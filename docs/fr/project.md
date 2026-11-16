@@ -1,6 +1,6 @@
 **Langues**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Consultez les guides [EVM](evm.md), [Solana SBF](sbf.md), [récupération de sou
 
 > Chaque cellule de la matrice est implémentée, mais la profondeur des tests d’intégration varie. Consultez la [matrice de couverture de l’architecture](architecture.md#support-and-test-depth). Mach-O i386 utilise des objets relogeables `thin`, car macOS moderne ne peut pas lier les anciens exécutables i386.
 
-**L’analyse ELF MIPS est expérimentale :** MIPS32r2/o32 et MIPS64r2/n64, dans les deux ordres d’octets, prennent en charge un sous-ensemble strict d’instructions entières pour le désassemblage, la reconstruction du CFG et les sorties C et LLVM. La réécriture de code natif n’est pas prise en charge. Voir [la couverture MIPS et l’exemple de firmware (anglais)](../mips.md) pour les sous-ensembles microMIPS32, DSP et MIPS32r5 MSA validés séparément et leurs restrictions de sortie source.
+**L’analyse ELF MIPS est expérimentale :** MIPS32r2/o32 et MIPS64r2/n64, dans les deux ordres d’octets, prennent en charge un sous-ensemble strict d’instructions entières pour le désassemblage, la reconstruction du CFG et les sorties C et LLVM. La réécriture de code natif n’est pas prise en charge. Voir [la couverture MIPS et l’exemple de firmware (anglais)](../mips.md) pour les sous-ensembles microMIPS32, MIPS16e/e2, DSP et MIPS32r5 MSA validés séparément et leurs restrictions de sortie source.
 
 Le bytecode EVM legacy est pris en charge indépendamment des conteneurs natifs :
 les 150 opcodes attribués de Frontier à Fusaka alimentent Low/Med/High IR,
@@ -294,6 +294,7 @@ neverd <command> [options] <binary>
 |----------|--------|-------------|
 | `lift` | `.ll` | Lever vers LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, Solidity EVM ou Rust SBF choisi avec `--language` |
+| `decompile --check-all` | compteurs | C par défaut pour chaque fonction chargée ; chaque corps est libéré après vérification |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimiseur |
 | `decompile --devirtualize` | `.c` + JSON facultatif | Récupération expérimentale d’interpréteurs x64 ; `--func` requis ; [contrat et exemples](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Expérimental: [Android](android.md), [iOS](ios.md) |

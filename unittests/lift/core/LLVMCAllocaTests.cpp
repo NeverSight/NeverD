@@ -124,6 +124,68 @@ void comparePrograms(llvm::StringRef IR, llvm::StringRef Driver,
 
 } // namespace
 
+TEST(LLVMCAlloca, FloatingViewsOfIntegerStoragePreserveObjectBits) {
+  comparePrograms(R"IR(
+declare void @observe(ptr)
+define i64 @float_bits(double %value) {
+  %slot = alloca i64, align 8
+  store double %value, ptr %slot, align 8
+  call void @observe(ptr %slot)
+  %bits = load i64, ptr %slot, align 8
+  ret i64 %bits
+}
+define double @bits_float(i64 %bits) {
+  %slot = alloca i64, align 8
+  store i64 %bits, ptr %slot, align 8
+  call void @observe(ptr %slot)
+  %value = load double, ptr %slot, align 8
+  ret double %value
+}
+define i32 @single_bits(float %value) {
+  %slot = alloca float, align 4
+  store float %value, ptr %slot, align 4
+  call void @observe(ptr %slot)
+  %bits = load i32, ptr %slot, align 4
+  ret i32 %bits
+}
+define float @bits_single(i32 %bits) {
+  %slot = alloca float, align 4
+  store i32 %bits, ptr %slot, align 4
+  call void @observe(ptr %slot)
+  %value = load float, ptr %slot, align 4
+  ret float %value
+}
+)IR",
+                  R"C(
+void observe(void *p) { __asm__ volatile("" : : "r"(p) : "memory"); }
+extern uint64_t original_float_bits(double);
+extern double original_bits_float(uint64_t);
+extern uint32_t original_single_bits(float);
+extern float original_bits_single(uint32_t);
+int main(void) {
+  uint64_t values[] = {0, 1, UINT64_C(0x8000000000000000),
+    UINT64_C(0x3ff4000000000000), UINT64_C(0x7ff8123456789abc)};
+  for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+    double value; __builtin_memcpy(&value, &values[i], 8);
+    if (float_bits(value) != original_float_bits(value)) return 1;
+    double actual = bits_float(values[i]);
+    double expected = original_bits_float(values[i]);
+    if (__builtin_memcmp(&actual, &expected, 8)) return 2;
+  }
+  uint32_t singles[] = {0, 1, 0x80000000u, 0x3fa00000u, 0x7fc12345u};
+  for (unsigned i = 0; i < sizeof(singles) / sizeof(singles[0]); ++i) {
+    float value; __builtin_memcpy(&value, &singles[i], 4);
+    if (single_bits(value) != original_single_bits(value)) return 3;
+    float actual = bits_single(singles[i]);
+    float expected = original_bits_single(singles[i]);
+    if (__builtin_memcmp(&actual, &expected, 4)) return 4;
+  }
+  return 0;
+}
+)C",
+                  true, {}, false);
+}
+
 TEST(LLVMCAlloca, StaticObjectsPreserveExplicitAlignment) {
   for (bool Preserve : {false, true})
     comparePrograms(R"(

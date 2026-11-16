@@ -14,6 +14,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Errc.h"
@@ -25,10 +26,89 @@ namespace neverd {
 namespace {
 using namespace llvm::MachO;
 using Bytes = std::vector<uint8_t>;
+#define MACHO_HEADER_TEXT(Name, Text) constexpr char Name[] = Text;
+#define MACHO_HEADER_VALUE(Type, Name, Value) constexpr Type Name = Value;
+#include "MachOHeaderGrowth.def"
+
 llvm::Error fail(const llvm::Twine &S) {
   return llvm::createStringError(llvm::errc::not_supported,
                                  "Mach-O header growth: " + S);
 }
+// The strict dyld reader owns slot discovery, including multi-start pages and
+// threaded roots. Rewriting only target bits preserves links and signing data.
+llvm::Expected<uint64_t> relocatedChainWord(uint64_t Raw, uint16_t Format,
+                                            const MachOChainedFixups &Chains,
+                                            uint64_t HeaderSize,
+                                            uint64_t Shift) {
+  namespace arm64e = macho_loader::arm64e;
+  uint64_t Value;
+  unsigned Width = kOrdinaryTargetBits;
+  bool Relative = Format == DYLD_CHAINED_PTR_64_OFFSET;
+  if (const auto F = arm64e::chainFormat(Format)) {
+    const auto Word = *arm64e::decodePointerWord(Raw, *F);
+    if (Word.Bind)
+      return Raw;
+    if (F->Segmented &&
+        Chains.Segments[Word.SegmentIndex].VMAddr != Chains.HeaderVA)
+      return Raw;
+    Value = Word.Target;
+    Width = F->Segmented         ? arm64e::kSegmentedTargetOffset.Width
+            : Word.Authenticated ? arm64e::kAuthenticatedTarget.Width
+                                 : arm64e::kTarget.Width;
+    Relative = F->Segmented || Word.Authenticated || F->Offset;
+  } else {
+    dyld_chained_ptr_64_rebase Word;
+    std::memcpy(&Word, &Raw, sizeof(Word));
+    if (Word.bind)
+      return Raw;
+    Value = Word.target | (uint64_t(Word.high8) << arm64e::kHigh8Shift);
+  }
+
+  // An exact reference to the header follows it. Other live targets retain
+  // their VA when the header grows down into its prefix.
+  const uint64_t Base = Relative ? 0 : Chains.HeaderVA;
+  if (Value > Base && Value - Base < HeaderSize)
+    return fail(kChainHeaderInterior);
+  const uint64_t Mask = llvm::maskTrailingOnes<uint64_t>(Width);
+  if (Relative) {
+    if (!Value)
+      return Raw;
+    if (Shift > Mask - (Raw & Mask))
+      return fail(kChainTargetOverflow);
+    return Raw + Shift;
+  }
+  if (Value != Base)
+    return Raw;
+  const uint64_t NewBase = Base - Shift;
+  if ((Base & ~Mask) != (NewBase & ~Mask))
+    return fail(kChainTargetOverflow);
+  return (Raw & ~Mask) | (NewBase & Mask);
+}
+
+llvm::Error relocateChainSlots(Bytes &Binary, const MachOChainedFixups &Chains,
+                               uint64_t HeaderSize, uint64_t Shift) {
+  for (const auto &Segment : Chains.Segments) {
+    if (Segment.StartsFileOffset && Segment.VMAddr != Chains.HeaderVA) {
+      if (Segment.VMAddr < Chains.HeaderVA ||
+          Segment.VMAddr - Chains.HeaderVA > UINT64_MAX - Shift)
+        return fail(kChainStartRange);
+      writeLE<uint64_t>(
+          Binary.data() + Shift + Segment.StartsFileOffset +
+              offsetof(dyld_chained_starts_in_segment, segment_offset),
+          Segment.VMAddr - Chains.HeaderVA + Shift);
+    }
+    for (const auto &Slot : Segment.Slots) {
+      auto Word = relocatedChainWord(Slot.Raw, Segment.PointerFormat, Chains,
+                                     HeaderSize, Shift);
+      if (!Word)
+        return Word.takeError();
+      writeLE<uint64_t>(Binary.data() + Shift + Segment.FileOff + Slot.Offset,
+                        *Word);
+    }
+  }
+  return llvm::Error::success();
+}
+
 void uleb(Bytes &B, uint64_t V) {
   uint8_t T[10];
   auto N = llvm::encodeULEB128(V, T);
@@ -138,6 +218,110 @@ llvm::Error compact(Bytes &B, Arch TargetArch, uint64_t Off, uint64_t Size,
   return llvm::Error::success();
 }
 } // namespace
+
+char InsufficientMachOHeaderPrefix::ID;
+void InsufficientMachOHeaderPrefix::log(llvm::raw_ostream &OS) const {
+  OS << kPrefixRange;
+}
+std::error_code InsufficientMachOHeaderPrefix::convertToErrorCode() const {
+  return llvm::errc::not_supported;
+}
+
+llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
+                                                             uint64_t Slide) {
+  namespace arm64e = macho_loader::arm64e;
+  MachOChainedFixups Chains;
+  auto Before = readMachODependencyState(Binary, &Chains);
+  if (!Before)
+    return Before.takeError();
+  const auto H = parseMachOHeader(Binary.data(), Binary.size());
+  if (!H.Is64 || H.FileType != MH_DYLIB || Before->CPUType != CPU_TYPE_ARM64 ||
+      !arm64e::isSubtype(Before->CPUSubtype) || Chains.HeaderVA ||
+      !Chains.CommandOffset || Chains.Threaded)
+    return fail(kSlideImage);
+  // Encoded binds are independent of the preferred base. Rebases in
+  // userland offset formats and authenticated rebases are image-relative.
+  for (const auto &Segment : Chains.Segments) {
+    for (const auto &Slot : Segment.Slots) {
+      const auto Format = arm64e::chainFormat(Segment.PointerFormat);
+      if (Format) {
+        const auto W = arm64e::decodePointerWord(Slot.Raw, *Format);
+        if (W && (W->Bind || W->Authenticated || Format->Offset ||
+                  Format->Segmented))
+          continue;
+      } else if (Segment.PointerFormat == DYLD_CHAINED_PTR_64_OFFSET) {
+        continue;
+      }
+      return fail(kSlideImage);
+    }
+  }
+  const symtab_command *Sym = nullptr;
+  const uint64_t HeaderEnd = H.HeaderSize + H.SizeOfCmds;
+  auto Candidate = Binary;
+  for (const auto &Segment : Chains.Segments) {
+    auto *Command = Candidate.data() + Segment.CommandOffset;
+    auto Fields = readMachOSegment(Command, true);
+    if (Fields.VMAddr > UINT64_MAX - Fields.VMSize ||
+        Fields.VMAddr + Fields.VMSize > UINT64_MAX - Slide)
+      return fail(kSlideOverflow);
+    const bool Text =
+        readMachOName(Fields.SegName) == section_names::macho::TextSeg;
+    auto *S =
+        reinterpret_cast<section_64 *>(Command + sizeof(segment_command_64));
+    uint64_t Cursor = HeaderEnd;
+    for (unsigned I = 0; I < Fields.NSects; ++I) {
+      if (Text && S[I].size && !isVirtualSection(S[I].flags & SECTION_TYPE)) {
+        if (S[I].offset < Cursor ||
+            !llvm::all_of(
+                llvm::ArrayRef(Candidate).slice(Cursor, S[I].offset - Cursor),
+                [](uint8_t Byte) { return Byte == 0; }))
+          return fail(kSlideOpaque);
+        Cursor = S[I].offset + S[I].size;
+      }
+      if (S[I].addr > UINT64_MAX - Slide)
+        return fail(kSlideOverflow);
+      S[I].addr += Slide;
+    }
+    const uint64_t End = Segment.FileOff + Segment.FileSize;
+    if (Text &&
+        (Cursor > End ||
+         !llvm::all_of(llvm::ArrayRef(Candidate).slice(Cursor, End - Cursor),
+                       [](uint8_t Byte) { return Byte == 0; })))
+      return fail(kSlideOpaque);
+    Fields.VMAddr += Slide;
+    writeMachOSegment(Command, true, Fields);
+  }
+  bool ClassicDyld = false;
+  forEachMachOLoadCommand(Binary.data(), Binary.size(),
+                          [&](const uint8_t *C, uint32_t Cmd, uint32_t, bool) {
+                            if (Cmd == LC_SYMTAB)
+                              Sym = reinterpret_cast<const symtab_command *>(C);
+                            ClassicDyld |=
+                                Cmd == LC_DYLD_INFO || Cmd == LC_DYLD_INFO_ONLY;
+                          });
+  if (ClassicDyld)
+    return fail(kSlideImage);
+  if (Sym) {
+    auto *Symbols =
+        reinterpret_cast<nlist_64 *>(Candidate.data() + Sym->symoff);
+    for (unsigned I = 0; I < Sym->nsyms; ++I) {
+      auto &N = Symbols[I];
+      if (N.n_type & N_STAB)
+        return fail(kSlideSymbol);
+      if ((N.n_type & N_TYPE) != N_SECT)
+        continue;
+      if (!N.n_sect || N.n_value > UINT64_MAX - Slide)
+        return fail(kSlideSymbol);
+      N.n_value += Slide;
+    }
+  }
+  auto After = readMachODependencyState(Candidate);
+  if (!After)
+    return After.takeError();
+  Binary.swap(Candidate);
+  return After;
+}
+
 llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
                                                uint64_t Extra) {
   if (Extra > ::neverd::limits::backend::kMaxMachOHeaderGrowthBytes)
@@ -167,13 +351,15 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
       llvm::all_of(llvm::ArrayRef<uint8_t>(Binary).slice(End, Extra),
                    [](uint8_t V) { return !V; }))
     return false;
+  const auto FileType = H.FileType;
+  const bool Executable = FileType == MH_EXECUTE;
   if (!H.Is64 || (A != Arch::X64 && A != Arch::AArch64) ||
-      readLE<uint32_t>(Binary.data() + 12) != MH_EXECUTE || !(H.Flags & MH_PIE))
-    return fail("command relocation requires a 64-bit PIE executable with a "
-                "PAGEZERO guard");
+      (Executable ? !(H.Flags & MH_PIE)
+                  : FileType != MH_DYLIB && FileType != MH_BUNDLE))
+    return fail(kImageKind);
   const uint64_t Page = A == Arch::AArch64 ? 16384 : 4096;
   const uint64_t Shift = llvm::alignTo(End + Extra, Page);
-  if (Binary.size() > UINT32_MAX - Shift)
+  if (Shift > UINT32_MAX || Binary.size() > UINT32_MAX - Shift)
     return fail("expanded file exceeds native offsets");
   Bytes B(Shift, 0);
   B.insert(B.end(), Binary.begin(), Binary.end());
@@ -210,10 +396,15 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
           Bad |= S.FileOff + S.FileSize != Binary.size() || S.NSects;
         }
       });
-  if (Bad || Text == UINT64_MAX || Zero == UINT64_MAX || LE == UINT64_MAX ||
-      OldBase % Page || OldBase < Shift + Page ||
-      readMachOSegment(Binary.data() + Zero, true).VMSize != OldBase)
-    return fail("header mapping lacks an adjacent releasable PAGEZERO range");
+  if (!Executable && !Dyld)
+    return fail(kDyldPrefix);
+  if (Bad || Text == UINT64_MAX || LE == UINT64_MAX || OldBase % Page ||
+      (Executable && (Zero == UINT64_MAX || OldBase < Shift + Page)) ||
+      (Zero != UINT64_MAX &&
+       readMachOSegment(Binary.data() + Zero, true).VMSize != OldBase))
+    return fail(kPrefixRange);
+  if (OldBase < Shift)
+    return llvm::make_error<InsufficientMachOHeaderPrefix>();
   std::vector<std::pair<uint64_t, uint64_t>> Code;
   for (const auto &R : Sections) {
     const auto &S =
@@ -271,8 +462,9 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
   if (!Starts)
     return fail("header relocation requires typed function-start coverage");
   std::optional<MachODependencyState> Before;
+  MachOChainedFixups Chains;
   if (Dyld) {
-    auto S = readMachODependencyState(Binary);
+    auto S = readMachODependencyState(Binary, &Chains);
     if (!S)
       return S.takeError();
     Before = std::move(*S);
@@ -305,6 +497,31 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     B.insert(B.end(), Data.begin(), Data.end());
     return Off;
   };
+  const auto RelocateExports =
+      [&](llvm::ArrayRef<uint8_t> Raw) -> llvm::Expected<Bytes> {
+    auto Exports = readMachOExportLayout(Raw);
+    if (!Exports)
+      return Exports.takeError();
+    for (auto &[Name, Entry] : *Exports) {
+      if ((Entry.Flags & EXPORT_SYMBOL_FLAGS_REEXPORT) ||
+          (Entry.Flags & EXPORT_SYMBOL_FLAGS_KIND_MASK) ==
+              EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE)
+        continue;
+      const auto Relocate = [&](uint64_t &Offset) -> llvm::Error {
+        if (Offset < End || Offset > UINT64_MAX - Shift)
+          return fail(kExportRange);
+        Offset += Shift;
+        return llvm::Error::success();
+      };
+      if (Entry.Address || !isMachOHeaderSymbol(Name, FileType))
+        if (auto E = Relocate(Entry.Address))
+          return E;
+      if (Entry.Flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER)
+        if (auto E = Relocate(Entry.Resolver))
+          return E;
+    }
+    return writeMachOExportLayout(*Exports);
+  };
   for (auto Off : Commands) {
     const uint32_t ID = readLE<uint32_t>(B.data() + Off);
     switch (ID) {
@@ -331,6 +548,21 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
         if (Old.offset)
           Now->offset += Shift;
         if (!isVirtualSection(Old.flags & SECTION_TYPE) && Old.size) {
+          // dyld interprets each initializer as an offset from the Mach
+          // header. The functions stay at their VAs while the header moves.
+          if ((Old.flags & SECTION_TYPE) == S_INIT_FUNC_OFFSETS) {
+            if (Old.size % sizeof(uint32_t) || Old.addr % alignof(uint32_t) ||
+                (Original.InitProt & VM_PROT_WRITE))
+              return fail(kInitializerOffset);
+            for (uint64_t I = 0; I < Old.size; I += sizeof(uint32_t)) {
+              auto *Field = B.data() + Now->offset + I;
+              const auto Value = readLE<uint32_t>(Field);
+              if (Value > UINT32_MAX - Shift || Value > UINT64_MAX - OldBase ||
+                  !InCode(OldBase + Value))
+                return fail(kInitializerOffset);
+              writeLE<uint32_t>(Field, Value + Shift);
+            }
+          }
           if (auto E = headerReferences(B, Old, OldBase, End, Shift, A))
             return E;
           if (readMachOName(Old.sectname) == "__unwind_info")
@@ -361,7 +593,7 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
           continue;
         const llvm::StringRef Name(
             reinterpret_cast<const char *>(B.data() + T->stroff + N->n_strx));
-        if (Name != "__mh_execute_header" || N->n_value != OldBase ||
+        if (!isMachOHeaderSymbol(Name, FileType) || N->n_value != OldBase ||
             (N->n_type & N_TYPE) != N_SECT)
           return fail("unmodeled symbol inside the header");
         N->n_value -= Shift;
@@ -385,20 +617,8 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
       const auto Original =
           *reinterpret_cast<const dyld_info_command *>(Binary.data() + Off);
       if (Original.export_size) {
-        auto E = readMachOExportLayout(llvm::ArrayRef<uint8_t>(Binary).slice(
+        auto Enc = RelocateExports(llvm::ArrayRef<uint8_t>(Binary).slice(
             Original.export_off, Original.export_size));
-        if (!E)
-          return E.takeError();
-        for (auto &[Name, X] : *E)
-          if (!(X.Flags & EXPORT_SYMBOL_FLAGS_REEXPORT) &&
-              (X.Flags & EXPORT_SYMBOL_FLAGS_KIND_MASK) !=
-                  EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE) {
-            if (!(Name == "__mh_execute_header" && X.Address == 0))
-              X.Address += Shift;
-            if (X.Flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER)
-              X.Resolver += Shift;
-          }
-        auto Enc = writeMachOExportLayout(*E);
         if (!Enc)
           return Enc.takeError();
         const auto NewOff = Append(*Enc);
@@ -420,19 +640,7 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
       auto Raw = llvm::ArrayRef<uint8_t>(Binary).slice(L.dataoff, L.datasize);
       Bytes Enc;
       if (ID == LC_DYLD_EXPORTS_TRIE) {
-        auto E = readMachOExportLayout(Raw);
-        if (!E)
-          return E.takeError();
-        for (auto &[Name, X] : *E)
-          if (!(X.Flags & EXPORT_SYMBOL_FLAGS_REEXPORT) &&
-              (X.Flags & EXPORT_SYMBOL_FLAGS_KIND_MASK) !=
-                  EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE) {
-            if (!(Name == "__mh_execute_header" && X.Address == 0))
-              X.Address += Shift;
-            if (X.Flags & EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER)
-              X.Resolver += Shift;
-          }
-        auto V = writeMachOExportLayout(*E);
+        auto V = RelocateExports(Raw);
         if (!V)
           return V.takeError();
         Enc = std::move(*V);
@@ -472,57 +680,6 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     case LC_DYLD_CHAINED_FIXUPS: {
       auto *L = reinterpret_cast<linkedit_data_command *>(B.data() + Off);
       ShiftOff(L->dataoff, L->datasize);
-      if (Bad || !Before)
-        return fail("unauthenticated chained metadata");
-      auto *C = B.data() + L->dataoff;
-      const auto Starts = readLE<uint32_t>(C + 4),
-                 Count = readLE<uint32_t>(C + Starts);
-      std::vector<MachOSegFields> Segs;
-      forEachMachOLoadCommand(
-          Binary.data(), Binary.size(),
-          [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
-            if (ID == LC_SEGMENT_64)
-              Segs.push_back(readMachOSegment(P, true));
-          });
-      for (unsigned I = 0; I < Count; ++I) {
-        const auto Rel = readLE<uint32_t>(C + Starts + 4 + I * 4);
-        if (!Rel)
-          continue;
-        auto *S = C + Starts + Rel;
-        const auto Offset = readLE<uint64_t>(S + 8);
-        if (Segs[I].VMAddr == OldBase || Offset > UINT64_MAX - Shift)
-          return fail("header-segment chains are not modeled");
-        writeLE<uint64_t>(S + 8, Offset + Shift);
-        const auto PageSize = readLE<uint16_t>(S + 4),
-                   Format = readLE<uint16_t>(S + 6),
-                   Pages = readLE<uint16_t>(S + 20);
-        for (unsigned P = 0; P < Pages; ++P) {
-          uint64_t At = readLE<uint16_t>(S + 22 + P * 2);
-          if (At == DYLD_CHAINED_PTR_START_NONE)
-            continue;
-          while (true) {
-            auto *Cell = B.data() + Segs[I].FileOff + Shift +
-                         uint64_t(P) * PageSize + At;
-            auto Raw = readLE<uint64_t>(Cell);
-            const auto Next = (Raw >> 51) & 0xfff;
-            if (!(Raw >> 63)) {
-              const auto Target = Raw & 0xfffffffffULL;
-              if (Format == DYLD_CHAINED_PTR_64_OFFSET) {
-                // A zero target is the distinguished header itself.
-                if (Target && Target > 0xfffffffffULL - Shift)
-                  return fail("chained target overflow");
-                if (Target)
-                  Raw = (Raw & ~uint64_t(0xfffffffffULL)) | (Target + Shift);
-              } else if ((Target | (((Raw >> 36) & 255) << 56)) == OldBase)
-                Raw = (Raw & ~uint64_t(0xfffffffffULL)) | (OldBase - Shift);
-              writeLE<uint64_t>(Cell, Raw);
-            }
-            if (!Next)
-              break;
-            At += Next * 4;
-          }
-        }
-      }
       break;
     }
     case LC_DATA_IN_CODE:
@@ -565,7 +722,10 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
       return fail("invalid file-offset range");
   }
   // Legacy dyld rebases carry absolute pointers, not encoded chain words.
-  if (Before)
+  if (Chains.CommandOffset) {
+    if (auto E = relocateChainSlots(B, Chains, End, Shift))
+      return E;
+  } else if (Before)
     for (const auto &[K, V] : Before->Slots)
       if (K.second == 0 && readLE<uint64_t>(V.data()) == 1) {
         for (const auto &R : Segments) {

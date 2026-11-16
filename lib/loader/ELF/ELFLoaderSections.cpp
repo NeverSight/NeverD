@@ -16,6 +16,7 @@
 
 #include "neverd/loader/BinaryImageFlags.h"
 #include "neverd/loader/ELF/ELFLoaderUtils.h"
+#include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/BinaryFormat/ELF.h"
@@ -38,11 +39,32 @@ namespace detail {
 
 namespace {
 
-/// The ELF ABIs for the Arm architectures mark where the instruction set
-/// changes or data begins with the local untyped symbols `$a`, `$d`, `$t` and
-/// `$x`, each optionally followed by `.` and a suffix.  They are the
-/// toolchain's markers, not names: one sits at the start of practically every
-/// function and data section, at the address of the symbol that names it.
+/// A linked image already has its allocated bytes in the segment, and DWARF
+/// reads its own file mapping. Copying those ranges again makes a second
+/// dirty copy of the file. A relocatable object has no program image, so its
+/// section bytes stay.
+bool retainSectionFileBytes(bool IsRelocatable, llvm::StringRef Name,
+                            uint64_t Flags, uint64_t Offset, uint64_t Size,
+                            const BinaryImage &Img) {
+  if (Size == 0)
+    return false;
+  if (IsRelocatable)
+    return true;
+  if ((Flags & llvm::ELF::SHF_ALLOC) == 0 &&
+      section_names::isDebugSectionName(Name))
+    return false;
+  if (Offset > std::numeric_limits<uint64_t>::max() - Size)
+    return true;
+  const uint64_t End = Offset + Size;
+  for (const Segment &Seg : Img.Segments) {
+    if (Seg.FileSz == 0 ||
+        Seg.FileOff > std::numeric_limits<uint64_t>::max() - Seg.FileSz)
+      continue;
+    if (Offset >= Seg.FileOff && End <= Seg.FileOff + Seg.FileSz)
+      return false;
+  }
+  return true;
+}
 
 } // namespace
 
@@ -84,7 +106,9 @@ llvm::Error buildSections(llvm::ArrayRef<typename ELFT::Shdr> Sections,
       return llvm::make_error<llvm::StringError>(
           "elf: section file range is out of bounds",
           llvm::inconvertibleErrorCode());
-    if (Sec.FileSz > 0)
+    if (Sec.FileSz > 0 &&
+        retainSectionFileBytes(IsRelocatable, Name, SH.sh_flags, SH.sh_offset,
+                               SH.sh_size, Img))
       Sec.Data.assign(Data + SH.sh_offset, Data + SH.sh_offset + SH.sh_size);
     Img.Sections.push_back(std::move(Sec));
   }

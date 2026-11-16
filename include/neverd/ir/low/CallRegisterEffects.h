@@ -45,10 +45,12 @@ class StackProbeIndex;
 
 struct BinaryImage;
 
-/// Bit I names the x86-64 GPR whose 8-byte slot starts at register offset
-/// 8 * I (RAX = bit 0 ... R15 = bit 15).  A write to any byte of a slot
-/// (AL, AH, EAX, ...) sets the whole family.  Bits 16 through 23 name the
-/// vector argument registers XMM0 through XMM7, families as well.
+/// Bit I names the GPR whose 8-byte slot starts at register offset 8 * I.
+/// On x86-64 that is RAX (bit 0) through R15 (bit 15). On AArch64 the same
+/// bits name X0 through X15; X16 through X30 and SP are not in this mask, so
+/// a summary never claims to preserve them. A write to any byte of a slot
+/// sets the whole family. Bits 16 through 23 name the x86-64 vector argument
+/// registers XMM0 through XMM7.
 using GPRFamilyMask = uint32_t;
 
 /// The family of XMM0, the first of the eight vector argument registers.
@@ -80,7 +82,8 @@ using GPRReadWidths =
 using GPRExitConstants = std::vector<std::pair<uint64_t, uint64_t>>;
 
 /// The GPR family of a register slice, or nullopt when \p RegOff is not one
-/// of the sixteen x86-64 GPRs this summary tracks.
+/// of the sixteen slots this summary tracks: x86-64 RAX through R15, or
+/// AArch64 X0 through X15.
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff);
 
 /// The family of a register slice, a GPR or a vector argument register, and
@@ -154,6 +157,13 @@ struct RegisterBlock {
 /// \p F has an effect this summary cannot describe.
 struct LocalRegisterEffect {
   GPRFamilyMask Writes = 0;
+  /// Original GPR writes before ABI/identity simplifications. Untracked
+  /// families and the x64 stack pointer are always set. This separate fact
+  /// supplies scalar observations without assuming an external call's ABI.
+  GPRFamilyMask BodyWrites = ~GPRFamilyMask{0};
+  /// No original-body proof unless localRegisterEffect establishes one.
+  /// Opaque operations, contract-only calls and exceptional entries forbid it.
+  bool BodyUnknown = true;
   GPRExitConstants ExitConstants;
   /// Complete, bounded straight-line scalar/CPUID body with an ordinary RET.
   /// Source call recovery may expand it after checking the caller's physical
@@ -252,6 +262,9 @@ struct CallRegisterSummaries {
   /// Families a call may change, for functions whose whole call tree is
   /// known.
   std::map<va_t, GPRFamilyMask> MayWrite;
+  /// GPR writes over complete original bodies and their complete callees.
+  /// No ABI-only preservation, vector, stack-pointer or save/restore proof.
+  std::map<va_t, GPRFamilyMask> BodyMayWrite;
   /// Constants established locally on every return of a bounded call-free
   /// body. Unknown paths, exceptional roots and addresses supply no fact.
   std::map<va_t, GPRExitConstants> ExitConstants;

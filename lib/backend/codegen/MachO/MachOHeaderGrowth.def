@@ -1,0 +1,42 @@
+//===- MachOHeaderGrowth.def - Header relocation contracts -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef MACHO_HEADER_TEXT
+#define MACHO_HEADER_TEXT(Name, Text)
+#endif
+#ifndef MACHO_HEADER_VALUE
+#define MACHO_HEADER_VALUE(Type, Name, Value)
+#endif
+
+MACHO_HEADER_TEXT(kChainTargetOverflow,
+                  "relocated chained target exceeds its encoded width")
+MACHO_HEADER_TEXT(
+    kChainHeaderInterior,
+    "chained pointer addresses the interior of the relocated header")
+MACHO_HEADER_TEXT(kChainStartRange, "chain start has no stable segment address")
+MACHO_HEADER_TEXT(
+    kImageKind,
+    "header relocation requires a 64-bit PIE executable, dylib or bundle")
+MACHO_HEADER_TEXT(
+    kDyldPrefix, "dylib or bundle prefix growth requires checked dyld metadata")
+MACHO_HEADER_TEXT(kExportRange,
+                  "export offset cannot follow the relocated header")
+MACHO_HEADER_TEXT(kInitializerOffset,
+                  "initializer offset does not name a relocatable function")
+MACHO_HEADER_TEXT(kPrefixRange,
+                  "header mapping has no available aligned prefix")
+MACHO_HEADER_VALUE(unsigned, kOrdinaryTargetBits, 36)
+
+MACHO_HEADER_TEXT(kSlideImage, "uniform slide requires a zero-base arm64e "
+                               "dylib with image-relative chained fixups")
+MACHO_HEADER_TEXT(kSlideOpaque,
+                  "unowned TEXT bytes lack a header relocation contract")
+MACHO_HEADER_TEXT(kSlideSymbol, "symbol has no section-relative slide contract")
+MACHO_HEADER_TEXT(kSlideOverflow,
+                  "preferred image address overflows during slide")
+
+#undef MACHO_HEADER_VALUE
+#undef MACHO_HEADER_TEXT

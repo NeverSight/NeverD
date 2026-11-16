@@ -22,6 +22,7 @@
 #include "neverd/ir/med/MedDispatchSlots.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -33,6 +34,8 @@
 #include <tuple>
 
 namespace neverd {
+
+struct DarwinVariadicStackValue;
 
 struct BinaryImage;
 struct CompareTreeSwitch;
@@ -311,6 +314,12 @@ struct VariadicVectorCallee {
   int NamedIntegerRegisters = -1;
 };
 
+/// Aim the jump statement \p Goto at the target of \p Med's direct branch
+/// \p Branch, or at no label where that address is one a path left the image
+/// for (MedFunc::TruncatedPathAddresses): it has no block, and the jump ends
+/// in a trap as an indirect branch without a proved target does.
+void aimDirectBranch(HighStmt &Goto, const MedFunc &Med, const MedOp &Branch);
+
 class MedToHighConverter {
 public:
   /// Reject native call contracts that HighC cannot express, before a batch
@@ -341,6 +350,14 @@ public:
   /// Optional algebraic/MBA rewriting. Ordinary source retains basic cleanup.
   void setSymbolicSimplification(bool Enabled) {
     SymbolicSimplification = Enabled;
+  }
+
+  /// The caller proves the original full-width register occurrence and the
+  /// debug location's scope. Attach its declaration only to a surviving use
+  /// of that same MedIR operand, not to the variable's other occurrences.
+  void setSourcePointerResolver(
+      std::function<TypeRef(const MedOp &, const MedVar &)> Resolver) {
+    SourcePointerResolver = std::move(Resolver);
   }
 
   /// Observe expression creation without adding metadata to either IR. The
@@ -429,6 +446,7 @@ private:
 
   ExprPtr medOpToExpr(const MedOp &Op);
   ExprPtr medOpToExprImpl(const MedOp &Op);
+  ExprPtr sourcePointerOperand(const MedOp &Op, ExprPtr Value) const;
   /// \p Op as stack the function allocates at run time (MedDynamicStack.h):
   /// `sp - size` that becomes the stack pointer is storage the C allocates,
   /// and a later `old_sp - size` the variable holding it; null otherwise.
@@ -473,12 +491,15 @@ private:
   std::set<std::pair<va_t, int>> I386PcRootedStores;
   /// Recover a target-width memory address from the wider LowIR VA carrier
   /// only when an explicit zero extension proves that no high bits are lost.
+  ExprPtr darwinVariadicStackAddress(DarwinVariadicStackValue Source);
   ExprPtr memoryAddressExpr(const MedVar &V, bool InlineDefinition = true);
   void indexMedDefinitions();
   const MedOp *uniqueMedDefinition(const MedVar &V);
   const PhiNode *uniqueMedPhi(const MedVar &V);
   ExprPtr sourceBitSlice(const ExprPtr &Value, uint64_t ByteOffset,
                          uint16_t Bytes, unsigned Depth = 0);
+  void collectSourcePhiSlices(const MedFunc &Med);
+  VarKeyMap<std::map<std::pair<uint64_t, uint16_t>, MedVar>> SourcePhiSlices;
   ExprPtr sourceFloatValue(const MedVar &Value, uint16_t Bytes);
   ExprPtr sourceScalarValue(const MedVar &Value, const TypeRef &Type);
   ExprPtr inlineableDefinition(VarKey Key) const;
@@ -513,6 +534,14 @@ private:
   /// loaded from \p ResolvedSlot.
   unsigned importFixedArgCount(size_t CallIdx, const std::vector<MedOp> &Ops,
                                va_t ResolvedSlot) const;
+
+  /// How many leading register parameters of the function being converted
+  /// call \p CallIdx of \p Ops may pass on, positions of \p ParamRegs from
+  /// the first: every one it has where the call is a jump to an import that
+  /// no summary, source binding, declaration or C library table describes,
+  /// under a convention whose arguments the register scan recovers; else 0.
+  int forwardedParameterCount(size_t CallIdx, const std::vector<MedOp> &Ops,
+                              llvm::ArrayRef<uint64_t> ParamRegs) const;
 
   /// \p ResolvedSlot is the import slot an indirect call was resolved to
   /// through the register it calls, else 0.
@@ -654,6 +683,7 @@ private:
   std::shared_ptr<detail::HighEntryStackOffsets> EntryStackOffsets;
   const MedFunc *EntryOffsetDefsFor = nullptr;
   const BinaryImage *Image = nullptr;
+  std::function<TypeRef(const MedOp &, const MedVar &)> SourcePointerResolver;
   std::function<void(const MedOp &, const ExprPtr &)> ExpressionObserver;
   std::function<void(const ExprPtr &, const ExprPtr &)> ExpressionCloneObserver;
   std::function<void(const MedOp &, const HighStmt &)> StatementObserver;

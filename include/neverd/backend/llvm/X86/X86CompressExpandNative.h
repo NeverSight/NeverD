@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 namespace neverd {
+inline constexpr std::string_view X86CompactNamePrefix = "llvm.x86.avx512.";
 inline unsigned x86CompactNativePrefix(const X86CompactControl &C,
                                        NdMemoryAddressSpace Space) {
   return C.SegmentPrefix |
@@ -43,7 +44,7 @@ struct X86CompactPlan {
            (Expand ? "expand" : "compress") + Suffixes[Kind];
   }
   std::string llvmName() const {
-    return std::string("llvm.x86.avx512.") +
+    return std::string(X86CompactNamePrefix) +
            (Expand ? "expandload" : "compressstore") +
            std::to_string(Bytes * 8) + ".native";
   }
@@ -101,6 +102,8 @@ inline std::optional<X86CompactPlan> x86CompactPlan(bool Expand, unsigned Bytes,
   return X86CompactPlan{Expand, Bytes, Kind, bool(Zero), Prefix};
 }
 inline std::optional<X86CompactPlan> x86CompactNativeName(std::string_view N) {
+  if (!N.starts_with(X86CompactNamePrefix) || !N.ends_with(".native"))
+    return {};
   for (bool Expand : {false, true})
     for (unsigned Bytes : {16u, 32u, 64u}) {
       X86CompactPlan P{Expand, Bytes, 0, false, 0};

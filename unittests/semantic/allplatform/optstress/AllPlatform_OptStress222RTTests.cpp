@@ -26,6 +26,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress222RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -37,7 +38,8 @@ class A64OptStress222RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress222RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress222RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress222RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -119,12 +121,26 @@ static std::vector<RoundTripTC> makeOptStress222TC(const char *prefix, const cha
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress222TC("x64o222", "long");
-static const std::vector<RoundTripTC> kX86 = makeOptStress222TC("x86o222", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress222TC("a64o222", "long");
-static const std::vector<RoundTripTC> kARM = makeOptStress222TC("armo222", "int");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress222TC("x64o222", "long");
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress222TC("x86o222", "int");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress222TC("a64o222", "long");
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress222TC("armo222", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress222, X64OptStress222RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress222, X86OptStress222RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress222, A64OptStress222RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress222, ARM32OptStress222RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress222, X64OptStress222RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress222, X86OptStress222RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress222, A64OptStress222RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress222, ARM32OptStress222RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// An i386 routine that fills its caller's record leaves a scalar in XMM0,
+// merged into what the register held at entry. The LLVM route returned the
+// whole register, unknown bytes included: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress222LLVMC, X86OptStress222RT,
+                         ::testing::ValuesIn(onLLVMC(kX86)), rtTCName);

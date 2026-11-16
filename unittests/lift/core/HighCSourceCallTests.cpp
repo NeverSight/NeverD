@@ -31,6 +31,7 @@
 #include "neverd/loader/Swift/SwiftRuntimeCalls.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
@@ -165,6 +166,200 @@ TEST(HighCSourceCalls, RuntimeHeaderOwnsItsEnumerationDefinitions) {
   }
 }
 
+TEST(HighCSourceCalls, NarrowUnknownCopiesTrapOnlyWhenObserved) {
+  const auto Byte = NdType::makeInt(1, false);
+  const auto Word = NdType::makeInt(8, false);
+  auto Variable = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 1;
+    return HighExpr::makeVar(V, Byte);
+  };
+  auto Assign = [](ExprPtr Destination, ExprPtr Value) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Dst = std::move(Destination);
+    S.Val = std::move(Value);
+    S.IsPhiCopy = true;
+    return S;
+  };
+  constexpr int Copies = 96;
+  auto Function =
+      returning("narrow_unknown", HighExpr::makeConst(7, 1), {Word, Word});
+  std::vector<HighStmt> Body;
+  for (int I = 0; I < Copies; ++I) {
+    auto Slice = HighExpr::makeBinop(
+        NdOp::SUBBYTES, I ? Variable(I - 1) : HighExpr::makeUndef(8),
+        HighExpr::makeConst(0, 8));
+    Slice->Type = Byte;
+    Body.push_back(Assign(Variable(I), Slice));
+  }
+  HighStmt Replace;
+  Replace.Kind = StmtKind::If;
+  Replace.Cond = parameter(0, Word);
+  Replace.Body = {Assign(Variable(Copies - 1), HighExpr::makeConst(37, 1))};
+  Body.push_back(Replace);
+  HighStmt Observe;
+  Observe.Kind = StmtKind::If;
+  Observe.Cond = parameter(1, Word);
+  auto Return = Function.Body.back();
+  Return.RetVal = Variable(Copies - 1);
+  Observe.Body = {Return};
+  Body.push_back(Observe);
+  Function.Body.insert(Function.Body.begin(), Body.begin(), Body.end());
+  const auto Program = emit({Function}) + R"c(
+#include <signal.h>
+#include <stdlib.h>
+static void expected_trap(int sig) { _Exit(0); }
+int main(void) {
+  if (narrow_unknown(0, 0) != 7) return 1;
+  if (narrow_unknown(1, 1) != 37) return 2;
+  signal(SIGILL, expected_trap);
+#ifdef SIGTRAP
+  signal(SIGTRAP, expected_trap);
+#endif
+  narrow_unknown(0, 1);
+  return 3;
+}
+)c";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndRun(Program, {Level});
+}
+
+TEST(HighCSourceCalls, VoidCallResultIsUnknownOnlyWhenObserved) {
+  const auto Word = NdType::makeInt(8, false);
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Callee;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Callee.Addr ? std::optional(Callee) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  Debug.Callee.Name = "record_effect";
+  Debug.Callee.Addr = 0x2000;
+  Debug.Callee.ReturnType = NdType::makeVoid();
+  auto Variable = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 8;
+    V.TheArch = Arch::X64;
+    return HighExpr::makeVar(V, Word);
+  };
+  auto Assign = [](ExprPtr Destination, ExprPtr Value, bool Phi = false) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Dst = std::move(Destination);
+    S.Val = std::move(Value);
+    S.IsPhiCopy = Phi;
+    return S;
+  };
+  const auto Result = Variable(1), Joined = Variable(2);
+  auto Function = returning("void_result", Joined, {Word});
+  auto Call = HighExpr::makeCall("record_effect", Debug.Callee.Addr, {});
+  Call->Type = Word;
+  HighStmt Choose;
+  Choose.Kind = StmtKind::If;
+  Choose.Cond = parameter(0, Word);
+  Choose.Body = {Assign(Joined, HighExpr::makeConst(37, 8), true)};
+  Function.Body.insert(
+      Function.Body.begin(),
+      {Assign(Result, Call), Assign(Joined, Result, true), Choose});
+  const auto Source =
+      emit({Function}, true, Arch::X64,
+           CEmitterOptions::ScalarPointerSpelling::StandardTypes, &Debug);
+  const auto Program = Source + R"c(
+#include <signal.h>
+#include <stdlib.h>
+static volatile unsigned ticks;
+void record_effect(void) { ++ticks; }
+static void expected_trap(int sig) { _Exit(0); }
+int main(void) {
+  for (unsigned i = 0; i < 8; ++i) {
+    if (void_result(1) != 37) return 1;
+    if (ticks != i + 1) return 2;
+  }
+  signal(SIGILL, expected_trap);
+#ifdef SIGTRAP
+  signal(SIGTRAP, expected_trap);
+#endif
+  void_result(0);
+  return 3;
+}
+)c";
+  for (const char *Level : {"-O0", "-O2"})
+    compileAndRun(Program, {Level});
+}
+
+TEST(HighCSourceCalls, DeferredPointerResultsKeepTheirIntegerCarrier) {
+  const auto Word = NdType::makeInt(8, false);
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Callee;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Callee.Addr ? std::optional(Callee) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  Debug.Callee.Name = "pointer_identity";
+  Debug.Callee.Addr = 0x2000;
+  Debug.Callee.ReturnType = Pointer;
+  Debug.Callee.Params = {{"value", Pointer}};
+  auto Variable = [&](int Id) {
+    MedVar V;
+    V.Kind = MedVar::Temp;
+    V.Id = Id;
+    V.Size = 8;
+    V.TheArch = Arch::X64;
+    return HighExpr::makeVar(V, Word);
+  };
+  const auto Result = Variable(1);
+  const auto Joined = Variable(2);
+  auto Assign = [](ExprPtr Destination, ExprPtr Value, bool Phi = false) {
+    HighStmt S;
+    S.Kind = StmtKind::Assign;
+    S.Dst = std::move(Destination);
+    S.Val = std::move(Value);
+    S.IsPhiCopy = Phi;
+    return S;
+  };
+  auto Returned =
+      HighExpr::makeBinop(NdOp::INT_ADD, Joined,
+                          HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Result,
+                                              HighExpr::makeConst(0, 8)));
+  auto Function = returning("joined_pointer", Returned, {Pointer, Word});
+  HighStmt Choose;
+  Choose.Kind = StmtKind::If;
+  Choose.Cond = parameter(1, Word);
+  Choose.Body = {Assign(Joined, Result, true)};
+  auto Call = HighExpr::makeCall("pointer_identity", Debug.Callee.Addr,
+                                 {parameter(0, Pointer)});
+  Call->Type = Word;
+  Function.Body.insert(Function.Body.begin(),
+                       {Assign(Result, Call),
+                        Assign(Joined, HighExpr::makeUndef(8), true), Choose});
+  const std::string Source =
+      emit({Function}, true, Arch::X64,
+           CEmitterOptions::ScalarPointerSpelling::StandardTypes, &Debug);
+  EXPECT_NE(Source.find("no recovered semantics"), std::string::npos) << Source;
+  const std::string Program = Source + R"(
+void *pointer_identity(void *value) { return value; }
+int main(void) {
+  unsigned char bytes[3];
+  for (unsigned i = 0; i != 3; ++i)
+    if (joined_pointer(bytes + i, 1) != (uintptr_t)(bytes + i) + 1)
+      return 1;
+  return joined_pointer(0, 1) != 0;
+}
+)";
+  for (const char *Optimization : {"-O0", "-O2"})
+    compileAndRun(Program, {Optimization, "-Werror=int-conversion",
+                            "-Werror=incompatible-pointer-types"});
+}
+
 TEST(HighCSourceCalls, OpaqueParametersCompleteOnlyForMemberAccess) {
   class RecordContext final : public NullDebugContext {
   public:
@@ -290,6 +485,71 @@ HighFunc lowerSavedFloatingRecord(const MedFunc &Med) {
   MedToHighConverter Converter;
   Converter.setFuncNames(&Names);
   return Converter.convert(Med, Arch::AArch64);
+}
+
+TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
+  class CalleeDebug final : public NullDebugContext {
+  public:
+    FunctionSym Callee;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Callee.Addr ? std::optional(Callee) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  Debug.Callee.Name = "readdir";
+  Debug.Callee.Addr = 0x2000;
+  Debug.Callee.ReturnType = NdType::makePtr(NdType::makeNamedRecord("dirent"));
+  const auto Pointer = NdType::makePtr(NdType::makeVoid());
+  Debug.Callee.Params = {{"directory", Pointer}};
+  Debug.Callee.PrototypeFromCLibrary = true;
+  const auto Integer = NdType::makeInt(8, false);
+  MedVar Temporary;
+  Temporary.Kind = MedVar::Temp;
+  Temporary.Id = 19;
+  Temporary.Size = 8;
+  auto Value = HighExpr::makeVar(Temporary, Integer);
+  auto Nonnull =
+      HighExpr::makeBinop(NdOp::INT_NOTEQUAL, Value, HighExpr::makeConst(0, 8));
+  auto Result = HighExpr::makeBinop(NdOp::INT_ADD, Nonnull, Nonnull);
+  Result->Type = NdType::makeInt(4, true);
+  auto Function = returning("has_entry_twice", Result, {Pointer});
+  HighStmt Read;
+  Read.Kind = StmtKind::Assign;
+  Read.Dst = Value;
+  Read.Val =
+      HighExpr::makeCall("readdir", Debug.Callee.Addr, {parameter(0, Pointer)});
+  Read.Val->Type = Integer;
+  Function.Body.insert(Function.Body.begin(), Read);
+  bool RequestedOpaqueReturn = false;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+    CRecordDefinitions Definitions;
+    for (const auto &Type : Types)
+      if (Type->Kind == NdTypeKind::Ptr && Type->Pointee &&
+          Type->Pointee->SourceName == "dirent") {
+        RequestedOpaqueReturn = true;
+        Definitions.Tags["dirent"] = false;
+      }
+    return Definitions;
+  };
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+  EXPECT_TRUE(RequestedOpaqueReturn) << Source;
+  Source += R"(
+int main(void) {
+    DIR *directory = opendir(".");
+    if (!directory) return 1;
+    int result = has_entry_twice(directory);
+    closedir(directory);
+    return result != 2;
+}
+)";
+  for (auto Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, {Optimization, "-Werror=incompatible-pointer-types",
+                           "-Werror=int-conversion"});
 }
 
 TEST(HighCSourceCalls, UserAndIndirectCalleesKeepOpaqueUnionTags) {
@@ -594,7 +854,9 @@ TEST(HighCSourceCalls, CallClobberedVectorSuffixStaysUnknown) {
     const auto Med = savedFloatingRecord(Calls, false, true);
     const auto Source =
         emit({lowerSavedFloatingRecord(Med)}, true, Arch::AArch64);
-    EXPECT_NE(Source.find("unknown value"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("no recovered semantics"), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
   }
 }
 
@@ -635,7 +897,9 @@ TEST(HighCSourceCalls, BrokenPreservedPrefixChainsRemainUnknown) {
       ASSERT_TRUE(verifyMedFunc(Med, "reduced-preserved-prefix"));
     const auto Source =
         emit({lowerSavedFloatingRecord(Med)}, true, Arch::AArch64);
-    EXPECT_NE(Source.find("unknown value"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("no recovered semantics"), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
   }
 }
 
@@ -667,8 +931,11 @@ TEST(HighCSourceCalls, ReusedConverterRebuildsClobberIdentityAndOrder) {
               emit({lowerSavedFloatingRecord(Med)}, true, Arch::AArch64));
     if (Round == 0 || Round == 3)
       EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
-    if (Round == 1)
-      EXPECT_NE(Source.find("unknown value"), std::string::npos) << Source;
+    if (Round == 1) {
+      EXPECT_NE(Source.find("no recovered semantics"), std::string::npos)
+          << Source;
+      EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
+    }
   }
 }
 
@@ -1475,6 +1742,7 @@ TEST(HighCSourceCalls,
     Functions.push_back(std::move(F));
   }
   const std::string Check = R"(
+#include <string.h>
 int main(void) {
   _Alignas(16) unsigned char bytes[32];
   uint64_t (*stores[])(uint64_t, uint64_t) = {raw_store_0, raw_store_1, raw_store_2};
@@ -1596,8 +1864,9 @@ TEST(HighCSourceCalls, UnknownOnlyTempsFailAtTheirObservableUse) {
       returning("unknown_argument", HighExpr::makeConst(0, 8), {Integer});
   Function.Body.insert(Function.Body.begin(), {Define, Guard});
   const std::string Source = emit({Function});
-  EXPECT_NE(Source.find("__builtin_trap(), 0 /* unknown value */"),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("__builtin_trap(), 0 /* no recovered semantics at 0x0 */"),
+      std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("t731"), std::string::npos) << Source;
   // The harness intercepts the emitted failure intrinsic so both the normal
@@ -2573,6 +2842,99 @@ int main(void) {
         << AllocateSource;
     EXPECT_NE(AllocateSource.find("&neverd_darwin_malloc"), std::string::npos)
         << AllocateSource;
+  }
+}
+
+TEST(HighCSourceCalls, CallbackDeclarationsKeepRecordsArraysAndEllipses) {
+  const auto Record = NdType::makeNamedRecord("Item", 4);
+  const auto Enumeration = NdType::makeNamedRecord("Mode", 4, true);
+  const auto Aggregate = NdType::makePtr(
+      NdType::makeFunc(Record, {Record, NdType::makePtr(Enumeration)}));
+  EXPECT_EQ(declarationToC(Aggregate, "transform"),
+            "Item (*transform)(Item, Mode*)");
+  EXPECT_FALSE(equalSourceTypes(Aggregate, Aggregate));
+  const auto Callback = NdType::makePtr(
+      NdType::makeFunc(NdType::makeInt(4), {NdType::makeFloat(4)}));
+  const auto Table = NdType::makeArray(Callback, 2, 16);
+  EXPECT_EQ(declarationToC(Table, "table"), "int32_t (*table[2])(float)");
+  EXPECT_EQ(typeToC(Table), "int32_t (**)(float)");
+  EXPECT_EQ(declarationToC(NdType::makePtr(Table), "table_pointer"),
+            "int32_t (*(*table_pointer)[2])(float)");
+  const auto Row = NdType::makeArray(NdType::makeInt(4), 3, 12);
+  EXPECT_EQ(declarationToC(NdType::makePtr(Row), "row"), "int32_t (*row)[3]");
+  EXPECT_EQ(typeToC(NdType::makeArray(Row, 2, 24)), "int32_t (*)[3]");
+  const auto Variadic = NdType::makePtr(
+      NdType::makeFunc(NdType::makeInt(4), {NdType::makePtr()},
+                       types::CallingConvention::Unspecified, true));
+  EXPECT_EQ(declarationToC(Variadic, "log"), "int32_t (*log)(void*, ...)");
+  EXPECT_FALSE(equalSourceTypes(Variadic, Variadic));
+  source_call_execution_test::checkSyntax(
+      std::string("#include <stdint.h>\n"
+                  "typedef struct Item { int value; } Item;\n"
+                  "typedef enum Mode { One } Mode;\n"
+                  "typedef int32_t (*Callback)(float);\n") +
+      declarationToC(Aggregate, "transform") + ";\n" +
+      declarationToC(Table, "table") + ";\n" +
+      declarationToC(NdType::makePtr(Table), "table_pointer") + ";\n" +
+      declarationToC(NdType::makePtr(Row), "row") + ";\n" +
+      declarationToC(Variadic, "logger") +
+      ";\n"
+      "_Static_assert(__builtin_types_compatible_p(__typeof__(table), "
+      "Callback[2]), \"array of callbacks\");\n"
+      "_Static_assert(__builtin_types_compatible_p(__typeof__(table_pointer), "
+      "Callback (*)[2]), \"pointer to callback array\");\n"
+      "_Static_assert(__builtin_types_compatible_p(__typeof__(row), "
+      "int32_t (*)[3]), \"pointer to scalar array\");\n"
+      "_Static_assert(__builtin_types_compatible_p(__typeof__(logger), "
+      "int32_t (*)(void *, ...)), \"ellipsis\");\n");
+  for (const auto &Invalid :
+       {NdType::makeFunc(nullptr), NdType::makeFunc(Table),
+        NdType::makeFunc(NdType::makeVoid(), {nullptr}),
+        NdType::makeFunc(NdType::makeVoid(), {NdType::makeVoid()}),
+        NdType::makeFunc(NdType::makeVoid(), {},
+                         types::CallingConvention::Unspecified, true)})
+    EXPECT_THROW(declarationToC(NdType::makePtr(Invalid), "invalid"),
+                 std::invalid_argument);
+  auto Cycle = NdType::makeArray(nullptr, 1, 8);
+  Cycle->ElemType = Cycle;
+  EXPECT_THROW(declarationToC(Cycle, "invalid"), std::invalid_argument);
+  Cycle->ElemType.reset();
+}
+
+TEST(HighCSourceCalls, CallbackDeclarationsUseSupportedScalarSpellings) {
+  for (unsigned Bytes : {2u, 4u, 8u, 10u, 12u, 16u}) {
+    const auto Scalar = NdType::makeFloat(Bytes);
+    const auto Callback = NdType::makePtr(NdType::makeFunc(Scalar, {Scalar}));
+    EXPECT_EQ(declarationToC(Callback, "transform"),
+              typeToC(Scalar) + " (*transform)(" + typeToC(Scalar) + ")");
+    source_call_execution_test::checkSyntax(
+        declarationToC(Callback, "transform") + ";\n");
+  }
+  const auto Unsupported = NdType::makeFloat(3);
+  EXPECT_THROW(
+      declarationToC(
+          NdType::makePtr(NdType::makeFunc(Unsupported, {Unsupported})), "bad"),
+      std::invalid_argument);
+}
+
+TEST(HighCSourceCalls, CallbackVectorDeclarationsPreserveLaneTypes) {
+  for (const auto &Lane :
+       {NdType::makeFloat(4), NdType::makeFloat(8), NdType::makeInt(1, false),
+        NdType::makeInt(8, true)}) {
+    auto Vector = NdType::makeVector(Lane, 16 / Lane->Size, 16);
+    const auto Callback = NdType::makePtr(NdType::makeFunc(Vector, {Vector}));
+    const std::string Expected =
+        typeToC(Lane) + " __attribute__((vector_size(16)))";
+    EXPECT_EQ(declarationToC(Callback, "transform"),
+              Expected + " (*transform)(" + Expected + ")");
+    EXPECT_FALSE(equalSourceTypes(Callback, Callback));
+    source_call_execution_test::checkSyntax(
+        "#include <stdint.h>\ntypedef " + Expected + " LaneVector;\n" +
+        declarationToC(Callback, "transform") +
+        ";\n_Static_assert(__builtin_types_compatible_p(__typeof__(transform), "
+        "LaneVector (*)(LaneVector)), \"vector callback type\");\n");
+    Vector->ArrayCount = 3;
+    EXPECT_THROW(declarationToC(Callback, "bad"), std::invalid_argument);
   }
 }
 
@@ -3829,6 +4191,55 @@ TEST(HighCSourceCalls, PreparedImageFunctionNamesPreserveEmission) {
   EXPECT_EQ(Emit(Prepared, Other), Emit(Plain, Other));
 }
 
+TEST(HighCSourceCalls, PreparedDataSymbolBindingsPreserveEmission) {
+  BinaryImage Image;
+  Image.Format = BinaryFormat::ELF;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Segment Data;
+  Data.VA = 0x10000 - 8;
+  Data.Size = 32;
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Data.Data.assign(Data.Size, 0);
+  Image.Segments.push_back(Data);
+  RelocationEntry Relocation;
+  Relocation.Address = Data.VA;
+  Relocation.Type = llvm::ELF::R_AARCH64_GLOB_DAT;
+  Relocation.Addend = 0;
+  Relocation.HasExplicitAddend = true;
+  Relocation.ELF.emplace();
+  auto &Symbol = Relocation.ELF->Symbol.emplace();
+  Symbol.Name = "weak_data";
+  Symbol.Binding = llvm::ELF::STB_WEAK;
+  Symbol.Type = llvm::ELF::STT_OBJECT;
+  Image.Relocations.push_back(std::move(Relocation));
+  Image.ELFMetadata.emplace();
+  Image.ELFMetadata->Type = llvm::ELF::ET_DYN;
+  Image.ELFMetadata->ProgramHeaders.push_back(
+      {llvm::ELF::PT_GNU_RELRO, 0, 0, Data.VA, 8, 8, 1});
+
+  const auto Word = NdType::makeInt(8, false);
+  auto Func = returning(
+      "read_slot", HighExpr::makeLoad(HighExpr::makeConst(Data.VA, 8), Word));
+  Func.Entry = 0x20000;
+  const auto Emit = [&](HighCEmitter &Emitter) {
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    EXPECT_TRUE(Emitter.emit({Func}, OS, Options));
+    return Source;
+  };
+  HighCEmitter Plain;
+  HighCEmitter Prepared;
+  Prepared.prepareImageFunctionNames(Image);
+  const auto Source = Emit(Prepared);
+  EXPECT_EQ(Source, Emit(Plain));
+  EXPECT_NE(Source.find("weak_data"), std::string::npos) << Source;
+}
+
 TEST(HighCSourceCalls,
      TypedBlockDispatchExecutesCapturedIntegerAndMixedFloatValues) {
   auto Pointer = NdType::makePtr(NdType::makeVoid());
@@ -4544,7 +4955,8 @@ TEST(HighCSourceCalls, PartialIntegerCarriersPreserveWideValuesAndShiftBounds) {
       Function.Body.insert(Function.Body.begin(), Store);
       Functions.push_back(std::move(Function));
     }
-    compileAndRun(emit(Functions) + "\n#define BYTES " + std::to_string(Bytes) +
+    compileAndRun(emit(Functions) + "\n#include <string.h>\n#define BYTES " +
+                  std::to_string(Bytes) +
                   R"(
 int main(void) {
     unsigned char input[BYTES], output[BYTES + 2];

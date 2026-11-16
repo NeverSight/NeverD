@@ -368,11 +368,26 @@ ExprPtr MedToHighConverter::inlineableDefinition(VarKey Key) const {
     Value = Value->Operands[0].get();
   if (!Value || Value->Kind == ExprKind::Call)
     return nullptr;
+  // A shared floating computation remains one assignment. Register-width
+  // views and forced source slices must not expand it at every comparison.
+  if (Value->Type && Value->Type->Kind == NdTypeKind::Float &&
+      Value->Kind != ExprKind::Var && Value->Kind != ExprKind::Const)
+    if (const auto Uses = UseCount.find(Key);
+        Uses != UseCount.end() && Uses->second > 1)
+      return nullptr;
   return It->second;
 }
 
 TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
   if (Op.SourceCallHint && sourceCallRetainsResultStorage(*Op.SourceCallHint))
+    return NdType::makeVoid();
+  if (Op.RegisterReturnFields &&
+      llvm::any_of(*Op.RegisterReturnFields,
+                   [](const auto &Field) { return Field.IsFP; }))
+    return multiRegisterReturnType(*Op.RegisterReturnFields);
+  if (Op.ScalarCallSignature && !Op.ScalarCallSignature->ReturnBytes &&
+      boundFloatingCallArguments(
+          Op, TargetArch, Image ? Image->abiFormat() : BinaryFormat::Unknown))
     return NdType::makeVoid();
   if (Op.SourceCallHint &&
       isNativeSwiftErrorSourceCall(*Op.SourceCallHint, TargetArch))
@@ -383,6 +398,12 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
     if (auto Type = sourceABICallResultType(Op.SourceCallHint->Signature);
         Type && Type->Size == Op.Output.Size)
       return Type;
+  if (Op.ScalarCallSignature &&
+      Op.ScalarCallSignature->ReturnKind != NdTypeKind::Float)
+    if (const auto Types = floatingCallTypes(
+            TargetArch, Image ? Image->abiFormat() : BinaryFormat::Unknown,
+            *Op.ScalarCallSignature))
+      return Types->Result;
   // The packed MedIR temporary owns all HFA result registers. Keep those
   // fields in HighIR instead of inventing an integer wider than the C target
   // supports. The bound signature validates every result and argument lane.
@@ -509,6 +530,44 @@ ExprPtr MedToHighConverter::medvarToExpr(const MedVar &V) {
         return Scalar;
       return HighExpr::makeVar(Param, Type);
     }
+  }
+
+  // SSA version -1 is the rename sentinel for a register no definition and
+  // no alias write has replaced. It is the parameter that arrived there, at
+  // that parameter's own width: a wider view must not gain unknown high
+  // bytes. A register no parameter arrives in is still unknown.
+  if (CurMed && V.Kind == MedVar::Reg && V.SSAVer < 0) {
+    int Slot = -1;
+    for (size_t I = 0; I < CurMed->Params.size(); ++I) {
+      const MedVar &P = CurMed->Params[I];
+      if (P.RegOff != kNoParamReg && P.RegOff == V.RegOff) {
+        Slot = static_cast<int>(I);
+        break;
+      }
+    }
+    if (Slot >= 0) {
+      const MedVar &P = CurMed->Params[static_cast<size_t>(Slot)];
+      MedVar Param = P;
+      Param.Kind = MedVar::Param;
+      Param.Id = Slot;
+      Param.SSAVer = 0;
+      Param.Size = P.Size;
+      TypeRef Type;
+      if (static_cast<size_t>(Slot) < CurMed->TypedParams.size())
+        Type = CurMed->TypedParams[static_cast<size_t>(Slot)].Type;
+      if (Type && Type->Size != P.Size)
+        Type = NdType::makeInt(P.Size);
+      if (V.Size > P.Size) {
+        auto Value = HighExpr::makeVar(Param, Type);
+        if (Type && Type->Kind == NdTypeKind::Float)
+          Value = HighExpr::makeBitCast(Value, NdType::makeInt(P.Size, false));
+        return sourceBitSlice(Value, 0, V.Size);
+      }
+      if (auto Scalar = ScalarParameter(Param, static_cast<size_t>(Slot)))
+        return Scalar;
+      return HighExpr::makeVar(Param, Type);
+    }
+    return HighExpr::makeUndef(V.Size);
   }
 
   if (CurMed && V.Kind == MedVar::Reg) {
@@ -698,8 +757,45 @@ const PhiNode *MedToHighConverter::uniqueMedPhi(const MedVar &V) {
   return EntryStackOffsets->uniquePhi(V);
 }
 
+ExprPtr MedToHighConverter::darwinVariadicStackAddress(
+    DarwinVariadicStackValue Source) {
+  if (!Source.Base || TargetArch != Arch::AArch64 || !Image || !CurMed ||
+      !usesDarwinVariadicEntryStack(*CurMed, TargetArch, Image->abiFormat()))
+    return nullptr;
+  const MedVar &Value = *Source.Base;
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  if (Value.Size != TRI.PointerSize)
+    return nullptr;
+  indexMedDefinitions();
+  const auto BaseOffset = EntryStackOffsets->offset(Value);
+  if (!BaseOffset)
+    return nullptr;
+  const int64_t Offset = Source.offsetFrom(*BaseOffset);
+
+  ExprPtr Base;
+  if (Offset >= CurMed->VariadicOverflowBase) {
+    Base = std::make_shared<HighExpr>();
+    Base->Kind = ExprKind::IncomingStack;
+    Base->Type = NdType::makeInt(Value.Size, false);
+  } else {
+    // Locals and named homes belong to the reconstructed private frame.
+    MedVar SP;
+    SP.Kind = MedVar::Reg;
+    SP.TheArch = TargetArch;
+    SP.RegOff = TRI.StackPointer;
+    SP.Size = Value.Size;
+    Base = HighExpr::makeVar(SP);
+  }
+  if (!Offset)
+    return Base;
+  return HighExpr::makeBinop(NdOp::INT_ADD, std::move(Base),
+                             HighExpr::makeConst(Offset, Value.Size));
+}
+
 ExprPtr MedToHighConverter::memoryAddressExpr(const MedVar &V,
                                               bool InlineDefinition) {
+  if (auto Address = darwinVariadicStackAddress({&V}))
+    return Address;
   if (CurMed && TargetArch == Arch::X86 && Image &&
       (!Image->isELF() || !Image->IsRelocatable))
     if (auto Address = foldI386PicAddress(*CurMed, V, [&](const MedVar &Value) {
@@ -740,6 +836,12 @@ ExprPtr MedToHighConverter::sourceBitSlice(const ExprPtr &Value,
   if (!Value || !Bytes ||
       Depth > ::neverd::limits::ir::kMedToHighConverterSourceBitSliceDepthLimit)
     return HighExpr::makeUndef(Bytes);
+  if (Value->Kind == ExprKind::Var)
+    if (const auto Found = SourcePhiSlices.find(varKey(Value->Var));
+        Found != SourcePhiSlices.end())
+      if (const auto Slice = Found->second.find({ByteOffset, Bytes});
+          Slice != Found->second.end())
+        return HighExpr::makeVar(Slice->second, NdType::makeInt(Bytes, false));
   if (Value->Kind == ExprKind::Var && Value->Var.Kind != MedVar::Param)
     if (auto Definition = inlineableDefinition(varKey(Value->Var)))
       if (Definition.get() != Value.get())
@@ -1002,11 +1104,62 @@ ExprPtr MedToHighConverter::forceInlineCallTarget(const ExprPtr &E) {
 // buildExpressions
 //===----------------------------------------------------------------------===//
 
+void MedToHighConverter::collectSourcePhiSlices(const MedFunc &Med) {
+  std::vector<const MedOp *> Requests;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (!Op.Dead && Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst() && PhiOutputVars.count(varKey(Op.Inputs[0])))
+        Requests.push_back(&Op);
+  if (Requests.empty())
+    return;
+  VarKeyMap<const PhiNode *> Phis;
+  for (const auto &Block : Med.Blocks)
+    if (Block.ExceptionalPreds.empty())
+      for (const auto &Phi : Block.Phis)
+        if (!Phi.ExceptionalEntry)
+          Phis.emplace(varKey(Phi.Output), &Phi);
+  using SliceRange = std::pair<uint64_t, uint16_t>;
+  std::vector<std::pair<VarKey, SliceRange>> Pending;
+  const auto Add = [&](VarKey Key, SliceRange Range) {
+    const auto Found = Phis.find(Key);
+    if (Found == Phis.end() || Range.first >= Found->second->Output.Size ||
+        !Range.second ||
+        Range.second > Found->second->Output.Size - Range.first ||
+        Range.second == Found->second->Output.Size)
+      return;
+    auto [It, Inserted] = SourcePhiSlices[Key].try_emplace(Range);
+    if (!Inserted)
+      return;
+    MedVar &Value = It->second;
+    Value.Kind = MedVar::Temp;
+    Value.Id = NextHighTempId++;
+    Value.Size = Range.second;
+    Value.TheArch = TargetArch;
+    PhiOutputVars.insert(varKey(Value));
+    Pending.emplace_back(Key, Range);
+  };
+  for (const auto *Op : Requests)
+    Add(varKey(Op->Inputs[0]), {Op->Inputs[1].ConstVal, Op->Output.Size});
+  // A slice follows the same edges as its whole PHI. Index each (PHI, range)
+  // once, including cycles, and keep effectful incoming definitions shared.
+  for (size_t I = 0; I < Pending.size(); ++I) {
+    const auto [Key, Range] = Pending[I];
+    for (const auto &[Pred, Input] : Phis.at(Key)->Args) {
+      (void)Pred;
+      if (Input.Id >= 0)
+        ++UseCount[varKey(Input)];
+      Add(varKey(Input), Range);
+    }
+  }
+}
+
 void MedToHighConverter::buildExpressions(const MedFunc &Med) {
   UseCount.clear();
   DefExpr.clear();
   SourceRecordValues.clear();
   SourceFloatCallValues.clear();
+  SourcePhiSlices.clear();
   collectI386GotBase(Med);
   collectI386PcRootedValues(Med);
   for (const auto &Block : Med.Blocks)
@@ -1100,6 +1253,32 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
         UseCount[varKey(Arg)]++;
   }
 
+  collectSourcePhiSlices(Med);
+
+  // A scalar can have one immediate use (its widened register) and many
+  // consumers through that register's views. Propagate sharing backwards
+  // once through those transports, without expanding expression trees.
+  VarKeyMap<VarKey> ViewInputs;
+  for (const MedBlock &Block : Med.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Output.Id >= 0 && Op.NumInputs && Op.Inputs[0].Id >= 0 &&
+          (Op.Opcode == NdOp::COPY || Op.Opcode == NdOp::INT_ZEXT ||
+           Op.Opcode == NdOp::INT_SEXT ||
+           (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+            Op.Inputs[1].isConst())))
+        ViewInputs.emplace(varKey(Op.Output), varKey(Op.Inputs[0]));
+  VarKeySet SharedViews;
+  std::vector<VarKey> SharedWork;
+  for (const auto &[Key, Count] : UseCount)
+    if (Count > 1) {
+      SharedViews.insert(Key);
+      SharedWork.push_back(Key);
+    }
+  for (size_t I = 0; I != SharedWork.size(); ++I)
+    if (const auto View = ViewInputs.find(SharedWork[I]);
+        View != ViewInputs.end() && SharedViews.insert(View->second).second)
+      SharedWork.push_back(View->second);
+
   // Build each definition before its uses: a use builds its single-use
   // definition inline, and a definition that is not yet built leaves a name
   // whose assignment is never emitted. Block order is not dominance order (a
@@ -1140,6 +1319,12 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
       if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
         auto Key = varKey(Op.Output);
         DefExpr[Key] = medOpToExpr(Op);
+        const auto &Definition = DefExpr[Key];
+        if (SharedViews.count(Key) && Definition &&
+            Definition->Kind == ExprKind::BitCast &&
+            Definition->Operands.size() == 1 && Definition->Operands[0]->Type &&
+            Definition->Operands[0]->Type->Kind == NdTypeKind::Float)
+          UseCount[Key] = std::max(UseCount[Key], 2);
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
             Op.Opcode == NdOp::INTRINSIC)
           CallOutputs.insert(Key);
@@ -1178,13 +1363,14 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       (!Func.FrameSize && !Func.FrameHeadroom))
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
+  const auto AddressBytes = TRI.addressRegisterBytes();
   const auto &LSDA = *Med.ExceptionMetadata->Itanium;
   const MedVar *EntryStack = nullptr;
   for (const MedOp &Op : Med.Blocks.front().Ops)
     if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
         Op.Output == Op.Inputs[0] && Op.Output.Kind == MedVar::Reg &&
         Op.Output.RegOff == TRI.StackPointer &&
-        Op.Output.Size == TRI.PointerSize && Op.Output.SSAVer == 0)
+        Op.Output.Size == AddressBytes && Op.Output.SSAVer == 0)
       EntryStack = &Op.Output;
   if (!EntryStack)
     return;
@@ -1197,7 +1383,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
   for (uint64_t Register : TRI.CalleeSaveRegs)
     if (!TRI.isVectorReg(Register) && !llvm::is_contained(Registers, Register))
       Registers.push_back(Register);
-  // These facts require a complete pointer, not the argument scanner's
+  // These facts require a complete address register, not the argument scanner's
   // narrower register views. Index each block's full-width PHIs and last
   // writes once, then share predecessor queries across all protected calls.
   using RegisterKey = std::pair<int, size_t>;
@@ -1207,7 +1393,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       for (const PhiNode &Phi : Block.Phis)
         if (Phi.Output.Kind == MedVar::Reg &&
             Phi.Output.RegOff == Registers[R] &&
-            Phi.Output.Size == TRI.PointerSize)
+            Phi.Output.Size == AddressBytes)
           Entries[{Block.Id, R}] = Phi.Output;
       for (const MedOp &Op : Block.Ops) {
         if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
@@ -1215,15 +1401,15 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
             Op.Inputs[1].ConstVal == 0 &&
             Op.Output.RegOff == Op.Inputs[0].RegOff &&
             Op.Output.Size <= Op.Inputs[0].Size)
-          continue; // a synchronized view does not write the pointer
+          continue; // a synchronized view does not write the address
         const auto Write = [&](const MedVar &V) {
           if (V.Kind == MedVar::Reg && V.Size &&
-              V.RegOff < Registers[R] + TRI.PointerSize &&
+              V.RegOff < Registers[R] + AddressBytes &&
               Registers[R] < V.RegOff + V.Size)
             Exits[{Block.Id, R}] =
-                V.RegOff == Registers[R] && V.Size == TRI.PointerSize
+                V.RegOff == Registers[R] && V.Size == AddressBytes
                     ? V
-                    : MedVar::makeUnspecified(TRI.PointerSize, TargetArch);
+                    : MedVar::makeUnspecified(AddressBytes, TargetArch);
         };
         Write(Op.Output);
         for (const MedVar &V : Op.IntrinsicOutputs)
@@ -1231,7 +1417,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
         if (&Block == &Med.Blocks.front() && Op.Opcode == NdOp::COPY &&
             Op.NumInputs == 1 && Op.Output == Op.Inputs[0] &&
             Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == Registers[R] &&
-            Op.Output.Size == TRI.PointerSize)
+            Op.Output.Size == AddressBytes)
           Entries[{Block.Id, R}] = Op.Output;
       }
     }
@@ -1269,7 +1455,7 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
     if (Block.ExceptionalSuccs.empty())
       continue;
     FrameValues Current(Registers.size(),
-                        MedVar::makeUnspecified(TRI.PointerSize, TargetArch));
+                        MedVar::makeUnspecified(AddressBytes, TargetArch));
     for (size_t R = 0; R != Registers.size(); ++R)
       if (const auto Value = Entries.find({Block.Id, R});
           Value != Entries.end())
@@ -1288,12 +1474,12 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
         if (Value.Kind != MedVar::Reg || !Value.Size)
           return;
         for (size_t R = 0; R != Registers.size(); ++R)
-          if (Value.RegOff < Registers[R] + TRI.PointerSize &&
+          if (Value.RegOff < Registers[R] + AddressBytes &&
               Registers[R] < Value.RegOff + Value.Size)
             Current[R] =
-                Value.RegOff == Registers[R] && Value.Size == TRI.PointerSize
+                Value.RegOff == Registers[R] && Value.Size == AddressBytes
                     ? Value
-                    : MedVar::makeUnspecified(TRI.PointerSize, TargetArch);
+                    : MedVar::makeUnspecified(AddressBytes, TargetArch);
       };
       Written(Op.Output);
       for (const MedVar &Aux : Op.IntrinsicOutputs)
@@ -1311,8 +1497,8 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
       Exceptional.insert(Edge.BlockId);
     for (PhiNode &Phi : Block.Phis) {
       const auto Register = llvm::find(Registers, Phi.Output.RegOff);
-      if (Phi.Output.Kind != MedVar::Reg ||
-          Phi.Output.Size != TRI.PointerSize || Register == Registers.end())
+      if (Phi.Output.Kind != MedVar::Reg || Phi.Output.Size != AddressBytes ||
+          Register == Registers.end())
         continue;
       decltype(Phi.Args) Inputs;
       for (const auto &[Pred, Value] : Phi.Args) {
@@ -1337,11 +1523,10 @@ void MedToHighConverter::collectItaniumCallFrameOffsets(HighFunc &Func,
           ExprPtr Address = HighExpr::makeBinop(
               NdOp::INT_ADD,
               HighExpr::makeVar(*EntryStack,
-                                NdType::makeInt(TRI.PointerSize, false)),
-              HighExpr::makeConst(static_cast<uint64_t>(*Offset),
-                                  TRI.PointerSize,
+                                NdType::makeInt(AddressBytes, false)),
+              HighExpr::makeConst(static_cast<uint64_t>(*Offset), AddressBytes,
                                   ConstantAddressProvenance::Scalar));
-          Address->Type = NdType::makeInt(TRI.PointerSize, false);
+          Address->Type = NdType::makeInt(AddressBytes, false);
           Func.ItaniumCallFrameOffsets.emplace_back(Phi.Output,
                                                     std::move(Address));
         }
@@ -1751,6 +1936,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     }
   Func.Entry = Med.Entry;
   Func.FrameBytes = Med.FrameBytes;
+  Func.ImageBytes = Med.ImageBytes;
   Func.FrameSize = Med.FrameSize;
   Func.FrameHeadroom = Med.FrameHeadroom;
   // The incoming stack argument homes seeded below, written in place or read
@@ -1775,6 +1961,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.DoesNotReturn = Med.DoesNotReturn;
   Func.ReturnsNoValue = Med.ReturnsNoValue;
   Func.IsVariadic = Med.IsVariadic;
+  Func.UsesNativeVariadicStack = usesDarwinVariadicEntryStack(
+      Med, TheArch, Image ? Image->abiFormat() : BinaryFormat::Unknown);
   Func.VaListDisplacement = Med.VaListDisplacement;
   Func.VaRegisterSaveArea = Med.VaRegisterSaveArea;
   Func.VaNamedIntegerRegisters = Med.VaNamedIntegerRegisters;

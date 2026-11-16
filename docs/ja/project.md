@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI・統合側・AI エージェントは **純粋 C API** 経由で同じエ�
 
 > 表の全セルは実装済みですが、統合テストの深さは異なります。詳細は[アーキテクチャのカバレッジ表](architecture.md#support-and-test-depth)を参照してください。Mach-O i386 では、現代の macOS が旧式の i386 実行ファイルをリンクできないため、`thin` 再配置可能オブジェクトを使用します。
 
-**MIPS ELF 解析は実験的な対応です。** MIPS32r2/o32 と MIPS64r2/n64 の両エンディアンで、厳密に限定した整数命令の逆アセンブル、CFG 復元、C および LLVM 出力に対応します。ネイティブコードの書き換えには対応していません。[MIPS の対応範囲とファームウェアの例（英語）](../mips.md)で、個別に検証された microMIPS32、DSP、MIPS32r5 MSA の各サブセットとソース出力の制約を確認してください。
+**MIPS ELF 解析は実験的な対応です。** MIPS32r2/o32 と MIPS64r2/n64 の両エンディアンで、厳密に限定した整数命令の逆アセンブル、CFG 復元、C および LLVM 出力に対応します。ネイティブコードの書き換えには対応していません。[MIPS の対応範囲とファームウェアの例（英語）](../mips.md)で、個別に検証された microMIPS32、MIPS16e/e2、DSP、MIPS32r5 MSA の各サブセットとソース出力の制約を確認してください。
 
 legacy EVM bytecode は native container と独立して対応します。Frontier から Fusaka
 までの 150 assigned opcode が専用 Low/Med/High IR、verified LLVM `i256`、C23
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |----------|------|------|
 | `lift` | `.ll` | LLVM IR へリフト |
 | `decompile` | `.c` / `.sol` / `.rs` | `--language` で C、EVM Solidity、SBF Rust を選択 |
+| `decompile --check-all` | 件数 | 読み込まれた各関数を既定の C 経路で処理し、確認後に関数本体を破棄 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `decompile --devirtualize` | `.c` + 任意の JSON | 実験的な x64 インタープリター復元。`--func` が必須。[契約と例](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 実験的: [Android](android.md), [iOS](ios.md) |

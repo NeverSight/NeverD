@@ -31,6 +31,9 @@ inline constexpr int kInterpreterRecoveryDialogWidth = 640;
 inline constexpr int kInterpreterRecoveryDialogHeight = 600;
 inline constexpr int kInterpreterRecoveryReportWidth = 760;
 inline constexpr int kInterpreterRecoveryReportHeight = 560;
+// Initial size of the scrollable, complete conditional string evidence view.
+inline constexpr int kComputedStringDetailsWidth = 760;
+inline constexpr int kComputedStringDetailsHeight = 560;
 inline constexpr int kPatchPreviewDelayMs = 180;
 inline constexpr int kPatchEditorWidth = 620;
 inline constexpr int kPatchAnchorGap = 4;
@@ -78,6 +81,15 @@ inline constexpr double kComparisonZoomStep = 1.2;
 inline constexpr int kComparisonInitialWidth = 1280;
 inline constexpr int kComparisonInitialHeight = 800;
 inline constexpr int kComparisonMinimumWidth = 760;
+/// Commands of one group stand this close in their row, and the groups this
+/// far apart.
+inline constexpr int kComparisonCommandSpacing = 2;
+inline constexpr int kComparisonCommandGroupSpacing = 12;
+/// The room between two panes that hold controls, as Binary comparison's
+/// inventory and details, the version graph's snapshots and pages, and MCP
+/// connections' catalog and result: the hairline that parts them with a
+/// layout's spacing on either side, so the controls of neither pane touch it.
+inline constexpr int kPaneGutter = 13;
 /// Keep source code readable below the comparison and paging controls.
 inline constexpr int kComparisonMinimumHeight = 640;
 /// Digest display prefix; full identities remain in row evidence and tooltips.
@@ -129,6 +141,8 @@ inline constexpr int kChooserViewMaxCachedPages = 64;
 inline constexpr int kChooserViewMaxRefreshLookups = kChooserViewMaxCachedPages;
 inline constexpr int kChooserViewMaxPendingPages = 4;
 inline constexpr int kChooserViewFilterDebounceMs = 150;
+/// Refresh elapsed time without repopulating any table rows.
+inline constexpr int kChooserViewStatusIntervalMs = 500;
 inline constexpr int kChooserViewChooserModelRequestPageTextLimit = 400;
 
 // tools/neverd-gui/app/CodeView.cpp
@@ -142,6 +156,22 @@ inline constexpr int kAnalysisAbandonedReadRestores = 2;
 /// the pages its views keep (kQueryServiceKeptPages); past this it forgets
 /// them all, and those pages go to the replica.
 inline constexpr int kAnalysisOwnerPageNames = 256;
+/// The pages read at the revision an edit leaves whose reads the edit carries
+/// to answer after it (QueryService, the worker's "then").
+inline constexpr int kQueryServiceThenReads = 2;
+/// The reads of their own that views have an edit carry beside those pages
+/// (QueryService::carryWithEdits): the lines the listing shows.  The worker
+/// answers four reads with a request.
+inline constexpr int kQueryServiceThenCarried = 1;
+/// The pages a code view takes at once where an edit's reply carried them, one
+/// asked for as the one before it is taken: those the reply carries, and one
+/// turn to find there is no more.
+inline constexpr int kCodeViewPagesTakenAtOnce = kQueryServiceThenReads + 1;
+/// The lines of its viewport a code view lays out while a rename that will
+/// write them is with the worker.  A layout built cold takes a good part of
+/// the answer's way back, so the few a call site or a definition shows are
+/// made ready and the rest are laid out as they are painted.
+inline constexpr int kCodeViewLinesMadeReadyForRename = 4;
 /// A completed function's display-name refresh can batch existing text. Keep
 /// the interactive first load small, and retry it if a batch exceeds bytes.
 inline constexpr int kCodeViewNameRefreshPageLines =
@@ -359,9 +389,6 @@ inline constexpr int kDefaultMcpStartupSamples = 3;
 
 // tools/neverd-gui/mcp/GuiSessionBroker.cpp
 inline constexpr int kGuiRouteTimeoutMilliseconds = 120000;
-
-// tools/neverd-gui/LibraryCodeView.cpp
-inline constexpr int kMaxLibraryViewByteOffset = 32 * 1024 * 1024;
 
 // tools/neverd-gui/LibraryCodeView.cpp
 inline constexpr int kMaxLibraryViewOrdinal = 8192;

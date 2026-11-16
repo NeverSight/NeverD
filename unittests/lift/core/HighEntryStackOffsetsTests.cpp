@@ -8,6 +8,8 @@
 #include "../../../lib/ir/high/lower/HighEntryStackOffsets.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ir/high/MedToHigh.h"
+
 #include <algorithm>
 #include <functional>
 #include <limits>
@@ -38,7 +40,8 @@ struct Fixture {
     V.Kind = MedVar::Temp;
     V.Id = ID;
     V.SSAVer = ID ? 1 : 0;
-    V.Size = Width ? Width : getTargetRegInfo(Architecture).PointerSize;
+    V.Size =
+        Width ? Width : getTargetRegInfo(Architecture).addressRegisterBytes();
     V.TheArch = Architecture;
     return V;
   }
@@ -194,15 +197,20 @@ std::optional<int64_t> pathOracle(const std::vector<Equation> &Graph,
 } // namespace
 
 TEST(HighEntryStackOffsets, BalancedLoopKeepsEveryIntermediateOffset) {
-  Fixture F;
-  const auto Initial = F.add(1, F.SP, -32);
-  const auto Header = F.phi(2, {Initial, F.value(4)});
-  const auto Pushed = F.add(3, Header, 16, true);
-  const auto Restored = F.add(4, Pushed, 16);
-  HighEntryStackOffsets Offsets(F.Function, F.Architecture);
-  for (const auto &V : {Header, Pushed, Restored, Initial}) {
-    EXPECT_EQ(Offsets.offset(V), legacyOffset(F, V));
-    EXPECT_EQ(Offsets.offset(V), V.Id == 3 ? -48 : -32);
+  for (const Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
+                       Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                       Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    Fixture F(A);
+    const auto Initial = F.add(1, F.SP, -32);
+    const auto Header = F.phi(2, {Initial, F.value(4)});
+    const auto Pushed = F.add(3, Header, 16, true);
+    const auto Restored = F.add(4, Pushed, 16);
+    HighEntryStackOffsets Offsets(F.Function, F.Architecture);
+    for (const auto &V : {Header, Pushed, Restored, Initial}) {
+      EXPECT_EQ(Offsets.offset(V), legacyOffset(F, V));
+      EXPECT_EQ(Offsets.offset(V), V.Id == 3 ? -48 : -32);
+    }
   }
 }
 
@@ -458,7 +466,10 @@ TEST(HighEntryStackOffsets, CoupledPhiCyclesRequireCompleteGlobalProof) {
 }
 
 TEST(HighEntryStackOffsets, ScalarWidthAndNativePointerViewsStayDistinct) {
-  for (Arch A : {Arch::X64, Arch::X86, Arch::AArch64, Arch::ARM}) {
+  for (Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64, Arch::MIPS32,
+                 Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
     Fixture F(A);
     const auto SmallLiteral = F.add(1, F.SP, 0xf0, false, 1);
     const auto Negative = F.add(2, F.SP, -16);
@@ -479,6 +490,11 @@ TEST(HighEntryStackOffsets, ScalarWidthAndNativePointerViewsStayDistinct) {
     EXPECT_EQ(Offsets.offset(Truncated), std::nullopt);
     EXPECT_EQ(Offsets.offset(OverWide), std::nullopt);
     EXPECT_EQ(Offsets.offset(ConstantRoot), std::nullopt);
+    if (isMIPSN32(A)) {
+      auto PointerView = F.SP;
+      PointerView.Size = 4;
+      EXPECT_EQ(Offsets.offset(PointerView), std::nullopt);
+    }
   }
 }
 
@@ -590,4 +606,98 @@ TEST(HighEntryStackOffsets, SharedIndexesKeepDefinitionAndPhiIdentities) {
   F.Function.Blocks.front().Phis.clear();
   HighEntryStackOffsets Next(F.Function, F.Architecture);
   EXPECT_EQ(Next.uniquePhi(Join), nullptr);
+}
+
+TEST(HighEntryStackOffsets, ItaniumCallFramesKeepTheMachineAddressWidth) {
+  for (const Arch A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64,
+                       Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64,
+                       Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    Fixture F(A);
+    auto &M = F.Function;
+    M.FrameSize = 64;
+    M.ReturnType = NdType::makeVoid();
+    M.Blocks.resize(2);
+    auto &Entry = M.Blocks[0];
+    auto &Pad = M.Blocks[1];
+    Entry.Id = 0;
+    Entry.StartAddr = M.Entry;
+    Entry.EndAddr = M.Entry + 0x40;
+    Pad.Id = 1;
+    Pad.StartAddr = M.Entry + 0x100;
+    Pad.EndAddr = Pad.StartAddr + 4;
+    ExceptionalEdge ToPad;
+    ToPad.BlockId = Pad.Id;
+    ToPad.TargetVA = Pad.StartAddr;
+    ToPad.Kind = ExceptionalEdgeKind::ItaniumCleanupPad;
+    Entry.ExceptionalSuccs.push_back(ToPad);
+    auto FromEntry = ToPad;
+    FromEntry.BlockId = Entry.Id;
+    Pad.ExceptionalPreds.push_back(FromEntry);
+    const auto SP = [&](int Version) {
+      auto V = F.SP;
+      V.SSAVer = Version;
+      return V;
+    };
+    MedOp Seed;
+    Seed.Opcode = NdOp::COPY;
+    Seed.Output = F.SP;
+    Seed.addInput(F.SP);
+    Entry.Ops.push_back(Seed);
+    MedOp Allocate;
+    Allocate.Opcode = NdOp::INT_SUB;
+    Allocate.Output = SP(1);
+    Allocate.addInput(F.SP);
+    Allocate.addInput(MedVar::makeConst(32, F.SP.Size));
+    Entry.Ops.push_back(Allocate);
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.Addr = M.Entry + 8;
+    Call.addInput(MedVar::makeConst(0x2000, F.SP.Size));
+    Entry.Ops.push_back(Call);
+    MedCallInfo Info;
+    Info.BlockId = Entry.Id;
+    Info.OpIdx = 2;
+    Info.TargetAddr = 0x2000;
+    Info.TargetName = "observe";
+    M.CallInfos.push_back(Info);
+    // A range can include an epilogue whose restored register is no longer
+    // an entry-frame coordinate. The landing pad needs the value at CALL.
+    MedOp Restore;
+    Restore.Opcode = NdOp::COPY;
+    Restore.Output = SP(2);
+    Restore.addInput(MedVar::makeUnspecified(F.SP.Size, A));
+    Entry.Ops.push_back(Restore);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Entry.Ops.push_back(Return);
+    Pad.Ops.push_back(Return);
+    PhiNode Phi;
+    Phi.Output = SP(3);
+    Phi.Args.emplace_back(Entry.Id, Restore.Output);
+    Pad.Phis.push_back(Phi);
+    M.ExceptionMetadata.emplace();
+    auto &EH = *M.ExceptionMetadata;
+    EH.CodeRange = {M.Entry, Pad.EndAddr};
+    EH.Encoding = ExceptionEncoding::DwarfFDE;
+    EH.ParseStatus = ExceptionParseStatus::Complete;
+    EH.Personality = ExceptionPersonality::GxxPersonalityV0;
+    EH.Itanium.emplace();
+    EH.Itanium->IsCallSiteAddressForm = true;
+    ItaniumCallSite Site;
+    Site.GuardedRange = {Entry.StartAddr, Entry.EndAddr};
+    Site.LandingPadVA = Pad.StartAddr;
+    EH.Itanium->CallSites.push_back(Site);
+    EXPECT_FALSE(HighEntryStackOffsets(M, A).offset(Phi.Output));
+    auto High = MedToHighConverter().convert(M, A);
+    ASSERT_EQ(High.ItaniumCallFrameOffsets.size(), 1u);
+    const auto &[Value, Address] = High.ItaniumCallFrameOffsets.front();
+    EXPECT_EQ(Value, Phi.Output);
+    ASSERT_TRUE(Address);
+    EXPECT_EQ(Address->Type->Size, F.SP.Size);
+    ASSERT_EQ(Address->Operands.size(), 2u);
+    EXPECT_EQ(Address->Operands[0]->Var.Size, F.SP.Size);
+    EXPECT_EQ(Address->Operands[1]->ConstVal, uint64_t(int64_t(-32)));
+    EXPECT_EQ(Address->Operands[1]->Type->Size, F.SP.Size);
+  }
 }

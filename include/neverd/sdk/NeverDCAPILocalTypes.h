@@ -67,6 +67,16 @@ extern "C" {
 /// "renamed":[[name,spelling],...], the names that language cannot spell as
 /// they are.  NULL with neverd_last_error() when no binary is loaded, the
 /// options are malformed or the debug information's types cannot be read.
+/// Optional "offset" (nonnegative), "limit" (1–512), or "locate" (exact
+/// name) selects a page, adding "total", "offset", "next_offset" and an
+/// "index" when locate finds a type. Locate selects that type's page.
+/// "sort" is ordinal (default), name, kind, size or members; "descending"
+/// reverses it. Filtering and sorting precede paging; ordinal breaks ties.
+/// A page may end early at the byte limit: continue at next_offset.
+/// Paged diagnostics use "diagnostics_offset" (default 0) and the same
+/// limit, with per-category total/offset/next_offset in "diagnostics".
+/// Without paging, the full legacy inventory and diagnostics are returned.
+/// With paging, "renamed" includes only names on the returned type page.
 NEVERD_API const char *neverd_local_types_json(neverd_session_t Sess,
                                                const char *OptionsJson);
 
@@ -181,6 +191,13 @@ NEVERD_API const char *neverd_types_languages_json(void);
 /// The user's declarations in the order made:
 /// [{"language","source"} | {"forget":[name,...]}, ...].
 NEVERD_API const char *neverd_type_declarations_json(neverd_session_t Sess);
+/// The declarations from the \p Begin-th to before the \p End-th, as
+/// neverd_type_declarations_json lists them: what a declaration added after
+/// those a caller holds, read without listing every one.  Empty where \p End
+/// is not above \p Begin.  Free with neverd_free_string.
+NEVERD_API const char *
+neverd_type_declarations_range_json(neverd_session_t Sess, size_t Begin,
+                                    size_t End);
 /// Write or read the declarations as `<input>.neverd/types.json`, which
 /// neverd_session_load reads too.  Reading them reads the program's types
 /// anew.  Return 0, or -1 with neverd_last_error.

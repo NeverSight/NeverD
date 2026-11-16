@@ -764,6 +764,7 @@ add_neverd_unittest(NeverDSemanticTests
   x86_64/X64_BsrPreserveParamRTTests.cpp
   x86_64/X64_CExprRoundTripTests.cpp
   x86_64/X64_CarryConsumeRTTests.cpp
+  x86_64/X64_CondTailCallRTTests.cpp
   x86_64/X64_ControlSemanticTests.cpp
   x86_64/X64_CvtScalarUpperRTTests.cpp
   x86_64/X64_Div128RTTests.cpp

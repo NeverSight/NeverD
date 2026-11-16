@@ -25,6 +25,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace neverd::sdk {
 namespace {
@@ -236,22 +237,23 @@ private:
     return Named;
   }
 
-  /// A function type, as a pointer to it is spelled: scalars and pointers
-  /// retain their declared pointees; void where a part of it
-  /// is neither, or for a variadic one, whose calls pass more.
+  /// A function type, as a pointer to it is spelled: scalars, pointers and
+  /// named records retain their declaration identities, without a call ABI.
+  /// Variadic declarations retain their ellipsis; source call ABI admission
+  /// remains separate from spelling a pointer to the function.
   TypeRef function(const types::FunctionDef &Function, unsigned Depth) {
-    if (Function.Variadic)
-      return NdType::makeVoid();
     // A callback needs borrowed record identities, not member reconstruction
     // or recursive ownership through a record's own callback fields.
     Converter Borrowed(Library, PrototypeSpeller, false, true, Shared);
-    const auto scalar = [&](const types::TypeExpr *Type) -> TypeRef {
+    const auto declared = [&](const types::TypeExpr *Type) -> TypeRef {
       TypeRef Converted = Type ? Borrowed.convert(*Type, Depth + 1) : nullptr;
       if (!Converted)
         return nullptr;
       return Converted->Kind == NdTypeKind::Ptr ||
                      Converted->Kind == NdTypeKind::Int ||
-                     Converted->Kind == NdTypeKind::Float
+                     Converted->Kind == NdTypeKind::Float ||
+                     (Converted->Kind == NdTypeKind::Struct &&
+                      !Converted->SourceName.empty())
                  ? Converted
                  : nullptr;
     };
@@ -259,19 +261,19 @@ private:
         Function.Return &&
                 !(Function.Return->Kind == types::TypeExprKind::Builtin &&
                   Function.Return->TheBuiltin == types::Builtin::Void)
-            ? scalar(Function.Return.get())
+            ? declared(Function.Return.get())
             : NdType::makeVoid();
     if (!Return)
       return NdType::makeVoid();
     std::vector<TypeRef> Params;
     for (const types::Parameter &Param : Function.Params) {
-      TypeRef Converted = scalar(Param.Type.get());
+      TypeRef Converted = declared(Param.Type.get());
       if (!Converted)
         return NdType::makeVoid();
       Params.push_back(std::move(Converted));
     }
     return NdType::makeFunc(std::move(Return), std::move(Params),
-                            Function.Convention);
+                            Function.Convention, Function.Variadic);
   }
 
   /// A record's node before its members: its name, size and alignment.
@@ -279,6 +281,7 @@ private:
     if (Record.Size > std::numeric_limits<uint16_t>::max())
       return nullptr;
     TypeRef Named = NdType::makeNamedRecord(Name.str(), uint16_t(Record.Size));
+    Named->FieldDisplaySize = Named->Size;
     // Local types are C's records, whose calls pass and return them as C
     // does: no constructor sends a small one through memory.
     Named->Passing = NdRecordPassing::ByValue;
@@ -323,8 +326,8 @@ private:
 
   /// A record by its name, its members named for display where they lie, as
   /// a PDB's flat member list gives them: through records in place, which
-  /// have no names of their own.  Bitfields share their storage's bytes and
-  /// are left out.
+  /// have no names of their own. Bitfields retain their bit ranges separately
+  /// from whole-byte members.
   TypeRef record(llvm::StringRef Name, const types::RecordDef &Record,
                  unsigned Depth) {
     TypeRef Named = recordNode(Name, Record);
@@ -417,8 +420,21 @@ private:
     for (const types::Member &Field : Record.Members) {
       if (Into.FieldDisplayNames.size() >= limits::kMaxTpiDisplayFields)
         return;
-      if (!Field.Type || Field.isBitfield())
+      if (!Field.Type)
         continue;
+      if (Field.isBitfield()) {
+        if (isDisplayName(Field.Name))
+          if (TypeRef Storage = memberType(*Field.Type, Depth + 1);
+              Storage &&
+              (Storage->Kind == NdTypeKind::Int || Storage->IsEnum) &&
+              Base + Field.BitOffset < uint64_t(Into.Size) * 8 &&
+              Field.BitWidth <=
+                  uint64_t(Into.Size) * 8 - Base - Field.BitOffset)
+            Into.FieldDisplayBits.push_back(
+                {Field.Name, uint32_t(Base + Field.BitOffset), Field.BitWidth,
+                 Storage->IsSigned});
+        continue;
+      }
       const uint64_t Byte = (Base + Field.BitOffset) / 8;
       if (Byte > std::numeric_limits<uint16_t>::max())
         continue;
@@ -596,19 +612,25 @@ bool reachesMoreRecords(const types::TypeLibrary &Library, llvm::StringRef Name,
 }
 
 /// Whether every member \p Record names for display is one \p Def has
-/// where the name says, and is no bitfield, which C reads otherwise than
-/// its storage's bytes.
+/// where the name says. Bitfields match their exact bit ranges, separately
+/// from fields that read whole bytes.
 bool membersAgree(const NdType &Record, const types::RecordDef &Def) {
   if (Record.FieldDisplayNames.size() != Record.FieldDisplayOffsets.size())
     return Record.FieldDisplayNames.empty();
   std::set<std::pair<uint64_t, std::string>> Members;
+  std::set<std::tuple<uint64_t, uint32_t, std::string>> Bits;
   for (const types::FlatMember &Flat : types::flattenMembers(Def))
     if (!Flat.BitWidth && !Flat.Name.empty())
       Members.emplace(Flat.BitOffset / 8, Flat.Name);
+    else if (Flat.BitWidth && !Flat.Name.empty())
+      Bits.emplace(Flat.BitOffset, Flat.BitWidth, Flat.Name);
   for (size_t I = 0; I < Record.FieldDisplayNames.size(); ++I)
     if (!Record.FieldDisplayNames[I].empty() &&
         !Members.count(
             {Record.FieldDisplayOffsets[I], Record.FieldDisplayNames[I]}))
+      return false;
+  for (const auto &Bit : Record.FieldDisplayBits)
+    if (!Bits.count({Bit.BitOffset, Bit.BitWidth, Bit.Name}))
       return false;
   return true;
 }
@@ -732,6 +754,8 @@ LocalTypesDebugContext::~LocalTypesDebugContext() {
     Type.Type->FieldDisplayOffsets = std::move(Type.Offsets);
     Type.Type->FieldDisplayTypes = std::move(Type.Types);
     Type.Type->FieldDisplayAlignment = Type.Alignment;
+    Type.Type->FieldDisplayBits = std::move(Type.Bits);
+    Type.Type->FieldDisplaySize = Type.Size;
   }
   // What this context completed holds its parts no longer.
   Completed.clear();
@@ -869,7 +893,9 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
   std::vector<std::string> Names;
   std::vector<uint16_t> Offsets;
   std::vector<TypeRef> Members;
+  std::vector<NdDisplayBitField> Bits;
   uint16_t Alignment = Type->FieldDisplayAlignment;
+  uint16_t Size = Type->FieldDisplaySize;
   const types::LocalType *Local = nullptr;
   if (Type->IsEnum) {
     Local = Types->find(Type->SourceName);
@@ -898,7 +924,9 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
     Names = From->FieldDisplayNames;
     Offsets = From->FieldDisplayOffsets;
     Members = From->FieldDisplayTypes;
+    Bits = From->FieldDisplayBits;
     Alignment = From->FieldDisplayAlignment;
+    Size = From->FieldDisplaySize;
   }
   if (CompletedRecords.insert(Type.get()).second)
     KeptTypes.push_back(Type);
@@ -908,17 +936,21 @@ bool LocalTypesDebugContext::takeLibraryNames(const TypeRef &Type) const {
   // otherwise a scalar access may name an entire union or structure in C.
   if (Names == Type->FieldDisplayNames &&
       Offsets == Type->FieldDisplayOffsets &&
-      Members == Type->FieldDisplayTypes &&
-      Alignment == Type->FieldDisplayAlignment)
+      Members == Type->FieldDisplayTypes && Bits == Type->FieldDisplayBits &&
+      Alignment == Type->FieldDisplayAlignment &&
+      Size == Type->FieldDisplaySize)
     return true;
-  Completed.push_back({Type, std::move(Type->FieldDisplayNames),
-                       std::move(Type->FieldDisplayOffsets),
-                       std::move(Type->FieldDisplayTypes),
-                       Type->FieldDisplayAlignment});
+  Completed.push_back(
+      {Type, std::move(Type->FieldDisplayNames),
+       std::move(Type->FieldDisplayOffsets), std::move(Type->FieldDisplayTypes),
+       Type->FieldDisplayAlignment, std::move(Type->FieldDisplayBits),
+       Type->FieldDisplaySize});
   Type->FieldDisplayNames = std::move(Names);
   Type->FieldDisplayOffsets = std::move(Offsets);
   Type->FieldDisplayTypes = std::move(Members);
   Type->FieldDisplayAlignment = Alignment;
+  Type->FieldDisplayBits = std::move(Bits);
+  Type->FieldDisplaySize = Size;
   return true;
 }
 
@@ -984,13 +1016,15 @@ void LocalTypesDebugContext::completeType(const TypeRef &Type) const {
 void LocalTypesDebugContext::readRenamedInC() const {
   if (RenamedInC)
     return;
+  makeCRenderer();
   RenamedInC.emplace();
-  for (const auto &[Name, Spelled] :
-       types::renamedNames(*Types, types::Language::C)) {
+  for (const auto &[Name, Spelled] : CRenderer->renamed()) {
     RenamedInC->insert(Name);
     // An enumerator's key is its enumeration's: Owner::Value.
-    if (const size_t Scope = Name.find("::"); Scope != std::string::npos)
-      RenamedInC->insert(Name.substr(0, Scope) + "::");
+    if (const size_t Scope = Name.rfind("::"); Scope != std::string::npos)
+      if (const auto Owner = CRenderer->sourceTypeName(Name.substr(0, Scope));
+          !Owner.empty())
+        RenamedInC->insert(Owner + "::");
   }
 }
 
@@ -1047,6 +1081,20 @@ void LocalTypesDebugContext::prepareDefinitions() const {
   makeCRenderer();
 }
 
+std::string
+LocalTypesDebugContext::cTypeName(llvm::StringRef SourceName) const {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  makeCRenderer();
+  return CRenderer->typeName(SourceName);
+}
+
+std::string
+LocalTypesDebugContext::sourceTypeName(llvm::StringRef Identifier) const {
+  std::lock_guard<std::mutex> Guard(Mutex);
+  makeCRenderer();
+  return CRenderer->sourceTypeName(Identifier);
+}
+
 CRecordDefinitions
 LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
   std::lock_guard<std::mutex> Guard(Mutex);
@@ -1096,11 +1144,17 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
       GivenEnumerators;
   CRecordDefinitions Result;
   std::vector<const types::LocalType *> Roots;
+  const types::TypeLibrary *System = nullptr;
+  for (const types::HeaderLibrary Library : Headers)
+    if (types::headerLibrarySystem(Library)) {
+      System = types::headerLibrary(Library);
+      break;
+    }
   for (const TypeRef &Requested : Records) {
     const bool Declaration = Requested && Requested->Kind == NdTypeKind::Ptr;
     const TypeRef &Record = Declaration ? Requested->Pointee : Requested;
     if (!Record || Record->Kind != NdTypeKind::Struct ||
-        Record->SourceName.empty() || RenamedInC->contains(Record->SourceName))
+        Record->SourceName.empty())
       continue;
     // A name emitted C takes from the headers it includes, as its casts
     // spell uintptr_t, is the header's: a local type of the name, as a
@@ -1120,10 +1174,21 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
     }
     if (Local->Kind == types::TypeKind::Struct ||
         Local->Kind == types::TypeKind::Union)
-      Result.Tags[Record->SourceName] = Local->Kind == types::TypeKind::Union;
+      Result.Tags[CRenderer->typeName(Record->SourceName)] =
+          Local->Kind == types::TypeKind::Union;
     if (Declaration) {
       Read.insert(Local->Name);
       Result.DeclaredTypes.push_back(Local->Name);
+      // A pointer to a system-owned typedef still needs that header's
+      // identity: inventing `typedef struct pthread_mutex_t pthread_mutex_t`
+      // conflicts with libc's anonymous record. Only the unchanged header
+      // definition qualifies; local opaque records stay declarations.
+      if (const types::LocalType *Header =
+              System ? System->find(Local->Name) : nullptr;
+          Header && Header->TypedefNamed && !Header->Header.empty() &&
+          Header->Kind == Local->Kind && Header->Record &&
+          Header->Record == Local->Record)
+        Roots.push_back(Local);
       continue;
     }
     if (Record->IsEnum || (Spelled && Local->Kind == types::TypeKind::Enum)) {
@@ -1159,7 +1224,7 @@ LocalTypesDebugContext::definitions(const std::vector<TypeRef> &Records) const {
     Read.insert(Name);
     if (const types::LocalType *Type = Types->find(Name);
         Type && Type->Kind == types::TypeKind::Enum)
-      Result.Enumerations.push_back(Name);
+      Result.Enumerations.push_back(CRenderer->typeName(Name));
   }
   Result.Types = Embedded.Types;
   Result.HeaderTypes = Embedded.HeaderTypes;

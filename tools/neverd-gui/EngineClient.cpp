@@ -97,7 +97,7 @@ void WorkerTransport::receive() {
         stop();
         return;
       }
-      emit message(document.object(), epoch_);
+      emit message(document.object(), epoch_, qint64(length) + 4);
     }
   }
 }
@@ -155,9 +155,9 @@ EngineClient::EngineClient(QObject *parent)
   connect(this, &EngineClient::stopRequested, transport_,
           &WorkerTransport::stop);
   connect(transport_, &WorkerTransport::message, this,
-          [this](const QJsonObject &message, quint64 epoch) {
+          [this](const QJsonObject &message, quint64 epoch, qint64 bytes) {
             if (epoch == epoch_)
-              emit this->message(message);
+              emit this->message(message, bytes);
           });
   connect(transport_, &WorkerTransport::diagnostic, this,
           [this](const QString &message, quint64 epoch) {

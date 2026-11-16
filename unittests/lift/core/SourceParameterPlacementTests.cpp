@@ -15,8 +15,11 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ArchSupport.h"
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <iterator>
 #include <vector>
@@ -373,6 +376,144 @@ TEST(SourceParameterPlacement, I386PassesEverythingOnTheStack) {
   EXPECT_TRUE(place(X86, COFF, record(8, NdRecordPassing::Microsoft, {}, 0),
                     {intType(4)})
                   .Parameters.empty());
+}
+
+TEST(SourceParameterPlacement,
+     MIPSHardFloatUsesSharedPositionsAndAlignedPairs) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const bool Wide = isMIPS64(A), Little = archLittleEndian(A);
+    const auto Prefix =
+        place(A, ELF, floatType(8), {floatType(4), floatType(8), intType(4)});
+    ASSERT_EQ(Prefix.Parameters.size(), 3u);
+    expectRegister(Prefix.Parameters[0][0], FloatingReg, mipsreg::w(12), 0, 4);
+    expectRegister(Prefix.Parameters[1][0], FloatingReg,
+                   mipsreg::w(Wide ? 13 : 14), 0, 8);
+    if (Wide)
+      expectRegister(Prefix.Parameters[2][0], IntegerReg,
+                     integerRegister(A, ELF, 2), 0, 4);
+    else
+      expectStack(Prefix.Parameters[2][0], 16, 4);
+
+    const std::vector<TypeRef> Types{intType(4), floatType(8), floatType(4)};
+    const auto Mixed = place(A, ELF, floatType(8), Types);
+    ASSERT_EQ(Mixed.Parameters.size(), Types.size());
+    if (Wide) {
+      expectRegister(Mixed.Parameters[1][0], FloatingReg, mipsreg::w(13), 0, 8);
+      expectRegister(Mixed.Parameters[2][0], FloatingReg, mipsreg::w(14), 0, 4);
+    } else {
+      ASSERT_EQ(Mixed.Parameters[1].size(), 2u);
+      expectRegister(Mixed.Parameters[1][0], IntegerReg,
+                     integerRegister(A, ELF, 2), Little ? 0 : 4, 4);
+      expectRegister(Mixed.Parameters[1][1], IntegerReg,
+                     integerRegister(A, ELF, 3), Little ? 4 : 0, 4);
+      expectStack(Mixed.Parameters[2][0], 16, 4);
+    }
+    const auto Signature = floatingCallArguments(A, ELF, floatType(8), Types);
+    ASSERT_TRUE(Signature);
+    const auto Restored = floatingCallTypes(A, ELF, *Signature);
+    ASSERT_TRUE(Restored);
+    ASSERT_EQ(Restored->Parameters.size(), Types.size());
+    for (size_t I = 0; I < Types.size(); ++I) {
+      EXPECT_EQ(Restored->Parameters[I]->Kind, Types[I]->Kind);
+      EXPECT_EQ(Restored->Parameters[I]->Size, Types[I]->Size);
+    }
+    auto Invalid = *Signature;
+    Invalid.Scalars[1].Register += 8;
+    EXPECT_FALSE(floatingCallTypes(A, ELF, Invalid));
+
+    std::vector<TypeRef> Overflow(Wide ? 8 : 4, intType(4));
+    Overflow.push_back(floatType(4));
+    Overflow.push_back(intType(4));
+    const auto Stack = place(A, ELF, floatType(4), Overflow);
+    ASSERT_EQ(Stack.Parameters.size(), Overflow.size());
+    expectStack(Stack.Parameters[Overflow.size() - 2][0], Wide ? 0 : 16, 4);
+    expectStack(Stack.Parameters.back()[0], Wide ? (Little ? 8 : 12) : 20, 4);
+    EXPECT_TRUE(place(A, ELF, floatType(4), {floatType(2)}).Parameters.empty());
+  }
+}
+
+TEST(SourceParameterPlacement, MIPSScalarOnlyCallsKeepCompleteSignatures) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const auto &TRI = getTargetRegInfo(A);
+    const auto Pointer = NdType::makePtr();
+    Pointer->Size = TRI.PointerSize;
+    for (const auto &Return :
+         {NdType::makeVoid(), intType(1), NdType::makeInt(4, false),
+          intType(2 * TRI.FullRegWidth), Pointer}) {
+      for (const auto &Parameters :
+           {std::vector<TypeRef>{},
+            std::vector<TypeRef>{intType(1), intType(8), Pointer}}) {
+        const auto Bound = floatingCallArguments(A, ELF, Return, Parameters);
+        ASSERT_TRUE(Bound);
+        EXPECT_EQ(Bound->ReturnKind, Return->Kind);
+        EXPECT_EQ(Bound->ReturnBytes, Return->Size);
+        EXPECT_EQ(Bound->SignedResult,
+                  Return->Kind == NdTypeKind::Int && Return->IsSigned);
+        ASSERT_EQ(Bound->Scalars.size(), Parameters.size());
+        const auto Restored = floatingCallTypes(A, ELF, *Bound);
+        ASSERT_TRUE(Restored);
+        ASSERT_EQ(Restored->Parameters.size(), Parameters.size());
+        for (size_t I = 0; I < Parameters.size(); ++I) {
+          EXPECT_EQ(Restored->Parameters[I]->Kind, Parameters[I]->Kind);
+          EXPECT_EQ(Restored->Parameters[I]->Size, Parameters[I]->Size);
+          EXPECT_EQ(Restored->Parameters[I]->IsSigned, Parameters[I]->IsSigned);
+        }
+      }
+    }
+    const auto WrongPointer = NdType::makePtr();
+    WrongPointer->Size = TRI.PointerSize == 4 ? 8 : 4;
+    for (const auto &Unsupported :
+         {TypeRef(), NdType::makeVoid(), intType(3), WrongPointer})
+      EXPECT_FALSE(floatingCallArguments(A, ELF, intType(4), {Unsupported}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, WrongPointer, {}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, TypeRef(), {}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, intType(3), {}));
+  }
+}
+
+TEST(SourceParameterPlacement,
+     MIPSVariadicFloatingCallsKeepTheirNamedBoundary) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    const bool Wide = isMIPS64(A);
+    const auto FP = floatType(8);
+    const std::vector<TypeRef> Actual{FP, FP, intType(4)};
+    for (const uint16_t Bytes : {1u, 2u, 4u, 8u, 2u * TRI.FullRegWidth}) {
+      const auto Bound =
+          floatingCallArguments(A, ELF, intType(Bytes), Actual, 1);
+      ASSERT_TRUE(Bound);
+      ASSERT_TRUE(floatingCallTypes(A, ELF, *Bound));
+      EXPECT_EQ(Bound->Scalars[0].Register,
+                Wide ? mipsreg::w(12) : mipsreg::r(4));
+      EXPECT_EQ(Bound->Scalars[1].Register, mipsreg::r(Wide ? 5 : 6));
+      EXPECT_EQ(Bound->Scalars[2].Kind,
+                Wide ? IntegerReg : SourceABICarrierKind::Stack);
+    }
+    EXPECT_EQ(TRI.PointerSize, Wide && !isMIPSN32(A) ? 8 : 4);
+    EXPECT_EQ(TRI.integerArgumentLayout(ELF).SlotBytes, Wide ? 8 : 4);
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, {FP, floatType(4)}, 1));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, {FP, intType(2)}, 1));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, FP, Actual, 4));
+  }
+}
+
+TEST(SourceParameterPlacement, MIPSSavedFPRsPreserveOnlyTheScalarView) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto &TRI = getTargetRegInfo(A);
+    for (unsigned R = 0; R < 32; ++R) {
+      const bool Saved =
+          isMIPS64(A) && !isMIPSN32(A) ? R >= 24 : R >= 20 && R % 2 == 0;
+      EXPECT_EQ(TRI.isCallPreserved(mipsreg::w(R), 8, ELF), Saved);
+      EXPECT_FALSE(TRI.isCallPreserved(mipsreg::w(R), 16, ELF));
+      EXPECT_EQ(TRI.callPreservedPrefixSize(mipsreg::w(R), 16, ELF),
+                Saved ? 8 : 0);
+    }
+  }
 }
 
 } // namespace

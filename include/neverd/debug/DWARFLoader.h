@@ -46,12 +46,13 @@ using SubprogramRange = std::pair<va_t, va_t>;
 /// Closed set of location-expression shapes that the exact-object resolver
 /// understands.  Malformed also covers otherwise valid DWARF expressions
 /// whose complete semantics are outside this resolver's deliberately narrow
-/// stack-coordinate model.
+/// stack-coordinate and whole-register model.
 enum class LocationExpressionBase {
   CFA,
   StackPointer,
   FramePointer,
   FrameBase,
+  Register,
   NonStack,
   Malformed,
 };
@@ -142,10 +143,16 @@ public:
   VariableExtentLookup
   resolveFramePointerVariableAt(va_t FuncAddr, va_t UsePC,
                                 int64_t Offset) const override;
+  VariableExtentLookup
+  resolveRegisterVariableAt(va_t FuncAddr, va_t UsePC,
+                            uint64_t Register) const override;
   std::optional<TypeSym> resolveType(uint64_t TypeId) const override;
   std::optional<SourceLoc> sourceLocation(va_t Addr) const override;
   std::vector<FunctionSym> allFunctions() const override;
   std::vector<DataObjectSym> allDataObjects() const override;
+  std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override;
+  std::pair<std::optional<va_t>, std::optional<va_t>>
+  dataSymbolsAround(va_t Addr) const override;
   bool hasAuthenticatedFunctionSignatures() const override;
   AuthenticatedReturnValueState
   resolveAuthenticatedReturnValueState(va_t Entry) const override;
@@ -156,7 +163,9 @@ public:
 
   /// Runs \p Use on the DWARF this context read, for a reader that walks
   /// its units whole, such as the local type import; no other query reads
-  /// it meanwhile.  An error when the context read none.
+  /// it meanwhile. The reader and its DIEs live only during Use: consumers
+  /// must return owned facts, not LLVM references. An error when the context
+  /// read none.
   llvm::Error withDWARFContext(
       llvm::function_ref<llvm::Error(llvm::DWARFContext &)> Use) const;
 

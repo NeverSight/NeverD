@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/low/MIPS/MIPSCachePlatform.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSLifter.h"
@@ -618,7 +619,7 @@ TEST_P(MIPS16E2,
   Decoder D;
   ASSERT_TRUE(D.init(I));
   for (bool Strict : {false, true})
-    for (unsigned Index : {0u, 1u, 2u, 3u, 29u})
+    for (unsigned Index : {0u, 1u, 2u, 3u, 29u, 30u, 31u})
       for (unsigned RY = 0; RY != 8; ++RY)
         for (bool CP0 : {false, true}) {
           NdOpEmulator E(I);
@@ -692,7 +693,7 @@ TEST_P(MIPS16E2, InterruptUpdatesReturnOldStatusAndRequireAnExecutionBarrier) {
         EXPECT_FALSE(C.ExecutionHazardPending);
         ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
       }
-  for (unsigned Index : {4u, 5u, 28u, 30u, 31u}) {
+  for (unsigned Index : {4u, 5u, 6u, 28u}) {
     auto Invalid = stateOp(Intrinsic::MIPSReadHardwareRegister,
                            NdVar::reg(mipsreg::V0, 4), {NdVar::cst(Index, 1)});
     NdOpEmulator E(I);
@@ -766,38 +767,82 @@ TEST_P(MIPS16E2, CP0WordViewsPreserveAllBitsAndRequireBoundPrivilege) {
           EXPECT_EQ(I.Mode, InstructionMode::MIPS16);
         }
 }
-TEST_P(MIPS16E2, CP0SelectorsAndStatefulShapesRejectUnsupportedContracts) {
+TEST_P(MIPS16E2, CP0PlatformHonorsWriteMasksAndSharedStatus) {
+  struct Platform final : MIPSCP0Platform {
+    std::optional<uint32_t> readWord(uint8_t Key,
+                                     MIPSSystemContext &Context) override {
+      return Key == 0xfd ? Context.Status : std::nullopt;
+    }
+    bool writeWord(uint8_t Key, uint32_t Value,
+                   MIPSSystemContext &Context) override {
+      if (Key != 12 || !Context.Status)
+        return false;
+      Context.Status = (*Context.Status & ~3u) | (Value & 3);
+      return true;
+    }
+  } Board;
   auto I = e2Image(GetParam());
   Decoder D;
   ASSERT_TRUE(D.init(I));
-  for (unsigned Write = 0; Write != 2; ++Write)
-    for (unsigned Selector = 0; Selector != 8; ++Selector)
-      for (unsigned Index = 0; Index != 32; ++Index) {
-        const uint32_t Word =
-            0xf0006740 | (Write << 16) | (Selector << 21) | Index;
-        const bool Admitted = Selector == 0 && (Index == 14 || Index == 30 ||
-                                                (!Write && Index == 12));
-        if (Admitted) {
-          auto Ops = e2Lift(D, GetParam(), Word);
-          EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], GetParam()));
-          for (unsigned Bad = 0; Bad != 5; ++Bad) {
-            auto Op = Ops[0];
-            if (Bad == 0)
-              Op.Inputs[1] = NdVar::cst(13, 1);
-            if (Bad == 1)
-              Op.Inputs[1] = NdVar::reg(mipsreg::A0, 1);
-            if (Bad == 2)
-              Op.Inputs[1].Size = 4;
-            if (Bad == 3)
-              Op.Output = Write ? NdVar::tmp(999, 4) : NdVar{};
-            if (Bad == 4)
-              ++Op.NumInputs;
-            EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
-          }
-          EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
-        } else
-          EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
-      }
+  NdOpEmulator E(I);
+  E.setStrictMode(true);
+  E.setRegister(mipsreg::V0, 0xfffffff2);
+  MIPSSystemContext C;
+  C.Status = 0x2135;
+  C.CP0Usable = true;
+  const auto Write = e2Lift(D, GetParam(), 0xf001674c);
+  EXPECT_FALSE(E.stepMIPSSystem(Write[0], C));
+  C.CP0 = &Board;
+  ASSERT_TRUE(E.stepMIPSSystem(Write[0], C));
+  EXPECT_EQ(C.Status, 0x2136u);
+  const auto Read = e2Lift(D, GetParam(), 0xf0e0675d);
+  EXPECT_FALSE(E.stepMIPSSystem(Read[0], C));
+  ASSERT_TRUE(
+      E.stepMIPSSystem(stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+  ASSERT_TRUE(E.stepMIPSSystem(Read[0], C));
+  ASSERT_TRUE(run(E, llvm::ArrayRef(Read).drop_front()));
+  EXPECT_EQ(E.getRegister(mipsreg::V0), 0x2136u);
+}
+TEST_P(MIPS16E2, CP0SelectorsAndStatefulShapesRejectUnsupportedContracts) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  for (bool MT : {false, true}) {
+    I.MIPS->HasMT = MT;
+    ASSERT_TRUE(D.init(I));
+    for (unsigned Write = 0; Write != 2; ++Write)
+      for (unsigned Selector = 0; Selector != 8; ++Selector)
+        for (unsigned Index = 0; Index != 32; ++Index) {
+          const uint32_t Word =
+              0xf0006740 | (Write << 16) | (Selector << 21) | Index;
+          const bool ThreadView =
+              (Index == 0 && Selector >= 1 && Selector <= 3) ||
+              ((Index == 1 || Index == 2) && Selector != 0) ||
+              (Index == 3 && Selector == 7);
+          const bool Admitted = MT || !ThreadView;
+          if (Admitted) {
+            auto Ops = e2Lift(D, GetParam(), Word);
+            EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], GetParam()));
+            for (unsigned Bad = 0; Bad != 5; ++Bad) {
+              auto Op = Ops[0];
+              if (Bad == 0)
+                Op.Inputs[1] = NdVar::cst(256, 1);
+              if (Bad == 1)
+                Op.Inputs[1] = NdVar::reg(mipsreg::A0, 1);
+              if (Bad == 2)
+                Op.Inputs[1].Size = 4;
+              if (Bad == 3)
+                Op.Output = Write ? NdVar::tmp(999, 4) : NdVar{};
+              if (Bad == 4)
+                ++Op.NumInputs;
+              EXPECT_FALSE(mipsScalarLowShapeIsValid(Op, GetParam()));
+            }
+            // R6 n64 shares the same architectural CP0 word view.
+            EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+            EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::X64));
+          } else
+            EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
+        }
+  }
   for (uint32_t Word : {0xf000674cu, 0xf001674eu, 0xf000679eu, 0xf1403018u}) {
     MIPSLifter L(GetParam(), InstructionMode::MIPS16);
     cs_insn Raw{};
@@ -857,7 +902,8 @@ TEST_P(MIPS16E2, PauseCompletesOnlyWithExplicitlyKnownClearReservation) {
   auto Bad = Ops[0];
   Bad.Output = NdVar::tmp(1, 4);
   EXPECT_FALSE(mipsScalarLowShapeIsValid(Bad, GetParam()));
-  EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+  EXPECT_TRUE(mipsScalarLowShapeIsValid(Ops[0], Arch::MIPS64));
+  EXPECT_FALSE(mipsScalarLowShapeIsValid(Ops[0], Arch::X64));
   MIPSLifter L(GetParam(), InstructionMode::MIPS16);
   L.setMIPS16E2Enabled(true);
   cs_insn Head{}, Slot{};
@@ -874,6 +920,271 @@ TEST_P(MIPS16E2, PauseCompletesOnlyWithExplicitlyKnownClearReservation) {
   EXPECT_TRUE(Out.empty());
 }
 
+TEST_P(MIPS16E2, MTControlUsesBoundViewsMasterPermissionAndHazards) {
+  auto I = e2Image(GetParam());
+  I.MIPS->HasMT = true;
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (bool Strict : {false, true})
+    for (unsigned Kind = 0; Kind != 4; ++Kind)
+      for (bool Discard : {false, true})
+        for (unsigned Y = 0; Y != (Discard ? 1u : 8u); ++Y)
+          for (bool Master : {false, true})
+            for (uint32_t Old : {0u, 0x13572468u, 0xffffffffu}) {
+              const bool Thread = Kind >= 2, Enable = Kind & 1;
+              const uint32_t Word = 0xf0226700 | (Enable << 16) |
+                                    (Discard << 18) | (Y << 5) | Thread;
+              auto Ops = e2Lift(D, GetParam(), Word);
+              ASSERT_TRUE(mipsScalarLowShapeIsValid(Ops[0], GetParam()));
+              NdOpEmulator E(I);
+              E.setStrictMode(Strict);
+              MIPSSystemContext C;
+              C.Status = 0x55aa;
+              C.MVPControl = C.VPEControl = Old;
+              C.VPEConf0 = Master ? 2 : 0;
+              EXPECT_FALSE(E.step(Ops[0]));
+              EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+              C.CP0Usable = true;
+              EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+              C.ImplementedMT = true;
+              auto &Control = Thread ? C.VPEControl : C.MVPControl;
+              Control.reset();
+              EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+              EXPECT_FALSE(C.ExecutionHazardPending);
+              Control = Old;
+              if (!Thread) {
+                C.VPEConf0.reset();
+                EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+                EXPECT_EQ(Control, Old);
+                C.VPEConf0 = Master ? 2 : 0;
+              }
+              ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+              ASSERT_TRUE(run(E, llvm::ArrayRef(Ops).drop_front()));
+              if (!Discard)
+                EXPECT_EQ(E.getRegister(mipsreg::r(compact(Y))), Old);
+              const uint32_t Mask = Thread ? 0x8000 : 1;
+              EXPECT_EQ(Control, Thread || Master
+                                     ? (Enable ? Old | Mask : Old & ~Mask)
+                                     : Old);
+              EXPECT_EQ(Thread ? C.MVPControl : C.VPEControl, Old);
+              EXPECT_EQ(C.Status, 0x55aau);
+              EXPECT_TRUE(C.ExecutionHazardPending);
+              EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+              ASSERT_TRUE(E.stepMIPSSystem(
+                  stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+              EXPECT_FALSE(C.ExecutionHazardPending);
+            }
+  for (unsigned Key : {32u, 33u, 65u}) {
+    auto Ops =
+        e2Lift(D, GetParam(), 0xf0006740 | ((Key >> 5) << 21) | (Key & 31));
+    NdOpEmulator E(I);
+    MIPSSystemContext C;
+    C.CP0Usable = true;
+    C.MVPControl = C.VPEControl = C.VPEConf0 = 0x87654321;
+    EXPECT_FALSE(E.stepMIPSSystem(Ops[0], C));
+    C.ImplementedMT = true;
+    ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+    ASSERT_TRUE(run(E, llvm::ArrayRef(Ops).drop_front()));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x87654321u);
+    const auto Write =
+        e2Lift(D, GetParam(), 0xf0016740 | ((Key >> 5) << 21) | (Key & 31));
+    EXPECT_FALSE(E.stepMIPSSystem(Write[0], C));
+  }
+  I.MIPS->HasMT = false;
+  ASSERT_TRUE(D.init(I));
+  for (uint32_t Word : {0xf0226741u, 0xf0236741u, 0xf0226740u, 0xf0236740u,
+                        0xf0206740u, 0xf0406741u})
+    EXPECT_THROW(e2Lift(D, GetParam(), Word), UnliftedInstruction);
+}
+
+TEST_P(MIPS16E2, CacheAndPrefetchRetainExactEffectsWithoutInventingExecution) {
+  auto I = e2Image(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  for (bool Prefetch : {false, true})
+    for (unsigned Hint = 0; Hint != 32; ++Hint)
+      for (unsigned Base = 0; Base != 8; ++Base)
+        for (int Offset : {-256, -1, 0, 31, 255}) {
+          const uint32_t Word = 0xf000d080 | ((!Prefetch) << 5) | (Hint << 16) |
+                                (Base << 8) | ((Offset & 0x1e0) << 16) |
+                                (Offset & 31);
+          auto Ops = e2Lift(D, GetParam(), Word);
+          ASSERT_EQ(Ops.size(), 2u);
+          const auto &Effect = Ops.back();
+          const auto Id =
+              Prefetch ? Intrinsic::MIPSPrefetch : Intrinsic::MIPSCache;
+          EXPECT_EQ(Effect.Inputs[0].Offset, uint64_t(Id));
+          EXPECT_EQ(Effect.Inputs[1], NdVar::cst(Hint, 1));
+          EXPECT_TRUE(mips::scalarMayWriteMemory(Id));
+          EXPECT_TRUE(isSideeffectIntrinsic(Id));
+          EXPECT_FALSE(mips::isBarrier(Id));
+          ASSERT_TRUE(mipsScalarLowShapeIsValid(Effect, GetParam()));
+          EXPECT_FALSE(mipsScalarLowShapeIsValid(Effect, Arch::MIPS64));
+          for (bool Strict : {false, true}) {
+            NdOpEmulator E(I);
+            E.setStrictMode(Strict);
+            E.setRegister(mipsreg::r(compact(Base)), 0xfffffff0);
+            ASSERT_TRUE(E.step(Ops.front()));
+            LowOp Copy;
+            Copy.Opcode = NdOp::COPY;
+            Copy.Output = NdVar::reg(mipsreg::V1, 4);
+            Copy.addInput(Effect.Inputs[2]);
+            ASSERT_TRUE(E.step(Copy));
+            EXPECT_EQ(E.getRegister(mipsreg::V1),
+                      uint32_t(0xfffffff0u + Offset));
+            EXPECT_FALSE(E.step(Effect));
+            MIPSSystemContext C;
+            C.CP0Usable = C.ImplementedMT = true;
+            EXPECT_FALSE(E.stepMIPSSystem(Effect, C));
+          }
+          for (unsigned Bit : {25u, 26u}) {
+            auto B = e2Bytes(Word | (1u << Bit), GetParam());
+            DecodedInsn Bad;
+            EXPECT_EQ(D.decodeOneForLift(B.data(), B.size(), 0x1002, Bad), 0);
+          }
+        }
+}
+
+TEST_P(MIPS16E2,
+       CacheUsesDataTranslationAndCommitsDirtyWritebackBeforeInvalidation) {
+  struct Board : MIPSCachePlatform {
+    std::optional<MIPSCacheTranslation> Translation;
+    MIPSCacheLine Line{0x12000, {1, 2, 3, 4}, true, true, true};
+    std::vector<uint8_t> Memory;
+    uint32_t LastVA = 0, Calls = 0;
+    bool Fail = false;
+    unsigned Fills = 0;
+    std::optional<MIPSCacheTranslation>
+    translateDataRead(uint32_t VA) override {
+      LastVA = VA;
+      return Translation;
+    }
+    bool apply(const MIPSCacheRequest &R) override {
+      ++Calls;
+      if (R.Action == MIPSCacheAction::Prefetch)
+        return true;
+      const auto Base = R.Translation.PhysicalAddress & ~UINT64_C(3);
+      MIPSCacheSelection Selected{Line, Base == Line.PhysicalBase, false};
+      const auto Write = [&](uint64_t OldBase, const auto &Bytes) {
+        EXPECT_EQ(OldBase, 0x12000u);
+        if (Fail)
+          return false;
+        Memory = Bytes;
+        return true;
+      };
+      if (R.Action == MIPSCacheAction::Fill ||
+          R.Action == MIPSCacheAction::FetchAndLock)
+        return fill(
+            R, Selected, Base,
+            [&](uint64_t Requested, auto &Bytes) {
+              ++Fills;
+              EXPECT_EQ(Requested, Base);
+              for (size_t I = 0; I < Bytes.size(); ++I)
+                Bytes[I] = uint8_t((Requested >> 12) + I);
+              return true;
+            },
+            Write);
+      return maintain(R, Selected, Write);
+    }
+  } B;
+  BinaryImage I;
+  I.Arch = GetParam();
+  NdOpEmulator E(I);
+  MIPSSystemContext C;
+  C.Cache = &B;
+  const auto Cache = [&](unsigned Code, bool Prefetch = false) {
+    auto O =
+        stateOp(Prefetch ? Intrinsic::MIPSPrefetch : Intrinsic::MIPSCache, {});
+    O.Output = {};
+    O.addInput(NdVar::cst(Code, 1));
+    O.addInput(NdVar::cst(0x80001233, 4));
+    return E.stepMIPSSystem(O, C);
+  };
+  EXPECT_FALSE(Cache(21));
+  EXPECT_EQ(B.LastVA, 0u);
+  C.CP0Usable = true;
+  EXPECT_FALSE(Cache(21));
+  B.Translation = MIPSCacheTranslation{MIPSCacheMapping::AddressException, 0};
+  EXPECT_FALSE(Cache(21));
+  C.CP0Usable = false;
+  EXPECT_TRUE(Cache(30, true));
+  B.Translation->Mapping = MIPSCacheMapping::Uncached;
+  EXPECT_TRUE(Cache(30, true));
+  EXPECT_EQ(B.Calls, 0u);
+  C.CP0Usable = true;
+  EXPECT_FALSE(Cache(21));
+  B.Translation->Mapping = MIPSCacheMapping::Cached;
+  B.Translation->PhysicalAddress = 0x23001;
+  EXPECT_TRUE(Cache(21));
+  EXPECT_TRUE(B.Line.Dirty);
+  EXPECT_TRUE(B.Line.Valid);
+  B.Translation->PhysicalAddress = 0x12001;
+  B.Fail = true;
+  EXPECT_FALSE(Cache(21));
+  EXPECT_TRUE(B.Line.Locked);
+  EXPECT_TRUE(B.Line.Dirty);
+  B.Fail = false;
+  EXPECT_TRUE(Cache(21));
+  EXPECT_FALSE(B.Line.Valid);
+  EXPECT_FALSE(B.Line.Dirty);
+  EXPECT_FALSE(B.Line.Locked);
+  EXPECT_EQ(B.Memory, B.Line.Data);
+  EXPECT_EQ(B.LastVA, 0x80001233u);
+  B.Translation->PhysicalAddress = 0x100023002;
+  ASSERT_TRUE(Cache(20)); // I-cache fill
+  EXPECT_EQ(B.Line.PhysicalBase, UINT64_C(0x100023000));
+  EXPECT_EQ(B.Line.Data, (std::vector<uint8_t>{0x23, 0x24, 0x25, 0x26}));
+  EXPECT_FALSE(B.Line.Locked);
+  ASSERT_TRUE(Cache(28)); // A fetch-and-lock hit needs no memory read.
+  EXPECT_EQ(B.Fills, 1u);
+  EXPECT_TRUE(B.Line.Locked);
+  B.Translation->PhysicalAddress = 0x12000;
+  EXPECT_FALSE(Cache(29)); // The board selected a locked victim.
+  EXPECT_EQ(B.Fills, 1u);
+  B.Line = {0x12000, {5, 6, 7, 8}, true, true, false};
+  B.Translation->PhysicalAddress = 0x100023002;
+  B.Fail = true;
+  EXPECT_FALSE(Cache(29));
+  EXPECT_EQ(B.Line.PhysicalBase, 0x12000u);
+  EXPECT_TRUE(B.Line.Dirty);
+  B.Fail = false;
+  ASSERT_TRUE(Cache(29));
+  EXPECT_EQ(B.Memory, (std::vector<uint8_t>{5, 6, 7, 8}));
+  EXPECT_TRUE(B.Line.Valid);
+  EXPECT_TRUE(B.Line.Locked);
+  EXPECT_FALSE(B.Line.Dirty);
+}
+
+TEST_P(MIPS16E2, MTExecutionBarrierDoesNotCertifyPeerInstructionSuspension) {
+  BinaryImage I;
+  I.Arch = GetParam();
+  NdOpEmulator E(I);
+  MIPSSystemContext C;
+  C.ImplementedMT = C.CP0Usable = true;
+  C.MVPControl = 1;
+  C.VPEControl = 1u << 15;
+  C.VPEConf0 = 2;
+  const auto MT = [&](Intrinsic Id) {
+    auto O = stateOp(Id, {});
+    O.Output = NdVar::tmp(9, 4);
+    return E.stepMIPSSystem(O, C);
+  };
+  EXPECT_EQ(C.peerIssueEnabled(true), true);
+  ASSERT_TRUE(MT(Intrinsic::MIPSDisableMT));
+  EXPECT_FALSE(C.peerIssueEnabled(true).has_value());
+  ASSERT_TRUE(
+      E.stepMIPSSystem(stateOp(Intrinsic::MIPSExecutionHazardBarrier, {}), C));
+  EXPECT_FALSE(C.peerIssueEnabled(true).has_value());
+  EXPECT_EQ(C.peerIssueEnabled(false), true);
+  C.completeInstructionHazardBarrier();
+  EXPECT_EQ(C.peerIssueEnabled(true), false);
+  ASSERT_TRUE(MT(Intrinsic::MIPSDisableVPE));
+  C.completeInstructionHazardBarrier();
+  EXPECT_EQ(C.peerIssueEnabled(false), false);
+  C.VPEConf0 = 0;
+  ASSERT_TRUE(MT(Intrinsic::MIPSEnableVPE));
+  EXPECT_EQ(C.peerIssueEnabled(false), false);
+}
 INSTANTIATE_TEST_SUITE_P(BothByteOrders, MIPS16E2,
                          testing::Values(Arch::MIPS32, Arch::MIPS32EL));
 } // namespace

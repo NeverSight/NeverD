@@ -56,9 +56,12 @@ class AbsoluteRelocationRootIndex;
 namespace libc {
 class NoReturnTargetIndex;
 } // namespace libc
+// 融合双方的前向声明：上游需要 GlobalCalleeSolve 与 RelocationSymbolIndex，
+// 补丁新增的 NoReturnCalleeProver 同样被本文件引用（noReturnCallees 接口）。
 
 struct GlobalCalleeSolve;
 class RelocationSymbolIndex;
+class NoReturnCalleeProver;
 
 /// What reading the signature bodies of omitted callees read of each callee
 /// (recoverModuleCallAbi): how its lift's blocks count against the bound on
@@ -334,7 +337,8 @@ struct OmittedCalleeMemo {
   /// What the kept bodies count against maxBytes().
   size_t bytes() const { return Bytes; }
   /// The entries callee lifts know: the image's function symbols that are
-  /// not boundary guesses, read when the memo adopts the image.
+  /// not boundary guesses and the run's known entries, read when the memo
+  /// adopts the image.
   const std::set<va_t> &functionEntries() const { return FunctionEntries; }
   /// The function-pointer variables of the image the memo adopted
   /// (collectPointerVariableCallees), read when it adopts the image.
@@ -365,6 +369,11 @@ struct OmittedCalleeMemo {
   /// The code addresses the relocated code pointers of the image the memo
   /// adopted hold (codePointerTargetsOf), kept like runtimeRoutineCalls.
   const std::vector<va_t> &codePointerTargets();
+  /// The routines of the image the memo adopted that never return, by name
+  /// and by proof, for the lifts of the callees read of it: a call to one
+  /// ends the path it is on, as in a run's own lifts. Kept like codeOwners.
+  // 注：noReturnTargets() 已在上方声明，此处仅补充 fork 的 prover 接口。
+  const NoReturnCalleeProver &noReturnCallees();
 
   std::map<va_t, Callee> Callees;
 
@@ -385,7 +394,11 @@ private:
   const BinaryImage *Image = nullptr;
   const Symbol *SymbolData = nullptr;
   size_t SymbolCount = 0;
+  // 融合：CallArgumentSources 沿用上游 SharedValue 包装（跨 run 共享、
+  // 写时复制的调用摘要来源表）；KnownEntries 为补丁新增的已知函数入口
+  // 集合，保留 fork 的 shared_ptr 形式以匹配其 bool 判空与 -> 访问用法。
   SharedValue<std::map<va_t, va_t>> CallArgumentSources;
+  std::shared_ptr<const std::set<va_t>> KnownEntries;
   std::set<va_t> FunctionEntries;
   std::map<va_t, PointerVariableCallee> PointerCallees;
   std::optional<ExecutableCodeOwnerIndex> CodeOwners;
@@ -397,6 +410,8 @@ private:
   std::shared_ptr<const libc::NoReturnTargetIndex> NoReturnTargets;
   std::optional<std::map<va_t, Intrinsic>> RuntimeRoutineCalls;
   std::optional<std::vector<va_t>> CodePointerTargets;
+  // 注：NoReturnTargets 成员已在上方声明；此处仅保留 fork 的 prover 成员。
+  std::shared_ptr<const NoReturnCalleeProver> NoReturnCallees;
   size_t Bytes = 0;
   uint64_t Clock = 0;
 };

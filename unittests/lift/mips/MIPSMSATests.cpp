@@ -18,10 +18,13 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #ifdef NEVERD_MIPS_UNICORN_REFERENCE
 #include "unicorn/unicorn.h"
+
+#include "neverd/emulation/arch/mips/P5600MSA.h"
 #endif
 
 #include <algorithm>
@@ -37,12 +40,12 @@ namespace {
 BinaryImage msaImage(Arch Target) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Image.Entry = 0x10000;
   Image.MIPS.emplace();
   Image.MIPS->ISARevision = 5;
   Image.MIPS->HasMSA = true;
-  Image.MIPS->FPABI = 6;
+  Image.MIPS->FPABI = isMIPS64(Target) ? 1 : 6;
   return Image;
 }
 
@@ -57,9 +60,9 @@ std::vector<uint8_t> msaBytes(llvm::ArrayRef<uint32_t> Words, bool Little) {
 std::vector<LowOp> msaLift(Decoder &Decode, Arch Target, uint32_t Word) {
   const auto Bytes = msaBytes({Word}, archLittleEndian(Target));
   DecodedInsn Instruction;
-  EXPECT_EQ(
-      Decode.decodeOneForLift(Bytes.data(), Bytes.size(), 0x10000, Instruction),
-      4);
+  if (Decode.decodeOneForLift(Bytes.data(), Bytes.size(), 0x10000,
+                              Instruction) != 4)
+    throw std::runtime_error("MSA decoder rejected " + llvm::utohexstr(Word));
   std::vector<LowOp> Ops;
   Decode.liftToLow(Instruction, Ops);
   return Ops;
@@ -362,6 +365,37 @@ std::vector<uint8_t> vectorExpected(const VectorCase &Case,
 
 class MIPSMSA : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPSMSA, WideningAliasesAndSignedUnsignedSaturationUseFullLaneWidths) {
+  auto I = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  NdOpEmulator E(I);
+  E.setStrictMode(true);
+  const auto W0 = mipsreg::w(0), W1 = mipsreg::w(1);
+  const auto Repeated = [](uint8_t Lo, uint8_t Hi) {
+    std::vector<uint8_t> V(16);
+    for (unsigned I = 0; I != 16; ++I)
+      V[I] = I % 2 ? Hi : Lo;
+    return V;
+  };
+  E.setRegisterBytes(W0, Repeated(0x7f, 0x80));
+  E.setRegisterBytes(W1, Repeated(0xff, 0x40));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x7a210015, E)); // hadd_s.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x7f, 0xff));
+  E.setRegisterBytes(W0, Repeated(0x7f, 0x80));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x78210013, E)); // dotp_s.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x81, 0xdf));
+  E.setRegisterBytes(W0, Repeated(0xff, 0));
+  E.setRegisterBytes(W1, Repeated(0x80, 1));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x79010011, E)); // subsus_u.b w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0xff, 0));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x79810011, E)); // subsuu_s.b w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0x7f, 0xff));
+  E.setRegisterBytes(W0, Repeated(0, 0x80));
+  E.setRegisterBytes(W1, Repeated(0, 0x80));
+  ASSERT_TRUE(msaExecute(D, GetParam(), 0x7901001c, E)); // mul_q.h w0,w0,w1
+  EXPECT_EQ(E.getRegisterBytes(W0), Repeated(0xff, 0x7f));
+}
 TEST_P(MIPSMSA, FillInsertCopyEveryWordAndSharedLowViews) {
   auto Image = msaImage(GetParam());
   Decoder Decode;
@@ -546,7 +580,10 @@ TEST_P(MIPSMSA, ReusedDecoderConsumesRevisionAndFeatureEvidence) {
 TEST_P(MIPSMSA, UnadmittedFormatsRefuseBeforeEmittingEffects) {
   MIPSLifter Lifter(GetParam());
   Lifter.setMSAEnabled(true);
-  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x7a800012u}) {
+  // FILL.D and COPY_U.W need MIPS64. The ELM tag and DOTP byte format
+  // below are reserved.
+  for (uint32_t Word : {0x7b03201eu, 0x79342819u, 0x78f00099u, 0x78000013u}) {
+    SCOPED_TRACE(llvm::utohexstr(Word));
     cs_insn Instruction{};
     Instruction.address = 0x10000;
     Instruction.size = 4;
@@ -970,6 +1007,455 @@ TEST_P(MIPSMSA, IntegerImmediatesCoverEveryValueAndFullLanePredicates) {
           }
         }
 }
+
+TEST_P(MIPSMSA, RoundedShiftsAndBitInsertionCoverAllCountsWidthsAndAliases) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  // Independently assembled base encodings; do not use the lifter descriptor.
+  const uint32_t Opcodes[] = {0x78800015, 0x79000015, 0x7900000a, 0x7980000a,
+                              0x7b00000d, 0x7b80000d, 0x7b000009, 0x7b800009};
+  for (unsigned Kind = 0; Kind != 8; ++Kind)
+    for (unsigned Format = 0; Format != 4; ++Format)
+      for (unsigned Count = 0; Count != (8u << Format); ++Count)
+        for (unsigned Destination : {1u, 2u, 4u})
+          for (unsigned Pattern = 0; Pattern != 5; ++Pattern) {
+            const unsigned Bytes = 1u << Format, Bits = 8 * Bytes;
+            const bool Immediate = Kind % 4 >= 2, Insert = Kind >= 4;
+            const unsigned Field = (Bits == 64   ? 0
+                                    : Bits == 32 ? 64
+                                    : Bits == 16 ? 96
+                                                 : 112) |
+                                   Count;
+            const uint32_t Word =
+                Opcodes[Kind] | (1 << 11) | (Destination << 6) |
+                (Immediate ? Field << 16 : (Format << 21) | (2 << 16));
+            std::vector<uint8_t> Source(16), Counts(16), Old(16, 0x5a),
+                Expected(16);
+            const auto X =
+                Pattern == 0   ? llvm::APInt(Bits, 0)
+                : Pattern == 1 ? llvm::APInt::getAllOnes(Bits)
+                : Pattern == 2 ? llvm::APInt::getSignedMinValue(Bits)
+                : Pattern == 3
+                    ? llvm::APInt::getSignedMaxValue(Bits)
+                    : llvm::APInt(Bits, UINT64_C(0x123456789abcdef0));
+            for (unsigned At = 0; At != 16; At += Bytes)
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte) {
+                Source[At + Byte] = X.extractBitsAsZExtValue(8, Byte * 8);
+                Counts[At + Byte] = uint64_t(Count + Bits) >> (Byte * 8);
+              }
+            if (Destination == 1)
+              Old = Source;
+            if (Destination == 2)
+              Old = Counts;
+            for (unsigned At = 0; At != 16; At += Bytes) {
+              uint64_t Previous = 0;
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte)
+                Previous |= uint64_t(Old[At + Byte]) << (Byte * 8);
+              llvm::APInt Result(Bits, 0);
+              if (Insert) {
+                const auto Mask =
+                    Kind & 1 ? llvm::APInt::getLowBitsSet(Bits, Count + 1)
+                             : llvm::APInt::getHighBitsSet(Bits, Count + 1);
+                Result = (X & Mask) | (llvm::APInt(Bits, Previous) & ~Mask);
+              } else {
+                auto Wide = Kind & 1 ? X.zext(128) : X.sext(128);
+                if (Count)
+                  Wide += llvm::APInt(128, 1).shl(Count - 1);
+                Result = Wide.ashr(Count).trunc(Bits);
+              }
+              for (unsigned Byte = 0; Byte != Bytes; ++Byte)
+                Expected[At + Byte] =
+                    Result.extractBitsAsZExtValue(8, Byte * 8);
+            }
+            NdOpEmulator E(Image);
+            E.setStrictMode(true);
+            E.setRegisterBytes(mipsreg::w(1), Source);
+            E.setRegisterBytes(mipsreg::w(2), Counts);
+            if (Insert && Destination == 4 && !(Immediate && Count == Bits - 1))
+              E.setRegisterBytes(mipsreg::w(4), Old);
+            ASSERT_TRUE(msaExecute(D, GetParam(), Word, E))
+                << Kind << '/' << Bits << '/' << Count;
+            EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Destination)), Expected);
+          }
+  for (uint32_t Opcode : {0x7900000au, 0x7980000au, 0x7b000009u, 0x7b800009u})
+    for (unsigned Reserved = 120; Reserved != 128; ++Reserved) {
+      MIPSLifter L(GetParam());
+      L.setMSAEnabled(true);
+      cs_insn Raw{};
+      Raw.size = 4;
+      auto B =
+          msaBytes({Opcode | (Reserved << 16)}, archLittleEndian(GetParam()));
+      std::copy(B.begin(), B.end(), Raw.bytes);
+      std::vector<LowOp> Ops;
+      EXPECT_THROW(L.lift(Raw, Ops), UnliftedInstruction);
+      EXPECT_TRUE(Ops.empty());
+    }
+}
+
+TEST_P(MIPSMSA, PermutationsUseRegisterLanesAndSlideBytesInIndependentRows) {
+  auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (unsigned Size = 0; Size < 4; ++Size) {
+    const unsigned Bytes = 1u << Size, Count = 16 / Bytes;
+    const unsigned Tag[] = {0, 32, 48, 56};
+    for (unsigned N = 0; N < Count; ++N)
+      for (unsigned Op = 0; Op < 13; ++Op) {
+        if (Op == 12 && Size == 3)
+          continue;
+        for (unsigned Dest : {0u, 1u, 3u}) {
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          std::vector<uint8_t> A(16), B(16), Old(16), Result(16);
+          for (unsigned I = 0; I < 16; ++I) {
+            A[I] = I + 16;
+            B[I] = 255 - I;
+            Old[I] = (I & 1) ? uint8_t(0xc0 + I) : uint8_t(N + I);
+          }
+          if (Dest == 0)
+            Old = A;
+          if (Dest == 1)
+            Old = B;
+          E.setRegisterBytes(mipsreg::w(0), A);
+          E.setRegisterBytes(mipsreg::w(1), B);
+          E.setRegisterBytes(mipsreg::w(Dest), Old);
+          E.setRegister(mipsreg::A0, 2 * Count + N);
+          uint32_t W = 0;
+          if (Op < 8)
+            W = 0x78000014 | Op << 23 | Size << 21 | ((Op < 2 ? 4u : 1u) << 16);
+          if (Op == 8)
+            W = 0x78010015 | Size << 21;
+          if (Op == 9 || Op == 10 || Op == 11)
+            W = 0x78000019 |
+                ((Op == 9    ? 0u
+                  : Op == 10 ? 1u
+                             : 5u)
+                 << 22) |
+                ((Tag[Size] + N) << 16);
+          if (Op == 12)
+            W = 0x78000002 | Size << 24 | 0x39u << 16;
+          W |= Dest << 6;
+          for (unsigned I = 0; I < 16; ++I) {
+            const auto Lane = I / Bytes, J = I % Bytes;
+            switch (Op) {
+            case 0:
+            case 9: {
+              const auto Row = I / Count * Count, Column = I % Count + N;
+              Result[I] = (Column < Count ? A : Old)[Row + Column % Count];
+              break;
+            }
+            case 1:
+            case 10:
+              Result[I] = A[N * Bytes + J];
+              break;
+            case 2:
+            case 3:
+              Result[I] =
+                  (Lane < Count / 2
+                       ? B
+                       : A)[((2 * Lane + (Op & 1)) % Count) * Bytes + J];
+              break;
+            case 4:
+            case 5:
+              Result[I] =
+                  (Lane & 1
+                       ? A
+                       : B)[(Lane / 2 + (Op == 4 ? Count / 2 : 0)) * Bytes + J];
+              break;
+            case 6:
+            case 7:
+              Result[I] =
+                  (Lane & 1 ? A : B)[((Lane & ~1u) + (Op & 1)) * Bytes + J];
+              break;
+            case 8: {
+              const auto K = Old[Lane * Bytes];
+              Result[I] =
+                  (K & 0xc0)
+                      ? 0
+                      : (K & Count ? A : B)[(K & (Count - 1)) * Bytes + J];
+              break;
+            }
+            case 11:
+              Result[I] = Lane == N ? A[J] : Old[I];
+              break;
+            case 12:
+              Result[I] =
+                  A[((Lane & ~3u) + ((0x39 >> (2 * (Lane % 4))) & 3)) * Bytes +
+                    J];
+              break;
+            }
+          }
+          ASSERT_TRUE(msaExecute(D, GetParam(), W, E)) << std::hex << W;
+          EXPECT_EQ(E.getRegisterBytes(mipsreg::w(Dest)), Result)
+              << std::hex << W;
+        }
+      }
+  }
+}
+
+TEST_P(MIPSMSA, FloatClassDistinguishesEveryIEEEClassWithoutReadingControl) {
+  const auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  for (unsigned Size : {4u, 8u}) {
+    const uint64_t Sign = UINT64_C(1) << (8 * Size - 1),
+                   Exp = Size == 4 ? UINT32_C(0x7f800000)
+                                   : UINT64_C(0x7ff0000000000000);
+    const uint64_t Quiet = (Sign - Exp) / 2;
+    const uint64_t Values[] = {Exp | 1,    Sign | Exp | Quiet,
+                               Sign | Exp, Sign | (Sign - Exp),
+                               Sign | 1,   Sign,
+                               Exp,        Sign - Exp,
+                               1,          0};
+    for (unsigned Offset = 0; Offset < 10; ++Offset) {
+      std::vector<uint8_t> Input(16), Expected(16);
+      for (unsigned I = 0; I < 16 / Size; ++I) {
+        const auto Index = (Offset + I) % 10;
+        for (unsigned J = 0; J < Size; ++J) {
+          Input[I * Size + J] = Values[Index] >> (8 * J);
+          Expected[I * Size + J] = uint64_t(1u << Index) >> (8 * J);
+        }
+      }
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegisterBytes(mipsreg::w(0), Input);
+      ASSERT_TRUE(
+          msaExecute(D, GetParam(), Size == 4 ? 0x7b20001e : 0x7b21001e, E));
+      EXPECT_EQ(E.getRegisterBytes(mipsreg::w(0)), Expected);
+    }
+  }
+}
+
+TEST_P(MIPSMSA,
+       ControlWritesCommitBeforeEnabledExceptionAndRespectImplementation) {
+  const auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  MIPSSystemContext C;
+  C.MSAImplementation = 0x1234;
+  C.MSAControlWritableMask = 0x0107ffff;
+  for (unsigned Sel = 0; Sel < 32; ++Sel) {
+    const auto Read = msaLift(D, GetParam(), 0x787e0099 | (Sel << 11));
+    C.MSAControl = 0x01000003;
+    ASSERT_TRUE(E.stepMIPSSystem(Read.front(), C));
+    ASSERT_TRUE(E.step(Read.back()));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Sel == 0   ? 0x1234u
+                                          : Sel == 1 ? 0x01000003u
+                                                     : 0u);
+  }
+  const auto Op = msaLift(D, GetParam(), 0x783e2059).front(); // ctcmsa $1,$a0
+  E.setRegister(mipsreg::A0,
+                0xff801083); // inexact cause and enable, round toward -inf
+  EXPECT_FALSE(E.stepMIPSSystem(Op, C));
+  EXPECT_TRUE(C.MSAFloatingPointException);
+  EXPECT_EQ(C.MSAControl, 0x01001083u);
+  EXPECT_FALSE(E.step(Op));
+}
+
+TEST_P(MIPSMSA, PartitionSelectorsEnforcePrivilegeAndPhysicalRegisterCapacity) {
+  const auto I = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(I));
+  NdOpEmulator E(I);
+  MIPSSystemContext C;
+  C.MSAImplementation = 1u << 16;
+  C.MSAPartition = MIPSMSAPartition{1, 3, 4, 5, 0, 0, 1};
+  auto Write = [&](unsigned Sel, uint32_t V) {
+    E.setRegister(mipsreg::A0, V);
+    return E.stepMIPSSystem(
+        msaLift(D, GetParam(), 0x783e2019 | (Sel << 6)).front(), C);
+  };
+  auto Read = [&](unsigned Sel) -> std::optional<uint64_t> {
+    const auto Ops = msaLift(D, GetParam(), 0x787e0099 | (Sel << 11));
+    if (!E.stepMIPSSystem(Ops.front(), C) || !E.step(Ops.back()))
+      return std::nullopt;
+    return E.getRegister(mipsreg::V0);
+  };
+  EXPECT_FALSE(Read(2));
+  EXPECT_FALSE(Write(6, 1));
+  EXPECT_TRUE(Write(5, 1));
+  C.CP0Usable = true;
+  EXPECT_EQ(Read(2), 1u);
+  EXPECT_EQ(Read(5), 5u);
+  EXPECT_TRUE(Write(3, 0xabc));
+  EXPECT_EQ(Read(3), 0xabcu);
+  EXPECT_TRUE(Write(4, 0x123));
+  EXPECT_EQ(Read(4), 0x123u);
+  E.setRegisterBytes(mipsreg::w(31), std::vector<uint8_t>(16, 0x5a));
+  EXPECT_FALSE(Write(6, 63));
+  EXPECT_EQ(Read(2), 1u);
+  EXPECT_TRUE(Write(6, 31));
+  EXPECT_EQ(Read(6), 31u);
+  EXPECT_EQ(Read(2), 0x80000001u);
+  EXPECT_FALSE(E.getRegisterBytes(mipsreg::w(31)));
+  EXPECT_TRUE(Write(6, 1));
+  EXPECT_EQ(Read(6), 1u);
+  EXPECT_EQ(Read(2), 0x80000001u);
+  EXPECT_TRUE(Write(7, 0));
+  EXPECT_EQ(Read(7), 0u);
+  EXPECT_EQ(Read(2), 0x80000000u);
+  EXPECT_TRUE(Write(6, 1));
+  EXPECT_EQ(Read(2), 0x80000002u);
+}
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST_P(MIPSMSA, ZeroDivisorsUseTheBoundIntegerImplementationWithoutFPTraps) {
+  auto CPU = emulation::createP5600MSAExecutor(GetParam());
+  ASSERT_TRUE(bool(CPU)) << llvm::toString(CPU.takeError());
+  const auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  E.setRegisterBytes(mipsreg::w(0), std::vector<uint8_t>(16, 0x80));
+  E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16, 0xff));
+  auto Ops = msaLift(D, GetParam(), 0x7a010092); // div_s.b w2,w0,w1
+  ASSERT_EQ(Ops.size(), 1u);
+  ASSERT_TRUE(E.step(Ops[0]));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 0x80));
+  E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16));
+  EXPECT_FALSE(E.step(Ops[0]));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 0x80));
+  MIPSSystemContext C;
+  C.MSAFloat = CPU->get();
+  C.MSAImplementation = 0; // P5600 MSAIR
+  C.MSAControl = 0x405;
+  ASSERT_TRUE(E.stepMIPSSystem(Ops[0], C));
+  EXPECT_EQ(C.MSAControl, 0x405u);
+  EXPECT_FALSE(C.MSAFloatingPointException);
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), std::vector<uint8_t>(16, 1));
+}
+TEST_P(MIPSMSA,
+       ConcreteFloatingPointUsesBoundCSRAndCommitsTrapWithoutDestination) {
+  auto CPU = emulation::createP5600MSAExecutor(GetParam());
+  ASSERT_TRUE(bool(CPU)) << llvm::toString(CPU.takeError());
+  const auto Image = msaImage(GetParam());
+  Decoder D;
+  ASSERT_TRUE(D.init(Image));
+  NdOpEmulator E(Image);
+  E.setStrictMode(true);
+  const auto A =
+      msaBytes({0x3f800000, 0x3f800000, 0x3f800000, 0x3f800000}, true);
+  const auto HalfULP =
+      msaBytes({0x33800000, 0x33800000, 0x33800000, 0x33800000}, true);
+  const auto Canary = msaBytes({1, 2, 3, 4}, true);
+  E.setRegisterBytes(mipsreg::w(0), A);
+  E.setRegisterBytes(mipsreg::w(1), HalfULP);
+  const auto Add = msaLift(D, GetParam(), 0x7801009b).front();
+  MIPSSystemContext C;
+  C.MSAFloat = CPU->get();
+  C.MSAImplementation = 0;
+  EXPECT_FALSE(E.stepMIPSSystem(Add, C));
+  for (unsigned RM = 0; RM < 4; ++RM) {
+    C.MSAControl = RM;
+    ASSERT_TRUE(E.stepMIPSSystem(Add, C));
+    const uint32_t X = 0x3f800000u + (RM == 2);
+    EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), msaBytes({X, X, X, X}, true));
+    EXPECT_EQ(C.MSAControl, RM | 0x1004u);
+  }
+  E.setRegisterBytes(mipsreg::w(1), std::vector<uint8_t>(16));
+  E.setRegisterBytes(mipsreg::w(2), Canary);
+  const auto Div = msaLift(D, GetParam(), 0x78c1009b).front();
+  C.MSAControl = 1u << 10; // Divide-by-zero trap enabled.
+  EXPECT_FALSE(E.stepMIPSSystem(Div, C));
+  EXPECT_TRUE(C.MSAFloatingPointException);
+  EXPECT_EQ(C.MSAControl, (1u << 10) | (1u << 15));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)), Canary);
+  C.MSAFloatingPointException = false;
+  C.MSAControl = 0;
+  ASSERT_TRUE(E.stepMIPSSystem(Div, C));
+  EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)),
+            msaBytes({0x7f800000, 0x7f800000, 0x7f800000, 0x7f800000}, true));
+  EXPECT_EQ(C.MSAControl, (1u << 15) | (1u << 5));
+}
+#endif
+
+TEST(MIPSMSA64, DoublewordTransfersAndFullWidthAddresses) {
+  for (const Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Image = msaImage(Target);
+    for (uint64_t VA : {0x4000ull, 0x200004000ull}) {
+      Segment Data;
+      Data.VA = VA;
+      Data.Size = Data.FileSz = 128;
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Data.Data.resize(Data.Size);
+      Image.Segments.push_back(std::move(Data));
+    }
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    const uint64_t X = 0x89abcdef76543210, Y = 0xfedcba9880000000;
+    E.setRegister(mipsreg::A0, X);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7b03205e, E)); // fill.d w1,a0
+    E.setRegister(mipsreg::A1, Y);
+    ASSERT_TRUE(msaExecute(D, Target, 0x79392859, E)); // insert.d w1[1],a1
+    EXPECT_EQ(E.getRegisterBytes(mipsreg::w(1)),
+              msaBytes({uint32_t(X), uint32_t(X >> 32), uint32_t(Y),
+                        uint32_t(Y >> 32)},
+                       true));
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b90899, E)); // copy_s.d v0,w1[1]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Y);
+    ASSERT_TRUE(msaExecute(D, Target, 0x78f20899, E)); // copy_u.w v0,w1[2]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x80000000ull);
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b20899, E)); // copy_s.w v0,w1[2]
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0xffffffff80000000ull);
+    // Distinct addresses with identical low words must not alias. Each
+    // store uses a negative element offset and a deliberately unaligned base.
+    const uint64_t Base = 0x200004031;
+    E.setRegister(mipsreg::A0, Base);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2067, E)); // st.d w1,-8(a0)
+    E.setRegister(mipsreg::A0, uint32_t(Base));
+    ASSERT_TRUE(msaExecute(D, Target, 0x7b03005e, E)); // fill.d w1,zero
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2067, E));
+    E.setRegister(mipsreg::A0, Base);
+    ASSERT_TRUE(msaExecute(D, Target, 0x7bff2063, E)); // ld.d w1,-8(a0)
+    ASSERT_TRUE(msaExecute(D, Target, 0x78b90899, E));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), Y);
+    MIPSLifter L(Target);
+    L.setMSAEnabled(true);
+    cs_insn Insn{};
+    Insn.size = 4;
+    const auto Reserved = msaBytes({0x78f90899}, archLittleEndian(Target));
+    std::copy(Reserved.begin(), Reserved.end(), Insn.bytes);
+    std::vector<LowOp> Ops;
+    EXPECT_THROW(L.lift(Insn, Ops), UnliftedInstruction); // COPY_U.D
+    EXPECT_TRUE(Ops.empty());
+  }
+}
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST(MIPSMSA64, I6400ExecutesFloatingLanesAndCSRInBothEndians) {
+  for (const Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto CPU = emulation::createI6400MSAExecutor(Target);
+    ASSERT_TRUE(bool(CPU)) << llvm::toString(CPU.takeError());
+    auto Image = msaImage(Target);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    NdOpEmulator E(Image);
+    E.setStrictMode(true);
+    MIPSSystemContext C;
+    C.MSAFloat = CPU->get();
+    C.MSAImplementation = 0x300;
+    C.MSAControl = 0;
+    E.setRegisterBytes(
+        mipsreg::w(0),
+        msaBytes({0x3f800000, 0x40000000, 0xbf800000, 0xc0000000}, true));
+    E.setRegisterBytes(
+        mipsreg::w(1),
+        msaBytes({0x3f800000, 0x40000000, 0xbf800000, 0xc0000000}, true));
+    auto Ops = msaLift(D, Target, 0x7801009b); // fadd.w w2,w0,w1
+    ASSERT_EQ(Ops.size(), 1u);
+    ASSERT_TRUE(E.stepMIPSSystem(Ops.front(), C));
+    EXPECT_FALSE(C.MSAFloatingPointException);
+    EXPECT_EQ(E.getRegisterBytes(mipsreg::w(2)),
+              msaBytes({0x40000000, 0x40800000, 0xc0000000, 0xc0800000}, true));
+  }
+}
+#endif
 
 INSTANTIATE_TEST_SUITE_P(Endian, MIPSMSA,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL));

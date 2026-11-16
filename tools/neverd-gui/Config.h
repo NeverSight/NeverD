@@ -95,6 +95,9 @@ inline constexpr int kQuickStartDialogMaximumSideWidth = 440;
 // tools/neverd-gui/app/StyledText.cpp
 /// Pixels a character's advance may differ from its columns' width.
 inline constexpr qreal kStyledTextGridTolerance = 0.01;
+/// How many colors' character formats styled text keeps to share among the
+/// spans it lays out: more than the themes in use color text with.
+inline constexpr int kStyledTextFormatsKept = 64;
 
 // tools/neverd-gui/app/Theme.cpp
 inline constexpr int kThemeMinimumCodePointSize = 6;
@@ -275,7 +278,7 @@ inline constexpr int kTitleBarTitlePadding = 12;
 // tools/neverd-gui/app/WindowFrame.cpp
 /// The band outside the visible window that holds its shadow.
 inline constexpr int kWindowFrameShadowExtent = 10;
-/// Resize presses take precedence over content and docking inside this band.
+/// Resize presses take precedence inside this band, except over scrollbars.
 inline constexpr int kWindowFrameResizeInset = 8;
 /// Corner resize reach measured from the visible edge.
 inline constexpr int kWindowFrameCornerReach = 16;

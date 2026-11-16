@@ -1,0 +1,1049 @@
+{
+  "source_revision": "7bf3d8571ab87cb8de5f20145e786621d3dc4659",
+  "dependency_revisions": {
+    "capstone": "7e761ce29b7e6d321c7ef37bcfd5d7855d413b2a",
+    "unicorn": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+    "llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+  },
+  "build_type": "Release",
+  "build_driver": "scripts/build.py",
+  "prebuilt_release": "neverd-llvm-v23.0.0-r6",
+  "local": {
+    "pinned_fork_lifted_images": {
+      "cases": 28,
+      "passed": 28,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "5ddafde7ec2ae7c827e483765bc050375a6eff5bff96c2b0bb8ee07fc8d3480e"
+    },
+    "prebuilt_r6_lifted_images": {
+      "cases": 28,
+      "passed": 23,
+      "failed": [
+        "AArch64DarwinEntry.SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [],
+      "xml_sha256": "bd6fe39593d60b95c94021a5dbeec09ce2e39da8280b126fff209d28b2526c77"
+    },
+    "pinned_fork_shared_pipeline_and_variadic": {
+      "cases": 87,
+      "passed": 87,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "61049c857238c129893e2b02e73b96c79f880766f0ec1df9161e07933a3591ca"
+    },
+    "prebuilt_r6_shared_pipeline_and_variadic": {
+      "cases": 87,
+      "passed": 87,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "83871e809dfb5d47dee45e3e8ec233c36f8b7c5f3d49ea2f8794ab910babbbdf"
+    },
+    "r6_failure_baseline": "arm64e-darwin-variadic-2026-11-12.json",
+    "probe_classification_python_tests": 20,
+    "signal_cursor_header_dialects": [
+      "C11",
+      "C++20"
+    ],
+    "public_cli": {
+      "O0": {
+        "published_sha256": "db61eaee7d2a2dffadf1de444d6f3c54354d8cd0828af5b9e1ece7a3940368ae",
+        "published_bytes": 52112,
+        "code_bytes": 16384,
+        "trampolines": 9,
+        "signature_verified": true,
+        "original_sha256": "e515dc53622837e78c769cd5c78550f64ccca408da0db54a484390484d7fdc35"
+      },
+      "O2": {
+        "published_sha256": "d64f31ab04b56f93468bc631c81da470d1878fce07780d76ab95929109fda5c7",
+        "published_bytes": 52112,
+        "code_bytes": 16384,
+        "trampolines": 9,
+        "signature_verified": true,
+        "original_sha256": "fe7c21af6aa2a936f94547405010e5512184770b796cf5ee4314f43385729cac"
+      }
+    },
+    "cpta_probe": {
+      "source_revision": "7bf3d8571ab87cb8de5f20145e786621d3dc4659",
+      "source_sha256": {
+        "scripts/verify_arm64e_native.py": "8f7a9873e4bcb3cc5f6fb31fba769258c8069362806f6034cd340c6103f94a1e",
+        "scripts/verify_arm64e_native.def": "2ff7a3cf9eeac60df0ea736ca94c0ddd414d044d531942b67c99756fed8406b7",
+        "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+        "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+        "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997",
+        "scripts/arm64e_native_cpta.def": "a81119ca8a78da71a74376323553bafdc6fa616ed1edf0670c2a04125bbfd39c"
+      },
+      "platform": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+      "profiles": {
+        "arm64": {
+          "outcome": "undefined-instruction",
+          "sha256": "62ccb4174ce5b7b7d9ba9eee20785f7e5f0f50b106a56b1a33c8715ae60ec97b",
+          "cpu_subtype": 0,
+          "results": []
+        },
+        "arm64e": {
+          "outcome": "did-not-start",
+          "sha256": "2fa84e3494904a43c9775da60c68cfea25e6cb283ee6e20dc9efb335d92d8ff4",
+          "cpu_subtype": 2147483650
+        },
+        "arm64e.x1": {
+          "outcome": "slice-unavailable"
+        }
+      },
+      "status": "unavailable",
+      "native_el0_cpta_observed": false,
+      "x1_el0_cpta_qualified": false
+    },
+    "clang_format_version": "22.1.2",
+    "changed_source_formatting_passed": true,
+    "source_provenance_passed": true
+  },
+  "native": {
+    "r6": {
+      "package": "neverd-llvm-v23.0.0-r6",
+      "host_sha256": "5f0b5d4138d981ce2fca244948a1c594ec73b07b001c935a9bba3ede567942cb",
+      "archive_sha256": "be5d7fd468b4011fe3b53ce7140120cecbc42624e5848afbe32ca1b461cc9ac9",
+      "workflow_revision": "e3ede78d0c06bab0e360075b172852168f7dc35f",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43152019017",
+      "runner_cold_build": false,
+      "runners": {
+        "macos-26": {
+          "cases": 23,
+          "ordinary_image_executions": 48,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "sigtramp_context_handoffs": 10,
+          "register_input_comparisons": 54,
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+          },
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_controls": 6,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "eb87647648c10f79b33f0d6f0dd9faf01bce0533ba9b74f270ae79eab997d042",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "d77a8ca1914e6b9fa68b8271785917927184fd1e7591c16cf470301a1b2d9652",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "slice-unavailable"
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "tests": {
+            "PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "original_signal_rows": "16 0 0 0\n44 1 0 0\n72 1 16 1\n104 1 0 0\n136 0 0 0\n",
+              "published_signal_rows": "16 0 0 0\n44 1 0 0\n72 1 16 1\n108 1 0 0\n136 0 0 0\n",
+              "native_interrupted_frames": "10",
+              "native_authenticated_parent_frames": "10",
+              "native_sigtramp_context_handoffs": "10"
+            },
+            "DirectCallerConsumesNonVariadicX8AndX9Results": {
+              "original_sha256": "6424fd8c15f1e0fc233addec56484056ac74b09ffd325398b756c2e5492b0c93",
+              "published_sha256": "fe2a155c186cd899dfd82afd7d9945142ef590a1e0af89efc05a22bfd8bd03ed",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectCallerConsumesTailForwardedX8AndX9Results": {
+              "original_sha256": "a40dfa984bc287f47432870f5d3e85a2c20ea37499f9c9217bc74c60fc54acc6",
+              "published_sha256": "8db90df4c0807293495e8a3ec1b34cdcf6acafadf3ff554d1c19f5e225566459",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+              "original_sha256": "5900345844806f6c8072a21f976f7a2599dffb769ef0f459dc228655a3d1f374",
+              "published_sha256": "0dfe01cf36fdcbd943eab0a6c81315e4711b8286b0ce9044bcd5774074312234",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+              "original_sha256": "9587f1a21832d8e6bc354ab6da58fd54eded872c2a0fb68da95a17bee7ac3de9",
+              "published_sha256": "7e17d7fa3cab720bc4ff695ce7b54fd9df1c20d7e796c02fa70628d1442764ad",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "TailCallForwardsTheWritableSwiftErrorRegister": {
+              "original_sha256": "abe699851adf59a6655c3efd8328db3473a005ae6b4dbb47d185856e49e0c7cf",
+              "published_sha256": "5188d3ec41e0bf5d6d2639ea76e0e197afa5490593fe9623bdea3d10d6145e82",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftContextSurvivesNativeLeafPublication": {
+              "original_sha256": "465bc91022434ae2fe9186382374ba3ec60f01bea2c11b67f7602f8ee2217287",
+              "published_sha256": "3b33f87584d0935e56801f503adfc17c64d5a12ce2e174289d4bb79acaaabadd",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftAsyncContextSurvivesNativeLeafPublication": {
+              "original_sha256": "fdb5d0e98915909ac43bc670ac9b3c6e318e4b891effbdb0094b2529577c7228",
+              "published_sha256": "014e85d9dfb4a23d6845cdfb21fe7ede02a4dedc32250d478be032148ef17e57",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "ScalarFPParametersAndResultsSurvivePublication": {
+              "original_sha256": "dae566d0f08834592c9438d981796823d3491675aacc8a3da7e4c7a041daf59a",
+              "published_sha256": "5e8e4681f0175a635da9a6c6db3ae9d9d5000a1895a89cf6a4c880e85dfc4a19",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "463cc133b17c990c2890d88f60552e048aa37ccb4c63f8556ffdc93db37f078f",
+              "published_sha256": "93df867e7aebd645895d56221208a99c904e48c4d856ca56a16e4199b1201a00",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "UnoptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "e6a5e2dab41947753d5a0492a8441efa39616d3001c26f0083879703c3f06db4",
+              "published_sha256": "05f2fcb35e48fea6f7db12befab63e13c7df1a34fd1b4b899156d9530c4e0993",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "OptimizedCalleeWalksTheNativeArgumentArea": {
+              "executed_native_images": "4"
+            },
+            "UnoptimizedCalleeHomesItsNativeArgumentCursor": {
+              "executed_native_images": "4"
+            },
+            "FramelessStackLoadsSurviveImagePublication": {
+              "original_sha256": "617fffc546d30e2824c67e88eb2a745d08891ca0fe4b2f10cb80d4611a7fd331",
+              "published_sha256": "7dd104fc666cda48118e73605da3c1c60e5c7fab00a45b96236fa9f9a7666c14",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "CompactLeavesElideOnlyTheUnusedStackReservation": {
+              "original_sha256": "c61df527fee658b8b8a18e74e41c8e389ce1c14de8141078778e07d151b2bedb",
+              "published_sha256": "b18d9377535703e8a36adea840d140c9a687e2ba1852f4f8ee04b41cc13fc786",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PreIndexedArgumentLoadRestoresTheIncomingSP": {
+              "original_sha256": "eb1b1b785aaaab2262978c0eff61b94f4749e244f2f0f6a66e6c70bfadbf3126",
+              "published_sha256": "72e4d0ee39bed58bb383e4b7580c7e10aa72b2abb1c90efe0f7e542ed8495753",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinTrue": {
+              "system_slice_sha256": "b7e03a70e7992e0c8c95306a1ec8bc35d323ea7db40c48cf42417d7f48b917aa",
+              "unsigned_input_sha256": "f5cd882c138069420c0c857607207408aca9f33ab02c41315c4a2858ee90bce7",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "73d14a6048b1cf01042cf5f612ca214e1e06441586e38160f14a2a20b966f581",
+              "published_sha256": "7bafbdb5a29f4e5a1b145ae4062cca30dd66151f8a8f2a8f9bf70ec432578d50",
+              "native_exit_status": "0",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinFalse": {
+              "system_slice_sha256": "cf712cf2777a0e4c22059c4e1939a6e716387a44d38c7d6c29b0184f742d9d87",
+              "unsigned_input_sha256": "bdc589ce36b9c749260b343cbb58cc2c51fcd0f35e1815e1610926b5112f5efd",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "93c8069c5cb536445be0344bdac5ae248f79d6d6060ba4a90bab31b41572430b",
+              "published_sha256": "b8bb99eb50110d5d0c1266b32de7a1b48725e099599193e8ce1c694ef0fbd097",
+              "native_exit_status": "1",
+              "executed_native_images": "2"
+            },
+            "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+              "original_sha256": "1839409112eb221c5d7cac7d0784b768df59fb93b4afc49444cbaf6ba2a20cac",
+              "published_sha256": "648a821931c3c6c5f374f2e042591bba85bd1c477df162c4b8ab60161fed6c7d",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectTailTransferPreservesItsInstalledCallee": {
+              "original_sha256": "b59978e70c798475e5ffbff5a706b10c78cf8c98569893bf7a21afdc6809b4cd",
+              "published_sha256": "338e190949d7f9937e5501dc36917a8cb3b2482d916671453f15c4ab53a0ac0a",
+              "caller_authenticated_call_sites": "10",
+              "native_reordered_tail": "true",
+              "executed_native_images": "2"
+            },
+            "EquivalentWAndXZeroingPreservesTheWholeRegister": {
+              "original_sha256": "261fff39e182cab77666c7ba5e0bbacde1d8a0ea7dfe23c1fa09f751c74dfb6b",
+              "published_sha256": "667a3ab9911b30f153a6361f4b381d14d8c107540e77bb3f28d5894e717c1da6",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OriginalGlobalAndAuthenticatedImportSurvivePublication": {
+              "original_sha256": "e1fd212b056c0374b8b36ba7f1758aae08cfb67b317baa0735751ba8ae1960f9",
+              "published_sha256": "5b901b3efbd63bdef75bf9771e4d7c448461f23457a4ed6fdac3c7bcaca08d0e",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "BaseAndDisplacementRetainLoadAndStoreEffects": {
+              "original_sha256": "aeb33376cbe6db0732b15589feed70ef970c03a4c7926fe9cea90ae5f9dbf85b",
+              "published_sha256": "556ceea25cb2642a8ec3cf28689a14982cf7a940721b2932f2cf6ae77ab4ab72",
+              "caller_authenticated_call_sites": "15",
+              "executed_native_images": "2"
+            }
+          },
+          "artifact_id": 13913408739,
+          "artifact_digest": "sha256:7e44ad2052241357a89fceec9c95dde407e6d53d99804fd0a348a029e410e2cc",
+          "qualification_sha256": "e03f6dbeb66efc7ec6d0384eafdda2b6b1ff11e11720b6f6d69373f18f2855dd",
+          "cpta_report_sha256": "eb3507748b15c6167dab022dc0fa4c2be04ff51d11f3744020660709e7e1acf6",
+          "compiler_controls_sha256": "a32cd598104ee16687c44c8507f00d553a02617d4d56a83c014d728455c413ac"
+        },
+        "xcode-27": {
+          "cases": 23,
+          "ordinary_image_executions": 48,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "sigtramp_context_handoffs": 10,
+          "register_input_comparisons": 54,
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_controls": 6,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "28c735f03b4817a42bad2b1d9479d0bd5adfc3e860d7ecd491f58aa2ce868040",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "29ac57c59943ba06b2ce4e8ac82e1f4d4595e7bc9f8e4b9580777deba4da46be",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "did-not-start",
+                "sha256": "960a97d7168416bd04bcd66e12a1dd4cc8a654eb3996da60883355e4592500c1",
+                "cpu_subtype": 2147483660,
+                "errno": 86
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "tests": {
+            "PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "original_signal_rows": "12 0 0 0\n48 1 0 0\n76 1 16 1\n104 1 0 0\n136 0 0 0\n",
+              "published_signal_rows": "12 0 0 0\n40 1 0 0\n72 1 16 1\n104 1 0 0\n132 0 0 0\n",
+              "native_interrupted_frames": "10",
+              "native_authenticated_parent_frames": "10",
+              "native_sigtramp_context_handoffs": "10"
+            },
+            "DirectCallerConsumesNonVariadicX8AndX9Results": {
+              "original_sha256": "92fefceb97b101ce2f4eb1b259bf924b061e525a0b80f4c6ca27839581dcbf6e",
+              "published_sha256": "76f5b9702e86cc9834cc88106e7edb8d35d9da6e4474ff810bf539df38c43012",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectCallerConsumesTailForwardedX8AndX9Results": {
+              "original_sha256": "35d8ef3fca3fa1d7ecd96e7c92113a5b91fe423965a8876f2c5a8bd11bd78112",
+              "published_sha256": "7c3a0fc1055a597f9f53972e7fc4e710f55ee3c840a5f3e51febe79d3004e366",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+              "original_sha256": "f7f5d82ee63f348c97a0f6e010d8a75369c136d5780657f8a68c2db02ba23324",
+              "published_sha256": "0338bc00f80dac1b5784b4588fecdab4875a9926b79d8ed3a6940bcc6fe8d8a4",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+              "original_sha256": "16a5aa529a6122417fbe7a51f0c21ceb485d63ef27cbda488410fcd8381252ce",
+              "published_sha256": "15e333ab92767d30ceabecdea80c98d22e7c7e16dd12962e75853b0fa99533cf",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "TailCallForwardsTheWritableSwiftErrorRegister": {
+              "original_sha256": "2161b3f87840a859eada7da3c6a3ec03790620886966899edbe7d0f4a6c3b7a4",
+              "published_sha256": "4b9538ae8970fa3f558a456b5a507f5d4a5aafce30c0a4eea81302a0b2152391",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftContextSurvivesNativeLeafPublication": {
+              "original_sha256": "793a143c3d49d5a50680bb9edaa6732fec456237ab1684435a5b5128c276e5b3",
+              "published_sha256": "b6274a70014cd5f7443f2996ae4d69935d6d9f3f65c7ed04cc207a5089631544",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftAsyncContextSurvivesNativeLeafPublication": {
+              "original_sha256": "43f9d75666562fce41e3115ac27fc36e8e07e2d43becd3057af8ce70a0844ac6",
+              "published_sha256": "1bf011ab04ed53460dcd29527de2bb099f7143ddf2bb4d133f2ce42ce1371d81",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "ScalarFPParametersAndResultsSurvivePublication": {
+              "original_sha256": "02b0bd845c887b53a342bc31278a1e4e6a1785354e80d90759667987671eb4ff",
+              "published_sha256": "978833bdb609a14edfb655fc1c2cf2777df2d3a06ce12c5d9360dc46760e6da2",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "e05ef9f5968bbf41b3b64980c8c8a61933e4d33a5b03ac150f1d9be754bfb57e",
+              "published_sha256": "e0ad9d741a3bae88b64b2553aab27b95e550d889708411992b72d5ea68ec96ee",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "UnoptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "ee0bb857f3b31118638ce835823fd8264950df4ab79484807cab22748cbdb1bc",
+              "published_sha256": "8356cdf5302973531450ad3740f1bec579c42e1561f11adf6afa68252e7f50e8",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "OptimizedCalleeWalksTheNativeArgumentArea": {
+              "executed_native_images": "4"
+            },
+            "UnoptimizedCalleeHomesItsNativeArgumentCursor": {
+              "executed_native_images": "4"
+            },
+            "FramelessStackLoadsSurviveImagePublication": {
+              "original_sha256": "04e9ee40c6aeab9778ece8223abeb56acd1d579cd269deb481c2a3b7333f8454",
+              "published_sha256": "9dc8ac1747e70442647ae84144a5fa8fcd4ee00207be6428447c04737ae4589f",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "CompactLeavesElideOnlyTheUnusedStackReservation": {
+              "original_sha256": "510b75441e7bf6acd33ba9d30bdeca98d8e8f300677d7b71a3564e1ecbaf2914",
+              "published_sha256": "22949495d57d5dace28e86a402616d6208298e5bae33bff0b25befd2a0048c7a",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PreIndexedArgumentLoadRestoresTheIncomingSP": {
+              "original_sha256": "c97783ca0890bdf64ab51ff9add4c4bce58dba00d79811a5e71274ceec9a3a8a",
+              "published_sha256": "8a470d43f7f205362bddaf26fa1b61b52412398bd3e610ba8b2af13e8c77d898",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinTrue": {
+              "system_slice_sha256": "0290c62f2ca3156f4dbb7791d448675864777f7ac34981f6eade81ec484dca09",
+              "unsigned_input_sha256": "9be741f8826e078c63ee797dea0f1933e1aec9499174689f440f3a34df3f476a",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "8aa626f60b877cdcab9a58800a7340f9ff9ccda6b7a23e21344d831a53fe0ed1",
+              "published_sha256": "2f3fec09be7edc5583dbdad582fc053ff91509b1b6539f9c426bb15ab938a035",
+              "native_exit_status": "0",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinFalse": {
+              "system_slice_sha256": "5ffbfaf038acbe7960cdb4a99af237e7a76c1e249e7a234f491a37cafe5b0329",
+              "unsigned_input_sha256": "6b1f0a20c5a7e8491eee5f0d05271e0f85e315b20f82cb07f5fc981173982974",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "a1d0011a513ec3f311d9207fc110f7718f274b218062a4922362cfc5e37e7ef1",
+              "published_sha256": "bd69e9ef67d2c319ab8f91e9140d4555e320a5f48cd0d3dbccff3fa1b8768913",
+              "native_exit_status": "1",
+              "executed_native_images": "2"
+            },
+            "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+              "original_sha256": "d95f9c63389e3056bc7c2f07618e0235bc5b6366365f11bc3aff4aa8c5350f8a",
+              "published_sha256": "2b4696434d6cb6cd0e2135ccc3c7619cb3f057dc5838d5086de544b3eccfd7ad",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectTailTransferPreservesItsInstalledCallee": {
+              "original_sha256": "df0e9f78dd744767283b2cef3e9ee1f411281cb87f48c15b4a1f52016e3ecd32",
+              "published_sha256": "3cc6696de0cf78df26ee96d53db7bc78ebb8c7236f9f13b0aedf1e44b721f139",
+              "caller_authenticated_call_sites": "10",
+              "native_reordered_tail": "true",
+              "executed_native_images": "2"
+            },
+            "EquivalentWAndXZeroingPreservesTheWholeRegister": {
+              "original_sha256": "b5d9a9e562d37efa8582710600adce7ed538b6a78bf8dc835cabb3c537ba097b",
+              "published_sha256": "5fc5a95d3b4d00a47e36a8a606805f063fb191804b710f9969bdeb12936d6b51",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OriginalGlobalAndAuthenticatedImportSurvivePublication": {
+              "original_sha256": "26a03e08fdc04f75cbba8834df9e172031b5fc65d94ae4583941d6e871e1509e",
+              "published_sha256": "8c32967fcdeb3fbe7a522258b1b5740aa34ef4d0237726571a8528ce86f5c051",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "BaseAndDisplacementRetainLoadAndStoreEffects": {
+              "original_sha256": "8b11d9a5f6c6fbc4e0249f7d29f210a66409458d594a88e88142ba8e0bf3902a",
+              "published_sha256": "ac94e9d8e1c2727d1de105d12930fe429984bc7b6ded848c99806816ab1b4b1b",
+              "caller_authenticated_call_sites": "15",
+              "executed_native_images": "2"
+            }
+          },
+          "artifact_id": 13914052864,
+          "artifact_digest": "sha256:7cb11ff2497814c55158c22cfacca0dc4b7fbcb8b90362f5229e4a1652b122fe",
+          "qualification_sha256": "e0582eb2c8e83679b1022c041d27cee5b8a9cd374a9cf58711e2633f939a1853",
+          "cpta_report_sha256": "993e5a5f06bc9ca9d38b50af5809d1121ef264add3b6e399cf856e2c140b5f3b",
+          "compiler_controls_sha256": "d47b9986af32804cb76ab04eb665cc8f8a27b9e35c230de63f2d35ac2b63c931"
+        }
+      }
+    },
+    "fork": {
+      "package": "source LLVM 5676029e378c9e37adc16c8216a8e8453ffafcae",
+      "host_sha256": "acf3c4819efb724070dd1855ac1c0fc0d11b7bd6259df5aa7cac85d59721f952",
+      "archive_sha256": "86b8282ac9e87ecad66992f32ea40baa31089a9f6f33d8273c9f1641eb834f0a",
+      "workflow_revision": "2baa257726e47163b55500162280e1a8b328668c",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43151660686",
+      "runner_cold_build": false,
+      "runners": {
+        "macos-26": {
+          "cases": 28,
+          "ordinary_image_executions": 58,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "sigtramp_context_handoffs": 10,
+          "register_input_comparisons": 54,
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+          },
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_controls": 6,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "eb87647648c10f79b33f0d6f0dd9faf01bce0533ba9b74f270ae79eab997d042",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "d77a8ca1914e6b9fa68b8271785917927184fd1e7591c16cf470301a1b2d9652",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "slice-unavailable"
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "tests": {
+            "PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "original_signal_rows": "16 0 0 0\n44 1 0 0\n80 1 16 1\n104 1 0 0\n136 0 0 0\n",
+              "published_signal_rows": "12 0 0 0\n44 1 0 0\n72 1 16 1\n108 1 0 0\n140 0 0 0\n",
+              "native_interrupted_frames": "10",
+              "native_authenticated_parent_frames": "10",
+              "native_sigtramp_context_handoffs": "10"
+            },
+            "DirectCallerConsumesNonVariadicX8AndX9Results": {
+              "original_sha256": "1e4d92c23ccd223f74c471ab4f13027d2880f553d716952a874b7d0d482ceee7",
+              "published_sha256": "f2f3dbe8b21f2bad5da8ed86284b0eade88453536a3cff68f546074fa60bd22d",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectCallerConsumesTailForwardedX8AndX9Results": {
+              "original_sha256": "35be7b9b437f3755ef9a2af7925fc9bb4fdfd8544ed1bdd9c4aad0f77e2201f1",
+              "published_sha256": "c20ae9205ccf9fbfc6263f68ea58effcb9c3b1a5d374ad6d89190a453ce5dd64",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+              "original_sha256": "da2923aae1c4a52d7b1af3dc8ccd9d53fc9c08c4ca7e254e339fa47164936553",
+              "published_sha256": "60b8b3ec8206ae978069bea6376b5ab5ac08ee94d8ecd1352743792811a3ae36",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+              "original_sha256": "271e0a1aa3ff2e065c9ff207502b36ff343a9e3d2298598ac21e975ed7e6a04d",
+              "published_sha256": "1ab71dda44f1429dfd36c8e6d147050483eab9b1e5d83fd513e08325bc10e43b",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "TailCallForwardsTheWritableSwiftErrorRegister": {
+              "original_sha256": "ba177d3a195c89763d41571ea1a7ddb34577cb27fd0621e77d060c932a7e967b",
+              "published_sha256": "a56309cf1b119b74289aa0e4cacc6ee6f388520544c86211d3dcf5efb65c4afc",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SignedCallReturnsTheUpdatedSwiftErrorRegister": {
+              "original_sha256": "dcc42405b3f6ed56ff511a5b0d117995791f4bfd4ae473b1f66fbd90e887839a",
+              "published_sha256": "1ccc9d003fa9bf216cf62db60844f6bc2e7073afdfd18614823bf147764b4e4f",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister": {
+              "original_sha256": "2a123e990c686c0ec903da61a5e3bdcace6e337d39e4951fff4962889768feb2",
+              "published_sha256": "afe24435523512a5db7aeea04e4e3360a590fb1bea3eab782ed35bf0d1b5a04f",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn": {
+              "restored_lr_offset": "16",
+              "original_sha256": "5ac9416fef66f9bb36de3b8952e0c110325882c0aba99d7c5574776205670d73",
+              "published_sha256": "a093ee8857a58f0dbd88a82a9a72406d47f5750e98cb871ed2582ffc21cd9e83",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftContextSurvivesNativeLeafPublication": {
+              "original_sha256": "4f7a73ab34da948032173a2ed794f01e94f3fee731579b4665df217ed2915e64",
+              "published_sha256": "69fa0e30beed4a14a1e4c3afc765f48170139b94f077de75b80840d012a36ab7",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftAsyncContextSurvivesNativeLeafPublication": {
+              "original_sha256": "890c9f8732868af879c119b62e89a398bcad3293803d2386506669ed67be89bd",
+              "published_sha256": "7b0750ef20a1e2313f7b11014b9f90a6a34d52fff8b85715118d189beaf03b73",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "ScalarFPParametersAndResultsSurvivePublication": {
+              "original_sha256": "c2d2558f6f5bbe1ff39761094f52d82ba68c4facf1c00af4abb6500d7fe15322",
+              "published_sha256": "0ef0f0e28c0263a1932ffb2d8aad4498a9e629e0fd58695fa2bad8b32b993515",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SignedLeafUsesTheIncomingSPAtItsNewAddress": {
+              "original_sha256": "7435183a1da58c98344bfb4223829d561f7f0463da718390d9e40385d35d1cc4",
+              "published_sha256": "e663db37cbc38e62c95bb214ca4133efcbfd3279097ec6649ff480b91d036863",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "0eaeaf6ea51331b19cb541ed2b523ee9d84e881b84d8fa80ecfea62779a954c8",
+              "published_sha256": "842b0091e7573a1344bd34b788a23d4e4f1c229ac6c85145e36b48ba6b42cc61",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "UnoptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "0e2046f5b8f79de13e32843d0026abae0d21b571000a7c70145a0fbc3a983c14",
+              "published_sha256": "afe02a1bfb464dddbc7451b42904e5557a68f425f17d816956f5c9ca2978c1a6",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "OptimizedCalleeWalksTheNativeArgumentArea": {
+              "executed_native_images": "4"
+            },
+            "UnoptimizedCalleeHomesItsNativeArgumentCursor": {
+              "executed_native_images": "4"
+            },
+            "FramelessStackLoadsSurviveImagePublication": {
+              "original_sha256": "744cbbe2104733246f9556e1707357c27258e2a83c2ed1c8a6e17ed78f1b7690",
+              "published_sha256": "b9244309d1490319e5893c18d04ebf5f8f320b589c53023efc07d4fcb1177192",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "CompactLeavesElideOnlyTheUnusedStackReservation": {
+              "original_sha256": "b1fff0a271dcfa839e0d429a37c0aceeb4d7f80b38feed59d90b53eead78e317",
+              "published_sha256": "c33fd0171652d4b8eb64ca9f3d7a523cadebfa8dc8ca56aa29ee9d71c703a307",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PreIndexedArgumentLoadRestoresTheIncomingSP": {
+              "original_sha256": "a1f124a49d99b595c02ab786d7b0e626f7cce12361aaa8c670530d7370e4c3be",
+              "published_sha256": "43400abb7e0ed1b9d619c1da995d7b2d79b622dd79bf9753f8699412c0876295",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinTrue": {
+              "system_slice_sha256": "b7e03a70e7992e0c8c95306a1ec8bc35d323ea7db40c48cf42417d7f48b917aa",
+              "unsigned_input_sha256": "f5cd882c138069420c0c857607207408aca9f33ab02c41315c4a2858ee90bce7",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "73d14a6048b1cf01042cf5f612ca214e1e06441586e38160f14a2a20b966f581",
+              "published_sha256": "7bafbdb5a29f4e5a1b145ae4062cca30dd66151f8a8f2a8f9bf70ec432578d50",
+              "native_exit_status": "0",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinFalse": {
+              "system_slice_sha256": "cf712cf2777a0e4c22059c4e1939a6e716387a44d38c7d6c29b0184f742d9d87",
+              "unsigned_input_sha256": "bdc589ce36b9c749260b343cbb58cc2c51fcd0f35e1815e1610926b5112f5efd",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "93c8069c5cb536445be0344bdac5ae248f79d6d6060ba4a90bab31b41572430b",
+              "published_sha256": "b8bb99eb50110d5d0c1266b32de7a1b48725e099599193e8ce1c694ef0fbd097",
+              "native_exit_status": "1",
+              "executed_native_images": "2"
+            },
+            "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+              "original_sha256": "c7f3d3fcd2cfd2e94f44cd6ccbad8543f46bc2ed1afc4a16369cb63f5828d2f2",
+              "published_sha256": "3a71da3449d5c659a535c4d39711e6518f377d680268cb897561735af92682ff",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectTailTransferPreservesItsInstalledCallee": {
+              "original_sha256": "30885a54efcb6a1f565d6eacb22a48733c54c73d53a779f33436a4362c48508e",
+              "published_sha256": "46d537a2324fd2b7a1209d090d6f396023bccbe9ac934b67677d633b0415738e",
+              "caller_authenticated_call_sites": "10",
+              "native_reordered_tail": "true",
+              "executed_native_images": "2"
+            },
+            "EquivalentWAndXZeroingPreservesTheWholeRegister": {
+              "original_sha256": "78bbf4eb46209e356d5a44d2acb8bbba5846bd77cdddfba157f998440ef25dd0",
+              "published_sha256": "619bce03bba6d78be4d462379ff0036d2e59913563d34d1e1e27140974017c00",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OriginalGlobalAndAuthenticatedImportSurvivePublication": {
+              "original_sha256": "3899cbc0924eaa2baf4975a482f6073dbde2e44b97d6845077e8693ea1e7e944",
+              "published_sha256": "a6ce10caebbaabd98895b38ded1ef7fcee4237f3c1c4da2481f9b538e75b046a",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "SignedFrameCallsImportBeforeReadingOriginalGlobal": {
+              "original_sha256": "e5a24bb8ce13329c1b3b33157b5ec2a7100e1ecc5fc754470619672c7e681764",
+              "published_sha256": "46bf00fca81fafded902182ab6095c57b463eb549b384621d18d716ba10d1f12",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "BaseAndDisplacementRetainLoadAndStoreEffects": {
+              "original_sha256": "25ee9723f062e97b5bfc426744cb753672af9fc426b6b5a0c1bd4ac6f2a68ab7",
+              "published_sha256": "edef50607bc175f2d7162a824a777772df24dd9dabacfd0023547956257da32f",
+              "caller_authenticated_call_sites": "15",
+              "executed_native_images": "2"
+            }
+          },
+          "artifact_id": 13913547982,
+          "artifact_digest": "sha256:8e4365e67ef78255724a6f696d8bae7261839e43957fe6cf2ddf22a76a6c2a46",
+          "qualification_sha256": "58bb639d293f91dc212a2ba868573316c9d9eb76843f30405fecdcc57454f6a6",
+          "cpta_report_sha256": "eb3507748b15c6167dab022dc0fa4c2be04ff51d11f3744020660709e7e1acf6",
+          "compiler_controls_sha256": "5147dda32e73a6cffb9de1788481a46c2ac3a12feebf18adc0bbb50c9acf482d"
+        },
+        "xcode-27": {
+          "cases": 28,
+          "ordinary_image_executions": 58,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "sigtramp_context_handoffs": 10,
+          "register_input_comparisons": 54,
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_controls": 6,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "28c735f03b4817a42bad2b1d9479d0bd5adfc3e860d7ecd491f58aa2ce868040",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "29ac57c59943ba06b2ce4e8ac82e1f4d4595e7bc9f8e4b9580777deba4da46be",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "did-not-start",
+                "sha256": "960a97d7168416bd04bcd66e12a1dd4cc8a654eb3996da60883355e4592500c1",
+                "cpu_subtype": 2147483660,
+                "errno": 86
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "tests": {
+            "PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "original_signal_rows": "16 0 0 0\n44 1 0 0\n76 1 16 1\n104 1 0 0\n136 0 0 0\n",
+              "published_signal_rows": "12 0 0 0\n40 1 0 0\n76 1 16 1\n108 1 0 0\n132 0 0 0\n",
+              "native_interrupted_frames": "10",
+              "native_authenticated_parent_frames": "10",
+              "native_sigtramp_context_handoffs": "10"
+            },
+            "DirectCallerConsumesNonVariadicX8AndX9Results": {
+              "original_sha256": "a10ce737a88723b1ba1d26a1c59634448153252c72e1daf1aa1bc068854a811c",
+              "published_sha256": "5fac32212969ecf433c2183aa6573e26dbae193576e8e6e6d80020c40adc4bcf",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectCallerConsumesTailForwardedX8AndX9Results": {
+              "original_sha256": "526dea46dde1a673424978b4c56fea4e450a67118f17bd731fe400d916e9263e",
+              "published_sha256": "55c6a4025285f0a5fe34a7edd9e98976717c54e93c89623c161a014f8d25f5a1",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorReturnsBothTheOldValueAndTheUpdatedRegister": {
+              "original_sha256": "b64cffcb6341fe6ba21f943d6e4ab1e07d8afa7e9d096a6e8984dc1d992d1fb6",
+              "published_sha256": "4f92aad8b3a0b679764cb4b73e98dad0bcebd63329706196b4b3e8724d78de0e",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftErrorCanClearTheRegisterWithoutReadingIt": {
+              "original_sha256": "180c83ac924c5daf6a5044fe833001b1e6f93a1d20d4fb47011f4daebddd88ff",
+              "published_sha256": "1c778261a2e994cf411d5a460fea57e8c9c10c9f49c151b1dd4abf65390ea751",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "TailCallForwardsTheWritableSwiftErrorRegister": {
+              "original_sha256": "54dd7e6acd45a1138299a7bd9eb12a0724928f90e85f8d469bd6300c532fa8ab",
+              "published_sha256": "f8f076d302152c453794fe4fcceb117ef4577910986fd9c5a8563a5c0f98ba8e",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SignedCallReturnsTheUpdatedSwiftErrorRegister": {
+              "original_sha256": "cc55404e0db7d3cdcdffba9ed94999caf25aace18f147f16c3c7e19d17128670",
+              "published_sha256": "4be1e3894f29a7c9a160ab7b6e1aa4411ccfdb05a85db52a21775f8c04a53558",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister": {
+              "original_sha256": "ed2a0fd4ab021223d3d0ae61df066dbbb22ad4a02d8c3c310db1169314712762",
+              "published_sha256": "6a04c1d7e2fee779b383065418d89be655b96c901440806e36b26b57858cb5bf",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn": {
+              "restored_lr_offset": "16",
+              "original_sha256": "053445b9534e4a46c2d24de1b9b4a86c03f63a57f5b9a6e5920ae69dc8be3067",
+              "published_sha256": "ae4fd9dc4d06c4a4c116c73266d9ea4a01df7a54f2dde46dd4565daf9b54829f",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftContextSurvivesNativeLeafPublication": {
+              "original_sha256": "ce4240af69e1ed87a4845252ec51cbcb1a0bc454c5ba2748d0e815ad076d2283",
+              "published_sha256": "e995d63d438eeacccd2d06aeec074053fad45db96936707e697550643f8b444f",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SwiftAsyncContextSurvivesNativeLeafPublication": {
+              "original_sha256": "d3c1943a6e57f2700ed46de8192ab70eac4c2bb705f4ff57d1eb5ed74b34451f",
+              "published_sha256": "d010331a78cffb15def081a7b8f8a83ae523623cf334f82b9563e14c7736d885",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "ScalarFPParametersAndResultsSurvivePublication": {
+              "original_sha256": "4555692b097b7bfb0e141364747d4605e9692ac282aff4a266e88b9ef15312d0",
+              "published_sha256": "73710e53d24d77982a08efe4560f5a21d34fcaccfb0ea7281f12b894110a0fde",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "SignedLeafUsesTheIncomingSPAtItsNewAddress": {
+              "original_sha256": "2cffa190c2a87da2291cdef2372bf8855b6aa3ef17a4895db7f58f67342a30f8",
+              "published_sha256": "df48332b843e9126e5004b71d99e22e868af058cf789b741f88a14e3589e83f9",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "3dcffd0e82cfc255b07cb2afdb3b38ee555f276f689272bc4dc18f5a589439e9",
+              "published_sha256": "f867b45a74c1697bea90b11f75578aae331dcba3a30f020b4fd16c5bdcefe09a",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "UnoptimizedImagePreservesReturnedRegisters": {
+              "installed_register_entries": "9",
+              "original_sha256": "7ad335380296e05236d5cafa0c1364482ac9993b0856c795326f412f1e9f4dd6",
+              "published_sha256": "f58dec17e7902a22fc9380a4259e588e25fb6e0d620a357d2682ce09d3628a98",
+              "executed_native_images": "2",
+              "native_register_entries_compared": "9",
+              "native_register_input_comparisons": "27"
+            },
+            "OptimizedCalleeWalksTheNativeArgumentArea": {
+              "executed_native_images": "4"
+            },
+            "UnoptimizedCalleeHomesItsNativeArgumentCursor": {
+              "executed_native_images": "4"
+            },
+            "FramelessStackLoadsSurviveImagePublication": {
+              "original_sha256": "544ae129d5217da11b74bd3d7564f65ade5110ae8b53ac4739c517c1b3e152f4",
+              "published_sha256": "964077e7fb2fa08841281ea1e4a0c38c952d30abf23f43002642f6b842f05b06",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "CompactLeavesElideOnlyTheUnusedStackReservation": {
+              "original_sha256": "8f39f9efdab3c262d6804a9c6896cec0a59dee0de7c6b3904dd0ae092db2f498",
+              "published_sha256": "a274d3d07092cbcf9af2e5fa154d6b65a52746bc5209bcf13cef9287dc96b119",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PreIndexedArgumentLoadRestoresTheIncomingSP": {
+              "original_sha256": "8ddb2b86e254b86d89eb4006e59e1f49a037faf2680b5aad5b3ac304da35dea0",
+              "published_sha256": "33b09d05a2c85fbfed5aa7e9b46e1fba1288bdaa021df36ae948376537072364",
+              "caller_authenticated_call_sites": "8",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinTrue": {
+              "system_slice_sha256": "0290c62f2ca3156f4dbb7791d448675864777f7ac34981f6eade81ec484dca09",
+              "unsigned_input_sha256": "9be741f8826e078c63ee797dea0f1933e1aec9499174689f440f3a34df3f476a",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "8aa626f60b877cdcab9a58800a7340f9ff9ccda6b7a23e21344d831a53fe0ed1",
+              "published_sha256": "2f3fec09be7edc5583dbdad582fc053ff91509b1b6539f9c426bb15ab938a035",
+              "native_exit_status": "0",
+              "executed_native_images": "2"
+            },
+            "PublishesDarwinFalse": {
+              "system_slice_sha256": "5ffbfaf038acbe7960cdb4a99af237e7a76c1e249e7a234f491a37cafe5b0329",
+              "unsigned_input_sha256": "6b1f0a20c5a7e8491eee5f0d05271e0f85e315b20f82cb07f5fc981173982974",
+              "original_entry": "4294968168",
+              "published_entry": "4294983680",
+              "original_sha256": "a1d0011a513ec3f311d9207fc110f7718f274b218062a4922362cfc5e37e7ef1",
+              "published_sha256": "bd69e9ef67d2c319ab8f91e9140d4555e320a5f48cd0d3dbccff3fa1b8768913",
+              "native_exit_status": "1",
+              "executed_native_images": "2"
+            },
+            "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+              "original_sha256": "718e8d652d146a52fc5acb2ddf8ef3dd3916272cd58121ebcde1b234ab0d00df",
+              "published_sha256": "f86e3b3b137cea09af5ba021b390cff26c964e76f8ebb093758cdc0195401ff7",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "DirectTailTransferPreservesItsInstalledCallee": {
+              "original_sha256": "190a57744dd922e8bf94ccad27b920ff62d21c9951d93d93cdd24cc21f84dcc5",
+              "published_sha256": "ff04a3622a59b37cf8313e855a0f43059d6cc4a4ddce92d694b8d5d61c2c06ac",
+              "caller_authenticated_call_sites": "10",
+              "native_reordered_tail": "true",
+              "executed_native_images": "2"
+            },
+            "EquivalentWAndXZeroingPreservesTheWholeRegister": {
+              "original_sha256": "44b195644e86c572716a84f4e277413eafd18d2662071b39115aac65444302d7",
+              "published_sha256": "96896906424f029501dabd4c6c57902a8bbd95dab93627549ed5708af7a182b2",
+              "caller_authenticated_call_sites": "10",
+              "executed_native_images": "2"
+            },
+            "OriginalGlobalAndAuthenticatedImportSurvivePublication": {
+              "original_sha256": "cad2b3c36e276d6cdbb1327d3ec28ac4952447a92be21ce79ec4682ba5fe4579",
+              "published_sha256": "07a27870c7b1a32c7661b79e0f60151c9acd92aef714abf8c3a3dbc841e480c5",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "SignedFrameCallsImportBeforeReadingOriginalGlobal": {
+              "original_sha256": "c8db00e2721b321dd6b26ac06ca46a0cbde2e712eef88881f8fca6087ba9e62e",
+              "published_sha256": "a9d9f8c9c8a83616b021079e2ae6f01fce8e707798f87fcf10b1b535e3dbee8a",
+              "caller_authenticated_call_sites": "9",
+              "executed_native_images": "2"
+            },
+            "BaseAndDisplacementRetainLoadAndStoreEffects": {
+              "original_sha256": "95793a0f3097e7c11e5cf0d0c3442fbc89a9f4f37cfd232cd30084298bfb05f2",
+              "published_sha256": "6853b5a876c2fd5e967d4f528ea3f9d9b707d234071624515d34fc4be2912e89",
+              "caller_authenticated_call_sites": "15",
+              "executed_native_images": "2"
+            }
+          },
+          "artifact_id": 13914312096,
+          "artifact_digest": "sha256:3417796f90ffc325943c5072f742e23bcb960ee2c48c6e6997a41dc5a5e44634",
+          "qualification_sha256": "d730c971ea9181451897f806cc25aa8d398b00377ef60b281abaca5b91a1bf44",
+          "cpta_report_sha256": "993e5a5f06bc9ca9d38b50af5809d1121ef264add3b6e399cf856e2c140b5f3b",
+          "compiler_controls_sha256": "383d9768dade00a8c74741d20dcf1186bee5023d356230e0606bf4a927b7a250"
+        }
+      }
+    }
+  },
+  "signal_cursor": {
+    "header": "include/neverd/runtime/DarwinArm64eSignalCursor.h",
+    "input": "Kernel ucontext, exact-PC resolved CFA and saved-register row, mapped interrupted stack bounds",
+    "qualified_signing": [
+      "unsigned",
+      "IA with CFA",
+      "IB with CFA"
+    ],
+    "negative_cases": [
+      "forged PAC",
+      "unknown signing state",
+      "out-of-range saved stack slot"
+    ],
+    "implicit_signing_fixture": "Signing rows are transferred from an explicit original only after complete instruction-range equality. Each image supplies its own CFA and saved-register locations.",
+    "system_unw_step_across_sigtramp_qualified": false,
+    "compiler_original_failure_runs": [
+      "https://github.com/gmh5225/test_mac_intel/actions/runs/43139300136",
+      "https://github.com/gmh5225/test_mac_intel/actions/runs/43139817036",
+      "https://github.com/gmh5225/test_mac_intel/actions/runs/43141157090"
+    ],
+    "independent_context_handoff_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43142689452"
+  },
+  "arbitrary_lifted_image_publication_qualified": false,
+  "native_apple_cpta_on_qualified": false,
+  "remaining_coverage": [
+    "Native CPA/CPA2 instructions and CPTA-on on an arm64e.x1 execution environment",
+    "Unmodified system unw_step across _sigtramp",
+    "Additional arbitrary native-body instruction, control-flow and unwind profiles beyond the admitted register publication forms",
+    "Native checked returns whose signing modifier includes the instruction address"
+  ]
+}

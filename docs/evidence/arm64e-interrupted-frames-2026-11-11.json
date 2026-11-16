@@ -1,0 +1,678 @@
+{
+  "date": "2026-11-11",
+  "scope": "Interrupted classic Darwin arm64e frames and normal publication of complete verified native leaf images",
+  "source_revision": "bd2d7d5cef2506db333e609ab234338867210f35",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "configuration": "Release",
+  "cold_source_build_on_runner": false,
+  "host_sha256": "b760ab02abc29213435b29f04b1f5b17e878560604e6195c8655b58b567ef4a0",
+  "manifest_sha256": "0e934d4c4d301ff5d08d9965bd0a7f44261f482baf9bd8f7ab0ee80c1944695b",
+  "archive_sha256": "2a0c94c269a8bd2e7888cf8cd312823335eda395f63b13b88cdecafefd789e2e",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42969858410",
+  "workflow_revision": "24d259f25274d952a079f826474aa25f51f951e7",
+  "native_apple_cpta_qualified": false,
+  "arbitrary_lifted_image_publication_qualified": false,
+  "general_async_system_unwinding_qualified": false,
+  "runners": {
+    "macos-26": {
+      "artifact_id": 13832991477,
+      "artifact_digest": "sha256:e654c4daf06273b1aab91fa86ba84c1f94b9b0cb79d83fe60504a9c7bd032b76",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sdk": "26.5",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler_controls": 6,
+      "argument_pairs_per_entry_fixture": 25,
+      "cases": {
+        "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+          "original_sha256": "d575f007866a8b9974740db67c640a7d6ce771d77f4cf94bce5fc7a914faebae",
+          "published_sha256": "1408aa57d978fb1e60025a3e7b65e3f4c0e6b0e74623d96fb03f05017e069b3c",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SwiftContextSurvivesNativeLeafPublication": {
+          "original_sha256": "e4ad7283acef0d51e7de6a8bff1aa190a63e3648c2f7c0b28e4212f27442daff",
+          "published_sha256": "8dd3654fa65fdbb91f9f5c80da08170caa4cd5833d43d3d9021ef93c22bd608c",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "ScalarFPParametersAndResultsSurvivePublication": {
+          "original_sha256": "0f276cc9855669d386bcde3e533d69616504a600a055aa3ff26420c4e78c2fd1",
+          "published_sha256": "eff1aa30b3d81a0b0921034eca314498a97a7e8a6c3a58cf86d7760d9384d27d",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SignedLeafUsesTheIncomingSPAtItsNewAddress": {
+          "original_sha256": "f35c38e041f38ca1319875a3cf3af855105a5225809bd7b8c360ca6a5ade8ec5",
+          "published_sha256": "3d7caac5e66a728888e29e9fd5616d3f00ac1f6fe1058ac6aae82c2ee2885ce0",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "BaseAndDisplacementRetainLoadAndStoreEffects": {
+          "original_sha256": "3bed7447f95e2be9485765532f675e3f8ae029917f4071ffa0931d8b05784b7d",
+          "published_sha256": "1dbf9b951f7b3b060f66bfb6436204c8aaef620eb674f8be6064cbadc0ab83f7",
+          "caller_authenticated_call_sites": "15",
+          "executed_native_images": "2"
+        },
+        "SwiftAsyncContextSurvivesNativeLeafPublication": {
+          "original_sha256": "955cd0e1449dee4420b134e919bab616de7ac046fe38a770d8714cd47b52b19b",
+          "published_sha256": "ba7b6fda69600f3c9801beed0b99c16d6f503c525826247041373eb54181d2c0",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        }
+      },
+      "authenticated_parent_frames": 10,
+      "signal_row_columns": [
+        "offset_within_body",
+        "signed_lr",
+        "entry_sp_minus_sp",
+        "saved_lr_matches"
+      ],
+      "signal_rows": {
+        "original_signal_rows": [
+          [
+            12,
+            0,
+            0,
+            0
+          ],
+          [
+            40,
+            1,
+            0,
+            0
+          ],
+          [
+            72,
+            1,
+            16,
+            1
+          ],
+          [
+            104,
+            1,
+            0,
+            0
+          ],
+          [
+            132,
+            0,
+            0,
+            0
+          ]
+        ],
+        "published_signal_rows": [
+          [
+            20,
+            0,
+            0,
+            0
+          ],
+          [
+            48,
+            1,
+            0,
+            0
+          ],
+          [
+            76,
+            1,
+            16,
+            1
+          ],
+          [
+            108,
+            1,
+            0,
+            0
+          ],
+          [
+            136,
+            0,
+            0,
+            0
+          ]
+        ]
+      },
+      "report_sha256": "68c8ca6eb2fb2fedbaefac2a78f7d2abf85da5c813b735108f84cfb96834a07c",
+      "xml_sha256": "df8c74b573fc3522cc726c1164ce50fb92327958fa25c479597eb648fae04ba8",
+      "probe_sha256": "fc7e721a07ac8764d6fdbf310629379fd13e6ccaf8b8e2bf187279a588d19b2d"
+    },
+    "xcode-27": {
+      "artifact_id": 13832907229,
+      "artifact_digest": "sha256:614d4388f0a03351f72b44dca7dc46f5c2d21068b66b8002d140489446d791e7",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sdk": "27.0",
+      "cpu": "Apple M1 (Virtual)",
+      "compiler_controls": 6,
+      "argument_pairs_per_entry_fixture": 25,
+      "cases": {
+        "VerifiedLeafBodiesUseTheNormalPatchPipeline": {
+          "original_sha256": "1450f02f3ad423799f245e7c1c1b4786432166ed6c02d500830ed31c0a63b790",
+          "published_sha256": "e7521dd07840fbd6bf48af274000e6fdd5ef49fb087c84519f66f8a7290289e0",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SwiftContextSurvivesNativeLeafPublication": {
+          "original_sha256": "a2cb88eaf03df6888128cd8697d4d408ffa05d9fa30886b381242084ef883802",
+          "published_sha256": "4a48c6eda1d62f9e8d451632144ed1d571fb629efa62f581d1c379f6873029d2",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "ScalarFPParametersAndResultsSurvivePublication": {
+          "original_sha256": "f970598b0b80a2fbbc74f7e91c5775aa776b857773efc3f103eb689fb49b9a5b",
+          "published_sha256": "5990fb737f6f3fe0184b168761c9ccb3f31074de80052a05c09789962b448633",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "SignedLeafUsesTheIncomingSPAtItsNewAddress": {
+          "original_sha256": "24cd96a9f49826fdb4bf1028d4e733d560bc7753a535154ab77d3713515e60f5",
+          "published_sha256": "ac355c14150a326dbfcd493f977395be56a3c05214f5c87c5858814218b97870",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        },
+        "BaseAndDisplacementRetainLoadAndStoreEffects": {
+          "original_sha256": "96752e30a0c20fd31f8a40b04830f6301eff96799a99c0560e5a4a9f93d5f2d8",
+          "published_sha256": "c2707c34c66d96c739068818a3c6b50826d586a9dbfd6c5d73a9c6a3a0a16c7e",
+          "caller_authenticated_call_sites": "15",
+          "executed_native_images": "2"
+        },
+        "SwiftAsyncContextSurvivesNativeLeafPublication": {
+          "original_sha256": "98a94b35ad1295578663837b48d66b92364d15234b5dc409028e9594897c1cf3",
+          "published_sha256": "fe198ede3646c9dee5d5a23a3e21f14378ab8e6730b81b6e8b8f636878bed4b8",
+          "caller_authenticated_call_sites": "10",
+          "executed_native_images": "2"
+        }
+      },
+      "authenticated_parent_frames": 10,
+      "signal_row_columns": [
+        "offset_within_body",
+        "signed_lr",
+        "entry_sp_minus_sp",
+        "saved_lr_matches"
+      ],
+      "signal_rows": {
+        "original_signal_rows": [
+          [
+            16,
+            0,
+            0,
+            0
+          ],
+          [
+            40,
+            1,
+            0,
+            0
+          ],
+          [
+            76,
+            1,
+            16,
+            1
+          ],
+          [
+            108,
+            1,
+            0,
+            0
+          ],
+          [
+            132,
+            0,
+            0,
+            0
+          ]
+        ],
+        "published_signal_rows": [
+          [
+            12,
+            0,
+            0,
+            0
+          ],
+          [
+            48,
+            1,
+            0,
+            0
+          ],
+          [
+            76,
+            1,
+            16,
+            1
+          ],
+          [
+            108,
+            1,
+            0,
+            0
+          ],
+          [
+            136,
+            0,
+            0,
+            0
+          ]
+        ]
+      },
+      "report_sha256": "0b92eac005d419d3f445c0b80a5ce6c91f2c79d7598358852ca74fea853752eb",
+      "xml_sha256": "1ac3ef0d91c14b85a85f1c1eccc3b33f97107ed1d9d1db6c9b3bb85229031c33",
+      "probe_sha256": "a9c274f8aa08677fcbd470b0cbe392d5090f477124fafbef901a0b9778908e58"
+    }
+  },
+  "local_checks": {
+    "qualified": {
+      "cases": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_sha256": "b470ef9fdb6e66ca938008443db6c61c956621ccb0952930017e616cd3ace714"
+    },
+    "language-real": {
+      "cases": 314,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_sha256": "180fe056e5f1c9e6ee10ae8dbed9deffe90995789320b00932062abcd654c4a2"
+    },
+    "contract": {
+      "cases": 296,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "xml_sha256": "39e16257b8a4398bd73ddefb5c461c8a5855a88370ddd6cd72a06bd0d0d9a54b"
+    },
+    "darwin_text_decode_parity": {
+      "input": "/usr/lib/dyld",
+      "section": "__TEXT,__text",
+      "source_sha256": "12dc97d541939a8e05d58f265f62eaef93fbce63740d7eefaee434cea7acbac5",
+      "bytes": 554684,
+      "words": 138671,
+      "text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb",
+      "xml_sha256": "c646a72ebf652db920dab34b50f080a725a5096db15f8d962e4a5bda7f072cbc"
+    },
+    "system_dyld": {
+      "system_path": "/usr/lib/dyld",
+      "arch": "arm64e",
+      "thin_sha256": "12dc97d541939a8e05d58f265f62eaef93fbce63740d7eefaee434cea7acbac5",
+      "system_sha256": "e371c8cb28c9459c20bf7ee7cc4ad3609a7fe57524d6c08453f718e80e1b35b4",
+      "language_cases": 314,
+      "xml_sha256": "180fe056e5f1c9e6ee10ae8dbed9deffe90995789320b00932062abcd654c4a2"
+    },
+    "r6_cli": {
+      "configuration": "Release",
+      "prebuilt": "neverd-llvm-v23.0.0-r6",
+      "source_revision": "b592b7c647febac448032b484ecc98a92c0ba4e2",
+      "binary": "45d75eabd3f6b9de93675532ef0387c096af885e7ede2e983936934f7e5e3416",
+      "cases": {
+        "kLeaves": {
+          "ir_sha256": "7fdf8940a1614dc93462f980efafaa8c3ed6f6b54b5917275d9abfd0d306da0d",
+          "input": "62feb18bb53f45f08190f5bbda8ee600117829d1b4673e3e51a4c4b4053710f7",
+          "output": "a4be39b964e6f762c3a9024f8879352f8ac9ee4869105ab731dc92191388d954",
+          "entries": {
+            "leaf_sum": {
+              "source": 792,
+              "published_body": 16384,
+              "bytes": 8,
+              "bytes_sha256": "3d9196547eedaf90d031812ea65483677b81385d4e271093dd9e423d0aca43e9"
+            },
+            "leaf_difference": {
+              "source": 800,
+              "published_body": 16392,
+              "bytes": 8,
+              "bytes_sha256": "8338d9b0c902e7b5315732265201b8e2b593edfa3a32f39c338f7a10d78117ea"
+            }
+          }
+        },
+        "kSwiftLeaves": {
+          "ir_sha256": "8a3cf7c82e48b8c138d28ec271277fa05609ab279bce19ab9064b17a5ddbfceb",
+          "input": "0dbb1c34977b3820217ec0417ba4d1b944dccc19b5f26e64c1892b7d6be32283",
+          "output": "7f661c9860086d012eea7978e6d7f8ea2c8ad7eef4d9131c812b6fd73cd108ab",
+          "entries": {
+            "leaf_sum": {
+              "source": 792,
+              "published_body": 16384,
+              "bytes": 8,
+              "bytes_sha256": "2d23223c23e3f188fbc3b20dde71ef1b86402b1aceb1a9a31987095b2be9a412"
+            },
+            "leaf_difference": {
+              "source": 800,
+              "published_body": 16392,
+              "bytes": 8,
+              "bytes_sha256": "701568c963e9a8e596ecf8de3414915003e19d3c9c53cfc4e5d21cf716dd3f5e"
+            }
+          }
+        },
+        "kSwiftAsyncLeaves": {
+          "ir_sha256": "9005d8408dcaefbac3f4a005b18823466ea1c92b7c515ea7880a181f2162f4b6",
+          "input": "953d75eb401fdea40bd24fc77286963567a8096f0f66790b578d60d49240e67b",
+          "output": "e8c583d4b38546564708008bb09af5d8e0307d9eb5664b0a7bb143ae7fdd1ea4",
+          "entries": {
+            "leaf_sum": {
+              "source": 792,
+              "published_body": 16384,
+              "bytes": 8,
+              "bytes_sha256": "0067bd163a07bafa5d10a5ec4d8486e7c4047b8d8786a3eb97eebafadff32630"
+            },
+            "leaf_difference": {
+              "source": 800,
+              "published_body": 16392,
+              "bytes": 8,
+              "bytes_sha256": "0efed15962f739d5a44ac01c025a55df8b91ed859fcb587a3b523ecbcb6e3632"
+            }
+          }
+        },
+        "kScalarFPLeaves": {
+          "ir_sha256": "c3d05daed0108facb556dc194414466a39fd4ac74c54be3bbc23b7e473d1e6b0",
+          "input": "15668d2c0a5655509242d077140e62139cc9452ce3e0d3a146403bc93f4d348d",
+          "output": "fe1deaf33265012b9c994e4b05655176667d276e31b086a686ba0a9154394a13",
+          "entries": {
+            "leaf_sum": {
+              "source": 792,
+              "published_body": 16384,
+              "bytes": 8,
+              "bytes_sha256": "814e2fbd7ddbc2d29c15d9ac26658050bc55540383746a14a133c2e2c421b16d"
+            },
+            "leaf_difference": {
+              "source": 800,
+              "published_body": 16392,
+              "bytes": 8,
+              "bytes_sha256": "ab6bcb089540e9446c0a32833f265e5ed2fe9cbacc36a913061c8d19459fc864"
+            }
+          }
+        },
+        "kMemoryLeaves": {
+          "ir_sha256": "354359bb036bfb8f03e7be9be9981d5ddfce3768e5c5ae85cb46f26eeb9e479e",
+          "input": "df8d8d18d72e346aa29a409f87eb178315c80c88149266b367d31b0c7bdad385",
+          "output": "2703ae40ff19387c54b8da2f04ce9debe164efa45685e43977a62e33c715aba1",
+          "entries": {
+            "leaf_sum": {
+              "source": 792,
+              "published_body": 16384,
+              "bytes": 8,
+              "bytes_sha256": "19647f57f48e23c8730ecfc85bdce80bf67ce4eae56e82f97661432fa2018025"
+            },
+            "leaf_difference": {
+              "source": 800,
+              "published_body": 16392,
+              "bytes": 8,
+              "bytes_sha256": "ab203c9f462e14bd4e997db2460790fd1a22f16c02c4fcef69fd84fcdc395371"
+            }
+          }
+        },
+        "kSignedLeaves": {
+          "status": "refused",
+          "detail": "error: Mach-O patch object: native DWARF requires a registered original eh_frame section",
+          "input": "8df6fcbf22f86a56117519ef976e7b29813450bcd570c56048e130a5d076ef82",
+          "entries": {}
+        }
+      }
+    },
+    "cli-fix-local": {
+      "cases": 7,
+      "xml_sha256": "5777d532053632ccb0ade8819e6918b98a3e0548c885a4d36effdbf30cbabd38",
+      "source_revision": "b592b7c647febac448032b484ecc98a92c0ba4e2"
+    },
+    "cli-fix-symbols": {
+      "cases": 14,
+      "xml_sha256": "78f7a5c771241df98b5d1a587105ad9799b5a76ca192f6ceb3c0de0324029bda",
+      "source_revision": "b592b7c647febac448032b484ecc98a92c0ba4e2"
+    },
+    "cli-fix-contract": {
+      "cases": 296,
+      "xml_sha256": "48d3d5ef7c1985e6e426837d28d528842e3ccf5ae284c560af3a8a9387d253a4",
+      "source_revision": "b592b7c647febac448032b484ecc98a92c0ba4e2"
+    },
+    "arm64e_ctest": {
+      "cases": 769,
+      "skips": 47,
+      "first_attempt_failures": [],
+      "passed_after_serial_retry": false
+    },
+    "verification_scripts": 35
+  },
+  "patch_symbolization_revision": "b592b7c647febac448032b484ecc98a92c0ba4e2",
+  "compiler_signal_controls": {
+    "cursor-framed": {
+      "purpose": "system libunwind walk from the signal handler",
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42967112065",
+      "conclusion": "failure",
+      "workflow_revision": "cf2c437eff220d96281a438842eeaa9ee5802e42",
+      "runners": {
+        "macos-26": {
+          "artifact_id": 13830868960,
+          "artifact_digest": "sha256:d5a4928d347bbd427f5a29024f50af432b0320ab32fc1cc86869afc6e49c00ae",
+          "report_sha256": "dd0605e612a974cac350c74dc0b1cd55382eb59d2ceb44f1e94b310c8d28610f",
+          "profiles": [
+            "explicit",
+            "framed-explicit",
+            "framed-implicit",
+            "implicit"
+          ],
+          "compiler_original_control": true,
+          "sampled_two_frame_qualified": false,
+          "system_signal_cursor_qualified": false,
+          "system_walk_by_stage": {
+            "1": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".main"
+              ]
+            },
+            "2": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "3": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "4": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "5": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".main"
+              ]
+            }
+          }
+        },
+        "xcode-27": {
+          "artifact_id": 13832240198,
+          "artifact_digest": "sha256:05317eb7a0e07029611315fe748f8ab0f24aa331b97d9807047ea94ce90f2eb7",
+          "report_sha256": "dd0605e612a974cac350c74dc0b1cd55382eb59d2ceb44f1e94b310c8d28610f",
+          "profiles": [
+            "explicit",
+            "framed-explicit",
+            "framed-implicit",
+            "implicit"
+          ],
+          "compiler_original_control": true,
+          "sampled_two_frame_qualified": false,
+          "system_signal_cursor_qualified": false,
+          "system_walk_by_stage": {
+            "1": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".main"
+              ]
+            },
+            "2": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "3": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "4": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "5": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".main"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "cursor-chain": {
+      "purpose": "register-context recovery through a signed parent",
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/42967877615",
+      "conclusion": "success",
+      "workflow_revision": "2e149981ad03feed454a0a09731502759eeb3e56",
+      "runners": {
+        "macos-26": {
+          "artifact_id": 13831079336,
+          "artifact_digest": "sha256:eaf505dbc408e4ebb006060d6149532eecf79bf2daa04697f4a23e19f5fedd31",
+          "report_sha256": "cade84e065d19e006139e56fa0172e95b078a58b46cc718d7c4318f50606027d",
+          "profiles": [
+            "explicit",
+            "framed-explicit",
+            "framed-implicit",
+            "implicit"
+          ],
+          "compiler_original_control": true,
+          "sampled_two_frame_qualified": true,
+          "system_signal_cursor_qualified": false,
+          "system_walk_by_stage": {
+            "1": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".call_outer",
+                ".main"
+              ]
+            },
+            "2": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "3": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "4": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "5": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".call_outer",
+                ".main"
+              ]
+            }
+          }
+        },
+        "xcode-27": {
+          "artifact_id": 13831773775,
+          "artifact_digest": "sha256:ef8c238e14ea3800163f392728034de8fae4d2ef25cdcadc824933050d1156c4",
+          "report_sha256": "cade84e065d19e006139e56fa0172e95b078a58b46cc718d7c4318f50606027d",
+          "profiles": [
+            "explicit",
+            "framed-explicit",
+            "framed-implicit",
+            "implicit"
+          ],
+          "compiler_original_control": true,
+          "sampled_two_frame_qualified": true,
+          "system_signal_cursor_qualified": false,
+          "system_walk_by_stage": {
+            "1": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".call_outer",
+                ".main"
+              ]
+            },
+            "2": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "3": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "4": {
+              "exit_code": -5,
+              "trace": [
+                ".observe",
+                "._sigtramp"
+              ]
+            },
+            "5": {
+              "exit_code": 43,
+              "trace": [
+                ".observe",
+                "._sigtramp",
+                "Rinvoke_stages",
+                ".call_outer",
+                ".main"
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}

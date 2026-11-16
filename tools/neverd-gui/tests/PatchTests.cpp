@@ -19,6 +19,7 @@
 #include "ListingView.h"
 #include "MainWindow.h"
 #include "OutputWindow.h"
+#include "PaintCheck.h"
 #include "PatchEditor.h"
 #include "PatchMenu.h"
 #include "RewriteFunctionDialog.h"
@@ -268,10 +269,21 @@ QString currentBytes(Session &session, Address address, qsizetype size) {
 class PatchTests : public QObject {
   Q_OBJECT
   QTemporaryDir settings_;
+  quint64 stalePaints_ = 0;
 
 private slots:
+  void init() { stalePaints_ = PaintCheck::stalePaints(); }
+
+  void cleanup() {
+    // No view kept a row that another state of it had painted.
+    QCOMPARE(PaintCheck::stalePaints(), stalePaints_);
+  }
+
   void initTestCase() {
     QVERIFY(settings_.isValid());
+    // The views that repaint rows of themselves are compared, at each paint,
+    // with all of themselves painted afresh.
+    PaintCheck::setEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("NeverDTests"));
     QCoreApplication::setApplicationName(QStringLiteral("PatchTests"));
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -390,7 +402,7 @@ private slots:
     for (bool ready : {true, false})
       for (auto key : {Qt::Key_J, Qt::Key_A, Qt::Key_B})
         QTest::newRow(
-            qPrintable(QString(QChar(key)) + (ready ? "-ready" : "-fast")))
+            qPrintable(QString(QChar(int(key))) + (ready ? "-ready" : "-fast")))
             << int(key) << ready;
   }
 
@@ -891,8 +903,8 @@ private slots:
     view.show();
     session.open(path);
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    // Opening must populate existing chooser views without a manual reload.
     auto &model = view.model();
-    model.reload();
     QTRY_VERIFY(model.total() > 0 && !model.loading());
     if (sorted) {
       model.setFilter("function_");

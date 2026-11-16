@@ -22,7 +22,7 @@
 
 namespace neverd {
 
-enum class MIPSABI : uint8_t { O32, N64 };
+enum class MIPSABI : uint8_t { O32, N64, N32 };
 
 struct MIPSCodeRegion {
   uint64_t Start, End;
@@ -34,17 +34,24 @@ struct MIPSImageMetadata {
   uint32_t ELFFlags = 0;
   /// The admitted instruction profile. Without .MIPS.abiflags, e_flags cannot
   /// distinguish Release 2 from Releases 3 and 5; only the R2 subset is
-  /// admitted without that record. The MSA slice requires explicit R5 evidence.
+  /// admitted for that header without the record. Release 6 has distinct
+  /// e_flags. MSA requires explicit R5 and FP64 evidence.
   uint8_t ISARevision = 2;
+  /// Historical MIPS I-V architecture level, independent of MIPS32/64 releases.
+  /// Zero denotes the release-based ISA; historical profiles use revision zero.
+  uint8_t HistoricalISA = 0;
   /// The ELF admits both classic and microMIPS code, not a global micro mode.
   bool HasMicroMIPS = false;
   /// MIPS16e32 code; mutually exclusive with the microMIPS ASE.
   bool HasMIPS16 = false;
   /// MIPS16e2 requires its own .MIPS.abiflags ASE evidence.
   bool HasMIPS16E2 = false;
-  /// Classic MIPS32 DSP ASE; the initial slice requires DSP execution enabled.
+  /// MT control operations require explicit ABI feature evidence.
+  bool HasMT = false;
+  /// DSP/DSPR2 execution in classic o32/n64 or microMIPS o32 code.
   bool HasDSP = false;
-  /// Initial classic MIPS32r5/o32 integer MSA slice, with FP64 register mode.
+  bool HasDSPR2 = false;
+  /// MSA in classic or microMIPS32r5/o32 code with FP64 register mode.
   bool HasMSA = false;
   std::map<uint64_t, InstructionMode> CodeModeEntries;
   std::vector<MIPSCodeRegion> CodeRegions;
@@ -52,6 +59,18 @@ struct MIPSImageMetadata {
   /// GNU MIPS FP ABI tag, when supplied by .MIPS.abiflags. Integer analysis
   /// does not establish support for these floating-point calling conventions.
   std::optional<uint8_t> FPABI;
+
+  /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
+  bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }
+
+  /// The o32 hard-double ABI uses 32-bit FPRs, pairing even/odd registers
+  /// for doubles. FPXX does not establish the runtime FR mode.
+  bool hasScalarFP32ABI(bool Wide) const {
+    return !Wide && ISARevision != 6 && FPABI == 1;
+  }
+  bool hasScalarFPABI(bool Wide) const {
+    return hasScalarFP64ABI(Wide) || hasScalarFP32ABI(Wide);
+  }
 };
 
 } // namespace neverd

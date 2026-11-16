@@ -11,8 +11,11 @@
 
 #include "neverd/ir/FloatingCallArguments.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+
+#include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 #include <utility>
@@ -21,8 +24,12 @@ namespace neverd {
 
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                      llvm::ArrayRef<TypeRef> Parameters) {
-  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64)
+                      llvm::ArrayRef<TypeRef> Parameters,
+                      std::optional<unsigned> FixedCount) {
+  if (FixedCount &&
+      (!isMIPS(A) || !*FixedCount || *FixedCount > Parameters.size()))
+    return std::nullopt;
+  if (A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A))
     return std::nullopt;
   const auto Scalar = [](const TypeRef &Type) {
     return Type && Type->Kind == NdTypeKind::Float &&
@@ -30,6 +37,10 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   };
   if (Parameters.size() > static_cast<size_t>(limits::kMaxBoundSourceCallArgs))
     return std::nullopt;
+  const auto MIPSSignedInteger = [&](const TypeRef &Type) {
+    return isMIPS(A) && (Type->Kind == NdTypeKind::Int || Type->IsEnum) &&
+           Type->IsSigned;
+  };
   const auto ScalarParameter = [&](const TypeRef &Type) {
     return Scalar(Type) ||
            (Type &&
@@ -129,8 +140,24 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     }
     return Result;
   }
-  if (!Scalar(ReturnType))
-    return std::nullopt;
+  const bool VoidReturn = ReturnType && ReturnType->Kind == NdTypeKind::Void;
+  if (!Scalar(ReturnType)) {
+    const bool IntegerPair =
+        isMIPS(A) && ReturnType && ReturnType->Kind == NdTypeKind::Int &&
+        ReturnType->Size == 2 * getTargetRegInfo(A).FullRegWidth;
+    const bool ScalarIntegerResult =
+        (A == Arch::X64 || A == Arch::AArch64) && ScalarParameter(ReturnType);
+    if ((!isMIPS(A) && !VoidReturn && !ScalarIntegerResult) || !ReturnType ||
+        (!isMIPS(A) && !llvm::any_of(Parameters, Scalar)) ||
+        (ReturnType->Kind != NdTypeKind::Void && !IntegerPair &&
+         !ScalarParameter(ReturnType)))
+      return std::nullopt;
+  }
+  if (FixedCount)
+    for (const auto &Type : Parameters.drop_front(*FixedCount))
+      if (!Type || (Type->Kind == NdTypeKind::Float && Type->Size != 8) ||
+          ((Type->Kind == NdTypeKind::Int || Type->IsEnum) && Type->Size < 4))
+        return std::nullopt;
   const auto Registers = getTargetRegInfo(A).floatingParamRegs(F);
   bool AllFloating = true;
   for (const auto &Type : Parameters)
@@ -139,17 +166,43 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       if (!ScalarParameter(Type))
         return std::nullopt;
     }
-  if (A != Arch::X86 && AllFloating && Parameters.size() > Registers.size())
+  if (A != Arch::X86 && !isMIPS(A) && AllFloating &&
+      Parameters.size() > Registers.size())
     return std::nullopt;
-  const auto Placement = placeSourceParameters(A, F, ReturnType, Parameters);
+  const auto Placement = placeSourceParameters(
+      A, F, ReturnType, Parameters, FixedCount.has_value(), FixedCount);
   if (!Placement || Placement->ResultPointer ||
       Placement->Parameters.size() != Parameters.size())
     return std::nullopt;
   FloatingCallArguments Result;
   Result.ReturnBytes = ReturnType->Size;
-  if (A == Arch::X86 || !AllFloating) {
+  Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
+  Result.SignedResult = MIPSSignedInteger(ReturnType);
+  Result.FixedCount = FixedCount;
+  if (A == Arch::X86 || !AllFloating || !Scalar(ReturnType) || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
+      // o32 passes an eight-byte scalar outside the FP prefix as two
+      // consecutive words. Keep one logical call argument; lowering joins
+      // the register pair, or reads the contiguous stack object, once.
+      if (isMIPS(A) && !isMIPS64(A) && Parameters[I]->Size == 8 &&
+          Pieces.size() == 2) {
+        const auto &First = Pieces[0].Location;
+        const auto &Second = Pieces[1].Location;
+        if (First.Kind == SourceABICarrierKind::IntegerRegister) {
+          Result.Scalars.push_back({First.Kind, First.RegisterOffset, 0, 8,
+                                    Scalar(Parameters[I]), false,
+                                    MIPSSignedInteger(Parameters[I])});
+        } else if (First.Kind == SourceABICarrierKind::Stack &&
+                   Second.Kind == First.Kind) {
+          Result.Scalars.push_back({First.Kind, 0, First.EntryStackOffset, 8,
+                                    Scalar(Parameters[I]), false,
+                                    MIPSSignedInteger(Parameters[I])});
+        } else {
+          return std::nullopt;
+        }
+        continue;
+      }
       if (Pieces.size() != 1 || Pieces[0].Indirect || Pieces[0].Offset != 0 ||
           Pieces[0].Location.ValueBytes != Parameters[I]->Size)
         return std::nullopt;
@@ -161,7 +214,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       Result.Scalars.push_back({Location.Kind, Location.RegisterOffset,
                                 Location.EntryStackOffset, Location.ValueBytes,
                                 Scalar(Parameters[I]),
-                                Parameters[I]->Kind == NdTypeKind::Ptr});
+                                Parameters[I]->Kind == NdTypeKind::Ptr,
+                                MIPSSignedInteger(Parameters[I])});
     }
     return Result;
   }
@@ -180,7 +234,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
 std::optional<FloatingCallTypes>
 floatingCallTypes(Arch A, BinaryFormat F,
                   const FloatingCallArguments &Signature) {
-  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64) ||
+  if ((A != Arch::X86 && A != Arch::X64 && A != Arch::AArch64 && !isMIPS(A)) ||
       Signature.Scalars.size() >
           static_cast<size_t>(limits::kMaxBoundSourceCallArgs) ||
       Signature.ParameterBytes.size() >
@@ -208,9 +262,11 @@ floatingCallTypes(Arch A, BinaryFormat F,
         (Parameter.Floating ||
          Parameter.Bytes != getTargetRegInfo(A).PointerSize))
       return std::nullopt;
-    auto Type = Parameter.Floating  ? NdType::makeFloat(Parameter.Bytes)
-                : Parameter.Pointer ? NdType::makePtr()
-                                    : NdType::makeInt(Parameter.Bytes);
+    auto Type =
+        Parameter.Floating ? NdType::makeFloat(Parameter.Bytes)
+        : Parameter.Pointer
+            ? NdType::makePtr()
+            : NdType::makeInt(Parameter.Bytes, !isMIPS(A) || Parameter.Signed);
     Type->Size = Parameter.Bytes;
     Types.Parameters.push_back(std::move(Type));
   }
@@ -236,7 +292,24 @@ floatingCallTypes(Arch A, BinaryFormat F,
       return std::nullopt;
     Types.Parameters = std::move(Grouped);
   }
-  Types.Result = NdType::makeFloat(Signature.ReturnBytes);
+  switch (Signature.ReturnKind) {
+  case NdTypeKind::Void:
+    Types.Result = NdType::makeVoid();
+    break;
+  case NdTypeKind::Int:
+    Types.Result =
+        NdType::makeInt(Signature.ReturnBytes, Signature.SignedResult);
+    break;
+  case NdTypeKind::Ptr:
+    Types.Result = NdType::makePtr();
+    Types.Result->Size = Signature.ReturnBytes;
+    break;
+  case NdTypeKind::Float:
+    Types.Result = NdType::makeFloat(Signature.ReturnBytes);
+    break;
+  default:
+    return std::nullopt;
+  }
   if (Signature.ReturnElements) {
     if (Signature.ReturnBytes % Signature.ReturnElements)
       return std::nullopt;
@@ -244,8 +317,8 @@ floatingCallTypes(Arch A, BinaryFormat F,
         Signature.ReturnElements,
         NdType::makeFloat(Signature.ReturnBytes / Signature.ReturnElements)));
   }
-  const auto Expected =
-      floatingCallArguments(A, F, Types.Result, Types.Parameters);
+  const auto Expected = floatingCallArguments(
+      A, F, Types.Result, Types.Parameters, Signature.FixedCount);
   return Expected && *Expected == Signature ? std::optional(std::move(Types))
                                             : std::nullopt;
 }

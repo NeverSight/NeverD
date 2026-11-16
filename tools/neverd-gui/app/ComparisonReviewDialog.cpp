@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include "neverd/diff/Limits.h"
@@ -37,6 +38,9 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
                                                QWidget *Parent)
     : QDialog(Parent), Session(S), Revision(S.revision()) {
   setObjectName("comparisonReviewDialog");
+  // Refresh history was the default by Qt's choice of the first push button
+  // and ran beside the filter's own search for Return in it.
+  leaveWithoutDefaultButton(*this);
   setWindowTitle(tr("Analyst review — NeverD"));
   setWindowIcon(icon("compare"));
   resize(::neverd::limits::gui::kComparisonReviewInitialWidth,
@@ -159,6 +163,18 @@ ComparisonReviewDialog::ComparisonReviewDialog(ComparisonSession &S,
   Save->setObjectName("reviewSave");
   Footer->addWidget(Save);
   Root->addLayout(Footer);
+  // Appending is what the form is filled in for: the window's main action
+  // while the form shows, faint until the draft can be appended.  With the
+  // selected record in front the form is hidden, and saving the comparison,
+  // which the line beside it asks for, takes the accent: no page of the
+  // window is left without one.
+  const auto Accent = [this, Tabs, Form] {
+    const bool Filling = Tabs->currentWidget() == Form;
+    showAsMainAction(*Append, Filling);
+    showAsMainAction(*Save, !Filling);
+  };
+  connect(Tabs, &QTabWidget::currentChanged, this, Accent);
+  Accent();
   connect(Save, &QPushButton::clicked, this,
           &ComparisonReviewDialog::saveComparison);
   connect(Refresh, &QPushButton::clicked, this,

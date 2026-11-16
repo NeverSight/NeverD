@@ -171,6 +171,9 @@ struct DataObjectSym {
   va_t Addr = InvalidVA;
   uint64_t Size = 0;
   bool IsBuffer = false;
+  /// Source declaration of this exact object, when the provider has one.
+  /// Public symbols and unknown or conflicting declarations carry no type.
+  TypeRef Type;
 };
 
 enum class VariableExtentLookupStatus : uint8_t {
@@ -309,6 +312,14 @@ public:
   /// subprogram's frame-base expression names that register at UsePC.
   virtual VariableExtentLookup resolveFramePointerVariableAt(va_t, va_t,
                                                              int64_t) const {
+    return VariableExtentLookup::notFound();
+  }
+  /// A whole variable held in a physical register at this instruction.
+  /// Register is a NeverD register offset, not the provider's register number.
+  /// Scope and location-list ranges must both cover UsePC. Conflicting
+  /// declarations are ambiguous; a register piece is not a whole value.
+  virtual VariableExtentLookup resolveRegisterVariableAt(va_t, va_t,
+                                                         uint64_t) const {
     return VariableExtentLookup::notFound();
   }
   /// Attach display fields on a named TPI/DWARF record. Pointers peel to

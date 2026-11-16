@@ -1,0 +1,715 @@
+{
+  "source_revision": "06d091c34b8fa1fa84016c528982aa55452ba874",
+  "baseline_revision": "bff3e753ecbc28336fed62c043f76cfa6f07a88b",
+  "dependency_revisions": {
+    "capstone": "7e761ce29b7e6d321c7ef37bcfd5d7855d413b2a",
+    "unicorn": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+    "llvm-project": "5676029e378c9e37adc16c8216a8e8453ffafcae"
+  },
+  "build_type": "Release",
+  "build_driver": "scripts/build.py",
+  "prebuilt_release": "neverd-llvm-v23.0.0-r6",
+  "local": {
+    "source_fork_lifted_images": {
+      "cases": 30,
+      "passed": 30,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "5f03c5d32975a92de0d28a9006346c014e0367641a8f9038e2a7dda3844ed33a"
+    },
+    "prebuilt_r6_lifted_images": {
+      "cases": 30,
+      "passed": 25,
+      "failed": [
+        "AArch64DarwinEntry.SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [],
+      "xml_sha256": "1b3969d114ce75a6047abb7826bc3fa605538fc0559da5dce1f9f3a2077d176a"
+    },
+    "return_protection": {
+      "cases": 19,
+      "passed": 19,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "1a66c12cc665671c03f468b75cf73af0a3176395035b6d0a0b956cc68982965b"
+    },
+    "pauth_and_pacm": {
+      "cases": 31,
+      "passed": 29,
+      "failed": [],
+      "skipped": [
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ],
+      "xml_sha256": "44fc9eda4672615a7dc9ba4286aac83fd68b51b2ad6b1cc754f43358a691d29e"
+    },
+    "pauth_lr": {
+      "cases": 4,
+      "passed": 3,
+      "failed": [],
+      "skipped": [
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections"
+      ],
+      "xml_sha256": "0ab3b82fd06cb1b0fb0dcd366b77c982d583f3e8d362e2b6b8103b7dc169470c"
+    },
+    "python_regressions_passed": 190,
+    "python_regressions_log_sha256": "8024a7bdac2ff0e110ad30d8110d135ad8e6295fdc2791ea28146267f0a64c2d",
+    "cursor_header_dialects": [
+      "C11",
+      "C++20"
+    ],
+    "clang_format_version": "22.1.2",
+    "changed_source_formatting_passed": true,
+    "source_provenance_passed": true,
+    "r6_failures_match_baseline": "arm64e-register-results-and-signal-2026-11-12.json"
+  },
+  "native": {
+    "fork": {
+      "package": "source LLVM 5676029e378c9e37adc16c8216a8e8453ffafcae",
+      "host_sha256": "14b1ea62555afee49cbd76257af2afbbe71686a68e9d9760980b9bd4673a7e7b",
+      "archive_sha256": "254845a614adb31235666f499ed4fd3e46947d9284c9509dcfdbfece36dcf71a",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43176528918",
+      "attempt": 2,
+      "workflow_revision": "ba7550f0ae9ddf2646986ed17209fa2223251bb8",
+      "runner_cold_build": false,
+      "runners": {
+        "macos-26": {
+          "cases": 30,
+          "ordinary_image_executions": 60,
+          "register_input_comparisons": 54,
+          "signal_context": {
+            "original_signal_rows": "16 0 0 0\n40 1 0 0\n72 1 16 1\n104 1 0 0\n132 0 0 0\n",
+            "published_signal_rows": "12 0 0 0\n40 1 0 0\n72 1 16 1\n104 1 0 0\n132 0 0 0\n",
+            "native_interrupted_frames": "10",
+            "native_authenticated_parent_frames": "10",
+            "native_sigtramp_context_handoffs": "10"
+          },
+          "new_cursor_test": {
+            "native_cursor_pacm_profiles": "4",
+            "native_cursor_explicit_profiles": "0"
+          },
+          "new_remembered_frame_test": {
+            "original_sha256": "92671cdb7c126f27f77079b2df650d4d53504186b29528af43523aaf9dbf395c",
+            "published_sha256": "9e76f023ff02a73d304a873bb3707e4c1ff5e5a6a05c4f573b208d0010de4242",
+            "caller_authenticated_call_sites": "10",
+            "executed_native_images": "2"
+          },
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+          },
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "cursor_profiles": {
+            "O0-pacm": {
+              "sha256": "6150f91f65b9f8601faaa915b26f0ed1c3cb7de4b4cfd2e7c001f8f5a8194823",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O0-explicit": {
+              "sha256": "6150f91f65b9f8601faaa915b26f0ed1c3cb7de4b4cfd2e7c001f8f5a8194823",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            },
+            "O2-pacm": {
+              "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O2-explicit": {
+              "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            }
+          },
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "eb87647648c10f79b33f0d6f0dd9faf01bce0533ba9b74f270ae79eab997d042",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "d77a8ca1914e6b9fa68b8271785917927184fd1e7591c16cf470301a1b2d9652",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "slice-unavailable"
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "artifact_id": 13924885986,
+          "artifact_digest": "sha256:c3c5a52232dc77019d281b61585df0c559912241c3942ce6a7ab439cab638df5",
+          "report_sha256": {
+            "native-image/qualification.json": "ad9b18102d81226426b89670d0c92779c16bfd82e6c79852a9afd72e2e5cdb8b",
+            "native-image/results.xml": "d41a26473d4bed72b8c534bb01a24215957250914f98e1694f62ca9ffed25f57",
+            "cursor/report.json": "ab7ab892e5bda69d8b3789c23eb712583ce89390e424054ae96f40dbbb68b330",
+            "cpta/report.json": "49ebe3cbe9151fe6a068853f2c0b3a838b2ff83ea9f04aad3a6a5766678765b2",
+            "original-controls/report.json": "922e0cb0a97a8a8c7d5bd01158f6845302d39b2cde5607d664ae5dce0bff0de9"
+          }
+        },
+        "xcode-27": {
+          "cases": 30,
+          "ordinary_image_executions": 60,
+          "register_input_comparisons": 54,
+          "signal_context": {
+            "original_signal_rows": "16 0 0 0\n44 1 0 0\n76 1 16 1\n108 1 0 0\n132 0 0 0\n",
+            "published_signal_rows": "16 0 0 0\n44 1 0 0\n76 1 16 1\n108 1 0 0\n136 0 0 0\n",
+            "native_interrupted_frames": "10",
+            "native_authenticated_parent_frames": "10",
+            "native_sigtramp_context_handoffs": "10"
+          },
+          "new_cursor_test": {
+            "native_cursor_pacm_profiles": "4",
+            "native_cursor_explicit_profiles": "0"
+          },
+          "new_remembered_frame_test": {
+            "original_sha256": "5ec4854ebb9f61aedfd9768b22f309d96981bdbc154b23630b35114ceba1eacb",
+            "published_sha256": "98da761cd7ed4aa7d363da9510303a9dba813c9cf9825ebf326b6c9e3bb7dfc8",
+            "caller_authenticated_call_sites": "10",
+            "executed_native_images": "2"
+          },
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cursor_profiles": {
+            "O0-pacm": {
+              "sha256": "4241db7e73323c35f9eb7ae1af0e47a220e462de651f05211494f78642d7b4a2",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O0-explicit": {
+              "sha256": "4241db7e73323c35f9eb7ae1af0e47a220e462de651f05211494f78642d7b4a2",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            },
+            "O2-pacm": {
+              "sha256": "b7c887c67827424fb7f3c0a033621595594aba0dd51814e6ed9580183f1ef4b2",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O2-explicit": {
+              "sha256": "b7c887c67827424fb7f3c0a033621595594aba0dd51814e6ed9580183f1ef4b2",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            }
+          },
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "28c735f03b4817a42bad2b1d9479d0bd5adfc3e860d7ecd491f58aa2ce868040",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "29ac57c59943ba06b2ce4e8ac82e1f4d4595e7bc9f8e4b9580777deba4da46be",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "did-not-start",
+                "sha256": "960a97d7168416bd04bcd66e12a1dd4cc8a654eb3996da60883355e4592500c1",
+                "cpu_subtype": 2147483660,
+                "errno": 86
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "artifact_id": 13924402702,
+          "artifact_digest": "sha256:5f0817e10f54e97f921490a3b70fe46a4bfeb5320997b4e2f98b3993a8ced15a",
+          "report_sha256": {
+            "native-image/qualification.json": "f66b1b6ce37f7b27220a1cfb5498a27650f6360d503ba0b4ae441751f7f80ca6",
+            "native-image/results.xml": "84fd7e32bf2ac6c622559302de8cdd36ef995fbb3408bbbdb8bc34040dc90c8b",
+            "cursor/report.json": "4de3f0ee64173a16f038a5161610173a560091885015e01992ea6d99bde2f6df",
+            "cpta/report.json": "f23253c2a70bf54e08f0ccbc6e7a15903101ec8fa453247b8e3408d7da49d57f",
+            "original-controls/report.json": "df3f62b7345a865945788c7f588b5d4202c2c3f5ec1648627f14d31048ffe44a"
+          }
+        }
+      },
+      "upload_attempt": "Attempt 1 failed before replay because the draft asset upload was incomplete; attempt 2 used the same workflow and completed package."
+    },
+    "r6": {
+      "package": "neverd-llvm-v23.0.0-r6",
+      "host_sha256": "bc36fcb6d3263420e2a342f91d9a0b6fc97962958ccb91b6d05e76294d4e7773",
+      "archive_sha256": "a896410088b00d2aac6c65afd5296da20ed344ae91926440d356ec3b7eda802a",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43179032464",
+      "attempt": 1,
+      "workflow_revision": "6c79a0f8bdad17446b3b9c8125d2f480f5f505f6",
+      "runner_cold_build": false,
+      "runners": {
+        "macos-26": {
+          "cases": 25,
+          "ordinary_image_executions": 50,
+          "register_input_comparisons": 54,
+          "signal_context": {
+            "original_signal_rows": "20 0 0 0\n44 1 0 0\n72 1 16 1\n108 1 0 0\n136 0 0 0\n",
+            "published_signal_rows": "16 0 0 0\n40 1 0 0\n76 1 16 1\n104 1 0 0\n136 0 0 0\n",
+            "native_interrupted_frames": "10",
+            "native_authenticated_parent_frames": "10",
+            "native_sigtramp_context_handoffs": "10"
+          },
+          "new_cursor_test": {
+            "native_cursor_pacm_profiles": "4",
+            "native_cursor_explicit_profiles": "0"
+          },
+          "new_remembered_frame_test": {
+            "original_sha256": "00ab80f2f1eeb99370d4647b59c1299d4dddaacd75c9e97642f342eaddb10dc1",
+            "published_sha256": "a4ed8722e571e0cc95607e8687c382dfb39a56a98396637654d6a555a2d45d21",
+            "caller_authenticated_call_sites": "10",
+            "executed_native_images": "2"
+          },
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+          },
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "cursor_profiles": {
+            "O0-pacm": {
+              "sha256": "f4995fa3cf665dc15ea93ef07b9d81d0cfc19423f049e01aa9ce3d9bfc3819fb",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O0-explicit": {
+              "sha256": "f4995fa3cf665dc15ea93ef07b9d81d0cfc19423f049e01aa9ce3d9bfc3819fb",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            },
+            "O2-pacm": {
+              "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O2-explicit": {
+              "sha256": "0cc63fc4ce5c91b93a089273ffcb8be71ed247c92ba84ac1b391627506ae824d",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            }
+          },
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "eb87647648c10f79b33f0d6f0dd9faf01bce0533ba9b74f270ae79eab997d042",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "d77a8ca1914e6b9fa68b8271785917927184fd1e7591c16cf470301a1b2d9652",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "slice-unavailable"
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "artifact_id": 13925901235,
+          "artifact_digest": "sha256:c30d517a8d21621c2b297c2833d244bfc8f7c3ee9d048052279f5bfed5448e51",
+          "report_sha256": {
+            "native-image/qualification.json": "53c0e8d0d699f9dddea99f5eff85f47f5791c6bc5aee351fd0e467e21b082522",
+            "native-image/results.xml": "63148c77315e107c86137bb38bd618a2f8d2403e425dafcdece80d1e3dd57365",
+            "cursor/report.json": "15e3c05e1371472275e2a79f93a307c64fe42a952ba45c7a9398fad0538071ef",
+            "cpta/report.json": "49ebe3cbe9151fe6a068853f2c0b3a838b2ff83ea9f04aad3a6a5766678765b2",
+            "original-controls/report.json": "37ec8655127d9cc23d956df581539235c9a6a933bdc82dd5b5d857979bf690c7"
+          }
+        },
+        "xcode-27": {
+          "cases": 25,
+          "ordinary_image_executions": 50,
+          "register_input_comparisons": 54,
+          "signal_context": {
+            "original_signal_rows": "16 0 0 0\n44 1 0 0\n76 1 16 1\n108 1 0 0\n136 0 0 0\n",
+            "published_signal_rows": "12 0 0 0\n48 1 0 0\n80 1 16 1\n108 1 0 0\n136 0 0 0\n",
+            "native_interrupted_frames": "10",
+            "native_authenticated_parent_frames": "10",
+            "native_sigtramp_context_handoffs": "10"
+          },
+          "new_cursor_test": {
+            "native_cursor_pacm_profiles": "4",
+            "native_cursor_explicit_profiles": "0"
+          },
+          "new_remembered_frame_test": {
+            "original_sha256": "5735d03fa4fe4348af4fa917b8d4322e2482db249d895ff32d4f5e566dcffb96",
+            "published_sha256": "52109f87fabfce2a9d5749621a6bda2d0ab13ff597bdd838510a3daf02201f59",
+            "caller_authenticated_call_sites": "10",
+            "executed_native_images": "2"
+          },
+          "hardware": {
+            "exit": 0,
+            "text": "Apple M1 (Virtual)"
+          },
+          "os": {
+            "exit": 0,
+            "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+          },
+          "compiler": {
+            "exit": 0,
+            "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+          },
+          "cpa": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "cursor_profiles": {
+            "O0-pacm": {
+              "sha256": "3f206b423a6e1de71e5ea2a442d1818c32315c0c5e86cc2dd514602774599cc9",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O0-explicit": {
+              "sha256": "3f206b423a6e1de71e5ea2a442d1818c32315c0c5e86cc2dd514602774599cc9",
+              "bytes": 35208,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            },
+            "O2-pacm": {
+              "sha256": "b7c887c67827424fb7f3c0a033621595594aba0dd51814e6ed9580183f1ef4b2",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "passed",
+              "checks": 1058,
+              "signed": [
+                64,
+                64
+              ],
+              "pc_rejected": [
+                0,
+                0
+              ],
+              "key_rejected": [
+                64,
+                64
+              ],
+              "recipe_rejected": [
+                0,
+                0
+              ]
+            },
+            "O2-explicit": {
+              "sha256": "b7c887c67827424fb7f3c0a033621595594aba0dd51814e6ed9580183f1ef4b2",
+              "bytes": 36024,
+              "cpu_subtype": 2164260866,
+              "status": "unavailable"
+            }
+          },
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false,
+          "cpta_probe": {
+            "status": "unavailable",
+            "profiles": {
+              "arm64": {
+                "outcome": "undefined-instruction",
+                "sha256": "28c735f03b4817a42bad2b1d9479d0bd5adfc3e860d7ecd491f58aa2ce868040",
+                "cpu_subtype": 0,
+                "results": []
+              },
+              "arm64e": {
+                "outcome": "undefined-instruction",
+                "sha256": "29ac57c59943ba06b2ce4e8ac82e1f4d4595e7bc9f8e4b9580777deba4da46be",
+                "cpu_subtype": 2164260866,
+                "results": []
+              },
+              "arm64e.x1": {
+                "outcome": "did-not-start",
+                "sha256": "960a97d7168416bd04bcd66e12a1dd4cc8a654eb3996da60883355e4592500c1",
+                "cpu_subtype": 2147483660,
+                "errno": 86
+              }
+            },
+            "native_el0_cpta_observed": false,
+            "x1_el0_cpta_qualified": false
+          },
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "artifact_id": 13926066099,
+          "artifact_digest": "sha256:ea366e5b9069d69b8f8919fd3f3a0289ab20547056fdb20f9bceca77b7809af4",
+          "report_sha256": {
+            "native-image/qualification.json": "3c759d3c4423b5c6e9660bc2adc27798d1ac57a4a251c1b2345ac2f6775a832e",
+            "native-image/results.xml": "e0f2ffbf2bea3fef14a1e8fa6ab4ef377a8f49b741349eb5ad50d22b999f0aa7",
+            "cursor/report.json": "5cfa4b4daf5e6c777cae4d2f1c9bc22a97e8619aed580f4f85b6ef79ae670b7a",
+            "cpta/report.json": "f23253c2a70bf54e08f0ccbc6e7a15903101ec8fa453247b8e3408d7da49d57f",
+            "original-controls/report.json": "ff5e1152d2f546bb3ea0a000425944759f28a6adb2fa0787b7f0869cdfec6075"
+          }
+        }
+      },
+      "excluded_known_baseline_cases": [
+        "AArch64DarwinEntry.SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ]
+    }
+  },
+  "signal_cursor": {
+    "runtime_header": "include/neverd/runtime/DarwinArm64eSignalCursor.h",
+    "input_contract": "Exact-PC resolved CFA, saved-register and signing row; mapped interrupted stack bounds; same thread PAC keys and enable controls",
+    "new_recipes": [
+      "IA with CFA and signing PC",
+      "IB with CFA and signing PC",
+      "IA with CFA and PACM hint semantics",
+      "IB with CFA and PACM hint semantics"
+    ],
+    "zero_signing_address_is_valid": true,
+    "explicit_pauth_lr_requires_qualified_caller_capability": true,
+    "authentication_failure_leaves_cursor_unchanged": true,
+    "native_signing_pc_sensitivity_qualified": false,
+    "automatic_implicit_signing_row_resolution_qualified": false,
+    "system_unw_step_across_sigtramp_qualified": false
+  },
+  "publication": {
+    "new_unwind_forms": [
+      "SP/FP CFA changes",
+      "remember/restore state across multiple epilogues",
+      "same-value FP/LR",
+      "GNU argument size",
+      "explicit B-key CIE"
+    ],
+    "original_and_published_rows_compared": true,
+    "changed_lr_spill_rule_rejected": true,
+    "arbitrary_instruction_and_unwind_profiles_qualified": false
+  },
+  "native_apple_cpta_on_qualified": false,
+  "remaining_coverage": [
+    "Native CPA/CPA2 and CPTA-on on a capable execution environment",
+    "Native PC-sensitive PACM and explicit PAuth_LR return authentication",
+    "Unmodified system unw_step across _sigtramp",
+    "Automatic recovery of implicit signing rows outside the checked fixture contract",
+    "Additional arbitrary image instructions, control flow and unwind profiles beyond admitted publication forms"
+  ],
+  "cursor_source_sha256": {
+    "scripts/verify_arm64e_native.py": "9ae27e47281229b266df0adeb952fce1b107dc374c2dce3b5390e9c9e2a44610",
+    "scripts/verify_arm64e_native.def": "eef70f619ba55e402df3597369945c6a2a9916e1cadc7d5b8cd4c821ff3eb24a",
+    "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+    "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+    "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "d1628d586e9733be6511cf100d5e2190f65931fad3ea76d590063d988d996997",
+    "unittests/lift/aarch64/AArch64SignalCursorNative.def": "210bba4b2d409cba961125cf0e41525b716177e848fbbc40f3f9403d63754073",
+    "include/neverd/runtime/DarwinArm64eSignalCursor.h": "13272a61b8a0cc709af99f0e906098f9d0ed1a203a79b50063a60cb789ac12a5",
+    "include/neverd/runtime/DarwinArm64eSignatures.def": "57a2a710166d1759aeaa8a3d78571a9c0c2eea030d7b346027babec4e519a3b8",
+    "include/neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def": "97e9532706dc0baccd00fb1934766e327423c1d16de5256d2e38feabde4a40cf",
+    "include/neverd/ir/intrinsics/AArch64/AArch64PAuthM.def": "9e66faeca1acb29ef1d216aea1308761a8cbd28f58368e09530c01837aaa6976"
+  },
+  "cleanup": {
+    "temporary_release_assets_removed": true,
+    "temporary_workflow_retirement_revision": "93984d79573f4961c4bd08b3a1ac97616635f794",
+    "removed_upload_package_bytes": 82743458,
+    "superseded_reports_archived_with_verified_decompressed_hashes": true,
+    "active_builds_and_required_diagnostics_retained": true
+  }
+}

@@ -24,6 +24,7 @@
 #include "neverd/loader/ExceptionInfo.h"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -53,9 +54,9 @@ struct PointerBases {
 };
 
 struct ParseLimits {
-  /// Upper bound on entries decoded from one section.  A crafted section can
-  /// otherwise describe more entries than the file has bytes for.
-  size_t MaxEntries = 1u << 20;
+  /// Optional caller work limit. By default the section's checked record
+  /// lengths bound traversal; a large valid image must not lose its frames.
+  size_t MaxEntries = std::numeric_limits<size_t>::max();
   /// Upper bound on call-frame instructions decoded from one entry.
   size_t MaxInstructionsPerEntry = 1u << 16;
 };
@@ -66,6 +67,9 @@ struct ParseResult {
   ExceptionParseStatus ParseStatus = ExceptionParseStatus::Complete;
   std::vector<std::string> Diagnostics;
 };
+
+/// Compare a decoded instruction and its function-relative rule boundary.
+bool sameCFIInstruction(const CFIInstruction &A, const CFIInstruction &B);
 
 /// Decode every CIE and FDE in \p Sec.
 ///

@@ -51,6 +51,15 @@ AArch64RAQueryResult
 evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
                                   const DwarfFDE &FDE, va_t PC,
                                   const AArch64RAQueryLimits &Limits) {
+  bool HasExplicitRule;
+  return evaluateAArch64ReturnAddressState(Architecture, CIE, FDE, PC, Limits,
+                                           HasExplicitRule);
+}
+
+AArch64RAQueryResult evaluateAArch64ReturnAddressState(
+    Arch Architecture, const DwarfCIE &CIE, const DwarfFDE &FDE, va_t PC,
+    const AArch64RAQueryLimits &Limits, bool &HasExplicitRule) {
+  HasExplicitRule = false;
   using namespace aarch64;
   using Status = AArch64RAQueryStatus;
   const auto fail = [](Status S, const char *Message) {
@@ -75,13 +84,15 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
           Limits.MaxInstructions - CIE.InitialInstructions.size())
     return fail(Status::ResourceLimit, kBudget);
 
-  bool HasToggle = false, HasRegisterRule = false;
+  bool HasToggle = false, HasRegisterRule = false, HasSetState = false;
   for (const auto *Program : {&CIE.InitialInstructions, &FDE.Instructions})
     for (const auto &I : *Program) {
       HasToggle |= I.Kind == CFIOpKind::NegateRAState ||
                    I.Kind == CFIOpKind::NegateRAStateWithPC;
       HasRegisterRule |= isRARegisterRule(I);
+      HasSetState |= I.Kind == CFIOpKind::SetRAState;
     }
+  HasExplicitRule = HasToggle || HasRegisterRule || HasSetState;
   if (HasToggle && HasRegisterRule)
     return fail(Status::Malformed, kMixedRules);
 
@@ -212,8 +223,9 @@ evaluateAArch64ReturnAddressState(Arch Architecture, const DwarfCIE &CIE,
   Initial = State;
   if (!run(FDE.Instructions, false))
     return Error;
-  return Answer ? AArch64RAQueryResult{Status::Known, Answer, nullptr}
-                : fail(Status::Unknown, kDynamicState);
+  if (!Answer)
+    return fail(Status::Unknown, kDynamicState);
+  return {Status::Known, Answer, nullptr};
 }
 
 } // namespace neverd::dwarf_eh

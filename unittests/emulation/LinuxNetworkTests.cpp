@@ -122,6 +122,11 @@ TEST_P(LinuxNetwork, FailedAdmissionDoesNotConsumeConnectionOrStream) {
   const uint8_t Right[] = {1, 2, 3};
   llvm::cantFail(cpu().write(Base + 64, Right));
   EXPECT_EQ(call(ServiceKind::Write, FD, Base + 64, 3), 2u);
+  EXPECT_FALSE(call(ServiceKind::SendTo, FD, 1, 3));
+  EXPECT_EQ(Report.Diagnostic,
+            "outgoing TCP stream exceeds its offline contract at stream "
+            "offset 2 (request size 3, size after max_send 2, bytes remaining "
+            "1, connection index 0)");
   EXPECT_EQ(call(ServiceKind::SendTo, FD, Base + 66, 1), 1u);
   EXPECT_FALSE(call(ServiceKind::SendTo, FD, Base + 64, 1));
   EXPECT_EQ(call(ServiceKind::SendTo, FD, UINT64_MAX, 0), 0u);
@@ -209,6 +214,11 @@ TEST_P(LinuxNetwork, MismatchConnectionIdentitySurvivesAliasesAndFDReuse) {
   const uint8_t Right[] = {2, 3};
   llvm::cantFail(cpu().write(Base + 65, Right));
   EXPECT_EQ(call(ServiceKind::Write, Reused, Base + 65, 2), 2u);
+  EXPECT_FALSE(call(ServiceKind::SendTo, Alias, 1, 3));
+  EXPECT_EQ(Report.Diagnostic,
+            "outgoing TCP stream exceeds its offline contract at stream "
+            "offset 3 (request size 3, size after max_send 2, bytes remaining "
+            "0, connection index 1)");
 }
 TEST_P(LinuxNetwork, SharedCursorsReplacementAndFDReuseKeepOneOwner) {
   const auto FD = open(), Other = open();
@@ -398,15 +408,71 @@ TEST_P(LinuxNetwork, TCPConnectFailuresPreserveAdmissionAndBoundedOwnership) {
   std::vector<uint8_t> IPv6(28, 0);
   IPv6[0] = 10;
   IPv6[23] = 1;
+  IPv6[24] = 7; // Preserve the scope ID as part of the guest sockaddr.
   llvm::cantFail(cpu().write(Base + 64, IPv6));
   FD = call(ServiceKind::Socket, 10, 1, 6).value();
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base + 64, 28), uint64_t(-101));
   EXPECT_EQ(call(ServiceKind::Close, FD), 0u);
-  FD = open();
-  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
+  FD = call(ServiceKind::Socket, 10, 1, 6).value();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 64, 28));
   EXPECT_NE(Report.Diagnostic.find("failure contract exhausted"),
             std::string::npos);
   EXPECT_NE(Report.Diagnostic.find("after 2 supplied failures"),
+            std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("peer_hex=0a00000000000000"
+                                   "0000000000000000000000000000000107000000"),
+            std::string::npos);
+}
+
+TEST_P(LinuxNetwork, TCPConnectFailuresCanPrecedeTheFirstExactPeer) {
+  Options.LinuxNetwork->TCPConnectFailures = LinuxTCPConnectFailures{13, 1, 0};
+  const auto FD = open();
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), uint64_t(-13));
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  EXPECT_EQ(call(ServiceKind::Connect, open(), Base, 16), 0u);
+}
+
+TEST_P(LinuxNetwork, TCPConnectFailuresResumeAtTheNextExactPeer) {
+  auto &Network = *Options.LinuxNetwork;
+  auto &NextPeer = Network.Connections[1].Peer;
+  ++NextPeer[3];
+  llvm::cantFail(cpu().write(Base + 32, NextPeer));
+  Network.TCPConnectFailures = LinuxTCPConnectFailures{101, 2, 1};
+
+  auto FD = open();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base + 32, 16));
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 1, connection index 0 has a different peer), "
+                "peer_hex=0200232a7f0000010000000000000000"),
+            std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+
+  for (unsigned I = 0; I != 2; ++I) {
+    FD = open();
+    EXPECT_EQ(call(ServiceKind::Connect, FD, 1, 16), uint64_t(-14));
+    // Even the next exact peer gets the supplied failure during this run.
+    ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), uint64_t(-101));
+    ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  }
+
+  FD = open();
+  EXPECT_FALSE(call(ServiceKind::Connect, FD, Base, 16));
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 4, connection index 1 has a different peer), "
+                "peer_hex=020023297f0000010000000000000000"),
+            std::string::npos);
+  ASSERT_EQ(call(ServiceKind::Connect, FD, Base + 32, 16), 0u);
+  EXPECT_EQ(call(ServiceKind::Read, FD, Base + 64, 2), 2u);
+  uint8_t Data[2];
+  llvm::cantFail(cpu().read(Base + 64, Data));
+  EXPECT_EQ(Data[0], 7);
+  EXPECT_EQ(Data[1], 8);
+  ASSERT_EQ(call(ServiceKind::Close, FD), 0u);
+  EXPECT_FALSE(call(ServiceKind::Connect, open(), Base + 32, 16));
+  EXPECT_NE(Report.Diagnostic.find(
+                "attempt 5, connection index 2 has no supplied result), "
+                "peer_hex=0200232a7f0000010000000000000000"),
             std::string::npos);
 }
 
@@ -432,6 +498,8 @@ TEST_P(LinuxNetwork, TCPConnectFailuresReachConfiguredBoundThenStop) {
             std::string::npos);
   EXPECT_NE(Report.Diagnostic.find("after 4097 supplied failures"),
             std::string::npos);
+  EXPECT_NE(Report.Diagnostic.find("attempt 4098 has no supplied result"),
+            std::string::npos);
 }
 
 TEST(LinuxNetworkJSON,
@@ -454,6 +522,13 @@ TEST(LinuxNetworkJSON,
   Check(R"({"errno":101,"count":4097})", true);
   Check(R"({"errno":101,"count":4294967295})", true);
   Check(R"({"errno":101,"count":"4294967295"})", true);
+  Check(R"({"errno":101,"count":1,"after_connections":0})", true);
+  Check(R"({"errno":101,"count":1,"after_connections":"0"})", true);
+  for (const char *Position : {"1", "-1", "4294967296", "null", "true"})
+    Check(R"({"errno":101,"count":1,"after_connections":)" +
+              std::string(Position) + "}",
+          false);
+  Check(R"({"errno":101,"count":1,"after_connections":0,"extra":0})", false);
   // A long offline worker must be able to pass the former 256-attempt bound.
   Check(R"({"errno":101,"count":257})", true);
   for (const char *Fields : {"null",
@@ -489,6 +564,10 @@ TEST(LinuxNetworkJSON,
   LinuxDatagramConnection D;
   D.Peer = S.Peer;
   N.DatagramConnections = {D};
+  // Only exact TCP attempts count toward the insertion position.
+  N.TCPConnectFailures = LinuxTCPConnectFailures{101, 1, 4095};
+  EXPECT_EQ(llvm::toString(linux_model::validateNetworkOptions(N)),
+            "after_connections exceeds the number of TCP connections");
   for (auto F : {LinuxTCPConnectFailures{101, 1},
                  {101, 2},
                  {0, 1},
@@ -531,6 +610,7 @@ INSTANTIATE_TEST_SUITE_P(Raw, LinuxNetwork,
 
 TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
   auto Check = [](llvm::StringRef Text, bool Valid) {
+    SCOPED_TRACE(Text.str());
     auto P = processOptionsFromJSON(Text);
     EXPECT_EQ(bool(P), Valid);
     if (!P)
@@ -604,6 +684,23 @@ TEST(LinuxNetworkJSON, StrictWireAndSemanticAdmission) {
   Event(R"("receive_quiet_until_ns":9223372036854775807)", true, false);
   Event(R"("receive_quiet_until_ns":18446744073709551615)", false, false);
   Event(R"("connect_errno":101,"receive_quiet_until_ns":7)", true, false);
+  Event(R"("receive_quiet_after_connect_ns":0)", false, true);
+  Event(R"("receive_quiet_after_connect_ns":9223372036854775806)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":"9223372036854775806")", false,
+        true);
+  Event(R"("receive_quiet_after_connect_ns":"9223372036854775807")", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":9223372036854775807)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":-1)", false, false);
+  Event(R"("receive_quiet_until_ns":3,"receive_quiet_after_connect_ns":3)",
+        false, false);
+  Event(R"("receive_eof":true,"receive_quiet_after_connect_ns":1)", false,
+        false);
+  Event(R"("connect_errno":101,"receive_quiet_after_connect_ns":1)", false,
+        false);
+  Event(R"("receive_quiet_after_connect_ns":1)", true, false);
   // C++ admission shares byte and event limits with JSON callers.
   LinuxNetworkOptions N;
   LinuxDatagramConnection D;

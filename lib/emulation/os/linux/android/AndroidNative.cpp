@@ -84,19 +84,11 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       return failure(diagnostic::SnapshotLimits);
     ReportSize += ThreadBytes;
   }
-  for (const auto &Read : Native.ReadMemory) {
-    if (Native.ObserveMemoryOnFailure || Native.ObserveMemoryAtStop) {
-      constexpr uint64_t DiagnosticBytes =
-          ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes;
-      if (DiagnosticBytes > Options.OutputLimit - ReportSize)
-        return failure(diagnostic::SnapshotLimits);
-      ReportSize += DiagnosticBytes;
-    }
-    if (!Read.Size || Read.Size > Options.OutputLimit - ReportSize ||
-        Read.Address > UINT64_MAX - Read.Size)
-      return failure(diagnostic::SnapshotLimits);
-    ReportSize += Read.Size;
-  }
+  auto SnapshotBytes =
+      finalMemorySnapshotBytes(Native, Options.OutputLimit - ReportSize);
+  if (!SnapshotBytes)
+    return SnapshotBytes.takeError();
+  ReportSize += *SnapshotBytes;
   if (Native.ObserveExecution) {
     auto Bytes = executionObservationBytes(*Native.ObserveExecution,
                                            Options.OutputLimit - ReportSize);
@@ -667,26 +659,9 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
   // device callbacks, changing permissions or replacing the original stop.
   const bool Failed = Result.Stop == ProcessStopReason::CPUFailure ||
                       Result.Stop == ProcessStopReason::RuntimeFailure;
-  if (Native.ObserveMemoryAtStop || (Failed && Native.ObserveMemoryOnFailure)) {
-    constexpr size_t DiagnosticBytes =
-        ::neverd::limits::emulation::kAndroidFailureMemoryDiagnosticBytes;
-    const llvm::StringRef Suffix(diagnostic::SnapshotDiagnosticTruncated);
-    static_assert(DiagnosticBytes >
-                  sizeof(diagnostic::SnapshotDiagnosticTruncated));
-    for (const auto &Read : Native.ReadMemory) {
-      NativeMemorySnapshot Snapshot{Read.Address,
-                                    std::vector<uint8_t>(Read.Size)};
-      if (auto E = CPU.snapshotBacking(Read.Address, Snapshot.Bytes)) {
-        Snapshot.Bytes.clear();
-        Snapshot.Diagnostic = llvm::toString(std::move(E));
-        if (Snapshot.Diagnostic.size() > DiagnosticBytes) {
-          Snapshot.Diagnostic.resize(DiagnosticBytes - Suffix.size());
-          Snapshot.Diagnostic += Suffix.str();
-        }
-      }
-      Result.MemorySnapshots.push_back(std::move(Snapshot));
-    }
-  } else if (!Failed) {
+  const bool CaptureFixedBacking =
+      Native.ObserveMemoryAtStop || (Failed && Native.ObserveMemoryOnFailure);
+  if (!CaptureFixedBacking && !Failed) {
     for (const auto &Read : Native.ReadMemory) {
       auto Access = CPU.canAccess(Read.Address, Read.Size,
                                   emulation::Read | UserAccessible);
@@ -707,6 +682,8 @@ llvm::Expected<ProcessResult> runNative(const std::filesystem::path &Path,
       Result.MemorySnapshots.push_back(std::move(Snapshot));
     }
   }
+  captureStoppedMemory(CPU, Native, CaptureFixedBacking,
+                       Result.MemorySnapshots);
   if (Native.ObserveCPUState) {
     auto &State = Result.CPUState.emplace();
     State.ThreadID = Threads.id();

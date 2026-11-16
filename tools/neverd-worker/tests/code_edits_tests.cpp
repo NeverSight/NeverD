@@ -149,6 +149,31 @@ void manySourceNames() {
   }
 }
 
+void virtualTargetNames() {
+  const std::string annotation = "/* virtual callee [slot +0x20] */";
+  auto view = page("int target(void) {\n  (" + annotation +
+                   " slot)();\n"
+                   "  // callee\n  const char *note = \"" +
+                   annotation + "\";\n  /* callee */\n}\n");
+  view["identifier_symbols"] = Json::array({{{"identifier", "callee"},
+                                             {"symbol", "_callee"},
+                                             {"address", "0x1100"}}});
+  CodeEdits::spellIdentifierSymbols(view);
+  check(view.at("source_names").size() == 1,
+        "Virtual target was lost or ordinary comment/string gained a target");
+  const auto &name = view.at("source_names").front();
+  check(name.at("address") == "0x1100" &&
+            name.at("begin_byte") ==
+                view.at("text").get<std::string>().find("callee"),
+        "Virtual annotation did not retain the exact address and source span");
+  decorate(view);
+  bool linked = false;
+  for (const auto &n : view.at("code_names"))
+    linked |= n.value("original", "") == "callee" &&
+              n.value("address", "") == "0x1100";
+  check(linked, "Virtual target was lost during edit decoration");
+}
+
 std::vector<std::string> spellings(std::string_view line,
                                    neverd::LiteralSyntax syntax) {
   bool inComment = false;
@@ -493,6 +518,88 @@ void dataNames() {
       {{{"identifier", "total"}, {"symbol", "_total"}, {"address", "0x3000"}}});
   check(!takesDataName(symbol, nullptr, "", "total"),
         "A data took a name an identifier symbol spells");
+  // A name another is numbered after, in the text or about to be: a render
+  // under the new names would number them otherwise.
+  const auto body = [](const std::string &line) {
+    return "int target(int value) {\n  " + line +
+           "\n  counter = value;\n  return counter;\n}\n";
+  };
+  check(takesDataName(dataPage(body("int other_x = value;")), nullptr, "",
+                      "total"),
+        "A data's new name was not taken beside a name that numbers nothing");
+  check(!takesDataName(dataPage(body("int counter_2 = value;")), nullptr, "",
+                       "total"),
+        "A data gave up a name another is numbered after");
+  check(!takesDataName(dataPage(body("int counter_ = value;")), nullptr, "",
+                       "total"),
+        "A data gave up a name another is numbered after with no number");
+  check(takesDataName(dataPage(body("int counter_x2 = value;")), nullptr, "",
+                      "total"),
+        "A name that only begins as the data's was read as numbered after it");
+  check(!takesDataName(dataPage(body("int total_1 = value;")), nullptr, "",
+                       "total"),
+        "A data took a name another is numbered after");
+  check(takesDataName(dataPage(body("int total_a = value;")), nullptr, "",
+                      "total"),
+        "A name that only begins as the new one was read as numbered after it");
+  {
+    // The data's own name numbered after one the text spells.
+    const std::string prelude = "/* neverd.image: 0x2000 */\nint value_1;\n";
+    auto numbered = page(prelude + "int target(int value) {\n"
+                                   "  value_1 = value;\n"
+                                   "  return value_1;\n}\n");
+    numbered["prelude"]["end_byte"] = prelude.size();
+    auto view = numbered;
+    CodeEdits::decorate(view, nullptr, 0x1000, "c", CodeEdits::ImageFacts(), {},
+                        resolve);
+    auto patched = view;
+    check(!CodeEdits::takeDataNames(patched, CodeEdits::engineText(numbered),
+                                    dataRenamed("total"), nullptr, "c") &&
+              patched == view,
+          "A data numbered after a name the text spells gave its name up");
+    auto respelled = numbered;
+    check(!CodeEdits::respell(respelled, dataRenamed("total")) &&
+              respelled == numbered,
+          "Respell gave up a name numbered after one the text spells");
+  }
+  // The globals decorate read of the engine text are those a rename reads:
+  // kept with what engineText read of the same view, they give what reading
+  // them again gives, and it is they that are read.
+  {
+    auto kept = CodeEdits::engineText(engine);
+    check(!kept.globals, "An engine text holds globals no one read");
+    auto view = engine;
+    CodeEdits::decorate(view, nullptr, 0x1000, "c", dataFacts(""), {}, resolve,
+                        nullptr, &kept);
+    check(kept.globals && kept.globals->size() == 1 &&
+              kept.globals->front().address == 0x2000 &&
+              kept.globals->front().name == "counter" &&
+              kept.globals->front().plain,
+          "Decoration did not keep the globals it read");
+    auto fresh = view, reused = view;
+    const auto read =
+        CodeEdits::takeDataNames(fresh, CodeEdits::engineText(engine),
+                                 dataRenamed("total"), nullptr, "c");
+    const auto again = CodeEdits::takeDataNames(
+        reused, kept, dataRenamed("total"), nullptr, "c");
+    check(read && again && fresh == reused && read->text == again->text &&
+              read->bodyStart == again->bodyStart &&
+              read->sourceNames == again->sourceNames && !again->globals,
+          "The globals kept give another view than those read again");
+    auto elsewhere = kept;
+    elsewhere.globals->front().address = 0x9000;
+    auto refused = view;
+    check(!CodeEdits::takeDataNames(refused, elsewhere, dataRenamed("total"),
+                                    nullptr, "c") &&
+              refused == view,
+          "A rename read the text's globals again where they were kept");
+    // An engine text of another view takes none.
+    auto other = CodeEdits::engineText(dataPage(body("int more = value;")));
+    auto unrelated = engine;
+    CodeEdits::decorate(unrelated, nullptr, 0x1000, "c", dataFacts(""), {},
+                        resolve, nullptr, &other);
+    check(!other.globals, "An engine text took the globals of another text");
+  }
   // Its name again, from the engine text the first gave.
   {
     auto view = engine;
@@ -516,14 +623,241 @@ void dataNames() {
           "A data's second name reads otherwise than decorated afresh");
   }
 }
+
+// What a patch says it wrote into a view makes each page of the view from the
+// page it was, whatever lines the page holds: the lines it wrote, the rows and
+// names it wrote other values of, the spans it moved and the fields it wrote.
+std::vector<std::size_t> lineStarts(const std::string &text) {
+  std::vector<std::size_t> starts{0};
+  for (std::size_t at = 0; at + 1 < text.size(); ++at)
+    if (text[at] == '\n')
+      starts.push_back(at + 1);
+  return starts;
+}
+/// Lines [from, to) of \p view as a page of it holds them: the text's span,
+/// the rows of those lines, the names whose spans reach into it.
+PageSource pageOf(const Json &view, const std::vector<std::size_t> &starts,
+                  std::size_t from, std::size_t to) {
+  const auto &text = view.at("text").get_ref<const std::string &>();
+  const auto begin = from < starts.size() ? starts[from] : text.size();
+  const auto end = to < starts.size() ? starts[to] : text.size();
+  PageSource source;
+  for (auto it = view.begin(); it != view.end(); ++it)
+    if (it.key() != "text" && it.key() != "rows" &&
+        !((it.key() == "source_names" || it.key() == "code_names") &&
+          it->is_array()))
+      source.value(it.key(), *it);
+  source.text("text", std::string_view(text).substr(begin, end - begin));
+  std::vector<const Json *> rows;
+  for (const auto &row : view.at("rows"))
+    if (row.value("line", std::size_t{0}) >= from &&
+        row.value("line", std::size_t{0}) < to)
+      rows.push_back(&row);
+  source.items("rows", std::move(rows));
+  for (const char *field : {"source_names", "code_names"}) {
+    if (!view.contains(field) || !view.at(field).is_array())
+      continue;
+    std::vector<const Json *> names;
+    for (const auto &name : view.at(field))
+      if (name.value("begin_byte", std::size_t{0}) < end &&
+          name.value("end_byte", std::size_t{0}) > begin)
+        names.push_back(&name);
+    source.items(field, std::move(names));
+  }
+  source.own("offset", from);
+  source.own("byte_offset", begin);
+  source.own("total_lines", starts.size());
+  source.own("complete", to == starts.size());
+  source.own("next_offset", to == starts.size() ? Json(nullptr) : Json(to));
+  return source;
+}
+void saysPages(const Json &before, const Json &after,
+               const CodeEdits::ViewChange &wrote, const char *what,
+               bool stated = false) {
+  const auto &old = before.at("text").get_ref<const std::string &>();
+  const auto &now = after.at("text").get_ref<const std::string &>();
+  const auto startsBefore = lineStarts(old), starts = lineStarts(now);
+  check(startsBefore.size() == starts.size(), what);
+  DocumentChange change;
+  change.wrote = wrote;
+  change.stated = stated;
+  const auto lines = changedLines(wrote, startsBefore, old.size(), now);
+  check(lines.has_value(), what);
+  change.lines = *lines;
+  bool changed = false;
+  for (std::size_t from = 0; from < starts.size(); ++from)
+    for (std::size_t to = from + 1; to <= starts.size(); ++to) {
+      const auto pageBefore = pageOf(before, startsBefore, from, to);
+      const auto page = pageOf(after, starts, from, to);
+      const auto delta = changedPage(page, after, starts, change, from, to);
+      check(delta.has_value(), what);
+      const auto applied = applyPageDelta(pageBefore.json(), *delta);
+      if (!applied || *applied != page.json()) {
+        std::cerr << what << ": lines [" << from << ", " << to << ") read "
+                  << (applied ? applied->dump() : std::string("nothing"))
+                  << "\nnot " << page.json().dump() << "\nby " << delta->dump()
+                  << '\n';
+        std::exit(1);
+      }
+      changed = changed || !delta->empty();
+    }
+  check(changed == (before != after), what);
+}
+void saidChanges() {
+  // Two spans of one line move what follows by both; spans are read in order,
+  // each within a line, as what reads there now is.
+  {
+    const std::string old = "ab cd\nef\ngh";
+    const auto starts = lineStarts(old);
+    CodeEdits::ViewChange wrote;
+    wrote.text = {{0, 2, 5}, {3, 5, 1}, {9, 9, 4}};
+    const auto lines =
+        changedLines(wrote, starts, old.size(), "abcde c\nef\nNOTEgh");
+    check(lines && *lines ==
+                       std::vector<std::pair<std::size_t, std::ptrdiff_t>>{
+                           {0, 2}, {2, 6}},
+          "The lines a patch wrote are not those its spans lie on");
+    wrote.text = {{3, 5, 1}, {0, 2, 5}};
+    check(!changedLines(wrote, starts, old.size(), "abcde c\nef\ngh"),
+          "Spans out of order were read as a patch's");
+    wrote.text = {{4, 7, 1}};
+    check(!changedLines(wrote, starts, old.size(), "ab cXf\ngh"),
+          "A span over a line break was read as within a line");
+    wrote.text = {{0, 2, 3}};
+    check(!changedLines(wrote, starts, old.size(), "a\nb cd\nef\ngh"),
+          "A span that reads a line break now was read as within a line");
+    wrote.text = {{11, 13, 1}};
+    check(!changedLines(wrote, starts, old.size(), "ab cd\nef\ng"),
+          "A span past the text was read as within it");
+  }
+  // A comment written, changed and taken away, beside names, source names,
+  // library spans and a prelude it moves.
+  const std::string source =
+      "int counter;\n"
+      "int target(int value) {\n"
+      "  int local = value + callee(value) + callee(1);\n"
+      "  counter = local * 3;\n"
+      "  return local + callee(local);\n"
+      "}\n";
+  const auto spanned = [&](Json view) {
+    const auto &text = view.at("text").get_ref<const std::string &>();
+    const auto first = text.find("target"), last = text.rfind("return");
+    view["source_names"] =
+        Json::array({{{"begin_byte", first}, {"end_byte", first + 6}},
+                     {{"begin_byte", last}, {"end_byte", last + 6}}});
+    view["library_regions"] = Json::array(
+        {{{"spans", Json::array({{{"begin_byte", 0}, {"end_byte", 3}}})}},
+         {{"spans",
+           Json::array({{{"begin_byte", first}, {"end_byte", first + 6}}})}},
+         {{"spans",
+           Json::array({{{"begin_byte", last}, {"end_byte", last + 6}}})}}});
+    view["prelude"]["end_byte"] = text.find("int target");
+    return view;
+  };
+  const auto noted = [](const char *first, const char *second) {
+    Json comments = Json::array();
+    if (*first)
+      comments.push_back({{"addr", "0x1010"}, {"text", first}});
+    if (*second)
+      comments.push_back({{"addr", "0x1020"}, {"text", second}});
+    CodeEdits::ImageFacts image;
+    image.read(Json::array({{{"addr", "0x1100"},
+                             {"original", "callee"},
+                             {"renamed", "called"}}}),
+               comments);
+    return image;
+  };
+  auto view = page(source);
+  view["rows"][2]["addresses"] = Json::array({"0x1010"});
+  view["rows"][4]["addresses"] = Json::array({"0x1020"});
+  std::optional<std::size_t> definition;
+  CodeEdits::decorate(view, nullptr, 0x1000, "c", noted("", ""), {}, resolve,
+                      &definition);
+  view = spanned(view);
+  for (const auto &[first, second] :
+       {std::pair<const char *, const char *>{"a note", ""},
+        {"a note", "another, a longer one"},
+        {"a", "another, a longer one"},
+        {"", "x"},
+        {"", ""}}) {
+    auto patched = view;
+    CodeEdits::ViewChange wrote;
+    check(CodeEdits::takeComments(patched, 0x1000, definition,
+                                  noted(first, second), &wrote),
+          "A comment was not written into the view");
+    saysPages(view, patched, wrote, "comments");
+    view = patched;
+  }
+  // A function's name, spelled twice on a line and once on another.
+  {
+    CodeEdits::ImageFacts renamed;
+    renamed.read(Json::array({{{"addr", "0x1100"},
+                               {"original", "callee"},
+                               {"renamed", "a_longer_name_for_it"}}}),
+                 Json::array());
+    auto patched = view;
+    CodeEdits::ViewChange wrote;
+    check(CodeEdits::takeFunctionNames(patched, {0x1100}, renamed, &wrote) &&
+              wrote.text.size() == 3,
+          "A function's name was not written where the view links it");
+    saysPages(view, patched, wrote, "function names");
+    CodeEdits::ImageFacts shorter;
+    shorter.read(
+        Json::array(
+            {{{"addr", "0x1100"}, {"original", "callee"}, {"renamed", "qz"}}}),
+        Json::array());
+    auto again = patched;
+    CodeEdits::ViewChange less;
+    check(CodeEdits::takeFunctionNames(again, {0x1100}, shorter, &less),
+          "A function's shorter name was not written");
+    saysPages(patched, again, less, "shorter function names");
+  }
+  // A data's name: its spellings, its rows' anchors, its variable and every
+  // local's identity.
+  {
+    auto engine = dataPage();
+    engine["source_variables"] = Json::array({{{"name", "counter"},
+                                               {"address", "0x2000"},
+                                               {"id", "global:8192"},
+                                               {"ambiguous", false},
+                                               {"parameter", false}}});
+    auto decorated = engine;
+    decorateData(decorated, nullptr, "");
+    auto first = decorated;
+    CodeEdits::ViewChange wrote;
+    const auto taken = CodeEdits::takeDataNames(
+        first, CodeEdits::engineText(engine), dataRenamed("a_longer_total"),
+        nullptr, "c", &wrote);
+    check(taken && wrote.identity && wrote.variables.size() == 1 &&
+              !wrote.rows.empty() && !wrote.names.empty(),
+          "A data's name does not say all it wrote");
+    saysPages(decorated, first, wrote, "data names");
+    auto second = first;
+    CodeEdits::ViewChange less;
+    check(CodeEdits::takeDataNames(second, *taken, dataRenamed("t"), nullptr,
+                                   "c", &less)
+              .has_value(),
+          "A data's second name was not taken");
+    saysPages(first, second, less, "shorter data names");
+  }
+  // A view states a function's name otherwise: the fields that state it.
+  {
+    auto before = view, after = view;
+    before["function_identity"] = {{"addr", "0x1000"}, {"name", "target"}};
+    after["function_identity"] = {{"addr", "0x1000"}, {"name", "stated"}};
+    saysPages(before, after, {}, "a name stated", true);
+  }
+}
 } // namespace
 
 int main() {
   sourceSpanBoundaries();
+  virtualTargetNames();
   manySourceNames();
   integerLiterals();
   numberFormats();
   dataNames();
+  saidChanges();
   const std::string source =
       "extern int32_t global_data; /* 0x2000 */\n"
       "int32_t callee(int32_t);\n"

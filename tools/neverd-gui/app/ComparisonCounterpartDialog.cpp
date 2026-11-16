@@ -13,6 +13,7 @@
 #include "../ResourceLimits.h"
 #include "ComparisonModel.h"
 #include "ComparisonSession.h"
+#include "DialogReturnKey.h"
 #include "Icons.h"
 
 #include <QComboBox>
@@ -108,11 +109,15 @@ ComparisonCounterpartDialog::ComparisonCounterpartDialog(
   Root->addWidget(Table, 1);
   Selection = Label("counterpartSelection");
   auto *Buttons = new QDialogButtonBox(QDialogButtonBox::Cancel, this);
-  Pair = Buttons->addButton(tr("Pair functions"), QDialogButtonBox::ActionRole);
+  // The accept role: pairing follows Cancel, where every dialog's main
+  // action stands.  An action's role put it before Cancel.
+  Pair = Buttons->addButton(tr("Pair functions"), QDialogButtonBox::AcceptRole);
   Pair->setObjectName("counterpartPair");
-  // Enter in a search field must not commit a mapping.
-  Pair->setAutoDefault(false);
-  Buttons->button(QDialogButtonBox::Cancel)->setAutoDefault(false);
+  // Enter in a search field must not commit a mapping, so no button is the
+  // default, though the button box would appoint its accept as it shows.
+  // Pairing is still what the chooser is opened for and wears the accent.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Pair);
   Root->addWidget(Buttons);
   connect(Buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
   Filter.setSingleShot(true);

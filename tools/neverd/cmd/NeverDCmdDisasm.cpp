@@ -114,17 +114,19 @@ int runFuncs(neverd_session_t Sess) {
     return json::Object{};
   };
   if (JsonOutput) {
-    json::Array Funcs;
+    json::OStream JSON(outs());
+    JSON.arrayBegin();
     for (int I = 0; I < Count; ++I) {
       const char *N = neverd_func_name(Sess, I);
       json::Object Func = Identity(I);
       Func["name"] = std::string(N ? N : "");
       Func["addr"] = "0x" + utohexstr(neverd_func_entry(Sess, I));
       Func["size"] = static_cast<int64_t>(neverd_func_size(Sess, I));
-      Funcs.push_back(std::move(Func));
+      JSON.value(std::move(Func));
       neverd_free_string(N);
     }
-    outs() << json::Value(std::move(Funcs)) << "\n";
+    JSON.arrayEnd();
+    outs() << "\n";
   } else {
     outs() << "\nFunctions (" << Count << "):\n";
     outs() << format("  %-18s %-8s %s\n", "Address", "Size", "Name");

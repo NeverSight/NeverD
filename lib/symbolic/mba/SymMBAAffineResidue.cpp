@@ -58,6 +58,7 @@ struct ResidueMemo {
   };
   std::map<std::pair<uint32_t, bool>, Attempt> Attempts;
   std::vector<std::pair<uint32_t, uint32_t>> Generated;
+  llvm::SmallVector<SymRef, 4> ReconstructedProgressions;
   std::optional<ParityPrefix> PreparedParity;
 };
 
@@ -1967,6 +1968,33 @@ SymRef synthesizeResidueTable(SymContext &Ctx, SymRef Root,
 }
 
 } // namespace
+
+bool isReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                WorkBudget &Budget) {
+  if (Budget.MemoOwner != &Ctx || !Budget.Residues)
+    return false;
+  const auto &Products = Budget.Residues->ReconstructedProgressions;
+  if (Products.empty() || !Budget.canConsume(Products.size()))
+    return false;
+  Budget.consume(Products.size());
+  return llvm::is_contained(Products, Root);
+}
+
+void recordReconstructedProgression(const SymContext &Ctx, SymRef Root,
+                                    WorkBudget &Budget, size_t &Storage) {
+  if (Budget.MemoOwner != &Ctx || !Budget.Residues)
+    return;
+  auto &Products = Budget.Residues->ReconstructedProgressions;
+  const size_t Bytes = 2 * sizeof(SymRef);
+  if (Products.size() >= Budget.MemoCapacity || Bytes > Storage ||
+      !Budget.canConsume(Products.size() + 1))
+    return;
+  Budget.consume(Products.size() + 1);
+  if (!llvm::is_contained(Products, Root)) {
+    Storage -= Bytes;
+    Products.push_back(Root);
+  }
+}
 
 void recordResidueReading(SymContext &Ctx, size_t First, WorkBudget &Budget,
                           size_t &Storage) {

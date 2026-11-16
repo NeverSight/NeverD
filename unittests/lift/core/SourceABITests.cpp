@@ -2123,7 +2123,7 @@ TEST(SourceABI, StructReturnFieldsNeedTheirLastRealWritesOnEveryReturn) {
   };
   const std::vector<MedReturnReg> Fields = {{TRI.IntReturnRegs[0], 8, false},
                                             {TRI.IntReturnRegs[1], 8, false}};
-  for (unsigned Mode = 0; Mode != 6; ++Mode) {
+  for (unsigned Mode = 0; Mode != 8; ++Mode) {
     SCOPED_TRACE(Mode);
     MedFunc Function;
     Function.Entry = 0x1000;
@@ -2138,12 +2138,21 @@ TEST(SourceABI, StructReturnFieldsNeedTheirLastRealWritesOnEveryReturn) {
       Write.addInput(MedVar::makeConst(7 + Index, 8));
       Block.Ops.push_back(Write);
     }
-    if (Mode == 3) {
+    if (Mode == 3 || Mode >= 6) {
       MedOp Call;
       Call.Opcode = NdOp::CALL;
       Call.Output = Reg(0, 2);
       Call.addInput(MedVar::makeConst(0x2000, 8));
+      if (Mode == 7)
+        Call.addInput(MedVar::makeUnspecified(8, Arch::AArch64));
       Block.Ops.push_back(Call);
+    }
+    if (Mode >= 6) {
+      MedOp Write;
+      Write.Opcode = NdOp::COPY;
+      Write.Output = Reg(1, 2);
+      Write.addInput(MedVar::makeConst(11, 8));
+      Block.Ops.push_back(Write);
     }
     if (Mode >= 1 && Mode <= 4) {
       MedOp Last;
@@ -2164,7 +2173,63 @@ TEST(SourceABI, StructReturnFieldsNeedTheirLastRealWritesOnEveryReturn) {
     }
     EXPECT_EQ(
         returnsStructFields(Function, Fields, Arch::AArch64, BinaryFormat::ELF),
-        Mode == 0 || Mode == 4);
+        Mode == 0 || Mode == 4 || Mode == 6);
+  }
+}
+
+TEST(SourceABI, StructReturnLowViewsKeepTheirWholeDefinition) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  const auto Reg = [&](unsigned Index, uint16_t Bytes) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::AArch64;
+    V.RegOff = TRI.IntReturnRegs[Index];
+    V.Id = 1 + Index + (Bytes == 4 ? 10 : 0);
+    V.SSAVer = 1;
+    V.Size = Bytes;
+    return V;
+  };
+  const std::vector<MedReturnReg> Fields = {{TRI.IntReturnRegs[0], 8, false},
+                                            {TRI.IntReturnRegs[1], 8, false}};
+  for (unsigned Mode = 0; Mode != 4; ++Mode) {
+    SCOPED_TRACE(Mode);
+    MedFunc Function;
+    Function.Entry = 0x1000;
+    Function.Blocks.resize(1);
+    auto &Block = Function.Blocks.front();
+    Block.Id = 0;
+    MedVar Temp;
+    Temp.Kind = MedVar::Temp;
+    Temp.Id = 20;
+    Temp.Size = 8;
+    MedOp Define;
+    Define.Opcode = NdOp::COPY;
+    Define.Output = Temp;
+    Define.addInput(Mode == 3 ? MedVar::makeUnspecified(8, Arch::AArch64)
+                              : MedVar::makeConst(7, 8));
+    Block.Ops.push_back(Define);
+    MedOp Whole;
+    Whole.Opcode = NdOp::COPY;
+    Whole.Output = Reg(0, 8);
+    Whole.addInput(Mode == 1 ? MedVar::makeConst(19, 8) : Temp);
+    Block.Ops.push_back(Whole);
+    // An unrelated register write separates the whole write and low view.
+    MedOp Second = Whole;
+    Second.Output = Reg(1, 8);
+    Second.Inputs[0] = MedVar::makeConst(11, 8);
+    Block.Ops.push_back(Second);
+    MedOp View;
+    View.Opcode = NdOp::SUBBYTES;
+    View.Output = Reg(0, 4);
+    View.addInput(Temp);
+    View.addInput(MedVar::makeConst(Mode == 2 ? 1 : 0, 4));
+    Block.Ops.push_back(View);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Block.Ops.push_back(Return);
+    EXPECT_EQ(
+        returnsStructFields(Function, Fields, Arch::AArch64, BinaryFormat::ELF),
+        Mode == 0);
   }
 }
 
@@ -2243,6 +2308,106 @@ TEST(SourceABI, StructReturnFieldsFollowAllPredecessorsAndUnknownInputs) {
     F.Blocks[2].Ops.push_back(Ret);
     EXPECT_EQ(returnsStructFields(F, Fields, Arch::AArch64, BinaryFormat::ELF),
               Variant == 0);
+  }
+}
+
+TEST(SourceABI, StructReturnFieldsUseCompleteConstantPhis) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    for (bool Floating : {false, true}) {
+      const auto &Registers = Floating ? TRI.FPReturnRegs : TRI.IntReturnRegs;
+      ASSERT_GE(Registers.size(), 2U);
+      const uint16_t Bytes = Floating ? 4 : 8;
+      const std::vector<MedReturnReg> Fields = {
+          {Registers[0], Bytes, Floating}, {Registers[1], Bytes, Floating}};
+      for (unsigned Variant = 0; Variant != 12; ++Variant) {
+        SCOPED_TRACE(static_cast<int>(Architecture));
+        SCOPED_TRACE(Floating);
+        SCOPED_TRACE(Variant);
+        MedFunc Function;
+        Function.Entry = 0x1000;
+        Function.Blocks.resize(5);
+        for (unsigned I = 0; I != Function.Blocks.size(); ++I) {
+          Function.Blocks[I].Id = I;
+          Function.Blocks[I].StartAddr = Function.Entry + I * 0x10;
+        }
+        Function.Blocks[0].Succs = {1, 2};
+        for (unsigned I : {1U, 2U}) {
+          Function.Blocks[I].Preds = {0};
+          Function.Blocks[I].Succs = {3};
+        }
+        auto &Join = Function.Blocks[3];
+        Join.Preds = {1, 2};
+        Join.Succs = {4};
+        auto &Exit = Function.Blocks[4];
+        Exit.Preds = {3};
+        // Constant propagation has replaced predecessor writes by literal
+        // incoming values. The PHIs are now the complete field definitions.
+        for (unsigned I = 0; I != 2; ++I) {
+          PhiNode Phi;
+          Phi.Output.Kind = MedVar::Reg;
+          Phi.Output.TheArch = Architecture;
+          Phi.Output.RegOff = Registers[I];
+          Phi.Output.Id = I + 1;
+          Phi.Output.SSAVer = 1;
+          Phi.Output.Size = Bytes;
+          Phi.Args = {{1, MedVar::makeConst(7 + I, Bytes)},
+                      {2, MedVar::makeConst(13 + I, Bytes)}};
+          Join.Phis.push_back(Phi);
+        }
+        auto &Second = Join.Phis[1];
+        if (Variant == 1)
+          Second.Args[1].second = MedVar::makeUnspecified(Bytes, Architecture);
+        if (Variant == 2)
+          Second.Args.pop_back();
+        if (Variant == 3)
+          Second.Args[1].first = 0;
+        if (Variant == 4)
+          Second.Args[1].first = 1;
+        if (Variant == 5) {
+          Join.ExceptionalPreds = {{0, Join.StartAddr}};
+          Second.ExceptionalEntry =
+              MedVar::makeUnspecified(Bytes, Architecture);
+        }
+        if (Variant == 6) {
+          MedOp Call;
+          Call.Opcode = NdOp::CALL;
+          Call.Output = Join.Phis[0].Output;
+          Call.Output.SSAVer = 2;
+          Call.addInput(MedVar::makeConst(0x2000, 8));
+          Exit.Ops.push_back(Call);
+        }
+        if (Variant == 7) {
+          MedOp Write;
+          Write.Opcode = NdOp::COPY;
+          Write.Output = Second.Output;
+          Write.Output.SSAVer = 2;
+          Write.Output.Size = Bytes / 2;
+          Write.addInput(MedVar::makeConst(1, Bytes / 2));
+          Exit.Ops.push_back(Write);
+        }
+        if (Variant == 8)
+          Second.Output.Size = Bytes / 2;
+        if (Variant == 9 || Variant == 10) {
+          PhiNode View = Second;
+          View.Output.Id += 10;
+          View.Output.Size = Bytes / 2;
+          for (auto &[Pred, Input] : View.Args)
+            Input = MedVar::makeUnspecified(Bytes / 2, Architecture);
+          Join.Phis.push_back(View);
+          if (Variant == 10)
+            std::reverse(Join.Phis.begin(), Join.Phis.end());
+        }
+        if (Variant == 11)
+          Second.Args[1].second = MedVar::makeConst(1, Bytes / 2);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Exit.Ops.push_back(Return);
+        EXPECT_EQ(returnsStructFields(Function, Fields, Architecture,
+                                      BinaryFormat::ELF),
+                  Variant == 0 || Variant == 9 || Variant == 10);
+      }
+    }
   }
 }
 
@@ -2376,6 +2541,8 @@ TEST(SourceABI, CallbackTypesKeepTheirSignaturesAndRejectMalformedGraphs) {
           NdType::makeFunc(NdType::makeVoid(), {NdType::makeVoid()}),
           NdType::makeFunc(NdType::makeVoid(), {Callback->Pointee}),
           NdType::makeFunc(Callback->Pointee),
+          NdType::makeFunc(NdType::makeVoid(), {Pointer},
+                           types::CallingConvention::Unspecified, true),
           NdType::makeFunc(NdType::makeVoid(),
                            std::vector<TypeRef>(65, Pointer))}) {
       Hint.Parameters[0].Type = NdType::makePtr(Invalid);
@@ -3152,8 +3319,9 @@ TEST(SourceABI, IndirectRecordCallInitializesAllFieldsAndKeepsReturnClobbers) {
     CEmitterOptions Options;
     Options.TheArch = Architecture;
     ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-    Source += "\nstatic unsigned calls;\n" + typeToC(Record) +
-              " make_three(uint64_t value) { ++calls; " + typeToC(Record) +
+    Source += "\n#include <string.h>\nstatic unsigned calls;\n" +
+              typeToC(Record) + " make_three(uint64_t value) { ++calls; " +
+              typeToC(Record) +
               " result; uint64_t words[] = {value, value + 7, value * 3}; "
               "memcpy(&result, words, sizeof(result)); return result; }\n";
     executeC(Source + R"(
@@ -3244,8 +3412,9 @@ TEST(SourceABI, SixDoubleIndirectCallWritesEveryField) {
   CEmitterOptions Options;
   Options.TheArch = Architecture;
   ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-  Source += "\nstatic unsigned calls;\n" + typeToC(Record) +
-            " make_six(double angle) { ++calls; " + typeToC(Record) +
+  Source += "\n#include <string.h>\nstatic unsigned calls;\n" +
+            typeToC(Record) + " make_six(double angle) { ++calls; " +
+            typeToC(Record) +
             " result; double values[6] = {angle, angle + 1, angle + 2, "
             "angle + 3, angle + 4, angle + 5}; "
             "memcpy(&result, values, sizeof(result)); return result; }\n";
@@ -4004,7 +4173,18 @@ TEST(SourceABI, NarrowParametersPreserveKnownBytesThroughWideCopies) {
             CEmitterOptions Options;
             Options.TheArch = Architecture;
             ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
-            EXPECT_NE(Source.find("unknown"), std::string::npos) << Source;
+            EXPECT_TRUE(Source.find("no recovered semantics") !=
+                            std::string::npos ||
+                        Source.find("incoming register has no definition") !=
+                            std::string::npos ||
+                        Source.find("no recovered result") != std::string::npos)
+                << Source;
+            EXPECT_EQ(Source.find("unknown register"), std::string::npos)
+                << Source;
+            EXPECT_EQ(Source.find("unknown value"), std::string::npos)
+                << Source;
+            EXPECT_EQ(Source.find("unknown return value"), std::string::npos)
+                << Source;
           }
         }
         std::string Source;
@@ -4286,7 +4466,7 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
       Join.Ops.push_back(Operation(NdOp::RETURN, {}, {}));
       auto High = MedToHighConverter().convert(Function, Architecture);
       narrowSourceConcatLocals(High);
-      unsigned PhiCopies = 0, UnknownEdges = 0;
+      unsigned NarrowCopies = 0, FullCopies = 0, UnknownEdges = 0;
       // A small return tail may be copied to each jump into it; count each
       // distinct store once.
       std::set<std::string> Stores, FullStores;
@@ -4304,9 +4484,11 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
         }
         if (!Statement.IsPhiCopy)
           return;
-        ++PhiCopies;
-        EXPECT_TRUE(Statement.Val && Statement.Val->Type &&
-                    Statement.Val->Type->Size == (FullWidthRead ? 8U : 4U));
+        ASSERT_TRUE(Statement.Val && Statement.Val->Type);
+        const auto Bytes = Statement.Val->Type->Size;
+        EXPECT_TRUE(Bytes == 4U || (FullWidthRead && Bytes == 8U));
+        NarrowCopies += Bytes == 4U;
+        FullCopies += Bytes == 8U;
         auto Visit = [&](auto &&Self, const ExprPtr &E) -> void {
           if (!E)
             return;
@@ -4317,7 +4499,10 @@ TEST(SourceABI, OnlyUnobservedParameterPhiCarrierBytesCanBeDiscarded) {
         };
         Visit(Visit, Statement.Val);
       });
-      EXPECT_EQ(PhiCopies, 2U);
+      // A full-width use retains its original copies, while the low store
+      // has independent narrow copies that never observe the unknown suffix.
+      EXPECT_EQ(NarrowCopies, 2U);
+      EXPECT_EQ(FullCopies, FullWidthRead ? 2U : 0U);
       EXPECT_EQ(Stores.size(), FullWidthRead ? 2U : 1U);
       EXPECT_EQ(FullStores.size(), FullWidthRead ? 1U : 0U);
       EXPECT_EQ(UnknownEdges, FullWidthRead ? 2U : 0U);

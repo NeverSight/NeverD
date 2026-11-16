@@ -713,15 +713,23 @@ TEST_F(SessionLLVMTest, RejectedEmissionDoesNotPublishAModule) {
   Function.Blocks.front().Ops.front().addInput(
       MedVar::makeConst(0x1080, 8, ConstantAddressProvenance::CodeAddress));
   State.PipeResult.MedFuncs.push_back(std::move(Function));
+  MedFunc Other = sourceFunction();
+  Other.Entry = 0x1040;
+  Other.Name = "other_refused";
+  Other.ReturnType = NdType::makeInt(8);
+  Other.Blocks.front().StartAddr = Other.Entry;
+  Other.Blocks.front().Ops.front().addInput(
+      MedVar::makeConst(0x1088, 8, ConstantAddressProvenance::CodeAddress));
+  State.PipeResult.MedFuncs.push_back(std::move(Other));
 
   EXPECT_FALSE(State.ensureLlvmModule());
   EXPECT_EQ(State.PipeResult.LlvmModule, nullptr);
-  // The refused body says why.
-  EXPECT_TRUE(llvm::StringRef(State.LastError)
-                  .starts_with("native LLVM emission failed: "))
-      << State.LastError;
-  EXPECT_NE(State.LastError.find("source_function"), std::string::npos)
-      << State.LastError;
+  EXPECT_TRUE(State.LastError.starts_with("native LLVM emission failed"));
+  EXPECT_NE(State.LastError.find("0x1000"), std::string::npos);
+  EXPECT_NE(State.LastError.find("0x1080"), std::string::npos);
+  EXPECT_NE(State.LastError.find("code-address"), std::string::npos);
+  EXPECT_NE(State.LastError.find("other_refused at 0x1040"), std::string::npos);
+  EXPECT_NE(State.LastError.find("0x1088"), std::string::npos);
   EXPECT_TRUE(State.PipeResult.Success);
 }
 
@@ -762,11 +770,10 @@ TEST_F(SessionLLVMTest, OneFunctionsModuleDoesNotEmitItsSiblings) {
   // The refused function and an unknown one still fail clearly.
   State.clearError();
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x1040, false), nullptr);
-  EXPECT_TRUE(llvm::StringRef(State.LastError)
-                  .starts_with("native LLVM emission failed: "))
-      << State.LastError;
-  EXPECT_NE(State.LastError.find("refused_sibling"), std::string::npos)
-      << State.LastError;
+  EXPECT_TRUE(State.LastError.starts_with("native LLVM emission failed"));
+  EXPECT_NE(State.LastError.find("refused_sibling"), std::string::npos);
+  EXPECT_NE(State.LastError.find("0x1040"), std::string::npos);
+  EXPECT_NE(State.LastError.find("0x1080"), std::string::npos);
   State.clearError();
   EXPECT_EQ(State.ensureFunctionLlvmModule(0x2000, false), nullptr);
   EXPECT_EQ(State.LastError, "LLVM function not found at 0x2000");

@@ -47,6 +47,8 @@ private:
   QLabel *Status;
   QPlainTextEdit *Dwarf;
   QPlainTextEdit *Compact;
+  QPlainTextEdit *Instruction;
+  QLabel *InstructionLabel;
   QPushButton *Reload;
 };
 } // namespace neverd::gui

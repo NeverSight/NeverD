@@ -85,6 +85,23 @@ TEST(ReturnAddressSigning, Arm64eUsesTheImplicitBKeyWithoutChangingTheCIE) {
     }
 }
 
+TEST(ReturnAddressSigning, ImplicitDarwinFrameHasNoExactPCSigningColumn) {
+  for (bool Darwin : {false, true}) {
+    auto Image = image({});
+    Image.ExceptionMetadata.CIEs.front().UsesArm64eReturnAddressABI = Darwin;
+    const auto Result = queryImage(Image);
+    ASSERT_TRUE(Result.DwarfStateAtPC);
+    if (Darwin) {
+      EXPECT_EQ(Result.DwarfStateAtPC->Status, AArch64RAQueryStatus::Unknown);
+      EXPECT_FALSE(Result.DwarfStateAtPC->State);
+    } else {
+      ASSERT_TRUE(Result.DwarfStateAtPC->State);
+      EXPECT_EQ(Result.DwarfStateAtPC->State->Kind,
+                AArch64RASigningKind::Unsigned);
+    }
+  }
+}
+
 TEST(ReturnAddressSigning, ExactPCStateDoesNotBorrowTheCompactRecipe) {
   auto Image = image();
   auto &Function = Image.ExceptionMetadata.Functions.front();

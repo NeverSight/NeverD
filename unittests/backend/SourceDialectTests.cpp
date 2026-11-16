@@ -485,22 +485,102 @@ TEST(SourceDialect, NavigationKeepsStatementsSeparateInEveryDialect) {
   }
 }
 
-TEST(SourceDialect, NavigationRefusesAFunctionShownAsC) {
+TEST(SourceDialect, NavigationKeepsCopiedCStatements) {
   const llvm::StringRef C = "int work(int v) {\n"
                             "    v = v * 2;\n"
+                            "    v = v * 2;  \n"
                             "    return v++ + 1;\n"
                             "}\n";
   for (SourceDialect Dialect : {SourceDialect::Rust, SourceDialect::Go}) {
     SCOPED_TRACE(sourceDialectKey(Dialect).str());
     const auto Spelled = spell(C, Dialect);
     ASSERT_EQ(Spelled.Unread.size(), 1u);
-    for (llvm::StringRef Line : {"    v = v * 2;\n", "    return v++ + 1;\n"}) {
+    for (llvm::StringRef Line :
+         {"    v = v * 2;\n", "    v = v * 2;  \n", "    return v++ + 1;\n"}) {
       const size_t Begin = C.find(Line);
-      EXPECT_TRUE(Spelled.map(Begin, Begin + Line.size()));
-      EXPECT_FALSE(Spelled.mapExact(C, Begin, Begin + Line.size()));
+      const auto Mapped = Spelled.mapExact(C, Begin, Begin + Line.size());
+      ASSERT_TRUE(Mapped) << Line.str();
+      EXPECT_EQ(
+          llvm::StringRef(Spelled.Text).slice(Mapped->first, Mapped->second),
+          Line.trim());
+      const size_t Copied = Spelled.Text.find(C.trim().str());
+      EXPECT_EQ(Mapped->first, Copied + Begin + 4);
     }
     EXPECT_TRUE(llvm::StringRef(Spelled.Text).contains(C.trim()));
   }
+}
+
+TEST(SourceDialect, NavigationKeepsUnreadCxxFunctionBytes) {
+  const llvm::StringRef C = "struct Missing;\n"
+                            "float work(struct Missing *p, float v) {\n"
+                            "    v = v * 0.5f;\n"
+                            "    p->field = v;\n"
+                            "    return v;\n"
+                            "}\n";
+  const auto Spelled = spell(C, SourceDialect::Cpp);
+  ASSERT_EQ(Spelled.Unread.size(), 1u);
+  const size_t Begin = C.find("    v =");
+  const size_t End = C.find("    return");
+  const auto Mapped = Spelled.mapExact(C, Begin, End);
+  ASSERT_TRUE(Mapped);
+  EXPECT_EQ(llvm::StringRef(Spelled.Text).slice(Mapped->first, Mapped->second),
+            C.slice(Begin, End).trim());
+  // A span crossing the converted declaration and copied body has no single
+  // byte-preserving origin, even though both parts were individually kept.
+  EXPECT_FALSE(Spelled.mapExact(C, 0, End));
+}
+
+TEST(SourceDialect, UnreadCxxKeepsFunctionAndVirtualTargetIdentities) {
+  const llvm::StringRef C =
+      "enum Large { Limit = 0x100000000 };\n"
+      "struct Missing;\n"
+      "void Device_work(struct Missing *p) {\n"
+      "    const char *s = \"Device_tick\";\n"
+      "    /* Device_tick remains an ordinary comment. */\n"
+      "    p->field = 1;\n"
+      "    (/* virtual Device_tick [slot +0x28] */ Device_tick)(p);\n"
+      "    Device_tick(\n"
+      "        p);\n"
+      "}\n";
+  const std::vector<CSourceName> Names = {
+      {CSourceName::Kind::Function, "Device_work", "_ZN6Device4workEv", 0x1200},
+      {CSourceName::Kind::Function, "Device_tick", "_ZN6Device4tickEv",
+       0x1400}};
+  const auto Spelled = spell(C, SourceDialect::Cpp, Names);
+  ASSERT_EQ(Spelled.Unread.size(), 2u);
+  EXPECT_NE(Spelled.Text.find("void Device::work("), std::string::npos);
+  EXPECT_NE(Spelled.Text.find("\"Device_tick\""), std::string::npos);
+  EXPECT_NE(Spelled.Text.find("/* Device_tick remains an ordinary comment. */"),
+            std::string::npos);
+  unsigned Targets = 0;
+  for (const auto &Name : Spelled.Names)
+    if (Name.Identifier == "Device_tick") {
+      EXPECT_EQ(Name.Address, 0x1400u);
+      EXPECT_EQ(Spelled.Text.substr(Name.Begin, Name.End - Name.Begin),
+                "Device::tick");
+      ++Targets;
+    }
+  EXPECT_EQ(Targets, 3u);
+  const size_t CallBegin = C.find("    (/* virtual");
+  const size_t CallEnd = C.find('\n', CallBegin);
+  const auto Call = Spelled.mapExact(C, CallBegin, CallEnd);
+  ASSERT_TRUE(Call);
+  EXPECT_EQ(Spelled.Text.substr(Call->first, Call->second - Call->first),
+            "(/* virtual Device::tick [slot +0x28] */ Device::tick)(p);");
+  const size_t Store = C.find("p->field = 1;");
+  const auto StoreSpan = Spelled.mapExact(C, Store, Store + 13);
+  ASSERT_TRUE(StoreSpan);
+  EXPECT_EQ(Spelled.Text.substr(StoreSpan->first,
+                                StoreSpan->second - StoreSpan->first),
+            "p->field = 1;");
+  const size_t Multiline = C.find("    Device_tick(\n");
+  const size_t MultilineEnd = C.find(';', Multiline) + 1;
+  const auto MultiSpan = Spelled.mapExact(C, Multiline, MultilineEnd);
+  ASSERT_TRUE(MultiSpan);
+  EXPECT_EQ(Spelled.Text.substr(MultiSpan->first,
+                                MultiSpan->second - MultiSpan->first),
+            "Device::tick(\n        p);");
+  EXPECT_EQ(tokens(spell(C, SourceDialect::C, Names).Text), tokens(C));
 }
 
 TEST(SourceDialect, NavigationRefusesConflictingOrInvalidSpans) {
@@ -515,6 +595,22 @@ TEST(SourceDialect, NavigationRefusesConflictingOrInvalidSpans) {
   EXPECT_FALSE(Spelled.mapExact(C, 0, C.size() + 1));
   EXPECT_FALSE(Spelled.mapExact(C, C.size(), 0));
   Spelled.Pieces.front().End = Spelled.Text.size() + 1;
+  EXPECT_FALSE(Spelled.mapExact(C, 0, C.size()));
+}
+
+TEST(SourceDialect, NavigationValidatesCopiedBytesAndConflicts) {
+  const llvm::StringRef C = "    return 1;\n";
+  SourceDialectText Spelled;
+  Spelled.Text = C.str() + C.str();
+  Spelled.Pieces = {{0, C.size(), 0, C.size(), true}};
+  EXPECT_TRUE(Spelled.mapExact(C, 0, C.size()));
+  Spelled.Pieces.push_back({0, C.size(), C.size(), 2 * C.size(), true});
+  EXPECT_FALSE(Spelled.mapExact(C, 0, C.size()));
+  Spelled.Pieces.pop_back();
+  Spelled.Text[11] = '2';
+  EXPECT_FALSE(Spelled.mapExact(C, 0, C.size()));
+  Spelled.Text[11] = '1';
+  --Spelled.Pieces.front().End;
   EXPECT_FALSE(Spelled.mapExact(C, 0, C.size()));
 }
 

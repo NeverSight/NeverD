@@ -53,11 +53,17 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
   // have no candidate.
   std::optional<std::set<va_t>> RestoredFrames;
   auto Restored = [&](va_t Addr) {
-    if (!RestoredFrames)
-      RestoredFrames =
-          FrameProofAdmitted
-              ? restoredAArch64IndirectTailFrames(Func, CurrentImg->abiFormat())
-              : std::set<va_t>{};
+    if (!RestoredFrames) {
+      ExceptionAddressRange OwnedCode;
+      if (AuthoritativeCurrentFuncRange)
+        OwnedCode = {AuthoritativeCurrentFuncRange->first,
+                     AuthoritativeCurrentFuncRange->second};
+      RestoredFrames = FrameProofAdmitted
+                           ? restoredAArch64IndirectTailFrames(
+                                 Func, CurrentImg->abiFormat(), OwnedCode,
+                                 limits::kMaxIndirectTailFrameWork, CurrentImg)
+                           : std::set<va_t>{};
+    }
     return RestoredFrames->count(Addr) != 0;
   };
   bool Changed = false;
@@ -72,6 +78,7 @@ void CFGBuilder::convertIndirectTailCalls(LowFunc &Func) {
         EverPublishedJumpTableBranches.count(Addr) ||
         LostValidatedJumpTableBranches.count(Addr) ||
         StackTableEvidenceIncompleteBranches.count(Addr) ||
+        FrameLabelTableSources.count(Addr) ||
         IndexDomainEvidenceIncompleteBranches.count(Addr) ||
         IncompleteBranchMarkerEvidenceIncomplete ||
         ((finiteGOTOFFGroupClaimed() || finiteAbsoluteGroupClaimed()) &&

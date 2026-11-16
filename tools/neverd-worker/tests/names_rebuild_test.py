@@ -141,6 +141,19 @@ def exported_function(executable, directory):
         other = resolves(client, "other_value")
         assert address and other, (address, other)
         anchors = [address, other]
+        # The exports list reads the image's own names, in each order asked
+        # for and as filtered, whatever the session calls the functions.
+        exports = {"offset": 0, "limit": 100, "sort": "name"}
+        listed = ok(client, "exports", exports)
+        names = [row["name"] for row in listed["items"]]
+        assert {"exported_value", "other_value"} <= set(names), listed
+        assert names == sorted(names, key=str.lower), names
+        down = ok(client, "exports", dict(exports, descending=True))
+        downward = [row["name"] for row in down["items"]]
+        assert sorted(downward) == sorted(names), (downward, names)
+        assert downward == sorted(downward, key=str.lower, reverse=True), downward
+        other_only = ok(client, "exports", dict(exports, filter="OTHER_V"))
+        assert [row["name"] for row in other_only["items"]] == ["other_value"], other_only
         ok(client, "xrefs", {"address": address})
         def exported_name_taken():
             taken = client.call("rename", {"address": other, "name": "exported_value"})
@@ -148,6 +161,8 @@ def exported_function(executable, directory):
             assert "is used at" in taken["error"]["message"], taken
 
         rename_in_place(client, anchors, address, "renamed_export", other)
+        assert ok(client, "exports", exports) == listed
+        assert ok(client, "exports", dict(exports, descending=True)) == down
         assert resolves(client, "exported_value") == address
         exported_name_taken()
         same_as_full_rebuild(client, anchors, "exported function rename")

@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>플러그인 관리자(M)...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>계산된 문자열</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>함수에서 계산되는 조건부 문자열 찾기</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>수정된 바이트</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>계산된 문자열</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>데이터 주소</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>증거</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>이 명령 실행 후 관측</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>텍스트 / 진단</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>테이블을 새로 고치는 동안 선택 항목이 너무 많이 변경되었습니다.</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>검색 취소됨</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1953,6 +1985,154 @@
         <translation>
             <numerusform>항목 %n개</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 초</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · 탐색 실패: </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · 함수 %2/%3개 · %4행 · 문제 %5개</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>분석이 변경되었습니다. 다시 스캔하세요</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>함수 %1 분석 중…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>블록 진입 시 메모리와 레지스터가 나열된 값을 가지며 관측 지점까지 성공적으로 실행된다고 가정합니다. 초기화자는 값을 제안할 뿐이며, 도달 가능성은 증명되지 않았습니다.</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>블록 진입점</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>취소</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>계산된 문자열 조건</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>명령어에서 계산되는 조건부 텍스트</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>조건…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>계속</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>데이터 주소</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>인코딩</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>초기화자</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>불러오는 중…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>결과 없음</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>이 명령 실행 후 관측</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>먼저 바이너리를 여세요</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>일시 정지</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>일시 정지됨</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>현재 함수 처리 후 일시 정지 중…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>레지스터 오프셋 %1, %2바이트 = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>필요한 진입 레지스터</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>필요한 입력 바이트</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>다시 시도</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>불러오기를 계속하려면 다시 시도하거나 목록을 탐색하세요.</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>모든 함수 스캔</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>스캔 취소됨</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>스캔 완료</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>스캔 중</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>검색 취소됨</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>검색 진행 상황</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>검색 중…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>정렬 중…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>검색 대기 중…</translation>
     </message>
 </context>
 <context>
@@ -2081,6 +2261,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>복원 중지: %1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>백그라운드에서 분석 계속 중</translation>
     </message>
 </context>
 <context>
@@ -2908,7 +3092,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>형식을 설정하려면 함수 안에 커서를 두세요</translation>
+        <translation type="vanished">형식을 설정하려면 함수 안에 커서를 두세요</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3432,6 +3616,10 @@ After:
         <source>Plugin tasks</source>
         <translation>플러그인 작업</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>형식을 설정하려면 전역 객체 위나 함수 안에 커서를 놓으세요</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3822,6 +4010,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>프로젝트 변경 사항을 저장했습니다</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>소스 뷰를 준비할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>디컴파일러 준비 중</translation>
     </message>
 </context>
 <context>
@@ -5035,7 +5231,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>형식: %1</translation>
+        <translation type="vanished">형식: %1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5122,6 +5318,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>로컬 타입 없음: 이 프로그램에는 타입이 있는 PDB나 DWARF가 없습니다.</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · 가져오지 못한 형식 %1개</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>다음</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>%1과 일치하는 형식이 없습니다.</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>페이지 </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>이전</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>형식: %1 · %2–%3 표시 중</translation>
     </message>
 </context>
 <context>
@@ -5434,6 +5654,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>이 소스 유형 지정을 제거하고 분석에서 얻은 유형 사용</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>%3에 있는 %1은 %2바이트 전역 객체입니다. 로컬 형식에서 스칼라 또는 포인터 형식을 입력하세요.</translation>
     </message>
 </context>
 <context>
@@ -10260,6 +10484,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>불러오는 중</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>디컴파일러 준비 중</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10379,14 +10607,6 @@ Your previous graph is still available.</source>
         <translation>이미지로 코드 가져오기</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>프로세스 플러그인 가져오기</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>프로세스 플러그인 가져오기…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 로그</translation>
     </message>
@@ -10447,10 +10667,6 @@ Your previous graph is still available.</source>
         <translation>위치</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>프로세스 플러그인을 가져왔습니다: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>진행률</translation>
     </message>
@@ -10493,6 +10709,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>이 동작의 등록이 더 이상 활성 상태가 아닙니다.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>플러그인 가져오기…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>플러그인을 가져왔습니다: %1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10786,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>프로세스 플러그인 매니페스트를 가져와 명령을 추가하세요. 제공 프로그램은 명령 실행 시에만 시작됩니다.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>플러그인 가져오기…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>프로세스 플러그인 가져오기</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10800,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>설치 기록을 제거했습니다. 실행 중인 작업을 중지합니다.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>설치된 프로세스 플러그인</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10866,6 @@ Your previous graph is still available.</source>
         <translation>중지 중</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>유형: 외부 프로세스</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>사용 불가</translation>
     </message>
@@ -10676,6 +10888,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>예</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>플러그인 가져오기</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>외부 프로세스</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>플러그인 매니페스트를 가져와 워크벤치 명령이나 뷰를 추가합니다.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>설치된 플러그인</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>네이티브 GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>출처: NeverD에 포함</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>이 플러그인은 NeverD에 포함되어 있습니다. 비활성화를 사용하여 끌 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>유형: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>알 수 없음</translation>
     </message>
 </context>
 <context>
@@ -10729,6 +10977,10 @@ Your previous graph is still available.</source>
     <message>
         <source>DWARF state at the selected PC</source>
         <translation>선택한 PC의 DWARF 상태</translation>
+    </message>
+    <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>명령어에서 복원한 선택한 PC의 서명 상태</translation>
     </message>
     <message>
         <source>Compact unwind: completed-prologue recipe</source>
@@ -10850,6 +11102,55 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>탭 닫기</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI 모듈 활성화 중 오류가 발생했습니다.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI 모듈을 활성화하지 못했습니다.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI 모듈이 없거나 패키지 외부에 있습니다: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>모듈에 필요한 GUI 인터페이스가 없습니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>플러그인 메뉴 작업이 잘못되었거나 중복되었거나 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>플러그인 뷰가 잘못되었거나 중복되었거나 사용할 수 없습니다: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>분석 세션이 변경되었습니다.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>메뉴 작업 팩터리는 제공된 부모 객체를 사용해야 합니다.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>뷰 팩터리는 워크벤치의 자식 위젯을 만들어야 합니다.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>%1 불러오는 중…</translation>
     </message>
 </context>
 </TS>

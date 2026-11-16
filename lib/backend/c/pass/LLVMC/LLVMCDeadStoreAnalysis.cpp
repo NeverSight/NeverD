@@ -83,6 +83,8 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
   State.DeadFrameStores.clear();
   State.FramePointerLocations.clear();
   State.RawFrameLocations.clear();
+  State.RawFrameExtents.clear();
+  State.RawFrameLocationsInRecord.clear();
   State.RawFrameAllocas.clear();
   State.FrameEscapes.clear();
 
@@ -198,6 +200,29 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
     return false;
   };
   bool UncertainFrameRead = false;
+  // An access through a pointer that may name several places keeps all of
+  // them in the frame's own bytes: every byte it covers at each, and the
+  // place a join points at before a later offset moves it. Named C locals
+  // lie wherever the compiler puts them, so `&local + 4` is not the next one.
+  auto NoteRaw = [&](const FrameAliases &Aliases, uint64_t Size, bool Read) {
+    for (const FrameLocation &Loc : Aliases.Locations) {
+      State.RawFrameLocations.insert(Loc);
+      if (Read)
+        State.RawFrameLocationsInRecord.insert(Loc);
+      uint64_t &Extent = State.RawFrameExtents[Loc];
+      Extent = std::max({Extent, Size, uint64_t{1}});
+    }
+    for (const FrameLocation &Loc : Aliases.JoinLocations) {
+      State.RawFrameLocations.insert(Loc);
+      uint64_t &Extent = State.RawFrameExtents[Loc];
+      Extent = std::max(Extent, uint64_t{1});
+    }
+  };
+  auto Ambiguous = [](const FrameAliases &Aliases) {
+    return Aliases.Locations.size() > 1 ||
+           (Aliases.HasNonFrameAlternative && !Aliases.Locations.empty()) ||
+           (Aliases.Incomplete && !Aliases.Frames.empty());
+  };
   auto NoteAddress = [&](const llvm::Value *Ptr, const FrameAliases &Aliases) {
     // An unresolved index can reach more than any one named slot. Keeping
     // its stores live is insufficient: fixed and indexed accesses must also
@@ -214,11 +239,8 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
                       uint64_t ReadSize = 0) {
     FrameAliases Aliases = peelSyntheticFrames(Ptr, Stores, DL);
     NoteAddress(Ptr, Aliases);
-    if (Aliases.Locations.size() > 1 ||
-        (Aliases.HasNonFrameAlternative && !Aliases.Locations.empty()) ||
-        (Aliases.Incomplete && !Aliases.Frames.empty()))
-      State.RawFrameLocations.insert(Aliases.Locations.begin(),
-                                     Aliases.Locations.end());
+    if (Ambiguous(Aliases))
+      NoteRaw(Aliases, ReadSize, /*Read=*/true);
     if (Aliases.Incomplete && !Aliases.Frames.empty()) {
       UncertainFrameRead = true;
     }
@@ -276,6 +298,27 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
       }
     }
   }
+  // A store through such a pointer writes the bytes a later direct read
+  // takes, as a read through one takes the bytes a direct store wrote.
+  for (auto &BB : Fn)
+    for (auto &Inst : BB) {
+      const auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
+      if (!SI)
+        continue;
+      const llvm::AllocaInst *Slot = asAlloca(SI->getPointerOperand());
+      if (Slot && !isSyntheticFrameAlloca(Slot))
+        continue;
+      const FrameAliases Dest =
+          peelSyntheticFrames(SI->getPointerOperand(), Stores, DL);
+      if (!Ambiguous(Dest))
+        continue;
+      const llvm::TypeSize Size =
+          DL.getTypeStoreSize(SI->getValueOperand()->getType());
+      if (Size.isScalable())
+        State.RawFrameAllocas.insert(Dest.Frames.begin(), Dest.Frames.end());
+      else
+        NoteRaw(Dest, Size.getFixedValue(), /*Read=*/false);
+    }
   bool Grew = true;
   unsigned Guard = 0;
   while (Grew &&
@@ -303,8 +346,7 @@ void analyzeDeadFrameStores(LLVMCAnalysisState &State, llvm::Function &Fn) {
             peelSyntheticFrames(SI->getValueOperand(), Stores, DL);
         if (Src.Incomplete && !Src.Frames.empty()) {
           UncertainFrameRead = true;
-          State.RawFrameLocations.insert(Src.Locations.begin(),
-                                         Src.Locations.end());
+          NoteRaw(Src, 0, /*Read=*/true);
         }
         for (const FrameLocation &Loc : Src.Locations) {
           bool New = LiveSlots.insert(Loc).second;

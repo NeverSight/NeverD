@@ -1034,8 +1034,9 @@ class Session:
 
         JSON null becomes None. AArch64 DWARF state describes this exact PC;
         the independent compact recipe describes the completed prologue.
-        Neither source authenticates a live return address. No PC bias or
-        function-entry substitution is applied, and native statuses are kept.
+        Implicit Darwin frames may also report signing recovered from the
+        instructions at that PC. Each result retains its native status. Looking
+        up a rule does not authenticate a live return address or bias the PC.
         """
         return self._json(
             UNWIND_FRAME_QUERY,

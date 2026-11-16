@@ -125,6 +125,17 @@ range reserves an additional diagnostic allowance from `output_limit`, owned by
 end with an explicit truncation marker. Entry-time mapping requirements still
 apply. This is selected RAM evidence, not a resumable process checkpoint.
 
+`android.read_register_memory` captures memory pointed to by the current
+thread at the final stop, including a pending service or CPU fault. It uses
+the same register, signed offset and positive size as the instruction
+observations below. For example, `[{"register":"x1","size":16}]` captures
+16 bytes at the address in X1. Each entry reserves its size and one diagnostic
+allowance from `output_limit`. These reads use stopped RAM backing and follow
+the fixed reads in `android.memory`. An unreadable range retains its resolved
+address. A failed register read or an overflowing offset reports `address: null`.
+Both failures report empty `bytes_hex` and a diagnostic for that entry. Later
+ranges are still captured and the workload keeps its original stop.
+
 `android.observe_execution` records state immediately before explicit absolute
 guest PCs, without patching code or supplying call results:
 

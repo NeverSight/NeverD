@@ -1292,7 +1292,10 @@ SymRef foldProductParity(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
                          size_t &Storage) {
   if (Budget.exhausted() || !Budget.canConsume(1) || Storage < 128)
     return Root;
-  if (Ctx.op(Root) == SymOp::Mul)
+  // A completed interval already supplied this product's modular reading.
+  // The zero and one-bit projections below can still simplify its factors.
+  if (Ctx.op(Root) == SymOp::Mul &&
+      !isReconstructedProgression(Ctx, Root, Budget))
     if (auto Zero = foldProductResidues(Ctx, Root, Budget, Storage);
         Zero != Root)
       return Zero;

@@ -1945,6 +1945,11 @@ cl::opt<bool> DecompileCallees(
              "declarations, and a callee that is not decompiled is named in "
              "a note at the top"),
     cl::sub(DecompileCmd));
+cl::opt<bool> DecompileCheckAll(
+    "check-all",
+    cl::desc("Decompile every loaded function on the default C route, drop "
+             "each body, and print failure and phrase counts"),
+    cl::sub(DecompileCmd));
 
 //===----------------------------------------------------------------------===//
 // Rename-specific options

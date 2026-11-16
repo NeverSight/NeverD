@@ -158,6 +158,7 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
           ::neverd::limits::ir::
               kSourceStackFrameAnalyzeSourceStackFramePolicyVariablesSizeLimit) {
     Out.Error = "Stack-frame analysis budget exceeded";
+    Out.BudgetExceeded = true;
     return Out;
   }
   std::map<int, const LowBlock *> Blocks;
@@ -172,6 +173,7 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
         ::neverd::limits::ir::
             kSourceStackFrameAnalyzeSourceStackFrameOperationCountLimit) {
       Out.Error = "Stack-frame operation budget exceeded";
+      Out.BudgetExceeded = true;
       return Out;
     }
     Blocks[B.Id] = &B;
@@ -224,6 +226,7 @@ StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &F, Arch Architecture,
             ::neverd::limits::ir::
                 kSourceStackFrameAnalyzeSourceStackFrameRunRunWorkLimit) {
           Out.Error = "Stack-frame analysis work budget exceeded";
+          Out.BudgetExceeded = true;
           return S;
         }
         if (Record && (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) &&

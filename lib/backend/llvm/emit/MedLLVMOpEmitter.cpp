@@ -16,16 +16,19 @@
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/X86AtomicRmw.h"
 #include "neverd/backend/llvm/X86/X86RegistrationFrame.h"
 #include "neverd/backend/llvm/X86RegistrationSEHThread.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIntrinsicOutputs.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-op-emitter"
@@ -154,6 +157,49 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           "memory address space is attached to a non-memory operation");
   }
 
+  // A Darwin va_list can walk beyond all the named arguments. With no
+  // materialized overflow parameters, those bytes belong to the caller.
+  // Keep the lifted locals and any named stack homes in the private frame.
+  const bool NativeVariadicStack =
+      FrameBaseInt &&
+      usesDarwinVariadicEntryStack(*CurMedFunc, TargetArch, TargetFormat);
+  const auto VariadicAddress =
+      [&](DarwinVariadicStackValue Source) -> llvm::Value * {
+    if (!Source.Base)
+      return nullptr;
+    const MedVar &V = *Source.Base;
+    if (!NativeVariadicStack ||
+        V.Size != getTargetRegInfo(TargetArch).PointerSize)
+      return nullptr;
+    auto Slot = canonicalFrameSlotKey(V, /*RequireEntryStackPointer=*/true);
+    if (!Slot)
+      return nullptr;
+    const int64_t Offset = Source.offsetFrom(Slot->second);
+    llvm::Value *Base;
+    if (Offset >= CurMedFunc->VariadicOverflowBase) {
+      // Inlining into a different function would change the incoming SP.
+      CurFunc->addFnAttr(llvm::Attribute::NoInline);
+      Base = Builder.CreateIntrinsic(llvm::Intrinsic::sponentry,
+                                     {Builder.getPtrTy()}, {});
+    } else {
+      Base = Builder.CreateIntToPtr(FrameBaseInt, Builder.getPtrTy());
+    }
+    return Builder.CreateConstGEP1_64(Builder.getInt8Ty(), Base, Offset);
+  };
+
+  // Only machine instruction outputs write the physical error result. SSA edge
+  // copies and call-clobber bookkeeping update the value map independently.
+  auto SetOutput = [&](const MedVar &Output, llvm::Value *Value) {
+    if (NativeVariadicStack)
+      if (auto *Pointer = VariadicAddress(darwinVariadicStackDefinition(
+              Op, getTargetRegInfo(TargetArch), TargetFormat,
+              CurMedFunc->EntryKind)))
+        Value = Builder.CreatePtrToInt(Pointer, sizeToType(Output.Size));
+    setVar(Output, Value, Builder);
+    if (Op.OriginSeq >= 0 && Output.Kind == MedVar::Reg &&
+        Output.RegOff == a64reg::X21 && Img && Img->isArm64e())
+      writeDarwinAArch64ErrorRegister(Builder, getVar(Output, Builder));
+  };
   auto GetInput = [&](uint8_t Idx) -> llvm::Value * {
     if (Idx >= Op.NumInputs)
       return llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), 0);
@@ -991,6 +1037,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
+    if (!Ptr && !IsSegmentRelative)
+      Ptr = VariadicAddress({&AddrVar});
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved load address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
@@ -1100,6 +1148,8 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       if (Ptr)
         IsGlobalData = true;
     }
+    if (!Ptr && !IsSegmentRelative)
+      Ptr = VariadicAddress({&AddrVar});
     if (!Ptr) {
       rejectEscapingAddressFragment(AddrVar, "an unresolved store address");
       auto *Addr = IsSegmentRelative ? getRawSegmentOffset(AddrVar, Builder)
@@ -1428,7 +1478,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
     }
     if (Result && Op.Output.Size > 0)
-      setVar(Op.Output, Result, Builder);
+      SetOutput(Op.Output, Result);
 
     if (PendingIntrinsicCount > 0) {
       for (auto &Blk : CurMedFunc->Blocks) {
@@ -1439,7 +1489,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         for (size_t I = 0; I < Bindings.size(); ++I) {
           if (!PendingIntrinsicOutputs[I])
             llvm::report_fatal_error("intrinsic output is missing a value");
-          setVar(Bindings[I].Source, PendingIntrinsicOutputs[I], Builder);
+          SetOutput(Bindings[I].Source, PendingIntrinsicOutputs[I]);
         }
         break;
       }
@@ -1474,7 +1524,7 @@ void MedLLVMEmitter::emitOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     SourceMap->Observations.push_back(
         {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
   if (Result && Op.Output.Size > 0)
-    setVar(Op.Output, Result, Builder);
+    SetOutput(Op.Output, Result);
 }
 
 } // namespace neverd

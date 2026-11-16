@@ -50,6 +50,13 @@ inline constexpr int
 inline constexpr int kNeverDCmdPipelineRunDecompileSizeLimit = 128 * 1024;
 inline constexpr int kNeverDCmdPipelineRunDecompileBufferGetBufferSizeLimit =
     128 * 1024;
+/// Bound diagnostic output while checking every loaded function.
+inline constexpr int kDecompileCheckMaxFailureSamples = 32;
+inline constexpr size_t kDecompileCheckMaxReasonBytes = 180;
+/// Report progress and return freed allocator pages once per completed batch.
+inline constexpr uint64_t kDecompileCheckReportFunctions = 1000;
+/// Also report slow batches after this many seconds.
+inline constexpr int kDecompileCheckReportSeconds = 30;
 
 // tools/neverd/cmd/NeverDCmdSearch.cpp
 inline constexpr int kNeverDCmdSearchRunSearchMaxResultsLimit = 4096;

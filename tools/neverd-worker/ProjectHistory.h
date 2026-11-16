@@ -67,6 +67,9 @@ public:
   bool recovered() const { return recovered_; }
   const Json &committedState() const;
   const Json &committedTable(const std::string &name) const;
+  /// The same rows, held as the state that committed them holds them: they
+  /// stay what they are through the edits that follow.
+  std::shared_ptr<const Json> committedTableHeld(const std::string &name) const;
   const PatchRows &committedPatches() const;
   /// The committed rows of a table kept row by row.
   const PatchRows &committedRows(const std::string &table) const;

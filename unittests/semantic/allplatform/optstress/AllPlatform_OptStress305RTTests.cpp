@@ -11,23 +11,29 @@
 // lifter (MedTypePass type inference + MedCallingConv argument typing) must
 // reconstruct each incoming argument's exact width and signedness:
 //
-//   * pchar  - signed char + unsigned char params (sign- vs zero-extend in regs).
+//   * pchar  - signed char + unsigned char params (sign- vs zero-extend in
+//   regs).
 //   * pshort - short + unsigned short params.
-//   * pmix   - char/short/int/long long in one signature (reg-class assignment).
-//   * pmany  - 8 mixed-width params: the tail spills to the stack (sub-word slot).
-//   * pll    - long long + int params, returns long long (reg/stack pairs on 32b).
-//   * pptr   - const-pointer param over a file-scope global array (.bss escape).
+//   * pmix   - char/short/int/long long in one signature (reg-class
+//   assignment).
+//   * pmany  - 8 mixed-width params: the tail spills to the stack (sub-word
+//   slot).
+//   * pll    - long long + int params, returns long long (reg/stack pairs on
+//   32b).
+//   * pptr   - const-pointer param over a file-scope global array (.bss
+//   escape).
 //
 // A mis-inferred parameter width/sign (e.g. treating a `signed char` arg as a
 // full register, or zero- instead of sign-extending) makes the recompiled code
-// diverge from the original.  The entry function is DEFINED FIRST so it lands at
-// the emulation entry (CODE_BASE); the helpers follow.  All 64-bit math is
+// diverge from the original.  The entry function is DEFINED FIRST so it lands
+// at the emulation entry (CODE_BASE); the helpers follow.  All 64-bit math is
 // multiply/shift/add/logic only (no 64-bit division) to stay libcall-free on
 // i386/arm32.  Deterministic (LCG-seeded).  All four targets, -O2.
 //
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress305RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -39,7 +45,8 @@ class A64OptStress305RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(A64OptStress305RT, Verify) { roundTripAArch64(GetParam()); }
 class ARM32OptStress305RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32OptStress305RT, Verify) { roundTripARM32(GetParam()); }
 
 // clang-format off
@@ -129,12 +136,28 @@ static std::vector<RoundTripTC> makeOptStress305TC(const char *prefix,
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress305TC("x64o305", "long", 2);
-static const std::vector<RoundTripTC> kX86 = makeOptStress305TC("x86o305", "int", 2);
-static const std::vector<RoundTripTC> kA64 = makeOptStress305TC("a64o305", "long", 2);
-static const std::vector<RoundTripTC> kARM = makeOptStress305TC("armo305", "int", 2);
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress305TC("x64o305", "long", 2);
+static const std::vector<RoundTripTC> kX86 =
+    makeOptStress305TC("x86o305", "int", 2);
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress305TC("a64o305", "long", 2);
+static const std::vector<RoundTripTC> kARM =
+    makeOptStress305TC("armo305", "int", 2);
 
-INSTANTIATE_TEST_SUITE_P(OptStress305, X64OptStress305RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress305, X86OptStress305RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress305, A64OptStress305RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress305, ARM32OptStress305RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress305, X64OptStress305RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress305, X86OptStress305RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress305, A64OptStress305RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress305, ARM32OptStress305RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// AAPCS32 leaves the register or the stack lane before a 64-bit argument
+// unset, and the call passed an unknown value there though the callee reads
+// none: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress305HighC, ARM32OptStress305RT,
+                         ::testing::ValuesIn(onHighC(kARM,
+                                                     {"_pmix", "_pmany"})),
+                         rtTCName);

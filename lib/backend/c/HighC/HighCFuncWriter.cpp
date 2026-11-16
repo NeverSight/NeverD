@@ -40,6 +40,7 @@
 
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -339,7 +340,7 @@ TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
   }
   // A return type C cannot spell keeps the recovered machine type, as a
   // parameter's does.
-  if (!hasCValueLayout(cDisplayType(DebugFn->ReturnType)))
+  if (!hasCValueLayout(DebugFn->ReturnType))
     return {};
   return DebugFn->ReturnType;
 }
@@ -528,6 +529,8 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
   };
   auto AllArgs = [](const HighExpr &E) { return E.Operands.size(); };
   collectUnknownOnlyNames(Func);
+  collectCapturedEntryRegisters(Func);
+  collectEntryVectorSpills(Func);
   // Whether C shows the function `void` decides what its returns read.
   const PrintedReturn Return = printedReturn(Func);
   InferredVoid = Return.Void;
@@ -613,7 +616,7 @@ void HighCWriter::collectDeferredUnknowns(const HighFunc &Func) {
   std::vector<CValueTransfer<std::string>> Transfers;
   walkStmts(Func.Body, [&](const HighStmt &Stmt) {
     if (Stmt.Kind != StmtKind::Assign || !Stmt.Dst || !Stmt.Val ||
-        Analysis.DeadStmts.count(&Stmt) ||
+        stmtSuppressedAsDead(Stmt) ||
         (Stmt.Dst->Kind != ExprKind::Var && Stmt.Dst->Kind != ExprKind::Phi) ||
         !Stmt.Dst->Type || Stmt.Dst->Type->Kind != NdTypeKind::Int ||
         Stmt.Dst->Type->IsEnum)
@@ -624,7 +627,7 @@ void HighCWriter::collectDeferredUnknowns(const HighFunc &Func) {
       return;
     CValueTransfer<std::string> Transfer{
         Name, std::nullopt,
-        Stmt.IsPhiCopy && isUnknownCallOperand(Stmt.Val.get())};
+        knownVoidCall(*Stmt.Val) || isDeferredUnknownInput(Stmt.Val.get())};
     const HighExpr *Value = peelIntegerViewOps(Stmt.Val.get());
     if (Value && (Value->Kind == ExprKind::Var || Value->Kind == ExprKind::Phi))
       Transfer.Source = copyForwardName(varName(Value->Var));
@@ -692,11 +695,50 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   std::vector<TypeRef> ParameterTypes;
   for (size_t I = 0; I < Func.Params.size(); ++I)
     ParameterTypes.push_back(emittedParamType(Func, I));
-  const auto PointerFacts =
-      inferHighPointerTypes(Func, Opts.TheArch, ParameterTypes);
+  const auto PointerFacts = pointerTypeFacts(
+      Func, ParameterTypes, &RecordPointerLocations, &RecordPointerUses);
+  // Scalar bit carriers used as floats can be declared as floats. All
+  // integer reads still go through reinterpretedBits, including mixed uses.
+  // A coalesced name of differing widths must retain its machine carrier.
+  std::map<std::string, TypeRef> FloatingViews;
+  std::map<std::string, uint16_t> CarrierWidths;
+  llvm::SmallPtrSet<const HighExpr *, 32> SeenFloatingViews;
+  std::function<void(const ExprPtr &)> CollectFloatingViews =
+      [&](const ExprPtr &E) {
+        if (!E || !SeenFloatingViews.insert(E.get()).second)
+          return;
+        if (E->Kind == ExprKind::Var || E->Kind == ExprKind::Phi) {
+          const std::string Name = PrintedVarFn(E->Var);
+          if (!Name.empty()) {
+            const uint16_t Size = E->Type ? E->Type->Size : E->Var.Size;
+            const auto [It, Inserted] = CarrierWidths.emplace(Name, Size);
+            if (!Inserted && It->second != Size)
+              It->second = 0;
+          }
+        }
+        if (E->Kind == ExprKind::BitCast && E->Type &&
+            E->Type->Kind == NdTypeKind::Float &&
+            (E->Type->Size == 4 || E->Type->Size == 8) &&
+            E->Operands.size() == 1 && E->Operands[0] &&
+            (E->Operands[0]->Kind == ExprKind::Var ||
+             E->Operands[0]->Kind == ExprKind::Phi)) {
+          const std::string Name = PrintedVarFn(E->Operands[0]->Var);
+          if (!Name.empty())
+            FloatingViews.emplace(Name, E->Type);
+        }
+        E->forEachChildExpr(CollectFloatingViews);
+      };
+  walkStmts(Func.Body,
+            [&](const HighStmt &S) { forEachExpr(S, CollectFloatingViews); });
+  // Store forwarding has already rendered these integer carriers into text.
+  // Changing their declarations to float would turn the cached integer casts
+  // into numeric conversions instead of reads of their original bits.
+  for (const auto &[Address, Names] : Analysis.StoreFwdDeps)
+    for (const std::string &Name : Names)
+      FloatingViews.erase(Name);
   // A type's C spelling, empty where C has none.
   const auto Spelling = [this](const TypeRef &Type) {
-    const TypeRef Display = cDisplayType(Type);
+    const TypeRef Display = Type;
     return hasCSpelling(Display) ? typeToC(Display) : std::string();
   };
   std::map<std::string, TypeRef> TransportedPointers;
@@ -723,7 +765,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   auto EmitDeclaration = [&](const std::string &Name, TypeRef Type,
                              const auto &Explicit) {
     const DeferredDecl Decl = Explicit == ExplicitDeclarations.end()
-                                  ? DeferredDecl{cDisplayType(Type), {}}
+                                  ? DeferredDecl{Type, {}}
                                   : Explicit->second;
     // Retain the actual declaration's type even when an operation requires
     // a different carrier than the local's inferred type.
@@ -751,12 +793,7 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
   std::function<void(const std::vector<HighStmt> &, bool)> CollectPrinted;
   CollectPrinted = [&](const std::vector<HighStmt> &Stmts, bool InCleanup) {
     for (const HighStmt &S : Stmts) {
-      const bool PrintDeadJoin =
-          Analysis.DeadStmts.count(&S) && S.Kind == StmtKind::Assign && S.Dst &&
-          (S.Dst->Kind == ExprKind::Var || S.Dst->Kind == ExprKind::Phi) &&
-          AmbiguousFrameAliases.count(varName(S.Dst->Var));
-      if ((!Analysis.DeadStmts.count(&S) || PrintDeadJoin) &&
-          !stmtHiddenFromC(S)) {
+      if (!stmtSuppressedAsDead(S) && !stmtHiddenFromC(S)) {
         if (S.Kind == StmtKind::Assign && S.Dst && S.Val &&
             S.Dst->Kind == ExprKind::Var) {
           std::string Name = varName(S.Dst->Var);
@@ -957,8 +994,8 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
       // A debug type C cannot spell leaves the local its recovered type, as
       // debugTypeForDisplacement does.
       if (auto Var = Debug->resolveVariable(CurrentFunc->Entry, Local.StackOff);
-          Var && Var->Type && hasCValueLayout(cDisplayType(Var->Type)))
-        Ty = cDisplayType(Var->Type);
+          Var && Var->Type && hasCValueLayout(Var->Type))
+        Ty = Var->Type;
     }
     auto ExplicitTy = ExplicitDeclarations.find(Name);
     if (ExplicitTy == ExplicitDeclarations.end())
@@ -1019,6 +1056,11 @@ void HighCWriter::emitLocalDecls(const HighFunc &Func,
         (ProjectFrameAliasesIntoStorage && FrameAliases.count(Name) &&
          !VisibleAssigned.count(Name)))
       continue;
+    if (const auto Floating = FloatingViews.find(Name);
+        Floating != FloatingViews.end() && Ty && Ty->Kind == NdTypeKind::Int &&
+        !Ty->IsEnum && Ty->Size == Floating->second->Size &&
+        CarrierWidths.at(Name) == Ty->Size && !AddressTakenNames.count(Name))
+      Ty = Floating->second;
     if (TypeRef Stated = statedVariableTypeNamed(Name);
         Stated && !CanonicalVectorNames.count(Name)) {
       Ty = Stated;
@@ -1234,12 +1276,19 @@ void HighCWriter::writeAnalysisOnlyFunction(const HighFunc &Func) {
             "*/\n";
   }
   if (Func.HasUnresolvedSEHFrame)
-    OS << "/* neverd.seh: unresolved runtime stack; unknown entry values "
-          "remain explicit. Native reconstruction is unavailable. */\n";
+    OS << "/* neverd.seh: runtime stack has no recovered frame; entry values "
+          "stay explicit. Native reconstruction is unavailable. */\n";
   writeFunctionProjection(Func);
 }
 
+void HighCWriter::indexFrameSlotNames() {
+  auto &Index = FrameSlotOffsetsByName.emplace();
+  for (const auto &[Offset, Slot] : FrameSlots)
+    Index[Slot.Name].push_back(Offset);
+}
+
 void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
+  FrameSlotOffsetsByName.reset();
   FrameSlots.clear();
   FrameAddressEscapes = false;
   FrameAliases.clear();
@@ -1345,7 +1394,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
       if (!Inferred || Ty->Size > Inferred->Size ||
           (Ty->Size == Inferred->Size && Ty->Kind == NdTypeKind::Struct &&
            Inferred->Kind != NdTypeKind::Struct))
-        Inferred = cDisplayType(Ty);
+        Inferred = Ty;
     }
     NamedFrameSlot &Slot = FrameSlots[*Disp];
     if (AddressTaken)
@@ -1366,7 +1415,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
              (!Slot.Type || Ty->Size > Slot.Type->Size ||
               (Ty->Size == Slot.Type->Size && Ty->Kind == NdTypeKind::Struct &&
                Slot.Type->Kind != NdTypeKind::Struct)))
-      Slot.Type = cDisplayType(Ty);
+      Slot.Type = Ty;
     if (IsStore && Ty && Ty->Size &&
         (!Slot.MinStoreSize || Ty->Size < Slot.MinStoreSize))
       Slot.MinStoreSize = Ty->Size;
@@ -1628,6 +1677,7 @@ void HighCWriter::collectNamedFrameSlots(const HighFunc &Func) {
   for (auto &[Disp, Slot] : FrameSlots)
     if (SharedFrameStorage.count(Slot.Name))
       Slot.AddressTaken = true;
+  indexFrameSlotNames();
 }
 
 void HighCWriter::invalidateJoinPhiFrameAliases(const HighFunc &Func) {
@@ -1798,7 +1848,7 @@ void HighCWriter::applyDebugCallSlotTypes(const HighFunc &Func) {
       auto It = FrameSlots.find(*Disp);
       if (It == FrameSlots.end())
         continue;
-      TypeRef Next = cDisplayType(Expected->Pointee);
+      TypeRef Next = Expected->Pointee;
       // A unit that defines the program's records reads members only of
       // those it holds complete (prepareRecordDefinitions), its own or a
       // system header's: the callee's record names no member of another.
@@ -1850,7 +1900,7 @@ void HighCWriter::propagateFrameSlotCopyTypes(const HighFunc &Func) {
       return false;
     if (DestSize && SrcSize && DestSize != SrcSize)
       return false;
-    TypeRef Next = cDisplayType(SrcTy);
+    TypeRef Next = SrcTy;
     It->second.Type = Next;
     // A TPtr/ArgList overlay dest keeps CallType so `values_` still prints.
     if (!ReplaceNamed &&
@@ -2009,6 +2059,7 @@ void HighCWriter::hideInteriorRecordFieldSlots() {
   }
   for (int64_t Disp : Drop)
     FrameSlots.erase(Disp);
+  indexFrameSlotNames();
 }
 
 void HighCWriter::overlayPackedValueHomes(const HighFunc &Func) {
@@ -2049,7 +2100,7 @@ void HighCWriter::overlayPackedValueHomes(const HighFunc &Func) {
         (ReplaceNamed && NamedRecord(It->second.Type) &&
          It->second.Type->SourceName != Src->SourceName &&
          It->second.Type->Size == Src->Size)) {
-      It->second.Type = cDisplayType(Src);
+      It->second.Type = Src;
       It->second.CallType = Src;
     }
   };
@@ -4931,7 +4982,7 @@ TypeRef HighCWriter::integerCallResultCarrier(const HighExpr &Call,
 TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
   if (Call.SourceCallHint &&
       Call.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst)
-    return cDisplayType(Call.SourceCallHint->Signature.ReturnType);
+    return Call.SourceCallHint->Signature.ReturnType;
   TypeRef ReturnType;
   // An external prototype rejected by noteDebugExtern cannot supply the
   // printed result type: the fallback declaration returns its ABI carrier.
@@ -4939,7 +4990,7 @@ TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
       FS && debugCallReturnIsDeclared(Call, *FS)) {
     if (Dbg)
       Dbg->completeType(FS->ReturnType);
-    ReturnType = cDisplayType(FS->ReturnType);
+    ReturnType = FS->ReturnType;
     if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
         ReturnType && ReturnType->Kind != NdTypeKind::Ptr) {
       if (const NdType *Record = msvcIndirectReturnRecord(
@@ -5057,7 +5108,7 @@ void HighCWriter::bindParams(const HighFunc &Func) const {
     // A debug record's byte size alone does not describe a C type: a type C
     // cannot spell, such as a pointer to a record without a printable name or
     // validated fields, keeps the recovered machine parameter.
-    if (const TypeRef DebugType = cDisplayType(DebugFn->Params[B.Index].second);
+    if (const TypeRef DebugType = (DebugFn->Params[B.Index].second);
         DebugType && hasCValueLayout(DebugType))
       EmittedParamTypes[PI] = DebugType;
   }
@@ -5164,24 +5215,29 @@ HighCWriter::unreadDeclaredParams(const HighFunc &Func) const {
   if (!ParamsPlaced)
     return {};
   const uint16_t Word = pointerBytes(Opts.TheArch);
-  auto Integer = [&](const TypeRef &Type) {
-    return Type && Type->Size && Type->Size <= Word &&
-           (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr ||
-            (Type->Kind == NdTypeKind::Struct && Type->IsEnum));
+  auto Scalar = [&](const TypeRef &Type) {
+    return Type && Type->Size &&
+           ((Type->Size <= Word &&
+             (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr ||
+              (Type->Kind == NdTypeKind::Struct && Type->IsEnum))) ||
+            (Type->Kind == NdTypeKind::Float &&
+             (Type->Size == sizeof(float) || Type->Size == sizeof(double))));
   };
   int Last = -1;
   for (const size_t PI : emittedParamIndices(Func)) {
     const DebugParamBinding &B = ParamBindings[PI];
     if (B.Result)
       continue;
-    if (B.Index < 0 || !Integer(Func.Params[PI].Type))
+    if (B.Index < 0 || !B.Whole || !Scalar(Func.Params[PI].Type))
       return {};
     Last = std::max(Last, B.Index);
   }
   std::vector<size_t> Unread;
   for (size_t Index = static_cast<size_t>(Last + 1);
        Index < DebugFn->Params.size(); ++Index) {
-    if (!Integer(DebugFn->Params[Index].second))
+    // Placement already accounts for independent integer and FP banks. An
+    // unread floating suffix is still part of the declared interface.
+    if (!Scalar(DebugFn->Params[Index].second))
       return {};
     Unread.push_back(Index);
   }
@@ -5196,8 +5252,7 @@ TypeRef HighCWriter::unreadDeclaredParamType(const HighFunc &Func,
   const TypeRef &Declared = DebugFn->Params[Index].second;
   if (Declared)
     Dbg->completeType(Declared);
-  if (TypeRef Display = cDisplayType(Declared);
-      Display && hasCValueLayout(Display))
+  if (TypeRef Display = Declared; Display && hasCValueLayout(Display))
     return Display;
   return NdType::makeInt(Declared ? Declared->Size : pointerBytes(Opts.TheArch),
                          Declared && Declared->IsSigned);
@@ -5297,6 +5352,19 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
       All[I] = I;
     EmittedParamIndices[Key] = All;
     return All;
+  } else if (Opts.TheArch == Arch::AArch64 &&
+             Opts.Format == BinaryFormat::MachO) {
+    // A recovered stack parameter needs all the preceding ABI positions.
+    // Removing an unread register or stack slot changes where C reads it.
+    for (size_t I = N; I != 0; --I) {
+      const HighParam &Param = Func.Params[I - 1];
+      if (Param.RegOff != kNoParamReg || Param.MedIndex < 0 ||
+          !Used.count(static_cast<int>(I - 1)))
+        continue;
+      for (size_t J = 0; J < I; ++J)
+        Used.insert(static_cast<int>(J));
+      break;
+    }
   }
   size_t Unused = 0;
   for (size_t I = 0; I < N; ++I)
@@ -5708,6 +5776,7 @@ void HighCWriter::nameCxxCatchObjects(const HighFunc &Func) {
   // pointee remains unchanged, or that its first field is named `Value`.
   if (Func.ExceptionMetadata && Func.ExceptionMetadata->Registration)
     return;
+  FrameSlotOffsetsByName.reset();
   auto nameTaken = [&](const std::string &Name) {
     if (Name.empty())
       return true;
@@ -5814,6 +5883,7 @@ void HighCWriter::nameCxxCatchObjects(const HighFunc &Func) {
         }
       };
   Walk(Func.Body);
+  indexFrameSlotNames();
 }
 
 void HighCWriter::noteCatchReaching(const HighStmt &Stmt) {
@@ -5937,6 +6007,7 @@ void HighCWriter::simulateCatchReaching(const HighFunc &Func) {
 
 void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CurrentFunc = &Func;
+  FrameSlotOffsetsByName.reset();
   StatedLocalTypes.clear();
   SourceLocalClasses.clear();
   FrameStorageActive = false;
@@ -5958,8 +6029,14 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   CallResultNames.clear();
   CallResultTypes.clear();
   UnknownOnlyNames.clear();
+  CapturedEntryRegisters.clear();
   DeferredUnknownFlags.clear();
+  DeferredFlagsProvedOne.clear();
   ReadingDeferredPayload = false;
+  EmittingStmt = nullptr;
+  AvailabilityFlow.reset();
+  AvailabilityPoints.clear();
+  AvailabilityValues.clear();
   AssignedNames.clear();
   CtorSourceNames.clear();
   CxxThrowPrints.clear();
@@ -5988,6 +6065,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   MemoryTemporaries.clear();
   AddressTakenNames.clear();
   DeclaredCTypes.clear();
+  RecordPointerLocations.clear();
+  RecordPointerUses.clear();
+  BitFieldStatements.clear();
   PrintedIntegerTypes.clear();
   UnsignedCarrierTexts.clear();
   for (const auto &Param : Func.Params)
@@ -6097,7 +6177,6 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   collectValueForward(Func);
   hideCleanupSlotCopyIntoCall(Func);
   aliasCtorReturnThis(Func);
-  hideIncrementOnlyLoads(Func);
   collectFieldLoadForward(Func);
   collectEnumConstForward(Func);
   collectTypedPointerArgDests(Func);
@@ -6304,8 +6383,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     for (const auto &[Disp, Slot] : FrameSlots)
       if (!Slot.Name.empty())
         StorageViewSlots[Slot.Name] = {
-            Disp, Slot.Type ? cDisplayType(Slot.Type) : NdType::makeInt(1),
-            Slot.RegionBytes};
+            Disp, Slot.Type ? Slot.Type : NdType::makeInt(1), Slot.RegionBytes};
     if (!NeedsFrameStorage)
       RewriteStorageViews();
     if (ProjectFrameAliasesIntoStorage)
@@ -6314,6 +6392,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       if (!Slot.Name.empty() && Slot.Outer.empty() && !Slot.RegionBytes)
         FrameSlotNamesBeforeStorage[Disp] = Slot.Name;
     FrameSlots.clear();
+    FrameSlotOffsetsByName.emplace();
     if (!ProjectFrameAliasesIntoStorage)
       FrameAliases.clear();
   } else {
@@ -6385,7 +6464,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
        << Declaration << " */\n";
   } else if (Opts.EmitComments && DebugFn) {
     OS << "/* neverd.debug: return=";
-    if (const TypeRef Return = cDisplayType(DebugFn->ReturnType); !Return)
+    if (const TypeRef Return = DebugFn->ReturnType; !Return)
       OS << "(none)";
     else if (hasCSpelling(Return))
       OS << typeToC(Return);
@@ -6398,8 +6477,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
-          MIPSScalarHelpers.count(Intrinsic::MIPSReadDSPControl) ||
-              MIPSScalarHelpers.count(Intrinsic::MIPSWriteDSPControl));
+          MIPSScalarHelpers.count({Intrinsic::MIPSReadDSPControl, 0}) ||
+              MIPSScalarHelpers.count({Intrinsic::MIPSWriteDSPControl, 0}));
     if (Opts.Image && isMIPS(Opts.TheArch))
       if (const auto Mode = Opts.Image->instructionModeAt(Func.Entry))
         OS << mips::instructionModeCAttribute(*Mode);
@@ -6420,6 +6499,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     if (!TargetFeatures.empty())
       OS << "__attribute__((target(\"" << TargetFeatures << "\")))\n";
 
+    if (Func.UsesNativeVariadicStack)
+      OS << c_stack::kRetainStackFrame;
     if (Func.DoesNotReturn)
       OS << "_Noreturn ";
     if (Func.SourceTypeHint)
@@ -6445,6 +6526,16 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     const bool Indirect = !IndirectReturnName.empty();
     size_t Emitted = 0;
     VaStartLastNamed.clear();
+    const auto RememberParameter = [&](const TypeRef &Type,
+                                       const std::string &Identifier) {
+      // Machine expressions may read a declared float as integer bits.
+      // Both ordinary and source-bound parameters have the declaration's
+      // scalar type, just as local variables do.
+      if (const TypeRef Display = Type;
+          Display && ((Display->Kind == NdTypeKind::Int && !Display->IsEnum) ||
+                      Display->Kind == NdTypeKind::Float))
+        DeclaredCTypes.emplace(Identifier, Display);
+    };
     auto emitParam = [&](TypeRef Ty, std::string Name) {
       if (Emitted > 0)
         Declarator += ", ";
@@ -6452,10 +6543,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
           ParameterIdentifiers.allocate(Name, "nd_arg");
       Declarator += declaredAs(Ty, Identifier);
       VaStartLastNamed = Identifier;
-      // A parameter's name has its declared type, as a local's has.
-      if (const TypeRef Display = cDisplayType(Ty);
-          Display && Display->Kind == NdTypeKind::Int && !Display->IsEnum)
-        DeclaredCTypes.emplace(Identifier, Display);
+      RememberParameter(Ty, Identifier);
       ++Emitted;
     };
     const bool HighIRIncludesSret =
@@ -6477,8 +6565,10 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
           Declarator += ", ";
         auto Parameter = Func.SourceTypeHint->Parameters[PI];
         Parameter.Type = Ty;
-        Declarator += sourceParameterType(
-            Parameter, ParameterIdentifiers.allocate(Name, "nd_arg"));
+        const std::string Identifier =
+            ParameterIdentifiers.allocate(Name, "nd_arg");
+        Declarator += sourceParameterType(Parameter, Identifier);
+        RememberParameter(Ty, Identifier);
         ++Emitted;
       } else
         emitParam(Ty, Name);
@@ -6511,23 +6601,31 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       emitParam(unreadDeclaredParamType(Func, Index),
                 Name.empty() ? "unread" + std::to_string(Index) : Name);
     }
-    if (currentVaStart() && Emitted > 0)
+    if ((currentVaStart() || Func.UsesNativeVariadicStack) && Emitted > 0)
       Declarator += ", ...";
     if (Emitted == 0)
       Declarator += "void";
     OS << declaredAs(ReturnType, Declarator + ")") << " {\n";
+    if (Func.UsesNativeVariadicStack) {
+      emitIndent(1);
+      OS << llvm::formatv(
+          c_stack::kStackIntrinsicDecl.data(), c_stack::kNativeEntrySPName,
+          llvm::Intrinsic::getBaseName(llvm::Intrinsic::sponentry));
+    }
     if (Opts.Image && !Func.SourceTypeHint)
       if (const auto &Frame = dispatchFrame(Func.Entry)) {
         c_stub::writeDispatchFrameBody(OS, x64DispatchFrameAssembly(*Frame));
         return;
       }
   }
-  if (Opts.EmitComments)
+  if (Opts.EmitComments) {
+    writeSourceImageStringComments(OS, Func.ImageBytes);
     for (const auto &Bytes : Func.FrameBytes)
       if (const auto Text = sourceFrameStringComment(Bytes)) {
         emitIndent(1);
         OS << "/* " << *Text << " */\n";
       }
+  }
   if (Func.Body.empty()) {
     // Conversion produced no statements.  An empty `{ }` looks like a
     // successful leaf; trap instead so coverage cannot treat this as a body.
@@ -6574,13 +6672,16 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     uint64_t FrameBaseOffset = checkedStackAdd(LowerSize, EntryResidue);
     uint64_t StorageSize = checkedStackAdd(FrameBaseOffset, UpperSize);
     collectFrameRecordMembers(Func, FrameBaseOffset, StorageSize);
+    const std::string FrameBaseInit =
+        isMIPSN32(Opts.TheArch)
+            ? "const int64_t frame_base = (int64_t)(intptr_t)"
+            : "const uintptr_t frame_base = (uintptr_t)";
     emitIndent(1);
     if (FrameRecordMembers.empty()) {
       OS << "_Alignas(" << kSyntheticStackAlignment << ") uint8_t "
          << kFrameStorageName << "[" << StorageSize << "];\n";
-      FrameBaseDeclaration = "const uintptr_t frame_base = (uintptr_t)(" +
-                             kFrameStorageName.str() + " + " +
-                             std::to_string(FrameBaseOffset) + ")";
+      FrameBaseDeclaration = FrameBaseInit + "(" + kFrameStorageName.str() +
+                             " + " + std::to_string(FrameBaseOffset) + ")";
     } else {
       // The members at their byte offsets, the gaps named by offset as IDA
       // names a structure's gaps. The tag is the function's own: the C++,
@@ -6609,10 +6710,9 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Gap(StorageSize);
       emitIndent(1);
       OS << "} " << kFrameStorageName << ";\n";
-      FrameBaseDeclaration =
-          "const uintptr_t frame_base = (uintptr_t)((uint8_t *)&" +
-          kFrameStorageName.str() + " + " + std::to_string(FrameBaseOffset) +
-          ")";
+      FrameBaseDeclaration = FrameBaseInit + "((uint8_t *)&" +
+                             kFrameStorageName.str() + " + " +
+                             std::to_string(FrameBaseOffset) + ")";
     }
     // The rebuilt storage has the host's pointer width, which a 64-bit
     // target's source is compiled with: frame arithmetic is uint64_t already.
@@ -6628,6 +6728,10 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   // forwarding proofs, so a later call cannot change a saved pointer's value.
   if (!FrameRecordMembers.empty())
     collectFieldLoadTypes(Func);
+  // The final frame layout decides whether a compound update is legal.
+  // Hiding its load while it still names an independent slot can leave an
+  // undefined temporary when shared storage changes that decision.
+  hideIncrementOnlyLoads(Func);
   std::set<std::string> PrintedAddrSlots;
   std::set<std::string> PrintedSlotStores;
   std::set<std::string> PrintedSlotLoads;
@@ -6941,7 +7045,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       Decl.Text =
           "uint8_t " + Slot.Name + "[" + std::to_string(Slot.RegionBytes) + "]";
     else
-      Decl.Type = cDisplayType(Slot.Type);
+      Decl.Type = Slot.Type;
     // A slot's name has its declared type, as a local's has, whether it is
     // declared here or after the body: `var_m24 < 0` is no signed test of a
     // uint32_t slot.
@@ -6970,6 +7074,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   for (const auto &Name : ParamNames)
     MemoryIdentifiers.allocate(Name);
   collectDeferredUnknowns(Func);
+  collectBitFieldStatements(Func);
 
   // Frame projection can hide an ordinary-edge PHI copy after a try. Settle
   // clause exits against the statements that will actually be printed, while
@@ -6986,6 +7091,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   // Render the body first: a name the declaration pass expected to be
   // forwarded or dead may still be printed, and it must be declared.
   std::string Body;
+  buildAvailabilityFlow(Func);
   const size_t FirstBodyAnchor =
       SourceRecorder ? SourceRecorder->positionBuffer() : 0;
   {

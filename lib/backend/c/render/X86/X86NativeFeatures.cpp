@@ -20,6 +20,7 @@
 #include "X86FourSource.h"
 #include "X86RepState.h"
 
+#include "neverd/backend/c/render/NativeVectorCall.h"
 #include "neverd/backend/llvm/X86/LLVMX86SHA.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
 #include "neverd/backend/llvm/X86/X86SystemStateNative.h"
@@ -41,6 +42,20 @@ std::string featureNames(const std::set<std::string> &Features) {
     Text += Name;
   }
   return Text;
+}
+/// The target feature the compiler's header declares a scalar intrinsic of
+/// intrinsics_x86_llvm_cnames.inc with: a function that calls it names the
+/// feature, since the header's definition is inlined into it.
+const char *headerIntrinsicFeature(llvm::StringRef Name) {
+  if (Name.starts_with("llvm.x86.bmi.pdep.") ||
+      Name.starts_with("llvm.x86.bmi.pext."))
+    return "bmi2";
+  if (Name.starts_with("llvm.x86.sse42.crc32."))
+    return "crc32";
+  if (Name == "llvm.x86.xbegin" || Name == "llvm.x86.xabort" ||
+      Name == "llvm.x86.xtest")
+    return "rtm";
+  return nullptr;
 }
 std::string preamble(const std::set<std::string> &Amx, bool Sgx, bool Rep,
                      bool Compare, bool Bounded, bool BoundedEnclu,
@@ -222,6 +237,9 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
       }
       if (llvmX86SHA256CName(*Call))
         Required.insert("sha");
+      if (const auto Native = nativeVectorCall(*Call, TargetArch);
+          Native && Native->Feature)
+        Required.insert(Native->Feature);
       const auto *Result = llvm::dyn_cast<llvm::StructType>(Call->getType());
       const Arch RepArch = Result && Result->getNumElements() &&
                                    Result->getElementType(0)->isIntegerTy(64)
@@ -244,6 +262,8 @@ std::string x86NativeFunctionPreamble(const llvm::Function &Function,
         Sgx |= isX86SgxNativeName(Callee->getName().str());
         if (const auto *Feature =
                 x86SystemNativeTargetFeature(Callee->getName().str()))
+          Required.insert(Feature);
+        if (const auto *Feature = headerIntrinsicFeature(Callee->getName()))
           Required.insert(Feature);
       }
       if (const auto *Asm =

@@ -114,7 +114,8 @@ inline constexpr unsigned kLLVMCStoreForwardingAnalyzeStoreForwardingBudget =
 // belong to the character before them.
 inline constexpr unsigned kCTypeFormatMaxCharacters = 64;
 /// A string that does not end within this many bytes is not read. Literal
-/// replacement keeps the complete string; only comments use the display cap.
+/// replacement and bounded image-byte observations keep the complete string;
+/// image-reference previews use the display cap.
 inline constexpr size_t kCTypeFormatStringWindow = 4096;
 
 // lib/backend/codegen/COFF/COFFExceptionPatch.cpp
@@ -203,6 +204,9 @@ inline constexpr unsigned kMaxRuntimeOffsetSourceDepth = 32;
 inline constexpr size_t kMaxFrameRuntimeSourceWork = 1048576;
 inline constexpr unsigned
     kMedLLVMAddrResolveMedLLVMEmitterValueIsGuardedScalarOffsetBudget = 256;
+/// Values one certified model-zero join (PHIs and copies of an i386 GOT base
+/// and its reloads) may visit; a larger join is unproved.
+inline constexpr unsigned kMaxModelZeroJoinValues = 32;
 inline constexpr int kMedLLVMAddrResolveScalarRecurrenceHasInitializerBudget =
     8192;
 inline constexpr int kMedLLVMAddrResolveProveClosedScalarGraphBudget = 8192;

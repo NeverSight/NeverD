@@ -142,6 +142,7 @@ struct Update {
     S.DiscoveredFunctions.reset();
     S.ProgramMainFound.reset();
     S.ImageStrings.reset();
+    S.EmbeddedELFObjects.reset();
     // Patches and round trips read the input file, which no section edit
     // changes: their results, and the object neverd_roundtrip_obj lends,
     // stay valid.

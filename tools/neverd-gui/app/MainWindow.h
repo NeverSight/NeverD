@@ -56,6 +56,7 @@ class NavigationBand;
 class MicrosoftSymbols;
 class OutputWindow;
 class Session;
+class GuiPluginUiHost;
 class TitleBar;
 class WindowFrame;
 
@@ -66,7 +67,8 @@ class MainWindow final : public KDDockWidgets::QtWidgets::MainWindow {
   Q_OBJECT
 public:
   MainWindow(Session &session, McpConnectionManager &mcp,
-             GuiSessionBroker &broker);
+             GuiSessionBroker &broker,
+             const QString &bundledAgentManifest = {});
   ~MainWindow() override;
 
   void openFile(const QString &path);
@@ -185,6 +187,8 @@ private:
   void toggleFocusMode();
   void leaveFocusMode();
   void resetFocusSequence();
+  /// Where plugin views float in \p surface: \p content's rectangle.
+  QRect pluginViewArea(const QWidget &surface, const QWidget *content) const;
   void connectFunctions(ChooserView *view);
   void connectPatchActions();
   void preparePatchMenu(QMenu *menu);
@@ -305,9 +309,10 @@ private:
   /// user picks among those the code's accesses fit (TypePickerDialog).
   void chooseStructOffset();
   void editDataPresentation(const QString &kind);
-  /// IDA's Y: the type of the parameter under a pseudocode cursor, else the
-  /// declaration of the current function.
+  /// Y: the selected global, local or parameter type, else the current
+  /// function's declaration. Globals do not require a decompiled function.
   void setType();
+  std::optional<Address> globalTypeTarget() const;
   void editVariable(const QString &action);
   void editCallType(bool resetAll = false);
   void editStackFrame(int mode);
@@ -414,6 +419,7 @@ private:
   HexView *hex_ = nullptr;
   OutputWindow *output_ = nullptr;
   AnalysisPlugins *plugins_ = nullptr;
+  GuiPluginUiHost *pluginUi_ = nullptr;
   MicrosoftSymbols *microsoftSymbols_ = nullptr;
   /// A file to open once the worker has started, asking for its debug
   /// information then.

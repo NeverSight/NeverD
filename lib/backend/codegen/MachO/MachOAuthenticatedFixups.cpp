@@ -9,6 +9,7 @@
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
 
+#include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
@@ -246,15 +247,7 @@ neverd::collectMachOAuthenticatedFixups(
   if (State->CPUType != CPU_TYPE_ARM64 ||
       !arm64e::isSubtype(State->CPUSubtype) || !Chains.CommandOffset)
     return fail(kImageABI);
-  using Provider = std::pair<int64_t, bool>;
-  std::map<std::string, std::optional<Provider>> Providers;
-  for (const auto &Import : Chains.Imports) {
-    const Provider Identity{Import.Ordinal,
-                            bool(Import.Flags & BIND_SYMBOL_FLAGS_WEAK_IMPORT)};
-    auto [It, Added] = Providers.emplace(Import.Name, Identity);
-    if (!Added && It->second != Identity)
-      It->second.reset();
-  }
+  auto Providers = Chains.uniqueImportProviders();
   std::map<llvm::StringRef, unsigned> LibraryOrdinals;
   if (!Dependencies.empty())
     for (unsigned I = 0; I < Chains.Libraries.size(); ++I)
@@ -267,7 +260,7 @@ neverd::collectMachOAuthenticatedFixups(
     if (Library == LibraryOrdinals.end() ||
         !Declared.emplace(Name, false).second)
       return fail(kDeclaredProvider);
-    Providers[Name] = Provider{Library->second, false};
+    Providers[Name] = MachOChainedFixups::Provider{Library->second, false};
   }
   for (const auto &Section : Image.Sections) {
     const bool ExternalRelro = isExternalMachORelro(Image, Section);
@@ -450,6 +443,29 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   llvm::sort(Requests, [](const auto *Left, const auto *Right) {
     return Left->Address < Right->Address;
   });
+  std::vector<MachOAuthenticatedFixup> Bootstrap;
+  for (const auto *F : Requests) {
+    if (!F->ReplacesTLVBootstrap)
+      continue;
+    const auto Lib =
+        llvm::find(Chains.Libraries, macho_arm64e_abi::kTLVProvider);
+    if (Lib == Chains.Libraries.end())
+      return fail(kRecipe);
+    MachOAuthenticatedPointer Old;
+    Old.Symbol = macho_arm64e_abi::kTLVBootstrap;
+    Old.Module = *Lib;
+    Old.LibraryOrdinal = Lib - Chains.Libraries.begin() + 1;
+    Bootstrap.push_back({F->Address, std::move(Old)});
+  }
+  if (!Bootstrap.empty())
+    if (auto Error = replay(Chains, Bootstrap))
+      return Error;
+  // Indices remain valid when new words are appended to a segment.
+  std::map<uint64_t, size_t> OldIndices;
+  if (!Bootstrap.empty())
+    for (const auto &Seg : Chains.Segments)
+      for (auto [I, Slot] : llvm::enumerate(Seg.Slots))
+        OldIndices.emplace(Seg.VMAddr + Slot.Offset, I);
   for (const auto *Fixup : Requests) {
     const auto Owner = segmentFor(Chains, Index, Fixup->Address);
     if (!Owner)
@@ -471,7 +487,10 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
       return Word.takeError();
     Segment.PointerFormat = PointerFormat;
     Segment.PageSize = Page;
-    Segment.Slots.push_back({Offset, *Word});
+    if (Fixup->ReplacesTLVBootstrap)
+      Segment.Slots[OldIndices.at(Fixup->Address)].Raw = *Word;
+    else
+      Segment.Slots.push_back({Offset, *Word});
   }
 
   auto Candidate = Binary;
@@ -710,7 +729,7 @@ static llvm::Error installFixups(std::vector<uint8_t> &Binary,
   auto After = readMachODependencyState(Candidate, &Installed);
   if (!After)
     return After.takeError();
-  if (auto Error = preserveMachODependencyState(*Before, *After))
+  if (auto Error = preserveMachODependencyState(*Before, *After, {}, Fixups))
     return Error;
   if (auto Error = replay(Installed, Fixups))
     return Error;

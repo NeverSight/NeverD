@@ -1,0 +1,1651 @@
+//===- AArch64LiftedLeafFixtures.def - Leaf fixtures ---------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_LEAF_TEXT
+#define A64_LEAF_TEXT(Name, Text)
+#endif
+#ifndef A64_LEAF_VALUE
+#define A64_LEAF_VALUE(Type, Name, Value)
+#endif
+
+A64_LEAF_TEXT(kTemporary, "neverd-arm64e-lifted-leaves")
+A64_LEAF_TEXT(kSource, "leaves.c")
+A64_LEAF_TEXT(kOriginal, "leaves.dylib")
+A64_LEAF_TEXT(kOutput, "published.dylib")
+A64_LEAF_TEXT(kRejected, "refused.dylib")
+A64_LEAF_TEXT(kDriverSource, "driver.c")
+A64_LEAF_TEXT(kDriver, "driver")
+A64_LEAF_TEXT(kDarwinTrue, "/usr/bin/true")
+A64_LEAF_TEXT(kDarwinFalse, "/usr/bin/false")
+A64_LEAF_TEXT(kDarwinSlice, "original")
+A64_LEAF_TEXT(kUnsignedInput, "unsigned-input")
+A64_LEAF_TEXT(kDarwinOutput, "installed")
+A64_LEAF_TEXT(kLipo, "/usr/bin/lipo")
+A64_LEAF_TEXT(kThinOption, "-thin")
+A64_LEAF_TEXT(kDarwinArch, "arm64e")
+A64_LEAF_TEXT(kLipoOutput, "-output")
+A64_LEAF_TEXT(kCodesign, "/usr/bin/codesign")
+A64_LEAF_TEXT(kRemoveSignature, "--remove-signature")
+A64_LEAF_TEXT(kSign, "--sign")
+A64_LEAF_TEXT(kAdHocIdentity, "-")
+A64_LEAF_TEXT(kVerify, "--verify")
+A64_LEAF_TEXT(kStrict, "--strict")
+A64_LEAF_TEXT(kForceSign, "--force")
+A64_LEAF_TEXT(kWrongSpillInput, "wrong-spill.dylib")
+// advance by 8, CFA = SP+16, LR = [CFA-16]. Use the same code and a
+// well-formed FDE which instead points one pointer width too high.
+A64_LEAF_VALUE(auto, kLinkSpillRule,
+               (std::array<uint8_t, 5>{0x48, 0x0e, 0x10, 0x9e, 0x02}))
+A64_LEAF_VALUE(uint8_t, kWrongLinkOffsetFactor, 1)
+A64_LEAF_VALUE(auto, kFrameLinkSpillRule, (std::array<uint8_t, 2>{0x9e, 0x01}))
+A64_LEAF_VALUE(uint8_t, kWrongFrameLinkOffsetFactor, 2)
+A64_LEAF_TEXT(kPlatformHash, "system_slice_sha256")
+A64_LEAF_TEXT(kUnsignedHash, "unsigned_input_sha256")
+A64_LEAF_TEXT(kEntryVA, "original_entry")
+A64_LEAF_TEXT(kOwnerVA, "published_entry")
+A64_LEAF_TEXT(kExitCode, "native_exit_status")
+A64_LEAF_TEXT(kOriginalHash, "original_sha256")
+A64_LEAF_TEXT(kPublishedHash, "published_sha256")
+A64_LEAF_TEXT(kAuthenticatedSites, "caller_authenticated_call_sites")
+A64_LEAF_TEXT(kNativeImages, "executed_native_images")
+A64_LEAF_TEXT(kExecute, "NEVERD_ARM64E_LIFTED_NATIVE")
+A64_LEAF_TEXT(kUnavailable,
+              "native Darwin AArch64 and Apple Clang are required")
+A64_LEAF_TEXT(kCompiler, "/usr/bin/clang")
+A64_LEAF_TEXT(kTargetFlag, "-target")
+A64_LEAF_TEXT(kTarget, "arm64e-apple-macosx15.0")
+A64_LEAF_TEXT(kOptimize, "-O2")
+A64_LEAF_TEXT(kAsyncTables, "-fasynchronous-unwind-tables")
+A64_LEAF_TEXT(kRestoreBoundary, "restored_lr_offset")
+A64_LEAF_TEXT(kOmitFrame, "-fomit-frame-pointer")
+A64_LEAF_TEXT(kDylib, "-dynamiclib")
+A64_LEAF_TEXT(kTight, "-Wl,-headerpad,0")
+A64_LEAF_TEXT(kOut, "-o")
+A64_LEAF_TEXT(kSum, "leaf_sum")
+A64_LEAF_TEXT(kDifference, "leaf_difference")
+A64_LEAF_VALUE(unsigned, kCount, 2)
+A64_LEAF_VALUE(unsigned, kHighBranchBit, 40)
+A64_LEAF_VALUE(unsigned, kTamperedResult, 19)
+A64_LEAF_TEXT(kSIMDEncodedWord, ".inst ")
+A64_LEAF_VALUE(uint32_t, kSIMDDestinationBit, 1)
+A64_LEAF_VALUE(unsigned, kSharedDispatchAuthenticatedSites, 1)
+A64_LEAF_TEXT(kHostTarget, "arm64-apple-macosx15.0")
+A64_LEAF_TEXT(kLiftedIR, "lifted.ll")
+A64_LEAF_TEXT(kLiftedC, "lifted.c")
+A64_LEAF_TEXT(kStructuredC, "structured.c")
+A64_LEAF_TEXT(kControl, "control.dylib")
+A64_LEAF_TEXT(kUnoptimized, "-O0")
+A64_LEAF_TEXT(kClassicABI, "ptrauth.abi-version")
+A64_LEAF_VALUE(unsigned, kClassicABIVersion, 0)
+A64_LEAF_TEXT(kExtendedVariadics, "#define TEST_VARIADIC_EXTENDED 1\n")
+A64_LEAF_VALUE(unsigned, kMixedEntries, 9)
+A64_LEAF_TEXT(kRegisterCallerName, "observe.S")
+A64_LEAF_TEXT(kRegisterCallerC, "register_caller.c")
+A64_LEAF_TEXT(kRegisterDriver, "register-caller")
+A64_LEAF_TEXT(kRegisterObservations, "native_register_entries_compared")
+A64_LEAF_TEXT(kRegisterMatrix, "native_register_input_comparisons")
+A64_LEAF_TEXT(kInstalledEntries, "installed_register_entries")
+A64_LEAF_VALUE(unsigned, kRegisterInputs, 3)
+A64_LEAF_TEXT(kReturnMnemonic, "ret")
+A64_LEAF_TEXT(kChangeScratch, "mov x9, xzr\n")
+A64_LEAF_TEXT(kVariadicDirect, "va_direct")
+A64_LEAF_TEXT(kScratchTail, "#define NEVERD_TEST_SCRATCH_FORWARD 1\n")
+A64_LEAF_TEXT(kScratchBranches, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n")
+A64_LEAF_TEXT(kScratchKilled, "#define NEVERD_TEST_SCRATCH_BRANCHES 1\n"
+                              "#define NEVERD_TEST_SCRATCH_KILLED 1\n")
+A64_LEAF_TEXT(kUnknownStackOperation, "-DNEVERD_TEST_UNSUPPORTED_STACK_BODY")
+A64_LEAF_TEXT(kUnknownVectorOperation, "-DNEVERD_TEST_UNSUPPORTED_VECTOR_BODY")
+A64_LEAF_TEXT(kUnknownStackInput, "unsupported-stack.dylib")
+A64_LEAF_TEXT(kScratchFrame, "#define NEVERD_TEST_SCRATCH_FRAME 1\n")
+A64_LEAF_TEXT(kScratchFrameSIMD, "#define NEVERD_TEST_SCRATCH_FRAME 1\n"
+                                 "#define NEVERD_TEST_FIXED_VECTOR_BODY 1\n")
+A64_LEAF_VALUE(unsigned, kScratchTailEntries, 3)
+A64_LEAF_TEXT(kScratchResultSource, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+#ifdef NEVERD_TEST_SCRATCH_FORWARD
+  b _scratch_results
+.cfi_endproc
+.globl _scratch_results
+_scratch_results:
+.cfi_startproc
+#endif
+  mov x8, x0
+  mov x9, x1
+  add x0, x8, x9
+  ret
+.cfi_endproc
+
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_b_key_frame
+.cfi_escape 0x2e,0
+#endif
+  pacibsp
+  sub sp, sp, #32
+  stp x29, x30, [sp, #16]
+.cfi_def_cfa_offset 32
+.cfi_offset x30, -8
+.cfi_offset x29, -16
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+  mov x29, sp
+.cfi_def_cfa_register x29
+#endif
+  bl _leaf_sum
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+#ifdef NEVERD_TEST_UNSUPPORTED_STACK_BODY
+  rbit x12, x0
+#endif
+#ifdef NEVERD_TEST_UNSUPPORTED_VECTOR_BODY
+  .arch_extension sve
+  add z16.b, z0.b, z1.b
+#endif
+#ifdef NEVERD_TEST_FIXED_VECTOR_BODY
+  add v16.16b, v0.16b, v1.16b
+#endif
+  mov x10,#1
+  str x8,[sp,x10,lsl #3]
+  ldr x8,[sp,w10,uxtw #3]
+  sub x11,x10,#1
+  str x9,[sp,w11,sxtw #3]
+  ldr x9,[sp,x11,sxtx #3]
+#endif
+#ifdef NEVERD_TEST_SCRATCH_BRANCHES
+  b Ldispatch
+Lconsume:
+#ifdef NEVERD_TEST_SCRATCH_KILLED
+  mov w8, wzr
+  mov w9, wzr
+#endif
+  sub x0, x8, x9
+  b Lconsumed
+Ldispatch:
+  cbz x0, Lconsume
+  tbz x0, #40, Lconsume
+  tbnz w0, #0, Lconsume
+  b Lconsume
+Lconsumed:
+#else
+  sub x0, x8, x9
+#endif
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_remember_state
+  cbz x0, Lzero
+  tbz x0, #40, Lpositive
+  tbnz w0, #0, Lzero
+Lpositive:
+#endif
+  ldp x29, x30, [sp, #16]
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_def_cfa sp,32
+.cfi_restore x29
+.cfi_restore x30
+#endif
+  add sp, sp, #32
+#ifdef NEVERD_TEST_SCRATCH_FRAME
+.cfi_def_cfa_offset 0
+  autibsp
+  ret
+.cfi_restore_state
+Lzero:
+  ldp x29,x30,[sp,#16]
+.cfi_def_cfa sp,32
+.cfi_same_value x29
+.cfi_same_value x30
+  add sp,sp,#32
+.cfi_def_cfa_offset 0
+#endif
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kRegisterCallerAssembly, R"asm(
+.text
+.p2align 2
+.globl _observe
+_observe:
+#if __arm64e__
+  pacibsp
+#endif
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  stp x19, x20, [sp, #-16]!
+  sub sp, sp, #64
+  mov x19, x3
+  mov x16, x0
+  mov x17, x1
+  ldp x10, x11, [x2]
+  stp x10, x11, [sp]
+  ldp x10, x11, [x2, #16]
+  stp x10, x11, [sp, #16]
+  ldp x10, x11, [x2, #32]
+  stp x10, x11, [sp, #32]
+  ldp x10, x11, [x2, #48]
+  stp x10, x11, [sp, #48]
+  ldp x0, x1, [x17]
+  ldp x2, x3, [x17, #16]
+  ldp x4, x5, [x17, #32]
+  ldp x6, x7, [x17, #48]
+  mov x8, #68
+  mov x9, #85
+  fmov d0, xzr
+#if __arm64e__
+  blraaz x16
+#else
+  blr x16
+#endif
+  stp x0, x8, [x19]
+  str x9, [x19, #16]
+  str d0, [x19, #24]
+  mov x10, sp
+  str x10, [x19, #32]
+  add sp, sp, #64
+  ldp x19, x20, [sp], #16
+  ldp x29, x30, [sp], #16
+#if __arm64e__
+  retab
+#else
+  ret
+#endif
+)asm")
+A64_LEAF_TEXT(kRegisterCallerSource, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+typedef void (*entry)(void);
+struct result { uint64_t x0, x8, x9, d0, sp; };
+extern void observe(entry, const uint64_t *, const uint64_t *, struct result *);
+int main(int argc, char **argv) {
+  if (argc != 3) return 1;
+  void *original = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  void *installed = dlopen(argv[2], RTLD_NOW | RTLD_LOCAL);
+  if (!original || !installed) return 2;
+  const char *names[] = {"leaf_sum", "leaf_difference", "va_walk", "va_named",
+                         "va_sentinel", "va_direct", "va_copied", "va_wide", "va_fp"};
+  for (unsigned i = 0; i != sizeof(names) / sizeof(*names); ++i) {
+    entry a = (entry)dlsym(original, names[i]), b = (entry)dlsym(installed, names[i]);
+    if (!a || !b || a == b) return 3;
+    for (unsigned round = 0; round != 3; ++round) {
+      uint64_t regs[8] = {round, 1, 2, 3, 4, 5, 6, 7};
+      uint64_t args[8] = {9, 23, 7, 0, 1, 2, 3, 4};
+      if (i < 2) regs[0] = 100;
+      if (round == 1) args[0] = 0;
+      struct result x, y;
+      observe(a, regs, args, &x);
+      observe(b, regs, args, &y);
+      if (memcmp(&x, &y, sizeof(x))) {
+        fprintf(stderr, "%s[%u] x0 %llx/%llx x8 %llx/%llx x9 %llx/%llx d0 %llx/%llx sp %llx/%llx\n",
+                names[i], round, x.x0, y.x0, x.x8, y.x8, x.x9, y.x9,
+                x.d0, y.d0, x.sp, y.sp);
+        return 4;
+      }
+      if (i == 0 && x.x0 != 100 + args[0]) return 5;
+      if (i == 1 && x.x0 != 77) return 6;
+    }
+  }
+  return 0;
+}
+)c")
+A64_LEAF_TEXT(kVariadicLeaves, R"c(
+#include <stdarg.h>
+typedef unsigned long word;
+word leaf_sum(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  va_end(args);
+  return seed + first;
+}
+word leaf_difference(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  (void)va_arg(args, word);
+  word second = va_arg(args, word);
+  va_end(args);
+  return seed - second;
+}
+word va_walk(word count, ...) {
+  va_list args;
+  va_start(args, count);
+  word sum = 0;
+  while (count--)
+    sum = sum * 5 + va_arg(args, word);
+  va_end(args);
+  return sum;
+}
+word va_named(word a, word b, word c, word d, word e, word f, word g,
+              word h, word i, ...) {
+  va_list args;
+  va_start(args, i);
+  word tail = va_arg(args, word);
+  va_end(args);
+  return a + i - tail;
+}
+__attribute__((noinline)) word va_sentinel(word unused, ...) {
+  va_list args;
+  va_start(args, unused);
+  word total = 0;
+  for (word n; (n = va_arg(args, word));)
+    total = total * 7 + n;
+  va_end(args);
+  return total;
+}
+word va_direct(void) {
+  return va_sentinel(123, 2UL, 4UL, 0UL);
+}
+word va_copied(word seed, ...) {
+  va_list args, copy;
+  va_start(args, seed);
+  va_copy(copy, args);
+  word first = va_arg(args, word), second = va_arg(args, word);
+  word copied = va_arg(copy, word);
+  va_end(copy);
+  va_end(args);
+  return ((seed + second) ^ first) - copied;
+}
+word va_wide(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  unsigned __int128 wide = va_arg(args, unsigned __int128);
+  va_end(args);
+  return seed - first + (word)(wide >> 64);
+}
+double va_fp(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word first = va_arg(args, word);
+  double second = va_arg(args, double);
+  va_end(args);
+  return (double)(seed + first) + second;
+}
+)c")
+A64_LEAF_TEXT(kVariadicCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef unsigned long word;
+typedef word operation(word, ...);
+#ifdef TEST_VARIADIC_EXTENDED
+static int check_extended(void *image) {
+  operation *walk = (operation *)dlsym(image, "va_walk");
+  operation *copy = (operation *)dlsym(image, "va_copied");
+  operation *wide = (operation *)dlsym(image, "va_wide");
+  word (*named)(word, word, word, word, word, word, word, word, word, ...) =
+      dlsym(image, "va_named");
+  double (*fp)(word, ...) = dlsym(image, "va_fp");
+  if (!walk || !copy || !wide || !named || !fp) return 5;
+  const word high = UINT64_C(0x13579bdf2468ace0);
+  const unsigned __int128 value = ((unsigned __int128)high << 64) | ~high;
+  if (walk(0) || walk(3, 3UL, 9UL, 7UL) != 127) return 6;
+  if (named(8, 2, 3, 4, 5, 6, 7, 8, 30, 11UL) != 27) return 7;
+  if (copy(6, 3UL, 4UL) != 6) return 8;
+  if (wide(10, 3UL, value) != high + 7) return 9;
+  if (fp(10, 3UL, -2.5) != 10.5) return 10;
+  operation *sentinel = (operation *)dlsym(image, "va_sentinel");
+  word (*direct)(void) = dlsym(image, "va_direct");
+  if (!sentinel || !direct) return 11;
+  if (direct() != 18) return 12;
+  if (sentinel(9, 0UL) || sentinel(1, 3UL, 1UL, 2UL, 0UL) != 156) return 13;
+  return 0;
+}
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  operation *sum = (operation *)dlsym(image, "leaf_sum");
+  operation *difference = (operation *)dlsym(image, "leaf_difference");
+  if (!sum || !difference) return 3;
+  const word values[] = {0, 1, UINT64_C(0x123456789abcdef), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(values)/sizeof(*values); ++i)
+    for (unsigned j = 0; j < sizeof(values)/sizeof(*values); ++j) {
+      word seed = values[i], a = values[j], b = ~a;
+#ifdef TEST_RESERVED_STACK
+      if (sum(seed, a, b) != seed + b ||
+#else
+      if (sum(seed, a, b) != seed + a ||
+#endif
+          difference(seed, a, b) != seed - b)
+        return 4;
+    }
+#ifdef TEST_VARIADIC_EXTENDED
+  int result = check_extended(image);
+  if (result) return result;
+#endif
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kReservedFrame, "#define TEST_RESERVED_STACK 1\n")
+A64_LEAF_TEXT(kRestoreOnLoad, "#define TEST_RESTORE_ON_LOAD 1\n")
+A64_LEAF_TEXT(kPostIndexedInput, "post-indexed.dylib")
+A64_LEAF_TEXT(kReservedStackLeaves, R"c(
+#include <stdarg.h>
+typedef unsigned long word;
+word leaf_sum(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+#ifdef TEST_RESTORE_ON_LOAD
+  word value = va_arg(args, word);
+#else
+  word value = ((const word *)args)[1];
+#endif
+  va_end(args);
+  return seed + value;
+}
+word leaf_difference(word seed, ...) {
+  va_list args;
+  va_start(args, seed);
+  word value = ((const word *)args)[1];
+  va_end(args);
+  return seed - value;
+}
+)c")
+A64_LEAF_TEXT(kStackLoadLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  ldr x8, [sp]
+  add x0, x8, x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  ldr x8, [sp, #8]
+  sub x0, x0, x8
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+A64_LEAF_TEXT(kLeaves, R"c(
+unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
+unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
+)c")
+A64_LEAF_TEXT(kCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef unsigned long (*operation)(unsigned long, unsigned long);
+
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  operation sum = (operation)dlsym(image, "leaf_sum");
+  operation difference = (operation)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const unsigned long values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j)
+#if defined(NEVERD_TEST_TAIL_SUM)
+      if (sum(values[i], values[j]) != values[i] + values[j] ||
+          difference(values[i], values[j]) != values[i] + values[j])
+#elif defined(NEVERD_TEST_ZERO_RESULTS)
+      if (sum(values[i], values[j]) != 0 || difference(values[i], values[j]) != 0)
+#else
+      if (sum(values[i], values[j]) != values[i] + values[j] ||
+          difference(values[i], values[j]) != values[i] - values[j])
+#endif
+        return 4;
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kReorderedOutput, "reordered.dylib")
+A64_LEAF_TEXT(kReorderedTail, "native_reordered_tail")
+A64_LEAF_TEXT(kErrorABI, R"c(
+#define SWIFT __attribute__((swiftcall))
+#define SELF __attribute__((swift_context))
+#define ERROR __attribute__((swift_error_result))
+)c")
+A64_LEAF_TEXT(kClearError, "#define NEVERD_TEST_CLEAR_ERROR 1\n")
+A64_LEAF_TEXT(kNativeReturnSign, "pacibsp")
+A64_LEAF_TEXT(kMissingReturnSign, "nop")
+A64_LEAF_TEXT(kForwardError, "#define NEVERD_TEST_FORWARD_ERROR 1\n")
+A64_LEAF_TEXT(kTailErrorLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  b _leaf_difference
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  mov x8, x0
+  mov x0, x21
+  mov x21, x8
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kErrorLeaves, R"c(
+#ifdef NEVERD_TEST_FORWARD_ERROR
+SWIFT __attribute__((noinline)) void *leaf_difference(void *, void * SELF, void ** ERROR);
+#endif
+SWIFT void *leaf_sum(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_FORWARD_ERROR
+  return leaf_difference(next, context, error);
+#else
+  return *error;
+#endif
+}
+SWIFT void *leaf_difference(void *next, void * SELF context, void ** ERROR error) {
+#ifdef NEVERD_TEST_CLEAR_ERROR
+  *error = 0;
+  return 0;
+#else
+  void *old = *error;
+  *error = next;
+  return old;
+#endif
+}
+)c")
+A64_LEAF_TEXT(kErrorCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef SWIFT void *operation(void *next, void * SELF context, void ** ERROR error);
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  operation *read = (operation *)dlsym(image, "leaf_sum");
+  operation *replace = (operation *)dlsym(image, "leaf_difference");
+  if (!read || !replace) return 3;
+  uintptr_t storage[4];
+  void *values[] = {0, &storage[0], &storage[1], &storage[2], &storage[3]};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i) {
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      void *error = values[i];
+#ifdef NEVERD_TEST_FORWARD_ERROR
+      if (read(values[j], storage, &error) != values[i] || error != values[j])
+        return 4;
+      error = values[i];
+#else
+      if (read(values[j], storage, &error) != values[i] || error != values[i])
+        return 4;
+#endif
+#ifdef NEVERD_TEST_CLEAR_ERROR
+      if (replace(values[j], storage, &error) || error)
+#else
+      if (replace(values[j], storage, &error) != values[i] || error != values[j])
+#endif
+        return 5;
+    }
+  }
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kTailSum, "#define NEVERD_TEST_TAIL_SUM 1\n")
+A64_LEAF_TEXT(kTailLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  add x0, x1, x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  b _leaf_sum
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+A64_LEAF_TEXT(kZeroLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  movz w0, #0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  movz x0, #0
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kZeroResults, "#define NEVERD_TEST_ZERO_RESULTS\n")
+A64_LEAF_TEXT(kSwiftABI, R"c(
+#define SWIFT __attribute__((swiftcall))
+#define CONTEXT __attribute__((swift_context))
+)c")
+A64_LEAF_TEXT(kSwiftAsyncABI, R"c(
+#define SWIFT __attribute__((swiftasynccall))
+#define CONTEXT __attribute__((swift_async_context))
+)c")
+A64_LEAF_TEXT(kSwiftLeaves, R"c(
+#include <stdint.h>
+SWIFT uintptr_t leaf_sum(uintptr_t x, void *CONTEXT self) {
+  return (uintptr_t)self + x;
+}
+SWIFT uintptr_t leaf_difference(uintptr_t x, void *CONTEXT self) {
+  return x - (uintptr_t)self;
+}
+)c")
+A64_LEAF_TEXT(kSwiftCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef uintptr_t SWIFT operation(uintptr_t, void *CONTEXT);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  operation *sum = (operation *)dlsym(image, "leaf_sum");
+  operation *difference = (operation *)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const uintptr_t values[] = {0, 1, 17, UINTPTR_MAX, UINT64_C(1) << 63};
+  unsigned char storage[4];
+  void *contexts[] = {0, storage, storage + 1, storage + 2, storage + 3};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(contexts) / sizeof(*contexts); ++j) {
+      const uintptr_t context = (uintptr_t)contexts[j];
+      if (sum(values[i], contexts[j]) != context + values[i] ||
+          difference(values[i], contexts[j]) != values[i] - context)
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kScalarFPLeaves, R"c(
+double leaf_sum(double a, double b) { return a + b; }
+float leaf_difference(float a, float b) { return a - b; }
+)c")
+A64_LEAF_TEXT(kScalarFPCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef double (*sum_fn)(double, double);
+  typedef float (*diff_fn)(float, float);
+  sum_fn sum = (sum_fn)dlsym(image, "leaf_sum");
+  diff_fn difference = (diff_fn)dlsym(image, "leaf_difference");
+  if (!sum || !difference)
+    return 3;
+  const double values[] = {0., -0., 1.5, -2.75, 0x1.000002p+0};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      const double a = values[i], b = values[j];
+      const double result = sum(a, b), expected = a + b;
+      const float diff = difference((float)a, (float)b);
+      const float expected_diff = (float)a - (float)b;
+      if (memcmp(&result, &expected, sizeof(result)) ||
+          memcmp(&diff, &expected_diff, sizeof(diff)))
+        return 4;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kAssemblyName, "leaves.S")
+A64_LEAF_TEXT(kSignedLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  pacibsp
+  add x0, x1, x0
+  retab
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  pacibsp
+  sub x0, x0, x1
+  retab
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+
+A64_LEAF_TEXT(kScalarLeaves, R"c(
+#include <stdint.h>
+int64_t leaf_sum(int64_t a, int64_t b) { return a < b ? a : b; }
+uint64_t leaf_difference(uint64_t a, uint64_t b) { return a > b ? a : b; }
+)c")
+A64_LEAF_TEXT(kDivisionLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+#ifdef TEST_WORD
+  sdiv w0, w0, w1
+#else
+  sdiv x0, x0, x1
+#endif
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+#ifdef TEST_WORD
+  udiv w8, w0, w1
+  msub w0, w8, w1, w0
+#else
+  udiv x8, x0, x1
+  msub x0, x8, x1, x0
+#endif
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kDivisionOracle, "#define TEST_DIVISION\n")
+A64_LEAF_TEXT(kWordDivisionOracle, "#define TEST_DIVISION\n#define TEST_WORD\n")
+A64_LEAF_TEXT(kScalarCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#ifdef TEST_WORD
+typedef int32_t Signed;
+typedef uint32_t Unsigned;
+#define MIN_INPUT INT32_MIN
+#define MAX_INPUT INT32_MAX
+#else
+typedef int64_t Signed;
+typedef uint64_t Unsigned;
+#define MIN_INPUT INT64_MIN
+#define MAX_INPUT INT64_MAX
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  Signed (*s)(Signed, Signed) = dlsym(image, "leaf_sum");
+  Unsigned (*u)(Unsigned, Unsigned) = dlsym(image, "leaf_difference");
+  if (!s || !u) return 3;
+  const Signed inputs[] = {0, 1, -1, 3, -7, MIN_INPUT, MAX_INPUT};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    for (unsigned j = 0; j < sizeof(inputs) / sizeof(*inputs); ++j) {
+      Signed a = inputs[i], b = inputs[j];
+      Unsigned x = a, y = b;
+#ifdef TEST_DIVISION
+      // AArch64 defines both cases where C division is undefined.
+      Signed sr = !b ? 0 : a == MIN_INPUT && b == -1 ? a : a / b;
+      Unsigned ur = y ? x % y : x;
+#else
+      Signed sr = a < b ? a : b;
+      Unsigned ur = x > y ? x : y;
+#endif
+      if (s(a, b) != sr || u(x, y) != ur) return 4;
+    }
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kConditionalLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p) { return p ? *p : 0; }
+uint64_t leaf_difference(uint64_t *p, uint64_t value) {
+  if (!p) return 0;
+  *p = value;
+  return value;
+}
+)c")
+A64_LEAF_TEXT(kConditionalCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const uint64_t *) = dlsym(image, "leaf_sum");
+  uint64_t (*write)(uint64_t *, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write || read(0) || write(0, UINT64_MAX)) return 3;
+  uint64_t words[] = {1, UINT64_C(0xf123456789abcdef), 3};
+  if (read(words + 1) != words[1] || write(words + 1, 7) != 7 ||
+      words[0] != 1 || words[1] != 7 || words[2] != 3) return 4;
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kNarrowLeaves, R"c(
+#include <stdint.h>
+int leaf_sum(const int8_t *p) { return p[3]; }
+unsigned long leaf_difference(const uint16_t *p) { return p[2]; }
+)c")
+A64_LEAF_TEXT(kLoopLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const volatile uint64_t *p, uint64_t n) {
+  uint64_t result = 0;
+  while (n--) result += *p++;
+  return result;
+}
+uint64_t leaf_difference(volatile uint64_t *p, uint64_t n, uint64_t value) {
+  while (n--) *p++ = value;
+  return value;
+}
+)c")
+A64_LEAF_TEXT(kIndexedLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p, uint64_t index) { return p[index]; }
+void leaf_difference(uint64_t *p, int index, uint64_t value) {
+  p[index] = value;
+}
+)c")
+A64_LEAF_TEXT(kVectorByteMemory, "#define NEVERD_TEST_VECTOR_BYTES 1\n")
+A64_LEAF_TEXT(kVectorHalfMemory, "#define NEVERD_TEST_VECTOR_BYTES 2\n")
+A64_LEAF_TEXT(kVectorWordMemory, "#define NEVERD_TEST_VECTOR_BYTES 4\n")
+A64_LEAF_TEXT(kVectorDoubleMemory, "#define NEVERD_TEST_VECTOR_BYTES 8\n")
+A64_LEAF_TEXT(kVectorCopyLeaves, R"asm(
+#ifndef NEVERD_TEST_VECTOR_BYTES
+#define NEVERD_TEST_VECTOR_BYTES 16
+#endif
+#if NEVERD_TEST_VECTOR_BYTES == 1
+#define SINGLE b0
+#elif NEVERD_TEST_VECTOR_BYTES == 2
+#define SINGLE h0
+#elif NEVERD_TEST_VECTOR_BYTES == 4
+#define SINGLE s0
+#elif NEVERD_TEST_VECTOR_BYTES == 8
+#define SINGLE d0
+#else
+#define SINGLE q0
+#endif
+#if NEVERD_TEST_VECTOR_BYTES <= 4
+#define PAIR0 s0
+#define PAIR1 s1
+#define PAIR_BYTES 8
+#elif NEVERD_TEST_VECTOR_BYTES == 8
+#define PAIR0 d0
+#define PAIR1 d1
+#define PAIR_BYTES 16
+#else
+#define PAIR0 q0
+#define PAIR1 q1
+#define PAIR_BYTES 32
+#endif
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  mov x8, x0
+  cbz x2, Lsingle_done
+Lsingle:
+  ldr SINGLE, [x1], #NEVERD_TEST_VECTOR_BYTES
+  str q0, [x8], #16
+  subs x2, x2, #1
+  b.ne Lsingle
+Lsingle_done:
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  mov x8, x0
+  cbz x2, Lpair_done
+Lpair:
+  ldp PAIR0, PAIR1, [x1], #PAIR_BYTES
+  stp q0, q1, [x8], #32
+  subs x2, x2, #1
+  b.ne Lpair
+Lpair_done:
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kPreIndexedMemory, "#define NEVERD_TEST_PREINDEXED_MEMORY 1\n")
+A64_LEAF_TEXT(kScalarWritebackLeaves, R"asm(
+#ifdef NEVERD_TEST_PREINDEXED_MEMORY
+#define A1 [x0, #1]!
+#define A2 [x0, #2]!
+#define A4 [x0, #4]!
+#define A8 [x0, #8]!
+#define A16 [x0, #16]!
+#else
+#define A1 [x0], #1
+#define A2 [x0], #2
+#define A4 [x0], #4
+#define A8 [x0], #8
+#define A16 [x0], #16
+#endif
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  ldrb w8, A1
+  ldrsb x9, A1
+  add x8, x8, x9
+  ldrsb w9, A1
+  add x8, x8, x9
+  ldrh w9, A2
+  add x8, x8, x9
+  ldrsh x9, A2
+  add x8, x8, x9
+  ldrsh w9, A2
+  add x8, x8, x9
+  ldr w9, A4
+  add x8, x8, x9
+  ldrsw x9, A4
+  add x8, x8, x9
+  ldr x9, A8
+  add x8, x8, x9
+  ldp w9, w10, A8
+  add x8, x8, x9
+  add x8, x8, x10
+  ldpsw x9, x10, A8
+  add x8, x8, x9
+  add x8, x8, x10
+  ldp x9, x10, A16
+  add x8, x8, x9
+  add x0, x8, x10
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  strb w1, A1
+  strh w1, A2
+  str w1, A4
+  str x1, A8
+  stp w1, w1, A8
+  stp x1, x1, A16
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kScalarWritebackCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const void *) = dlsym(image, "leaf_sum");
+  void *(*write)(void *, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write) return 3;
+#ifdef NEVERD_TEST_PREINDEXED_MEMORY
+  const int pre = 1;
+#else
+  const int pre = 0;
+#endif
+  struct load { unsigned bytes, count; int sign, word_result; };
+  const struct load loads[] = {{1,1,0,0}, {1,1,1,0}, {1,1,1,1},
+                              {2,1,0,0}, {2,1,1,0}, {2,1,1,1},
+                              {4,1,0,0}, {4,1,1,0}, {8,1,0,0},
+                              {4,2,0,0}, {4,2,1,0}, {8,2,0,0}};
+  const struct load stores[] = {{1,1,0,0}, {2,1,0,0}, {4,1,0,0},
+                               {8,1,0,0}, {4,2,0,0}, {8,2,0,0}};
+  uint8_t source[96], output[96], expected[96];
+  for (unsigned round = 0; round < 4; ++round) {
+    for (unsigned i = 0; i < sizeof(source); ++i)
+      source[i] = i * 37 + 129 + round * 53;
+    unsigned offset = 0;
+    uint64_t sum = 0;
+    for (unsigned i = 0; i < sizeof(loads) / sizeof(*loads); ++i) {
+      struct load l = loads[i];
+      if (pre) offset += l.bytes * l.count;
+      for (unsigned j = 0; j < l.count; ++j) {
+        const void *at = source + offset + j * l.bytes;
+        uint64_t value = 0;
+        memcpy(&value, at, l.bytes);
+        if (l.sign) {
+          int64_t signed_value;
+          if (l.bytes == 1) { int8_t x; memcpy(&x, at, 1); signed_value = x; }
+          else if (l.bytes == 2) { int16_t x; memcpy(&x, at, 2); signed_value = x; }
+          else { int32_t x; memcpy(&x, at, 4); signed_value = x; }
+          value = l.word_result ? (uint32_t)signed_value : (uint64_t)signed_value;
+        }
+        sum += value;
+      }
+      if (!pre) offset += l.bytes * l.count;
+    }
+    if (read(source) != sum) return 4;
+    memset(output, 0xa5, sizeof(output));
+    memset(expected, 0xa5, sizeof(expected));
+    uint64_t value;
+    memcpy(&value, source + round, sizeof(value));
+    offset = 0;
+    for (unsigned i = 0; i < sizeof(stores) / sizeof(*stores); ++i) {
+      struct load l = stores[i];
+      if (pre) offset += l.bytes * l.count;
+      for (unsigned j = 0; j < l.count; ++j)
+        memcpy(expected + 3 + offset + j * l.bytes, &value, l.bytes);
+      if (!pre) offset += l.bytes * l.count;
+    }
+    if (write(output + 3, value) != output + 3 + offset ||
+        memcmp(output, expected, sizeof(output))) return 5;
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kVectorCopyCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <string.h>
+#ifndef NEVERD_TEST_VECTOR_BYTES
+#define NEVERD_TEST_VECTOR_BYTES 16
+#endif
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  typedef void *(*copy)(void *, const void *, uint64_t);
+  copy single = (copy)dlsym(image, "leaf_sum");
+  copy pair = (copy)dlsym(image, "leaf_difference");
+  if (!single || !pair || single(0, 0, 0) || pair(0, 0, 0)) return 3;
+  uint8_t source[160], output[160], expected[160];
+  for (unsigned i = 0; i < sizeof(source); ++i) source[i] = i * 113 + 197;
+  for (unsigned p = 0; p < 2; ++p)
+    for (unsigned n = 0; n <= 4; ++n) {
+      memset(output, 0xa5, sizeof(output));
+      memset(expected, 0xa5, sizeof(expected));
+      const unsigned single_bytes = NEVERD_TEST_VECTOR_BYTES;
+      const unsigned load_bytes = p && single_bytes < 4 ? 4 : single_bytes;
+      const unsigned vectors = n * (p ? 2 : 1);
+      for (unsigned i = 0; i < vectors; ++i) {
+        memset(expected + 7 + i * 16, 0, 16);
+        memcpy(expected + 7 + i * 16, source + 5 + i * load_bytes, load_bytes);
+      }
+      if ((p ? pair : single)(output + 7, source + 5, n) != output + 7 ||
+          memcmp(output, expected, sizeof(output))) return 4;
+    }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kIndexedCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read)(const uint64_t *, uint64_t) = dlsym(image, "leaf_sum");
+  void (*write)(uint64_t *, int, uint64_t) = dlsym(image, "leaf_difference");
+  if (!read || !write) return 3;
+  uint64_t words[] = {1, UINT64_MAX, 3, UINT64_C(0x8123456789abcdef), 5};
+  if (read(words, 1) != words[1] || read(words, 3) != words[3]) return 4;
+  write(words + 2, -1, 17);
+  write(words + 2, 1, 23);
+  if (words[0] != 1 || words[1] != 17 || words[2] != 3 ||
+      words[3] != 23 || words[4] != 5) return 5;
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kLoopCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*sum)(const volatile uint64_t *, uint64_t) = dlsym(image, "leaf_sum");
+  uint64_t (*fill)(volatile uint64_t *, uint64_t, uint64_t) =
+      dlsym(image, "leaf_difference");
+  if (!sum || !fill || sum(0, 0) || fill(0, 0, UINT64_MAX) != UINT64_MAX)
+    return 3;
+  const uint64_t inputs[] = {0, 1, UINT64_MAX, UINT64_C(0x8123456789abcdef)};
+  for (unsigned n = 0; n <= 17; ++n) {
+    uint64_t words[19], expected = 0;
+    for (unsigned i = 0; i < 19; ++i) words[i] = inputs[i % 4];
+    for (unsigned i = 0; i < n; ++i) expected += words[i + 1];
+    if (sum(words + 1, n) != expected) return 4;
+    uint64_t value = inputs[n % 4];
+    if (fill(words + 1, n, value) != value) return 5;
+    for (unsigned i = 0; i < 19; ++i)
+      if (words[i] != (i && i <= n ? value : inputs[i % 4])) return 6;
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kNarrowCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  int (*s)(const int8_t *) = dlsym(image, "leaf_sum");
+  unsigned long (*u)(const uint16_t *) = dlsym(image, "leaf_difference");
+  if (!s || !u) return 3;
+  int8_t bytes[] = {3, 1, -8, INT8_MIN, INT8_MAX};
+  uint16_t words[] = {3, 1, UINT16_MAX, UINT16_C(0x8001)};
+  if (s(bytes) != INT8_MIN || s(bytes + 1) != INT8_MAX ||
+      u(words) != UINT16_MAX || u(words + 1) != UINT16_C(0x8001)) return 4;
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kBitLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(uint64_t value) {
+  return __builtin_bswap64(value);
+}
+unsigned leaf_difference(uint32_t value) {
+  return __builtin_clzg(__builtin_bitreverse32(value), 32);
+}
+)c")
+A64_LEAF_TEXT(kBitCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*reverse)(uint64_t) = (uint64_t (*)(uint64_t))dlsym(image, "leaf_sum");
+  unsigned (*trailing)(uint32_t) = (unsigned (*)(uint32_t))dlsym(image, "leaf_difference");
+  if (!reverse || !trailing) return 3;
+  const uint64_t inputs[] = {0, 1, UINT64_C(0x0102030405060708),
+                             UINT64_C(0x80000000), UINT64_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    uint64_t answer = 0;
+    for (unsigned b = 0; b < 8; ++b)
+      answer = (answer << 8) | ((inputs[i] >> (8 * b)) & 255);
+    uint32_t low = inputs[i];
+    unsigned n = 0;
+    while (n < 32 && ((low >> n) & 1) == 0) ++n;
+    if (reverse(inputs[i]) != answer || trailing(low) != n) return 4;
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kMultiplyLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(uint64_t a, uint64_t b, uint64_t c) { return a * b + c; }
+uint64_t leaf_difference(uint64_t a, uint64_t b, uint64_t c) {
+  return (c - a * b) >> (a & 63);
+}
+)c")
+A64_LEAF_TEXT(kMultiplyCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef uint64_t (*operation)(uint64_t, uint64_t, uint64_t);
+  operation sum = (operation)dlsym(image, "leaf_sum"),
+            difference = (operation)dlsym(image, "leaf_difference");
+  uint64_t values[] = {0, 1, 17, 63, 64, UINT64_MAX};
+  if (!sum || !difference)
+    return 3;
+  for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    uint64_t a = values[i], b = values[5 - i], c = UINT64_MAX - i;
+    if (sum(a, b, c) != a * b + c ||
+        difference(a, b, c) != ((c - a * b) >> (a & 63)))
+      return 4;
+  }
+  return dlclose(image);
+}
+)c")
+A64_LEAF_TEXT(kMemoryLeaves, R"c(
+#include <stdint.h>
+uint64_t leaf_sum(const uint64_t *p) { return p[1]; }
+void leaf_difference(uint64_t *p, uint64_t v) { p[1] = v; }
+)c")
+
+A64_LEAF_TEXT(kKeepFrame, "-fno-omit-frame-pointer")
+A64_LEAF_TEXT(kFramedImport, "#define NEVERD_TEST_FRAMED_IMPORT 1\n")
+A64_LEAF_TEXT(kProcessImport, "getpid")
+A64_LEAF_TEXT(kGlobalLeaves, R"c(
+#include <stdint.h>
+#include <unistd.h>
+/* The selected word is past a 4-KiB ADRP boundary and has a nonzero PAGEOFF. */
+uint64_t leaf_state[] = {[0] = UINT64_C(0x7369676e6564), [513] = 42};
+uint64_t leaf_sum(void) { return leaf_state[513]; }
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+uint64_t leaf_difference(void) { return (uint32_t)getpid() + leaf_state[513]; }
+#else
+int leaf_difference(void) { return getpid(); }
+#endif
+)c")
+A64_LEAF_TEXT(kGlobalCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  uint64_t (*read_state)(void) = dlsym(image, "leaf_sum");
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+  uint64_t (*process)(void) = dlsym(image, "leaf_difference");
+#else
+  int (*process)(void) = dlsym(image, "leaf_difference");
+#endif
+  uint64_t *words = dlsym(image, "leaf_state");
+  if (!words || !read_state || !process || read_state() != 42) return 3;
+  uint64_t *state = &words[513];
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i < sizeof(values) / sizeof(*values); ++i) {
+    *state = values[i];
+    if (read_state() != *state || words[0] != UINT64_C(0x7369676e6564)) return 4;
+#ifdef NEVERD_TEST_FRAMED_IMPORT
+    if (process() != (uint32_t)getpid() + *state) return 5;
+#else
+    if (process() != getpid()) return 5;
+#endif
+  }
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kMemoryCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  typedef uint64_t (*load_fn)(const uint64_t *);
+  typedef void (*store_fn)(uint64_t *, uint64_t);
+  load_fn load = (load_fn)dlsym(image, "leaf_sum");
+  store_fn store = (store_fn)dlsym(image, "leaf_difference");
+  if (!load || !store)
+    return 3;
+  const uint64_t values[] = {0, 1, 17, UINT64_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i != sizeof(values) / sizeof(*values); ++i)
+    for (unsigned j = 0; j != sizeof(values) / sizeof(*values); ++j) {
+      uint64_t words[] = {UINT64_C(0x3210), values[i], UINT64_C(0xabcd)};
+      if (load(words) != values[i])
+        return 4;
+      store(words, values[j]);
+      if (load(words) != values[j] || words[0] != UINT64_C(0x3210) ||
+          words[1] != values[j] || words[2] != UINT64_C(0xabcd))
+        return 5;
+    }
+  return dlclose(image) != 0;
+}
+)c")
+
+A64_LEAF_TEXT(kTLVProviderSource, "provider.c")
+A64_LEAF_TEXT(kTLVProvider, "provider.dylib")
+A64_LEAF_TEXT(kTLVObject, "access.o")
+A64_LEAF_TEXT(kTLVCompile, "-c")
+A64_LEAF_TEXT(kTLVReplacement, "-DADJUSTMENT=5")
+A64_LEAF_TEXT(kTLVMapping, "adjust")
+A64_LEAF_TEXT(kTLVSymbol, "_adjust")
+A64_LEAF_TEXT(kTLVBind, "_counter")
+A64_LEAF_TEXT(kTLVAssembly, "bad.S")
+A64_LEAF_TEXT(kTLVMissing, "-DBIND_OTHER")
+A64_LEAF_TEXT(kTLVOrdinaryFlag, "-DORDINARY")
+A64_LEAF_TEXT(kTLVOrdinaryData, "int counter = 13;\n")
+A64_LEAF_TEXT(kTLVCalls, "native_thread_local_accesses")
+A64_LEAF_VALUE(unsigned, kTLVChangedAdjustment, 5)
+A64_LEAF_VALUE(unsigned, kTLVAccessesPerProcess, 4)
+A64_LEAF_TEXT(kTLVProviderBody, "_Thread_local int counter = 13;")
+A64_LEAF_TEXT(kTLVBody, R"c(
+#ifndef ADJUSTMENT
+#define ADJUSTMENT 0
+#endif
+#ifdef BIND_OTHER
+#define counter other_counter
+#endif
+#ifdef ORDINARY
+extern int counter;
+#else
+extern _Thread_local int counter;
+#endif
+int adjust(int x) { return counter += x + ADJUSTMENT; }
+)c")
+A64_LEAF_TEXT(kTLVBadRelocation, R"asm(
+.text
+.globl _adjust
+_adjust:
+  adrp x0, _counter@TLVPPAGE
+  ldr w0, [x0, _counter@TLVPPAGEOFF]
+  ret
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kTLVDriver, R"c(
+#include <dlfcn.h>
+#include <pthread.h>
+#include <stdlib.h>
+static int (*adjust)(int);
+static int delta;
+static void *work(void *unused) {
+  (void)unused;
+  if (adjust(3) != 16 + delta || adjust(4) != 20 + 2*delta)
+    return (void *)1;
+  return 0;
+}
+int main(int argc,char **argv) {
+  if (argc != 3) return 1;
+  void *image = dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);
+  if (!image) return 2;
+  adjust = (int (*)(int))dlsym(image,"adjust");
+  delta = atoi(argv[2]);
+  if (!adjust || adjust(2) != 15 + delta) return 3;
+  pthread_t thread;
+  void *error;
+  if (pthread_create(&thread,0,work,0) || pthread_join(thread,&error) || error) return 4;
+  if (adjust(1) != 16 + 2*delta) return 5;
+  return dlclose(image);
+}
+)c")
+
+A64_LEAF_TEXT(kNewTLSFile, "tls.cpp")
+A64_LEAF_TEXT(kNewTLSImage, "base.cpp")
+A64_LEAF_TEXT(kNewTLSDriverFile, "tls-driver.cpp")
+A64_LEAF_TEXT(kTLSCxx, "/usr/bin/clang++")
+A64_LEAF_TEXT(kTLSWithOriginal, "-DORIGINAL_TLS")
+A64_LEAF_TEXT(kTLSConflict, "-DTLS_CONFLICT")
+A64_LEAF_TEXT(kTLSDescriptorSection, "__thread_vars")
+A64_LEAF_TEXT(kPublishedTLVName, "_initialized")
+A64_LEAF_TEXT(kTLVResolverSymbol, "__tlv_bootstrap")
+A64_LEAF_VALUE(unsigned, kTLVDescriptorWords, 3)
+A64_LEAF_VALUE(unsigned, kTLVOffsetWord, 2)
+A64_LEAF_VALUE(unsigned, kTLVNewDescriptors, 6)
+A64_LEAF_TEXT(kTLSReference, "-DNEVERD_TLS_REFERENCE")
+A64_LEAF_TEXT(kNewTLSProperty, "native_new_tls_lifecycles")
+A64_LEAF_TEXT(kNewTLSDriver, R"cpp(
+#include <cstdint>
+#include <cstdlib>
+#include <dlfcn.h>
+#include <pthread.h>
+static int (*adjust)(int), (*oldValue)(int), (*counts)();
+static void *image;
+static bool oldTLS;
+static void *worker(void *) {
+  struct descriptor {
+    void *(*resolve)(descriptor *);
+    uintptr_t key, offset;
+  };
+  auto *tls = static_cast<descriptor *>(dlsym(image, "initialized"));
+  auto *value = tls ? static_cast<int *>(tls->resolve(tls)) : nullptr;
+  if (!value || *value != 17 || oldValue(1) != (oldTLS ? 32 : 1) ||
+      adjust(2) != 2119 || adjust(3) != 5122 || *value != 22 ||
+      oldValue(1) != (oldTLS ? 33 : 1))
+    return (void *)1;
+  return nullptr;
+}
+int main(int argc, char **argv) {
+  if (argc != 3)
+    return 1;
+  auto img = image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!img)
+    return 2;
+  adjust = (int (*)(int))dlsym(img, "adjust");
+  oldValue = (int (*)(int))dlsym(img, "previous");
+  counts = (int (*)())dlsym(img, "counts");
+  oldTLS = atoi(argv[2]);
+  auto loaded = (int (*)())dlsym(img, "module_state");
+  if (!adjust || !oldValue || !counts || counts() != 0 || !loaded ||
+      loaded() != 12)
+    return 3;
+  if (adjust(1) != 1118 || counts() != 10)
+    return 4;
+  for (int i = 1; i <= 2; ++i) {
+    pthread_t thread;
+    void *result;
+    if (pthread_create(&thread, nullptr, worker, nullptr) ||
+        pthread_join(thread, &result) || result || counts() != (i + 1) * 10 + i)
+      return 5;
+  }
+  if (adjust(1) != 2119 || oldValue(1) != (oldTLS ? 32 : 1))
+    return 6;
+  return 0;
+}
+)cpp")
+A64_LEAF_TEXT(kNewTLSBase, R"cpp(
+#include <atomic>
+#ifdef TLS_CONFLICT
+extern "C" {
+__thread int initialized = 9;
+}
+#endif
+static std::atomic<int> constructed, destroyed;
+static int loaded;
+extern "C" int module_state() { return loaded; }
+extern "C" void module_event(int n) { loaded = loaded * 10 + n; }
+__attribute__((constructor)) static void base_load() { module_event(1); }
+extern "C" int counts() { return constructed.load() * 10 + destroyed.load(); }
+extern "C" int construct() {
+  ++constructed;
+  return 100;
+}
+extern "C" void destroy(void *) noexcept { ++destroyed; }
+#ifdef ORIGINAL_TLS
+static int old_anchor = 43;
+static int old_marker() { return 71; }
+extern "C" {
+__thread int *old_pointer = &old_anchor;
+__thread int (*old_callback)() = old_marker;
+}
+#endif
+extern "C" int previous(int x) {
+#ifdef ORIGINAL_TLS
+  if (*old_pointer != 43 || old_callback() != 71)
+    return -1;
+  static thread_local int old = 31;
+  return old += x;
+#else
+  return x;
+#endif
+}
+#ifndef NEVERD_TLS_REFERENCE
+extern "C" __attribute__((noinline)) int adjust(int x) {
+  asm volatile("" : "+r"(x));
+  return x;
+}
+#endif
+)cpp")
+A64_LEAF_TEXT(kNewTLSBody, R"cpp(
+extern "C" int construct();
+extern "C" void destroy(void *) noexcept;
+extern "C" void module_event(int);
+__attribute__((constructor)) static void new_load() { module_event(2); }
+static int anchor = 43;
+static int marker() { return 71; }
+extern "C" {
+__thread int initialized = 17;
+__thread int *new_pointer = &anchor;
+__thread int (*new_callback)() = marker;
+}
+namespace {
+struct Item {
+  int value = construct();
+  ~Item() { destroy(this); }
+};
+static thread_local int zero;
+static thread_local Item item;
+} // namespace
+extern "C" __attribute__((noinline)) int adjust(int x) {
+  if (*new_pointer != 43 || new_callback() != 71)
+    return -1;
+  initialized += x;
+  zero += x;
+  return zero * 1000 + item.value + initialized;
+}
+)cpp")
+
+A64_LEAF_TEXT(kPerThreadProperty, "native_thread_resolver_lifecycles")
+A64_LEAF_TEXT(kLegacyInitSection, "__thread_init")
+A64_LEAF_TEXT(kTraceSymbol, "_trace")
+A64_LEAF_TEXT(kPerThreadBase, R"cpp(
+extern "C" {
+__thread int trace;
+static int value = 37;
+static int old_function(int n) { return n + 2; }
+#ifdef ORIGINAL_TLS
+__thread int (*__ptrauth(0, 1, 0x172a) old_ia)(int) = old_function;
+__thread int *__ptrauth(2, 1, 0) old_da = &value;
+#endif
+__attribute__((noinline)) int record(int n) { return trace = trace * 10 + n; }
+int old_state() {
+#ifdef ORIGINAL_TLS
+  return old_ia(*old_da);
+#else
+  return 39;
+#endif
+}
+#ifdef NEVERD_TLS_REFERENCE
+void initialize_new();
+void reference_init() {
+  static __thread bool initialized;
+  if (initialized) return;
+  initialized = true;
+#ifdef ORIGINAL_TLS
+  old_ia = old_function;
+  old_da = &value;
+  record(2);
+  record(1);
+#endif
+  initialize_new();
+}
+#endif
+int trace_value() {
+#ifdef NEVERD_TLS_REFERENCE
+  reference_init();
+#endif
+  return trace;
+}
+#if defined(ORIGINAL_TLS) && !defined(NEVERD_TLS_REFERENCE)
+void old_first() { record(1); }
+void old_second() { record(old_state() == 39 ? 2 : 8); }
+asm(".section __DATA,__thread_init,thread_local_init_function_pointers\n"
+    ".p2align 3\n.quad _old_first\n.quad _old_second@AUTH(ia,0)\n.text");
+#endif
+#ifndef NEVERD_TLS_REFERENCE
+__attribute__((noinline)) int adjust(int n) { asm volatile("" : "+r"(n)); return n; }
+#endif
+}
+)cpp")
+A64_LEAF_TEXT(kPerThreadBody, R"cpp(
+extern "C" {
+int record(int);
+int trace_value();
+int old_state();
+static int value = 41;
+static int marker(int n) { return n + 1; }
+__thread int (*__ptrauth(1, 1, 0) new_ib)(int) = marker;
+__thread int *__ptrauth(3, 1, 0x2431) new_db = &value;
+static void first() {
+  asm volatile("movi v0.16b, #0\n movi v8.16b, #0\n movi v31.16b, #0"
+               ::: "v0", "v8", "v31");
+  record(3);
+}
+static void second() { record(new_ib(*new_db) == 42 ? 4 : 8); }
+#ifdef NEVERD_TLS_REFERENCE
+void reference_init();
+void initialize_new() {
+  new_ib = marker;
+  new_db = &value;
+  second();
+  first();
+}
+#else
+__attribute__((used)) void new_first() { first(); }
+__attribute__((used)) void new_second() { second(); }
+asm(".section __DATA,__thread_init,thread_local_init_function_pointers\n"
+    ".p2align 3\n.quad _new_first@AUTH(ia,0)\n"
+#ifndef INVALID_TLS_INIT
+    ".quad _new_second@AUTH(ia,0)\n"
+#else
+    ".quad _new_second@AUTH(da,0)\n"
+#endif
+    ".text");
+#endif
+__attribute__((noinline)) int adjust(int n) {
+#ifdef NEVERD_TLS_REFERENCE
+  reference_init();
+#endif
+  if (new_ib(*new_db) != 42 || old_state() != 39)
+    return -1;
+  return trace_value() + n;
+}
+}
+)cpp")
+A64_LEAF_TEXT(kInvalidTLSInit, "-DINVALID_TLS_INIT")
+A64_LEAF_TEXT(kPerThreadDriver, R"cpp(
+#include <cstdlib>
+#include <dlfcn.h>
+#include <pthread.h>
+extern "C" int check_descriptor(void *);
+asm(R"asm(
+.text
+.p2align 2
+_check_descriptor:
+  pacibsp
+  stp x29, x30, [sp, #-32]!
+  mov x29, sp
+  str q8, [sp, #16]
+  mov x1, #11
+  mov x8, #18
+  mov x15, #25
+  movi v0.16b, #21
+  movi v8.16b, #38
+  movi v31.16b, #61
+  ldr x16, [x0]
+  blraaz x16
+  cmp x1, #11
+  ccmp x8, #18, #0, eq
+  ccmp x15, #25, #0, eq
+  umov w9, v0.b[15]
+  ccmp w9, #21, #0, eq
+  umov w9, v8.b[15]
+  mov w10, #38
+  ccmp w9, w10, #0, eq
+  umov w9, v31.b[15]
+  mov w10, #61
+  ccmp w9, w10, #0, eq
+  cset w0, ne
+  ldr q8, [sp, #16]
+  ldp x29, x30, [sp], #32
+  retab
+)asm");
+static void *descriptor;
+static int (*adjust)(int), (*trace_value)();
+static int expected;
+static void *worker(void *mode) {
+  if (mode && check_descriptor(descriptor)) return (void *)3;
+  if (mode && trace_value() != expected) return (void *)1;
+  if (adjust(7) != expected + 7 || trace_value() != expected ||
+      adjust(3) != expected + 3) return (void *)2;
+  return nullptr;
+}
+int main(int argc, char **argv) {
+  if (argc != 3) return 1;
+  auto *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image) return 2;
+  adjust = (int (*)(int))dlsym(image, "adjust");
+  trace_value = (int (*)())dlsym(image, "trace_value");
+  expected = atoi(argv[2]) ? 2143 : 43;
+  descriptor = dlsym(image, "trace");
+  if (!adjust || !trace_value || !descriptor || worker((void *)1)) return 3;
+  pthread_t threads[2];
+  for (unsigned i = 0; i < 2; ++i)
+    if (pthread_create(&threads[i], nullptr, worker, i ? (void *)1 : nullptr)) return 4;
+  for (auto t : threads) {
+    void *result;
+    if (pthread_join(t, &result) || result) return 5;
+  }
+  return trace_value() != expected;
+}
+)cpp")
+
+#undef A64_LEAF_VALUE
+#undef A64_LEAF_TEXT

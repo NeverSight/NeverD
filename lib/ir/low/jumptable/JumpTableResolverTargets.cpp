@@ -55,7 +55,8 @@ uint32_t CFGBuilder::getInsnAlignment() const {
 }
 
 bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
-                               va_t FuncEntry) const {
+                               va_t FuncEntry,
+                               bool AllowDecodedContinuation) const {
   const auto *Seg = Img.getSegmentFor(Target);
   if (!Seg || !Img.hasExecutableCodeOwnerAt(Target, ExecutableCodeOwners))
     return false;
@@ -93,16 +94,27 @@ bool CFGBuilder::isValidTarget(const BinaryImage &Img, va_t Target,
   // Once the detector has a symbol/unwind/next-entry boundary, distance is no
   // longer an ownership proof.  In particular, a relocation can name the
   // middle of the next known function and evade the entry-only check above.
-  // Permit an out-of-envelope target only when runtime unwind metadata links
-  // its chained/cold fragment explicitly back to this exact primary function.
-  // With no usable boundary, retain the conservative distance policy above.
+  // Permit an out-of-envelope target when runtime unwind metadata links its
+  // chained/cold fragment explicitly back to this exact primary function, or
+  // when a direct edge already decoded that instruction into this function.
+  // The decoded instruction is the same edge. An address that only sits in
+  // the next function was not decoded here and stays rejected. With no usable
+  // boundary, retain the conservative distance policy above.
   if (CurrentFuncRange &&
       (Target < CurrentFuncRange->first ||
        Target >= CurrentFuncRange->second) &&
       !LeafColdPart &&
       !isExplicitlyOwnedFunctionFragment(Img, FuncEntry, Target,
-                                         ExecutableCodeOwners))
-    return false;
+                                         ExecutableCodeOwners)) {
+    const auto Decoded = Insns.find(Target);
+    const bool DecodedHere =
+        AllowDecodedContinuation && Decoded != Insns.end() &&
+        Decoded->second.Size != 0 && !Decoded->second.Ops.empty() &&
+        std::none_of(Decoded->second.Ops.begin(), Decoded->second.Ops.end(),
+                     [](const LowOp &Op) { return Op.Seq < 0; });
+    if (!DecodedHere)
+      return false;
+  }
 
   return true;
 }
@@ -358,8 +370,13 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
       Target = *Canonical;
     }
 
+    // A bounded domain is complete: one slot outside this function rejects
+    // the table. A slot that names an instruction a direct edge already
+    // decoded is that edge, so the other slots still publish. An unbounded
+    // scan still stops at the first address it does not own.
     if (Policy == JumpTableTargetReadPolicy::SwitchPublication &&
-        !isValidTarget(Img, Target, CurrentFuncEntry)) {
+        !isValidTarget(Img, Target, CurrentFuncEntry,
+                       /*AllowDecodedContinuation=*/Bounded)) {
       if (Bounded)
         return {};
       break;

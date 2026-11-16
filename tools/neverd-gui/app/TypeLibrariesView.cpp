@@ -21,6 +21,7 @@
 #include <QMenu>
 #include <QPushButton>
 #include <QShortcut>
+#include <QStyle>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -286,7 +287,22 @@ void TypeLibrariesView::addLibrary() {
   }
   if (choices->topLevelItemCount())
     choices->setCurrentItem(choices->topLevelItem(0));
+  // As wide as its three columns, measured with the style sheet's padding:
+  // at the tree's own width hint the last heading was cut short and a scroll
+  // bar crossed the list.  The last column still takes the room that is
+  // left, so a selected row reaches the list's edge; it is sized to its
+  // contents before it stretches again, because a stretching column shrinks
+  // no further than the size it had when it began to, which is Qt's default
+  // of 100 pixels for one that always stretched.
+  choices->ensurePolished();
+  choices->header()->ensurePolished();
+  choices->header()->setStretchLastSection(false);
   choices->header()->resizeSections(QHeaderView::ResizeToContents);
+  choices->setMinimumWidth(choices->header()->length() +
+                           2 * choices->frameWidth() +
+                           choices->style()->pixelMetric(
+                               QStyle::PM_ScrollBarExtent, nullptr, choices));
+  choices->header()->setStretchLastSection(true);
   layout->addWidget(choices, 1);
   auto *buttons = new QDialogButtonBox(
       QDialogButtonBox::Ok | QDialogButtonBox::Cancel, dialog);

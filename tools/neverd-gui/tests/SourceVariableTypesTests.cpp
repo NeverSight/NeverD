@@ -1,9 +1,10 @@
-// Real workbench, worker and engine: Y on an ordinary local edits that value.
+// Real workbench, worker and engine: Y edits locals and global objects.
 #include "CodeView.h"
 #include "DisassemblyView.h"
 #include "Docking.h"
 #include "ListingView.h"
 #include "MainWindow.h"
+#include "PaintCheck.h"
 #include "Session.h"
 #include "SetTypeDialog.h"
 #include "mcp/GuiSessionBroker.h"
@@ -12,17 +13,21 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCompleter>
 #include <QDataStream>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
+#include <QFontInfo>
 #include <QInputDialog>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSpinBox>
@@ -34,8 +39,8 @@
 using namespace neverd::gui;
 
 namespace {
-QString fixture(const QTemporaryDir &Directory,
-                const QByteArray &Override = {}) {
+QString fixture(const QTemporaryDir &Directory, const QByteArray &Override = {},
+                quint32 Permissions = 5) {
   const QByteArray Code =
       Override.isEmpty()
           ? QByteArray::fromHex(
@@ -50,7 +55,7 @@ QString fixture(const QTemporaryDir &Directory,
   Out << quint16(2) << quint16(62) << quint32(1) << quint64(0x400078)
       << quint64(64) << quint64(0) << quint32(0) << quint16(64) << quint16(56)
       << quint16(1) << quint16(64) << quint16(0) << quint16(0);
-  Out << quint32(1) << quint32(5) << quint64(0) << quint64(0x400000)
+  Out << quint32(1) << Permissions << quint64(0) << quint64(0x400000)
       << quint64(0x400000) << quint64(120 + Code.size())
       << quint64(120 + Code.size()) << quint64(4096);
   Bytes += Code;
@@ -63,8 +68,9 @@ QString fixture(const QTemporaryDir &Directory,
 // Navigation and presentation cases need a stable user-owned entry before
 // the first view asks discovery for it. Function creation has separate tests.
 QString createdFunctionFixture(const QTemporaryDir &Directory,
-                               const QByteArray &Code) {
-  const QString Path = fixture(Directory, Code);
+                               const QByteArray &Code,
+                               quint32 Permissions = 5) {
+  const QString Path = fixture(Directory, Code, Permissions);
   if (Path.isEmpty() || !QDir().mkpath(Path + ".neverd"))
     return {};
   QFile Functions(Path + ".neverd/functions.json");
@@ -74,13 +80,66 @@ QString createdFunctionFixture(const QTemporaryDir &Directory,
              ? Path
              : QString();
 }
+// A symbol gives LLVM C the exact global object rather than an anonymous
+// byte range covering the entire load segment.
+bool nameGlobalObject(const QString &Path) {
+  QFile File(Path);
+  if (!File.open(QIODevice::ReadWrite))
+    return false;
+  QByteArray Bytes = File.readAll();
+  while (Bytes.size() % 8)
+    Bytes += '\0';
+  const quint64 Symbols = Bytes.size();
+  QByteArray Extra;
+  QDataStream Out(&Extra, QIODevice::WriteOnly);
+  Out.setByteOrder(QDataStream::LittleEndian);
+  Out << quint64(0) << quint64(0) << quint64(0);
+  Out << quint32(1) << quint8(0x11) << quint8(0) << quint16(1)
+      << quint64(0x4000B8) << quint64(8);
+  const quint64 Strings = Symbols + Extra.size();
+  const QByteArray Names("\0GlobalRoot\0", 12);
+  Out.writeRawData(Names.constData(), Names.size());
+  while ((Symbols + Extra.size()) % 8)
+    Out << quint8(0);
+  const quint64 Sections = Symbols + Extra.size();
+  const auto Section = [&](quint32 Type, quint64 Flags, quint64 Address,
+                           quint64 Offset, quint64 Size, quint32 Link,
+                           quint32 Info, quint64 Align, quint64 Entry) {
+    Out << quint32(0) << Type << Flags << Address << Offset << Size << Link
+        << Info << Align << Entry;
+  };
+  Section(0, 0, 0, 0, 0, 0, 0, 0, 0);
+  Section(1, 3, 0x4000B8, 0xB8, 8, 0, 0, 8, 0);
+  Section(1, 6, 0x400078, 0x78, 11, 0, 0, 1, 0);
+  Section(2, 0, 0, Symbols, 48, 4, 1, 8, 24);
+  Section(3, 0, 0, Strings, Names.size(), 0, 0, 1, 0);
+  Bytes += Extra;
+  QDataStream Header(&Bytes, QIODevice::ReadWrite);
+  Header.setByteOrder(QDataStream::LittleEndian);
+  Header.device()->seek(40);
+  Header << Sections;
+  Header.device()->seek(60);
+  Header << quint16(5);
+  return File.seek(0) && File.write(Bytes) == Bytes.size();
+}
 } // namespace
 
 class SourceVariableTypesTests : public QObject {
   Q_OBJECT
   QTemporaryDir Settings;
+  quint64 StalePaints = 0;
 private slots:
+  void init() { StalePaints = PaintCheck::stalePaints(); }
+
+  void cleanup() {
+    // No view kept a row that another state of it had painted.
+    QCOMPARE(PaintCheck::stalePaints(), StalePaints);
+  }
+
   void initTestCase() {
+    // The views that repaint rows of themselves are compared, at each paint,
+    // with all of themselves painted afresh.
+    PaintCheck::setEnabled(true);
     QCoreApplication::setOrganizationName("NeverDTests");
     QCoreApplication::setApplicationName("SourceVariableTypes");
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -284,6 +343,92 @@ private slots:
     Session.closeFile();
     Window.close();
   }
+  void returnAppliesAStackCorrectionAndNeverResets() {
+    // Reset was the stack dialogs' default by Qt's choice of their first push
+    // button, so Return in the offset field discarded the corrections it was
+    // meant to state, and Apply stood before Cancel where every other
+    // dialog's primary action follows it.
+    QTemporaryDir Directory;
+    const auto Path = fixture(
+        Directory, QByteArray::fromHex(
+                       "4883ec2848897c2418e8c3ff0f00488b4424184883c428c3"));
+    QVERIFY(!Path.isEmpty());
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    McpConnectionManager Mcp;
+    GuiSessionBroker Broker;
+    MainWindow Window(Session, Mcp, Broker);
+    Window.setAsksForDebugInfo(false);
+    Window.setLayoutPath(Directory.filePath("layout.json"));
+    Window.resize(1400, 900);
+    Window.initializeLayout();
+    Window.show();
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    Window.disassembly()->navigate(0x400078);
+    QTRY_COMPARE_WITH_TIMEOUT(Window.disassembly()->currentItem(),
+                              std::optional<Address>(0x400078), 30000);
+    Window.disassembly()->listing()->setFocus();
+    auto *Action = Window.actions().action(ActionId::EditStackPointer);
+    QTRY_VERIFY(Action->isEnabled());
+    int Resets = 0, Applies = 0;
+    bool Seen = false, Accepts = false, ResetTakesFocusDefault = true;
+    int Height = 0, Needed = 0;
+    QTimer Editor;
+    connect(&Editor, &QTimer::timeout, this, [&] {
+      auto *Dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+      // A dialog is the active modal widget before it is the active window,
+      // and until then a key belongs to the window behind it: Return there
+      // is the listing's "Jump to operand".
+      if (!Dialog || Dialog->objectName() != "stackFrameDialog" ||
+          !Dialog->isActiveWindow())
+        return;
+      Editor.stop();
+      auto *Box = Dialog->findChild<QDialogButtonBox *>();
+      auto *After = Dialog->findChild<QLineEdit *>("stackPointerAfter");
+      QPushButton *Apply = nullptr, *Reset = nullptr, *Cancel = nullptr;
+      for (auto *Button : Box->buttons()) {
+        auto *Push = qobject_cast<QPushButton *>(Button);
+        switch (Box->buttonRole(Button)) {
+        case QDialogButtonBox::ResetRole:
+          Reset = Push;
+          break;
+        case QDialogButtonBox::RejectRole:
+          Cancel = Push;
+          break;
+        default:
+          Apply = Push;
+        }
+      }
+      if (!After || !Apply || !Reset || !Cancel) {
+        Dialog->reject();
+        return;
+      }
+      connect(Reset, &QPushButton::clicked, this, [&Resets] { ++Resets; });
+      connect(Apply, &QPushButton::clicked, this, [&Applies] { ++Applies; });
+      // The accept role stands after Cancel in the workbench's layout; the
+      // standard Apply's own role stands before it.
+      Accepts = Box->buttonRole(Apply) == QDialogButtonBox::AcceptRole;
+      ResetTakesFocusDefault = Reset->autoDefault() || Reset->isDefault();
+      Height = Dialog->height();
+      Needed = Dialog->layout()->totalHeightForWidth(Dialog->width());
+      Seen = true;
+      After->setFocus();
+      QTest::keyClick(After, Qt::Key_Return);
+      if (Dialog->isVisible())
+        Dialog->reject();
+    });
+    Editor.start(20);
+    Action->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(Seen, 30000);
+    QCOMPARE(Resets, 0);
+    QCOMPARE(Applies, 1);
+    QVERIFY(Accepts);
+    QVERIFY(!ResetTakesFocusDefault);
+    // Four lines stand as tall as they need, not adrift in the height the
+    // table of stack variables takes.
+    QCOMPARE(Height, Needed);
+  }
+
   void stackFrameDialogs_data() {
     QTest::addColumn<QString>("Offset");
     QTest::addColumn<QString>("Width");
@@ -337,9 +482,7 @@ private slots:
           Table->item(Row, 3)->setText("uint64_t");
           Opened = true;
         }
-      Dialog->findChild<QDialogButtonBox *>()
-          ->button(QDialogButtonBox::Apply)
-          ->click();
+      Dialog->findChild<QPushButton *>("stackFrameApply")->click();
     });
     Editor.start(20);
     Action->trigger();
@@ -385,9 +528,7 @@ private slots:
       Input->setText(After);
       PointerOpened = true;
       PointerEditor.stop();
-      Dialog->findChild<QDialogButtonBox *>()
-          ->button(QDialogButtonBox::Apply)
-          ->click();
+      Dialog->findChild<QPushButton *>("stackFrameApply")->click();
     });
     PointerEditor.start(20);
     Action->trigger();
@@ -456,6 +597,143 @@ private slots:
     QVERIFY2(Empty, "An unknown SP must not offer zero as a correction");
     Session.closeFile();
     Window.close();
+  }
+  void globalType_data() {
+    QTest::addColumn<QString>("Location");
+    QTest::addColumn<bool>("Template");
+    QTest::newRow("data") << "data" << false;
+    QTest::newRow("pseudocode") << "source" << false;
+    QTest::newRow("llvm-c") << "llvmc" << false;
+    QTest::newRow("template-data") << "data" << true;
+    QTest::newRow("template-pseudocode") << "source" << true;
+    QTest::newRow("template-llvm-c") << "llvmc" << true;
+  }
+  void globalType() {
+    QFETCH(QString, Location);
+    QFETCH(bool, Template);
+    const QString TypeName =
+        Template ? "gui::Box<gui::Pair<int, unsigned int>, 3>" : "GUI_CONTEXT";
+    const bool DataListing = Location != "source";
+    const bool LLVMC = Location == "llvmc";
+    QTemporaryDir Directory;
+    const auto Path = createdFunctionFixture(
+        Directory,
+        QByteArray::fromHex("488b05390000008b4004c3") + QByteArray(96, '\0'),
+        7);
+    QVERIFY(!Path.isEmpty());
+    QVERIFY(nameGlobalObject(Path));
+    QFile Item(Path + ".neverd/items.json");
+    const QByteArray Definition =
+        R"json([{"addr":"0x4000b8","kind":"qword","size":8}])json";
+    QVERIFY(Item.open(QIODevice::WriteOnly));
+    QCOMPARE(Item.write(Definition), Definition.size());
+    Item.close();
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    McpConnectionManager Mcp;
+    GuiSessionBroker Broker;
+    MainWindow Window(Session, Mcp, Broker);
+    Window.setAsksForDebugInfo(false);
+    Window.setLayoutPath(Directory.filePath("layout.json"));
+    Window.resize(1400, 900);
+    Window.initializeLayout();
+    Window.show();
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    bool Declared = false;
+    Session.declareTypes(
+        "c",
+        "struct " + TypeName + " { unsigned int State; unsigned int Length; };",
+        [&](const QJsonObject &Reply) {
+          Declared = Reply.value("problems").toArray().isEmpty();
+        });
+    QTRY_VERIFY_WITH_TIMEOUT(Declared, 30000);
+    const auto OpenCode = [&]() -> CodeText * {
+      for (auto *View : Window.findChildren<CodeView *>())
+        if (View->representation() == (LLVMC ? "llvmc" : "source"))
+          return View->text();
+      return nullptr;
+    };
+    Window.disassembly()->navigate(DataListing ? 0x4000B8 : 0x400078);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        Window.disassembly()->currentItem(),
+        std::optional<Address>(DataListing ? 0x4000B8 : 0x400078), 30000);
+    if (DataListing) {
+      Window.disassembly()->listing()->setFocus();
+      QVERIFY(Window.disassembly()->onData());
+    } else {
+      Window.actions()
+          .action(LLVMC ? ActionId::ViewLLVMC : ActionId::ViewPseudocode)
+          ->trigger();
+      QTRY_VERIFY_WITH_TIMEOUT(OpenCode() && !OpenCode()->loading(), 30000);
+      QVERIFY2(OpenCode()->findText("GlobalRoot", true),
+               qPrintable(OpenCode()->allText()));
+      OpenCode()->setFocus();
+      QTRY_VERIFY(OpenCode()->renameTarget() &&
+                  OpenCode()->renameTarget()->value("object").toBool());
+    }
+    auto *Action = Window.actions().action(ActionId::EditSetType);
+    QTRY_VERIFY(Action->isEnabled());
+    QTimer Editor;
+    bool Edited = false, Inspected = false;
+    int Stage = 0;
+    QString Diagnostic;
+    connect(&Editor, &QTimer::timeout, this, [&] {
+      auto *Dialog =
+          qobject_cast<SetTypeDialog *>(QApplication::activeModalWidget());
+      if (!Dialog)
+        return;
+      auto *Field = Dialog->findChild<QLineEdit *>("setTypeField");
+      auto *Apply = Dialog->findChild<QPushButton *>("setTypeApply");
+      Diagnostic = Dialog->findChild<QLabel *>("setTypeSubject")->text();
+      if (!Field->isEnabled())
+        return;
+      if (!Stage) {
+        Inspected = Diagnostic.contains("global object") &&
+                    Diagnostic.contains("0x4000b8") && !Field->text().isEmpty();
+        if (Template) {
+          QTest::keyClicks(Field, "struct gui::Bo");
+          auto *Completion = Dialog->findChild<QCompleter *>();
+          QVERIFY(Completion);
+          QVERIFY(QMetaObject::invokeMethod(Completion, "activated",
+                                            Q_ARG(QString, TypeName)));
+          QCOMPARE(Field->text(), "struct " + TypeName);
+          QTest::keyClicks(Field, " *");
+        } else {
+          QTest::keyClicks(Field, "struct " + TypeName + " *");
+        }
+        ++Stage;
+      } else if (Apply->isEnabled()) {
+        Edited = true;
+        Editor.stop();
+        Apply->click();
+      }
+    });
+    QTimer::singleShot(30000, &Window, [] {
+      if (auto *Dialog =
+              qobject_cast<SetTypeDialog *>(QApplication::activeModalWidget()))
+        Dialog->reject();
+    });
+    Editor.start(10);
+    // Exercise the keyboard binding used by the workbench.
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Y);
+    QTRY_VERIFY_WITH_TIMEOUT(Edited, 30000);
+    QVERIFY2(Inspected, qPrintable(Diagnostic));
+    if (DataListing) {
+      Window.disassembly()->navigate(0x400078);
+      QTRY_COMPARE_WITH_TIMEOUT(Window.disassembly()->currentFunction(),
+                                std::optional<Address>(0x400078), 30000);
+      Window.actions()
+          .action(LLVMC ? ActionId::ViewLLVMC : ActionId::ViewPseudocode)
+          ->trigger();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(OpenCode() && !OpenCode()->loading() &&
+                                 OpenCode()->allText().contains("->Length"),
+                             30000);
+    Session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(!OpenCode()->allText().contains("->Length"),
+                             30000);
+    Session.redo();
+    QTRY_VERIFY_WITH_TIMEOUT(OpenCode()->allText().contains("->Length"), 30000);
   }
   void localType_data() {
     QTest::addColumn<QString>("Representation");
@@ -604,7 +882,7 @@ private slots:
     QVERIFY(View->text()->findText("sub_4000B8(7", true));
     View->text()->setFocus();
     QTRY_VERIFY(Window.actions().action(ActionId::EditCallType)->isEnabled());
-    bool Edited = false;
+    bool Edited = false, Primary = false, Wraps = false;
     QTimer Editor;
     connect(&Editor, &QTimer::timeout, this, [&] {
       auto *Dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
@@ -621,6 +899,16 @@ private slots:
           ->setPlainText("unsigned int\nunsigned int");
       Edited = true;
       Editor.stop();
+      // Apply is the step that comes next and Reset never takes Return.
+      const auto *Apply = Dialog->findChild<QPushButton *>("callTypeApply");
+      const auto *Reset = Dialog->findChild<QPushButton *>("callTypeReset");
+      Primary =
+          Apply->isDefault() && !Reset->isDefault() && !Reset->autoDefault();
+      // The line about variadic arguments is longer than the dialog is
+      // wide at a desktop's font, where it ended at "default p": it wraps.
+      for (const auto *Label : Dialog->findChildren<QLabel *>())
+        if (Label->text().startsWith("Actual variadic"))
+          Wraps = Label->wordWrap();
       Dialog->findChild<QPushButton *>("callTypeApply")->click();
     });
     Editor.start(10);
@@ -631,6 +919,8 @@ private slots:
     });
     Window.actions().action(ActionId::EditCallType)->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(Edited, 30000);
+    QVERIFY(Primary);
+    QVERIFY(Wraps);
     QTRY_VERIFY_WITH_TIMEOUT(
         View->text()->allText().contains("(*)(uint32_t, ...)"), 30000);
     QVERIFY2(Session.lastError().isEmpty(), qPrintable(Session.lastError()));

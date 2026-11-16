@@ -235,6 +235,8 @@ TEST(MedCallLeftovers, PlatformRegisterPreservationFollowsTheABI) {
     }
     EXPECT_EQ(TRI.callPreservedPrefixSize(a64reg::X18 + 4, 4, Format),
               Reserved ? 4 : 0);
+    EXPECT_EQ(callClobbersRegister(Call, a64reg::X18 + 4, 4, TRI, Format),
+              !Reserved);
     EXPECT_FALSE(TRI.isCallPreserved(a64reg::X18, 16, Format));
     EXPECT_TRUE(callClobbersRegister(Call, a64reg::X18, 16, TRI, Format));
     EXPECT_TRUE(callClobbersRegister(Call, a64reg::X17, 8, TRI, Format));

@@ -16,11 +16,14 @@
 #include "PipelineReturnModelingDetail.h"
 #include "PipelineSourceStackAccesses.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedNoReturn.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -53,6 +56,9 @@
 namespace neverd {
 
 namespace {
+
+#define NEVERD_PATCH_LIFT_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "PipelinePatchLift.def"
 
 bool isFatalOptimizationStop(OptimizationStopReason Stop) {
   return Stop == OptimizationStopReason::InputInvalid ||
@@ -290,13 +296,16 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // now recovered call sites, append the trailing stack parameters, and pad
   // every call to that arity.  The emitter spills these into the frame headroom
   // so the unchanged va_arg walk reads the caller's overflow arguments.
-  finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat());
+  finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat(),
+                          Img.Exports);
   if (Img.Arch == Arch::ARM)
     propagateForwardedPointerParams(Result.MedFuncs, Img.Arch);
   // Late ABI remodelling may reconvert a function from LowIR.  Refresh the
   // interprocedural facts before either serial or sharded LLVM emission.
   propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
                             importCallAddresses(Img));
+  // Call-setup recovery adds parameters the first settlement could not see.
+  settleReturnContracts(Img, Result, Opts.SourceProjection ? Dbg : nullptr);
 
   for (const MedFunc &Function : Result.MedFuncs)
     for (const MedBlock &Block : Function.Blocks)
@@ -325,6 +334,10 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   if (Opts.MedAnalysisOnly)
     return true;
+
+  for (auto &Function : Result.MedFuncs)
+    discardUnobservedMIPSFPUpperBits(
+        Function, Img, Result.CallEntryFloatingArguments.get(), Dbg);
 
   if (medStackProjection(Opts) == MedStackProjection::Source) {
     prepareRecoveredSourceStackAccesses(Img, Result, Result.LowFuncs);
@@ -358,6 +371,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                    Result.MedFuncs.size() >= 8 &&
                    !requiresSerialLLVMEmission(Result.MedFuncs, Img);
 
+  llvm::SmallVector<va_t> NativeStackEntries;
   // The bodies the module declares only, by index into MedFuncs, with why.
   std::vector<std::pair<size_t, std::string>> LeftOut;
   if (UseShards) {
@@ -397,6 +411,14 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     const bool OmitRefused = Opts.OmitRefusedLLVMBodies && !Opts.PatchMode &&
                              !Result.InterpreterMachineSourceABI;
     std::vector<char> Mask;
+    if (Opts.PatchMode && Img.isArm64e())
+      for (const auto &[Index, F] : llvm::enumerate(Result.MedFuncs))
+        if (needsMachONativeStackIndex(F)) {
+          if (Mask.empty())
+            Mask.assign(Result.MedFuncs.size(), 1);
+          Mask[Index] = 0;
+          NativeStackEntries.push_back(F.Entry);
+        }
     uint64_t UnhandledValueIntrinsics = 0;
     // Why a refused body fails a lift that cannot leave it out.
     std::string Refusal;
@@ -509,10 +531,42 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     }
   }
 
+  if (!normalizeResolvedLLVMCalls(*Result.LlvmModule,
+                                  Result.LLVMSources.get())) {
+    Result.Error = kCallSignatureMismatch;
+    return false;
+  }
+  if (Opts.PatchMode && Img.isArm64e()) {
+    llvm::SmallVector<va_t> Admitted;
+    for (const auto &Audit : Result.FunctionAudits)
+      if (Audit.HasMedIR && Audit.MedIRVerified &&
+          Audit.UnsupportedInstructions.empty() &&
+          Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
+          Audit.UnprovenReturns.empty())
+        Admitted.push_back(Audit.Entry);
+    if (auto Error = lowerMachORegisterResults(*Result.LlvmModule, Img,
+                                               Admitted, NativeStackEntries)) {
+      Result.Error = llvm::toString(std::move(Error));
+      Result.LlvmModule.reset();
+      Result.LLVMSources.reset();
+      return false;
+    }
+  }
+
+  llvm::DenseSet<va_t> DefinedEntries;
   Result.LLVMDefinitionNames.clear();
-  for (const auto &Function : *Result.LlvmModule)
-    if (!Function.isDeclaration())
-      Result.LLVMDefinitionNames.push_back(Function.getName().str());
+  for (const auto &Function : *Result.LlvmModule) {
+    if (Function.isDeclaration())
+      continue;
+    Result.LLVMDefinitionNames.push_back(Function.getName().str());
+    auto Source = rewrite_source::getOriginalVA(Function);
+    if (!Source) {
+      Result.Error = llvm::toString(Source.takeError());
+      return false;
+    }
+    if (*Source)
+      DefinedEntries.insert(**Source);
+  }
   std::sort(Result.LLVMDefinitionNames.begin(),
             Result.LLVMDefinitionNames.end());
 
@@ -520,6 +574,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     if (!Audit.HasMedIR)
       continue;
     Audit.HasLLVMDefinition =
+        DefinedEntries.contains(Audit.Entry) ||
         std::binary_search(Result.LLVMDefinitionNames.begin(),
                            Result.LLVMDefinitionNames.end(), Audit.Name);
   }
@@ -531,12 +586,6 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   std::string FinalVerifyError;
   llvm::raw_string_ostream FinalVerifyStream(FinalVerifyError);
-  if (!normalizeResolvedLLVMCalls(*Result.LlvmModule,
-                                  Result.LLVMSources.get())) {
-    Result.Error =
-        "final LLVM verification failed: resolved call signature mismatch";
-    return false;
-  }
   Result.LLVMVerifierFailed =
       llvm::verifyModule(*Result.LlvmModule, &FinalVerifyStream);
   if (Result.LLVMVerifierFailed) {
@@ -545,8 +594,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return false;
   }
   if (!validateResolvedLLVMCallSignatures(*Result.LlvmModule)) {
-    Result.Error =
-        "final LLVM verification failed: resolved call signature mismatch";
+    Result.Error = kCallSignatureMismatch;
     return false;
   }
 

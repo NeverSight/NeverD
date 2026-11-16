@@ -198,10 +198,9 @@ void appendIndexedELFFrames(const BinaryImage &Img, const FrameSection &Sec,
     return;
   const auto Size = Header->FileSize;
   const auto VA = Header->VirtualAddress;
-  const uint8_t *Bytes =
-      Size >= 4 && Size <= ::neverd::limits::loader::kItaniumEHMaxIndex
-          ? Img.readVA(VA, Size)
-          : nullptr;
+  const uint8_t *Bytes = Size >= 4 && Size <= std::numeric_limits<size_t>::max()
+                             ? Img.readVA(VA, static_cast<size_t>(Size))
+                             : nullptr;
   if (!Bytes || Bytes[0] != 1) {
     Malformed("invalid runtime DWARF frame index");
     return;
@@ -217,9 +216,16 @@ void appendIndexedELFFrames(const BinaryImage &Img, const FrameSection &Sec,
   if (!readEncodedPointer(Bytes, Size, Cursor, VA, Bytes[1], HeaderBases,
                           Img.getPointerSize(), &Img, FrameVA) ||
       !readEncodedPointer(Bytes, Size, Cursor, VA, Bytes[2], {},
-                          Img.getPointerSize(), nullptr, Count) ||
-      Count > (1u << 20)) {
+                          Img.getPointerSize(), nullptr, Count)) {
     Malformed("unreadable runtime DWARF frame index header");
+    return;
+  }
+  // Every index entry consumes two encoded pointers, at least one byte each.
+  // The backing extent, rather than an image-independent function-count cap,
+  // bounds even variable-length encodings. Individual readers still validate
+  // their exact encoding, width and alignment below.
+  if (Count > (Size - Cursor) / 2) {
+    Malformed("runtime DWARF frame index count leaves its backing range");
     return;
   }
   std::map<va_t, size_t> Known;

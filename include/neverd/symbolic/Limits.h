@@ -71,6 +71,8 @@ inline constexpr unsigned kSymExprLogicSubsetWork = 256;
 inline constexpr unsigned kSymExprSelectionEqualityMaxSteps = 32;
 
 inline constexpr size_t kSymExprStructMaximum = 4096;
+/// Maximum visited nodes when reassembling a Boolean data bit above a literal.
+inline constexpr unsigned kSymExprPackedBitNodes = 64;
 
 // Optional equality/range folds inspect bounded constant words and at most
 // this many extension pairs. Exhaustion retains the exact remaining predicate.

@@ -30,6 +30,7 @@
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/ir/NdTypes.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/types/HeaderLibrary.h"
 #include "neverd/types/LocalTypes.h"
@@ -162,6 +163,16 @@ public:
                                 int64_t Offset) const override {
     return Inner.resolveFramePointerVariableAt(FuncAddr, UsePC, Offset);
   }
+  VariableExtentLookup
+  resolveRegisterVariableAt(va_t FuncAddr, va_t UsePC,
+                            uint64_t Register) const override {
+    auto Result = Inner.resolveRegisterVariableAt(FuncAddr, UsePC, Register);
+    // A function Y declaration replaces its parameter declarations, including
+    // their old register-resident debug views.
+    return Result.Variable.IsParam && Declarations.contains(FuncAddr)
+               ? VariableExtentLookup::notFound()
+               : Result;
+  }
   /// A record's members for display from the library, where it defines a
   /// record of the name and size, and an enumeration's enumerators where it
   /// defines one of the name: the library is the authority on the names, so
@@ -223,6 +234,8 @@ public:
   /// the name, members or enumerators, must agree with the library too.
   /// A pointer request obtains only a record's tag, without completing it.
   CRecordDefinitions definitions(const std::vector<TypeRef> &Records) const;
+  std::string cTypeName(llvm::StringRef SourceName) const;
+  std::string sourceTypeName(llvm::StringRef Identifier) const;
   /// The copy of the library this context reads, which its definitions
   /// render.
   const types::TypeLibrary &library() const { return *Types; }
@@ -370,6 +383,8 @@ private:
     std::vector<uint16_t> Offsets;
     std::vector<TypeRef> Types;
     uint16_t Alignment;
+    std::vector<NdDisplayBitField> Bits;
+    uint16_t Size;
   };
   mutable std::vector<Named> Completed;
   mutable llvm::DenseSet<const NdType *> CompletedRecords;

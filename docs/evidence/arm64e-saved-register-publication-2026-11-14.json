@@ -1,0 +1,137 @@
+{
+  "neverd_revision": "8223da42b74cd5a00df267cfc71a7dac8b9c607e",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43610978871",
+  "ci_revision": "5e1605959f1f5abfed9f1ec758105e22f9021ae6",
+  "windows_frontend_job": "https://github.com/gmh5225/test_mac_intel/actions/runs/43610978871/job/132495734003",
+  "local": {
+    "publication_cases": 74,
+    "unwind_recovery_cases": 18,
+    "abi_format_passed": 137,
+    "abi_format_skipped": 42,
+    "regression_before_fix_failed": 4,
+    "regression_after_fix_passed": 4
+  },
+  "runner_availability": {
+    "observed_at": "2026-11-14T15:27:23.240670+00:00",
+    "self_hosted_runner_counts": {
+      "gmh5225/test_mac_intel": 0,
+      "NeverSight/NeverD": 0
+    },
+    "standard_mac_arm": "M1",
+    "larger_mac_arm": "M2",
+    "sources": [
+      "https://docs.github.com/en/actions/reference/runners/github-hosted-runners",
+      "https://docs.github.com/en/actions/reference/runners/larger-runners"
+    ],
+    "native_cpta_on_qualified": false
+  },
+  "hosts": {
+    "cursor-macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "d84aca1d5ee4ade46bd267d3b925b300369fed043e5c7f7dd41ef7bc019a7f4e",
+      "test_cases": 74,
+      "executed_native_images": 128,
+      "added_cases": {
+        "PublishesAllPreservedGPRAndDRegisters": {
+          "original_sha256": "8ac2ffc93e481592ca304550eac1fa955c6b6a58b7a90cc78323ee529a875ddd",
+          "published_sha256": "5678e5d91f412dfca0738ae7df16e211245d5e2d78858429125590d5e2f1d473",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "52"
+        },
+        "PublishesAllPreservedGPRAndQRegisters": {
+          "original_sha256": "10ad58989e8bdbd3ac1287a8bd17f601c6f9d5232bfa5ea9bcf7f27a5d7ce282",
+          "published_sha256": "a33416b49c33dc759883e6b9f6b0a93b498e8db1efbc2ee1e342f705ff1f5bae",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "52"
+        },
+        "SignalResumesPublishedGPRAndDRegisters": {
+          "original_sha256": "412fc81f0eb9a5831ac4cd0a8e889f873acadd6fac00b34a606b1f7b038e5874",
+          "published_sha256": "e2017cd54a3f10c6fc9e8669cb11152d9b20b0bac6c8e20078c0a52ba864a014",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SignalResumesPublishedGPRAndQRegisters": {
+          "original_sha256": "4b446587f39a577e78e8e01b2ec7f65fd926dc54a00e7a2e26b1bc22871ca496",
+          "published_sha256": "f71a9bca6d3d2cc7d4ff59986bc506842d63052a636d69724ba32ddbdffb95a4",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "12"
+        }
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    },
+    "cursor-xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "d84aca1d5ee4ade46bd267d3b925b300369fed043e5c7f7dd41ef7bc019a7f4e",
+      "test_cases": 74,
+      "executed_native_images": 128,
+      "added_cases": {
+        "PublishesAllPreservedGPRAndDRegisters": {
+          "original_sha256": "eafd7d01fa02263a74dd927da2e10f9e2cf48e53e979f23537e3be22f46b9c08",
+          "published_sha256": "010a08201d4a91b9f9c93a281e23d020769e822879a853b8edef6866e7792cab",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "52"
+        },
+        "PublishesAllPreservedGPRAndQRegisters": {
+          "original_sha256": "7e8719fd7f1e8a87335f6fb42066b99720f60ecbc183158223c76c0e25013fec",
+          "published_sha256": "06ce85043113f7a9017a5690cd638688db4b73a4e3c4b17e0f5c801b4685b4c0",
+          "executed_native_images": "2",
+          "native_preserved_register_calls": "52"
+        },
+        "SignalResumesPublishedGPRAndDRegisters": {
+          "original_sha256": "f479e8a252d55c60a85188ffac4398dec1e4a7f67f2f16a809620e008ef48174",
+          "published_sha256": "c05bdfd1ebce0996ab8136c4b800e8637992f298fa3e4bf51af4b977e8b1c6ec",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SignalResumesPublishedGPRAndQRegisters": {
+          "original_sha256": "7edde30287d9d5ad05e79ef34bfcd7bd0a4c76615e1e46af144896ff2c85ea46",
+          "published_sha256": "3772f76bcaa2899af8da21206cb13e4fa9cc919756471e0c2af5725f78bafd22",
+          "executed_native_images": "2",
+          "native_signal_caller_resumptions": "12"
+        }
+      },
+      "cpta_probe": {
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    }
+  }
+}

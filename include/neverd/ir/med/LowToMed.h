@@ -166,6 +166,16 @@ public:
       const std::map<va_t, FloatingCallArguments> *M) {
     CallEntryFloatingArguments = M;
   }
+  /// Occurrence-specific declared virtual signatures. These bind operands
+  /// before SSA, while preserving the original indirect dispatch target.
+  void setCallSiteIntegerArguments(
+      const std::map<SourceCallOccurrenceKey, FixedIntegerCallArguments> *M) {
+    CallSiteIntegerArguments = M;
+  }
+  void setCallSiteFloatingArguments(
+      const std::map<SourceCallOccurrenceKey, FloatingCallArguments> *M) {
+    CallSiteFloatingArguments = M;
+  }
   void setCallEntryVariadicArguments(
       const std::map<va_t, std::vector<uint16_t>> *M) {
     CallEntryVariadicArguments = M;
@@ -395,6 +405,11 @@ private:
   /// its result.  Runs before buildSsa.
   void liftRuntimeRoutineCalls(MedFunc &Func);
   /// Record which GPRs a direct call's callee never writes.
+  void bindScalarCall(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
+                      const FloatingCallArguments &Signature, bool TailCall);
+  void bindIntegerCall(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
+                       const FixedIntegerCallArguments &Signature,
+                       bool TailCall);
   void applyCallRegisterEffect(MedBlock &Block, MedOp &MOp, const LowOp &LOp,
                                bool TailCall);
   /// The fixed parameters of the variadic C library routine the import a
@@ -490,6 +505,10 @@ private:
       nullptr;
   const std::map<va_t, FloatingCallArguments> *CallEntryFloatingArguments =
       nullptr;
+  const std::map<SourceCallOccurrenceKey, FixedIntegerCallArguments>
+      *CallSiteIntegerArguments = nullptr;
+  const std::map<SourceCallOccurrenceKey, FloatingCallArguments>
+      *CallSiteFloatingArguments = nullptr;
   const std::set<va_t> *UserPrototypeCallees = nullptr;
   const std::set<va_t> *CallDispatchThunks = nullptr;
   std::set<va_t> *CallSummaryKeysRead = nullptr;

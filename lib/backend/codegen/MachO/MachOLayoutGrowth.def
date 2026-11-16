@@ -13,18 +13,28 @@
 
 MACHO_LAYOUT_TEXT(kMetadataTextSegment, "__TEXT")
 MACHO_LAYOUT_TEXT(kCompactSection, "__unwind_info")
+MACHO_LAYOUT_TEXT(kFrameSection, "__eh_frame")
 MACHO_LAYOUT_VALUE(uint64_t, kMetadataCommandReserve, 512)
 MACHO_LAYOUT_TEXT(kSectionOrderReferences,
                   "TEXT section ordering has unmodeled section references")
 
-MACHO_LAYOUT_TEXT(kRelroOwnership,
-                  "read-only data has unknown payload ownership")
+MACHO_LAYOUT_TEXT(
+    kMetadataOwnership,
+    "metadata placement has unknown load-command payload ownership")
 MACHO_LAYOUT_TEXT(
     kMetadataCapacity,
     "new section needs authenticated header capacity and section identities")
 MACHO_LAYOUT_TEXT(
     kRelroCapacity,
     "main executable needs unowned capacity in its existing read-only segment")
+
+MACHO_LAYOUT_TEXT(kLostFrameSection, "header growth lost the DWARF section")
+MACHO_LAYOUT_TEXT(
+    kInsufficientText,
+    "Mach-O layout: metadata growth requires authenticated TEXT capacity")
+MACHO_LAYOUT_TEXT(
+    kUnwindPrefix,
+    "cannot reserve a zero-base TEXT prefix for the complete unwind registry")
 
 #undef MACHO_LAYOUT_TEXT
 #undef MACHO_LAYOUT_VALUE

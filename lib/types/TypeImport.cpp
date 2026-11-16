@@ -49,6 +49,14 @@ bool sameRecord(const std::shared_ptr<const RecordDef> &A,
       A->Alignment != B->Alignment || A->Pack != B->Pack ||
       A->Defined != B->Defined || A->Members.size() != B->Members.size())
     return false;
+  if (bool(A->MemberPointer) != bool(B->MemberPointer))
+    return false;
+  if (A->MemberPointer &&
+      (A->MemberPointer->Function != B->MemberPointer->Function ||
+       !sameType(A->MemberPointer->Owner, B->MemberPointer->Owner, Depth + 1) ||
+       !sameType(A->MemberPointer->Target, B->MemberPointer->Target,
+                 Depth + 1)))
+    return false;
   for (size_t I = 0; I < A->Members.size(); ++I) {
     const Member &X = A->Members[I], &Y = B->Members[I];
     if (X.Name != Y.Name || X.BitOffset != Y.BitOffset ||
@@ -170,6 +178,19 @@ public:
     if (!Original)
       return {};
     std::shared_ptr<RecordDef> Copy;
+    if (Original->MemberPointer) {
+      const auto Owner = type(Original->MemberPointer->Owner, Depth + 1);
+      const auto Target = type(Original->MemberPointer->Target, Depth + 1);
+      if (Owner != Original->MemberPointer->Owner ||
+          Target != Original->MemberPointer->Target) {
+        Copy = std::make_shared<RecordDef>(*Original);
+        auto Identity =
+            std::make_shared<MemberPointerDef>(*Original->MemberPointer);
+        Identity->Owner = Owner;
+        Identity->Target = Target;
+        Copy->MemberPointer = std::move(Identity);
+      }
+    }
     for (size_t I = 0; I < Original->Members.size(); ++I) {
       if (!Original->Members[I].Type)
         Incomplete = true;

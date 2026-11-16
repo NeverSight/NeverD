@@ -36,6 +36,13 @@ class ARM32OptStress81RT : public SemanticRoundTripFixture,
                            public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32OptStress81RT, Verify) { roundTripARM32(GetParam()); }
 
+// Its VPOP of d8-d15 rebuilds q4-q7 too, which the LLVM C route's
+// callee-save restore proof must follow.
+class ARM32OptStress81LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32OptStress81LLVMCRT, Verify) { roundTripARM32(GetParam()); }
+
 // clang-format off
 static std::vector<RoundTripTC> makeOptStress81TC(const char *prefix, const char *T) {
   std::string p = prefix, t = T;
@@ -91,12 +98,26 @@ static std::vector<RoundTripTC> makeOptStress81TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress81TC("x64o81", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress81TC("x64o81", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress81TC("x86o81", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress81TC("a64o81", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress81TC("a64o81", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress81TC("armo81", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress81, X64OptStress81RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress81, X86OptStress81RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress81, A64OptStress81RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress81, ARM32OptStress81RT, ::testing::ValuesIn(kARM), rtTCName);
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+
+INSTANTIATE_TEST_SUITE_P(OptStress81, X64OptStress81RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress81, X86OptStress81RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress81, A64OptStress81RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress81, ARM32OptStress81RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress81LLVMC, ARM32OptStress81LLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);

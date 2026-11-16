@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "scope": "MIPS16e2 CP0/MT word views and CACHE/PREF ordering, DSP AC0 through AC3, 32 MSA rounded shift and bit insert forms, LowIR emitter performance",
+  "comparison_base": "4a59c8d259a511b5ce135e847a1d9bc07e033c42",
+  "feature_head": "7c887c97dd9fc63fab5ddcab7e34d89b8fa20d10",
+  "integrated_dev": "47a0cede35fa302dbfcd270800827b6bd82933ea",
+  "validated_code": "1418d58712390356afd02a550d36fe8ef2688117",
+  "host": "Apple M4 Max, macOS arm64, Release, AppleClang 17, prebuilt NeverD LLVM 23 r6, default Highway/mimalloc/simdjson/simdutf/TBB",
+  "dependencies": {
+    "capstone": "c8a201f9482d83b0766e09546d8d3cb5147db261",
+    "capstone_pr": 27,
+    "decoder_normal_tests": 14,
+    "decoder_diet_tests": 14,
+    "unicorn": "f00305569977bfcb30b8867824235f00ab536b40",
+    "reference_dylib_sha256": "978571a25ef478998393c60ddf13ea5a08e1771348632ec46f2b6336e31f60c1"
+  },
+  "products": {
+    "neverd": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "libneverd.dylib": "d684af238ad61fc227fb96d015a172638da937808d1101395aa8335ebf903e2c",
+    "neverd-mips-bench": "418f80179992d7186798c86cdd6e59e85f47d62db044e06b26a0aa117bac59a5",
+    "NeverDMIPSPipelineTests": "1bed409eeb3d54ee3b84b5d5f0ee4369970749458ee77d66719693d7d19f80c6"
+  },
+  "ctest": {
+    "delivery": {
+      "owners": {
+        "cases": 745,
+        "skipped": 0,
+        "failed": 0
+      },
+      "emission": {
+        "cases": 56,
+        "skipped": 0,
+        "failed": 0
+      }
+    },
+    "mips": 566,
+    "initial_broad_selection": {
+      "total": 894,
+      "passed": 851,
+      "skipped": 37,
+      "timeout_reruns_passed": 3,
+      "reproduced_on_baseline": [
+        "VolatileSegmentLoadsKeepDefinitionsAndReadOrder",
+        "VolatileSegmentPointerLoadKeepsItsPointerType",
+        "OrdinarySegmentLoadKeepsItsExistingProjection"
+      ]
+    },
+    "integrated_host_controls": {
+      "LLVMCIntrinsicSemantics": {
+        "cases": 3,
+        "passed": 0,
+        "existing_baseline_failures": [
+          "VolatileSegmentLoadsKeepDefinitionsAndReadOrder",
+          "VolatileSegmentPointerLoadKeepsItsPointerType",
+          "OrdinarySegmentLoadKeepsItsExistingProjection"
+        ]
+      },
+      "LLVMCValues": {
+        "cases": 3,
+        "passed": 3,
+        "existing_baseline_failures": []
+      }
+    }
+  },
+  "source": {
+    "qualified_groups": 5684,
+    "fresh_execution_groups": {
+      "classic": 400,
+      "micro": 20,
+      "mips16": 312,
+      "mips16e2": 520
+    },
+    "both_backends_o0_o2_identical_source_reuse": {
+      "dsp": {
+        "identical_c_outputs": 548,
+        "prior_executed_groups": 1096,
+        "prior_report_sha256": "d9d4154837e93705980f11b15448e7cd839f7f5c98254790c76fb495904b66f2"
+      },
+      "msa": {
+        "identical_c_outputs": 1668,
+        "prior_executed_groups": 3336,
+        "prior_report_sha256": "5978daae283033c751e36a799d8dcaaeade3e0a2eb1c8c01dd03a18b08cd19d5"
+      }
+    },
+    "original_dsp_observations": 6048,
+    "original_msa_observations": 3200,
+    "mips16e2_stateful_refusals": 104,
+    "dsp_standalone_groups": 24,
+    "dsp_compiler_probes": 12,
+    "msa_wide_execution_groups": 4,
+    "msa_wide_storage_checks": 4
+  },
+  "firmware": {
+    "model": "Archer C7 V5 US",
+    "elf": "bin/ubus",
+    "profile": "MIPS32r2 o32 BE",
+    "sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "handler": "0x4012d0",
+    "outputs": [
+      {
+        "backend": "highc",
+        "selection": "call",
+        "equal": true,
+        "matches_verified_candidate": true,
+        "output": {
+          "sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+          "bytes": 3038
+        }
+      },
+      {
+        "backend": "highc",
+        "selection": "discovered",
+        "equal": true,
+        "matches_verified_candidate": true,
+        "output": {
+          "sha256": "30a79315c656ec1d1d124120928864b0a784ed1215bd1156c2d98d713708db87",
+          "bytes": 9323
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "call",
+        "equal": false,
+        "matches_verified_candidate": true,
+        "output": {
+          "sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+          "bytes": 3851
+        }
+      },
+      {
+        "backend": "llvmc",
+        "selection": "discovered",
+        "equal": true,
+        "matches_verified_candidate": true,
+        "output": {
+          "sha256": "ea9cb10ed758722f9bf8d8678e9f8b66010c1432332417739e55821f9d809f33",
+          "bytes": 8453
+        }
+      }
+    ],
+    "lowir_change": "The complete selected handler differs by a single COPY clearing AC0Pending immediately after SPECIAL2 MUL.",
+    "original_call_cases": 12,
+    "rebuilt_call_cases": 48,
+    "imports": "Five controlled PLT bindings. Both byte orders of classic MIPS use separate owned tests. This vendor ELF is big endian.",
+    "changed_output": "Selected LLVMC C reflects the new AC0 history write after SPECIAL2 MUL. HighC and both bounded discovery outputs kept the base hashes. Compare return, stack and callee-save registers, external calls with all seven invoke operands, and guest memory effects on twelve original executions."
+  },
+  "measurement": {
+    "same_base_paired_samples": 7,
+    "short_primitive_profiles": 14,
+    "added_form_profiles": 6,
+    "complete_firmware_requests_with_warmups": 976,
+    "delivery_matching_fingerprints": 72,
+    "unchanged_output_streams": "Exact physical instruction counts and LowIR digests",
+    "original_mixed_stream": "One MULT and two HI/LO reads add three required LowIR operations per pass. Timed separately.",
+    "one_shot_ubus": "Ghidra 12.1.3 headless import, auto-analysis and selected decompilation. NeverD selected HighC CLI. Each tool has its own stable C and analysis scope."
+  },
+  "limits": [
+    "Bound CP0/MT state only. Privileged native source, cache execution and MT scheduling require additional architectural state. Original e2 hardware execution has not been exercised.",
+    "A register-count MSA insertion requires prior destination state in strict execution even when runtime counts replace all lanes. Full-width immediate insertion can initialize an unknown destination.",
+    "Saturating DSP accumulator and extraction families and further MSA instructions, including floating-point state, remain unqualified.",
+    "Source execution reuse requires a new complete C and input ELF hash match with the same compiler, flags and reference.",
+    "Performance evidence covers the measured host, configurations and corpora."
+  ],
+  "local_evidence": "build-mips/mips-system-accumulators/qualification.json"
+}

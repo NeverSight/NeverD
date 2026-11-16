@@ -285,7 +285,7 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     }
     // Any other register by its encoding, which the C writers name.
     S.emitIntrinsic(Intrinsic::Mrs, Dst,
-                    {NdVar::cst(systemInstructionField(Insn), 2)});
+                    {NdVar::scalar(systemInstructionField(Insn), 2)});
     break;
   }
   case AARCH64_INS_MSR: {
@@ -293,7 +293,7 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     // An MSR (immediate) writes a PSTATE field, `msr daifset, #2` or
     // `smstart`, whose immediate the field holds.
     if (Field >> 14 == 0) {
-      S.emitVoidIntrinsic(Intrinsic::Msr, {NdVar::cst(Field, 2)});
+      S.emitVoidIntrinsic(Intrinsic::Msr, {NdVar::scalar(Field, 2)});
       break;
     }
     if (ARM64.op_count < 2)
@@ -316,7 +316,7 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
     }
     // Any other register by its encoding.  An MSR writes no general
     // register.
-    S.emitVoidIntrinsic(Intrinsic::Msr, {NdVar::cst(Field, 2), Src});
+    S.emitVoidIntrinsic(Intrinsic::Msr, {NdVar::scalar(Field, 2), Src});
     break;
   }
 
@@ -342,7 +342,7 @@ bool AArch64Lifter::liftControl(LiftState &S, const cs_insn *Insn,
         break;
       }
     }
-    const NdVar Field = NdVar::cst(systemInstructionField(Insn), 2);
+    const NdVar Field = NdVar::scalar(systemInstructionField(Insn), 2);
     if (ARM64.op_count >= 1 &&
         ARM64.operands[ARM64.op_count - 1].type == AARCH64_OP_REG)
       S.emitVoidIntrinsic(

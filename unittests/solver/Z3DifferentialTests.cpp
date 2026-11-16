@@ -354,7 +354,12 @@ TEST(Z3Differential, IndependentlySizedShiftAndRotateCounts) {
     Inputs.emplace_back(llvm::APInt(W, 1), llvm::APInt::getAllOnes(AW));
     for (SymOp Op : Shifts) {
       checkEvaluation(Op, W, AW, Inputs);
-      checkSolvers(Op, W, AW, Inputs);
+      // Rotates reduce the count modulo the value width. For a wide count
+      // and a non-power-of-two width, expose the pinned inputs before Z3
+      // expands that remainder into an unconstrained wide division.
+      const bool WideRemainder =
+          (Op == SymOp::Rol || Op == SymOp::Ror) && AW > 64 && (W & (W - 1));
+      checkSolvers(Op, W, AW, Inputs, WideRemainder);
     }
   }
 }

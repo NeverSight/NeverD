@@ -40,6 +40,7 @@
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
+#include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/debug/UserPrototype.h"
@@ -62,11 +63,13 @@
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 
@@ -85,9 +88,29 @@
 namespace neverd {
 
 namespace {
+#define C_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/c/render/CStackIntrinsic.def"
 
 /// Holds the frame record's place until the body has named its members.
 constexpr llvm::StringLiteral kFrameRecordMarker = "/*@neverd-frame-record@*/";
+
+/// Whether the C compiler for the original target lets a definition assume
+/// that its callers extended a char or short argument to a full int, as Clang
+/// does for AAPCS, i386, x86-64 System V, MIPS and Apple arm64 (`zeroext`).
+/// Win64 and AAPCS64 make the callee extend it.
+bool cCallersExtendNarrowArguments(Arch TheArch, BinaryFormat Format) {
+  switch (TheArch) {
+  case Arch::X86:
+  case Arch::ARM:
+    return true;
+  case Arch::X64:
+    return Format != BinaryFormat::COFF;
+  case Arch::AArch64:
+    return Format == BinaryFormat::MachO;
+  default:
+    return isMIPS(TheArch);
+  }
+}
 
 /// Whether \p Signature declares main as a hosted C program's runtime calls
 /// it: `int main(int argc, char **argv)`, and envp after argv where it
@@ -540,12 +563,58 @@ void LLVMCWriter::planExpressionMaterialization(llvm::Function &Fn) {
   }
 }
 
+void LLVMCWriter::collectVectorGathers(llvm::Function &Fn) {
+  VectorGathers.clear();
+  llvm::DenseMap<const llvm::InsertElementInst *,
+                 llvm::SmallVector<const llvm::Value *, 4>>
+      Lanes;
+  // Follow SSA dependencies, independent of block layout. Memoizing each
+  // prefix makes the work proportional to inserts times the vector width;
+  // repeated or overwritten lanes do not cause repeated chain walks.
+  for (const auto &Block : Fn)
+    for (const auto &Inst : Block) {
+      const auto *Insert = llvm::dyn_cast<llvm::InsertElementInst>(&Inst);
+      if (!Insert || !isCVectorType(Insert->getType()) || Lanes.count(Insert))
+        continue;
+      llvm::SmallVector<const llvm::InsertElementInst *> Pending;
+      const auto *Cursor = Insert;
+      while (Cursor && !Lanes.count(Cursor)) {
+        Pending.push_back(Cursor);
+        Cursor = llvm::dyn_cast<llvm::InsertElementInst>(Cursor->getOperand(0));
+      }
+      llvm::SmallVector<const llvm::Value *, 4> Elements(
+          llvm::cast<llvm::FixedVectorType>(Insert->getType())
+              ->getNumElements(),
+          nullptr);
+      if (Cursor)
+        Elements = Lanes.find(Cursor)->second;
+      while (!Pending.empty()) {
+        const auto *Part = Pending.pop_back_val();
+        const auto *Index =
+            llvm::dyn_cast<llvm::ConstantInt>(Part->getOperand(2));
+        if (!Index || Index->getValue().uge(Elements.size()))
+          std::fill(Elements.begin(), Elements.end(), nullptr);
+        else
+          Elements[Index->getZExtValue()] = Part->getOperand(1);
+        Lanes.try_emplace(Part, Elements);
+        if (llvm::all_of(Elements, [](const llvm::Value *V) { return V; }))
+          VectorGathers.try_emplace(Part, Elements);
+      }
+    }
+}
+
 void LLVMCWriter::markInlinable(llvm::Function &Fn) {
   Analysis.Inlinable.clear();
   InlineCache.clear();
+  collectVectorGathers(Fn);
   planExpressionMaterialization(Fn);
   for (auto &BB : Fn) {
     for (auto &Inst : BB) {
+      if (const auto *Insert = llvm::dyn_cast<llvm::InsertElementInst>(&Inst);
+          Insert && VectorGathers.count(Insert)) {
+        Analysis.Inlinable.insert(Insert);
+        continue;
+      }
       if (Inst.getType()->isVoidTy() || MaterializedExpressions.count(&Inst) ||
           statedVariableType(&Inst))
         continue;
@@ -616,6 +685,26 @@ void LLVMCWriter::markInlinable(llvm::Function &Fn) {
       if (Analysis.IntrinsicStructVals.count(&Inst))
         continue;
       Analysis.Inlinable.insert(&Inst);
+    }
+  }
+  // A complete gather reads its scalar elements directly. Prefix inserts
+  // whose every use is such an assembly need no eager statement either.
+  // Keep them in the inline dependency graph so liveness still reaches all
+  // scalar payloads, including their missing-state flags and call snapshots.
+  llvm::SmallVector<const llvm::InsertElementInst *> Pending;
+  for (const auto &[Insert, Elements] : VectorGathers)
+    Pending.push_back(Insert);
+  llvm::DenseMap<const llvm::InsertElementInst *, unsigned> RemainingUses;
+  while (!Pending.empty()) {
+    const auto *Insert = Pending.pop_back_val();
+    const auto *Prefix =
+        llvm::dyn_cast<llvm::InsertElementInst>(Insert->getOperand(0));
+    if (!Prefix)
+      continue;
+    auto At = RemainingUses.try_emplace(Prefix, Prefix->getNumUses()).first;
+    if (--At->second == 0 && !VectorGathers.count(Prefix)) {
+      Analysis.Inlinable.insert(Prefix);
+      Pending.push_back(Prefix);
     }
   }
 }
@@ -2661,16 +2750,72 @@ void LLVMCWriter::collectOmittedUnknowns(llvm::Function &Fn) {
   }
 }
 
-bool LLVMCWriter::isDeferredUnknownInput(const llvm::Value *Value) {
+std::optional<unsigned>
+LLVMCWriter::deferredUnknownLowBit(const llvm::Value *Value) {
   // LLVM undef/freeze retains its own refinement contract. Only the source
   // marker denotes missing machine state that must fail when observed.
+  unsigned ObservedBits = Value->getType()->getIntegerBitWidth();
   while (const auto *Inst = llvm::dyn_cast<llvm::Instruction>(Value)) {
+    if (isCallClobberValue(Value))
+      return 0;
     if (!llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst,
                    llvm::FreezeInst>(Inst))
       break;
     Value = Inst->getOperand(0);
+    ObservedBits =
+        std::min(ObservedBits, Value->getType()->getIntegerBitWidth());
   }
-  return llvm_source_unknown::isValue(Value);
+  if (llvm_source_unknown::isValue(Value) || isCallClobberValue(Value))
+    return 0;
+  const auto *Or = llvm::dyn_cast<llvm::BinaryOperator>(Value);
+  // Masking out low bits of an unavailable register does not read its
+  // remaining bits. Keep that suffix unavailable until an actual use.
+  if (Or && Or->getOpcode() == llvm::Instruction::And)
+    for (unsigned I = 0; I != 2; ++I) {
+      const auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(Or->getOperand(I));
+      const llvm::Value *Unknown = Or->getOperand(1 - I);
+      if (Mask && (llvm_source_unknown::isValue(Unknown) ||
+                   isCallClobberValue(Unknown))) {
+        const unsigned LowBits = Mask->getValue().countr_zero();
+        return ObservedBits > LowBits ? std::optional<unsigned>(LowBits)
+                                      : std::nullopt;
+      }
+    }
+  if (!Or || Or->getOpcode() != llvm::Instruction::Or)
+    return std::nullopt;
+  // Recognize a disjoint concatenation of an incoming argument's bits and
+  // an opaque high suffix. It is a transport of an unavailable whole value,
+  // not an observation at the PHI edge or an instruction before a later use.
+  for (unsigned I = 0; I != 2; ++I) {
+    const auto *Low = llvm::dyn_cast<llvm::ZExtInst>(Or->getOperand(I));
+    const auto *Shift =
+        llvm::dyn_cast<llvm::BinaryOperator>(Or->getOperand(1 - I));
+    if (!Low || !Shift || Shift->getOpcode() != llvm::Instruction::Shl)
+      continue;
+    const auto *Count = llvm::dyn_cast<llvm::ConstantInt>(Shift->getOperand(1));
+    const auto *High = llvm::dyn_cast<llvm::ZExtInst>(Shift->getOperand(0));
+    const unsigned LowBits = Low->getSrcTy()->getIntegerBitWidth();
+    if (!Count || !High || Count->getLimitedValue() != LowBits ||
+        High->getSrcTy()->getIntegerBitWidth() + LowBits !=
+            Or->getType()->getIntegerBitWidth() ||
+        !llvm_source_unknown::isValue(High->getOperand(0)))
+      continue;
+    const llvm::Value *Known = Low->getOperand(0);
+    if (const auto *Cast = llvm::dyn_cast<llvm::CastInst>(Known);
+        Cast && (llvm::isa<llvm::BitCastInst, llvm::PtrToIntInst>(Cast)))
+      Known = Cast->getOperand(0);
+    if (llvm::isa<llvm::Argument, llvm::ConstantInt>(Known))
+      return ObservedBits > LowBits ? std::optional<unsigned>(LowBits)
+                                    : std::nullopt;
+  }
+  return std::nullopt;
+}
+
+bool LLVMCWriter::isDeferredUnknownInput(const llvm::Value *Value) {
+  // A call-clobbered carrier has the same missing-state contract as a source
+  // marker when valueStr observes it. PHI transport must defer that failure
+  // too, including cycles longer than an optional dead-copy query can prove.
+  return deferredUnknownLowBit(Value).has_value();
 }
 
 void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
@@ -2684,14 +2829,39 @@ void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
           Transfers.push_back(
               {Phi, Incoming, isDeferredUnknownInput(Incoming)});
       } else if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(
-                     &Inst))
-        Transfers.push_back({&Inst, Inst.getOperand(0), false});
+                     &Inst)) {
+        // A low slice which excludes the missing suffix has no dependency
+        // on the whole carrier's availability flag.
+        if (llvm::isa<llvm::TruncInst>(&Inst))
+          if (auto FirstUnknown = deferredUnknownLowBit(Inst.getOperand(0));
+              FirstUnknown &&
+              Inst.getType()->getIntegerBitWidth() <= *FirstUnknown)
+            continue;
+        Transfers.push_back(
+            {&Inst, Inst.getOperand(0), isDeferredUnknownInput(&Inst)});
+      } else if ((Inst.getOpcode() == llvm::Instruction::Or ||
+                  Inst.getOpcode() == llvm::Instruction::And) &&
+                 isDeferredUnknownInput(&Inst))
+        Transfers.push_back({&Inst, std::nullopt, true});
     }
   const auto Deferred = deferredCValues(Transfers);
   for (auto &Block : Fn)
     for (auto &Inst : Block) {
       if (!Deferred.count(&Inst) || Inst.use_empty())
         continue;
+      // An always-missing transport feeding only other missing transports
+      // or PHI unknown arms has no reader of its flag or payload. Those
+      // assignments set the destination flag directly to unknown.
+      if (isDeferredUnknownInput(&Inst) &&
+          llvm::all_of(Inst.users(), [&](const llvm::User *User) {
+            const auto *Use = llvm::dyn_cast<llvm::Instruction>(User);
+            return Use && Deferred.count(Use) &&
+                   (llvm::isa<llvm::PHINode>(Use) ||
+                    isDeferredUnknownInput(Use));
+          })) {
+        OmittedUnknowns.insert(&Inst);
+        continue;
+      }
       DeferredUnknownFlags.emplace(&Inst, freshVar(getName(&Inst) + "_known"));
       Analysis.Inlinable.erase(&Inst);
       OmittedInlined.erase(&Inst);
@@ -2700,13 +2870,26 @@ void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
   // Copy-only cycles have no observation and need no payload declaration.
   // Decide after materializing the closure so an inlined live copy cannot
   // hide its users during the liveness query.
-  std::erase_if(DeferredUnknownFlags, [&](const auto &Entry) {
+  // Decide against one unchanged liveness state. Publishing an omission
+  // during a pointer-keyed map traversal shortens later bounded walks, so
+  // allocation addresses would decide which transports survive.
+  std::vector<const llvm::Instruction *> UnobservedTransports;
+  for (const auto &Entry : DeferredUnknownFlags) {
     const auto *Inst = llvm::cast<llvm::Instruction>(Entry.first);
     const auto *Phi = llvm::dyn_cast<llvm::PHINode>(Inst);
-    return Analysis.DeadFrameStores.count(Inst) ||
-           (usersAreDeadCopies(Inst) &&
-            (!Phi || !phiPrintedAsJoinCallArg(Phi)));
-  });
+    const bool Unobserved =
+        Analysis.DeadFrameStores.count(Inst) ||
+        (usersAreDeadCopies(Inst) && (!Phi || !phiPrintedAsJoinCallArg(Phi)));
+    // Removing the availability flag also removes the unobserved transport.
+    // Otherwise a partial concatenation is printed as ordinary arithmetic
+    // and evaluates its missing suffix even though its copy cycle is gone.
+    if (Unobserved)
+      UnobservedTransports.push_back(Inst);
+  }
+  for (const auto *Inst : UnobservedTransports) {
+    OmittedUnknowns.insert(Inst);
+    DeferredUnknownFlags.erase(Inst);
+  }
   // Earlier display analysis can have cached expressions before availability
   // was known. Their observations must be rendered with the new guards.
   if (!DeferredUnknownFlags.empty())
@@ -2716,6 +2899,8 @@ void LLVMCWriter::collectDeferredUnknowns(llvm::Function &Fn) {
 void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   DeferredUnknownFlags.clear();
   ReadingDeferredPayload = false;
+  AvailabilityFlow.reset();
+  AvailabilityPoints.clear();
   PointerParams.clear();
   PointerReturnType.clear();
   UseScalarExpressionTypes = false;
@@ -2753,6 +2938,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   BlockLabels.clear();
   DeferredBlockLabels.clear();
   ReferencedBlocks.clear();
+  AddressLabelBlocks.clear();
   KnownImmediates.clear();
   AllocaImmediates.clear();
   UnknownPlaceholderCache.clear();
@@ -3233,7 +3419,7 @@ LLVMCWriter::definitionPointerTypes(const llvm::Function &Fn) const {
     if (Sret >= 0 && static_cast<size_t>(Sret) < Types.Parameters.size())
       Types.Result = Types.Parameters[Sret];
   } else if (SameWidth(Signature->ReturnType, Fn.getReturnType()) &&
-             Signature->ReturnType->Pointee->Kind != NdTypeKind::Func)
+             hasCSpelling(Signature->ReturnType))
     Types.Result = Project(Signature->ReturnType, Fn.getReturnType());
   return Types;
 }
@@ -3529,10 +3715,9 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
-  // Inline assembly has an exact input contract, not an inferred C call ABI.
-  // A trailing input loaded from a cross-block snapshot is still required;
-  // dropping its producers leaves the assembly using an uninitialized local.
-  if (Call.isInlineAsm())
+  // Both render every operand. Even a trailing load used only by a variadic
+  // occurrence must stay live when its target's declaration has fewer inputs.
+  if (Call.isInlineAsm() || Call.getMetadata("neverd.source.analyst-call"))
     return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {
@@ -3766,7 +3951,7 @@ TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
   // The source-import table already proved this exact call's complete scalar
   // signature. Use the same binding for frame objects and call conversions.
   if (const auto *Source = sourceImportCallee(Call))
-    if (TypeRef Ty = cDisplayType(debugCallArgPointer(*Source, Index, Opts)))
+    if (TypeRef Ty = (debugCallArgPointer(*Source, Index, Opts)))
       return Ty;
   if (auto FS = debugCallee(Call)) {
     if (const auto Layout = recordCallArguments(Call, *FS);
@@ -3777,7 +3962,7 @@ TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
         return {};
       Index = *Scalar;
     }
-    if (TypeRef Ty = cDisplayType(debugCallArgPointer(*FS, Index, Opts)))
+    if (TypeRef Ty = (debugCallArgPointer(*FS, Index, Opts)))
       return Ty;
   }
   std::string Name;
@@ -3795,7 +3980,7 @@ TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
   if (const MsvcCallee *Msvc = msvcCallee(Name, Opts.Format)) {
     if (Index == 0 || msvcTypesCallArgAsPointer(*Msvc, Index) ||
         (Msvc->Kind == MsvcCalleeKind::Ctor && Index == 1)) {
-      TypeRef Ty = cDisplayType(msvcSyntheticThis(Name, *Msvc));
+      TypeRef Ty = (msvcSyntheticThis(Name, *Msvc));
       if (isNamedPointerDisplay(Ty))
         return Ty;
     }
@@ -3833,7 +4018,7 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
     auto It = FrameSlots.find(Peeled->second);
     if (It == FrameSlots.end() || It->second.Name.empty())
       return;
-    TypeRef Next = cDisplayType(Expected->Pointee);
+    TypeRef Next = Expected->Pointee;
     if (!Next)
       return;
     if (Dbg)
@@ -3996,7 +4181,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
             Text != ValueTexts.end() && !Text->second.empty())
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty())
+            ValueTexts[&Inst] = std::move(Converted);
         continue;
       }
       if (auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst)) {
@@ -4039,7 +4226,7 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
             TypeRef Expected = expectedCallArgType(*CB, I);
             applyCallSlotType(Arg, Expected);
             if (Expected && isArgListRecord(Expected->Pointee))
-              Packed = cDisplayType(Expected->Pointee);
+              Packed = Expected->Pointee;
           }
           if (auto Off = frameSlotOff(Arg)) {
             auto It = FrameSlots.find(*Off);
@@ -4147,7 +4334,9 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         continue;
       if (auto Text = ValueTexts.find(Inst.getOperand(0));
           Text != ValueTexts.end() && !Text->second.empty())
-        ValueTexts[&Inst] = castOfText(*Cast, Text->second);
+        if (std::string Converted = castOfText(*Cast, Text->second);
+            !Converted.empty())
+          ValueTexts[&Inst] = std::move(Converted);
     }
   }
 
@@ -4404,10 +4593,12 @@ void LLVMCWriter::markComposedPrints(llvm::Function &Fn) {
         if (llvm::isa<llvm::TruncInst, llvm::ZExtInst, llvm::SExtInst>(&Inst))
           continue;
         if (auto Text = ValueTexts.find(Inst.getOperand(0));
-            Text != ValueTexts.end() && !Text->second.empty()) {
-          ValueTexts[&Inst] = castOfText(*Cast, Text->second);
-          Mark(Inst);
-        }
+            Text != ValueTexts.end() && !Text->second.empty())
+          if (std::string Converted = castOfText(*Cast, Text->second);
+              !Converted.empty()) {
+            ValueTexts[&Inst] = std::move(Converted);
+            Mark(Inst);
+          }
       }
       if (isComposedRemValue(&Inst) || isRedundantFlagAnd(Inst) ||
           (llvm::isa<llvm::ICmpInst>(&Inst) && !Inst.use_empty()))
@@ -6103,24 +6294,8 @@ bool LLVMCWriter::cursorCopyLatch(const llvm::BasicBlock *BB) {
   const llvm::BasicBlock *Pred = BB->getSinglePredecessor();
   if (!Pred)
     return false;
-  bool Reaches = false;
-  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Seen;
-  llvm::SmallVector<const llvm::BasicBlock *, 8> Work{Succ};
-  while (!Work.empty()) {
-    const llvm::BasicBlock *Cur = Work.pop_back_val();
-    if (!Cur || !Seen.insert(Cur).second)
-      continue;
-    if (Cur == Pred) {
-      Reaches = true;
-      break;
-    }
-    if (Cur == BB)
-      continue;
-    for (const llvm::BasicBlock *Next : llvm::successors(Cur))
-      Work.push_back(Next);
-  }
-  if (!Reaches)
-    return false;
+  // Most blocks do not copy a cursor at all. Establish that local shape
+  // before walking a potentially large cyclic CFG for each candidate.
   const llvm::AllocaInst *Slot = nullptr;
   const llvm::StoreInst *Store = nullptr;
   for (const llvm::Instruction &Inst : *BB) {
@@ -6139,10 +6314,28 @@ bool LLVMCWriter::cursorCopyLatch(const llvm::BasicBlock *BB) {
   }
   if (!Slot || !Store || !llvm::isa<llvm::LoadInst>(Store->getValueOperand()))
     return false;
+  bool ReadsSlot = false;
   for (const llvm::Instruction &Inst : *Succ) {
     const auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst);
-    if (LI && asAllocaPointer(LI->getPointerOperand()) == Slot)
+    if (LI && asAllocaPointer(LI->getPointerOperand()) == Slot) {
+      ReadsSlot = true;
+      break;
+    }
+  }
+  if (!ReadsSlot)
+    return false;
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Seen;
+  llvm::SmallVector<const llvm::BasicBlock *, 8> Work{Succ};
+  while (!Work.empty()) {
+    const llvm::BasicBlock *Cur = Work.pop_back_val();
+    if (!Cur || !Seen.insert(Cur).second)
+      continue;
+    if (Cur == Pred)
       return true;
+    if (Cur == BB)
+      continue;
+    for (const llvm::BasicBlock *Next : llvm::successors(Cur))
+      Work.push_back(Next);
   }
   return false;
 }
@@ -6154,20 +6347,18 @@ bool LLVMCWriter::splitPhiCursorLoop(const llvm::BasicBlock *Header,
   Latch = nullptr;
   Step = nullptr;
   Slot = nullptr;
-  if (!Header)
+  if (!Header || !Header->hasNPredecessors(2))
     return false;
   const auto *Br = llvm::dyn_cast<llvm::CondBrInst>(Header->getTerminator());
   if (!Br || Br->getSuccessor(0) == Br->getSuccessor(1))
     return false;
   const llvm::BasicBlock *Back = nullptr;
-  int Preds = 0;
   for (const llvm::BasicBlock *Pred : llvm::predecessors(Header)) {
-    ++Preds;
     if (cursorCopyLatch(Pred) &&
         Pred->getTerminator()->getSuccessor(0) == Header)
       Back = Pred;
   }
-  if (Preds != 2 || !Back)
+  if (!Back)
     return false;
   auto Reaches = [&](const llvm::BasicBlock *Start,
                      const llvm::BasicBlock *Target) {
@@ -9048,6 +9239,7 @@ void LLVMCWriter::writeGoto(const llvm::BasicBlock *From,
                             bool EmitGoto) {
   if (!From || !To)
     return;
+  noteLabelPlace(From);
   std::set<const llvm::BasicBlock *> Seen;
   const llvm::BasicBlock *CurFrom = From;
   const llvm::BasicBlock *CurTo = To;
@@ -10174,8 +10366,8 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
 
 void LLVMCWriter::writeFunctionProjection(llvm::Function &Fn) {
   if (Fn.hasFnAttribute(windows_eh_md::UnresolvedSourceFrame))
-    OS << "/* neverd.seh: unresolved runtime stack; unknown entry values "
-          "remain explicit. Native reconstruction is unavailable. */\n";
+    OS << "/* neverd.seh: runtime stack has no recovered frame; entry values "
+          "stay explicit. Native reconstruction is unavailable. */\n";
   restoreSEHRangeEntryOrder(Fn);
   // A call the analysis sinks into the one use that needs it must print
   // there exactly once: text that prints the use twice (`(c) & (c)` for
@@ -10323,6 +10515,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       return {};
     return cNamedTypeSpelling(Ty->TypedefName);
   };
+  // The char and short arguments the definition takes as whole words, and the
+  // word each one arrives in.
+  std::vector<std::pair<const llvm::Argument *, std::string>> NarrowedArguments;
   auto ParamDecl = [&](llvm::Argument &Arg, unsigned ParamIdx) {
     if (ParamIdx < DefinitionTypes.Parameters.size()) {
       const auto &Pointer = DefinitionTypes.Parameters[ParamIdx];
@@ -10351,6 +10546,26 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         return Name + " " + BindParam(Arg, ParamIdx);
       }
     }
+    // A char or short argument with no extension attribute arrives with
+    // whatever bits its caller left above it: the code reads its low bits
+    // only, so an int argument the original declared passes it too. C would
+    // let the definition rely on an extension the original never did, so it
+    // takes the whole word and narrows it itself. A declared narrow type is
+    // one its callers extend, and keeps its spelling.
+    if (!Sret && !DebugIdx && !Opts.PreserveLLVMFunctionTypes &&
+        cCallersExtendNarrowArguments(Opts.TheArch, Opts.Format) &&
+        (Arg.getType()->isIntegerTy(8) || Arg.getType()->isIntegerTy(16)) &&
+        !Arg.hasZExtAttr() && !Arg.hasSExtAttr() &&
+        !Fn.hasFnAttribute("neverd.x64_dispatch_frame")) {
+      const std::string Name = BindParam(Arg, ParamIdx);
+      if (Arg.use_empty())
+        return "uint32_t " + Name;
+      std::string Word = Name + "_word";
+      if (!UsedNames.insert(Word).second)
+        Word = freshVar(Word);
+      NarrowedArguments.emplace_back(&Arg, Word);
+      return "uint32_t " + Word;
+    }
     return ParamTypeStr(Arg, ParamIdx) + " " + BindParam(Arg, ParamIdx);
   };
 
@@ -10363,11 +10578,16 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       OS << Preamble;
     }
     auto *FuncTy = Fn.getFunctionType();
+    const SourcePointerType *ReturnPointer = nullptr;
     std::string RetStr =
-        InferredVoid ? "void" : typeToCLLVM(FuncTy->getReturnType());
+        InferredVoid
+            ? "void"
+            : sourceScalarType(FuncTy->getReturnType(),
+                               Fn.hasFnAttribute(LLVMSourceSignedResult));
     if (std::string Ty = IndirectReturnTypeStr(); !Ty.empty())
       RetStr = std::move(Ty);
     else if (!InferredVoid && DefinitionTypes.Result.Type) {
+      ReturnPointer = &DefinitionTypes.Result;
       RetStr = PointerReturnType = DefinitionTypes.Result.declaration();
     } else if (!InferredVoid && DebugFn) {
       if (std::string Name =
@@ -10382,7 +10602,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     // machine word; the known source ABI owns the result width and signedness.
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame") && DebugFn &&
         !Opts.PreserveLLVMFunctionTypes)
-      if (const auto Return = cDisplayType(DebugFn->ReturnType);
+      if (const auto Return = DebugFn->ReturnType;
           Return && Return->Kind == NdTypeKind::Int &&
           (Return->Size == 1 || Return->Size == 2 || Return->Size == 4 ||
            Return->Size == 8))
@@ -10391,6 +10611,13 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     llvm::raw_string_ostream SignatureOS(Signature);
     if (Fn.hasFnAttribute(LLVMSourceBody))
       SignatureOS << "static ";
+    // An inlined entry-SP read would see the caller's own argument area.
+    if (Fn.hasFnAttribute(llvm::Attribute::NoInline) &&
+        llvm::any_of(llvm::instructions(Fn), [](const auto &I) {
+          const auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+          return Call && Call->getIntrinsicID() == llvm::Intrinsic::sponentry;
+        }))
+      SignatureOS << kRetainStackFrame;
     if (isMIPS(Opts.TheArch)) {
       if (Fn.hasFnAttribute(mips::BarrierSourceMarker))
         SignatureOS << mips::BarrierNoInlineC;
@@ -10398,17 +10625,21 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      SignatureOS << mips::instructionModeCAttribute(
-          mips::instructionModeFromLLVM(Fn));
+      SignatureOS << mipsModeAttribute(Fn);
     }
-    SignatureOS << RetStr << " " << FName << "(";
+    // Return pointers may contain callback or array declarators. Attach the
+    // whole function name/parameter list at the shared declarator boundary;
+    // concatenating an abstract type and a name loses the C grouping.
+    std::string Declarator;
+    llvm::raw_string_ostream DeclaratorOS(Declarator);
+    DeclaratorOS << FName << "(";
 
     unsigned ParamIdx = 0;
     std::set<size_t> Declared;
     for (auto &Arg : Fn.args()) {
       if (ParamIdx > 0)
-        SignatureOS << ", ";
-      SignatureOS << ParamDecl(Arg, ParamIdx);
+        DeclaratorOS << ", ";
+      DeclaratorOS << ParamDecl(Arg, ParamIdx);
       if (const auto DebugIdx = debugParamIndexOf(ParamIdx, SretParamIdx))
         Declared.insert(*DebugIdx);
       ++ParamIdx;
@@ -10420,17 +10651,19 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       for (size_t Index = 0; Index < DebugFn->Params.size(); ++Index)
         if (!Declared.count(Index) && Index >= ParamIdx) {
           if (ParamIdx++ > 0)
-            SignatureOS << ", ";
+            DeclaratorOS << ", ";
           const auto &[Name, Ty] = DebugFn->Params[Index];
-          SignatureOS << declarationToC(
+          DeclaratorOS << declarationToC(
               Ty, Name.empty() ? "arg" + std::to_string(Index) : Name);
         }
     if (Fn.isVarArg() && ParamIdx != 0) {
       if (ParamIdx > 0)
-        SignatureOS << ", ";
-      SignatureOS << "...";
+        DeclaratorOS << ", ";
+      DeclaratorOS << "...";
     }
-    SignatureOS << ")";
+    DeclaratorOS << ")";
+    SignatureOS << (ReturnPointer ? ReturnPointer->declaration(Declarator)
+                                  : RetStr + " " + Declarator);
     DefinitionDeclarations[&Fn] =
         (Fn.hasFnAttribute("neverd.x64_dispatch_frame")
              ? "__attribute__((ms_abi)) "
@@ -10455,6 +10688,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       OS.retarget(Guard.Primary);
       OS << Buffered;
       return;
+    }
+    for (const auto &[Arg, Word] : NarrowedArguments) {
+      const std::string Type = typeToCLLVM(Arg->getType());
+      emitIndent(1);
+      OS << Type << " " << getName(Arg) << " = (" << Type << ")" << Word
+         << ";\n";
     }
   } else {
     unsigned ParamIdx = 0;
@@ -10481,15 +10720,18 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   ConditionChainBodies.clear();
   collectDeferredUnknowns(Fn);
 
-  if (Opts.EmitComments)
+  if (Opts.EmitComments) {
+    writeSourceImageStringComments(OS.stream(), readSourceImageBytes(Fn));
     for (const auto &Bytes : readSourceFrameBytes(Fn))
       if (const auto Text = sourceFrameStringComment(Bytes)) {
         emitIndent(1);
         OS << "/* " << *Text << " */\n";
       }
+  }
   BufOS.flush();
   const size_t DeclInsertPos = Buffered.size();
   emitFunctionDecls(Fn);
+  writeLabelTables(Fn);
   {
     llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Seen;
     for (const llvm::BasicBlock &BB : Fn) {
@@ -10609,10 +10851,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     // Every localaddress in this LLVM function names its parent's local area,
     // not a newly outlined C helper's frame. Capture it once before outlining;
     // frameaddress(0) can name a different base after stack realignment.
-    const std::string LocalAddress = freshVar("llvm_localaddress");
+    const std::string LocalAddress = freshVar(kLocalAddressName.str());
     emitIndent(1);
-    OS << "extern void *" << LocalAddress
-       << "(void) __asm__(\"llvm.localaddress\");\n";
+    OS << llvm::formatv(
+        kStackIntrinsicDecl.data(), LocalAddress,
+        llvm::Intrinsic::getBaseName(llvm::Intrinsic::localaddress));
     emitIndent(1);
     OS << "void *" << SEHParentFrameName << " = " << LocalAddress << "();\n";
   }
@@ -11167,6 +11410,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         writeInstruction(Inst, Indent);
       }
       auto *Term = BB.getTerminator();
+      llvm::SaveAndRestore<const llvm::Instruction *> Context(
+          EmittingInstruction, Term);
       if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
         writeCallLike(*Invoke,
                       Invoke->getType()->isVoidTy() ? "" : getName(Invoke),
@@ -11472,7 +11717,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   // a later region will actually inline. Retain the destination's rendered
   // position and reconcile late references before publishing the function.
   llvm::StringSet<> PrintedGotos, PrintedLabels;
-  if (!DeferredBlockLabels.empty()) {
+  if (!DeferredBlockLabels.empty() || !AddressLabelBlocks.empty()) {
     const llvm::StringRef Text(Buffered);
     for (size_t Pos = 0; (Pos = Text.find("goto ", Pos)) != Text.npos;) {
       const size_t Start = Pos + 5;
@@ -11492,6 +11737,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       Start = End + 1;
     }
   }
+  // A label table names its blocks as a goto does.
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    PrintedGotos.insert(blockLabel(Block));
   std::vector<std::pair<size_t, std::string>> MissingLabels;
   for (const auto &[Block, Position] : DeferredBlockLabels) {
     const std::string Name = blockLabel(Block);
@@ -11503,6 +11751,11 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     if (!PrintedLabels.contains(Name))
       MissingLabels.emplace_back(Position, Label);
   }
+  for (const llvm::BasicBlock *Block : AddressLabelBlocks)
+    if (!PrintedLabels.contains(blockLabel(Block)) &&
+        !DeferredBlockLabels.count(Block))
+      throw std::runtime_error(
+          "a label table names a block that prints no statement");
   if (!MissingLabels.empty()) {
     std::sort(MissingLabels.begin(), MissingLabels.end());
     std::string WithLabels;

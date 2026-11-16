@@ -24,6 +24,9 @@
 #include <cstdint>
 
 namespace neverd::limits::worker {
+// Eager view preparation needs the shared image indexes and one seed body,
+// not a whole-program decompile. Later functions retain normal full analysis.
+inline constexpr int kInitialViewPreparationFunctions = 1;
 /// Intermediate updates to one load step; boundaries are always sent.
 inline constexpr int kLoadProgressIntervalMs = 50;
 inline constexpr std::size_t kPatchHexBytes =
@@ -42,7 +45,11 @@ inline constexpr std::size_t kEngineMaxDeclarationBytes = 4u << 20;
 // The most other instructions one structure offset goes to, which with the
 // instruction's own row fill a history command.
 inline constexpr std::size_t kEngineMaxOperandFormatRows = 63;
+/// Above this size, keep compact row indexes instead of materialized JSON.
+/// This limits the eager representation, not the searchable catalog.
 inline constexpr std::size_t kEngineMaxFunctionRows = 1000000;
+/// Amortize cancellation checks and progress publication during table scans.
+inline constexpr std::size_t kListingQueryCheckpointRows = 2048;
 // Strings need this many display columns unless string_options says
 // otherwise; a minimum is at most MaxStringMinLength
 // (neverd::strings::MaxMinLength).
@@ -53,8 +60,9 @@ inline constexpr std::int64_t kEngineMaxStringMinLength =
 /// Lines of one engine code page.
 inline constexpr std::size_t kEngineEnginePageLines =
     ::neverd::sdk::kMaxCodeViewPageLines;
-/// Text a renamed whole-function view may hold: the engine's source budget.
-inline constexpr std::size_t kEngineMaxNamedViewBytes = 32 * 1024 * 1024;
+/// Source metadata spilled to disk uses the same chunk size as engine pages.
+inline constexpr std::size_t kEngineStoredViewChunkItems =
+    kEngineEnginePageLines;
 /// The text of one code page, as the engine bounds its own pages: a page
 /// ends before the line that would pass it.
 inline constexpr std::size_t kEngineMaxCodePageBytes =
@@ -62,6 +70,8 @@ inline constexpr std::size_t kEngineMaxCodePageBytes =
 /// Finished view documents the worker keeps, so that returning to a function
 /// answers from its document instead of decompiling it again: a session's
 /// working set of functions, bounded by retained bytes as well as count.
+/// Older original documents move to temporary disk storage until a context
+/// change or explicit refresh; memory eviction never requires decompilation.
 inline constexpr std::size_t kEngineMaxNamedViewCacheBytes = 256 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxNamedViews = 512;
 /// Edits a kept document can be behind and still read for what reached it, and
@@ -72,9 +82,16 @@ inline constexpr std::size_t kEngineMaxViewEdits = 128;
 inline constexpr std::size_t kEngineMaxViewEditTextBytes = 4 * 1024 * 1024;
 inline constexpr std::size_t kEngineMaxEncodedPages = 64;
 inline constexpr std::size_t kEngineMaxEncodedBytes = 8 * 1024 * 1024;
+/// Bytes reserved in that frame for the response envelope around one code
+/// page. The page is what the pseudocode view paints; the envelope is the
+/// protocol fields and background state, which stay far under this.
+inline constexpr std::size_t kEngineCodePageFrameEnvelope = 64 * 1024;
 /// Compact bytes of engine pages a replica keeps of the functions it renders
 /// ahead (EngineRenderAhead.cpp); the job ends at them.
 inline constexpr std::size_t kRenderAheadMaxStoredBytes = 1024 * 1024 * 1024;
+/// Source retained by an optional speculative render. Explicit views have no
+/// whole-function ceiling and use the disk-backed document when needed.
+inline constexpr std::size_t kRenderAheadMaxSourceBytes = 32 * 1024 * 1024;
 /// The longest key of a render kept between sessions (RenderStore.h): a
 /// function's address, its view and its engine options.
 inline constexpr std::size_t kRenderStoreMaxKeyBytes = 1024 * 1024;
@@ -124,8 +141,6 @@ inline constexpr std::size_t kGraphLayoutMaxDummies = 200000;
 inline constexpr int kGraphLayoutPlacementRounds = 8;
 
 // tools/neverd-worker/GraphSnapshot.cpp
-inline constexpr std::size_t kGraphSnapshotMaxNodes = 20000;
-inline constexpr std::size_t kGraphSnapshotMaxEdges = 100000;
 inline constexpr std::size_t kGraphSnapshotNodePage = 256;
 inline constexpr std::size_t kGraphSnapshotEdgePage = 512;
 inline constexpr double kGraphSnapshotMaxNodeExtent = 1e6;
@@ -135,6 +150,9 @@ inline constexpr std::size_t kListingMaxXrefLines = 2;
 /// The strings one neverd_strings_page_json call reads.
 inline constexpr int kListingStringPageRows =
     ::neverd::sdk::kMaxStringRowsPerPage;
+/// The data symbols one neverd_data_symbols_page_json call reads.
+inline constexpr int kListingDataSymbolPageRows =
+    ::neverd::sdk::kMaxDataSymbolRowsPerPage;
 inline constexpr std::size_t kListingMaxPageLines =
     ::neverd::limits::transport::kListingMaxPageLines;
 inline constexpr std::size_t kListingMaxOpcodeBytes = 12;
@@ -153,11 +171,8 @@ inline constexpr std::int64_t kBrowseCacheStaleTemporarySeconds = 10 * 60;
 inline constexpr std::size_t kListingOwnerSearchFunctions = 16;
 inline constexpr std::uint64_t kListingOwnerSearchDistance = 0x10000;
 inline constexpr std::size_t kListingMaxStringDisplay = 400;
-inline constexpr std::size_t kListingMaxUnsizedInstructions =
-    ::neverd::sdk::kMaxUnsizedInstructions;
-/// A recovered body the listing copies. The engine bounds the CFG; this bounds
-/// the copy above the largest real functions, as a kernel's of 86K
-/// instructions. A larger body lists through the ordinary decoder.
+/// Detailed instructions retained for one recovered body. Larger functions
+/// keep a compact boundary index and fetch further details one page at a time.
 inline constexpr std::size_t kListingMaxRecoveredInstructions = std::size_t{1}
                                                                 << 18;
 inline constexpr std::uint64_t kListingMaxAlignment = 0x1000;
@@ -420,9 +435,10 @@ inline constexpr int
 inline constexpr int
     kEngineExecuteImplLocalTypesSourceLocalTypesOptionsKeyKeyStringFieldMax =
         4096;
-inline constexpr int
-    kEngineExecuteImplLocalTypesSourceLocalTypesLocalTypeNameNameStringFieldMax =
-        4096;
+/// A name returned on a local-type page must also be accepted by lookup,
+/// filtering and navigation. C++ template names can exceed ordinary labels.
+inline constexpr std::size_t kEngineMaxLocalTypeNameBytes =
+    ::neverd::sdk::kMaxLocalTypePageBytes;
 inline constexpr int kEngineExecuteImplSearchKindKindStringFieldMax = 16;
 inline constexpr int kEngineExecuteImplSearchPatternStringFieldMax = 4096;
 inline constexpr int kEngineExecuteImplSearchLimitSizeFieldDefault = 256;
@@ -510,6 +526,9 @@ inline constexpr std::size_t kEngineMaxPreviousViews = 32;
 /// Views an edit reaches that are read ahead of the client's reads after its
 /// reply (Engine::prepareFollowingViews).
 inline constexpr std::size_t kEngineMaxPreparedViews = 2;
+/// Listing pages kept for the clients that name them (if_none_match), whose
+/// next read of the same lines is answered with what changed of them.
+inline constexpr std::size_t kEngineMaxKeptListingPages = 8;
 inline constexpr std::size_t kEngineMaxPreviousViewBytes = 32 * 1024 * 1024;
 /// A delta up to this size goes without weighing it against its page; a larger
 /// one goes only where it is under half the page.
@@ -559,7 +578,8 @@ inline constexpr int kProjectHistoryValidateRowRenamedStringFieldMax = 4096;
 inline constexpr int kProjectHistoryValidateRowStateStringFieldMax = 16;
 inline constexpr int kProjectHistoryValidateRowNamesSizeLimit = 4096;
 inline constexpr int
-    kProjectHistoryValidateRowNameGetRefConstStdStringSizeLimit = 4096;
+    kProjectHistoryValidateRowNameGetRefConstStdStringSizeLimit =
+        kEngineMaxLocalTypeNameBytes;
 inline constexpr int kProjectHistoryValidateRowLanguageStringFieldMax = 16;
 inline constexpr unsigned kProjectHistoryValidateRowSourceStringFieldMax =
     4u << 20;
@@ -594,6 +614,14 @@ inline constexpr int
 
 // tools/neverd-worker/main.cpp
 inline constexpr int kMainIdleGracePeriodMilliseconds = 150;
+/// The reads a request may carry to follow it ("then"), and the bytes each
+/// answer may take in its reply.
+inline constexpr std::size_t kMainThenReads = 4;
+inline constexpr std::size_t kMainThenReadBytes = 1024 * 1024;
+/// The lines of the listing one such read may ask for: those a client shows,
+/// which hold the request's reply back by little.  A page of the listing is
+/// read by itself.
+inline constexpr std::size_t kMainThenListingLines = 256;
 inline constexpr int kMainExecuteLoopMilliseconds = 10;
 inline constexpr int kMainMainHeartbeatSeconds = 1;
 inline constexpr int kMainMainHelloCancelTargetRequestIdStringFieldMax = 128;

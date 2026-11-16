@@ -9,6 +9,7 @@
 #include "CodeView.h"
 #include "ComparisonDialog.h"
 #include "ConnectionsDialog.h"
+#include "DialogReturnKey.h"
 #include "DisassemblyView.h"
 #include "Docking.h"
 #include "DwarfPromptDialog.h"
@@ -19,6 +20,7 @@
 #include "FunctionEditDialog.h"
 #include "GnomeWindowEdges.h"
 #include "GraphView.h"
+#include "GuiPluginUiHost.h"
 #include "HexView.h"
 #include "HighlightLocks.h"
 #include "Icons.h"
@@ -38,6 +40,7 @@
 #include "PathfinderView.h"
 #include "PdbPromptDialog.h"
 #include "PluginManagerDialog.h"
+#include "PluginServices.h"
 #include "ProjectDatabase.h"
 #include "QuickStartDialog.h"
 #include "Resolve.h"
@@ -212,6 +215,35 @@ protected:
 };
 
 /// Browse references while keeping the originating analysis pane usable.
+/// The buttons of a dialog that states one correction: Reset, then Cancel and
+/// Apply.
+struct CorrectionButtons {
+  QDialogButtonBox *box;
+  QPushButton *apply;
+  QPushButton *reset;
+};
+
+/// Apply is the step that comes next: it follows Cancel, as every dialog's
+/// primary action does, and takes Return while it can act.  Reset discards
+/// what the user stated, so it stands apart and never takes the key.  Left
+/// to Qt, Reset was the default as the first push button, and Apply, with a
+/// role of its own, stood before Cancel.
+CorrectionButtons correctionButtons(QDialog &dialog) {
+  auto *box =
+      new QDialogButtonBox(QDialogButtonBox::Apply | QDialogButtonBox::Cancel |
+                               QDialogButtonBox::Reset,
+                           &dialog);
+  auto *apply = box->button(QDialogButtonBox::Apply);
+  auto *reset = box->button(QDialogButtonBox::Reset);
+  box->removeButton(apply);
+  box->addButton(apply, QDialogButtonBox::AcceptRole);
+  apply->setDefault(true);
+  reset->setAutoDefault(false);
+  QObject::connect(apply, &QPushButton::clicked, &dialog, &QDialog::accept);
+  QObject::connect(box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  return {box, apply, reset};
+}
+
 class ReferencesDialog final : public QDialog {
 public:
   ReferencesDialog(Session &session, const AddressSpace &space,
@@ -324,7 +356,8 @@ protected:
 } // namespace
 
 MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
-                       GuiSessionBroker &broker)
+                       GuiSessionBroker &broker,
+                       const QString &bundledAgentManifest)
     : KDDockWidgets::QtWidgets::MainWindow(QStringLiteral("NeverDMainWindow")),
       session_(session), mcp_(mcp), broker_(broker), actions_(this) {
   instance_ = this;
@@ -337,38 +370,55 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   qApp->installEventFilter(this);
   buildMenusAndToolbars();
   buildDocks();
-  plugins_ = new AnalysisPlugins(session_, actions_);
-  plugins_->setSelectionProvider([this] {
-    QJsonObject selection;
-    auto address = currentAddress();
-    auto function = currentFunction();
-    if (auto *code = focusedCodeView()) {
-      function = code->text()->function();
-      address = code->text()->currentAddress();
-      if (!address)
-        address = function;
-    } else if (auto *chooser = focusedChooser()) {
-      address = chooser->currentAddress();
-      function = chooser->model().kind() == ChooserKind::Functions
-                     ? address
-                     : std::nullopt;
-    }
-    if (address)
-      selection.insert("address", hexAddress(*address));
-    if (function)
-      selection.insert("function_address", hexAddress(*function));
-    QString text;
-    if (auto *chooser = focusedChooser())
-      text = chooser->selectedText();
-    else if (auto *code = focusedCodeView())
-      text = code->text()->selectedText();
-    else
-      text = disassembly_->selectedText();
-    selection.insert(
-        "selection_text",
-        text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
-    return selection;
-  });
+  pluginUi_ = new GuiPluginUiHost(
+      *this, session_,
+      [this] { return pluginViewArea(*this, centralWidget()); },
+      [this](const QString &address) {
+        if (const auto parsed = parseAddress(address))
+          navigate(*parsed);
+      });
+  plugins_ = new AnalysisPlugins(session_, actions_, nullptr,
+                                 bundledAgentManifest, pluginUi_);
+  plugins_->setSelectionProvider(
+      [this, last = QJsonObject{}, epoch = quint64{}]() mutable {
+        if (epoch != session_.epoch()) {
+          epoch = session_.epoch();
+          last = {};
+        }
+        if (pluginUi_ && pluginUi_->contains(commandFocusWidget()) &&
+            !last.isEmpty())
+          return last;
+        QJsonObject selection;
+        auto address = currentAddress();
+        auto function = currentFunction();
+        if (auto *code = focusedCodeView()) {
+          function = code->text()->function();
+          address = code->text()->currentAddress();
+          if (!address)
+            address = function;
+        } else if (auto *chooser = focusedChooser()) {
+          address = chooser->currentAddress();
+          function = chooser->model().kind() == ChooserKind::Functions
+                         ? address
+                         : std::nullopt;
+        }
+        if (address)
+          selection.insert("address", hexAddress(*address));
+        if (function)
+          selection.insert("function_address", hexAddress(*function));
+        QString text;
+        if (auto *chooser = focusedChooser())
+          text = chooser->selectedText();
+        else if (auto *code = focusedCodeView())
+          text = code->text()->selectedText();
+        else
+          text = disassembly_->selectedText();
+        selection.insert(
+            "selection_text",
+            text.left(::neverd::limits::gui::plugin::kMaxSelectionCharacters));
+        last = selection;
+        return selection;
+      });
   auto *pluginDock =
       makeDock(QStringLiteral("analysisPlugins"), QT_TR_NOOP("Plugin tasks"),
                QStringLiteral("extensions"), plugins_);
@@ -416,7 +466,15 @@ MainWindow::MainWindow(Session &session, McpConnectionManager &mcp,
   connect(&focusSequenceTimer_, &QTimer::timeout, this,
           &MainWindow::resetFocusSequence);
   connect(qApp, &QApplication::focusChanged, this,
-          [this] { resetFocusSequence(); });
+          [this](QWidget *previous, QWidget *current) {
+            resetFocusSequence();
+            if (!previous || !pluginUi_ || pluginUi_->contains(previous) ||
+                !pluginUi_->contains(current))
+              return;
+            QScopedValueRollback<QPointer<QWidget>> focus(contextMenuFocus_,
+                                                          previous);
+            session_.pluginServices().refreshContext();
+          });
   // Other programs find this window and open links in it, as in IDA 9.4.
   instances_.setInfo([this] { return instanceInfo(); });
   const auto comeToFront = [this] {
@@ -597,8 +655,8 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
       input->setMinimumWidth(
           ::neverd::limits::gui_config::kMainWindowInputDialogWidth);
   if (auto *code = qobject_cast<CodeView *>(object)) {
-    // Reopening resumes this pane's interrupted function, independently of
-    // the assembly cursor. Hidden panes do not keep analysis jobs running.
+    // Reopening rejoins this pane's analysis or reads its completed result,
+    // independently of the assembly cursor.
     if (event->type() == QEvent::Show) {
       const QPointer<CodeView> view = code;
       QTimer::singleShot(0, this, [view] {
@@ -608,9 +666,9 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
       });
     }
     // A completed document keeps its exact instruction across tab changes.
-    // Only an active request needs to be stopped while its pane is hidden.
+    // Detach hidden pages while their expensive engine call finishes.
     if (event->type() == QEvent::Hide && code->text()->loading())
-      code->text()->cancel();
+      code->text()->cancel(true);
   }
   return KDDockWidgets::QtWidgets::MainWindow::eventFilter(object, event);
 }
@@ -622,6 +680,7 @@ MainWindow::~MainWindow() {
   // notifications refresh that context: it must not reach a view being
   // destroyed.
   plugins_->setSelectionProvider({});
+  delete std::exchange(pluginUi_, nullptr);
   qApp->removeEventFilter(this);
   // The startup greeting has no widget parent: it is the application's only
   // visible window until a start is chosen.
@@ -941,6 +1000,16 @@ void MainWindow::buildDocks() {
               hexActive_ = it.key() == QLatin1String(HexDock);
             if (!hexActive_)
               hexFollower_.clear();
+            // An edit carries the lines of the listing the user works in,
+            // which is that of the last analysis view used where it is a
+            // disassembly.
+            for (const auto &other : std::as_const(docks_))
+              if (other)
+                if (auto *assembly =
+                        qobject_cast<DisassemblyView *>(other->widget()))
+                  assembly->listing()->setWorkedIn(assembly == disassembly_ &&
+                                                   !lastCodeView_ &&
+                                                   !hexActive_);
             // What the commands act on follows the view: a pseudocode
             // window converts a parameter, the disassembly an operand.
             updateActions();
@@ -2403,6 +2472,8 @@ void MainWindow::connectActions() {
   on(ActionId::ViewNames, [openChooser] { openChooser(ChooserKind::Names); });
   on(ActionId::ViewStrings,
      [openChooser] { openChooser(ChooserKind::Strings); });
+  on(ActionId::ViewComputedStrings,
+     [openChooser] { openChooser(ChooserKind::ComputedStrings); });
   // The list opens ready for a query, like a debugger's reference search.
   on(ActionId::SearchStringReferences, [this, openChooser] {
     openChooser(ChooserKind::StringReferences);
@@ -2795,8 +2866,9 @@ void MainWindow::updateActions() {
   const bool declarations =
       location && !session_.readOnly() && session_.typesFunctions();
   enable(ActionId::EditSetType,
-         declarations && (code ? code->text()->function().has_value()
-                               : currentFunction().has_value()));
+         declarations && (globalTypeTarget().has_value() ||
+                          (code ? code->text()->function().has_value()
+                                : currentFunction().has_value())));
   // The stack variables are a code window's own function's; an instruction's
   // SP and operand are the disassembly's.
   enable(ActionId::EditStackFrame,
@@ -3674,6 +3746,15 @@ void MainWindow::showCrossReferences(std::optional<Address> address, bool to) {
       showReferencesDialog(at, to, view);
       return;
     }
+  // HighC goto labels belong to this source document, not the image's symbol
+  // table. Reuse the definition that double-click follows; its block can
+  // differ from both the current instruction and the label row's source map.
+  if (!target)
+    if (const auto label =
+            view->text()->addressLabel(view->text()->currentToken())) {
+      showReferencesDialog(label->first, to, view);
+      return;
+    }
   const auto query = target && !target->value("query").toString().isEmpty()
                          ? target->value("query").toString()
                          : view->text()->currentToken();
@@ -3904,7 +3985,7 @@ void MainWindow::showPseudocode(const QString &representation, CodeOpen mode) {
   // the only ordinary cursor action that selects an address in the other pane.
   if (!selectAssemblyAddress || view->text()->function() != function ||
       view->text()->interrupted())
-    view->showFunction(*function);
+    view->showFunction(*function, mode == CodeOpen::Generate);
   if (selectAssemblyAddress)
     if (const auto address = disassembly_->currentAddress())
       view->text()->selectAddress(*address);
@@ -4416,9 +4497,6 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
   QDialog dialog(owner);
   dialog.setWindowTitle(tr("String literals"));
   auto *form = new QFormLayout(&dialog);
-  auto *choices = new QWidget(&dialog);
-  auto *column = new QVBoxLayout(choices);
-  column->setContentsMargins(0, 0, 0, 0);
   QStringList chosen;
   for (const auto &name : current.value("encodings").toArray())
     chosen.append(name.toString());
@@ -4442,13 +4520,18 @@ void MainWindow::stringOptionsDialog(const QJsonArray &encodings,
       continue;
     }
     // Plain ASCII has no listing spelling of its own.
+    // Each encoding is a row of the form, the first beside the label: one
+    // field holding them all had the label centered on its first lines, below
+    // the box it names.
     auto *box = new QCheckBox(
-        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, choices);
+        spelling.isEmpty() ? QStringLiteral("ASCII") : spelling, &dialog);
     box->setChecked(chosen.contains(name));
-    column->addWidget(box);
+    if (boxes.isEmpty())
+      form->addRow(tr("Encodings:"), box);
+    else
+      form->setWidget(form->rowCount(), QFormLayout::FieldRole, box);
     boxes.append({name, box});
   }
-  form->addRow(tr("Encodings:"), choices);
   auto *detect = new QCheckBox(tr("Detect common code pages"), &dialog);
   detect->setChecked(
       !common.isEmpty() &&
@@ -4727,6 +4810,10 @@ void MainWindow::showShortcuts() {
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   layout->addWidget(buttons);
+  // Close would otherwise be the default, and Return in the filter press it;
+  // it keeps the accent, as the way on from a list that is only read.
+  leaveWithoutDefaultButton(*dialog);
+  showAsMainAction(*buttons->button(QDialogButtonBox::Close));
   filter->setFocus();
   showModelessDialog(dialog, dialog->parentWidget());
 }
@@ -5229,6 +5316,24 @@ void MainWindow::chooseStructOffset() {
                                dialog.delta(), dialog.others(), epoch);
 }
 
+std::optional<Address> MainWindow::globalTypeTarget() const {
+  if (const auto *view = focusedCodeView()) {
+    if (const auto target = view->text()->renameTarget();
+        target && target->value(QStringLiteral("object")).toBool())
+      return addressValue(target->value(QStringLiteral("address")));
+    return std::nullopt;
+  }
+  if (disassembly_->onData())
+    return disassembly_->currentItem();
+  if (const auto target = disassembly_->operandTarget())
+    if (const auto *region = space_.regionOf(*target); region && !region->exec)
+      return target;
+  if (const auto item = disassembly_->currentItem())
+    if (const auto *region = space_.regionOf(*item); region && !region->exec)
+      return item;
+  return std::nullopt;
+}
+
 void MainWindow::setType() {
   if (session_.readOnly() || !session_.typesFunctions())
     return;
@@ -5239,7 +5344,12 @@ void MainWindow::setType() {
   std::optional<int> parameter;
   QString name;
   QJsonObject variable;
-  if (view) {
+  const auto object = globalTypeTarget();
+  if (object) {
+    function = object;
+    variable = {{"address", hexAddress(*object)},
+                {"object_address", hexAddress(*object)}};
+  } else if (view) {
     function = view->text()->function();
     if (const auto target = view->text()->renameTarget();
         target && target->contains(QStringLiteral("parameter"))) {
@@ -5266,7 +5376,9 @@ void MainWindow::setType() {
     function = currentFunction();
   }
   if (!function) {
-    output_->append(tr("Put the cursor in a function to set its type"), 1);
+    output_->append(tr("Put the cursor on a global object or in a function to "
+                       "set its type"),
+                    1);
     return;
   }
   if (name.isEmpty())
@@ -5274,7 +5386,8 @@ void MainWindow::setType() {
   const auto epoch = session_.epoch();
   // What the dialog states, a replica renders: it starts on it as the user
   // types.
-  session_.prepareFunctionRead(*function);
+  if (!object)
+    session_.prepareFunctionRead(*function);
   SetTypeDialog dialog(session_, *function, parameter, name, commandWindow(),
                        variable);
   const bool accepted = dialog.exec() == QDialog::Accepted;
@@ -5515,22 +5628,33 @@ void MainWindow::editStackFrame(int mode) {
           }
           layout->addWidget(table);
         }
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("stackFrameApply");
+        buttons.reset->setObjectName("stackFrameReset");
         bool reset = false;
-        buttons->button(QDialogButtonBox::Apply)->setEnabled(stale.isEmpty());
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        buttons.apply->setEnabled(stale.isEmpty());
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        if (!table) {
+          // A few lines stand as tall as they need and stay at the top; in
+          // the height the table takes they drifted apart.
+          layout->addStretch(1);
+          layout->addWidget(buttons.box);
+          const auto fit = [&dialog, layout] {
+            const int needed = layout->totalHeightForWidth(dialog.width());
+            if (dialog.height() < needed)
+              dialog.resize(dialog.width(), needed);
+          };
+          dialog.resize(dialog.width(),
+                        layout->totalHeightForWidth(dialog.width()));
+          // Again once it shows: a platform's frame or font may give the
+          // wrapped text less room than was measured before.
+          QTimer::singleShot(0, &dialog, fit);
+        } else {
+          layout->addWidget(buttons.box);
+        }
         if (dialog.exec() != QDialog::Accepted || session_.epoch() != epoch ||
             session_.revision() != revision || currentFunction() != function)
           return;
@@ -5665,10 +5789,13 @@ void MainWindow::editCallType(bool resetAll) {
         declaration->setPlainText(
             stated.value("declaration").toString("int64_t call(void);"));
         layout->addWidget(declaration);
-        layout->addWidget(new QLabel(
+        // Longer than the dialog is wide: unwrapped, it ended at "default p".
+        auto *actualsLabel = new QLabel(
             tr("Actual variadic argument types for this call, one per line "
                "(use int or double after default promotions):"),
-            &dialog));
+            &dialog);
+        actualsLabel->setWordWrap(true);
+        layout->addWidget(actualsLabel);
         auto *actuals = new QPlainTextEdit(&dialog);
         actuals->setObjectName("callTypeActuals");
         QStringList types;
@@ -5676,25 +5803,15 @@ void MainWindow::editCallType(bool resetAll) {
           types.append(type.toString());
         actuals->setPlainText(types.join('\n'));
         layout->addWidget(actuals);
-        auto *buttons = new QDialogButtonBox(QDialogButtonBox::Apply |
-                                                 QDialogButtonBox::Cancel |
-                                                 QDialogButtonBox::Reset,
-                                             &dialog);
-        buttons->button(QDialogButtonBox::Apply)
-            ->setObjectName("callTypeApply");
-        buttons->button(QDialogButtonBox::Reset)
-            ->setObjectName("callTypeReset");
+        const auto buttons = correctionButtons(dialog);
+        buttons.apply->setObjectName("callTypeApply");
+        buttons.reset->setObjectName("callTypeReset");
         bool reset = false;
-        connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked,
-                &dialog, &QDialog::accept);
-        connect(buttons, &QDialogButtonBox::rejected, &dialog,
-                &QDialog::reject);
-        connect(buttons->button(QDialogButtonBox::Reset), &QPushButton::clicked,
-                &dialog, [&] {
-                  reset = true;
-                  dialog.accept();
-                });
-        layout->addWidget(buttons);
+        connect(buttons.reset, &QPushButton::clicked, &dialog, [&] {
+          reset = true;
+          dialog.accept();
+        });
+        layout->addWidget(buttons.box);
         if (dialog.exec() != QDialog::Accepted || !view ||
             session_.epoch() != epoch || session_.revision() != revision ||
             view->text()->function() != function ||
@@ -6064,7 +6181,31 @@ void MainWindow::toggleFocusMode() {
                 0, std::max(header->minimumSectionSize(),
                             header->sectionSize(0) + difference));
           });
+  // Plugin views, such as the Agent's Ask Agent button and conversation,
+  // stay with the person in the workspace that covers the workbench.
+  pluginUi_->lendViews(*floating, [this,
+                                   workspace = QPointer<QWidget>(floating),
+                                   content = QPointer<QWidget>(area)] {
+    return workspace && content ? pluginViewArea(*workspace, content) : QRect();
+  });
   updateActions();
+}
+
+QRect MainWindow::pluginViewArea(const QWidget &surface,
+                                 const QWidget *content) const {
+  QRect area = content && surface.isAncestorOf(content)
+                   ? QRect(content->mapTo(&surface, QPoint{}), content->size())
+                   : surface.contentsRect();
+  // Floating plugin views keep off the command line when it runs along the
+  // foot of the window, under either bottom corner.
+  if (const auto *line = output_ ? output_->commandLine() : nullptr;
+      line && line->isVisible() && surface.isAncestorOf(line)) {
+    const QRect row(line->mapTo(&surface, QPoint{}), line->size());
+    if (row.bottom() >= area.bottom() - row.height() / 2 &&
+        row.width() >= area.width() / 2)
+      area.setBottom(std::min(area.bottom(), row.top() - 1));
+  }
+  return area;
 }
 
 void MainWindow::resetFocusSequence() {
@@ -6079,6 +6220,9 @@ void MainWindow::leaveFocusMode() {
     return;
   const auto layout = std::exchange(focusLayout_, {});
   const auto focus = std::exchange(focusReturn_, {});
+  // The workspace goes away with the layout before focus mode.
+  if (pluginUi_)
+    pluginUi_->returnViews();
   focusFunctions_.clear();
   delete focusSidebar_.data();
   if (auto *toolbar = focusToolbar_.data()) {

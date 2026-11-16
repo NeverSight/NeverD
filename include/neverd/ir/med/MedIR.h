@@ -20,6 +20,7 @@
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/SourceCallTypeHint.h"
 #include "neverd/ir/SourceFrameBytes.h"
+#include "neverd/ir/SourceImageBytes.h"
 #include "neverd/ir/SourceTypeHint.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/SourceClassGetterCall.h"
@@ -194,6 +195,15 @@ struct PhiNode {
   std::optional<MedVar> ExceptionalEntry;
 };
 
+/// One ABI register of a small aggregate return, in aggregate-field order.
+/// SysV x86-64 uses RAX/RDX or XMM0/XMM1; AArch64 uses X0/X1 or an HFA in
+/// V0..V3. The field width is the scalar payload, not its enclosing vector.
+struct MedReturnReg {
+  uint64_t RegOff = 0;
+  uint16_t Size = 0;
+  bool IsFP = false;
+};
+
 struct MedOp {
   enum class RegistrationRootKind : uint8_t {
     None,
@@ -272,6 +282,9 @@ struct MedOp {
   /// Fixed scalar prefix of a checked header variadic call, or -1.
   /// Its explicit register operands and recovered stack tail remain open.
   int8_t CalleeVariadicFrom = -1;
+  /// Fixed register prefix of a summarized variadic call with independent
+  /// vector arguments. This is an ABI summary, not a checked header type.
+  int8_t CalleeVariadicRegisterFrom = -1;
   /// The vector argument registers the summarized callee reads, published
   /// after the register arguments as Inputs[1 + CalleeRegisterArgs..]; -1
   /// when the convention publishes none.
@@ -307,6 +320,11 @@ struct MedOp {
   /// The proven scalar FP result width. A complete header signature also
   /// binds the explicit FP inputs. Zero means no scalar result contract.
   uint16_t CalleeFloatReturnBytes = 0;
+  /// The established aggregate return contract for this packed temporary.
+  /// Keep it after dead field extracts disappear, independently of whether
+  /// the callee's definition belongs to the current selection. Populated by
+  /// register-return modeling; never inferred from a C emitter's live uses.
+  std::shared_ptr<const std::vector<MedReturnReg>> RegisterReturnFields;
   /// Complete mixed header operands, bound in source order before SSA.
   std::shared_ptr<const FloatingCallArguments> ScalarCallSignature;
   /// Complete fixed integer/pointer operands bound before SSA, including
@@ -368,6 +386,7 @@ enum class CallingConv : uint8_t {
   Unknown,
   MIPS_O32,
   MIPS_N64,
+  MIPS_N32,
 };
 
 struct MedBlock {
@@ -408,18 +427,6 @@ enum class MedReturnValueEvidence : uint8_t {
   ReturnsAggregate,
 };
 
-/// One register of a small aggregate (struct-by-value) returned in multiple
-/// registers: SysV x86-64 returns a <=16-byte struct in up to two eightbyte
-/// registers (an INTEGER eightbyte in RAX/RDX, an SSE eightbyte in XMM0/XMM1),
-/// and AArch64 returns a homogeneous floating aggregate in V0..V3.  Listed in
-/// aggregate-field order (the order the LLVM struct return type is built in),
-/// which the ABI lowering maps back to the registers.
-struct MedReturnReg {
-  uint64_t RegOff = 0; ///< ABI register offset (RAX/RDX/X0/X1/XMM0/V0...).
-  uint16_t Size = 0;   ///< Field value size in bytes (8 double/long, 4 float).
-  bool IsFP = false;   ///< Returned in an FP/vector register (XMM/V), else GPR.
-};
-
 /// An SSA value implicitly defined by a particular call because its physical
 /// register is caller-saved.
 struct MedCallClobber {
@@ -456,10 +463,10 @@ struct MedCallReturnRead {
 struct MedStructReturnCandidate {
   uint32_t CallSiteId = 0;
   std::vector<MedVar> Fields;
-  /// The caller read only the second integer word; the first is proposed.
-  /// A second word the callee leaves untouched is then the caller's own
-  /// residue, not a returned argument: the callee must write each field.
-  bool SecondWordOnly = false;
+  /// At least one field was proposed to complete an observed register prefix.
+  /// An untouched register is then caller residue, not a returned argument:
+  /// the callee must explicitly define every field on every return path.
+  bool HasUnobservedFields = false;
 };
 
 struct MedTypedLocal {
@@ -475,9 +482,15 @@ struct MedCallInfo {
   std::string TargetName;
   std::vector<MedVar> Args;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
+  /// An omitted callee's complete, unchanged scalar C projection. This keeps
+  /// low FP lanes and the explicit trailing result-buffer parameter when the
+  /// body is absent. It is not an authenticated native source ABI.
+  TypeRef SourceCalleeType;
   bool IsIndirect = false;
-  /// Darwin AArch64 indirect variadic call: number of fixed (register-prefix)
-  /// arguments before the stack-passed variadic tail.  -1 = not variadic.
+  /// Number of named arguments before a variadic tail. The target convention
+  /// decides whether unnamed values continue in registers or use the stack;
+  /// this count alone establishes neither their types nor their total arity.
+  /// -1 means no recovered variadic prefix.
   int VarArgFixedCount = -1;
   /// Args passes the register arguments in the callee's own register order
   /// (MedFunc::IntegerArgumentRegisters), not the convention's.
@@ -570,6 +583,7 @@ struct SEHFuncletRegisterValue {
 struct MedFunc {
   /// Display observations of the original machine bytes; never rewrite facts.
   std::vector<SourceFrameBytes> FrameBytes;
+  SourceImageByteObservations ImageBytes;
   bool AnalystStackFrame = false;
   bool AnalysisOnly = false;
   va_t Entry = 0;
@@ -608,6 +622,9 @@ struct MedFunc {
   int64_t FrameHeadroom = 0;
 
   TypeRef ReturnType;
+  /// The MIPS scalar entry declaration supplies the integer return width and
+  /// signedness. An inferred ReturnType cannot select ABI extension attributes.
+  bool HasDeclaredMIPSIntegerResult = false;
 
   /// Source projection only; never an authenticated semantic return contract.
   std::optional<SourceFunctionTypeHint> SourceTypeHint;
@@ -786,6 +803,12 @@ struct MedFunc {
   /// The LowIR function lifted every instruction it reaches and kept every
   /// path inside the image (LowFunc::hasCompleteLiftCoverage).
   bool CompleteLiftCoverage = false;
+  /// Where a path left the image: addresses the LowIR function reached and
+  /// found no code the image maps at (LowFunc::TruncatedPathAddresses).  The
+  /// function is lifted all the same.  An edge to such an address has no
+  /// block, and each backend ends that path in a trap instead of inventing
+  /// where it goes.
+  std::set<va_t> TruncatedPathAddresses;
   std::optional<ExceptionFunction> ExceptionMetadata;
   /// Source analysis retained unknown machine entries instead of asserting a
   /// common SEH invocation frame. This function cannot be lowered to LLVM.

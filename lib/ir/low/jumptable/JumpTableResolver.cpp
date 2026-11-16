@@ -1167,9 +1167,18 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     std::map<va_t, StrongJumpTableProposalOutcome> &ProposalOutcomes;
 
     ~CandidateEvidenceOutcome() {
-      const bool ResourceIncomplete = I386GOTOFFIncomplete || ChargeFailed ||
-                                      ExhaustedBeforeDedicatedRefund ||
-                                      (!Published && Remaining == 0);
+      // Spending the whole personal cap without publishing is this branch's
+      // fail-closed result.  The stage account still has room, so the charge
+      // failure must not roll back siblings whose proofs already completed.
+      // A smaller initial grant means the shared stage itself ran out.
+      const bool PersonalCapClosed =
+          !Published && !I386GOTOFFIncomplete && !AnalysisIncomplete &&
+          Initial == limits::kMaxJumpTableCandidateEvidenceWork &&
+          (ChargeFailed || ExhaustedBeforeDedicatedRefund || Remaining == 0);
+      const bool ResourceIncomplete =
+          I386GOTOFFIncomplete || (ChargeFailed && !PersonalCapClosed) ||
+          (ExhaustedBeforeDedicatedRefund && !PersonalCapClosed) ||
+          (!Published && Remaining == 0 && !PersonalCapClosed);
       const bool EvidenceIncomplete = AnalysisIncomplete || ResourceIncomplete;
       if ((ShapeClaimed || I386GOTOFFShapeClaimed) && IncompleteInsertPrepaid)
         ShapeClaimedBranches.insert(BranchAddr);
@@ -1466,6 +1475,26 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     IndexDomainEvidenceIncompleteBranches.insert(Rec.Addr);
     IncompleteBranchAlreadyInserted = true;
   };
+  // A jump that reads labels of its own function through an exact GOTOFF
+  // field is a dispatch among them, whatever the proofs below conclude about
+  // its GOT base.  Keep that identity before they run: a definitive loss of
+  // the base or of the target role would otherwise leave the jump to
+  // tail-call conversion, which calls into the middle of this function.  The
+  // bookkeeping account pays, as for the markers above, so that a proof
+  // budget of zero keeps the identity too.
+  if (Img.Arch == Arch::X86 && Img.isELF() && Img.getPointerSize() == 4) {
+    const size_t IdentityLookupWork =
+        orderedLookupWork(ValidatedPhysicalJumpTableBranches.size());
+    if (!consumeIncompleteBranchMarkerEvidence(IdentityLookupWork))
+      return {};
+    if (!ValidatedPhysicalJumpTableBranches.count(Rec.Addr) &&
+        jumpReadsOwnLabelsThroughI386GOTOFF(Rec)) {
+      if (!consumeIncompleteBranchMarkerEvidence(IdentityLookupWork +
+                                                 NodeAndCleanupWork))
+        return {};
+      ValidatedPhysicalJumpTableBranches.insert(Rec.Addr);
+    }
+  }
   // Reserve the nested i386 allowance from the candidate/stage aggregate
   // before the query can traverse the graph or publish cache/set state.  The
   // dedicated value-match cap covers both exact proposal bookkeeping and the
@@ -3259,8 +3288,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
     }
   }
   CandidateEvidenceAnalysisIncomplete |= !TargetRoleComplete;
-  if (!TargetRole || !TargetRoleComplete)
+  if (!TargetRole || !TargetRoleComplete) {
     return {};
+  }
   // An overlay-backed target proof is valid only in this immutable proposal
   // universe.  Keep the published candidate in the complete-CFG replay set so
   // retirement (or growth) of the borrowed edge forces one final proof without
@@ -3417,8 +3447,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info, &CandidateEvidenceBudget, &AddressRoleComplete,
       TargetRoleUsesDefinedOccurrenceRoots, TargetRoleEdgeOverrides);
   CandidateEvidenceAnalysisIncomplete |= !AddressRoleComplete;
-  if (!AddressRole || !AddressRoleComplete)
+  if (!AddressRole || !AddressRoleComplete) {
     return {};
+  }
   if (!EnsureTargetRoleProofCurrent())
     return {};
 
@@ -4103,9 +4134,10 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                   &PhysicalTargetRoleComplete,
                   TargetRoleUsesDefinedOccurrenceRoots, TargetRoleEdgeOverrides)
             : false;
-    CandidateEvidenceAnalysisIncomplete |=
-        !PhysicalAddressRoleComplete ||
-        (PhysicalAddressRole && !PhysicalTargetRoleComplete);
+    if (!PhysicalAddressRoleComplete ||
+        (PhysicalAddressRole && !PhysicalTargetRoleComplete)) {
+      CandidateEvidenceAnalysisIncomplete = true;
+    }
     const std::optional<bool> PhysicalIdentity =
         PhysicalAddressRole && PhysicalTargetRole &&
                 (!UsedRawRelocationClassification || RawClassificationComplete)
@@ -4361,33 +4393,75 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       CandidateProposalStageActive && ProvisionalRelativeEdgeTemplate
           ? &ExactFiniteRelativeClosureUnknownValue
           : nullptr;
-  const uint32_t MaskBound =
-      FiniteJointAbsolute ? Info.MaxEntries
-      : (GuardedGroupProofContext && !FiniteJointGOTOFF)
-          ? 0
-          : inferBoundsFromMaskWithAbsoluteProof(
-                Rec, Info, /*AllowNonContiguous=*/true, &IncompleteMaskDomain,
-                &UsedNonContiguousMask, &MaskCoordinates,
-                &MaskKnownOneWitnesses,
-                /*RequireProducerReachability=*/
-                CurrentCandidateSelfReplayTargets != nullptr,
-                CurrentCandidateSelfReplayTargets,
-                CurrentCandidateSelfReplayReachable
-                    ? &*CurrentCandidateSelfReplayReachable
-                    : nullptr,
-                /*AllowFixedPointBootstrap=*/true,
-                /*AllowRawDenseShortcut=*/true, &CandidateEvidenceBudget,
-                &SemanticMaskDomainAmbiguous, &ExactConsumerGroup,
-                TargetRoleEdgeOverrides, CertifiedSiblingRuntimeStorage,
-                ExactFiniteRelativeSingletonTarget,
-                ExactFiniteRelativeClosureUnknown,
-                /*RetainProvisionalRelativeEdges=*/
-                CandidateProposalStageActive &&
-                    ProvisionalRelativeEdgeTemplate.has_value(),
-                /*AllowInlineZeroCapacityBoundedReplay=*/false,
-                InlineRelativeReadableCapacity,
-                CurrentCandidateSelfReplayRuntimeStorage,
-                &ExactFiniteAbsoluteSingletonProofValue);
+  // A block-local dense AND already authenticated [0, N). Replaying that
+  // proof through the origin fixed-point exhausts the candidate account on a
+  // chain longer than the resolver depth and rolls back the stage, including
+  // an earlier table in the same function. The bound is already exact.
+  const bool ProvenLocalDenseMask =
+      Info.IndexDomainAuthenticated && Info.AuthenticatedDenseMaskBound != 0 &&
+      Info.AuthenticatedDenseMaskBound == Info.MaxEntries &&
+      !FiniteJointAbsolute && !(GuardedGroupProofContext && !FiniteJointGOTOFF);
+  if (ProvenLocalDenseMask)
+    Info.AuthenticatedDenseMaskBound = 0;
+  // A precise guard already authenticated [0, N). Nested mask cores share
+  // one aggregate account; pointing them at the candidate lets an unfinished
+  // search spend the table read. That search keeps the ordinary mask
+  // allowance. The candidate is charged only for the work it used, and an
+  // unfinished search does not replace the guard.
+  const bool IsolateAuthenticatedGuardMask =
+      Info.IndexDomainAuthenticated && Info.HasControllingGuard &&
+      Info.AuthenticatedGuardBound != 0 &&
+      Info.AuthenticatedGuardBound == Info.MaxEntries && !FiniteJointAbsolute &&
+      !((GuardedGroupProofContext && !FiniteJointGOTOFF) ||
+        ProvenLocalDenseMask);
+  size_t GuardedMaskAccount = 0;
+  size_t *MaskEvidenceBudget = &CandidateEvidenceBudget;
+  if (IsolateAuthenticatedGuardMask) {
+    GuardedMaskAccount =
+        std::min<size_t>(limits::kMaxJumpTableMaskFixedPointEvidenceWork,
+                         MaskFixedPointEvidenceBudgetForTesting.value_or(
+                             limits::kMaxJumpTableMaskFixedPointEvidenceWork));
+    if (GuardedMaskAccount > CandidateEvidenceBudget)
+      GuardedMaskAccount = CandidateEvidenceBudget;
+    MaskEvidenceBudget = &GuardedMaskAccount;
+  }
+  const size_t GuardedMaskAccountBefore = GuardedMaskAccount;
+  uint32_t MaskBound =
+      FiniteJointAbsolute
+          ? Info.MaxEntries
+          : ((GuardedGroupProofContext && !FiniteJointGOTOFF) ||
+                     ProvenLocalDenseMask
+                 ? 0
+                 : inferBoundsFromMaskWithAbsoluteProof(
+                       Rec, Info, /*AllowNonContiguous=*/true,
+                       &IncompleteMaskDomain, &UsedNonContiguousMask,
+                       &MaskCoordinates, &MaskKnownOneWitnesses,
+                       /*RequireProducerReachability=*/
+                       CurrentCandidateSelfReplayTargets != nullptr,
+                       CurrentCandidateSelfReplayTargets,
+                       CurrentCandidateSelfReplayReachable
+                           ? &*CurrentCandidateSelfReplayReachable
+                           : nullptr,
+                       /*AllowFixedPointBootstrap=*/true,
+                       /*AllowRawDenseShortcut=*/true, MaskEvidenceBudget,
+                       &SemanticMaskDomainAmbiguous, &ExactConsumerGroup,
+                       TargetRoleEdgeOverrides, CertifiedSiblingRuntimeStorage,
+                       ExactFiniteRelativeSingletonTarget,
+                       ExactFiniteRelativeClosureUnknown,
+                       /*RetainProvisionalRelativeEdges=*/
+                       CandidateProposalStageActive &&
+                           ProvisionalRelativeEdgeTemplate.has_value(),
+                       /*AllowInlineZeroCapacityBoundedReplay=*/false,
+                       InlineRelativeReadableCapacity,
+                       CurrentCandidateSelfReplayRuntimeStorage,
+                       &ExactFiniteAbsoluteSingletonProofValue));
+  if (IsolateAuthenticatedGuardMask) {
+    const size_t Used = GuardedMaskAccountBefore - GuardedMaskAccount;
+    if (IncompleteMaskDomain || SemanticMaskDomainAmbiguous || MaskBound == 0)
+      MaskBound = 0;
+    if (Used != 0 && !consumeCandidateEvidence(Used))
+      return {};
+  }
   const std::optional<bool> MaskGraphGrowth = SuspendForPendingGraphGrowth(
       /*RetainNoGrowthProposal=*/
       !ExactFiniteRelativeSingletonTargetValue.has_value());
@@ -5065,16 +5139,26 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // independent witness after ownership has been narrowed.
   if ((IncompleteMaskDomain || SemanticMaskDomainAmbiguous) &&
       Info.AuthenticatedGuardBound == 0 && Info.AuthenticatedModuloBound == 0) {
-    CandidateEvidenceAnalysisIncomplete |= IncompleteMaskDomain;
+    // The precise guard already rejected this selector. An unfinished mask
+    // search is not a new domain and must not roll back a sibling that
+    // published in the same stage. A guard that is itself unfinished still
+    // fails closed.
+    const bool GuardRejectedSelector = Info.SemanticGuardDomainAmbiguous &&
+                                       !Info.IncompleteGuardDomain &&
+                                       !Info.IndexDomainAuthenticated;
+    if (!GuardRejectedSelector)
+      CandidateEvidenceAnalysisIncomplete |= IncompleteMaskDomain;
     const bool ClaimedPhysicalIdentity = ClaimRejectedPhysicalTableIdentity();
-    if (IncompleteMaskDomain && ClaimedPhysicalIdentity)
+    if (IncompleteMaskDomain && ClaimedPhysicalIdentity &&
+        !GuardRejectedSelector)
       insertIncompleteBranchOnce();
     return {};
   }
   if (InitialModuloEvidenceIncomplete && !Info.IndexDomainAuthenticated &&
       Info.AuthenticatedGuardBound == 0 &&
-      Info.AuthenticatedMaskCoordinates.empty())
+      Info.AuthenticatedMaskCoordinates.empty()) {
     CandidateEvidenceAnalysisIncomplete = true;
+  }
   // A sampled/non-prefix guard must not be rescued by a relocation run: the
   // run proves readable table storage, not which selector values can reach
   // it.  An independently authenticated exact mask domain is sufficient
@@ -5348,8 +5432,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   const bool DomainRevalidated = RevalidateIndexDomain();
   const std::optional<bool> RevalidationGraphGrowth =
       SuspendForPendingGraphGrowth();
-  if (!RevalidationGraphGrowth || *RevalidationGraphGrowth)
+  if (!RevalidationGraphGrowth || *RevalidationGraphGrowth) {
     return {};
+  }
   if (!DomainRevalidated) {
     ClaimRejectedPhysicalTableIdentity();
     return {};
@@ -5566,11 +5651,11 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
                  ExactFiniteAbsoluteSingletonProofValue->Coordinate)
           : sanityCheckTargets(Img, Targets);
   if (!Sane || ((Info.MaxEntries > 0 || !Info.RuntimeSlotIndices.empty()) &&
-                Targets.size() != BeforeSanity))
+                Targets.size() != BeforeSanity)) {
     Targets.clear();
+  }
   if (KeptIdx.size() > Targets.size())
     KeptIdx.resize(Targets.size()); // sanity-check truncates trailing entries
-
   // Emulation-based fallback: when all static strategies fail, try
   // running the ops through the NdOp emulator for each candidate index.
   if (Targets.size() < limits::kMinJumpTableEntries && Info.MaxEntries > 0 &&
@@ -5790,8 +5875,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
 
   if ((!Info.RuntimeCaseLabels.empty() || !Info.RuntimeSlotIndices.empty()) &&
       (Info.RuntimeCaseLabels.size() != Targets.size() ||
-       Info.RuntimeSlotIndices.size() != Targets.size()))
+       Info.RuntimeSlotIndices.size() != Targets.size())) {
     return {};
+  }
 
   // Decide which physical code relocations this dispatch may suppress
   // only after both the final runtime domain and final target edges are known.
@@ -7217,8 +7303,9 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
           orderedLookupWork(StackTableEvidenceIncompleteBranches.size())) ||
       !reserveResolvedInfoMaterialization(Info) ||
       !consumeCandidateEvidence(orderedLookupWork(ResolvedTableInfo.size()) +
-                                1))
+                                1)) {
     return {};
+  }
   // An alternate stack-materialized-table probe can exhaust while this same
   // branch is independently authenticated and published by an exact
   // relocation/role/domain proof.  The marker is stage-local safety state:

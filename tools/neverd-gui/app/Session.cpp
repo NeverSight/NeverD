@@ -3,6 +3,7 @@
 #include "../ResourceLimits.h"
 #include "PluginServices.h"
 #include "ProjectDatabase.h"
+#include "ProjectFileWatcher.h"
 #include "SettingsKeys.h"
 
 #include <QCoreApplication>
@@ -17,6 +18,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QSettings>
+#include <QThread>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
@@ -186,6 +188,12 @@ Session::Session(QString workerPath, QObject *parent)
           [this](const QString &text) { emit message(text, 0); });
   connect(&analysis_, &AnalysisPool::sourceRefined, this,
           &Session::sourceRefined);
+  connect(&analysis_, &AnalysisPool::loadProgress, this,
+          [this](const QJsonObject &payload) {
+            if (opening_)
+              emit loadProgress(QStringLiteral("prepare_views"), -1,
+                                payload.value("detail").toString());
+          });
   connect(&client_, &EngineClient::message, this, &Session::receive);
   connect(&client_, &EngineClient::diagnostic, this,
           [this](const QString &text) {
@@ -213,6 +221,14 @@ Session::Session(QString workerPath, QObject *parent)
   connect(&queries_, &QueryService::contextChanged, this, [this] {
     if (sessionEpoch_ != queries_.sessionEpoch())
       sessionEpoch_ = queries_.sessionEpoch();
+    // The views that show a reader the content ask for it again; what they
+    // ask of the worker goes at once; they take what is there already, the
+    // view worked in and those with the change still to show before the
+    // others; and then everyone else hears of the revision.
+    emit shownRevisionChanged();
+    queries_.sendAhead();
+    emit shownRevisionAsked();
+    emit shownRevisionTaken();
     emit revisionChanged();
     emit stateChanged();
   });
@@ -239,14 +255,38 @@ Session::Session(QString workerPath, QObject *parent)
   projectSync_.setInterval(
       ::neverd::limits::gui::kSessionSessionSetIntervalMilliseconds);
   connect(&projectSync_, &QTimer::timeout, this, &Session::syncProject);
-  connect(&projectWatcher_, &QFileSystemWatcher::directoryChanged,
-          &projectSync_, qOverload<>(&QTimer::start));
-  connect(&projectWatcher_, &QFileSystemWatcher::fileChanged, &projectSync_,
-          qOverload<>(&QTimer::start));
+  projectWatcher_ = new ProjectFileWatcher;
+  projectWatcherThread_ = new QThread;
+  projectWatcher_->moveToThread(projectWatcherThread_);
+  connect(projectWatcherThread_, &QThread::finished, projectWatcher_,
+          &QObject::deleteLater);
+  connect(projectWatcherThread_, &QThread::finished, projectWatcherThread_,
+          &QObject::deleteLater);
+  connect(projectWatcher_, &ProjectFileWatcher::changed, this,
+          [this](quint64 generation) {
+            if (generation == projectWatchGeneration_)
+              projectSync_.start();
+          });
+  connect(projectWatcher_, &ProjectFileWatcher::filesReady, this,
+          [this](quint64 generation, const ProjectFileWatcher::Files &files) {
+            if (generation != projectWatchGeneration_)
+              return;
+            if (!loaded_ || opening_ || !transition_.isEmpty()) {
+              projectSync_.start();
+              return;
+            }
+            takeProjectFiles(files);
+          });
+  projectWatcherThread_->setObjectName(QStringLiteral("Project file watcher"));
+  projectWatcherThread_->start();
   startWorker();
 }
 
 Session::~Session() {
+  // A native directory open may still be waiting for permission. The I/O
+  // objects own no session state and retire themselves when that call returns;
+  // closing a window must not join the blocked thread on the UI thread.
+  projectWatcherThread_->quit();
   pluginServices_.reset();
   disconnect(&client_, nullptr, this, nullptr);
   disconnect(&queries_, nullptr, this, nullptr);
@@ -468,7 +508,8 @@ QString Session::heldMessage(const QString &path, const QString &reason) {
 }
 
 void Session::command(const QString &operation, const QJsonObject &payload,
-                      Callback done, Failure failed, QString expectedRevision) {
+                      Callback done, Failure failed, QString expectedRevision,
+                      bool leaves) {
   // Only edits and their saving make the project dirty while in flight; an
   // open, reload or analysis does not.
   const bool edit = isEdit(operation);
@@ -529,15 +570,14 @@ void Session::command(const QString &operation, const QJsonObject &payload,
         }
         emit stateChanged();
       },
-      std::move(expectedRevision));
+      std::move(expectedRevision), leaves);
 }
 
 void Session::resetState() {
   analysis_.setSnapshotBlocked(true);
-  if (!projectWatcher_.directories().isEmpty())
-    projectWatcher_.removePaths(projectWatcher_.directories());
-  if (!projectWatcher_.files().isEmpty())
-    projectWatcher_.removePaths(projectWatcher_.files());
+  ++projectWatchGeneration_;
+  QMetaObject::invokeMethod(projectWatcher_, &ProjectFileWatcher::clear,
+                            Qt::QueuedConnection);
   projectSync_.stop();
   projectFiles_.clear();
   loaded_ = false;
@@ -548,6 +588,8 @@ void Session::resetState() {
   databaseIdentity_.clear();
   metadata_ = {};
   history_ = {};
+  historyReads_ = 0;
+  stepWanted_ = Step::None;
   background_ = {};
   BackgroundSequence.reset();
   generation_.clear();
@@ -761,6 +803,7 @@ void Session::sendOpen(const QString &requested, const QString &path,
                       // sessions. The owner cannot share its pipeline cache
                       // with them, so warming it only delays browsing reads.
                       {"warm", false},
+                      {"prepare_views", false},
                       // This client gates large replicas on discovery
                       // completion before opting in to an owned SDK snapshot.
                       {"step_discovery", options.analysis},
@@ -789,7 +832,6 @@ void Session::sendOpen(const QString &requested, const QString &path,
       QStringLiteral("open"), payload,
       [this, requested, path, database, state, databaseIdentity, options,
        recoveredEdits](const QJsonObject &payload) {
-        opening_ = false;
         resetState();
         loadOptions_ = options;
         metadata_ = payload;
@@ -821,10 +863,6 @@ void Session::sendOpen(const QString &requested, const QString &path,
                            .toString()
                            .left(12)),
               1);
-        // Files a pull or another tool changed since the last session leave
-        // the undo history behind them; the project takes them as they are,
-        // and watches them from now on.
-        syncProject();
         QSettings store;
         auto recent = store.value(settings::RecentFiles).toStringList();
         recent.removeAll(requested);
@@ -895,9 +933,9 @@ void Session::sendOpen(const QString &requested, const QString &path,
                        1);
         if (std::exchange(reloading_, false))
           emit message(tr("Reloaded the input file"), 0);
-        // Bound speculative preparation. On very large images, defer fresh
-        // replicas until discovery releases its snapshot; browsing continues
-        // through the owner while a foreground analysis request waits.
+        // Large images prepare one reusable source executor before publishing
+        // opened(). Discovery must release its snapshot first, keeping the
+        // same memory bound as later foreground analysis.
         const auto arch = architecture();
         const bool native =
             arch == QLatin1String("x86") || arch == QLatin1String("x86_64") ||
@@ -909,6 +947,7 @@ void Session::sendOpen(const QString &requested, const QString &path,
             QFileInfo(filePath_).size() >
                 ::neverd::limits::gui::
                     kSessionSendOpenLargeQFileInfoFilePathSizeLimit;
+        analysis_.setSingleReplica(large);
         analysis_.setSnapshotBlocked(options.analysis && native && large);
         // Idle-time work, which a file opened without idle analysis asks for
         // none of.
@@ -928,12 +967,36 @@ void Session::sendOpen(const QString &requested, const QString &path,
               },
               Qt::SingleShotConnection);
         }
-        emit opened();
-        emit stateChanged();
-        refreshHistory();
-        refreshContributions();
-        if (!pendingFile_.isEmpty())
-          openPending();
+        const auto finishOpen =
+            [this, openedEpoch = epoch()](const QJsonObject &response) {
+              if (!loaded_ || epoch() != openedEpoch)
+                return;
+              opening_ = false;
+              // Start watching only after opening has completed, including
+              // source preparation. syncProject defers while opening_.
+              syncProject();
+              if (response.value("status") != QLatin1String("ok"))
+                setError(tr("Could not prepare source views: %1")
+                             .arg(response.value("error")
+                                      .toObject()
+                                      .value("message")
+                                      .toString()));
+              emit opened();
+              emit stateChanged();
+              refreshHistory();
+              refreshContributions();
+              if (!pendingFile_.isEmpty())
+                openPending();
+            };
+        if (options.analysis && native && large &&
+            capabilities_.contains(QStringLiteral("prepare_analysis_views"))) {
+          emit loadProgress(QStringLiteral("prepare_views"), -1,
+                            tr("Preparing the decompiler"));
+          // Like the open command, this is session bookkeeping. Cancelling
+          // pane reads does not detach the opening completion callback.
+          analysis_.prepareViews(&reads_, finishOpen);
+        } else
+          finishOpen({{"status", "ok"}});
       },
       [this](const QString &, const QString &) {
         opening_ = false;
@@ -1082,14 +1145,27 @@ void Session::finishTransition() {
 void Session::refreshHistory() {
   if (!loaded_)
     return;
-  read(
+  ++historyReads_;
+  // A step asked for while this read was on its way is taken now that the
+  // history says whether there is one.
+  const auto read = [this] {
+    if (historyReads_ <= 0 || --historyReads_ > 0)
+      return;
+    const auto wanted = std::exchange(stepWanted_, Step::None);
+    if (wanted == Step::Undo)
+      undo();
+    else if (wanted == Step::Redo)
+      redo();
+  };
+  this->read(
       QStringLiteral("history"), {{"limit", 1}}, &reads_,
-      [this](const QJsonObject &payload) {
+      [this, read](const QJsonObject &payload) {
         history_ = payload;
         emit historyChanged();
         emit stateChanged();
+        read();
       },
-      [](const QString &, const QString &) {});
+      [read](const QString &, const QString &) { read(); });
 }
 
 void Session::save() {
@@ -1298,31 +1374,20 @@ void Session::saveBookmarks(const QJsonArray &rows) {
   }
 }
 
-void Session::watchProject() {
-  // The input's folder shows the project folder appear, as a pull or a
-  // first edit makes it; the project folder shows its files replaced.
-  projectWatcher_.addPath(QFileInfo(filePath_).absolutePath());
-  if (const QString folder = ProjectDatabase::projectFolder(filePath_);
-      QFileInfo(folder).isDir() &&
-      !projectWatcher_.directories().contains(folder))
-    projectWatcher_.addPath(folder);
-  const auto current = projectWatcher_.files();
-  for (const auto &suffix : ProjectDatabase::sidecarSuffixes()) {
-    const QString path = ProjectDatabase::projectFilePath(filePath_, suffix);
-    QFile file(path);
-    projectFiles_.insert(suffix, file.open(QIODevice::ReadOnly) ? file.readAll()
-                                                                : QByteArray());
-    // A file replaced as a whole is a new file to watch.
-    if (file.exists() && !current.contains(path))
-      projectWatcher_.addPath(path);
-  }
-}
-
 void Session::syncProject() {
   if (!loaded_ || opening_ || !transition_.isEmpty())
     return;
-  const auto before = std::exchange(projectFiles_, {});
-  watchProject();
+  QMetaObject::invokeMethod(
+      projectWatcher_,
+      [watcher = projectWatcher_, input = filePath_,
+       generation = projectWatchGeneration_] {
+        watcher->read(input, generation);
+      },
+      Qt::QueuedConnection);
+}
+
+void Session::takeProjectFiles(const QHash<QString, QByteArray> &files) {
+  const auto before = std::exchange(projectFiles_, files);
   if (projectFiles_ == before && !before.isEmpty())
     return;
   if (!before.isEmpty() &&
@@ -1606,17 +1671,29 @@ void Session::rename(Address function, const QString &name,
   // commit them first so the rename never discards or blocks on them.
   if (commentsStaged())
     commitComments();
-  command(QStringLiteral("rename"),
-          {{"address", hexAddress(function)}, {"name", name.trimmed()}},
-          [this, function, name, then = std::move(then)](const QJsonObject &) {
-            refreshHistory();
-            emit renamed(function, name.trimmed());
-            emit message(tr("Renamed %1 to %2")
-                             .arg(displayAddress(function), name.trimmed()),
-                         0);
-            if (then)
-              then();
-          });
+  // A rename no command waits ahead of leaves as it is enqueued, and the
+  // views hear of it while the worker reads it.
+  const bool leaves = !queries_.hasCommands();
+  Failure refused;
+  if (leaves)
+    refused = [this, function, name](const QString &, const QString &) {
+      emit renameRefused(function, name.trimmed());
+    };
+  command(
+      QStringLiteral("rename"),
+      {{"address", hexAddress(function)}, {"name", name.trimmed()}},
+      [this, function, name, then = std::move(then)](const QJsonObject &) {
+        refreshHistory();
+        emit renamed(function, name.trimmed());
+        emit message(tr("Renamed %1 to %2")
+                         .arg(displayAddress(function), name.trimmed()),
+                     0);
+        if (then)
+          then();
+      },
+      std::move(refused), {}, leaves);
+  if (leaves)
+    emit renaming(function, name.trimmed());
 }
 
 void Session::prepareCodeName(const QJsonObject &edit, quint64 epoch) {
@@ -1655,8 +1732,12 @@ void Session::setComment(Address address, const QString &text,
 }
 
 void Session::undo() {
-  if (!canUndo())
+  if (!canUndo()) {
+    // The history of an edit just made is still being read.
+    stepWanted_ = historyReads_ > 0 ? Step::Undo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   // A step past staged comments commits them first, as an edit does.
   command(
       QStringLiteral("undo"), {{"commit_staged", true}, {"limit", 1}},
@@ -1670,8 +1751,11 @@ void Session::undo() {
 }
 
 void Session::redo() {
-  if (!canRedo())
+  if (!canRedo()) {
+    stepWanted_ = historyReads_ > 0 ? Step::Redo : Step::None;
     return;
+  }
+  stepWanted_ = Step::None;
   command(
       QStringLiteral("redo"), {{"commit_staged", true}, {"limit", 1}},
       [this](const QJsonObject &payload) {
@@ -1927,6 +2011,7 @@ void Session::cancelReads() {
   // A cancelled replica already removes its own snapshot subscription.
   keep.unite(analysis_.snapshotOwners());
   queries_.cancelReads(keep);
+  emit readsCancelled();
   emit message(tr("Queued requests cancelled; a running engine call finishes "
                   "unless the worker is restarted."),
                1);

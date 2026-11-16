@@ -7,6 +7,149 @@ universal definition of good taste.
 Carry forward choices the user has accepted; change them when new evidence or
 an explicit request warrants it.
 
+## Style at a glance
+
+NeverD's style on one page, for building a window or judging one. Each line
+names where its value lives and the section below that gives the reasons.
+The code is the authority: colors are roles in
+`ChromeColors.def` (chrome) and `ThemeColors.def` (code views), shapes live in
+`theme.qss` and `WorkbenchStyle.cpp`, sizes in `Config.h` and
+`ResourceLimits.h`. Where a number here differs from them, they are right;
+correct this page in the change that moves one.
+
+The workbench keeps IDA's layout, window names, menus and shortcuts, in Visual
+Studio Code's Dark+ (the default) and Light+ colors and its two high contrast
+themes; the System theme follows the desktop's light or dark mode, and its
+high contrast setting on Windows and macOS. It is a calm, precise analysis
+tool: a few solid surfaces a step apart, parted by hairlines, with no
+gradients, halos or shadows inside the window. Color is kept for meaning: the
+duotone icons of toolbars and menus, a blue that marks state, and one blue
+button in each window. Asked for more polish, the user wanted this style
+unchanged, so refine within it ("Visual direction", "Workbench chrome").
+
+### Colors
+
+Roles in `ChromeColors.def`. The high contrast themes have columns of their
+own there and outline what these two themes fill ("Lists, fields, and
+states").
+
+| Role | Dark+ | Light+ | Used for |
+| --- | --- | --- | --- |
+| `Window` | `#252526` | `#F3F3F3` | Dialogs and panes; the status bar and headings take the same value |
+| `Base` | `#1E1E1E` | `#FFFFFF` | Lists and read-only text; code views and listings fill with the same value from `CodeBackground` and `ListingBackground` in `ThemeColors.def` |
+| `TitleBar`, `MenuBar`, `ToolBar` | `#2D2D2D` | `#F3F3F3` | The one band above the windows |
+| `Separator`, `Border` | `#3C3C3C` | `#E5E5E5` | Hairlines between regions; the edge of a push button |
+| `Text`, `SecondaryText`, `DisabledText` | `#CCCCCC`, `#9D9D9D`, `#6E6E6E` | `#3B3B3B`, `#717171`, `#A0A0A0` | Text that acts, text that describes, text that cannot act |
+| `Accent` | `#007ACC` | `#007ACC` | Progress and other marks of state; a selected tab's top line (`TabActiveBorder`) repeats it |
+| `Focus` | `#007FD4` | `#0090F1` | Keyboard focus frames and a focused field's outline |
+| `ListSelection`, `MenuSelection` | `#04395E` | `#0060C0` | Selected rows and highlighted menu items, under white text |
+| `ButtonPrimary`, hover `ButtonPrimaryHover` | `#0E639C`, `#1177BB` | `#007ACC`, `#0062A3` | The one main button of a window; a checked box (`CheckboxChecked`) has the same blue |
+| `Button`, hover `ButtonHover` | `#3A3D41`, `#45494E` | `#E7E7E7`, `#CCCCCC` | Every other push button |
+| `Input`, `InputBorder` | `#3C3C3C`, `#3C3C3C` | `#FFFFFF`, `#CECECE` | Fields |
+| `ControlDisabled`, `ButtonPrimaryDisabled` | The button gray at 40%; the main button at 40% | The button gray at 40% inside a 4% edge; the accent at 18% | Controls that cannot act ("Control states") |
+
+The accent, the main button, keyboard focus and selection are four roles;
+keep them apart. A new color is a new role with values for all four themes,
+read by the style sheet as `${Role}` and by paint code by its name, never as a
+literal.
+
+### Type
+
+- The interface is the bundled Noto Sans, with Noto Sans CJK, Noto Sans Arabic
+  and Noto Sans Symbols 2 behind it, at the platform's interface size
+  (`QFontDatabase::GeneralFont`). Code views, Output and the text typed in
+  fields use the bundled JetBrains Mono NL at that same reading size, or the
+  face the person chose; fields do not zoom with the code views (`Theme.cpp`,
+  `docs/gui.md`).
+- No window sets a font size of its own, and no font size is written into the
+  code: the desktop decides. Judge a layout at the desktop's size, not at a
+  headless platform's smaller default ("Judging a look", "Auditing every
+  window").
+- Quiet secondary text with color, not with a smaller size: `SecondaryText`,
+  and a view's status line from `makeStatusLine()` ("Workbench chrome").
+
+### Sizes
+
+In logical pixels, which Qt scales for the screen.
+
+| What | Size | Where |
+| --- | --- | --- |
+| Spacing | A 4-pixel scale. Dialogs that place their own lines take 16 around the content, 8 between groups and 4 between the lines of one group; other windows keep Qt's layout spacing | `kLoadQuestionDialogMargin` and its neighbors in `Config.h`; "Hierarchy and proportion" |
+| Between two panes of controls | 13, with a hairline in the middle | `kPaneGutter` in `ResourceLimits.h` |
+| Between panes that are surfaces | A 1-pixel line that the pointer grabs over 5 | `QSplitter::handle` in `theme.qss`; `kDockingSeparatorLineWidth`, `kDockingSeparatorGrabWidth` |
+| Binary comparison's command rows | 2 within a group, 12 between groups | `kComparisonCommandSpacing`, `kComparisonCommandGroupSpacing` |
+| Corners | 2 for fields and push buttons; 3 for tool buttons, check boxes, group frames and menu highlights; 6 for cards and the command center; none for docks and views | `kWorkbenchStyleControlRadius` and the other radii in `Config.h`; `kTitleBarCenterRadius` |
+| Push button | Padding 4 by 14; a dialog's buttons at least 75 wide, a row of equals without icons | `theme.qss` |
+| Field | Padding 3 by 4 | `theme.qss` |
+| Check box, radio button | A 14-pixel box, 6 from its label | `theme.qss` |
+| Keyboard focus frame | 1 pixel with corners of 2; 1 off a push button's face; 2 around a check box's box and label | `kWorkbenchStyleFocusFrameWidth` and its neighbors |
+| Title bar | 35 high; window controls 46 wide; the command center 22 high and 38% of the bar, between 120 and 600 | `kTitleBarHeight` and its neighbors |
+| Menu | Inset 4; items padded 8 before, 24 after, 4 above and below; a 16-pixel icon in an 18-pixel box 3 in; check mark 16; submenu chevron 10; separators 6 in from the sides; shortcut and chevron at 70% until highlighted | `kWorkbenchStyleMenuItemPaddingLeft` and its neighbors; `theme.qss` |
+| Tab | Padding 10 by 5 | `kWorkbenchStyleTabPadding` |
+| List | Items padded 1 above and below, none at the sides; headings padded 3 by 6; a quick filter 4 below its list | `theme.qss`; `kChooserViewFilterMargins` |
+| Scroll bar, status bar, progress | 12 wide without arrow buttons; at least 22 high; a bar 4 high in `Accent` | `theme.qss` |
+| Icons | 16, drawn on a 16-pixel grid; Quick Start's line glyphs 24 | `kWorkbenchStyleSmallIconSize`, `kQuickStartDialogGlyphSize` |
+| Qt's file and font dialogs | At least 860 by 540 and 600 by 460 | `kWorkbenchStyleFileDialogSize`, `kWorkbenchStyleFontDialogSize` |
+
+### Rules every window keeps
+
+- One accent: exactly one button in the accent, on the window's main action,
+  chosen from evidence. Its look (`showAsMainAction`) is decided apart from
+  the key (the default button and Return); a window of tools calls
+  `leaveWithoutDefaultButton()` ("Auditing every window", `SKILL.md` 1.7).
+- Quiet states: a control that cannot act is the same control turned down, a
+  faint plate under a dimmed label with nothing standing out more than about
+  1.25:1, and a main button keeps a faint accent. Commands that cannot apply
+  in the window's mode stay away as a group; single commands disable in place
+  ("Control states", "Judging a look").
+- Every state reads: hover shows on every enabled control and never on a
+  disabled one; keyboard focus draws a frame in `Focus` around the whole
+  control, and focus given by the pointer draws none; every control the style
+  sheet colors has a `:disabled` rule ("Control states").
+- Command rows: commands grouped by what they act on, in the order of use, at
+  their natural widths, wrapping a group whole; a command at the foot of a
+  list spans the list; text commands keep their faces ("Control states",
+  "Auditing every window", "Judging a look").
+- Seams: no control touches a divider or the next pane, panes of controls
+  part with the gutter, the first rows of neighboring panes share a line, and
+  two shapes of one gray never meet ("Judging a look", "Fractional display
+  scales").
+- Lists: headings start at the left, plain, at least as wide as their text,
+  and end in an ellipsis; a column starts as wide as its format; item text
+  never moves under the pointer ("Lists, fields, and states", "Control
+  states", "Auditing every window").
+- One drawing per thing: every window takes the application's font, a group
+  box frames something or is flat, a form's labels share one column, and a
+  line that can outgrow its window wraps ("Auditing every window").
+- Hierarchy: what the task needs first gets the line, as a file's name comes
+  before its folder and time, and branding stays below starting work
+  ("Hierarchy and proportion").
+- Menus: every command shows an icon, in menus built in code too; a submenu's
+  icon shows what its commands share; a tall menu scrolls in one column
+  ("Icon family", "Workbench chrome").
+- Icons: original SVGs on a 16-pixel grid, outlined in `#3B4250` with white
+  highlights and an accent for each group of commands, most of them with a
+  lighter tint for body areas: files and transformations `#D9902F`,
+  navigation `#2F7FD9`, search `#C2662D`, views `#7A55C8`, lists and windows
+  `#2E9E8F`, edit `#4F9A3A`, analysis `#C8455A` (no tint), settings
+  `#4E5FD6`; the library function icon takes `#1FA7C9`. `IconSet.def`
+  records every icon and color. A command that varies another keeps its icon
+  and marks the difference; judge a draft on the dark menu first ("Icon
+  family").
+- Crisp lines: straight strokes on whole pixels at 100%, and chrome lines on
+  whole device pixels from 125% to 200% (`DevicePixels`,
+  `scripts/check_gui_icons.py`; "Crisp lines on the pixel grid").
+- Windows: NeverD's own frame and title bar on every desktop, with a dialog's
+  title in the middle; a useful first size and a minimum taken from the
+  content, and a fixed size only where the task needs fixed geometry
+  ("Workbench chrome", "Resizing is part of the design").
+- Languages: eleven of them, Arabic right to left, switched while the
+  workbench runs. Mirror geometry placed by hand, and set every text again
+  when the language changes ("Languages and direction").
+- High contrast: outlines where the other themes fill, from border roles that
+  are transparent in Dark+ and Light+, and no `if (highContrast)` in paint
+  code ("Lists, fields, and states").
+
 ## Visual direction
 
 Aim for a calm, precise desktop analysis tool with clear, readable content.
@@ -236,16 +379,27 @@ once: the user called the disabled buttons "lifeless", and found a disabled
 combo box that looked enabled. Take each value from a primary source, as the
 rules below do, not from taste.
 
-- Disabled controls give up their fill, keep their outline and dim their
-  label, as Windows 11 draws a disabled button, text box and combo box (WinUI
-  `ControlFillColorDisabled`, `ControlStrokeColorDefault`,
-  `TextFillColorDisabled`): `background: transparent` over the `Border`
-  hairline and `DisabledText`, which composite to almost exactly WinUI's
-  values in both themes. A full `Button` fill behind gray text turned
-  Binary comparison, whose actions wait for input, into a wall of dead gray
-  blocks. Combo box and spin box chevrons dim with the field
-  (`chevron_*_disabled-<mode>.svg`), and a disabled partly checked box
-  matches a disabled checked one.
+- A button or field that cannot act recedes to a faint plate under a dimmed
+  label (`ControlDisabled`, `ControlDisabledBorder`, `DisabledText`): the
+  button gray at 40%, as Visual Studio Code's `.monaco-button.disabled` fades
+  the whole button, with no edge in the dark theme and a 4% edge in the light
+  one, whose plate alone lies within a twentieth of the window. The plate
+  must be there, and nothing of the control may stand out from its surface by
+  more than a quarter: Windows 11 composites to 1.14:1 for the plate and
+  1.23:1 for the edge (`ControlFillColorDisabled` inside
+  `ControlStrokeColorDefault`, over `#202020`), and Visual Studio Code's
+  secondary button at 40% to 1.04:1 and 1.19:1 in Dark+, or to an edge of
+  1.13:1 alone in Dark Modern, whose enabled button is an outline too. Two
+  earlier looks failed with the user. A full
+  `Button` fill behind gray text turned Binary comparison, whose actions wait
+  for input, into a wall of dead gray blocks ("lifeless"). An outline alone
+  in the full `Border` color was as loud as an enabled button's fill (1.39:1
+  beside 1.40:1) around nothing, and the same dialog became a wall of empty
+  frames ("a bit ugly"); the note here that it matched Windows 11 was wrong
+  for the dark theme, where WinUI keeps its plate. Check boxes and radio
+  buttons keep `DisabledBorder`: a small box needs its outline. Combo box and
+  spin box chevrons dim with the field (`chevron_*_disabled-<mode>.svg`), and
+  a disabled partly checked box matches a disabled checked one.
 - Give every control the style sheet colors a `:disabled` rule. An explicit
   `color` or `background` hides the palette's disabled colors, so a disabled
   combo box, such as Binary comparison's SSA representation, looked exactly
@@ -258,8 +412,31 @@ rules below do, not from taste.
   white at 40% vanished into the pale fill (1.3:1), so there the fill is the
   accent at 18% and the label the window text at 55% (2.7:1). The full accent
   behind gray text read as an enabled button that had broken.
-- A checked tool button that cannot act keeps an outline in place of its
+- A checked tool button that cannot act keeps that plate in place of its
   fill; a toggle whose glyph shows its state keeps neither.
+- Do not show commands that cannot apply yet as a block of disabled buttons.
+  Hide by mode, disable by selection, as the Windows guidelines put it:
+  Binary comparison's eleven commands on a pair appear with the first
+  comparison, before which there is no function to select, and from then on
+  each disables in place. Group a row of commands by what they act on, with
+  a wider gap between groups than within one, at their natural widths in a
+  `FlowLayout` that wraps a group whole; a grid stretched them to its columns
+  and scattered them.
+- Give a window at most one default action, and only while it is the next
+  step. Qt makes a dialog's first push button its default and then each
+  button the keyboard reaches, so Binary comparison drew Browse in the accent
+  and Return in its filter pressed it. Turn `autoDefault` off for a tool
+  window's buttons, as Lineage does, and set the default yourself: Compare
+  until a comparison exists and none after, when Return in the filter would
+  start another (Compare keeps the accent all the same; see Auditing every
+  window). Such a window must then answer Return itself. `QDialog`
+  presses the first default button among all its descendants, those of an
+  open child window included, and a button without `autoDefault` passes the
+  key up to it. Binary comparison presses the button that holds focus,
+  compares from an input field only where the inputs differ from the
+  comparison shown, and otherwise swallows the key. A window with no
+  default at all calls `leaveWithoutDefaultButton()`, which does the same
+  for it ("Auditing every window" lists the windows that needed it).
 - A spin box's arrow dims where its range ends. Qt marks that arrow `:off`,
   from `stepEnabled`, not `:disabled`.
 - Make hover visible. `ToolBarHover` sat within two levels of the dark
@@ -316,6 +493,337 @@ rules below do, not from taste.
   pixels in and a 10 pixel chevron. Right to left, the chevron points left;
   the style sheet had fallen back to Fusion's triangle there.
 
+## Judging a look
+
+The user judges NeverD's windows by comfort and names a defect by how it
+feels, not by its cause. Each complaint below was traced to a number or a
+count; start from these before reaching for taste.
+
+| Complaint | What the window showed | Cause, measured | What settled it |
+| --- | --- | --- | --- |
+| Lifeless (2026-11-09) | Disabled buttons as full gray blocks | The enabled fill (1.40:1 on the dark window) kept behind a gray label | The fill must fade with the label |
+| Unattractive (2026-11-12) | Disabled buttons as hollow outlines | An outline of 1.39:1 around nothing, as loud as an enabled fill; seventeen at once | A faint plate (1.14:1), and commands that cannot apply yet stay away |
+| Too far left (2026-11-12) | A pane flush against the combo box beside it | A 6-pixel splitter handle painted whole in the fields' gray | A hairline in a 13-pixel gutter, first rows on one line |
+
+How loud a button that cannot act is, as the contrast of each part against
+what lies behind it, composited over each system's own surface (fetched
+2026-11-12; `-` is not drawn):
+
+| Dark theme | Plate | Edge | Label |
+| --- | --- | --- | --- |
+| Windows 11 (WinUI 3) | 1.14 | 1.23 | 3.25 |
+| Visual Studio Code, default secondary at 40% | 1.04 | 1.19 | 2.65 |
+| Visual Studio Code Dark Modern, secondary at 40% | - | 1.13 | 2.82 |
+| Fluent 2 web (a plate darker than the surface) | 1.27 | 1.45 | 2.76 |
+| NeverD until 2026-11-12 | - | 1.39 | 3.00 |
+| NeverD now | 1.14 | - | 2.64 |
+| NeverD's enabled button, for scale | 1.40 | 1.39 | 6.80 |
+
+| Light theme | Plate | Edge | Label |
+| --- | --- | --- | --- |
+| Windows 11 (WinUI 3) | 1.02 | 1.11 | 2.49 |
+| Visual Studio Code Light Modern, secondary at 40% | 1.07 | 1.19 | 1.99 |
+| Fluent 2 web | 1.14 | 1.32 | 1.65 |
+| NeverD until 2026-11-12 | - | 1.14 | 2.36 |
+| NeverD now | 1.05 | 1.11 | 2.25 |
+| NeverD's enabled button, for scale | 1.11 | 1.14 | 9.06 |
+
+- Trace a verdict to its cause before changing a color. Measure the parts of
+  what the user points at, and count how many of it the window shows. The
+  hollow buttons were a token defect (the outline's strength) and a
+  structure defect (seventeen commands waiting) at once, and the earlier
+  token-only fix had only traded one verdict for the next.
+- Offer the choice as renders of the real window, switched in place: the
+  window as it is, the token change alone, and the token change with the
+  structure change. The user left the choice to comfort; the regrouped
+  window was taken because it opened quietest while its buttons still looked
+  like buttons.
+- Keep faces on text commands. A row of flat text commands, as Visual Studio
+  Code and Windows command bars draw them, was rendered and set aside: without
+  icons the commands read as labels. Revisit it once the commands have icons;
+  the icon set has `check`, `link`, `refresh` and `pathfinder`, and none for
+  unmatching a pair.
+- Let the accent say what the window is for. In Binary comparison it sits on
+  Compare, faintly while Compare cannot act yet. Until a comparison exists
+  Compare is also the default and Return starts it; afterwards it gives up
+  the key, so Return in the filter starts nothing, and keeps the accent. For
+  some hours it lost the accent too once a comparison showed; the user's
+  rule that every window keeps one (Auditing every window, below) put it
+  back.
+- Look along every seam. Two shapes of one gray that meet read as one shape:
+  the splitter's band and the combo box beside it were both `#3C3C3C`. Leave
+  a layout's spacing between a control and any dividing line, and put the
+  first rows of two panes on one line so the rows below start level.
+- Render at the desktop's own font size. The user's GNOME desktop gives the
+  interface about 11 points where Qt's offscreen platform gives 9: the same
+  Cancel button is 77 by 31 pixels on their screen and 68 by 27 offscreen,
+  and a row that fits offscreen wraps for them. Set the application font's
+  point size in the throwaway driver; `QT_FONT_DPI` scales everything, not
+  the font.
+
+## Auditing every window
+
+On 2026-11-12, after the rounds on Binary comparison, the user asked for the
+rest: look at every other window, one by one, and fix what does not look
+right. `SKILL.md` section 1.8 holds the method. This is what it found in
+NeverD, where each rule now lives, and what was left alone.
+
+### How the windows were captured
+
+- The interface font is the bundled Noto Sans at the size of the desktop's
+  system font (`Theme::apply` reads `QFontDatabase::systemFont`); the
+  desktop's own family never shows. The user's desktop reports 11 points, the
+  offscreen platform 9, and the code font is the user's saved choice. A
+  capture at the offscreen size is roomier than what the user sees, and a
+  font set after startup leaves the main window's lists at the old size.
+- A throwaway probe took the place of `tests/WidgetsProbe.cpp` at link time
+  (no tracked file changes) in a copy of the delivered bundle, so the real
+  worker analysed a real program. It opened the main window, every dock,
+  every code view, every menu and context menu and each command's window;
+  walked each window's tabs; pressed each button that ends in an ellipsis
+  and each dock's insert and edit buttons to reach the windows behind them;
+  ran a comparison to reach its review windows; repeated the commands from a
+  pseudocode line that calls; and built the load questions from the facts
+  their tests use. 187 captures a theme, each with its widget tree.
+- The executable defined `QFontDatabase::systemFont` itself to report the
+  desktop's size, so every widget was built at it. With the caret steady and
+  input paths fixed, two runs of an untouched build differed only in the
+  status bar's text, Quick start's time and the Windows menu.
+- Not reached: Stack variables (the sample has no function with an exact
+  stack access; it shares its builder with Change stack pointer), the list
+  of a local's occurrences, and what only a plugin or a second instance
+  shows.
+
+### What it found, and where the rule lives
+
+A default nobody chose, in fourteen windows. Qt had made each one's first
+push button the default; a fifteenth pressed a child window's:
+
+| Window | Default by Qt's choice | What Return did |
+|---|---|---|
+| MCP connections | Enable sharing | From the server path, shared the session |
+| Plugin manager | Import plugin… | From the filter, opened the import chooser |
+| Shortcuts | Close | From the filter, closed the list |
+| x87 support | Reload | From the filter, fetched the inventory again |
+| Unwind information | Refresh | Fetched the report again |
+| Offline package review | Preview file… | From the finding filter, opened a file chooser |
+| Change stack pointer, Stack variables, Set call type | Reset | From the offset field, discarded the corrections |
+| Change review, Analyst review, Validate scalar returns | Refresh review, Refresh history, Check again | From a row, ran the review again |
+| Call paths, Region hypotheses | Trace, Inspect primary function | Took the key from the lists |
+| Version comparison graph | None of its own | Pressed the default of a list it had opened |
+
+- A window of tools calls `leaveWithoutDefaultButton()` (`DialogReturnKey.h`):
+  none of its push buttons takes the default as it shows or as the focus
+  moves, Return presses the button that holds the focus and otherwise stays
+  with the control it was typed in, and the dialog swallows what is left.
+  A field that should act on Return connects its own `returnPressed`, as the
+  server row of MCP connections connects.
+- A dialog that states one correction builds its buttons with
+  `correctionButtons()` in `MainWindow.cpp`: Apply takes the accept role, so
+  it follows Cancel and takes Return while it can act; Reset never takes the
+  key. In `QDialogButtonBox`'s GNOME layout a button of the Apply role stands
+  before Cancel. Removing the standard button and adding it again with the
+  accept role keeps its translated text.
+
+The accent stays. The first round of this audit took the default from
+those windows and, with it, their only colored button: the plugin manager
+showed "Import plugin…" in the gray of every other command. The same day the
+user asked that no window be left in a single color, proposed the accent for
+the import, and asked which design was better. Every other dialog of the
+application has exactly one accent button, About's OK included, and the
+plugin manager's own line of help names the import. So:
+
+- `showAsMainAction(button)` (`DialogReturnKey.h`) sets the `mainAction`
+  property, which `pushButtonFace` in `WorkbenchStyle.cpp` and the
+  `QPushButton[mainAction="true"]` rules of `theme.qss` draw exactly as a
+  default button, enabled and faint. The button is not the default, so
+  Return presses it from no other control and no parent window can.
+  `AppearanceTests::aMainActionWearsTheAccentOfADefault` compares the two
+  to the pixel in the four themes. The dark high contrast theme outlines a
+  default and a plain button alike, as Visual Studio Code's does.
+- Which button, and the evidence for it:
+
+| Window | Main action | Why this one |
+|---|---|---|
+| Plugin manager | Import plugin… | Its line of help asks for it |
+| Version comparison graph | Add comparisons… | Its line of help asks for it |
+| MCP connections | Connect | Return in the server row runs it |
+| Call paths | Trace | Return in the address runs it |
+| Validate scalar returns | Check again | The window's one command |
+| Analyst review | Append assessment; Save comparison… while the selected record's page hides the form | The form's accept, faint until the draft is complete; the window's own line of help asks for the save |
+| Choose counterpart | Pair functions | The chooser's accept; faint until a row is chosen |
+| x87 support, Unwind information, Shortcuts | Close | They only show things, as About does under its OK |
+| Binary comparison | Compare | The window's own action; default until a comparison exists, the accent throughout |
+| Change review | Inspect function | What is done with the chosen change, as OK with a chooser's row |
+| Region hypotheses | Inspect primary function | What is done with the chosen hypothesis |
+| Dependency evidence | Trace inputs | Its line of help asks for it ("then trace its inputs or uses"); faint until an operation is chosen |
+| Offline package review | Preview file… | The step every review starts with |
+
+- Five of these were first left without an accent, four of them shown to the
+  user as renders of candidates to choose from. The same evening the user
+  answered that every window keeps at least one accent button, on its key
+  action. Choosing it is the designer's work, not a question to hand back.
+- The capture probe writes `main` beside `default` in each window's widget
+  tree; the query is "every window with push buttons has exactly one button
+  that is either". What stands outside it: the main window, whose panes are
+  not windows.
+- Kept as chosen: Compile to new binary in Rewrite function, Copy in Export
+  data, Next in Find in view, Trace's own Return in the address of Call
+  paths, and the accept buttons of questions.
+- `neverd_gui_web` is a library the workbench links, so Offline package
+  review cannot include the workbench's helper. It turns `autoDefault` off
+  on its own buttons, which is enough for a window that opens only modal
+  children, and sets the `mainAction` property itself.
+
+One thing drawn two ways:
+
+- Column headings. `QTableView` centers its headings and, through
+  `highlightSections`, draws them bold while a cell of their column is
+  selected; `QTreeView` keeps them left and plain. x87 support's headings
+  turned bold with its first row, and Binary comparison, the version graph
+  and Offline package review stood centered headings beside lists that
+  start theirs at the left. `WorkbenchStyle::polish` now gives every
+  horizontal header the left alignment and no highlighting. A model that
+  returns an alignment for a heading still decides it.
+- The interface font. Offline package review set at least 12 points;
+  `docs/gui.md` states that every window takes the desktop's size.
+- Panes of controls. MCP connections ("History" and "Result" read as two
+  tabs), the version comparison graph (its pages' tabs stood on the line)
+  and Dependency evidence (the operations' title against the side's list)
+  take `kPaneGutter`, the measure Binary comparison's gutter became, and put
+  their first rows level.
+
+Commands and forms:
+
+- A command at the foot of a list spans the list. A lone `QPushButton` added
+  to a vertical layout takes the layout's width: "Trace selected function"
+  was 835 pixels wide, "Assess selected evidence" 1058, and the version
+  graph's four release commands filled two columns. The audit cut them down
+  to their labels; reading the before and after, the user found the panes
+  empty around the narrowed buttons and preferred the earlier design. They
+  are back at the width of their panes, in the version graph and in Offline
+  package review alike, and `LineageTests` holds the version graph's.
+- A `FlowLayout` inside a tab page reports one row as its minimum height, so
+  at the window's minimum size a second row falls below the window in German
+  and Russian. The release commands stay in a grid.
+- Check a window's own layout tests before removing a margin. The version
+  graph's snapshot pane had a 6-pixel margin on both sides, which set its
+  list in from the commands above; the margin was there because Qt places
+  the first pane of a right-to-left splitter one pixel beyond the splitter's
+  edge, which cuts a control at the pane's. One pixel of the splitter's own
+  right margin now does that, and `LineageTests::localizedWorkspace` holds
+  it in Arabic at 760 pixels.
+- Two `QFormLayout`s in one column size two label columns: Edit function's
+  frame sizes started 17 pixels right of its name. Give every label of both
+  the wider width.
+- `QFormLayout` centers a label on the first lines of a tall field. String
+  literals held every encoding's box in one field, and "Encodings:" stood 7
+  pixels below "ASCII". Make each box a row.
+- A `QGroupBox` keeps the title's room above its frame, 8 pixels, also
+  without a title; Edit function's box of flags started that far below the
+  first field. It sets the `untitled` property, which `theme.qss` reads. A
+  style sheet cannot select `[title=""]`: it treats an empty string property
+  as absent.
+- A checkable group that shows its fields only while checked is flat, which
+  `WorkbenchStyle` draws as the rule beside the title and no sides.
+- A label that does not wrap is cut at the dialog's edge once the desktop's
+  font makes it longer than the dialog ("…after default p" in Set call
+  type); a test at the offscreen font cannot see that, so assert that the
+  long line wraps.
+- A list column starts as wide as its format (`ChooserFormats.def`), and the
+  last column takes what room is left. Cross references gave the type of a
+  reference, one letter, the 24 digits of `Text`, and the address after it
+  ended in an ellipsis; the type takes `Letter`, 3 digits.
+- A `QTreeWidget` in a dialog hints 256 pixels whatever its columns. Add a
+  Type Library opened narrower than its three headings, with a scroll bar
+  across the list; it sets the tree's minimum width from the header's
+  length. A last section that stretches never shrinks below the size it had
+  when it began to stretch, which is Qt's default of 100 pixels for a tree's
+  header, so the list turns the stretch off, sizes every column to its
+  contents, takes its minimum width, and turns the stretch on again. Leaving
+  the stretch off instead ends the last column, and a selected row's
+  highlight, a scroll bar's width before the list's edge: check that the
+  header's length equals the viewport's width, not that it is at most that.
+- A report of JSON reads in the code font (`Theme::codeFont`), as evidence
+  panes do; Validate scalar returns printed it in the interface font.
+
+### Keeping the fixes true on Windows and macOS
+
+The user's condition for the audit: what works here must not break there.
+
+- `gui.yml` runs the appearance suite on real windows on both, at 100% and
+  again with `QT_SCALE_FACTOR=1.5`, before the offscreen `ctest`. A check
+  that counts pixels in `grab()` sees the screen's scale: render into a
+  `QImage` whose device pixel ratio the test sets, as
+  `splitterHandlesKeepAHairlineInTheirRoom` does.
+- Do not compare a widget's picture before and after an event on a real
+  window; activation can fall between the two. Take both once it has
+  settled (the heading check selects a row, then clears the selection).
+- `QFileDialog::getOpenFileName` is native on both. A test that expects no
+  chooser sets `Qt::AA_DontUseNativeDialogs` for its length, so a regression
+  fails there instead of holding the run until it times out.
+- A test that presses a key in a dialog opened over the workbench waits for
+  `dialog->isActiveWindow()`, not for `activeModalWidget()` or `isVisible()`.
+  Return in a code view is "Jump to operand" (`Actions.def`), and a key sent
+  before the dialog is active is taken by that shortcut: the stack
+  correction test failed 2 runs in 25 on one busy processor and none in 40
+  once it waited. Run a new test a few dozen times pinned to a processor
+  that a spinning process shares (`taskset`) before trusting it to a hosted
+  runner.
+- Qt appoints a dialog's default in platform-independent code, but the keys
+  that press a focused button come from the platform theme: GNOME's includes
+  Return, Windows' and macOS' do not. `leaveWithoutDefaultButton()` presses
+  the focused button itself, so all three behave alike.
+- Change stack pointer measures its height before it shows and measures
+  again once shown, growing if a platform's frame or font left its wrapped
+  text less room.
+- The suites that need a real engine (comparison, lineage, source types,
+  web review) are not built by `gui.yml` on any platform. Link them by hand
+  against a qualified bundle's worker before changing their windows, and
+  say in the report that only Linux ran them.
+- Before a change reaches `dev`, push it to a throwaway `ci/` branch and run
+  `gui.yml` on that ref; runs on `dev` are cancelled by the next push.
+  Compare each platform's failures with the last run before the change,
+  per job, and count a cancelled job as no verdict.
+
+### Seen and left alone
+
+Each of these needs the user's word, a change to every window, or new
+strings in eleven languages:
+
+- Single-line controls differ in height by type at 11 points: line edit 30,
+  combo box and button 31, spin box 33 pixels. One height would move every
+  window in every theme.
+- The cross-references list runs to its dialog's edges while the jump lists
+  are inset by the dialog's margin. Its code says the list is meant to.
+- Form labels end in a colon in some dialogs and not in others, and the
+  comparison's review windows carry "— NeverD" in their titles where other
+  windows do not.
+- The File menu grows as wide as its longest recent path and carries its
+  shortcuts away from their commands.
+- "1 bytes" in the structure offset picker.
+- x87 support's rows are 30 pixels high and the tree lists' 22.
+- Unwind information shows two empty panes for an image without DWARF.
+- Region hypotheses' two tables start 6 pixels apart, and Type Libraries'
+  last column ends at the last heading.
+- Jump to function is 720 pixels wide and cuts the last digit of its
+  Length column.
+- The Pathfinder dock shows two buttons that both read "Ins".
+- At least sixteen commands of pop-up menus made in code show no icon: the
+  code view's three for interpreter recovery, the comparison source view's
+  four allowances, Edit function's two color choices, the lineage page's two
+  copies, Patch's restore and its waiting line, and the three of Quick
+  Start's recent-file menu. A search for `addAction(tr(` found these; other
+  ways of adding a command were not searched.
+- The pseudocode view's context menu has 39 entries and is taller than a
+  1080-pixel screen, where it scrolls.
+- The Windows menu lists the open panes in the order of a `QHash`
+  (`MainWindow::docks_`), so the list, and the pane each of Alt+1 to Alt+9
+  reaches, changes with every launch. Which order it should keep is the
+  user's to say. Two captures of one build differ in that menu, in the
+  status bar's free disk space and in the times of recent files; count
+  those three as the noise floor of a comparison, and nothing else.
+
 ## Hierarchy and proportion
 
 Start by identifying the user's task and the order in which information should
@@ -354,6 +862,37 @@ fractional DPI, as the next section describes. File labels must fit their
 outline, including longer labels such as MACH, NDDB, and WASM. Follow
 `IconSet.def` for asset provenance and palette conventions; do not copy a
 third-party icon set merely to imitate an IDE.
+
+Every menu command shows an icon. `Actions.def` gives the table's commands
+theirs and the appearance tests check them, so the gap opens where a window
+makes commands of its own: the Plugins menu showed one icon on four entries
+until the user asked for the other three. When a menu is built in code, give
+each command its icon there and test that menu's own entries the same way.
+
+Drawing a command's icon:
+
+- Start from what the menu is about and mark the difference, as the icons'
+  README says. Import process plugin is an arrow into the puzzle piece,
+  composed like `imports` and `file_load`.
+- Judge drafts on the dark menu first. The outline `#3B4250` nearly vanishes
+  on `#252526`, so an icon reads there through its fills. Carry every mark in
+  the tint, the accent or white, never in the outline alone.
+- Keep the subject whole. A puzzle piece shrunk under a corner badge lost its
+  right tab and read as a house. At full size, with the mark inside it, it
+  stayed a puzzle piece.
+- Choose the mark by what it could be mistaken for. Rows on the piece read as
+  a list of plugins, which is the manager, and three bars as a hamburger
+  menu. A play mark, as on `analyze`, says tasks that run.
+- Give a command that is no variation its own motif in the group's colors, so
+  the entries of one menu stay apart at a glance: the context menu settings
+  show a pointer opening a menu.
+- Compare drafts as Qt draws them: `QSvgRenderer` at 16 pixels on both menu
+  backgrounds, enlarged pixel for pixel, beside the icons they will sit with,
+  then at 24 and 32 pixels for 150% and 200%. The verdict is a capture of the
+  real menu.
+- A pane's tab keeps the icon it had. The Plugin tasks pane shows the plain
+  puzzle piece while the command that opens it shows the piece with the play
+  mark; the request was the menu.
 
 ## Crisp lines on the pixel grid
 
@@ -443,6 +982,18 @@ field looked sharp. Chrome boxes and hairlines do not have to look like this.
   read-only editors, must stay.
 - Qt passes the splitter, not the handle, as `CE_Splitter`'s widget; a
   default-constructed `QSizeF` is -1 by -1, not empty.
+- A splitter between panes that hold controls needs a gutter. The theme's
+  handle is a hairline, 1 pixel that Qt lets the pointer grab over 5, which
+  suits panes that are surfaces, such as two tables. Binary comparison set a
+  6-pixel handle to keep its combo boxes off the next pane, and the style
+  filled all of it: a band of the fields' own gray that the "All functions"
+  box ran into, with the next pane's title flush against it.
+  `WorkbenchStyle` draws a handle's hairline along the middle of its room,
+  under a dock separator's bar while the pointer is over it, so a wider
+  handle is a gutter: a layout's spacing on either side of the line
+  (`kPaneGutter`). Across such a gutter, put what the panes show
+  first on one row (the details' title on the inventory's filters' row), so
+  the rows below start level.
 - Verify at 125%, 150% and 175% with
   `AppearanceTests::controlsKeepTheirLinesOnDevicePixels`: render the window
   with `QWidget::render` into a `QImage` whose device pixel ratio is the scale,
@@ -491,6 +1042,251 @@ in every language and compared every text of the main window across them.
   strings of each such source.
 - Known limit: messages the analysis engine sends, such as why an operand has
   no structure offset, are English in every language.
+
+## Plugin views and the Agent
+
+NeverD Agent (a standalone Qt Quick window and an in-process workbench chat)
+was reviewed against the workbench on 2026-11-14 with real binaries and the
+real engine. These rules hold for it and for any view a plugin floats over
+the workbench.
+
+- Give a floating entry point the shape people already read as one: an
+  accent button with a mark and a short label ("Ask Agent"), at the
+  workbench's bottom-right corner, as Office places its Copilot button. A
+  48-pixel gray ball with a glyph was too quiet to find. Let it dock at the
+  side as its mark alone, and offer dock, reset and hide in its context menu,
+  with a menu action and a shortcut that keep working while it is hidden.
+- Keep the window's one accent while the entry's panel is open: the entry
+  is a checkable button, checked exactly while the panel shows, drawn as a
+  pressed toggle in the button gray, and the panel's Send keeps the accent.
+  The high contrast themes fill buttons with the window, so there the
+  button gray matched the closed accent button (Dark High Contrast: both
+  black, outlined alike); there the pressed toggle takes
+  `ToolButtonChecked`, the workbench's checked tool button fill.
+- Let a floating entry button take focus by Tab only (`Qt::TabFocus`). A
+  click that moved focus onto it made the panel record the button as the
+  view to return to, so Escape left the keyboard on the button instead of
+  the listing being read.
+- Keep floating views off the command line along the foot of the workbench,
+  under either bottom corner: mirrored, the command field does not reach the
+  right edge, so test the row's width, not its right edge.
+- Make a floating panel a window a person places: it moves by its title (a
+  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
+  input. It opens at the golden section across the workbench, with the smaller
+  golden part of the free width (0.382, `2 - std::numbers::phi` in
+  `AgentUiPlugin.cpp`) before it on the side a line starts from: left of the
+  middle in a left-to-right language, right of it in Arabic. In a 1000 by 700
+  workbench it stands at (199, 70). The corner beside the entry button read
+  worse than the middle, and on 2026-11-15 the user still found the middle
+  uncomfortable and asked for the golden section, further left (SKILL.md
+  section 1.9). Down, it keeps to the middle of the whole workbench, which
+  already sits above the middle of the dock area because the toolbars take the
+  top (137 pixels of a 1440 by 864 workbench); a golden section down the whole
+  workbench would put its top 21 pixels above the dock area there, where the
+  host stops it against the toolbars. It keeps its place as its share
+  of the room it can move in, so it holds its relative place when the
+  workbench resizes. Moved within 20 pixels of where it opens, on either axis,
+  it snaps there (VS Code snaps its quick input to the horizontal center
+  within the same distance), and a double click on the title puts it back
+  there at its first size. It opens at 480 by 560 pixels, about the tallest
+  that still sits in the middle of a 1440 by 864 workbench, whose dock area
+  starts 137 pixels down; 440 by 520 read as cramped. In a small workbench the
+  panel may cover the entry button, so it closes by its own button and Escape
+  too. It stays open until closed, without a hover preview or a pin, and
+  closing gives the keyboard back to the view that had it.
+- Known limit of that place: the share is of the whole workbench, while the
+  host keeps views inside the dock area, between the toolbars and the
+  command line. A panel let go exactly at the dock area's top edge left it
+  when the workbench grew from 864 to 1000 pixels high (54 pixels down); a
+  panel dragged past an edge, or left where it opens, held its place.
+- Take plugin views along into focus mode. Focus mode (F pressed three times
+  in an analysis view) floats the disassembly, the pseudocode and the output
+  into a maximized workspace over the workbench, and the Ask Agent button and
+  the conversation stayed behind it, so the Agent looked gone there. The
+  workbench now lends that workspace every plugin view
+  (`GuiPluginUiHost::lendViews`): each moves there shown or hidden, at the
+  same corner and share, clear of the workspace's command line, and the
+  workspace's window takes the plugins' menu shortcuts, such as Ctrl+Alt+I,
+  which otherwise belong only to the workbench's menu bar. Leaving focus mode
+  returns them before the old layout is restored; a workspace that goes away
+  by any other path returns them from its `destroyed()` signal. A view placed
+  as a share of its parent places itself again on `QEvent::ParentChange`.
+  Known limit: in a right-to-left language the button sits at the bottom-left
+  corner, where the focus workspace's Functions sidebar also opens.
+- Show a view's mark once. The empty conversation's welcome carries the
+  Agent's mark, so the panel's title is the grip and the name alone; a
+  second, smaller mark beside the title repeated it a few lines above.
+- Explain a new entry once, beside it, in a small card with one button, as
+  Fluent teaches a new entry point.
+- Lay out a conversation as VS Code's chat view. An empty conversation says
+  what the view does in the middle of the panel: the mark at 40 pixels in
+  the secondary text color, as VS Code draws its chat welcome's icon, a
+  heading a step larger than the panel's title, and the message centered at
+  a short measure of about 40 average characters. First questions are
+  compact chips as wide as their words, just above the composer. Full-width
+  outlined rows under a top-anchored welcome, with a blue mark beside the
+  blue Send, read as cluttered.
+- Make the composer one box in the input fill, outlined in the focus color
+  while the prompt has focus: the prompt, then what the question takes
+  along, then Send. Show that context as one chip, as VS Code shows a
+  chat's current file: its cross leaves the context out, and the chip
+  turns dashed and italic, with a plus that takes it back. A gray context
+  line above the conversation and an "Attach current selection" check box
+  below the prompt said the same thing twice. Without a binary, a line in
+  the chip's place says to open one, beside a Send that waits for it; a
+  placeholder alone left a disabled Send unexplained once typing hid it.
+- Type prose in the interface font. The workbench's text fields type in the
+  code font (`theme.qss`), so a chat prompt sets the interface font in its
+  own sheet, as VS Code's chat input uses the interface font. Grow a prompt
+  with its lines, two to eight here, and measure the laid-out lines: a
+  Chinese line among Latin text is taller than the font's line, and
+  `QPlainTextEdit` scrolls unless a pixel is left below its bottom margin.
+- To put a text field inside a box of your own, let the field paint the
+  box's fill over its whole frame when its paint event arrives. The
+  workbench paints a box, with its focus outline, on every text field that
+  takes typing (`fieldFace`) just before the field paints, whatever its
+  style sheet says, and the field's page and scroll bar are transparent, so
+  that outline showed inside the box's. No style sheet reaches the box;
+  rules for the field's page (Qt leaves a scroll area's viewport unstyled)
+  or its scroll bar painted nothing either.
+- Outline chips in VS Code's `chat.requestBorder`: a tenth of white in a
+  dark theme and of black in a light one, which shows on the panel and on
+  the input fill alike, and the theme's border in high contrast. A dark
+  theme's toolbar hover gray is its input gray, so a chip in the composer
+  hovers with the same tenth.
+- Show code in a plugin view in the workbench's code font
+  (`AppearanceContext::codeFont`). Markdown asks for a generic monospace
+  family that the workbench process does not resolve, and the workbench's
+  own fallbacks for digits and punctuation then mixed two fonts in one code
+  line, which read as letter-spaced text. Wrap long code lines in a narrow
+  panel instead of scrolling the whole message sideways.
+- A Qt Quick window follows the same rules as the workbench's widgets:
+  colors from `ChromeColors.def` in all four columns, push and main faces
+  outlined in the high contrast themes (their fills equal the window there),
+  a modal dim that leaves the frame's shadow band alone, right-to-left by
+  `LayoutMirroring` set on the window's root item (dialogs and menus live in
+  the overlay, outside any content item), and glyphs that point along the
+  reading direction turned around in Arabic.
+- Size tabs and choosers to their text, and let a hint give way when it and
+  its neighbor do not both fit: German cut a fixed 56-pixel tab and a
+  150-pixel scope chooser. Keep line breaks out of the middle of a sentence
+  in a source string; English then broke a hint after "research,".
+- The Agent and its CLI read the workbench's language and theme from the
+  workbench's own settings, and read them again when the Agent window becomes
+  active, so a choice made in the workbench is the Agent's too.
+
+### The Agent's own window
+
+The standalone Agent window was first shaped as the workbench is: a title
+band, panes parted by hairlines, corners of 2, 3 and 6, one text size, a
+status bar, and an empty state set at the left edge. On 2026-11-15 the user
+found that window not good-looking and asked for the design of OpenAI's Codex
+desktop application, in NeverD's colors. The workbench's shapes belong to a
+dense tool window; a window that holds a conversation takes these instead
+(`tools/neverd-agent/ui/Theme.qml`).
+
+- Take geometry, type and spacing from the reference and every color from a
+  role of `ChromeColors.def`. Codex's desktop stylesheet (version 26.928, the
+  rules for its Electron window) gave: a side list 275 wide (240 to 520), rows
+  30 high with 8 of padding at the sides and corners of 10, a title strip of
+  44, a reading column of 768, a composer and message bubbles with corners of
+  22, dialogs 12 and menus 16, composer buttons of 28, panel padding of 20,
+  text at 12, 13 and 14 pixels with a 28-pixel line on the start page, and
+  weights of 400, 500 and 600. None of its colors, glyphs, fonts or text is in
+  NeverD.
+- Set those on NeverD's own grid of 4: corners of 8 for rows, buttons, fields
+  and menu items, 12 for cards, menus and sheets, 20 for the composer and a
+  message; rows at least 30 high, push buttons and fields 2 more; a side list
+  of 272 (232 in a window under 1100 wide); a strip of 44; a reading column
+  of 768. Codex scales its corners by 1.25 where the browser draws them as
+  superellipses; Qt draws arcs of a circle, where 8 at 30 high reads as its
+  10 does.
+- Keep NeverD's order of surfaces. Codex's content is a card lighter than its
+  side list (5% of white over the window). NeverD's views (`Base`, #1E1E1E)
+  are darker than its chrome (`Window`, #252526), as an editor is beside its
+  side bar. The Agent keeps that: the side list and the right panel take
+  `Window`, the conversation `Base`. No literal or alpha mix copies the lift.
+- Part surfaces by their fills, and by lines only where the fills are one.
+  The hairlines between the side list, the conversation and the panel are
+  gone in the dark and light themes and drawn in the high contrast ones
+  (`Theme.paneLine`), where a message bubble and the panel's card are also
+  outlined.
+- Build the window as two columns, without a band across its top or a bar
+  along its foot. The side list runs the window's height and carries the
+  application's name on a strip that moves the window. The conversation's
+  strip carries the project's name, its commands and the window's controls.
+  A status bar that mostly said "Local workspace" is gone: what the
+  application reports shows as a note over the conversation for six seconds,
+  or for as long as it works.
+- Give the side list rows a list's behavior: the whole row answers the pointer
+  (`Hover`), and the one that is open carries `ToolBarHover`, a quiet gray, not
+  the selection blue. One row carries the fill: the open project's, until one
+  of its objects is chosen. A project's folder turns into the chevron that
+  folds it while the pointer or keyboard is on its row, and the row's menu
+  button shows then too. The same quiet fill marks a toggle that is on and the
+  panel's current tab, whose accent underline went. High contrast fills
+  nothing with `ToolBarHover`, so there these take `ToolButtonChecked`.
+- Use a type scale in steps of the desktop's interface size, never fixed
+  pixels: 0.93 for notes, 1.15 for a sheet's title, and 2 for the one line of
+  a start page. One size with secondary text quieted by
+  color, the workbench's rule, left the window without a first thing to read.
+- Center what an empty window says: the mark, one line at twice the text
+  size in the regular weight, a sentence at a measure of 480, and its two
+  buttons, in the middle of the pane and a twelfth of its height above it. At
+  the left edge of an 800-wide column the same block read as stranded.
+- Show who spoke by where a message stands. The person's words are in a
+  bubble at the trailing edge, as wide as they are within four fifths of the
+  column, in `Window` without an outline; an answer is plain across the
+  column. A name is written only where it says more (a goal's round, a
+  message inherited from the main conversation). The time, Copy and Quote
+  show under a message while the pointer or keyboard is on it. A header in
+  every bubble (a dot, a name, a time, a button) read as a form.
+- Make the composer the window's main object: a floating surface (`Menu` fill,
+  `FloatingWindowBorder` outline, the focus color while typed in) with corners
+  of 20, growing from two lines to eight, its pickers quiet until hovered, and
+  Send a disc in the accent. A flat block in the input gray with a square
+  Send read as a form field. Inside the right panel's card, a composer is a
+  well of the conversation's `Base` in the same outline.
+- Size a menu to its longest command (`ThemedMenu.fit`). At a desktop's 11
+  point text a 230-pixel menu cut "Show project files in the sidebar".
+- Let a project leave the side list. **Remove project…** stands last in the
+  project's menu, after a separator, and its sheet names the project in its
+  title, says what the removal keeps (the folder, the conversation and the
+  memory in it, and that **Open project…** brings it back), shows the folder,
+  and puts the accent on **Remove project**. Removing by itself deletes
+  nothing, so the word is "remove", never "delete". The project that followed
+  it opens; with none left the window shows its start page and the right
+  panel closes.
+- Offer what cannot be undone as a box that is never ticked for the person:
+  the same sheet can also delete the Agent's records (`.nd-agent`). While the
+  box is ticked the sentence above it says what is deleted, what is kept and
+  that it cannot be undone, and the button reads **Remove and delete**; the
+  box is clear again each time the sheet opens, and is absent where there are
+  no records to delete. A check box leads its label, so in a right-to-left
+  layout its box stands at the right.
+- Keep a listed folder that did not open as a row, in the quiet text color
+  with a folder glyph that carries a mark; its tool tip gives the folder and
+  the reason, a click tries it again, and its menu removes it. The window
+  first answered such a folder with an error sheet at every start and no way
+  to take it off the list.
+- A row's tool tip leaves when the row is clicked or its menu opens and
+  comes back with the pointer, so it never lies over the menu. A tool tip
+  wraps at 460 pixels; a path with a reason ran past the window on one line.
+- Show every string as plain text. A project's name comes from a file, a
+  function's name from a binary and a summary from a model; a Qt Quick label
+  left to its default lays such text out as markup when it looks like markup
+  and fetches the image it names, so a name could call another machine by
+  being displayed. Every `Label` and `Text` states
+  `textFormat: Text.PlainText`, which `scripts/check_agent_qml_text.py`
+  checks, and the window's engine has no network (`platform/OfflineQml.h`).
+  A long title wraps to a second line before it is cut.
+- Check the window with `neverd-agent --capture`, which needs no display, on
+  illustrative data in a private home: an empty workspace, a conversation, an
+  empty project, a paused goal with queued inputs, each right panel and the
+  settings sheet; in the four themes; in Chinese, German and Arabic; and at
+  800 by 560 and just under 1100 wide. Hover, menus and sheets need the window
+  on a private Xvfb. `--capture` exits with 1 and writes the reason to
+  `agent.log` when the workspace cannot start.
 
 ## Resizing is part of the design
 
@@ -579,6 +1375,29 @@ diff does not establish the appearance of a Qt widget.
    other language is either missing from the catalogs or written once and
    never set again, and the catalogs tell which.
 
+10. Render a dialog in the states that matter with a throwaway driver linked
+    against the build's `libneverd_gui_app.a`: construct the real dialog,
+    drive it through its states (as it opens, with its inputs chosen, with
+    its results and a selection), and grab each in both themes. Give it the
+    worker of a qualified bundle and private `XDG_*` directories, and private
+    copies of its input files, since comparing writes sidecars beside them.
+    Set the application font to the desktop's size first (see "Judging a
+    look"). A dialog that sets `Qt::WA_DeleteOnClose` must not be closed
+    from a stack-allocated object. To show the build before a change from
+    the same build directory, link the driver with objects compiled from the
+    old sources ahead of the archive.
+11. To see every window, link a probe in place of `tests/WidgetsProbe.cpp`
+    that walks the commands, docks, menus and the buttons that open further
+    windows, and saves each window's picture and widget tree ("Auditing
+    every window"). Run it in a copy of a qualified bundle, on a private copy
+    of a real program, with private `XDG_*` directories; it reaches the
+    probe through `--analysis-test`. Have the executable report the
+    desktop's font size from the start, keep a frozen copy of the build and
+    its sources so the baseline can be captured again after the probe gains
+    a part, and compare before with after per window: first the widget
+    trees, then the pixels. Never start two runs at once on one input
+    directory, and stop a run by its process id.
+
 When reporting an audit, connect each finding to its consequence and proposed
 change: for example, a timestamp beside the filename hides a build suffix, so
 move metadata below it. Separate observable defects from aesthetic judgment.
@@ -606,6 +1425,13 @@ perfect aesthetics or using decorative effects as a substitute for hierarchy.
   [Dark Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_modern.json)
   and [Light Modern](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/light_modern.json)
   button colors.
+- [Windows guidelines: dialog boxes](https://learn.microsoft.com/en-us/windows/win32/uxguide/win-dialog-box#disabling-or-removing-controls-vs-giving-error-messages)
+  (remove a control users do not expect to apply, disable one whose state
+  changes often) and
+  [command buttons](https://learn.microsoft.com/en-us/windows/win32/uxguide/ctrl-command-buttons)
+  (the default button, at most two widths in a window).
+- [Visual Studio Code: views](https://code.visualstudio.com/api/ux-guidelines/views)
+  — buttons only for primary actions, and few of them.
 - [WinUI theme resources](https://github.com/microsoft/microsoft-ui-xaml/tree/main/controls/dev/CommonStyles)
   — `Common_themeresources_any.xaml` and the Button, TextBox, ComboBox,
   CheckBox and ToggleButton resources give Windows 11's disabled fill,

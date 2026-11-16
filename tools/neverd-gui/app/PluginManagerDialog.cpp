@@ -10,6 +10,7 @@
 #include "PluginManagerDialog.h"
 
 #include "../ResourceLimits.h"
+#include "DialogReturnKey.h"
 #include "FlowLayout.h"
 #include "Icons.h"
 #include "PluginServices.h"
@@ -88,7 +89,7 @@ PluginManagerDialog::PluginManagerDialog(PluginServices &Services,
   auto *Splitter = new QSplitter(Qt::Vertical, this);
   Plugins = new QTreeWidget(Splitter);
   Plugins->setObjectName(QStringLiteral("pluginManagerList"));
-  Plugins->setAccessibleName(tr("Installed process plugins"));
+  Plugins->setAccessibleName(tr("Installed plugins"));
   Plugins->setHeaderLabels(
       {tr("Plugin"), tr("Version"), tr("Enabled"), tr("Activation")});
   Plugins->setRootIsDecorated(false);
@@ -110,16 +111,20 @@ PluginManagerDialog::PluginManagerDialog(PluginServices &Services,
   Status = new QLabel(this);
   Status->setObjectName(QStringLiteral("pluginManagerStatus"));
   Status->setWordWrap(true);
-  Status->setText(tr("Import a process-plugin manifest to add commands. "
-                     "Provider programs start only when a command runs."));
+  Status->setText(tr("Import a plugin manifest to add workbench commands or "
+                     "views."));
   Layout->addWidget(Status);
   auto *Close = new QDialogButtonBox(QDialogButtonBox::Close, this);
   connect(Close, &QDialogButtonBox::rejected, this, &QDialog::reject);
   Layout->addWidget(Close);
+  // Return in the filter would otherwise open the import chooser.  Importing
+  // is still what the window is for, as its own line of help says.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Import);
 
   connect(Import, &QPushButton::clicked, this, [this] {
     const auto Path = QFileDialog::getOpenFileName(
-        this, tr("Import process plugin"), {}, tr("Plugin manifests (*.json)"));
+        this, tr("Import plugin"), {}, tr("Plugin manifests (*.json)"));
     if (Path.isEmpty())
       return;
     QString Error;
@@ -213,6 +218,8 @@ void PluginManagerDialog::selectPlugin() {
   Toggle->setEnabled(false);
   Retry->setEnabled(false);
   Uninstall->setEnabled(!Id.isEmpty());
+  Uninstall->setToolTip(tr("Remove the saved registration. Plugin files and "
+                           "task artifacts are kept."));
   Location->setEnabled(!Id.isEmpty());
   Details->clear();
   for (const auto &Installation : Services.pluginInstallations()) {
@@ -220,19 +227,29 @@ void PluginManagerDialog::selectPlugin() {
       continue;
     auto &Jobs = Services.jobs();
     const bool Stopping = Jobs.retiring(Id);
-    Uninstall->setEnabled(Installation.Installed);
+    Uninstall->setEnabled(Installation.Installed && !Installation.Bundled);
+    if (Installation.Bundled)
+      Uninstall->setToolTip(
+          tr("This plugin ships with NeverD. Use Disable to turn it off."));
     Toggle->setText(Installation.Enabled ? tr("Disable") : tr("Enable"));
     Toggle->setEnabled(Installation.Installed && !Stopping);
     Retry->setEnabled(Installation.Installed && Installation.Enabled &&
                       !Stopping && !Jobs.componentOwner(Id));
+    const auto State = Jobs.catalog().snapshot(Id.toStdString());
+    QString Type = tr("Unknown");
+    if (State && State->Declaration)
+      Type = State->Declaration->GuiLibrary.empty() ? tr("External process")
+                                                    : tr("Native GUI");
     QStringList Lines{tr("Plugin: %1").arg(Installation.Name),
                       tr("ID: %1").arg(Id),
                       tr("Version: %1").arg(Installation.Version),
-                      tr("Type: External process"),
+                      tr("Type: %1").arg(Type),
                       tr("Manifest: %1").arg(Installation.Path),
                       tr("Enabled on startup: %1")
                           .arg(Installation.Enabled ? tr("Yes") : tr("No")),
                       tr("Activation: %1").arg(activationText(Jobs, Id))};
+    if (Installation.Bundled)
+      Lines.append(tr("Source: Bundled with NeverD"));
     if (const auto Owner = Jobs.componentOwner(Id))
       if (const auto Snapshot = Jobs.host().snapshot(*Owner)) {
         Lines.append(tr("Component generation: %1").arg(Snapshot->Id));

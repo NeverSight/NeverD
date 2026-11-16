@@ -38,6 +38,8 @@ inline VaListABI vaListABI(Arch TheArch, BinaryFormat Format) {
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     return VaListABI::Pointer;
   default:
@@ -47,14 +49,17 @@ inline VaListABI vaListABI(Arch TheArch, BinaryFormat Format) {
 
 /// The va_list a header-declared routine takes from a raw machine word.
 /// Use the compiler's target type: the word is not always an object pointer.
-inline std::string vaListArgument(Arch TheArch, BinaryFormat Format,
-                                  llvm::StringRef Word) {
+inline std::string
+vaListArgument(Arch TheArch, BinaryFormat Format, llvm::StringRef Word,
+               llvm::StringRef Temporary = "__nd_va_argument") {
   const std::string Address = "(void *)(uintptr_t)(" + Word.str() + ")";
   switch (vaListABI(TheArch, Format)) {
   case VaListABI::Pointer:
     return Address;
   case VaListABI::IndirectRecord:
-    return "*(__builtin_va_list *)" + Address;
+    return "({ __builtin_va_list " + Temporary.str() + "; __builtin_memcpy(&" +
+           Temporary.str() + ", " + Address + ", sizeof(" + Temporary.str() +
+           ")); " + Temporary.str() + "; })";
   case VaListABI::PointerRecord:
     return "(__builtin_va_list){" + Address + "}";
   }

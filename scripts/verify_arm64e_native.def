@@ -305,14 +305,101 @@
   "mode_argument": "mode",
   "modes": [
     "probe",
+    "probe-cpta",
     "run",
     "legacy",
     "probe-startup",
     "run-executable",
     "run-default-executable",
     "run-generated",
-    "run-generated-executable"
+    "run-generated-executable",
+    "probe-cursor"
   ],
+  "cpta_probe": {
+    "source": "scripts/arm64e_native_cpta.def",
+    "mode": "probe-cpta",
+    "observed_key": "native_el0_cpta_observed",
+    "writeback_mode": "writeback",
+    "writeback_suffix": "-writeback",
+    "writeback_key": "ordinary_memory_writeback",
+    "writeback_qualified_key": "x1_el0_checked_writeback_qualified",
+    "writeback_checked": "checked-writeback",
+    "writeback_unchecked": "unchecked-writeback",
+    "qualified_key": "x1_el0_cpta_qualified",
+    "profiles": {
+      "arm64": 0,
+      "arm64e": 2,
+      "arm64e.x1": 12
+    },
+    "x1": "arm64e.x1",
+    "compile": [
+      "/usr/bin/clang",
+      "-arch",
+      "{arch}",
+      "-O2",
+      "-x",
+      "c",
+      "{source}",
+      "-o",
+      "{binary}"
+    ],
+    "entitlements": {
+      "com.apple.security.hardened-process": true,
+      "com.apple.security.hardened-process.enhanced-security-version-string": "*",
+      "com.apple.security.hardened-process.checked-allocations": true,
+      "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true
+    },
+    "entitlements_file": "x1-cpta-entitlements.plist",
+    "entitlements_key": "signed_entitlements",
+    "sign_label": "x1-sign",
+    "read_label": "x1-read-entitlements",
+    "sign_command": ["/usr/bin/codesign", "--force", "--sign", "-", "--entitlements", "{plist}", "--generate-entitlement-der", "{binary}"],
+    "read_command": ["/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", "{binary}"],
+    "unsupported_compiler": [
+      "invalid arch name",
+      "unknown target triple",
+      "unsupported architecture",
+      "unsupported argument",
+      "unknown architecture"
+    ],
+    "started": "running-addpt",
+    "instructions": ["ADDPT", "SUBPT", "MADDPT", "MSUBPT"],
+    "scalar_results_key": "scalar_instruction_results",
+    "undefined_instruction": 132,
+    "bad_cpu_type_errno": 86,
+    "vectors": [
+      [
+        "1200000000000100",
+        "8",
+        "1200000000000108",
+        "1200000000000108"
+      ],
+      [
+        "00ffffffffffffff",
+        "1",
+        "0100000000000000",
+        "0080000000000000"
+      ],
+      [
+        "1200000000000000",
+        "ffffffffffffffff",
+        "11ffffffffffffff",
+        "127fffffffffffff"
+      ],
+      [
+        "1240000000000000",
+        "ffc0000000000000",
+        "1200000000000000",
+        "1240000000000000"
+      ]
+    ],
+    "checked": "checked",
+    "unchecked": "unchecked",
+    "isa_unavailable": "undefined-instruction",
+    "slice_unavailable": "slice-unavailable",
+    "loader_unavailable": "did-not-start",
+    "unexpected": "unexpected-result"
+  },
   "probe_mode": "probe",
   "output_argument": "--output",
   "build_argument": "--build-dir",
@@ -407,5 +494,66 @@
   "generated_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedIREntriesExecute/",
   "generated_executable_test_regex": "^AppleClang/MachOArm64eNativeObjectInstallation[.]GeneratedExecutableStarts/",
   "ir_compiler_key": "ir_compiler",
-  "cpta_qualification_key": "native_apple_cpta_qualified"
+  "cpta_qualification_key": "native_apple_cpta_qualified",
+  "cursor_probe": {
+    "mode": "probe-cursor",
+    "source": "unittests/lift/aarch64/AArch64SignalCursorNative.def",
+    "source_files": [
+      "include/neverd/runtime/DarwinArm64eSignalCursor.h",
+      "include/neverd/runtime/DarwinArm64eSignatures.def",
+      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def",
+      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+    ],
+    "compile": [
+      "/usr/bin/clang",
+      "-target",
+      "arm64e-apple-macosx15.0",
+      "-std=c11",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-{optimization}",
+      "-I",
+      "{include}",
+      "-x",
+      "c",
+      "{source}",
+      "-o",
+      "{binary}"
+    ],
+    "optimizations": [
+      "O0",
+      "O2"
+    ],
+    "recipes": [
+      "pacm",
+      "explicit"
+    ],
+    "started": "cursor-started",
+    "unavailable_code": 2,
+    "baseline_key": "native_cursor_qualified",
+    "explicit_key": "explicit_pauth_lr_qualified",
+    "pacm_pc_key": "pacm_pc_qualified",
+    "samples": 64,
+    "counts": [
+      "signed",
+      "pc_rejected",
+      "key_rejected",
+      "recipe_rejected"
+    ],
+    "required": [
+      "signed",
+      "key_rejected"
+    ],
+    "explicit_required": [
+      "pc_rejected",
+      "recipe_rejected"
+    ],
+    "recipe_pacm": "pacm",
+    "recipe_explicit": "explicit",
+    "profile_label": "{optimization}-{recipe}",
+    "binary_label": "cursor-{optimization}",
+    "invalid_report": "native cursor did not produce a complete, successful observation",
+    "include": "include"
+  }
 }

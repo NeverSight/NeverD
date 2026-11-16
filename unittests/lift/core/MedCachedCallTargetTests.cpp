@@ -837,4 +837,143 @@ TEST(MedCachedCallTarget, AffineCodeProofRejectsUnknownOrFutureInputs) {
   size_t Work = 0;
   EXPECT_FALSE(resolvePreSSAMedCallTarget(B, value(1), Arch::X64, &Work));
 }
+TEST(MedCachedCallTarget, RelocatableObjectsNameOnlyAddressConstants) {
+  // A relocatable object numbers its sections from zero: a null function
+  // pointer equals the address of the routine that starts the first section,
+  // and names nothing. Only a constant formed as a complete address does.
+  using Provenance = ConstantAddressProvenance;
+  for (Provenance P : {Provenance::Unknown, Provenance::Scalar,
+                       Provenance::AddressFragment, Provenance::Address,
+                       Provenance::DataAddress, Provenance::CodeAddress}) {
+    SCOPED_TRACE(static_cast<unsigned>(P));
+    MedBlock B;
+    B.Ops = {op(NdOp::COPY, value(1), {MedVar::makeConst(0, 8, P)})};
+    const auto Target = resolvePreSSAMedCallTarget(B, value(1), Arch::X64);
+    ASSERT_TRUE(Target);
+    EXPECT_FALSE(Target->ThroughSlot);
+    EXPECT_EQ(Target->Provenance, P);
+    EXPECT_TRUE(Target->addressesImage(/*Relocatable=*/false));
+    EXPECT_EQ(Target->addressesImage(/*Relocatable=*/true),
+              P == Provenance::Address || P == Provenance::DataAddress ||
+                  P == Provenance::CodeAddress);
+  }
+  // `adrp; add` completes a page fragment into an address and `lea`
+  // displaces one; a scalar plus a displacement stays a scalar.
+  for (Provenance Base : {Provenance::Scalar, Provenance::AddressFragment,
+                          Provenance::Address, Provenance::CodeAddress}) {
+    SCOPED_TRACE(static_cast<unsigned>(Base));
+    MedBlock B;
+    B.Ops = {
+        op(NdOp::INT_ADD, value(1),
+           {MedVar::makeConst(0x1000, 8, Base), MedVar::makeConst(0xC8, 8)})};
+    const auto Target = resolvePreSSAMedCallTarget(B, value(1), Arch::X64);
+    ASSERT_TRUE(Target);
+    EXPECT_EQ(Target->Address, 0x10C8u);
+    EXPECT_EQ(Target->Provenance,
+              Base == Provenance::AddressFragment ? Provenance::Address : Base);
+    EXPECT_EQ(Target->addressesImage(true), Base != Provenance::Scalar);
+    // The slot a load through that address reads is addressed the same way.
+    B.Ops.push_back(op(NdOp::LOAD, value(2), {value(1)}));
+    const auto Slot = resolvePreSSAMedCallTarget(B, value(2), Arch::X64);
+    ASSERT_TRUE(Slot);
+    EXPECT_TRUE(Slot->ThroughSlot);
+    EXPECT_EQ(Slot->addressesImage(true), Base != Provenance::Scalar);
+  }
+}
+
+TEST(MedCachedCallTarget,
+     RelocatableObjectCallsItsOwnRoutineThroughItsAddress) {
+  // `mov [rsp-8], <pointer>; mov rax, [rsp-8]; call rax` in an image whose
+  // first routine starts at address zero. A linked image's call is one to
+  // that routine either way. A relocatable object's is one where the pointer
+  // is the routine's address, and stays a call through the pointer where it
+  // is a scalar that only equals it: a null function pointer.
+  for (bool Address : {false, true})
+    for (bool Relocatable : {false, true}) {
+      SCOPED_TRACE(Address);
+      SCOPED_TRACE(Relocatable);
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Bits = Bitness::Bits64;
+      Image.Format = BinaryFormat::ELF;
+      Image.IsRelocatable = Relocatable;
+      Segment Text;
+      Text.VA = 0;
+      Text.Size = Text.FileSz = 0x100;
+      Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+      Text.Data.resize(0x100);
+      Image.Segments.push_back(std::move(Text));
+      Symbol Routine;
+      Routine.Name = "routine";
+      Routine.Addr = 0;
+      Routine.Size = 0x10;
+      Routine.IsFunc = true;
+      Image.Symbols.push_back(std::move(Routine));
+
+      LowFunc F;
+      F.Name = "caller";
+      F.Entry = 0x40;
+      LowBlock B;
+      B.Id = 0;
+      B.StartAddr = F.Entry;
+      const auto Add = [&](NdOp Opcode, NdVar Out,
+                           std::initializer_list<NdVar> Inputs) {
+        LowOp O;
+        O.Opcode = Opcode;
+        O.Addr = F.Entry + B.Ops.size();
+        O.Output = Out;
+        for (const auto &V : Inputs)
+          O.Inputs[O.NumInputs++] = V;
+        B.Ops.push_back(O);
+      };
+      const NdVar Slot = NdVar::tmp(0x10000, 8);
+      const NdVar Pointer = NdVar::tmp(0x10008, 8);
+      Add(NdOp::INT_SUB, Slot,
+          {NdVar::reg(x86reg::RSP, 8), NdVar::scalar(8, 8)});
+      Add(NdOp::STORE, {},
+          {Slot, Address ? NdVar::codeAddress(0, 8) : NdVar::scalar(0, 8)});
+      Add(NdOp::LOAD, Pointer, {Slot});
+      Add(NdOp::INDIR_CALL, NdVar::reg(x86reg::RAX, 8), {Pointer});
+      Add(NdOp::RETURN, {}, {NdVar::reg(x86reg::RAX, 8)});
+      F.Blocks.push_back(B);
+
+      LowToMedConverter Converter;
+      Converter.setBinaryImage(&Image);
+      const auto M = Converter.convert(F, Arch::X64, BinaryFormat::ELF);
+      bool Direct = false, Indirect = false;
+      for (const auto &Block : M.Blocks)
+        for (const auto &O : Block.Ops) {
+          Direct |= O.Opcode == NdOp::CALL && O.NumInputs &&
+                    O.Inputs[0].isConst() && O.Inputs[0].ConstVal == 0;
+          Indirect |= O.Opcode == NdOp::INDIR_CALL;
+        }
+      EXPECT_EQ(Direct, Address || !Relocatable);
+      EXPECT_EQ(Indirect, !Direct);
+    }
+}
+
+TEST(MedCachedCallTarget, MachineSummaryAdapterKeepsAddressProvenance) {
+  // The call-register summary projects the same calls lifting makes direct
+  // (summarizeRecoveredCallRegisters): its adapter has to carry what the
+  // pointer's constant is.
+  for (bool Address : {false, true}) {
+    LowBlock B;
+    LowOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = NdVar::tmp(1, 8);
+    Copy.addInput(Address ? NdVar::codeAddress(0x1000, 8)
+                          : NdVar::scalar(0x1000, 8));
+    B.Ops.push_back(Copy);
+    LowOp Call;
+    Call.Opcode = NdOp::INDIR_CALL;
+    Call.addInput(NdVar::tmp(1, 8));
+    B.Ops.push_back(Call);
+    const auto Targets = resolveLowBlockCallTargets(B, Arch::X64);
+    ASSERT_EQ(Targets.size(), 1u);
+    EXPECT_EQ(Targets.begin()->second.Address, 0x1000u);
+    EXPECT_TRUE(Targets.begin()->second.addressesImage(false));
+    EXPECT_EQ(Targets.begin()->second.addressesImage(true), Address);
+  }
+}
+
 } // namespace

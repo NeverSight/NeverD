@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDDecode
   ARM/ARMDecoder.cpp
   ARM/ARMInstructionRelocations.cpp
   ARM/ARMNativeOperands.cpp
+  MIPS/MIPSDecoder.cpp
   X86/X86Decoder.cpp
   X86/X86MpxDecoder.cpp
   X86/X86InstructionRelocations.cpp
@@ -19,6 +20,10 @@ add_neverd_component_library(NeverDDecode
   IR
   Lift
 )
+
+# The private x86 scan interface belongs to our statically linked Capstone fork.
+target_include_directories(NeverDDecode PRIVATE
+  "$<TARGET_PROPERTY:capstone_static,SOURCE_DIR>/arch/X86")
 
 # AArch64/AArch64Decoder.cpp contains the native operand decode hot path. Keep
 # it explicitly optimized in non-Debug configurations, but let Debug retain the

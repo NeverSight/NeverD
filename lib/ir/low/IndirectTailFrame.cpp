@@ -12,7 +12,10 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionForwarding.h"
+#include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 
 #include <algorithm>
 #include <bit>
@@ -40,6 +43,9 @@ struct FrameWord {
   std::optional<uint64_t> SecondModifier;
   bool ImplicitPrefix = false;
   std::optional<uint64_t> Constant;
+  // A possible base of a table containing this function's own labels.
+  // Loading it does not establish an external callable target.
+  bool MayLoadLocalCode = false;
   bool operator==(const FrameWord &) const = default;
 };
 
@@ -56,6 +62,7 @@ class TailFrameGuard {
   const std::vector<TargetRegisterRange> Preserved;
   size_t Remaining;
   const LowFunc *Owner = nullptr;
+  const BinaryImage *Image = nullptr;
 
   bool functionTemporary(uint64_t Offset) const {
     const auto &Ranges = Owner->FunctionTemporaries;
@@ -72,12 +79,14 @@ class TailFrameGuard {
   }
 
   /// The function's own code: the span from its lowest block to the end of
-  /// its highest, and the range its frame description covers.  A switch's
+  /// its highest, positive function ownership metadata, and the range its
+  /// frame description covers. A switch's
   /// case code that only its unresolved table reaches lies there, though no
   /// block holds it.  The entry itself is a call target: a branch there
   /// recurses (`volatile f self = f; return self(...)`).
   va_t CodeBegin = InvalidVA;
   va_t CodeEnd = 0;
+  ExceptionAddressRange OwnedCode;
   ExceptionAddressRange Described;
   va_t Entry = InvalidVA;
   /// The function's frame description; a branch out of the frame must leave
@@ -87,6 +96,8 @@ class TailFrameGuard {
   bool localCode(uint64_t Address) const {
     return Address != Entry &&
            ((Address >= CodeBegin && Address < CodeEnd) ||
+            (OwnedCode.isValid() && Address >= OwnedCode.Begin &&
+             Address < OwnedCode.End) ||
             (Described.isValid() && Address >= Described.Begin &&
              Address < Described.End));
   }
@@ -123,8 +134,15 @@ class TailFrameGuard {
 
   bool read(const FrameState &State, const NdVar &Value, FrameWord &Word) {
     Word = lookup(State, Value);
-    if (Value.isConst() && Value.Size == sizeof(uint64_t))
-      Word.Constant = Value.Offset;
+    if (Value.isConst() && Value.Size && Value.Size <= sizeof(uint64_t))
+      Word.Constant =
+          Value.Size == sizeof(uint64_t)
+              ? Value.Offset
+              : Value.Offset & ((uint64_t{1} << (Value.Size * 8)) - 1);
+    if (Image && Word.Constant)
+      if (const uint8_t *Bytes = Image->readVA(*Word.Constant, 8))
+        Word.MayLoadLocalCode |=
+            localCode(readPtr(Bytes, true, archLittleEndian(Image->Arch)));
     if ((!Value.isReg() && !Value.isTemp()) || Value.Size == 8)
       return true;
     if (!validRange(Value) || !charge(State.Values.size()))
@@ -134,6 +152,7 @@ class TailFrameGuard {
           Value.Offset < Key.second + 8) {
         Word.MayBeStack |= Fact.MayBeStack;
         Word.MayBeLocalCode |= Fact.MayBeLocalCode;
+        Word.MayLoadLocalCode |= Fact.MayLoadLocalCode;
       }
     return true;
   }
@@ -156,6 +175,7 @@ class TailFrameGuard {
       if (Output.Size != 8) {
         Word.MayBeStack |= Fact.MayBeStack;
         Word.MayBeLocalCode |= Fact.MayBeLocalCode;
+        Word.MayLoadLocalCode |= Fact.MayLoadLocalCode;
       }
       if (Output.Size != 8 || Output.Offset != Key.second)
         State.Escaped |= Fact.MayBeStack;
@@ -166,7 +186,7 @@ class TailFrameGuard {
       Word.Constant.reset();
     }
     if (Word.K != FrameWord::Unknown || Word.MayBeStack ||
-        Word.MayBeLocalCode || Word.Constant)
+        Word.MayBeLocalCode || Word.Constant || Word.MayLoadLocalCode)
       State.Values[{Output.Space, Output.Offset}] = Word;
     return true;
   }
@@ -209,6 +229,7 @@ class TailFrameGuard {
     for (const auto &[Offset, Spill] : State.Spills) {
       Result.MayBeStack |= Spill.MayBeStack;
       Result.MayBeLocalCode |= Spill.MayBeLocalCode;
+      Result.MayLoadLocalCode |= Spill.MayLoadLocalCode;
     }
     return true;
   }
@@ -243,6 +264,7 @@ class TailFrameGuard {
           Inputs[I].MayBeLocalCode = true;
         Result.MayBeStack |= Inputs[I].MayBeStack;
         Result.MayBeLocalCode |= Inputs[I].MayBeLocalCode;
+        Result.MayLoadLocalCode |= Inputs[I].MayLoadLocalCode;
       }
 
       if (Op.Opcode == NdOp::INDIR_BR) {
@@ -265,9 +287,7 @@ class TailFrameGuard {
       case NdOp::INT_ADD:
       case NdOp::INT_SUB:
         if (Op.NumInputs == 2 && Op.Output.Size == 8) {
-          if (Inputs[0].Constant && Inputs[1].Constant &&
-              Op.Inputs[0].Size == sizeof(uint64_t) &&
-              Op.Inputs[1].Size == sizeof(uint64_t))
+          if (Inputs[0].Constant && Inputs[1].Constant)
             Result.Constant = Op.Opcode == NdOp::INT_ADD
                                   ? *Inputs[0].Constant + *Inputs[1].Constant
                                   : *Inputs[0].Constant - *Inputs[1].Constant;
@@ -328,10 +348,10 @@ class TailFrameGuard {
                 State.Escaped |= Item.second.MayBeStack;
               return Overlap;
             });
-            const bool Recorded =
-                Memory.AccessSize == 8 &&
-                (Value.K != FrameWord::Unknown || Value.MayBeStack ||
-                 Value.MayBeLocalCode || Value.Constant);
+            const bool Recorded = Memory.AccessSize == 8 &&
+                                  (Value.K != FrameWord::Unknown ||
+                                   Value.MayBeStack || Value.MayBeLocalCode ||
+                                   Value.Constant || Value.MayLoadLocalCode);
             if (Recorded)
               State.Spills[Address.Offset] = Value;
             // A frame address no spill records, or stored outside the frame
@@ -342,6 +362,7 @@ class TailFrameGuard {
               State.Escaped |= Value.MayBeStack;
           }
         } else {
+          Result.MayBeLocalCode = Address.MayLoadLocalCode;
           bool Answered = false;
           if (Exact && Memory.AccessSize == 8) {
             const auto Found = State.Spills.find(Address.Offset);
@@ -395,6 +416,30 @@ class TailFrameGuard {
         if (lowAArch64CPAShapeIsValid(Op) || lowAArch64SVECPAShapeIsValid(Op) ||
             lowAArch64SVEPrefixShapeIsValid(Op))
           break;
+        if (lowAArch64AddressMemoryShapeIsValid(Op)) {
+          // The original address operation changes only its load destination
+          // or memory. Either address operand may derive from the frame; do
+          // not turn its native address formation into an unchecked sum or
+          // grant an exact spill/reload identity here.
+          FrameWord Address;
+          Address.MayBeStack =
+              Inputs[kAddressMemoryBaseOperand + 1].MayBeStack ||
+              Inputs[kAddressMemoryIndexOperand + 1].MayBeStack;
+          Result = {};
+          if (isAArch64AddressStoreIntrinsic(
+                  static_cast<Intrinsic>(Op.Inputs[0].Offset))) {
+            if (!storeUntracked(State, Address,
+                                Inputs[kAddressMemoryDataOperand + 1]))
+              return false;
+          } else if (Address.MayBeStack && !spilledTaint(State, Result)) {
+            return false;
+          }
+          if (!isAArch64AddressStoreIntrinsic(
+                  static_cast<Intrinsic>(Op.Inputs[0].Offset)))
+            Result.MayBeLocalCode |=
+                Inputs[kAddressMemoryBaseOperand + 1].MayLoadLocalCode;
+          break;
+        }
         if (lowAArch64PAuthShapeIsValid(Op)) {
           // A modifier's stack address is not the authenticated target.
           // A saved link is restored only by its matching key and modifier.
@@ -497,6 +542,7 @@ class TailFrameGuard {
     const auto Merge = [](FrameWord A, FrameWord B) {
       const bool May = A.MayBeStack || B.MayBeStack;
       const bool LocalCode = A.MayBeLocalCode || B.MayBeLocalCode;
+      const bool LoadsLocalCode = A.MayLoadLocalCode || B.MayLoadLocalCode;
       if (A.K != B.K || A.Offset != B.Offset ||
           A.AuthenticationKey != B.AuthenticationKey ||
           A.ZeroModifier != B.ZeroModifier ||
@@ -507,6 +553,7 @@ class TailFrameGuard {
         A.Constant.reset();
       A.MayBeStack = May;
       A.MayBeLocalCode = LocalCode;
+      A.MayLoadLocalCode = LoadsLocalCode;
       return A;
     };
     for (auto It = Into.begin(); It != Into.end();) {
@@ -514,22 +561,28 @@ class TailFrameGuard {
       It->second =
           Merge(It->second, Found == Other.end() ? FrameWord{} : Found->second);
       if (It->second.K == FrameWord::Unknown && !It->second.MayBeStack &&
-          !It->second.MayBeLocalCode && !It->second.Constant)
+          !It->second.MayBeLocalCode && !It->second.Constant &&
+          !It->second.MayLoadLocalCode)
         It = Into.erase(It);
       else
         ++It;
     }
     for (const auto &[KeyValue, Word] : Other)
-      if (!Into.count(KeyValue) && (Word.MayBeStack || Word.MayBeLocalCode))
+      if (!Into.count(KeyValue) &&
+          (Word.MayBeStack || Word.MayBeLocalCode || Word.MayLoadLocalCode)) {
         Into[KeyValue] = {FrameWord::Unknown, 0, Word.MayBeStack,
                           Word.MayBeLocalCode};
+        Into[KeyValue].MayLoadLocalCode = Word.MayLoadLocalCode;
+      }
     return true;
   }
 
 public:
-  TailFrameGuard(BinaryFormat Format, size_t MaxWork)
+  TailFrameGuard(BinaryFormat Format, ExceptionAddressRange Owned,
+                 size_t MaxWork, const BinaryImage *Image)
       : Preserved(TRI.callPreservedRanges(Format)),
-        Remaining(std::min(MaxWork, limits::kMaxIndirectTailFrameWork)) {}
+        Remaining(std::min(MaxWork, limits::kMaxIndirectTailFrameWork)),
+        Image(Image), OwnedCode(Owned) {}
 
   std::set<va_t> run(const LowFunc &Function) {
     // A frame description that only unwinds the frame (a plain FDE, which
@@ -678,10 +731,11 @@ public:
 
 } // namespace
 
-std::set<va_t> restoredAArch64IndirectTailFrames(const LowFunc &Function,
-                                                 BinaryFormat Format,
-                                                 size_t MaxWork) {
-  return TailFrameGuard(Format, MaxWork).run(Function);
+std::set<va_t>
+restoredAArch64IndirectTailFrames(const LowFunc &Function, BinaryFormat Format,
+                                  ExceptionAddressRange OwnedCode,
+                                  size_t MaxWork, const BinaryImage *Image) {
+  return TailFrameGuard(Format, OwnedCode, MaxWork, Image).run(Function);
 }
 
 } // namespace neverd

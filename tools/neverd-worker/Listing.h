@@ -77,6 +77,10 @@ public:
   /// listing answers is written there as text, and the result is null.
   Json page(const Json &payload,
             std::shared_ptr<const EncodedJson> *encoded = nullptr);
+  /// The page `listing` reads for \p payload, for a client that keeps pages,
+  /// each line as page() writes it.  None where the loader's first viewport
+  /// answers, or the image maps nothing, which page() reads.
+  std::optional<ListingPage> pageLines(const Json &payload);
   /// `overview`: address classes in equal linear buckets.
   Json overview(const Json &payload);
   /// `xrefs` from the reference index or, for "from", the instruction's lift.
@@ -128,6 +132,9 @@ public:
   /// \p viewsReadIt a kept view of a function reads it by its reads, as a name
   /// of data (viewGeneration).
   void declarationsChanged(bool viewsReadIt = false);
+  /// Typed indirect-call evidence from the source shown by the GUI.
+  void setVirtualCalls(std::uint64_t entry, const Json &calls);
+  bool hasVirtualCalls(std::uint64_t entry) const;
   /// How many times names were read again over a built listing.
   std::uint64_t nameBuilds() const;
   /// Only functions' names changed.  The next query reads them again, and a
@@ -176,10 +183,67 @@ public:
   Json assemblySymbols(std::uint64_t address);
   /// Functions in address order under their display names:
   /// [{"name","engine_name","address","size","library","thunk","exported"}].
+  /// A catalog beyond the function-index budget throws instead of building
+  /// that array; functionWindow serves an address-ordered page of it.
   const Json &functionRows();
+  /// How functionWindow answered.
+  enum class FunctionWindowStatus { FitsIndex, Served };
+  /// A page of the full catalog, using compact filtered/sorted row indexes
+  /// above the JSON materialization threshold. FitsIndex means the caller
+  /// reads functionRows().
+  struct FunctionWindow {
+    Json rows;
+    std::size_t total = 0;
+    std::size_t offset = 0;
+    std::optional<std::size_t> selectedIndex;
+    std::optional<std::uint64_t> selectedAddress;
+  };
+  struct FunctionWindowRequest {
+    std::string_view filter;
+    std::string_view sort;
+    bool descending = false;
+    bool hasFrom = false;
+    std::uint64_t from = 0;
+    bool hasSeek = false;
+    std::uint64_t seek = 0;
+    std::size_t offset = 0;
+    std::size_t limit = 0;
+  };
+  struct QueryControl {
+    std::function<void(const char *, std::uint64_t, std::uint64_t,
+                       const char *)>
+        progress;
+    std::function<bool()> cancelled;
+  };
+  FunctionWindowStatus functionWindow(const FunctionWindowRequest &request,
+                                      FunctionWindow &window,
+                                      const QueryControl &control = {});
+  /// How nameWindow answered. Large catalogs use compact filtered rows.
+  enum class NameWindowStatus { FitsIndex, Served };
+  struct NameWindow {
+    Json items;
+    std::size_t total = 0;
+    std::size_t offset = 0;
+    std::optional<std::size_t> selectedIndex;
+    std::optional<std::uint64_t> selectedAddress;
+  };
+  NameWindowStatus nameWindow(std::string_view filter, std::string_view sort,
+                              bool descending, bool hasSeek, std::uint64_t seek,
+                              std::size_t offset, std::size_t limit,
+                              NameWindow &window,
+                              const QueryControl &control = {});
   /// Reads what the session holds now, not at the first thing that needs it.
   /// It advances generation().
   void build();
+  /// Whether a read made now reads what the listing has built, and costs its
+  /// own lines alone: no name, item or function it read has changed under it
+  /// that it has yet to read again.
+  bool standing() const;
+  /// Whether the reference index is being built, or the functions that
+  /// discovery found are still to be listed: what the listing decoded is
+  /// decoded again once that ends, and a read then pays for it.  Not so
+  /// while the index merely waits to be built.
+  bool indexing() const;
   /// Engine function name -> display name, for engine text such as
   /// pseudocode that spells functions the engine's way.
   const std::unordered_map<std::string, std::string> &functionAliases();
@@ -211,6 +275,10 @@ public:
 private:
   Json uncachedPage(const Json &payload,
                     std::shared_ptr<const EncodedJson> *encoded = nullptr);
+  /// The lines a page reads for \p payload, the ones before its anchor newest
+  /// first; false where the image maps nothing.
+  struct PageWindow;
+  bool pageWindow(const Json &payload, PageWindow &window);
   Json uncachedOverview(const Json &payload);
   const Json &uncachedFunctionRows();
   struct Impl;

@@ -17,6 +17,7 @@
 #include "neverd/ir/low/FormattedCall.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ItaniumVTable.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -59,6 +60,7 @@ struct PipelineAnalysisCache::SymbolInventory {
   /// first request.
   const std::map<va_t, Intrinsic> &
   runtimeRoutineCalls(const BinaryImage &Img) const;
+  const ItaniumVTableIndex &virtualTables(const BinaryImage &Img) const;
 
   /// The catch continuations of \p Img's FH4 handlers that lie in another
   /// function of their record (pipeline_detail::fh4ContinuationCandidates),
@@ -83,6 +85,7 @@ private:
   size_t ContinuationCount;
   mutable std::optional<std::map<va_t, std::string>> FunctionNames;
   mutable std::optional<std::map<va_t, Intrinsic>> RuntimeRoutineCalls;
+  mutable std::optional<ItaniumVTableIndex> VirtualTables;
   mutable std::optional<std::vector<std::pair<va_t, va_t>>>
       FH4ContinuationCandidates;
 };

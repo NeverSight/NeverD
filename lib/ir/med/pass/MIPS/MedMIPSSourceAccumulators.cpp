@@ -11,6 +11,7 @@
 #include "../../abi/MedABIPassDetail.h"
 
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -24,21 +25,34 @@ namespace neverd {
 
 void requireMIPSSourceAccumulators(const MedFunc &Function) {
   const auto IsAccumulator = [](const MedVar &Value) {
-    return Value.Kind == MedVar::Reg &&
-           (Value.RegOff == mipsreg::HI || Value.RegOff == mipsreg::LO);
+    return Value.Kind == MedVar::Reg && (mipsreg::isAccumulator(Value.RegOff) ||
+                                         Value.RegOff == mipsreg::AC0Pending);
   };
+  llvm::SmallVector<MedVar, 8> Pending;
+  for (const auto &Block : Function.Blocks) {
+    for (const auto &Op : Block.Ops) {
+      // SSA's live-in definition is not itself an observation. A real use
+      // below still reaches this entry copy and is rejected by the proof.
+      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+          IsAccumulator(Op.Output) && Op.Output == Op.Inputs[0])
+        continue;
+      // This operation transports unknown bits; it does not observe them.
+      if (mipsScalarMedShapeIsValid(Op, Op.Output.TheArch) &&
+          static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+              Intrinsic::MIPSAccumulatorAfterWrite)
+        continue;
+      for (unsigned I = 0; I != Op.NumInputs; ++I)
+        if (IsAccumulator(Op.Inputs[I]))
+          Pending.push_back(Op.Inputs[I]);
+    }
+  }
+  if (Pending.empty())
+    return;
   llvm::DenseSet<std::pair<int, int>> Clobbers;
   for (const auto &Clobber : Function.CallClobbers)
     if (IsAccumulator(Clobber.Value))
       Clobbers.insert({Clobber.Value.Id, Clobber.Value.SSAVer});
   MedDefSiteIndex Definitions(Function);
-  llvm::SmallVector<MedVar, 8> Pending;
-  for (const auto &Block : Function.Blocks) {
-    for (const auto &Op : Block.Ops)
-      for (unsigned I = 0; I != Op.NumInputs; ++I)
-        if (IsAccumulator(Op.Inputs[I]))
-          Pending.push_back(Op.Inputs[I]);
-  }
   llvm::DenseSet<std::pair<int, int>> Seen;
   while (!Pending.empty()) {
     const MedVar Value = Pending.pop_back_val();

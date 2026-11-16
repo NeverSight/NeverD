@@ -1,6 +1,6 @@
 **اللغات**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center" dir="rtl">
 
@@ -62,7 +62,7 @@ CLI والمكاملون ووكلاء الذكاء الاصطناعي يستخد
 
 > نُفّذت كل خلية في المصفوفة، لكن عمق اختبارات التكامل يختلف. راجع [مصفوفة تغطية المعمارية](architecture.md#support-and-test-depth). يستخدم Mach-O i386 كائنات `thin` قابلة لإعادة التموضع لأن macOS الحديث لا يستطيع ربط ملفات i386 التنفيذية التاريخية.
 
-**تحليل MIPS ELF تجريبي:** يدعم MIPS32r2/o32 وMIPS64r2/n64 بكلا ترتيبي البايتات مجموعة فرعية محددة بدقة من تعليمات الأعداد الصحيحة لفك التجميع واستعادة CFG وإخراج C وLLVM. إعادة كتابة الشيفرة الأصلية غير مدعومة. راجع [نطاق دعم MIPS ومثال البرنامج الثابت (بالإنجليزية)](../mips.md) للاطلاع على المجموعات الفرعية microMIPS32 وDSP وMIPS32r5 MSA التي تم التحقق منها بشكل منفصل، والقيود المفروضة على إخراج الشيفرة المصدرية.
+**تحليل MIPS ELF تجريبي:** يدعم MIPS32r2/o32 وMIPS64r2/n64 بكلا ترتيبي البايتات مجموعة فرعية محددة بدقة من تعليمات الأعداد الصحيحة لفك التجميع واستعادة CFG وإخراج C وLLVM. إعادة كتابة الشيفرة الأصلية غير مدعومة. راجع [نطاق دعم MIPS ومثال البرنامج الثابت (بالإنجليزية)](../mips.md) للاطلاع على المجموعات الفرعية microMIPS32 وMIPS16e/e2 وDSP وMIPS32r5 MSA التي تم التحقق منها بشكل منفصل، والقيود المفروضة على إخراج الشيفرة المصدرية.
 
 يدعم بايت كود EVM التقليدي مستقلًا عن الحاويات الأصلية: تمر كل opcodes المخصصة
 وعددها 150 من Frontier إلى Fusaka عبر Low/Med/High IR وLLVM `i256` متحقق وC23
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |-------|--------|--------|
 | `lift` | `.ll` | رفع إلى LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C أو Solidity لـEVM أو Rust لـSBF عبر `--language` |
+| `decompile --check-all` | أعداد | C الافتراضي لكل دالة محمّلة؛ يُحرّر جسم كل دالة بعد التحقق منه |
 | `decompile -llvm` | `.c` | عبر LLVM IR + المحسّن |
 | `decompile --devirtualize` | `.c` + JSON اختياري | استعادة تجريبية لمفسّرات x64؛ تتطلب `--func`؛ [العقد والأمثلة](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | تجريبي: [Android](android.md), [iOS](ios.md) |

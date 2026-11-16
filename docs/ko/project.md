@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI, 통합, AI 에이전트는 **순수 C API**로 동일한 엔진 **`libnever
 
 > 표의 모든 셀은 구현되어 있지만 통합 테스트 깊이는 서로 다릅니다. 자세한 내용은 [아키텍처 범위 표](architecture.md#support-and-test-depth)를 참고하세요. 현대 macOS는 과거 i386 실행 파일을 링크할 수 없으므로 Mach-O i386에는 `thin` 재배치 가능 객체를 사용합니다.
 
-**MIPS ELF 분석은 실험적 지원입니다.** MIPS32r2/o32와 MIPS64r2/n64의 두 바이트 순서에서 엄격히 제한된 정수 명령어 집합의 디스어셈블, CFG 복원, C 및 LLVM 출력을 지원합니다. 네이티브 코드 재작성은 지원하지 않습니다. [MIPS 지원 범위와 펌웨어 예제(영문)](../mips.md)에서 별도로 검증된 microMIPS32, DSP, MIPS32r5 MSA 하위 집합과 소스 출력 제한을 확인하세요.
+**MIPS ELF 분석은 실험적 지원입니다.** MIPS32r2/o32와 MIPS64r2/n64의 두 바이트 순서에서 엄격히 제한된 정수 명령어 집합의 디스어셈블, CFG 복원, C 및 LLVM 출력을 지원합니다. 네이티브 코드 재작성은 지원하지 않습니다. [MIPS 지원 범위와 펌웨어 예제(영문)](../mips.md)에서 별도로 검증된 microMIPS32, MIPS16e/e2, DSP, MIPS32r5 MSA 하위 집합과 소스 출력 제한을 확인하세요.
 
 legacy EVM bytecode는 native container와 독립적으로 지원합니다. Frontier부터 Fusaka까지
 assigned opcode 150개가 전용 Low/Med/High IR, verified LLVM `i256`, C23
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |------|------|------|
 | `lift` | `.ll` | LLVM IR로 리프트 |
 | `decompile` | `.c` / `.sol` / `.rs` | `--language`로 C, EVM Solidity 또는 SBF Rust 선택 |
+| `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |

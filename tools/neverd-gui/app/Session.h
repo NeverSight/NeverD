@@ -7,7 +7,6 @@
 #include "QueryService.h"
 #include "UnwindInfoWords.h"
 
-#include <QFileSystemWatcher>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -20,8 +19,11 @@
 #include <optional>
 #include <utility>
 
+class QThread;
+
 namespace neverd::gui {
 class PluginServices;
+class ProjectFileWatcher;
 
 /// How to load a binary, as the load dialog chooses it.
 struct LoadOptions {
@@ -90,6 +92,15 @@ public:
   /// earlier sessions kept without one.
   bool analysisReplicaStarted() const { return analysis_.replicaStarted(); }
   bool analysisReplicaReady() const { return analysis_.replicaReady(); }
+  /// The analysis reads asked of the owner from what it keeps.
+  quint64 analysisOwnerReads() const { return analysis_.ownerReads(); }
+  /// The pages its views took as the owner read them with an edit.
+  quint64 analysisPagesTaken() const { return analysis_.pagesTaken(); }
+  /// Gives \p owner the answers its reads have already, now, in place of the
+  /// turn each would take (QueryService::deliverNow).
+  qsizetype deliverNow(QObject *owner) {
+    return queries_.deliverNow(owner) + analysis_.deliverNow(owner);
+  }
   /// An edit the user is making will have a replica render \p address, under
   /// the \p declaration the user would state where given
   /// (AnalysisService::prepareRead).
@@ -99,8 +110,10 @@ public:
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }
-  void cancelAnalysisReads(QObject *owner) {
-    analysis_.unsubscribeOwner(owner);
+  void cancelAnalysisReads(QObject *owner, bool finishRunning = false) {
+    analysis_.unsubscribeOwner(owner, finishRunning
+                                          ? QueryService::FinishRunning
+                                          : QueryService::CancelRunning);
   }
 
   bool connected() const { return connected_; }
@@ -115,7 +128,7 @@ public:
   }
   /// The configured NeverD worker, also used by separate offline workbenches.
   QString workerPath() const { return workerPath_; }
-  bool loaded() const { return loaded_; }
+  bool loaded() const { return loaded_ && !opening_; }
   bool opening() const { return opening_; }
   /// Whether a worker is on its way, which connected() then reports.
   bool starting() const { return starting_; }
@@ -440,12 +453,33 @@ public:
   QJsonObject selection() const { return selection_; }
 
 signals:
+  void readsCancelled();
   void bytePatchesChanged();
   void stateChanged();
   void opened();
   /// A file did not open, and no other waits to.
   void openFailed();
   void unloaded();
+  /// Said just ahead of revisionChanged, to the views that show a reader the
+  /// content the change is about: they ask for it again before every other
+  /// listener does its own work.  What they asked of the worker is sent, and
+  /// shownRevisionAsked follows: they take what is there already (deliverNow)
+  /// while the worker reads the rest.  The view the user works in takes its
+  /// own first, and with it a view that has the change still to show;
+  /// shownRevisionTaken follows for the others: a view no one works in, and
+  /// one that showed the change ahead of the answer and has nothing new for
+  /// a reader.
+  void shownRevisionChanged();
+  void shownRevisionAsked();
+  void shownRevisionTaken();
+  /// A rename no command waits ahead of has been enqueued to leave at once:
+  /// \p address is called \p name once the worker takes it.  A view that
+  /// shows names of the address may read as the rename leaves it while the
+  /// worker reads it (CodeText), and reads the worker's answer when it comes.
+  void renaming(Address address, const QString &name);
+  /// The worker refused the rename renaming told of, or the rename came to
+  /// nothing some other way: nothing is called \p name for it.
+  void renameRefused(Address address, const QString &name);
   void revisionChanged();
   void generationChanged();
   /// An analysis replica's decompiles changed once, after it solved the
@@ -487,7 +521,7 @@ private:
   using Callback = std::function<void(const QJsonObject &payload)>;
   void command(const QString &operation, const QJsonObject &payload,
                Callback done, Failure failed = {},
-               QString expectedRevision = {});
+               QString expectedRevision = {}, bool leaves = false);
   void receive(const QJsonObject &message);
   void applyBackgroundSnapshot(const QJsonObject &snapshot);
   void startWorker();
@@ -517,9 +551,10 @@ private:
   /// Whether the worker holds staged comments, or will once those sent are
   /// answered.
   bool commentsStaged() const { return dirty_ || pendingComments_ > 0; }
-  /// Watch the project's files beside the input for changes on disk.
-  void watchProject();
-  QFileSystemWatcher projectWatcher_;
+  void takeProjectFiles(const QHash<QString, QByteArray> &files);
+  ProjectFileWatcher *projectWatcher_;
+  QThread *projectWatcherThread_;
+  quint64 projectWatchGeneration_ = 0;
   QTimer projectSync_;
   /// Each project file's content when the workbench last looked at it.
   QHash<QString, QByteArray> projectFiles_;
@@ -571,6 +606,11 @@ private:
   std::optional<quint64> BackgroundSequence;
   qint64 functionCount_ = -1;
   QJsonObject metadata_, background_, history_, selection_;
+  /// The reads of the history that are on their way, and the step asked for
+  /// while the history of the last edit was still one of them: it is taken
+  /// once that history is read, rather than refused by the one before it.
+  int historyReads_ = 0;
+  enum class Step { None, Undo, Redo } stepWanted_ = Step::None;
   QJsonArray contributions_;
   quint64 sessionEpoch_ = 0;
   int pendingWrites_ = 0;

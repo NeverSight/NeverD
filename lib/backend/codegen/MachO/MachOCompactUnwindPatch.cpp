@@ -31,6 +31,11 @@
 #include <utility>
 
 namespace neverd {
+namespace {
+#define MACHO_NATIVE_UNWIND_TEXT(Name, Text)                                   \
+  static constexpr char Name[] = Text;
+#include "MachOCompactUnwindNative.def"
+} // namespace
 
 char MachOCompactUnwindLocateError::ID;
 char MachOCompactUnwindParseError::ID;
@@ -234,6 +239,13 @@ llvm::Error reserveMachOCompactUnwindStorage(std::vector<uint8_t> &Binary,
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         "compact-unwind growth exceeds adjacent segment padding");
+  std::vector<macho_patch_detail::MachOFileRange> Payloads;
+  if (!macho_patch_detail::collectMachOPayloadRanges(Binary, Payloads) ||
+      llvm::any_of(Payloads, [&](const auto &Range) {
+        return Range.Begin < NewEnd && Region.LimitFileOff < Range.End;
+      }))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   kCompactPaddingOwner);
   if (!std::all_of(Binary.begin() + Region.LimitFileOff,
                    Binary.begin() + NewEnd,
                    [](uint8_t Byte) { return Byte == 0; }))
@@ -2854,10 +2866,6 @@ llvm::Expected<uint64_t> nativeCompactHeaderVA(llvm::ArrayRef<uint8_t> Binary) {
 
 } // namespace
 
-#define MACHO_NATIVE_UNWIND_TEXT(Name, Text)                                   \
-  static constexpr char Name[] = Text;
-#include "MachOCompactUnwindNative.def"
-
 llvm::Error installNativeMachOCompactUnwind(
     std::vector<uint8_t> &Binary, Arch Architecture,
     llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
@@ -2967,9 +2975,8 @@ llvm::Error installNativeMachOCompactUnwind(
     return Encoded.takeError();
   auto Candidate = Binary;
   if (!*Located) {
-    auto Declared =
-        declareMachOTextMetadata(Candidate, Architecture, "__unwind_info",
-                                 llvm::alignTo(Encoded->size(), 4096));
+    auto Declared = declareMachOTextMetadata(
+        Candidate, Architecture, section_names::macho::Unwind, Encoded->size());
     if (!Declared)
       return Declared.takeError();
   } else if (auto E =

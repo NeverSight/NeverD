@@ -30,6 +30,7 @@
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -37,6 +38,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
 
 // This TU uses LLVM_DEBUG (which expands DEBUG_TYPE); define a category so the
 // macro resolves.  Placed after the includes so a header that defines and
@@ -692,11 +697,168 @@ int runLift(neverd_session_t Sess) {
   return 0;
 }
 
+/// The load has already freed the debug-unit copies it does not keep. Ask
+/// the process allocator, when this executable linked one, to return those
+/// pages before decompilation starts.
+void returnFreedHeapPages() {
+#if !defined(_WIN32)
+  using Collect = void (*)(bool);
+  if (auto *Fn = reinterpret_cast<Collect>(dlsym(RTLD_DEFAULT, "mi_collect")))
+    Fn(true);
+#endif
+}
+
+/// Walk every function the loaded image lists. Each body is the default C
+/// route (`neverd_decompile`), scanned, then freed. Entries are snapshotted
+/// first: a later call would publish recovered sizes and rebuild names for
+/// the whole list.
+int auditEveryLoadedFunction(neverd_session_t Sess) {
+  if (!ExportFunc.empty() || DecompileCallees || LlvmRoute || Devirtualize ||
+      NoOpt || JsonOutput || OutputLanguage != NEVERD_OUTPUT_C ||
+      MaxFunc.getNumOccurrences() || SourceSymbolic.getNumOccurrences() ||
+      SourceLLVMControlFlow.getNumOccurrences() ||
+      SourceLLVMLevel.getNumOccurrences() ||
+      SourceLLVMPasses.getNumOccurrences() ||
+      StackFrameFile.getNumOccurrences() || StackFrameInfo || VMMachineState ||
+      VMMachineSourceABI.getNumOccurrences() || !VMControlRegisters.empty() ||
+      !VMControlFrameSlots.empty()) {
+    WithColor::error()
+        << "--check-all decompiles every loaded function on the default C "
+           "route; omit other decompile options\n";
+    return 1;
+  }
+
+  const int Count = neverd_func_count(Sess);
+  if (Count <= 0) {
+    WithColor::error() << "no loaded functions: " << takeLastError(Sess)
+                       << "\n";
+    return 1;
+  }
+  std::vector<uint64_t> Entries(static_cast<size_t>(Count));
+  for (int Index = 0; Index < Count; ++Index)
+    Entries[static_cast<size_t>(Index)] = neverd_func_entry(Sess, Index);
+
+  uint64_t Attempted = 0, Failed = 0, Empty = 0;
+  uint64_t UnknownRegister = 0, UnknownValue = 0, UnknownReturnValue = 0;
+  uint64_t UnresolvedIndirect = 0, ZeroUnknown = 0, AdapterBudget = 0;
+  int Samples = 0;
+  const auto Note = [&](int Index, uint64_t Entry, StringRef Reason) {
+    if (Samples >= neverd::limits::cli::kDecompileCheckMaxFailureSamples)
+      return;
+    ++Samples;
+    std::string Text = Reason.str();
+    for (char &Ch : Text)
+      if (Ch == '\n' || Ch == '\r')
+        Ch = ' ';
+    if (Text.size() > neverd::limits::cli::kDecompileCheckMaxReasonBytes)
+      Text.resize(neverd::limits::cli::kDecompileCheckMaxReasonBytes);
+    errs() << "CENSUS fail index=" << Index << " entry=0x" << utohexstr(Entry)
+           << " reason=" << Text << "\n";
+    errs().flush();
+  };
+  const auto CountPhrase = [](StringRef Text, StringRef Phrase) {
+    uint64_t Hits = 0;
+    size_t At = 0;
+    while ((At = Text.find(Phrase, At)) != StringRef::npos) {
+      ++Hits;
+      At += Phrase.size();
+    }
+    return Hits;
+  };
+  const auto Report = [&](StringRef Kind) {
+    errs() << "CENSUS " << Kind << " denominator=" << Count
+           << " attempted=" << Attempted << " failed=" << Failed
+           << " empty=" << Empty << " hit_unknown_register=" << UnknownRegister
+           << " hit_unknown_value=" << UnknownValue
+           << " hit_unknown_return_value=" << UnknownReturnValue
+           << " hit_unresolved_indirect_branch=" << UnresolvedIndirect
+           << " hit_zero_unknown=" << ZeroUnknown
+           << " hit_adapter_budget=" << AdapterBudget << "\n";
+    errs().flush();
+  };
+
+  errs() << "CENSUS denominator " << Count << "\n";
+  errs().flush();
+  returnFreedHeapPages();
+  auto LastReport = std::chrono::steady_clock::now();
+  for (int Index = 0; Index < Count; ++Index) {
+    const uint64_t Entry = Entries[static_cast<size_t>(Index)];
+    const char *Source = neverd_decompile(Sess, Entry);
+    ++Attempted;
+    const StringRef Text = Source ? StringRef(Source) : StringRef();
+    if (Text.empty()) {
+      ++Failed;
+      ++Empty;
+      std::string Why = takeLastError(Sess);
+      Note(Index, Entry,
+           Why.empty() ? StringRef("empty source") : StringRef(Why));
+    } else {
+      const uint64_t ReturnHits = CountPhrase(Text, "unknown return value");
+      const uint64_t RegisterHits = CountPhrase(Text, "unknown register");
+      const uint64_t ValueHits = CountPhrase(Text, "unknown value");
+      const uint64_t BranchHits =
+          CountPhrase(Text, "unresolved indirect branch");
+      const uint64_t ZeroHits = CountPhrase(Text, "0 /* unknown */");
+      uint64_t BudgetHits = 0;
+      for (const char *Phrase :
+           {"Engine result exceeds the 32 MiB adapter budget",
+            "Engine result exceeds the adapter budget",
+            "The function index exceeds one million entries"})
+        BudgetHits += CountPhrase(Text, Phrase);
+      UnknownReturnValue += ReturnHits;
+      UnknownRegister += RegisterHits;
+      UnknownValue += ValueHits;
+      UnresolvedIndirect += BranchHits;
+      ZeroUnknown += ZeroHits;
+      AdapterBudget += BudgetHits;
+      if (ReturnHits || RegisterHits || ValueHits || BranchHits || ZeroHits ||
+          BudgetHits)
+        ++Failed;
+      if (ReturnHits)
+        Note(Index, Entry, "unknown return value");
+      if (RegisterHits)
+        Note(Index, Entry, "unknown register");
+      if (ValueHits)
+        Note(Index, Entry, "unknown value");
+      if (BranchHits)
+        Note(Index, Entry, "unresolved indirect branch");
+      if (ZeroHits)
+        Note(Index, Entry, "0 /* unknown */");
+      if (BudgetHits)
+        Note(Index, Entry, "adapter budget or function-index cap");
+    }
+    neverd_free_string(Source);
+    const auto Now = std::chrono::steady_clock::now();
+    const bool BatchComplete =
+        Attempted % neverd::limits::cli::kDecompileCheckReportFunctions == 0;
+    if (Attempted == 1 || BatchComplete ||
+        Now - LastReport >=
+            std::chrono::seconds(
+                neverd::limits::cli::kDecompileCheckReportSeconds) ||
+        Index + 1 == Count) {
+      if (BatchComplete)
+        returnFreedHeapPages();
+      Report("progress");
+      LastReport = Now;
+    }
+  }
+  Report("summary");
+  const bool Ok = Attempted == static_cast<uint64_t>(Count) && Failed == 0 &&
+                  Empty == 0 && UnknownRegister == 0 && UnknownValue == 0 &&
+                  UnknownReturnValue == 0 && UnresolvedIndirect == 0 &&
+                  ZeroUnknown == 0 && AdapterBudget == 0;
+  errs() << "CENSUS result " << (Ok ? "ok" : "fail") << "\n";
+  errs().flush();
+  return Ok ? 0 : 1;
+}
+
 int runDecompile(neverd_session_t Sess) {
   if (X64Continuation.getNumOccurrences() ||
       X86LegacySource.getNumOccurrences() ||
       ContinuationReport.getNumOccurrences())
     return runContinuation(Sess);
+  if (DecompileCheckAll)
+    return auditEveryLoadedFunction(Sess);
   const bool LLVMSourceTransforms = SourceLLVMControlFlow.getNumOccurrences() ||
                                     SourceLLVMLevel.getNumOccurrences() ||
                                     SourceLLVMPasses.getNumOccurrences();
@@ -952,7 +1114,6 @@ int runDecompile(neverd_session_t Sess) {
     if (FuncRef.consume_front("0x") || FuncRef.consume_front("0X")) {
       if (!FuncRef.empty() && !FuncRef.getAsInteger(16, DirectAddr)) {
         HaveDirectAddr = true;
-        FuncIdx = neverd_func_find_by_addr(Sess, DirectAddr);
       }
     } else {
       FuncIdx = neverd_func_find_by_name(Sess, ExportFunc.c_str());
@@ -965,7 +1126,6 @@ int runDecompile(neverd_session_t Sess) {
       if (FuncIdx < 0 && !HaveDirectAddr && !FuncRef.empty() &&
           !FuncRef.getAsInteger(16, DirectAddr)) {
         HaveDirectAddr = true;
-        FuncIdx = neverd_func_find_by_addr(Sess, DirectAddr);
       }
     }
     if (FuncIdx < 0 && !HaveDirectAddr) {
@@ -1064,14 +1224,16 @@ int runDecompile(neverd_session_t Sess) {
           return 1;
         }
         const size_t Size = StringRef(Raw).size();
-        if (Size >
-            ::neverd::limits::cli::kMaxPipelineAggregateSourceBytes - Bytes) {
+        if (JsonOutput &&
+            Size > ::neverd::limits::cli::kMaxPipelineAggregateSourceBytes -
+                       Bytes) {
           neverd_free_string(Raw);
           WithColor::error()
               << "JSON source view exceeds the 64 MiB output budget\n";
           return 1;
         }
-        Bytes += Size;
+        if (JsonOutput)
+          Bytes += Size;
         auto Value = json::parse(Raw);
         neverd_free_string(Raw);
         if (!Value || !Value->getAsObject()) {
@@ -1093,8 +1255,17 @@ int runDecompile(neverd_session_t Sess) {
                              << '\n';
           return 1;
         }
-        if (auto PageText = Page->getString("text"))
-          Text += *PageText;
+        if (!JsonOutput)
+          if (auto PageText = Page->getString("text")) {
+            if (PageText->size() >
+                ::neverd::limits::cli::kMaxPipelineAggregateSourceBytes -
+                    Text.size()) {
+              WithColor::error()
+                  << "source text exceeds the 64 MiB output budget\n";
+              return 1;
+            }
+            Text += *PageText;
+          }
         const bool Complete = Page->getBoolean("complete").value_or(false);
         auto Next = Page->getInteger("next_offset");
         if (!Complete &&
@@ -1102,7 +1273,8 @@ int runDecompile(neverd_session_t Sess) {
           WithColor::error() << "source view did not advance\n";
           return 1;
         }
-        Pages.push_back(std::move(*Value));
+        if (JsonOutput)
+          Pages.push_back(std::move(*Value));
         if (Complete)
           break;
         Offset = static_cast<size_t>(*Next);

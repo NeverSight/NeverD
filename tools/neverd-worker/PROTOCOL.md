@@ -55,7 +55,8 @@ Responses:
 ```
 
 Statuses are `ok`, `error`, `cancelled`, and `budget_exceeded`. Error responses
-include `error:{code,message}`. While a request loads an image, the worker may
+include `error:{code,message}`. While a request loads an image or searches/sorts
+a large function or name catalog, the worker may
 first send responses with the same `request_id` and `status:"progress"`, whose
 payload is `{phase,done,total,detail}`; they are not the request's result, and
 a client keeps waiting for one of the final statuses. Step boundaries and changes
@@ -112,7 +113,8 @@ the same journaled transaction runs on a thread of its own, joined with edits
 queued behind one already writing, in the few milliseconds after the reply.  A
 kill in that time leaves the project's files as they were, or a journal that
 completes them; a clean exit, `save` (except `save.write_behind`), `analysis_snapshot`
-and any operation that may read the project's files wait for the write first.  A write that fails stays
+and any operation that may read the project's files wait for the write first; `history`
+and `patches`, which read the session's steps and byte patches, do not.  A write that fails stays
 queued and fails the next edit or waiting operation with its error, and goes
 through once it can.  An edit refused meanwhile takes back what it changed of
 the session's data items, function edits and operand formats as its history
@@ -138,6 +140,16 @@ cooperative cancellation could stop it). Never show “stopped” from the initi
 cancel acknowledgement. `shutdown` cancels queued requests, acknowledges
 `{stopped,requires_restart}`, waits for an active call, and exits. EOF follows the
 same drain policy. A parent can terminate and restart an unresponsive worker.
+
+Function/name catalog scans and sorts check cancellation between batches. Their
+cancel acknowledgement uses `requires_restart:false`; the terminal error has
+`error.code:"cancelled"`, `calculation_stopped:true`, and
+`completed_before_cancellation:false` when the scan stopped. Partial filtered
+orders are not cached. Progress phases are `search`, `sort_keys`, and `sort`;
+`total:0` denotes an unknown amount of work, not zero percent completion.
+Catalogs above one million entries support the same filtering, stable sorting,
+address selection and pagination as smaller catalogs without constructing a
+whole-catalog JSON array. The limit applies to eager JSON materialization only.
 
 ## Native binary comparison
 
@@ -491,18 +503,32 @@ without the PDB it names and is saved with the project like a selection. With a
 one that loads. `pdb_reference` is listed in `capabilities` when the engine has
 it.
 
-`local_types {filter?,origin?,language?}`, `local_type {name,spelling?}`
+`local_types {filter?,origin?,language?,offset?,limit?,sort?,descending?,locate?,diagnostics_offset?}`, `local_type {name,spelling?}`
 and `local_types_source {language?,spelling?,offsets?,hexOffsets?,asserts?,
 types?,dependencies?,prototypes?}` read the open program's local types
 through the SDK's `neverd_local_types_json`, `neverd_local_type_json` and
 `neverd_local_types_source`: the list with import statistics, counts by
 origin and the header libraries joined (`headers`), one type laid out member
 by member, and `{language,source}`, the types rendered as C, C++, Rust or Go.
-The engine reads them from the program's PDB the first time it is asked, and
+The engine reads them from the program's PDB or DWARF the first time it is asked, and
 joins the system headers NeverD ships for the image, such as the Windows
 kernel's. A name the program has no type for, or the PDB's types failing to read,
 is a `local_types_failed` error. The three are listed in `capabilities` when
 the engine has them.
+
+For large libraries, pass `offset` and `limit` (1–512). The result adds
+`total`, `offset`, and `next_offset`; continue at `next_offset` because a
+page may stop at its byte limit. Filtering and sorting cover the complete
+library. `sort` accepts `ordinal`, `name`, `kind`, `size`, or `members`;
+`descending` reverses the order. `locate` selects an exact type name's page and
+returns its `index` when found. Paged diagnostics retain their totals and
+per-category continuation offsets in `diagnostics`; `diagnostics_offset`
+reads later entries without discarding import failures. Omitted paging
+keeps the full SDK inventory for existing clients. Names returned in a bounded
+type page are accepted by lookup, filtering, exact-name location and removal;
+template names are not cut off at the general short-option limit. A member
+pointer's layout includes `memberPointer:{owner,target,function}` and its
+encoded ABI storage fields.
 
 `local_types_fit {text?,records?,shifts?,limit?,spelling?,accesses?,
 function?,address?,parameter?}` ranks the program's structures and unions by
@@ -676,15 +702,15 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `identify` | Available before opening a file. `{path}`. Lists the ways the engine can load the file without loading it, from `neverd_identify_json`: `{rows:[{loader,text,processor,bits,endian,loadable,by_name?,reason?}]}` in the load dialog's order (rows a loader asks to lead, the others, then `Binary file`); `reason` says why a row cannot be loaded, and `by_name` marks a row only the file's name suggests, which loads only when chosen. For a file no header describes, the binary file row also carries what its bytes show: `guesses:[{isa,name,processor,share}]` (the likeliest instruction sets, `processor` empty for one NeverD cannot decode), `code_share` (the windows that look like code), `status` (`settled` when the bytes name one set, `width_unclear` when its family's instructions do not tell its 32-bit set from its 64-bit one, `unclear`, or `no_code`), `code_unit` and `code_offset` (the bytes the code's instructions align to, and where in the file they start modulo that), `wide_share` for a family of two widths (the share of its instructions only the 64-bit set has), `detected` (the processor an `open` without one reads the file as; empty unless `settled` names one NeverD decodes), `evidence`, and `fingerprint:{name,processor,entry,base}` when the file starts with a structure such as a Cortex-M vector table. A path that names no regular file is `invalid_request`. Capability present only with an engine that identifies files. |
 | `open` | `{path:string,read_only:false,debug_info:true,analysis:true,warm:false,loader?,processor?,base?,offset?,size?,entry?,platform?}`. Loads a regular file into a new Session, keeping the old Session on failure; returns metadata plus `warnings:[]`. `debug_info:false` loads the image alone, ignoring the PDB, DWARF or linker map beside it; `analysis:false` turns off idle-time analysis (function discovery and the reference index; a cross-reference request still builds the index). `warm:true` adds a last step to that idle-time analysis: preparing each function's analysis for its first decompile (see Workbench names and background work). `loader` chooses how a file that names no format itself is read: `"evm"` as EVM bytecode, or `"binary"` as code of `processor` (`x86`, `x86_64`, `arm`, `thumb`, `aarch64`; absent or `auto` reads it from the bytes, and fails naming what they look like when they name no processor NeverD decodes clearly, or the file offset to read from when the code starts mid-word) mapped at `base`, from file `offset` on for `size` bytes (0 for the rest), starting at `entry` (the base when absent); the numbers are hexadecimal strings. `platform` names the platform whose conventions a binary file's code follows -- `sysv`, `windows` or `darwin` -- and `auto`, the default, has the engine read it from the code. The engine keeps a chosen loader, with the detected platform, in the project folder's `load.json`, which later opens without `loader` read, unless the session is read-only. Metadata carries how the file was read as `load_options`, the engine's load options JSON: for a binary file its `processor` with `processor_source` (`detected` or `user`) and `processor_evidence`, its placement, and `platform` with `platform_source` and `platform_evidence`. Without the engine's load options API, `loader` is `unsupported`. Project ID changes and revision increases on success. |
 | `metadata` | Returns `path,architecture,format,bitness,file_size` (decimal string), `sha256` (the input's, in lowercase hexadecimal, empty when it cannot be read), `base_address,entry_address,function_count,segment_count,section_count,import_count,export_count,symbol_count,language,analyzed,analysis_state,read_only,dirty`. `function_count` is null before EVM/SBF analysis where a quick list is unavailable. `language` is `neverd_headers_json`'s: `{runtime,version?,secondary:[],evidence:[],pseudocode:[]}`, the runtime that built the image (`c`, `c++-itanium`, `c++-msvc`, `rust`, `go`, `objective-c`, `swift`, `delphi`, `ada`, `d` or `unknown`) and the languages its pseudocode reads in (`c`, and `rust` or `go` for an image with that language's code). |
-| `functions` | Standard page in address order, filtered by display name, engine name, the name demangled or hex address and optionally sorted by `{sort:field,descending}`. Items carry `{name,address,size,library,thunk,exported}` under the workbench display name (see Listing below) plus `engine_name` when that differs, and may add `display_name,linkage_name,name_origin,display_origin,linkage_origin,recognition_state,library_annotations` from the shared session identity. A function the workbench names, such as a PLT entry `__ZN10QByteArrayC1EPKcx`, shows its name demangled (`neverd_demangle`) as `display_name`. The order is cached per filter, sort and listing generation; a table beyond one million functions is refused explicitly. Optional `from` is an exclusive address cursor for adjacent-function navigation, requires address order, and combines with `descending`; offsets and totals are relative to the portion after that cursor. The cache key includes direction. |
+| `functions` | Standard page in address order, filtered by display name, engine name, the name demangled or hex address and optionally sorted by `{sort:field,descending}`. Items carry `{name,address,size,library,thunk,exported}` under the workbench display name (see Listing below) plus `engine_name` when that differs, and may add `display_name,linkage_name,name_origin,display_origin,linkage_origin,recognition_state,library_annotations` from the shared session identity. A function the workbench names, such as a PLT entry `__ZN10QByteArrayC1EPKcx`, shows its name demangled (`neverd_demangle`) as `display_name`. The order is cached per filter, sort and listing generation. An address-ordered page, including `from` and `seek_address` of an entry, is still returned when the catalog has more than one million functions; a filter or a sort other than address is refused with `budget_exceeded` and "The function index exceeds one million entries". Optional `from` is an exclusive address cursor for adjacent-function navigation, requires address order, and combines with `descending`; offsets and totals are relative to the portion after that cursor. The cache key includes direction. |
 | `resolve` | `{query:"0x..."}` or exact symbol name. Returns `{address,function_address:hex|null,name,comment,import}`. Optional display/linkage/evidence fields share the function-list identity. For an interior VA, containing function discovery uses engine sizes. An unmapped numeric VA remains an exact navigation address. An import's name, as its symbol or as C calls it (`c_name` from the engine), resolves to its thunk where it has one and otherwise to its slot; `import` says whether the address is an import's slot or thunk. |
-| `unwind_frame` | `{address:"0x..."}` only. Requires a loaded image and an engine exporting `neverd_unwind_frame_json`; advertised when that optional export exists. Returns the complete public C ABI frame object or `null` when no frame contains the exact requested address. It does not resolve the address to a function entry, subtract a return-address bias, analyze code or change revision. AArch64 frames may add `return_address:{query_pc,dwarf_state_at_pc,compact_recipe}`. `dwarf_state_at_pc` describes the exact PC; `compact_recipe` describes the completed prologue and never establishes the state at that PC. Source `null`, all typed statuses, diagnostics and a present `signing_pc:"0x0"` are preserved. An older engine may return a legacy frame without `return_address`. All address fields use the protocol's lowercase hexadecimal spelling. The listing's function-entry `__unwind` markers remain boundary annotations, not state queries. |
+| `unwind_frame` | `{address:"0x..."}` only. Requires a loaded image and an engine exporting `neverd_unwind_frame_json`; advertised when that optional export exists. Returns the complete public C ABI frame object or `null` when no frame contains the exact requested address. It does not resolve the address to a function entry, subtract a return-address bias or change revision. AArch64 frames may add `return_address:{query_pc,dwarf_state_at_pc,compact_recipe}`. `dwarf_state_at_pc` describes the exact PC; `compact_recipe` describes the completed prologue and never establishes the state at that PC. For a Darwin FDE without an explicit signing column or a supported compact-only frame, the engine may also return `instruction_state_at_pc`. It uses bounded control-flow and stack-save analysis and leaves the DWARF result unchanged. Source `null`, all typed statuses, diagnostics and a present `signing_pc:"0x0"` are preserved. An older engine may return a legacy frame without `return_address`. All address fields use the protocol's lowercase hexadecimal spelling. The listing's function-entry `__unwind` markers remain boundary annotations, not state queries. |
 | `disasm` | `{address,limit:128}`; limit 1–512 instructions. Returns `{items,address,next_address:hex|null,complete}`. Rows `{address,size,bytes,mnemonic,operands,comment}` may include backend decode status. `next_address` is computed from the last decoded instruction's size, with overflow checks. A full page's successor is a continuation candidate; an empty following page means decoding ended. |
 | `bytes` | `{address,size:256,text_encoding?}`; size 1–65536. Returns `{address,encoding:"hex",data,bytes_read,requested_size,mapping_status,next_address}`. Status is `mapped`, `partial`, or `unmapped_or_unmaterialized`; reading stops at the first unmapped byte. The legacy C ABI cannot distinguish BSS from unmapped bytes. Initial v1 carries bounded hex data in JSON, not separate binary attachments. With `text_encoding` (a `string_encodings` name) the reply adds `cells`, one per byte read, from the engine's `neverd_decode_text_json`: a character's text at its first byte, `""` at its later bytes, and `null` where no character is shown. The bytes decode from the first one, so a character cut by the range's ends shows as `null`. An unknown name is `unsupported_encoding`; an engine without the decoder returns `unsupported`. |
 | `analyze` | Computes the synchronous full-image pipeline once, publishes a new revision, invalidates adapter caches, and returns metadata. The listing then reads the jump tables the pipeline recovered (`neverd_switches_json`): a table is named `jpt_<dispatch>` and, in the form the engine verified, laid out a slot per line, and a two-level table's index table four entries a line, named by their width (`byte_<address>`) and commented `indirect table for switch statement`; its load and dispatch are commented, and every target is referred to from the dispatch (`j`) and the table (`o`). No function-level incremental analysis or cooperative cancellation is claimed. |
 | `prepare_call_summaries` | No parameters. Solves the call-register summaries of every function of an x86-64 image once (`neverd_prepare_call_summaries_json`), as a full-image analysis solves them, and returns `{available,ready}`. Later decompiles of the session read them instead of solving the callees each function reaches within fixed depth and lift bounds, so a function's text can change; the worker drops the decompiled text and views it kept. Neither revision nor history changes. |
 | `signatures_load` | `{path,mode:"file"}` loads one `.pat` or library feature `.json`; `mode:"auto"` selects from a signature tree including `features/rules`. Returns `{loaded:true,byte_matches}` and advances the analysis revision. `byte_matches` counts candidates, not renamed functions; library classification requires the SDK's admitted `auto_name`. Invalid packs preserve the previous evidence and revision. Available on read-only images; it does not write annotations or the binary. |
-| `decompile` | `{address,representation:"c",offset:0,limit:512}`; representation `c/llvmc/low/med/high/llvm/source/cpp/rust/go`, line limit 1–2048. Triggers analysis when needed. A known native chunk selects its recovered owner before analysis; `address` in the result is that entry. Explicit entries retain their identity, and unowned addresses retain the ordinary entry request. Returns `{address,representation,text,offset,total_lines,next_offset,complete,mapping_status,provenance_complete,rows,project_id,revision}`. Native Low/Med/High/LLVM/C/LLVMC use the optional bounded C ABI page API when present; other views retain one legacy function representation up to 32 MiB. C pages may also carry `byte_offset,function_identity,library_regions,prelude,recognition_budget_exhausted`. `cpp`, `rust` and `go` spell the HighC page in that language, for an image whose `language.pseudocode` lists it (otherwise `unavailable` with the engine's reason), and `source` in the function's own (C++, Rust, Go or C); they come only from the page API and add `dialect` (`c/cpp/rust/go`, what the page reads in), `unread` (why a declaration is shown as C) and `source_names` (`{begin_byte,end_byte,identifier,symbol,address?}` for each source name on the page, such as `core::fmt::write`, which splitting the text into identifiers would not find whole). A wire code page is capped at 2 MiB. See source mapping below. |
+| `decompile` | `{address,representation:"c",offset:0,limit:512}`; representation `c/llvmc/low/med/high/llvm/source/cpp/rust/go`, line limit 1–2048. Triggers analysis when needed. Optional boolean `refresh:true` on the first page explicitly discards this function's prepared analysis and retained source variants; later pages reuse the replacement. It requires `neverd_forget_function_analysis`; older SDKs report unsupported. Ordinary navigation, including a document evicted to temporary storage, does not recompile it. A known native chunk selects its recovered owner before analysis; `address` in the result is that entry. Explicit entries retain their identity, and unowned addresses retain the ordinary entry request. Returns `{address,representation,text,offset,total_lines,next_offset,complete,mapping_status,provenance_complete,rows,project_id,revision}`. Native Low/Med/High/LLVM/C/LLVMC use the optional bounded C ABI page API when present; other views retain one legacy function representation up to 32 MiB. C pages may also carry `byte_offset,function_identity,library_regions,prelude,recognition_budget_exhausted`. `cpp`, `rust` and `go` spell the HighC page in that language, for an image whose `language.pseudocode` lists it (otherwise `unavailable` with the engine's reason), and `source` in the function's own (C++, Rust, Go or C); they come only from the page API and add `dialect` (`c/cpp/rust/go`, what the page reads in), `unread` (why a declaration is shown as C) and `source_names` (`{begin_byte,end_byte,identifier,symbol,address?}` for each source name on the page, such as `core::fmt::write`, which splitting the text into identifiers would not find whole). A wire code page is capped at 2 MiB. A span's occurrences are published on the line that contains its first byte. A page that would exceed the 32 MiB adapter keeps the text and one address per row and omits `source_variables`, `library_regions`, `source_calls` and `identifier_symbols`. The worker omits those arrays, then extra row addresses, when the framed response would exceed 8 MiB. See source mapping below. |
 | `cfg` | `{address}`. Uses the same function-owner selection as `decompile`. Triggers analysis, returns `{name?,entry?,nodes,edges,complete:true}`. Nodes have `{id:string,start,end,insn_count,disasm:[string],address:start,label:start,lines:disasm}`; edges `{from:string,to:string|null,type}`. More than 500 nodes or 2000 edges returns `budget_exceeded`, with no partial graph. |
 | `cfg_summary` | `{address,metrics?}`. Uses the same function-owner selection as `decompile`; layout keys and returned `address` use that entry. Builds one immutable graph snapshot on the executor; returns counts, bounds and an opaque `layout_revision`, without node/edge arrays. Up to 20000 nodes / 100000 edges. Optional `metrics:{char_width,line_height,padding,...}` size each node to its formatted listing rows; the layered layout routes edges around nodes. See viewport contract below. |
 | `cfg_viewport` | `{address,layout_revision,x,y,width,height,scale:1,node_offset:0,edge_offset:0}`. Queries the current snapshot's spatial indexes; returns at most 256 nodes and 512 edges. No engine call or relayout per pan. A missing/mismatched snapshot returns `stale_layout`. |
@@ -695,12 +721,12 @@ diagnostic; fixed-image authentication still requires its stricter evidence.
 | `string_encodings` | Available before opening a file. Returns `{items:[{name,spelling,unit,default,legacy?}]}`, the engine's string encodings; `legacy:true` marks a code page (GBK, Big5, Shift-JIS, Windows-1252, ...). Engines without `neverd_string_encodings_json` return `unsupported`. |
 | `string_options` | Available before opening a file. `{encodings?:[name],preferred?:name\|null,min_length?:1-1024}` replaces the options the listing and `strings` search with, increments revision and invalidates both. C strings that are not UTF-8 are read in every code page among the encodings; `preferred` names the code page that reads them first and so wins where others read them as text too, and is searched whether or not the encodings name it. Without it, a code page wins that reads a string in the scripts it is made for and that no code page for another script contests. `min_length` counts display columns, a wide East Asian character two. An unknown name is `unsupported_encoding` and a preferred encoding that is not a code page `invalid_request`. Without fields it only reads. Returns `{encodings,preferred,min_length}`. The options outlive the open file. |
 | `string_references` | `{offset,limit:128,filter?,sort:"address",descending:false}`, limit 1–512; sort `address`, `text`, `function` or `type`. Every instruction that refers to a string under `string_options`, from the engine's `neverd_string_refs_json` (listed once per string options and function list): rows `{address,string_address,text,type,encoding,kind,disasm,function,function_address?,via?}`. A reference into a string reads its text from the first character that starts at or after that byte, when at least `min_length` columns remain; `string_address` is the referenced byte. An instruction that reads a relocated slot holding such an address refers to the string through it, and `via` names the slot. `disasm` is the instruction as the listing shows it. The filter matches the text, the function name or the address, ignoring case in any script; each query's filtered and sorted rows are kept for its pages. An engine without the query returns `unsupported`. Returns `{items,total,offset,next_offset,complete}`. |
-| `listing` | `{address,sub:0,before:0,after:100,opcode_bytes:0}`; before/after 0–2000 lines, opcode bytes 0–12. The classic text listing of the whole image around an address: rows `{item,item_size,address,sub,cls,kind,prefix,text,spans,target?,flow?,function?,function_address?}` with `[byte_offset,byte_length,role,address?]` spans into the UTF-8 text (roles from `ListingRoles.def`, address classes `cls` from `AddressClasses.def`). Returns `{lines,anchor,at_start,at_end,generation}`. `item_size` is the authoritative item byte extent, encoded as a hexadecimal string; clients must not infer an extent from neighboring displayed rows. No analysis is started; functions decode lazily and the `generation` changes when labels or names can change. |
+| `listing` | `{address,sub:0,before:0,after:100,opcode_bytes:0}`; before/after 0–2000 lines, opcode bytes 0–12. The classic text listing of the whole image around an address: rows `{item,item_size,address,sub,cls,kind,prefix,text,spans,target?,flow?,function?,function_address?}` with `[byte_offset,byte_length,role,address?]` spans into the UTF-8 text (roles from `ListingRoles.def`, address classes `cls` from `AddressClasses.def`). Returns `{lines,anchor,at_start,at_end,generation}`. `item_size` is the authoritative item byte extent, encoded as a hexadecimal string; clients must not infer an extent from neighboring displayed rows. No analysis is started; functions decode lazily and the `generation` changes when labels or names can change. A client that keeps pages names the one it has with `if_none_match` (empty for none) and gets the page with an `etag`; reading the same lines again naming it, it is told `{etag,unchanged:true}` where the page stands, or, with `page_delta:true`, `{base,delta,etag}` where at most half of its lines changed: `delta` sets the fields that changed and gives the lines as `["items","lines",runs]` of `["same",n]`, `["put",[line...]]`, `["skip",n]` and `["new",[line...]]` over the page kept, which applied is the page a read naming none gets.  The worker keeps the last eight pages it gave so; a page it did not give, or whose first viewport the loader answered, reads whole (the latter with no `etag`). `metadata.listing_pages_unchanged` and `metadata.listing_page_deltas` count those answered so. |
 | `overview` | `{buckets:1024}`, 1–16384. The address space as equal linear buckets, each the dominant address class digit: `{buckets:string,total,regions:[{name,start,end,initialized_end,linear,exec}],generation}`. |
-| `names` | Standard page by name, sortable: every function (kind `function`, `library` or `thunk`), data and string label and import slot as `{name,address,kind}`. |
+| `names` | Standard page by name, sortable: every function (kind `function`, `library` or `thunk`), data and string label and import slot as `{name,address,kind}`. A name list beyond one million entries still returns an unsorted, unfiltered page in that order; a filter or a sort is refused with `budget_exceeded` and "The name index exceeds one million entries". |
 | `regions` | Standard page by name, sortable: sections or segments as `{name,address,start,end,size,initialized_end,flags,alignment,class}`. |
 | `imports` | Standard page by name, sortable: `{address,name,module,ordinal}` at each import's data slot. |
-| `exports` | Standard page by name, sortable: exports `{address,name,ordinal,kind:"export"}` and entry points with their engine type. |
+| `exports` | Standard page by name, sortable: exports `{address,name,ordinal,kind:"export"}` and entry points with their engine type. The image's own names, which no edit changes: the worker sorts them once per project and order. |
 | `search` | `{kind:"text"|"bytes",pattern,case_sensitive:false,limit:256,from?:address,backward:false}`, limit 1–4096. Bytes are hexadecimal pairs with optional spaces. `from` is an exclusive image-address cursor; matches are ordered by address in the requested direction. Returns `{items:[{address,...}],complete,next_address}`. `complete:false` means another match exists; pass `next_address` as `from` to continue. Without `from`, starts at the first/last initialized image byte. Segments are searched independently, including overlapping matches within a segment. A malformed pattern or cursor is `invalid_request`. Requires the matching engine's `neverd_search_page` C API; older engines report `unsupported`. |
 | `segments` | Standard page by name; rows `{name,address,size,flags}`. `size` is the engine's hex string. |
 | `annotations` | Standard page by text; rows `{address,text}`. |
@@ -946,6 +972,17 @@ sidecar is `stale_snapshot`; a changed input is `input_changed`. The GUI tries i
 on every change to the project of an idle replica, and restores a fresh process
 when it refuses.
 
+`open` and `analysis_restore` accept `prepare_views:true` when the worker advertises
+`prepare_analysis_views`. Before replying, it prepares the shared data-access
+widths, debug types, symbol names and the first function page through
+`neverd_warm_functions_json`. Progress uses phase `prepare_views`; completion
+means these shared indexes are ready, not that all functions were decompiled.
+The restore option is execution policy and does not participate in later snapshot
+identity checks. Restoration suppresses the open option until all owner edits
+and chosen debug inputs have been applied. The GUI requests it while opening
+large files with automatic analysis enabled and for large-image replicas, and queues their
+initial preparation after discovery, without waiting for the first F5.
+
 `analysis_restore` also takes `call_summaries:true`, which the GUI adds to the
 owner's snapshot when the replica advertises `prepare_call_summaries`. The
 replica then discovers the image's functions (`neverd_session_discover_functions`,
@@ -990,6 +1027,9 @@ first visit to that function in a new session. Heartbeats report it as
 raw_bytes, bytes, kept}` with `pending`, `done` or `full`; `declared_hits` counts the
 views a render made under a declaration answered (`prepare_function`). A function the job failed to
 render, or has not reached, is decompiled as usual.
+The optional render stops retaining a function at 32 MiB of source. This is
+not a limit on an explicit source view, whose completed document can spill to
+temporary storage and continue to serve pages and navigation.
 
 It also takes `render_store`, `read` or `write`, which the GUI gives every replica
 of a worker that advertises `render_store`: `write` to the one that renders ahead,
@@ -1042,7 +1082,17 @@ them with those integer fields moved by amount, `["put", [values]]` replaces the
 elements, `["skip", n]` drops n and `["new", [values]]` adds values.  An edit that moves
 the byte offsets of what follows a line, such as a comment or a name, changes a page by
 a few operations.  Where the operations would weigh more than half the page, or the
-document is gone, the page comes whole.
+document is gone, the page comes whole.  Where one patch wrote the edit into the
+document the page is of (a comment, a function's name or a data's name, taken into the
+document that read it), the operations are what the patch says it wrote, for the same
+lines of the document it was made of, without the two documents being compared; and
+where the read names a page of that document, which the worker alone holds, the patch
+is written into the document itself, whose other pages then read what the patch says
+too, while a page of a document older than that comes whole.  `metadata.
+named_view_changes_said` counts the pages answered so and `metadata.
+named_view_documents_taken` the patches written so.  `open.check_view_changes:true`,
+for tests, has each such page also made by comparing the documents, an answer that
+differs failing the read, and leaves every patch a document of its own.
 
 `prepare_function {address}` analyzes the function at `address` and emits its source as
 a visit would, keeping nothing of the text, builds the listing a view decorates with,
@@ -1082,10 +1132,40 @@ most two, each as the client's next read of it asks (`if_none_match` naming the 
 it was given, `page_delta`), until a request waits.  A read that asks the same while
 the revision and the listing's view generation stand takes that answer, which reads
 as one made then would.  `metadata.prepared_views_made` and
-`metadata.prepared_views_given` count them.  `metadata.named_view_renders` counts the
+`metadata.prepared_views_given` count them.  A request's payload may carry the reads
+that follow it (`then`: at most four `{"operation":"decompile","payload":...}`, each
+naming the page its client keeps with `if_none_match`): once the request succeeds the
+reply answers each from the document that page is of, as a read made right after it
+would be answered, in the reply's own `then` list of `{status, payload}` or
+`{status, error}`, an answer over 1 MiB refused by itself.  One of them may be
+`{"operation":"listing","payload":...}`, the lines a client shows: at most 256 of them
+(`before` and `after` together), read as that `listing` read made right after the
+request reads, the page it names with `if_none_match` standing or taking what changed
+of it (`page_delta`).  More lines than that, a read with `recover_address` or
+`complete_anchor_item`, which may look for an address's owner, and any such read
+while the request left the listing names or functions to read again, or while the
+reference index is being built, are answered `{"status":"later"}`: the request's
+reply waits for no more than the lines, read from what the listing holds.  A view of more pages than
+one carries each: where an earlier answer had a patch written into the document they
+name, a later one is answered from what that patch says it wrote of it.  A page of no
+document the worker holds, nor of one a patch it holds was so written into, is answered
+`{"status":"later"}`, for the client to read itself.  A request
+that fails answers none, and a read that is neither a page's nor a listing's is refused alone.  A page given so
+is not read ahead again once the reply is sent.  `metadata.following_reads` counts the
+reads answered so.  The workbench's owner dispatcher has each edit carry the
+reads of the pages read at the revision it leaves, at most two, and takes the answers
+as those views' next reads; and, where the listing is what the user works in or the
+edit renames a function its lines show, the read of the lines the listing shows, whose
+answer the listing takes as the edit's revision is said.  Elsewhere the listing reads
+those lines itself behind the reply, so that the pseudocode's page waits for none of
+them; either way they come ahead of the lines around them, which it reads behind the
+edit.  `metadata.named_view_renders` counts the
 documents the engine rendered a function for, rather than built from pages kept.  `metadata.view_store_name_reads` counts
 the times an owner's views read which store they are kept under, which an edit that
-keeps the stores for what it changed says as it takes it.  `metadata.local_type_names_prepared`
+keeps the stores for what it changed says as it takes it.  A declaration of types nothing
+has read moves what the stores are kept under by its declarations alone: the names the
+stores had and have are read once its reply is sent, before the next request or anything
+else that reads them, and `metadata.store_keeps_settled` counts those.  `metadata.local_type_names_prepared`
 counts the idle steps that found read what a declaration of local types checks its
 names against (`neverd_local_types_prepare`), which the step after each request and
 after each other idle step reads once the session has read its local types.
@@ -1165,17 +1245,22 @@ Library-only mapped rows retain `mapping_status:"library_region"`. All pages hav
 `evidence_sha256,source_origin,source_revision,isolated,foldable,mapping_status`,
 `occurrences:[{address,origin_seq}]` and `spans:[{begin_byte,end_byte}]`.
 Scope is `whole-function`, `inline-expression`, `inline-region` or `call-site`.
+Region metadata repeats on every page that fits the adapter. A page past the
+32 MiB adapter, and a framed response past 8 MiB, omit it with the other
+unpainted arrays named on the `decompile` row.
 A call-site region adds the original `callee` address and `callee_identity`; an
 inline region does not invent a callee. Pages add `function_identity`, with
 raw/display/linkage names and evidence identical to the function list.
 Spans are half-open byte offsets in the full C document, not page-relative
-character positions. Region metadata repeats on every page. Source provenance
+character positions. Source provenance
 describes the rule, not the exact library version used by the target.
 
 Only a `mapped`, `isolated`, `foldable` region with all spans inside the loaded
 text may collapse. Unknown, overlapping or partial regions remain expanded.
-Rows intersecting a mapped span carry `mapping_status:"library_region"` and
-the region's instruction addresses; other C rows are unmapped. A region may
+The line containing a mapped span's first byte carries
+`mapping_status:"library_region"` and that span's instruction addresses when
+the row has no instruction anchor; a later line of the same span stays
+unmapped. Other C rows are unmapped. A region may
 map to several disjoint spans, without hiding intervening text. Clients retain
 the full source for copying and export and retire folds on revision changes.
 `recognition_budget_exhausted:true` reports a bounded stage that withheld its

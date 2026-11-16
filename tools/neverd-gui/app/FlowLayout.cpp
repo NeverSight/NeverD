@@ -77,6 +77,13 @@ void FlowLayout::setGeometry(const QRect &rect) {
   arrange(rect, true);
 }
 
+void FlowLayout::setHorizontalSpacing(int spacing) {
+  if (horizontalSpacing_ == spacing)
+    return;
+  horizontalSpacing_ = spacing;
+  invalidate();
+}
+
 int FlowLayout::arrange(const QRect &rect, bool place) const {
   const QMargins margins = contentsMargins();
   const QRect area = rect.marginsRemoved(margins);
@@ -126,6 +133,8 @@ int FlowLayout::arrange(const QRect &rect, bool place) const {
 }
 
 int FlowLayout::horizontalSpacing() const {
+  if (horizontalSpacing_ >= 0)
+    return horizontalSpacing_;
   if (spacing() >= 0)
     return spacing();
   const QWidget *owner = parentWidget();

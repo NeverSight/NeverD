@@ -15,6 +15,7 @@ class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QSortFilterProxyModel;
+class QSpinBox;
 class QStackedWidget;
 class QStandardItemModel;
 class QTabBar;
@@ -73,6 +74,7 @@ protected:
 
 private:
   void reload();
+  void requestList(qint64 offset, const QString &locate = {});
   void listed(const QJsonObject &payload);
   void selectionChanged();
   void requestLayout();
@@ -120,6 +122,8 @@ private:
   QStandardItemModel *model_ = nullptr;
   QSortFilterProxyModel *proxy_ = nullptr;
   QTreeView *list_ = nullptr;
+  QSpinBox *listPage_ = nullptr;
+  QToolButton *previousPage_ = nullptr, *nextPage_ = nullptr;
   QToolButton *back_ = nullptr;
   QLabel *heading_ = nullptr;
   QLabel *path_ = nullptr;

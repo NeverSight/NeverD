@@ -274,14 +274,14 @@ def multiple_residual_elf(degree, neighbor=False):
 
 def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=False,
                       *, interleaved=False, complemented=False, neighbor=False,
-                      factor_mask=None):
+                      factor_mask=None, factor_order=None):
     # Retain the requested low bits, including observable residual cross terms.
     high_bits = high_bits or (3 if product else 2)
     mask = (0xffffffff << (high_bits - int(product))) & 0xffffffff
     scale = 3 << (32 - needed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = [None] * degree
-    order = list(range(degree))
+    order = list(range(degree)) if factor_order is None else factor_order
     if interleaved:
         order = order[::2] + order[1::2]
     for i in order:
@@ -311,6 +311,83 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
             factors[i] = f"({factors[i]}&{factor_mask}U)"
     code += bytes.fromhex("01f8 01f0 01d0 c3")
     return elf(code), f"x+y+z+{scale}U*" + "*".join(factors)
+
+
+def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
+                          observed=32, dynamic_masks=False, spliced_words=False,
+                          rotated_bytes=False):
+    scale = 1 << (32 - observed)
+    code = bytearray.fromhex("b8") + struct.pack("<I", scale)
+    factors = []
+    for i in range(degree):
+        # The shift controls which cross terms between the three words survive.
+        op, value = (("31f1", "(x^y)"), ("09d1", "(x|z)"),
+                     ("21f1", "(x&y)"))[i % 3]
+        shift = i % 4 if i in low_factors else shift_base + i % 3
+        coefficient = ((2 * i + 1) << shift) & 0xffffffff
+        offset = 2 * i + 1
+        code += bytes.fromhex("89f9" + op)
+        if rotated_bytes:
+            # CH reads the byte at bit 8 after a rotate. Each axis has one
+            # source position, including a byte which wraps past bit 31.
+            source_bit = (0, 5, 29)[i % 3]
+            left = (8 - source_bit) % 32
+            if i % 2:
+                code += bytes.fromhex("c1c1") + bytes([left])  # rol ecx, imm8
+            else:
+                code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
+            value = f"((({value}<<{left})|({value}>>{32-left}))>>8&255U)"
+            if i % 4 < 2:
+                code += bytes.fromhex("0fbecd")  # movsx ecx, ch
+                value = f"(({value}^128U)-128U)"
+            else:
+                code += bytes.fromhex("0fb6cd")  # movzx ecx, ch
+        elif spliced_words:
+            # Keep CX and vary the high half of ECX three ways. Some high
+            # halves depend on the third argument at runtime.
+            if i % 4 == 0:
+                code += bytes.fromhex("0fbfc9")  # movsx ecx, cx
+                value = f"((({value}&65535U)^32768U)-32768U)"
+            elif i % 4 == 1:
+                code += bytes.fromhex("0fb7c9")  # movzx ecx, cx
+                value = f"({value}&65535U)"
+            else:
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("664189c8 4489c1")  # r8w = cx; ecx = r8d
+                value = f"(((z+{offset}U)&0xffff0000U)|({value}&65535U))"
+        elif observed < 32:
+            # The mask changes only bits discarded by the outer scale and
+            # this factor's coefficient. Keep the full operation in C.
+            low = (1 << (observed - shift)) - 1
+            high = (0x9e3779b9 * (i + 1)) & ~low & 0xffffffff
+            if dynamic_masks:
+                # r8d = (z + 2*i + 1) & high. Its low bits vanish even
+                # though the high bits depend on a third runtime input.
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", 2 * i + 1)
+                code += bytes.fromhex("4181e0") + struct.pack("<I", high)
+                hidden = f"((z+{2 * i + 1}U)&{high}U)"
+                operation, symbol = (("41f7d0 4421c1", "&~"), ("4409c1", "|"),
+                                     ("4431c1", "^"))[i % 3]
+                code += bytes.fromhex(operation)
+                value = f"({value}{symbol}{hidden})"
+            else:
+                opcode, symbol, mask = (("81e1", "&", low | high),
+                                        ("81c9", "|", high),
+                                        ("81f1", "^", high))[i % 3]
+                code += bytes.fromhex(opcode) + struct.pack("<I", mask)
+                value = f"({value}{symbol}{mask}U)"
+        for layer in range(affine_depth):
+            inner_weight = (-3 if layer % 2 else 5) & 0xffffffff
+            inner_offset = 3 + i + layer
+            code += bytes.fromhex("69c9") + struct.pack("<I", inner_weight)
+            code += bytes.fromhex("81c1") + struct.pack("<I", inner_offset)
+            value = f"({inner_offset}U+{inner_weight}U*{value})"
+        code += bytes.fromhex("69c9") + struct.pack("<I", coefficient)
+        code += bytes.fromhex("81c1") + struct.pack("<I", offset)
+        code += bytes.fromhex("0fafc1")
+        factors.append(f"({offset}U+{coefficient}U*{value})")
+    code += bytes.fromhex("01f8 01f0 01d0 c3")
+    return elf(code), "x+y+z+" + (f"{scale}U*" if scale != 1 else "") + "*".join(factors)
 
 
 def residue_power_elf(degree, observed, perturb=0, residual=False):
@@ -420,6 +497,9 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             if not kind.endswith("neighbor"):
                 assert code.count("*") <= 3, text
+        elif kind == "carry-product-isolated-column-64":
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+            assert code.count("*") <= 3 and code.count("^") <= 1, text
         elif kind.startswith("carry-product-partial-"):
             # Partial blocks keep complete unpaired words. Their original
             # degree-N product has two multiplications per factor; require
@@ -441,7 +521,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith("power-group-"):
+        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-")):
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
+            assert code.count("*") <= 12, text
+        elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
             code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") < int(kind.rsplit("-", 1)[1]) // 2, text
         elif kind.startswith("residue-"):
@@ -500,7 +583,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
                                       flags=re.S)
                         assert "*" in code, ordinary
@@ -574,11 +657,23 @@ if __name__ == "__main__":
             ("multiple-residual-neighbor", *multiple_residual_elf(4, True)),
             ("carry-product-32", *carry_product_elf(32)),
             ("carry-product-partial-23", *carry_product_elf(23, True, 6, 2)),
+            # Completed recursive and reordered reductions; the degree-25
+            # preservation boundary remains in SymMBASparseUnits.
+            ("carry-product-partial-recursive-49", *carry_product_elf(49, True, 7, 2)),
+            ("power-group-permuted-64", *carry_product_elf(
+                64, False, 8, 3, factor_order=(
+                    18, 61, 44, 34, 0, 36, 19, 11, 15, 21, 40, 55, 35, 42, 5, 52,
+                    31, 10, 63, 17, 50, 47, 22, 60, 20, 14, 49, 53, 43, 28, 23, 39,
+                    1, 57, 9, 37, 16, 26, 45, 4, 29, 8, 41, 46, 54, 59, 51, 32,
+                    13, 62, 3, 2, 38, 7, 33, 56, 24, 58, 48, 25, 6, 27, 12, 30))),
             ("carry-product-partial-narrow-23", *carry_product_elf(23, True, 6, 3)),
             ("carry-product-partial-neighbor-47", *carry_product_elf(47, True, 7, 4, neighbor=True)),
             ("carry-product-partial-complement-neighbor-95", *carry_product_elf(95, True, 8, 5, complemented=True, neighbor=True)),
             ("carry-product-partial-projected-neighbor-256", *carry_product_elf(256, True, 7, 2, complemented=True, neighbor=True)),
             ("carry-cofactor-projected-complement-256", *carry_product_elf(256, True, 8, 2, complemented=True)),
+            ("power-group-progression-64", *carry_product_elf(64, True, 8, 2)),
+            ("power-group-inverse-126", *carry_product_elf(126, True, 8, 5)),
+            ("carry-product-isolated-column-64", *carry_product_elf(64, True, 8, 2, factor_mask=0x83)),
             ("carry-cofactor-masked-window-16", *carry_product_elf(16, True, 8, 2, factor_mask=0x80000003)),
             ("carry-product-64", *carry_product_elf(64, False)),
             ("carry-cofactor-8", *carry_product_elf(8, True, 5, 2)),
@@ -594,6 +689,17 @@ if __name__ == "__main__":
             ("carry-cofactor-zero-witness-96", *carry_product_elf(96, True, 6, 2, complemented=True)),
             ("carry-cofactor-zero-witness-mask-96", *carry_product_elf(96, True, 6, 3, complemented=True)),
             ("carry-cofactor-zero-witness-256", *carry_product_elf(256, True, 6, 2, complemented=True)),
+            ("high-perturbation-33", *high_perturbation_elf(33)),
+            ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
+            ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
+            ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("rotated-perturbation-127", *high_perturbation_elf(
+                127, shift_base=6, affine_depth=1, observed=14, rotated_bytes=True)),
+            ("spliced-perturbation-97", *high_perturbation_elf(
+                97, shift_base=6, affine_depth=1, observed=22, spliced_words=True)),
+            ("dynamic-perturbation-63", *high_perturbation_elf(
+                63, shift_base=6, affine_depth=1, observed=23, dynamic_masks=True)),
+            ("view-perturbation-63", *high_perturbation_elf(63, shift_base=6, affine_depth=1, observed=23)),
             ("power-group-16", *residue_power_elf(16, 4)),
             ("power-group-64", *residue_power_elf(64, 6)),
             ("power-group-perturbed-128", *residue_power_elf(128, 4, 1)),

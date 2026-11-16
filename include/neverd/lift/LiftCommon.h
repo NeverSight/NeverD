@@ -21,6 +21,7 @@
 #include "llvm/Support/ErrorHandling.h"
 
 #include <initializer_list>
+#include <stdexcept>
 #include <vector>
 
 namespace neverd {
@@ -88,39 +89,40 @@ struct LiftStateBase {
     // unrelated object data.  COPY/SELECT/value-transport and memory/control
     // operands deliberately stay untouched because their constants may be
     // first-class data or code pointers.
-    LowOp Op;
+    // Check the complete operand list before publishing an operation in place.
+    if (Ins.size() > kLowOperationInputs)
+      throw std::length_error(kLowOperationInputOverflow);
+    auto &Op = Ops.emplace_back();
     Op.Opcode = Opc;
     Op.MemoryOrdering = MemoryOrdering;
     Op.MemoryAddressSpace = MemoryAddressSpace;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;
-    unsigned InputIndex = 0;
     for (NdVar V : Ins) {
       if (V.isConst() && V.Provenance == ConstantAddressProvenance::Unknown &&
-          isNumericConstantOperand(Opc, InputIndex))
+          isNumericConstantOperand(Opc, Op.NumInputs))
         V.Provenance = ConstantAddressProvenance::Scalar;
-      Op.addInput(V);
-      ++InputIndex;
+      Op.Inputs[Op.NumInputs++] = V;
     }
-    Ops.push_back(Op);
   }
 
   void emitIntrinsic(
       Intrinsic Id, NdVar Out, std::initializer_list<NdVar> Extra = {},
       NdMemoryOrdering MemoryOrdering = NdMemoryOrdering::None,
       NdMemoryAddressSpace MemoryAddressSpace = NdMemoryAddressSpace::Default) {
-    LowOp Op;
+    if (Extra.size() >= kLowOperationInputs)
+      throw std::length_error(kLowOperationInputOverflow);
+    auto &Op = Ops.emplace_back();
     Op.Opcode = NdOp::INTRINSIC;
     Op.MemoryOrdering = MemoryOrdering;
     Op.MemoryAddressSpace = MemoryAddressSpace;
     Op.Addr = Addr;
     Op.Seq = Seq++;
     Op.Output = Out;
-    Op.addInput(NdVar::cst(static_cast<uint64_t>(Id), 2));
+    Op.Inputs[Op.NumInputs++] = NdVar::cst(static_cast<uint64_t>(Id), 2);
     for (const auto &V : Extra)
-      Op.addInput(V);
-    Ops.push_back(Op);
+      Op.Inputs[Op.NumInputs++] = V;
   }
 
   /// Emit a side-effect-only intrinsic (a barrier / fence / prefetch) that

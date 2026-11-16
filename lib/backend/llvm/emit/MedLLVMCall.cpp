@@ -10,6 +10,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../MIPS/LLVMIntegerResult.h"
+
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
@@ -92,6 +95,31 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
         !(Call.Args[I] == Op.Inputs[I + 1]))
       return false;
   return true;
+}
+
+// LLVM integer types have no signedness. Preserve the source spelling as well
+// as the actual MIPS ABI extension on the declaration and every call site.
+static llvm::AttributeList
+mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
+                           const FloatingCallArguments &Signature, Arch A) {
+  if (Signature.ReturnKind == NdTypeKind::Int)
+    Attrs = mips::integerResultAttributes(C, Attrs, Signature.ReturnBytes,
+                                          Signature.SignedResult, A);
+  for (unsigned I = 0; I != Signature.Scalars.size(); ++I) {
+    const auto &P = Signature.Scalars[I];
+    if (P.Floating || P.Pointer)
+      continue;
+    if (P.Signed)
+      Attrs = Attrs.addParamAttribute(C, I, LLVMSourceSignedParameter);
+    // Both signed and unsigned 32-bit arguments are sign-extended on n64.
+    // At smaller widths the declared integer type selects the extension.
+    if (P.Bytes <= 4)
+      Attrs = Attrs.addParamAttribute(C, I,
+                                      P.Signed || P.Bytes == 4
+                                          ? llvm::Attribute::SExt
+                                          : llvm::Attribute::ZExt);
+  }
+  return Attrs;
 }
 
 llvm::GlobalValue *constantCallIdentity(llvm::Value *Value,
@@ -618,7 +646,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     FatalCodePointerResolution = true;
     return;
   }
-  if (Op.ScalarCallSignature && Dbg && Img) {
+  if (Op.ScalarCallSignature && !Op.SourceCallHint && Dbg && Img) {
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
     if (!Name.empty())
       if (const auto Header = Dbg->resolvePrototype(Name);
@@ -774,6 +802,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   auto inferAggregateReturnType = [&]() -> llvm::Type * {
     if (Op.Output.Kind != MedVar::Temp || Op.Output.Size == 0 || !CurMedFunc)
       return nullptr;
+    if (Op.RegisterReturnFields) {
+      std::vector<llvm::Type *> Types;
+      for (const auto &Field : *Op.RegisterReturnFields)
+        Types.push_back(Field.IsFP
+                            ? (Field.Size == 4 ? llvm::Type::getFloatTy(*Ctx)
+                                               : llvm::Type::getDoubleTy(*Ctx))
+                            : llvm::Type::getIntNTy(*Ctx, Field.Size * 8));
+      return llvm::StructType::get(*Ctx, Types);
+    }
     const auto &TRI = getTargetRegInfo(TargetArch);
     std::map<unsigned, llvm::Type *> FieldsByOffset;
     for (const auto &Blk2 : CurMedFunc->Blocks) {
@@ -1000,8 +1037,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     std::vector<llvm::Value *> Values;
     const auto Bindings = sourceABIParameters(Hint.Signature);
     std::vector<llvm::Value *> Carriers;
-    const auto Bits = [](llvm::Type *T) -> unsigned {
-      return T->isPointerTy() ? kSourceCallWordBytes * kSourceCallByteBits
+    const auto Bits = [&](llvm::Type *T) -> unsigned {
+      return T->isPointerTy() ? Mod->getDataLayout().getPointerSizeInBits()
                               : T->getPrimitiveSizeInBits().getFixedValue();
     };
     if (RetainResultStorage &&
@@ -1233,6 +1270,10 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Call->addParamAttr(I, Parameter.Type->IsSigned ? llvm::Attribute::SExt
                                                        : llvm::Attribute::ZExt);
     }
+    if (Hint.Signature.MIPSScalars)
+      Call->setAttributes(
+          mipsFloatingCallAttributes(*Ctx, Call->getAttributes(),
+                                     *Hint.Signature.MIPSScalars, TargetArch));
     if (Analyst && !MachineCall)
       Call->setMetadata(
           "neverd.source.analyst-call",
@@ -2026,6 +2067,14 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // integer register, where the routine reads no floating argument.
         AV = Builder.CreateBitCast(AV, llvm::Type::getDoubleTy(*Ctx),
                                    "formatted_double");
+      } else if (CalleeTy->isVarArg() && CI && ArgumentIndices[AI] >= 0 &&
+                 recoveredVariadicVectorArgument(*CI, ArgumentIndices[AI],
+                                                 TargetArch, TargetFormat) &&
+                 AV->getType()->isIntegerTy(128)) {
+        // A runtime format gives no scalar consumption proof. Keep the
+        // complete recorded SIMD carrier in its own register bank.
+        AV = Builder.CreateBitCast(AV, llvm::FixedVectorType::get(I64Ty, 2),
+                                   "variadic_vector");
       }
       CoercedArgs.push_back(AV);
     }
@@ -2049,6 +2098,30 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         CalleeTy, Callable, CoercedArgs, AuthenticationBundles,
         CalleeTy->getReturnType()->isVoidTy() ? "" : "call");
     Call->setCallingConv(Callee->getCallingConv());
+    if (isMIPS(TargetArch) && Op.ScalarCallSignature) {
+      const auto &Signature = *Op.ScalarCallSignature;
+      if (CalleeTy != floatingCallType(*Ctx, Signature)) {
+        syncError() << "med_llvm_emitter: MIPS floating call disagrees with "
+                       "its declared LLVM carriers\n";
+        FatalCodePointerResolution = true;
+        return;
+      }
+      Callee->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Callee->getAttributes(), Signature, TargetArch));
+      Call->setAttributes(mipsFloatingCallAttributes(
+          *Ctx, Call->getAttributes(), Signature, TargetArch));
+    }
+    // A direct arm64e tail transfer forwards the caller's LR. Mark direct
+    // argument forwarding so instruction selection can preserve that jump.
+    // Restrict it to incoming values, which cannot refer to this frame.
+    if (Op.IsTailCall && Img && Img->isArm64e() && Callable == Callee &&
+        !CalleeTy->isVarArg() && !Call->hasOperandBundles() &&
+        CalleeTy == Call->getFunction()->getFunctionType() &&
+        Call->getCallingConv() == Call->getFunction()->getCallingConv() &&
+        llvm::all_of(Call->args(), [](const llvm::Use &Arg) {
+          return llvm::isa<llvm::Argument>(Arg.get());
+        }))
+      Call->setTailCallKind(llvm::CallInst::TCK_Tail);
     if (CookieCheck)
       Call->addParamAttr(0, llvm::Attribute::InReg);
     Result = Call;
@@ -2101,7 +2174,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                   ITRI.isFPArgReg(CI->Args[AI].RegOff);
       bool IsVariadicTail =
           IsVariadicCall && AI >= static_cast<size_t>(CI->VarArgFixedCount);
-      if (IsFP) {
+      if (CI &&
+          recoveredVariadicVectorArgument(*CI, AI, TargetArch, TargetFormat)) {
+        ParamTys.push_back(Vec2);
+        ++FPSeen;
+      } else if (IsFP) {
         if (FPSeen < NumFPRegs && !IsVariadicTail) {
           ParamTys.push_back(Vec2);
         } else {
@@ -2126,6 +2203,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       IRetTy = llvm::Type::getX86_FP80Ty(*Ctx);
     } else if (AggregateRetTy) {
       IRetTy = AggregateRetTy;
+    }
+    // A bound scalar occurrence already owns the complete source ABI,
+    // including stack-passed floats and integer results. Reuse that checked
+    // signature when the runtime target is unknown as well as for imports.
+    // Register class recovery alone cannot type a spilled floating operand.
+    auto *BoundFT = Op.ScalarCallSignature
+                        ? floatingCallType(*Ctx, *Op.ScalarCallSignature)
+                        : nullptr;
+    if (BoundFT) {
+      ParamTys.assign(BoundFT->param_begin(), BoundFT->param_end());
+      IRetTy = BoundFT->getReturnType();
     }
 
     // Coerce each argument to its reconstructed ABI parameter type.  An
@@ -2174,7 +2262,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       CoercedArgs.push_back(AV);
     }
 
-    auto *IndirectFT = llvm::FunctionType::get(IRetTy, ParamTys, false);
+    auto *IndirectFT =
+        BoundFT ? BoundFT : llvm::FunctionType::get(IRetTy, ParamTys, false);
     if (CI && CI->VarArgFixedCount >= 0 &&
         static_cast<size_t>(CI->VarArgFixedCount) <= ParamTys.size()) {
       std::vector<llvm::Type *> FixedTys(
@@ -2185,7 +2274,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Builder.CreateIntToPtr(Target, llvm::PointerType::get(*Ctx, 0));
     Result =
         Builder.CreateCall(IndirectFT, FPtr, CoercedArgs, AuthenticationBundles,
-                           CoercedArgs.empty() ? "icall" : "call");
+                           IRetTy->isVoidTy()    ? ""
+                           : CoercedArgs.empty() ? "icall"
+                                                 : "call");
   }
 
   // Itanium call-site ranges are tight around individual calls rather than

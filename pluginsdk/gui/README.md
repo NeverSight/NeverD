@@ -8,6 +8,10 @@ support is required for the Python example.
 Read the [process-plugin SDK contract](../../docs/process-plugin-sdk.md), then run the complete
 [Workbench Explorer example](examples/workbench-explorer/README.md).
 
+`GuiPluginUi.h` declares the in-process native view interface
+(`neverd.gui-ui.v1`) instead. [GUI plugins](../../docs/gui-plugins.md) describes
+its contexts, including the optional `MenuContext` and `AppearanceContext`.
+
 `neverd_gui_plugin.py` is a Python 3.8+ standard-library helper for protocol v1:
 
 ```python
@@ -28,8 +32,22 @@ if __name__ == "__main__":
 
 Copy the helper beside your provider or package it with your own application.
 Create a manifest with an explicit executable/argument list, declare actions
-and queries, and import it through **Plugins → Import process plugin…**.
+and queries, and import it through **Plugins → Import plugin…**.
 Other languages can implement the same framed protocol directly.
+
+String parameter declarations can include `maxLength` (0–262144 Unicode code
+points). The host validates the default and each invocation against that bound,
+and publishes it in tool input schemas. Omitting it preserves the v1 limit of
+4096 UTF-16 code units. Parameter titles also become schema descriptions. Use an
+explicit larger bound for report text or other multiline inputs; do not assume
+that a model consumer knows hidden host limits.
+
+Programmatic NPH actions can additionally declare `type: "object"` with an
+object default for service-owned structured payloads. Process-plugin v1
+manifests keep scalar form fields and reject this type. Result schemas support
+explicit `additionalProperties: true` for heterogeneous payloads; closed
+schemas retain rejection of unknown fields. `maxLength` and validated `default`
+annotations are supported by the shared schema validator.
 
 `Task` exposes captured `context`, validated `parameters`, `action`, `id`,
 `output_dir`, `progress`, `log`, `query` and `artifact`. `run` implements the

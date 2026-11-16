@@ -16,6 +16,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/med/MedABIPass.h"
 
 #include <functional>
 
@@ -103,9 +104,8 @@ bool hasDarwinVariadicPrologue(VariadicScan &S) {
         return thruCopy(It->second->Inputs[0], Depth + 1);
       return V;
     };
-    // entry-SP delta allowing the va_arg alignment `orr base,#c`: entry SP is
-    // 16-aligned and the overflow base is slot-aligned, so OR with a small
-    // constant acts as +c.  Used only inside this tight walk gate.
+    // OR can set only the bits whose values are known from the entry SP's
+    // alignment. A bit already set in a negative local offset stays set.
     std::function<std::optional<int64_t>(const MedVar &, int)> ovfDelta =
         [&](const MedVar &V, int Depth) -> std::optional<int64_t> {
       if (Depth >
@@ -117,9 +117,14 @@ bool hasDarwinVariadicPrologue(VariadicScan &S) {
       const auto &Ors = getValueIndex().OrDefinitions;
       auto It = Ors.find(VariadicValueIndex::walkKeyOf(V));
       if (It != Ors.end())
-        for (const MedOp *Op : It->second)
+        for (const MedOp *Op : It->second) {
+          const auto Bits =
+              darwinEntryPointerOrBits(*Op, TRI, S.Format, Func.EntryKind);
+          if (V.Size != TRI.PointerSize || !Bits)
+            continue;
           if (auto B = ovfDelta(Op->Inputs[0], Depth + 1))
-            return *B + static_cast<int64_t>(Op->Inputs[1].ConstVal);
+            return *B | static_cast<int64_t>(*Bits);
+        }
       return std::nullopt;
     };
     // Whether some LOAD's address (through COPYs) is the register RegOff (the

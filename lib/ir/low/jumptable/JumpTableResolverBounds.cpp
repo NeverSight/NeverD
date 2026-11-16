@@ -2854,7 +2854,16 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
           if (!consumeInfoCopy(Info))
             return 0;
           JumpTableInfo BoundedInfo = Info;
-          BoundedInfo.PhysicalCapacity = EntryBound;
+          // EntryBound is the empty-edge selector envelope, often the mask
+          // width. It is a read ceiling, not permission to decode slots an
+          // authenticated guard already excludes. Those slots can be
+          // executable and still name this dispatch; queuing them as edges
+          // abandons the guarded table.
+          uint32_t ReplayCapacity = EntryBound;
+          if (Info.AuthenticatedGuardBound >= limits::kMinJumpTableEntries &&
+              Info.AuthenticatedGuardBound < ReplayCapacity)
+            ReplayCapacity = Info.AuthenticatedGuardBound;
+          BoundedInfo.PhysicalCapacity = ReplayCapacity;
           bool ReplayIncomplete = false;
           bool ReplaySemanticAmbiguous = false;
           bool ReplayNonContiguous = false;
@@ -4504,6 +4513,271 @@ uint32_t CFGBuilder::inferBoundsFromMaskWithAbsoluteProof(
           }
           Added |= NewOutput || *DomainChanged;
         }
+    }
+
+    // `(masked >> S)` is the table index when S is a constant logical shift
+    // and the image of the proved coordinates is exactly 0..N-1.  The mask
+    // coordinates stay on the pre-shift value; recording S as NormShift would
+    // label the switch with the source bits.  An arithmetic shift is a
+    // different operation.  A shift that leaves a hole is not this dense
+    // domain and remains an unmodelled dependency below.  A shift of a value
+    // that no mask, extract, or earlier shift has narrowed is the same index
+    // when the remaining bits are themselves exactly 0..2^(width-S)-1 inside
+    // the table limits.  That certificate does not bound the source register.
+    struct ShiftCandidate {
+      JumpTableValueOccurrence Output;
+      uint32_t Bound = 0;
+      std::vector<uint32_t> Coordinates;
+      JumpTableValueQuery ConstantProof;
+      JumpTableValueQuery InputProof;
+      // The output's image is the full unshifted width.  No mask producer is
+      // required, and a proved narrower producer must not reach this flag.
+      bool FullWidth = false;
+    };
+    std::vector<ShiftCandidate> ShiftCandidates;
+    for (int I = 0; I < static_cast<int>(Ops.size()); ++I) {
+      if (!consumeWork(1))
+        return FailIncomplete();
+      const LowOp &Op = Ops[I];
+      if (Op.Opcode != NdOp::INT_RIGHT || Op.NumInputs < 2 ||
+          Op.Output.Size == 0 || Op.Inputs[0].isConst())
+        continue;
+      if (!consumeWork(orderedEvidenceLookupWork(Insns.size())))
+        return FailIncomplete();
+      const auto InsnIt = Insns.find(Op.Addr);
+      if (InsnIt == Insns.end() || InsnIt->second.IsInstructionGuard)
+        continue;
+      if (!consumeWork(InsnIt->second.Ops.size()))
+        return FailIncomplete();
+      if (conditionalMergeOutput(Op, InsnIt->second))
+        continue;
+      const ConstantLookupResult Proposed =
+          constValueOf(I - 1, Op.Inputs[1], 0);
+      if (Proposed.Kind == ConstantLookupKind::Exhausted)
+        return FailIncomplete();
+      if (Proposed.Kind != ConstantLookupKind::Value)
+        continue;
+      const std::optional<uint64_t> ConstantMask =
+          integerWidthMask(Op.Inputs[1].Size);
+      const std::optional<uint64_t> OutputMask =
+          integerWidthMask(Op.Output.Size);
+      if (!ConstantMask || !OutputMask || Op.Output.Size == 0 ||
+          Op.Output.Size > sizeof(uint64_t))
+        continue;
+      const uint64_t Shift =
+          static_cast<uint64_t>(Proposed.Value) & *ConstantMask;
+      const unsigned OutputBits = unsigned(Op.Output.Size) * 8u;
+      if (Shift == 0 || Shift >= OutputBits || Shift >= 64)
+        continue;
+
+      for (const auto &[InputBound, InputEvidence] : EvidenceByBound) {
+        (void)InputBound;
+        if (!consumeWork(1))
+          return FailIncomplete();
+        const auto &Producers = InputEvidence.Producers;
+        const std::set<uint32_t> &InputCoordinates = InputEvidence.Coordinates;
+        if (!consumeWorkProducts(
+                {{InputCoordinates.size(), 2}, {Producers.size(), 1}, {1, 3}}))
+          return FailIncomplete();
+        std::vector<uint32_t> OutputCoordinates;
+        OutputCoordinates.reserve(InputCoordinates.size());
+        bool DomainComplete = true;
+        for (uint32_t Value : InputCoordinates) {
+          const uint64_t Shifted = uint64_t(Value) >> Shift;
+          if (Shifted > std::numeric_limits<uint32_t>::max()) {
+            DomainComplete = false;
+            break;
+          }
+          const auto Result = static_cast<uint32_t>(Shifted);
+          if (!OutputCoordinates.empty() && OutputCoordinates.back() == Result)
+            continue;
+          OutputCoordinates.push_back(Result);
+        }
+        bool Dense = DomainComplete &&
+                     OutputCoordinates.size() >= limits::kMinJumpTableEntries &&
+                     OutputCoordinates.size() <= limits::kMaxJumpTableEntries;
+        for (size_t N = 0; Dense && N < OutputCoordinates.size(); ++N)
+          Dense = OutputCoordinates[N] == static_cast<uint32_t>(N);
+        if (!Dense)
+          continue;
+        const uint32_t OutputBound =
+            static_cast<uint32_t>(OutputCoordinates.size());
+        if (!consumeWorkProducts(
+                {{SafeOutputKeyWork,
+                  orderedEvidenceLookupWork(KnownSafeOutputs.size())}}))
+          return FailIncomplete();
+        if (KnownSafeOutputs.count(
+                {OutputBound, static_cast<uint8_t>(Op.Output.Space),
+                 Op.Output.Offset, Op.Output.Size, Op.Addr, Op.Seq}))
+          continue;
+
+        JumpTableValueQuery ConstantProof;
+        ConstantProof.Candidate = Op.Inputs[1];
+        ConstantProof.UseAddr = Op.Addr;
+        ConstantProof.UseSeq = Op.Seq;
+        const uint64_t ShiftEncoding = Shift & *ConstantMask;
+        ConstantProof.Alternatives.push_back(
+            {NdVar::cst(ShiftEncoding, Op.Inputs[1].Size), InvalidVA, -1,
+             false});
+        ConstantProof.Alternatives.push_back(
+            {NdVar::scalar(ShiftEncoding, Op.Inputs[1].Size), InvalidVA, -1,
+             false});
+        JumpTableValueQuery InputProof;
+        InputProof.Candidate = Op.Inputs[0];
+        InputProof.UseAddr = Op.Addr;
+        InputProof.UseSeq = Op.Seq;
+        InputProof.Alternatives.assign(Producers.begin(), Producers.end());
+        InputProof.AllowZeroExtension = true;
+        ShiftCandidates.push_back(
+            {{Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true},
+             OutputBound,
+             std::move(OutputCoordinates),
+             std::move(ConstantProof),
+             std::move(InputProof)});
+      }
+
+      // The operand width is only a precondition.  A wider register whose
+      // remainder exceeds the table limit never walks its definition, so a
+      // mask shift of a few low bits keeps the budget it already spent.
+      const unsigned InputBits = unsigned(Op.Inputs[0].Size) * 8u;
+      if (Op.Inputs[0].Size == 0 || Op.Inputs[0].Size > sizeof(uint64_t) ||
+          Shift >= InputBits || Shift >= 64)
+        continue;
+      const unsigned InputRemaining = InputBits - static_cast<unsigned>(Shift);
+      if (InputRemaining >= 32 ||
+          (uint32_t{1} << InputRemaining) < limits::kMinJumpTableEntries ||
+          (uint32_t{1} << InputRemaining) > limits::kMaxJumpTableEntries)
+        continue;
+      uint16_t Width = Op.Inputs[0].Size;
+      NdVar Value = Op.Inputs[0];
+      int From = I - 1;
+      bool Decided = false;
+      bool Narrowed = false;
+      for (int Step = 0; Step < limits::kMaxSliceDepth; ++Step) {
+        if (!consumeWork(1))
+          return FailIncomplete();
+        const int Def = reachingDefIdx(Ops, From, Value);
+        if (Def < 0) {
+          Decided = true;
+          break;
+        }
+        const LowOp &Producer = Ops[Def];
+        if (Producer.Opcode == NdOp::COPY && Producer.NumInputs >= 1 &&
+            Producer.Inputs[0].Size != 0 &&
+            Producer.Inputs[0].Size == Producer.Output.Size) {
+          Value = Producer.Inputs[0];
+          From = Def - 1;
+          continue;
+        }
+        if (Producer.Opcode == NdOp::INT_ZEXT && Producer.NumInputs >= 1 &&
+            Producer.Inputs[0].Size != 0 &&
+            Producer.Inputs[0].Size < Producer.Output.Size) {
+          Width = Producer.Inputs[0].Size;
+          Value = Producer.Inputs[0];
+          From = Def - 1;
+          continue;
+        }
+        if (Producer.Opcode == NdOp::LOAD || Producer.Opcode == NdOp::CALL ||
+            Producer.Opcode == NdOp::INDIR_CALL) {
+          if (Producer.Output.Size != 0 && Producer.Output.Size < Width)
+            Width = Producer.Output.Size;
+          Decided = true;
+          break;
+        }
+        Narrowed = true;
+        break;
+      }
+      if (!Decided || Narrowed || Width == 0 || Width > sizeof(uint64_t))
+        continue;
+      const unsigned Bits = unsigned(Width) * 8u;
+      const unsigned OutBits = unsigned(Op.Output.Size) * 8u;
+      if (Shift >= Bits || Bits - static_cast<unsigned>(Shift) > OutBits)
+        continue;
+      const unsigned Remaining = Bits - static_cast<unsigned>(Shift);
+      if (Remaining >= 32)
+        continue;
+      const uint32_t Count = uint32_t{1} << Remaining;
+      if (Count < limits::kMinJumpTableEntries ||
+          Count > limits::kMaxJumpTableEntries)
+        continue;
+      if (!consumeWorkProducts(
+              {{SafeOutputKeyWork,
+                orderedEvidenceLookupWork(KnownSafeOutputs.size())}}))
+        return FailIncomplete();
+      if (KnownSafeOutputs.count({Count, static_cast<uint8_t>(Op.Output.Space),
+                                  Op.Output.Offset, Op.Output.Size, Op.Addr,
+                                  Op.Seq}))
+        continue;
+      if (!consumeWork(Count))
+        return FailIncomplete();
+      std::vector<uint32_t> FullCoordinates;
+      FullCoordinates.reserve(Count);
+      for (uint32_t Coordinate = 0; Coordinate < Count; ++Coordinate)
+        FullCoordinates.push_back(Coordinate);
+      JumpTableValueQuery FullConstantProof;
+      FullConstantProof.Candidate = Op.Inputs[1];
+      FullConstantProof.UseAddr = Op.Addr;
+      FullConstantProof.UseSeq = Op.Seq;
+      const uint64_t FullShiftEncoding = Shift & *ConstantMask;
+      FullConstantProof.Alternatives.push_back(
+          {NdVar::cst(FullShiftEncoding, Op.Inputs[1].Size), InvalidVA, -1,
+           false});
+      FullConstantProof.Alternatives.push_back(
+          {NdVar::scalar(FullShiftEncoding, Op.Inputs[1].Size), InvalidVA, -1,
+           false});
+      ShiftCandidates.push_back(
+          {{Op.Output, Op.Addr, Op.Seq, /*DefinedAtPoint=*/true},
+           Count,
+           std::move(FullCoordinates),
+           std::move(FullConstantProof),
+           JumpTableValueQuery{},
+           /*FullWidth=*/true});
+    }
+
+    if (!ShiftCandidates.empty()) {
+      std::vector<JumpTableValueQuery> ShiftQueries;
+      if (!consumeWorkProducts({{ShiftCandidates.size(), 2}}))
+        return FailIncomplete();
+      if (ShiftCandidates.size() > std::numeric_limits<size_t>::max() / 2)
+        return FailIncomplete();
+      ShiftQueries.reserve(ShiftCandidates.size() * 2);
+      for (ShiftCandidate &Candidate : ShiftCandidates) {
+        ShiftQueries.push_back(std::move(Candidate.ConstantProof));
+        ShiftQueries.push_back(std::move(Candidate.InputProof));
+      }
+      bool ShiftAnalysisComplete = false;
+      const std::vector<bool> ShiftMatches =
+          matchAtUses(ShiftQueries, &ShiftAnalysisComplete);
+      if (!ShiftAnalysisComplete || ShiftMatches.size() != ShiftQueries.size())
+        return FailIncomplete();
+      for (size_t I = 0; I < ShiftCandidates.size(); ++I) {
+        // A full-width shift has no mask producer.  Its constant count is the
+        // certificate; an empty input query stays false and is not required.
+        if (!ShiftMatches[I * 2] ||
+            (!ShiftCandidates[I].FullWidth && !ShiftMatches[I * 2 + 1]))
+          continue;
+        const ShiftCandidate &Candidate = ShiftCandidates[I];
+        if (!consumeWorkProducts(
+                {{SafeOutputKeyWork,
+                  orderedEvidenceLookupWork(KnownSafeOutputs.size())},
+                 {SafeOutputKeyWork, 2},
+                 {1, 2}}))
+          return FailIncomplete();
+        const bool NewOutput =
+            KnownSafeOutputs
+                .emplace(Candidate.Bound,
+                         static_cast<uint8_t>(Candidate.Output.Value.Space),
+                         Candidate.Output.Value.Offset,
+                         Candidate.Output.Value.Size, Candidate.Output.Addr,
+                         Candidate.Output.Seq)
+                .second;
+        const std::optional<bool> DomainChanged = appendBoundEvidence(
+            Candidate.Bound, NewOutput ? &Candidate.Output : nullptr,
+            Candidate.Coordinates, /*UsesNonContiguous=*/false);
+        if (!DomainChanged)
+          return FailIncomplete();
+        Added |= NewOutput || *DomainChanged;
+      }
     }
     if (!Added)
       break;

@@ -76,6 +76,10 @@ zero-based index in `linux_network.connections`. This index belongs to the
 bound open description, so aliases retain it and a reused FD can refer to a
 different index. Declared failed connection attempts occupy indices; rejected
 peer or memory admission does not consume one.
+When a send requires more bytes than remain in the declared stream, the
+diagnostic gives the bound connection index, current stream offset, guest
+request size, size after applying `max_send`, and remaining byte count. The
+send stops before reading the guest buffer or advancing the cursor.
 Socket seek returns ESPIPE. `setsockopt`/`getsockopt` share SO_RCVTIMEO and
 SO_SNDTIMEO state across aliases, accepting whole seconds up to one day;
 negative seconds retain immediate-timeout state. Fractional timeouts stop
@@ -188,6 +192,16 @@ times. All times fit signed 64-bit nanoseconds; a quiet interval must have a
 representable first unknown nanosecond. Failed connects cannot carry schedules.
 Every timed input requires `linux_time.advance_on_idle: true`.
 
+For a TCP connection established during execution, `receive_quiet_after_connect_ns`
+sets the same inclusive quiet end relative to the successful `connect`. Choose
+one of the two quiet fields. A duration of zero covers the instant of connection.
+Descriptor aliases share the deadline, and reads and polls do not extend it.
+The kernel checks the resolved end against the last timed arrival and the clock
+range before it consumes the connection attempt. Data arrival times still use
+elapsed nanoseconds from workload start.
+JSON durations above `9007199254740991` use decimal strings under the shared
+lossless integer encoding.
+
 ```json
 {
   "linux_files": {"files": []},
@@ -210,6 +224,10 @@ the same kernel owner advances the idle clock directly. The model uses exact
 virtual deadlines, without host scheduling delay or kernel timer slack.
 Readiness is rescanned on wake and wins at an exact deadline tie. Querying never
 consumes a receive event; partial TCP reads and UDP peeks retain readiness.
+When a connected TCP socket lacks a readiness observation, the diagnostic
+identifies the zero-based `connections` index and the read, write or exceptional
+interest that stopped the wait. The index follows the open socket description
+across duplication and FD reuse.
 A nonblocking receive before a declared arrival returns EAGAIN without consuming
 input. Direct blocking `read`, `recv` and `recvfrom` use the same arrival and
 idle-clock owner. A pending receive retains its open socket description,
@@ -304,20 +322,33 @@ Semantics are independently implemented from
 
 ### Counted TCP failures
 
-An explicit `tcp_connect_failures` object contains a nonzero `errno` and finite
-nonzero `count`. It becomes available only after all ordered TCP attempts have
-been consumed. It admits canonical IPv4/IPv6 peers matching the socket family
-and returns only the supplied failure; it creates no route, connection, bytes
-or readiness and never contacts the host network. Missing or exhausted input,
-wrong peers while exact attempts remain, nonblocking completion and failed
-socket reuse stop explicitly. Descriptor aliases share the failed description.
+An explicit `tcp_connect_failures` object contains a nonzero `errno` and a
+finite nonzero `count`. By default these failures follow all attempts in
+`connections`. The optional `after_connections` gives the number of exact TCP
+attempts to consume before the failures begin, from zero through the length of
+`connections`. For example, with two exact attempts, `after_connections: 1`
+and `count: 3`, the guest gets the first exact result, three supplied failures,
+then the second exact result.
+
+During the failure run, each admitted blocking TCP connect to a canonical
+IPv4/IPv6 peer of the socket's family receives the supplied errno. Once the
+count is consumed, the next exact attempt requires its declared peer and owns
+its normal stream data and readiness. Invalid addresses, wrong peers at exact
+attempts and UDP calls do not advance the TCP sequence. Descriptor aliases
+share the failed description.
 
 The failure count accepts 1 through `UINT32_MAX`, independently of the 4,096
 stored TCP/UDP entries. It retains one counter and creates no per-attempt
 inventory. The exhausted count is checked before incrementing, including at
-`UINT32_MAX`. Its diagnostic reports the number of consumed failures and states
-that the next result is not supplied. The pending `connect` retains no result;
-exhaustion supplies neither another errno nor a successful connection.
+`UINT32_MAX`. When an exact connection entry is missing or its peer differs,
+the diagnostic identifies the one-based attempt and the zero-based index in
+`connections` to append or correct. Each consumed exact result or counted
+failure advances the attempt number. Only exact results advance the index.
+When counted failures end the sequence, the diagnostic gives the number of
+failures consumed and the pending attempt number. Both diagnostics include
+`peer_hex` with the complete IPv4 or IPv6 sockaddr requested by the guest,
+in the same byte order as a `connections` entry. A pending `connect` retains
+no result until a matching outcome is supplied in the input.
 Execution instruction, event and time budgets still bound each
 run. JSON and typed input use the shared validator; decimal strings follow the
 existing integer wire contract. Allowed errors match explicit TCP attempts:

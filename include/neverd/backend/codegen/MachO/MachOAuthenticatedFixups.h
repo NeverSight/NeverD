@@ -31,6 +31,9 @@ struct MachOAuthenticatedFixup {
   /// False for an ordinary pointer sharing the same dyld chain. Signing
   /// fields must then be zero; Target/import identity retain their meaning.
   bool Authenticated = true;
+  /// Convert an existing IA/0 libSystem TLV bootstrap bind to the local
+  /// per-thread resolver. All other existing slots retain their identity.
+  bool ReplacesTLVBootstrap = false;
 };
 
 /// Translate producer receipts at their final section VAs. External symbols

@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class ARM32ShiftCarryRT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -81,10 +82,12 @@ static const std::vector<RoundTripTC> kARM = {
    "__asm__ volatile(\"lsls r3,%1,%2\\n\\tadc %0,%0,#0\""
    ":\"+r\"(c):\"r\"(a),\"r\"(b):\"r3\",\"cc\");return c;}\n",
    {0x00010000ULL, 16}, "ShiftCarry"},
-  // Register amount 0: C unchanged (here entry C is 0, so result stays 0).
+  // Register amount 0: C unchanged.  The compare sets it first: a function
+  // is entered with a carry nothing defines, and a shift that cleared the
+  // flag would go unseen over the emulator's zero.
   {"lsls_reg0_keep",
    "long f(long a,long b){unsigned long c=0;"
-   "__asm__ volatile(\"lsls r3,%1,%2\\n\\tadc %0,%0,#0\""
+   "__asm__ volatile(\"cmp %1,%1\\n\\tlsls r3,%1,%2\\n\\tadc %0,%0,#0\""
    ":\"+r\"(c):\"r\"(a),\"r\"(b):\"r3\",\"cc\");return c;}\n",
    {0xFFFFFFFFULL, 0}, "ShiftCarry"},
 
@@ -119,5 +122,13 @@ static const std::vector<RoundTripTC> kARM = {
 };
 // clang-format on
 
-INSTANTIATE_TEST_SUITE_P(ShiftCarry, ARM32ShiftCarryRT, ::testing::ValuesIn(kARM),
+INSTANTIATE_TEST_SUITE_P(ShiftCarry, ARM32ShiftCarryRT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+// A shift by a register that holds zero keeps the carry the compare set: the
+// C of both source routes is checked by execution.
+INSTANTIATE_TEST_SUITE_P(ShiftCarryHighC, ARM32ShiftCarryRT,
+                         ::testing::ValuesIn(onHighC(kARM, {"lsls_reg0_keep"})),
+                         rtTCName);
+INSTANTIATE_TEST_SUITE_P(ShiftCarryLLVMC, ARM32ShiftCarryRT,
+                         ::testing::ValuesIn(onLLVMC(kARM, {"lsls_reg0_keep"})),
                          rtTCName);

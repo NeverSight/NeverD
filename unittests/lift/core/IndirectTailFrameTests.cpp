@@ -102,6 +102,239 @@ TEST_F(IndirectTailFrame,
   }
 }
 
+TEST_F(IndirectTailFrame, IndexedMemoryKeepsRestoredFrameEvidence) {
+  auto Image = neverd::loadBinary(compileTailFrameFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name : {"tail_indexed_leaf", "tail_indexed_signed",
+                           "tail_indexed_virtual", "tail_indexed_foreign_store",
+                           "tail_indexed_vector", "tail_indexed_after_call"}) {
+    SCOPED_TRACE(Name);
+    const auto Low = build(*Image, Name);
+    EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::RETURN));
+  }
+}
+
+TEST_F(IndirectTailFrame, IndexedMemoryRetainsFrameAliasesAndUnknownLinks) {
+  auto Image = neverd::loadBinary(compileTailFrameFixture().string());
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  for (const char *Name :
+       {"tail_indexed_link_slot", "tail_indexed_frame_index",
+        "tail_indexed_frame_escape", "tail_indexed_link_load",
+        "tail_indexed_stack_target", "tail_indexed_local_target"}) {
+    SCOPED_TRACE(Name);
+    const auto Low = build(*Image, Name);
+    EXPECT_TRUE(hasOpcode(Low, neverd::NdOp::INDIR_BR));
+    EXPECT_FALSE(hasOpcode(Low, neverd::NdOp::INDIR_CALL));
+  }
+}
+
+TEST_F(IndirectTailFrame, IndexedVirtualTailMatchesNativeReceiverAndIndex) {
+#if !defined(__aarch64__)
+  GTEST_SKIP() << "native AArch64 execution is unavailable";
+#else
+  const auto Object = compileTailFrameFixture();
+  const auto Original = tmpFile("indexed-original.S");
+  std::ofstream(Original) << R"(
+#ifdef __APPLE__
+#define original_indexed_tail _original_indexed_tail
+#endif
+.text
+.p2align 2
+.globl original_indexed_tail
+original_indexed_tail:
+  ldr x9,[x0,#8]
+  ldr x0,[x9,x1,lsl #3]
+  ldr x10,[x0]
+  ldr x16,[x10,#40]
+  br x16
+)";
+  for (unsigned Route : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Route);
+    const auto File = tmpFile("indexed-tail-" + std::to_string(Route) + ".c");
+    std::vector<std::string> Args = {"decompile", Object.string(),
+                                     "--func",    "tail_indexed_virtual",
+                                     "-o",        File.string()};
+    if (Route)
+      Args.push_back("--llvm");
+    if (Route == 2)
+      Args.push_back("--no-opt");
+    const auto Recovered = exec(ndBin(), Args);
+    ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+    std::ifstream Input(File);
+    const std::string Source((std::istreambuf_iterator<char>(Input)), {});
+    ASSERT_EQ(Source.find("__builtin_trap"), std::string::npos) << Source;
+    std::ofstream(File, std::ios::app) << R"(
+struct object { uintptr_t *vtable; uint64_t payload; };
+struct container { uint64_t unused; struct object **entries; };
+extern uint64_t original_indexed_tail(void *, uint64_t);
+static uint64_t calls;
+static uintptr_t receiver;
+static uint64_t callback_a(uintptr_t p, uint64_t index) {
+  struct object *o = (struct object *)p;
+  ++calls;
+  receiver = p;
+  const uint64_t value = o->payload + index * 17;
+  o->payload += 1;
+  return value ^ UINT64_C(0xA5A55A5A12345678);
+}
+static uint64_t callback_b(uintptr_t p, uint64_t index) {
+  struct object *o = (struct object *)p;
+  ++calls;
+  receiver = p;
+  const uint64_t value = o->payload + index * 17;
+  o->payload += 2;
+  return value ^ UINT64_C(0x5A5AA5A887654321);
+}
+int main(void) {
+  uintptr_t tables[2][6] = {{0}, {0}};
+  tables[0][5] = (uintptr_t)&callback_a;
+  tables[1][5] = (uintptr_t)&callback_b;
+  struct object objects[16];
+  struct object *entries[16];
+  for (unsigned i = 0; i < 16; ++i) {
+    objects[i].vtable = tables[i & 1];
+    entries[i] = &objects[i];
+  }
+  struct container c = {0, entries};
+  for (uint64_t round = 0; round < 7; ++round) {
+    for (uint64_t i = 0; i < 16; ++i) {
+      const uint64_t initial = UINT64_C(0xFEDCBA9876543210) * round + i;
+      const uint64_t salt = (i & 1) ? UINT64_C(0x5A5AA5A887654321)
+                                   : UINT64_C(0xA5A55A5A12345678);
+      const uint64_t expected = (initial + i * 17) ^ salt;
+      for (unsigned original = 0; original < 2; ++original) {
+        objects[i].payload = initial;
+        calls = receiver = 0;
+        const uint64_t result = original ? original_indexed_tail(&c, i)
+                                         : tail_indexed_virtual(&c, i);
+        if (result != expected || calls != 1 ||
+            receiver != (uintptr_t)&objects[i] ||
+            objects[i].payload != initial + 1 + (i & 1))
+          return 1;
+      }
+    }
+  }
+  return 0;
+}
+)";
+    for (const char *Optimization : {"-O0", "-O2"}) {
+      SCOPED_TRACE(Optimization);
+      const auto Executable = tmpFile("indexed-tail.exe");
+      const auto Compiled =
+          exec(NEVERD_TEST_CLANG,
+               {"-std=c17", "-fno-strict-aliasing",
+                "-Wno-deprecated-non-prototype", Optimization, File.string(),
+                Original.string(), "-o", Executable.string()});
+      ASSERT_TRUE(Compiled.ok()) << Compiled.err << "\n" << Source;
+      const auto Run = exec(Executable, {});
+      EXPECT_TRUE(Run.ok()) << Run.err;
+    }
+  }
+#endif
+}
+
+TEST_F(IndirectTailFrame, FirstVirtualSlotKeepsTheReceiverAcrossABranch) {
+#if !defined(__aarch64__)
+  GTEST_SKIP() << "native AArch64 execution is unavailable";
+#else
+  const auto Object = compileTailFrameFixture();
+  for (bool Indexed : {false, true}) {
+    SCOPED_TRACE(Indexed);
+    const auto Original = tmpFile("first-slot-original.S");
+    std::ofstream(Original)
+        << R"(
+#ifdef __APPLE__
+#define original_first_slot _original_first_slot
+#endif
+.text
+.p2align 2
+.globl original_first_slot
+original_first_slot:
+)"
+        << (Indexed ? "  ldr x9,[x0,#8]\n  ldr x0,[x9,x1,lsl #3]\n"
+                    : "  ldr x0,[x0,#8]\n")
+        << R"(
+  cbz x0,1f
+  ldr x10,[x0]
+  ldr x16,[x10]
+  br x16
+1:
+  ret
+)";
+    for (unsigned Route : {0u, 1u, 2u}) {
+      SCOPED_TRACE(Route);
+      const auto File = tmpFile("first-slot-" + std::to_string(Route) + ".c");
+      std::vector<std::string> Args = {
+          "decompile",
+          Object.string(),
+          "--func",
+          Indexed ? "tail_indexed_virtual_zero" : "tail_direct_virtual_zero",
+          "-o",
+          File.string()};
+      if (Route)
+        Args.push_back("--llvm");
+      if (Route == 2)
+        Args.push_back("--no-opt");
+      const auto Recovered = exec(ndBin(), Args);
+      ASSERT_TRUE(Recovered.ok()) << Recovered.err;
+      std::ofstream(File, std::ios::app)
+          << "\n#define DIRECT_RECEIVER " << !Indexed << '\n'
+          << (Indexed ? "#define recovered_first_slot(c,i) "
+                        "tail_indexed_virtual_zero(c,i)\n"
+                      : "#define recovered_first_slot(c,i) "
+                        "tail_direct_virtual_zero(c)\n");
+      std::ofstream(File, std::ios::app) << R"(
+struct slot_object { uintptr_t *vtable; uint64_t payload; };
+struct slot_container { uint64_t unused; void *entries; };
+extern uint64_t original_first_slot(void *, uint64_t);
+static uintptr_t receiver;
+static unsigned calls;
+static uint64_t callback(uintptr_t p) {
+  receiver = p;
+  ++calls;
+  return UINT64_C(0xA12345678B987654);
+}
+int main(void) {
+  uintptr_t table[] = {(uintptr_t)&callback};
+  struct slot_object objects[16];
+  struct slot_object *entries[16];
+  for (unsigned i = 0; i < 16; ++i) {
+    objects[i].vtable = table;
+    entries[i] = (i % 3) ? &objects[i] : 0;
+  }
+  struct slot_container c = {0, entries};
+  for (unsigned i = 0; i < 16; ++i)
+    for (unsigned original = 0; original < 2; ++original) {
+      receiver = calls = 0;
+      c.entries = DIRECT_RECEIVER ? (void *)entries[i] : (void *)entries;
+      const uint64_t value = original ? original_first_slot(&c, i)
+                                     : recovered_first_slot(&c, i);
+      if (value != (entries[i] ? UINT64_C(0xA12345678B987654) : 0) ||
+          receiver != (uintptr_t)entries[i] || calls != (entries[i] != 0))
+        return 1;
+    }
+  return 0;
+}
+)";
+      for (const char *Optimization : {"-O0", "-O2"}) {
+        SCOPED_TRACE(Optimization);
+        const auto Executable = tmpFile("first-slot.exe");
+        const auto Compiled =
+            exec(NEVERD_TEST_CLANG,
+                 {"-std=c17", "-fno-strict-aliasing",
+                  "-Wno-deprecated-non-prototype", Optimization, File.string(),
+                  Original.string(), "-o", Executable.string()});
+        ASSERT_TRUE(Compiled.ok()) << Compiled.err;
+        const auto Run = exec(Executable, {});
+        EXPECT_TRUE(Run.ok()) << Run.err;
+      }
+    }
+  }
+#endif
+}
+
 // A frame description that only unwinds -- the FDE every function of an
 // ordinary shared library has -- leaves a restored frame's branch a tail call,
 // while a live frame still keeps its indirect branch, and so does a computed
@@ -331,6 +564,9 @@ TEST_F(IndirectTailFrame, UnresolvedLiveFrameCannotPublishACallReturn) {
     std::ifstream Input(File);
     const std::string Source((std::istreambuf_iterator<char>(Input)), {});
     EXPECT_NE(Source.find("__builtin_trap"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("indirect targets not proved at 0x"),
+              std::string::npos)
+        << Source;
     const auto Compiled =
         exec(NEVERD_TEST_CLANG, {"-fsyntax-only", "-Werror", File.string()});
     EXPECT_TRUE(Compiled.ok()) << Compiled.err << "\n" << Source;
@@ -404,9 +640,9 @@ TEST_F(IndirectTailFrame, IncompleteOrExhaustedGuardPublishesNoCandidate) {
   EXPECT_EQ(restoredAArch64IndirectTailFrames(Function, BinaryFormat::ELF),
             (std::set<va_t>{Function.Entry}));
   for (size_t Budget : {size_t{0}, size_t{1}})
-    EXPECT_TRUE(
-        restoredAArch64IndirectTailFrames(Function, BinaryFormat::ELF, Budget)
-            .empty());
+    EXPECT_TRUE(restoredAArch64IndirectTailFrames(Function, BinaryFormat::ELF,
+                                                  {}, Budget)
+                    .empty());
 
   auto Incomplete = Function;
   Incomplete.Blocks[0].InstructionBoundaries[0].OpCount = 0;

@@ -31,6 +31,7 @@
 #include <vector>
 
 namespace neverd::symbolic::detail {
+
 namespace {
 
 // This bounded, allocation-free hint grants no equality. Most MBA products
@@ -95,7 +96,7 @@ SymRef foldCommonOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
 }
 
 SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
-                         size_t &Storage) {
+                         size_t &Storage, bool *EmittedReading = nullptr) {
   if (Budget.exhausted() || Ctx.op(Root) != SymOp::Mul ||
       Ctx.numOperands(Root) < limits::kMinResidueProductFactors)
     return Root;
@@ -103,9 +104,18 @@ SymRef foldOffsetProduct(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     return Ctx.isConst(Ctx.operand(Root, 0))
                ? foldResidualProductResidues(Ctx, Root, Budget, Storage)
                : Root;
+  if (Ctx.op(Ctx.operands(Root).back()) == SymOp::Xor) {
+    if (auto Direct = foldMixedProductProgression(Ctx, Root, Budget, Storage);
+        Direct != Root)
+      return Direct;
+  }
   const bool OffsetHint = hasOffsetFactors(Ctx, Root);
   bool CommonBase = false;
   if (OffsetHint) {
+    if (auto Linear =
+            foldHighProductTerms(Ctx, Root, Budget, Storage, EmittedReading);
+        Linear != Root)
+      return Linear;
     auto Common =
         foldCommonOffsetProduct(Ctx, Root, Budget, Storage, CommonBase);
     if (Common != Root || Budget.exhausted())
@@ -269,12 +279,26 @@ SymRef foldProductResidues(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
   Storage -= N * 2 * sizeof(SymRef);
   llvm::SmallVector<SymRef, 16> Terms(Ctx.operands(Root));
   bool Changed = false;
+  bool OnlyEmittedReadings = true;
   for (auto &Term : Terms) {
-    auto Next = foldOffsetProduct(Ctx, Term, Budget, Storage);
-    Changed |= Next != Term;
+    bool Emitted = false;
+    auto Next = foldOffsetProduct(Ctx, Term, Budget, Storage, &Emitted);
+    if (Next != Term) {
+      Changed = true;
+      OnlyEmittedReadings &= Emitted;
+    }
     Term = Next;
   }
-  return Changed ? Ctx.mkAdd(Terms) : Root;
+  if (!Changed)
+    return Root;
+  const size_t FirstCombined = Ctx.numNodes();
+  auto Result = Ctx.mkAdd(Terms);
+  // The whole-sum mask and coefficient passes can still combine these terms.
+  // During the subsequent bottom-up walk, visit retained input words and
+  // propagate their rewrites through the canonical sum just once.
+  if (OnlyEmittedReadings)
+    recordResidueReading(Ctx, FirstCombined, Budget, Storage);
+  return Result;
 }
 
 } // namespace neverd::symbolic::detail

@@ -45,12 +45,14 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Transforms/Utils/PromoteMemToReg.h"
 
 #include <array>
 #include <climits>
+#include <cstdlib>
 #include <functional>
 #include <string>
 #include <vector>
@@ -62,6 +64,21 @@
 using namespace neverd;
 
 namespace {
+#define NEVERD_PAUTH_NATIVE_TEXT(Name, Value) constexpr char Name[] = Value;
+#include "AArch64PAuthNative.def"
+
+const char *pAuthFixtureDirectory() {
+  if (const char *Directory = std::getenv(kPAuthFixtureEnvironment))
+    return Directory;
+  return NEVERD_ARM64E_TEST_HEADERS;
+}
+
+auto readPAuthOracle(llvm::StringRef Name) {
+  llvm::SmallString<128> Path(pAuthFixtureDirectory());
+  llvm::sys::path::append(Path, Name);
+  return llvm::MemoryBuffer::getFile(Path);
+}
+
 void optimize(llvm::Module &Module) {
   llvm::LoopAnalysisManager Loops;
   llvm::FunctionAnalysisManager Functions;
@@ -111,13 +128,21 @@ void compileArm64eC(const std::string &Source,
                     bool EmitLLVM = false, llvm::StringRef ExecuteTarget = {},
                     bool *ExecutionAvailable = nullptr,
                     llvm::StringRef Language = "c") {
+  const bool ExecuteNative = !ExecuteTarget.empty();
 #ifdef NEVERD_TEST_CLANG
-  const std::string Compiler = NEVERD_TEST_CLANG;
+  const std::string HostCompiler = NEVERD_TEST_CLANG;
 #else
-  const auto Found = llvm::sys::findProgramByName("clang");
+  const auto Found = llvm::sys::findProgramByName(kPAuthCompiler);
   if (!Found)
-    GTEST_SKIP() << "clang is required for the arm64e source compilation check";
-  const std::string Compiler = *Found;
+    GTEST_SKIP() << kPAuthCompilerUnavailable;
+  const std::string HostCompiler = *Found;
+#endif
+#ifdef NEVERD_PAUTH_TEST_CLANG
+  // Executable controls also need the host SDK and deployment target.
+  const llvm::StringRef Compiler =
+      ExecuteNative ? llvm::StringRef(HostCompiler) : NEVERD_PAUTH_TEST_CLANG;
+#else
+  const llvm::StringRef Compiler = HostCompiler;
 #endif
   llvm::SmallString<128> SourcePath, ObjectPath, ErrorPath;
   ASSERT_FALSE(
@@ -139,7 +164,6 @@ void compileArm64eC(const std::string &Source,
       std::nullopt, std::nullopt, ErrorPath.str()};
   // Exclude host libc headers explicitly. Only Clang's resource headers and
   // the fixture's C declarations are needed, including on Linux and Windows.
-  const bool ExecuteNative = !ExecuteTarget.empty();
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     llvm::SmallVector<llvm::StringRef> Args = {
         Compiler,
@@ -148,7 +172,7 @@ void compileArm64eC(const std::string &Source,
         "-ffreestanding",
         "-nostdlibinc",
         "-I",
-        NEVERD_ARM64E_TEST_HEADERS,
+        pAuthFixtureDirectory(),
         "-std=gnu11",
         "-Werror=unused-value",
         "-x",
@@ -1701,16 +1725,13 @@ bool hasNativePAuth() {
 TEST(AArch64PAuthSemantics, NativeGenericSignaturesAgreeWithBothCProjections) {
   if (!hasNativePAuth())
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
-  const auto Oracle = llvm::MemoryBuffer::getFile(
-      std::string(NEVERD_ARM64E_TEST_HEADERS) + "/pacga_oracle.c");
+  const auto Oracle = readPAuthOracle(kGenericOracle);
   ASSERT_TRUE(Oracle);
   executeCProjections({pointerFunction(Intrinsic::A64_Pacga, "test_pacga")},
                       (*Oracle)->getBuffer(), "arm64-apple-macos");
 }
 
 TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
-#define NEVERD_PAUTH_NATIVE_TEXT(Name, Value) constexpr char Name[] = Value;
-#include "AArch64PAuthNative.def"
   if (!hasNativePAuth())
     GTEST_SKIP() << "native key comparison requires a PAuth Apple Silicon host";
   // A requested target alone is not evidence: a linker may emit ordinary
@@ -1722,8 +1743,7 @@ TEST(AArch64PAuthSemantics, NativeKeysAgreeWithBothCProjections) {
     return;
   if (!ExecutionAvailable)
     GTEST_SKIP() << kSigningKeysUnavailable;
-  const auto Oracle = llvm::MemoryBuffer::getFile(
-      std::string(NEVERD_ARM64E_TEST_HEADERS) + "/pauth_oracle.c");
+  const auto Oracle = readPAuthOracle(kSigningOracle);
   ASSERT_TRUE(Oracle);
   std::vector<MedFunc> Functions;
   const std::pair<Intrinsic, const char *> Cases[] = {
@@ -1771,8 +1791,7 @@ TEST(AArch64PAuthLRSemantics, NativeTwoModifierKeysAgreeWithBothCProjections) {
     return;
   if (!ExecutionAvailable)
     GTEST_SKIP() << "this host cannot execute arm64e PAuth_LR with active keys";
-  const auto Oracle = llvm::MemoryBuffer::getFile(
-      std::string(NEVERD_ARM64E_TEST_HEADERS) + "/pauth_lr_oracle.c");
+  const auto Oracle = readPAuthOracle(kReturnOracle);
   ASSERT_TRUE(Oracle);
   std::vector<MedFunc> Functions;
   for (const auto &[Id, Name] :

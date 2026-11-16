@@ -459,7 +459,9 @@ bool MedToHighConverter::lowerSwitchFromJumpTable(HighFunc &Func,
   }
 
   int DefaultCaseIdx = -1;
-  if (BoundsCheckTarget != 0) {
+  // A dispatch by value has a case for every label it may reach and traps on
+  // any other value: none of its labels is what an out-of-range index takes.
+  if (BoundsCheckTarget != 0 && !JT.ValueDispatch) {
     for (size_t K = 0; K < JT.Targets.size(); ++K) {
       if (JT.Targets[K] == BoundsCheckTarget) {
         DefaultCaseIdx = static_cast<int>(K);
@@ -506,6 +508,24 @@ void MedToHighConverter::lowerBranchInd(HighFunc &Func,
                                         const MedBlock &CurBlock,
                                         const MedOp &CurOp,
                                         const MedFunc &Med) {
+  // A jump that names only where it may go compares its target with each of
+  // those labels, which the image's slots hold as the addresses they had
+  // there.  Any other value has no label to go to.
+  for (const JumpTable &Table : Med.JumpTables)
+    if (Table.InsnAddr == CurOp.Addr && Table.ValueDispatch &&
+        !Table.Targets.empty() &&
+        Table.CaseLabels.size() == Table.Targets.size()) {
+      if (!lowerSwitchFromJumpTable(Func, CurBlock, CurOp, Med, Table))
+        break;
+      HighStmt Trap;
+      Trap.Kind = StmtKind::Goto;
+      Trap.Addr = CurOp.Addr;
+      Trap.GotoTarget = InvalidVA;
+      Func.Body.back().DefaultBody.clear();
+      Func.Body.back().DefaultBody.push_back(std::move(Trap));
+      return;
+    }
+
   const bool MustFailClosed =
       Med.UnsafeIndirectBranchAddresses.count(CurOp.Addr) != 0;
   // Try to find a matching jump table for switch recovery.

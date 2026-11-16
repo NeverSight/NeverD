@@ -321,18 +321,38 @@ bool isField(const QWidget &widget) {
   return false;
 }
 
-/// A field's box: the input fill and gray outline, the focus color's outline
-/// while it has focus, and only a quieter outline while it cannot take input,
-/// as Windows 11 draws a disabled text box.  A text edit, which the style
-/// sheet frames as it frames every scroll area, takes its outline only with
-/// focus and shows nothing while it cannot take input.
+/// The face of a button or field that cannot act: the control receded to a
+/// faint plate, inside a faint edge where the theme's plate alone would be
+/// lost, neither standing out from the surface by more than a quarter.
+/// Visual Studio Code fades a disabled button whole, and Windows 11 keeps a
+/// plate under its disabled button, text box and combo box
+/// (ControlFillColorDisabled).  An outline alone, as strong as an enabled
+/// button's fill, read as an empty frame, and a row of them as a wall of
+/// wire.
+DeviceBox disabledFace() {
+  DeviceBox face;
+  face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
+  face.fill = chrome("ControlDisabled");
+  face.border = chrome("ControlDisabledBorder");
+  // Without an edge the plate takes the whole box, to the pixel.
+  if (face.border.alpha() == 0)
+    face.borderWidth = 0;
+  return face;
+}
+
+/// A field's box: the input fill and gray outline, and the focus color's
+/// outline while it has focus; a plate that recedes while it cannot take
+/// input (disabledFace).  A text edit, which the style sheet frames as it
+/// frames every scroll area, takes its outline only with focus and shows
+/// nothing while it cannot take input.
 DeviceBox fieldFace(const QWidget &field) {
   DeviceBox face;
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
   const bool editor = qobject_cast<const QAbstractScrollArea *>(&field);
   if (!field.isEnabled()) {
-    face.border = editor ? QColor() : chrome("DisabledBorder");
-    face.borderWidth = editor ? 0 : 1;
+    if (!editor)
+      return disabledFace();
+    face.borderWidth = 0;
     return face;
   }
   face.fill = chrome("Input");
@@ -343,10 +363,11 @@ DeviceBox fieldFace(const QWidget &field) {
   return face;
 }
 
-/// A push button's face: a dialog's default in the accent, any other in the
-/// button gray, each a shade darker under the pointer.  One that cannot act
-/// gives up its fill and keeps its outline; a default one keeps a faint
-/// accent instead, so the dialog's default action stays recognizable.  A
+/// A push button's face: a dialog's default in the accent, as is the main
+/// action of a window that has no default (showAsMainAction), any other in
+/// the button gray, each a shade darker under the pointer.  One that cannot
+/// act recedes to a faint plate (disabledFace); one in the accent keeps a
+/// faint accent instead, so the window's way forward stays recognizable.  A
 /// high contrast theme outlines a button under the pointer in place of the
 /// darker shade.
 DeviceBox pushButtonFace(const QPushButton &button) {
@@ -355,7 +376,8 @@ DeviceBox pushButtonFace(const QPushButton &button) {
   const bool hover = enabled && (option.state & QStyle::State_MouseOver);
   DeviceBox face;
   face.radius = ::neverd::limits::gui_config::kWorkbenchStyleControlRadius;
-  if (option.features & QStyleOptionButton::DefaultButton) {
+  if ((option.features & QStyleOptionButton::DefaultButton) ||
+      button.property("mainAction").toBool()) {
     if (!enabled) {
       face.fill = chrome("ButtonPrimaryDisabled");
       face.border = chrome("ButtonPrimaryDisabledBorder");
@@ -367,10 +389,8 @@ DeviceBox pushButtonFace(const QPushButton &button) {
               : chrome("ButtonPrimaryBorder");
     return face;
   }
-  if (!enabled) {
-    face.border = chrome("DisabledBorder");
-    return face;
-  }
+  if (!enabled)
+    return disabledFace();
   face.fill = chrome(hover ? "ButtonHover" : "Button");
   face.border = hover ? chromeOr("ButtonHoverBorder", chrome("Border"))
                       : chrome("Border");
@@ -381,8 +401,9 @@ DeviceBox pushButtonFace(const QPushButton &button) {
 /// then, the selection color while it is pressed or on, and an outline of the
 /// focus color while it has focus.  A toggle whose glyph shows its state, as
 /// a disclosure's chevron points, takes no fill for it; one that is on but
-/// cannot act keeps an outline in place of its fill.  A tab bar's scroll
-/// arrows are square and fill with the bar.
+/// cannot act keeps the faint plate of a control that cannot act
+/// (disabledFace) in place of its fill.  A tab bar's scroll arrows are square
+/// and fill with the bar.
 DeviceBox toolButtonFace(const QToolButton &button) {
   const auto option =
       paintedOption<QToolButton, QStyleOptionToolButton>(button);
@@ -408,12 +429,18 @@ DeviceBox toolButtonFace(const QToolButton &button) {
     face.fill = chrome("ToolButtonChecked");
   else if (!glyph && hover)
     face.fill = chrome("ToolBarHover");
-  if (on && !enabled)
-    face.border = glyph ? QColor() : chrome("DisabledBorder");
-  else if (option.state & QStyle::State_HasFocus)
+  if (on && !enabled) {
+    if (!glyph) {
+      const DeviceBox plate = disabledFace();
+      face.fill = plate.fill;
+      face.border = plate.border;
+      face.borderWidth = plate.borderWidth;
+    }
+  } else if (option.state & QStyle::State_HasFocus) {
     face.border = chrome("Focus");
-  else if (hover)
+  } else if (hover) {
     face.border = chrome("ToolBarHoverBorder");
+  }
   return face;
 }
 
@@ -581,11 +608,18 @@ void WorkbenchStyle::drawPrimitive(PrimitiveElement element,
     case PE_IndicatorItemViewItemCheck:
       paintIndicator(element, *option, *painter);
       return;
-    case PE_FrameGroupBox:
-      paintDeviceBox(*painter, option->rect,
-                     DeviceBox{QColor(), chrome("Border"), 1, DeviceBox().edges,
-                               config::kWorkbenchStyleGroupBoxRadius});
+    case PE_FrameGroupBox: {
+      // A flat box is a rule beside its title: it frames nothing, as a box
+      // that shows its fields only while checked would around none of them.
+      const auto *frame = qstyleoption_cast<const QStyleOptionFrame *>(option);
+      const bool flat = frame && (frame->features & QStyleOptionFrame::Flat);
+      paintDeviceBox(
+          *painter, option->rect,
+          DeviceBox{QColor(), chrome("Border"), 1,
+                    flat ? Qt::Edges(Qt::TopEdge) : DeviceBox().edges,
+                    flat ? 0.0 : config::kWorkbenchStyleGroupBoxRadius});
       return;
+    }
     case PE_PanelMenu:
     case PE_FrameMenu:
       // A menu fills first and frames last, over its items.
@@ -710,17 +744,30 @@ void WorkbenchStyle::drawControl(ControlElement element,
                              Qt::RightEdge | Qt::BottomEdge});
     return;
   }
-  // A splitter's handle is a hairline, the focus color under the pointer.  A
+  // A splitter's handle is a hairline along the middle of its room, under
+  // the bar a dock's separator shows while the pointer is over it or drags
+  // it.  A handle wider than the hairline is a gutter between two panes whose
+  // controls would otherwise touch the line.  Filled whole, such a handle was
+  // a band of the fields' own gray that the fields beside it ran into.  A
   // handle paints itself on behalf of its splitter.
   if (element == CE_Splitter && option &&
       (qobject_cast<const QSplitter *>(widget) ||
        qobject_cast<const QSplitterHandle *>(widget))) {
-    fillDeviceLine(*painter, option->rect,
-                   option->state & State_Horizontal ? Qt::Vertical
-                                                    : Qt::Horizontal,
-                   chrome(option->state & (State_MouseOver | State_Sunken)
-                              ? "DockSeparatorHover"
-                              : "DockSeparator"));
+    const QRect &room = option->rect;
+    const int line = config::kDockingSeparatorLineWidth;
+    // Panes side by side have an upright handle between them.
+    const bool upright = option->state & State_Horizontal;
+    paintDeviceSeparator(
+        *painter,
+        upright ? QRect(room.left() + (room.width() - line) / 2, room.top(),
+                        line, room.height())
+                : QRect(room.left(), room.top() + (room.height() - line) / 2,
+                        room.width(), line),
+        upright ? Qt::Vertical : Qt::Horizontal, chrome("DockSeparator"),
+        config::kDockingSeparatorHighlightWidth,
+        option->state & (State_MouseOver | State_Sunken)
+            ? chrome("DockSeparatorHover")
+            : QColor());
     return;
   }
   // The style paints a menu's items, so a shortcut can read quieter than its
@@ -1077,10 +1124,18 @@ void WorkbenchStyle::polish(QWidget *widget) {
   // table starts as wide as its heading, in every language.
   if (auto *header = qobject_cast<QHeaderView *>(widget)) {
     header->setTextElideMode(Qt::ElideRight);
-    if (header->orientation() == Qt::Horizontal &&
-        !header->property(FittedHeadings).toBool()) {
-      header->setProperty(FittedHeadings, true);
-      new HeadingFitter(header);
+    if (header->orientation() == Qt::Horizontal) {
+      // A heading starts where its column's text does and keeps its weight.
+      // Qt centers a table's headings and draws them bold while a cell of
+      // their column is selected, where a tree's stay left and plain, so one
+      // window's lists read two ways.  A model that aligns a heading itself
+      // still does.
+      header->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+      header->setHighlightSections(false);
+      if (!header->property(FittedHeadings).toBool()) {
+        header->setProperty(FittedHeadings, true);
+        new HeadingFitter(header);
+      }
     }
   }
   // Qt's own file dialog lists folders and files with the icon theme's

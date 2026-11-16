@@ -19,6 +19,7 @@
 #include <vector>
 
 namespace neverd {
+inline constexpr std::string_view X86FourSourceNamePrefix = "llvm.x86.avx512.";
 inline unsigned x86FourSourceNativePrefix(const X86FourSourceControl &C,
                                           NdMemoryAddressSpace Space) {
   return C.SegmentPrefix |
@@ -33,7 +34,8 @@ struct X86FourSourcePlan {
   X86FourSourceControl Control;
   unsigned Prefix;
   std::string llvmName() const {
-    return std::string("llvm.x86.avx512.") + Control.mnemonic() + ".native";
+    return std::string(X86FourSourceNamePrefix) + Control.mnemonic() +
+           ".native";
   }
   std::string builtin() const {
     return std::string("__builtin_ia32_") + Control.mnemonic() + "_native";
@@ -81,6 +83,8 @@ x86FourSourcePlan(unsigned Kind, unsigned Zero, unsigned Prefix) {
 }
 inline std::optional<X86FourSourcePlan>
 x86FourSourceNativeName(std::string_view N) {
+  if (!N.starts_with(X86FourSourceNamePrefix) || !N.ends_with(".native"))
+    return {};
   for (unsigned I = 0; I <= static_cast<unsigned>(X86FourSourceKind::DPWSSDS);
        ++I) {
     const auto P = *x86FourSourcePlan(I, 0, 0);

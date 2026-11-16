@@ -23,6 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "../../AArch64ImmediateMemoryBase.h"
+#include "../MIPS/LLVMIntegerResult.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -39,6 +40,7 @@
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
+#include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/SourceABI.h"
@@ -491,6 +493,8 @@ llvm::Type *MedLLVMEmitter::mapNdtype(const TypeRef &Ty) {
            : Ty->Size == 4  ? llvm::Type::getFloatTy(*Ctx)
            : Ty->Size == 10 ? llvm::Type::getX86_FP80Ty(*Ctx)
                             : llvm::Type::getDoubleTy(*Ctx);
+  case NdTypeKind::Vector:
+    return llvm::FixedVectorType::get(mapNdtype(Ty->ElemType), Ty->ArrayCount);
   case NdTypeKind::Ptr:
     return llvm::PointerType::get(*Ctx, 0);
   case NdTypeKind::Int:
@@ -680,10 +684,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     // through the integer registers instead.
     if (P.RegOff != kNoParamReg && TRI.isFPArgReg(P.RegOff, TargetFormat)) {
       const auto Scalar = Func.FPParamScalarBytes.find(P.RegOff);
-      ParamTypes.push_back(fpAbiType(
-          TargetArch == Arch::AArch64 && Scalar != Func.FPParamScalarBytes.end()
-              ? Scalar->second
-              : P.Size));
+      ParamTypes.push_back(
+          fpAbiType((TargetArch == Arch::AArch64 || isMIPS(TargetArch)) &&
+                            Scalar != Func.FPParamScalarBytes.end()
+                        ? Scalar->second
+                        : P.Size));
       continue;
     }
     if (HaveTypes)
@@ -745,6 +750,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (Func.HasDeclaredMIPSIntegerResult &&
+      RetType->isIntegerTy(Func.ReturnType->Size * 8))
+    LLVMFunc->setAttributes(mips::integerResultAttributes(
+        *Ctx, LLVMFunc->getAttributes(), Func.ReturnType->Size,
+        Func.ReturnType->IsSigned, TargetArch));
   if (mips::imagePreservesDSPControl(Img))
     mips::applyDSPSourceAttributes(*LLVMFunc);
   if (mips::sourceAvoidsMSA(TargetArch, Img))
@@ -805,6 +815,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
     LLVMFunc->addFnAttr(llvm::Attribute::NoReturn);
   rewrite_source::setOriginalVA(*LLVMFunc, Func.Entry);
   writeSourceFrameBytes(*LLVMFunc, Func.FrameBytes);
+  writeSourceImageBytes(*LLVMFunc, Func.ImageBytes);
   return LLVMFunc;
 }
 
@@ -1054,6 +1065,11 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   GlobalDataCache.clear();
   ModuleJumpTableStorageRanges.clear();
   ModuleSuppressibleJumpTableRelocationSlots.clear();
+  ModuleValueDispatchLabels.clear();
+  for (const MedFunc &Func : Funcs)
+    for (const JumpTable &JT : Func.JumpTables)
+      if (JT.ValueDispatch)
+        ModuleValueDispatchLabels.insert(JT.Targets.begin(), JT.Targets.end());
   for (const MedFunc &Func : Funcs)
     for (const JumpTable &JT : Func.JumpTables) {
       ModuleJumpTableStorageRanges.insert(ModuleJumpTableStorageRanges.end(),
@@ -1214,6 +1230,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   AffineFrameKeys.clear();
   AddressFragmentTaintFor = nullptr;
   AddressFragmentTaint.clear();
+  UniformAddressFragmentCacheFor = nullptr;
+  UniformAddressFragmentCache.clear();
   SymbolizedWritableSegsFor = nullptr;
   SymbolizedWritableSegs.clear();
   DefPhiIndexFor = nullptr;
@@ -1249,7 +1267,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   WritableDataSegCache.clear();
   PtrTableUniqueSegCache.clear();
   ConstClassCacheFor = nullptr;
-  ConstUsedAsPointerCache.clear();
+  ConstUsedAsPointerValues.reset();
   ConstValueUsedAsIntegerCache.clear();
   FatalCodePointerResolution = false;
   FinalRegistrationFrameProofs.clear();

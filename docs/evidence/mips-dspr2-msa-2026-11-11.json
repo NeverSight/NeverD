@@ -1,0 +1,1246 @@
+{
+  "scope": "MIPS16e2 r2/o32 board CP0 and RDHWR, classic MIPS32r2/o32 DSP and all 46 DSPR2 instructions, and classic MIPS32r5/o32 MSA integer, transfer and branch forms in both byte orders.",
+  "tested_source_commit": "b24479a8c7f32bab2ac8d6a2d48855a26e852b82",
+  "build": {
+    "configuration": "Release",
+    "host": "macOS-15.6.1-arm64-arm-64bit-Mach-O",
+    "cpu": "Apple M4 Max",
+    "host_compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+    "target_compiler": "Homebrew clang version 22.1.6",
+    "e2_assembler": "GNU assembler (GNU Binutils) 2.47.20260726",
+    "capstone_commit": "a0a484309d86a7a8ff33c45285787c2c6e97bc54",
+    "unicorn_commit": "dab16e86b6ac4acca71c5f3ba50721efc3891a1e",
+    "cli_sha256": "3e3bc130749058fb5b88b407971a02441c0c0123d5f47a3c6b5095530e18aa63",
+    "sdk_sha256": "a70d3d47bc6f4f269c1ec68d277ca64dbec403f7e7fc4e794643f6292f17737c",
+    "reference_library_sha256": "deceed428cd7f2455f7bb1cc9c406ae9e02034255ed0c37ae97c3834ed5eeda8"
+  },
+  "validation": {
+    "mips_ctest": {
+      "tests": 599,
+      "failures": 0,
+      "skipped": 0,
+      "errors": 0
+    },
+    "shared_emulator_ctest": {
+      "tests": 62,
+      "failures": 0,
+      "skipped": 0,
+      "errors": 0
+    },
+    "dspr2_per_instruction_records": 46,
+    "complete_assembled_catalog": [
+      {
+        "profile": "mipsdsp",
+        "documented_forms": 113,
+        "physical_instructions": 226,
+        "operations": 2280,
+        "digest": "224cb6e3ae0960d4",
+        "sha256": "50ed97d564b9179744ec1557b1f3c40ec8785990cdeef68d5e428ee9695bf8ad"
+      },
+      {
+        "profile": "mipsdspel",
+        "documented_forms": 113,
+        "physical_instructions": 226,
+        "operations": 2280,
+        "digest": "224cb6e3ae0960d4",
+        "sha256": "b6431da0432c48f9c103a58852d2558b546b70062df79b81b91971def2566498"
+      },
+      {
+        "profile": "mipsdspr2",
+        "documented_forms": 46,
+        "physical_instructions": 92,
+        "operations": 996,
+        "digest": "0bb835116d83fb8f",
+        "sha256": "1a28559216f71b5d47595048331d359bfecfa5b9519d6f981073c6102027e8d8"
+      },
+      {
+        "profile": "mipsdspr2el",
+        "documented_forms": 46,
+        "physical_instructions": 92,
+        "operations": 996,
+        "digest": "0bb835116d83fb8f",
+        "sha256": "5880eed5dc70f7cb66c416103b9b32ffaa8b8c8a906dde7e586f20188dc7415e"
+      },
+      {
+        "profile": "mipsmsa",
+        "documented_forms": 526,
+        "physical_instructions": 1052,
+        "operations": 18140,
+        "digest": "c064a06e1f2cd113",
+        "sha256": "eb5f4295096c4386134bd97a63488edd45a1b69f8a310a946aa0218aecaadff6"
+      },
+      {
+        "profile": "mipsmsael",
+        "documented_forms": 526,
+        "physical_instructions": 1052,
+        "operations": 18140,
+        "digest": "c064a06e1f2cd113",
+        "sha256": "eab6407c8da9e58fe0ff82a18244258384afcbe909cd88955640c795ce9289b3"
+      }
+    ],
+    "catalog_scope": "One LLVM-assembled legal operand tuple per mnemonic and width, followed by NOP. Compares full physical decoding and LowIR fingerprints in both byte orders; semantic executions are reported separately.",
+    "reference_regression": {
+      "unicorn_pr": "https://github.com/NeverSight/unicorn/pull/22",
+      "suites_passed": 3,
+      "known_difference_on_prior_pin": "CMPGDU.EQ/LT/LE.QB with rd=0 skipped the DSP enable check and CCOND update. All three predicates now exercise zero, ordinary and aliased destinations on both byte orders."
+    },
+    "original_vs_rebuilt": {
+      "dspr2": {
+        "assembly_leaves": 48,
+        "original_cpu_observations": 576,
+        "source_builds": 384,
+        "original_vs_rebuilt_executions": 2304,
+        "fixture_sha256": "76a144b7e581cc400166fa1d9e26c2afe4a90a8a603fae110564d0214a9b69aa"
+      },
+      "dsp-extra": {
+        "assembly_leaves": 18,
+        "original_cpu_observations": 216,
+        "source_builds": 144,
+        "original_vs_rebuilt_executions": 864,
+        "fixture_sha256": "e8cfe38ef0dd13b5fa31632b2846d36144b07f8105f403b11fbbcc50bb8c6d81"
+      },
+      "msa-int": {
+        "assembly_leaves": 101,
+        "original_cpu_observations": 3244,
+        "source_builds": 808,
+        "original_vs_rebuilt_executions": 12976,
+        "fixture_sha256": "a4d2a7b8e8a9e457333c8bd61f6c76f04b852d276563a6371feb7fb8baed7836"
+      },
+      "msa-regression": {
+        "assembly_leaves": 5,
+        "original_cpu_observations": 352,
+        "source_builds": 40,
+        "original_vs_rebuilt_executions": 1408,
+        "fixture_sha256": "9404ae6d5612f6367e407c35d39724dac59afd3000cbbeef4c54e003c43602aa"
+      },
+      "dsp": {
+        "assembly_leaves": 22,
+        "original_cpu_observations": 132,
+        "source_builds": 176,
+        "original_vs_rebuilt_executions": 528,
+        "fixture_sha256": "753507f06589dd2589316432fbdab0c453b8691d4b8397140db2bc905dbe8862"
+      }
+    },
+    "mips16e2": {
+      "source_builds": 520,
+      "generated_mips16_executions": 16640,
+      "privileged_source_refusals": 128,
+      "reference": "MD01172 rev 1.00; generated-code execution only; no original-e2 engine"
+    },
+    "cpu_models": {
+      "dsp": "Unicorn 74Kf",
+      "msa": "Unicorn P5600",
+      "e2": "GNU-assembled input, LowIR field and platform tests, compiled MIPS16 code compared with ISA expectations. No original-e2 CPU execution."
+    }
+  },
+  "firmware": {
+    "model": "TP-Link Archer C7 V5 US",
+    "elf": "bin/ubus",
+    "original_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "function": "call",
+    "entry": "0x4012d0",
+    "original_cases": 12,
+    "rebuilt": [
+      {
+        "backend": "highc",
+        "optimization": "-O0",
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+        "cases_passed": 12
+      },
+      {
+        "backend": "highc",
+        "optimization": "-O2",
+        "source_sha256": "746482c701b92ddc0e77a202028fe20ec48232597fc05dbf175209dae56158e4",
+        "cases_passed": 12
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O0",
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+        "cases_passed": 12
+      },
+      {
+        "backend": "llvmc",
+        "optimization": "-O2",
+        "source_sha256": "dcba6c7b30feaf90fa02f2229d075e0dd609de5ab218770f5bb52bb094d7d349",
+        "cases_passed": 12
+      }
+    ],
+    "imports": "Five bounded import handlers in Unicorn."
+  },
+  "performance": {
+    "baseline_commit": "7ba5659c3c2a1208ca8acce7c2d003ccc20ab075",
+    "baseline_capstone": "3998ad42251df0547316a9d87df8b7aca5a4feac",
+    "candidate_commit": "b24479a8c7f32bab2ac8d6a2d48855a26e852b82",
+    "baseline_bench_sha256": "6fcd932c768898f94f90613ea92627341c9dac8bd5d49cc0b540f7f2f462fa3e",
+    "candidate_bench_sha256": "42a4df888210663457e99a82a3cb368ae0fe40711aef56120d7aed99e40f8f21",
+    "method": "Same Apple host. Existing physical input streams use seven alternating baseline/candidate CPU-time pairs after warmup with identical output fingerprints. New inputs report the median of five independent CPU-time samples; each timing loop runs on a reused decoder. Negative deltas are faster. Capstone performs physical decode. NeverD lift includes decode and LowIR generation.",
+    "existing_and_new_streams": [
+      {
+        "profile": "mips16e2",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 249975,
+        "baseline_cpu": 0.024327,
+        "candidate_cpu": 0.024103,
+        "delta_percent": -0.92,
+        "sha256": "4b5fc02f6900fb38bd554d922ce9b86ce0e5f44b9c97b78e4dd6d21d91a2c634",
+        "digest": "b7aa2f565af07bf6",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16e2",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 249975,
+        "baseline_cpu": 0.043018,
+        "candidate_cpu": 0.041069,
+        "delta_percent": -4.53,
+        "sha256": "4b5fc02f6900fb38bd554d922ce9b86ce0e5f44b9c97b78e4dd6d21d91a2c634",
+        "digest": "b201324d42497641",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsdsp",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 499998,
+        "baseline_cpu": 0.049621,
+        "candidate_cpu": 0.048976,
+        "delta_percent": -1.3,
+        "sha256": "d44e575f27a1b5b5aa13f594f5fdbb4995c5d672c0561bedfeca0e208ef32a3a",
+        "digest": "2e98cf37e980c6fa",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsdsp",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 499998,
+        "baseline_cpu": 0.3858,
+        "candidate_cpu": 0.380207,
+        "delta_percent": -1.45,
+        "sha256": "d44e575f27a1b5b5aa13f594f5fdbb4995c5d672c0561bedfeca0e208ef32a3a",
+        "digest": "43f1de43913b052b",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsmsa",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 499989,
+        "baseline_cpu": 0.047402,
+        "candidate_cpu": 0.048043,
+        "delta_percent": 1.35,
+        "sha256": "ee770878cb3180575583add45c194c60cfb73d541ad56436864102b05d72d4f5",
+        "digest": "58e62510ad2f1d62",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsmsa",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 499989,
+        "baseline_cpu": 0.213655,
+        "candidate_cpu": 0.2136,
+        "delta_percent": -0.03,
+        "sha256": "ee770878cb3180575583add45c194c60cfb73d541ad56436864102b05d72d4f5",
+        "digest": "b17bd07314c68fd2",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "micromips",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.047482,
+        "candidate_cpu": 0.048519,
+        "delta_percent": 2.18,
+        "sha256": "0f851d8e2fb9bc5790f762ff53b2bbac6f82329544aa19b6056eeefad26b167c",
+        "digest": "24ec21d509ef6e4d",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "micromips",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.117098,
+        "candidate_cpu": 0.118356,
+        "delta_percent": 1.07,
+        "sha256": "0f851d8e2fb9bc5790f762ff53b2bbac6f82329544aa19b6056eeefad26b167c",
+        "digest": "41fe2b47a40536a7",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.04683,
+        "candidate_cpu": 0.047324,
+        "delta_percent": 1.05,
+        "sha256": "c22cafa81bc43e287eae1f428af065f70a95fa18c94d0e07c8cf84ae9a0ff3fb",
+        "digest": "de3e09968e604c3c",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.102894,
+        "candidate_cpu": 0.102347,
+        "delta_percent": -0.53,
+        "sha256": "c22cafa81bc43e287eae1f428af065f70a95fa18c94d0e07c8cf84ae9a0ff3fb",
+        "digest": "87c2a124cb860141",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16",
+        "corpus": "mixed",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 447888,
+        "baseline_cpu": 0.045826,
+        "candidate_cpu": 0.046231,
+        "delta_percent": 0.88,
+        "sha256": "c3cef2adbb00a2680ff248af39e9638f09d0fe91baf8bdbfcd0e0927bb3c1dec",
+        "digest": "7e5968136cb02718",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16",
+        "corpus": "mixed",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 447888,
+        "baseline_cpu": 0.105744,
+        "candidate_cpu": 0.104784,
+        "delta_percent": -0.91,
+        "sha256": "c3cef2adbb00a2680ff248af39e9638f09d0fe91baf8bdbfcd0e0927bb3c1dec",
+        "digest": "203e7ca8b10c33dd",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16e2el",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 249975,
+        "baseline_cpu": 0.02383,
+        "candidate_cpu": 0.023028,
+        "delta_percent": -3.37,
+        "sha256": "b1821b0bdcac9aaae054d65dd1859706aab0505fe9acf5d7c4ddb2aaaeca34a2",
+        "digest": "b7aa2f565af07bf6",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16e2el",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 249975,
+        "baseline_cpu": 0.040879,
+        "candidate_cpu": 0.040167,
+        "delta_percent": -1.74,
+        "sha256": "b1821b0bdcac9aaae054d65dd1859706aab0505fe9acf5d7c4ddb2aaaeca34a2",
+        "digest": "b201324d42497641",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsdspel",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 499998,
+        "baseline_cpu": 0.047969,
+        "candidate_cpu": 0.048915,
+        "delta_percent": 1.97,
+        "sha256": "66973260fd491b95d0ecdde2a3ad23901f886fe79f85aa82fd65b25e7c911db6",
+        "digest": "2e98cf37e980c6fa",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsdspel",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 499998,
+        "baseline_cpu": 0.378517,
+        "candidate_cpu": 0.375204,
+        "delta_percent": -0.88,
+        "sha256": "66973260fd491b95d0ecdde2a3ad23901f886fe79f85aa82fd65b25e7c911db6",
+        "digest": "43f1de43913b052b",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsmsael",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 499989,
+        "baseline_cpu": 0.048495,
+        "candidate_cpu": 0.048537,
+        "delta_percent": 0.09,
+        "sha256": "5b6e5735e05f2360de4da0d0dc4bfd665fa2979d2ebb8983f86ca122b17d7163",
+        "digest": "58e62510ad2f1d62",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mipsmsael",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 499989,
+        "baseline_cpu": 0.209018,
+        "candidate_cpu": 0.206038,
+        "delta_percent": -1.43,
+        "sha256": "5b6e5735e05f2360de4da0d0dc4bfd665fa2979d2ebb8983f86ca122b17d7163",
+        "digest": "b17bd07314c68fd2",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "micromipsel",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.045589,
+        "candidate_cpu": 0.04575,
+        "delta_percent": 0.35,
+        "sha256": "fd635fdb3cbb4405a429317dbd80f24f6b4c1ccf4e990999c31d3d23cd032a1e",
+        "digest": "24ec21d509ef6e4d",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "micromipsel",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.118314,
+        "candidate_cpu": 0.119067,
+        "delta_percent": 0.64,
+        "sha256": "fd635fdb3cbb4405a429317dbd80f24f6b4c1ccf4e990999c31d3d23cd032a1e",
+        "digest": "41fe2b47a40536a7",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.048242,
+        "candidate_cpu": 0.046991,
+        "delta_percent": -2.59,
+        "sha256": "6489bd180316a76f6ee42c2d1f1869e038ab263c5aa4181950395556a4c85054",
+        "digest": "de3e09968e604c3c",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 500000,
+        "baseline_cpu": 0.102531,
+        "candidate_cpu": 0.101884,
+        "delta_percent": -0.63,
+        "sha256": "6489bd180316a76f6ee42c2d1f1869e038ab263c5aa4181950395556a4c85054",
+        "digest": "87c2a124cb860141",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "mixed",
+        "stage": "decode",
+        "pairs": 7,
+        "instructions": 447888,
+        "baseline_cpu": 0.047014,
+        "candidate_cpu": 0.045016,
+        "delta_percent": -4.25,
+        "sha256": "81144e2654e2f47833deb82ca45b1357a7b5f092df569a275e577a78c48b1f63",
+        "digest": "7e5968136cb02718",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "mixed",
+        "stage": "lift",
+        "pairs": 7,
+        "instructions": 447888,
+        "baseline_cpu": 0.104572,
+        "candidate_cpu": 0.104534,
+        "delta_percent": -0.04,
+        "sha256": "81144e2654e2f47833deb82ca45b1357a7b5f092df569a275e577a78c48b1f63",
+        "digest": "203e7ca8b10c33dd",
+        "delta_metric": "candidate CPU time relative to baseline (%)"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2",
+        "stage": "capstone",
+        "instructions": 149960,
+        "median_cpu": 0.014806,
+        "instructions_per_second": 10128326,
+        "sha256": "abb2c5a2960cbc004a808af0e109bfacd197f3c2cfc9dcc5dfbec66239e4f84e",
+        "digest": "0a613450b9d31d72"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2",
+        "stage": "decode",
+        "instructions": 149960,
+        "median_cpu": 0.015853,
+        "instructions_per_second": 9459408,
+        "sha256": "abb2c5a2960cbc004a808af0e109bfacd197f3c2cfc9dcc5dfbec66239e4f84e",
+        "digest": "0a613450b9d31d72"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2",
+        "stage": "lift",
+        "instructions": 149960,
+        "median_cpu": 0.139898,
+        "instructions_per_second": 1071924,
+        "sha256": "abb2c5a2960cbc004a808af0e109bfacd197f3c2cfc9dcc5dfbec66239e4f84e",
+        "digest": "b0870b9af3e16f0f"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2el",
+        "stage": "capstone",
+        "instructions": 149960,
+        "median_cpu": 0.013867,
+        "instructions_per_second": 10814163,
+        "sha256": "24a28ede2cacf43ca3ec6122173ff0e9c4856705871237bd3058edb85680aaaf",
+        "digest": "0a613450b9d31d72"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2el",
+        "stage": "decode",
+        "instructions": 149960,
+        "median_cpu": 0.015098,
+        "instructions_per_second": 9932441,
+        "sha256": "24a28ede2cacf43ca3ec6122173ff0e9c4856705871237bd3058edb85680aaaf",
+        "digest": "0a613450b9d31d72"
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2el",
+        "stage": "lift",
+        "instructions": 149960,
+        "median_cpu": 0.1382,
+        "instructions_per_second": 1085094,
+        "sha256": "24a28ede2cacf43ca3ec6122173ff0e9c4856705871237bd3058edb85680aaaf",
+        "digest": "b0870b9af3e16f0f"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2",
+        "stage": "capstone",
+        "instructions": 149940,
+        "median_cpu": 0.015206,
+        "instructions_per_second": 9860581,
+        "sha256": "078f9a28e9b03f6ebb3eaba1c7643d59f1f5e96b7c754ca1faa704385f235540",
+        "digest": "29d5fe796f3a5034"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2",
+        "stage": "decode",
+        "instructions": 149940,
+        "median_cpu": 0.015674,
+        "instructions_per_second": 9566161,
+        "sha256": "078f9a28e9b03f6ebb3eaba1c7643d59f1f5e96b7c754ca1faa704385f235540",
+        "digest": "29d5fe796f3a5034"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2",
+        "stage": "lift",
+        "instructions": 149940,
+        "median_cpu": 0.059833,
+        "instructions_per_second": 2505975,
+        "sha256": "078f9a28e9b03f6ebb3eaba1c7643d59f1f5e96b7c754ca1faa704385f235540",
+        "digest": "c535329db1d9f43b"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2el",
+        "stage": "capstone",
+        "instructions": 149940,
+        "median_cpu": 0.01537,
+        "instructions_per_second": 9755368,
+        "sha256": "ab2db2ff0b2e4e7d6c968dec6f22f94271f44de59a6497c7b8fac1d2e2ce08be",
+        "digest": "29d5fe796f3a5034"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2el",
+        "stage": "decode",
+        "instructions": 149940,
+        "median_cpu": 0.015675,
+        "instructions_per_second": 9565550,
+        "sha256": "ab2db2ff0b2e4e7d6c968dec6f22f94271f44de59a6497c7b8fac1d2e2ce08be",
+        "digest": "29d5fe796f3a5034"
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2el",
+        "stage": "lift",
+        "instructions": 149940,
+        "median_cpu": 0.058987,
+        "instructions_per_second": 2541916,
+        "sha256": "ab2db2ff0b2e4e7d6c968dec6f22f94271f44de59a6497c7b8fac1d2e2ce08be",
+        "digest": "c535329db1d9f43b"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsa",
+        "stage": "capstone",
+        "instructions": 149976,
+        "median_cpu": 0.014097,
+        "instructions_per_second": 10638859,
+        "sha256": "1e714d8434d81af6d61b0381789d32aa72e2d7d75575f087905b6e0f3255c09c",
+        "digest": "50d80dbfa227b4b1"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsa",
+        "stage": "decode",
+        "instructions": 149976,
+        "median_cpu": 0.015175,
+        "instructions_per_second": 9883097,
+        "sha256": "1e714d8434d81af6d61b0381789d32aa72e2d7d75575f087905b6e0f3255c09c",
+        "digest": "50d80dbfa227b4b1"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsa",
+        "stage": "lift",
+        "instructions": 149976,
+        "median_cpu": 0.058394,
+        "instructions_per_second": 2568346,
+        "sha256": "1e714d8434d81af6d61b0381789d32aa72e2d7d75575f087905b6e0f3255c09c",
+        "digest": "ed3e509282d5631c"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsael",
+        "stage": "capstone",
+        "instructions": 149976,
+        "median_cpu": 0.01422,
+        "instructions_per_second": 10546835,
+        "sha256": "a5bb12ead80573f0d682d7c68a6867129a553b4a623f1ac669b9c4f827d8553a",
+        "digest": "50d80dbfa227b4b1"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsael",
+        "stage": "decode",
+        "instructions": 149976,
+        "median_cpu": 0.015002,
+        "instructions_per_second": 9997067,
+        "sha256": "a5bb12ead80573f0d682d7c68a6867129a553b4a623f1ac669b9c4f827d8553a",
+        "digest": "50d80dbfa227b4b1"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsael",
+        "stage": "lift",
+        "instructions": 149976,
+        "median_cpu": 0.057844,
+        "instructions_per_second": 2592767,
+        "sha256": "a5bb12ead80573f0d682d7c68a6867129a553b4a623f1ac669b9c4f827d8553a",
+        "digest": "ed3e509282d5631c"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdsp",
+        "stage": "capstone",
+        "instructions": 149961,
+        "median_cpu": 0.015155,
+        "instructions_per_second": 9895150,
+        "sha256": "fe973be2c116e80980aa617b78066cfd43cc5ee0e4e3d343a2f8c9d3fa66d9d8",
+        "digest": "5cb63a128c5bcdc3"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdsp",
+        "stage": "decode",
+        "instructions": 149961,
+        "median_cpu": 0.015287,
+        "instructions_per_second": 9809708,
+        "sha256": "fe973be2c116e80980aa617b78066cfd43cc5ee0e4e3d343a2f8c9d3fa66d9d8",
+        "digest": "5cb63a128c5bcdc3"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdsp",
+        "stage": "lift",
+        "instructions": 149961,
+        "median_cpu": 0.036541,
+        "instructions_per_second": 4103911,
+        "sha256": "fe973be2c116e80980aa617b78066cfd43cc5ee0e4e3d343a2f8c9d3fa66d9d8",
+        "digest": "0ea4f21ee369fbc7"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdspel",
+        "stage": "capstone",
+        "instructions": 149961,
+        "median_cpu": 0.014906,
+        "instructions_per_second": 10060445,
+        "sha256": "e61e3cc55edc63936806e8ad01b2e4cb802e54f17451dd59996f7fea636b7657",
+        "digest": "5cb63a128c5bcdc3"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdspel",
+        "stage": "decode",
+        "instructions": 149961,
+        "median_cpu": 0.015453,
+        "instructions_per_second": 9704329,
+        "sha256": "e61e3cc55edc63936806e8ad01b2e4cb802e54f17451dd59996f7fea636b7657",
+        "digest": "5cb63a128c5bcdc3"
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdspel",
+        "stage": "lift",
+        "instructions": 149961,
+        "median_cpu": 0.036732,
+        "instructions_per_second": 4082571,
+        "sha256": "e61e3cc55edc63936806e8ad01b2e4cb802e54f17451dd59996f7fea636b7657",
+        "digest": "0ea4f21ee369fbc7"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2",
+        "stage": "capstone",
+        "instructions": 150000,
+        "median_cpu": 0.014407,
+        "instructions_per_second": 10411605,
+        "sha256": "e1f745e34053a424e37f41e00b8fa8e5893b9b1879459d258bf5df00cd324955",
+        "digest": "14d364d9d6b05ca8"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2",
+        "stage": "decode",
+        "instructions": 150000,
+        "median_cpu": 0.014498,
+        "instructions_per_second": 10346255,
+        "sha256": "e1f745e34053a424e37f41e00b8fa8e5893b9b1879459d258bf5df00cd324955",
+        "digest": "14d364d9d6b05ca8"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2",
+        "stage": "lift",
+        "instructions": 150000,
+        "median_cpu": 0.02895,
+        "instructions_per_second": 5181347,
+        "sha256": "e1f745e34053a424e37f41e00b8fa8e5893b9b1879459d258bf5df00cd324955",
+        "digest": "78e64823c90a9102"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2el",
+        "stage": "capstone",
+        "instructions": 150000,
+        "median_cpu": 0.013969,
+        "instructions_per_second": 10738063,
+        "sha256": "799beb21b8a41236af01e3467d91f94ed9b591594abcefb9c7f3e09c0485d5b3",
+        "digest": "14d364d9d6b05ca8"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2el",
+        "stage": "decode",
+        "instructions": 150000,
+        "median_cpu": 0.013935,
+        "instructions_per_second": 10764263,
+        "sha256": "799beb21b8a41236af01e3467d91f94ed9b591594abcefb9c7f3e09c0485d5b3",
+        "digest": "14d364d9d6b05ca8"
+      },
+      {
+        "corpus": "e2-system",
+        "profile": "mips16e2el",
+        "stage": "lift",
+        "instructions": 150000,
+        "median_cpu": 0.027541,
+        "instructions_per_second": 5446425,
+        "sha256": "799beb21b8a41236af01e3467d91f94ed9b591594abcefb9c7f3e09c0485d5b3",
+        "digest": "78e64823c90a9102"
+      }
+    ],
+    "long_compressed_recheck": [
+      {
+        "profile": "micromips",
+        "corpus": "unchanged",
+        "stage": "capstone",
+        "instructions_per_sample": 4000000,
+        "pairs": 9,
+        "median_paired_delta_percent": 0.87,
+        "paired_min": -4.85,
+        "paired_max": 2.16,
+        "baseline_cpu": [
+          0.322117,
+          0.333096,
+          0.325395,
+          0.337647,
+          0.339819,
+          0.336243,
+          0.328651,
+          0.32956,
+          0.323048
+        ],
+        "candidate_cpu": [
+          0.325725,
+          0.340059,
+          0.332408,
+          0.329622,
+          0.326702,
+          0.319927,
+          0.331495,
+          0.321872,
+          0.326573
+        ]
+      },
+      {
+        "profile": "micromips",
+        "corpus": "unchanged",
+        "stage": "decode",
+        "instructions_per_sample": 4000000,
+        "pairs": 9,
+        "median_paired_delta_percent": -0.59,
+        "paired_min": -3.3,
+        "paired_max": 2.46,
+        "baseline_cpu": [
+          0.347723,
+          0.36236,
+          0.351348,
+          0.358617,
+          0.351359,
+          0.34744,
+          0.351647,
+          0.357873,
+          0.351662
+        ],
+        "candidate_cpu": [
+          0.352348,
+          0.351777,
+          0.35245,
+          0.346781,
+          0.349286,
+          0.355986,
+          0.345439,
+          0.347648,
+          0.356345
+        ]
+      },
+      {
+        "profile": "micromips",
+        "corpus": "unchanged",
+        "stage": "lift",
+        "instructions_per_sample": 4000000,
+        "pairs": 9,
+        "median_paired_delta_percent": 0.02,
+        "paired_min": -2.73,
+        "paired_max": 2.76,
+        "baseline_cpu": [
+          0.899126,
+          0.88847,
+          0.900684,
+          0.902333,
+          0.922329,
+          0.913896,
+          0.894409,
+          0.886512,
+          0.896627
+        ],
+        "candidate_cpu": [
+          0.910763,
+          0.91299,
+          0.900259,
+          0.902476,
+          0.907799,
+          0.888948,
+          0.905045,
+          0.906126,
+          0.88606
+        ]
+      },
+      {
+        "profile": "mips16",
+        "corpus": "mixed",
+        "stage": "decode",
+        "instructions_per_sample": 3999989,
+        "pairs": 9,
+        "median_paired_delta_percent": -0.69,
+        "paired_min": -4.3,
+        "paired_max": 2.42,
+        "baseline_cpu": [
+          0.3836,
+          0.389858,
+          0.385071,
+          0.381643,
+          0.386718,
+          0.392531,
+          0.387939,
+          0.38848,
+          0.380942
+        ],
+        "candidate_cpu": [
+          0.373613,
+          0.381816,
+          0.368501,
+          0.390862,
+          0.390549,
+          0.386851,
+          0.395106,
+          0.385797,
+          0.384256
+        ]
+      },
+      {
+        "profile": "mips16",
+        "corpus": "mixed",
+        "stage": "lift",
+        "instructions_per_sample": 3999989,
+        "pairs": 9,
+        "median_paired_delta_percent": -0.12,
+        "paired_min": -1.87,
+        "paired_max": 2.89,
+        "baseline_cpu": [
+          0.897102,
+          0.868375,
+          0.878736,
+          0.891486,
+          0.901535,
+          0.899755,
+          0.890922,
+          0.87301,
+          0.835487
+        ],
+        "candidate_cpu": [
+          0.881458,
+          0.893469,
+          0.868695,
+          0.890411,
+          0.896221,
+          0.904085,
+          0.893702,
+          0.856679,
+          0.838137
+        ]
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "mixed",
+        "stage": "decode",
+        "instructions_per_sample": 3999989,
+        "pairs": 9,
+        "median_paired_delta_percent": -3.73,
+        "paired_min": -6.29,
+        "paired_max": 3.15,
+        "baseline_cpu": [
+          0.383908,
+          0.386228,
+          0.37312,
+          0.374629,
+          0.384195,
+          0.396563,
+          0.382418,
+          0.378787,
+          0.380985
+        ],
+        "candidate_cpu": [
+          0.367556,
+          0.368561,
+          0.377681,
+          0.386434,
+          0.365977,
+          0.37162,
+          0.378615,
+          0.36467,
+          0.379596
+        ]
+      },
+      {
+        "profile": "mips16el",
+        "corpus": "mixed",
+        "stage": "lift",
+        "instructions_per_sample": 3999989,
+        "pairs": 9,
+        "median_paired_delta_percent": -1.21,
+        "paired_min": -3.08,
+        "paired_max": 3.08,
+        "baseline_cpu": [
+          0.879303,
+          0.857786,
+          0.855922,
+          0.8289,
+          0.892143,
+          0.870316,
+          0.874708,
+          0.882714,
+          0.900085
+        ],
+        "candidate_cpu": [
+          0.852209,
+          0.854804,
+          0.853339,
+          0.854405,
+          0.866008,
+          0.871283,
+          0.848871,
+          0.872048,
+          0.879818
+        ]
+      }
+    ],
+    "long_method": "Nine paired baseline/candidate process CPU samples after warmup, four million physical instructions per sample. Delta is the median of the paired percentage differences.",
+    "new_corpus": "dspr2-only contains exactly 46 DSPR2 instructions. The dspr2, dsp-extra and msa-int streams also include the setup, result extraction and returns of their assembly leaves. e2-system contains six independently GNU-assembled board-specific transfers.",
+    "sleigh_method": "Nine alternating paired CPU-time repetitions after warmup on the same raw byte buffers and host, with the NeverD lift stage and default MIPS32 SLEIGH languages via pypcode 4.1.0. Reused contexts; independently checked each physical instruction address and width, including delay slots. SLEIGH emits raw P-code. Untranslatable streams have no throughput.",
+    "sleigh": [
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2",
+        "language": "MIPS:BE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 184,
+        "sha256": "abb2c5a2960cbc004a808af0e109bfacd197f3c2cfc9dcc5dfbec66239e4f84e",
+        "instructions_per_sample": 299966,
+        "pairs": 9,
+        "native_median_ips": 1150582,
+        "sleigh_median_ips": 1004134,
+        "native_cpu_seconds": [
+          0.266031,
+          0.269229,
+          0.258341,
+          0.259326,
+          0.260708,
+          0.257787,
+          0.271303,
+          0.261501,
+          0.245966
+        ],
+        "sleigh_cpu_seconds": [
+          0.306738,
+          0.302201,
+          0.31136600000000003,
+          0.28350200000000003,
+          0.300518,
+          0.29758700000000005,
+          0.298731,
+          0.295014,
+          0.28140200000000004
+        ]
+      },
+      {
+        "corpus": "dspr2-only",
+        "profile": "mipsdspr2el",
+        "language": "MIPS:LE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 184,
+        "sha256": "24a28ede2cacf43ca3ec6122173ff0e9c4856705871237bd3058edb85680aaaf",
+        "instructions_per_sample": 299966,
+        "pairs": 9,
+        "native_median_ips": 1166103,
+        "sleigh_median_ips": 1028221,
+        "native_cpu_seconds": [
+          0.255401,
+          0.249878,
+          0.260576,
+          0.257238,
+          0.258705,
+          0.249883,
+          0.261755,
+          0.258398,
+          0.25679
+        ],
+        "sleigh_cpu_seconds": [
+          0.29207500000000003,
+          0.285107,
+          0.298371,
+          0.29077400000000003,
+          0.294615,
+          0.286797,
+          0.291733,
+          0.299279,
+          0.286042
+        ]
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2",
+        "language": "MIPS:BE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 784,
+        "sha256": "078f9a28e9b03f6ebb3eaba1c7643d59f1f5e96b7c754ca1faa704385f235540",
+        "instructions_per_sample": 299880,
+        "pairs": 9,
+        "native_median_ips": 2731272,
+        "sleigh_median_ips": 1387627,
+        "native_cpu_seconds": [
+          0.110786,
+          0.113984,
+          0.109014,
+          0.108978,
+          0.111047,
+          0.109795,
+          0.11193,
+          0.105877,
+          0.107759
+        ],
+        "sleigh_cpu_seconds": [
+          0.21660900000000002,
+          0.21288,
+          0.214566,
+          0.20791400000000002,
+          0.217029,
+          0.216204,
+          0.221732,
+          0.212949,
+          0.21611000000000002
+        ]
+      },
+      {
+        "corpus": "dspr2",
+        "profile": "mipsdspr2el",
+        "language": "MIPS:LE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 784,
+        "sha256": "ab2db2ff0b2e4e7d6c968dec6f22f94271f44de59a6497c7b8fac1d2e2ce08be",
+        "instructions_per_sample": 299880,
+        "pairs": 9,
+        "native_median_ips": 2749553,
+        "sleigh_median_ips": 1392873,
+        "native_cpu_seconds": [
+          0.109065,
+          0.106344,
+          0.109873,
+          0.109004,
+          0.109092,
+          0.111129,
+          0.106156,
+          0.105102,
+          0.110447
+        ],
+        "sleigh_cpu_seconds": [
+          0.216398,
+          0.223607,
+          0.22012,
+          0.213767,
+          0.215032,
+          0.21494700000000003,
+          0.217589,
+          0.20269500000000001,
+          0.21529600000000002
+        ]
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdsp",
+        "language": "MIPS:BE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 444,
+        "sha256": "fe973be2c116e80980aa617b78066cfd43cc5ee0e4e3d343a2f8c9d3fa66d9d8",
+        "instructions_per_sample": 299922,
+        "pairs": 9,
+        "native_median_ips": 4590947,
+        "sleigh_median_ips": 1410482,
+        "native_cpu_seconds": [
+          0.068732,
+          0.067011,
+          0.0643,
+          0.06453,
+          0.065329,
+          0.064239,
+          0.071907,
+          0.065924,
+          0.064733
+        ],
+        "sleigh_cpu_seconds": [
+          0.21812800000000002,
+          0.221866,
+          0.21760000000000002,
+          0.205457,
+          0.212352,
+          0.219562,
+          0.21263800000000002,
+          0.210845,
+          0.20883300000000002
+        ]
+      },
+      {
+        "corpus": "dsp-extra",
+        "profile": "mipsdspel",
+        "language": "MIPS:LE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 444,
+        "sha256": "e61e3cc55edc63936806e8ad01b2e4cb802e54f17451dd59996f7fea636b7657",
+        "instructions_per_sample": 299922,
+        "pairs": 9,
+        "native_median_ips": 4576935,
+        "sleigh_median_ips": 1421505,
+        "native_cpu_seconds": [
+          0.068865,
+          0.070075,
+          0.063902,
+          0.065529,
+          0.065911,
+          0.06497,
+          0.065277,
+          0.066692,
+          0.061664
+        ],
+        "sleigh_cpu_seconds": [
+          0.23375200000000002,
+          0.228465,
+          0.223061,
+          0.210989,
+          0.21363600000000002,
+          0.195441,
+          0.209521,
+          0.197973,
+          0.199714
+        ]
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsa",
+        "language": "MIPS:BE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 8332,
+        "sha256": "1e714d8434d81af6d61b0381789d32aa72e2d7d75575f087905b6e0f3255c09c",
+        "unsupported": "r0x00010000: Unable to resolve constructor"
+      },
+      {
+        "corpus": "msa-int",
+        "profile": "mipsmsael",
+        "language": "MIPS:LE:32:default",
+        "pypcode": "4.1.0",
+        "bytes": 8332,
+        "sha256": "a5bb12ead80573f0d682d7c68a6867129a553b4a623f1ac669b9c4f827d8553a",
+        "unsupported": "r0x00010000: Unable to resolve constructor"
+      }
+    ]
+  }
+}

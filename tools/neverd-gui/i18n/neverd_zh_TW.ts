@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>外掛管理員(M)...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>計算字串</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>尋找函式在特定條件下計算出的字串</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>已修改位元組</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>計算字串</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>資料位址</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>證據</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>觀測位置（執行後）</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>文字 / 診斷</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>重新整理表格期間選取變更次數過多。</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>搜尋已取消</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1953,6 +1985,154 @@
         <translation>
             <numerusform>%n 個項目</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 秒</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · 探索失敗： </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · %2/%3 個函式 · %4 列 · %5 個問題</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>分析已變更；請重新掃描</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>正在分析函式 %1…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>假設基本區塊入口處具有所列的記憶體與暫存器值，並且成功執行至觀測位置。初始化器提供候選值；尚未證明可達性。</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>基本區塊入口</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>計算字串的條件</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>指令在特定條件下計算出的文字</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>條件…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>繼續</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>資料位址</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>編碼</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>初始化器</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>正在載入…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>無結果</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>觀測位置（執行後）</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>請先開啟二進位檔案</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>暫停</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>已暫停</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>將在目前函式完成後暫停…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>暫存器位移 %1，%2 位元組 = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>所需的入口暫存器值</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>所需的輸入位元組</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重試</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>重試或瀏覽清單以繼續載入。</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>掃描所有函式</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>掃描已取消</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>掃描已完成</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>正在掃描</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>搜尋已取消</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>搜尋進度</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>正在搜尋…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>正在排序…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>正在等待搜尋…</translation>
     </message>
 </context>
 <context>
@@ -2081,6 +2261,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>還原已停止：%1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>分析在背景繼續</translation>
     </message>
 </context>
 <context>
@@ -2908,7 +3092,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>請將游標放在函式內以設定其型別</translation>
+        <translation type="vanished">請將游標放在函式內以設定其型別</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3432,6 +3616,10 @@ After:
         <source>Plugin tasks</source>
         <translation>外掛工作</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>將游標放在全域物件上或函式內以設定其型別</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3822,6 +4010,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>專案變更已儲存</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>無法準備原始碼檢視：%1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>正在準備反編譯器</translation>
     </message>
 </context>
 <context>
@@ -5035,7 +5231,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>型別：%1</translation>
+        <translation type="vanished">型別：%1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5122,6 +5318,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>沒有本機型別：此程式沒有包含型別的 PDB 或 DWARF。</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · %1 個型別未匯入</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>下一個</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>沒有符合 %1 的型別。</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>頁碼 </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>上一個</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>型別：%1 · 顯示 %2–%3</translation>
     </message>
 </context>
 <context>
@@ -5434,6 +5654,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>移除此原始碼類型斷言並使用分析得到的類型</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>位於 %3 的 %1 是一個 %2 位元組的全域物件。請輸入本地型別中的純量或指標型別。</translation>
     </message>
 </context>
 <context>
@@ -10260,6 +10484,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>正在載入</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>正在準備反編譯器</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10379,14 +10607,6 @@ Your previous graph is still available.</source>
         <translation>將程式碼匯入映像</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>匯入行程外掛</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>匯入行程外掛…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 的記錄</translation>
     </message>
@@ -10447,10 +10667,6 @@ Your previous graph is still available.</source>
         <translation>位置</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>已匯入行程外掛：%1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>進度</translation>
     </message>
@@ -10493,6 +10709,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>此動作的註冊項目已不再作用。</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>匯入外掛</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>匯入外掛…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已匯入外掛：%1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10786,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>匯入行程外掛資訊清單以新增命令。僅執行命令時才會啟動提供程式。</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>匯入外掛…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>匯入行程外掛</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10800,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>已移除安裝記錄，正在停止執行中的工作。</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>已安裝的行程外掛</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10866,6 @@ Your previous graph is still available.</source>
         <translation>正在停止</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>類型：外部行程</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>無法使用</translation>
     </message>
@@ -10676,6 +10888,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>是</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>匯入外掛</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>外部處理程序</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>匯入外掛資訊清單以新增工作台命令或檢視。</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>已安裝外掛</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>原生 GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>來源：隨 NeverD 提供</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>此外掛隨 NeverD 提供。可使用「停用」將其關閉。</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>類型：%1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>未知</translation>
     </message>
 </context>
 <context>
@@ -10729,6 +10977,10 @@ Your previous graph is still available.</source>
     <message>
         <source>DWARF state at the selected PC</source>
         <translation>所選 PC 處的 DWARF 狀態</translation>
+    </message>
+    <message>
+        <source>Signing state recovered from instructions at the selected PC</source>
+        <translation>從指令還原所選 PC 處的簽章狀態</translation>
     </message>
     <message>
         <source>Compact unwind: completed-prologue recipe</source>
@@ -10850,6 +11102,55 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>關閉分頁</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI 模組在啟用過程中失敗。</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI 模組啟用失敗。</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI 模組遺失或位於外掛套件之外：%1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>此模組未提供所需的 GUI 介面。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>外掛選單動作無效、重複或無法使用：%1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>外掛檢視無效、重複或無法使用：%1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>分析工作階段已變更。</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>選單動作工廠必須使用提供的父物件。</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>檢視工廠必須建立工作台的子元件。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>正在載入 %1…</translation>
     </message>
 </context>
 </TS>

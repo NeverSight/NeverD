@@ -1,11 +1,13 @@
 #include "CodeView.h"
 
 #include "../Config.h"
+#include "../PageBytes.h"
 #include "../ResourceLimits.h"
 #include "DevicePixels.h"
 #include "HighlightLocks.h"
 #include "Icons.h"
 #include "InterpreterRecoveryDialog.h"
+#include "RenamedPages.h"
 #include "Session.h"
 #include "SettingsKeys.h"
 #include "ShrinkableRow.h"
@@ -27,6 +29,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QMenu>
+#include <QPaintEvent>
 #include <QPainter>
 #include <QRegularExpression>
 #include <QScopedValueRollback>
@@ -498,10 +501,10 @@ CodeText::CodeText(Session &session, QWidget *parent)
   connect(&Theme::instance(), &Theme::changed, this, [this] {
     ++styleStamp_;
     updateMetrics();
-    viewport()->update();
+    updateView();
   });
-  connect(&session_.highlightLocks(), &HighlightLocks::changed, viewport(),
-          qOverload<>(&QWidget::update));
+  connect(&session_.highlightLocks(), &HighlightLocks::changed, this,
+          &CodeText::updateView);
   // Scrolling moves another name under the mouse.
   for (auto *bar : {verticalScrollBar(), horizontalScrollBar()})
     connect(bar, &QScrollBar::valueChanged, this, [this] {
@@ -513,6 +516,9 @@ CodeText::CodeText(Session &session, QWidget *parent)
   for (const auto changed :
        {&Session::revisionChanged, &Session::sourceRefined})
     connect(&session_, changed, this, [this] {
+      // Read already, ahead of the others that hear of the revision.
+      if (std::exchange(readAhead_, false))
+        return;
       if (!function_)
         return;
       if (isVisible())
@@ -520,6 +526,56 @@ CodeText::CodeText(Session &session, QWidget *parent)
       else
         interrupted_ = true;
     });
+  // A view someone looks at reads its page ahead of what else a new revision
+  // sets off, and takes the one an edit's reply carried at once: it is there
+  // already, and shown before the rest of the workbench does its own work.
+  connect(&session_, &Session::shownRevisionChanged, this, [this] {
+    // The answer a text that read ahead waited for: it is read as any other,
+    // with what was asked of it meanwhile.
+    const auto ahead = std::exchange(ahead_, std::nullopt);
+    shownAhead_ = ahead.has_value();
+    if (!function_ || !isVisible())
+      return;
+    readAhead_ = true;
+    load(*function_, representation_,
+         ahead ? ahead->options : std::optional<QJsonObject>());
+  });
+  const auto take = [this] {
+    if (!readAhead_ || !loading_)
+      return;
+    // A page gives the next one's place: each is asked for as the one before
+    // it is taken.
+    rowsUpdated_ = {};
+    for (int pages = 0;
+         pages < ::neverd::limits::gui::kCodeViewPagesTakenAtOnce && loading_ &&
+         session_.deliverNow(this) > 0;
+         ++pages) {
+    }
+    // Shown now, the rows the page changed and no other: the rest read as
+    // they did.
+    if (loading_)
+      return;
+    showChanges();
+    if (!rowsUpdated_.isEmpty())
+      viewport()->repaint(std::exchange(rowsUpdated_, {}));
+  };
+  // A text that has the change still to show takes its page first.  One that
+  // showed it ahead of the answer has nothing new for its reader: it takes
+  // the answer behind the views that do (Session::shownRevisionTaken).
+  connect(&session_, &Session::shownRevisionAsked, this, [this, take] {
+    if (!shownAhead_)
+      take();
+  });
+  connect(&session_, &Session::shownRevisionTaken, this, [this, take] {
+    if (shownAhead_)
+      take();
+  });
+  // A rename with the worker writes the name in the places that link the
+  // old one, which the pages say: the text reads so at once, and as the
+  // worker made it when the answer comes; or as it did where the worker
+  // refuses the name.
+  connect(&session_, &Session::renaming, this, &CodeText::readAheadOf);
+  connect(&session_, &Session::renameRefused, this, &CodeText::takeBack);
   // A new default reaches the shown function too, whatever this window
   // chose for it; a hidden window takes it when it shows again.
   connect(&SourceDefaults::instance(), &SourceDefaults::changed, this, [this] {
@@ -594,26 +650,28 @@ void CodeText::resizeEvent(QResizeEvent *event) {
   QAbstractScrollArea::resizeEvent(event);
   updateRange();
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
+  updateView();
 }
 
 void CodeText::scrollContentsBy(int, int) {
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
-  viewport()->update();
+  updateView();
 }
 
-void CodeText::cancel() {
+void CodeText::cancel(bool finishRunning) {
   ++serial_;
   refreshPages_.reset();
   pendingAddress_.reset();
   // Cancelling hidden-pane work leaves the displayed document and its exact
   // instruction selection intact. A replacement document clears it below.
   statusNote_.clear();
-  session_.cancelAnalysisReads(this);
+  session_.cancelAnalysisReads(this, finishRunning);
   if (loading_) {
     sourceOptions_ = renderedOptions_;
     interrupted_ = true;
     loading_ = false;
-    status_ = tr("Cancelled");
+    status_ = finishRunning ? tr("Analysis continues in background")
+                            : tr("Cancelled");
     emit statusChanged();
   }
 }
@@ -629,7 +687,14 @@ void CodeText::clear() {
   sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
   interrupted_ = false;
   sourceRows_.clear();
+  rowLines_.clear();
+  pageRows_.clear();
+  pageRowsBefore_.clear();
   lineStarts_.clear();
+  linesBefore_.clear();
+  readyLines_.clear();
+  pages_.clear();
+  ahead_.reset();
   regions_ = {};
   regionsValid_ = false;
   prelude_ = {};
@@ -657,7 +722,7 @@ void CodeText::clear() {
   sourceNameIndex_.clear();
   unread_ = 0;
   updateRange();
-  viewport()->update();
+  updateView();
   if (!pageLanguage_.isEmpty()) {
     pageLanguage_.clear();
     emit languageChanged();
@@ -666,14 +731,38 @@ void CodeText::clear() {
 }
 
 void CodeText::load(Address function, const QString &representation,
-                    std::optional<QJsonObject> options) {
+                    std::optional<QJsonObject> options, bool refresh) {
+  // A text that reads ahead of a rename's answer is read again when the
+  // answer comes, and not before: a page the worker made before it took the
+  // rename would bring the name of before it back for a moment.
+  if (!refresh && ahead_ && function_ == function &&
+      representation_ == representation) {
+    ahead_->read = true;
+    if (options)
+      ahead_->options = std::move(options);
+    return;
+  }
+  ahead_.reset();
+  if (refresh)
+    session_.analysisQueries({{"address", hexAddress(function)}}, this)
+        .listingChanged();
+  request(
+      0,
+      beginLoad(function, representation, std::move(options), false, refresh),
+      refresh);
+}
+
+quint64 CodeText::beginLoad(Address function, const QString &representation,
+                            std::optional<QJsonObject> options, bool here,
+                            bool refresh) {
   ++DocumentVersion;
   const bool same = function_ == function && representation_ == representation;
   const auto nextOptions = options.value_or(
       same ? sourceOptions_ : SourceDefaults::options(representation));
+  // Pages that are here are those of the text as a whole, whatever changed.
   const bool nameRefresh =
-      ((complete_ && !interrupted_) || refreshPages_) && !lines_.isEmpty() &&
-      same && nextOptions == sourceOptions_ &&
+      !here && !refresh && ((complete_ && !interrupted_) || refreshPages_) &&
+      !lines_.isEmpty() && same && nextOptions == sourceOptions_ &&
       session_.queries().localNamesOnly() && CodeView::isSource(representation);
   pageLines_ = nameRefresh
                    ? ::neverd::limits::gui::kCodeViewNameRefreshPageLines
@@ -687,7 +776,7 @@ void CodeText::load(Address function, const QString &representation,
   } else if (!placeAfterLoad_ && !loading_ && !interrupted_ &&
              cursorLine_ < lines_.size())
     placeAfterLoad_ = currentPlace();
-  cancel();
+  cancel(true);
   selectedAddress_.reset();
   if (nameRefresh)
     refreshPages_.emplace();
@@ -707,6 +796,7 @@ void CodeText::load(Address function, const QString &representation,
   if (!same) {
     renderedOptions_ = {};
     lines_.clear();
+    readyLines_.clear();
     ++linesStamp_;
     widestLine_ = 0;
     cursorLine_ = cursorColumn_ = 0;
@@ -728,6 +818,8 @@ void CodeText::load(Address function, const QString &representation,
   blockStructureAfterLoad_ = same ? library_.blockStructure() : QString();
   if (!same)
     library_.reset({}, {}, {});
+  if (here)
+    return serial;
   if (!nameRefresh) {
     emit foldingChanged();
     status_ = sourceOptions_.contains("interpreter_recovery")
@@ -735,7 +827,103 @@ void CodeText::load(Address function, const QString &representation,
                   : tr("Decompiling…");
   }
   emit statusChanged();
-  request(0, serial);
+  return serial;
+}
+
+QRegion CodeText::takePages(const QVector<QJsonObject> &pages) {
+  // As a read of the function it shows again, whose pages are here already.
+  beginLoad(*function_, representation_, std::nullopt, true);
+  rowsUpdated_ = {};
+  pagesHere_ = true;
+  int offset = 0;
+  for (const QJsonObject &page : pages) {
+    const auto next = takePage(page, offset);
+    if (!next)
+      break;
+    offset = *next;
+  }
+  pagesHere_ = false;
+  // Shown now, the rows the pages changed and no other.
+  showChanges();
+  const QRegion shown = std::exchange(rowsUpdated_, {});
+  if (!shown.isEmpty())
+    viewport()->repaint(shown);
+  return shown;
+}
+
+void CodeText::readAheadOf(Address address, const QString &name) {
+  // The pages of a whole text someone looks at say what a function's new
+  // name makes of it.  Where they do not, or name data, whose name the
+  // worker reads the text again for, the lines are made ready and no more.
+  const auto renaming = showsAhead_ && function_ && isVisible() && complete() &&
+                                !ahead_ && editMetadata_ && !pages_.isEmpty()
+                            ? PagesRenaming::read(pages_, address, name)
+                            : std::nullopt;
+  if (!renaming || renaming->data()) {
+    makeReadyFor(address, name,
+                 ::neverd::limits::gui::kCodeViewLinesMadeReadyForRename);
+    return;
+  }
+  // The rows of the viewport the name is written on are painted first, each
+  // as its line is about to read; the pages are taken then, which paints
+  // nothing where the text reads so.  A name that opens or closes a comment
+  // colors the lines after it too, which taking the pages does.
+  //
+  // Where the text has names of its source's language, a line is colored by
+  // how the text spells them, and a function's new name may be one: they are
+  // read of the pages as the name leaves them, as taking the pages reads
+  // them, before a line is colored.
+  std::optional<QVector<QJsonObject>> renamed;
+  if (!sourceNames_.isEmpty()) {
+    renamed = renaming->pages();
+    sourceNames_.clear();
+    sourceNameIndex_.clear();
+    for (const QJsonObject &page : std::as_const(*renamed))
+      addSourceNames(page, PageBytes(page.value("text").toString()),
+                     page.value("byte_offset").toInteger(-1));
+  }
+  makeReadyFor(address, name, std::numeric_limits<int>::max());
+  QRegion shownAhead;
+  if (!readyLines_.isEmpty() &&
+      std::all_of(readyLines_.cbegin(), readyLines_.cend(),
+                  [this](const ReadyLine &ready) {
+                    return ready.commentAfter ==
+                           lines_[ready.index].commentAfter;
+                  })) {
+    for (ReadyLine &ready : readyLines_)
+      std::swap(lines_[ready.index].styled, ready.styled);
+    ++linesStamp_;
+    // The cursor of a line that grew shorter stands at its end, where taking
+    // the pages puts it.
+    if (cursorLine_ < lines_.size())
+      cursorColumn_ =
+          std::min(cursorColumn_, int(lines_[cursorLine_].styled.text.size()));
+    rowsUpdated_ = {};
+    updateView();
+    showChanges();
+    shownAhead = std::exchange(rowsUpdated_, {});
+    if (!shownAhead.isEmpty())
+      viewport()->repaint(shownAhead);
+  }
+  readyLines_.clear();
+  Ahead ahead{address, name, pages_, false, std::nullopt};
+  // A row painted ahead stands as the pages make it: none is painted twice.
+  if (takePages(renamed ? *renamed : renaming->pages()).intersects(shownAhead))
+    ++rowsShownTwice_;
+  ahead_ = std::move(ahead);
+  ++readsAhead_;
+}
+
+void CodeText::takeBack(Address address, const QString &name) {
+  if (!ahead_ || ahead_->address != address || ahead_->name != name)
+    return;
+  // The worker refused the rename: the text reads as it did before, and is
+  // read again where someone asked for that meanwhile.
+  const Ahead ahead = *std::exchange(ahead_, std::nullopt);
+  if (function_)
+    (void)takePages(ahead.before);
+  if (ahead.read && function_ && isVisible())
+    load(*function_, representation_, ahead.options);
 }
 
 void CodeText::setSourceOptions(const QJsonObject &options) {
@@ -760,248 +948,89 @@ void CodeText::showOrdinary(const QString &why) {
   auto options = sourceOptions_;
   options.remove("symbolic");
   options.remove("interpreter_recovery");
+  // An explicit cancellation must stop the transformation before loading its
+  // ordinary replacement. Navigation alone keeps running analysis alive.
+  cancel();
   load(*function_, representation_, options);
   // Pages arrive from the event loop, after this.
   statusNote_ = why;
 }
 
-void CodeText::request(int offset, quint64 serial) {
+void CodeText::makeReadyFor(Address address, const QString &name, int most) {
+  readyLines_.clear();
+  if (!isVisible() || !complete() || !editMetadata_ || lines_.isEmpty())
+    return;
+  const bool folding = library_.canFold();
+  const int first = verticalScrollBar()->value();
+  const int last = std::min(int(lines_.size()) - 1, first + visibleLines());
+  // The places the viewport's lines link the address's name, in the text's
+  // order.
+  struct Place {
+    int line, column, length;
+  };
+  QVector<Place> places;
+  for (const EditName &edit : std::as_const(editNames_)) {
+    if (edit.target.value("kind").toString() != QLatin1String("address") ||
+        addressValue(edit.target.value("address")) != address)
+      continue;
+    const int at =
+        folding ? library_.projectedPosition(edit.begin) : edit.begin;
+    const int line =
+        int(std::upper_bound(lineStarts_.cbegin(), lineStarts_.cend(), at) -
+            lineStarts_.cbegin()) -
+        1;
+    if (line < first || line > last)
+      continue;
+    const int column = at - lineStarts_[line];
+    const int length = edit.end - edit.begin;
+    const QString &shown = lines_[line].styled.text;
+    // The line shows the name where the source has it, not a fold's summary
+    // over it.
+    if (lines_[line].folded || column + length > shown.size() ||
+        QStringView(shown).mid(column, length) !=
+            QStringView(source_).mid(edit.begin, length))
+      continue;
+    places.append({line, column, length});
+  }
+  const QFont font = Theme::instance().codeFont();
+  for (qsizetype from = 0; from < places.size() && readyLines_.size() < most;) {
+    qsizetype to = from + 1;
+    while (to < places.size() && places[to].line == places[from].line)
+      ++to;
+    const int index = places[from].line;
+    // The last place first: each leaves the columns before it where they are.
+    Line made;
+    made.styled.text = lines_[index].styled.text;
+    for (qsizetype place = to; place-- > from;)
+      made.styled.text.replace(places[place].column, places[place].length,
+                               name);
+    from = to;
+    if (made.styled.text == lines_[index].styled.text)
+      continue;
+    bool inComment = lines_[index].commentBefore;
+    highlightLine(made, inComment);
+    made.styled.layout(font, styleStamp_, codeColor);
+    readyLines_.append({index, std::move(made.styled), inComment});
+  }
+}
+
+void CodeText::request(int offset, quint64 serial, bool refresh) {
   if (!function_)
     return;
+  QJsonObject payload{{"address", hexAddress(*function_)},
+                      {"representation", representation_},
+                      {"source_options", sourceOptions_},
+                      {"offset", offset},
+                      {"limit", pageLines_}};
+  if (refresh)
+    payload["refresh"] = true;
   session_.read(
-      QStringLiteral("decompile"),
-      {{"address", hexAddress(*function_)},
-       {"representation", representation_},
-       {"source_options", sourceOptions_},
-       {"offset", offset},
-       {"limit", pageLines_}},
-      this,
+      QStringLiteral("decompile"), payload, this,
       [this, offset, serial](const QJsonObject &payload) {
         if (serial != serial_)
           return;
-        if (offset == 0 && payload.contains("recovery_report")) {
-          RecoveryReport = payload.value("recovery_report").toObject();
-          if (!payload.value("source_available").toBool()) {
-            loading_ = false;
-            interrupted_ = true;
-            refreshPages_.reset();
-            pendingAddress_.reset();
-            placeAfterLoad_.reset();
-            selectAllAfterLoad_ = false;
-            sourceOptions_ = renderedOptions_;
-            status_ = tr("Recovery stopped: %1")
-                          .arg(RecoveryReport.value("error").toString(
-                              tr("No complete source was produced")));
-            emit statusChanged();
-            return;
-          }
-        }
-        const auto next = payload.value("next_offset");
-        struct RefreshPlace {
-          int cursor, top, horizontal;
-          std::optional<int> anchor;
-          QVector<EditName> names;
-        };
-        std::optional<RefreshPlace> refreshPlace;
-        std::optional<QSignalBlocker> rowsBlocked, columnsBlocked;
-        if (refreshPages_) {
-          refreshPages_->append(payload);
-          if (!next.isNull() && next.toInt() > offset) {
-            request(next.toInt(), serial);
-            return;
-          }
-          // Take the latest place, including scrolling or a selection made
-          // while the replacement was loading. No partial page is painted.
-          const auto original = [this](int line, int column) {
-            const int at = displayPosition(line, column);
-            return library_.canFold() ? library_.originalPosition(at) : at;
-          };
-          refreshPlace =
-              RefreshPlace{original(cursorLine_, cursorColumn_),
-                           lines_[std::clamp(verticalScrollBar()->value(), 0,
-                                             int(lines_.size()) - 1)]
-                               .sourceLine,
-                           horizontalScrollBar()->value(),
-                           anchor_ ? std::optional<int>(original(
-                                         anchor_->first, anchor_->second))
-                                   : std::nullopt,
-                           editNames_};
-          foldAfterLoad_ = library_.libraryFolded();
-          foldPreludeAfterLoad_ = library_.isFolded(PreludeRegion);
-          foldEpilogueAfterLoad_ = library_.isFolded(EpilogueRegion);
-          blocksAfterLoad_ = library_.foldedBlocks();
-          blockStructureAfterLoad_ = library_.blockStructure();
-          rowsBlocked.emplace(verticalScrollBar());
-          columnsBlocked.emplace(horizontalScrollBar());
-          auto pages = std::move(*refreshPages_);
-          refreshPages_.reset();
-          int pageOffset = 0;
-          for (const auto &page : pages) {
-            appendPage(page, pageOffset);
-            pageOffset = page.value("next_offset").toInt();
-          }
-        } else {
-          appendPage(payload, offset);
-          if (!next.isNull() && next.toInt() > offset) {
-            renderedOptions_ = sourceOptions_;
-            rebuildLines(true);
-            request(next.toInt(), serial);
-            return;
-          }
-        }
-        renderedOptions_ = sourceOptions_;
-        loading_ = false;
-        complete_ = true;
-        // Folding needs the whole function: regions span pages.
-        library_.reset(source_, sourceRows_,
-                       regionsValid_ ? foldRegions() : QJsonArray(),
-                       byteOffset_, false, CodeView::isSource(representation_));
-        if (foldAfterLoad_)
-          library_.setFolded(true);
-        if (foldPreludeAfterLoad_)
-          library_.setRegionFolded(PreludeRegion, true);
-        if (foldEpilogueAfterLoad_)
-          library_.setRegionFolded(EpilogueRegion, true);
-        if (foldDetailsAfterLoad_)
-          library_.setFoldedBlocks(library_.defaultDetailBlocks());
-        else if (!blocksAfterLoad_.isEmpty() &&
-                 library_.blockStructure() == blockStructureAfterLoad_)
-          library_.setFoldedBlocks(blocksAfterLoad_);
-        // Unfolded pages are already colored and mapped. Only a changed
-        // projection requires rebuilding earlier lines.
-        rebuildLines(!library_.anyFolded());
-        emit foldingChanged();
-        if (refreshPlace && !lines_.isEmpty()) {
-          // Local-name metadata tracks each occurrence across changes in
-          // spelling length. Keep a selected identifier selected in full.
-          auto oldNames = std::move(refreshPlace->names);
-          auto newNames = editNames_;
-          const auto byBegin = [](const EditName &a, const EditName &b) {
-            return a.begin < b.begin;
-          };
-          std::sort(oldNames.begin(), oldNames.end(), byBegin);
-          std::sort(newNames.begin(), newNames.end(), byBegin);
-          const bool matching =
-              oldNames.size() == newNames.size() &&
-              std::equal(oldNames.cbegin(), oldNames.cend(), newNames.cbegin(),
-                         [](const EditName &a, const EditName &b) {
-                           return a.target.value("original") ==
-                                      b.target.value("original") &&
-                                  a.target.value("identity") ==
-                                      b.target.value("identity") &&
-                                  a.target.value("kind") ==
-                                      b.target.value("kind") &&
-                                  a.target.value("address") ==
-                                      b.target.value("address");
-                         });
-          const auto mapped = [&](int position) {
-            int shift = 0;
-            if (matching)
-              for (int i = 0; i < oldNames.size(); ++i) {
-                const auto &oldName = oldNames[i];
-                const auto &newName = newNames[i];
-                if (position < oldName.begin)
-                  break;
-                if (position < oldName.end)
-                  return newName.begin + std::min(position - oldName.begin,
-                                                  newName.end - newName.begin);
-                shift = newName.end - oldName.end;
-              }
-            return position + shift;
-          };
-          const auto projected = [&](int original) {
-            const int at = library_.canFold()
-                               ? library_.projectedPosition(mapped(original))
-                               : mapped(original);
-            const int line =
-                std::clamp(int(std::upper_bound(lineStarts_.cbegin(),
-                                                lineStarts_.cend(), at) -
-                               lineStarts_.cbegin()) -
-                               1,
-                           0, int(lines_.size()) - 1);
-            return std::pair{line,
-                             std::clamp(at - lineStarts_[line], 0,
-                                        int(lines_[line].styled.text.size()))};
-          };
-          const auto cursor = projected(refreshPlace->cursor);
-          cursorLine_ = cursor.first;
-          cursorColumn_ = cursor.second;
-          anchor_ = refreshPlace->anchor
-                        ? std::optional(projected(*refreshPlace->anchor))
-                        : std::nullopt;
-          if (matching)
-            for (int i = 0; i < oldNames.size(); ++i)
-              if (highlight_ == oldNames[i].target.value("name").toString()) {
-                highlight_ = newNames[i].target.value("name").toString();
-                break;
-              }
-          verticalScrollBar()->setValue(
-              library_.canFold() ? library_.displayLine(refreshPlace->top)
-                                 : refreshPlace->top);
-          horizontalScrollBar()->setValue(refreshPlace->horizontal);
-          placeAfterLoad_.reset();
-        } else if (const auto place = std::exchange(placeAfterLoad_, {});
-                   place && !lines_.isEmpty()) {
-          cursorLine_ = shownLine(place->cursorLine);
-          cursorColumn_ =
-              std::clamp(place->cursorColumn, 0,
-                         int(lines_[cursorLine_].styled.text.size()));
-          verticalScrollBar()->setValue(shownLine(place->topLine));
-        }
-        const auto mapping = payload.value("mapping_status").toString();
-        status_ = session_.metadata().value("analyzed").toBool()
-                      ? QString()
-                      : tr("Function-level analysis");
-        if (mapping == QLatin1String("instruction_anchors"))
-          status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
-                     tr("rows linked to instructions");
-        if (unread_ > 0)
-          status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
-                     tr("%n declarations shown as C", nullptr, unread_);
-        if (payload.value("code_edits_stale").toBool())
-          status_ +=
-              QStringLiteral(" · ") +
-              tr("Saved variable names belong to a different source rendering");
-        if (!payload.value("stale_variable_types").toArray().isEmpty())
-          status_ +=
-              QStringLiteral(" · ") + tr("Saved variable types need review: "
-                                         "the analysis or local types changed");
-        for (const auto &edit :
-             payload.value("variable_edit_results").toArray())
-          if (!edit.toObject().value("applied").toBool()) {
-            status_ += QStringLiteral(" · ") +
-                       tr("Saved variable associations need review: ") +
-                       edit.toObject().value("refusal").toString();
-            break;
-          }
-        for (const auto &edit : payload.value("call_type_results").toArray())
-          if (!edit.toObject().value("applied").toBool()) {
-            status_ += QStringLiteral(" · ") +
-                       tr("Saved call-site declaration needs review: ") +
-                       edit.toObject().value("refusal").toString();
-            break;
-          }
-        if (sourceOptions_.value("symbolic").toBool())
-          status_ += QStringLiteral(" · ") + tr("Symbolic simplification");
-        if (sourceOptions_.contains("interpreter_recovery"))
-          status_ +=
-              QStringLiteral(" · ") +
-              tr("Interpreter recovered · %1 blocks")
-                  .arg(RecoveryReport.value("residualBlocks").toInteger());
-        if (representation_ == QLatin1String("llvmc"))
-          status_ +=
-              QStringLiteral(" · ") + sourceOptions_.value("llvm_optimization")
-                                          .toString(QStringLiteral("O2"));
-        if (!statusNote_.isEmpty())
-          status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
-                     std::exchange(statusNote_, {});
-        updateRange();
-        viewport()->update();
-        if (const auto address = std::exchange(pendingAddress_, {}))
-          selectAddress(*address);
-        if (selectAllAfterLoad_)
-          selectAll();
-        emit statusChanged();
+        if (const auto next = takePage(payload, offset))
+          request(*next, serial);
       },
       [this, offset, serial](const QString &code, const QString &message) {
         if (serial != serial_)
@@ -1054,9 +1083,233 @@ void CodeText::request(int offset, quint64 serial) {
         widestLine_ = message.size();
         status_ = message;
         updateRange();
-        viewport()->update();
+        updateView();
         emit statusChanged();
       });
+}
+
+std::optional<int> CodeText::takePage(const QJsonObject &payload, int offset) {
+  if (offset == 0 && payload.contains("recovery_report")) {
+    RecoveryReport = payload.value("recovery_report").toObject();
+    if (!payload.value("source_available").toBool()) {
+      loading_ = false;
+      interrupted_ = true;
+      refreshPages_.reset();
+      pendingAddress_.reset();
+      placeAfterLoad_.reset();
+      selectAllAfterLoad_ = false;
+      sourceOptions_ = renderedOptions_;
+      status_ = tr("Recovery stopped: %1")
+                    .arg(RecoveryReport.value("error").toString(
+                        tr("No complete source was produced")));
+      emit statusChanged();
+      return std::nullopt;
+    }
+  }
+  const auto next = payload.value("next_offset");
+  struct RefreshPlace {
+    int cursor, top, horizontal;
+    std::optional<int> anchor;
+    QVector<EditName> names;
+  };
+  std::optional<RefreshPlace> refreshPlace;
+  std::optional<QSignalBlocker> rowsBlocked, columnsBlocked;
+  if (refreshPages_) {
+    refreshPages_->append(payload);
+    if (!next.isNull() && next.toInt() > offset) {
+      return next.toInt();
+    }
+    // Take the latest place, including scrolling or a selection made
+    // while the replacement was loading. No partial page is painted.
+    const auto original = [this](int line, int column) {
+      const int at = displayPosition(line, column);
+      return library_.canFold() ? library_.originalPosition(at) : at;
+    };
+    refreshPlace = RefreshPlace{
+        original(cursorLine_, cursorColumn_),
+        lines_[std::clamp(verticalScrollBar()->value(), 0,
+                          int(lines_.size()) - 1)]
+            .sourceLine,
+        horizontalScrollBar()->value(),
+        anchor_ ? std::optional<int>(original(anchor_->first, anchor_->second))
+                : std::nullopt,
+        editNames_};
+    foldAfterLoad_ = library_.libraryFolded();
+    foldPreludeAfterLoad_ = library_.isFolded(PreludeRegion);
+    foldEpilogueAfterLoad_ = library_.isFolded(EpilogueRegion);
+    blocksAfterLoad_ = library_.foldedBlocks();
+    blockStructureAfterLoad_ = library_.blockStructure();
+    rowsBlocked.emplace(verticalScrollBar());
+    columnsBlocked.emplace(horizontalScrollBar());
+    auto pages = std::move(*refreshPages_);
+    refreshPages_.reset();
+    int pageOffset = 0;
+    for (const auto &page : pages) {
+      appendPage(page, pageOffset);
+      pageOffset = page.value("next_offset").toInt();
+    }
+  } else {
+    appendPage(payload, offset);
+    if (!next.isNull() && next.toInt() > offset) {
+      renderedOptions_ = sourceOptions_;
+      // A page whose next is on its way shows meanwhile.
+      if (!pagesHere_)
+        rebuildLines(true);
+      return next.toInt();
+    }
+  }
+  renderedOptions_ = sourceOptions_;
+  loading_ = false;
+  complete_ = true;
+  // The text shown before lent its rows to the pages that brought
+  // them again.
+  pageRowsBefore_.clear();
+  {
+    // Folding needs the whole function: regions span pages.  The
+    // function and what of it is folded are projected once.
+    const LibraryCodeView::Hold projection(library_);
+    library_.reset(source_, sourceRows_,
+                   regionsValid_ ? foldRegions() : QJsonArray(), byteOffset_,
+                   false, CodeView::isSource(representation_));
+    if (foldAfterLoad_)
+      library_.setFolded(true);
+    if (foldPreludeAfterLoad_)
+      library_.setRegionFolded(PreludeRegion, true);
+    if (foldEpilogueAfterLoad_)
+      library_.setRegionFolded(EpilogueRegion, true);
+    if (foldDetailsAfterLoad_)
+      library_.setFoldedBlocks(library_.defaultDetailBlocks());
+    else if (!blocksAfterLoad_.isEmpty() &&
+             library_.blockStructure() == blockStructureAfterLoad_)
+      library_.setFoldedBlocks(blocksAfterLoad_);
+  }
+  // Unfolded pages are already colored and mapped. Only a changed
+  // projection requires rebuilding earlier lines.
+  rebuildLines(!library_.anyFolded());
+  emit foldingChanged();
+  if (refreshPlace && !lines_.isEmpty()) {
+    // Local-name metadata tracks each occurrence across changes in
+    // spelling length. Keep a selected identifier selected in full.
+    auto oldNames = std::move(refreshPlace->names);
+    auto newNames = editNames_;
+    const auto byBegin = [](const EditName &a, const EditName &b) {
+      return a.begin < b.begin;
+    };
+    std::sort(oldNames.begin(), oldNames.end(), byBegin);
+    std::sort(newNames.begin(), newNames.end(), byBegin);
+    const bool matching =
+        oldNames.size() == newNames.size() &&
+        std::equal(
+            oldNames.cbegin(), oldNames.cend(), newNames.cbegin(),
+            [](const EditName &a, const EditName &b) {
+              return a.target.value("original") == b.target.value("original") &&
+                     a.target.value("identity") == b.target.value("identity") &&
+                     a.target.value("kind") == b.target.value("kind") &&
+                     a.target.value("address") == b.target.value("address");
+            });
+    const auto mapped = [&](int position) {
+      int shift = 0;
+      if (matching)
+        for (int i = 0; i < oldNames.size(); ++i) {
+          const auto &oldName = oldNames[i];
+          const auto &newName = newNames[i];
+          if (position < oldName.begin)
+            break;
+          if (position < oldName.end)
+            return newName.begin + std::min(position - oldName.begin,
+                                            newName.end - newName.begin);
+          shift = newName.end - oldName.end;
+        }
+      return position + shift;
+    };
+    const auto projected = [&](int original) {
+      const int at = library_.canFold()
+                         ? library_.projectedPosition(mapped(original))
+                         : mapped(original);
+      const int line = std::clamp(
+          int(std::upper_bound(lineStarts_.cbegin(), lineStarts_.cend(), at) -
+              lineStarts_.cbegin()) -
+              1,
+          0, int(lines_.size()) - 1);
+      return std::pair{line, std::clamp(at - lineStarts_[line], 0,
+                                        int(lines_[line].styled.text.size()))};
+    };
+    const auto cursor = projected(refreshPlace->cursor);
+    cursorLine_ = cursor.first;
+    cursorColumn_ = cursor.second;
+    anchor_ = refreshPlace->anchor
+                  ? std::optional(projected(*refreshPlace->anchor))
+                  : std::nullopt;
+    if (matching)
+      for (int i = 0; i < oldNames.size(); ++i)
+        if (highlight_ == oldNames[i].name) {
+          highlight_ = newNames[i].name;
+          break;
+        }
+    verticalScrollBar()->setValue(library_.canFold()
+                                      ? library_.displayLine(refreshPlace->top)
+                                      : refreshPlace->top);
+    horizontalScrollBar()->setValue(refreshPlace->horizontal);
+    placeAfterLoad_.reset();
+  } else if (const auto place = std::exchange(placeAfterLoad_, {});
+             place && !lines_.isEmpty()) {
+    cursorLine_ = shownLine(place->cursorLine);
+    cursorColumn_ = std::clamp(place->cursorColumn, 0,
+                               int(lines_[cursorLine_].styled.text.size()));
+    verticalScrollBar()->setValue(shownLine(place->topLine));
+  }
+  const auto mapping = payload.value("mapping_status").toString();
+  status_ = session_.metadata().value("analyzed").toBool()
+                ? QString()
+                : tr("Function-level analysis");
+  if (mapping == QLatin1String("instruction_anchors"))
+    status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
+               tr("rows linked to instructions");
+  if (unread_ > 0)
+    status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
+               tr("%n declarations shown as C", nullptr, unread_);
+  if (payload.value("code_edits_stale").toBool())
+    status_ +=
+        QStringLiteral(" · ") +
+        tr("Saved variable names belong to a different source rendering");
+  if (!payload.value("stale_variable_types").toArray().isEmpty())
+    status_ +=
+        QStringLiteral(" · ") + tr("Saved variable types need review: "
+                                   "the analysis or local types changed");
+  for (const auto &edit : payload.value("variable_edit_results").toArray())
+    if (!edit.toObject().value("applied").toBool()) {
+      status_ += QStringLiteral(" · ") +
+                 tr("Saved variable associations need review: ") +
+                 edit.toObject().value("refusal").toString();
+      break;
+    }
+  for (const auto &edit : payload.value("call_type_results").toArray())
+    if (!edit.toObject().value("applied").toBool()) {
+      status_ += QStringLiteral(" · ") +
+                 tr("Saved call-site declaration needs review: ") +
+                 edit.toObject().value("refusal").toString();
+      break;
+    }
+  if (sourceOptions_.value("symbolic").toBool())
+    status_ += QStringLiteral(" · ") + tr("Symbolic simplification");
+  if (sourceOptions_.contains("interpreter_recovery"))
+    status_ += QStringLiteral(" · ") +
+               tr("Interpreter recovered · %1 blocks")
+                   .arg(RecoveryReport.value("residualBlocks").toInteger());
+  if (representation_ == QLatin1String("llvmc"))
+    status_ += QStringLiteral(" · ") + sourceOptions_.value("llvm_optimization")
+                                           .toString(QStringLiteral("O2"));
+  if (!statusNote_.isEmpty())
+    status_ += (status_.isEmpty() ? QString() : QStringLiteral(" · ")) +
+               std::exchange(statusNote_, {});
+  updateRange();
+  updateView();
+  if (const auto address = std::exchange(pendingAddress_, {}))
+    selectAddress(*address);
+  if (selectAllAfterLoad_)
+    selectAll();
+  emit statusChanged();
+  return std::nullopt;
 }
 
 void CodeText::appendPage(const QJsonObject &payload, int offset) {
@@ -1064,12 +1317,17 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
     library_.reset({}, {}, {});
     editNames_.clear();
     editMetadata_ = payload.contains("code_names");
+    pages_.clear();
   }
+  pages_.append(payload);
   const QString text = payload.value("text").toString();
   const qint64 pageOffset = payload.value("byte_offset").toInteger(-1);
   if (offset == 0) {
     source_.clear();
     sourceRows_.clear();
+    rowLines_.clear();
+    // The rows it read lend themselves to the pages that bring them again.
+    pageRowsBefore_ = std::exchange(pageRows_, {});
     regions_ = payload.value("library_regions").toArray();
     regionsValid_ =
         payload.value("library_regions").isArray() && pageOffset >= 0;
@@ -1092,18 +1350,49 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
   }
   if (offset == 0) {
     sourceBytes_ = renderedChars_ = renderedRows_ = widestLine_ = 0;
+    // The lines it showed lend the ones that read the same their layouts
+    // (rebuildLines): a page read again after an edit changes few.
+    if (!lines_.isEmpty())
+      linesBefore_ = std::move(lines_);
     lines_.clear();
     lineStarts_.clear();
   }
   const int pageCharBase = source_.size();
   source_ += text;
-  sourceBytes_ += text.toUtf8().size();
+  // A name's bytes are in the page that holds its line.
+  const PageBytes bytes(text);
+  sourceBytes_ += bytes.size();
   if (!text.isEmpty() && !text.endsWith(QLatin1Char('\n'))) {
     source_ += QLatin1Char('\n');
     ++sourceBytes_;
   }
-  for (const auto &row : payload.value("rows").toArray())
-    sourceRows_.append(row.toObject().toVariantMap());
+  {
+    const QJsonArray given = payload.value("rows").toArray();
+    PageRows rows;
+    if (const qsizetype page = pageRows_.size();
+        page < pageRowsBefore_.size() && pageRowsBefore_[page].given == given) {
+      rows = std::move(pageRowsBefore_[page]);
+      ++pageRowsKept_;
+    } else {
+      rows.given = given;
+      for (const auto &row : given) {
+        const QVariantMap read = row.toObject().toVariantMap();
+        SourceRow line;
+        line.line = read.value(QStringLiteral("line"), -1).toInt();
+        // The projection reads a row that names no line as the first one's.
+        line.projectedLine = read.value(QStringLiteral("line")).toInt();
+        for (const auto &address :
+             read.value(QStringLiteral("addresses")).toList())
+          if (const auto parsed = parseAddress(address.toString()))
+            line.addresses.append(*parsed);
+        rows.read.append(read);
+        rows.lines.append(std::move(line));
+      }
+    }
+    sourceRows_ += rows.read;
+    rowLines_ += rows.lines;
+    pageRows_.append(std::move(rows));
+  }
   for (const auto &value : payload.value("references").toArray()) {
     const auto reference = value.toObject();
     const auto line = reference.value("line").toInteger(-1);
@@ -1113,22 +1402,22 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
         !name.isEmpty())
       references_[int(line)].append({name, *address});
   }
-  // A source name's bytes are in the page that holds its line.
-  const QByteArray bytes = text.toUtf8();
   for (const auto &value : payload.value("code_names").toArray()) {
     const auto name = value.toObject();
     const auto begin = name.value("begin_byte").toInteger(-1) - pageOffset;
     const auto end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (begin >= 0 && end > begin && end <= bytes.size()) {
-      auto target = name;
-      const auto spelling = QString::fromUtf8(bytes.mid(begin, end - begin));
-      target["name"] = spelling;
-      editNames_.push_back(
-          {pageCharBase + int(QString::fromUtf8(bytes.left(begin)).size()),
-           pageCharBase + int(QString::fromUtf8(bytes.left(end)).size()),
-           std::move(target)});
+      const int first = bytes.charsBefore(begin);
+      const int last = bytes.charsBefore(end);
+      editNames_.push_back({pageCharBase + first, pageCharBase + last, name,
+                            bytes.spelled(begin, end - begin)});
     }
   }
+  addSourceNames(payload, bytes, pageOffset);
+}
+
+void CodeText::addSourceNames(const QJsonObject &payload,
+                              const PageBytes &bytes, qint64 pageOffset) {
   bool namesAdded = false;
   for (const auto &value : payload.value("source_names").toArray()) {
     const auto name = value.toObject();
@@ -1136,7 +1425,7 @@ void CodeText::appendPage(const QJsonObject &payload, int offset) {
     const qint64 end = name.value("end_byte").toInteger(-1) - pageOffset;
     if (pageOffset < 0 || begin < 0 || end <= begin || end > bytes.size())
       continue;
-    const QString spelled = QString::fromUtf8(bytes.mid(begin, end - begin));
+    const QString spelled = bytes.spelled(begin, end - begin);
     if (spelled.isEmpty() || sourceNames_.contains(spelled))
       continue;
     sourceNames_.insert(spelled, {name.value("identifier").toString(),
@@ -1247,16 +1536,34 @@ QJsonArray CodeText::foldRegions() const {
 void CodeText::rebuildLines(bool append) {
   const bool folding = (!loading_ || refreshPages_) && library_.canFold();
   const QString display = folding ? library_.text() : source_;
-  const QVariantList &rows = folding ? library_.mappings() : sourceRows_;
   const int previousLine = cursorLine_;
   if (!append) {
+    // The lines it showed lend the ones that read the same their layouts,
+    // below: a fold, or a page read again, changes few.
+    if (linesBefore_.isEmpty()) {
+      linesBefore_ = std::move(lines_);
+    } else {
+      // The lines of a first page, shown while the rest was on its way,
+      // give back the layouts they took: the whole text's lines take them.
+      const auto count = std::min(linesBefore_.size(), lines_.size());
+      for (qsizetype i = 0; i < count; ++i)
+        linesBefore_[i].styled.adoptLayout(lines_[i].styled);
+    }
     lines_.clear();
     lineStarts_.clear();
     inComment_ = false;
     renderedChars_ = renderedRows_ = widestLine_ = 0;
   }
   int start = renderedChars_;
+  const int firstNewLine = lines_.size();
   const bool addressLabels = labelsNameAddresses();
+  // A line colored among no source names is colored by its text, its dialect
+  // and the comment open where it begins alone.  One that reads as the lent
+  // line in its place, which was colored so in this dialect with a comment
+  // open or not as here, takes that line's spans.
+  const qint8 coloring = sourceNames_.isEmpty()
+                             ? qint8(dialectOf(representation_, pageLanguage_))
+                             : Line::ColoredOtherwise;
   while (start < display.size()) {
     int end = int(display.indexOf(QLatin1Char('\n'), start));
     if (end < 0)
@@ -1271,23 +1578,45 @@ void CodeText::rebuildLines(bool append) {
         line.addresses = {label->second};
       }
     widestLine_ = std::max(widestLine_, int(line.styled.text.size()));
-    highlightLine(line, inComment_);
+    line.commentBefore = inComment_;
+    if (const Line *lent = coloring != Line::ColoredOtherwise &&
+                                   lines_.size() < linesBefore_.size()
+                               ? &std::as_const(linesBefore_)[lines_.size()]
+                               : nullptr;
+        lent && lent->coloredIn == coloring &&
+        lent->commentBefore == inComment_ &&
+        lent->styled.text == line.styled.text) {
+      line.styled.spans = lent->styled.spans;
+      inComment_ = lent->commentAfter;
+      ++spansKept_;
+    } else {
+      highlightLine(line, inComment_);
+    }
+    line.commentAfter = inComment_;
+    line.coloredIn = coloring;
     lines_.append(std::move(line));
     lineStarts_.append(start);
     start = end + 1;
   }
-  for (int i = renderedRows_; i < rows.size(); ++i) {
-    const auto row = rows[i].toMap();
-    const int index = row.value(QStringLiteral("line"), -1).toInt();
+  // A row's instructions go to the line that shows it: its own, or under
+  // folds the one the projection moves it to, which hides the rows of a
+  // folded block.  The rows the lines already took are those before
+  // renderedRows_ of the ones that show.
+  int shown = 0;
+  for (const SourceRow &row : std::as_const(rowLines_)) {
+    const int index =
+        folding ? library_.mappedLine(row.projectedLine) : row.line;
+    if (folding && index < 0)
+      continue;
+    if (shown++ < renderedRows_)
+      continue;
     if (index < 0 || index >= lines_.size() || lines_[index].label)
       continue;
-    for (const auto &address : row.value(QStringLiteral("addresses")).toList())
-      if (const auto parsed = parseAddress(address.toString()))
-        lines_[index].addresses.append(*parsed);
+    lines_[index].addresses += row.addresses;
   }
   renderedChars_ = display.size();
-  renderedRows_ = rows.size();
-  for (int i = 0; i < lines_.size(); ++i) {
+  renderedRows_ = shown;
+  for (int i = append && !folding ? firstNewLine : 0; i < lines_.size(); ++i) {
     lines_[i].sourceLine = folding ? library_.sourceLineAt(lineStarts_[i]) : i;
     lines_[i].block.clear();
     lines_[i].blockFolded = false;
@@ -1322,7 +1651,29 @@ void CodeText::rebuildLines(bool append) {
                   return a.start < b.start;
                 });
       line.styled.spans = spans;
+      line.coloredIn = Line::ColoredOtherwise;
     }
+  // A line that reads as the one in its place did keeps the layout built for
+  // that one; where lines came or went, as the one as far from the end.
+  if (!linesBefore_.isEmpty()) {
+    const auto count = std::min(linesBefore_.size(), lines_.size());
+    for (qsizetype i = 0; i < count; ++i)
+      layoutsKept_ += lines_[i].styled.adoptLayout(linesBefore_[i].styled);
+    // Whole: the rest of what it showed is let go of.
+    if (!loading_ || refreshPages_) {
+      for (qsizetype i = 1; i <= count; ++i)
+        layoutsKept_ += lines_[lines_.size() - i].styled.adoptLayout(
+            linesBefore_[linesBefore_.size() - i].styled);
+      linesBefore_.clear();
+    }
+  }
+  // A line a rename wrote takes the layout made ready for it, where it reads
+  // as the rename was read to write it.
+  for (ReadyLine &ready : readyLines_)
+    if (ready.index < lines_.size())
+      readyLinesTaken_ += lines_[ready.index].styled.adoptLayout(ready.styled);
+  if (!loading_ || refreshPages_)
+    readyLines_.clear();
   const int lastSourceLine =
       lines_.isEmpty() ? 1 : lines_.back().sourceLine + 1;
   gutterChars_ = std::max(3, int(QString::number(lastSourceLine).size()));
@@ -1331,7 +1682,7 @@ void CodeText::rebuildLines(bool append) {
   ++linesStamp_;
   updateRange();
   updateMouseCursor(viewport()->mapFromGlobal(QCursor::pos()));
-  viewport()->update();
+  updateView();
 }
 
 int CodeText::displayPosition(int line, int column) const {
@@ -1412,7 +1763,7 @@ void CodeText::setRegionFolded(const QString &id, bool folded) {
   }
   selectedAddress_.reset();
   marked_.clear();
-  viewport()->update();
+  updateView();
   emit foldingChanged();
 }
 
@@ -1449,6 +1800,10 @@ bool CodeText::event(QEvent *event) {
     dragScroll_.stop();
     selecting_ = false;
   }
+  // The text cursor shows with the focus alone.  The viewport is opaque, and
+  // no update of the area around it paints it.
+  if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
+    updateView();
   if (event->type() == QEvent::ToolTip) {
     auto *help = static_cast<QHelpEvent *>(event);
     const QPoint local = viewport()->mapFrom(this, help->pos());
@@ -1665,7 +2020,22 @@ void CodeText::highlightLine(Line &line, bool &inComment) const {
         add(i, n, Comment);
         return;
       }
-      add(i, end + 2, Comment);
+      // The engine publishes the exact virtual target as a source name.
+      // Keep its annotation navigable while ordinary comment text stays inert.
+      const QString prefix = QStringLiteral("/* virtual ");
+      const int nameStart = i + int(prefix.size());
+      const int length = s.mid(i, prefix.size()) == prefix && nameStart < end
+                             ? sourceNameLength(s, nameStart)
+                             : 0;
+      if (length && nameStart + length < end &&
+          QStringView(s).mid(nameStart + length).startsWith(u" [slot +0x")) {
+        add(i, nameStart, Comment);
+        const auto name = sourceNames_.value(s.mid(nameStart, length));
+        spans.append({nameStart, length, Function, name.address});
+        add(nameStart + length, end + 2, Comment);
+      } else {
+        add(i, end + 2, Comment);
+      }
       i = end + 2;
       inComment = false;
       continue;
@@ -1816,8 +2186,173 @@ int CodeText::columnAt(int line, int x) const {
   return layout.lineCount() ? layout.lineAt(0).xToCursor(x - textLeft()) : 0;
 }
 
-void CodeText::paintEvent(QPaintEvent *) {
-  QPainter painter(viewport());
+struct CodeText::RowsContext {
+  /// The line the first row shows.
+  int first = 0;
+  bool selected = false, focus = false;
+  std::pair<int, int> selectionFirst, selectionLast;
+  TokenDots dots = TokenDots::Join;
+  std::optional<BracketPair> brackets;
+};
+
+CodeText::RowFrame CodeText::rowFrame() const {
+  return {viewport()->width(), viewport()->height(), lineHeight_, textLeft(),
+          gutterChars_,        charWidth_,           styleStamp_};
+}
+
+CodeText::RowsContext CodeText::rowsContext() const {
+  RowsContext context;
+  context.first = verticalScrollBar()->value();
+  const auto cursor = std::pair{cursorLine_, cursorColumn_};
+  context.selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
+  context.selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
+  context.selected = anchor_ && context.selectionFirst != context.selectionLast;
+  context.focus = hasFocus();
+  context.dots = tokenDots();
+  context.brackets = bracketPair();
+  return context;
+}
+
+CodeText::Row CodeText::rowAt(int index, const RowsContext &context) const {
+  Row row;
+  if (index < 0 || index >= lines_.size())
+    return row;
+  const Line &line = lines_[index];
+  row.number = line.sourceLine + 1;
+  row.text = line.styled.text;
+  row.spans = line.styled.spans;
+  row.current = index == cursorLine_;
+  row.tinted = !row.current && (marked_.contains(index) || line.folded);
+  row.block = !line.block.isEmpty();
+  row.blockFolded = row.block && line.blockFolded;
+  if (!SearchHighlight.Text.isEmpty()) {
+    for (const int at : SearchHighlight.matches(line.styled.text))
+      row.fills.append({at, at + int(SearchHighlight.Text.size()),
+                        ColorRole::ListingHighlight});
+  } else {
+    // Locked words keep their colors under the cursor's highlight.
+    const auto mark = [&](const QString &word, ColorRole role) {
+      for (const auto &[first, last] :
+           highlightRanges(line.styled, word, std::nullopt, context.dots))
+        row.fills.append({first, last, role});
+    };
+    const auto &locks = session_.highlightLocks();
+    for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
+      if (const QString word = locks.word(slot); !word.isEmpty())
+        mark(word, highlightLockRole(slot));
+    if (!highlight_.isEmpty())
+      mark(highlight_, ColorRole::ListingHighlight);
+  }
+  // The bracket under the cursor and its partner stand boxed.
+  if (context.brackets)
+    for (const auto &[at, column] :
+         {std::pair{context.brackets->line, context.brackets->column},
+          std::pair{context.brackets->partnerLine,
+                    context.brackets->partnerColumn}})
+      if (at == index)
+        row.brackets.append(column);
+  if (context.selected && index >= context.selectionFirst.first &&
+      index <= context.selectionLast.first) {
+    row.selectionStart = index == context.selectionFirst.first
+                             ? context.selectionFirst.second
+                             : 0;
+    const int end = index == context.selectionLast.first
+                        ? context.selectionLast.second
+                        : int(line.styled.text.size());
+    row.selectionLength = std::max(0, end - row.selectionStart);
+  }
+  if (row.current && context.focus)
+    row.caret = cursorColumn_;
+  return row;
+}
+
+void CodeText::paintRow(QPainter &painter, const RowFrame &frame,
+                        const Row &line, int y, QTextLayout &layout) {
+  const auto &theme = Theme::instance();
+  const QRect row(0, y, frame.width, frame.lineHeight);
+  if (line.current) {
+    painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
+    // A high contrast theme outlines the line instead.
+    paintDeviceBox(
+        painter, row,
+        DeviceBox{QColor(), theme.color(ColorRole::ListingCurrentLineBorder)});
+  } else if (line.tinted)
+    painter.fillRect(row, theme.color(ColorRole::CodeFold));
+  const int gutterRight = ::neverd::limits::gui_config::kCodeViewMargin +
+                          int((frame.gutterChars + 2) * frame.charWidth);
+  painter.save();
+  // Within what is being painted: where no clip was set this is the text's
+  // own area, as it was.
+  painter.setClipRect(QRect(gutterRight, y,
+                            std::max(0, frame.width - gutterRight),
+                            frame.lineHeight),
+                      Qt::IntersectClip);
+  if (layout.lineCount()) {
+    const QTextLine textLine = layout.lineAt(0);
+    for (const RowFill &fill : line.fills) {
+      const qreal x0 = textLine.cursorToX(fill.first);
+      const qreal x1 = textLine.cursorToX(fill.last);
+      paintHighlight(painter,
+                     QRectF(frame.left + x0, y, x1 - x0, frame.lineHeight),
+                     fill.role);
+    }
+    for (const int column : line.brackets) {
+      const QRectF box(frame.left + textLine.cursorToX(column), y,
+                       textLine.cursorToX(column + 1) -
+                           textLine.cursorToX(column),
+                       frame.lineHeight);
+      painter.fillRect(box, theme.color(ColorRole::CodeBracketMatch));
+      painter.setPen(theme.color(ColorRole::CodeBracketMatchBorder));
+      painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
+    }
+  }
+  QList<QTextLayout::FormatRange> selection;
+  if (line.selectionLength >= 0) {
+    QTextLayout::FormatRange range;
+    range.start = line.selectionStart;
+    range.length = line.selectionLength;
+    range.format.setBackground(theme.color(ColorRole::ListingSelection));
+    // A high contrast theme's selection takes a text color of its own.
+    if (const QColor text = theme.color(ColorRole::ListingSelectionText);
+        text.alpha() > 0)
+      range.format.setForeground(text);
+    selection.append(range);
+  }
+  layout.draw(&painter, QPointF(frame.left, y), selection);
+  if (line.caret >= 0 && layout.lineCount()) {
+    const qreal x = frame.left + layout.lineAt(0).cursorToX(line.caret);
+    painter.fillRect(QRectF(x, y + 1, 2, frame.lineHeight - 2),
+                     theme.color(ColorRole::ListingCursor));
+  }
+  painter.restore();
+  painter.setPen(theme.color(ColorRole::CodeLineNumber));
+  painter.drawText(
+      QRect(::neverd::limits::gui_config::kCodeViewMargin, y,
+            int(frame.gutterChars * frame.charWidth), frame.lineHeight),
+      Qt::AlignRight | Qt::AlignVCenter, QString::number(line.number));
+  if (line.block) {
+    const qreal x = ::neverd::limits::gui_config::kCodeViewMargin +
+                    (frame.gutterChars + 1.25) * frame.charWidth;
+    const qreal middle = y + frame.lineHeight / 2.0;
+    const qreal radius =
+        std::min(frame.charWidth * 0.35, frame.lineHeight * 0.22);
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(theme.color(ColorRole::CodeLineNumber), 1.3));
+    if (line.blockFolded)
+      painter.drawPolyline(QPolygonF{{x - radius / 2, middle - radius},
+                                     {x + radius / 2, middle},
+                                     {x - radius / 2, middle + radius}});
+    else
+      painter.drawPolyline(QPolygonF{{x - radius, middle - radius / 2},
+                                     {x, middle + radius / 2},
+                                     {x + radius, middle - radius / 2}});
+    painter.restore();
+  }
+}
+
+void CodeText::paintRows(QPainter &painter, const QRegion &region, bool told,
+                         QVector<Row> *painted) const {
   const auto &theme = Theme::instance();
   const QRect area = viewport()->rect();
   painter.fillRect(area, theme.color(ColorRole::CodeBackground));
@@ -1825,120 +2360,122 @@ void CodeText::paintEvent(QPaintEvent *) {
     return;
   const QFont font = theme.codeFont();
   painter.setFont(font);
-  const int first = verticalScrollBar()->value();
-  const int last = std::min(int(lines_.size()) - 1, first + visibleLines());
-  const int left = textLeft();
-  const auto cursor = std::pair{cursorLine_, cursorColumn_};
-  const auto selectionFirst = anchor_ ? std::min(*anchor_, cursor) : cursor;
-  const auto selectionLast = anchor_ ? std::max(*anchor_, cursor) : cursor;
-  const TokenDots dots = tokenDots();
-  const auto brackets = bracketPair();
-  for (int i = first; i <= last; ++i) {
-    const int y = (i - first) * lineHeight_;
-    const QRect row(0, y, area.width(), lineHeight_);
-    if (i == cursorLine_) {
-      painter.fillRect(row, theme.color(ColorRole::ListingCurrentLine));
-      // A high contrast theme outlines the line instead.
-      paintDeviceBox(
-          painter, row,
-          DeviceBox{QColor(),
-                    theme.color(ColorRole::ListingCurrentLineBorder)});
-    } else if (marked_.contains(i) || lines_[i].folded)
-      painter.fillRect(row, theme.color(ColorRole::CodeFold));
-    const int gutterRight = ::neverd::limits::gui_config::kCodeViewMargin +
-                            int((gutterChars_ + 2) * charWidth_);
-    painter.save();
-    painter.setClipRect(QRect(
-        gutterRight, y, std::max(0, area.width() - gutterRight), lineHeight_));
-    auto &layout = lines_[i].styled.layout(font, styleStamp_, codeColor);
-    if (layout.lineCount()) {
-      const QTextLine textLine = layout.lineAt(0);
-      const auto fill = [&](int first, int last, ColorRole role) {
-        const qreal x0 = textLine.cursorToX(first);
-        const qreal x1 = textLine.cursorToX(last);
-        paintHighlight(painter, QRectF(left + x0, y, x1 - x0, lineHeight_),
-                       role);
-      };
-      if (!SearchHighlight.Text.isEmpty()) {
-        for (const int at : SearchHighlight.matches(lines_[i].styled.text))
-          fill(at, at + int(SearchHighlight.Text.size()),
-               ColorRole::ListingHighlight);
-      } else {
-        // Locked words keep their colors under the cursor's highlight.
-        const auto mark = [&](const QString &word, ColorRole role) {
-          for (const auto &[first, last] :
-               highlightRanges(lines_[i].styled, word, std::nullopt, dots))
-            fill(first, last, role);
-        };
-        const auto &locks = session_.highlightLocks();
-        for (int slot = 0; slot < HighlightLocks::Colors; ++slot)
-          if (const QString word = locks.word(slot); !word.isEmpty())
-            mark(word, highlightLockRole(slot));
-        if (!highlight_.isEmpty())
-          mark(highlight_, ColorRole::ListingHighlight);
-      }
-      // The bracket under the cursor and its partner stand boxed.
-      if (brackets)
-        for (const auto &[line, column] :
-             {std::pair{brackets->line, brackets->column},
-              std::pair{brackets->partnerLine, brackets->partnerColumn}})
-          if (line == i) {
-            const QRectF box(left + textLine.cursorToX(column), y,
-                             textLine.cursorToX(column + 1) -
-                                 textLine.cursorToX(column),
-                             lineHeight_);
-            painter.fillRect(box, theme.color(ColorRole::CodeBracketMatch));
-            painter.setPen(theme.color(ColorRole::CodeBracketMatchBorder));
-            painter.drawRect(box.adjusted(0.5, 0.5, -0.5, -0.5));
-          }
-    }
-    QList<QTextLayout::FormatRange> selection;
-    if (anchor_ && selectionFirst != selectionLast &&
-        i >= selectionFirst.first && i <= selectionLast.first) {
-      QTextLayout::FormatRange range;
-      range.start = i == selectionFirst.first ? selectionFirst.second : 0;
-      const int end = i == selectionLast.first
-                          ? selectionLast.second
-                          : int(lines_[i].styled.text.size());
-      range.length = std::max(0, end - range.start);
-      range.format.setBackground(theme.color(ColorRole::ListingSelection));
-      // A high contrast theme's selection takes a text color of its own.
-      if (const QColor text = theme.color(ColorRole::ListingSelectionText);
-          text.alpha() > 0)
-        range.format.setForeground(text);
-      selection.append(range);
-    }
-    layout.draw(&painter, QPointF(left, y), selection);
-    if (i == cursorLine_ && hasFocus() && layout.lineCount()) {
-      const qreal x = left + layout.lineAt(0).cursorToX(cursorColumn_);
-      painter.fillRect(QRectF(x, y + 1, 2, lineHeight_ - 2),
-                       theme.color(ColorRole::ListingCursor));
-    }
-    painter.restore();
-    painter.setPen(theme.color(ColorRole::CodeLineNumber));
-    painter.drawText(QRect(::neverd::limits::gui_config::kCodeViewMargin, y,
-                           int(gutterChars_ * charWidth_), lineHeight_),
-                     Qt::AlignRight | Qt::AlignVCenter,
-                     QString::number(lines_[i].sourceLine + 1));
-    if (!lines_[i].block.isEmpty()) {
-      const qreal x = ::neverd::limits::gui_config::kCodeViewMargin +
-                      (gutterChars_ + 1.25) * charWidth_;
-      const qreal middle = y + lineHeight_ / 2.0;
-      const qreal radius = std::min(charWidth_ * 0.35, lineHeight_ * 0.22);
-      painter.save();
-      painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(QPen(theme.color(ColorRole::CodeLineNumber), 1.3));
-      if (lines_[i].blockFolded)
-        painter.drawPolyline(QPolygonF{{x - radius / 2, middle - radius},
-                                       {x + radius / 2, middle},
-                                       {x - radius / 2, middle + radius}});
-      else
-        painter.drawPolyline(QPolygonF{{x - radius, middle - radius / 2},
-                                       {x, middle + radius / 2},
-                                       {x + radius, middle - radius / 2}});
-      painter.restore();
+  const RowFrame frame = rowFrame();
+  const RowsContext context = rowsContext();
+  const int last =
+      std::min(int(lines_.size()) - 1, context.first + visibleLines());
+  for (int i = context.first; i <= last; ++i) {
+    const int at = i - context.first;
+    const int y = at * lineHeight_;
+    // A row keeps to itself at any scale: the edges of what it fills, of
+    // what clips its text and of what a paint event may paint round alike.
+    if (!region.intersects(QRect(0, y, area.width(), lineHeight_)))
+      continue;
+    QTextLayout &layout = lines_[i].styled.layout(font, styleStamp_, codeColor);
+    if (told && at < knownRows_.size() && knownRows_[at].number > 0) {
+      paintRow(painter, frame, knownRows_[at], y, layout);
+    } else if (painted && at < painted->size()) {
+      Row &row = (*painted)[at];
+      row = rowAt(i, context);
+      paintRow(painter, frame, row, y, layout);
+    } else {
+      paintRow(painter, frame, rowAt(i, context), y, layout);
     }
   }
+}
+
+void CodeText::paintEvent(QPaintEvent *event) {
+  QPainter painter(viewport());
+  // What showChanges has just told the viewport its rows show is what there
+  // is to paint, while no one has said a change since: its rows are painted
+  // from that.  Any other paint looks at the view itself, and for a change
+  // no one spoke of, which is painted next.
+  const bool told = std::exchange(rowsTold_, false) && !viewChanged_ &&
+                    rowFrame() == knownFrame_;
+  if (told) {
+    paintRows(painter, event->region(), true);
+  } else {
+    QVector<Row> painted(knownRows_.size());
+    for (Row &row : painted)
+      row.number = UnknownRow;
+    paintRows(painter, event->region(), false, &painted);
+    if (!viewChanged_ && !rowsKnown(painted))
+      updateView();
+  }
+  if (PaintCheck::enabled())
+    PaintCheck::painted(
+        *viewport(), painter, event->region(), !viewChanged_, paintChecked_,
+        [this, told](QPainter &again, const QRegion &region, bool afresh) {
+          paintRows(again, region, told && !afresh);
+        });
+}
+
+void CodeText::updateView() {
+  rowsTold_ = false;
+  if (std::exchange(viewChanged_, true))
+    return;
+  QMetaObject::invokeMethod(this, &CodeText::showChanges, Qt::QueuedConnection);
+}
+
+bool CodeText::rowsKnown(const QVector<Row> &painted) const {
+  const RowFrame frame = rowFrame();
+  if (!(frame == knownFrame_))
+    return false;
+  const RowsContext context = rowsContext();
+  for (qsizetype at = 0; at < knownRows_.size(); ++at) {
+    const bool seen = at < painted.size() && painted[at].number != UnknownRow;
+    if (!((seen ? painted[at] : rowAt(context.first + int(at), context)) ==
+          knownRows_[at]))
+      return false;
+  }
+  return true;
+}
+
+void CodeText::showChanges() {
+  if (!std::exchange(viewChanged_, false))
+    return;
+  const RowFrame frame = rowFrame();
+  const int rows =
+      frame.lineHeight > 0
+          ? (frame.height + frame.lineHeight - 1) / frame.lineHeight
+          : 0;
+  // Another frame moves or resizes every row.
+  const bool all = !(frame == knownFrame_) || knownRows_.size() != rows;
+  knownFrame_ = frame;
+  knownRows_.resize(rows);
+  const RowsContext context = rowsContext();
+  // The rows that changed, as the runs of them that lie one under another.
+  QRegion changed;
+  int run = -1;
+  const auto close = [&](int end) {
+    if (run >= 0)
+      changed += QRect(0, run * frame.lineHeight, frame.width,
+                       (end - run) * frame.lineHeight);
+    run = -1;
+  };
+  for (int at = 0; at < rows; ++at) {
+    Row row = rowAt(context.first + at, context);
+    if (!all && row == knownRows_[at]) {
+      close(at);
+      continue;
+    }
+    knownRows_[at] = std::move(row);
+    if (run < 0)
+      run = at;
+  }
+  close(rows);
+  if (all) {
+    viewport()->update();
+    rowsUpdated_ = viewport()->rect();
+    pixelsAsked_ +=
+        quint64(viewport()->width()) * quint64(viewport()->height());
+  } else if (!changed.isEmpty()) {
+    viewport()->update(changed);
+    rowsUpdated_ += changed;
+    for (const QRect &rect : changed)
+      pixelsAsked_ += quint64(rect.width()) * quint64(rect.height());
+  }
+  rowsTold_ = all || !changed.isEmpty();
 }
 
 void CodeText::moveCursor(int line, int column, bool extend) {
@@ -1966,7 +2503,7 @@ void CodeText::moveCursor(int line, int column, bool extend) {
     if (const auto address = currentAddress())
       emit locationChanged(*address);
   }
-  viewport()->update();
+  updateView();
   emit cursorChanged();
 }
 
@@ -2022,7 +2559,7 @@ void CodeText::selectAddress(Address address) {
     selectedAddress_ = address;
   }
   marked_ = rows;
-  viewport()->update();
+  updateView();
   emit addressSelected(address, !marked_.isEmpty());
 }
 
@@ -2041,7 +2578,7 @@ void CodeText::revealAddress(Address address) {
   if (!rows.isEmpty())
     selectedAddress_ = address;
   marked_ = rows;
-  viewport()->update();
+  updateView();
 }
 
 CodeText::SourcePlace CodeText::currentPlace() const {
@@ -2118,6 +2655,12 @@ QString CodeText::currentToken() const {
   return lines_[cursorLine_].styled.tokenAt(cursorColumn_, tokenDots());
 }
 
+QJsonObject CodeText::targetOf(const EditName &name) {
+  QJsonObject target = name.target;
+  target["name"] = name.name;
+  return target;
+}
+
 std::optional<QJsonObject> CodeText::renameTarget() const {
   if (!function_ || loading_ || interrupted_)
     return std::nullopt;
@@ -2128,7 +2671,7 @@ std::optional<QJsonObject> CodeText::renameTarget() const {
       library_.canFold() ? library_.originalPosition(display) : display;
   for (const auto &name : editNames_)
     if (position >= name.begin && position < name.end)
-      return name.target;
+      return targetOf(name);
   if (editMetadata_)
     return std::nullopt;
   const auto token = currentToken();
@@ -2223,7 +2766,7 @@ bool CodeText::selectLocalReference(const QJsonObject &target,
       across->setValue(across->value() +
                        int(std::ceil(right - viewport()->width())));
   }
-  viewport()->update();
+  updateView();
   return true;
 }
 
@@ -2497,7 +3040,7 @@ QString CodeText::searchSeed() const {
 
 void CodeText::setSearchHighlight(const ViewSearchQuery &query) {
   SearchHighlight = query;
-  viewport()->update();
+  updateView();
 }
 
 bool CodeText::selectSearchRange(int begin, int length) {
@@ -2646,7 +3189,7 @@ void CodeText::selectAll() {
   anchor_ = std::pair{0, 0};
   cursorLine_ = int(lines_.size()) - 1;
   cursorColumn_ = int(lines_.back().styled.text.size());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::dragTo(const QPoint &position) {
@@ -2662,7 +3205,7 @@ void CodeText::dragTo(const QPoint &position) {
     anchor_ = std::pair{cursorLine_, cursorColumn_};
   cursorLine_ = line;
   cursorColumn_ = columnAt(line, position.x());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::mousePressEvent(QMouseEvent *event) {
@@ -2702,7 +3245,7 @@ void CodeText::mousePressEvent(QMouseEvent *event) {
     dragPoint_ = event->position().toPoint();
   }
   updateMouseCursor(event->position().toPoint());
-  viewport()->update();
+  updateView();
 }
 
 void CodeText::mouseMoveEvent(QMouseEvent *event) {
@@ -2733,10 +3276,12 @@ void CodeText::mouseDoubleClickEvent(QMouseEvent *event) {
   if (event->button() != Qt::LeftButton ||
       !blockAt(event->position().toPoint()).isEmpty())
     return;
-  // A source name resolves by its symbol, as the C view's linked names do.
+  // The emitter's exact target also works for C projections, debug-only
+  // names and linker veneers that cannot be resolved by their printed name.
   if (const auto name = sourceNameAt(cursorLine_, cursorColumn_)) {
-    emit nameActivated(name->second.symbol.isEmpty() ? name->second.identifier
-                                                     : name->second.symbol);
+    emit nameActivated(name->second.address ? hexAddress(*name->second.address)
+                       : name->second.symbol.isEmpty() ? name->second.identifier
+                                                       : name->second.symbol);
     return;
   }
   if (dialectOf(representation_, pageLanguage_) == Dialect::LLVM) {
@@ -3456,8 +4001,9 @@ void CodeView::updateRepresentations() {
     selector_->setCurrentIndex(selector_->findData(pseudocodeRepresentation()));
 }
 
-void CodeView::showFunction(Address function) {
-  text_->load(function, selector_->currentData().toString());
+void CodeView::showFunction(Address function, bool refresh) {
+  text_->load(function, selector_->currentData().toString(), std::nullopt,
+              refresh);
 }
 
 void CodeView::setRepresentation(const QString &representation) {

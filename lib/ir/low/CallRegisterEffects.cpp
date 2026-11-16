@@ -43,7 +43,10 @@ constexpr unsigned kX64StackPointerFamily = 4; // RSP
 
 GPRFamilyMask familyBit(Arch A, uint64_t RegOff) {
   auto Family = registerFamilyOf(A, RegOff);
-  if (!Family || Family->first == kX64StackPointerFamily)
+  // Family 4 is RSP on x86-64. On AArch64 it is X4, which this summary tracks.
+  if (!Family ||
+      Family->first >= kX64VectorFamilyBase + kX64VectorArgumentFamilies ||
+      (A == Arch::X64 && Family->first == kX64StackPointerFamily))
     return 0;
   return GPRFamilyMask(1) << Family->first;
 }
@@ -56,7 +59,8 @@ unsigned familyBytes(unsigned Family) {
 /// Record a read of \p Size bytes at \p RegOff.
 void addRead(Arch A, GPRReadWidths &Reads, uint64_t RegOff, uint64_t Size) {
   auto Family = registerFamilyOf(A, RegOff);
-  if (!Family || Family->first == kX64StackPointerFamily)
+  if (!Family || Family->first >= Reads.size() ||
+      (A == Arch::X64 && Family->first == kX64StackPointerFamily))
     return;
   const uint64_t End =
       std::min<uint64_t>(Family->second + Size, familyBytes(Family->first));
@@ -1380,7 +1384,9 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
 } // namespace
 
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff) {
-  if (A != Arch::X64 || RegOff >= kX64GPRBytes)
+  // AArch64 X0-X15 occupy the same 8-byte slots as x86-64 RAX-R15. X16-X30
+  // and SP stay outside the mask: an untracked register is never preserved.
+  if ((A != Arch::X64 && A != Arch::AArch64) || RegOff >= kX64GPRBytes)
     return std::nullopt;
   return static_cast<unsigned>(RegOff / 8);
 }
@@ -1404,7 +1410,7 @@ std::optional<std::pair<unsigned, unsigned>> registerFamilyOf(Arch A,
 bool callPreservesRegisterBytes(Arch A, uint32_t Preserved, uint64_t RegOff,
                                 uint16_t Size) {
   if (const auto Family = gprFamilyOf(A, RegOff))
-    return (Preserved >> *Family) & 1;
+    return Size && Size <= 8 - RegOff % 8 && ((Preserved >> *Family) & 1);
   const auto Family = registerFamilyOf(A, RegOff);
   return Family && Family->first >= kX64VectorFamilyBase &&
          ((Preserved >> Family->first) & 1) && Family->second + Size <= 16;
@@ -1479,6 +1485,11 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
                     const std::map<va_t, va_t> *ArgumentSources,
                     const libc::StackProbeIndex *StackProbes) {
   LocalRegisterEffect Effect;
+  Effect.BodyUnknown = F.HasIndependentRoots ||
+                       (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64);
+  Effect.BodyWrites = ~GPRFamilyMask{0xFFFF};
+  if (Img.Arch == Arch::X64)
+    Effect.BodyWrites |= GPRFamilyMask{1} << kX64StackPointerFamily;
   Effect.UnknownObservers = F.HasIndependentRoots;
   if (!F.Complete || F.UnsafeIndirectBranches || F.Blocks.empty()) {
     Effect.Unknown = true;
@@ -1496,6 +1507,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   std::map<int, size_t> IndexOfId;
   std::set<va_t> BlockStarts;
   for (size_t I = 0; I < F.Blocks.size(); ++I) {
+    Effect.BodyUnknown |= IndexOfId.count(F.Blocks[I].Id) != 0;
     Effect.UnknownObservers |= IndexOfId.count(F.Blocks[I].Id) != 0;
     IndexOfId[F.Blocks[I].Id] = I;
     BlockStarts.insert(F.Blocks[I].StartAddr);
@@ -1529,13 +1541,17 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   };
   for (size_t BI = 0; BI < F.Blocks.size(); ++BI) {
     const LowBlock &Block = F.Blocks[BI];
+    Effect.BodyUnknown |=
+        !Block.ExceptionalPreds.empty() || !Block.ExceptionalSuccs.empty();
     Effect.UnknownObservers |= !Block.ExceptionalSuccs.empty();
     RegisterBlock &Out = Effect.Blocks[BI];
     for (int Succ : Block.Succs)
       if (auto It = IndexOfId.find(Succ); It != IndexOfId.end())
         Out.Succs.push_back(It->second);
-      else
+      else {
         Effect.UnknownObservers = true;
+        Effect.BodyUnknown = true;
+      }
     std::map<size_t, uint8_t> MergeWrites;
     std::set<size_t> MergeReads;
     findMaskedMerges(Block, MergeWrites, MergeReads);
@@ -1556,6 +1572,21 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     };
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const LowOp &Op = Block.Ops[I];
+      // Keep physical writes separate from argument/ABI simplifications.
+      // A restoration still writes the register, and an opaque effect is
+      // not a proof that registers absent from its outputs stay unchanged.
+      Effect.BodyUnknown |=
+          Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::ATOMIC_XCHG ||
+          Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG;
+      if (Op.Output.isReg() && Op.Output.Size &&
+          Op.Output.Offset < kX64GPRBytes) {
+        const uint64_t End =
+            Op.Output.Offset +
+            std::min<uint64_t>(Op.Output.Size, kX64GPRBytes - Op.Output.Offset);
+        for (uint64_t Family = Op.Output.Offset / 8; Family <= (End - 1) / 8;
+             ++Family)
+          Effect.BodyWrites |= GPRFamilyMask{1} << Family;
+      }
       // Home-spill refinement below addresses steps by their LowIR index.
       // Keep an empty step for ignored operations until joinPlainSteps.
       RegisterStep &Step = Out.Steps.emplace_back();
@@ -1580,11 +1611,15 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           (hasLowInstructionControlFlag(Flags,
                                         LowInstructionControlFlag::NoReturn) ||
            (TailCall && EntersNoReturnFunction));
+      // A name or analyst no-return contract is not original-body evidence.
+      Effect.BodyUnknown |= NoReturnCall || EntersNoReturnFunction;
       // A stack probe changes no register its caller can observe.
       if (Op.Opcode == NdOp::CALL && DirectTarget && !TailCall &&
           libc::stackProbeEffect(Img, Op.Inputs[0].Offset, StackProbes) ==
-              libc::StackProbeEffect::Probe)
+              libc::StackProbeEffect::Probe) {
+        Effect.BodyUnknown = true;
         continue;
+      }
       // A vector register widened from its own low bytes (`vzeroupper`, or
       // a VEX write clearing the upper lanes) keeps those bytes in place:
       // it reads them no more than a RETURN that hands them back, and
@@ -1682,6 +1717,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
           Step.FixedTailCall = TailCall;
           Step.Exits = NoReturnCall;
           Effect.CallsFixedContract = true;
+          Effect.BodyUnknown = true;
           continue;
         }
       switch (Op.Opcode) {
@@ -1937,24 +1973,36 @@ CallRegisterSummaries solveCallRegisterEffects(
     if (!Effect->Incomplete && !Effect->ExitConstants.empty() &&
         !DispatchThunks.count(Entry))
       Result.ExitConstants.emplace(Entry, Effect->ExitConstants);
-  // Unknown is absorbing: a function is unknown if it or any callee is.
-  std::set<va_t> Unknown;
-  for (const auto &[Entry, Effect] : Funcs)
+  // Index the actual dependencies once. Unknown effects and growing write
+  // sets revisit only their callers, including callers in recursive SCCs.
+  std::map<va_t, std::vector<va_t>> Callers;
+  std::set<va_t> Unknown, BodyUnknown;
+  for (const auto &[Entry, Effect] : Funcs) {
     if (Effect->Unknown)
       Unknown.insert(Entry);
-  for (bool Changed = true; Changed;) {
-    Changed = false;
-    for (const auto &[Entry, Effect] : Funcs) {
-      if (Unknown.count(Entry))
-        continue;
-      for (va_t Callee : Effect->Callees)
-        if (!Funcs.count(Callee) || Unknown.count(Callee)) {
-          Unknown.insert(Entry);
-          Changed = true;
-          break;
-        }
-    }
+    if (Effect->BodyUnknown || Effect->CallsFixedContract)
+      BodyUnknown.insert(Entry);
+    for (va_t Callee : Effect->Callees)
+      if (Funcs.count(Callee))
+        Callers[Callee].push_back(Entry);
+      else
+        Unknown.insert(Entry);
   }
+  // Unknown is absorbing: a function is unknown if it or any callee is.
+  const auto PropagateUnknown = [&](std::set<va_t> &Set) {
+    std::deque<va_t> Work(Set.begin(), Set.end());
+    while (!Work.empty()) {
+      const va_t Callee = Work.front();
+      Work.pop_front();
+      if (const auto Found = Callers.find(Callee); Found != Callers.end())
+        for (va_t Caller : Found->second)
+          if (Set.insert(Caller).second)
+            Work.push_back(Caller);
+    }
+  };
+  PropagateUnknown(Unknown);
+  BodyUnknown.insert(Unknown.begin(), Unknown.end());
+  PropagateUnknown(BodyUnknown);
 
   // Least fixed point of Writes(F) = Local(F) | Writes(callees); recursion
   // converges because masks only grow.
@@ -1964,16 +2012,40 @@ CallRegisterSummaries solveCallRegisterEffects(
     if (!Unknown.count(Entry))
       Writes[Entry] =
           Effect->Writes | (Effect->CallsFixedContract ? VolatileFamilies : 0);
-  for (bool Changed = true; Changed;) {
-    Changed = false;
-    for (auto &[Entry, Mask] : Writes) {
-      GPRFamilyMask Next = Mask;
-      for (va_t Callee : Funcs.at(Entry)->Callees)
-        Next |= Writes.at(Callee);
-      if (Next != Mask) {
-        Mask = Next;
-        Changed = true;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (!BodyUnknown.count(Entry))
+      Result.BodyMayWrite.emplace(Entry, Effect->BodyWrites);
+  std::deque<va_t> WriteWork;
+  std::set<va_t> WriteQueued;
+  for (const auto &[Entry, Mask] : Writes)
+    if (Mask ||
+        (Result.BodyMayWrite.count(Entry) && Result.BodyMayWrite.at(Entry))) {
+      WriteWork.push_back(Entry);
+      WriteQueued.insert(Entry);
+    }
+  while (!WriteWork.empty()) {
+    const va_t Callee = WriteWork.front();
+    WriteWork.pop_front();
+    WriteQueued.erase(Callee);
+    const auto Found = Callers.find(Callee);
+    if (Found == Callers.end())
+      continue;
+    const GPRFamilyMask Mask = Writes.at(Callee);
+    const auto Body = Result.BodyMayWrite.find(Callee);
+    for (va_t Caller : Found->second) {
+      const auto Out = Writes.find(Caller);
+      if (Out == Writes.end())
+        continue;
+      bool Changed = (Out->second | Mask) != Out->second;
+      Out->second |= Mask;
+      if (auto BodyOut = Result.BodyMayWrite.find(Caller);
+          Body != Result.BodyMayWrite.end() &&
+          BodyOut != Result.BodyMayWrite.end()) {
+        Changed |= (BodyOut->second | Body->second) != BodyOut->second;
+        BodyOut->second |= Body->second;
       }
+      if (Changed && WriteQueued.insert(Caller).second)
+        WriteWork.push_back(Caller);
     }
   }
 

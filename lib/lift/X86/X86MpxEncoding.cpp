@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 
 namespace neverd {
 
@@ -92,13 +93,12 @@ x86_reg generalRegister(unsigned Index, bool Mode64) {
   return Mode64 ? Reg64[Index] : Reg32[Index];
 }
 
-cs_x86_op registerOperand(x86_reg Register, unsigned Size, cs_ac_type Access) {
-  cs_x86_op Operand{};
+void setRegisterOperand(cs_x86_op &Operand, x86_reg Register, unsigned Size,
+                        cs_ac_type Access) {
   Operand.type = X86_OP_REG;
   Operand.reg = Register;
   Operand.size = Size;
   Operand.access = Access;
-  return Operand;
 }
 
 } // namespace
@@ -124,6 +124,8 @@ decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode) {
   Bytes = Bytes.take_front(x86::kMaxInstructionLen);
   X86MpxEncoding E;
   auto &X = E.Detail;
+  // The decoder copies the complete C record into public instruction detail.
+  std::memset(&X, 0, sizeof(X));
   const bool Mode64 = Mode == X86MpxCodeMode::Long64;
   const unsigned WordBytes = Mode64 ? 8 : 4;
   size_t Offset = 0;
@@ -205,16 +207,16 @@ decodeX86MpxEncoding(llvm::ArrayRef<uint8_t> Bytes, X86MpxCodeMode Mode) {
       E.Id == X86_INS_BNDCL || E.Id == X86_INS_BNDCU || E.Id == X86_INS_BNDCN;
   const bool Move = E.Id == X86_INS_BNDMOV;
   X.op_count = 2;
-  X.operands[Store ? 1 : 0] =
-      registerOperand(x86_reg(X86_REG_BND0 + Reg), 16,
-                      Store || Check ? CS_AC_READ : CS_AC_WRITE);
+  setRegisterOperand(X.operands[Store ? 1 : 0], x86_reg(X86_REG_BND0 + Reg), 16,
+                     Store || Check ? CS_AC_READ : CS_AC_WRITE);
   auto &Operand = X.operands[Store ? 0 : 1];
   if (Mod == 3) {
     if (Move && RM >= X86MpxRegisterCount)
       return std::nullopt;
-    Operand = registerOperand(
-        Move ? x86_reg(X86_REG_BND0 + RM) : generalRegister(RM, Mode64),
-        Move ? 16 : WordBytes, Store ? CS_AC_WRITE : CS_AC_READ);
+    setRegisterOperand(Operand,
+                       Move ? x86_reg(X86_REG_BND0 + RM)
+                            : generalRegister(RM, Mode64),
+                       Move ? 16 : WordBytes, Store ? CS_AC_WRITE : CS_AC_READ);
     E.Size = Offset;
     return E;
   }

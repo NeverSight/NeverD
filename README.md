@@ -64,7 +64,7 @@ See the guides for [EVM](docs/evm.md), [Solana SBF](docs/sbf.md), [mobile source
 in both byte orders, support a strict integer subset through disassembly,
 CFG recovery, C and LLVM output. Native rewriting is not supported. See the
 [MIPS coverage and firmware example](docs/mips.md) for the separately qualified
-microMIPS32, DSP and MIPS32r5 MSA subsets and their source restrictions.
+microMIPS32, MIPS16e/e2, DSP and MIPS32r5 MSA subsets and their source restrictions.
 
 Legacy EVM bytecode is supported independently of native containers: all 150 assigned opcodes through Fusaka feed dedicated Low/Med/High IR, verified LLVM `i256`, C23 `_BitInt(256)`, and Solidity output. See [EVM decompilation](docs/evm.md).
 
@@ -326,6 +326,7 @@ neverd <command> [options] <binary>
 |---------|--------|-------------|
 | `lift` | `.ll` | Lift to LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM Solidity, or SBF Rust selected with `--language` |
+| `decompile --check-all` | counts | Default C for every loaded function; each body is dropped after it is checked |
 | `decompile -llvm` | `.c` | Via LLVM IR + optimizer |
 | `decompile --devirtualize` | `.c` + optional JSON | Experimental x64 interpreter recovery; requires `--func`; [contract and examples](docs/interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimental: [Android](docs/android.md), [iOS](docs/ios.md) |

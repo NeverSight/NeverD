@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Present the loader's two independently scoped results without fallback.
+/// Present independently scoped metadata and instruction results.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_SDK_CAPI_UNWINDSIGNINGJSON_H
@@ -12,7 +12,7 @@
 
 #include "JSONText.h"
 
-#include "neverd/loader/ReturnAddressSigning.h"
+#include "neverd/analysis/AArch64UnwindRecovery.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/JSON.h"
@@ -82,13 +82,18 @@ sourceResult(const std::optional<dwarf_eh::AArch64RAQueryResult> &Result) {
 } // namespace unwind_json
 
 inline llvm::json::Object
-unwindSigningJSON(const AArch64UnwindSigningQuery &Query) {
-  return llvm::json::Object{
+unwindSigningJSON(const AArch64AnalyzedUnwindSigning &Analysis) {
+  const auto &Query = Analysis.Metadata;
+  llvm::json::Object Result{
       {unwind_json::kQueryPC, unwind_json::address(Query.QueryPC)},
       {unwind_json::kDwarfStateAtPC,
        unwind_json::sourceResult(Query.DwarfStateAtPC)},
       {unwind_json::kCompactRecipe,
        unwind_json::sourceResult(Query.CompactRecipe)}};
+  if (Analysis.InstructionStateAtPC)
+    Result[unwind_json::kInstructionStateAtPC] =
+        unwind_json::sourceResult(Analysis.InstructionStateAtPC);
+  return Result;
 }
 
 } // namespace neverd::sdk

@@ -10,6 +10,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PipelineCallAbiDetail.h"
+#include "PipelineDebugReceivers.h"
 #include "PipelineFunctionNames.h"
 #include "PipelineHighIRDetail.h"
 #include "PipelineLowIRDetail.h"
@@ -23,6 +24,8 @@
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
+#include "neverd/ir/low/SourceImageBytes.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedTypePass.h"
@@ -36,6 +39,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -186,6 +190,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   propagateStructReturnForwarderShapes(Img, Result);
   recoverStructReturnFromBody(Img, Result, StructReturnEvidence::Callers);
   recoverVectorReturnFromCallers(Img, Result);
+  recoverPackedScalarReturnFromCallers(Img, Result);
   materializeKnownStructReturnCallSites(Img, Result);
   bindFloatCallResults(Img, Result);
   settleReturnContracts(Img, Result, Dbg);
@@ -216,7 +221,8 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
     // A variadic callee takes its call sites' overflow arguments as trailing
     // stack parameters, which MedToHigh seeds where its va_arg walk reads
     // them, as lift mode does for the LLVM emitter.
-    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat());
+    finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat(),
+                            Img.Exports);
   } else {
     // A convention whose calls take their arguments from callee summaries
     // recovers no call arguments here: a System V variadic callee's overflow
@@ -260,13 +266,37 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
     if (!Inserted)
       Found->second = nullptr;
   }
-  for (auto &Function : Result.MedFuncs) {
-    Function.FrameBytes.clear();
+  std::vector<uint64_t> ObservationWeights;
+  ObservationWeights.reserve(Result.MedFuncs.size());
+  for (const auto &Function : Result.MedFuncs) {
+    uint64_t Weight = 1;
     if (const auto Original = OriginalFunctions.find(Function.Entry);
-        !Function.AnalystStackFrame && Original != OriginalFunctions.end() &&
-        Original->second)
-      Function.FrameBytes = observeSourceFrameBytes(*Original->second, Img);
+        Original != OriginalFunctions.end() && Original->second)
+      for (const auto &Block : Original->second->Blocks)
+        Weight += Block.Ops.size();
+    ObservationWeights.push_back(Weight);
   }
+  parallelForEachWeighted(ObservationWeights, [&](auto Claim, size_t Count) {
+    for (size_t I; (I = Claim()) < Count;) {
+      auto &Function = Result.MedFuncs[I];
+      discardUnobservedMIPSFPUpperBits(
+          Function, Img, Result.CallEntryFloatingArguments.get(), Dbg);
+      Function.FrameBytes.clear();
+      Function.ImageBytes = {};
+      if (const auto Original = OriginalFunctions.find(Function.Entry);
+          Original != OriginalFunctions.end() && Original->second) {
+        if (!Function.AnalystStackFrame)
+          Function.FrameBytes = observeSourceFrameBytes(*Original->second, Img);
+        Function.ImageBytes = observeSourceImageBytes(
+            *Original->second, Img, &Result.CallBodyMayWriteGPRs.get());
+      }
+    }
+  });
+  // Call-setup recovery adds the parameter an unwritten return register still
+  // holds. The settlement above ran before that parameter existed, so a
+  // caller reading the preserved register left the function void. Settle
+  // again from the recovered parameters.
+  settleReturnContracts(Img, Result, Dbg);
 }
 
 void Pipeline::buildHighIR(const BinaryImage &Img, const PipelineOptions &Opts,
@@ -348,6 +378,10 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
                                          MF.VaNamedIntegerRegisters};
 
   const size_t Total = Result.MedFuncs.size();
+  std::map<va_t, const LowFunc *> ReceiverFunctions;
+  if (Dbg && Dbg->hasAuthenticatedObjectExtents())
+    for (const auto &Function : Result.LowFuncs)
+      ReceiverFunctions.emplace(Function.Entry, &Function);
   // A worker failure invalidates the whole stage. Keep output private until
   // every worker has joined so callers never receive a partially built batch.
   std::vector<HighFunc> Pending(Total);
@@ -380,6 +414,21 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
     Local.setPrototypeArgumentCallees(&Result.CallPrototypeArguments.get());
     for (size_t FI; (FI = Claim()) < N;) {
       const MedFunc &MF = Result.MedFuncs[FI];
+      DebugPointerOperands PointerOperands;
+      if (const auto Low = ReceiverFunctions.find(MF.Entry);
+          Low != ReceiverFunctions.end())
+        PointerOperands = debugPointerOperandTypes(Img, *Low->second, MF, *Dbg);
+      Local.setSourcePointerResolver({});
+      if (!PointerOperands.empty())
+        Local.setSourcePointerResolver([&](const MedOp &Op,
+                                           const MedVar &Value) -> TypeRef {
+          const auto At = PointerOperands.find({Op.Addr, Op.OriginSeq});
+          if (At != PointerOperands.end())
+            for (const auto &Operand : At->second)
+              if (Value == Operand.Value && Value.Size == Operand.Value.Size)
+                return Operand.Type;
+          return nullptr;
+        });
       // Explicit machine-state recovery retains fixed guest addresses, as
       // the LLVM and final C emitters do. It supplies no relocation image.
       Local.setBinaryImage(Result.InterpreterMachineSourceABI ? nullptr : &Img);
@@ -389,6 +438,7 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
       Local.setObservationReset({});
       std::map<const HighExpr *, std::vector<size_t>> SourceIndex;
       bool SourceOverflow = false;
+      size_t ExpressionSources = 0;
       size_t SourceWork =
           ::neverd::limits::pipeline::kPipelineHighIRSourceWorkBudget;
       std::vector<const sigs::LibraryRecognition *> SourceRegions;
@@ -396,27 +446,44 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
         if (R.Function == MF.Entry && R.Isolated &&
             R.Scope != sigs::LibraryFeatureScope::WholeFunction)
           SourceRegions.push_back(&R);
-      auto Append = [&](sigs::LibraryOccurrence Occurrence, const ExprPtr &Expr,
+      auto DiscardExpressions = [&] {
+        // Library matching follows and clones expression DAGs. Its bounded
+        // optional evidence must not erase the one-per-lowering-event
+        // statement identities needed to navigate an already admitted body.
+        std::erase_if(Sources[FI], [](const auto &Source) {
+          return Source.Kind == HighSourceKind::Expression;
+        });
+        SourceIndex.clear();
+        for (size_t I = 0; I < Sources[FI].size(); ++I)
+          if (const auto E = Sources[FI][I].Expression.lock())
+            SourceIndex[E.get()].push_back(I);
+        SourceOverflow = true;
+      };
+      auto Append = [&](sigs::LibraryOccurrence Occurrence,
+                        const std::shared_ptr<const HighExpr> &Expr,
                         HighSourceKind Kind = HighSourceKind::Expression,
                         std::optional<StmtKind> StatementKind = std::nullopt,
                         std::optional<uint8_t> ExpressionKind = std::nullopt) {
-        if (SourceOverflow)
-          return;
-        if (Sources[FI].size() >=
-            ::neverd::limits::pipeline::
-                kPipelineHighIRPipelineRebuildHighIRAppendSourcesFISizeLimit) {
-          Sources[FI].clear();
-          SourceIndex.clear();
-          SourceOverflow = true;
-          return;
+        if (Kind == HighSourceKind::Expression) {
+          if (SourceOverflow)
+            return;
+          if (ExpressionSources >=
+              ::neverd::limits::pipeline::
+                  kPipelineHighIRMaxExpressionObservations) {
+            DiscardExpressions();
+            return;
+          }
+          ++ExpressionSources;
         }
-        if (Expr && Kind == HighSourceKind::Expression)
+        if (Expr)
           SourceIndex[Expr.get()].push_back(Sources[FI].size());
         Sources[FI].push_back(
             {MF.Entry, Occurrence, Expr, Kind, StatementKind, ExpressionKind});
       };
       auto Observe = [&](sigs::LibraryOccurrence Occurrence,
                          const ExprPtr &Expr) {
+        if (SourceOverflow)
+          return;
         Append(Occurrence, Expr);
         for (const auto *R : SourceRegions) {
           auto Contains = [&](const auto &O) {
@@ -431,9 +498,8 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
           Expr->forEachChildExpr([&](const auto &E) { Pending.push_back(E); });
           while (!Pending.empty()) {
             if (!SourceWork || SourceOverflow) {
-              Sources[FI].clear();
-              SourceIndex.clear();
-              SourceOverflow = true;
+              if (!SourceOverflow)
+                DiscardExpressions();
               return;
             }
             --SourceWork;
@@ -447,7 +513,8 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
             if (auto At = SourceIndex.find(E.get()); At != SourceIndex.end())
               for (size_t I : At->second) {
                 const auto &S = Sources[FI][I];
-                if (S.Expression.lock() == E && Contains(S.Occurrence))
+                if (S.Kind == HighSourceKind::Expression &&
+                    S.Expression.lock() == E && Contains(S.Occurrence))
                   Origins.insert(S.Occurrence);
               }
             Pending.insert(Pending.end(), E->Operands.begin(),
@@ -461,39 +528,52 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
       Local.setStatementObserver([&](const MedOp &Op, const HighStmt &S) {
         const auto Source =
             observeHighStatement(MF.Entry, {Op.Addr, Op.OriginSeq}, S);
-        const ExprPtr Call = S.Kind == StmtKind::Assign ? S.Val : S.CallExpr;
-        Append(Source.Occurrence,
-               Source.Kind == HighSourceKind::StatementExpression ? Call
-                                                                  : ExprPtr(),
-               Source.Kind, Source.StatementKind, Source.ExpressionKind);
+        Append(Source.Occurrence, Source.Expression.lock(), Source.Kind,
+               Source.StatementKind, Source.ExpressionKind);
+        if (S.Kind == StmtKind::Store && S.StoreVal)
+          Append(Source.Occurrence, S.StoreVal,
+                 HighSourceKind::StoreValueExpression, S.Kind,
+                 static_cast<uint8_t>(S.StoreVal->Kind));
       });
       Local.setObservationReset([&] {
         Sources[FI].clear();
         SourceIndex.clear();
         SourceOverflow = false;
+        ExpressionSources = 0;
         SourceWork =
             ::neverd::limits::pipeline::kPipelineHighIRSourceWorkBudget;
       });
-      if (RecognizedFunctions.contains(MF.Entry)) {
-        Local.setExpressionObserver(
-            [&, FI](const MedOp &Op, const ExprPtr &Expr) {
+      Local.setExpressionObserver(
+          [&, FI](const MedOp &Op, const ExprPtr &Expr) {
+            // Unlike optional library expression coverage, a navigation
+            // observation follows one actual lowering event, without walking
+            // its operands or inheriting a synthetic PHI's branch address.
+            if (Op.Opcode != NdOp::COPY && Op.Opcode != NdOp::COND_BR)
+              if (auto Source = observeHighComputation(
+                      MF.Entry, {Op.Addr, Op.OriginSeq}, Expr))
+                Append(Source->Occurrence, Expr, Source->Kind,
+                       Source->StatementKind, Source->ExpressionKind);
+            if (RecognizedFunctions.contains(MF.Entry))
               Observe({Op.Addr, Op.OriginSeq}, Expr);
-            });
-        Local.setExpressionCloneObserver(
-            [&](const ExprPtr &From, const ExprPtr &To) {
-              auto At = SourceIndex.find(From.get());
-              if (At == SourceIndex.end())
-                return;
-              const auto Indices = At->second;
-              for (size_t I : Indices) {
-                if (SourceOverflow)
-                  break;
-                const auto &S = Sources[FI][I];
-                if (S.Expression.lock() == From)
-                  Observe(S.Occurrence, To);
-              }
-            });
-      }
+          });
+      Local.setExpressionCloneObserver([&](const ExprPtr &From,
+                                           const ExprPtr &To) {
+        auto At = SourceIndex.find(From.get());
+        if (At == SourceIndex.end())
+          return;
+        // Appending optional coverage can discard/reindex its entries.
+        // Snapshot these observations before following explicit clones.
+        HighSourceMap Originals;
+        for (size_t I : At->second)
+          if (Sources[FI][I].Expression.lock() == From)
+            Originals.push_back(Sources[FI][I]);
+        for (const auto &S : Originals) {
+          if (S.Kind == HighSourceKind::Expression)
+            Observe(S.Occurrence, To);
+          else
+            Append(S.Occurrence, To, S.Kind, S.StatementKind, S.ExpressionKind);
+        }
+      });
       auto keepIdentity = [&] {
         HighFunc &HF = Pending[FI];
         HF.Name = MF.Name;
@@ -544,6 +624,10 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
       try {
         Pending[FI] = Local.convert(MF, Img.Arch);
         auto &HF = Pending[FI];
+        if (const auto Low = ReceiverFunctions.find(MF.Entry);
+            Low != ReceiverFunctions.end())
+          HF.DebugCallReceiverTypes =
+              debugCallReceiverTypes(Img, *Low->second, MF, HF, *Dbg);
         // Structuring may invert or simplify an If condition. Its statement
         // retains the original branch address even when the expression root
         // changes; bind only an unambiguous original branch at that address.
@@ -593,7 +677,8 @@ void Pipeline::rebuildHighIR(const BinaryImage &Img,
   Result.HighSources.clear();
   for (auto &Source : Sources)
     for (auto &Observation : Source)
-      if (Observation.Kind != HighSourceKind::Expression ||
+      if ((Observation.Kind != HighSourceKind::Expression &&
+           Observation.Kind != HighSourceKind::ComputationExpression) ||
           !Observation.Expression.expired())
         Result.HighSources.push_back(std::move(Observation));
 }

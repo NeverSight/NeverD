@@ -199,16 +199,30 @@ bool Engine::keptPageReadsCurrentNames(const Json &page) const {
   return current;
 }
 
-void Engine::currentNamesInView(Json &view) const {
+bool Engine::currentNamesInView(Json &view) const {
   const auto &names = imageFacts().names;
   if (names.empty())
-    return;
+    return false;
+  bool stated = false;
   eachStatedFunction(view, [&](std::uint64_t address, Json &identity) {
     if (const auto name = names.find(address); name != names.end()) {
+      for (const auto &[field, said] :
+           {std::pair<const char *, const std::string &>{"name", name->second},
+            {"display_name", name->second}}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != said;
+      }
+      for (const char *field : {"name_origin", "display_origin"}) {
+        const auto held = identity.find(field);
+        stated = stated || held == identity.end() || !held->is_string() ||
+                 held->get_ref<const std::string &>() != "user";
+      }
       identity["name"] = identity["display_name"] = name->second;
       identity["name_origin"] = identity["display_origin"] = "user";
     }
   });
+  return stated;
 }
 
 Engine::StoreNames Engine::storeNames() {
@@ -217,9 +231,42 @@ Engine::StoreNames Engine::storeNames() {
 }
 
 std::optional<Json> Engine::storeIdentity(const Json *declared) {
+  // What a declaration left to be read comes first: the names it gives the
+  // stores are those this identity is read against.
+  settleStoreKeep();
   if (!browseCacheEnabled_ || projectFolder().empty())
     return std::nullopt;
   return renderStoreIdentity(declared);
+}
+
+void Engine::settleStoreKeep() {
+  if (!storeKeepWaiting_)
+    return;
+  const auto waiting = *std::exchange(storeKeepWaiting_, std::nullopt);
+  ++storeKeepsSettled_;
+  StoreNames before, after;
+  try {
+    if (waiting.after) {
+      // Of what the stores are kept under, only the declarations moved
+      // (analysisSnapshot's declared_types): the names before read the rest
+      // as the names after do.
+      if (auto identity = storeIdentity(waiting.after.get())) {
+        after = storeNames(*identity);
+        (*identity)["declared_types"] = *waiting.before;
+        before = storeNames(std::move(*identity));
+      }
+    } else {
+      // The history took no row: its declarations are those before, and the
+      // Session says what they are now.
+      if (auto identity = storeIdentity(waiting.before.get()))
+        before = storeNames(std::move(*identity));
+      after = storeNames();
+    }
+  } catch (const std::exception &) {
+    // Later sessions render again.
+    before = after = StoreNames{};
+  }
+  keepStoresFor(before, after);
 }
 
 Engine::StoreNames Engine::storeNames(Json identity) {
@@ -245,6 +292,7 @@ std::filesystem::path projectLocalFolder(const std::string &root,
 } // namespace
 
 void Engine::openRenderStore(const std::string &mode) {
+  writeStoreKeeps();
   renderStore_.reset();
   renderStoreStale_ = false;
   summariesDeferred_ = false;
@@ -269,6 +317,21 @@ void Engine::openRenderStore(const std::string &mode) {
   summariesDeferred_ = summaryJob_ && renderStore_->contains(CompleteKey);
 }
 
+void Engine::writeStoreKeeps() noexcept {
+  try {
+    settleStoreKeep();
+  } catch (const std::exception &) {
+    // Later sessions render again.
+  }
+  for (const auto &keep : storeKeeps_)
+    try {
+      RenderStore::keepFor(keep.folder, keep.from, keep.to);
+    } catch (const std::exception &) {
+      // Later sessions render again.
+    }
+  storeKeeps_.clear();
+}
+
 void Engine::keepStoresFor(const StoreNames &before) {
   StoreNames names;
   try {
@@ -284,16 +347,19 @@ void Engine::keepStoresFor(const StoreNames &before, const StoreNames &after) {
   factsStoreRead_ = false;
   try {
     const auto &project = projectFolder();
+    // What an earlier relabel says reads first; this one is written once the
+    // reply is sent.
+    writeStoreKeeps();
     if (!before.renders.empty() && !after.renders.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "render-ahead"),
-                           before.renders, after.renders);
+      storeKeeps_.push_back({projectLocalFolder(project, "render-ahead"),
+                             before.renders, after.renders});
       // What is open holds for them too.
       if (rendersStoreName_ == before.renders)
         rendersStoreName_ = after.renders;
     }
     if (!before.facts.empty() && !after.facts.empty()) {
-      RenderStore::keepFor(projectLocalFolder(project, "listing-facts"),
-                           before.facts, after.facts);
+      storeKeeps_.push_back({projectLocalFolder(project, "listing-facts"),
+                             before.facts, after.facts});
       if (factsStoreName_ == before.facts)
         factsStoreName_ = after.facts;
     }
@@ -349,6 +415,7 @@ Json Engine::keptRendersJson() {
 }
 
 void Engine::openFactsStore(const std::string &name, bool writable) {
+  writeStoreKeeps();
   factsStore_ = std::make_unique<RenderStore>(
       projectLocalFolder(projectFolder(), "listing-facts"), name, writable);
   factsStoreName_ = name;
@@ -604,7 +671,7 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
       const Json following = page.value("next_offset", Json());
       if (!following.is_number_unsigned() ||
           following.get<std::size_t>() <= next ||
-          textBytes > limits::kEngineMaxNamedViewBytes) {
+          textBytes > limits::kRenderAheadMaxSourceBytes) {
         failed();
         return;
       }

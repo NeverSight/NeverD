@@ -16,6 +16,7 @@
 #include "neverd/ir/high/X86/X86RegistrationFrame.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -23,14 +24,54 @@
 
 namespace neverd {
 
+ExprPtr MedToHighConverter::sourcePointerOperand(const MedOp &Op,
+                                                 ExprPtr Value) const {
+  if (!SourcePointerResolver || !Value || Value->Kind != ExprKind::Var)
+    return Value;
+  TypeRef Pointer = SourcePointerResolver(Op, Value->Var);
+  if (!Pointer || !Value->Type || Value->Type->Size != Pointer->Size ||
+      (Value->Type->Kind != NdTypeKind::Int &&
+       Value->Type->Kind != NdTypeKind::Ptr))
+    return Value;
+  auto Typed = std::make_shared<HighExpr>(*Value);
+  Typed->SourcePointerType = std::move(Pointer);
+  return Typed;
+}
+
 ExprPtr MedToHighConverter::medOpToExpr(const MedOp &Op) {
   ExprPtr Result = medOpToExprImpl(Op);
+  if (SourcePointerResolver && Result) {
+    if (Result->Kind == ExprKind::Var)
+      Result = sourcePointerOperand(Op, std::move(Result));
+    else if ((Result->Kind == ExprKind::BinOp && Result->Op == Op.Opcode &&
+              (Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB)) ||
+             (Result->Kind == ExprKind::Load && Op.Opcode == NdOp::LOAD)) {
+      // Definitions may be shared with earlier/later uses of a register.
+      // Clone the root as well as each annotated leaf before changing it.
+      ExprPtr Typed;
+      for (size_t I = 0; I < Result->Operands.size(); ++I) {
+        auto Operand = sourcePointerOperand(Op, Result->Operands[I]);
+        if (Operand == Result->Operands[I])
+          continue;
+        if (!Typed)
+          Typed = std::make_shared<HighExpr>(*Result);
+        Typed->Operands[I] = std::move(Operand);
+      }
+      if (Typed)
+        Result = std::move(Typed);
+    }
+  }
   if (ExpressionObserver && Result && Op.Addr != InvalidVA && Op.OriginSeq >= 0)
     ExpressionObserver(Op, Result);
   return Result;
 }
 
 ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
+  if (TargetArch == Arch::AArch64 && Image && CurMed)
+    if (auto Address = darwinVariadicStackAddress(darwinVariadicStackDefinition(
+            Op, getTargetRegInfo(TargetArch), Image->abiFormat(),
+            CurMed->EntryKind)))
+      return Address;
   if (ExprPtr Dynamic = dynamicStackExpr(Op))
     return Dynamic;
   if (const auto Displacement = i386GotDisplacement(Op))
@@ -38,7 +79,9 @@ ExprPtr MedToHighConverter::medOpToExprImpl(const MedOp &Op) {
   if (ExprPtr Rooted = i386PcRootedValue(Op))
     return Rooted;
   if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
-      Op.Inputs[1].isConst() && SourceRecordValues.count(varKey(Op.Inputs[0])))
+      Op.Inputs[1].isConst() &&
+      (SourceRecordValues.count(varKey(Op.Inputs[0])) ||
+       SourcePhiSlices.count(varKey(Op.Inputs[0]))))
     return sourceBitSlice(medvarToExpr(Op.Inputs[0]), Op.Inputs[1].ConstVal,
                           Op.Output.Size);
   if (Op.Opcode == NdOp::FLOAT_FMA) {

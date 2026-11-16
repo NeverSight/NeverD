@@ -27,6 +27,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64VectorAlgo20RT : public SemanticRoundTripFixture,
                           public ::testing::WithParamInterface<RoundTripTC> {};
@@ -37,8 +38,25 @@ class A64VectorAlgo20RT : public SemanticRoundTripFixture,
 TEST_P(A64VectorAlgo20RT, Verify) { roundTripAArch64(GetParam()); }
 
 class ARM32VectorAlgo20RT : public SemanticRoundTripFixture,
-                            public ::testing::WithParamInterface<RoundTripTC> {};
+                            public ::testing::WithParamInterface<RoundTripTC> {
+};
 TEST_P(ARM32VectorAlgo20RT, Verify) { roundTripARM32(GetParam()); }
+
+// Its sadsearch spills a register whose VLD1 lane load left the other half
+// with an incoming value no caller defines, and never reads that half back:
+// the LLVM C route must leave the unobserved store out.
+class ARM32VectorAlgo20LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32VectorAlgo20LLVMCRT, Verify) { roundTripARM32(GetParam()); }
+
+// The AArch64 sadsearch saves d8-d15 and uses the registers as whole vectors,
+// so each restore is read back through the register's views: the LLVM C
+// route must still take the saves for prologue transport.
+class A64VectorAlgo20LLVMCRT
+    : public SemanticRoundTripFixture,
+      public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(A64VectorAlgo20LLVMCRT, Verify) { roundTripAArch64(GetParam()); }
 
 // clang-format off
 static std::vector<RoundTripTC> makeVA20TC(const char *prefix, const char *T,
@@ -179,9 +197,17 @@ static std::vector<RoundTripTC> makeVA20TC(const char *prefix, const char *T,
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeVA20TC("x64v20", "long", 2, "");
-static const std::vector<RoundTripTC> kA64 = makeVA20TC("a64v20", "long", 2, "");
+static const std::vector<RoundTripTC> kX64 =
+    makeVA20TC("x64v20", "long", 2, "");
+static const std::vector<RoundTripTC> kA64 =
+    makeVA20TC("a64v20", "long", 2, "");
 static const std::vector<RoundTripTC> kARM = makeVA20TC("armv20", "int", 2, "");
+
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
 
 INSTANTIATE_TEST_SUITE_P(VectorAlgo20, X64VectorAlgo20RT,
                          ::testing::ValuesIn(kX64), rtTCName);
@@ -189,3 +215,8 @@ INSTANTIATE_TEST_SUITE_P(VectorAlgo20, A64VectorAlgo20RT,
                          ::testing::ValuesIn(kA64), rtTCName);
 INSTANTIATE_TEST_SUITE_P(VectorAlgo20, ARM32VectorAlgo20RT,
                          ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VectorAlgo20LLVMC, ARM32VectorAlgo20LLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(VectorAlgo20LLVMC, A64VectorAlgo20LLVMCRT,
+                         ::testing::ValuesIn(onLLVMC(kA64, {"_sadsearch"})),
+                         rtTCName);

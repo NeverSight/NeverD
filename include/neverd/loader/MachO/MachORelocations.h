@@ -12,7 +12,23 @@
 #include <cstdint>
 #include <optional>
 
+namespace llvm::object {
+class MachOObjectFile;
+class RelocationRef;
+} // namespace llvm::object
+
 namespace neverd::macho_loader::detail {
+
+#define MACHO_RELOC_VALUE(Type, Name, Value) inline constexpr Type Name = Value;
+#define MACHO_RELOC_TEXT(Name, Value) inline constexpr char Name[] = Value;
+#include "neverd/loader/MachO/MachORelocations.def"
+
+/// Decode the signed addend only when both records describe one instruction
+/// at the same address with the required width and PC-relative flags.
+std::optional<int64_t>
+decodeARM64AddendPair(const llvm::object::MachOObjectFile &Object,
+                      const llvm::object::RelocationRef &Prefix,
+                      const llvm::object::RelocationRef &Consumer);
 
 struct I386VanillaValue {
   int64_t Target = 0;

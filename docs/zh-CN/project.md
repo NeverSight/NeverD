@@ -1,6 +1,6 @@
 **语言**: [English](../../README.md) | [简体中文](project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ CLI、集成方与 AI 智能体通过 **纯 C API** 使用同一个引擎 **`lib
 
 > 矩阵中的每个单元格都已实现，但集成测试深度不同。详见[架构覆盖矩阵](architecture.md#support-and-test-depth)。Mach-O i386 使用 `thin` 可重定位对象，因为现代 macOS 无法链接历史 i386 可执行文件。
 
-**MIPS ELF 分析为实验性支持：** MIPS32r2/o32 和 MIPS64r2/n64 均支持大小端，可对严格限定的整数指令子集进行反汇编、CFG 恢复以及 C 和 LLVM 输出。不支持原生代码重写。详见 [MIPS 覆盖范围与固件示例（英文）](../mips.md)，其中说明了单独验证的 microMIPS32、DSP 和 MIPS32r5 MSA 子集及其源码输出限制。
+**MIPS ELF 分析为实验性支持：** MIPS32r2/o32 和 MIPS64r2/n64 均支持大小端，可对严格限定的整数指令子集进行反汇编、CFG 恢复以及 C 和 LLVM 输出。不支持原生代码重写。详见 [MIPS 覆盖范围与固件示例（英文）](../mips.md)，其中说明了单独验证的 microMIPS32、MIPS16e/e2、DSP 和 MIPS32r5 MSA 子集及其源码输出限制。
 
 传统 EVM 字节码独立于原生 container：从 Frontier 到 Fusaka 的 150 个已分配
 opcode 全部进入专用 Low/Med/High IR、已验证 LLVM `i256`、C23 `_BitInt(256)`
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |------|------|------|
 | `lift` | `.ll` | 提升到 LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | 通过 `--language` 选择 C、EVM Solidity 或 SBF Rust |
+| `decompile --check-all` | 统计 | 对每个已加载函数生成默认 C；检查后即释放该函数体 |
 | `decompile -llvm` | `.c` | 经 LLVM IR + 优化器 |
 | `decompile --devirtualize` | `.c` + 可选 JSON | 实验性 x64 解释器恢复；需要 `--func`；[契约与示例](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 实验性: [Android](android.md), [iOS](ios.md) |

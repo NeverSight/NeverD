@@ -175,6 +175,11 @@ void JsonWriter::value(const Json &value) {
   text_ += value.dump(-1, ' ', false, Json::error_handler_t::replace);
 }
 
+void JsonWriter::fragment(const EncodedJson &piece) {
+  separate();
+  text_ += piece.text();
+}
+
 EncodedJson::EncodedJson(const Json &value)
     : text_(value.dump(-1, ' ', false, Json::error_handler_t::replace)) {}
 

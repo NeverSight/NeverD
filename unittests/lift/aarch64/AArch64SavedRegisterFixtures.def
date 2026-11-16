@@ -1,0 +1,523 @@
+//===- AArch64SavedRegisterFixtures.def - Saved register inputs --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// Expand SAVED_TEXT(Name, Text) and SAVED_VALUE(Type, Name, Value).
+//===----------------------------------------------------------------------===//
+
+#ifndef SAVED_TEXT
+#define SAVED_TEXT(Name, Text)
+#endif
+#ifndef SAVED_VALUE
+#define SAVED_VALUE(Type, Name, Value)
+#endif
+
+SAVED_TEXT(kDirectory, "neverd-arm64e-saved-registers")
+SAVED_TEXT(kSource, "saved.S")
+SAVED_TEXT(kWrapper, "observe.S")
+SAVED_TEXT(kCaller, "driver.c")
+SAVED_TEXT(kDriver, "driver")
+SAVED_TEXT(kOriginal, "original.dylib")
+SAVED_TEXT(kPublished, "published.dylib")
+SAVED_TEXT(kRules, "rules.txt")
+SAVED_TEXT(kRejected, "refused.dylib")
+SAVED_TEXT(kCompiler, "/usr/bin/clang")
+SAVED_TEXT(kTargetFlag, "-target")
+SAVED_TEXT(kTarget, "arm64e-apple-macosx15.0")
+SAVED_TEXT(kOptimize, "-O2")
+SAVED_TEXT(kDylib, "-dynamiclib")
+SAVED_TEXT(kTight, "-Wl,-headerpad,0")
+SAVED_TEXT(kOutputFlag, "-o")
+SAVED_TEXT(kIncludeFlag, "-I")
+SAVED_TEXT(kWarnings, "-Wall")
+SAVED_TEXT(kExtraWarnings, "-Wextra")
+SAVED_TEXT(kErrorWarnings, "-Werror")
+SAVED_TEXT(kHeaderRoot, "NEVERD_ARM64E_TEST_INCLUDE_DIR")
+SAVED_TEXT(kIncludes, "../../../include")
+SAVED_TEXT(kQuadFlag, "-DTEST_QUAD")
+SAVED_TEXT(kSignalFlag, "-DTEST_SIGNAL")
+SAVED_TEXT(kExecute, "NEVERD_ARM64E_LIFTED_NATIVE")
+SAVED_TEXT(kUnavailable, "native Darwin AArch64 and Apple Clang are required")
+SAVED_TEXT(kSum, "leaf_sum")
+SAVED_TEXT(kDifference, "leaf_difference")
+SAVED_TEXT(kSumSymbol, "_leaf_sum")
+SAVED_TEXT(kDifferenceSymbol, "_leaf_difference")
+SAVED_TEXT(kNativeImages, "executed_native_images")
+SAVED_TEXT(kOriginalHash, "original_sha256")
+SAVED_TEXT(kPublishedHash, "published_sha256")
+SAVED_TEXT(kResumptions, "native_signal_caller_resumptions")
+SAVED_TEXT(kObservedCalls, "native_preserved_register_calls")
+SAVED_TEXT(kSystemSteps, "native_system_frameless_steps")
+SAVED_VALUE(unsigned, kFunctions, 2)
+SAVED_VALUE(unsigned, kNormalRounds, 13)
+SAVED_VALUE(unsigned, kSignalRounds, 3)
+SAVED_VALUE(unsigned, kVectorMask, 0xff)
+SAVED_VALUE(int, kCFAOffset, 16)
+SAVED_VALUE(int, kFPOffset, -16)
+SAVED_VALUE(int, kLROffset, -8)
+SAVED_VALUE(int, kFirstGPROffset, -32)
+SAVED_VALUE(int, kFirstDOffset, -112)
+SAVED_VALUE(int, kFirstQOffset, -128)
+SAVED_VALUE(uint32_t, kWaitLoad, 0xb9400049)        // ldr w9, [x2].
+SAVED_VALUE(uint32_t, kPlanInstruction, 0xaa0003f1) // mov x17, x0.
+SAVED_TEXT(kCFIX19, ".cfi_offset 19, -32")
+SAVED_TEXT(kWrongCFIX19, ".cfi_offset 19, -24")
+SAVED_TEXT(kCFID8, ".cfi_offset 72, -112")
+SAVED_TEXT(kWrongCFID8, ".cfi_offset 72, -104")
+SAVED_TEXT(kCFIQ8, ".cfi_offset 72, -128")
+SAVED_TEXT(kWrongCFIQ8, ".cfi_offset 72, -120")
+
+SAVED_TEXT(kBody, R"asm(
+#ifdef TEST_QUAD
+#define FRAME 240
+#else
+#define FRAME 176
+#endif
+.text
+.macro restore same
+  ldp x19, x20, [sp, #FRAME-32]
+  ldp x21, x22, [sp, #FRAME-48]
+  ldp x23, x24, [sp, #FRAME-64]
+  ldp x25, x26, [sp, #FRAME-80]
+  ldp x27, x28, [sp, #FRAME-96]
+#ifdef TEST_QUAD
+  ldp q8, q9, [sp, #FRAME-128]
+  ldp q10, q11, [sp, #FRAME-160]
+  ldp q12, q13, [sp, #FRAME-192]
+  ldp q14, q15, [sp, #FRAME-224]
+#else
+  ldp d8, d9, [sp, #FRAME-112]
+  ldp d10, d11, [sp, #FRAME-128]
+  ldp d12, d13, [sp, #FRAME-144]
+  ldp d14, d15, [sp, #FRAME-160]
+#endif
+  ldp x29, x30, [sp, #FRAME-16]
+.cfi_def_cfa sp, FRAME
+.irp reg, x19,x20,x21,x22,x23,x24,x25,x26,x27,x28,x29,x30,d8,d9,d10,d11,d12,d13,d14,d15
+.if \same
+.cfi_same_value \reg
+.else
+.cfi_restore \reg
+.endif
+.endr
+  add sp, sp, #FRAME
+.cfi_def_cfa_offset 0
+.endm
+
+.macro function name, operation
+.globl \name
+.p2align 2
+\name:
+.cfi_startproc
+.cfi_b_key_frame
+.cfi_escape 0x2e, 0
+  pacibsp
+  sub sp, sp, #FRAME
+.cfi_def_cfa_offset FRAME
+  stp x29, x30, [sp, #FRAME-16]
+.cfi_offset x29, -16
+.cfi_offset x30, -8
+  stp x19, x20, [sp, #FRAME-32]
+.cfi_offset x19, -32
+.cfi_offset x20, -24
+  stp x21, x22, [sp, #FRAME-48]
+.cfi_offset x21, -48
+.cfi_offset x22, -40
+  stp x23, x24, [sp, #FRAME-64]
+.cfi_offset x23, -64
+.cfi_offset x24, -56
+  stp x25, x26, [sp, #FRAME-80]
+.cfi_offset x25, -80
+.cfi_offset x26, -72
+  stp x27, x28, [sp, #FRAME-96]
+.cfi_offset x27, -96
+.cfi_offset x28, -88
+#ifdef TEST_QUAD
+  stp q8, q9, [sp, #FRAME-128]
+.cfi_offset d8, -128
+.cfi_offset d9, -112
+  stp q10, q11, [sp, #FRAME-160]
+.cfi_offset d10, -160
+.cfi_offset d11, -144
+  stp q12, q13, [sp, #FRAME-192]
+.cfi_offset d12, -192
+.cfi_offset d13, -176
+  stp q14, q15, [sp, #FRAME-224]
+.cfi_offset d14, -224
+.cfi_offset d15, -208
+#else
+  stp d8, d9, [sp, #FRAME-112]
+.cfi_offset d8, -112
+.cfi_offset d9, -104
+  stp d10, d11, [sp, #FRAME-128]
+.cfi_offset d10, -128
+.cfi_offset d11, -120
+  stp d12, d13, [sp, #FRAME-144]
+.cfi_offset d12, -144
+.cfi_offset d13, -136
+  stp d14, d15, [sp, #FRAME-160]
+.cfi_offset d14, -160
+.cfi_offset d15, -152
+#endif
+  add x29, sp, #FRAME-16
+.cfi_def_cfa x29, 16
+  mov x19, #19
+  mov x20, #20
+  mov x21, #21
+  mov x22, #22
+  mov x23, #23
+  mov x24, #24
+  mov x25, #25
+  mov x26, #26
+  mov x27, #27
+  mov x28, #28
+  movi v8.16b, #8
+  movi v9.16b, #9
+  movi v10.16b, #10
+  movi v11.16b, #11
+  movi v12.16b, #12
+  movi v13.16b, #13
+  movi v14.16b, #14
+  movi v15.16b, #15
+  \operation x0, x0, x1
+  mov x17, x0
+#ifdef TEST_SIGNAL
+  mov w9, #1
+  str w9, [x2]
+Lwait\@:
+  ldr w9, [x2]
+  cbnz w9, Lwait\@
+#endif
+.cfi_remember_state
+  cbz x0, Lzero\@
+  restore 0
+  autibsp
+  ret
+.cfi_restore_state
+Lzero\@:
+  restore 1
+  retab
+.cfi_endproc
+.endm
+function _leaf_sum, add
+function _leaf_difference, sub
+.subsections_via_symbols
+)asm")
+
+// Set distinct incoming values, call through an authenticated function pointer,
+// then record every preserved GPR and both halves of V8-V15.
+SAVED_TEXT(kObserver, R"asm(
+.text
+.globl _observe_preserved
+.p2align 2
+_observe_preserved:
+.cfi_startproc
+#ifdef __arm64e__
+  pacibsp
+#endif
+  sub sp, sp, #240
+.cfi_def_cfa_offset 240
+  stp x29, x30, [sp, #224]
+.cfi_offset x29, -16
+.cfi_offset x30, -8
+  stp x19, x20, [sp, #208]
+  stp x21, x22, [sp, #192]
+  stp x23, x24, [sp, #176]
+  stp x25, x26, [sp, #160]
+  stp x27, x28, [sp, #144]
+  stp q8, q9, [sp, #112]
+  stp q10, q11, [sp, #80]
+  stp q12, q13, [sp, #48]
+  stp q14, q15, [sp, #16]
+  add x29, sp, #224
+  str x5, [sp]
+  mov x16, x0
+  mov x0, x1
+  mov x1, x2
+  mov x2, x3
+  mov x9, x4
+  ldp x19, x20, [x9, #0]
+  ldp x21, x22, [x9, #16]
+  ldp x23, x24, [x9, #32]
+  ldp x25, x26, [x9, #48]
+  ldp x27, x28, [x9, #64]
+  ldp q8, q9, [x9, #80]
+  ldp q10, q11, [x9, #112]
+  ldp q12, q13, [x9, #144]
+  ldp q14, q15, [x9, #176]
+#ifdef __arm64e__
+  blraaz x16
+#else
+  blr x16
+#endif
+  ldr x9, [sp]
+  stp x19, x20, [x9, #0]
+  stp x21, x22, [x9, #16]
+  stp x23, x24, [x9, #32]
+  stp x25, x26, [x9, #48]
+  stp x27, x28, [x9, #64]
+  stp q8, q9, [x9, #80]
+  stp q10, q11, [x9, #112]
+  stp q12, q13, [x9, #144]
+  stp q14, q15, [x9, #176]
+  ldp x19, x20, [sp, #208]
+  ldp x21, x22, [sp, #192]
+  ldp x23, x24, [sp, #176]
+  ldp x25, x26, [sp, #160]
+  ldp x27, x28, [sp, #144]
+  ldp q8, q9, [sp, #112]
+  ldp q10, q11, [sp, #80]
+  ldp q12, q13, [sp, #48]
+  ldp q14, q15, [sp, #16]
+  ldp x29, x30, [sp, #224]
+  add sp, sp, #240
+.cfi_def_cfa_offset 0
+#ifdef __arm64e__
+  retab
+#else
+  ret
+#endif
+.cfi_endproc
+)asm")
+
+SAVED_TEXT(kDriverBody, R"c(
+#include <dlfcn.h>
+#include <inttypes.h>
+#include <stdatomic.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef TEST_SIGNAL
+#include "neverd/runtime/DarwinArm64eSystemUnwind.h"
+#include <pthread.h>
+#include <sched.h>
+#include <signal.h>
+#include <unistd.h>
+#endif
+
+enum { GPRCount = 10, DCount = 8, Words = GPRCount + 2 * DCount,
+       NormalRounds = 13, SignalRounds = 3, Returned = 73 };
+typedef uint64_t (*Entry)(uint64_t, uint64_t, atomic_int *);
+extern uint64_t observe_preserved(Entry, uint64_t, uint64_t, atomic_int *,
+                                 const uint64_t *, uint64_t *);
+static atomic_int Ready;
+#ifdef TEST_SIGNAL
+struct Plan {
+  uintptr_t Begin, End;
+  NDDarwinArm64eUnwindRow Frame;
+  size_t Count;
+  NDDarwinArm64eSavedGPR Saved[GPRCount];
+  NDDarwinArm64eVectorSaves Vectors;
+};
+static struct Plan Plans[2];
+static unsigned Current;
+static uintptr_t Low, High;
+static pthread_t Worker;
+static volatile sig_atomic_t Handled;
+static int SystemUnwind;
+static const uint64_t *ExpectedRegisters;
+
+// Seed a fresh public system cursor from a genuine interrupted register set.
+// Its unwind step consumes only the published image's registered DWARF. The
+// independently supplied caller values catch shifted slots or a wrong SP.
+static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) {
+  unw_context_t Capture;
+  unw_cursor_t Cursor;
+  NDDarwinArm64eCursor Interrupted = ndDarwinArm64eSignalCursor(Context);
+  uintptr_t CFA = Interrupted.SP + Plan->Frame.CFAOffset;
+  if (unw_getcontext(&Capture) || unw_init_local(&Cursor, &Capture) ||
+      unw_set_reg(&Cursor, UNW_REG_SP, Interrupted.SP) ||
+      unw_set_reg(&Cursor, UNW_ARM64_FP, Interrupted.FP) ||
+      unw_set_reg(&Cursor, UNW_ARM64_LR, Interrupted.LR))
+    return 0;
+  for (unsigned I = 0; I < GPRCount; ++I)
+    if (unw_set_reg(&Cursor, UNW_ARM64_X19 + I,
+                    Context->uc_mcontext->__ss.__x[19 + I]))
+      return 0;
+  for (unsigned I = 0; I < DCount; ++I) {
+    unw_fpreg_t Value;
+    memcpy(&Value, &Context->uc_mcontext->__ns.__v[8 + I], sizeof(Value));
+    if (unw_set_fpreg(&Cursor, UNW_ARM64_D8 + I, Value))
+      return 0;
+  }
+  void *PC = ptrauth_sign_unauthenticated((void *)Interrupted.PC,
+                                          ptrauth_key_return_address,
+                                          Interrupted.SP);
+  unw_word_t Value;
+  if (unw_set_reg(&Cursor, UNW_REG_IP, (uintptr_t)PC) ||
+      unw_step(&Cursor) <= 0 || unw_get_reg(&Cursor, UNW_REG_SP, &Value) ||
+      Value != CFA || unw_get_reg(&Cursor, UNW_REG_IP, &Value) ||
+      (uintptr_t)ptrauth_strip((void *)Value, ptrauth_key_return_address) !=
+          (uintptr_t)ptrauth_strip((void *)Interrupted.LR,
+                                         ptrauth_key_return_address))
+    return 0;
+  for (unsigned I = 0; I < GPRCount; ++I)
+    if (unw_get_reg(&Cursor, UNW_ARM64_X19 + I, &Value) ||
+        Value != ExpectedRegisters[I])
+      return 0;
+  for (unsigned I = 0; I < DCount; ++I) {
+    unw_fpreg_t Floating;
+    if (unw_get_fpreg(&Cursor, UNW_ARM64_D8 + I, &Floating))
+      return 0;
+    memcpy(&Value, &Floating, sizeof(Value));
+    if (Value != ExpectedRegisters[GPRCount + 2 * I])
+      return 0;
+  }
+  return 1;
+}
+
+static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
+  intptr_t Delta;
+  unsigned FromFP, SavedFP, SavedLR, LowMask, HighMask;
+  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %u %u %td %td %td %zu %u %u",
+             &Delta, &Plan->Begin, &Plan->End, &FromFP, &SavedFP, &SavedLR,
+             &Plan->Frame.CFAOffset,
+             &Plan->Frame.FPOffset, &Plan->Frame.LROffset, &Plan->Count,
+             &LowMask, &HighMask) != 12 || Plan->Count > GPRCount)
+    return 0;
+  Plan->Frame.CFAFromFP = FromFP;
+  Plan->Frame.SavedFP = SavedFP;
+  Plan->Frame.SavedLR = SavedLR;
+  Plan->Frame.Signing = NDArm64eSignedIBWithCFA;
+  Plan->Vectors.Complete = true;
+  Plan->Vectors.LowMask = LowMask;
+  Plan->Vectors.HighMask = HighMask;
+  for (unsigned I = 0; I < Plan->Count; ++I)
+    if (fscanf(File, "%u %td", &Plan->Saved[I].Register,
+               &Plan->Saved[I].CFAOffset) != 2)
+      return 0;
+  for (unsigned I = 0; I < DCount; ++I)
+    if (fscanf(File, "%td %td", &Plan->Vectors.LowOffsets[I],
+               &Plan->Vectors.HighOffsets[I]) != 2)
+      return 0;
+  uintptr_t Owner =
+      (uintptr_t)ptrauth_strip(Run, ptrauth_key_function_pointer) + Delta;
+  Plan->Begin += Owner;
+  Plan->End += Owner;
+  return 1;
+}
+
+static void observe(int Signal, siginfo_t *Info, void *Data) {
+  (void)Info;
+  ucontext_t *Context = Data;
+  struct Plan *Plan = &Plans[Current];
+  uintptr_t PC = arm_thread_state64_get_pc(Context->uc_mcontext->__ss);
+  if (SystemUnwind && (Signal != SIGUSR1 || PC < Plan->Begin ||
+                       PC >= Plan->End || !checkSystemFrame(Context, Plan)))
+    _exit(13);
+  if (Signal != SIGUSR1 || PC < Plan->Begin || PC >= Plan->End ||
+      !ndDarwinArm64eResumeSignalCaller(
+          Context, Plan->Frame, Plan->Saved, Plan->Count, &Plan->Vectors,
+          Low, High, false))
+    _exit(10);
+  Context->uc_mcontext->__ss.__x[0] = Returned;
+  Handled = 1;
+}
+
+static void *deliver(void *Unused) {
+  (void)Unused;
+  while (!atomic_load_explicit(&Ready, memory_order_relaxed))
+    sched_yield();
+  if (pthread_kill(Worker, SIGUSR1))
+    _exit(11);
+  return 0;
+}
+#endif
+
+int main(int Argc, char **Argv) {
+  if (Argc != 4)
+    return 1;
+  void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image)
+    return 2;
+  Entry Runs[] = {(Entry)dlsym(Image, "leaf_sum")
+#if !defined(TEST_COMPACT_PAIRS) || defined(TEST_COALESCED)
+                  , (Entry)dlsym(Image, "leaf_difference")
+#endif
+  };
+  enum { FunctionCount = sizeof(Runs) / sizeof(Runs[0]) };
+  for (unsigned I = 0; I < FunctionCount; ++I)
+    if (!Runs[I])
+      return 3;
+  unsigned Rounds = NormalRounds;
+#ifdef TEST_SIGNAL
+  SystemUnwind = atoi(Argv[3]);
+  alarm(30);
+  FILE *File = fopen(Argv[2], "r");
+  if (!File)
+    return 4;
+  for (unsigned I = 0; I < FunctionCount; ++I)
+    if (!readPlan(File, Runs[I], &Plans[I]))
+      return 4;
+  if (fclose(File))
+    return 4;
+  Worker = pthread_self();
+  High = (uintptr_t)pthread_get_stackaddr_np(Worker);
+  Low = High - pthread_get_stacksize_np(Worker);
+  struct sigaction Action = {.sa_sigaction = observe, .sa_flags = SA_SIGINFO};
+  sigemptyset(&Action.sa_mask);
+  if (sigaction(SIGUSR1, &Action, 0))
+    return 5;
+  Rounds = SignalRounds;
+#endif
+  for (unsigned Round = 0; Round < Rounds; ++Round) {
+    uint64_t Input[Words], Observed[Words];
+    for (unsigned I = 0; I < Words; ++I)
+      Input[I] = UINT64_C(0xa9bacbdc01020304) +
+                 UINT64_C(0x0102030405060708) * (I + Round);
+    uint64_t A = Round ? UINT64_MAX - Round : 0;
+    uint64_t B = Round & 1 ? A : -A;
+    for (unsigned I = 0; I < FunctionCount; ++I) {
+      uint64_t Expected = I ? A - B : A + B;
+#ifdef TEST_SIGNAL
+      Current = I;
+      ExpectedRegisters = Input;
+      Handled = 0;
+      atomic_store(&Ready, 0);
+      pthread_t Monitor;
+      if (pthread_create(&Monitor, 0, deliver, 0))
+        return 6;
+      Expected = Returned;
+#endif
+      uint64_t Result =
+          observe_preserved(Runs[I], A, B, &Ready, Input, Observed);
+#ifdef TEST_SIGNAL
+      if (pthread_join(Monitor, 0) || !Handled)
+        return 7;
+#endif
+      if (Result != Expected)
+        return 8;
+      for (unsigned Word = 0; Word < Words; ++Word) {
+        uint64_t ExpectedWord = Input[Word];
+#ifndef TEST_QUAD
+        if (Word >= GPRCount && (Word - GPRCount) % 2
+#ifdef TEST_COMPACT_PAIRS
+            && (TEST_COMPACT_PAIRS & (0x100u << ((Word - GPRCount) / 4)))
+#endif
+        ) {
+          // D reloads clear the upper lane. A signal return preserves the
+          // interrupted upper lane when the function has no Q save for it.
+#ifdef TEST_SIGNAL
+          ExpectedWord = UINT64_C(0x0101010101010101) *
+                         (8 + (Word - GPRCount) / 2);
+#else
+          ExpectedWord = 0;
+#endif
+        }
+#endif
+        if (Observed[Word] != ExpectedWord) {
+          fprintf(stderr, "round=%u function=%u word=%u expected=%" PRIx64
+                          " observed=%" PRIx64 "\n",
+                  Round, I, Word, ExpectedWord, Observed[Word]);
+          return 12;
+        }
+      }
+    }
+  }
+  return dlclose(Image);
+}
+)c")
+
+#undef SAVED_TEXT
+#undef SAVED_VALUE

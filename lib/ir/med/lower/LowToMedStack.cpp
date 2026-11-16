@@ -319,7 +319,10 @@ void LowToMedConverter::analyzeStack(const LowFunc &Low) {
     // Reuse the must-analysis at the exact use rather than the flow-insensitive
     // address map above, which cannot establish joins or temporary lifetimes.
     const auto Frame = analyzeSourceStackFrame(Low, TargetArch);
-    if (!Frame.Error.empty())
+    // A frame past the analysis's bounds adds no slot: the raw operands keep
+    // their own address arithmetic. A rebuilt arm64e image needs every one.
+    if (!Frame.Error.empty() &&
+        (!Frame.BudgetExceeded || (Image && Image->isArm64e())))
       throw LowToMedConversionError(Frame.Error);
     for (const auto &Access : Frame.Accesses)
       if (Access.OriginalWord) {

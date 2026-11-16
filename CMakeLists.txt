@@ -180,6 +180,7 @@ add_subdirectory(lib)
 option(NEVERD_BUILD_SHARED "Build libneverd shared library" ON)
 option(NEVERD_BUILD_GUI "Build the Qt Quick desktop workbench and analysis worker" OFF)
 option(NEVERD_BUILD_WORKER "Build the headless analysis worker" OFF)
+include(cmake/NeverDAgent.cmake)
 option(NEVERD_BUILD_WEB_MCP "Build the offline C++ web MCP server" OFF)
 option(NEVERD_ENABLE_PYTHON_PLUGINS
        "Enable embedded CPython support for NeverD plugins" ON)
@@ -209,9 +210,7 @@ add_subdirectory(tools)
 option(NEVERD_BUILD_PLUGINS "Build NeverD example plugins" OFF)
 include("${CMAKE_SOURCE_DIR}/cmake/NeverDWebProduct.cmake")
 if(NEVERD_BUILD_PLUGINS)
-  add_subdirectory(plugins/bytecode)
   add_subdirectory(plugins/example)
-  add_subdirectory(plugins/semantic)
 endif()
 
 # --- Copy signature files to build/bin/sig/ ---

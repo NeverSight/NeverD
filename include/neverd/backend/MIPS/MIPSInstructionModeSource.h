@@ -19,6 +19,10 @@
 
 namespace neverd::mips {
 
+#define MIPS_SOURCE_MODE(Name, Feature, Exclude, Attribute)
+#define MIPS_SOURCE_TEXT(Name, Value) inline constexpr char Name[] = Value;
+#include "neverd/backend/MIPS/MIPSInstructionModes.def"
+
 /// Called only when a source value acquires a resolved code identity. Direct
 /// control transfers do not use this boundary. Current Clang MIPS data layouts
 /// can fold a microMIPS function pointer's low bit to zero, including in static

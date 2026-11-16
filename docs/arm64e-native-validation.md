@@ -486,6 +486,205 @@ images still need those proofs, including variadic and non-C entries. The
 previous canonical-IR installation qualification and pinned r6 package remain
 unchanged; source-fork-only producer features still require the source build.
 
+## Publishing position-independent lifted dylibs
+
+The ordinary segment patch pipeline can publish a classic macOS arm64e image
+whose instruction section consists of verified frameless bodies.
+It matches lifted definitions to original entries, then checks the relocated
+machine instructions and compact unwind coverage for every body. An unshifted
+MOVZ with immediate zero and a move from the zero register can both clear the
+same GPR. Both W and X forms write all 64 destination bits and preserve NZCV.
+The original entries forward to the emitted RX addresses. The private native emission uses
+the classic ABI version. The input IR retains its analysis marker.
+
+`NeverDArm64eLiftedImageTests` compiles an unreserved Apple Clang dylib,
+lifts it through the normal patch pipeline and compares the result against
+the original image. A missing definition or a changed arithmetic result fails
+before an output file is created. Set `NEVERD_ARM64E_LIFTED_NATIVE=1` on a
+host that executes arm64e to run the independently compiled authenticated
+caller against both images. The strict instruction check accepts
+register-only integer arithmetic, logical operations, moves, and scalar
+floating-point add/subtract ending in RET. Plain LDR and STR can use a live
+base register and displacement. A typed caller compares loaded values and
+checks both neighboring slots after stores. Literal or register-indexed
+addressing, writeback and SP-based memory operands require separate proofs.
+
+A frameless body can end with an unconditional direct tail branch to another
+installed entry. The lifter preserves simple argument forwarding with the same
+calling convention and prototype. The installer independently decodes the two
+branch destinations at their actual PCs and matches the original callee to its
+compiled owner. The regression reverses the two emitted functions and checks
+the relocated branch with Capstone. Redirecting the tail call to a different
+entry fails before publication. A lifted tail call may also re-enter a
+loader-identified import stub at its published address. An image-relative
+data declaration binds to the original data section. The verifier decodes
+ADRP at both PCs and checks the destination register and original data page,
+then checks the memory operation and displacement. The global/import fixture
+changes an exported 64-bit variable between calls and compares its second
+entry with the independent caller's own `getpid()`.
+
+Unassigned incoming reads of X20 and X22 use LLVM's reserved physical
+registers. These carry Swift self and the asynchronous context, respectively.
+The lifter preserves the observed register even when the image omits its
+source calling convention. Apple Clang builds the independent typed callers
+and callees with `swiftcall` and `swiftasynccall`. The latter verifies the
+context passed to a leaf before any suspension or continuation switch.
+These register assignments are documented in the
+[Swift ARM64 ABI](https://github.com/swiftlang/swift/blob/main/docs/ABI/CallingConventionSummary.rst#arm64).
+The floating-point caller checks the exact result bits, including signed zero.
+
+A Darwin Swift error result has both an incoming and an outgoing value in
+X21. Analysis preserves each actual instruction write and the physical entry
+read. For a standalone writer the private native entry takes a Swift
+`swifterror` pointer, so instruction selection returns the new error in X21.
+The ordinary result can simultaneously return the previous error in X0.
+The compiler-typed tests exercise replacement and write-only clearing with
+null and four live object addresses. Removing the X21 write while preserving
+the ordinary return must prevent publication. Two adjacent clears of distinct
+admitted registers may be scheduled in either order. Both leave flags, memory,
+SP and the return address intact. Direct internal tail callers pass the same
+`swifterror` operand through to the writer. Publication checks the emitted
+branch against the relocated writer. A direct signed call with a continuation
+uses a local Swift error-result slot. The caller copies the incoming X21 into
+the slot, calls the relocated writer, then propagates the outgoing X21 while
+returning the ordinary result in X0.
+See the [Clang Swift error result attribute](https://clang.llvm.org/docs/AttributeReference.html#swift-error-result).
+
+On macos-26 and xcode-27, each typed caller executed all 25 input/output
+pairs on the compiler-original and NeverD-installed image. Both hosts also
+executed the independent compiler-only O0 and O2 controls. The default r6
+CLI published both fixture variants locally and their ad-hoc signatures
+passed strict verification. The [native run](https://github.com/gmh5225/test_mac_intel/actions/runs/42984546707)
+and [validation record](evidence/arm64e-swift-error-2026-11-11.json)
+identify the exact images, compiler, source-built NeverD test host and
+default r6 CLI results.
+
+Frameless bodies may also preserve a matching entry PACIBSP and terminal
+RETAB. SP and LR remain untouched between those instructions. The relocated
+body must pass the instruction comparison and retain its frameless compact
+unwind coverage. Removing the return-signing policy refuses publication.
+For standard X29 compact frames, the publisher also checks the PACIBSP,
+saved X29/X30 pair, X29 setup, pair restore and RETAB at their final PCs.
+A direct BL in such a frame must still reach its original dyld stub or the
+installed owner of its source callee. A compact-only input retains its compact
+unwind mode. The optimizer and publisher share the same bounds check when
+they turn accesses to the lifter's private stack into LLVM frame slots. The
+backend can then remove an unobservable spill before creating its native
+frame. A separate FDE for the same frame requires its own replay.
+The Swift call fixtures use both Clang frame-pointer settings. One saves X29
+and X30 in a 32-byte frame with compact unwind. The other saves LR on the
+stack with an indexed DWARF record. Publication compares the latter's CIE,
+CFA and register rules at their original instruction offsets. With
+`-fasynchronous-unwind-tables`, both images restore LR at offset 16, just
+before RETAB. The synchronous Clang record ends at the call-site row. The
+negative control changes the saved-LR slot in the FDE, re-signs the input,
+and requires publication to fail. Both the compact and indexed signed Swift
+callers ran on macos-26 and xcode-27, including the asynchronous epilogue
+control. The [native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43029704710)
+and [validation record](evidence/arm64e-swift-signed-call-2026-11-11.json)
+include both image hashes for each case, the LR boundary and compiler identities.
+The default r6 CLI refused all three signed non-tail Swift inputs. Its
+backend emitted an explicit return-address state toggle. The compact-only input
+lacked a registered DWARF section, and the indexed inputs had different CFI.
+Each refusal preserved the input and left no output. The
+[LLVM fork fix](https://github.com/NeverSight/llvm-project/commit/8b74c310a8140953b96df2464b8d091b46bd4fd8)
+is in the source build used by both runners.
+The framed import fixture calls
+`getpid`, reads an exported variable after the call and returns their sum.
+The caller changes that variable between invocations. Other stack layouts
+and PC-dependent signing need their own instruction and unwind coverage.
+
+The [native lifted-image run](https://github.com/gmh5225/test_mac_intel/actions/runs/42957645426)
+executed the original and installed images on both macos-26 and xcode-27.
+Each caller checked both entries for 25 ordered argument pairs. The
+[evidence record](evidence/arm64e-lifted-leaves-2026-11-11.json) identifies the
+source-bound Release host, local LLVM fork, original and published image hashes,
+and the runner artifacts.
+
+The two Darwin executable tests take the host's `/usr/bin/true` and
+`/usr/bin/false` as inputs. Each test extracts its arm64e slice, removes the
+platform signature from a temporary copy, then publishes it through the
+ordinary patch pipeline. Apple codesign signs the baseline and published
+copies explicitly. The tests verify both signatures and the new owner of
+the main entry. With `NEVERD_ARM64E_LIFTED_NATIVE=1` they also require the
+two original and two published processes to return their expected exit codes.
+
+The [native executable run](https://github.com/gmh5225/test_mac_intel/actions/runs/42985655565) qualified both system-image copies on
+macos-26 and xcode-27. On each runner, both baselines and both
+installed copies returned their expected exit statuses. Each runner also
+executed eight original/installed image pairs, verified a reordered direct tail caller,
+recovered ten interrupted frames and their signed callers, and passed
+40 native object installation cases. Those cases include authenticated
+indirect calls, language exceptions, legacy threaded fixups and default
+executable startup. The unmodified compiler-original B-key startup control
+failed on both hosts before emitting a control marker. The separate diagnostic
+runs recorded SIGTRAP on both and a SIGSEGV on one Xcode 27 repeat.
+Their reports and fixup disassemblies accompany the installed-default-startup
+results. Independent HighC and LLVM C projections were also
+checked against all four pointer-signing keys and PACGA on each host. The default r6 CLI also installed both system
+copies locally and verified the relocated entries and final signatures. The
+[execution record](evidence/arm64e-darwin-executables-2026-11-11.json)
+identifies the source-built Release hosts, the IR frontend and the image
+hashes for each runner.
+
+## Interrupted return-address signing
+
+The exact-PC unwind query reports an unknown DWARF state when a classic
+arm64e frame relies on Darwin's implicit signing ABI and supplies no rule
+for the signing column. A compact prologue recipe can still be available.
+Explicit DWARF rows retain their instruction-boundary signing state.
+Mach-O metadata relocation also preserves the CIE signal-frame marker `S`
+and its exact-PC interpretation alongside the signing rows. This accepts
+register and offset rules that retain their meaning when the table moves.
+Register-relative signal-context expressions can dereference a saved context
+pointer and add a field offset. Absolute addresses still need relocation. The
+fixture decodes the original and installed CFA and LR stack rules through LLVM
+and checks both against the interrupted stack, including the saved slot.
+
+`AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions`
+compares an original indexed-DWARF function with its installed native object.
+The original carries explicit signing transitions and the replacement uses
+Darwin-compatible implicit CFI. Both functions have identical instructions.
+With `NEVERD_ARM64E_ASYNC_NATIVE=1`, a second thread interrupts the active
+function before and after PACIBSP, with LR spilled, after restoring SP, and
+after AUTIBSP. Before execution, the test host decodes CFA and LR locations
+from that image's FDE. The handler selects the row by interrupted PC and
+recovers the return address from the Darwin thread state's LR or the saved
+stack slot. When the address carries the test's nonzero signature, the handler
+authenticates it with the derived CFA. The caller preserves a signed parent
+LR in its standard frame record. The handler uses the interrupted FP to
+recover and authenticate this second return. Both addresses must equal
+independent assembly return sites. The test also checks the original's
+explicit signing rows and executes a changed companion entry in the installed
+image. The two-frame hardware check covers this controlled call chain.
+
+Both the [native publication and interruption run](https://github.com/gmh5225/test_mac_intel/actions/runs/42969858410)
+and the [compiler-original frame controls](https://github.com/gmh5225/test_mac_intel/actions/runs/42967877615)
+ran on macos-26 and xcode-27. Each runner executed all six lifted original
+and installed image pairs. Five signals reached each of the original and
+installed unwind bodies. All ten samples recovered the interrupted return
+and authenticated the saved parent return. The
+[evidence record](evidence/arm64e-interrupted-frames-2026-11-11.json)
+includes the per-PC rows, caller checks, host and source revisions, and image
+hashes. The two Apple M1 virtual runners replayed a locally built Release
+host from the pinned LLVM fork.
+
+The default r6 CLI lifted six fixture images, published 5 of them, and
+verified the signed outputs and complete relocated entry bodies. For the
+compact-only signed input, r6 emitted DWARF and reported that the original
+contained no registered eh_frame section. The Release test suite also
+exercised the arm64e slice of the system dyld and decoded 138,671 real
+instruction words. The command-line symbolization regression separately
+covers unused function addresses and scalar values in a zero-based dylib.
+
+An independent [system cursor control](https://github.com/gmh5225/test_mac_intel/actions/runs/42967112065)
+starts Darwin's public `unw_init_local` in the signal handler. It reaches
+`_sigtramp` for all four compiler-original combinations of frame pointers
+and signing CFI. Before PAC or after authentication it skips the interrupted
+PC and reaches the caller. At the three signed positions it traps while
+stepping from the trampoline. A general walk from that signal handler
+remains unqualified on the two measured systems.
+
 ## Reconstructed entries through the native compiler
 
 `scripts/verify_arm64e_entry.py` separately validates the entry reconstruction
@@ -578,13 +777,69 @@ value, catch, cleanup, post-exception and corrupted-pointer check. This is a
 complete published fixture image, not automatic admission of arbitrary lifted
 modules.
 
-The linker receives `-Wl,-headerpad,0` for all four compact cases and both O2
-indexed-DWARF cases. NeverD fits the regular unwind table into checked TEXT
-storage and preserves the UUID and code-signing command capacity. The two O0
-DWARF cases still need `-Wl,-headerpad,0x8000`. Their existing TEXT mapping
-ends at live DATA and cannot hold the combined unwind records. Each case also
-fills the remaining TEXT tail of a private input copy and requires refusal
-before producing an output.
+The linker receives `-Wl,-headerpad,0` in all eight cases. The four compact
+and two O2 indexed-DWARF cases use the default zero preferred base and fit in
+existing TEXT storage. The two O0 DWARF cases set a nonzero preferred TEXT
+address so NeverD can extend the front of the segment while preserving code,
+data and authenticated slot VAs. The verifier reads each actual Mach header
+base and resolves the compact index's relative offsets against the installed
+base. With `--publish --zero-base`, the same eight IA/IB and compact/DWARF
+cases require both preferred header addresses to remain zero. This profile
+uses O2 for the original trapping entries and a fixed `@rpath` install name.
+The separately compiled caller still runs at O0 and O2.
+Add `--match-original-optimization` to compile both the caller and the
+original entries at each optimization level. The original fully O0 reproducer
+had 1,192 bytes of DWARF and 864 bytes of free TEXT with its fixed install
+name. Adding the two independently dereferenced pointer slots reduced the
+free TEXT to 440 bytes on the same compiler. The publisher can grow TEXT by
+inserting aligned pages ahead of the original sections in a zero-base
+arm64e dylib with image-relative
+chained fixups. The preferred header stays at zero. The output symbols, stubs
+and original data move together. The installation receipt records the slide
+and preserves each original entry VA. If the existing RX segment cannot grow,
+the installer can retry with a TEXT prefix. An occupied gap that prevents the
+slide produces a relocation error before the output is written.
+The verifier resolves each trampoline
+from the signed output's own symbols. In the dense profile the caller also
+reads an ordinary pointer and an address-diversified DA-signed pointer to a
+local variable, writes through one and reads the result through the other.
+Apple's `dyld_info` decodes both images so the verifier can compare each
+original bind and rebase slot, its target and its signing recipe.
+The installer measures LSDA index demand from the native compact entries
+and FDEs. It can retain the compact table at its original VA, move
+the adjacent DWARF records into audited free TEXT storage and reuse their
+former bytes for the enlarged compact table. Each case also
+fills the remaining TEXT tail of a zero-base input copy and requires refusal
+before producing an output. A separate contract fixture covers a zero-base
+image with exactly one free section descriptor and an aligned free range
+between occupied bytes. DWARF-only growth also exercises prefix relocation
+without a compact registry and replays the signed return-address rows.
+
+The [zero-base native run](https://github.com/gmh5225/test_mac_intel/actions/runs/42989932233)
+executed the eight zero-base images on macos-26 and xcode-27. On each host,
+both O0 caller / indexed DWARF cases kept compact unwind at `0x3230` as it
+grew from 168 to 1,096 bytes. The installer moved the 136 bytes of original
+DWARF from `0x32d8` to `0x3678` and installed a 2,240-byte frame section.
+Each installed caller exercised its 26 public entries and passed. The
+[validation record](evidence/arm64e-zero-base-unwind-2026-11-11.json) includes
+the source-built test host, per-image hashes, the fixed-name fully O0 refusal
+and a zero-filled range referenced by `LC_NOTE` on that earlier revision.
+
+The fully O0 IA and IB images on macos-26 and xcode-27 kept a preferred base
+of zero. Their original sections moved by `0x4000`. All 26 installed entries
+passed their independent caller checks, and `dyld_info` recovered the same 40
+authenticated binds, two ordinary binds, one authenticated rebase and one
+ordinary rebase in each image. Both runners also executed the lifted import and
+global-access fixtures, the Swift X21 tail caller and the five asynchronous
+interruption points on both original and published code. The
+[native run](https://github.com/gmh5225/test_mac_intel/actions/runs/43020688049)
+and [validation record](evidence/arm64e-dense-publication-2026-11-11.json)
+identify the source revision, compilers and per-host results.
+The default r6 CLI published the global and Swift tail cases and installed
+an independent 151-function native object into the dense image. For the
+framed `getpid` input, r6 generated indexed DWARF while the original
+registered only compact unwind. The CLI refused the image before writing
+an output. Both native runners used the pinned LLVM source fork for this call.
 
 The publication test also checks rejection before the receipt commits,
 unchanged input bytes, exact installed entry receipts and refusal to overwrite
@@ -638,3 +893,1112 @@ linked with zero header reservation. The
 [run record](evidence/arm64e-compact-layout-2026-11-11.json) binds the source
 revision, Release host, LLVM fork, GitHub artifacts and signed image hashes.
 Both runners reported Apple M1 (Virtual).
+
+The [header relocation run](https://github.com/gmh5225/test_mac_intel/actions/runs/42951431144)
+and the [compact storage replay](https://github.com/gmh5225/test_mac_intel/actions/runs/42954296548)
+executed all eight published images with zero linker header reservation on
+each Apple runner. In both O0 indexed-DWARF cases the preferred header moved
+from `0x100000000` to `0xffffc000`. The six default-base images retained
+their zero preferred address. Each host also passed eight original-caller
+trap controls, eight occupied-layout refusals and six compiler controls. The
+[evidence record](evidence/arm64e-header-relocation-2026-11-11.json)
+identifies the Release host, both artifacts and their measured image bases.
+
+### Darwin variadic entry stacks
+
+For a recovered Darwin arm64 variadic entry without materialized overflow
+parameters, the LLVM emitter takes the anonymous argument cursor from
+`llvm.sponentry`. Locals and recovered named argument homes keep their own
+storage. LLVM IR, LLVM-to-C and structured HighC retain the callee boundary
+when the cursor depends on its incoming SP. HighC keeps all ABI positions
+before a used stack argument, including unused registers and alignment slots.
+Stack-parameter recovery uses the target's entry alignment proof for masked
+pointers, including the upper word
+of a 16-byte-aligned argument after an 8-byte argument. An OR in a cursor
+walk can set only known low bits of its entry-SP displacement. In particular,
+setting an already-set bit in a negative local offset keeps the cursor local.
+
+`AArch64DarwinVariadic` compiles O0 and O2 Apple arm64e inputs and calls the
+lifted LLVM IR, LLVM-to-C and structured HighC from a separately compiled
+variadic caller. It covers a variable count, a named stack prefix, a copied cursor,
+double and a 128-bit value. The IR control enables stack protection to displace
+the private frame. Setting `NEVERD_ARM64E_LIFTED_NATIVE=1` runs the compiler
+original and all three replacements as arm64e.
+
+An exported variadic entry can be called by another image even when its only
+local callers use direct branches. The export keeps its open ABI. An optimized
+sentinel loop can read the first stack word directly and store an advanced
+cursor made with a pointer OR. The recognizer and both projections use the
+entry alignment to prove that cursor's displacement. The caller control calls
+the same entry through dyld with different tail lengths and through a function
+inside the image.
+
+The image publisher compares non-writeback SP accesses at their effective
+incoming byte offsets. It can remove a compact leaf's unused stack reservation
+when the exact SP adjustment and restoration agree with its unwind row, the
+surviving loads retain their widths and destinations, and every arithmetic
+instruction and the return agree. A pre-indexed SP load can restore the entire
+frame while reading the first anonymous argument. The verifier tracks the
+resulting SP for later loads and requires restoration by return. Tests change
+the incoming slot or switch the compiler's pre-indexed load to post-indexing;
+the latter restores the same SP but reads the callee's private frame. Both
+inputs must be refused. Register-walk bodies with other instruction
+changes, frame-local memory effects and additional DWARF rows need their own
+publication proof.
+
+The two Apple runners each executed 14 native images across five variadic
+tests with prebuilt r6. The signed installation and default executable checks
+also passed on each host. The pinned LLVM fork passed all 24 lifted-image
+cases on each runner, including 50 ordinary image executions, 10 interrupted
+frames and 10 authenticated parent returns. The
+[verification record](evidence/arm64e-darwin-variadic-2026-11-12.json)
+identifies the tested sources, host binaries and Actions artifacts.
+
+The nine-function mixed variadic fixture exercises a custom caller that reads
+X8 and X9 after return. The earlier O0 `leaf_sum` preserved the C result
+109 while changing X8 from 100 to entry SP + 8. The earlier O2
+`leaf_difference` returned 77 while changing X9 from 23 to 85.
+
+For these stack argument entries and their local callers, patch-mode lifting
+retains the source register operands in an LLVM native body. Immediates and
+local function targets are explicit LLVM operands. MC assembles each body
+at its new address, including local branches and unwind directives. Before
+writing the output, the installer checks the final machine instructions, call
+destinations and compact or indexed DWARF frame rows. The O0 and O2 tests
+require all nine relocated owners and reject changes to X9, a stack
+displacement or the called function. The native observer compares X0, X8,
+X9, D0 and SP immediately after each call across three input vectors.
+
+`python3 scripts/verify_arm64e_native.py probe-cpta --output <directory>`
+builds thin arm64, arm64e and arm64e.x1 controls. Each executable records
+the results of ADDPT on a non-overflowing pointer, a top-byte carry, a borrow
+and an existing poison bit. The report identifies the exact executed slice,
+an unavailable instruction or slice, and effective checked EL0 arithmetic.
+The privileged EL1 controls have a separate verification record.
+
+A local direct caller can also establish a non-variadic X8/X9 result contract.
+The register reader checks physical reads and writes after the call, including
+W-register definitions. The callee and its supported callers use the same
+native lowering. Local tail forwarders retain the complete register result,
+and the installer resolves their B targets against the published entry map.
+The custom-caller test consumes both results and checks a
+matrix of ordinary, wrapping and high-bit scalar values.
+
+`DarwinArm64eSignalCursor.h` provides a signal-context cursor for classic
+arm64e frames. A caller supplies the exact-PC CFA and saved-register row and
+the interrupted thread's mapped stack bounds. The cursor verifies an IA- or
+IB-key signature against the recovered CFA before returning the canonical PC.
+Unknown signing state, a mismatched signature and an out-of-range saved slot
+leave the cursor unchanged. The native interruption test reaches the system
+`_sigtramp`, recovers the interrupted return and its signed parent, and
+cross-checks the parent through Darwin's frame-pointer backtrace.
+
+In the original qualification, the installed implicit-signing fixture used the
+signing rows of the explicitly described original after checking identical
+machine code. The [system signal qualification below](#system-signal-trampoline-and-implicit-signing-rows)
+recovers the installed rows independently and records the behavior of an
+unmodified system `unw_step` at `_sigtramp`.
+
+Release verification at `7bf3d8571ab87cb8de5f20145e786621d3dc4659` uses the
+tracked Capstone and Unicorn revisions and LLVM fork
+`5676029e378c9e37adc16c8216a8e8453ffafcae`. The fork passes all 28 lifted-image
+cases locally and on both Apple runners. Each runner executes 58 ordinary
+images, compares 54 register input cases across the O0/O2 nine-function
+fixtures, and completes 10 interrupted-frame returns, 10 authenticated parent
+returns and 10 signal-context handoffs. Prebuilt r6 passes its 23 locally
+supported cases on both runners, with 48 ordinary image executions per host.
+The five r6 failures match the recorded baseline. Both local configurations
+pass all 87 shared Pipeline and variadic regressions. The public `neverd patch`
+entry point publishes both nine-function images and their signatures verify.
+The verification record contains source and host hashes, dependency revisions,
+native image properties and runner artifacts.
+[Verification record](evidence/arm64e-register-results-and-signal-2026-11-12.json)
+
+The native ADDPT controls report an undefined instruction in both arm64 and
+arm64e processes on both M1 runners. Xcode 27 emits an arm64e.x1 slice whose
+launch fails with `EBADARCH`. The local M4 control also reports an undefined
+ADDPT instruction. Native CPTA-on remains unavailable on these environments.
+That qualification covers unsigned and IA/IB-with-CFA signal rows. The
+instruction-address recipes added below have separate hardware qualification.
+At that revision, continuing the system cursor beyond `_sigtramp` had not
+been demonstrated. The [later bridge qualification](#system-signal-trampoline-and-implicit-signing-rows)
+covers the caller handoff. Additional image instruction and unwind profiles
+still require qualification.
+
+## Instruction-address signal recipes and remembered frames
+
+`DarwinArm64eSignalCursor.h` now accepts IA/IB signatures diversified by CFA
+and the resolved signing instruction address. Explicit PAuth_LR and PACM
+remain distinct recipes. `SigningPC = 0` is a valid modifier, not an unknown
+state. The caller resolves the row before entering a signal handler and
+supplies the interrupted thread's keys and enable controls. The existing
+`ndDarwinArm64eStepFrame` entry point refuses explicit PAuth_LR;
+`ndDarwinArm64eStepFrameWithPAuthLR` accepts it only when the caller has
+established instruction availability. Both compare a fresh hardware signature,
+so malformed PACs do not execute a potentially trapping authentication.
+Every refusal leaves the cursor unchanged.
+
+The runtime signers reuse the instruction contracts in
+`AArch64PAuthLR.def` and `AArch64PAuthM.def`. The independent native oracle
+uses SP/PC signing instructions, including the actual address of the signing
+instruction; the cursor instead materializes the two modifiers in registers.
+It exercises both keys, saved and live returns, SP/FP CFA bases, bounds and
+overflow, wrong PACs, wrong signing recipes and unavailable explicit
+instructions. C11 and C++20 compile at O0/O2 in the lifted-image test suite.
+Run the standalone C11 qualification with:
+
+```bash
+python3 scripts/verify_arm64e_native.py probe-cursor --output cursor-evidence
+```
+
+The report separates `native_cursor_qualified`, `pacm_pc_qualified` and
+`explicit_pauth_lr_qualified`. PACM hints can execute on old CPUs while
+ignoring the PC modifier, which cannot qualify PC-sensitive recovery.
+Both hosted Apple profiles pass 1,058 baseline checks at each optimization
+level, including signatures whose signing-address modifier is zero. Both report
+no PC sensitivity and unavailable explicit PAuth_LR.
+[Native cursor and image run](https://github.com/gmh5225/test_mac_intel/actions/runs/43176528918)
+
+Native register-result image publication also retains FP/SP CFA changes,
+remembered states across multiple epilogues, saved/same-value register rules,
+GNU argument-size rows and the explicit B-key CIE augmentation. Final linked
+CFI is compared against the original at every instruction boundary. Generic
+RA toggles remain rejected by the existing classic-Darwin compatibility
+boundary; this extension does not authorize them.
+
+Release verification at `06d091c34b8fa1fa84016c528982aa55452ba874` passes all
+30 lifted-image tests with the tracked LLVM fork, locally and on both Apple
+runners. Each runner executes 60 ordinary images, compares 54 custom-register
+input cases, completes 10 interrupted-frame and authenticated-parent returns,
+and runs four C/C++ cursor profiles. The new B-key multiple-epilogue image
+executes both the original and published bodies and rejects a changed LR spill
+rule before publication. The shared return-protection and PAuth suites pass
+51 cases; three native capability checks remain explicitly unavailable on the
+local host. All 190 script regressions pass.
+
+Prebuilt r6 remains unchanged. Its 25 supported lifted-image tests pass locally
+and on both runners, with 50 ordinary image executions per runner. Its five
+failures match the earlier recorded LLVM r6 baseline; the native r6 replay
+explicitly excludes those cases. The
+[verification record](evidence/arm64e-signing-recipes-and-remembered-frames-2026-11-12.json)
+binds source, dependencies, host binaries, native reports and exclusions.
+At that revision the installed rows still depended on the original. The
+following qualification supersedes that part of the earlier result.
+
+### System signal trampoline and implicit signing rows
+
+Resolve a Darwin frame with `recoverDarwinAArch64Unwind` outside the signal
+handler. For an implicit FDE, its CFA and register columns select the actual
+live LR or saved stack slot. For a compact-only frame the analysis instead
+tracks the incoming SP, register values and active frame saves. It follows
+reachable direct branches, joins agreeing facts, and accounts for call
+clobbers, stack writeback, classic IA/IB, PACM and explicit PAuth_LR. A failed
+proof has no unsigned default. Opaque control flow, alternate entries,
+unrecognized personalities and exceeded budgets cannot authorize a native
+handoff.
+
+Select the row at the interrupted instruction. `prepareDarwinArm64eSystemCaller`
+binds its signing PC to the loaded address and checks that the caller's integer
+register locations can be represented. With the system cursor positioned at
+the real signal trampoline, `ndDarwinArm64eCrossSignalTrampoline` consumes the
+matching kernel `ucontext_t` and mapped stack bounds. It verifies the return
+signature, restores SP, FP and X19–X28, and positions that same system cursor
+at the caller. Invalid or duplicate saves fail before changing the cursor.
+Discard the cursor on a system API failure or if the return PC selects a
+different function's unwind record.
+
+For an ordinary call return through the live Darwin signal trampoline, pass
+the same prepared frame, integer saves and `Plan.Vectors` to
+`ndDarwinArm64eResumeSignalCaller`. After success the handler supplies the
+call's result, if required, and returns normally. XNU consumes its original
+signal frame, restores the signal mask and alternate-stack state, and resumes
+at the authenticated call fallthrough. This operation returns from the
+interrupted call directly. A language exception that must run cleanups still
+requires its personality and landing pad. See the
+[XNU signal return implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/dev/arm/unix_signal.c)
+and [thread-state pointer accessors](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/mach/arm/_structs.h).
+
+The resume plan requires all eight ABI-preserved D8–D15 lanes. Recovery
+tracks both halves of a Q spill, the low half of a D spill and overlapping
+writes at instruction boundaries. A DWARF SIMD register column supplies its
+low 64 bits. Upper halves with a proven save are restored from it. Other
+upper halves and volatile vectors retain their interrupted bits, as do FPCR
+and FPSR. An incomplete low lane, an out-of-bounds saved lane or a rejected
+return signature leaves the signal context untouched. The register contracts
+are specified in [AAPCS64](https://github.com/ARM-software/abi-aa/blob/main/aapcs64/aapcs64.rst)
+and [AADWARF64](https://github.com/ARM-software/abi-aa/blob/main/aadwarf64/aadwarf64.rst).
+
+The public frame query exposes a separate `instruction_state_at_pc` where
+applicable. It leaves `dwarf_state_at_pc` and `compact_recipe` unchanged. The
+GUI presents the instruction result separately. Resolve once and reuse the
+row table when sampling; the public exact-PC query performs bounded analysis.
+
+The [compiler comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/43209395729)
+produced identical instructions and compact encodings on the two hosts.
+Apple's newer linker put the last lookup sentinel at `0x305`, one byte past
+the end of `__text` at `0x304`; the older linker used `0x304`. The loader
+retains the raw sentinel for rewriting and bounds the decoded instruction
+range at the proven end of the code section. Interior entries and partial
+instructions inside a code section are not rounded down.
+
+Two independent [system controls](https://github.com/gmh5225/test_mac_intel/actions/runs/43196724884)
+found the same behavior on both hosted Apple profiles: unmodified system
+stepping at the trampoline skipped the interrupted PC for unsigned LR and
+raised SIGTRAP at all three signed stages. Seeding the proved caller let the
+system walk to the correct grandparent in all five stages of both frame
+profiles. The [in-place bridge test](https://github.com/gmh5225/test_mac_intel/actions/runs/43202351334)
+also checked a clobbered X19 restored from the frame. This is observed
+behavior on those Darwin runtimes; it is not a guarantee that a future system
+libunwind will permit setting IP across functions.
+
+Native register-result publication now emits local TBZ/TBNZ targets as labels,
+keeps the tested bit as an LLVM operand, and preserves indexed memory operands
+including LSL, UXTW, SXTW and SXTX. Final linked bytes still have to match the
+source at each instruction. For indexed SP accesses the generic LLVM emitter
+declares the function with its recovered prototype. Before exposing the module,
+the patch pipeline requires its verified, complete native register body: its
+machine instructions use the physical SP. A partial body, an unsupported
+operation or a changed tested bit prevents publication. This does not qualify
+an ordinary LLVM function using a synthetic stack. No LLVM overlay or new
+prebuilt package is needed.
+
+At `a6ffeb9bd9e3a9799c56d60418ed05abf8b01a1b`, the
+[source LLVM replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43210663619)
+passed all 31 tests on each runner. Each executed 60 original or published
+images, continued the system cursor at all 10 interruptions across the two
+images, and made three native calls through the compiler-generated compact
+fixture. The nine-function variadic images each compared 27 register inputs
+at O0 and again at O2. Neither runner qualified explicit PAuth_LR,
+PC-sensitive PACM or native CPTA-on.
+
+The call-ABI suite also lifts Apple-linked arm64 and arm64e copies of a C
+variadic wrapper. Its context and format are fixed parameters. Apple Clang
+passes the third actual argument on the stack. The regression parses NeverD's
+LLVM output and checks the types at the definition and the call, including
+the single variadic operand. All 13 tests in the call-ABI suite passed.
+
+The unchanged [r6 replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43215695747)
+passed its 26 supported tests on each runner, with 50 image executions, the
+same 10 system-caller continuations and three compact-fixture calls. The
+local unfiltered run executed all 31 tests and reproduced exactly the five
+previous r6 failures; the compatibility replay explicitly excludes those
+five. No LLVM patch, fork revision change or replacement prebuilt is used.
+The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the per-runner signal samples, test-host hashes, local suite results
+and hardware capabilities.
+
+The [integrated source replay](https://github.com/gmh5225/test_mac_intel/actions/runs/43271432365) repeated the 31-test native suite on both Apple profiles after merging `dev` at
+`cee06981844f5597004da9be6bcc778db813d6b2`. Each profile again recorded
+60 image executions and 10 system-caller continuations. A separate Apple
+Clang fixture with a typed C++ catch has a compact frame and LSDA. Its
+implicit signing rule was unavailable at entry and at the next two
+instructions. The verification record includes the source and all three
+query results for that revision.
+
+For Darwin C++ frames using `__gxx_personality_v0`, instruction recovery
+follows the decoded LSDA call-site ranges to their catch and cleanup landing
+pads. The handler receives only surviving callee-saved registers and stack
+slots. For a protected non-call instruction the analysis intersects the
+states on both sides. A call to a known non-returning function can still
+reach its handler. An unaligned, overlapping or out-of-frame range, a missing
+LSDA or a different personality prevents this proof. At a protected PC with
+a DWARF outgoing-argument size, the exceptional edge advances SP and drops
+the released stack slots. Ordinary return retains the argument area. See the
+[Itanium exception ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html#base-personality)
+and [libunwind context installation](https://github.com/llvm/llvm-project/blob/main/libunwind/src/libunwind.cpp#L205-L212).
+
+Native Mach-O object publication can reuse a dyld-bound RTTI slot in a
+non-lazy pointer section sealed after fixups. The import table must select
+one provider and weak-import policy, and the binding must have zero addend.
+An ordinary RTTI reference and an authenticated personality reference keep
+their respective pointer encodings. A writable source slot requires separate
+GOT storage for the published reference.
+
+Apple Clang can leave a synchronous DWARF row in force through part of the
+prologue or epilogue. At an interrupt where its CFA cannot be proved to equal
+the incoming SP, recovery derives the CFA and integer register locations from
+the reachable instructions. Registers the producer marked undefined stay
+undefined.
+
+The [signed C++ execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43290127091) passed all 32
+publication tests on each Apple M1 runner. Each recorded 34 successful C++ outcomes and six system
+PAC traps across five compiler profiles, exercising the original and redirected
+entry. The four conventional profiles returned the expected values, propagated
+unmatched exceptions and ran cleanup for a new exception thrown inside a catch.
+With a nonzero DWARF outgoing-argument size, both untouched and published
+arm64e code returned normally on the nonthrowing path. On the throwing paths
+the system unwinder trapped before installing the handler. The
+[debugger control](https://github.com/gmh5225/test_mac_intel/actions/runs/43285706120) located the same authenticated-pointer
+`BRK #0xc471` in system libunwind on both hosts. Ordinary arm64 completed
+the corresponding controls. The system signal suite also crossed ten interrupted
+frames on each runner. The [verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+records the source revision, host digest, per-runner observations and local
+regressions.
+
+Darwin Objective-C uses an address-based LSDA for typed catches and
+`@finally` cleanup. The signing analysis follows those edges, uses the
+instruction's access width to identify overlapping stack saves, and stops at
+compiler-generated terminating traps. Apple's Objective-C runtime delegates
+selection of these landing pads to the C++ personality after running its
+alternative handlers. [Apple Objective-C exception runtime](https://github.com/apple-oss-distributions/objc4/blob/main/runtime/objc-exception.mm)
+
+An Objective-C replacement with the same image-info version and flags reuses
+the original runtime declaration. Foundation supplies the type descriptor for
+`NSException`. For an object that contributes its own weak fallback, such as a
+typed `NSString` catch, the publisher can use the existing sealed GOT slot
+with dyld's weak lookup ordinal. This requires an exported data fallback, a
+separate weak atom and indirect references through that slot. Conflicting
+image flags, additional live atoms in the same storage and direct references
+to a discarded fallback cause publication to fail.
+
+Each Apple M1 runner passed all 33 publication tests in the
+[Objective-C execution run](https://github.com/gmh5225/test_mac_intel/actions/runs/43294345635). On each runner, the original and redirected
+entries produced 32 expected results across both catch types at O0 and O2.
+The driver checked return values and the type and value of each propagated
+exception. It also verified one cleanup on every path. Both runners repeated
+ten system signal-frame crossings. The
+[verification record](evidence/arm64e-system-signal-and-implicit-unwind-2026-11-12.json)
+includes the compiler versions, test-host digest and hardware probe results.
+
+The native CPTA probe signs the x1 slice with the Enhanced Security and
+checked-pointer entitlements, verifies the signature and reads back the
+embedded plist before launch. Its report records the final binary digest,
+the signed entitlement values and the scalar ADDPT, SUBPT, MADDPT and MSUBPT
+results. Equivalent signed offsets and unit products exercise tag carry, borrow
+and already-poisoned pointers across all four forms. A second invocation
+executes post-indexed LD1 and ST1 on a mapped byte. It verifies the data and
+the updated base for an in-range offset and for a carry into the top byte.
+This ordinary-memory control also runs on older CPUs when ADDPT is undefined.
+A passing x1 run requires both explicit checked arithmetic and checked
+load/store writeback. [Arm LD1 operation](https://support.arm.com/documentation/111108/2026-03/SIMD-FP-Instructions/LD1--multiple-structures---Load-multiple-single-element-structures-to-one--two--three--or-four-registers-).
+Apple documents the required [Enhanced Security entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow)
+and [supported x1 devices](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication).
+
+For an external thread-local variable, the arm64e object publisher resolves
+TLVP page relocations to the original strong import's sealed descriptor
+slot. The compiler's authenticated descriptor call still selects storage for
+the current thread. This path requires an existing provider and accepts the
+ordinary ADRP and pointer-sized LDR forms. For a strong per-thread export
+in the original image, the publisher checks the descriptor's section and
+authenticated bootstrap, then relaxes the load to an ADD at the relocated
+descriptor address. Both paths reuse the original per-thread storage.
+The native object path below also registers storage contributed by a replacement.
+
+Both Apple M1 runners passed all 35 publication cases in the
+[native signal and TLS run](https://github.com/gmh5225/test_mac_intel/actions/runs/43366275284). Each runner completed eight signal
+returns through original and redirected entries on both stack types. Across
+the two TLS layouts it performed 32 accesses at O0 and O2, checking both
+threads' independent values. The [verification record](evidence/arm64e-signal-resume-and-tlv-2026-11-13.json)
+includes the code and binary digests, exception results and CPTA observations.
+
+To repeat the interrupted-frame test on a Mac that can launch arm64e
+executables, build the test host against the tracked LLVM fork and require
+native execution:
+
+```bash
+python3 scripts/build.py build-release --target NeverDArm64eLiftedImageTests
+NEVERD_ARM64E_ASYNC_NATIVE=1 build-release/bin/NeverDArm64eLiftedImageTests \
+  --gtest_filter='AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions:AArch64AsyncUnwind.SignalReturnResumesCallerWithRecoveredVectorLanes' \
+  --gtest_output=xml:signal-results.xml
+```
+
+The XML properties `native_system_caller_steps` and
+`native_signal_caller_resumptions` must be 10 and 8 respectively. Without the
+environment variable the test can check publication and the recovered rows
+without performing those native steps.
+
+### Signal delivery, language cleanup and new thread-local storage
+
+Resolve the unwind rows and call-site table while the image is loaded.
+`prepareDarwinArm64eExceptionSite` intersects the recovered row with the
+personality's guarded range. At a protected call, it requires a saved LR and
+an actual call instruction. The same rule covers a prefix in its guarded
+range and a call's own return edge that loops back to the call. Every
+instruction on that path must preserve the row, memory and the callee-saved
+registers. A stack reload must fit inside the recovered live frame.
+A frame with no local action can forward to its
+authenticated caller. The SA_SIGINFO handler passes this plan and a throw
+or rethrow callback to `ndDarwinArm64eDeliverSignalException`, then returns.
+The kernel restores the interrupted thread's signal mask and stack. The
+callback runs there, with the original call's return address, so the system
+personality selects the landing pad and executes cleanup. A protected
+instruction other than a call needs separate evidence for the live values
+expected by its landing pad. An ordinary unmanaged throw out of a handler
+still depends on the system unwinder's signal-trampoline support.
+
+For TLS contributed by a native object, the publisher emits dyld descriptor
+and template sections, an authenticated bootstrap bind, and offsets for
+initialized data, zero-fill and compiler guards. The original template forms
+the prefix of the combined template, preserving references from existing
+descriptors. Strong exported definitions receive per-thread export-trie
+entries. Reading the C or C++ variable resolves the descriptor for the
+calling thread. Compiled first-use code and the authenticated libSystem
+terminator call supply C++ initialization and thread-exit destruction.
+When the template contains an address-diverse pointer or the object supplies
+per-thread initializer pointers, the publisher registers a private descriptor
+with dyld. On first access the public descriptor obtains the calling thread's
+block, authenticates each nonnull pointer against its template address and
+signs it for the corresponding address in that block. The resolver uses
+the original IA, IB, DA or DB key and discriminator. It runs the original
+initializer sections before the added sections, traversing each in reverse
+entry order. Recursive TLS lookups from callbacks use the same initialized
+pointers. The resolver preserves Darwin's TLV argument and SIMD registers.
+[Apple dyld TLS allocation](https://github.com/apple-oss-distributions/dyld/blob/main/libdyld/ThreadLocalVariables.cpp)
+and [legacy initializer ordering](https://github.com/apple-oss-distributions/dyld/blob/dyld-852.2/src/threadLocalVariables.c).
+
+Image constructors have a different lifetime. The publisher resolves each
+native module-initializer relocation to a local function and emits a
+read-only array of 32-bit offsets from the Mach header for dyld. Existing
+image constructors retain their order. [Apple's initializer reader](https://github.com/apple-oss-distributions/dyld/blob/main/common/MachOAnalyzer.cpp)
+
+For register-only integer leaves the publisher also accepts multiply,
+multiply-add, multiply-subtract and scalar shifts whose emitted instruction
+words and register operands match the source. LLVM instruction simplification
+removes the generic oversized-shift check when the lifted AArch64 count mask
+proves it redundant. The native control covers wraparound products and shift
+counts at and above the register width.
+
+Both M1 runners passed all 39 cases using the Release host built from
+`3b6fc93c6c800290c3ff02a98f15f287cd589ee4`. Each executed 16 C++ signal
+deliveries and 16 Objective-C deliveries with typed catches, cleanup and
+rethrow. Each ran eight compiler-linked or published TLS lifecycle controls,
+including image initialization, independent threads and thread-exit callbacks.
+The arithmetic image ran once before and once after publication. Both runners
+reported unchecked ordinary-memory writeback. Xcode 27 built and signed the
+x1 slice, and the M1 loader returned Darwin error 86 on launch.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43387041250)
+and [verification record](evidence/arm64e-signal-cleanup-and-new-tls-2026-11-13.json).
+
+The per-thread resolver and protected-call path tests ran in the 40-case
+Release suite on macOS 26.7.2 and 27.0.1. Each M1 runner executed 24 C++
+and 24 Objective-C signal deliveries and eight reference or published TLS
+lifecycles. Xcode 27 built and signed the x1 probe. Its loader rejected
+the slice on this hardware.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43462907219)
+and [per-host results](evidence/arm64e-tls-resolver-and-call-setup-2026-11-14.json).
+
+Register-only lifted leaves can also publish integer REV, RBIT and CLZ.
+The object producer uses LLVM's bit-provenance matcher to recognize the
+lifter's shifts and masks. The publication check still compares the emitted
+instruction words and their operands. The byte-reversal and trailing-zero
+fixture compares both entries with independent loops, including a zero input.
+
+Lifted integer leaves also publish signed and unsigned selects, register
+division and remainder, sign- or zero-extending loads, and local conditional
+loads and stores. The producer recognizes division only after proving the
+zero and signed-overflow guards carry the architecture's results. Conditional
+branches must keep their displacement and land inside the same function.
+Native drivers check null and nonnull paths, adjacent memory, signed extrema,
+and zero divisors on the original and published libraries.
+
+The Windows CI analysis and authenticated-call fixtures use the same checked
+Clang 22.1.6 frontend as the Windows source-patch tests. Clang 20.1.8 accepts
+the arm64e target while leaving function-pointer authentication off by default.
+Explicit flags enable C function-pointer signing in that version, but its
+Objective-C class and method metadata still lacks the authentication relocations
+exercised by the loader tests.
+
+The Release host passed all 46 cases on macOS 26.7.2 and 27.0.1. Each M1
+runner executed 74 original or published images and verified 24 C++ and 24
+Objective-C signal cleanups. The Windows runner independently compiled the
+signed C and Objective-C controls at O0 and O2. Both M1 runners reported
+that native checked writeback remained unavailable.
+[Native and Windows Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43545498327)
+and [per-host verification record](evidence/arm64e-scalar-publication-2026-11-14.json).
+
+Ordinary register-indexed accesses and non-SP writeback accesses now enter
+the same audited native register-body producer as physical stack cursors.
+The producer retains each original memory instruction and its base update,
+including the runtime checked-pointer behavior. This covers signed and
+unsigned GPR loads, scalar and SIMD stores, signed word pairs, and B/H/S/D/Q
+memory registers. Publication continues to verify the relocated
+instruction words, control-transfer targets and unwind rows.
+
+Direct-call X8/X9 result discovery follows the function's control-flow edges.
+Backward liveness reaches reads across conditional, forward and backward
+branches. W writes kill the complete corresponding X value, and another call
+ends the previous result. Functions without direct calls skip this analysis.
+The two-bit worklist processes each edge at most twice and emits results in
+instruction order.
+
+The additional publication controls compare indexed reads and signed-offset
+stores, zero and nonzero loop counts, pre/post-indexed scalar and pair
+accesses, and all five SIMD memory widths. Narrow SIMD loads are subsequently
+stored as full 128-bit registers, checking that their upper lanes are cleared.
+Independent drivers compare complete destination buffers, untouched guards
+and updated pointers on the original and published libraries. A separate
+negative case verifies that intervening W8/W9 writes end both old call results.
+
+Both M1 runners passed all 57 cases with the Release host built from
+`7991be5e74e7c671ce0e30b5fdfba002df64f72b`. Each executed 94 original or
+published images, 24 C++ and 24 Objective-C signal cleanups, and eight
+per-thread resolver lifecycles. The Windows frontend controls also passed.
+Both hosts still reported native CPTA-on unavailable.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43581342838)
+and [per-host verification record](evidence/arm64e-memory-and-register-publication-2026-11-14.json).
+
+### Fixed-width SIMD data in published images
+
+The complete native register-body producer also admits audited scalar FP and
+Advanced SIMD data-processing instructions. It identifies their
+[A64 encoding class](https://support.arm.com/documentation/ddi0602/2023-12/Index-by-Encoding),
+which has no PC-relative operands, and supplies the original instruction word
+to LLVM MC. This preserves vector arrangements, lane operands, modified
+immediates, table-register lists and floating-point controls. Functions must
+still pass the existing semantic audit and complete-body/unwind checks.
+Memory and control transfers retain their separate relocation rules; SVE/SME
+instructions do not enter this encoding class.
+
+Publication regressions exercise all integer ADD/SUB lane widths in 64/128-bit
+registers, vector arguments and results, logical operations, permutations,
+table lookups, lane insertion/extraction and modified immediates. Independent
+scalar drivers also check widening/narrowing, multiplication, shifts,
+reductions, comparisons and saturation, including FPSR.QC. The fused float and
+double lane controls compare every result and exception flag under all four
+rounding modes. A mixed SIMD/physical-SP case retains signed LR, remembered
+CFI states and multiple epilogues. Changing an encoded SIMD destination is
+rejected before publication. This extends the admitted image contract; it
+does not qualify arbitrary image layouts or native CPTA-on.
+
+Both M1 runners passed all 70 cases with the Release host built from
+`a726549412997a5be4b257148ece6cc57916ed65`. Each executed 120 original or
+published images, including all 13 added SIMD cases, and retained the signed
+signal cleanup and TLS lifecycle controls. The Windows frontend controls
+also passed. Neither host reported native CPTA-on.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43599335828)
+and [per-host verification record](evidence/arm64e-simd-publication-2026-11-14.json).
+
+### Preserved registers in whole lifted frames
+
+The native register-body producer retains DWARF offset, restore and same-value
+rules for X19-X28 and V8-V15, alongside FP/LR. Register admission reuses the
+Darwin unwind ABI definitions. The final image must still match the original
+instruction words, control transfers, B-key augmentation and complete CFI
+rows; changing an X19 or V8 spill to another valid stack slot is refused.
+CFA bases and unsupported CFI operations retain their existing restrictions.
+
+Four publication fixtures save and overwrite every preserved GPR and vector,
+use FP-based CFA rows, and retain two signed epilogues with remembered CFI
+state. Independent callers check normal returns over zero and wrapping integer
+inputs. The D fixtures check the low 64-bit lanes required by the Darwin call
+ABI; the Q fixtures additionally check the upper lanes explicitly saved by
+their instructions. D upper lanes are checked separately: reloads clear them,
+whereas signal resumption retains their interrupted values. Signal fixtures
+interrupt the fully established original
+or published frame, recover its caller from the linked metadata and machine
+instructions, and resume through the system signal frame. The resumed caller
+checks every saved register. These checks do not imply that ordinary language
+unwind tables preserve caller-clobbered vector upper lanes.
+
+This closes the indexed-DWARF preserved-register publication restriction. That
+qualification did not reconstruct compact saved-pair frames, qualify arbitrary
+image layouts or arbitrary non-call language cleanup, or supply native CPTA-on
+evidence. The current GitHub [standard macOS ARM runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+list M1 processors, and [larger ARM runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
+list M2. Neither test repository had a registered self-hosted runner during
+this qualification; hardware features remain subject to the native probe.
+
+Both M1 runners passed all 74 cases using the Release host built from
+`8223da42b74cd5a00df267cfc71a7dac8b9c607e`. Each executed 128 original or
+published images. The added cases made 104 normal calls with complete
+register observations and 24 authenticated caller resumptions across signal
+frames per host. All original signed exception, signal cleanup and TLS
+controls remained enabled, and the Windows frontend checks passed. Local
+checks passed 74 publication cases, 18 unwind-recovery cases and 137 ABI/format
+cases; 42 native-gated ABI/format cases were skipped locally. Neither native
+host reported CPTA-on.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43610978871)
+and [per-host verification record](evidence/arm64e-saved-register-publication-2026-11-14.json).
+
+### Compact saved frames in published images
+
+The native register-body producer also reconstructs classic ARM64
+frame-pointer compact recipes from the loader's normalized saved-register
+slots. MC receives the canonical FP-based CFA, LR/FP record and descending
+GPR/D offsets; the final image must retain the original compact encoding and
+instruction words without introducing a DWARF fallback. The slot ordering
+follows Apple's [compact unwinder](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/CompactUnwinder.hpp).
+These MC directives describe the compact recipe; exact-PC asynchronous
+recovery still analyzes the original or published instructions.
+
+When an ordinary lifted callee needs a Swift error-result prototype, verified
+native callers keep their physical X21 call boundary and symbolic target.
+Only LLVM callers receive rewritten prototypes and call operands. The existing
+signed Swift forwarding case checks this mixed boundary and still refuses a
+callee whose X21 write was removed.
+
+Nine cases cover all nine individual saved pairs, no additional pair, all
+pairs, sparse masks, an additional stack reservation below FP and two signed
+epilogues. The fixtures overwrite the live LR after saving it, so signal
+resumption must authenticate the saved stack copy. Independent callers check
+every preserved GPR and vector low lane. Saved D upper lanes are checked
+against the appropriate reload or interrupted value, and unsaved upper
+lanes must remain unchanged. Mutating any emitted saved-register offset
+refuses publication and creates no output.
+
+This qualification uses one function per compact fixture. Linkers can coalesce
+adjacent identical compact recipes into one range; recovering an individual
+function from that range still needs a proved function boundary. Frameless
+saved-pair layouts and PAuth_LR compact publication also remain separate gaps.
+These cases do not qualify arbitrary lifted images, arbitrary protected
+non-call language cleanup or native CPTA-on.
+
+Both M1 runners passed all 83 cases using the Release host built from
+`b54eed139a515af9042314863daf30ad193f78b7`. Each executed 164 original or
+published images; the added compact cases made 364 normal calls with complete
+register observations and 24 signed caller resumptions across signal frames
+per host. The mixed native/Swift call case, original authentication and
+exception controls, existing signal cleanup and TLS cases remained enabled.
+Windows frontend checks passed. Local checks passed 83 publication cases,
+18 unwind-recovery cases and 137 ABI/format cases; 42 native-gated ABI/format
+cases were skipped locally. Both native CPTA probes remained unavailable.
+The LLVM fork revision and r6 prebuilt pin were unchanged.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43617563664)
+and [per-host verification record](evidence/arm64e-compact-frame-publication-2026-11-15.json).
+
+
+### Coalesced, frameless and PAuth_LR compact frames
+
+Compact recovery now seeds each authenticated function entry in a coalesced
+range with its own incoming register state. Mach-O typed function symbols,
+including `LC_FUNCTION_STARTS`, supply roots without being reclassified as
+loader/CRT entry points. Guessed boundaries and continuation labels do not
+supply roots. Rows keep offsets relative to the original unwind range; calls
+and tail transfers to another proved entry do not merge its state. Fallthrough
+across a boundary and transfers into another function's interior are refused.
+DWARF, language tables and explicit signing-PC rules still require one owner.
+
+The native producer reconstructs frameless saved-pair recipes with the complete
+stack size and normalized slots. These preserve live LR, omit an invented
+FP/LR spill record and support an additional stack reservation. Coalesced
+fixture pairs must share the same original unwind record before publication.
+Independent native callers compare all preserved registers and signal-driven
+caller resumptions for both functions.
+
+PAuth_LR publication preserves PACIBSPPC, AUTIBSPPC and RETABSPPC words and their
+function-relative positions. The LLVM fork emits a canonical B-key mode-5
+recipe with the signing-PC offset. Ordinary compact mode cannot authorize
+these PC-signed words. The final verifier checks the complete emitted recipe
+and rejects removal of the signing CFI.
+
+The Xcode 27 diagnostic reproduced a transport difference: the input object
+contained `0x05002515`, but the Apple-linked image contained `0x04000515`.
+Regular LLVM object emission therefore retains DWARF for nonzero signing-PC
+offsets. The final-image writer and explicitly marked native-object installer
+can consume the full compact payload directly. Tests independently construct
+the single final-image encoding slot in an unsigned structural fixture after
+linking; they record the linker word before construction and also require
+rejection of an ordinary-FP record with PC-signed instructions. This does not
+qualify Apple's external linker as a mode-5 nonzero-offset producer.
+
+PAuth_LR cases report structural images separately from native execution.
+Neither a structurally correct compact record nor a passing classic PAC signal
+resumption qualifies execution on PAuth_LR hardware, arbitrary lifted images,
+arbitrary protected non-call language cleanup, or native CPTA-on.
+
+Both native runners passed all 96 cases from
+`941203f5d2036ad3541a2e797938ccba01a898ed`. Each executed 202 original or
+published images. The eleven added classic compact cases contributed 442
+register-observed calls and 48 signed signal-caller resumptions per host.
+The two PAuth_LR cases contributed four structural original/published images
+and zero native PAuth_LR executions per host. Windows frontend checks passed.
+The Xcode 27 linker word before fixture construction was recorded as
+`0x04000515` for the nonzero-offset case; the final installed image retained
+`0x05002515`.
+
+Local Release validation selected 909 cases: 862 passed, 47 native-gated cases
+were skipped, and none failed. Six LLVM MC/FileCheck invocations passed, as
+did the pinned 22.1.2 format check for all thirteen changed source files and
+the documentation inventory check. The r6 prebuilt configuration is unchanged.
+The encoder and consumer-boundary changes were merged directly into the LLVM
+fork in [PR #10](https://github.com/NeverSight/llvm-project/pull/10) and
+[PR #11](https://github.com/NeverSight/llvm-project/pull/11).
+Both M1 environments still reported native CPTA-on unavailable, and neither
+repository had a registered self-hosted runner at the recorded observation.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43628073491)
+and [per-host verification record](evidence/arm64e-compact-range-publication-2026-11-15.json).
+
+
+### System unwinding of frameless saved pairs
+
+The previous frameless qualification compared native returns and NeverD's
+instruction-derived signal resumption. An independent public libunwind cursor
+exposed a different system consumer behavior: the compact frameless walker
+loads its first spill at CFA and leaves SP reduced by the saved-pair bytes.
+A two-register control restored the wrong X19/X20 values and SP. Apple's
+[compact walker source](https://github.com/apple-oss-distributions/libunwind/blob/main/libunwind/src/CompactUnwinder.hpp)
+contains the same slot and SP calculations.
+
+Publication now gives these bodies indexed DWARF with explicit actual stack
+size and CFA-relative saved slots. It retains the original instructions and
+B-key return ABI. The final-object verifier checks the complete CIE/FDE recipe;
+existing offset-mutation controls must still refuse publication. This is a
+complete-prologue synchronous recipe. Instruction-derived recovery remains
+the owner of interrupted prologue and epilogue states.
+
+The native signal driver additionally seeds a fresh system cursor from the
+genuine interrupted context, steps the published frame and compares SP,
+authenticated return PC, X19-X28 and D8-D15 with independent caller inputs.
+All-pair, sparse, coalesced and each individual-pair cases exercise this path.
+These checks do not qualify native PAuth_LR or CPTA-on, nor arbitrary non-call
+language cleanup or arbitrary image publication.
+
+
+### Explicitly protected non-call exception delivery
+
+An address-based C++ or Objective-C LSDA can now authorize delivery at a
+non-call instruction without finding a later throwing call. Its entire
+instruction must belong to the guarded range, have a saved original LR,
+preserve live frame registers, and keep the same complete recovery row at
+the virtual return edge. The existing signal-return bridge runs the supplied
+throw thunk outside the handler; the original system personality selects and
+executes the interrupted frame's cleanup. Missing LSDA ownership, partial
+instruction coverage, changed CFA/signing/spills and preserved-register
+writes remain rejected.
+
+Independent assembly fixtures protect exactly one load in a loop with no
+calls. Their C++ and Objective-C landing pads record the original or changed
+published cleanup before resuming the exception. The driver checks that
+cleanup, the outer cleanup, exception identity and the restored signal mask
+on both ordinary and alternate stacks, for original and installed images at
+O0 and O2. This qualifies explicitly guarded points with a proved frame;
+it does not infer missing asynchronous lifetime information in arbitrary
+compiler output.
+
+
+Both native runners passed all 99 cases from
+`c316fe83a8d07880aa6c851274ae0be62a8ea8ff`. Each reported 220 executed
+original/published images, 39 independent system frameless steps, eight C++
+non-call cleanup deliveries and eight Objective-C non-call cleanup deliveries.
+The latter cover both optimization settings, both image forms and both stacks.
+Windows frontend checks passed. The independent LSDA fixture includes a
+no-handler entry for `_Unwind_Resume`; omitting it was reproduced as a
+second-phase termination in a local ordinary-arm64 control before correction.
+
+Local validation passed 99 publication cases and 26 recovery cases, with the
+four affected cleanup cases rerun after the fixture correction. The broader
+1084-case ABI/language selection passed 1036 cases and explicitly skipped 48,
+with no failures. All twelve changed source files passed clang-format 22.1.2,
+and the documentation inventory check passed. LLVM and r6 pins are unchanged.
+Both M1 runners still report native CPTA unavailable; PAuth_LR execution,
+arbitrary lifted-image contracts and missing asynchronous lifetime information
+remain unqualified.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998)
+and [per-host verification record](evidence/arm64e-system-frames-and-noncall-2026-11-15.json).
+
+
+### Lifted indexed language frames
+
+Automatic whole-image publication can retain a complete indexed C++ or
+Objective-C frame whose original read-only LSDA uses an omitted LPStart and
+ULEB128 function-relative call-site offsets. The native register-body producer
+keeps every instruction at its original function offset, including the cleanup
+landing pad, direct imported calls and terminal BRK. It emits the original
+personality and LSDA CFI references. The installer binds the LSDA to original
+storage and resolves the personality through the original authenticated GOT.
+A bare RET entry also retains its incoming physical result registers.
+
+The native-object reader accepts an external LSDA difference relocation only
+at a decoded PC-relative LSDA field. Original-image bindings and final
+relocations remain mandatory. The publication verifier parses linked CFI
+against the relocated image, compares the complete CIE/FDE rules, checks
+LSDA/personality slot addresses after any image slide, and compares every
+source instruction and direct transfer. A changed LSDA operand is rejected
+without publishing an output.
+
+`LiftedNonCallRunsInterruptedAndOuterCleanups` and its Objective-C companion
+run the complete Pipeline/PatchMode/MachOPatcher route at O0/O2. Their native
+driver checks interrupted and outer cleanup, exception identity, restored
+signal masks and ordinary/alternate signal stacks for original and published
+images. It separately calls the bare RET entry with nonzero 64-bit seeds.
+Native-object replacement remains an independent control.
+
+This contract requires unchanged instruction offsets and complete original
+language metadata. Explicit LPStart, SJLJ tables, compact frameless language frames,
+unsupported native body operations and missing asynchronous lifetime tables
+remain outside this profile. It does not qualify arbitrary lifted-image
+publication or native PAuth_LR/CPTA-on execution.
+
+
+Both macOS runners passed all 101 cases from
+`efa88237c8a6e6078e5c73b6674efc0abf87406f`. Each executed eight C++ and eight
+Objective-C cleanup deliveries through the new lifted-image route, in addition
+to the independent native-object controls and 220 existing original/published
+image checks. The Windows frontend job also passed. Both hosts remain M1
+virtual machines: explicit PAuth_LR and CPTA-on were unavailable, including
+the signed arm64e.x1 launch attempt on the newer environment.
+
+Local publication passed 101 cases. The 1408-case exception/ABI selection
+finished with 1359 passes, 48 skips and one 120-second parallel timeout. That
+unchanged immediate-memory test passed alone in 22.60 seconds, leaving 1360
+passed cases and 48 environmental skips after retry. Both logs are retained;
+the initial timeout is not counted as a pass. Eight source files passed
+clang-format 22.1.2 and the documentation inventory passed. LLVM and r6 are
+unchanged. The temporary native replay release and asset were removed, and
+the CI branch was returned to its original tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43687902578)
+and [per-host verification record](evidence/arm64e-lifted-language-frames-2026-11-15.json).
+
+### Compact language frames and explicit LPStart decoding
+
+Automatic publication also accepts complete compact FP C++ and Objective-C
+language frames without a DWARF FDE. The compact reader retains the selected
+personality pointer slot; exception resolution, native-object verification and
+whole-image verification consume that identity. The generated object supplies
+canonical personality and LSDA references. Verification compares the linked
+slot and LSDA after any image slide, while retaining the original compact
+frame recipe and every instruction offset. A language frame must cover exactly
+one published function; an unwind-only coalesced range does not establish this
+LSDA contract.
+
+For a compact FP frame, asynchronous recovery can select the saved LR even
+while the live register still contains it. One exact frame-record lookup must
+prove an active, full-width copy with the same return and signing state.
+Partially overwritten or released saves and a different live signing recipe
+cannot authorize exception delivery through that copy. Declared DWARF columns
+keep their existing authority.
+
+`CompactNonCallRunsInterruptedAndOuterCleanups` and its Objective-C companion
+exercise native-object replacement. Their `LiftedCompactNonCall` counterparts
+exercise the normal lift/publication pipeline. Each uses O0/O2 original and
+published images, ordinary and alternate signal stacks, nested cleanup and
+exception-identity checks. The input must actually have a compact FP record
+and no FDE; a changed LSDA operand must still fail publication.
+The compact recovery tests separately cover overwritten, released, misplaced
+and differently signed LR copies.
+
+The shared Itanium reader now keeps explicit LPStart separate from the
+function-relative guarded ranges and preserves an explicitly encoded zero.
+This follows the independent address bases used by
+[LLVM libc++abi's personality](https://github.com/llvm/llvm-project/blob/main/libcxxabi/src/cxa_personality.cpp)
+and [GNU libsupc++](https://github.com/gcc-mirror/gcc/blob/master/libstdc%2B%2B-v3/libsupc%2B%2B/eh_personality.cc).
+`ItaniumLSDA.ExplicitLPStart*` checks ELF/Mach-O and x64/AArch64 coordinates,
+including guarded-range overflow. At that milestone, publication still required
+an omitted LPStart and a compact FP or indexed frame. The next section records
+explicit-base rebuilding and compact frameless language publication. Unsupported
+body operations, missing lifetime tables and native PAuth_LR/CPTA-on qualification
+remain separate gaps.
+
+
+Both macOS runners passed all 105 cases from
+`2a837b5adaa629e91477df909e66cb010f850707`. Each executed 32 new compact-frame
+cleanup deliveries across C++/Objective-C, native-object/lifted publication,
+O0/O2 and ordinary/alternate signal stacks, in addition to the existing
+220 original/published image checks. The Windows frontend job passed.
+Local publication passed 105 cases, implicit recovery passed 29, and the
+focused LSDA/compact-reader checks passed three. Seventeen source files passed
+clang-format 22.1.2; the documentation inventory passed.
+
+Both hosts remain M1 virtual machines. The probes did not qualify explicit
+PAuth_LR or CPTA-on, including the signed arm64e.x1 launch attempt on the
+newer environment. LLVM and prebuilt r6 are unchanged. The temporary replay
+release and asset were deleted with verified HTTP 404 responses, and the
+test repository was restored to its original tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43708062786)
+and [per-host verification record](evidence/arm64e-compact-language-frames-2026-11-15.json).
+
+
+### Explicit LPStart rebuilding and frameless language frames
+
+The native register producer now rebuilds explicit-base C++ and Objective-C
+LSDAs in generated read-only exception storage. Guarded ranges remain relative
+to the function; landing pads are rebased independently. The usual output omits
+LPStart. If a handler is at the function entry, an explicit base one instruction
+before it preserves a nonzero handler offset, since zero denotes no handler.
+Action links, selectors and exception-specification list offsets retain their
+original bytes. Type references use relocated PC-relative fields and preserve
+indirection through the original binding cells. The shared reader also resolves
+types referenced only by negative exception-specification filters.
+
+Publication validates the installed private candidate before making the output
+visible. It compares normalized guarded ranges, handler coordinates, action
+chains, type identities and specification lists with the source, in addition to
+the existing instruction, CFI, personality and dependency checks. Native object
+installation also reserves load-command capacity for new writable and zero-fill
+data mappings before assigning addresses; type-pointer cells no longer fail
+late because their segment commands lack header space. The original
+omitted-base table may still be reused when its function-relative contract
+holds. Truncated tables, handlers outside the copied function and incomplete
+metadata cannot authorize publication.
+
+Compact frameless language frames retain their personality and LSDA. Frames
+with saved pairs use indexed DWARF for the system walker's established spill
+layout, just as unwind-only frameless publication does. The regression suite
+separately checks ordinary signed returns, preserved registers and system walks
+of these installed language frames. SP-based indexed frames with a saved LR
+exercise actual C++ and Objective-C cleanup delivery at a protected non-call
+instruction, at O0 and O2 and on ordinary and alternate signal stacks.
+
+The typed explicit-base fixture executes a nonmatching catch followed by cleanup;
+its additional specification-only type tests reconstruction without invoking an
+unexpected-exception path. The entry-handler case qualifies address serialization
+only. At that milestone, frames whose caller return exists solely in live LR
+were not admitted to protected exception delivery: the direct throw thunk
+would overwrite that return address.
+Absent lifetime tables cannot establish arbitrary asynchronous cleanup scopes.
+
+Both macos-26 and xcode-27 passed all 119 source-bound publication cases from
+`42786bcb1fc38597a31cb79a04b4f434e635eb24`, with no failed or skipped cases. Each
+host executed 80 new language-cleanup deliveries, 52 new frameless preserved-
+register calls, six signal resumptions and three system frameless steps. The
+complete replay includes 226 original/published image checks per host. The
+Windows frontend job passed. Local publication passed 119 cases; related CTest
+coverage passed 1,067 with 48 explicitly skipped native/environment cases; all
+11 focused LSDA checks passed. Thirteen C++/header/definition files passed
+clang-format 22.1.2 and the documentation inventory passed.
+
+The fresh hardware reports still identify both runners as M1 virtual machines.
+Explicit PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including
+the arm64e.x1 launch attempt. LLVM and prebuilt r6 are unchanged. The temporary
+release and asset were deleted with verified HTTP 404 responses, and the replay
+branch was returned to its baseline tree after saving the results.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43733530036)
+and [per-host verification record](evidence/arm64e-lsda-frameless-2026-11-16.json).
+
+
+### Live-LR asynchronous language delivery
+
+Protected indexed-DWARF frames can retain their caller return in live x30.
+`prepareDarwinArm64eExceptionSite` requires the original system CFA and live-LR
+rule to match the recovered frame at the instruction and its virtual return
+edge. The live return must use the ordinary IB/CFA signing recipe. An inferred
+interrupt row cannot replace incompatible synchronous unwind metadata; compact
+FP records with a different saved return remain rejected.
+
+`ndDarwinArm64eDeliverSignalException` preserves the genuine signal context's
+SP and LR and schedules a small native bridge. The bridge runs after sigreturn,
+reserves the interrupted frame's 128-byte red zone and saves two independent
+returns. DWARF return column x17 supplies the signed virtual protected edge;
+the x30 column restores the original caller return. The language throw thunk
+then runs outside the handler, with the original signal mask and alternate-
+stack state restored. Stack capacity and authentication are checked before
+mutating the context. No bridge slots are written over an active kernel signal
+frame. Its assembly, register indices and frame size belong to
+`DarwinArm64eSystemUnwind.def`.
+
+The bridge personality advances the system cursor to the original language
+frame and delegates matching and cleanup selection to that frame's personality.
+A local catch retains the bridge's identity across the two unwind phases.
+Darwin's landing-pad resume itself consumes x30, so a separate authenticated
+entry restores the caller LR before the original handler can spill it. Its CFI
+retains the interrupted frame's virtual return, original SP and LR; a walker
+can still apply the original frame's saved-register rules. The resumed virtual
+return uses x12 because system resume does not restore x16/x17. Neither transfer
+disables return authentication or copies an opaque system cursor.
+
+The eight `AArch64AsyncUnwind.*LiveLR*` cases cover C++ and Objective-C,
+replacement objects and NeverD-generated images, O0/O2, and normal/alternate
+signal stacks. They verify red-zone contents, nested handler exceptions,
+exception identity, interrupted/outer cleanup ordering, the original SP/LR,
+insufficient-stack rejection, and the emitted bridge's independent return
+columns. Four cases execute a local catch and authenticated normal return;
+the others spill live LR before calling `_Unwind_Resume`, with matching
+PC-specific CFI. The Objective-C catch uses the compiler's `_OBJC_EHTYPE_id`
+GOT reference to obtain the original object through `objc_begin_catch`.
+Hardware breakpoints also interrupt each resume instruction. A fresh public
+cursor walks through the interrupted frame to its
+caller and checks SP, LR, FP and the preserved general registers before signal
+return continues the landing pad. `LDUR` and `STUR` now participate in native
+register body generation and the existing exact-instruction publication checks.
+
+This admission requires an owned language lifetime table. It does not infer
+cleanup scopes for arbitrary faulting instructions. At this milestone,
+compact-only live-LR delivery, additional signing recipes, and native
+PAuth_LR/PACM-PC/CPTA-on qualification remained separate coverage requirements.
+The LLVM fork revision and prebuilt r6 were unchanged.
+
+Both macos-26 and xcode-27 passed all 127 source-bound publication cases from
+`ec26d6dfa35fc2ae4e945a3bdfcfb07a034248e1`, with no failed or skipped cases.
+Each host completed 64 live-LR deliveries: 32 cleanup paths and 32 local catches,
+covering original/replacement/lifted images, O0/O2 and both signal stacks.
+All 64 also checked the resumed cursor against the original caller. The Windows
+frontend job passed. Local publication passed 127 cases, unwind recovery passed
+31, and related CTest coverage passed 142 with four explicit native/environment
+skips. C11/C++20 multi-translation-unit linking, clang-format 22.1.2 and the
+documentation inventory passed.
+
+Fresh reports still identify both runners as M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the signed
+arm64e.x1 launch attempt. The temporary release and asset were deleted with
+verified HTTP 404 responses; the replay repository was returned to its baseline
+tree. [Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43746760233)
+and [per-host verification record](evidence/arm64e-live-lr-2026-11-16.json).
+
+### Compact live-LR and adapted signing recipes
+
+Protected compact frameless scopes can now use live LR when their actual system
+recipe agrees with the instruction-derived frame: SP plus the encoded stack
+size, no saved register pairs, and unchanged preserved registers. The scope's
+owned address-based language table must protect the interrupted instruction.
+A mismatched stack size, compact FP record or saved-pair encoding cannot
+authorize this route. The saved-pair consumer discrepancy described above still
+requires publication to indexed DWARF.
+
+Live-LR delivery first authenticates the recovered original recipe. It then
+signs a separate caller return using Darwin's implicit IB/CFA unwind schema.
+The bridge preserves this value, the virtual protected edge, and the original
+LR independently, below the interrupted red zone. Its personality and resume
+entry expose the adapted LR to the system walker while restoring the original
+LR for the landing pad's instructions. Thus unsigned and IA-signed interrupted
+states need not masquerade as an IB signature. The source still owns its
+synchronous calling ABI: the indexed fixtures authenticate or sign their live
+return before spilling it for calls; the compact fixtures restore their stack
+and authenticate before tail-calling a language resume or catch helper.
+
+The recovered row also retains explicit PAuth_LR and PACM IA/IB recipes and
+their relocated signing PCs. These use the existing hardware-capability and
+signature checks before any signal-context mutation. Static admission across
+both metadata forms does not qualify executing explicit PAuth_LR or the
+PC-dependent behavior of PACM on unsupported hardware. The bridge does not
+repair arbitrary synchronous CFI, invent language lifetimes, or replace the
+signature in a saved source stack slot.
+
+The regression matrix covers C++/Objective-C, compact/indexed frames,
+unsigned/IA/IB live returns, replacement objects and NeverD-generated images,
+cleanup/local catch, O0/O2, and normal/alternate signal stacks. Each native
+delivery also walks a cursor from the resume entry, checks both the original
+and adapted returns, and verifies refusal of an unknown recipe or unavailable
+explicit PAuth_LR without modifying the kernel context. Runtime assembly and
+ABI constants, fixture source, and admitted native hint aliases remain in
+their owning `.def` tables. LLVM and prebuilt r6 are unchanged.
+
+Once a proved native register body supplies every instruction and CFI row, it
+owns the return-signing policy. Its naked LLVM wrapper drops inferred compiler
+prologue attributes and retains the PAuth instruction feature. This permits
+an IA or unsigned protected scope to convert its return recipe before making
+ordinary Darwin calls without also requesting a conflicting compiler prologue.
+
+The compact Objective-C catch helper also exposed an overly broad shared frame
+classification: `objc_begin_catch` and other ordinary runtime-call annotations
+were treated as local unwind handlers. `ExceptionFunction::describesUnwindOnly`
+now distinguishes these annotations from landing pads, fragile setjmp state and
+MSVC tables; personality, LSDA, parse completeness and other language-table
+requirements remain intact. The narrower scalar comparison profile continues
+to reject runtime-call annotations it cannot project.
+
+Both macos-26 and xcode-27 passed all 167 source-bound publication cases from
+`9fa1dda6876d960bac97bd0a69c6cb4a8c457861`, with no failed or skipped cases.
+Each host completed 384 live-LR deliveries and resume-cursor checks: 192
+cleanup paths and 192 local catches, including 192 compact-only deliveries.
+Unsigned, IA/CFA and IB/CFA each contributed 128 deliveries per host. This
+includes original, replacement and NeverD-generated images at O0/O2 on normal
+and alternate signal stacks. Windows frontend checks passed as well.
+
+Both fresh hardware reports still identify M1 virtual machines. Explicit
+PAuth_LR, PACM PC dependence and CPTA-on remain unqualified, including the
+signed arm64e.x1 launch attempt. The extended PC-dependent recipes have
+recovery/admission coverage here; that does not complete their native
+publication and language-delivery matrices. The temporary release, asset and
+tag were deleted with verified HTTP 404 responses, and the replay repository
+was returned to its baseline tree.
+[Native Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/43792618472)
+and [per-host verification record](evidence/arm64e-compact-live-lr-2026-11-16.json).
+
+Local Release checks passed all 167 publication cases, all 33 unwind-recovery
+cases, 321 language-EH cases with one explicit sample skip, and 144 related
+cases with four native/environment skips. All 324 binary-diff cases and 12
+tail-frame cases passed, including the scalar profile's nine focused checks.
+The latter target's CLI dependency was built with the real shared SDK enabled.
+C11/C++20 multi-translation-unit checks, clang-format 22.1.2 and the documentation
+inventory also passed. Generated products were removed after recording hashes;
+the active Release build and r6 were retained.

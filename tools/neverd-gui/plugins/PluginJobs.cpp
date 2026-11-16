@@ -137,6 +137,12 @@ PluginJobs::PluginJobs(QString outputRoot, QObject *parent)
       },
       [this](const auto &id) {
         emit componentBound(QString::fromStdString(id));
+      },
+      [this](auto scope, const auto &manifest, auto &error) {
+        if (activateGui_)
+          return activateGui_(scope, manifest, error);
+        error = {"gui_unavailable", "No workbench UI host is available"};
+        return false;
       });
   poll_.setInterval(kRuntimePollMilliseconds);
   connect(&poll_, &QTimer::timeout, this, [this] {
@@ -219,6 +225,9 @@ void PluginJobs::setContext(QJsonObject context) {
   const bool changed =
       context.value("epoch") != context_.value("epoch") ||
       context.value("project_id") != context_.value("project_id");
+  // The host holds the context it was given last, and takes one equal to it
+  // as no change (HostServices::setContext): it is not written out for it.
+  const bool same = context == context_;
   context_ = std::move(context);
   for (const auto &record : jobs_)
     if (!record.terminal() && !current(record))
@@ -233,8 +242,10 @@ void PluginJobs::setContext(QJsonObject context) {
       throw std::logic_error(error.Message);
     catalog_->setProject(projectOwner_);
     retireOwner(previous);
-  } else
+  } else if (!same)
     capabilities_->setContext(projectOwner_, native(context_));
+  if (!same)
+    emit contextChanged(context_);
   emit jobsChanged();
 }
 QString PluginJobs::start(const QString &pluginId, const QString &actionId,

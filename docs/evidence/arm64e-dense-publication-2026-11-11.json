@@ -1,0 +1,332 @@
+{
+  "date": "2026-11-11",
+  "configuration": "Release",
+  "source_revision": "8084d224c3d00873429c798d10bf3bce39545e15",
+  "llvm_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "runner_cold_build": false,
+  "test_host_sha256": "d2290781e547d4e8fc18220bcd8c5f5704ad387f27b98bccbd7c2594ff47bbff",
+  "lifted_host_sha256": "bb4127e593f1bcfe09b55873d4621f1959803e9e076128ab9523e946c20a1651",
+  "test_archive_sha256": "c49d69ec8a47c96a18f999c218ed63831f3bcda268139dcda14ab6b3e8a8517a",
+  "source_build_receipt_sha256": "a763820a8ecd64e69e370b57826eb6b2d7998750bd233351072d2bd24023a45d",
+  "workflow_revision": "afec771c8de6514b11a03c66412e4047b3e46eec",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43020688049",
+  "public_entries_per_dense_image": 26,
+  "arbitrary_lifted_image_publication_qualified": false,
+  "system_signal_trampoline_walk_qualified": false,
+  "native_apple_cpta_qualified": false,
+  "runners": {
+    "macos-26": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+      "sdk": "MacOSX26.5.sdk",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "compiler_sha256": "d2e4bf622758eee1bf7267c060497fb2c41e098d37b0fca8be73898dc7e14eda",
+      "artifact_id": 13855066844,
+      "artifact_digest": "sha256:667800a49d6caa6cbfa59a5cb0d3d8a762fe09ab6b42bda96bdd322bb8914406",
+      "dense_report_sha256": "fcc5ba01ddd0981ab74bec5e174625c01fb01000a84940c14b92ec311f4516c8",
+      "lifted_xml_sha256": "9250bb4c23905187322b350f464b777efb488a6b11aafcd8ad3c0fb262088819",
+      "dense_cases": 8,
+      "dense_preferred_base": 0,
+      "fixups_preserved_by_optimization": {
+        "-O0": {
+          "auth-bind": 40,
+          "bind": 2,
+          "auth-rebase": 1,
+          "rebase": 1
+        },
+        "-O2": {
+          "auth-bind": 12,
+          "bind": 3,
+          "auth-rebase": 1,
+          "rebase": 1
+        }
+      },
+      "dense_images": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "9e88522fcc9cda937ed8c7f2a653c43b474bd48fbf7e10afe5576594a458939d"
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "4013248b3e93cf8f432e2e6353e81afaedfc1ff520622a07c294ca12883b7c9d"
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 16384,
+          "published_sha256": "0a8248aa6b84d9387ae82427540a571a1b2bde6e6a1f4e73f91cd6d4951e4774"
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 16384,
+          "published_sha256": "9ec52f02f4f19e1188f03206d7823ed504395994139dedffdb801dd197682f40"
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "279ea322a3e0c599629c33e12ec4f0bf4483f7e895f67b1f00de10209f67b55e"
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "f093d18228f8e65660b6d387808321b69d064ed17e1a86fc4ba0040deb75dcc4"
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "709f100ee780ec2896b98dab380ef40ac8dee2fcc6eb3cd454b92e1f2803d296"
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "5e050e04dda572338a47fdfadf0acbb62616007781f3b6f141ddaa0cdb879d1a"
+        }
+      ],
+      "lifted_tests": 16,
+      "lifted_cases": {
+        "global_case": {
+          "signed_call_sites": 9,
+          "baseline_sha256": "76a25c2d58e107ef3f6553de76dcf64635fd2725e8295d5eb9e3ff28de93f015",
+          "published_sha256": "ac438c2fc20c89603f45f4bcf881caf6d38a1fbcff35cdc4598f9395b2d2f8db",
+          "native_images": 2
+        },
+        "framed_import": {
+          "signed_call_sites": 9,
+          "baseline_sha256": "96a0356f389bfa7a386869a78abcc726d8b286e5aa0962f4cfefa7b004f9c7d1",
+          "published_sha256": "b0cc8f59cef99a2828bea5b387be345539765723dc83dc85623418c77bd7de4a",
+          "native_images": 2
+        },
+        "swift_tail": {
+          "signed_call_sites": 10,
+          "baseline_sha256": "6fe3566480277589f9c5b6c273bf604d1c1fcababeb5f8fab52d79208f35402f",
+          "published_sha256": "aaf943ab06b9fb08bdaba946a3d57a6f460967a35f4963b579775be3cb3a547c",
+          "native_images": 2
+        }
+      },
+      "interrupted_frames": 10,
+      "authenticated_parent_returns": 10
+    },
+    "xcode-27": {
+      "cpu": "Apple M1 (Virtual)",
+      "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+      "sdk": "MacOSX27.0.sdk",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "compiler_sha256": "06e3d64f541c65a93acd176690bdaae13a3d7db092c8b98b392d4c6d0d03f176",
+      "artifact_id": 13855086844,
+      "artifact_digest": "sha256:e38bb8916565ec43a8e92863c26613e8bc009d4deadbbb7cb594e11fd7a6a870",
+      "dense_report_sha256": "6179bba0c927ee060901e998fcea54f46e4a867494404a17a3b5308f6c734bff",
+      "lifted_xml_sha256": "5113042a62da6d41a704ac7c93ad71e7770624d82fecf9140c2a7d45b14108ee",
+      "dense_cases": 8,
+      "dense_preferred_base": 0,
+      "fixups_preserved_by_optimization": {
+        "-O0": {
+          "auth-bind": 40,
+          "bind": 2,
+          "auth-rebase": 1,
+          "rebase": 1
+        },
+        "-O2": {
+          "auth-bind": 12,
+          "bind": 3,
+          "auth-rebase": 1,
+          "rebase": 1
+        }
+      },
+      "dense_images": [
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "4aeff08b378950793209ffd4eceda828f5f599e5a27f5af99a11daf6a7f55b4a"
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "26a3690b8c156ab807bc8afc48554c514404866a7aa25cd34faceef4e691800c"
+        },
+        {
+          "optimization": "-O0",
+          "key": 0,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 16384,
+          "published_sha256": "29c2d350ff1a316637a78013be35a17157e8d7550da87bb4b506e32037742853"
+        },
+        {
+          "optimization": "-O0",
+          "key": 1,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 16384,
+          "published_sha256": "938e2893f0ae9adc1a5d01e8ac85af2a1d393d9f7784a6efeb8e46c683c40e8c"
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "944f6ad56e0ffa7a84e2ad4b5ff3dd31bb6deeb11140bc47e53e1ef840d37447"
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": false,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "0e6d647e1934db4282beaca619dd76a5c5f9cb92da58f414b90b73658cea938f"
+        },
+        {
+          "optimization": "-O2",
+          "key": 0,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "2f9213e8af4797672a4b162777ec3c513a174813338e17c03abdacd2234dcf64"
+        },
+        {
+          "optimization": "-O2",
+          "key": 1,
+          "dwarf": true,
+          "original_trap_status": -5,
+          "original_section_slide": 0,
+          "published_sha256": "425b4aa256f9c5f0795036953f79d15dd4e89a21cc7728e14050e6fdc8335160"
+        }
+      ],
+      "lifted_tests": 16,
+      "lifted_cases": {
+        "global_case": {
+          "signed_call_sites": 9,
+          "baseline_sha256": "9153c7e15201aa12692729502e57e163ff63301f31182c4a477f3b7ce7e21bcb",
+          "published_sha256": "9b3c04845f4f929b33eefca5b32ca4157d5e52b3c28760b038fc907d59cda228",
+          "native_images": 2
+        },
+        "framed_import": {
+          "signed_call_sites": 9,
+          "baseline_sha256": "09b7a5494f55bd3b11626c67bebb927f68876364c8a67c73976ba96a28b82d06",
+          "published_sha256": "8c2758557aafdb9eb04f868b78ac8c6bf66febacb066e618884be51cf343ca48",
+          "native_images": 2
+        },
+        "swift_tail": {
+          "signed_call_sites": 10,
+          "baseline_sha256": "d39ef9e53a6ff429303fcef1e6e604efb8ee96443afab2a1200152f58b7056ef",
+          "published_sha256": "61e40a6998632e42fc558df7654ab4a6ef66f1123589be176111bbe4596317fc",
+          "native_images": 2
+        }
+      },
+      "interrupted_frames": 10,
+      "authenticated_parent_returns": 10
+    }
+  },
+  "local_suites": {
+    "contract": {
+      "passed": 297,
+      "xml_sha256": "fd1615cdb4dcfdeebaf9daee3859c5376834851b61c89ea067ada94acd010223"
+    },
+    "layout": {
+      "passed": 14,
+      "xml_sha256": "83a181ab5d110098f31285e760b94dfe3a3f24d54bea0aded0fee9af0c609c28"
+    },
+    "leaves": {
+      "passed": 16,
+      "xml_sha256": "0646cfe7ec41902d2d182372002c3530d1bc1b7d6542ecd20d432c39a4d3713a"
+    },
+    "language": {
+      "passed": 314,
+      "xml_sha256": "5cff6e7c838b766ad72d2aa3041bf80b33f1db82a9d6c04efba71ca5cf39022a"
+    },
+    "relocations": {
+      "passed": 19,
+      "xml_sha256": "821be8cb91d2e0938e5b7e061ebc787d824130293a2053e273f91283947dcc98"
+    },
+    "private-frame": {
+      "passed": 1,
+      "xml_sha256": "d7b4920527b633265dd4e251addb11f741e66a27cd6a34ba23b76496eee7ac42"
+    }
+  },
+  "local_verifier_tests": 40,
+  "local_compile_only": {
+    "original-profile": {
+      "images": 8,
+      "report_sha256": "c1639969bfaede400d95fb96cf678c261eb0380deb4869e61bc9d95d3f3b9ee6"
+    },
+    "zero-base": {
+      "images": 8,
+      "report_sha256": "9d4acca689b56b940b867bcc963a734884e2b1d846e0a6a6d1a8cb9a7b26ac27"
+    },
+    "dense": {
+      "images": 8,
+      "report_sha256": "78c6c2a2706af0da7b2d4f4a4c496b2bb9c5aa23bbcf4f3385c1c26cbac3a985"
+    }
+  },
+  "arm64e_analysis": {
+    "cases": 769,
+    "passed": 723,
+    "skipped": 46,
+    "first_attempt_failures": [],
+    "real_text_words": 138671,
+    "real_text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb"
+  },
+  "prebuilt_r6": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "cli_sha256": "45d75eabd3f6b9de93675532ef0387c096af885e7ede2e983936934f7e5e3416",
+    "sdk_sha256": "b169be36cf2a905fd9b4140130095dfcfe757d29c7eeb4fba1b09e66137eab47",
+    "build_receipt_sha256": "e641a3ffb37b37f2ae032a853985cb3f83f07ed780c197e49fdce4a81881e202",
+    "lifted_publications": {
+      "global-tail": {
+        "status": "published",
+        "input_sha256": "003df76e99bae332a1e69f98c0b9ff96a435c6f06050775d325fb04b6a692b89",
+        "output_sha256": "b9c5e4a1836d6baea19cce0ff93ecd82caaa604d43ad40ce3adbccc8eda4e22d"
+      },
+      "swift-error-tail": {
+        "status": "published",
+        "input_sha256": "0af3fd4052e2b5759e57c228a7ea091384dd57e00e1fcc36baf4231007751e79",
+        "output_sha256": "c523451ba238cb9a325b9079daa21ac9b88fe4a873ee5bfcf4394f6ed76703f5"
+      },
+      "global-framed": {
+        "status": "refused",
+        "input_sha256": "61dd178c5c73eb2c1aa544d2426a1b8e68d0b34e718688791b70146e17eff4b6",
+        "input_compact_encoding": "0x04000000",
+        "input_registered_eh_frame": false,
+        "diagnostic": "native DWARF requires a registered original eh_frame section",
+        "output_exists": false,
+        "input_unchanged": true
+      }
+    },
+    "from_object": {
+      "original_section_slide": 16384,
+      "source_sha256": "fbd0b939dc2ca0dd17c897c04b588a918644589deec92abff92be3624d767060",
+      "installed_sha256": "3984e00a0b30a613973ca847c2e583fd06a09085927089bca22f169e0fbc5910"
+    }
+  }
+}

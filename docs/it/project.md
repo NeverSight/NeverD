@@ -1,6 +1,6 @@
 **Lingue**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Le guide [EVM](evm.md), [Solana SBF](sbf.md), [recupero di sorgenti mobili](mobi
 
 > Ogni cella della matrice è implementata, ma la profondità dei test d’integrazione varia. Consulta la [matrice di copertura dell’architettura](architecture.md#support-and-test-depth). Mach-O i386 usa oggetti `thin` rilocabili perché macOS moderno non può collegare gli eseguibili i386 storici.
 
-**L’analisi ELF MIPS è sperimentale:** MIPS32r2/o32 e MIPS64r2/n64, in entrambi gli ordini dei byte, supportano un sottoinsieme rigoroso di istruzioni intere per disassemblaggio, ricostruzione del CFG e output C e LLVM. La riscrittura del codice nativo non è supportata. Vedi [la copertura MIPS e l’esempio firmware (inglese)](../mips.md) per i sottoinsiemi microMIPS32, DSP e MIPS32r5 MSA verificati separatamente e le relative restrizioni sull’output sorgente.
+**L’analisi ELF MIPS è sperimentale:** MIPS32r2/o32 e MIPS64r2/n64, in entrambi gli ordini dei byte, supportano un sottoinsieme rigoroso di istruzioni intere per disassemblaggio, ricostruzione del CFG e output C e LLVM. La riscrittura del codice nativo non è supportata. Vedi [la copertura MIPS e l’esempio firmware (inglese)](../mips.md) per i sottoinsiemi microMIPS32, MIPS16e/e2, DSP e MIPS32r5 MSA verificati separatamente e le relative restrizioni sull’output sorgente.
 
 Il bytecode EVM legacy è supportato indipendentemente dai container nativi: i
 150 opcode assegnati da Frontier a Fusaka alimentano Low/Med/High IR, LLVM
@@ -294,6 +294,7 @@ neverd <command> [options] <binary>
 |---------|--------|-------------|
 | `lift` | `.ll` | Lift a LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | C, Solidity EVM o Rust SBF selezionato con `--language` |
+| `decompile --check-all` | conteggi | C predefinito per ogni funzione caricata; ogni corpo viene liberato dopo la verifica |
 | `decompile -llvm` | `.c` | Via LLVM IR + ottimizzatore |
 | `decompile --devirtualize` | `.c` + JSON opzionale | Recupero sperimentale di interpreti x64; richiede `--func`; [contratto ed esempi](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Sperimentale: [Android](android.md), [iOS](ios.md) |

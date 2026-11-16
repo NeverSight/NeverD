@@ -33,6 +33,16 @@ class ARM32FPtrRT : public SemanticRoundTripFixture,
                     public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(ARM32FPtrRT, Verify) { roundTripARM32(GetParam()); }
 
+// The LLVM C route once called through a pointer as if the callee returned
+// its two result registers through memory. No environment selects that route
+// in every run, so these do.
+class X86FPtrLLVMCRT : public SemanticRoundTripFixture,
+                       public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(X86FPtrLLVMCRT, Verify) { roundTripX86(GetParam()); }
+class ARM32FPtrLLVMCRT : public SemanticRoundTripFixture,
+                         public ::testing::WithParamInterface<RoundTripTC> {};
+TEST_P(ARM32FPtrLLVMCRT, Verify) { roundTripARM32(GetParam()); }
+
 // clang-format off
 static std::vector<RoundTripTC> makeFPtrTC(const char *prefix, const char *T) {
   std::string p = prefix, t = T;
@@ -109,4 +119,15 @@ static const std::vector<RoundTripTC> kARM = makeFPtrTC("armfp", "int");
 INSTANTIATE_TEST_SUITE_P(FPtr, X64FPtrRT, ::testing::ValuesIn(kX64), rtTCName);
 INSTANTIATE_TEST_SUITE_P(FPtr, X86FPtrRT, ::testing::ValuesIn(kX86), rtTCName);
 INSTANTIATE_TEST_SUITE_P(FPtr, A64FPtrRT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(FPtr, ARM32FPtrRT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPtr, ARM32FPtrRT, ::testing::ValuesIn(kARM),
+                         rtTCName);
+
+static std::vector<RoundTripTC> llvmCRoute(std::vector<RoundTripTC> Cases) {
+  for (RoundTripTC &Case : Cases)
+    Case.SourceRoute = true;
+  return Cases;
+}
+INSTANTIATE_TEST_SUITE_P(FPtrLLVMC, X86FPtrLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kX86)), rtTCName);
+INSTANTIATE_TEST_SUITE_P(FPtrLLVMC, ARM32FPtrLLVMCRT,
+                         ::testing::ValuesIn(llvmCRoute(kARM)), rtTCName);

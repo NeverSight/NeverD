@@ -5,13 +5,15 @@
 //===----------------------------------------------------------------------===//
 //
 // A recursive descent reader of the declarations headers hold: no
-// statements, no templates, no preprocessor beyond #pragma pack and macros
-// that stand for words.  Records are laid out as they close, so a record
-// held by value must be defined before, as C requires.  Everything reads
+// statements, no template instantiation, no preprocessor beyond #pragma pack
+// and macros that stand for words.  Records are laid out as they close, so a
+// record held by value must be defined before, as C requires.  Everything reads
 // into a copy of the library, which replaces it only when the whole source
 // reads without a problem.
 //
 //===----------------------------------------------------------------------===//
+
+#include "CTypeName.h"
 
 #include "neverd/types/Limits.h"
 #include "neverd/types/TypeParse.h"
@@ -835,7 +837,7 @@ private:
   // Names.
   bool isTypeName(llvm::StringRef Word) const {
     return builtinKeyword(Word) || builtinWords().count(Word) ||
-           exactLongDoubleBytes(Word) || Library.find(Word) ||
+           exactLongDoubleBytes(Word) || findTypeName(Word) ||
            Word == "size_t" || Word == "ptrdiff_t" || Word == "intptr_t" ||
            Word == "uintptr_t" || Word == "ssize_t" ||
            (vaListWord(Word) && !Library.find(Word));
@@ -888,11 +890,14 @@ private:
   /// Whether the token at \p Ahead may begin a declaration's type.
   bool startsType(size_t Ahead = 0) const {
     const Token &T = peek(Ahead);
+    if (isPunct("::", Ahead) && peek(Ahead + 1).Kind == TokenKind::Word)
+      return true;
     if (T.Kind != TokenKind::Word)
       return false;
     if (startsAttribute(Ahead))
       return true;
-    return isTypeName(T.Text) || T.Text == "struct" || T.Text == "union" ||
+    return isTypeName(T.Text) || isPunct("::", Ahead + 1) ||
+           isPunct("<", Ahead + 1) || T.Text == "struct" || T.Text == "union" ||
            T.Text == "enum" || T.Text == "class" || typeofWord(T.Text) ||
            constWord(T.Text) || T.Text == "_Noreturn" ||
            T.Text == "DECLSPEC_NORETURN" || volatileWord(T.Text) ||
@@ -1347,6 +1352,22 @@ private:
         pragma(take());
         continue;
       }
+      if (!Spec.Type && !AnyWord &&
+          (isPunct("::") ||
+           (T.Kind == TokenKind::Word && !reservedWord(T.Text) &&
+            T.Text != "typename" && (isPunct("::", 1) || isPunct("<", 1))))) {
+        const std::string Name = typeName();
+        if (Failed)
+          return false;
+        const LocalType *Found = findTypeName(Name);
+        if (!Found) {
+          fail(T, "'" + Name + "' names no unambiguous catalog type");
+          return false;
+        }
+        Spec.Type = makeNamed(Found->Name, Found->Kind);
+        Spec.TypeName = true;
+        continue;
+      }
       if (T.Kind != TokenKind::Word)
         break;
       const llvm::StringRef W = T.Text;
@@ -1490,10 +1511,10 @@ private:
             return false;
           }
           Spec.Type = makeBuiltin(Builtin::LongDouble);
-        } else if (const LocalType *Named = Library.find(W)) {
+        } else if (const LocalType *Named = findTypeName(W)) {
           // A typedef the declarations made, such as glibc's size_t, keeps
           // its name, including va_list when the header defines it.
-          Spec.Type = makeNamed(W.str(), Named->Kind);
+          Spec.Type = makeNamed(Named->Name, Named->Kind);
           Spec.TypeName = true;
         } else if (vaListWord(W)) {
           // Windows and i386 pass the variable arguments' address; other
@@ -1570,6 +1591,107 @@ private:
   TypeExprRef named(llvm::StringRef Name) {
     const LocalType *Type = Library.find(Name);
     return makeNamed(Name.str(), Type ? Type->Kind : TypeKind::Typedef);
+  }
+
+  const LocalType *findTypeName(llvm::StringRef Name) const {
+    if (Options.TypeNames)
+      if (const auto It = Options.TypeNames->find(Name);
+          It != Options.TypeNames->end())
+        return Library.find(It->second);
+    return Library.findCxxType(Name);
+  }
+
+  /// Read a qualified-id, including opaque template arguments. Only an
+  /// existing catalog entry can give those arguments meaning or a layout.
+  std::string typeName() {
+    std::string Name;
+    auto Append = [&] {
+      const Token T = take();
+      if (!Name.empty())
+        Name += ' ';
+      if (T.Character || T.Kind == TokenKind::String) {
+        const char Quote = T.Character ? '\'' : '"';
+        switch (T.Quoted) {
+        case Encoding::Wide:
+          Name += 'L';
+          break;
+        case Encoding::UTF16:
+          Name += 'u';
+          break;
+        case Encoding::UTF32:
+          Name += 'U';
+          break;
+        case Encoding::UTF8:
+          Name += "u8";
+          break;
+        case Encoding::Plain:
+          break;
+        }
+        Name += Quote;
+        for (char C : T.Text) {
+          if (C == '\n' || C == '\t') {
+            Name += C == '\n' ? "\\n" : "\\t";
+            continue;
+          }
+          if (C == Quote || C == '\\')
+            Name += '\\';
+          Name += C;
+        }
+        Name += Quote;
+      } else {
+        Name += T.Text;
+      }
+    };
+    if (isPunct("::"))
+      Append();
+    while (!Failed) {
+      if (peek().Kind != TokenKind::Word) {
+        fail(peek(), "expected a name after ::");
+        break;
+      }
+      Append();
+      if (isPunct("<")) {
+        unsigned Angles = 0;
+        llvm::SmallVector<llvm::StringRef, 4> Groups;
+        do {
+          const Token &T = peek();
+          if (T.Kind == TokenKind::End || isPunct(";") || isPunct("{") ||
+              isPunct("}")) {
+            fail(T, "a template type name does not end");
+            break;
+          }
+          if (isPunct("(") || isPunct("["))
+            Groups.push_back(isPunct("(") ? ")" : "]");
+          else if (isPunct(")") || isPunct("]")) {
+            if (Groups.empty() || Groups.back() != T.Text) {
+              fail(T, "unbalanced template argument");
+              break;
+            }
+            Groups.pop_back();
+          } else if (Groups.empty()) {
+            if (isPunct("<"))
+              ++Angles;
+            else if (isPunct(">") || isPunct(">>")) {
+              const unsigned Close = T.Text.size();
+              if (Close > Angles) {
+                fail(T, "too many template closers");
+                break;
+              }
+              Angles -= Close;
+            }
+          }
+          Append();
+        } while (Angles && !Failed);
+      }
+      if (!isPunct("::"))
+        break;
+      Append();
+    }
+    // Return the library's spelling, including its original namespace and
+    // template identity, rather than the whitespace of this declaration.
+    if (const LocalType *Found = findTypeName(Name))
+      return Found->Name;
+    return Name;
   }
 
   /// Whether an attribute, an alignment specifier or an assembler name
@@ -1727,8 +1849,10 @@ private:
       return nullptr;
     std::string Name;
     Token NameToken = peek();
-    if (peek().Kind == TokenKind::Word && !isPunct("{", 0)) {
-      Name = take().Text;
+    if (peek().Kind == TokenKind::Word || isPunct("::")) {
+      Name = typeName();
+      if (Failed)
+        return nullptr;
       // C++ may name a base after a colon; local types have none.
       if (Cpp && isPunct(":")) {
         fail(peek(), "local types hold no base classes");
@@ -1912,8 +2036,11 @@ private:
     if (!attributes(Asked))
       return nullptr;
     std::string Name;
-    if (peek().Kind == TokenKind::Word)
-      Name = take().Text;
+    if (peek().Kind == TokenKind::Word || isPunct("::")) {
+      Name = typeName();
+      if (Failed)
+        return nullptr;
+    }
     Builtin Underlying = Builtin::Int;
     bool Fixed = false;
     if (accept(":")) {
@@ -2691,6 +2818,52 @@ private:
 };
 
 } // namespace
+
+std::string cTypeNameKey(llvm::StringRef Name) {
+  std::vector<SourceProblem> Problems;
+  llvm::BumpPtrAllocator Storage;
+  llvm::StringSaver Spellings(Storage);
+  const auto Tokens = Lexer(Name, Problems, Spellings).run();
+  if (!Problems.empty())
+    return {};
+  std::string Key;
+  unsigned Groups = 0, Angles = 0;
+  auto Append = [&](const Token &T, llvm::StringRef Text) {
+    Key += char(T.Kind);
+    Key += char(T.Quoted);
+    Key += char(T.Character);
+    Key += std::to_string(Text.size());
+    Key += ':';
+    Key += Text;
+  };
+  for (size_t I = 0; I < Tokens.size(); ++I) {
+    const Token &T = Tokens[I];
+    if (T.Kind == TokenKind::End)
+      break;
+    if (!I && T.Kind == TokenKind::Punct && T.Text == "::")
+      continue;
+    if (T.Kind == TokenKind::Punct) {
+      if (T.Text == "(" || T.Text == "[")
+        ++Groups;
+      else if ((T.Text == ")" || T.Text == "]") && Groups)
+        --Groups;
+      else if (!Groups) {
+        if (T.Text == "<")
+          ++Angles;
+        else if (T.Text == ">" && Angles)
+          --Angles;
+        else if (T.Text == ">>" && Angles >= 2) {
+          Angles -= 2;
+          Append(T, ">");
+          Append(T, ">");
+          continue;
+        }
+      }
+    }
+    Append(T, T.Text);
+  }
+  return Key;
+}
 
 ParseResult parseTypes(llvm::StringRef Source, TypeLibrary &Library,
                        const ParseOptions &Options) {

@@ -7,11 +7,13 @@ import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import struct
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from xml.parsers.expat import ExpatError
 
 from arm64e_artifacts import OwnedProducts
 
@@ -85,6 +87,191 @@ def check_binary(binary):
         raise ValueError(POLICY["errors"]["binary"])
     return {"sha256": digest(binary), "bytes": len(raw),
             "cpu_subtype": fields[2]}
+
+
+def cursor_observation(result, recipe):
+    policy = POLICY["cursor_probe"]
+    lines = result.stdout.splitlines()
+    if not lines and result.returncode < 0:
+        return {"status": POLICY["unavailable"]}
+    if (lines == [policy["started"]] and
+            result.returncode == policy["unavailable_code"] and
+            recipe == policy["recipe_explicit"]):
+        return {"status": POLICY["unavailable"]}
+    if result.returncode or len(lines) != 2 or lines[0] != policy["started"]:
+        raise ValueError(policy["invalid_report"])
+    data = json.loads(lines[1])
+    if (not isinstance(data, dict) or set(data) != {"checks", *policy["counts"]} or
+            type(data["checks"]) is not int or data["checks"] <= 0):
+        raise ValueError(policy["invalid_report"])
+    for name in policy["counts"]:
+        values = data[name]
+        if (not isinstance(values, list) or len(values) != 2 or
+                any(type(v) is not int or v < 0 or v > policy["samples"] for v in values)):
+            raise ValueError(policy["invalid_report"])
+    required = policy["required"] + (
+        policy["explicit_required"] if recipe == policy["recipe_explicit"] else [])
+    if any(not all(data[name]) for name in required):
+        raise ValueError(policy["invalid_report"])
+    return {"status": POLICY["passed"], **data}
+
+
+def probe_signal_cursor(output):
+    policy = POLICY["cursor_probe"]
+    source = ROOT / policy["source"]
+    report = {**provenance(), "platform": platform.platform(), "profiles": {},
+              "status": POLICY["failed"], policy["baseline_key"]: False,
+              policy["explicit_key"]: False, policy["pacm_pc_key"]: False}
+    report["source_sha256"].update(
+        {name: digest(ROOT / name) for name in [policy["source"], *policy["source_files"]]})
+    try:
+        if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
+            report["status"] = POLICY["unavailable"]
+            return report
+        with OwnedProducts(output, False) as products:
+            for optimization in policy["optimizations"]:
+                label = policy["binary_label"].format(optimization=optimization)
+                binary = output / label
+                products.append(binary)
+                argv = [arg.format(optimization=optimization, include=ROOT / policy["include"],
+                                   source=source, binary=binary) for arg in policy["compile"]]
+                built = command(products, output, label + POLICY["compile_suffix"],
+                                argv, POLICY["tool_timeout"])
+                if built.returncode:
+                    return report
+                identity = check_binary(binary)
+                for recipe in policy["recipes"]:
+                    label = policy["profile_label"].format(optimization=optimization, recipe=recipe)
+                    result = command(products, output, label, [binary, recipe], POLICY["tool_timeout"])
+                    report["profiles"][label] = {**identity, **cursor_observation(result, recipe)}
+            def observations(recipe):
+                return [report["profiles"][policy["profile_label"].format(
+                    optimization=optimization, recipe=recipe)] for optimization in policy["optimizations"]]
+            pacm = observations(policy["recipe_pacm"])
+            report[policy["baseline_key"]] = all(p["status"] == POLICY["passed"] for p in pacm)
+            report[policy["pacm_pc_key"]] = all(p["status"] == POLICY["passed"] and
+                                               all(p["pc_rejected"]) for p in pacm)
+            report[policy["explicit_key"]] = all(
+                p["status"] == POLICY["passed"] for p in observations(policy["recipe_explicit"]))
+            report["status"] = POLICY["passed"] if report[policy["baseline_key"]] else POLICY["unavailable"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
+
+
+def sign_cpta_slice(products, output, binary, policy):
+    entitlements = output / policy["entitlements_file"]
+    products.append(entitlements)
+    entitlements.write_bytes(plistlib.dumps(policy["entitlements"]))
+    signed = command(products, output, policy["sign_label"],
+                     [v.format(plist=entitlements, binary=binary) for v in policy["sign_command"]],
+                     POLICY["tool_timeout"])
+    if signed.returncode:
+        return None
+    verified = command(products, output, policy["x1"] + POLICY["signature_suffix"],
+                       [*POLICY["signature_command"], binary], POLICY["tool_timeout"])
+    if verified.returncode:
+        return None
+    embedded = command(products, output, policy["read_label"],
+                       [v.format(binary=binary) for v in policy["read_command"]], POLICY["tool_timeout"])
+    if embedded.returncode:
+        return None
+    try:
+        actual = plistlib.loads(embedded.stdout.encode())
+    except (ValueError, plistlib.InvalidFileException, ExpatError):
+        return None
+    # Compare the plist types too. Python treats booleans as integers when comparing dictionaries.
+    if plistlib.dumps(actual) == entitlements.read_bytes():
+        return actual
+    return None
+
+
+def probe_cpta(output):
+    policy = POLICY["cpta_probe"]
+    source = ROOT / policy["source"]
+    report = {**provenance(), "platform": platform.platform(), "profiles": {},
+              "status": POLICY["failed"], policy["observed_key"]: False,
+              policy["qualified_key"]: False, policy["writeback_qualified_key"]: False}
+    report["source_sha256"][policy["source"]] = digest(source)
+    try:
+        if platform.system() != POLICY["host_os"] or platform.machine() not in POLICY["host_arches"]:
+            report["status"] = POLICY["unavailable"]
+            return report
+        with OwnedProducts(output, False) as products:
+            for name, argv in POLICY["environment_commands"].items():
+                command(products, output, name, argv, POLICY["tool_timeout"])
+            for arch, subtype in policy["profiles"].items():
+                binary = output / (arch + POLICY["binary_suffix"])
+                products.append(binary)
+                argv = [arg.format(arch=arch, source=source, binary=binary) for arg in policy["compile"]]
+                built = command(products, output, arch + POLICY["compile_suffix"], argv, POLICY["tool_timeout"])
+                profile = report["profiles"][arch] = {"outcome": policy["unexpected"]}
+                if built.returncode:
+                    if (arch == policy["x1"] and arch in built.stderr and
+                            any(t in built.stderr.lower() for t in policy["unsupported_compiler"])):
+                        profile["outcome"] = policy["slice_unavailable"]
+                    continue
+                if arch == policy["x1"]:
+                    signed = sign_cpta_slice(products, output, binary, policy)
+                    if signed is None:
+                        continue
+                    profile[policy["entitlements_key"]] = signed
+                raw = binary.read_bytes()
+                magic, cpu, actual = struct.unpack_from(POLICY["header_format"], raw)
+                profile.update(sha256=digest(binary), cpu_subtype=actual)
+                if (magic, cpu, actual & POLICY["subtype_mask"]) != (POLICY["macho_magic"], POLICY["cpu_type"], subtype):
+                    continue
+                vectors = policy["vectors"]
+                arguments = [binary, *(v for row in vectors for v in row[:2])]
+                try:
+                    result = command(products, output, arch, arguments, POLICY["tool_timeout"])
+                except OSError as error:
+                    if error.errno != policy["bad_cpu_type_errno"]:
+                        raise
+                    profile.update(outcome=policy["loader_unavailable"], errno=error.errno)
+                    continue
+                lines = result.stdout.splitlines()
+                if not lines:
+                    if result.returncode < 0:
+                        profile["outcome"] = policy["loader_unavailable"]
+                    continue
+                if lines[0] != policy["started"]:
+                    continue
+                profile["results"] = lines[1:]
+                if result.returncode == policy["undefined_instruction"] and len(lines) == 1:
+                    profile["outcome"] = policy["isa_unavailable"]
+                elif result.returncode == 0:
+                    instructions = policy["instructions"]
+                    if len(lines) == 1 + len(vectors) * len(instructions):
+                        by_instruction = {name: lines[index + 1::len(instructions)]
+                                          for index, name in enumerate(instructions)}
+                        profile[policy["scalar_results_key"]] = by_instruction
+                        if all(values == [row[3] for row in vectors] for values in by_instruction.values()):
+                            profile["outcome"] = policy["checked"]
+                        elif all(values == [row[2] for row in vectors] for values in by_instruction.values()):
+                            profile["outcome"] = policy["unchecked"]
+                if profile["outcome"] in (policy["checked"], policy["unchecked"], policy["isa_unavailable"]):
+                    writeback = command(products, output, arch + policy["writeback_suffix"],
+                                        [binary, policy["writeback_mode"]], POLICY["tool_timeout"])
+                    state = policy["unexpected"]
+                    if writeback.returncode == 0:
+                        state = {policy["writeback_checked"]: policy["checked"],
+                                 policy["writeback_unchecked"]: policy["unchecked"]}.get(
+                                     writeback.stdout.strip(), policy["unexpected"])
+                    profile[policy["writeback_key"]] = state
+            outcomes = {name: profile["outcome"] for name, profile in report["profiles"].items()}
+            report[policy["observed_key"]] = policy["checked"] in outcomes.values()
+            writebacks = {arch: p.get(policy["writeback_key"]) for arch, p in report["profiles"].items()}
+            report[policy["writeback_qualified_key"]] = writebacks[policy["x1"]] == policy["checked"]
+            report[policy["qualified_key"]] = (outcomes[policy["x1"]] == policy["checked"] and
+                                                report[policy["writeback_qualified_key"]])
+            if policy["unexpected"] in outcomes.values() or policy["unexpected"] in writebacks.values():
+                report["status"] = POLICY["failed"]
+            else:
+                report["status"] = POLICY["passed"] if report[policy["qualified_key"]] else POLICY["unavailable"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
 
 
 def legacy_cases(contract):
@@ -424,6 +611,10 @@ def main():
             raise ValueError(POLICY["errors"]["startup_fixups"])
         if args.mode == POLICY["probe_mode"]:
             report = probe(output)
+        elif args.mode == POLICY["cpta_probe"]["mode"]:
+            report = probe_cpta(output)
+        elif args.mode == POLICY["cursor_probe"]["mode"]:
+            report = probe_signal_cursor(output)
         elif args.mode == POLICY["startup_mode"]:
             report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:

@@ -373,6 +373,31 @@ TEST(MedVariadic, DarwinWalkRetainsFirstCopyAndOrderedOrCandidates) {
   }
 }
 
+TEST(MedVariadic, DarwinWalkSetsOnlyKnownLowBitsOfTheStackDisplacement) {
+  struct Cursor {
+    int64_t Offset;
+    uint64_t Bits;
+    bool Incoming;
+  };
+  constexpr Cursor Cases[] = {
+#define DARWIN_CURSOR(Offset, Bits, Incoming) {Offset, Bits, Incoming},
+#include "MedVariadicDarwinOffsets.def"
+  };
+  for (const auto &[Offset, Bits, Incoming] : Cases) {
+    SCOPED_TRACE(testing::Message() << Offset << ' ' << Bits);
+    auto F = walkFunction();
+    auto &Ops = F.Blocks.front().Ops;
+    const auto SP = Ops.front().Inputs[0];
+    const auto Base = temp(SP.Id + 1, SP.Size);
+    Ops.front().Inputs[0] = Base;
+    Ops.front().Inputs[1] = MedVar::makeConst(Bits, SP.Size);
+    Ops.insert(Ops.begin(), op(NdOp::INT_ADD, Base,
+                               {SP, MedVar::makeConst(Offset, SP.Size)}));
+    classify(F);
+    EXPECT_EQ(F.IsVariadic, Incoming);
+  }
+}
+
 TEST(MedVariadic, ProofAndCopyDepthLimitsRemainPerRoot) {
   for (int Copies : {0, 62, 63}) {
     SCOPED_TRACE(Copies);
@@ -499,6 +524,22 @@ struct AAPCS64VaStart {
     return Count;
   }
 };
+
+TEST(MedVariadic, NamedScalarSpillsAreNotAnAAPCS64VariadicSaveArea) {
+  const auto &TRI = getTargetRegInfo(Arch::AArch64);
+  for (const uint16_t Bytes : {uint16_t(4), uint16_t(8)}) {
+    AAPCS64VaStart V;
+    // A fixed function homes scalar parameters or homogeneous aggregates.
+    // Even a va_list-shaped collection of unrelated pointers cannot make
+    // those S/D stores into the ABI's complete Q-register save area.
+    for (auto &Op : V.F.Blocks[0].Ops)
+      if (Op.Opcode == NdOp::STORE && TRI.isFPArgReg(Op.Inputs[1].RegOff))
+        Op.Inputs[1].Size = Bytes;
+    detectVariadic(V.F, TRI, Arch::AArch64, BinaryFormat::ELF);
+    EXPECT_FALSE(V.F.IsVariadic);
+    EXPECT_EQ(V.vectorSpills(), TRI.FPParamRegs.size());
+  }
+}
 
 TEST(MedVariadic, IntegerOnlyVaListMustNameItsOwnSpillChain) {
   const auto &TRI = getTargetRegInfo(Arch::AArch64);

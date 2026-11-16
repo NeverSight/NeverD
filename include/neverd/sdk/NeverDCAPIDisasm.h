@@ -172,13 +172,19 @@ NEVERD_API const char *neverd_function_disasm_json(neverd_session_t Sess,
                                                    int MaxInsns,
                                                    unsigned Options);
 
-/// Direct references of up to \p MaxFunctions native functions whose entries
+/// Native references of up to \p MaxFunctions functions whose entries
 /// are at or above \p FirstEntry, in ascending entry order, from the same
 /// LowIR lift as NEVERD_DISASM_FLOW.  The address cursor stays valid when lazy
 /// analysis adds a function to the list between calls.  A function with a
 /// known size is decoded across its whole extent; one without a size is the
 /// code its own direct jumps reach from its entry, short of another listed
 /// function's entry (on 32-bit ARM, up to its first function terminator).
+/// For x86 and AArch64, agreed register constants also supply computed memory
+/// references after ordinary paths and loops reach a fixed point. Decoded
+/// exception and address-taken entries have independent unknown inputs;
+/// incomplete tables or unresolved control flow retain instruction-local
+/// references. This inventories original addresses under the decoded control
+/// model, without certifying runtime dispatch or relocatable pointer identity.
 /// Returns
 /// {"refs":[["from","to","kind"],...],"next_entry":"0x..."|null,
 /// "function_count":int}, where kind is "call", "jump", "cjump", "read",
@@ -189,7 +195,7 @@ NEVERD_API const char *neverd_function_disasm_json(neverd_session_t Sess,
 /// element, the bytes it accesses, when the lift names them:
 /// ["from","to","read",8].  MaxFunctions is clamped to 1..4096.  EVM and
 /// SBF images return NULL with an error, because their analyzers own a
-/// different instruction model.  This query never starts analysis.
+/// different instruction model. This query never starts decompilation.
 NEVERD_API const char *neverd_code_refs_json(neverd_session_t Sess,
                                              neverd_va_t FirstEntry,
                                              int MaxFunctions);
@@ -260,6 +266,14 @@ NEVERD_API int neverd_pointer_at(neverd_session_t Sess, neverd_va_t Address,
 NEVERD_API int neverd_prepare_function(neverd_session_t Sess,
                                        neverd_va_t FuncEntry);
 
+/// Explicitly discard the prepared pipeline and emitted views, selecting
+/// FuncEntry for the next preparation. Immutable image facts remain valid;
+/// this does not edit bytes, types, names or the function inventory. Bytecode
+/// images retain whole-program selection. Returns 1 on success, 0 with
+/// neverd_last_error on failure. A subsequent view performs the analysis.
+NEVERD_API int neverd_forget_function_analysis(neverd_session_t Sess,
+                                               neverd_va_t FuncEntry);
+
 /// Prepare the requested view with the same entry and recovery checks.
 /// Native "low", "med", "llvm" and "llvmc" postpone HighIR construction,
 /// preserving shared CFG/ABI/exception analysis. A later source or "high" view
@@ -276,7 +290,8 @@ NEVERD_API int neverd_prepare_function_view(neverd_session_t Sess,
 /// FirstEntry on, in entry order, at most MaxFunctions (clamped to
 /// 1..4096): build the control-flow graphs those calls would otherwise build
 /// on demand, for them to reuse, and scan the image's data access widths the
-/// first C view reads.  The results of later calls are unchanged,
+/// first C view reads. Shared reference roots, no-return targets, type and
+/// symbol indexes are prepared too. The results of later calls are unchanged,
 /// and nothing already prepared is discarded.  Returns
 /// {"available":bool,"prepared":int,"full":bool,"next_entry":"0x..."|null,
 /// "call_summaries":bool}:
@@ -457,13 +472,16 @@ NEVERD_API const char *neverd_ir_llvm(neverd_session_t Sess,
 /// function's definition begins: the whole lines before it (includes, support
 /// types and declarations) and the byte where the definition starts. Source
 /// text is always complete code, identical to the legacy C emitter. The page
-/// text is capped at 2 MiB; Low/Med retain no whole IR string for paging, while
-/// C renders one bounded function (at most 32 MiB). Object IDs are stable for a
-/// fixed analysis snapshot, not across revisions. Free the result with
+/// text is capped at 2 MiB and the encoded page at 32 MiB. Low/Med retain no
+/// whole IR string for paging, while C caches the rendered function; that
+/// function may span more than 32 MiB across its pages. Object IDs are stable
+/// for a fixed analysis snapshot, not across revisions. Free the result with
 /// neverd_free_string().
 /// Native views prepare the requested function in fresh/restricted sessions,
 /// as neverd_prepare_function_view does; completed whole-image analyses remain
 /// available. No prior preparation or decompile call is required.
+/// The call_sites representation returns original LowIR call IDs and their
+/// snapshot, including when a missing prototype prevents source emission.
 NEVERD_API const char *neverd_ir_view_json(neverd_session_t Sess,
                                            neverd_va_t FuncEntry,
                                            const char *Representation,

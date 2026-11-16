@@ -411,4 +411,108 @@ TEST(StaticSymbolTableTest, MinGWImportVariableNoCodeChangesIsConstant) {
                   .ConstantCodeSlots.empty());
 }
 
+/// A linked image whose load segment covers `.text` and whose debug section
+/// sits outside that segment.
+std::vector<char> linkedImageWithUnmappedDebug() {
+  using namespace llvm::ELF;
+  static const char SectionTable[] = "\0.text\0.debug_info\0.shstrtab";
+  const std::string SectionNames(SectionTable, sizeof(SectionTable));
+  constexpr unsigned TextName = 1;
+  constexpr unsigned DebugName = 7;
+  constexpr unsigned ShstrtabName = 19;
+  const char Text[] = {'\xAB'};
+  const char Debug[] = {'\x01', '\x02', '\x03', '\x04'};
+
+  std::vector<char> Bytes(sizeof(ELFT::Ehdr) + sizeof(ELFT::Phdr), 0);
+  const auto append = [&](const void *Data, size_t Size) {
+    const size_t At = Bytes.size();
+    Bytes.insert(Bytes.end(), static_cast<const char *>(Data),
+                 static_cast<const char *>(Data) + Size);
+    return At;
+  };
+  Bytes.resize(0x100, 0);
+  const size_t TextAt = append(Text, sizeof(Text));
+  Bytes.resize(0x200, 0);
+  const size_t DebugAt = append(Debug, sizeof(Debug));
+  const size_t ShstrtabAt = append(SectionNames.data(), SectionNames.size());
+  Bytes.resize(llvm::alignTo(Bytes.size(), 8));
+
+  ELFT::Shdr Sections[4] = {};
+  Sections[1].sh_name = TextName;
+  Sections[1].sh_type = SHT_PROGBITS;
+  Sections[1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+  Sections[1].sh_addr = 0x1000;
+  Sections[1].sh_offset = TextAt;
+  Sections[1].sh_size = sizeof(Text);
+  Sections[1].sh_addralign = 1;
+  Sections[2].sh_name = DebugName;
+  Sections[2].sh_type = SHT_PROGBITS;
+  Sections[2].sh_offset = DebugAt;
+  Sections[2].sh_size = sizeof(Debug);
+  Sections[2].sh_addralign = 1;
+  Sections[3].sh_name = ShstrtabName;
+  Sections[3].sh_type = SHT_STRTAB;
+  Sections[3].sh_offset = ShstrtabAt;
+  Sections[3].sh_size = SectionNames.size();
+  Sections[3].sh_addralign = 1;
+  const size_t SectionsAt = append(Sections, sizeof(Sections));
+
+  ELFT::Phdr Load = {};
+  Load.p_type = PT_LOAD;
+  Load.p_flags = PF_R | PF_X;
+  Load.p_offset = TextAt;
+  Load.p_vaddr = 0x1000;
+  Load.p_paddr = 0x1000;
+  Load.p_filesz = sizeof(Text);
+  Load.p_memsz = sizeof(Text);
+  Load.p_align = 1;
+
+  ELFT::Ehdr Header = {};
+  std::memcpy(Header.e_ident, ElfMagic, std::strlen(ElfMagic));
+  Header.e_ident[EI_CLASS] = ELFCLASS64;
+  Header.e_ident[EI_DATA] = ELFDATA2LSB;
+  Header.e_ident[EI_VERSION] = EV_CURRENT;
+  Header.e_type = ET_DYN;
+  Header.e_machine = EM_X86_64;
+  Header.e_version = EV_CURRENT;
+  Header.e_ehsize = sizeof(ELFT::Ehdr);
+  Header.e_phoff = sizeof(ELFT::Ehdr);
+  Header.e_shoff = SectionsAt;
+  Header.e_phentsize = sizeof(ELFT::Phdr);
+  Header.e_phnum = 1;
+  Header.e_shentsize = sizeof(ELFT::Shdr);
+  Header.e_shnum = 4;
+  Header.e_shstrndx = 3;
+  std::memcpy(Bytes.data(), &Header, sizeof(Header));
+  std::memcpy(Bytes.data() + sizeof(Header), &Load, sizeof(Load));
+  return Bytes;
+}
+
+const Section *sectionNamed(const BinaryImage &Image, llvm::StringRef Name) {
+  for (const Section &Sec : Image.Sections)
+    if (Sec.Name == Name)
+      return &Sec;
+  return nullptr;
+}
+
+TEST(StaticSymbolTableTest, LinkedImageDoesNotRepeatMappedOrDebugBytes) {
+  const auto Image =
+      load(linkedImageWithUnmappedDebug(), /*ReadStaticSymbols=*/true);
+  const Section *Text = sectionNamed(Image, ".text");
+  const Section *Debug = sectionNamed(Image, ".debug_info");
+  ASSERT_NE(Text, nullptr);
+  ASSERT_NE(Debug, nullptr);
+  EXPECT_TRUE(Text->Data.empty());
+  EXPECT_TRUE(Debug->Data.empty());
+  const uint8_t *Byte = Image.readVA(Text->VA, 1);
+  ASSERT_NE(Byte, nullptr);
+  EXPECT_EQ(*Byte, 0xAB);
+
+  const auto Object = load(relocatableObject(), /*ReadStaticSymbols=*/true);
+  const Section *ObjectText = sectionNamed(Object, ".text");
+  ASSERT_NE(ObjectText, nullptr);
+  ASSERT_EQ(ObjectText->Data.size(), 1u);
+  EXPECT_EQ(ObjectText->Data[0], static_cast<uint8_t>('\xC3'));
+}
+
 } // namespace

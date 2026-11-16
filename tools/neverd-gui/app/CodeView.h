@@ -2,7 +2,9 @@
 
 #include "Address.h"
 #include "LibraryCodeView.h"
+#include "PaintCheck.h"
 #include "StyledText.h"
+#include "Theme.h"
 #include "ViewSearch.h"
 #include "WheelInput.h"
 
@@ -12,7 +14,9 @@
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QRegion>
 #include <QTimer>
+#include <QVarLengthArray>
 #include <QVector>
 #include <QWidget>
 #include <optional>
@@ -20,11 +24,13 @@
 
 class QComboBox;
 class QLabel;
+class QPainter;
 class QToolButton;
 class QMenu;
 
 namespace neverd::gui {
 
+class PageBytes;
 class Session;
 
 /// The source choices every function's code opens with: whether source is
@@ -63,12 +69,23 @@ public:
     bool blockFolded = false;
     /// The line defines a goto label, mapped to the block it labels.
     bool label = false;
+    /// Whether a comment was open where the line begins, and where it ends,
+    /// as highlightLine colored its text.
+    bool commentBefore = false, commentAfter = false;
+    /// The dialect highlightLine colored its text in while the text had no
+    /// source names, where the spans are still those: such a line is colored
+    /// by its text, that dialect and the comment open where it begins alone.
+    /// ColoredOtherwise for a line colored among source names, and for one
+    /// whose spans are a folded summary's or a message's.
+    static constexpr qint8 ColoredOtherwise = -1;
+    qint8 coloredIn = ColoredOtherwise;
   };
 
   CodeText(Session &session, QWidget *parent = nullptr);
 
   void load(Address function, const QString &representation,
-            std::optional<QJsonObject> options = std::nullopt);
+            std::optional<QJsonObject> options = std::nullopt,
+            bool refresh = false);
   const QJsonObject &sourceOptions() const { return sourceOptions_; }
   const QJsonObject &recoveryReport() const { return RecoveryReport; }
   const QJsonObject &recoveryOptions() const { return RecoveryOptions; }
@@ -78,7 +95,7 @@ public:
   void clear();
   /// Stop obsolete requests/pages, including an in-flight analysis process
   /// when no other view still subscribes to its result.
-  void cancel();
+  void cancel(bool finishRunning = false);
   /// Cancel as the user does: a symbolic simplification of a function that
   /// shows no source yet gives way to its ordinary source.
   void cancelTransformation();
@@ -122,6 +139,27 @@ public:
   /// Changes when a load or clear replaces this source document. Hiding a
   /// complete document cancels requests without replacing its contents.
   quint64 documentVersion() const { return DocumentVersion; }
+  /// The layouts its lines took from the lines they replaced, which read the
+  /// same (rebuildLines).
+  quint64 layoutsKept() const { return layoutsKept_; }
+  /// The pages it took whose rows were those of the page it showed there,
+  /// which it had read already.
+  quint64 pageRowsKept() const { return pageRowsKept_; }
+  /// The lines that took the spans of the line that read the same in their
+  /// place, colored as they are to be (rebuildLines).
+  quint64 spansKept() const { return spansKept_; }
+  /// The lines a rename's answer brought that took the layout made ready for
+  /// them while the rename was with the worker (makeReadyFor).
+  quint64 readyLinesTaken() const { return readyLinesTaken_; }
+  /// The renames it read ahead of the worker's answer (readAheadOf).
+  quint64 readsAhead() const { return readsAhead_; }
+  /// It reads as a rename with the worker leaves it, which the worker has
+  /// not answered yet.
+  bool aheadOfTheWorker() const { return ahead_.has_value(); }
+  /// The renames read ahead whose rows were painted as their lines were
+  /// about to read and then again as the pages made them: none, where a line
+  /// is painted ahead as the text then holds it.
+  quint64 rowsShownTwice() const { return rowsShownTwice_; }
   /// All pages of this document arrived successfully. Error text and a
   /// cancelled or partially loaded document are not exportable source.
   bool complete() const { return complete_ && !loading_ && !interrupted_; }
@@ -278,8 +316,26 @@ protected:
   bool viewportEvent(QEvent *event) override;
 
 private:
-  void request(int offset, quint64 serial);
+  /// What load does before it asks for the first page; the serial of the
+  /// read it begins.  Where the pages are \p here already and about to be
+  /// taken (takePages), no one is told of a load before they are: its status
+  /// and what it folds are said once, as it stands with them.
+  quint64 beginLoad(Address function, const QString &representation,
+                    std::optional<QJsonObject> options, bool here,
+                    bool refresh = false);
+  void request(int offset, quint64 serial, bool refresh = false);
+  /// Takes a page of the text being read, at \p offset: the offset of the
+  /// page to take next, or none once the text is whole or cannot be.
+  std::optional<int> takePage(const QJsonObject &payload, int offset);
+  /// Takes \p pages, the whole text of the function it shows, as a read of
+  /// it again brings them, and paints the rows that changed: those rows.
+  QRegion takePages(const QVector<QJsonObject> &pages);
   void appendPage(const QJsonObject &payload, int offset);
+  /// Adds the source names of a page, \p payload, to those the text has: by
+  /// their spelling in the page's \p bytes, which the page names from
+  /// \p pageOffset.
+  void addSourceNames(const QJsonObject &payload, const PageBytes &bytes,
+                      qint64 pageOffset);
   /// Load the function's source without symbolic simplification, saying
   /// \p why in the status line when it arrives.
   void showOrdinary(const QString &why);
@@ -312,6 +368,76 @@ private:
   void highlightLine(Line &line, bool &inComment) const;
   void updateMetrics();
   void updateRange();
+  /// What every row of the viewport is painted with, beside the theme.
+  struct RowFrame {
+    int width = 0, height = 0, lineHeight = 0, left = 0, gutterChars = 0;
+    qreal charWidth = 0;
+    quint64 style = 0;
+    bool operator==(const RowFrame &) const = default;
+  };
+  /// A fill under a row's text, from one column to another.
+  struct RowFill {
+    int first = 0, last = 0;
+    ColorRole role = ColorRole::ListingHighlight;
+    bool operator==(const RowFill &) const = default;
+  };
+  /// All that one row of the viewport is painted from, beside its frame and
+  /// the theme.  paintRow is given this and nothing of the view, so that two
+  /// rows which compare equal paint the same pixels: a row is painted again
+  /// only where this changed (showChanges).  What a row paints from belongs
+  /// here, or its row is left as it was painted.
+  struct Row {
+    /// The number in the margin, one more than the line's own; 0 for a row
+    /// below the text, which shows the background alone, and UnknownRow for
+    /// one of which nothing is known.
+    int number = 0;
+    QString text;
+    QVector<StyledSpan> spans;
+    /// The cursor's line; else, a marked or a folded one.
+    bool current = false, tinted = false;
+    /// The line heads a block, which is folded or open.
+    bool block = false, blockFolded = false;
+    /// The fills under the text, in the order they are painted.
+    QVarLengthArray<RowFill, 4> fills;
+    /// The columns boxed as a pair of brackets.
+    QVarLengthArray<int, 2> brackets;
+    /// The selected columns; a length below zero where none are.
+    int selectionStart = 0, selectionLength = -1;
+    /// The column the text cursor is drawn at, or -1.
+    int caret = -1;
+    bool operator==(const Row &) const = default;
+  };
+  /// What the rows of one paint share of the view's state.
+  struct RowsContext;
+  RowFrame rowFrame() const;
+  RowsContext rowsContext() const;
+  /// What the line \p index is painted from; a row below the text for none.
+  Row rowAt(int index, const RowsContext &context) const;
+  /// Paints a line over its row's background, which starts at \p y, with
+  /// the layout of its text.
+  static void paintRow(QPainter &painter, const RowFrame &frame, const Row &row,
+                       int y, QTextLayout &layout);
+  /// Paints the rows \p region touches over their background: each from what
+  /// the viewport was last told it shows where \p told, else from what the
+  /// view holds now, \p painted then taking what each row it painted was
+  /// painted from, by the row's place in the viewport.
+  void paintRows(QPainter &painter, const QRegion &region, bool told,
+                 QVector<Row> *painted = nullptr) const;
+  /// The number of a row of which nothing is known.
+  static constexpr int UnknownRow = -1;
+  /// Says that what the view shows changed: every such change ends here, as
+  /// it ended in an update of the whole viewport.  What changed is looked for
+  /// once the one who says so is done (showChanges), so that it may change
+  /// more after saying it, as it might before an update painted.
+  void updateView();
+  /// Has the viewport paint the rows whose painting changed since it was last
+  /// told what they show, and no other.
+  void showChanges();
+  /// Whether every row is painted from what the viewport was last told: not
+  /// so after a change that no one said (updateView), which the view looks
+  /// for as it paints.  \p painted holds what the rows just painted were
+  /// painted from, the others being unknown.
+  bool rowsKnown(const QVector<Row> &painted) const;
   int visibleLines() const;
   int lineAt(int y) const;
   int columnAt(int line, int x) const;
@@ -326,6 +452,27 @@ private:
   // folding projects them, copy and export use them unchanged.
   QString source_;
   QVariantList sourceRows_;
+  /// What a line takes of a source row: the line the row names, as a row
+  /// read by itself names it and as the folded projection reads it, and the
+  /// instructions it maps to.
+  struct SourceRow {
+    int line = -1, projectedLine = 0;
+    QVector<Address> addresses;
+  };
+  /// The rows of sourceRows_, in its order.
+  QVector<SourceRow> rowLines_;
+  /// A page's rows as the worker gave them and as they are read from that.
+  /// A page read again after an edit mostly brings the rows it brought, the
+  /// same array: they are read once.
+  struct PageRows {
+    QJsonArray given;
+    QVariantList read;
+    QVector<SourceRow> lines;
+  };
+  /// The pages' rows of the text being loaded or shown, and those of the
+  /// text shown before it, until the new one is whole.
+  QVector<PageRows> pageRows_, pageRowsBefore_;
+  quint64 pageRowsKept_ = 0;
   QJsonArray regions_;
   qint64 byteOffset_ = 0;
   qint64 sourceBytes_ = 0;
@@ -370,6 +517,61 @@ private:
   /// replacement page arrives. Cancellation discards these pages together.
   std::optional<QVector<QJsonObject>> refreshPages_;
   bool interrupted_ = false;
+  /// The page was read again ahead of the others that hear of a new revision
+  /// (Session::shownRevisionChanged): the word that follows reads it no more.
+  bool readAhead_ = false;
+  /// The lines shown before the page was read again, whose layouts the lines
+  /// that read the same take (rebuildLines); let go of when it is whole.
+  QList<Line> linesBefore_;
+  quint64 layoutsKept_ = 0;
+  quint64 spansKept_ = 0;
+  /// A line of the viewport as a rename on its way will write it, if the
+  /// worker takes the rename as the view reads it: its text with the new name
+  /// in each place the old one is linked, colored and laid out.
+  struct ReadyLine {
+    int index = 0;
+    StyledLine styled;
+    /// A comment is open where it ends, as its text was colored.
+    bool commentAfter = false;
+  };
+  /// Those lines, made while the worker reads the rename
+  /// (Session::renaming).  The line the answer brings in the place of one
+  /// takes its layout where it reads the same under the same spans, which is
+  /// then the layout it would build (rebuildLines); any other is laid out as
+  /// it is painted, as before.  Let go of once the text is whole again.
+  QVector<ReadyLine> readyLines_;
+  quint64 readyLinesTaken_ = 0;
+  /// Makes ready the lines of the viewport that \p address being called
+  /// \p name will write, the first \p most of them.
+  void makeReadyFor(Address address, const QString &name, int most);
+  /// The pages of the text it shows, as they were taken.
+  QVector<QJsonObject> pages_;
+  /// A rename with the worker that the text reads ahead of.
+  struct Ahead {
+    Address address = 0;
+    QString name;
+    /// The pages it showed before, which it shows again where the worker
+    /// refuses the name.
+    QVector<QJsonObject> before;
+    /// Someone asked for the text to be read again meanwhile, with these
+    /// options where they gave some: it is, once the worker has answered.
+    bool read = false;
+    std::optional<QJsonObject> options;
+  };
+  std::optional<Ahead> ahead_;
+  /// The pages being taken are all here (takePages): none is shown by itself
+  /// while the next is on its way.
+  bool pagesHere_ = false;
+  quint64 readsAhead_ = 0, rowsShownTwice_ = 0;
+  /// Reads ahead where the pages say what a rename makes of them; a test
+  /// turns it off to see the lines made ready alone.
+  bool showsAhead_ = true;
+  /// A rename has left for the worker (Session::renaming): the text reads as
+  /// the pages say the rename leaves it, where they do (pagesRenamed), and
+  /// its lines are made ready where they do not (makeReadyFor).
+  void readAheadOf(Address address, const QString &name);
+  /// The worker refused that rename (Session::renameRefused).
+  void takeBack(Address address, const QString &name);
   bool foldPreludeAfterLoad_ = true;
   bool foldDetailsAfterLoad_ = true;
   QSet<QString> blocksAfterLoad_;
@@ -408,11 +610,17 @@ private:
   /// The source names of every page by their spelling, and those spellings
   /// by their first character, longest first.
   QHash<QString, SourceName> sourceNames_;
+  /// A name an edit can name, where the text spells it: what the page links
+  /// it by, as the page gave it, and its spelling.
   struct EditName {
     int begin, end;
     QJsonObject target;
+    QString name;
   };
   QVector<EditName> editNames_;
+  /// What an edit names \p name by: what the page links it by, and how the
+  /// text spells it.
+  static QJsonObject targetOf(const EditName &name);
   bool editMetadata_ = false;
   QHash<QChar, QVector<QString>> sourceNameIndex_;
   /// The length of a source name at \p position of \p text, or 0.
@@ -450,6 +658,28 @@ private:
   qreal charWidth_ = 8;
   int lineHeight_ = 16, ascent_ = 12, gutterChars_ = 4;
   quint64 styleStamp_ = 1;
+  /// What showChanges last told the viewport its rows show.  The window keeps
+  /// those pixels, or a paint of the rows that changed is on its way.
+  RowFrame knownFrame_;
+  QVector<Row> knownRows_;
+  /// updateView was called and showChanges is still to look.
+  bool viewChanged_ = false;
+  /// showChanges has asked for rows that no paint has painted yet: until
+  /// someone says another change, what it told the viewport is what there is
+  /// to paint.
+  bool rowsTold_ = false;
+  /// The pixels showChanges has asked the viewport to paint, all told
+  /// (ListingView::pixelsAsked_).
+  quint64 pixelsAsked_ = 0;
+  /// The rows showChanges had painted again since a page read ahead of a new
+  /// revision began to be taken (Session::shownRevisionAsked).
+  QRegion rowsUpdated_;
+  /// The text showed the change of the revision being said ahead of the
+  /// worker's answer (ahead_, as that revision began to be said).
+  bool shownAhead_ = false;
+  /// The picture its paints add up to, kept where a test checks them.
+  PaintCheck::Picture paintChecked_;
+  friend struct CodeTextTestAccess;
 };
 
 /// A pseudocode or IR window: the representation selector over a CodeText.
@@ -459,7 +689,7 @@ public:
   CodeView(Session &session, const QString &representation,
            QWidget *parent = nullptr);
   CodeText *text() const { return text_; }
-  void showFunction(Address function);
+  void showFunction(Address function, bool refresh = false);
   void setRepresentation(const QString &representation);
   void addSourceActions(QMenu &menu);
   /// The representation the selector shows, loaded or still to load.

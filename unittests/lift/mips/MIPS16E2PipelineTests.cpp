@@ -38,6 +38,15 @@ TEST(MIPS16E2Pipeline,
                {0xf001674e, Intrinsic::MIPSWriteCP0Word},
                {0xf001675e, Intrinsic::MIPSWriteCP0Word},
                {0xf1403018, Intrinsic::MIPSPause},
+               {0xf0226741, Intrinsic::MIPSDisableMT},
+               {0xf0236741, Intrinsic::MIPSEnableMT},
+               {0xf0266700, Intrinsic::MIPSDisableVPE},
+               {0xf0276700, Intrinsic::MIPSEnableVPE},
+               {0xf0206740, Intrinsic::MIPSReadCP0Word},
+               {0xf0206741, Intrinsic::MIPSReadCP0Word},
+               {0xf0406741, Intrinsic::MIPSReadCP0Word},
+               {0xf000d2a0, Intrinsic::MIPSCache},
+               {0xf01ed280, Intrinsic::MIPSPrefetch},
                {0xf00492c0, Intrinsic::MIPSLoadLinkedWord},
                {0xf004d2c0, Intrinsic::MIPSStoreConditionalWord},
                {0xf000304c, Intrinsic::MIPSReadHardwareRegister},
@@ -54,7 +63,7 @@ TEST(MIPS16E2Pipeline,
         F.abiFlags();
         F.put(36, 0x74001000, 4);
         F.put(24, 0x10101, 4);
-        F.put(0xec, 0x4400, 4);
+        F.put(0xec, 0x4440, 4);
         F.put(0x100, C.Word >> 16, 2);
         F.put(0x102, C.Word & 65535, 2);
         F.put(0x104, Dead ? 0x6a07 : 0x6500, 2); // overwrite result or NOP
@@ -226,7 +235,7 @@ TEST(MIPS16E2Pipeline,
       F.abiFlags();
       F.put(36, 0x74001000, 4);
       F.put(24, 0x10101, 4);
-      F.put(0xec, 0x4400, 4);
+      F.put(0xec, 0x4440, 4);
       const uint16_t Code[] = {
           0x64c4, 0xf0c0, 0x3010, uint16_t(0xf000 | (Stype << 6)),
           0x3014, 0x6a07, 0x6444, 0xe8a0};
@@ -303,7 +312,7 @@ TEST(MIPS16E2Pipeline, PartialImageStoresBindOnlyWritableSelectedBytes) {
         F.Bytes.resize(0x308);
         F.put(36, 0x74001000, 4);
         F.put(24, 0x10101, 4);
-        F.put(0xec, 0x4400, 4);
+        F.put(0xec, 0x4440, 4);
         F.put(44, 3, 2);
         F.put(52 + 24, 5, 4);
         F.put(116, 1, 4);
@@ -413,7 +422,7 @@ TEST(MIPS16E2Pipeline, FourByteE2CannotOccupyTwoByteReturnDelaySlot) {
     F.abiFlags();
     F.put(36, 0x74001000, 4);
     F.put(24, 0x10101, 4);
-    F.put(0xec, 0x4400, 4);
+    F.put(0xec, 0x4440, 4);
     F.put(0x100, 0xe820, 2); // jr ra, requires a two-byte delay instruction
     F.put(0x102, 0xf010, 2);
     F.put(0x104, 0x6a61, 2); // e2 ANDI, four bytes

@@ -16,6 +16,8 @@
 #define NEVERD_COMPACT_PAGE_TEXT(Name, Text)
 #endif
 
+NEVERD_COMPACT_PAGE_VALUE(unsigned, kARM64TerminalLookupByte, 1)
+
 NEVERD_COMPACT_PAGE_VALUE(uint32_t, kCompressedFunctionDeltaMask, 0x00ffffffu)
 NEVERD_COMPACT_PAGE_VALUE(uint32_t, kCompressedEncodingIndexShift, 24)
 NEVERD_COMPACT_PAGE_TEXT(

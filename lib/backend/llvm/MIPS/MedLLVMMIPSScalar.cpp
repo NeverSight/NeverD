@@ -11,6 +11,9 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
+#include "neverd/backend/MIPS/MIPSMSASource.h"
+#include "neverd/backend/MIPS/MIPSScalarFPSource.h"
 #include "neverd/backend/llvm/LLVMSourceBody.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
@@ -29,8 +32,89 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     throw std::runtime_error(mips::kMalformedScalar);
   if (Id == Intrinsic::MIPSUnpredictable)
     throw std::runtime_error(mips::kUnpredictableResult);
+  if (Id == Intrinsic::MIPSAccumulatorAfterWrite)
+    throw std::runtime_error(mips::kAccumulatorHistoryUnknown);
   if (Id == Intrinsic::MIPSLwrUpper)
     throw std::runtime_error(mips::kPartialLwrRequiresWord);
+  const bool ScalarFP =
+      mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id);
+  if (ScalarFP || mips::isMSANativeVector(Id) || mips::isMSAControl(Id)) {
+    if (!Img || !Img->MIPS ||
+        (ScalarFP ? ((Img->MIPS->ISARevision != 6 &&
+                      !Img->MIPS->hasScalarFPABI(isMIPS64(TargetArch))) ||
+                     !mips::scalarFPAvailable(
+                         Id, Img->MIPS->ISARevision,
+                         Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch)),
+                         Img->MIPS->HistoricalISA))
+                  : (!Img->MIPS->HasMSA || Img->MIPS->ISARevision != 5)))
+      throw std::runtime_error(
+          "native MIPS FP source requires a matching scalar or MSA profile");
+    const unsigned Selector =
+        (mips::isMSAControl(Id) || mips::scalarFPHasSelector(Id))
+            ? Op.Inputs[1].ConstVal
+            : 0;
+    if (mips::isScalarFPControl(Id) &&
+        !mips::scalarFPControlSelector(Selector,
+                                       Id == Intrinsic::MIPSWriteFPControl,
+                                       Img->MIPS->HistoricalISA))
+      throw std::runtime_error(
+          "FP control register is absent from historical ISA");
+    const auto Asm =
+        ScalarFP
+            ? mips::scalarFPAssembly(
+                  Id, Selector,
+                  mips::instructionModeFromLLVM(
+                      *B.GetInsertBlock()->getParent()) ==
+                      InstructionMode::MicroMIPS,
+                  Img->MIPS->hasScalarFP32ABI(isMIPS64(TargetArch)))
+            : mips::msaAssembly(Id, Selector, archLittleEndian(TargetArch));
+    llvm::SmallVector<llvm::Value *, 4> Args;
+    llvm::SmallVector<llvm::Type *, 4> Types;
+    llvm::Value *Result = nullptr;
+    if (Asm.Write) {
+      auto *V = getVar(Op.Inputs[2], B);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? B.CreatePtrToInt(V, B.getInt32Ty())
+                         : B.CreateZExtOrTrunc(V, B.getInt32Ty()));
+    } else if (Asm.Pointers) {
+      auto &Entry = B.GetInsertBlock()->getParent()->getEntryBlock();
+      llvm::IRBuilder<> Frame(&Entry, Entry.getFirstInsertionPt());
+      const bool Compare =
+          ScalarFP && mips::scalarFPOperation(Id).writesCondition();
+      for (unsigned I = 0; I < Asm.Pointers; ++I) {
+        const unsigned Bytes =
+            ScalarFP ? (I || Compare ? mips::scalarFPOperation(Id).InputBytes
+                                     : mips::scalarFPOperation(Id).OutputBytes)
+                     : 16;
+        auto *Slot = Frame.CreateAlloca(B.getIntNTy(8 * Bytes), nullptr,
+                                        ScalarFP ? "mips.fp" : "msa.vec");
+        Slot->setAlignment(llvm::Align(16));
+        Args.push_back(Slot);
+        if (I || Compare)
+          B.CreateStore(getVar(Op.Inputs[I + (Compare ? 2 : 0)], B), Slot);
+        else
+          Result = Slot;
+      }
+    }
+    for (auto *V : Args)
+      Types.push_back(V->getType());
+    auto *Ty = llvm::FunctionType::get(
+        Asm.Read ? static_cast<llvm::Type *>(B.getInt32Ty()) : B.getVoidTy(),
+        Types, false);
+    auto *Call = B.CreateCall(
+        llvm::InlineAsm::get(Ty, Asm.llvmText(), Asm.Constraints, true), Args);
+    Call->setMetadata(
+        ScalarFP ? "neverd.mips.scalar.fp" : "neverd.mips.msa",
+        llvm::MDNode::get(
+            *Ctx, {llvm::ConstantAsMetadata::get(B.getInt32(unsigned(Id))),
+                   llvm::ConstantAsMetadata::get(B.getInt32(Selector))}));
+    if (Result)
+      return B.CreateLoad(
+          B.getIntNTy(ScalarFP ? mips::scalarFPOperation(Id).OutputBytes * 8
+                               : 128),
+          Result);
+    return Call;
+  }
   if (mips::isStatefulScalar(Id))
     throw std::runtime_error(mips::kStatefulSourceUnsupported);
   if (mips::isBarrier(Id)) {
@@ -66,6 +150,21 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
       HB.CreateRetVoid();
     }
     return B.CreateCall(Helper);
+  }
+  if (mips::isDSPPartialControl(Id)) {
+    mips::applyDSPSourceAttributes(*B.GetInsertBlock()->getParent());
+    const auto &A = mips::dspPartialOperation(Id);
+    llvm::SmallVector<llvm::Type *, 2> Types(A.Inputs, B.getInt32Ty());
+    llvm::SmallVector<llvm::Value *, 2> Args;
+    for (unsigned I = 0; I != A.Inputs; ++I) {
+      auto *V = getVar(Op.Inputs[I + 1], B);
+      Args.push_back(V->getType()->isPointerTy()
+                         ? B.CreatePtrToInt(V, B.getInt32Ty())
+                         : B.CreateZExtOrTrunc(V, B.getInt32Ty()));
+    }
+    auto *Ty = llvm::FunctionType::get(B.getVoidTy(), Types, false);
+    return B.CreateCall(llvm::InlineAsm::get(Ty, A.LLVM, A.Constraints, true),
+                        Args);
   }
   if (Id == Intrinsic::MIPSReadDSPControl ||
       Id == Intrinsic::MIPSWriteDSPControl) {
@@ -105,6 +204,19 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     B.CreateUnreachable();
     B.SetInsertPoint(Continue);
   };
+  if (Id == Intrinsic::MIPSRequireTakenBranch) {
+    Require(B.CreateIsNotNull(getVar(Op.Inputs[1], B)),
+            "mips.r6.forbidden.slot");
+    return nullptr;
+  }
+  if (Id == Intrinsic::MIPSExtractResult ||
+      Id == Intrinsic::MIPSRelease6DivideResult) {
+    auto *Failed = getVar(Op.Inputs[1], B);
+    Require(B.CreateIsNull(Failed), Id == Intrinsic::MIPSExtractResult
+                                        ? "mips.extract.position"
+                                        : "mips.divide.zero");
+    return getVar(Op.Inputs[2], B);
+  }
   if (Id == Intrinsic::MIPSRequireWord) {
     auto *First =
         Coerce(getVar(Op.Inputs[1], B), sizeToType(Op.Inputs[1].Size));
@@ -151,15 +263,17 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   auto *ValueTy = sizeToType(Load.Bytes);
   auto *OutputTy = Store ? ValueTy : sizeToType(Op.Output.Size);
   auto *Old = Coerce(getVar(Op.Inputs[2], B), OutputTy);
-  const auto C = [&](uint64_t V) {
-    return llvm::ConstantInt::get(AddressTy, V);
-  };
-  auto *Offset = B.CreateAnd(First, C(Load.Bytes - 1));
+  // A lane fits in a native word on every MIPS profile, including n32.
+  const auto C = [&](unsigned V) { return B.getInt32(V); };
+  auto *AddressMask = llvm::ConstantInt::get(AddressTy, Load.Bytes - 1);
+  auto *Offset =
+      B.CreateZExtOrTrunc(B.CreateAnd(First, AddressMask), B.getInt32Ty());
   const bool Forward = Load.Left != Little;
-  auto *Count =
-      Forward ? B.CreateSub(C(Load.Bytes), Offset) : B.CreateAdd(Offset, C(1));
-  auto *Base = Forward ? First : B.CreateSub(First, Offset);
-  auto *DestinationByte = Load.Left ? B.CreateSub(C(Load.Bytes), Count) : C(0);
+  // In the forward direction the last lane is the complement of the offset
+  // within the aligned word. In the other direction it is the offset itself.
+  auto *LaneMask = C(Load.Bytes - 1);
+  auto *Last = Forward ? B.CreateXor(Offset, LaneMask) : Offset;
+  auto *DestinationByte = Load.Left ? B.CreateXor(Last, LaneMask) : C(0);
   llvm::Value *Memory = nullptr;
   if (VA) {
     const auto Access = mips::mergeAccess(Load, *VA, Little);
@@ -176,7 +290,8 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
     if (!Memory && Img && Img->getSegmentFor(Access.First))
       throw std::runtime_error(kMIPSMergeImageAddress);
     if (!Memory)
-      Memory = getMemoryPtr(Base, B.getInt8Ty(), B);
+      Memory = getMemoryPtr(llvm::ConstantInt::get(AddressTy, Access.First),
+                            B.getInt8Ty(), B);
   } else {
     if (Img && !usesOriginalImageStorage() &&
         (tryResolveWritableData(AddressValue, 1, B) ||
@@ -195,14 +310,14 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   auto *Done = llvm::BasicBlock::Create(*Ctx, "mips.merge.done", Function);
   B.CreateBr(Loop);
   B.SetInsertPoint(Loop);
-  auto *Index = B.CreatePHI(AddressTy, 2, "mips.merge.index");
+  auto *Index = B.CreatePHI(B.getInt32Ty(), 2, "mips.merge.index");
   auto *Result = Store ? nullptr : B.CreatePHI(ValueTy, 2, "mips.merge.value");
   Index->addIncoming(C(0), Entry);
   if (Result)
     Result->addIncoming(Initial, Entry);
   auto *Pointer = B.CreateGEP(B.getInt8Ty(), Memory, Index);
-  auto *Lane = Little ? static_cast<llvm::Value *>(Index)
-                      : B.CreateSub(B.CreateSub(Count, C(1)), Index);
+  auto *Lane =
+      Little ? static_cast<llvm::Value *>(Index) : B.CreateSub(Last, Index);
   auto *Shift = B.CreateZExtOrTrunc(
       B.CreateShl(B.CreateAdd(DestinationByte, Lane), C(3)), ValueTy);
   llvm::Value *Next = nullptr;
@@ -222,7 +337,7 @@ llvm::Value *MedLLVMEmitter::emitMIPSScalar(const MedOp &Op, Intrinsic Id,
   }
   auto *NextIndex = B.CreateAdd(Index, C(1));
   auto *Backedge = B.GetInsertBlock();
-  B.CreateCondBr(B.CreateICmpULT(NextIndex, Count), Loop, Done);
+  B.CreateCondBr(B.CreateICmpEQ(Index, Last), Done, Loop);
   Index->addIncoming(NextIndex, Backedge);
   if (Result)
     Result->addIncoming(Next, Backedge);

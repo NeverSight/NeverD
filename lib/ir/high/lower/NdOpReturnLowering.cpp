@@ -44,24 +44,39 @@ ExprPtr parameterInRegister(const MedFunc &Med, uint64_t Reg) {
   return nullptr;
 }
 
+/// A SUBBYTES that re-views the low bytes of the register it reads is a view
+/// of that register, not a write. Defined with the other return helpers below.
+bool isRegisterLowView(const MedOp &Op);
+
+/// A copy of a register onto itself names the value that arrived in it.
+bool isIncomingRegisterCopy(const MedOp &Op) {
+  const MedVar &Out = Op.Output;
+  return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
+         Op.Inputs[0].Kind == Out.Kind && Op.Inputs[0].RegOff == Out.RegOff &&
+         Op.Inputs[0].Size == Out.Size && Op.Inputs[0].Id == Out.Id &&
+         Op.Inputs[0].SSAVer == Out.SSAVer;
+}
+
 /// Whether every path from the function's entry into \p Block leaves the
 /// \p Width bytes of register at \p Reg as the caller passed them.  A phi or
 /// write of any of those bytes other than the copy that names the incoming
-/// value, a call, which clobbers them, an exceptional entry, which the
-/// unwinder fills, or an entry no predecessor explains, each leaves them
-/// otherwise.
+/// value, a call whose callee may change them, an exceptional entry, which
+/// the unwinder fills, or an entry no predecessor explains, each leaves them
+/// otherwise. A compare's low view does not. A call that keeps the register
+/// does not.
 bool registerUntouchedFromEntry(const MedFunc &Med, const MedBlock &Block,
-                                uint64_t Reg, uint64_t Width) {
+                                uint64_t Reg, uint64_t Width, Arch TheArch) {
   auto Overlaps = [&](const MedVar &V) {
     return V.Kind == MedVar::Reg && V.Size > 0 && V.RegOff < Reg + Width &&
            Reg < V.RegOff + V.Size;
   };
-  auto IsIncomingCopy = [](const MedOp &Op) {
-    const MedVar &Out = Op.Output;
-    return Op.Opcode == NdOp::COPY && Op.NumInputs >= 1 &&
-           Op.Inputs[0].Kind == Out.Kind && Op.Inputs[0].RegOff == Out.RegOff &&
-           Op.Inputs[0].Size == Out.Size && Op.Inputs[0].Id == Out.Id &&
-           Op.Inputs[0].SSAVer == Out.SSAVer;
+  auto CallKeeps = [&](const MedOp &Op) {
+    if (Op.PreservesCallerSaved)
+      return true;
+    if (Width == 0 || Width > 0xFFFF)
+      return false;
+    return callPreservesRegisterBytes(TheArch, Op.CallPreservedGPRs, Reg,
+                                      static_cast<uint16_t>(Width));
   };
   std::map<int, const MedBlock *> ById;
   for (const MedBlock &Candidate : Med.Blocks)
@@ -77,8 +92,10 @@ bool registerUntouchedFromEntry(const MedFunc &Med, const MedBlock &Block,
       if (Overlaps(Phi.Output))
         return false;
     for (const MedOp &Op : Current.Ops)
-      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Overlaps(Op.Output) && !IsIncomingCopy(Op)))
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL
+              ? !CallKeeps(Op)
+              : (Overlaps(Op.Output) && !isIncomingRegisterCopy(Op) &&
+                 !isRegisterLowView(Op)))
         return false;
     if (Current.Preds.empty() && Current.StartAddr != Med.Entry)
       return false;
@@ -119,7 +136,7 @@ ExprPtr unchangedDeclaredReturnParameter(const MedFunc &Med,
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           Op.Opcode == NdOp::INTRINSIC)
         return nullptr;
-      if (!Overlaps(Op.Output))
+      if (!Overlaps(Op.Output) || isRegisterLowView(Op))
         continue;
       const bool SelfCopy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
                             Op.Inputs[0] == Op.Output &&
@@ -144,6 +161,23 @@ bool isRegisterLowView(const MedOp &Op) {
                                 Op.NumInputs < 2 || !Op.Inputs[1].isConst()
                                     ? 0
                                     : Op.Inputs[1].ConstVal);
+}
+
+/// A compare reads the low bytes through a view. That view is not a write:
+/// the register still holds the wider value the view was taken from. A real
+/// 32-bit write is not a view, so the zeros it produces stay the value.
+void widenRegisterLowView(const MedFunc &Med, MedVar &V) {
+  if (V.Kind != MedVar::Reg)
+    return;
+  for (const MedBlock &Blk : Med.Blocks)
+    for (const MedOp &Op : Blk.Ops) {
+      if (!isRegisterLowView(Op) || Op.Output.Kind != V.Kind ||
+          Op.Output.RegOff != V.RegOff || Op.Output.Size != V.Size ||
+          Op.Output.Id != V.Id || Op.Output.SSAVer != V.SSAVer)
+        continue;
+      V = Op.Inputs[0];
+      return;
+    }
 }
 
 const MedBlock *onlyPredecessor(const MedFunc &Med, const MedBlock &Block) {
@@ -300,8 +334,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
           if (!callKeepsRegister(*RIt, RegOff, Size))
             return ExprPtr();
         }
-        if (const PhiNode *Phi = detail::registerPhi(
-                Med, Block, RegOff, getTargetRegInfo(TargetArch)))
+        if (const PhiNode *Phi = aggregateReturnPhi(Block, RegOff))
           return HighExpr::makeVar(Phi->Output);
         return std::nullopt;
       };
@@ -313,9 +346,13 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         if (std::optional<ExprPtr> Value = WrittenIn(*Pred))
           return *Value;
       MedVar Entry;
-      if (reachingRegAtBlockEntry(CurBlock, RegOff, Entry) && Entry.Size > 0 &&
-          !isEntryIdentity(Med, Entry))
-        return medvarToExpr(Entry);
+      if (reachingRegAtBlockEntry(CurBlock, RegOff, Entry) && Entry.Size > 0) {
+        // The reaching helper reports the compare's low view as the write.
+        // The field still holds the register that view was taken from.
+        widenRegisterLowView(Med, Entry);
+        if (Entry.Size > 0 && !isEntryIdentity(Med, Entry))
+          return medvarToExpr(Entry);
+      }
       return nullptr;
     };
     // A field narrower than its register (a float in an SSE eightbyte) is
@@ -434,6 +471,11 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         continue;
       if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
           RIt->Output.RegOff == ReturnReg && !isRegisterLowView(*RIt)) {
+        // The copy that names the incoming register is not a value this
+        // function computed. A later preserving call leaves that value in
+        // place; the parameter fallback below names it.
+        if (isIncomingRegisterCopy(*RIt))
+          continue;
         // Calls and memory reads materialize once. Other definitions can be
         // followed to their right-hand side so a register-only COPY need not
         // become a source variable with no emitted assignment.
@@ -447,37 +489,14 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     if (const PhiNode *Phi = detail::registerPhi(Med, CurBlock, ReturnReg, TRI))
       RetVal = HighExpr::makeVar(Phi->Output);
 
-  if (!RetVal) {
-    // A bare RET block inherits the value established on its only incoming
-    // edge: the last definition on the chain of single predecessors, or the
-    // join that begins a block of it (a conditional return out of a loop).
-    // Reconstruct the defining expression rather than naming the otherwise
-    // unused register SSA output. Multiple incoming edges need an explicit
-    // PHI; choosing one predecessor would invent semantics.
-    std::set<const MedBlock *> Seen{&CurBlock};
-    for (const MedBlock *Pred = onlyPredecessor(Med, CurBlock);
-         Pred && !RetVal && Seen.insert(Pred).second;
-         Pred = onlyPredecessor(Med, *Pred)) {
-      for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
-        if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
-            RIt->Output.RegOff != ReturnReg || isRegisterLowView(*RIt))
-          continue;
-        RetVal = ValueFromDefinition(*RIt);
-        break;
-      }
-      if (!RetVal)
-        if (const PhiNode *Phi =
-                detail::registerPhi(Med, *Pred, ReturnReg, TRI))
-          RetVal = HighExpr::makeVar(Phi->Output);
-    }
-  }
-
-  if (!RetVal && CurBlock.Preds.size() > 1) {
-    // A join whose predecessors all leave the same version of the register
-    // needs no PHI: the value was established before they parted, as when an
-    // ARM predicated store or a branch around a store sits between the result
-    // and the RETURN.  Predecessors that leave different versions need the
-    // PHI, and the value a register holds at entry is none computed.
+  // Predecessors that leave one version of the register established it
+  // before they parted: an ARM predicated store, or a branch around a store
+  // between a call and the RETURN. A `cbnz w0` after that call is a low view,
+  // not a second write. Predecessors that leave different versions need the
+  // PHI. The value a register holds at entry is none this function computed.
+  auto agreedByPredecessors = [&](const MedBlock &Join) -> ExprPtr {
+    if (Join.Preds.size() <= 1)
+      return nullptr;
     auto LeftBy = [&](int PredId, MedVar &Out) {
       const auto Pred = std::find_if(Med.Blocks.begin(), Med.Blocks.end(),
                                      [PredId](const MedBlock &Candidate) {
@@ -491,28 +510,56 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
           Out = RIt->Output;
           return true;
         }
-      return reachingRegAtBlockEntry(*Pred, ReturnReg, Out);
+      if (!reachingRegAtBlockEntry(*Pred, ReturnReg, Out))
+        return false;
+      widenRegisterLowView(Med, Out);
+      return Out.Size > 0;
     };
     std::optional<MedVar> Common;
-    bool Agree = true;
-    for (const int PredId : CurBlock.Preds) {
+    for (const int PredId : Join.Preds) {
       MedVar Left;
       if (!LeftBy(PredId, Left) ||
-          (Common &&
-           (Common->Id != Left.Id || Common->SSAVer != Left.SSAVer))) {
-        Agree = false;
-        break;
-      }
+          (Common && (Common->Id != Left.Id || Common->SSAVer != Left.SSAVer)))
+        return nullptr;
       Common = Left;
     }
-    if (Agree && Common && !isEntryIdentity(Med, *Common)) {
-      for (const auto &Blk : Med.Blocks)
-        for (const auto &Op : Blk.Ops)
-          if (!RetVal && Op.Output.Kind == MedVar::Reg &&
-              Op.Output.Id == Common->Id && Op.Output.SSAVer == Common->SSAVer)
-            RetVal = ValueFromDefinition(Op);
+    if (!Common || isEntryIdentity(Med, *Common))
+      return nullptr;
+    for (const auto &Blk : Med.Blocks)
+      for (const auto &Op : Blk.Ops)
+        if (Op.Output.Kind == MedVar::Reg && Op.Output.Id == Common->Id &&
+            Op.Output.SSAVer == Common->SSAVer)
+          return ValueFromDefinition(Op);
+    return HighExpr::makeVar(*Common);
+  };
+
+  if (!RetVal)
+    RetVal = agreedByPredecessors(CurBlock);
+
+  if (!RetVal) {
+    // A bare RET block inherits the value on its only incoming edge: the last
+    // definition on the chain of single predecessors, or the same agreement
+    // at the join that chain runs into. A later branch that does not write
+    // the register leaves the call result in it. Choosing one predecessor
+    // when they disagree would invent semantics.
+    std::set<const MedBlock *> Seen{&CurBlock};
+    for (const MedBlock *Pred = onlyPredecessor(Med, CurBlock);
+         Pred && !RetVal && Seen.insert(Pred).second;
+         Pred = onlyPredecessor(Med, *Pred)) {
+      for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
+        if (RIt->Output.Kind != MedVar::Reg || RIt->Output.Size == 0 ||
+            RIt->Output.RegOff != ReturnReg || isRegisterLowView(*RIt) ||
+            isIncomingRegisterCopy(*RIt))
+          continue;
+        RetVal = ValueFromDefinition(*RIt);
+        break;
+      }
       if (!RetVal)
-        RetVal = HighExpr::makeVar(*Common);
+        if (const PhiNode *Phi =
+                detail::registerPhi(Med, *Pred, ReturnReg, TRI))
+          RetVal = HighExpr::makeVar(Phi->Output);
+      if (!RetVal)
+        RetVal = agreedByPredecessors(*Pred);
     }
   }
 
@@ -537,7 +584,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         Med.Params.begin(), Med.Params.end(),
         [&](const MedVar &P) { return P.RegOff == ReturnReg && P.Size > 0; });
     if (Param != Med.Params.end() &&
-        registerUntouchedFromEntry(Med, CurBlock, ReturnReg, Param->Size))
+        registerUntouchedFromEntry(Med, CurBlock, ReturnReg, Param->Size,
+                                   TargetArch))
       RetVal = parameterInRegister(Med, ReturnReg);
   }
 
@@ -547,15 +595,16 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // the source return value.  Keep the low and high SSA values separate until
   // this boundary; an unrelated earlier write to the high register is not a
   // substitute for the value reaching this RETURN.
+  const uint16_t WordBytes = TRI.integerReturnWordBytes();
   if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
-      Func.ReturnType->Size == 2 * TRI.PointerSize &&
-      (TRI.PointerSize == 4 ||
+      Func.ReturnType->Size == 2 * WordBytes &&
+      (WordBytes == 4 || isMIPS(TargetArch) ||
        (Med.MultiReturn.size() == 2 && !Med.MultiReturn[0].IsFP &&
         !Med.MultiReturn[1].IsFP &&
         Med.MultiReturn[0].RegOff == TRI.IntReturnReg &&
         Med.MultiReturn[1].RegOff == TRI.IntReturnReg2)) &&
       TRI.IntReturnReg2 != 0 && RetVal && RetVal->Type &&
-      RetVal->Type->Size == TRI.PointerSize) {
+      RetVal->Type->Size == WordBytes) {
     // A call after the high register's last write leaves what its callee
     // put there, which this function computed none of.
     ExprPtr High;
@@ -568,8 +617,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         High = ValueFromDefinition(*RIt);
         break;
       }
-      if ((Clobbered =
-               !callKeepsRegister(*RIt, TRI.IntReturnReg2, TRI.PointerSize)))
+      if ((Clobbered = !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
         break;
     }
     if (!High && !Clobbered)
@@ -584,8 +632,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
             High = ValueFromDefinition(*RIt);
             break;
           }
-          if ((Clobbered = !callKeepsRegister(*RIt, TRI.IntReturnReg2,
-                                              TRI.PointerSize)))
+          if ((Clobbered =
+                   !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
             break;
         }
       }
@@ -597,18 +645,24 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     if (!High && !Clobbered) {
       MedVar Reaching;
       if (reachingRegAtBlockEntry(CurBlock, TRI.IntReturnReg2, Reaching) &&
-          Reaching.Size > 0 && !isEntryIdentity(Med, Reaching))
-        High = medvarToExpr(Reaching);
+          Reaching.Size > 0) {
+        widenRegisterLowView(Med, Reaching);
+        if (Reaching.Size > 0 && !isEntryIdentity(Med, Reaching))
+          High = medvarToExpr(Reaching);
+      }
     }
     if (High) {
       if (TRI.IntegerReturnPairHighFirst)
         std::swap(High, RetVal);
-      auto Pair = HighExpr::makeBinop(
-          NdOp::CONCAT, sourceBitSlice(High, 0, TRI.PointerSize),
-          sourceBitSlice(RetVal, 0, TRI.PointerSize));
+      auto Pair =
+          HighExpr::makeBinop(NdOp::CONCAT, sourceBitSlice(High, 0, WordBytes),
+                              sourceBitSlice(RetVal, 0, WordBytes));
       Pair->Type = Func.ReturnType;
       RetVal = std::move(Pair);
     } else {
+      // The high half is not proved. Publishing the low half as the pair, or
+      // a constant left in the other register, would invent the result. This
+      // is a failed pair conversion, not an unbound scalar return register.
       throw std::runtime_error(
           "cannot recover the high register of a wide integer return");
     }

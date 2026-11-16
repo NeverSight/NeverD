@@ -19,6 +19,7 @@
 
 #include "AnalysisCall.h"
 
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -49,8 +50,12 @@ void MedToHighConverter::lowerCBranch(HighFunc &Func, const MedOp &CurOp) {
       ExpressionObserver(CurOp, S.Cond);
     HighStmt GotoStmt;
     GotoStmt.Kind = StmtKind::Goto;
-    if (CurOp.Inputs[0].isConst())
-      GotoStmt.GotoTarget = CurOp.Inputs[0].ConstVal;
+    if (CurOp.Inputs[0].isConst()) {
+      if (CurMed)
+        aimDirectBranch(GotoStmt, *CurMed, CurOp);
+      else
+        GotoStmt.GotoTarget = CurOp.Inputs[0].ConstVal;
+    }
     S.Body.push_back(GotoStmt);
   }
   Func.Body.push_back(std::move(S));
@@ -60,9 +65,24 @@ void MedToHighConverter::lowerBranch(HighFunc &Func, const MedOp &CurOp) {
   HighStmt S;
   S.Kind = StmtKind::Goto;
   S.Addr = CurOp.Addr;
-  if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst())
-    S.GotoTarget = CurOp.Inputs[0].ConstVal;
+  if (CurOp.NumInputs >= 1 && CurOp.Inputs[0].isConst()) {
+    if (CurMed)
+      aimDirectBranch(S, *CurMed, CurOp);
+    else
+      S.GotoTarget = CurOp.Inputs[0].ConstVal;
+  }
   Func.Body.push_back(std::move(S));
+}
+
+void aimDirectBranch(HighStmt &Goto, const MedFunc &Med, const MedOp &Branch) {
+  const va_t Target = Branch.Inputs[0].ConstVal;
+  if (Med.TruncatedPathAddresses.count(Target)) {
+    Goto.Addr = Branch.Addr;
+    Goto.GotoTarget = InvalidVA;
+    Goto.LeftImageAt = Target;
+    return;
+  }
+  Goto.GotoTarget = Target;
 }
 
 void MedToHighConverter::lowerGenericAssign(HighFunc &Func, const MedOp &CurOp,
@@ -104,7 +124,8 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
   S.MemoryOrdering = CurOp.MemoryOrdering;
   S.MemoryAddressSpace = CurOp.MemoryAddressSpace;
   if (CurOp.NumInputs >= 2) {
-    S.StoreAddr = memoryAddressExpr(CurOp.Inputs[0]);
+    S.StoreAddr =
+        sourcePointerOperand(CurOp, memoryAddressExpr(CurOp.Inputs[0]));
 
     const auto ValKey = varKey(CurOp.Inputs[1]);
     if (CallOutputs.count(ValKey))
@@ -180,12 +201,16 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
   CallExpr->CallSiteAddr = CurOp.Addr;
   CallExpr->SourceCallHint = CurOp.SourceCallHint;
+  if (CurMed)
+    if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx))
+      CallExpr->SourceCalleeType = Info->SourceCalleeType;
   if (auto Signature = boundFloatingCallArguments(
           CurOp, TargetArch,
           Image ? Image->abiFormat() : BinaryFormat::Unknown))
     CallExpr->FloatingCallSignature =
         std::make_shared<FloatingCallArguments>(std::move(*Signature));
-  else if (CurOp.CalleeFloatReturnBytes && CurMed)
+  else if ((CurOp.CalleeFloatReturnBytes || CurOp.RegisterReturnFields) &&
+           CurMed)
     if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx))
       if (auto Signature = recoveredFloatingCallArguments(
               CurOp, *Info, TargetArch,
@@ -197,10 +222,13 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
       CurOp.Output.Kind == MedVar::Reg && CurOp.Output.Size == 10 &&
       getTargetRegInfo(TargetArch).isX87StackReg(CurOp.Output.RegOff);
   if (CurOp.Output.Size || CurOp.SourceCallHint || X87Result ||
-      CurOp.CalleeFloatReturnBytes ||
-      (CallExpr->FloatingCallSignature &&
-       CallExpr->FloatingCallSignature->ReturnElements))
-    CallExpr->Type = sourceCallResultType(CurOp);
+      CurOp.CalleeFloatReturnBytes || CallExpr->FloatingCallSignature)
+    CallExpr->Type =
+        CallExpr->SourceCalleeType &&
+                !(CurOp.SourceCallHint &&
+                  sourceCallRetainsResultStorage(*CurOp.SourceCallHint))
+            ? CallExpr->SourceCalleeType->RetType
+            : sourceCallResultType(CurOp);
   if (ExpressionObserver && CurOp.Addr != InvalidVA && CurOp.OriginSeq >= 0)
     ExpressionObserver(CurOp, CallExpr);
 

@@ -11,6 +11,7 @@
 #include "LineageDialog.h"
 
 #include "../ResourceLimits.h"
+#include "DialogReturnKey.h"
 #include "ElidedLabel.h"
 #include "FlowLayout.h"
 #include "Icons.h"
@@ -117,16 +118,23 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Root->addWidget(Scope);
   auto *Split = new QSplitter(this);
   Split->setChildrenCollapsible(false);
+  // The gutter keeps both panes' controls off the line between them; a
+  // margin of the pane's own set its list in from the commands above it,
+  // and the hairline alone had the pages' tabs standing on it.
+  Split->setHandleWidth(limits::kPaneGutter);
+  // Qt's right-to-left splitter geometry can place its first pane one pixel
+  // beyond its own edge, which then cuts a control that reaches the pane's.
+  Split->setContentsMargins(0, 0, 1, 0);
   Root->addWidget(Split, 1);
   auto *Left = new QWidget(Split);
   auto *LeftLayout = new QVBoxLayout(Left);
-  // Keep control frames inside the pane, including the outer edge that Qt's
-  // right-to-left splitter geometry can place one pixel beyond its viewport.
-  LeftLayout->setContentsMargins(Root->spacing(), 0, Root->spacing(), 0);
+  LeftLayout->setContentsMargins(0, 0, 0, 0);
   LeftLayout->addWidget(label(tr("Analyzed snapshots"), Left));
   Versions = page(Session, {tr("Label"), tr("Branch"), tr("Functions")},
                   {"label", "branch", "functions"}, "lineageVersions", Left);
   LeftLayout->addWidget(Versions, 1);
+  // The command under a list spans it, as the list's foot: at its own width
+  // it left the pane looking empty, and the user asked for this back.
   Rename = button(tr("Edit &label / branch…"), "lineageMetadata", Left);
   LeftLayout->addWidget(Rename);
   Tabs = new QTabWidget(Split);
@@ -277,6 +285,11 @@ LineageDialog::LineageDialog(const QString &Worker, QWidget *Parent)
   Bottom->addWidget(Status, 1);
   Bottom->addWidget(Progress);
   Root->addLayout(Bottom);
+  // No button here is a default, but QDialog would press the default of a
+  // list this window has opened for Return in its filter.  Adding
+  // comparisons is what the window asks for first, in its own words.
+  leaveWithoutDefaultButton(*this);
+  showAsMainAction(*Add);
   Filter.setSingleShot(true);
   Filter.setInterval(limits::kComparisonGraphDebounceMs);
   connect(Search, &QLineEdit::textChanged, &Filter,

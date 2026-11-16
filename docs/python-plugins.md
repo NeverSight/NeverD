@@ -142,6 +142,14 @@ The low-level ABI also declares `neverd_function_presentation_json`,
 pointers are borrowed only during the callback. Copy any retained facts there;
 the callback must not throw, block or reenter the session.
 
+`neverd_embedded_objects_json` and `neverd_computed_strings_json` return owned
+JSON strings through `session.raw.session_owned_string`. The former reports
+validated embedded ELF metadata without executing its contents; the latter
+reports strings conditional on the listed function-entry inputs, without
+changing the literal-string catalogue. `neverd_forget_function_analysis`,
+called through `session.raw.session_call`, discards prepared analysis and views
+for the next requested entry while retaining immutable image facts and edits.
+
 ### Bounded symbolic path exploration
 
 For native LowIR functions, `session.symbolic_explore` returns typed path

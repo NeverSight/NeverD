@@ -153,7 +153,7 @@ void HighCWriter::writeSEHHandlerEntries(const HighStmt &Stmt,
        << ": entered by the exception runtime. */\n";
     emitIndent(Indent);
     OS << "L_" << Platform << "_entry_" << Address << "_" << Suffix << ": {\n";
-    writeStmts(Stmt.EHClauseBodies[I], Indent + 1);
+    writeStmtsUnproved(Stmt.EHClauseBodies[I], Indent + 1);
     emitIndent(Indent);
     OS << "}\n";
   }

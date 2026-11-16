@@ -1115,6 +1115,26 @@ TEST(SymExpr, CollectVarsReportsEveryReachableVariableOnce) {
   EXPECT_EQ(Ctx.varInfo(Vars[1]).Name, "y");
 }
 
+TEST(SymExpr, CollectVarsUnionsSharedRootsAndExistingSparseIds) {
+  SymContext C;
+  const auto X = C.mkVar("x", 32);
+  C.mkVar("unused", 257);
+  const auto Y = C.mkVar("y", 32);
+  const auto Z = C.mkVar("z", 32);
+  const auto Kept = C.mkVar("kept", 128);
+  const auto Shared = C.mkMul(C.mkXor(X, Y), C.mkConst(32, 7));
+  const llvm::SmallVector<SymRef, 4> Roots{C.mkAdd(Shared, Z),
+                                           C.mkXor(Shared, Z), Shared, X};
+  llvm::SmallVector<uint32_t, 8> Vars{C.varId(Kept), C.varId(Y), C.varId(Y)};
+  C.collectVars(Roots, Vars);
+  const llvm::SmallVector<uint32_t, 4> Expected{0, 2, 3, 4};
+  EXPECT_EQ(Vars, Expected);
+  std::reverse(Vars.begin(), Vars.end());
+  Vars.push_back(C.varId(X));
+  C.collectVars(llvm::ArrayRef<SymRef>{}, Vars);
+  EXPECT_EQ(Vars, Expected);
+}
+
 TEST(SymExpr, ReadabilityPrefixInspectionPreservesLazyAndCopiedCaches) {
   SymContext Ctx;
   const auto X = Ctx.mkVar("x", 64);
@@ -1580,6 +1600,53 @@ TEST(SymExpr, NativeResiduesKeepSharedFullWidthUses) {
         }
         EXPECT_EQ(Plan.numSteps(), Ctx.dagSize(Roots[Kind]));
       }
+    }
+  }
+}
+
+TEST(SymExpr, RepeatedProductResiduesRespectAllObserverWidths) {
+  for (unsigned Width : {8u, 16u, 64u}) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    auto Z = Ctx.mkVar("z", Width);
+    const uint64_t Mask = UINT64_MAX >> (64 - Width);
+    const uint64_t Scale = uint64_t(3) << (Width - 5);
+    auto Shared = Ctx.mkAdd(X, Ctx.mkConst(Width, 33));
+    llvm::SmallVector<SymRef, 64> Factors{Ctx.mkConst(Width, Scale)};
+    for (unsigned I = 0; I < 97; ++I) {
+      auto Sum = Ctx.mkAdd(X, Ctx.mkConst(Width, I));
+      auto V = (I & 1) ? Ctx.mkXor(Sum, Y) : Ctx.mkAdd(Sum, Z);
+      Factors.push_back(Ctx.mkOr(V, Ctx.mkOne(Width)));
+    }
+    const auto Root = Ctx.mkAdd(Ctx.mkMul(Factors),
+                                Ctx.mkLShr(Shared, Ctx.mkConst(Width, 3)));
+    const auto Work = Ctx.dagSize(Root);
+    SymEvalPlan Plan(Ctx, Root);
+    std::mt19937_64 Random(288);
+    for (unsigned Trial = 0; Trial < 128; ++Trial) {
+      const std::array<uint64_t, 3> Values{
+          (Trial < 2 ? uint64_t(0) - Trial : Random()) & Mask, Random() & Mask,
+          Random() & Mask};
+      auto Product = Scale;
+      for (unsigned I = 0; I < 97; ++I) {
+        const auto Sum = Values[0] + I;
+        Product *= ((I & 1) ? Sum ^ Values[1] : Sum + Values[2]) | 1;
+      }
+      const auto Expected = (Product + (((Values[0] + 33) & Mask) >> 3)) & Mask;
+      std::array<unsigned, 3> Calls{};
+      EXPECT_EQ(Plan.evalU64With([&](uint32_t Id) {
+        ++Calls.at(Id);
+        return Values.at(Id);
+      }),
+                Expected);
+      EXPECT_EQ(Calls, (std::array<unsigned, 3>{1, 1, 1}));
+      EXPECT_EQ(Plan.eval({llvm::APInt(Width, Values[0]),
+                           llvm::APInt(Width, Values[1]),
+                           llvm::APInt(Width, Values[2])})
+                    .getZExtValue(),
+                Expected);
+      EXPECT_EQ(Plan.numSteps(), Work);
     }
   }
 }
@@ -2244,6 +2311,45 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
         EXPECT_EQ(Reads, (std::array<unsigned, 3>{1, 1, 1}));
         EXPECT_EQ(SharedPlan.eval(Inputs), Expected + Shared);
         EXPECT_EQ(ShiftPlan.eval(Inputs), Expected + Shared.lshr(Width - 1));
+      }
+    }
+}
+
+TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {
+  std::mt19937_64 Random(0x6c6f777072656669);
+  for (unsigned W : {65u, 128u, 257u})
+    for (unsigned Bits : {7u, 64u, 65u}) {
+      SCOPED_TRACE(W);
+      SCOPED_TRACE(Bits);
+      SymContext C;
+      const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+      const auto Z = C.mkVar("z", W);
+      const auto Scale = llvm::APInt::getOneBitSet(W, W - Bits);
+      const auto Factor = C.mkXor(Y, C.mkAdd(X, Z));
+      for (bool Perturbed : {false, true}) {
+        SCOPED_TRACE(Perturbed);
+        const auto Offset = Scale * 3 + unsigned(Perturbed);
+        const auto Coeff =
+            C.mkAdd(C.mkConst(Offset), C.mkMul(C.mkConst(Scale), Z));
+        const auto Product = C.mkMul({Factor, Y, Coeff});
+        ASSERT_NE(C.operand(Product, 0), Coeff);
+        SymEvalPlan ProductPlan(C, Product);
+        SymEvalPlan SharedPlan(C, C.mkXor(Product, Factor));
+        for (unsigned I = 0; I < 48; ++I) {
+          std::array<llvm::APInt, 3> V;
+          for (auto &Word : V) {
+            std::array<uint64_t, 5> Limbs;
+            for (auto &Limb : Limbs)
+              Limb = Random();
+            Word = llvm::APInt(W, Limbs);
+          }
+          if (!I)
+            V[0] = llvm::APInt::getSignMask(W);
+          const auto F = V[1] ^ (V[0] + V[2]);
+          const auto Expected = F * V[1] * (Offset + Scale * V[2]);
+          EXPECT_EQ(ProductPlan.eval(V), Expected);
+          EXPECT_EQ(SharedPlan.eval(V), Expected ^ F);
+        }
       }
     }
 }

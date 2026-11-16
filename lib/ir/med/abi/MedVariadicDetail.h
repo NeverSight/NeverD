@@ -102,7 +102,8 @@ bool isX64VaStartWord(uint64_t V);
 
 /// Distinct live-in (SSA version 0) parameter registers from \p Regs that the
 /// function spills to the stack: the variadic prologue's register save area.
-int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs);
+int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs,
+                        uint16_t Bytes = 0);
 
 /// The integer argument register a register save area starts at: the
 /// prologue spills each argument register from the first unnamed one through
@@ -115,12 +116,14 @@ int firstSavedArgumentRegister(VariadicScan &S,
 /// One function's variadic prologue recognition.
 class VariadicScan {
 public:
-  VariadicScan(const MedFunc &Func, const TargetRegInfo &TRI)
-      : Func(Func), TRI(TRI), SpOff(TRI.StackPointer) {}
+  VariadicScan(const MedFunc &Func, const TargetRegInfo &TRI,
+               BinaryFormat Format)
+      : Func(Func), TRI(TRI), SpOff(TRI.StackPointer), Format(Format) {}
 
   const MedFunc &Func;
   const TargetRegInfo &TRI;
   const uint64_t SpOff;
+  const BinaryFormat Format;
 
   /// The function's definitions, indexed on first use.
   const VariadicValueIndex &values() {

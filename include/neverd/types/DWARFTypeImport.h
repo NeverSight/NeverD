@@ -8,8 +8,9 @@
 /// Every named union, structure, enumeration and typedef the DWARF of a
 /// program's units defines, as local types.  DWARF keeps a record as its
 /// source declares it: members at the offsets the compiler chose, anonymous
-/// unions and structures in place, bit-fields at their bits, so nothing is
-/// rebuilt; a record laid out tighter than its members align takes the
+/// unions and structures in place and bit-fields at their bits. Overlapping
+/// padding of C++ subobjects becomes an anonymous overlay; their value bits
+/// must remain disjoint. A record laid out tighter than its members takes the
 /// packing that lays it out so.  A type C names only through a typedef,
 /// `typedef struct { ... } X`, takes the typedef's name, as C declarations
 /// read (TypeParse.h).  C++ and Rust types are named within their
@@ -18,10 +19,14 @@
 ///
 /// The same name in many units, as a header's types are, is one type: the
 /// first definition, which a declaration elsewhere names.  Another
-/// definition of the name that lays the type out otherwise is left out and
-/// reported.  So is a record DWARF describes in a way local types do not
-/// hold, such as a Rust enumeration's variants or a virtual base, with the
-/// reason, rather than a guess at its layout.
+/// record definition of another size is left out and reported. When a
+/// bit-field or overlapping layout needs a forward declaration's definition,
+/// publishing it wakes only its blocked dependents. Incomplete aliases remain
+/// named references. Missing required definitions and by-value cycles retain
+/// explicit diagnostics.
+/// Unsupported layouts, such as dynamic virtual-base offsets, retain their
+/// reasons rather than guessed layouts. Member pointers keep their source
+/// identity alongside explicitly labelled ABI storage, not ordinary pointers.
 ///
 //===----------------------------------------------------------------------===//
 

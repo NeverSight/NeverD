@@ -2449,12 +2449,17 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
     llvm::json::Value Baseline = nullptr;
     for (bool Observe : {false, true}) {
       llvm::json::Array Reads;
+      llvm::json::Array RegisterReads;
       if (Observe) {
         Reads.push_back(llvm::json::Object{{"address", "0x23000000"},
                                            {"size", 16},
                                            {"require_mapped_at_entry", false}});
         Reads.push_back(
             llvm::json::Object{{"address", "0x21000000"}, {"size", 16}});
+        RegisterReads.push_back(llvm::json::Object{
+            {"register", "sp"}, {"offset", INT64_MIN}, {"size", 1}});
+        RegisterReads.push_back(llvm::json::Object{
+            {"register", "sp"}, {"offset", -8}, {"size", 8}});
       }
       const auto Request = jsonText(llvm::json::Object{
           {"backend", "unicorn"},
@@ -2468,7 +2473,8 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
                {"observe_memory_at_stop", Observe},
                {"memory", llvm::json::Array{llvm::json::Object{
                               {"address", "0x21000000"}, {"size", 4096}}}},
-               {"read_memory", std::move(Reads)}}}});
+               {"read_memory", std::move(Reads)},
+               {"read_register_memory", std::move(RegisterReads)}}}});
       auto Text = takeString(neverd_emulate_process_json(
           Session, Path.c_str(), AndroidNativeAArch64, Request.c_str()));
       ASSERT_FALSE(Text.empty()) << takeString(neverd_last_error(Session));
@@ -2487,13 +2493,22 @@ TEST_F(ProcessPublic, AndroidMemoryAtStopKeepsOutcomesAcrossSDKAndCLI) {
       }
       auto *Android = Report.getAsObject()->getObject(field::Android);
       auto *Memory = Android->getArray(field::Memory);
-      ASSERT_EQ(Memory->size(), 2u);
+      ASSERT_EQ(Memory->size(), 4u);
       const auto *Missing = (*Memory)[0].getAsObject();
       EXPECT_EQ(Missing->getString(field::Bytes), "");
       ASSERT_TRUE(Missing->getString(field::Diagnostic));
       EXPECT_FALSE(Missing->getString(field::Diagnostic)->empty());
       EXPECT_EQ((*Memory)[1].getAsObject()->getString(field::Bytes),
                 "00000000000000000000000000000000");
+      const auto *Overflow = (*Memory)[2].getAsObject();
+      ASSERT_NE(Overflow->get(field::Address), nullptr);
+      EXPECT_TRUE(Overflow->get(field::Address)->getAsNull());
+      EXPECT_EQ(Overflow->getString(field::Bytes), "");
+      EXPECT_TRUE(Overflow->getString(field::Diagnostic));
+      const auto *Stack = (*Memory)[3].getAsObject();
+      ASSERT_TRUE(Stack->getString(field::Bytes));
+      EXPECT_EQ(Stack->getString(field::Bytes)->size(), 16u);
+      EXPECT_FALSE(Stack->get(field::Diagnostic));
       *Memory = llvm::json::Array();
       EXPECT_EQ(Report, Baseline);
     }
@@ -5549,20 +5564,31 @@ TEST_F(ProcessPublic, AndroidConnectionFailuresMatchSDKAndCLI) {
     Path = (std::filesystem::path(NEVERD_ANDROID_FIXTURE_DIR) /
             (std::string(Variant) + ".so"))
                .string();
-    using Case = std::pair<unsigned, uint32_t>;
-    for (const auto &[Mode, Count] :
+    struct Case {
+      unsigned Mode;
+      uint32_t Count;
+      bool Recover = false;
+    };
+    for (const auto &[Mode, Count, Recover] :
          {Case{0, 4}, Case{0, 4097}, Case{0, UINT32_MAX}, Case{1, 4},
-          Case{2, 4}}) {
+          Case{2, 4}, Case{0, 3, true}}) {
       SCOPED_TRACE(Variant);
       SCOPED_TRACE(Mode);
       SCOPED_TRACE(Count);
       auto Request = llvm::cantFail(llvm::json::parse(
           R"({"backend":"unicorn","linux_files":{"files":[]},"linux_network":{"connections":[{"peer_hex":"020023297f0000010000000000000000"}],"tcp_connect_failures":{"errno":101,"count":4}},"android":{"entry_symbol":"network_connect_failures","initialize":false,"read_memory":[{"address":"0x20000000","size":4096}],"libraries":{"libc.so":["connect"]}}})"));
       auto &Android = *Request.getAsObject()->getObject(field::Android);
-      auto &Failures = *Request.getAsObject()
-                            ->getObject(field::LinuxNetwork)
-                            ->getObject(field::TCPConnectFailures);
+      auto &Network = *Request.getAsObject()->getObject(field::LinuxNetwork);
+      auto &Failures = *Network.getObject(field::TCPConnectFailures);
       Failures[field::NetworkFailureCount] = uint64_t(Count);
+      if (Recover) {
+        Failures[field::AfterConnections] = 1;
+        // The fixture's fourth retry is a raw IPv6 connect to [::1]:9003.
+        Network.getArray(field::Connections)
+            ->push_back(llvm::json::Object{
+                {field::NetworkPeer,
+                 "0a00232b000000000000000000000000000000000000000100000000"}});
+      }
       Android[field::Arguments] = llvm::json::Array{"0x20000000", Mode};
       std::vector<uint8_t> Expected(4096, 0xa5);
       Android[field::Memory] = llvm::json::Array{
@@ -5587,15 +5613,17 @@ TEST_F(ProcessPublic, AndroidConnectionFailuresMatchSDKAndCLI) {
                   llvm::StringRef::npos);
         if (Mode == 1)
           EXPECT_NE(Report->getString(field::Diagnostic)
-                        ->find("after 4 supplied failures"),
+                        ->find("after 4 supplied failures "
+                               "(attempt 6 has no supplied result)"),
                     llvm::StringRef::npos);
       } else {
         EXPECT_EQ(Report->getString(field::ReturnValue), "0");
       }
       llvm::support::endian::write64le(Expected.data(), 0);
       for (unsigned I = 0; I != (Mode == 2 ? 1u : 4u); ++I) {
+        const auto RawResult = Recover ? 0u : uint64_t(-101);
         llvm::support::endian::write64le(Expected.data() + 8 * (1 + 2 * I),
-                                         I == 3 ? uint64_t(-101) : UINT64_MAX);
+                                         I == 3 ? RawResult : UINT64_MAX);
         llvm::support::endian::write64le(Expected.data() + 8 * (2 + 2 * I),
                                          I == 3 ? 73 : 101);
       }

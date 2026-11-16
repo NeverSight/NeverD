@@ -10,6 +10,7 @@
 
 #include "neverd/loader/MachO/MachOExceptions.h"
 #include "neverd/loader/SourceUnwind.h"
+#include "neverd/object/SectionNames.h"
 
 #include <cstring>
 #include <limits>
@@ -249,6 +250,62 @@ std::vector<uint8_t> buildBigEndianRawRegularInfo() {
 // Frameless indirect
 //===----------------------------------------------------------------------===//
 
+TEST(CompactUnwindSection, TerminalLookupByteIsNotAnArm64Instruction) {
+  using namespace fixture;
+  enum class Tail { Padding, PartialText, Stubs, OtherCode };
+  for (const auto Kind :
+       {Tail::Padding, Tail::PartialText, Tail::Stubs, Tail::OtherCode}) {
+    const bool Partial = Kind == Tail::PartialText;
+    auto Img = makeImage(Arch::AArch64);
+    Section Text;
+    Text.Name = section_names::macho::Text;
+    Text.SegmentName = section_names::macho::TextSeg;
+    Text.VA = kImageBase + kTerminalLeafStart;
+    Text.Size =
+        (Partial ? kTerminalLookupEnd : kTerminalTextEnd) - kTerminalLeafStart;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Img.Sections.push_back(Text);
+    if (Kind == Tail::Stubs || Kind == Tail::OtherCode) {
+      auto &Next = Img.Sections.emplace_back(Text);
+      Next.Name = section_names::macho::Stubs;
+      Next.VA = kImageBase + kTerminalTextEnd;
+      Next.Size = sizeof(uint32_t);
+      if (Kind == Tail::Stubs)
+        Next.Type |= llvm::MachO::S_SYMBOL_STUBS;
+    }
+    enum class Boundary { Sentinel, Gap, Recipe };
+    for (auto End : {Boundary::Sentinel, Boundary::Gap, Boundary::Recipe}) {
+      auto Image = Img;
+      std::vector<RawEntry> Entries = {
+          {kTerminalLeafStart, kARM64ModeFrameless},
+          {kTerminalCallerStart, kARM64ModeFrame}};
+      uint32_t Sentinel = kTerminalLookupEnd;
+      if (End != Boundary::Sentinel) {
+        Entries.push_back({kTerminalLookupEnd, End == Boundary::Gap
+                                                   ? kARM64ModeNone
+                                                   : kARM64ModeFrame});
+        Entries.push_back({kPublishedFunctionStart, kARM64ModeFrameless});
+        Sentinel = kPublishedFunctionEnd;
+      }
+      auto Bytes = buildUnwindInfo(Entries, Sentinel);
+      auto Raw = parseCompactUnwindRaw(Bytes);
+      ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+      EXPECT_EQ(Raw->Index.back().FunctionOffset, Sentinel);
+      attachUnwindInfo(Image, std::move(Bytes));
+      const auto Parsed = parseCompactUnwind(Image);
+      ASSERT_EQ(Parsed.Entries.size(), Entries.size());
+      EXPECT_EQ(Parsed.Entries.front().CodeRange.End,
+                kImageBase + kTerminalCallerStart);
+      const bool HasLookupByte =
+          End != Boundary::Recipe && !Partial && Kind != Tail::OtherCode;
+      EXPECT_EQ(Parsed.Entries[1].CodeRange.End,
+                kImageBase +
+                    (HasLookupByte ? kTerminalTextEnd : kTerminalLookupEnd));
+    }
+  }
+}
+
 TEST(CompactUnwindIndirect, ReadsTheFrameSizeFromThePrologue) {
   BinaryImage Img = makeImage();
   writeStackSubtract(Img, 0x100, 0x1234);
@@ -438,6 +495,9 @@ TEST(CompactUnwindSection,
   const auto &First = Result.Entries.front();
   const auto &Second = Result.Entries.back();
   ASSERT_TRUE(First.ReturnAddressSigningOffset);
+  EXPECT_EQ(First.PersonalitySlotVA, 0u);
+  ASSERT_EQ(Result.PersonalitySlots.size(), 1u);
+  EXPECT_EQ(Second.PersonalitySlotVA, Result.PersonalitySlots.front());
   EXPECT_EQ(*First.ReturnAddressSigningOffset, fixture::kFirstSigningOffset);
   ASSERT_TRUE(Second.ReturnAddressSigningOffset);
   EXPECT_EQ(*Second.ReturnAddressSigningOffset, fixture::kLocalSigningOffset);

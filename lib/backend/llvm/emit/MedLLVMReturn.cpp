@@ -92,6 +92,56 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return GetReturnValue(Op.Inputs[Idx]);
   };
   auto *RetTy = CurFunc->getReturnType();
+  // A scalar floating return carried in a vector register is the register's
+  // low lane.  A scalar operation merges its result into the register it
+  // found (`cvtsi2sd`, `movsd xmm, xmm`), so the bytes above the lane can be
+  // the register's own value at entry, which no parameter supplies: unknown
+  // machine state, and no part of what the function returns.  The lane is
+  // read without them and the type's widening leaves them zero, as an unset
+  // register reads on the native route; reading the whole register would
+  // make source output fail on a value no caller observes.  Bytes the body
+  // computed stay: a caller that reads past the scalar makes the function
+  // return the whole register (recoverPackedScalarReturnFromCallers).
+  auto EntryStateFrom = [&](const MedVar &Value, uint64_t From) {
+    const MedVar *Whole = &Value;
+    for (;;) {
+      if (Whole->isConst() || Whole->Kind != MedVar::Reg || lookupPhi(*Whole))
+        return false;
+      const MedOp *Def = lookupDef(*Whole);
+      const bool EntryMarker = Def && Def->Opcode == NdOp::COPY &&
+                               Def->NumInputs == 1 &&
+                               Def->Inputs[0] == Def->Output;
+      if (!Def || EntryMarker)
+        return Whole->SSAVer == 0 &&
+               llvm::none_of(CurMedFunc->Params, [&](const MedVar &Parameter) {
+                 return Parameter.RegOff == Whole->RegOff;
+               });
+      // A later merge keeps the bytes above its own low part.
+      if (Def->Opcode != NdOp::CONCAT || Def->NumInputs != 2 ||
+          From < Def->Inputs[1].Size)
+        return false;
+      const MedOp *High = lookupDef(Def->Inputs[0]);
+      if (!High || High->Opcode != NdOp::SUBBYTES || High->NumInputs != 2 ||
+          !High->Inputs[1].isConst() ||
+          High->Inputs[1].ConstVal != Def->Inputs[1].Size ||
+          High->Output.Size + Def->Inputs[1].Size != Whole->Size)
+        return false;
+      Whole = &High->Inputs[0];
+    }
+  };
+  auto ReturnRegisterValue = [&](const MedVar &Register) -> llvm::Value * {
+    if (CurMedFunc && RetTy->isVectorTy() && CurMedFunc->ReturnType &&
+        CurMedFunc->ReturnType->Kind == NdTypeKind::Float &&
+        !CurMedFunc->ReturnsVectorRegister && !CurMedFunc->FPReturnViaX87)
+      if (const MedOp *Def = lookupDef(Register);
+          Def && Def->Opcode == NdOp::CONCAT && Def->NumInputs == 2 &&
+          !Def->Inputs[1].isConst() &&
+          Def->Inputs[1].Size == CurMedFunc->ReturnType->Size &&
+          Def->Inputs[1].Size < Register.Size &&
+          EntryStateFrom(Register, Def->Inputs[1].Size))
+        return GetReturnValue(Def->Inputs[1]);
+    return GetReturnValue(Register);
+  };
   llvm::Value *FilterResult = nullptr;
   if (AnalysisRecoveryForSource && TargetArch == Arch::X86 &&
       TargetFormat == BinaryFormat::COFF && CurMedFunc &&
@@ -155,11 +205,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RV = &RIt->Output;
         }
         if (!RV)
-          for (auto &Phi : RetBlk->Phis)
-            if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
-                Phi.Output.RegOff == RegOff &&
-                (!RV || Phi.Output.Size > RV->Size))
-              RV = &Phi.Output;
+          if (const PhiNode *Phi = aggregateReturnPhi(*RetBlk, RegOff))
+            RV = &Phi->Output;
         if (RV)
           return RV;
       }
@@ -181,10 +228,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                 (!RV || BIt->Output.Size > RV->Size))
               RV = &BIt->Output;
           if (!RV)
-            for (auto &Phi : B.Phis)
-              if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
-                  Phi.Output.RegOff == RegOff)
-                RV = &Phi.Output;
+            if (const PhiNode *Phi = aggregateReturnPhi(B, RegOff))
+              RV = &Phi->Output;
           if (RV)
             return RV;
           for (int P : B.Preds)
@@ -286,18 +331,16 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     // in the integer return register here (V0/D0 are not the tracked var).
     uint64_t FloatRetOff = TRI.fpReturnModelReg();
     uint64_t IntRetOff = TRI.IntReturnReg;
-    // A 32-bit target returns a 64-bit integer in a register pair: the low
-    // half in IntReturnReg (EAX/R0) and the high half in IntReturnReg2
-    // (EDX/R1).  Combine both halves so the high 32 bits are not dropped.
-    bool WantWide64 = !WantFloat && RetTy->isIntegerTy(64) &&
-                      TRI.PointerSize == 4 && TRI.IntReturnReg2 != 0;
+    const unsigned WordBytes = TRI.integerReturnWordBytes();
+    const bool WantPair = TRI.IntReturnReg2 &&
+                          (WordBytes == 4 || isMIPS(TargetArch)) &&
+                          RetTy->isIntegerTy(2 * WordBytes * 8);
     uint64_t HiRetOff = TRI.IntReturnReg2;
     const uint16_t IntegerReturnSize =
-        WantWide64             ? TRI.PointerSize
+        WantPair               ? WordBytes
         : RetTy->isPointerTy() ? TRI.PointerSize
-        : RetTy->isIntegerTy()
-            ? static_cast<uint16_t>((RetTy->getIntegerBitWidth() + 7) / 8)
-            : 0;
+        : RetTy->isIntegerTy() ? (RetTy->getIntegerBitWidth() + 7) / 8
+                               : 0;
     auto isAuthoritativeIntegerReturnView = [&](const MedVar &V) {
       if (WantFloat || V.RegOff != IntRetOff || IntegerReturnSize == 0)
         return false;
@@ -354,7 +397,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           if (isAuthoritativeIntegerReturnView(RIt->Output))
             RetVar = &RIt->Output;
         }
-        if (WantWide64 && RIt->Output.RegOff == HiRetOff) {
+        if (WantPair && RIt->Output.RegOff == HiRetOff) {
           // A SUBBYTES that extracts the high PointerSize bytes (e.g. ARM
           // `vmov rLo,rHi,dN` lowers the high register to SUBBYTES(d,4)) is a
           // genuine high half; only a sub-register narrowing at another
@@ -388,7 +431,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RetVar = &Phi.Output;
         }
       }
-      if (WantWide64 && !HiVar) {
+      if (WantPair && !HiVar) {
         for (auto &Phi : Blk.Phis)
           if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
               Phi.Output.RegOff == HiRetOff)
@@ -397,7 +440,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       if (RetVar) {
         rejectEscapingAddressFragment(*RetVar, "a return value");
-        RetVal = GetReturnValue(*RetVar);
+        RetVal = ReturnRegisterValue(*RetVar);
         const ConstantProvenanceSummary ReturnOccurrence =
             summarizeConstantProvenance(*RetVar);
         // A returned address into a WRITABLE global (`return &g[index]` /
@@ -412,7 +455,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         const bool ReturnAddressRelation =
             ReturnOccurrence.Model ==
             ConstantProvenanceSummary::ValueModel::Address;
-        if (!WantFloat && !WantWide64 && RetTy->isIntegerTy() && RetVal &&
+        if (!WantFloat && !WantPair && RetTy->isIntegerTy() && RetVal &&
             RetVal->getType()->isIntegerTy() &&
             (!ReturnOccurrence.hasExplicitProvenance() ||
              ReturnAddressRelation))
@@ -421,24 +464,19 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RetVal = Builder.CreatePtrToInt(Sym, RetTy);
       }
       // Splice the high half above the low half into the 64-bit result.
-      if (WantWide64 && RetVal && HiVar) {
+      if (WantPair && RetVal && HiVar) {
         rejectEscapingAddressFragment(*HiVar,
                                       "the high half of a return value");
-        auto *I64 = llvm::Type::getInt64Ty(*Ctx);
-        auto toI64 = [&](llvm::Value *V) -> llvm::Value * {
-          if (V->getType() == I64)
-            return V;
-          if (V->getType()->getIntegerBitWidth() > 64)
-            return Builder.CreateTrunc(V, I64);
-          return Builder.CreateZExt(V, I64);
+        auto ToLimb = [&](llvm::Value *V) {
+          return Builder.CreateZExt(
+              Builder.CreateZExtOrTrunc(V, sizeToType(WordBytes)), RetTy);
         };
-        llvm::Value *Lo = toI64(RetVal);
-        llvm::Value *Hi = toI64(GetReturnValue(*HiVar));
+        llvm::Value *Lo = ToLimb(RetVal);
+        llvm::Value *Hi = ToLimb(GetReturnValue(*HiVar));
         if (TRI.IntegerReturnPairHighFirst)
           std::swap(Lo, Hi);
-        RetVal = Builder.CreateOr(
-            Builder.CreateShl(Hi, llvm::ConstantInt::get(I64, 32)), Lo,
-            "ret64");
+        RetVal = Builder.CreateOr(Builder.CreateShl(Hi, WordBytes * 8), Lo,
+                                  WordBytes == 4 ? "ret64" : "ret128");
       }
       break;
     }
@@ -492,7 +530,7 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         }
         if (RetVar) {
           rejectEscapingAddressFragment(*RetVar, "a return value");
-          RetVal = GetReturnValue(*RetVar);
+          RetVal = ReturnRegisterValue(*RetVar);
           break;
         }
         for (auto &Phi : Blk.Phis) {

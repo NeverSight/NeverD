@@ -450,6 +450,30 @@ TEST(SymMBAWeightedMask, DenseEvenWeightsHaveCompleteProofsWithinSmallBudgets) {
   }
 }
 
+TEST(SymMBAWeightedMask, ProvesSparseMasksAcrossWordBoundariesWithinBudget) {
+  constexpr unsigned Width = 257;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Scale = C.mkConst(Width, 3);
+  llvm::APInt Union(Width, 0);
+  llvm::SmallVector<SymRef, 16> Terms;
+  for (const unsigned Bit :
+       {0u, 19u, 63u, 64u, 83u, 127u, 128u, 163u, 191u, 192u, 237u, 256u}) {
+    const auto Mask = llvm::APInt::getOneBitSet(Width, Bit);
+    Union |= Mask;
+    Terms.push_back(C.mkMul(Scale, C.mkAnd(X, C.mkConst(Mask))));
+  }
+  auto Input = C.mkAdd(Terms);
+  detail::WorkBudget Budget(4096);
+  detail::SolveReport Report;
+  auto Out = detail::solveWeightedMasks(C, Input, {}, Budget, Report);
+  EXPECT_EQ(Out, C.mkMul(Scale, C.mkAnd(X, C.mkConst(Union))));
+  EXPECT_LT(Budget.used(), 4096u);
+  for (unsigned Bit = 0; Bit < Width; ++Bit) {
+    const auto Word = llvm::APInt::getOneBitSet(Width, Bit);
+    EXPECT_EQ(C.eval(Out, {Word}), (Word & Union) * 3);
+  }
+}
+
 TEST(SymMBAWeightedMask, IndependentZ3ProvesFullWidthWeightedPartitions) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 is unavailable";

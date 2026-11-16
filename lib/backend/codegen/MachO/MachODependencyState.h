@@ -11,12 +11,15 @@
 #define NEVERD_LIB_BACKEND_CODEGEN_MACHO_DEPENDENCYSTATE_H
 #include "neverd/object/MachOLayout.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
 
 #include <array>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 namespace neverd {
 struct MachOChainedImport {
@@ -33,6 +36,9 @@ struct MachOChainedSegment {
   uint16_t PointerFormat = 0, PageSize = 0;
   std::vector<MachOChainedSlot> Slots;
   uint32_t Flags = 0;
+  /// Original file location of the validated starts-in-segment record.
+  /// Threaded bind streams have no starts record.
+  uint64_t StartsFileOffset = 0;
 };
 /// Owned facts from the strict reader, captured only for an installing caller.
 struct MachOChainedFixups {
@@ -43,6 +49,15 @@ struct MachOChainedFixups {
   std::vector<MachOChainedSegment> Segments;
   std::vector<MachOChainedImport> Imports;
   std::vector<std::string> Libraries;
+  /// Regular weak definitions exported by the original image, keyed by the
+  /// exact dyld spelling and carrying the linked address of the fallback.
+  std::map<std::string, uint64_t> WeakDefinitions;
+  /// Strong per-thread exports name the already-registered dyld descriptor.
+  std::map<std::string, uint64_t> ThreadLocalDefinitions;
+
+  using Provider = std::pair<int64_t, bool>; // Library ordinal and weak import.
+  /// A disengaged value records conflicting dyld lookup scopes for a name.
+  std::map<std::string, std::optional<Provider>> uniqueImportProviders() const;
 };
 struct MachODependencyState {
   uint32_t CPUType = 0, CPUSubtype = 0;
@@ -51,6 +66,33 @@ struct MachODependencyState {
   std::vector<std::vector<uint8_t>> Libraries, Symbols, Indirect;
   std::vector<uint8_t> Exports;
 };
+/// A valid header has insufficient VA space immediately below it. An
+/// explicitly movable zero-base image can retry after a checked uniform slide.
+class InsufficientMachOHeaderPrefix final
+    : public llvm::ErrorInfo<InsufficientMachOHeaderPrefix> {
+public:
+  static char ID;
+  void log(llvm::raw_ostream &OS) const override;
+  std::error_code convertToErrorCode() const override;
+};
+
+struct MachOUnwindFunctionCounts;
+struct MachOAuthenticatedFixup;
+
+/// A source image's section addresses can move together when an explicitly
+/// published zero-base dylib needs a larger TEXT mapping. The returned slide
+/// applies to source sections. The preferred Mach header stays at zero.
+llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
+    std::vector<uint8_t> &Binary, Arch Architecture, uint64_t ExtraFrameBytes,
+    MachOUnwindFunctionCounts Additional, bool AllowSlide,
+    std::optional<MachODependencyState> &SlidDependencies,
+    uint64_t AdditionalCommandBytes = 0);
+
+/// Translate the preferred section addresses of a position-independent dylib
+/// with image-relative chained fixups before growing its header downwards.
+llvm::Expected<MachODependencyState>
+slideMachOZeroBaseDylib(std::vector<uint8_t> &Binary, uint64_t Slide);
+
 // Unlike the analysis loader this decoder rejects every malformed or unmodeled
 // byte. Its result is evidence for editing loader metadata, not best effort
 // data.
@@ -59,5 +101,9 @@ readMachODependencyState(llvm::ArrayRef<uint8_t> Bytes,
                          MachOChainedFixups *Chained = nullptr);
 llvm::Error preserveMachODependencyState(const MachODependencyState &Before,
                                          const MachODependencyState &After);
+llvm::Error preserveMachODependencyState(
+    const MachODependencyState &Before, const MachODependencyState &After,
+    const std::map<std::string, uint64_t> &AddedTLS,
+    llvm::ArrayRef<MachOAuthenticatedFixup> Fixups = {});
 } // namespace neverd
 #endif

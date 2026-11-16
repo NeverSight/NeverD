@@ -14,13 +14,29 @@
 #define NEVERD_WORKER_TABLE_PAGE_H
 
 #include "Protocol.h"
+#include "TextFold.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 
 namespace neverd::worker {
+
+using TableSortKey = std::pair<std::uint64_t, std::string>;
+
+/// Shared ordering for materialized and compact table rows.
+inline TableSortKey tableTextSortKey(std::string_view text) {
+  if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X'))
+    try {
+      return {parseAddress(std::string(text)), {}};
+    } catch (const Error &) {
+    }
+  return {0, foldText(text)};
+}
 
 struct TableRowRange {
   std::uint64_t start = 0, size = 1;

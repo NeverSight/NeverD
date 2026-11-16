@@ -1,6 +1,7 @@
 """Reject false native qualification from skipped or mismatched evidence."""
 
 import json
+import plistlib
 from pathlib import Path
 import subprocess
 import struct
@@ -26,6 +27,125 @@ def runtime_xml(executable=False, generated=False):
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_cursor_requires_pc_sensitivity_for_explicit_instructions(self):
+        observation = dict(CASES["cursor_observation"])
+        def result():
+            return subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
+                                               "\n" + json.dumps(observation) + "\n", "")
+        self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][0])["status"],
+                         native.POLICY["passed"])
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result(), CASES["cursor_recipes"][1])
+        observation["pc_rejected"] = observation["signed"]
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result(), CASES["cursor_recipes"][1])
+        observation["recipe_rejected"] = observation["signed"]
+        self.assertEqual(native.cursor_observation(result(), CASES["cursor_recipes"][1])["status"],
+                         native.POLICY["passed"])
+
+    def test_cursor_does_not_accept_a_partial_or_unsigned_observation(self):
+        for observation in CASES["cursor_invalid_observations"]:
+            result = subprocess.CompletedProcess([], 0, CASES["cursor_started"] +
+                                                 "\n" + json.dumps(observation) + "\n", "")
+            with self.subTest(observation=observation), self.assertRaises(ValueError):
+                native.cursor_observation(result, CASES["cursor_recipes"][0])
+
+    def test_cursor_distinguishes_unavailable_isa_from_failed_checks(self):
+        result = subprocess.CompletedProcess([], CASES["cursor_unavailable_code"],
+                                             CASES["cursor_started"] + "\n", "")
+        self.assertEqual(native.cursor_observation(result, CASES["cursor_recipes"][1])["status"],
+                         native.POLICY["unavailable"])
+        with self.assertRaises(ValueError):
+            native.cursor_observation(result, CASES["cursor_recipes"][0])
+        for code in CASES["cursor_invalid_return_codes"]:
+            result.returncode = code
+            with self.subTest(code=code), self.assertRaises(ValueError):
+                native.cursor_observation(result, CASES["cursor_recipes"][1])
+
+    def test_cpta_requires_checked_results_from_the_actual_x1_slice(self):
+        policy = native.POLICY["cpta_probe"]
+        checked = [row[3] for row in policy["vectors"] for _ in policy["instructions"]]
+        unchecked = [row[2] for row in policy["vectors"] for _ in policy["instructions"]]
+        for results, writeback, status in (
+            (checked, policy["writeback_checked"], native.POLICY["passed"]),
+            (unchecked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
+            (checked, policy["writeback_unchecked"], native.POLICY["unavailable"]),
+            (checked, "", native.POLICY["failed"]),
+            (checked[:-1], policy["writeback_checked"], native.POLICY["failed"]),
+            (checked[:-1] + unchecked[-1:], policy["writeback_checked"], native.POLICY["failed"]),
+            (unchecked[:-1] + checked[-1:], policy["writeback_checked"], native.POLICY["failed"]),
+        ):
+            def run(products, output, label, argv, timeout, env=None):
+                if label.endswith(native.POLICY["compile_suffix"]):
+                    arch = label.removesuffix(native.POLICY["compile_suffix"])
+                    Path(argv[-1]).write_bytes(struct.pack(
+                        native.POLICY["header_format"], native.POLICY["macho_magic"],
+                        native.POLICY["cpu_type"], policy["profiles"][arch]))
+                if label == policy["read_label"]:
+                    return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
+                if label.endswith(policy["writeback_suffix"]):
+                    return subprocess.CompletedProcess(argv, 0, writeback, "")
+                values = results if label == policy["x1"] else checked
+                lines = [policy["started"], *values]
+                return subprocess.CompletedProcess(argv, 0, "\n".join(lines), "")
+
+            with self.subTest(results=results), tempfile.TemporaryDirectory() as temporary, \
+                    mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                    mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                    mock.patch.object(native, "command", side_effect=run):
+                report = native.probe_cpta(Path(temporary))
+                self.assertEqual(report["status"], status)
+                self.assertTrue(report[policy["observed_key"]])
+                self.assertEqual(report[policy["qualified_key"]], status == native.POLICY["passed"])
+                self.assertEqual(report[policy["writeback_qualified_key"]],
+                                 results in (checked, unchecked) and writeback == policy["writeback_checked"])
+                self.assertFalse(list(Path(temporary).glob("*" + native.POLICY["binary_suffix"])))
+
+    def test_cpta_requires_the_signed_entitlements_to_round_trip(self):
+        policy = native.POLICY["cpta_probe"]
+        wrong = {k: int(v) if v is True else v for k, v in policy["entitlements"].items()}
+        for contents in (plistlib.dumps({}).decode(), plistlib.dumps(wrong).decode(), ""):
+            with self.subTest(contents=contents), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                with native.OwnedProducts(root, False) as products, mock.patch.object(
+                    native, "command", return_value=subprocess.CompletedProcess([], 0, contents, "")
+                ):
+                    self.assertIsNone(native.sign_cpta_slice(products, root, root / policy["x1"], policy))
+                self.assertFalse((root / policy["entitlements_file"]).exists())
+
+    def test_cpta_records_unsupported_isa_and_loader_without_qualification(self):
+        policy = native.POLICY["cpta_probe"]
+
+        def run(products, output, label, argv, timeout, env=None):
+            if label.endswith(native.POLICY["compile_suffix"]):
+                arch = label.removesuffix(native.POLICY["compile_suffix"])
+                Path(argv[-1]).write_bytes(struct.pack(
+                    native.POLICY["header_format"], native.POLICY["macho_magic"],
+                    native.POLICY["cpu_type"], policy["profiles"][arch]))
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label in (policy["sign_label"], policy["x1"] + native.POLICY["signature_suffix"]):
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if label == policy["read_label"]:
+                return subprocess.CompletedProcess(argv, 0, plistlib.dumps(policy["entitlements"]).decode(), "")
+            if label.endswith(policy["writeback_suffix"]):
+                return subprocess.CompletedProcess(argv, 0, policy["writeback_unchecked"], "")
+            if label == policy["x1"]:
+                raise OSError(policy["bad_cpu_type_errno"], "")
+            return subprocess.CompletedProcess(argv, policy["undefined_instruction"],
+                                               policy["started"], "")
+
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(native.platform, "system", return_value=CASES["probe_host"]["system"]), \
+                mock.patch.object(native.platform, "machine", return_value=CASES["probe_host"]["machine"]), \
+                mock.patch.object(native, "command", side_effect=run):
+            report = native.probe_cpta(Path(temporary))
+            self.assertEqual(report["status"], native.POLICY["unavailable"])
+            self.assertFalse(report[policy["observed_key"]])
+            self.assertFalse(report[policy["qualified_key"]])
+            for arch, profile in report["profiles"].items():
+                self.assertEqual(profile["outcome"],
+                                 policy["loader_unavailable" if arch == policy["x1"] else "isa_unavailable"])
+
     def test_probe_keeps_startup_and_dlopen_contracts_distinct(self):
         contract = native.fixture_contract()
         markers = "\n".join(contract[name] for name in

@@ -25,13 +25,20 @@
 #ifndef NEVERD_A64_PAUTH_M_TEXT
 #define NEVERD_A64_PAUTH_M_TEXT(Name, Text)
 #endif
+#ifndef NEVERD_A64_PAUTH_M_SIGN
+#define NEVERD_A64_PAUTH_M_SIGN(Key, Asm)
+#endif
+
+#define NEVERD_A64_PACM_ASM ".inst 0xd50324ff\n"
+#define NEVERD_A64_PACIA1716_ASM ".inst 0xd503211f"
+#define NEVERD_A64_PACIB1716_ASM ".inst 0xd503215f"
 
 NEVERD_A64_PAUTH_M_MARKER(A64_PACMPending, "__neverd_pending_pacm")
 
 NEVERD_A64_PAUTH_M_OPERATION(A64_PaciaM, "pacm_pacia", IA, false, false,
-                             ".inst 0xd503211f")
+                             NEVERD_A64_PACIA1716_ASM)
 NEVERD_A64_PAUTH_M_OPERATION(A64_PacibM, "pacm_pacib", IB, false, false,
-                             ".inst 0xd503215f")
+                             NEVERD_A64_PACIB1716_ASM)
 NEVERD_A64_PAUTH_M_OPERATION(A64_AutiaM, "pacm_autia", IA, true, false,
                              ".inst 0xd503219f")
 NEVERD_A64_PAUTH_M_OPERATION(A64_AutibM, "pacm_autib", IB, true, false,
@@ -40,6 +47,9 @@ NEVERD_A64_PAUTH_M_OPERATION(A64_AuthReturnIAM, "pacm_retaa", IA, true, true,
                              ".inst 0xd503219f")
 NEVERD_A64_PAUTH_M_OPERATION(A64_AuthReturnIBM, "pacm_retab", IB, true, true,
                              ".inst 0xd50321df")
+
+NEVERD_A64_PAUTH_M_SIGN(IA, NEVERD_A64_PACM_ASM NEVERD_A64_PACIA1716_ASM)
+NEVERD_A64_PAUTH_M_SIGN(IB, NEVERD_A64_PACM_ASM NEVERD_A64_PACIB1716_ASM)
 
 NEVERD_A64_PAUTH_M_CONSUMER(0xd503233f, A64_PaciaM, PC)
 NEVERD_A64_PAUTH_M_CONSUMER(0xd503237f, A64_PacibM, PC)
@@ -56,9 +66,9 @@ NEVERD_A64_PAUTH_M_VALUE(uint32_t, kAArch64PACMEncoding, 0xd50324ff)
 NEVERD_A64_PAUTH_M_VALUE(unsigned, kAArch64PACMOperandCount, 4)
 // All operand materialization precedes this indivisible instruction pair.
 NEVERD_A64_PAUTH_M_TEXT(kAArch64PACMPrefixLLVM,
-                        "cbz $4, 2f\n.inst 0xd50324ff\n2:\n")
+                        "cbz $4, 2f\n" NEVERD_A64_PACM_ASM "2:\n")
 NEVERD_A64_PAUTH_M_TEXT(kAArch64PACMPrefixC,
-                        "cbz %4, 2f\n.inst 0xd50324ff\n2:\n")
+                        "cbz %4, 2f\n" NEVERD_A64_PACM_ASM "2:\n")
 NEVERD_A64_PAUTH_M_TEXT(kAArch64PACMConstraints, "={x17},0,{x16},{x15},r")
 NEVERD_A64_PAUTH_M_TEXT(kAArch64PACMReturnConstraints,
                         "={x17},0,{x16},{x15},r,~{x14},~{cc}")
@@ -68,3 +78,7 @@ NEVERD_A64_PAUTH_M_TEXT(kAArch64PACMReturnConstraints,
 #undef NEVERD_A64_PAUTH_M_CONSUMER
 #undef NEVERD_A64_PAUTH_M_VALUE
 #undef NEVERD_A64_PAUTH_M_TEXT
+#undef NEVERD_A64_PAUTH_M_SIGN
+#undef NEVERD_A64_PACM_ASM
+#undef NEVERD_A64_PACIA1716_ASM
+#undef NEVERD_A64_PACIB1716_ASM

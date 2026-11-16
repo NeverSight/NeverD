@@ -298,6 +298,34 @@ MedLLVMEmitter::tryResolveDirectGlobalDataAddress(const MedVar &Address,
       NumericAddress = traceValueVA(Address);
   if (!NumericAddress)
     NumericAddress = traceAuthenticatedI386PicAddress();
+  if (!NumericAddress && !usesOriginalImageStorage() &&
+      TargetArch == Arch::AArch64 && Address.Size == 8 &&
+      occurrenceHasAddressFragmentTaint(Address)) {
+    // ADRP may survive a loop as a PHI of the same raw page, including resets
+    // that re-materialize it. Complete its address at the memory use; the
+    // unmapped page prefix itself never acquires a data-object identity.
+    const MedOp *Def = lookupDef(Address);
+    if (Def && Def->NumInputs == 2 &&
+        (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB)) {
+      auto complete = [&](const MedVar &Base,
+                          const MedVar &Offset) -> std::optional<uint64_t> {
+        if (Offset.Size != 8 ||
+            summarizeConstantProvenance(Offset).Model !=
+                ConstantProvenanceSummary::ValueModel::Scalar)
+          return std::nullopt;
+        auto Delta = traceSSAConst(Offset);
+        if (!Delta)
+          return std::nullopt;
+        auto Page = uniformAddressFragment(Base);
+        if (!Page)
+          return std::nullopt;
+        return Def->Opcode == NdOp::INT_ADD ? *Page + *Delta : *Page - *Delta;
+      };
+      NumericAddress = complete(Def->Inputs[0], Def->Inputs[1]);
+      if (!NumericAddress && Def->Opcode == NdOp::INT_ADD)
+        NumericAddress = complete(Def->Inputs[1], Def->Inputs[0]);
+    }
+  }
   if (!NumericAddress)
     return nullptr;
   if (*NumericAddress == 0)
@@ -326,6 +354,15 @@ llvm::Constant *MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr,
   // `__ImageBase`.
   if (OwnerVA == Img->Base && Img->PEHeaderBytes)
     return tryResolveImageHeaderData(Addr, OwnerVA);
+
+  // A linked AArch64 page can start before its first mapped byte. Its
+  // original-image address is still complete, including through an owned
+  // relation; the ordinary segment bounds below apply to other addresses.
+  if (Addr == OwnerVA && isOriginalImagePageBase(OwnerVA))
+    if (auto [Storage, Base] = originalImageStorage(OwnerVA); Storage)
+      return llvm::ConstantExpr::getGetElementPtr(
+          llvm::Type::getInt8Ty(*Ctx), Storage,
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), Addr - Base));
 
   const Segment *OwnerSeg = Img->getSegmentFor(OwnerVA);
   if (!OwnerSeg || !OwnerSeg->isReadable())

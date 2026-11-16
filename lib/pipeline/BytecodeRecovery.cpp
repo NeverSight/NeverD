@@ -381,7 +381,7 @@ recoverBytecode(llvm::ArrayRef<uint8_t> Code, llvm::StringRef RequestJSON,
     if (llvm::verifyModule(*Module, &llvm::errs()))
       return invalid("LLVM source transformation failed verification");
     if (Observations) {
-      SourceMap.LLVMSources = &LLVMSources;
+      Options.LLVMSources = &LLVMSources;
       nameLLVMSourceEvidence(LLVMSources, Evidence);
     }
     if (!LLVMCEmitter().emit(*Module, OS, Options))

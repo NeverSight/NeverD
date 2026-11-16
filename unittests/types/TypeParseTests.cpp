@@ -513,6 +513,103 @@ TEST(TypeParse, ReadsOneFunctionsDeclarationAgainstTheLibrary) {
   EXPECT_NE(problem("int f(int a").find("expected ')'"), std::string::npos);
 }
 
+TEST(TypeParse, QualifiedTemplateReferencesKeepTheCatalogIdentity) {
+  auto Library = parsed("struct Layout { unsigned long long value; };");
+  const std::vector<std::string> Names = {
+      "sample::Box<sample::Pair<unsigned long, const char *>, 3>",
+      "sample::Box<sample::Pair<unsigned long, const char *>, 3>::Node",
+      "sample::Callback<void (*)(int, sample::Node *), sample::Mode::Fast>",
+      "sample::Grid<sample::Box<int>, -2, true>",
+      "sample::Box<sample::Box<int> >",
+      "sample::Words<' ', '>'>"};
+  for (const auto &Name : Names) {
+    LocalType Type = *Library.find("Layout");
+    Type.Name = Name;
+    Library.define(std::move(Type));
+  }
+  const std::vector<std::string> Inputs = {
+      "::sample :: Box < sample::Pair<unsigned long,const char*>,3 >",
+      "sample::Box<sample::Pair<unsigned long, const char*>, 3>::Node",
+      "sample::Callback<void(*)(int,sample::Node*),sample::Mode::Fast>",
+      "sample::Grid<sample::Box<int>,-2,true>",
+      "sample::Box<sample::Box<int>>",
+      "sample::Words< ' ', '>' >"};
+  for (size_t I = 0; I < Inputs.size(); ++I) {
+    for (const std::string Prefix : {"", "struct "}) {
+      const auto Read = parseFunctionDeclaration(
+          "void inspect(" + Prefix + Inputs[I] + " const *object)", Library);
+      ASSERT_TRUE(Read.ok())
+          << Inputs[I] << ": " << Read.Problems.front().Message;
+      ASSERT_EQ(Read.Function->Params.size(), 1u);
+      const auto &Type = Read.Function->Params[0].Type;
+      ASSERT_EQ(Type->Kind, TypeExprKind::Pointer);
+      EXPECT_EQ(Type->Element->Name, Names[I]);
+      EXPECT_TRUE(Type->Element->Const);
+    }
+  }
+  for (llvm::StringRef Bad :
+       {"sample::Missing<int> *", "sample::Grid<sample::Box<int>,-2,false> *",
+        "sample::Grid<sample::Box<int>,-2,true>> *",
+        "sample::Grid<sample::Box<int>,-2,true *", "sample: :Grid<int> *",
+        "sample::Words<'','>'> *"}) {
+    EXPECT_FALSE(
+        parseFunctionDeclaration("void inspect(" + Bad.str() + ")", Library)
+            .ok())
+        << Bad.str();
+  }
+  EXPECT_EQ(Library.size(), Names.size() + 1);
+}
+
+TEST(TypeParse, TemplateIndexObservesReplacementRemovalTrialsAndCopies) {
+  auto Library = parsed("struct Layout { unsigned long long value; };");
+  LocalType Type = *Library.find("Layout");
+  Type.Name = "sample::Box<int, 3>";
+  Library.define(Type);
+  const auto Read = [](const TypeLibrary &Library) {
+    return parseFunctionDeclaration("void inspect(sample :: Box<int,3> *)",
+                                    Library)
+        .ok();
+  };
+  ASSERT_TRUE(Read(Library));
+  auto Copy = Library;
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove(Type.Name));
+    EXPECT_FALSE(Read(Library));
+  }
+  ASSERT_TRUE(Read(Library));
+  {
+    TypeLibrary::Trial Trial(Library);
+    Type.Name = "sample :: Box<int,3>";
+    Library.define(Type);
+    EXPECT_FALSE(Read(Library))
+        << "a spelling shared by two declarations is ambiguous";
+  }
+  EXPECT_TRUE(Read(Library));
+  EXPECT_TRUE(Read(Copy));
+  Library.remove("sample::Box<int, 3>");
+  EXPECT_FALSE(Read(Library));
+  EXPECT_TRUE(Read(Copy));
+  Type.Name = "sample::Box<int, 3>";
+  Library.define(Type);
+  Library.define(Type);
+  EXPECT_TRUE(Read(Library));
+  llvm::StringMap<std::string> Aliases{{"Projected", Type.Name}};
+  ParseOptions Options;
+  Options.TypeNames = &Aliases;
+  const auto Aliased = parseFunctionDeclaration(
+      "void inspect(Projected *Projected)", Library, Options);
+  ASSERT_TRUE(Aliased.ok());
+  EXPECT_EQ(Aliased.Function->Params[0].Type->Element->Name, Type.Name);
+  EXPECT_EQ(Aliased.Function->Params[0].Name, "Projected");
+  RenderOptions Spelling;
+  Spelling.SourceTypeNames = true;
+  const auto Text =
+      spellType(Library, *makeFunction(Aliased.Function), "inspect", Spelling);
+  EXPECT_NE(Text.find(Type.Name), std::string::npos);
+  EXPECT_TRUE(parseFunctionDeclaration(Text, Library).ok()) << Text;
+}
+
 TEST(TypeParse, PunctuationKeepsOperatorsDeclaratorsAndErrorPositions) {
   for (const auto Model :
        {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {

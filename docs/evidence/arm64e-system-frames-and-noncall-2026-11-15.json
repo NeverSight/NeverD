@@ -1,0 +1,267 @@
+{
+  "neverd_revision": "c316fe83a8d07880aa6c851274ae0be62a8ea8ff",
+  "llvm_revision": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "capstone_revision": "729680277dd762704ea3270291b7a75318f51583",
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43675185998",
+  "ci_revision": "ffcc703d3aa9aa5b14cf3cd2e4cb4da379bf873b",
+  "package": {
+    "host_sha256": "37aacddb8f435098724433981ac5eeca108670690f32e66b3e14c7ac6d3dd62b",
+    "archive_sha256": "9f3570fba2e4b8548be9803a4738907c853c0d1ee7437927a14f7f6265265452",
+    "tag": "neverd-system-frames-c316fe83a8d0",
+    "asset": "lifted-system-frames.tgz"
+  },
+  "local": {
+    "publication_cases": 99,
+    "cleanup_cases_rechecked_after_fixture_fix": 4,
+    "unwind_recovery_cases": 26,
+    "abi_language_selected": 1084,
+    "abi_language_passed": 1036,
+    "abi_language_skipped": 48,
+    "abi_language_failed": 0,
+    "abi_language_elapsed_seconds": 641.07,
+    "formatter_version": "22.1.2",
+    "formatted_files": 12,
+    "documentation_inventory": "309 Markdown files, 10 locales"
+  },
+  "hosts": {
+    "macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA'"
+      },
+      "cpa2": {
+        "exit": 1,
+        "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+      },
+      "host_sha256": "37aacddb8f435098724433981ac5eeca108670690f32e66b3e14c7ac6d3dd62b",
+      "test_cases": 99,
+      "executed_native_images": 220,
+      "native_system_frameless_steps": 39,
+      "native_noncall_cxx_cleanups": 8,
+      "native_noncall_objc_cleanups": 8,
+      "cases": {
+        "ProtectedNonCallRunsInterruptedAndOuterCleanups": {
+          "native_noncall_language_cleanups": "8"
+        },
+        "ProtectedNonCallRunsInterruptedAndOuterObjCCleanups": {
+          "native_noncall_objc_cleanups": "8"
+        },
+        "SignalResumesFramelessAllPairs": {
+          "original_sha256": "55793ca1611b95829111cc48fad9d7249b5ad635bd61b7915f8138c0440c7c47",
+          "published_sha256": "3fb901e763304a567c1800b5c1bcfbe148bd57e952b7a5a44f48b0bac970e72a",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "3",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesFramelessSparsePairs": {
+          "original_sha256": "900650a7eb2cb9e5aebdfe22fb401b83515ac9d62bae20aeb27c446331f7ebd9",
+          "published_sha256": "f11d237c511084c9a00872f6ba9af081f3613e4710ddd33505097b7cca834075",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "3",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesCoalescedFramelessPairs": {
+          "original_sha256": "659532e24f813bffa7d9810323164681cb8002b0a16d67ae7020d1458841ed77",
+          "published_sha256": "fe4d413e9c86f07358eade0a229d61ca571408594aacb9a9e878f28ff73faabd",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "6",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SystemUnwindsEachFramelessPair": {
+          "original_sha256": "3a696eb0594ff31b17d1d8fc24d4752f3f16e5634029da6ca66a228e424b2d0c",
+          "published_sha256": "e8e7eb7dfb6580add2d5d9097ee504a46680fab490d33cd4baadf8a68188f7f2",
+          "executed_native_images": "18",
+          "native_system_frameless_steps": "27",
+          "native_signal_caller_resumptions": "54"
+        }
+      },
+      "qualification_sha256": "b40644c19ad4f20578d34fa7314f98cbcc6363b06f76bf59e06d2666092faa61",
+      "results_sha256": "6e093ecdd73f2ac4303d401a04cbbd74e3ad8b0f8a6ecfa23609ee02830a42e6",
+      "cpta": {
+        "source_revision": "c316fe83a8d07880aa6c851274ae0be62a8ea8ff",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "b1dc8438ca07734ca80c007d879a3e4d8c0fb1b64ba97563b76cc5c1d7e3e05d",
+          "scripts/verify_arm64e_native.def": "49b592ad62bb788184dfd22a1988a6e5c15e6ca7b982769eae6f98a41382502d",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838",
+          "scripts/arm64e_native_cpta.def": "52308548db2dcf514226a4045d0c40b6c1cbbf10e2a1a0ee618e81f65f606fef"
+        },
+        "platform": "macOS-26.7.2-arm64-arm-64bit-Mach-O",
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "61ee4ce24e923e16ed8fae952c45890c0a1c5687c5dac5d7cda828889c492c0a",
+            "cpu_subtype": 0,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "33cbc4e7d028fe7f0b9521f026fddb0e9e214ae2b65c23d4d63f79832a507346",
+            "cpu_subtype": 2164260866,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "slice-unavailable"
+          }
+        },
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    },
+    "xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "cpa": {
+        "exit": 0,
+        "text": "0"
+      },
+      "cpa2": {
+        "exit": 0,
+        "text": "0"
+      },
+      "host_sha256": "37aacddb8f435098724433981ac5eeca108670690f32e66b3e14c7ac6d3dd62b",
+      "test_cases": 99,
+      "executed_native_images": 220,
+      "native_system_frameless_steps": 39,
+      "native_noncall_cxx_cleanups": 8,
+      "native_noncall_objc_cleanups": 8,
+      "cases": {
+        "ProtectedNonCallRunsInterruptedAndOuterCleanups": {
+          "native_noncall_language_cleanups": "8"
+        },
+        "ProtectedNonCallRunsInterruptedAndOuterObjCCleanups": {
+          "native_noncall_objc_cleanups": "8"
+        },
+        "SignalResumesFramelessAllPairs": {
+          "original_sha256": "e8f4200c696a4e3df144ce8797ce48b8f238192a4b9079af3d6e6f4acd205e91",
+          "published_sha256": "227654f86796296590267d04b97b0f4c058d8dec5e56af12ff88c69827042268",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "3",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesFramelessSparsePairs": {
+          "original_sha256": "1d0036b55bd70bb22d0752cf7e7369b242feec7a2a0ba77cde2c3a6d0889d4f4",
+          "published_sha256": "7ce21d359b811607843a73a3c99c28e7ff0518aaa64a9ff57fc20c51a770b3c8",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "3",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesCoalescedFramelessPairs": {
+          "original_sha256": "4440148eba50909c32d3822983135fde86a1bdab26b7fc5b228b78e390e1179f",
+          "published_sha256": "8b285225bac32e338a35bea676180fdaa0b6a07de1b32ac1ca5ba17be3a48dcf",
+          "executed_native_images": "2",
+          "native_system_frameless_steps": "6",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SystemUnwindsEachFramelessPair": {
+          "original_sha256": "0ed98ccf394359111f768baf318463b34cce61ba9a9502d8fdd0c8ab111f2909",
+          "published_sha256": "8988ca61e1ede14c96a017bad8ab2e138f460b255e5e663444113259fec42532",
+          "executed_native_images": "18",
+          "native_system_frameless_steps": "27",
+          "native_signal_caller_resumptions": "54"
+        }
+      },
+      "qualification_sha256": "977c224cbc35b256d0c5361af85a97dfb3a2a9042a9fa9777d4c501df0eee45f",
+      "results_sha256": "3d95ad652d764f67345f2c870163448bf84efb4c9c064bd3682f381d837d4752",
+      "cpta": {
+        "source_revision": "c316fe83a8d07880aa6c851274ae0be62a8ea8ff",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "b1dc8438ca07734ca80c007d879a3e4d8c0fb1b64ba97563b76cc5c1d7e3e05d",
+          "scripts/verify_arm64e_native.def": "49b592ad62bb788184dfd22a1988a6e5c15e6ca7b982769eae6f98a41382502d",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838",
+          "scripts/arm64e_native_cpta.def": "52308548db2dcf514226a4045d0c40b6c1cbbf10e2a1a0ee618e81f65f606fef"
+        },
+        "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+        "profiles": {
+          "arm64": {
+            "outcome": "undefined-instruction",
+            "sha256": "352c4e085f577250ddcd2dd6115e4ced847298854eba0029c69551bac0310455",
+            "cpu_subtype": 0,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e": {
+            "outcome": "undefined-instruction",
+            "sha256": "3499bee71456d43fff499bf099842d07743abfe6764528ff08842c52330638df",
+            "cpu_subtype": 2164260866,
+            "results": [],
+            "ordinary_memory_writeback": "unchecked"
+          },
+          "arm64e.x1": {
+            "outcome": "did-not-start",
+            "signed_entitlements": {
+              "com.apple.security.hardened-process": true,
+              "com.apple.security.hardened-process.checked-allocations": true,
+              "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+              "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+            },
+            "sha256": "eb2128e9c9f9cc3b046273addae00bf6b7114077216d7ea3d2b06f6520734411",
+            "cpu_subtype": 2147483660,
+            "errno": 86
+          }
+        },
+        "status": "unavailable",
+        "native_el0_cpta_observed": false,
+        "x1_el0_cpta_qualified": false,
+        "x1_el0_checked_writeback_qualified": false
+      }
+    }
+  },
+  "independent_controls": {
+    "original_compact_frameless_pair": "Wrong X19/X20 slots and SP reproduced with the public Darwin cursor on ordinary arm64. Explicit DWARF restores the independently specified values and CFA.",
+    "native_cursor_comparison": "Public arm64e cursor IP values retain PAC; compare stripped addresses after the system unwind step. All 39 steps per host pass with the corrected comparison.",
+    "language_fixture_resumption": "A local unsigned arm64 throwing-call control aborted with the missing _Unwind_Resume no-handler entry and passed after adding it; the protected non-call original and installed fixtures then passed on both native runners."
+  },
+  "superseded_runs": [
+    {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/43673826521",
+      "result": "Four system-cursor tests per host failed the signed/unsigned IP comparison."
+    },
+    {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/43674602925",
+      "result": "All system-cursor tests passed; two independent non-call fixtures per host aborted at the missing cleanup-resumption LSDA entry."
+    }
+  ],
+  "remaining_qualification": {
+    "frameless_complete_prologue_system_unwind": true,
+    "explicitly_guarded_non_call_cleanup": true,
+    "native_pauth_lr": false,
+    "native_cpta_on": false,
+    "arbitrary_lifted_images": false,
+    "unproved_asynchronous_lifetime_information": false
+  },
+  "self_hosted_runner_counts": {
+    "NeverSight/NeverD": 0,
+    "gmh5225/test_mac_intel": 0
+  }
+}

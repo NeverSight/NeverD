@@ -176,12 +176,14 @@ public:
   /// admission leaves both context and architectural outputs unchanged.
   bool stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context);
 
-  /// Declare a concrete MIPS32 ordinary-RAM profile: identity VA/PA,
+  /// Declare a concrete MIPS ordinary-RAM profile: identity VA/PA,
   /// synchronizable memory, Config5.LLB=1, the given power-of-two reservation
   /// granule (>=4), and no unreported interference/cache evictions. This is
   /// not a general SMP or device model. Incoming LL state remains unknown.
   /// Configuration survives reset; reservation knowledge does not.
   bool setMIPSReservationModel(uint32_t GranuleBytes);
+  /// Paired transfers additionally require Config5.XNP=0 on the observed CPU.
+  bool setMIPSReservationModel(uint32_t GranuleBytes, bool PairedTransfers);
   /// Report an observed reservation-clear event (ERET, coherent interference
   /// or spurious failure). This does not modify memory or enable the profile.
   void clearMIPSReservation();
@@ -289,7 +291,13 @@ private:
   std::optional<X86FullSegmentLimitChoice> X86OperandSegmentChoice;
   std::optional<uint32_t> MIPSReservationGranule;
   bool MIPSReservationKnown = false;
-  std::optional<uint32_t> MIPSReservationAddress;
+  struct MIPSLinkedAccess {
+    uint64_t Address;
+    uint16_t Bytes;
+    bool Paired;
+  };
+  std::optional<MIPSLinkedAccess> MIPSReservation;
+  bool MIPSPairedTransfers = false;
   bool StepOverCalls = false;
   bool StrictMode = false;
   bool X86Approx12ReferenceMode = false;

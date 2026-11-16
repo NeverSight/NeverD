@@ -26,9 +26,11 @@ namespace neverd {
 struct FloatingCallArguments {
   /// Scalar bytes in consecutive floating parameter registers.
   std::vector<uint16_t> ParameterBytes;
+  /// Result byte width, or zero for void with no return lane.
   uint16_t ReturnBytes = 0;
   /// A dense AAPCS64 HFA result has this many equal FP members; zero denotes
-  /// a scalar result. ReturnBytes is the complete returned object's size.
+  /// a scalar or void result. ReturnBytes is the complete returned object's
+  /// size.
   uint16_t ReturnElements = 0;
   /// For an HFA signature, one count per source parameter: zero for a scalar,
   /// otherwise the number of consecutive Scalars carrying that dense record.
@@ -41,12 +43,23 @@ struct FloatingCallArguments {
     uint16_t Bytes = 0;
     bool Floating = false;
     bool Pointer = false;
+    /// MIPS narrow integer arguments are extended by the caller.
+    bool Signed = false;
     bool operator==(const ScalarParameter &) const = default;
   };
-  /// A mixed scalar signature, in source order. Empty retains the consecutive
+  /// Scalar carriers in source order. Empty retains the consecutive
   /// floating-register representation above. Locations come exclusively from
   /// SourceParameterPlacement, including the entry-SP bias of stack values.
+  /// An o32 double in a GPR pair occupies one logical entry at its first word.
   std::vector<ScalarParameter> Scalars;
+  /// AArch64/x64 integer and pointer results use their native result register;
+  /// MIPS results use v0 or the ordered v0/v1 pair.
+  /// A void call has no result. HFA descriptors keep
+  /// their existing ReturnElements and floating element convention.
+  NdTypeKind ReturnKind = NdTypeKind::Float;
+  bool SignedResult = false;
+  /// For a variadic occurrence Scalars includes all promoted actual arguments.
+  std::optional<unsigned> FixedCount;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 
@@ -57,7 +70,8 @@ struct FloatingCallArguments {
 /// conventions need other adapters. The caller establishes the fixed C ABI.
 std::optional<FloatingCallArguments>
 floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
-                      llvm::ArrayRef<TypeRef> Parameters);
+                      llvm::ArrayRef<TypeRef> Parameters,
+                      std::optional<unsigned> FixedCount = std::nullopt);
 
 struct FloatingCallTypes {
   TypeRef Result;

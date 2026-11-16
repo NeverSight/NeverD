@@ -9,6 +9,7 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 
+#include <bit>
 #include <map>
 #include <vector>
 
@@ -41,6 +42,24 @@ public:
     return (!A || B <= std::numeric_limits<size_t>::max() / A) && charge(A * B);
   }
 };
+
+// Visit each set position once, charging the scan and its word operations.
+// APInt clears unused bits in its last word, including for non-native widths.
+template <typename Fn>
+bool visitMaskBits(const llvm::APInt &Mask, MaskResources &Resources,
+                   size_t WorkPerBit, Fn Visit) {
+  for (unsigned W = 0; W < Mask.getNumWords(); ++W) {
+    uint64_t Bits = Mask.getRawData()[W];
+    if (!Resources.charge(1 + std::popcount(Bits) * WorkPerBit))
+      return false;
+    while (Bits) {
+      if (!Visit(64 * W + std::countr_zero(Bits)))
+        return false;
+      Bits &= Bits - 1;
+    }
+  }
+  return true;
+}
 
 struct MaskTerm {
   SymRef Original;
@@ -282,7 +301,13 @@ bool proveMaskIdentity(const SymContext &Ctx, SymRef Before, SymRef After,
   // above distributes over that sum, even when arithmetic carries occur.
   // Check the actual shifted contribution, including its modular overflow,
   // instead of trusting the synthesizer's unshifted coefficient buckets.
-  for (unsigned Bit = 0; Bit != Width; ++Bit) {
+  llvm::APInt Active(Width, 0);
+  for (const auto &Term : Terms) {
+    if (!Resources.charge(Words))
+      return false;
+    Active |= Term.Mask;
+  }
+  return visitMaskBits(Active, Resources, Words, [&](unsigned Bit) {
     llvm::APInt Difference(Width, 0);
     for (const auto &Term : Terms) {
       if (!Resources.charge(1 + Words))
@@ -290,10 +315,8 @@ bool proveMaskIdentity(const SymContext &Ctx, SymRef Before, SymRef After,
       if (Term.Mask[Bit])
         Difference += Term.Coefficient.shl(Bit);
     }
-    if (!Difference.isZero())
-      return false;
-  }
-  return true;
+    return Difference.isZero();
+  });
 }
 
 } // namespace
@@ -462,29 +485,34 @@ SymRef solveWeightedMasks(SymContext &Ctx, SymRef E, const MBAOptions &Opts,
     std::vector<llvm::APInt> Coefficients(Width, llvm::APInt(Width, 0));
     llvm::APInt Constant =
         GroupLiteral ? Ctx.constValue(GroupLiteral) : llvm::APInt(Width, 0);
+    llvm::APInt Active(Width, 0);
     for (const auto &Term : Terms) {
-      if (!Resources.product(Words, Words))
+      if (!Resources.product(Words, Words) || !Resources.charge(2 * Words))
         return E;
       Constant += Term.Coefficient * Term.Zero;
-      for (unsigned Bit = 0; Bit != Width; ++Bit) {
-        if (!Resources.charge(1 + Words))
-          return E;
-        if (Term.One[Bit] && !Term.Zero[Bit])
-          Coefficients[Bit] += Term.Coefficient;
-        else if (Term.Zero[Bit] && !Term.One[Bit])
-          Coefficients[Bit] -= Term.Coefficient;
-      }
+      // If both carrier assignments give the same bit, its contribution is
+      // already in Constant. Visit only positions that can change.
+      const auto Vary = Term.One ^ Term.Zero;
+      Active |= Vary;
+      if (!visitMaskBits(Vary, Resources, 1 + Words, [&](unsigned Bit) {
+            if (Term.One[Bit])
+              Coefficients[Bit] += Term.Coefficient;
+            else
+              Coefficients[Bit] -= Term.Coefficient;
+            return true;
+          }))
+        return E;
     }
     std::map<llvm::APInt, llvm::APInt, CoefficientLess> Buckets;
-    for (unsigned Bit = 0; Bit != Width; ++Bit) {
-      if (!Resources.charge(1 + Words))
-        return E;
-      const auto &K = Coefficients[Bit];
-      if (K.shl(Bit).isZero())
-        continue;
-      auto [It, Added] = Buckets.try_emplace(K, Width, 0);
-      It->second.setBit(Bit);
-    }
+    if (!visitMaskBits(Active, Resources, 1 + Words, [&](unsigned Bit) {
+          const auto &K = Coefficients[Bit];
+          if (!K.shl(Bit).isZero()) {
+            auto [It, Added] = Buckets.try_emplace(K, Width, 0);
+            It->second.setBit(Bit);
+          }
+          return true;
+        }))
+      return E;
     SymRef Carrier(Index);
     llvm::SmallVector<SymRef, 8> Parts, Originals;
     SymRef SingleScale, SingleWord;

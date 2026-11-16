@@ -12,10 +12,10 @@
 // so this is purely a NeverD lift gap (same family as #303/#377/#381).
 //
 // The fix keeps each as the GENUINE instruction via inline asm (per the
-// "keep binary as binary, don't lift to library functions" directive): the lifter emits a
-// per-op intrinsic with the correct x87-stack effect and the backend lowers it
-// to `fsin`/`fscale`/... so the recompiled object runs the same hardware op as
-// the original and roundtrips bit-for-bit through Unicorn.
+// "keep binary as binary, don't lift to library functions" directive): the
+// lifter emits a per-op intrinsic with the correct x87-stack effect and the
+// backend lowers it to `fsin`/`fscale`/... so the recompiled object runs the
+// same hardware op as the original and roundtrips bit-for-bit through Unicorn.
 //
 // Each probe drives one instruction through inline asm, folds the 64-bit double
 // result into the 32-bit return so it works on both x64 and i386, and the
@@ -25,6 +25,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64X87TransRT : public SemanticRoundTripFixture,
                       public ::testing::WithParamInterface<RoundTripTC> {};
@@ -34,9 +35,10 @@ class X86X87TransRT : public SemanticRoundTripFixture,
                       public ::testing::WithParamInterface<RoundTripTC> {};
 TEST_P(X86X87TransRT, Verify) { roundTripX86(GetParam()); }
 
-// Each kernel folds the double result bits to an int so the return fits EAX too.
-#define X87_FOLD                                                                \
-  "  unsigned long long _b; __builtin_memcpy(&_b,&r,8);\n"                      \
+// Each kernel folds the double result bits to an int so the return fits EAX
+// too.
+#define X87_FOLD                                                               \
+  "  unsigned long long _b; __builtin_memcpy(&_b,&r,8);\n"                     \
   "  return (int)(_b ^ (_b>>32));\n"
 
 // clang-format off
@@ -154,7 +156,8 @@ static const std::vector<RoundTripTC> kX64X87FpremIterative = {
      "  __builtin_memcpy(&bits, &r, 8);\n"
      "  return (long)(bits ^ ((unsigned long long)(sw & 0x4700) << 32));\n"
      "}\n",
-     {0}, "X87FpremIterative"},
+     {0},
+     "X87FpremIterative"},
 };
 
 INSTANTIATE_TEST_SUITE_P(X87FpremIterative, X64X87FpremIterativeRT,
@@ -207,9 +210,24 @@ static const std::vector<RoundTripTC> kX64X87FpremAntiEmulation = {
      "    : \"cc\", \"st\", \"st(1)\");\n"
      "  return result;\n"
      "}\n",
-     {0}, "X87FpremAntiEmulation"},
+     {0},
+     "X87FpremAntiEmulation"},
 };
 
 INSTANTIATE_TEST_SUITE_P(X87FpremAntiEmulation, X64X87FpremAntiEmulationRT,
                          ::testing::ValuesIn(kX64X87FpremAntiEmulation),
                          rtTCName);
+
+// The two-result instructions sampled their status through the address of
+// a thread-local: the C is checked by execution in an image without thread
+// storage.
+INSTANTIATE_TEST_SUITE_P(
+    X87TransHighC, X64X87TransRT,
+    ::testing::ValuesIn(onHighC(kX87, {"x87_fptan", "x87_fsincos",
+                                       "x87_fxtract_exp", "x87_fxtract_sig"})),
+    rtTCName);
+INSTANTIATE_TEST_SUITE_P(
+    X87TransHighC, X86X87TransRT,
+    ::testing::ValuesIn(onHighC(kX87, {"x87_fptan", "x87_fsincos",
+                                       "x87_fxtract_exp", "x87_fxtract_sig"})),
+    rtTCName);

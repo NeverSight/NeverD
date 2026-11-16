@@ -49,7 +49,7 @@ public:
   struct Observation {
     std::vector<ReadyEntry> Ready;
     std::optional<uint64_t> Wake;
-    const char *Unknown = nullptr;
+    ReadinessFailure Unknown;
   };
   Observation observe() const {
     Observation O;
@@ -99,7 +99,7 @@ public:
     using Reply = std::optional<uint64_t>;
     const auto O = observe();
     if (O.Unknown)
-      return unsupported(Result, O.Unknown);
+      return O.Unknown.stop(Result);
     if (O.Ready.empty() && !Immediate &&
         (!Deadline || Files.Clock->elapsed() < *Deadline))
       return Reply();

@@ -7,10 +7,13 @@
 #include "../../../lib/backend/c/LLVMC/LLVMCWriter.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 #include "llvm/IR/Module.h"
@@ -19,6 +22,7 @@
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Program.h"
+#include "llvm/Support/SourceMgr.h"
 
 #include <stdexcept>
 
@@ -249,6 +253,220 @@ TEST(LLVMCValues, FloatingVectorConstantsPreserveExactBitsWithGCC) {
     GTEST_SKIP() << "GCC is unavailable for the additional C11 compiler check";
   for (bool Double : {false, true})
     compileAndRun(floatingVectorConstantSource(Double), *GCC);
+}
+
+TEST(LLVMCValues, VectorPackingObservesMissingBitsOnlyAtTheConsumer) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("deferred-vector-packing", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Wide = B.getInt128Ty();
+  auto *Vector = llvm::FixedVectorType::get(B.getInt64Ty(), 2);
+  auto *Consumer = llvm::Function::Create(
+      llvm::FunctionType::get(B.getInt64Ty(), {Vector}, false),
+      llvm::GlobalValue::ExternalLinkage, "consume_vector", Module);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(
+          B.getInt64Ty(),
+          {B.getInt32Ty(), B.getInt32Ty(), B.getInt64Ty(), B.getInt64Ty()},
+          false),
+      llvm::GlobalValue::ExternalLinkage, "observed", Module);
+  auto *Entry = llvm::BasicBlock::Create(Context, "entry", Function);
+  auto *Known = llvm::BasicBlock::Create(Context, "known", Function);
+  auto *Missing = llvm::BasicBlock::Create(Context, "missing", Function);
+  auto *Join = llvm::BasicBlock::Create(Context, "join", Function);
+  auto *Observe = llvm::BasicBlock::Create(Context, "observe", Function);
+  auto *First = llvm::BasicBlock::Create(Context, "first", Function);
+  auto *Second = llvm::BasicBlock::Create(Context, "second", Function);
+  auto *Ignore = llvm::BasicBlock::Create(Context, "ignore", Function);
+  B.SetInsertPoint(Entry);
+  auto *Unknown = neverd::llvm_source_unknown::createEntrySeed(B, Wide);
+  B.CreateCondBr(B.CreateICmpNE(Function->getArg(0), B.getInt32(0)), Known,
+                 Missing);
+  B.SetInsertPoint(Known);
+  auto *Bits =
+      B.CreateOr(B.CreateZExt(Function->getArg(2), Wide),
+                 B.CreateShl(B.CreateZExt(Function->getArg(3), Wide), 64));
+  B.CreateBr(Join);
+  B.SetInsertPoint(Missing);
+  B.CreateBr(Join);
+  B.SetInsertPoint(Join);
+  auto *Payload = B.CreatePHI(Wide, 2, "payload");
+  Payload->addIncoming(Bits, Known);
+  Payload->addIncoming(Unknown, Missing);
+  auto *Packed = B.CreateBitCast(Payload, Vector);
+  B.CreateCondBr(B.CreateICmpNE(Function->getArg(1), B.getInt32(0)), Observe,
+                 Ignore);
+  B.SetInsertPoint(Observe);
+  B.CreateCondBr(B.CreateICmpEQ(Function->getArg(1), B.getInt32(1)), First,
+                 Second);
+  B.SetInsertPoint(First);
+  auto *FirstCall = B.CreateCall(Consumer, {Packed});
+  B.CreateRet(FirstCall);
+  B.SetInsertPoint(Second);
+  auto *SecondCall = B.CreateCall(Consumer, {Packed});
+  B.CreateRet(SecondCall);
+  B.SetInsertPoint(Ignore);
+  B.CreateRet(B.getInt64(42));
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  neverd::LLVMSourceMap Sources;
+  Sources.Functions[0x1000] = Function;
+  Sources.Observations.push_back({0x1000, {0x1010, 1}, FirstCall});
+  Sources.Observations.push_back({0x1000, {0x1020, 2}, SecondCall});
+  Options.LLVMSources = &Sources;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(Module, OS, Options));
+  EXPECT_NE(Source.find("no recovered machine state"), std::string::npos);
+  EXPECT_NE(Source.find("no recovered machine state at 0x1010"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("no recovered machine state at 0x1020"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("source address unavailable"), std::string::npos)
+      << Source;
+  compileAndRun(Source + R"c(
+#include <signal.h>
+#include <stdlib.h>
+uint64_t consume_vector(uint64_t __attribute__((vector_size(16))) value) {
+  return value[0] + 3 * value[1];
+}
+static void expected_unknown(int code) { (void)code; _Exit(0); }
+int main(void) {
+  if (observed(0, 0, 11, 23) != 42) return 1;
+  for (uint64_t seed = 1; seed < 256; ++seed) {
+    uint64_t lo = seed * UINT64_C(0x985721A34E2095DF);
+    uint64_t hi = seed * UINT64_C(0xEC4076B90AF51283);
+    if (observed(1, 0, lo, hi) != 42) return 2;
+    if (observed(1, 1, lo, hi) != (lo + 3 * hi)) return 3;
+    if (observed(1, 2, lo, hi) != (lo + 3 * hi)) return 3;
+  }
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 4;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 4;
+#endif
+  (void)observed(0, 2, 11, 23);
+  return 5;
+}
+)c");
+}
+
+TEST(LLVMCValues, VectorLaneSelectionObservesOnlyTheSelectedLane) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+declare i64 @missing_lane() "neverd.source.unknown-value"
+declare i32 @read_index(i32)
+define i64 @observed_lane(i32 %requested) {
+entry:
+  %missing = call i64 @missing_lane()
+  %index = call i32 @read_index(i32 %requested)
+  %first = insertelement <2 x i64> poison, i64 42, i32 0
+  %whole = insertelement <2 x i64> %first, i64 %missing, i32 1
+  %selected = extractelement <2 x i64> %whole, i32 %index
+  ret i64 %selected
+}
+)ir",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  compileAndRun(Source + R"c(
+#include <signal.h>
+#include <stdlib.h>
+static unsigned index_reads;
+uint32_t read_index(uint32_t value) { ++index_reads; return value; }
+static void expected_unknown(int code) {
+  (void)code; _Exit(index_reads == 2 ? 0 : 6);
+}
+int main(void) {
+  if (observed_lane(0) != 42 || index_reads != 1) return 1;
+  if (signal(SIGILL, expected_unknown) == SIG_ERR) return 2;
+#ifdef SIGTRAP
+  if (signal(SIGTRAP, expected_unknown) == SIG_ERR) return 2;
+#endif
+  (void)observed_lane(1);
+  return 3;
+}
+)c");
+}
+
+TEST(LLVMCValues, DeferredVectorAssemblyKeepsOperandEffectsAndSnapshots) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@cell = external global i64
+declare i64 @read_lane(i32)
+declare void @mutate()
+declare i64 @consume_snapshot(<2 x i64>)
+define i64 @observed_effects(i32 %use) {
+entry:
+  %saved = load volatile i64, ptr @cell
+  %low = call i64 @read_lane(i32 0)
+  %high = call i64 @read_lane(i32 1)
+  %first = insertelement <2 x i64> poison, i64 %low, i32 0
+  %whole = insertelement <2 x i64> %first, i64 %high, i32 1
+  %enabled = icmp ne i32 %use, 0
+  br i1 %enabled, label %consume, label %ignore
+consume:
+  %a = call i64 @consume_snapshot(<2 x i64> %whole)
+  call void @mutate()
+  %b = call i64 @consume_snapshot(<2 x i64> %whole)
+  %pair = add i64 %a, %b
+  %result = add i64 %pair, %saved
+  ret i64 %result
+ignore:
+  ret i64 %saved
+}
+)ir",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  std::string Before;
+  llvm::raw_string_ostream BeforeOS(Before);
+  Module->print(BeforeOS, nullptr);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  std::string After;
+  llvm::raw_string_ostream AfterOS(After);
+  Module->print(AfterOS, nullptr);
+  EXPECT_EQ(After, Before);
+  compileAndRun(Source + R"c(
+uint64_t cell;
+static uint64_t seed, events;
+uint64_t read_lane(uint32_t which) {
+  events = events * 10 + 1 + which;
+  cell = 987;
+  return seed + 7 * which;
+}
+void mutate(void) { events = events * 10 + 4; seed = 999; cell = 876; }
+uint64_t consume_snapshot(uint64_t __attribute__((vector_size(16))) value) {
+  events = events * 10 + 3;
+  return value[0] + 5 * value[1];
+}
+int main(void) {
+  for (uint64_t i = 1; i != 128; ++i) {
+    seed = i; cell = i + 100; events = 0;
+    if (observed_effects(0) != i + 100 || events != 12) return 1;
+    seed = i; cell = i + 100; events = 0;
+    if (observed_effects(1) != 2 * (i + 5 * (i + 7)) + i + 100 ||
+        events != 12343) return 2;
+  }
+  return 0;
+}
+)c");
 }
 
 TEST(LLVMCValues, IntegerVectorsAreScalarizedWithoutMutatingTheInputModule) {
@@ -964,6 +1182,122 @@ TEST(LLVMCValues, UnsupportedVectorSignaturesStillFailClosed) {
     llvm::raw_string_ostream Out(Source);
     EXPECT_THROW(neverd::LLVMCEmitter().emit(Module, Out, {}),
                  std::runtime_error);
+  }
+}
+
+TEST(LLVMCValues, ALabelTableIsDefinedInTheFunctionThatOwnsItsLabels) {
+  // A table of one function's block addresses that only that function
+  // reads is a static object of that function: C names a label inside its
+  // function alone. Each block keeps a label however it is laid out, an
+  // arm of the switch included. The unit builds and its switch runs; what
+  // address the compiler gives a label nothing jumps to is its own choice.
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+@labels = internal constant <{ [8 x i8], i64, i64, i64 }> <{
+    [8 x i8] c"\01\02\03\04\05\06\07\08",
+    i64 ptrtoint (ptr blockaddress(@dispatch, %first) to i64),
+    i64 ptrtoint (ptr blockaddress(@dispatch, %second) to i64),
+    i64 ptrtoint (ptr blockaddress(@dispatch, %third) to i64) }>, align 16
+define i64 @dispatch(i64 %selector, ptr %copy) {
+entry:
+  %a = load volatile i64, ptr getelementptr inbounds (i8, ptr @labels, i64 8)
+  %b = load volatile i64, ptr getelementptr inbounds (i8, ptr @labels, i64 16)
+  %c = load volatile i64, ptr getelementptr inbounds (i8, ptr @labels, i64 24)
+  store i64 %a, ptr %copy
+  %slot1 = getelementptr inbounds i64, ptr %copy, i64 1
+  store i64 %b, ptr %slot1
+  %slot2 = getelementptr inbounds i64, ptr %copy, i64 2
+  store i64 %c, ptr %slot2
+  switch i64 %selector, label %third [
+    i64 0, label %first
+    i64 1, label %second
+  ]
+first:
+  br label %done
+second:
+  br label %done
+third:
+  br label %done
+done:
+  %r = phi i64 [ 10, %first ], [ 20, %second ], [ 30, %third ]
+  ret i64 %r
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, {}));
+  // Inside the function, after its opening brace, and nowhere before it.
+  const size_t Definition =
+      Source.find("dispatch(uint64_t selector, void* copy) {");
+  ASSERT_NE(Definition, std::string::npos) << Source;
+  const size_t Table = Source.find("static const struct");
+  ASSERT_NE(Table, std::string::npos) << Source;
+  EXPECT_GT(Table, Definition) << Source;
+  EXPECT_EQ(Source.find("&&"), Source.find("&&", Definition)) << Source;
+  unsigned Labels = 0;
+  for (size_t At = Source.find("&&L_"); At != std::string::npos;
+       At = Source.find("&&L_", At + 1))
+    ++Labels;
+  EXPECT_EQ(Labels, 3u) << Source;
+  compileAndRun(Source + R"(
+int main(void) {
+  uint64_t copy[3] = {0, 0, 0};
+  for (uint64_t selector = 0; selector < 4; ++selector) {
+    const uint64_t expected = selector == 0 ? 10 : selector == 1 ? 20 : 30;
+    if (dispatch(selector, copy) != expected) return 1;
+  }
+  return 0;
+}
+)");
+}
+
+TEST(LLVMCValues, ALabelTableAnotherFunctionReadsIsRefused) {
+  // Another function cannot name the labels, and neither can a second
+  // object's initializer: the table has no C definition then.
+  for (bool ThroughObject : {false, true}) {
+    SCOPED_TRACE(ThroughObject);
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    const std::string IR = std::string(R"ir(
+target datalayout = "e-p:64:64"
+@labels = internal constant [2 x i64] [
+    i64 ptrtoint (ptr blockaddress(@owner, %first) to i64),
+    i64 ptrtoint (ptr blockaddress(@owner, %second) to i64)]
+)ir") + (ThroughObject ? "@alias = internal constant ptr @labels\n" : "") +
+                           R"ir(
+define i64 @owner(i64 %selector) {
+entry:
+  %a = load volatile i64, ptr @labels
+  %is = icmp eq i64 %selector, 0
+  br i1 %is, label %first, label %second
+first:
+  ret i64 %a
+second:
+  ret i64 2
+}
+define i64 @reader() {
+  %b = load volatile i64, ptr )ir" +
+                           (ThroughObject ? "@alias" : "@labels") + R"ir(
+  ret i64 %b
+}
+)ir";
+    auto Module = llvm::parseAssemblyString(IR, Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    try {
+      (void)neverd::LLVMCEmitter().emit(*Module, Out, {});
+      FAIL() << "a label table was defined where its labels have no name: "
+             << Source;
+    } catch (const std::runtime_error &Refusal) {
+      EXPECT_NE(std::string(Refusal.what()).find("blockaddress"),
+                std::string::npos)
+          << Refusal.what();
+    }
   }
 }
 

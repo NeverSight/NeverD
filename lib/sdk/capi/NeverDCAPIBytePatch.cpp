@@ -153,6 +153,7 @@ void changed(Session &S) {
   S.ExceptionHandlersSettled = false;
   S.ProgramMainFound.reset();
   S.ImageStrings.reset();
+  S.EmbeddedELFObjects.reset();
   S.ImmediateIndex = {};
   S.invalidatePipeline();
 }

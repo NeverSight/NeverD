@@ -11,6 +11,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <vector>
 
 using namespace neverd;
@@ -82,6 +83,26 @@ TEST(LiftStateBase, NarrowingExtensionIsFatal) {
         "integer extension input must be narrower than output.*"
         "instruction address 4096, input bytes 4, output bytes 1");
   }
+}
+
+TEST(LiftStateBase, ExcessOperandsLeaveNoPartialOperationOrSequenceGap) {
+  std::vector<LowOp> Ops;
+  LiftStateBase State(0x1000, 4, Ops);
+  const auto X = NdVar::cst(7, 4);
+  State.emit(NdOp::COPY, State.makeTemp(4), {X});
+  const auto Original = Ops.front();
+  EXPECT_THROW(State.emit(NdOp::CALL, {}, {X, X, X, X, X, X, X, X, X}),
+               std::length_error);
+  EXPECT_THROW(
+      State.emitIntrinsic(Intrinsic::MIPSSync, {}, {X, X, X, X, X, X, X, X}),
+      std::length_error);
+  ASSERT_EQ(Ops.size(), 1u);
+  EXPECT_EQ(Ops.front(), Original);
+  State.emit(NdOp::INT_ADD, State.makeTemp(4), {X, X});
+  ASSERT_EQ(Ops.size(), 2u);
+  EXPECT_EQ(Ops.back().Seq, Original.Seq + 1);
+  EXPECT_EQ(Ops.back().Inputs[0].Provenance, ConstantAddressProvenance::Scalar);
+  EXPECT_EQ(Original.Inputs[0].Provenance, ConstantAddressProvenance::Unknown);
 }
 
 TEST(TextEncoding, EscapesOnlyMalformedUTF8Bytes) {

@@ -47,7 +47,8 @@ TEST(MIPSCallMemory,
      PartialStoreInvalidatesStackSetupButPreservesRegisterSetup) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
     for (Intrinsic Id : {Intrinsic::MIPSSwl, Intrinsic::MIPSSwr,
-                         Intrinsic::MIPSStoreConditionalWord})
+                         Intrinsic::MIPSStoreConditionalWord,
+                         Intrinsic::MIPSCache, Intrinsic::MIPSPrefetch})
       for (bool Overwrite : {false, true})
         for (unsigned Graph = 0; Graph < 4; ++Graph) {
           const auto &TRI = getTargetRegInfo(A);
@@ -83,6 +84,10 @@ TEST(MIPSCallMemory,
                               : MedVar{},
                           {MedVar::makeConst(uint64_t(Id), sizeof(Intrinsic)),
                            Partial, MedVar::makeConst(0x12345678, 4)});
+            if (mips::isCacheIntrinsic(Id)) {
+              Store.Inputs[1] = MedVar::makeConst(30, 1);
+              Store.Inputs[2] = Partial;
+            }
             EXPECT_TRUE(endsCallArgumentSetup(Store));
             EXPECT_FALSE(endsCallArgumentSetup(Store, true));
             auto Malformed = Store;
@@ -153,7 +158,8 @@ TEST(MIPSCallMemory,
 TEST(MIPSCallMemory, IncompleteStackProofCannotOmitARequiredArgument) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
     for (Intrinsic Id : {Intrinsic::MIPSSwl, Intrinsic::MIPSSwr,
-                         Intrinsic::MIPSStoreConditionalWord})
+                         Intrinsic::MIPSStoreConditionalWord,
+                         Intrinsic::MIPSCache, Intrinsic::MIPSPrefetch})
       for (unsigned Boundary = 0; Boundary != 6; ++Boundary) {
         SCOPED_TRACE(Boundary);
         const bool WorkLimit = Boundary == 1;

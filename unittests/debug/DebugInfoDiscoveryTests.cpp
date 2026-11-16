@@ -19,7 +19,9 @@
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/debug/MapFile.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
@@ -34,6 +36,8 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Object/ELF.h"
 #include "llvm/Object/ELFTypes.h"
 #include "llvm/Support/FileSystem.h"
@@ -432,6 +436,99 @@ void appendAttributeSpec(std::vector<uint8_t> &Abbrev,
 std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
                                       const std::vector<uint8_t> &Info);
 
+/// A function returning a callback with a scalar argument. The callback's
+/// signature has no object size; only its containing pointer has one.
+std::vector<uint8_t> makeELFDWARFCallbackFixture(
+    unsigned PointerBytes, bool Variadic = false, bool MissingParameter = false,
+    std::optional<uint8_t> Convention = {}, bool Vector = false) {
+  using namespace llvm::dwarf;
+  std::vector<uint8_t> Abbrev;
+  const auto declare =
+      [&](unsigned Code, Tag TheTag, bool Children,
+          std::initializer_list<std::pair<Attribute, Form>> Attributes) {
+        appendULEB(Abbrev, Code);
+        appendULEB(Abbrev, TheTag);
+        Abbrev.push_back(Children ? DW_CHILDREN_yes : DW_CHILDREN_no);
+        for (const auto &[Attr, Form] : Attributes)
+          appendAttributeSpec(Abbrev, Attr, Form);
+        appendULEB(Abbrev, 0);
+        appendULEB(Abbrev, 0);
+      };
+  declare(1, DW_TAG_compile_unit, true, {});
+  declare(2, DW_TAG_base_type, false,
+          {{DW_AT_byte_size, DW_FORM_data1}, {DW_AT_encoding, DW_FORM_data1}});
+  if (Convention)
+    declare(3, DW_TAG_subroutine_type, true,
+            {{DW_AT_type, DW_FORM_ref4},
+             {DW_AT_calling_convention, DW_FORM_data1}});
+  else
+    declare(3, DW_TAG_subroutine_type, true, {{DW_AT_type, DW_FORM_ref4}});
+  if (MissingParameter)
+    declare(4, DW_TAG_formal_parameter, false, {});
+  else
+    declare(4, DW_TAG_formal_parameter, false, {{DW_AT_type, DW_FORM_ref4}});
+  declare(5, DW_TAG_pointer_type, false,
+          {{DW_AT_byte_size, DW_FORM_data1}, {DW_AT_type, DW_FORM_ref4}});
+  declare(6, DW_TAG_subprogram, false,
+          {{DW_AT_name, DW_FORM_string},
+           {DW_AT_low_pc, DW_FORM_addr},
+           {DW_AT_high_pc, DW_FORM_data4},
+           {DW_AT_type, DW_FORM_ref4}});
+  declare(7, DW_TAG_unspecified_parameters, false, {});
+  declare(
+      8, DW_TAG_array_type, true,
+      {{DW_AT_type, DW_FORM_ref4}, {DW_AT_GNU_vector, DW_FORM_flag_present}});
+  declare(9, DW_TAG_subrange_type, false, {{DW_AT_count, DW_FORM_data1}});
+  appendULEB(Abbrev, 0);
+
+  std::vector<uint8_t> Info;
+  appendU32LE(Info, 0);
+  appendU16LE(Info, 4);
+  appendU32LE(Info, 0);
+  Info.push_back(8);
+  appendULEB(Info, 1);
+  const auto here = [&] { return static_cast<uint32_t>(Info.size()); };
+  const uint32_t Integer = here();
+  appendULEB(Info, 2);
+  Info.push_back(4);
+  Info.push_back(DW_ATE_signed);
+  const uint32_t Floating = here();
+  appendULEB(Info, 2);
+  Info.push_back(4);
+  Info.push_back(DW_ATE_float);
+  const uint32_t VectorType = here();
+  appendULEB(Info, 8);
+  appendU32LE(Info, Floating);
+  appendULEB(Info, 9);
+  Info.push_back(4);
+  Info.push_back(0);
+  const uint32_t Signature = here();
+  appendULEB(Info, 3);
+  appendU32LE(Info, Vector ? VectorType : Integer);
+  if (Convention)
+    Info.push_back(*Convention);
+  appendULEB(Info, 4);
+  if (!MissingParameter)
+    appendU32LE(Info, Vector ? VectorType : Floating);
+  if (Variadic)
+    appendULEB(Info, 7);
+  Info.push_back(0);
+  const uint32_t Pointer = here();
+  appendULEB(Info, 5);
+  Info.push_back(PointerBytes);
+  appendU32LE(Info, Signature);
+  appendULEB(Info, 6);
+  constexpr llvm::StringLiteral Name = "get_callback";
+  Info.insert(Info.end(), Name.begin(), Name.end());
+  Info.push_back(0);
+  appendU64LE(Info, 0x1000);
+  appendU32LE(Info, 0x10);
+  appendU32LE(Info, Pointer);
+  Info.push_back(0);
+  patchU32LE(Info, 0, static_cast<uint32_t>(Info.size() - 4));
+  return makeELFWithDWARF(Abbrev, Info);
+}
+
 std::vector<uint8_t> makeELFDWARFReturnFixture(DWARFReturnFixtureKind Kind,
                                                unsigned CompileUnits = 1) {
   using namespace llvm::dwarf;
@@ -746,7 +843,10 @@ std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
 /// its copy at 0x1000 names its parameter and local only by
 /// DW_AT_abstract_origin.  `table` is defined at 0x2000 through
 /// DW_AT_specification of its declaration.  Only the declarations hold types.
-std::vector<uint8_t> makeELFDWARFOriginFixture() {
+std::vector<uint8_t>
+makeELFDWARFOriginFixture(std::optional<bool> ConflictingGlobals = {},
+                          unsigned RegisterLocal = 0,
+                          unsigned ParameterType = 0) {
   using namespace llvm::dwarf;
   std::vector<uint8_t> Abbrev;
   const auto declare =
@@ -771,8 +871,11 @@ std::vector<uint8_t> makeELFDWARFOriginFixture() {
           {{DW_AT_byte_size, DW_FORM_data1}, {DW_AT_type, DW_FORM_ref4}});
   declare(5, DW_TAG_subprogram, true,
           {{DW_AT_name, DW_FORM_string}, {DW_AT_inline, DW_FORM_data1}});
-  declare(6, DW_TAG_formal_parameter, false,
-          {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
+  if (ParameterType == 1)
+    declare(6, DW_TAG_formal_parameter, false, {{DW_AT_name, DW_FORM_string}});
+  else
+    declare(6, DW_TAG_formal_parameter, false,
+            {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
   declare(7, DW_TAG_variable, false,
           {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
   declare(8, DW_TAG_subprogram, true,
@@ -793,6 +896,8 @@ std::vector<uint8_t> makeELFDWARFOriginFixture() {
   declare(
       12, DW_TAG_variable, false,
       {{DW_AT_specification, DW_FORM_ref4}, {DW_AT_location, DW_FORM_exprloc}});
+  declare(13, DW_TAG_lexical_block, true,
+          {{DW_AT_low_pc, DW_FORM_addr}, {DW_AT_high_pc, DW_FORM_data4}});
   appendULEB(Abbrev, 0);
 
   std::vector<uint8_t> Info;
@@ -832,11 +937,16 @@ std::vector<uint8_t> makeELFDWARFOriginFixture() {
   const uint32_t AbstractParameter = here();
   appendULEB(Info, 6);
   name("p");
-  appendU32LE(Info, PairPointer);
+  if (ParameterType != 1)
+    appendU32LE(Info, ParameterType == 2 ? 0xffffffffu : PairPointer);
   const uint32_t AbstractLocal = here();
   appendULEB(Info, 7);
   name("count");
   appendU32LE(Info, Long);
+  const uint32_t AbstractRegisterLocal = here();
+  appendULEB(Info, 7);
+  name("child");
+  appendU32LE(Info, PairPointer);
   Info.push_back(0);
 
   appendULEB(Info, 8);
@@ -850,6 +960,23 @@ std::vector<uint8_t> makeELFDWARFOriginFixture() {
   appendULEB(Info, 10);
   appendU32LE(Info, AbstractLocal);
   expression({DW_OP_fbreg, 0x68}); // SLEB128 -24
+  if (RegisterLocal) {
+    appendULEB(Info, 13);
+    appendU64LE(Info, 0x1004);
+    appendU32LE(Info, 4);
+    appendULEB(Info, 10);
+    appendU32LE(Info, AbstractRegisterLocal);
+    if (RegisterLocal == 3)
+      expression({DW_OP_reg13, DW_OP_piece, 8});
+    else
+      expression({DW_OP_regx, 13});
+    if (RegisterLocal == 2) {
+      appendULEB(Info, 10);
+      appendU32LE(Info, AbstractLocal);
+      expression({DW_OP_reg13});
+    }
+    Info.push_back(0);
+  }
   Info.push_back(0);
 
   const uint32_t Declaration = here();
@@ -859,6 +986,17 @@ std::vector<uint8_t> makeELFDWARFOriginFixture() {
   appendULEB(Info, 12);
   appendU32LE(Info, Declaration);
   expression({DW_OP_addr, 0x00, 0x20, 0, 0, 0, 0, 0, 0});
+  if (ConflictingGlobals) {
+    for (unsigned I = 0; I < 2; ++I) {
+      const uint32_t GlobalDeclaration = here();
+      appendULEB(Info, 11);
+      name(I ? "Alias" : "Root");
+      appendU32LE(Info, I && *ConflictingGlobals ? Long : PairPointer);
+      appendULEB(Info, 12);
+      appendU32LE(Info, GlobalDeclaration);
+      expression({DW_OP_addr, 0x10, 0x20, 0, 0, 0, 0, 0, 0});
+    }
+  }
   Info.push_back(0);
   patchU32LE(Info, 0, static_cast<uint32_t>(Info.size() - 4));
   return makeELFWithDWARF(Abbrev, Info);
@@ -1133,6 +1271,48 @@ TEST(ApplyDebugSymbolsTest, DataRefutesAFunctionGuessedAfterPadding) {
   EXPECT_NE(findFunc(Img, 0x1600), nullptr);
   EXPECT_EQ(findFunc(Img, 0x1700), nullptr);
   EXPECT_EQ(findFunc(Img, 0x1800), nullptr);
+}
+
+// A range that begins inside an earlier range is an interior chunk, not
+// another entry. A later disjoint range is. Many disjoint ranges take one
+// pass: each start is compared with the furthest end already seen.
+TEST(ApplyDebugSymbolsTest, InteriorRangeDoesNotConfirmAGuess) {
+  BinaryImage Img;
+  Img.Arch = Arch::X64;
+  Img.Bits = Bitness::Bits64;
+  Img.Format = BinaryFormat::COFF;
+  Segment Code;
+  Code.VA = 0x1000;
+  Code.Size = Code.FileSz = 0x17000;
+  Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Code.Data.assign(Code.Size, 0xc3);
+  Img.Segments.push_back(std::move(Code));
+  Img.KnownCodeRanges.push_back({0x1000, 0x5000});
+  Img.KnownCodeRanges.push_back({0x2000, 0x2010});
+  Img.KnownCodeRanges.push_back({0x6000, 0x6010});
+  for (unsigned I = 0; I < 4000; ++I) {
+    const va_t Addr = 0x8000 + static_cast<va_t>(I) * 0x10;
+    Img.KnownCodeRanges.push_back({Addr, Addr + 0x8});
+  }
+  std::sort(Img.KnownCodeRanges.begin(), Img.KnownCodeRanges.end());
+  const va_t Tail = 0x8000 + 3999u * 0x10;
+  for (const va_t Addr :
+       {va_t{0x1000}, va_t{0x2000}, va_t{0x6000}, va_t{0x7000}, Tail}) {
+    Symbol Guess = Symbol::makeFunc(Addr);
+    Guess.IsBoundaryGuess = true;
+    Img.Symbols.push_back(Guess);
+  }
+  FakeDebugContext Dbg({}, {{"outer", 0x1000, 0, false},
+                            {"inner", 0x2000, 0, false},
+                            {"later", 0x6000, 0, false},
+                            {"plain", 0x7000, 0, false},
+                            {"tail", Tail, 0, false}});
+  EXPECT_EQ(applyDebugSymbols(Img, Dbg), 0u);
+  EXPECT_NE(findFunc(Img, 0x1000), nullptr);
+  EXPECT_EQ(findFunc(Img, 0x2000), nullptr);
+  EXPECT_NE(findFunc(Img, 0x6000), nullptr);
+  EXPECT_EQ(findFunc(Img, 0x7000), nullptr);
+  EXPECT_NE(findFunc(Img, Tail), nullptr);
 }
 
 // A pointer .data holds to such a literal points to data: the guess the
@@ -1913,10 +2093,197 @@ TEST(DWARFSourceTypes, ReferencesPreserveQualifiedRecordIdentity) {
   }
 }
 
+TEST(DWARFSourceTypes, CallbackSignaturesUseTheSharedFunctionTypeContract) {
+  ScratchDir Dir;
+  for (unsigned PointerBytes : {4, 8}) {
+    SCOPED_TRACE(PointerBytes);
+    const auto Bytes = makeELFDWARFCallbackFixture(PointerBytes);
+    const auto Path = Dir.writeBytes("callback.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context);
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function && Function->ReturnType);
+    const TypeRef &Pointer = Function->ReturnType;
+    ASSERT_EQ(Pointer->Kind, NdTypeKind::Ptr);
+    EXPECT_EQ(Pointer->Size, PointerBytes);
+    ASSERT_TRUE(Pointer->Pointee);
+    EXPECT_EQ(Pointer->Pointee->Kind, NdTypeKind::Func);
+    EXPECT_EQ(Pointer->Pointee->Size, 0);
+    EXPECT_TRUE(equalSourceTypes(
+        Pointer->Pointee,
+        NdType::makeFunc(NdType::makeInt(4), {NdType::makeFloat(4)})));
+  }
+}
+
+TEST(DWARFSourceTypes, CallbackEllipsisAndMissingParametersAreNotGuessed) {
+  ScratchDir Dir;
+  for (bool MissingParameter : {false, true}) {
+    const auto Bytes = makeELFDWARFCallbackFixture(8, true, MissingParameter);
+    const auto Path = Dir.writeBytes("callback.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context);
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function && Function->ReturnType);
+    const TypeRef &Callback = Function->ReturnType->Pointee;
+    ASSERT_TRUE(Callback);
+    EXPECT_TRUE(Callback->FunctionVariadic);
+    ASSERT_EQ(Callback->ParamTypes.size(), 1u);
+    EXPECT_EQ(bool(Callback->ParamTypes.front()), !MissingParameter);
+    // A declaration of a variadic callback does not certify a fixed call ABI.
+    EXPECT_FALSE(equalSourceTypes(Callback, Callback));
+  }
+}
+
+TEST(DWARFSourceTypes, CallbackVectorsAreValuesRatherThanArrays) {
+  ScratchDir Dir;
+  const auto Bytes = makeELFDWARFCallbackFixture(8, false, false, {}, true);
+  auto Context = DWARFDebugContext::load(Dir.writeBytes("vector.elf", Bytes),
+                                         BinaryFormat::ELF,
+                                         DWARFLoadTrust::InImage, Bytes);
+  ASSERT_TRUE(Context);
+  const auto Function = Context->resolveFunction(0x1000);
+  ASSERT_TRUE(Function && Function->ReturnType &&
+              Function->ReturnType->Pointee);
+  const auto Callback = Function->ReturnType->Pointee;
+  ASSERT_TRUE(Callback->RetType);
+  ASSERT_EQ(Callback->ParamTypes.size(), 1u);
+  for (const auto &Vector : {Callback->RetType, Callback->ParamTypes.front()}) {
+    ASSERT_TRUE(Vector);
+    EXPECT_EQ(Vector->Kind, NdTypeKind::Vector);
+    EXPECT_EQ(Vector->Size, 16);
+    EXPECT_EQ(Vector->ArrayCount, 4u);
+    ASSERT_TRUE(Vector->ElemType);
+    EXPECT_EQ(Vector->ElemType->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Vector->ElemType->Size, 4);
+    EXPECT_FALSE(equalSourceTypes(Vector, Vector));
+  }
+}
+
+TEST(DWARFSourceTypes, CallbackConventionsAreExplicitOrUnsupported) {
+  using CC = types::CallingConvention;
+  using namespace llvm::dwarf;
+  ScratchDir Dir;
+  for (const auto &[Code, Expected] :
+       std::vector<std::pair<uint8_t, std::optional<CC>>>{
+           {DW_CC_normal, CC::Unspecified},
+           {DW_CC_LLVM_Win64, CC::Win64},
+           {DW_CC_LLVM_X86_64SysV, CC::SysV},
+           {DW_CC_LLVM_vectorcall, CC::Vectorcall},
+           {DW_CC_nocall, std::nullopt}}) {
+    SCOPED_TRACE(Code);
+    const auto Bytes = makeELFDWARFCallbackFixture(8, false, false, Code);
+    const auto Path = Dir.writeBytes("callback.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context);
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function && Function->ReturnType);
+    const TypeRef &Callback = Function->ReturnType->Pointee;
+    ASSERT_TRUE(Callback);
+    EXPECT_EQ(Callback->FunctionConvention, Expected);
+  }
+}
+
 // Compilers name the parameters and locals of an inlined function's
 // out-of-line copy only by DW_AT_abstract_origin, and a variable defined
 // apart from its declaration only by DW_AT_specification: their types are
 // the declarations', not a guessed int.
+TEST(DWARFSourceTypes, WholeUnitReadersKeepOwnedFactsAndLocalQueries) {
+  ScratchDir Dir;
+  const auto Bytes = makeELFDWARFOriginFixture();
+  const auto Path = Dir.writeBytes("whole-reader.elf", Bytes);
+  auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                         DWARFLoadTrust::InImage, Bytes);
+  ASSERT_TRUE(Context && Context->hasInfo());
+  ASSERT_TRUE(Context->resolveVariable(0x1000, -24));
+  std::vector<std::string> First;
+  for (int Read = 0; Read < 3; ++Read) {
+    std::vector<std::string> Names;
+    auto Error = Context->withDWARFContext([&](llvm::DWARFContext &Reader) {
+      for (const auto &Unit : Reader.info_section_units())
+        for (const auto &Entry : Unit->dies())
+          if (const char *Name =
+                  llvm::DWARFDie(Unit.get(), &Entry).getShortName())
+            Names.emplace_back(Name);
+      return Read == 1 ? llvm::createStringError("reader refusal")
+                       : llvm::Error::success();
+    });
+    if (Read == 1)
+      EXPECT_EQ(llvm::toString(std::move(Error)), "reader refusal");
+    else
+      ASSERT_FALSE(Error) << llvm::toString(std::move(Error));
+    if (Read == 0) {
+      ASSERT_FALSE(Names.empty());
+      First = Names;
+    } else {
+      EXPECT_EQ(Names, First);
+    }
+    const auto Local = Context->resolveVariable(0x1000, -24);
+    ASSERT_TRUE(Local && Local->Type);
+    EXPECT_EQ(Local->Name, "count");
+    EXPECT_EQ(Local->Type->Size, 8);
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function);
+    EXPECT_EQ(Function->Name, "second_of");
+  }
+}
+
+TEST(DWARFSourceTypes, RegisterLocalsRequireWholeValuesAndExactScope) {
+  for (unsigned Kind : {1u, 2u, 3u}) {
+    SCOPED_TRACE(Kind);
+    ScratchDir Dir;
+    const auto Bytes = makeELFDWARFOriginFixture({}, Kind);
+    const auto Path = Dir.writeBytes("register-local.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context && Context->hasInfo());
+    using Status = VariableExtentLookupStatus;
+    const auto Before =
+        Context->resolveRegisterVariableAt(0x1000, 0x1003, x86reg::R13);
+    EXPECT_EQ(Before.Status, Status::NotFound);
+    for (va_t PC : {0x1004, 0x1007}) {
+      auto Local = Context->resolveRegisterVariableAt(0x1000, PC, x86reg::R13);
+      EXPECT_EQ(Local.Status, Kind == 1   ? Status::Unique
+                              : Kind == 2 ? Status::Ambiguous
+                                          : Status::NotFound);
+      if (Local.Status == Status::Unique) {
+        EXPECT_EQ(Local.Variable.Name, "child");
+        ASSERT_TRUE(Local.Variable.Type && Local.Variable.Type->Pointee);
+        EXPECT_EQ(Local.Variable.Type->Pointee->SourceName, "Pair");
+      }
+    }
+    EXPECT_EQ(
+        Context->resolveRegisterVariableAt(0x1000, 0x1008, x86reg::R13).Status,
+        Status::NotFound);
+    EXPECT_EQ(
+        Context->resolveRegisterVariableAt(0x1000, 0x1005, x86reg::R12).Status,
+        Status::NotFound);
+  }
+}
+
+TEST(DWARFSourceTypes, MissingFunctionParameterTypesRemainUnknown) {
+  ScratchDir Dir;
+  for (unsigned Kind : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Kind);
+    const auto Bytes = makeELFDWARFOriginFixture({}, 0, Kind);
+    const auto Path = Dir.writeBytes("parameter.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context && Context->hasAuthenticatedFunctionSignatures());
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->Params.size(), 1u);
+    EXPECT_EQ(Function->Params.front().first, "p");
+    EXPECT_EQ(bool(Function->Params.front().second), Kind == 0);
+    // A missing parameter does not change the independently declared void
+    // result, but it cannot become an invented four-byte integer argument.
+    EXPECT_EQ(Context->resolveAuthenticatedReturnValueState(0x1000).Kind,
+              AuthenticatedReturnKind::NoValue);
+  }
+}
+
 TEST(DWARFSourceTypes, OriginsAndSpecificationsDeclareTheTypes) {
   ScratchDir Dir;
   const auto Bytes = makeELFDWARFOriginFixture();
@@ -1951,6 +2318,9 @@ TEST(DWARFSourceTypes, OriginsAndSpecificationsDeclareTheTypes) {
   const auto Local = Context->resolveVariable(0x1000, -24);
   EXPECT_TRUE(Local && Local->Name == "count" && Local->Type &&
               Local->Type->Size == 8);
+  const auto LocalAgain = Context->resolveVariable(0x1000, -24);
+  EXPECT_TRUE(LocalAgain && LocalAgain->Name == "count" && LocalAgain->Type &&
+              LocalAgain->Type->Size == 8);
 
   const auto Objects = Context->allDataObjects();
   const auto Table = std::find_if(
@@ -1958,6 +2328,61 @@ TEST(DWARFSourceTypes, OriginsAndSpecificationsDeclareTheTypes) {
       [](const DataObjectSym &Object) { return Object.Addr == 0x2000; });
   EXPECT_TRUE(Table != Objects.end() && Table->Name == "table" &&
               Table->Size == 16);
+  // The indexed lookup answers what a walk of every object does: the first
+  // named object at an address, and the symbols around one.
+  const auto NamedAt = [&](va_t Addr) -> std::optional<DataObjectSym> {
+    for (const DataObjectSym &Object : Objects)
+      if (Object.Addr == Addr && !Object.Name.empty())
+        return Object;
+    return std::nullopt;
+  };
+  const auto Around = [&](va_t Addr) {
+    std::optional<va_t> Before;
+    std::optional<va_t> After;
+    for (const DataObjectSym &Object : Objects) {
+      if (Object.Addr <= Addr && (!Before || Object.Addr > *Before))
+        Before = Object.Addr;
+      else if (Object.Addr > Addr && (!After || Object.Addr < *After))
+        After = Object.Addr;
+    }
+    return std::pair{Before, After};
+  };
+  const auto Resolved = Context->resolveDataObject(0x2000);
+  const auto Expected = NamedAt(0x2000);
+  ASSERT_TRUE(Resolved && Expected);
+  EXPECT_EQ(Resolved->Name, Expected->Name);
+  EXPECT_EQ(Resolved->Addr, Expected->Addr);
+  EXPECT_EQ(Resolved->Size, Expected->Size);
+  EXPECT_EQ(Resolved->IsBuffer, Expected->IsBuffer);
+  ASSERT_TRUE(Resolved->Type);
+  EXPECT_EQ(Resolved->Type->SourceName, "Pair");
+  EXPECT_EQ(Resolved->Type->Size, 16u);
+  EXPECT_FALSE(Context->resolveDataObject(0x1).has_value());
+  EXPECT_FALSE(NamedAt(0x1).has_value());
+  EXPECT_EQ(Context->dataSymbolsAround(0x2000), Around(0x2000));
+  EXPECT_EQ(Context->dataSymbolsAround(0x1fff), Around(0x1fff));
+}
+
+TEST(DWARFSourceTypes, GlobalDeclarationsAtOneAddressMustAgree) {
+  for (bool Conflict : {false, true}) {
+    SCOPED_TRACE(Conflict);
+    ScratchDir Dir;
+    const auto Bytes = makeELFDWARFOriginFixture(Conflict);
+    const auto Path = Dir.writeBytes("globals.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context);
+    const auto Global = Context->resolveDataObject(0x2010);
+    ASSERT_TRUE(Global);
+    EXPECT_EQ(bool(Global->Type), !Conflict);
+    if (!Conflict) {
+      ASSERT_EQ(Global->Type->Kind, NdTypeKind::Ptr);
+      ASSERT_TRUE(Global->Type->Pointee);
+      EXPECT_EQ(Global->Type->Pointee->SourceName, "Pair");
+      EXPECT_EQ(Global->Type->Size, 8u);
+    }
+    EXPECT_FALSE(Context->resolveDataObject(0x2011));
+  }
 }
 
 TEST(DWARFParallelLoad, DuplicateDIEsAcrossWorkersCannotAuthenticateAType) {
@@ -2048,7 +2473,7 @@ TEST(DWARFLocationExpressionPolicy,
 }
 
 TEST(DWARFLocationExpressionPolicy,
-     OnlyCompleteRegisterValuesAreProvablyNonStack) {
+     OnlyCompleteRegisterValuesRetainTheirRegister) {
   using dwarf_loader_detail::decodeLocationExpressionShape;
   using dwarf_loader_detail::LocationExpressionBase;
 
@@ -2056,7 +2481,16 @@ TEST(DWARFLocationExpressionPolicy,
   EXPECT_EQ(decodeLocationExpressionShape(llvm::dwarf::DW_OP_reg5, NoOperands,
                                           true, false, 7, 6)
                 .Base,
-            LocationExpressionBase::NonStack);
+            LocationExpressionBase::Register);
+  EXPECT_EQ(decodeLocationExpressionShape(llvm::dwarf::DW_OP_reg5, NoOperands,
+                                          true, false, 7, 6)
+                .Offset,
+            5);
+  const std::array<uint64_t, 1> Register = {20};
+  const auto Extended = decodeLocationExpressionShape(
+      llvm::dwarf::DW_OP_regx, Register, true, false, 7, 6);
+  EXPECT_EQ(Extended.Base, LocationExpressionBase::Register);
+  EXPECT_EQ(Extended.Offset, 20);
   EXPECT_EQ(decodeLocationExpressionShape(llvm::dwarf::DW_OP_reg5, NoOperands,
                                           false, false, 7, 6)
                 .Base,

@@ -1,0 +1,11 @@
+//===- DarwinExceptionNoReturn.def - Objective-C exception runtime --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+// objc/objc-exception.h declares these routines OBJC_NORETURN. The begin/end
+// catch helpers return to their caller and keep their ordinary fallthrough.
+LIBC_NO_RETURN_SYMBOL("objc_exception_throw")
+LIBC_NO_RETURN_SYMBOL("objc_exception_rethrow")
+LIBC_NO_RETURN_SYMBOL("objc_terminate")

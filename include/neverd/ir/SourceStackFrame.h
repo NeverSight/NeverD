@@ -59,6 +59,9 @@ struct StackFrameAnalysis {
   std::map<va_t, StackFrameInstruction> Instructions;
   std::vector<StackFrameAccess> Accesses;
   std::string Error;
+  /// The function is past the analysis's bounds: its frame is unknown, not
+  /// malformed.
+  bool BudgetExceeded = false;
 };
 /// Bounded must-analysis. Unknown is not zero. No memory or callee guesses.
 StackFrameAnalysis analyzeSourceStackFrame(const LowFunc &, Arch,

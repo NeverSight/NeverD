@@ -21,6 +21,11 @@
 
 namespace neverd {
 
+namespace {
+#define HIGH_STACK_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "neverd/ir/high/HighStack.def"
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // HighExpr::str
 //===----------------------------------------------------------------------===//
@@ -103,6 +108,8 @@ std::string HighExpr::str() const {
   }
   case ExprKind::Undef:
     return "undef";
+  case ExprKind::IncomingStack:
+    return kIncomingStack;
   case ExprKind::EntryRegister:
     return "entry_register(0x" + llvm::utohexstr(EntryFunctionVA) + ", 0x" +
            llvm::utohexstr(EntryVA) + ", " + Var.display() + ")";
@@ -213,7 +220,9 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
       return false;
     break;
   case ExprKind::Var:
-    return Var == Other.Var;
+    return Var == Other.Var &&
+           (!(SourcePointerType || Other.SourcePointerType) ||
+            equalSourceTypes(SourcePointerType, Other.SourcePointerType));
   case ExprKind::EntryRegister:
     return EntryFunctionVA == Other.EntryFunctionVA &&
            EntryVA == Other.EntryVA && Var.TheArch == Other.Var.TheArch &&
@@ -223,10 +232,13 @@ bool HighExpr::structuralEq(const HighExpr &Other) const {
            ConstProvenance == Other.ConstProvenance &&
            AddressOwnerVA == Other.AddressOwnerVA;
   case ExprKind::Undef:
+  case ExprKind::IncomingStack:
     return true;
   case ExprKind::Call:
     if (CallTarget != Other.CallTarget || CallAddr != Other.CallAddr ||
         SourceCallHint != Other.SourceCallHint ||
+        ((SourceCalleeType || Other.SourceCalleeType) &&
+         !equalSourceTypes(SourceCalleeType, Other.SourceCalleeType)) ||
         ((FloatingCallSignature || Other.FloatingCallSignature) &&
          (!FloatingCallSignature || !Other.FloatingCallSignature ||
           *FloatingCallSignature != *Other.FloatingCallSignature)) ||

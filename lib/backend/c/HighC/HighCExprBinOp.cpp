@@ -270,10 +270,8 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
            exprStr(*E.Operands[0]) + ", " + exprStr(*E.Operands[1]) + ")";
   if ((E.Op == NdOp::FLOAT_MINNUM || E.Op == NdOp::FLOAT_MAXNUM) &&
       E.Operands.size() == 2 && E.Operands[0] && E.Operands[1]) {
-    const bool IsFloat = E.Type && E.Type->Size == 4;
-    const char *Name = E.Op == NdOp::FLOAT_MINNUM
-                           ? (IsFloat ? "__builtin_fminf" : "__builtin_fmin")
-                           : (IsFloat ? "__builtin_fmaxf" : "__builtin_fmax");
+    const char *Name = E.Op == NdOp::FLOAT_MINNUM ? "__builtin_elementwise_min"
+                                                  : "__builtin_elementwise_max";
     return std::string(Name) + "(" + exprStr(*E.Operands[0]) + ", " +
            exprStr(*E.Operands[1]) + ")";
   }
@@ -1112,9 +1110,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
     OpSym = " <= ";
     break;
   default:
-    return "/* unknown_op(" + std::to_string(static_cast<int>(E.Op)) +
-           ") */ (" + exprStr(*E.Operands[0]) + " ?? " +
-           exprStr(*E.Operands[1]) + ")";
+    return "(__builtin_trap(), 0 " +
+           failClosedComment("no recovered operator " +
+                                 std::to_string(static_cast<int>(E.Op)),
+                             EmittingAddr) +
+           ")";
   }
 
   int MyPrec = getOpPrecedence(E.Op);
@@ -1128,6 +1128,17 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
   if (E.Op == NdOp::INT_EQUAL || E.Op == NdOp::INT_NOTEQUAL) {
     const HighExpr *A = unwrapIntegerView(E.Operands[0].get());
     const HighExpr *B = unwrapIntegerView(E.Operands[1].get());
+    // Inferred record pointers still participate in machine integer
+    // comparisons. Preserve a pointer/null comparison, but give a scalar
+    // address the pointer's bits instead of comparing an integer to a pointer.
+    const bool LeftPointer = printsPointer(*E.Operands[0], LHS);
+    const bool RightPointer = printsPointer(*E.Operands[1], RHS);
+    if (LeftPointer && !RightPointer &&
+        !(B && B->Kind == ExprKind::Const && B->ConstVal == 0))
+      LHS = "(uintptr_t)(" + LHS + ")";
+    if (RightPointer && !LeftPointer &&
+        !(A && A->Kind == ExprKind::Const && A->ConstVal == 0))
+      RHS = "(uintptr_t)(" + RHS + ")";
     auto ApplyEnum = [&](const HighExpr *Typed, const HighExpr *Const,
                          bool ConstOnRight) {
       if (!Typed || !Const || Const->Kind != ExprKind::Const)
@@ -1189,6 +1200,11 @@ std::string HighCWriter::renderBinOpOperands(const HighExpr &E,
                  Cur->Operands[1]->ConstVal == 0 && !Cur->Operands.empty())
           Inner = Cur->Operands[0].get();
         if (!Inner)
+          break;
+        // The cast below converts the peeled operand's value.  A floating
+        // value's view is its bits (BitCast) or its own conversion (Cast),
+        // neither of which a C integer cast of the floating text is.
+        if (Inner->Type && Inner->Type->Kind == NdTypeKind::Float)
           break;
         const uint16_t InnerSize =
             Inner->Type ? Inner->Type->Size

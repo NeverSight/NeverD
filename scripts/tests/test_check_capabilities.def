@@ -1,0 +1,8 @@
+{
+  "analysis.mips.classic-r2": "experimental",
+  "analysis.mips.classic-r6": "experimental",
+  "analysis.mips.micromips32-r2": "experimental",
+  "analysis.mips.dsp32-r2": "experimental",
+  "analysis.mips.mips16-r2": "experimental",
+  "analysis.mips.msa32-r5": "experimental"
+}

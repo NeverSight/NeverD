@@ -1,0 +1,211 @@
+{
+  "source_revision": "c8ebcd7dbf2189adccb11461e1b853beeaea98b5",
+  "llvm_fork_revision": "5676029e378c9e37adc16c8216a8e8453ffafcae",
+  "runner_cold_build": false,
+  "local": {
+    "public_cli_inputs": [
+      "O0",
+      "O2"
+    ],
+    "public_cli_projections": [
+      "neverd decompile",
+      "neverd decompile --llvm"
+    ],
+    "projected_c_recompilation": [
+      "O0 -fstack-protector-all",
+      "O2 -fstack-protector-all"
+    ],
+    "public_cli_passed_combinations": 8,
+    "med_variadic": {
+      "cases": 9,
+      "passed": 9,
+      "failing_cases": []
+    },
+    "pinned_fork_lifted_images": {
+      "cases": 24,
+      "passed": 24,
+      "failing_cases": []
+    },
+    "prebuilt_r6_lifted_images": {
+      "cases": 24,
+      "passed": 19,
+      "failing_cases": [
+        "SignedFrameCallsImportBeforeReadingOriginalGlobal",
+        "SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "SignedLeafUsesTheIncomingSPAtItsNewAddress"
+      ]
+    },
+    "prebuilt_r6_baseline": {
+      "cases": 19,
+      "passed": 14,
+      "failing_cases": [
+        "SignedFrameCallsImportBeforeReadingOriginalGlobal",
+        "SignedCallReturnsTheUpdatedSwiftErrorRegister",
+        "IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "SignedLeafUsesTheIncomingSPAtItsNewAddress"
+      ]
+    },
+    "aarch64_analysis": {
+      "host": "7f4aef594ff25db544ef6b2acede70be9afa89cd90e1b3fec2c1202cb29ffb6e",
+      "tests": 769,
+      "final": {
+        "passed": 722,
+        "skipped": 47,
+        "failed": 0
+      },
+      "replayed": []
+    },
+    "darwin_dyld_text_words": 138671,
+    "darwin_dyld_text_sha256": "11b82a7d642384b9a129eb031b84717813520ad7125103ac6300ce9d8d1c3fbb"
+  },
+  "native": {
+    "r6": {
+      "package": "neverd-llvm-v23.0.0-r6",
+      "workflow_revision": "987c7cca798015f2d5a39cf656f604b02a9e7264",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43101213715",
+      "runners": {
+        "macos-26": {
+          "cases": 5,
+          "ordinary_images": 14,
+          "interrupted_frames": 0,
+          "authenticated_parent_frames": 0,
+          "compiler_controls": 6,
+          "cpu": "Apple M1 (Virtual)",
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "physical_cpta": false,
+          "host_sha256": "d758b84ba90f4d77a44a6b859321349d55929a0448906352c59721d6a2f97d2b",
+          "run": 20,
+          "run-default-executable": 4,
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t26.7.2",
+            "BuildVersion:\t\t25G332"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+          "artifact_id": 13890947889,
+          "artifact_digest": "sha256:78b1a68fa4b2888951c974fcb028848eec916c92bf99bd7e57fce62d32b1c585",
+          "report_sha256": "5fd7f5f4794d2d1fda516e9e5f71f20441ddd58dc4557feb069f58349c4b1fcb"
+        },
+        "xcode-27": {
+          "cases": 5,
+          "ordinary_images": 14,
+          "interrupted_frames": 0,
+          "authenticated_parent_frames": 0,
+          "compiler_controls": 6,
+          "cpu": "Apple M1 (Virtual)",
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "physical_cpta": false,
+          "host_sha256": "d758b84ba90f4d77a44a6b859321349d55929a0448906352c59721d6a2f97d2b",
+          "run": 20,
+          "run-default-executable": 4,
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t27.0.1",
+            "BuildVersion:\t\t26A434"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "artifact_id": 13892671483,
+          "artifact_digest": "sha256:5e3d27bc52f32d3bf5a8cebdd43c436e4c3b8a462e79cdf10e2edd7126e3254e",
+          "report_sha256": "75ab7ab6d979824f33f5af71c3bdbc08e25b1a2b16792221f4d8974eb332f2c4"
+        }
+      }
+    },
+    "pinned_fork": {
+      "package": "source LLVM 5676029e378c9e37adc16c8216a8e8453ffafcae",
+      "workflow_revision": "12efe03c3f70bab46339be96af57251d821b7565",
+      "actions_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/43101159771",
+      "runners": {
+        "macos-26": {
+          "cases": 24,
+          "ordinary_images": 50,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "compiler_controls": 6,
+          "cpu": "Apple M1 (Virtual)",
+          "cpa2": {
+            "exit": 1,
+            "text": "sysctl: unknown oid 'hw.optional.arm.FEAT_CPA2'"
+          },
+          "physical_cpta": false,
+          "host_sha256": "14a8d8f60f2efb7aca6d4a489e2d059113ef5d20fd96240746728dd7953695b5",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t26.7.2",
+            "BuildVersion:\t\t25G332"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+          "artifact_id": 13892566420,
+          "artifact_digest": "sha256:88399487f471ab3bbd4c952095a4591b26de9d77a2e25182b2d1ae5f597a916d",
+          "report_sha256": "5e725916cc5e8aba5d5da8dc4c7f796ed991592d38c6fe99da1fe2902474a80a"
+        },
+        "xcode-27": {
+          "cases": 24,
+          "ordinary_images": 50,
+          "interrupted_frames": 10,
+          "authenticated_parent_frames": 10,
+          "compiler_controls": 6,
+          "cpu": "Apple M1 (Virtual)",
+          "cpa2": {
+            "exit": 0,
+            "text": "0"
+          },
+          "physical_cpta": false,
+          "host_sha256": "14a8d8f60f2efb7aca6d4a489e2d059113ef5d20fd96240746728dd7953695b5",
+          "os": [
+            "ProductName:\t\tmacOS",
+            "ProductVersion:\t\t27.0.1",
+            "BuildVersion:\t\t26A434"
+          ],
+          "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "artifact_id": 13890858404,
+          "artifact_digest": "sha256:b001bebc78b11d973d1cdd685d679cd69eea3f3c62074987a6dbfbf92f73403a",
+          "report_sha256": "f426fe6b9918260f31611ac592b83cce94af513603cfaa689ee3e59bf566c6bd"
+        }
+      }
+    }
+  },
+  "refused_whole_image": {
+    "O0": {
+      "entry": "leaf_sum",
+      "source_machine_bytes": "ff8300d1e00f00f9e9430091e8830091280100f9e90b40f9280140f929210091e90b00f9e80300f9e80340f9e80700f9e80f40f9e90740f90001098bff830091c0035fd6",
+      "emitted_machine_bytes": "ff8300d1e8830091e91340f908017db2e80301a90000098be92782a8c0035fd6",
+      "output_written": false,
+      "local_arm64_caller": {
+        "x0": 109,
+        "original_x9": 9,
+        "emitted_x9": 9,
+        "original_x8_equals_seed": true,
+        "emitted_x8_equals_seed": false,
+        "original_x8_equals_entry_sp_plus_eight": false,
+        "emitted_x8_equals_entry_sp_plus_eight": true
+      }
+    },
+    "O2": {
+      "entry": "leaf_difference",
+      "source_machine_bytes": "ff4300d1e843009108017db2098540f8000009cbff430091c0035fd6",
+      "emitted_machine_bytes": "e80740f9000008cbc0035fd6",
+      "output_written": false,
+      "local_arm64_caller": {
+        "x0": 77,
+        "original_x9": 23,
+        "emitted_x9": 85,
+        "original_x8_equals_seed": false,
+        "emitted_x8_equals_seed": false,
+        "original_x8_equals_entry_sp_plus_eight": false,
+        "emitted_x8_equals_entry_sp_plus_eight": false
+      }
+    }
+  },
+  "arbitrary_lifted_image_publication_qualified": false,
+  "system_signal_trampoline_walk_qualified": false,
+  "native_apple_cpta_qualified": false
+}

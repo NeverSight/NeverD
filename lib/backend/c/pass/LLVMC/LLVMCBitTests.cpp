@@ -170,13 +170,62 @@ bool simplifyIntegerSlices(llvm::Function &Function, unsigned WorkLimit) {
       Slices.push_back(Slice);
   }
   bool Changed = false;
-  for (auto *Slice : Slices) {
+  DenseMap<std::pair<PHINode *, unsigned>, PHINode *> NarrowPhis;
+  for (size_t Index = 0; Index < Slices.size(); ++Index) {
+    auto *Slice = Slices[Index];
     Value *Root = Slice->getOperand(0);
+    const unsigned Width = Slice->getType()->getIntegerBitWidth();
+    if (auto *Phi = dyn_cast<PHINode>(Root)) {
+      // Slice each incoming value before joining it. A whole carrier may
+      // contain unavailable high bits even when every incoming low slice
+      // is known. Keep the original PHI for users of that complete value.
+      const auto Key = std::make_pair(Phi, Width);
+      PHINode *Narrow = NarrowPhis.lookup(Key);
+      if (!Narrow) {
+        if (Phi->getNumIncomingValues() > WorkLimit)
+          continue;
+        bool CanInsert = true;
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          const auto *Pred = Phi->getIncomingBlock(I);
+          const auto *Incoming =
+              dyn_cast<Instruction>(Phi->getIncomingValue(I));
+          // An invoke/callbr result exists only after its terminator; a
+          // catchswitch block has no position for an ordinary instruction.
+          if (Pred->getFirstInsertionPt() == Pred->end() ||
+              (Incoming && Incoming->getParent() == Pred &&
+               Incoming->isTerminator())) {
+            CanInsert = false;
+            break;
+          }
+        }
+        if (!CanInsert)
+          continue;
+        WorkLimit -= Phi->getNumIncomingValues();
+        Narrow = PHINode::Create(Slice->getType(), Phi->getNumIncomingValues(),
+                                 Phi->getName() + ".low", Phi->getIterator());
+        Narrow->setDebugLoc(Slice->getDebugLoc());
+        // Publish before visiting the new slices, including loop backedges.
+        NarrowPhis.try_emplace(Key, Narrow);
+        for (unsigned I = 0; I < Phi->getNumIncomingValues(); ++I) {
+          auto *Pred = Phi->getIncomingBlock(I);
+          IRBuilder<> Builder(Pred->getTerminator());
+          Builder.SetCurrentDebugLocation(Slice->getDebugLoc());
+          Value *Incoming =
+              Builder.CreateTrunc(Phi->getIncomingValue(I), Slice->getType());
+          Narrow->addIncoming(Incoming, Pred);
+          if (auto *Next = dyn_cast<TruncInst>(Incoming))
+            Slices.push_back(Next);
+        }
+      }
+      Slice->replaceAllUsesWith(Narrow);
+      Slice->eraseFromParent();
+      Changed = true;
+      continue;
+    }
     // An opaque whole value already has the same narrow cast. Only these
     // producers can expose a different source or discard unobserved bits.
     if (!isa<BinaryOperator, CastInst, SelectInst, ConstantInt>(Root))
       continue;
-    const unsigned Width = Slice->getType()->getIntegerBitWidth();
     BitProjection Project(WorkLimit);
     Value *Source = nullptr;
     std::optional<int> Offset;

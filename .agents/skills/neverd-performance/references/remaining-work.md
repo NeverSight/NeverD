@@ -177,9 +177,11 @@ A/B with identical output.
 
 - **Interval-shaped address data.** Evaluate `llvm::IntervalMap` (no uses
   yet). Entry: interval lookups or coalescing appear in a profile.
-- **Build.** ThinLTO and PGO are unevaluated. Entry: a whole-request A/B on
-  Linux, macOS and Windows that also reports build time and binary size. Keep
-  the generic ISA baseline; runtime dispatch covers SIMD.
+- **Build.** Profile-guided builds are an opt-in
+  (`cmake/NeverDProfileGuided.cmake`). ThinLTO was measured on Linux only and
+  left out (§ Rejected). Entry for another look: a whole-request A/B on macOS
+  and Windows that also reports build time and binary size. Keep the generic
+  ISA baseline; runtime dispatch covers SIMD.
 - **JSON.** Transport keeps the nlohmann DOM, and simdjson On-Demand is unused.
   Decompile runs did not show JSON. Entry: JSON parsing or DOM copying is
   significant in a worker or MCP request profile.
@@ -191,6 +193,32 @@ A/B with identical output.
   pinned-corpus run. Entry: a runner with stable hardware counters. Until
   then, the same-base A/B is the guard.
 
+### Workbench, after an edit
+
+Found while the listing learned to show an edit's lines first (`ffb77c8063`);
+none is started.
+
+- **The repaint that follows a dialog.** When a dialog closes, the window takes
+  its activation back and repaints its title bar and every item view
+  (`QAbstractItemView` updates its viewport on each activation change): 598 k
+  pixels, 3 to 10 ms on the GUI thread, of which the functions list is 1.7 to
+  5. Where it is still unpainted when the edit's answer lands, the edit's row
+  waits behind it. The theme draws an inactive list as an active one, so the
+  list's repaint buys nothing; a change needs a test that the two paint the
+  same pixels in every theme, high contrast included, and figures taken under
+  a window system, where activation always moves.
+- **A command for the worker's own writes.** Every edit is followed, 300 ms
+  later, by a read of the project's files on the GUI thread and a
+  `project_sync` command that answers `changed: false`. While it waits, a
+  rename is not read ahead. The worker could say what it wrote, or a read
+  could ask before a command does.
+- **The listing's rename leaves late.** Its dialog runs inside the delivery of
+  the read that asked the address's name, and the rename is sent when that
+  delivery returns: 0.4 to 0.5 ms after the dialog is accepted.
+- **Lines carried by a worker that slept.** 1.2 ms where the warm path takes
+  0.2. The prepare request a pseudocode rename sends as its dialog opens has
+  no counterpart for the listing's lines.
+
 ## Rejected
 
 `docs/bbtree-evaluation.md` gives the reasons:
@@ -201,3 +229,23 @@ A/B with identical output.
 - Software prefetch, retained caches or per-query allocation in sorted search.
 - SSE2-SSE4 SIMD for sorted search.
 - The variable-tail search prototype: it regressed random queries.
+
+Measured on whole requests between 2026-11-04 and 2026-11-10, with identical
+output, and left out. Each needs a new reason before it is tried again:
+
+- **ThinLTO with lld, `-fno-semantic-interposition` and
+  `-Bsymbolic-functions` on top of a profile-guided build** (Linux): 3% more
+  CPU and no gain in the median pseudocode request.
+- **A jemalloc worker.** One round cut the first-visit total by 15% to 27%
+  and left the median flat. After library records were shared per session
+  (`4b28263e42`) it was level with mimalloc.
+- **Huge pages for the engine's text.** No median gain in a four-round A/B.
+- **Warming call-signature probes ahead of requests.** Probe misses fell from
+  52.7 to 39.7 per request; the first-visit time did not move.
+- **A lower cap on the synthesis search's retained behaviours.** The present
+  cap was the fastest of five settings. With no retention CPU rose 4% to 6%,
+  and a smaller cap regrows the array (`9edc47b6bb`, `88d388842c`).
+- **Keeping the worker thread spinning between spaced edits.** No round-trip
+  gain, because the client's own wake-ups dominate, and 2 ms stalls under load
+  when the spinner took a core the client needed. A mimalloc purge delay made
+  no difference to the same case.

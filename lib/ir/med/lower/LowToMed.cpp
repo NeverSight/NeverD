@@ -46,6 +46,7 @@
 #include "neverd/ir/low/X86/X86FourSourceShape.h"
 #include "neverd/ir/low/X86ArithmeticFlags.h"
 #include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
@@ -380,10 +381,10 @@ MedVar LowToMedConverter::loadCallStackArgument(MedBlock &Block,
   MedOp Address;
   Address.Opcode = NdOp::INT_ADD;
   Address.Addr = Call.Addr;
-  Address.Output = Temporary(TRI.PointerSize);
-  Address.addInput(
-      ndVarToMedVar(NdVar::reg(TRI.StackPointer, TRI.PointerSize)));
-  Address.addInput(MedVar::makeConst(EntryOffset - Bias, TRI.PointerSize,
+  const uint16_t SPBytes = TRI.addressRegisterBytes();
+  Address.Output = Temporary(SPBytes);
+  Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, SPBytes)));
+  Address.addInput(MedVar::makeConst(EntryOffset - Bias, SPBytes,
                                      ConstantAddressProvenance::Scalar));
   MedOp Load;
   Load.Opcode = NdOp::LOAD;
@@ -411,12 +412,145 @@ unsigned LowToMedConverter::variadicImportFixedCount(va_t Key) const {
   return libc::varArgFixedCount(Name, libc::libcVariantOf(*Image));
 }
 
+void LowToMedConverter::bindScalarCall(MedBlock &Block, MedOp &MOp,
+                                       const LowOp &LOp,
+                                       const FloatingCallArguments &Signature,
+                                       bool TailCall) {
+  const auto &TRI = getTargetRegInfo(TargetArch);
+  // TOP normalization owns the physical x87 result slot. A declaration
+  // cannot overwrite an unproved or context-based call with guessed ST0.
+  MOp.ScalarCallSignature = std::make_shared<FloatingCallArguments>(Signature);
+  MOp.CalleeRegisterArgs = -1;
+  MOp.CalleeStackArgs = -1;
+  MOp.CalleeVectorArgs = -1;
+  auto Temporary = [&](uint16_t Bytes) {
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = allocVarId();
+    Value.Size = Bytes;
+    Value.TheArch = TargetArch;
+    return Value;
+  };
+  for (const auto &Parameter : Signature.Scalars) {
+    if (isMIPS(TargetArch) &&
+        Parameter.Kind == SourceABICarrierKind::FloatingRegister &&
+        Parameter.Bytes < TRI.FPABIRegWidth) {
+      // A float observes only the low word of an FR=1 FPR. Materialize
+      // that view before SSA/DCE so an undefined upper word does not
+      // become an input of an otherwise complete fixed call.
+      MedOp Slice;
+      Slice.Opcode = NdOp::SUBBYTES;
+      Slice.Output = Temporary(Parameter.Bytes);
+      Slice.Addr = LOp.Addr;
+      Slice.OriginSeq = LOp.Seq;
+      Slice.addInput(
+          ndVarToMedVar(NdVar::reg(Parameter.Register, TRI.FPABIRegWidth)));
+      Slice.addInput(MedVar::makeConst(0, TRI.PointerSize));
+      MOp.addInput(Slice.Output);
+      Block.Ops.push_back(std::move(Slice));
+      continue;
+    }
+    if (isMIPS(TargetArch) && !isMIPS64(TargetArch) &&
+        Parameter.Kind == SourceABICarrierKind::IntegerRegister &&
+        Parameter.Bytes == 8) {
+      const auto Layout = TRI.integerArgumentLayout(TargetFormat);
+      const int First = Layout.registerIndex(Parameter.Register);
+      MedOp Join;
+      Join.Opcode = NdOp::CONCAT;
+      Join.Output = Temporary(8);
+      Join.Addr = LOp.Addr;
+      Join.OriginSeq = LOp.Seq;
+      const bool Little = archLittleEndian(TargetArch);
+      Join.addInput(
+          ndVarToMedVar(NdVar::reg(Layout.Registers[First + Little], 4)));
+      Join.addInput(
+          ndVarToMedVar(NdVar::reg(Layout.Registers[First + !Little], 4)));
+      MOp.addInput(Join.Output);
+      Block.Ops.push_back(std::move(Join));
+      continue;
+    }
+    if (Parameter.Kind != SourceABICarrierKind::Stack) {
+      MOp.addInput(ndVarToMedVar(NdVar::reg(
+          Parameter.Register,
+          Parameter.Kind == SourceABICarrierKind::FloatingRegister
+              ? TRI.FPABIRegWidth
+          : TargetArch == Arch::AArch64 ? std::max<uint16_t>(4, Parameter.Bytes)
+                                        : Parameter.Bytes)));
+      continue;
+    }
+    MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
+                                       Parameter.Bytes, TailCall));
+  }
+  MOp.CalleeFloatReturnBytes = 0;
+  if (Signature.ReturnElements) {
+    MOp.Output = Temporary(Signature.ReturnBytes);
+  } else if (Signature.ReturnKind == NdTypeKind::Float) {
+    MOp.CalleeFloatReturnBytes = Signature.ReturnBytes;
+    MOp.Output =
+        TargetArch == Arch::X86
+            ? ndVarToMedVar(LOp.Output)
+            : ndVarToMedVar(NdVar::reg(TRI.FPReturnReg, TRI.FPABIRegWidth));
+  } else if (Signature.ReturnKind == NdTypeKind::Void) {
+    MOp.Output = {};
+    MOp.Output.Id = -1;
+  } else if (isMIPS(TargetArch) && Signature.ReturnBytes != TRI.FullRegWidth) {
+    MOp.Output = Temporary(Signature.ReturnBytes);
+  } else {
+    MOp.Output =
+        ndVarToMedVar(NdVar::reg(TRI.IntReturnReg, Signature.ReturnBytes));
+  }
+}
+
+void LowToMedConverter::bindIntegerCall(
+    MedBlock &Block, MedOp &MOp, const LowOp &LOp,
+    const FixedIntegerCallArguments &Signature, bool TailCall) {
+  MOp.IntegerCallSignature =
+      std::make_shared<FixedIntegerCallArguments>(Signature);
+  MOp.CalleeRegisterArgs = 0;
+  MOp.CalleeVectorArgs = 0;
+  MOp.CalleeStackArgs = 0;
+  for (const auto &Parameter : Signature.Parameters) {
+    if (Parameter.Kind == SourceABICarrierKind::Stack) {
+      MOp.CalleeStackArgs = Signature.Parameters.size();
+      MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
+                                         Parameter.Bytes, TailCall));
+    } else {
+      MOp.addInput(ndVarToMedVar(NdVar::reg(
+          Parameter.Register, TargetArch == Arch::AArch64
+                                  ? std::max<uint16_t>(4, Parameter.Bytes)
+                                  : Parameter.Bytes)));
+      ++MOp.CalleeRegisterArgs;
+    }
+  }
+}
+
 void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
                                                 const LowOp &LOp,
                                                 bool TailCall) {
   if ((LOp.Opcode != NdOp::CALL && LOp.Opcode != NdOp::INDIR_CALL) ||
       LOp.NumInputs == 0)
     return;
+  if (MOp.NumInputs == 1 &&
+      (CallSiteIntegerArguments || CallSiteFloatingArguments)) {
+    const SourceCallOccurrenceKey Site{
+        LOp.Addr, LOp.Seq, LOp.Opcode,
+        LOp.Inputs[0].isConst() ? std::optional<va_t>(LOp.Inputs[0].Offset)
+                                : std::nullopt};
+    const bool Explicit =
+        SourceCallSiteHints && SourceCallSiteHints->contains(Site);
+    if (!Explicit && CallSiteIntegerArguments)
+      if (const auto I = CallSiteIntegerArguments->find(Site);
+          I != CallSiteIntegerArguments->end()) {
+        bindIntegerCall(Block, MOp, LOp, I->second, TailCall);
+        return;
+      }
+    if (!Explicit && CallSiteFloatingArguments)
+      if (const auto I = CallSiteFloatingArguments->find(Site);
+          I != CallSiteFloatingArguments->end()) {
+        bindScalarCall(Block, MOp, LOp, I->second, TailCall);
+        return;
+      }
+  }
   // The callee's address, or the import slot a register the call goes
   // through was loaded from (RegisterCallSlot).  A call through a
   // function-pointer variable reads the arguments of the routine the
@@ -475,24 +609,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
       CallEntryIntegerArguments && MOp.NumInputs == 1)
     if (const auto I = CallEntryIntegerArguments->find(ArgumentsKey);
         I != CallEntryIntegerArguments->end()) {
-      MOp.IntegerCallSignature =
-          std::make_shared<FixedIntegerCallArguments>(I->second);
-      MOp.CalleeRegisterArgs = 0;
-      MOp.CalleeVectorArgs = 0;
-      MOp.CalleeStackArgs = 0;
-      for (const auto &Parameter : I->second.Parameters) {
-        if (Parameter.Kind == SourceABICarrierKind::Stack) {
-          MOp.CalleeStackArgs = I->second.Parameters.size();
-          MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
-                                             Parameter.Bytes, TailCall));
-        } else {
-          MOp.addInput(ndVarToMedVar(NdVar::reg(
-              Parameter.Register, TargetArch == Arch::AArch64
-                                      ? std::max<uint16_t>(4, Parameter.Bytes)
-                                      : Parameter.Bytes)));
-          ++MOp.CalleeRegisterArgs;
-        }
-      }
+      bindIntegerCall(Block, MOp, LOp, I->second, TailCall);
     }
   if (Convention && Convention->ImportArgumentsFromPrototype &&
       CallEntryVariadicArguments && MOp.NumInputs == 1)
@@ -518,48 +635,13 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
       CallEntryFloatingArguments && MOp.NumInputs == 1)
     if (const auto F = CallEntryFloatingArguments->find(ArgumentsKey);
         F != CallEntryFloatingArguments->end() &&
-        (TargetArch != Arch::X86 ||
+        (TargetArch != Arch::X86 || !F->second.ReturnBytes ||
          (LOp.Output.isReg() && TRI.isX87StackReg(LOp.Output.Offset) &&
           LOp.Output.Size == x86reg::FPURegSize))) {
       const auto &Signature = F->second;
-      if (TargetArch == Arch::X86 || !Signature.Scalars.empty() ||
-          Signature.ReturnElements) {
-        // TOP normalization owns the physical x87 result slot. A declaration
-        // cannot overwrite an unproved or context-based call with guessed ST0.
-        MOp.ScalarCallSignature =
-            std::make_shared<FloatingCallArguments>(Signature);
-        MOp.CalleeRegisterArgs = -1;
-        MOp.CalleeStackArgs = -1;
-        MOp.CalleeVectorArgs = -1;
-        auto Temporary = [&](uint16_t Bytes) {
-          MedVar Value;
-          Value.Kind = MedVar::Temp;
-          Value.Id = allocVarId();
-          Value.Size = Bytes;
-          Value.TheArch = TargetArch;
-          return Value;
-        };
-        for (const auto &Parameter : Signature.Scalars) {
-          if (Parameter.Kind != SourceABICarrierKind::Stack) {
-            MOp.addInput(ndVarToMedVar(NdVar::reg(
-                Parameter.Register,
-                Parameter.Kind == SourceABICarrierKind::FloatingRegister
-                    ? TRI.FPABIRegWidth
-                : TargetArch == Arch::AArch64
-                    ? std::max<uint16_t>(4, Parameter.Bytes)
-                    : Parameter.Bytes)));
-            continue;
-          }
-          MOp.addInput(loadCallStackArgument(Block, LOp, Parameter.StackOffset,
-                                             Parameter.Bytes, TailCall));
-        }
-        MOp.CalleeFloatReturnBytes =
-            Signature.ReturnElements ? 0 : Signature.ReturnBytes;
-        MOp.Output =
-            Signature.ReturnElements ? Temporary(Signature.ReturnBytes)
-            : TargetArch == Arch::X86
-                ? ndVarToMedVar(LOp.Output)
-                : ndVarToMedVar(NdVar::reg(TRI.FPReturnReg, TRI.FPABIRegWidth));
+      if (TargetArch == Arch::X86 || isMIPS(TargetArch) ||
+          !Signature.Scalars.empty() || Signature.ReturnElements) {
+        bindScalarCall(Block, MOp, LOp, Signature, TailCall);
       } else if (Signature.ParameterBytes.size() <= FPParamRegs.size() &&
                  Signature.ParameterBytes.size() <=
                      sizeof(MOp.CalleeVectorArgWidths) * 2 &&
@@ -719,11 +801,17 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
       // callee reads: the whole register, whose value every write reaches,
       // and the bytes the callee reads of it.
       if (Convention->VectorArgumentsFromCalleeSummary && !VectorSlots) {
+        if (VariadicFrom && Convention->VariadicVectorCountRegister)
+          MOp.CalleeVariadicRegisterFrom = static_cast<int8_t>(*VariadicFrom);
         int8_t Vectors = 0;
         uint32_t Widths = 0;
         for (size_t K = 0;
              K < FPParamRegs.size() && K < kX64VectorArgumentFamilies; ++K)
-          if (const uint8_t Width = R->second[kX64VectorFamilyBase + K]) {
+          if (const uint8_t Width =
+                  VariadicFrom && MOp.VariadicVectorCount >= 0
+                      ? (K < static_cast<size_t>(MOp.VariadicVectorCount) ? 16
+                                                                          : 0)
+                      : R->second[kX64VectorFamilyBase + K]) {
             const uint32_t Units = Width <= 4 ? 1 : Width <= 8 ? 2 : 4;
             MOp.addInput(ndVarToMedVar(NdVar::reg(FPParamRegs[K], 16)));
             Widths |= Units << (4 * Vectors);
@@ -790,18 +878,21 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   if (isMIPS(TheArch))
-    requireMIPSSourceVectors(Low, TheArch, Image);
+    requireMIPSSourceVectors(Low, TheArch, Image, CallEntryFloatingArguments,
+                             SourceCallHintsEnabled ? SourceCallSiteHints
+                                                    : nullptr);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image
            ? (hasCompressedMIPSCode(Image->Mode) ||
-              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA)))
-           : llvm::any_of(Low.Blocks, [TheArch](const auto &Block) {
+              (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
+                               Image->MIPS->ISARevision == 6 ||
+                               Image->MIPS->hasScalarFPABI(isMIPS64(TheArch)))))
+           : llvm::any_of(Low.Blocks, [](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.
                // This also covers RDDSP ra,0, which is a plain zero copy.
-               if (!isMIPS64(TheArch) &&
-                   llvm::any_of(Block.Ops, [](const LowOp &Op) {
+               if (llvm::any_of(Block.Ops, [](const LowOp &Op) {
                      return (Op.Output.isReg() &&
                              Op.Output.Offset == mipsreg::RA) ||
                             (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
@@ -818,6 +909,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
              }));
   bool MIPSReturnsQualified = !QualifyMIPSReturns;
   bool HasMIPSScalarValues = false;
+  bool HasMIPSAccumulatorTransport = false;
   for (const LowBlock &Block : Low.Blocks)
     for (const LowOp &Op : Block.Ops) {
       if (isLowRawEnvironmentRequirement(Op) ||
@@ -868,6 +960,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
             !mipsScalarLowShapeIsValid(Op, TheArch))
           throw LowToMedConversionError(mips::kMalformedScalar);
         HasMIPSScalarValues |= mips::isScalarIntrinsic(Id);
+        HasMIPSAccumulatorTransport |=
+            Id == Intrinsic::MIPSAccumulatorAfterWrite;
         if ((Id == Intrinsic::Eret && TheArch != Arch::AArch64) ||
             !aarch64ExceptionReturnShapeIsValid(Id, Op.NumInputs,
                                                 Op.Output.Size))
@@ -1059,10 +1153,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   Func.Entry = Low.Entry;
   Func.Name = Low.Name;
   Func.JumpTables = Low.JumpTables;
+  Func.JumpTables.insert(Func.JumpTables.end(), Low.ValueDispatches.begin(),
+                         Low.ValueDispatches.end());
   Func.ModuleAnalysisRoots = Low.ModuleAnalysisRoots;
   Func.CxxContinuationEntries = Low.CxxContinuationEntries;
   Func.UnsafeIndirectBranchAddresses = Low.UnsafeIndirectBranchAddresses;
   Func.CompleteLiftCoverage = Low.hasCompleteLiftCoverage();
+  Func.TruncatedPathAddresses.insert(Low.TruncatedPathAddresses.begin(),
+                                     Low.TruncatedPathAddresses.end());
   Func.ExceptionMetadata = Low.ExceptionMetadata;
   Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(Low, TheArch);
   Func.SEHHomedArguments = collectLowSEHHomedArguments(Low, TheArch);
@@ -1195,6 +1293,35 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     ImportSnapshots.emplace(Producer, Snapshot);
   }
 
+  // The SMC Calling Convention's argument registers some operation of the
+  // routine writes, besides its SMC and HVC #0 calls and the results each
+  // binds at its own address.
+  std::optional<std::set<uint64_t>> WrittenSmcccArguments;
+  const auto writtenSmcccArguments = [&]() -> const std::set<uint64_t> & {
+    if (WrittenSmcccArguments)
+      return *WrittenSmcccArguments;
+    WrittenSmcccArguments.emplace();
+    std::set<va_t> Calls;
+    std::set<uint64_t> Arguments;
+    for (const auto &Block : Low.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+            Op.Inputs[0].isConst() && Op.Inputs[1].isConst())
+          for (const uint64_t Register : smcccArgumentRegisters(
+                   TheArch, static_cast<Intrinsic>(Op.Inputs[0].Offset),
+                   Op.Inputs[1].Offset)) {
+            Calls.insert(Op.Addr);
+            Arguments.insert(Register);
+          }
+    for (const auto &Block : Low.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Output.isReg() && !Calls.count(Op.Addr))
+          for (const uint64_t Register : Arguments)
+            if (Op.Output.Offset >= Register && Op.Output.Offset < Register + 8)
+              WrittenSmcccArguments->insert(Register);
+    return *WrittenSmcccArguments;
+  };
+
   for (const auto &LB : Low.Blocks) {
     uint8_t DispatchDefined =
         TrackDispatchArgs ? DispatchDefinedIn[LowBlockIndex] : 0;
@@ -1248,8 +1375,12 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                 "instruction mode");
           CachedTarget->Address = *Target;
         }
+        // A relocatable object's call takes the routine's contract too,
+        // where the pointer is an address of the object's own
+        // (MedCallTarget::addressesImage): left indirect, each backend would
+        // have to bind an unknown callee's arguments to that routine late.
         if (CachedTarget && !CachedTarget->ThroughSlot && !AnalystSite &&
-            !Image->IsRelocatable &&
+            CachedTarget->addressesImage(Image->IsRelocatable) &&
             Image->hasExecutableCodeOwnerAt(CachedTarget->Address)) {
           DirectCall = Call;
           DirectCall->Opcode = NdOp::CALL;
@@ -1420,14 +1551,27 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           MOp.Output = ndVarToMedVar(NdVar::reg(Syscall->ResultRegister, Size));
         }
       // An SMC or HVC #0 reads the registers of the SMC Calling Convention;
-      // the lift binds its results.
+      // the lift binds its results.  Where the block sets the function
+      // identifier just before the call, the call takes the arguments the
+      // routine sets: a register it never writes holds only what its caller
+      // left there (`__hyp_reset_vectors`, `mov x0, #2; hvc #0`), and passes
+      // zero, as an unread syscall argument does.
       if (LOp.Opcode == NdOp::INTRINSIC && LOp.NumInputs == 2 &&
-          LOp.Inputs[0].isConst() && LOp.Inputs[1].isConst())
-        for (uint64_t Register : smcccArgumentRegisters(
-                 TheArch, static_cast<Intrinsic>(LOp.Inputs[0].Offset),
-                 LOp.Inputs[1].Offset))
-          MOp.addInput(ndVarToMedVar(
-              NdVar::reg(Register, TheArch == Arch::AArch64 ? 8 : 4)));
+          LOp.Inputs[0].isConst() && LOp.Inputs[1].isConst()) {
+        const llvm::ArrayRef<uint64_t> Registers = smcccArgumentRegisters(
+            TheArch, static_cast<Intrinsic>(LOp.Inputs[0].Offset),
+            LOp.Inputs[1].Offset);
+        const uint16_t Size = TheArch == Arch::AArch64 ? 8 : 4;
+        const bool SetsIdentifier =
+            TheArch == Arch::AArch64 && !Registers.empty() &&
+            blockRegisterConstant(LB.Ops, LowOpIndex, Registers.front(), Size);
+        for (const uint64_t Register : Registers)
+          MOp.addInput(SetsIdentifier && Register != Registers.front() &&
+                               !writtenSmcccArguments().count(Register)
+                           ? MedVar::makeConst(
+                                 0, Size, ConstantAddressProvenance::Scalar)
+                           : ndVarToMedVar(NdVar::reg(Register, Size)));
+      }
       DispatchCallDefinedArgs = DispatchDefined;
       // A register an indirect call goes through, loaded from an import's
       // slot, names that import as the slot would (`mov rax, [rip+slot];
@@ -1486,6 +1630,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         MOp.CalleeRegisterArgs = 0;
         MOp.CalleeStackArgs = 0;
         MOp.CalleeVectorArgs = 0;
+      } else if (const auto *Site = isMIPS(TheArch) && SourceCallHintsEnabled
+                                        ? mipsFloatingCallSite(
+                                              LOp, TheArch, SourceCallSiteHints)
+                                        : nullptr) {
+        MOp.NumInputs = 1;
+        bindScalarCall(MB, MOp, LOp, *Site->Signature.MIPSScalars, TailCall);
+        MOp.SourceCallHint = std::make_shared<const SourceCallTypeHint>(*Site);
       } else if (!bindFormattedCall(MB, MOp, LOp))
         applyCallRegisterEffect(MB, MOp, LOp, TailCall);
       if (CallUnreadGPRs && TheArch == Arch::X64 && LOp.Opcode == NdOp::CALL &&
@@ -1621,6 +1772,35 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         Save.addInput(MOp.Output);
         MB.Ops.push_back(std::move(Save));
       }
+      if (isMIPS(TheArch) && MOp.ScalarCallSignature && MOp.Output.Size &&
+          MOp.Output.Kind == MedVar::Temp) {
+        const auto &Signature = *MOp.ScalarCallSignature;
+        const uint16_t Word = ConventionRegs.FullRegWidth;
+        if (Signature.ReturnBytes < Word) {
+          MedOp Extend;
+          Extend.Opcode = Signature.SignedResult || Signature.ReturnBytes == 4
+                              ? NdOp::INT_SEXT
+                              : NdOp::INT_ZEXT;
+          Extend.Addr = LOp.Addr;
+          Extend.Output =
+              ndVarToMedVar(NdVar::reg(ConventionRegs.IntReturnReg, Word));
+          Extend.addInput(MOp.Output);
+          MB.Ops.push_back(std::move(Extend));
+        } else {
+          for (unsigned I = 0; I != 2; ++I) {
+            MedOp Part;
+            Part.Opcode = NdOp::SUBBYTES;
+            Part.Addr = LOp.Addr;
+            Part.Output = ndVarToMedVar(
+                NdVar::reg(ConventionRegs.IntReturnRegs[I], Word));
+            Part.addInput(MOp.Output);
+            Part.addInput(
+                MedVar::makeConst(ConventionRegs.integerReturnWordOffset(I), 4,
+                                  ConstantAddressProvenance::Scalar));
+            MB.Ops.push_back(std::move(Part));
+          }
+        }
+      }
       if (MOp.ScalarCallSignature && MOp.ScalarCallSignature->ReturnElements) {
         // The selected header owns every HFA result register before SSA.
         // A following call may consume those fields without a single move.
@@ -1715,8 +1895,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   for (const auto &Block : Func.Blocks)
     CopiedOps += Block.Ops.size();
   if (Low.DecodedInstructionCount >
-          static_cast<uint64_t>(limits::kMaxSSAFunctionOps) ||
-      CopiedOps > limits::kMaxSSAFunctionOps) {
+          static_cast<uint64_t>(limits::kMaxSSABuildOps) ||
+      CopiedOps > limits::kMaxSSABuildOps) {
     LLVM_DEBUG(llvm::dbgs() << "LowIR -> MedIR: skipping SSA for " << Func.Name
                             << " insns=" << Low.DecodedInstructionCount
                             << " ops=" << CopiedOps << "\n");
@@ -1749,6 +1929,21 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     modelSEHFinallyRegisters(Func);
     debugVerifyMedFunc(Func, "modelSEHFinallyRegisters");
 
+    if (isMIPS(TheArch) && Image && Image->MIPS &&
+        Image->MIPS->hasScalarFP32ABI(isMIPS64(TheArch)))
+      projectMIPSFP32Registers(
+          Func,
+          [&](uint16_t Bytes) {
+            MedVar Value;
+            Value.Kind = MedVar::Temp;
+            Value.Id = allocVarId();
+            Value.Size = Bytes;
+            Value.TheArch = TheArch;
+            return Value;
+          },
+          [&](unsigned Even) {
+            return ndVarToMedVar(NdVar::reg(mipsreg::w(Even), 8));
+          });
     fixupSubRegisters(Func);
     debugVerifyMedFunc(Func, "fixupSubRegisters");
 
@@ -1948,6 +2143,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       runDce(Func);
       if (discardUnobservedMIPSMergeInputs(Func, Low, TheArch))
         runDce(Func);
+      if (HasMIPSAccumulatorTransport) {
+        requireMIPSSourceAccumulators(Func);
+        for (const auto &Block : Func.Blocks)
+          for (const auto &Op : Block.Ops)
+            if (!Op.Dead && mipsScalarMedShapeIsValid(Op, TheArch) &&
+                static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                    Intrinsic::MIPSAccumulatorAfterWrite)
+              throw LowToMedConversionError(mips::kAccumulatorHistoryUnknown);
+      }
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     detectCc(Func, TheArch, Fmt);

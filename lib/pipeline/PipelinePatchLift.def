@@ -1,0 +1,11 @@
+//===- PipelinePatchLift.def - Patch lift diagnostics -----------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+NEVERD_PATCH_LIFT_TEXT(
+    kCallSignatureMismatch,
+    "final LLVM verification failed: resolved call signature mismatch")
+
+#undef NEVERD_PATCH_LIFT_TEXT

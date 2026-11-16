@@ -1,6 +1,6 @@
 **Sprachen**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: 9a100b1a0b2a5ec44fc5623ea91ed93b02f978ecbe29cc51a156ea53dcde63ff -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -62,7 +62,7 @@ Verwendung, unterstützte Verträge und Grenzen stehen in den Leitfäden zu [EVM
 
 > Jede Zelle der Matrix ist implementiert, die Tiefe der Integrationstests variiert jedoch. Siehe die [Architektur-Abdeckungsmatrix](architecture.md#support-and-test-depth). Mach-O i386 verwendet relocatable `thin`-Objekte, weil modernes macOS historische i386-Executables nicht linken kann.
 
-**Die MIPS-ELF-Analyse ist experimentell:** MIPS32r2/o32 und MIPS64r2/n64 unterstützen in beiden Byte-Reihenfolgen eine strikt begrenzte Teilmenge von Ganzzahlbefehlen für Disassemblierung, CFG-Rekonstruktion sowie C- und LLVM-Ausgabe. Das Umschreiben nativen Codes wird nicht unterstützt. Siehe [MIPS-Abdeckung und Firmware-Beispiel (Englisch)](../mips.md) für die separat geprüften Teilmengen microMIPS32, DSP und MIPS32r5 MSA sowie deren Einschränkungen bei der Quellcodeausgabe.
+**Die MIPS-ELF-Analyse ist experimentell:** MIPS32r2/o32 und MIPS64r2/n64 unterstützen in beiden Byte-Reihenfolgen eine strikt begrenzte Teilmenge von Ganzzahlbefehlen für Disassemblierung, CFG-Rekonstruktion sowie C- und LLVM-Ausgabe. Das Umschreiben nativen Codes wird nicht unterstützt. Siehe [MIPS-Abdeckung und Firmware-Beispiel (Englisch)](../mips.md) für die separat geprüften Teilmengen microMIPS32, MIPS16e/e2, DSP und MIPS32r5 MSA sowie deren Einschränkungen bei der Quellcodeausgabe.
 
 Legacy-EVM-Bytecode wird unabhängig von nativen Containern unterstützt: Alle
 150 Opcodes von Frontier bis Fusaka führen durch Low/Med/High IR, verifiziertes
@@ -295,6 +295,7 @@ neverd <command> [options] <binary>
 |--------|---------|-------------|
 | `lift` | `.ll` | Nach LLVM IR liften |
 | `decompile` | `.c` / `.sol` / `.rs` | C, EVM-Solidity oder SBF-Rust über `--language` |
+| `decompile --check-all` | Zähler | Standard-C für jede geladene Funktion; jeder Funktionsrumpf wird nach der Prüfung freigegeben |
 | `decompile -llvm` | `.c` | Über LLVM IR + Optimizer |
 | `decompile --devirtualize` | `.c` + optionales JSON | Experimentelle x64-Interpreterrekonstruktion; benötigt `--func`; [Vertrag und Beispiele](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | Experimentell: [Android](android.md), [iOS](ios.md) |

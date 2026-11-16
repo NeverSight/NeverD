@@ -8,6 +8,7 @@
 
 #include "TargetRegInfoDetail.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -286,6 +287,8 @@ const TargetRegInfo &getTargetRegInfo(Arch TheArch) {
   case Arch::MIPS32:
   case Arch::MIPS32EL:
   case Arch::MIPS64:
+  case Arch::MIPS64N32:
+  case Arch::MIPS64N32EL:
   case Arch::MIPS64EL:
     return getMIPSRegInfo(TheArch);
   default:
@@ -317,6 +320,13 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
            Size <= PreservedEnd - RegOff;
   }
 
+  if (isMIPS(TheArch) && isVectorReg(RegOff)) {
+    const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
+    return Size <= 8 && (isMIPS64(TheArch) && !isMIPSN32(TheArch)
+                             ? Index >= 24
+                             : Index >= 20 && Index % 2 == 0);
+  }
+
   // AAPCS64 requires callees to preserve only the low 64 bits of v8-v15.
   // Treating the whole Q register as callee-saved would retain an upper half
   // the callee may overwrite; treating it as volatile loses valid D-register
@@ -331,6 +341,8 @@ uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
                                                 uint16_t Size) const {
   if (isCallPreserved(RegOff, Size))
     return Size;
+  if (isMIPS(TheArch) && Size > 8 && isCallPreserved(RegOff, 8))
+    return 8;
   if (TheArch != Arch::AArch64 || Size <= 8 || !isVectorReg(RegOff))
     return 0;
   unsigned VecIdx = static_cast<unsigned>((RegOff - VecRegBase) / VecRegStride);
@@ -439,7 +451,7 @@ IntegerArgumentLayout TargetRegInfo::integerArgumentLayout(bool IsWin64) const {
   const bool Win64 = TheArch == Arch::X64 && IsWin64 && !Win64ParamRegs.empty();
   IntegerArgumentLayout Layout;
   Layout.Registers = Win64 ? Win64ParamRegs : IntParamRegs;
-  Layout.SlotBytes = PointerSize;
+  Layout.SlotBytes = isMIPS(TheArch) ? FullRegWidth : PointerSize;
   Layout.CallStackBase = Win64 ? int64_t(Layout.Registers.size()) * PointerSize
                                : CallStackArgumentBase;
   Layout.EntryStackBase =

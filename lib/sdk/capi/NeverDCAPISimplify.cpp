@@ -30,6 +30,7 @@
 
 #include <cstddef>
 #include <string>
+#include <tuple>
 
 using namespace neverd;
 using namespace neverd::sdk;
@@ -118,8 +119,8 @@ Simplified simplify(const char *Expr, const SimplifyConfig &Config) {
                    : symbolic::simplifyMBA(Ctx, Parsed.Root, Config.MBA);
   // Rendered here because the context that gives these references meaning does
   // not outlive this function; nothing downstream holds a SymRef.
-  Out.Input = Ctx.toString(Parsed.Root);
-  Out.Output = Ctx.toString(Out.Result.Expr);
+  std::tie(Out.Input, Out.Output) =
+      symbolic::printSymExprPair(Ctx, Parsed.Root, Out.Result.Expr);
   return Out;
 }
 

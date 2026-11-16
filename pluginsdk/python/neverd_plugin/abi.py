@@ -1411,6 +1411,12 @@ _declare(
     ["neverd_session_t"],
     ownership=Ownership.OWNED_STRING,
 )
+_declare(
+    "neverd_type_declarations_range_json",
+    "const char *",
+    ["neverd_session_t", "size_t", "size_t"],
+    ownership=Ownership.OWNED_STRING,
+)
 _declare("neverd_type_declarations_save", "int", ["neverd_session_t"])
 _declare("neverd_type_declarations_load", "int", ["neverd_session_t"])
 _declare(
@@ -1586,6 +1592,11 @@ _declare(
 )
 _declare(
     "neverd_prepare_function",
+    "int",
+    ["neverd_session_t", "neverd_va_t"],
+)
+_declare(
+    "neverd_forget_function_analysis",
     "int",
     ["neverd_session_t", "neverd_va_t"],
 )
@@ -1790,6 +1801,18 @@ _declare(
     "neverd_string_refs_json",
     "const char *",
     ["neverd_session_t", "const char *", "neverd_va_t", "int"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_embedded_objects_json",
+    "const char *",
+    ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_computed_strings_json",
+    "const char *",
+    ["neverd_session_t", "neverd_va_t"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(
@@ -2229,6 +2252,12 @@ _declare(
     "neverd_data_symbols_json",
     "const char *",
     ["neverd_session_t"],
+    ownership=Ownership.OWNED_STRING,
+)
+_declare(
+    "neverd_data_symbols_page_json",
+    "const char *",
+    ["neverd_session_t", "uint64_t", "int"],
     ownership=Ownership.OWNED_STRING,
 )
 _declare(

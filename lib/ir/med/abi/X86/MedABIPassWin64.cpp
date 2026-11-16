@@ -54,29 +54,6 @@ void resolveFirstArgAfterCall(AbiCallContext &C, bool &Arg0FromInBlock) {
     }
 }
 
-/// Win64 IAT call with no stack arg: rcx/rdx written in the predecessor are
-/// the real arguments (`cstr(&name)`, `assign(&dst, &src)`).  Do not use the
-/// function's incoming this when nothing in the function wrote that
-/// register.
-void takeIndirectCallRegisters(AbiCallContext &C) {
-  const int NumIntParamRegs = static_cast<int>(C.Layout.Registers.size());
-  for (int K = 0; K < NumIntParamRegs && K < C.MaxArgs; ++K) {
-    if (C.FoundMask[K])
-      continue;
-    if (K > 0 && !C.FoundMask[K - 1])
-      break;
-    bool FoundDef = false;
-    auto V =
-        findReachingArgReg(C.Func, C.TRI, C.TheArch, C.Blk.Id, K, C.Layout,
-                           /*AllowUnknownLiveIn=*/false, nullptr, &FoundDef,
-                           C.CallIdx, BinaryFormat::COFF, C.Blocks);
-    if (!V || !FoundDef)
-      break;
-    C.Found[K] = *V;
-    C.FoundMask[K] = true;
-  }
-}
-
 /// A virtual call's object is arg0; when this function already has an rdx
 /// param, the result buffer it passes on is arg1.
 void takeVirtualCallResultBuffer(AbiCallContext &C) {
@@ -105,7 +82,6 @@ const AbiCallPolicy Win64AbiCallPolicy = {
     .TheArch = Arch::X64,
     .Format = BinaryFormat::COFF,
     .ResolveFirstArgAfterCall = resolveFirstArgAfterCall,
-    .TakeIndirectCallRegisters = takeIndirectCallRegisters,
     .TakeVirtualCallResultBuffer = takeVirtualCallResultBuffer,
 };
 

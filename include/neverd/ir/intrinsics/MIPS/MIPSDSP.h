@@ -27,12 +27,16 @@ constexpr std::optional<DSPInstruction> dspInstruction(uint32_t Word) {
   return std::nullopt;
 }
 
-constexpr uint32_t dspControlMask(unsigned Selector) {
+constexpr uint32_t dspControlMask(unsigned Selector, bool Wide = false) {
   uint32_t Result = 0;
 #define NEVERD_MIPS_DSP_FIELD(Name, Select, Bits)                              \
   if (Selector & Select)                                                       \
     Result |= Bits;
 #include "neverd/ir/intrinsics/MIPS/MIPSDSP.def"
+  if (Wide && (Selector & 1))
+    Result |= 1u << 6;
+  if (Wide && (Selector & 16))
+    Result |= 0xf0000000u;
   return Result;
 }
 

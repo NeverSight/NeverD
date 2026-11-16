@@ -8,7 +8,8 @@
 // and exercise the adjacent shapes the OptStress71 probe did not reach.
 //
 //   * hfa4f - HFA struct{float a,b,c,d}: AArch64 S0-S3 (four V registers);
-//             x86-64 packs a,b into XMM0 and c,d into XMM1 (two SSE eightbytes).
+//             x86-64 packs a,b into XMM0 and c,d into XMM1 (two SSE
+//             eightbytes).
 //   * hfa2f - HFA struct{float a,b}: AArch64 S0,S1 (two V registers); x86-64
 //             packs both floats into one XMM0 — a single-register return there,
 //             the negative control for the AArch64 two-register HFA path.
@@ -24,6 +25,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SemanticRoundTripFixture.h"
+#include "SourceRouteCases.h"
 
 class X64OptStress72RT : public SemanticRoundTripFixture,
                          public ::testing::WithParamInterface<RoundTripTC> {};
@@ -96,12 +98,24 @@ static std::vector<RoundTripTC> makeOptStress72TC(const char *prefix, const char
 }
 // clang-format on
 
-static const std::vector<RoundTripTC> kX64 = makeOptStress72TC("x64o72", "long");
+static const std::vector<RoundTripTC> kX64 =
+    makeOptStress72TC("x64o72", "long");
 static const std::vector<RoundTripTC> kX86 = makeOptStress72TC("x86o72", "int");
-static const std::vector<RoundTripTC> kA64 = makeOptStress72TC("a64o72", "long");
+static const std::vector<RoundTripTC> kA64 =
+    makeOptStress72TC("a64o72", "long");
 static const std::vector<RoundTripTC> kARM = makeOptStress72TC("armo72", "int");
 
-INSTANTIATE_TEST_SUITE_P(OptStress72, X64OptStress72RT, ::testing::ValuesIn(kX64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress72, X86OptStress72RT, ::testing::ValuesIn(kX86), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress72, A64OptStress72RT, ::testing::ValuesIn(kA64), rtTCName);
-INSTANTIATE_TEST_SUITE_P(OptStress72, ARM32OptStress72RT, ::testing::ValuesIn(kARM), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress72, X64OptStress72RT,
+                         ::testing::ValuesIn(kX64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress72, X86OptStress72RT,
+                         ::testing::ValuesIn(kX86), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress72, A64OptStress72RT,
+                         ::testing::ValuesIn(kA64), rtTCName);
+INSTANTIATE_TEST_SUITE_P(OptStress72, ARM32OptStress72RT,
+                         ::testing::ValuesIn(kARM), rtTCName);
+
+// A pair of floats returned in one vector register was typed as its first
+// lane: the C is checked by execution.
+INSTANTIATE_TEST_SUITE_P(OptStress72HighC, X64OptStress72RT,
+                         ::testing::ValuesIn(onHighC(kX64, {"_hfa2f"})),
+                         rtTCName);

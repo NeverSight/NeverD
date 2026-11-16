@@ -78,6 +78,17 @@ def copy_dependency(origin: Path, relative: Path, frameworks: Path, origins: set
         shutil.copytree(origin_framework, frameworks / framework_name, symlinks=True, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("Headers", "*.prl", "_CodeSignature", "__pycache__",
                                                       "site-packages", "test", "tests"))
+        # Homebrew Python can ship only Versions/<version>, without the links
+        # codesign requires to recognize the enclosing framework bundle.
+        parts = origin.relative_to(origin_framework).parts
+        if len(parts) == 3 and parts[0] == "Versions":
+            copied_framework = frameworks / framework_name
+            for name, target in (("Versions/Current", parts[1]),
+                                 (parts[2], "Versions/Current/" + parts[2]),
+                                 ("Resources", "Versions/Current/Resources")):
+                link = copied_framework / name
+                if not os.path.lexists(link):
+                    link.symlink_to(target)
     else:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, destination)
@@ -273,6 +284,30 @@ def copy_notices(bundle: Path, source: Path, origins: set[Path], qt_version: str
 ENGINE_HOSTS = ("neverd-worker", "neverd-mcp")
 
 
+def agent_inputs(build: Path, bundle: Path) -> list[tuple[str, Path, Path]]:
+    """Resolve the Agent artifacts from an enabled desktop build."""
+    cache = build / "CMakeCache.txt"
+    # NEVERD_AGENT_ENABLED records the build's decision; caches written before
+    # NEVERD_BUILD_AGENT took AUTO kept it as a boolean option.
+    if not cache.is_file() or not re.search(
+            r"^(?:NEVERD_AGENT_ENABLED:INTERNAL|NEVERD_BUILD_AGENT:BOOL)=(?:ON|TRUE|1)$",
+            cache.read_text(encoding="utf-8"), flags=re.MULTILINE | re.IGNORECASE):
+        return []
+    package = build / "agent-ui"
+    manifest = package / "plugin.json"
+    declaration = json.loads(manifest.read_text(encoding="utf-8"))
+    library = declaration["components"][0]["entry"]["library"]
+    if not library or Path(library).name != library or library in (".", ".."):
+        raise RuntimeError("Invalid bundled Agent module filename")
+    directory = bundle / "Contents/PlugIns/neverd-agent-ui"
+    return [
+        ("neverd-agent-cli", build / "bin/neverd-agent-cli",
+         bundle / "Contents/MacOS/neverd-agent-cli"),
+        ("Agent plugin manifest", manifest, directory / manifest.name),
+        ("Agent GUI module", package / library, directory / library),
+    ]
+
+
 def sign_bundle(bundle: Path, entitlements: Path) -> None:
     """Sign leaves, retain the engine hosts' HVF entitlement, then audit it."""
     hosts = [bundle / "Contents/MacOS" / name for name in ENGINE_HOSTS]
@@ -294,6 +329,8 @@ def main() -> None:
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--qt-dir", type=Path, required=True)
+    parser.add_argument("--qt-platform-plugin", type=Path,
+                        help="Cocoa plugin built for this exact Qt kit, replacing its deployed plugin")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--qt-licenses", type=Path)
     parser.add_argument("--kddw-source", type=Path)
@@ -304,8 +341,11 @@ def main() -> None:
     bundle = args.output.resolve()
     if bundle.suffix != ".app" or bundle.exists():
         parser.error("--output must be a new .app path")
+    if args.qt_platform_plugin and not macho(args.qt_platform_plugin):
+        parser.error("--qt-platform-plugin must be a regular Mach-O plugin")
     source = Path(__file__).resolve().parent
     macos, frameworks, resources = (bundle / "Contents" / name for name in ("MacOS", "Frameworks", "Resources"))
+    agent = agent_inputs(args.build_dir, bundle)
     for directory in (macos, frameworks, resources):
         directory.mkdir(parents=True)
     executables = {name: args.build_dir / "bin" / name
@@ -315,7 +355,9 @@ def main() -> None:
         executables["neverd-gui"] = gui_bundle_binary
     inputs = [(name, origin, macos / name) for name, origin in executables.items()]
     inputs.append(("libneverd.dylib", args.engine, frameworks / "libneverd.dylib"))
+    inputs.extend(agent)
     for name, origin, copied in inputs:
+        copied.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(origin, copied)
     build_inputs = [{"name": name, "source": str(origin.resolve()),
                      "sha256": hashlib.sha256(copied.read_bytes()).hexdigest()}
@@ -346,9 +388,21 @@ def main() -> None:
     repair_dependencies(bundle, args.qt_dir, origins)
     # Qt 6.8 does not support -no-codesign. Any deployment-time signatures
     # are regenerated after dependency repairs by the signing steps below.
+    executables = [macos / host for host in ENGINE_HOSTS]
+    if agent:
+        executables.append(macos / "neverd-agent-cli")
     run(args.qt_dir / "bin/macdeployqt", bundle,
-        *("-executable=" + str(macos / host) for host in ENGINE_HOSTS), "-libpath=" + str(args.qt_dir / "lib"),
+        *("-executable=" + str(executable) for executable in executables), "-libpath=" + str(args.qt_dir / "lib"),
         "-libpath=" + str(frameworks))
+    if args.qt_platform_plugin:
+        destination = bundle / "Contents/PlugIns/platforms/libqcocoa.dylib"
+        if not destination.is_file() or destination.is_symlink():
+            raise RuntimeError("macdeployqt did not deploy a regular Cocoa plugin")
+        shutil.copy2(args.qt_platform_plugin, destination)
+        origins.add(args.qt_platform_plugin.resolve())
+        build_inputs.append({"name": "libqcocoa.dylib",
+                             "source": str(args.qt_platform_plugin.resolve()),
+                             "sha256": hashlib.sha256(destination.read_bytes()).hexdigest()})
     validate_and_prune_sql_drivers(bundle)
     repair_dependencies(bundle, args.qt_dir, origins)
     report = audit_bundle(bundle)

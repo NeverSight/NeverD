@@ -96,18 +96,15 @@ bool liftSegmentedBlock32(X86Lifter &L, X86Lifter::LiftState &S,
   const unsigned PP = Kind == X86SegmentedBlockKind::DirectStore ? 1
                       : Kind == X86SegmentedBlockKind::Enqueue   ? 3
                                                                  : 2;
-  // The pinned handwritten ENQ decoder retains REP in prefix[0] and all
-  // three opcode bytes. Authenticate that detail before adapting it to the
-  // generated legacy layout consumed by the common byte/detail validator.
+  // The pinned handwritten ENQ decoder retains REP in prefix[0]. Authenticate
+  // that detail before adapting it to the generated legacy layout, which
+  // keeps a mandatory prefix out of it, for the common byte/detail validator.
   cs_x86 Detail = X86;
   if (Kind != X86SegmentedBlockKind::DirectStore) {
     const auto Prefix = Kind == X86SegmentedBlockKind::Enqueue ? 0xf2 : 0xf3;
-    if (X86.prefix[0] != Prefix || X86.opcode[0] != 0x0f ||
-        X86.opcode[1] != 0x38 || X86.opcode[2] != 0xf8 || X86.opcode[3] != 0)
+    if (X86.prefix[0] != Prefix)
       return false;
     Detail.prefix[0] = 0;
-    Detail.opcode[1] = 0xf8;
-    Detail.opcode[2] = 0;
   }
   if (!parseFPEncoding(Insn, Detail, Arch::X86, false, 2, PP, E) ||
       E.Opcode != 0xf8 || X86.op_count != 2 ||

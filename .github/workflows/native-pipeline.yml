@@ -8,59 +8,6 @@ name: Native pipeline compatibility
 # would catch shows up at the next run here, or sooner through dispatch.
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/pipeline-performance, codex/performance-libraries]
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
-  pull_request:
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
 
 permissions:
   contents: read
@@ -107,6 +54,7 @@ jobs:
         with:
           python-version: '3.14'
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.16.0
+        if: matrix.cc != 'cl'
         with:
           version: v0.16.0
       - name: Install Linux build tools
@@ -126,11 +74,14 @@ jobs:
         with:
           arch: x64
       - name: Configure native pipeline, SDK and worker
+        env:
+          # The cache server disconnects while compiling the Capstone decoder with cl.
+          COMPILER_LAUNCHER: ${{ matrix.cc != 'cl' && 'sccache' || '' }}
         run: |
           cmake -S . -B build-abi -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
             -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_C_COMPILER_LAUNCHER="$COMPILER_LAUNCHER" -DCMAKE_CXX_COMPILER_LAUNCHER="$COMPILER_LAUNCHER" \
             -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
             -DNEVERD_TEST_EXPECT_MIMALLOC=ON -DNEVERD_ENABLE_PYTHON_PLUGINS=ON \
             -DNEVERD_ENABLE_WEB_ANALYSIS=OFF -DNEVERD_ENABLE_CPU_EMULATION=OFF \
