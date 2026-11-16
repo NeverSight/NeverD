@@ -18,6 +18,7 @@ on:
           - constructor-repro
           - render-store-probe
           - render-store-profile
+          - worker-cadence
 
 permissions:
   contents: read
@@ -687,3 +688,196 @@ jobs:
           build-mips-ci/CMakeCache.txt
           build-mips-ci/neverd-build-receipt.json
           build-mips-ci/neverd-dependency-inputs.json
+
+  worker_cadence:
+    if: inputs.scope == 'worker-cadence'
+    name: ${{ matrix.name }} mock worker wait cadence
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}'
+        || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS
+        Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}')
+        }}
+    timeout-minutes: 65
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      QUALIFICATION_CXX: ${{ matrix.cxx }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.source_sha }}
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Verify source identity
+      run: |
+        python - <<'PYTHON'
+        import os, re, subprocess
+        expected = os.environ['EXPECTED_SOURCE_SHA']
+        assert re.fullmatch(r'[0-9a-f]{40}', expected), expected
+        actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+        assert actual == expected, (actual, expected)
+        PYTHON
+        git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+    - name: Install Linux build and fixture tools
+      if: runner.os == 'Linux'
+      run: |
+        curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+          --output "$RUNNER_TEMP/neverd-llvm.asc"
+        gpg --show-keys --with-colons "$RUNNER_TEMP/neverd-llvm.asc" \
+          | grep '^fpr:.*6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+        sudo install -m 0644 "$RUNNER_TEMP/neverd-llvm.asc" /usr/share/keyrings/neverd-llvm.asc
+        echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' \
+          | sudo tee /etc/apt/sources.list.d/neverd-llvm.list > /dev/null
+        sudo apt-get update
+        sudo apt-get install --yes clang-18 clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib g++-14 zlib1g-dev
+        printf '%s\n' /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+        printf '%s\n' 'NEVERD_SOURCE_CLANG=/usr/lib/llvm-23/bin/clang' >> "$GITHUB_ENV"
+        sudo sysctl -w kernel.core_pattern=/dev/null
+    - name: Install macOS build and fixture tools
+      if: runner.os == 'macOS'
+      run: |
+        brew install cmake lld ninja llvm@22
+        echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+        echo "NEVERD_SOURCE_CLANG=$(brew --prefix llvm@22)/bin/clang" >> "$GITHUB_ENV"
+    - name: Install Windows build tools
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: choco install ninja --yes --no-progress
+    - name: Install pinned fixture compiler
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./scripts/ci/Install-WindowsFixtureClang.ps1
+    - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      if: runner.os == 'Windows'
+      with:
+        arch: x64
+    - name: Configure bounded Release qualification
+      run: |
+        platform_args=()
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          test -d /usr/lib/gcc/x86_64-linux-gnu/14
+          platform_args+=("-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14")
+        elif [ "$RUNNER_OS" = "Windows" ]; then
+          platform_args+=("-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")")
+        else
+          platform_args+=("-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$NEVERD_SOURCE_CLANG")
+        fi
+        cmake -S . -B build-mips-ci -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+          -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+          -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
+          -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+          -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
+    - name: Build the complete mock-worker owner
+      run: |
+        python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target neverd-worker-test-server
+    - name: Repeat the original timeout and complete worker inventory
+      run: |
+        cat > build-mips-ci/native-worker-cadence.py <<'CADENCE'
+        from collections import Counter
+        from pathlib import Path
+        import datetime
+        import hashlib
+        import json
+        import os
+        import platform
+        import shutil
+        import signal
+        import subprocess
+        import sys
+        import time
+        import xml.etree.ElementTree as ET
+  
+        root = Path.cwd()
+        build = root / "build-mips-ci"
+        out = build / "evidence"
+        out.mkdir(exist_ok=True)
+        expected = os.environ["EXPECTED_SOURCE_SHA"]
+        actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        assert actual == expected
+        subprocess.run(["git", "diff", "--exit-code", "HEAD", "--", ".", ":(exclude)third_party", ":(exclude)signatures"], check=True)
+        command = ["ctest", "--test-dir", str(build), "-C", "Release"]
+        inventory = json.loads(subprocess.check_output(command + ["--show-only=json-v1"], text=True))
+        tests = [test for test in inventory["tests"] if len(test.get("command", [])) > 2 and Path(test["command"][2]).stem == "neverd-worker-test-server"]
+        names = [test["name"] for test in tests]
+        assert len(names) == len(set(names)) == 20
+        props = {item["name"]: item["value"] for test in tests if test["name"] == "NeverDWorkerRenderStore" for item in test["properties"]}
+        assert props["TIMEOUT"] == 240
+        (out / "worker-inventory.json").write_text(json.dumps(tests, indent=2) + "\n")
+        binary = build / "bin" / ("neverd-worker-test-server.exe" if os.name == "nt" else "neverd-worker-test-server")
+        identity = {
+            "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_sha": actual,
+            "workflow_sha": os.environ["GITHUB_SHA"],
+            "platform": platform.platform(),
+            "python": sys.version,
+            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "fixture_sha256": {name: hashlib.sha256((root / "tools/neverd-worker/tests" / name).read_bytes()).hexdigest() for name in ["mock_engine.cpp", "render_store_test.py", "render_ahead_test.py", "transport_test.py"]},
+            "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "scope": "Three original isolated240sRenderStore runs plus two complete20-case parallel4 mock-worker owner groups. No assertion, CTest timeout, production scheduling or per-platform exclusion changes. Not complete MIPS/native SDK qualification.",
+        }
+        (out / "worker-source.json").write_text(json.dumps(identity, indent=2) + "\n")
+        results = []
+        for label, selected, parallel in [(f"isolated-{i}", ["NeverDWorkerRenderStore"], 1) for i in range(1, 4)] + [(f"complete-group-{i}", names, 4) for i in range(1, 3)]:
+            directory = out / label
+            directory.mkdir()
+            temporary = directory / "tmp"
+            temporary.mkdir()
+            xml = directory / "results.xml"
+            args = command + ["-R", "^(" + "|".join(selected) + ")$", "--parallel", str(parallel), "--no-tests=error", "--output-on-failure", "--output-junit", str(xml)]
+            started = time.monotonic()
+            timeout = False
+            with (directory / "ctest.log").open("w") as log:
+                child = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary)), start_new_session=os.name != "nt")
+                try:
+                    code = child.wait(timeout=600)
+                except subprocess.TimeoutExpired:
+                    timeout = True
+                    if os.name == "nt":
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)], stdout=log, stderr=subprocess.STDOUT)
+                    else:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    code = child.wait()
+                finally:
+                    if os.name != "nt":
+                        try:
+                            os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            cases = list(ET.parse(xml).getroot().iter("testcase")) if xml.exists() else []
+            failed = [case.get("name") for case in cases if case.find("failure") is not None or case.find("error") is not None]
+            skipped = [case.get("name") for case in cases if case.find("skipped") is not None]
+            complete = Counter(case.get("name") for case in cases) == Counter(selected)
+            row = {"label": label, "command": args, "exit": code, "outer_timeout": timeout, "wall_seconds": time.monotonic() - started, "complete_inventory": complete, "cases": [dict(case.attrib) for case in cases], "failed": failed, "skipped": skipped}
+            if code == 0 and complete and not failed and not skipped:
+                files = [path for path in temporary.rglob("*") if path.is_file()]
+                row["removed_temporary_products"] = {"files": len(files), "logical_bytes": sum(path.stat().st_size for path in files)}
+                shutil.rmtree(temporary)
+            else:
+                row["failure_diagnostics_retained"] = str(temporary)
+            results.append(row)
+            (out / "worker-results.json").write_text(json.dumps({"source": actual, "runs": results, "scope": identity["scope"]}, indent=2) + "\n")
+            print(label, code, complete, failed, skipped, flush=True)
+        assert len(results) == 5
+        assert all(row["exit"] == 0 and row["complete_inventory"] and not row["failed"] and not row["skipped"] for row in results)
+        CADENCE
+        python build-mips-ci/native-worker-cadence.py
+    - name: Upload bounded mock-worker qualification evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: mips-worker-cadence-${{ matrix.runner }}-${{ inputs.source_sha }}
+        retention-days: 7
+        if-no-files-found: error
+        path: |
+          build-mips-ci/evidence/
+          build-mips-ci/native-worker-cadence.py
+          build-mips-ci/CMakeCache.txt
+          build-mips-ci/neverd-dependency-inputs.json
+          build-mips-ci/neverd-build-receipt.json
