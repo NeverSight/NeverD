@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImage.h"
@@ -90,11 +91,30 @@ definedEntries(llvm::Module &M, const BinaryImage &Image,
   return Functions;
 }
 
+struct PCSigningInstruction {
+  unsigned Operands;
+  bool Returns;
+};
+
+std::optional<PCSigningInstruction> pcSigningInstruction(unsigned Id) {
+  switch (Id) {
+#define MACHO_REGISTER_PC_SIGNING(Name, Operands, Returns)                     \
+  case AARCH64_INS_##Name:                                                     \
+    return PCSigningInstruction{Operands, Returns};
+#include "MachORegisterResults.def"
+  default:
+    return std::nullopt;
+  }
+}
+
 // A literal load has an immediate target, whereas indirect and indexed
 // memory operands carry the actual base. Render only position-independent
 // instruction forms; all PC-relative control transfers get symbolic operands.
 bool independent(const DecodedInsn &I) {
   const auto &D = I.Raw->detail->aarch64;
+  if (const auto PCSigning = pcSigningInstruction(I.Id))
+    return D.op_count == PCSigning->Operands &&
+           (!D.op_count || D.operands[0].type == AARCH64_OP_IMM);
   switch (I.Id) {
 #define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
 #include "MachORegisterResults.def"
@@ -115,15 +135,11 @@ bool independent(const DecodedInsn &I) {
     default:
       return false;
     }
+  case AARCH64_INS_RETAA:
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
-  case AARCH64_INS_PACIBSPPC:
     return D.op_count == 0;
   case AARCH64_INS_BRK:
-  case AARCH64_INS_AUTIBSPPC:
-  case AARCH64_INS_RETABSPPC:
-    // These displacements stay relative to the same instruction in the
-    // copied body. Final publication checks every emitted instruction word.
     return D.op_count == 1 && D.operands[0].type == AARCH64_OP_IMM;
   default:
     return false;
@@ -680,16 +696,36 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
-    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAB &&
-        I.Id != AARCH64_INS_RETABSPPC && I.Id != AARCH64_INS_BRK)
+    const auto PCSigning = pcSigningInstruction(I.Id);
+    if (PCSigning && PCSigning->Operands) {
+      const auto Distance =
+          ((Encoding >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRImmMask) *
+          kAArch64PAuthLRScale;
+      if (Distance > PC - Start)
+        return std::nullopt;
+    }
+    const bool PACM =
+        I.Id == AARCH64_INS_HINT && I.Raw->alias_id == AARCH64_INS_ALIAS_PACM;
+    // ADR can materialize a signing point within this same body. Its relative
+    // distance survives publication, just like an internal branch. External
+    // data and page-relative addresses require a different relocation owner.
+    const bool LocalAddress =
+        I.Id == AARCH64_INS_ADR && Ops.size() == 2 &&
+        Ops[0].type == AARCH64_OP_REG && physicalRegister(Ops[0].reg) &&
+        Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
+        va_t(Ops[1].imm) < End && (va_t(Ops[1].imm) - Start) % Word == 0;
+    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAA &&
+        I.Id != AARCH64_INS_RETAB && !(PCSigning && PCSigning->Returns) &&
+        I.Id != AARCH64_INS_BRK)
       Fallthrough();
-    if (!SIMDData && !independent(I))
+    if (!SIMDData && !LocalAddress && !independent(I))
       return std::nullopt;
-    // Classic compact mode has no signing-PC field. Copying these words with
-    // that recipe would publish a frame the system unwinder cannot describe.
-    if (!Indexed && !PAuthLR &&
-        (I.Id == AARCH64_INS_PACIBSPPC || I.Id == AARCH64_INS_AUTIBSPPC ||
-         I.Id == AARCH64_INS_RETABSPPC))
+    // Classic compact mode cannot describe a saved PC-signed return. A
+    // frameless body without calls or spills retains a live LR instead; the
+    // asynchronous bridge authenticates its recovered recipe and supplies
+    // the separate normalized LR used by the system cursor.
+    if (!Indexed && !PAuthLR && (PCSigning || PACM) &&
+        (Framed || HasCall || !Compact.SavedRegisterSlots.empty()))
       return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
@@ -716,8 +752,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     // lists and FP controls. PAuth_LR words retain their signing-PC distance
     // because every instruction keeps its offset within the copied body.
     // Both the assembly and final linked words are checked against the image.
-    if (SIMDData || I.Id == AARCH64_INS_PACIBSPPC ||
-        I.Id == AARCH64_INS_AUTIBSPPC || I.Id == AARCH64_INS_RETABSPPC) {
+    if (SIMDData || PCSigning || PACM || LocalAddress) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&

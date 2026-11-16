@@ -2077,6 +2077,16 @@ also compiles a compact-only Apple Clang dylib. With native replay enabled,
 it checks both that dylib and the system cursor's next frame after crossing
 the real signal trampoline. See the [system signal qualification](arm64e-native-validation.md#system-signal-trampoline-and-implicit-signing-rows).
 
+The live-LR language matrix additionally covers IA/IB PACM and explicit
+PAuth_LR recipes, including compact-only frames. Every case checks the
+original and published signing-PC offset, reloads it at the actual owner, and
+reports `structural_pc_signing_images` separately from
+`native_pc_recipe_deliveries`. Explicit instruction execution is probed in a
+separate process; an unavailable instruction suppresses only the native
+execution count, while publication and recovery checks still run. PACM delivery
+on a pre-PAuth_LR CPU tests its architectural hint behavior. Only the independent
+`probe-cursor` report can qualify PC dependence.
+
 `AArch64LinkedUnwind` assembles and links real arm64e dylibs with the host
 Apple toolchain, then loads them through the public Mach-O loader. Its explicit
 mode-5 compact row checks linker transport and the PACIBSPPC offset; it does
