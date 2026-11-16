@@ -903,8 +903,8 @@ private slots:
     view.show();
     session.open(path);
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    // Opening must populate existing chooser views without a manual reload.
     auto &model = view.model();
-    model.reload();
     QTRY_VERIFY(model.total() > 0 && !model.loading());
     if (sorted) {
       model.setFilter("function_");
