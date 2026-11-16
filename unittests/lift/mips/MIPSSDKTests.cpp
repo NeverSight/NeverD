@@ -339,12 +339,14 @@ TEST_P(MIPS16SDK, CallTreeFollowsProvenClassicEntryTransportWithoutTypes) {
     Output.close();
     ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1)
         << take(neverd_last_error(Session));
-    const auto Text =
-        take(neverd_call_tree_json(Session, "{\"root\":\"0x10100\"}"));
+    const auto Text = take(neverd_call_tree_json(
+        Session, "{\"root\":\"0x10100\",\"max_depth\":3}"));
     auto Tree = llvm::json::parse(Text);
     ASSERT_TRUE(bool(Tree)) << Text << take(neverd_last_error(Session));
     const auto *Root = Tree->getAsObject();
     ASSERT_NE(Root, nullptr);
+    EXPECT_EQ(Root->getBoolean("complete"), true);
+    EXPECT_EQ(Root->getBoolean("depth_limited"), false);
     const auto *Order = Root->getArray("bottom_up");
     ASSERT_NE(Order, nullptr);
     std::vector<std::string> Entries;
