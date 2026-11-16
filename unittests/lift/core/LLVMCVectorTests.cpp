@@ -1301,4 +1301,67 @@ define i64 @reader() {
   }
 }
 
+// LLVM's scalarizer writes a value's lanes right after the instruction that
+// defines it, and an invoke ends its block: the lanes of a vector it returns
+// are read where its normal destination begins, also when that block merges
+// the value with another in a PHI.  The invoke stays the call the function
+// makes.
+TEST(LLVMCValues, AVectorAnInvokeReturnsIsScalarizedWhereItIsFirstRead) {
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+declare <2 x i64> @callee(<2 x i64>)
+declare i32 @__C_specific_handler(...)
+define i64 @read_after(<2 x i64> %a) personality ptr @__C_specific_handler {
+entry:
+  %r = invoke <2 x i64> @callee(<2 x i64> %a) to label %ok unwind label %pad
+ok:
+  %lane = extractelement <2 x i64> %r, i64 1
+  ret i64 %lane
+pad:
+  %cleanup = cleanuppad within none []
+  cleanupret from %cleanup unwind to caller
+}
+define i64 @merged(<2 x i64> %a, i1 %called) personality ptr @__C_specific_handler {
+entry:
+  br i1 %called, label %call, label %join
+call:
+  %r = invoke <2 x i64> @callee(<2 x i64> %a) to label %join unwind label %pad
+join:
+  %value = phi <2 x i64> [ %r, %call ], [ %a, %entry ]
+  %low = extractelement <2 x i64> %value, i64 0
+  %high = extractelement <2 x i64> %value, i64 1
+  %sum = add i64 %low, %high
+  ret i64 %sum
+pad:
+  %cleanup = cleanuppad within none []
+  cleanupret from %cleanup unwind to caller
+}
+)ir",
+                                          Diagnostic, Context);
+  ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+  ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+  std::string Before, After, Source;
+  llvm::raw_string_ostream BeforeOut(Before), AfterOut(After), OS(Source);
+  Module->print(BeforeOut, nullptr);
+  neverd::CEmitterOptions Options;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+  Module->print(AfterOut, nullptr);
+  EXPECT_EQ(Before, After);
+  // Each function still makes its call once.
+  for (const char *Name : {"read_after(", "merged("}) {
+    const size_t Definition = Source.rfind(Name);
+    ASSERT_NE(Definition, std::string::npos) << Source;
+    const size_t End = Source.find("\n}\n", Definition);
+    const llvm::StringRef Body = llvm::StringRef(Source).slice(Definition, End);
+    EXPECT_EQ(Body.count("callee("), 1u) << Body.str();
+  }
+  // Nothing of the stand-in the lanes were read through is left.
+  EXPECT_EQ(Source.find("invoke.result"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("invoke_result"), std::string::npos) << Source;
+}
+
 } // namespace

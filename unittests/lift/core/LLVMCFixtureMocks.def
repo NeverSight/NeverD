@@ -1,0 +1,12 @@
+// Runtime functions modeled by LLVMC source fixtures. Keep their test
+// definitions distinct from symbols supplied by the native Windows CRT.
+LLVMC_FIXTURE_MOCK(EnterCriticalSection)
+LLVMC_FIXTURE_MOCK(_onexit)
+LLVMC_FIXTURE_MOCK(_set_app_type)
+LLVMC_FIXTURE_MOCK(_configure_narrow_argv)
+LLVMC_FIXTURE_MOCK(_configure_wide_argv)
+LLVMC_FIXTURE_MOCK(__setusermatherr)
+LLVMC_FIXTURE_MOCK(_initialize_onexit_table)
+LLVMC_FIXTURE_MOCK(_register_onexit_function)
+LLVMC_FIXTURE_MOCK(_execute_onexit_table)
+LLVMC_FIXTURE_MOCK(_register_thread_local_exe_atexit_callback)

@@ -14778,6 +14778,11 @@ integer/stack positions, partial carriers, absent bank proofs, fixed arguments,
 Windows and Darwin ARM64 vararg conventions. Run the complete AAPCS64, SysV and
 Win64 call-contract suites after changing this ownership boundary.
 
+`LLVMCValues.AVectorAnInvokeReturnsIsScalarizedWhereItIsFirstRead` gives the
+C emitter hand-built IR whose invokes return a vector, one read in the normal
+destination and one merged there in a PHI: without the stand-in the
+scalarizer crashes, and the test also requires one call per function and no
+trace of the stand-in.
 `NeverDLLVMCVectorTests` checks deferred vector assembly with an independently
 controlled known/missing input and optional consumers. Native O0/O2 executions
 require ignored missing payloads to return normally, known payloads to retain
@@ -20597,6 +20602,30 @@ blocks branch too. `LLVMCSourceMapNamesTheUnwindCallForItsHandlers` uses the
 emitter's own observations: the body's call keeps its instruction through the
 change to an invoke, the unwind's handlers name the runtime call's address,
 and another call placed at that address names nothing.
+`AFinallyThatDoesNotReturnIsLoweredForPrintedC` and
+`ALocalUnwindHandlerThatDoesNotReturnIsPlaced` give a termination handler that
+never returns: the parent keeps its pads, each clause that calls the handler
+says once that the path ends, and a local unwind still calls it outside the
+scope it ends. `ATableBehindACookieCheckIsLoweredForPrintedC` puts the table
+behind `__GSHandlerCheck_SEH` with a record that passes every row: printed C
+lowers it, native capabilities and other architectures refuse it, and its
+identity differs from the bare table's, which is unchanged, and from that of
+another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
+record that holds back exceptions from an `__except` row or unwinds from a
+`__finally` row, and takes a table of termination handlers whose record
+passes unwinds only.
+`COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
+x64 IR for a local unwind out of the only scope, out of the inner of two and
+out of both: the handler's call is a plain one, an invoke to the outer row's
+pad, or both in that order; each carries one mark with the runtime call's
+address and the row it ends; the contract counts only the invokes; and
+`planCOFFExceptionPatch` refuses the module by the mark's name, before and
+after optimization.
+`WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
+x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
+action table with one, on all three capabilities; behind a cookie record that
+passes unwinds only, a table the writer or IR lowering would take is refused
+for the check and a destructor-only one for its own reason.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one
@@ -21290,6 +21319,14 @@ The earlier 204-observation translation-profile receipt is historical. Current f
 `NormalizationChargesOnlyTheUncachedReadabilityPrefix` / `ReadabilityPrefixInspectionPreservesLazyAndCopiedCaches` checks that cached history is not charged again, appended wide constants still cost admission, short work and node budgets still refuse, and copied readability caches remain independent.
 
 ## Native Lift qualification
+
+Windows source fixtures use the AddressSanitizer DLL reported by their pinned
+Clang driver. The installer prepends that runtime directory to the job's DLL
+search path; MSVC's independently installed ASan DLL is not interchangeable.
+LLVMC tests inspect original Windows runtime declarations before renaming
+mock definitions for execution, so they cannot collide with the host CRT.
+The POSIX `optarg`/`optind` case checks emitted declarations on every host and
+explicitly skips native execution on Windows, which lacks `<unistd.h>`.
 
 The `Lift native qualification` workflow owns the 108 previously unqualified cases (62 failures and 46 skips). It installs Clang 23 or newer, GNU GCC and the i386 development libraries on a native Linux x86-64 runner, and initializes the pinned binary corpus. `unittests/Inputs/lift-qualification.json` retains every original test identity. `scripts/run_lift_qualification.py` rejects missing, duplicate, disabled, skipped or failed cases and a nonzero process exit; `qualification.json` records individual passes, source/corpus revisions, compiler versions and binary hashes.
 

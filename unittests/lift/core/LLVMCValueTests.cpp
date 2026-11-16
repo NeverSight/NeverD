@@ -62,6 +62,17 @@
 
 namespace {
 
+// Inspect the original declarations before applying these test-only aliases.
+// A mock must not replace a routine used internally by the host's own CRT.
+std::string withRuntimeMocks(const std::string &Source) {
+  constexpr const char Prefix[] =
+#define LLVMC_FIXTURE_MOCK(Name) "#define " #Name " neverd_fixture_" #Name "\n"
+#include "LLVMCFixtureMocks.def"
+#undef LLVMC_FIXTURE_MOCK
+      ;
+  return Prefix + Source;
+}
+
 void compileAndRun(const std::string &Source,
                    llvm::StringRef Optimization = "-O2",
                    const std::string &ReferenceIR = {},
@@ -4361,7 +4372,12 @@ int main(void) {
   return optarg == (char *)7 ? 0 : 2;
 }
 )c";
+#ifdef _WIN32
+  GTEST_SKIP() << "POSIX optarg/optind execution requires unistd.h; source "
+                  "declarations were checked above";
+#else
   compileAndRun(Source, "-O0");
+#endif
 }
 
 TEST(LLVMCValues, ALibraryRoutineCalledThroughItsImportTakesItsDeclaration) {
@@ -4420,7 +4436,7 @@ int main(void) {
   return entered ? 0 : 2;
 }
 )c";
-  compileAndRun(Source, "-O0");
+  compileAndRun(withRuntimeMocks(Source), "-O0");
 }
 
 TEST(LLVMCValues, WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations) {
@@ -4573,12 +4589,14 @@ int main(void) {
 }
 )c";
       for (llvm::StringRef Level : {"-O0", "-O2"}) {
-        compileAndRun(Prelude + Source + Harness, Level, {}, true);
+        compileAndRun(withRuntimeMocks(Prelude + Source + Harness), Level, {},
+                      true);
 #if defined(__linux__) && defined(__x86_64__)
         // Exercise stdcall's actual stack cleanup, not only its spelling in
         // a 64-bit host projection where the compiler ignores the attribute.
         if (Arch == neverd::Arch::X86)
-          compileAndRun(Prelude + Source + Harness, Level, {}, true, true);
+          compileAndRun(withRuntimeMocks(Prelude + Source + Harness), Level, {},
+                        true, true);
 #endif
       }
 
@@ -4964,7 +4982,7 @@ int main(void) {
              : 1;
 }
 )c";
-  compileAndRun(Source, "-O0");
+  compileAndRun(withRuntimeMocks(Source), "-O0");
 }
 
 TEST(LLVMCValues, RuntimeVariadicFramePointersTakeTheirDeclaredPointee) {
@@ -5077,7 +5095,7 @@ int main(void) {
              : 1;
 }
 )c";
-  compileAndRun(Source, "-O0");
+  compileAndRun(withRuntimeMocks(Source), "-O0");
 }
 
 TEST(LLVMCValues, AWeakImportIsDeclaredWeak) {

@@ -35,10 +35,14 @@ inline constexpr uint32_t SemanticDigestSchemaVersion = 2;
 /// inside that graph and Clause is zero.  A table with two rows over one
 /// range has an identity only with \p AllowRepeatedRanges: such rows nest by
 /// their order, the earlier inside the later, which only the lowering for
-/// printed C takes up (WindowsEHNativeCapability::SourceIRLowering).
+/// printed C takes up (WindowsEHNativeCapability::SourceIRLowering).  So does
+/// a table behind `__GSHandlerCheck_SEH`, only with \p AllowCookieCheck: its
+/// identity covers the stack-cookie record too, so it is never the identity
+/// of the same rows under `__C_specific_handler`.
 std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken>
 getSEHScopeSemanticToken(const ExceptionFunction &EH, Arch TargetArch,
-                         uint32_t ScopeIndex, bool AllowRepeatedRanges = false);
+                         uint32_t ScopeIndex, bool AllowRepeatedRanges = false,
+                         bool AllowCookieCheck = false);
 
 /// Return the source-issued identity for one FH3 or FH4 catch clause.  The
 /// digest covers the complete ordered FuncInfo graph, including its native
