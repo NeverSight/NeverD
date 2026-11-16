@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 #include "neverd/loader/BinaryImageModel.h"
 
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Function.h"
 
 #include <stdexcept>
@@ -22,6 +23,17 @@ namespace neverd::mips {
 #define MIPS_SOURCE_MODE(Name, Feature, Exclude, Attribute)
 #define MIPS_SOURCE_TEXT(Name, Value) inline constexpr char Name[] = Value;
 #include "neverd/backend/MIPS/MIPSInstructionModes.def"
+
+/// A reconstructed definition cannot take the assembler name the compiler
+/// generates again for its compressed callee. Only its C identifier changes;
+/// the original function, call identity and source address mapping remain.
+inline std::string entryStubDefinitionStem(const BinaryImage *Image,
+                                           llvm::StringRef Name) {
+  if (!Image || !Image->MIPS || !Image->MIPS->HasMIPS16 ||
+      !Name.consume_front(CompilerEntryStubPrefix))
+    return {};
+  return (llvm::Twine(ReconstructedEntryStubPrefix) + Name).str();
+}
 
 /// Called only when a source value acquires a resolved code identity. Direct
 /// control transfers do not use this boundary. Current Clang MIPS data layouts

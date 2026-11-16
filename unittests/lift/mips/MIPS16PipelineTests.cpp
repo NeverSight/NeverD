@@ -444,7 +444,7 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
     for (const auto &[Address, Size, Name, Mode] :
          {std::tuple{0x10100u, 32u, "kernel", InstructionMode::MIPSClassic},
           std::tuple{0x10140u, 6u, "fp_callee", InstructionMode::MIPS16},
-          std::tuple{0x10160u, 16u, "entry_adapter",
+          std::tuple{0x10160u, 16u, "__fn_stub_fp_callee",
                      InstructionMode::MIPSClassic}}) {
       auto S = Symbol::makeFunc(Address, Size);
       S.Name = Name;
@@ -561,8 +561,11 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
           ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
         }
         EXPECT_NE(Text.find("fp_callee("), std::string::npos) << Text;
-        if (!Together)
-          EXPECT_EQ(Text.find("entry_adapter"), std::string::npos) << Text;
+        EXPECT_EQ(Text.find("__fn_stub_fp_callee"), std::string::npos) << Text;
+        if (Together)
+          EXPECT_NE(Text.find("neverd_mips16_entry_fp_callee("),
+                    std::string::npos)
+              << Text;
       }
   }
 }

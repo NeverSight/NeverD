@@ -427,6 +427,7 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
     std::string Stem;
     if (!Fn.isDeclaration()) {
       CName = cDefinitionName(CName, Opts.Format);
+      Stem = mips::entryStubDefinitionStem(Img ? Img : Opts.Image, CName);
       // The image's own copy of a C library routine, as a statically linked
       // `atexit`, is not the routine a header declares the name for, and
       // takes its address as a body lifted under an import's name does

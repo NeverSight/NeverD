@@ -495,8 +495,10 @@ void HighCWriter::prepareFunctionIdentifiers(
     // header's name, as LLVM-C's does: by the identifier it would take, as a
     // C++ `sigaddset(unsigned long*, int)` would take `sigaddset`, or by its
     // prototype, which a C library's headers give (`__strlen_chk`).
-    std::string Stem =
-        canonicalizeCProjectionIdentifier(RenderedName, "nd_function");
+    std::string Stem = mips::entryStubDefinitionStem(Opts.Image, RenderedName);
+    if (Stem.empty())
+      Stem = RenderedName.str();
+    Stem = canonicalizeCProjectionIdentifier(Stem, "nd_function");
     if (Func.Entry && (copiesHeaderRoutine(Stem, Opts.Format) ||
                        libraryDeclaresDefinition(Func))) {
       Stem += "_" + llvm::utohexstr(Func.Entry);

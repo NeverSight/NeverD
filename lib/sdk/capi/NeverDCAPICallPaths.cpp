@@ -189,9 +189,12 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
     va_t Site;
   };
   std::vector<std::vector<Reference>> Slots(Bodies.size());
+  const bool HasMIPS16Entries = isMIPS(Img.Arch) && !isMIPS64(Img.Arch) &&
+                                Img.MIPS && Img.MIPS->HasMIPS16;
   // Each worker writes its own byte. Unlike vector<bool>, these cannot share
   // one packed word across concurrently decoded functions.
-  std::vector<uint8_t> UnresolvedEntryTransfers(Bodies.size());
+  std::vector<uint8_t> UnresolvedEntryTransfers(HasMIPS16Entries ? Bodies.size()
+                                                                 : 0);
   // The references of one instruction of body \p Index.
   const auto Collect = [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
                            InstructionFlowScratch &Scratch) {
@@ -201,7 +204,7 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
         Out.push_back({*To, Kind, DI.Addr});
     };
     const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
-    if (Flow.Kind == "ijump" && Flow.Target == InvalidVA)
+    if (HasMIPS16Entries && Flow.Kind == "ijump" && Flow.Target == InvalidVA)
       UnresolvedEntryTransfers[Index] = 1;
     const bool Indirect = Flow.Kind == "icall" || Flow.Kind == "ijump";
     if (Flow.Target != InvalidVA && !Flow.Kind.empty() &&
@@ -268,8 +271,7 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
   // Reuse the exact LowIR byte proof, independent of debug declarations, to
   // include its compressed body in the original-address call graph. Other
   // unresolved transfers remain unresolved.
-  if (isMIPS(Img.Arch) && !isMIPS64(Img.Arch) && Img.MIPS &&
-      Img.MIPS->HasMIPS16) {
+  if (HasMIPS16Entries) {
     std::optional<ExecutableCodeOwnerIndex> Owners;
     for (size_t I = 0; I < Bodies.size(); ++I) {
       if (!UnresolvedEntryTransfers[I])
