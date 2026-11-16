@@ -14,6 +14,8 @@
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
@@ -65,25 +67,43 @@ static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
     const std::map<va_t, FloatingCallArguments> *Calls,
-    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites,
+    std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
   };
-  const auto SignatureOf =
-      [&](const LowOp &Op) -> const FloatingCallArguments * {
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> LocalTargets;
+  auto &Targets = ConstantTargets ? *ConstantTargets : LocalTargets;
+  const auto SignatureOf = [&](const LowBlock &Block,
+                               size_t Index) -> const FloatingCallArguments * {
+    const auto &Op = Block.Ops[Index];
     if (const auto *Site = mipsFloatingCallSite(Op, Target, Sites))
       return Site->Signature.MIPSScalars.get();
-    if (Calls && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-        Op.NumInputs && Op.Inputs[0].isConst())
-      if (const auto Call = Calls->find(Op.Inputs[0].Offset);
-          Call != Calls->end())
+    if (!Calls || Calls->empty() || Op.NumInputs == 0 ||
+        (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL))
+      return nullptr;
+    std::optional<va_t> Address;
+    if (Op.Inputs[0].isConst()) {
+      Address = Op.Inputs[0].Offset;
+    } else if (Image && !Image->IsRelocatable) {
+      if (const auto Site = sourceCallOccurrenceKey(Op, Target)) {
+        if (!Targets)
+          Targets = constantRegisterCallTargets(Function);
+        if (const auto Found = Targets->find(*Site); Found != Targets->end())
+          Address =
+              qualifiedMIPSCallTarget(*Image, Block, Index, Found->second);
+      }
+    }
+    if (Address)
+      if (const auto Call = Calls->find(*Address); Call != Calls->end())
         return &Call->second;
     return nullptr;
   };
   bool HasVectors = false;
   for (const auto &Block : Function.Blocks)
-    for (const auto &Op : Block.Ops) {
-      if (const auto *Signature = SignatureOf(Op)) {
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const auto &Op = Block.Ops[I];
+      if (const auto *Signature = SignatureOf(Block, I)) {
         if (!floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
@@ -140,9 +160,10 @@ void requireMIPSSourceVectors(
     if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
       throw LowToMedConversionError(
           "MSA source requires ordinary control flow");
-    for (const auto &Op : Block.Ops) {
+    for (size_t J = 0; J < Block.Ops.size(); ++J) {
+      const auto &Op = Block.Ops[J];
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const FloatingCallArguments *Signature = SignatureOf(Op);
+        const FloatingCallArguments *Signature = SignatureOf(Block, J);
         if (!Scalar || !Signature)
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
