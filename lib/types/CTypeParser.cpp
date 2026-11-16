@@ -113,7 +113,12 @@ public:
         continue;
       }
       if (llvm::isSpace(C)) {
-        advance();
+        // Newlines keep the outer loop's line-start handling.
+        const size_t Start = At++;
+        while (At < Source.size() && Source[At] != '\n' &&
+               llvm::isSpace(Source[At]))
+          ++At;
+        Column += static_cast<unsigned>(At - Start);
         continue;
       }
       if (Source.substr(At).starts_with("//")) {
@@ -213,16 +218,20 @@ private:
         (C == '.' && At + 1 < Source.size() && llvm::isDigit(Source[At + 1]))) {
       const size_t Start = At;
       const bool Hex = Source.substr(At).starts_with_insensitive("0x");
-      while (At < Source.size()) {
-        const char D = Source[At];
-        const char Before = llvm::toLower(Source[At - (At > Start)]);
+      // Numeric spelling cannot contain a newline.
+      size_t End = At;
+      while (End < Source.size()) {
+        const char D = Source[End];
+        const char Before = llvm::toLower(Source[End - (End > Start)]);
         // An exponent's sign belongs to the number: 1e-5, 0x1p+3.
-        const bool Sign =
-            (D == '+' || D == '-') && At > Start && Before == (Hex ? 'p' : 'e');
+        const bool Sign = (D == '+' || D == '-') && End > Start &&
+                          Before == (Hex ? 'p' : 'e');
         if (!llvm::isAlnum(D) && D != '.' && !Sign)
           break;
-        advance();
+        ++End;
       }
+      At = End;
+      Column += static_cast<unsigned>(End - Start);
       llvm::StringRef Text = Source.slice(Start, At);
       if (Text.contains('.') ||
           (Hex ? Text.contains_insensitive("p")
@@ -320,7 +329,9 @@ private:
     if (PunctBytes) {
       Result.Kind = TokenKind::Punct;
       Result.Text = Rest.take_front(PunctBytes);
-      advance(PunctBytes);
+      // Every admitted punctuation spelling excludes newlines.
+      At += PunctBytes;
+      Column += PunctBytes;
       return;
     }
     problem(Line, Column,

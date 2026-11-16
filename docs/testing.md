@@ -8449,6 +8449,11 @@ recovery after unknown or incompatible type words across those models.
 containing underscores, digits and dollar signs, quoted encoding prefixes,
 CRLF and tab positions, macro invocation diagnostics, and identifiers ending
 at EOF on all three data models. Failed declarations keep the library intact.
+`TypeParse.TokenSpansKeepWhitespaceNumbersAndErrorPositions` checks horizontal
+whitespace runs, indented directives, CRLF, numeric spellings and punctuation
+across the same models. Batched position updates preserve packing, variadics,
+constant expressions, exact error columns and transactional failure at EOF,
+on invalid numbers and at macro invocations.
 `TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
