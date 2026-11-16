@@ -18,6 +18,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -407,6 +408,115 @@ TEST_P(MIPS16Pipeline, TypedDirectCallReadsGPRFloatInEitherSelection) {
       }
       EXPECT_NE(Text.find("NEVERD_MIPS16 "), std::string::npos) << Text;
     }
+}
+
+TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
+  for (bool FP64 : {false, true}) {
+    SCOPED_TRACE(FP64);
+    mips_test::ELFBytes File(GetParam());
+    File.Bytes.resize(0x180);
+    File.put(52 + 16, File.Bytes.size(), 4);
+    File.put(52 + 20, File.Bytes.size(), 4);
+    File.abiFlags();
+    File.Bytes[0xe5] = FP64 ? 2 : 1;
+    File.Bytes[0xe7] = FP64 ? 6 : 1;
+    File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+    File.put(24, 0x10100, 4);
+    File.put(0xec, 0x400, 4);
+    // GCC 12.4 + GNU as 2.47. Both the caller's integer reorder and the
+    // stub's mfc1 execute in physical delay slots. Relocate the three entries
+    // together; the jr destination keeps its MIPS16 tag.
+    const uint32_t Caller[] = {0x44856000, 0x27bdffe8, 0xafbf0014, 0x0c004058,
+                               0x00802825, 0x8fbf0014, 0x03e00008, 0x27bd0018};
+    const uint16_t Callee[] = {0x6745, 0xe820, 0xea8e};
+    const uint32_t Adapter[] = {0x3c190001, 0x27390141, 0x03200008, 0x44046000};
+    for (unsigned I = 0; I < std::size(Caller); ++I)
+      File.put(0x100 + I * 4, Caller[I], 4);
+    for (unsigned I = 0; I < std::size(Callee); ++I)
+      File.put(0x140 + I * 2, Callee[I], 2);
+    for (unsigned I = 0; I < std::size(Adapter); ++I)
+      File.put(0x160 + I * 4, Adapter[I], 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    for (const auto &[Address, Size, Name, Mode] :
+         {std::tuple{0x10100u, 32u, "kernel", InstructionMode::MIPSClassic},
+          std::tuple{0x10140u, 6u, "fp_callee", InstructionMode::MIPS16},
+          std::tuple{0x10160u, 16u, "entry_adapter",
+                     InstructionMode::MIPSClassic}}) {
+      auto S = Symbol::makeFunc(Address, Size);
+      S.Name = Name;
+      Image->Symbols.push_back(std::move(S));
+      // The adapter's local symbol and spelling confer no prototype.
+      if (Address != 0x10160)
+        Image->Exports.push_back({Name, 0, Address});
+      Image->MIPS->CodeModeEntries.emplace(Address, Mode);
+      Image->MIPS->CodeRegions.push_back({Address, Address + Size, Mode});
+    }
+    class BodyDebug final : public NullDebugContext {
+    public:
+      std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+        if (Address != 0x10140)
+          return std::nullopt;
+        FunctionSym F;
+        F.Name = "fp_callee";
+        F.Addr = Address;
+        F.ReturnType = NdType::makeInt(4, false);
+        F.Params = {{"value", NdType::makeFloat(4)},
+                    {"mask", NdType::makeInt(4, false)}};
+        F.PrototypeLibrary = UserPrototypeLibrary.str();
+        return F;
+      }
+      bool hasInfo() const override { return true; }
+    } Debug;
+    for (bool Together : {false, true})
+      for (bool LLVM : {false, true}) {
+        SCOPED_TRACE(Together);
+        SCOPED_TRACE(LLVM);
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries =
+            Together ? std::set<va_t>{0x10100, 0x10140, 0x10160}
+                     : std::set<va_t>{0x10100};
+        Options.LiftMode = LLVM;
+        Options.EmitDumpOutput = false;
+        auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+        std::string Diagnostic;
+        if (!Result.Success) {
+          Decoder Dec;
+          ASSERT_TRUE(Dec.init(*Image));
+          CFGBuilder CFG;
+          const std::set<va_t> Entries{0x10100, 0x10140, 0x10160};
+          CFG.setKnownFuncEntries(&Entries);
+          llvm::raw_string_ostream Out(Diagnostic);
+          Pipeline::dumpLowIR(
+              {CFG.build(*Image, Dec, 0x10160, "entry_adapter")}, Out);
+        }
+        ASSERT_TRUE(Result.Success) << Result.Error << '\n' << Diagnostic;
+        ASSERT_EQ(Result.MedIRVerifierFailures, 0u);
+        const auto Signature = Result.CallEntryFloatingArguments.find(0x10160);
+        ASSERT_NE(Signature, Result.CallEntryFloatingArguments.end());
+        EXPECT_FALSE(Signature->second.MIPS16Parameters);
+        ASSERT_EQ(Signature->second.Scalars.size(), 2u);
+        EXPECT_EQ(Signature->second.Scalars[0].Kind,
+                  SourceABICarrierKind::FloatingRegister);
+        EXPECT_EQ(Signature->second.Scalars[0].Register, mipsreg::w(12));
+        CEmitterOptions Emit;
+        Emit.TheArch = GetParam();
+        Emit.Format = BinaryFormat::ELF;
+        Emit.Image = &*Image;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        if (LLVM) {
+          ASSERT_TRUE(Result.LlvmModule);
+          EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+          ASSERT_TRUE(
+              LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit, &Debug));
+        } else {
+          ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+        }
+      }
+  }
 }
 
 TEST_P(MIPS16Pipeline, ExtendAndScalarLeavesReachBothSourcesWithExactMode) {
