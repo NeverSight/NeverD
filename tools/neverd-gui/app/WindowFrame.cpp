@@ -83,6 +83,13 @@ protected:
     return QObject::eventFilter(object, event);
   }
 };
+
+/// Whether the platform settles a surface's pixel format once, as the
+/// native window is made.  Windows composes a window with an alpha channel
+/// when its flags change, and Cocoa reads the request each time.
+bool surfaceKeepsItsFormat() {
+  return QGuiApplication::platformName().startsWith(QLatin1String("wayland"));
+}
 } // namespace
 
 void WindowFrame::prepareNativeWindows() {
@@ -106,6 +113,19 @@ WindowFrame *WindowFrame::attach(QWidget &window, QWidget *titleBar) {
     QSurfaceFormat format = handle->requestedFormat();
     format.setAlphaBufferSize(8);
     handle->setFormat(format);
+    // That request reaches only a native window made after it, and every
+    // framed window has one already: KDDockWidgets makes the main window's
+    // and a floating window's in its base constructor, and Qt makes a
+    // dialog's before the dialog is polished.  Up to Qt 6.9 this did not
+    // matter on Wayland, where every surface's buffers had an alpha
+    // channel; from Qt 6.10 a surface made without the request gets opaque
+    // buffers for as long as it lives, and the shadow shows as a black
+    // band.  The window has not shown yet, so make its native window again.
+    if (surfaceKeepsItsFormat() && handle->handle() && !handle->isVisible() &&
+        !handle->format().hasAlpha()) {
+      handle->destroy();
+      handle->create();
+    }
     // Windows chooses layered composition when the native flags change.
     // Set the alpha format first, including for dialogs with an early HWND.
     handle->setFlags(window.windowFlags());
