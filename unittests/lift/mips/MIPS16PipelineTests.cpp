@@ -561,7 +561,7 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
           ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
         }
         EXPECT_NE(Text.find("fp_callee("), std::string::npos) << Text;
-        EXPECT_EQ(Text.find("__fn_stub_fp_callee"), std::string::npos) << Text;
+        EXPECT_EQ(Text.find("__fn_stub_fp_callee("), std::string::npos) << Text;
         if (Together)
           EXPECT_NE(Text.find("neverd_mips16_entry_fp_callee("),
                     std::string::npos)
