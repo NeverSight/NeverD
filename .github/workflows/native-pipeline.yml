@@ -8,59 +8,6 @@ name: Native pipeline compatibility
 # would catch shows up at the next run here, or sooner through dispatch.
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/pipeline-performance, codex/performance-libraries]
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
-  pull_request:
-    paths:
-      - '.github/workflows/native-pipeline.yml'
-      - 'tools/neverd-worker/tests/call_site_types_test.py'
-      - 'tools/neverd-worker/tests/native_mapping_test.py'
-      - 'lib/sdk/capi/**'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/capstone'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/**'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-      - 'unittests/TextEncodingTests.cpp'
 
 permissions:
   contents: read

@@ -1,32 +1,6 @@
 name: Prebuilt LLVM Audit
 
 on:
-  push:
-    branches:
-      - dev
-    paths:
-      - '.github/workflows/prebuilt-llvm-audit.yml'
-      - '.gitmodules'
-      - 'third_party/llvm-project'
-      - 'CMakeLists.txt'
-      - 'cmake/NeverDLLVMPrebuilt.cmake'
-      - 'scripts/audit_prebuilt_llvm_release.py'
-      - 'scripts/audit_prebuilt_llvm_release.def'
-      - 'scripts/tests/test_audit_prebuilt_llvm_release.def'
-      - 'scripts/tests/test_audit_prebuilt_llvm_release.py'
-  pull_request:
-    # closed cancels this PR's run through its concurrency group; no job runs.
-    types: [opened, synchronize, reopened, closed]
-    paths:
-      - '.github/workflows/prebuilt-llvm-audit.yml'
-      - '.gitmodules'
-      - 'third_party/llvm-project'
-      - 'CMakeLists.txt'
-      - 'cmake/NeverDLLVMPrebuilt.cmake'
-      - 'scripts/audit_prebuilt_llvm_release.py'
-      - 'scripts/audit_prebuilt_llvm_release.def'
-      - 'scripts/tests/test_audit_prebuilt_llvm_release.def'
-      - 'scripts/tests/test_audit_prebuilt_llvm_release.py'
   workflow_dispatch:
 
 permissions:

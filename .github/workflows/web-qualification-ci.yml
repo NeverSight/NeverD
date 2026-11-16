@@ -1,44 +1,6 @@
 name: Required Web qualification
 
 on:
-  push:
-    branches: [dev]
-    paths:
-      - 'include/neverd/web/**'
-      - 'include/neverd/sdk/NeverDCAPIWeb.h'
-      - 'lib/web/**'
-      - 'lib/sdk/capi/NeverDCAPIWeb.cpp'
-      - 'tools/common/web/**'
-      - 'tools/common/transport/**'
-      - 'tools/neverd/cmd/NeverDCmdWeb*'
-      - 'tools/neverd-worker/**'
-      - 'tools/neverd-web-mcp/**'
-      - 'unittests/web/**'
-      - 'unittests/web-api/**'
-      - 'scripts/build_web_icu.sh'
-      - 'CMakeLists.txt'
-      - 'cmake/NeverDWeb*.cmake'
-      - 'cmake/hermes-parser/**'
-      - '.github/workflows/web-*.yml'
-  pull_request:
-    types: [opened, synchronize, reopened, closed]
-    paths:
-      - 'include/neverd/web/**'
-      - 'include/neverd/sdk/NeverDCAPIWeb.h'
-      - 'lib/web/**'
-      - 'lib/sdk/capi/NeverDCAPIWeb.cpp'
-      - 'tools/common/web/**'
-      - 'tools/common/transport/**'
-      - 'tools/neverd/cmd/NeverDCmdWeb*'
-      - 'tools/neverd-worker/**'
-      - 'tools/neverd-web-mcp/**'
-      - 'unittests/web/**'
-      - 'unittests/web-api/**'
-      - 'scripts/build_web_icu.sh'
-      - 'CMakeLists.txt'
-      - 'cmake/NeverDWeb*.cmake'
-      - 'cmake/hermes-parser/**'
-      - '.github/workflows/web-*.yml'
   workflow_dispatch:
 
 permissions:

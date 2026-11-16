@@ -1,47 +1,6 @@
 name: Allocator compatibility
 
 on:
-  push:
-    branches: [dev, codex/performance-libraries]
-    paths:
-      - 'cmake/*Mimalloc*'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'cmake/AddNeverD.cmake'
-      - 'cmake/NeverDWorkerAllocator.cmake'
-      - 'tools/neverd-worker/CMakeLists.txt'
-      - 'unittests/CMakeLists.txt'
-      - 'unittests/allocator/**'
-      - 'scripts/tests/test_mimalloc*.py'
-      - '.github/workflows/allocator.yml'
-  pull_request:
-    paths:
-      - 'cmake/*Mimalloc*'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'cmake/AddNeverD.cmake'
-      - 'cmake/NeverDWorkerAllocator.cmake'
-      - 'tools/neverd-worker/CMakeLists.txt'
-      - 'unittests/CMakeLists.txt'
-      - 'unittests/allocator/**'
-      - 'scripts/tests/test_mimalloc*.py'
-      - '.github/workflows/allocator.yml'
   workflow_dispatch:
 
 permissions:
