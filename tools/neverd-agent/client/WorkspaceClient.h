@@ -69,6 +69,8 @@ private:
 class WorkspaceClient final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList projects READ projects NOTIFY workspaceChanged)
+  Q_PROPERTY(QVariantList unavailableProjects READ unavailableProjects NOTIFY
+                 workspaceChanged)
   Q_PROPERTY(
       QVariantMap activeProject READ activeProject NOTIFY workspaceChanged)
   Q_PROPERTY(QString activeId READ activeId NOTIFY workspaceChanged)
@@ -146,6 +148,7 @@ public:
   Q_INVOKABLE void refreshResearch();
   Q_INVOKABLE bool createProject(const QString &name, const QString &directory);
   Q_INVOKABLE bool openProject(const QString &directory);
+  Q_INVOKABLE bool removeProject(const QString &directory);
   Q_INVOKABLE bool selectProject(const QString &id);
   Q_INVOKABLE void selectObject(const QString &id);
   Q_INVOKABLE void addObject(const QString &path);

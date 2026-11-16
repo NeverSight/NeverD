@@ -803,6 +803,26 @@ Analysis revision %3 · %4</source>
         <source>Set a persistent goal…</source>
         <translation>تعيين هدف مستمر…</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>إزالة المشروع…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>محاولة الفتح مجددًا</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>إزالة %1؟</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>يُزال المشروع من القائمة فقط. لا يُحذف شيء من القرص: يبقى مجلده ومحادثته وذاكرته في مكانها، ويعيده «فتح مشروع».</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>إزالة المشروع</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>لا يُرسَل مفتاح API إلا عبر HTTPS، أو عبر HTTP إلى هذا الكمبيوتر. استخدم عنوان HTTPS للخادم البعيد.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>أوقف تحليل هذا المشروع قبل إزالته.</translation>
     </message>
 </context>
 <context>

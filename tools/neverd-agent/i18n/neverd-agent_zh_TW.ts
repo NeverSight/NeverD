@@ -803,6 +803,26 @@ Analysis revision %3 · %4</source>
         <source>Set a persistent goal…</source>
         <translation>設定持續目標…</translation>
     </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>移除專案…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>再次嘗試開啟</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>移除 %1？</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>這只會將專案從清單中移除，不會刪除磁碟上的任何內容：專案資料夾、對話與記憶都會原樣保留，使用「開啟專案」即可重新加入。</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>移除專案</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1877,6 +1897,10 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API 金鑰只會透過 HTTPS 傳送，或透過 HTTP 傳送到這部電腦。遠端伺服器請使用 HTTPS 位址。</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>請先停止此專案的分析，再移除專案。</translation>
     </message>
 </context>
 <context>

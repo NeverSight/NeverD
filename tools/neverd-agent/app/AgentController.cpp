@@ -27,6 +27,7 @@
 #include <QUrl>
 #include <QUuid>
 #include <QtConcurrentRun>
+#include <algorithm>
 #include <utility>
 
 namespace neverd::agent {
@@ -47,6 +48,17 @@ QVariantMap projectView(const Project &project) {
           {"name", project.Name},
           {"directory", project.Directory},
           {"objects", objects}};
+}
+
+// Whether two listed folders are one. A folder that is gone has no canonical
+// path, so two missing folders are one only when their text says so.
+bool sameDirectory(const QString &left, const QString &right) {
+  const QFileInfo first(left), second(right);
+  if (QDir::cleanPath(first.absoluteFilePath()) ==
+      QDir::cleanPath(second.absoluteFilePath()))
+    return true;
+  const QString canonical = first.canonicalFilePath();
+  return !canonical.isEmpty() && canonical == second.canonicalFilePath();
 }
 } // namespace
 
@@ -168,17 +180,18 @@ bool AgentController::initialize(QString &error) {
       if (!KnownDirectories.contains(entry.toString()))
         KnownDirectories.append(entry.toString());
     }
-    QStringList unavailable;
+    // A listed folder that does not open stays listed, with the reason: a
+    // drive may be away for a day, and the person removes what is gone.
     for (const auto &directory : KnownDirectories) {
       QString issue;
       auto project = ProjectStore::open(directory, issue);
-      if (!project || !bindProject(*project, issue))
-        unavailable.append(issue);
-    }
-    if (!unavailable.isEmpty()) {
-      const QString message = unavailable.join('\n');
-      QTimer::singleShot(0, this,
-                         [this, message] { emit operationError(message); });
+      if (project && bindProject(*project, issue))
+        continue;
+      const QString folder = QFileInfo(directory).fileName();
+      Unavailable.append({project            ? project->Name
+                          : folder.isEmpty() ? directory
+                                             : folder,
+                          directory, issue});
     }
   }
   const QString wanted = config.value("activeProjectId").toString();
@@ -270,6 +283,15 @@ QVariantList AgentController::projects() const {
   QVariantList values;
   for (const auto &project : Projects)
     values.append(projectView(project));
+  return values;
+}
+
+QVariantList AgentController::unavailableProjects() const {
+  QVariantList values;
+  for (const auto &entry : Unavailable)
+    values.append(QVariantMap{{"name", entry.Name},
+                              {"directory", entry.Directory},
+                              {"issue", entry.Issue}});
   return values;
 }
 
@@ -405,18 +427,146 @@ bool AgentController::createProject(const QString &name,
 
 bool AgentController::openProject(const QString &directory) {
   QString error;
-  auto project = ProjectStore::open(localPath(directory), error);
+  const QString folder = localPath(directory);
+  auto project = ProjectStore::open(folder, error);
   if (!project || !bindProject(*project, error)) {
+    // A listed folder that still does not open shows its latest reason.
+    for (auto &entry : Unavailable)
+      if (sameDirectory(entry.Directory, folder) && entry.Issue != error) {
+        entry.Issue = error;
+        emit workspaceChanged();
+      }
     emit operationError(error);
     return false;
   }
-  if (!KnownDirectories.contains(project->Directory))
+  const auto opened = [&](const QString &entry) {
+    return sameDirectory(entry, project->Directory);
+  };
+  Unavailable.removeIf(
+      [&](const UnavailableProject &entry) { return opened(entry.Directory); });
+  if (std::none_of(KnownDirectories.cbegin(), KnownDirectories.cend(), opened))
     KnownDirectories.append(project->Directory);
   if (!selectProject(project->Id))
     return false;
   if (!writeCatalog(error))
     emit operationError(error);
   emit workspaceChanged();
+  return true;
+}
+
+void AgentController::releaseProject(qsizetype index) {
+  const QString id = Projects[index].Id;
+  // The learner may be organizing this project's memory; what it has not
+  // finished stays pending in the folder.
+  Learner.cancel();
+  delete Runtimes.take(id);
+  for (const auto &chat : SideChatIds.take(id))
+    delete SideChats.take(id + '/' + chat);
+  ActiveSideIds.remove(id);
+  for (const auto &key : Inspectors.keys())
+    if (key.startsWith(id + '/'))
+      delete Inspectors.take(key);
+  Goals.remove(id);
+  GoalBudgets.remove(id);
+  Conversations.remove(id);
+  DirtyRuns.remove(id);
+  // The lock goes with the project, so its folder can be opened again.
+  ProjectLocks.erase(ProjectLocks.begin() + index);
+  Projects.removeAt(index);
+}
+
+void AgentController::leaveActiveProject() {
+  // No project is open: every view of one empties, as before the first.
+  ActiveId.clear();
+  SelectedObjectId.clear();
+  Conversation = {};
+  Evidence = {};
+  ExpandedDirectories.clear();
+  closePreview();
+  refreshFiles();
+  readMemoryViews();
+  emit evidenceChanged();
+  emit reviewChanged();
+  emit sideChatsChanged();
+  emit sideChatChanged();
+  emit goalChanged();
+  emit workspaceChanged();
+  emit conversationChanged();
+  emit objectChanged();
+  emit runChanged();
+}
+
+bool AgentController::removeProject(const QString &directory) {
+  // The workbench binds one conversation of its own and keeps no list.
+  if (!WorkbenchAttachment.isEmpty())
+    return false;
+  const QString folder = localPath(directory);
+  qsizetype index = 0;
+  while (index < Projects.size() &&
+         !sameDirectory(Projects[index].Directory, folder))
+    ++index;
+  QString error;
+  if (index == Projects.size()) {
+    // A folder that did not open holds nothing here to let go of.
+    const auto listed = KnownDirectories.size() + Unavailable.size();
+    KnownDirectories.removeIf(
+        [&](const QString &entry) { return sameDirectory(entry, folder); });
+    Unavailable.removeIf([&](const UnavailableProject &entry) {
+      return sameDirectory(entry.Directory, folder);
+    });
+    if (KnownDirectories.size() + Unavailable.size() == listed)
+      return false;
+    if (!saveSettings(error))
+      emit operationError(error);
+    emit workspaceChanged();
+    return true;
+  }
+  const Project project = Projects[index];
+  if (WritingProjects.contains(project.Id) || projectHasAnalysis(project.Id)) {
+    emit operationError(tr("Stop this project's analysis before removing it."));
+    return false;
+  }
+  // Removing forgets the project and deletes nothing. What has not reached
+  // its folder goes there first, unless the folder is gone: a save would
+  // make it again.
+  QString unsaved;
+  if (QFileInfo(ProjectStore::stateDirectory(project)).isDir()) {
+    pauseProjectGoal(project.Id);
+    if (project.Id == ActiveId && DraftDirty &&
+        !ProjectStore::saveConversation(project, Conversation, error))
+      unsaved = error;
+    for (const auto &chat : SideChatIds.value(project.Id))
+      if (!SideChats.value(project.Id + '/' + chat)->flush(error))
+        unsaved = error;
+  }
+  releaseProject(index);
+  KnownDirectories.removeIf([&](const QString &entry) {
+    return sameDirectory(entry, folder) ||
+           sameDirectory(entry, project.Directory);
+  });
+  bool saved = false;
+  if (project.Id == ActiveId) {
+    // The project that followed it opens, or the last one; with none left,
+    // none is open.
+    ActiveId.clear();
+    DraftDirty = false;
+    DraftTimer.stop();
+    saved = !Projects.isEmpty() &&
+            selectProject(Projects[qMin(index, Projects.size() - 1)].Id);
+    if (!saved)
+      leaveActiveProject();
+  } else {
+    // Memory shared from the removed project leaves the open one's view.
+    readMemoryViews();
+    emit objectChanged();
+  }
+  if (!saved && !saveSettings(error))
+    emit operationError(error);
+  if (!writeCatalog(error))
+    emit operationError(error);
+  emit workspaceChanged();
+  if (!unsaved.isEmpty())
+    emit operationError(unsaved);
   return true;
 }
 
