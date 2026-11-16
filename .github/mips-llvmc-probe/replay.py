@@ -93,3 +93,7 @@ for path in out.iterdir():
     if path.suffix.lower() in ('.obj', '.pdb', '.ilk', '.lib', '.exp'):
         path.unlink()
 print(json.dumps(rows, indent=2))
+
+wide_rows = [r for r in rows if r['case'].startswith('WideFrameStore')]
+assert len(wide_rows) == 2
+assert all(r['compile'] == 0 and r['run'] == 0 for r in wide_rows), wide_rows
