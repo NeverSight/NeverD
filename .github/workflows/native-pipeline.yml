@@ -932,7 +932,7 @@ jobs:
           source = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
           assert source == expected
           assert not subprocess.check_output(['git','status','--porcelain'], text=True).strip()
-          targets = {'test_mips64_dsp_extract': 4, 'test_mips_dsp_zero': 4,
+          targets = {'test_mips64_dsp_extract': 5, 'test_mips_dsp_zero': 4,
                      'test_mips': 18, 'test_mips_scalar_fp': 2}
           receipt = {'source': source, 'workflow': os.environ['GITHUB_SHA'],
                      'platform': platform.platform(), 'configuration': 'Release',
