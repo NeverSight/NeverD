@@ -25497,6 +25497,31 @@ qualified. These refusals are separate from successful source-build counts.
 `MIPS16Pipeline.TypedDirectCallReadsGPRFloatInEitherSelection` checks both a
 selected caller and the caller/callee selection through HighC and LLVMC.
 
+`mips16-floating-return-roundtrip.py` supplies an independent result-transport
+matrix. Give it an external, unmodified GCC
+`libgcc/config/mips/mips16.S` with its generated include directory, rather than
+substituting a handwritten helper. For example:
+
+```bash
+python3 unittests/lift/mips/mips16-floating-return-roundtrip.py \
+  --neverd build-mips/bin/neverd --clang /path/to/qualified/clang \
+  --gcc /path/to/mips-linux-gnu-gcc --assembler /path/to/mips-as \
+  --ld /path/to/mips-ld --runtime-source /path/to/gcc/mips16.S \
+  --kind sf --kind df --output build-mips/mips16-fp-results
+```
+
+The GNU compiler, assembler and actual runtime produce the original image.
+Each C route rebuilds the caller, callee and both translation units at O0/O2
+with GCC and Clang. Both byte orders, FR=0/1 and classic/MIPS16 callers must
+preserve every result bit, FCSR, saved registers, SP, RA and the return mode.
+NaN payloads and asymmetric word combinations detect accidental numeric
+conversion or swapped double halves. `--kind sc` and `--kind dc` exercise
+complex results; the driver does not treat a source refusal as success.
+Omit `--neverd` to qualify compiler interworking separately from reconstruction.
+`--endian`, `--fr`, `--mode` and `--rebuild-compiler` select a diagnosis slice.
+Every attempt records tool/source hashes and removes generated binaries via
+the shared artifact lifecycle. Compiler-only success does not qualify NeverD.
+
 `HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
 separately executes direct, forwarded and logical-shift reads through signed
 and unsigned 32/64-bit machine carriers at O0/O2 with undefined-behavior

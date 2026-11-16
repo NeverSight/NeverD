@@ -90,44 +90,61 @@ std::optional<LowFunc> projectMIPS16ReturnCalls(
       for (unsigned I = 0; I < Op.NumInputs; ++I)
         Reserve(Op.Inputs[I]);
     }
+  for (const auto &Temporary : Source.FunctionTemporaries)
+    NextTemporary = std::max(NextTemporary, Temporary.Offset + Temporary.Bytes);
   LowFunc Projected = Source;
-  // Later slices first: each replacement preserves all original indexes
-  // still needed by earlier sites in this block.
-  for (auto I = Sites.rbegin(); I != Sites.rend(); ++I) {
-    auto &Block = Projected.Blocks[I->Block];
-    auto &Boundary = Block.InstructionBoundaries[I->Boundary];
-    const size_t At = Boundary.FirstOp + Boundary.OpCount - 1;
-    const LowOp Call = Block.Ops[At];
-    std::vector<LowOp> Effects = I->Transport->Effects;
-    std::map<std::pair<va_t, uint64_t>, uint64_t> Temporaries;
-    int Seq = Call.Seq;
-    for (auto &Op : Effects) {
-      const auto Remap = [&](NdVar &Value) {
-        if (!Value.isTemp())
-          return;
-        const auto [It, Added] = Temporaries.try_emplace(
-            std::pair{Op.Addr, Value.Offset}, NextTemporary);
-        if (Added)
-          NextTemporary += mipsreg::VectorBytes;
-        Value.Offset = It->second;
-      };
-      Remap(Op.Output);
-      for (unsigned K = 0; K < Op.NumInputs; ++K)
-        Remap(Op.Inputs[K]);
-      Op.Addr = Call.Addr;
-      Op.Seq = Seq++;
+  size_t NextSite = 0;
+  while (NextSite < Sites.size()) {
+    const size_t FirstSite = NextSite;
+    const size_t B = Sites[NextSite].Block;
+    size_t Extra = 0;
+    while (NextSite < Sites.size() && Sites[NextSite].Block == B) {
+      Extra += Sites[NextSite].Transport->Effects.size() - 1;
+      ++NextSite;
     }
-    Block.Ops.erase(Block.Ops.begin() + At);
-    Block.Ops.insert(Block.Ops.begin() + At, Effects.begin(), Effects.end());
-    const size_t Added = Effects.size() - 1;
-    Boundary.OpCount += Added;
-    Boundary.Control = LowInstructionControl::None;
-    Boundary.ControlFlags = LowInstructionControlFlag::None;
-    Boundary.Immediate.reset();
-    Boundary.TargetMode = LowInstructionTargetMode::Preserve;
-    for (size_t J = I->Boundary + 1; J < Block.InstructionBoundaries.size();
-         ++J)
-      Block.InstructionBoundaries[J].FirstOp += Added;
+    const auto &Original = Source.Blocks[B];
+    auto &Block = Projected.Blocks[B];
+    Block.Ops.clear();
+    Block.Ops.reserve(Original.Ops.size() + Extra);
+    size_t Site = FirstSite;
+    for (size_t I = 0; I < Block.InstructionBoundaries.size(); ++I) {
+      const auto &Before = Original.InstructionBoundaries[I];
+      auto &Boundary = Block.InstructionBoundaries[I];
+      Boundary.FirstOp = Block.Ops.size();
+      const size_t End = Before.FirstOp + Before.OpCount;
+      if (Site == NextSite || Sites[Site].Boundary != I) {
+        Block.Ops.insert(Block.Ops.end(), Original.Ops.begin() + Before.FirstOp,
+                         Original.Ops.begin() + End);
+        continue;
+      }
+      Block.Ops.insert(Block.Ops.end(), Original.Ops.begin() + Before.FirstOp,
+                       Original.Ops.begin() + End - 1);
+      const LowOp &Call = Original.Ops[End - 1];
+      std::map<std::pair<va_t, uint64_t>, uint64_t> Temporaries;
+      int Seq = Call.Seq;
+      for (LowOp Op : Sites[Site++].Transport->Effects) {
+        const auto Remap = [&](NdVar &Value) {
+          if (!Value.isTemp())
+            return;
+          const auto [It, Added] = Temporaries.try_emplace(
+              std::pair{Op.Addr, Value.Offset}, NextTemporary);
+          if (Added)
+            NextTemporary += mipsreg::VectorBytes;
+          Value.Offset = It->second;
+        };
+        Remap(Op.Output);
+        for (unsigned K = 0; K < Op.NumInputs; ++K)
+          Remap(Op.Inputs[K]);
+        Op.Addr = Call.Addr;
+        Op.Seq = Seq++;
+        Block.Ops.push_back(std::move(Op));
+      }
+      Boundary.OpCount = Block.Ops.size() - Boundary.FirstOp;
+      Boundary.Control = LowInstructionControl::None;
+      Boundary.ControlFlags = LowInstructionControlFlag::None;
+      Boundary.Immediate.reset();
+      Boundary.TargetMode = LowInstructionTargetMode::Preserve;
+    }
   }
   return Projected;
 }
