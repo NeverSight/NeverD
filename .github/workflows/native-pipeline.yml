@@ -27,6 +27,7 @@ on:
           - render-store-probe
           - render-store-profile
           - worker-cadence
+          - dsp64-reference
 
 permissions:
   contents: read
@@ -892,3 +893,89 @@ jobs:
           build-mips-ci/CMakeCache.txt
           build-mips-ci/neverd-dependency-inputs.json
           build-mips-ci/neverd-build-receipt.json
+
+  dsp64_reference:
+    if: inputs.scope == 'dsp64-reference'
+    name: ${{ matrix.runner }} DSP64 reference
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-latest]
+    timeout-minutes: 30
+    env:
+      EXPECTED_REFERENCE: ${{ inputs.source_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: NeverSight/unicorn
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Configure build and execute exact reference
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import datetime, hashlib, json, os, platform, re, subprocess, time
+          out = Path('reference-evidence'); out.mkdir()
+          expected = os.environ['EXPECTED_REFERENCE']
+          assert re.fullmatch(r'[0-9a-f]{40}', expected)
+          source = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          assert source == expected
+          assert not subprocess.check_output(['git','status','--porcelain'], text=True).strip()
+          targets = {'test_mips64_dsp_extract': 4, 'test_mips_dsp_zero': 4,
+                     'test_mips': 18, 'test_mips_scalar_fp': 2}
+          receipt = {'source': source, 'workflow': os.environ['GITHUB_SHA'],
+                     'platform': platform.platform(), 'configuration': 'Release',
+                     'tests': [], 'commands': [], 'complete': False}
+          def save():
+              (out/'results.json').write_text(json.dumps(receipt, indent=2)+'\n')
+          def run(name, command, timeout=1200):
+              started = time.monotonic()
+              with (out/(name+'.log')).open('w') as log:
+                  result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
+              row = {'name': name, 'command': command, 'exit': result.returncode,
+                     'wall_seconds': time.monotonic()-started}
+              receipt['commands'].append(row); save(); result.check_returncode()
+              return (out/(name+'.log')).read_text(errors='replace')
+          try:
+              config = ['cmake','-S','.','-B','build-reference','-DCMAKE_BUILD_TYPE=Release',
+                        '-DUNICORN_ARCH=mips','-DUNICORN_BUILD_TESTS=ON',
+                        '-DUNICORN_INSTALL=OFF','-DBUILD_SHARED_LIBS=ON']
+              if platform.system() == 'Darwin':
+                  config += ['-DCMAKE_OSX_ARCHITECTURES=arm64']
+              if os.name == 'nt':
+                  config += ['-A','x64']
+              run('configure', config)
+              run('build', ['cmake','--build','build-reference','--config','Release',
+                            '--parallel','4','--target',*targets])
+              for name, count in targets.items():
+                  binary = Path('build-reference') / ('Release' if os.name == 'nt' else '') / (name + ('.exe' if os.name == 'nt' else ''))
+                  output = run(name, [str(binary.resolve())], 600)
+                  passed = len(re.findall(r'\[\s*OK\s*\]', output))
+                  assert passed == count and 'SUCCESS: All unit tests have passed.' in output, (name, passed, count)
+                  receipt['tests'].append({'name': name, 'passed': passed,
+                                          'sha256': hashlib.sha256(binary.read_bytes()).hexdigest()})
+              receipt['complete'] = len(receipt['tests']) == len(targets)
+          finally:
+              receipt['finished_utc'] = datetime.datetime.now(datetime.timezone.utc).isoformat(); save()
+          PYTHON
+      - name: Upload reference evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mips-reference-${{ matrix.runner }}-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            reference-evidence/
+            build-reference/CMakeCache.txt
