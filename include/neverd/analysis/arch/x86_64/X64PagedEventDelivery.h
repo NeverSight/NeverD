@@ -161,7 +161,8 @@ struct X64PagedInstructionTransitionResult {
 
 namespace detail {
 struct X64PagedReturnContinuation;
-}
+struct X64PagedSegmentContinuation;
+} // namespace detail
 /// Immutable progress outside the V6 ABI. Retain state and existing RAM effects
 /// when repairing physical backing; use resume rather than starting a return.
 using X64PagedReturnContinuation =
@@ -171,6 +172,14 @@ struct X64PagedReturnResult : X64PagedInstructionTransitionResult {
   X64PagedReturnContinuation Continuation;
 };
 using X64PagedInterruptReturnResult = X64PagedReturnResult;
+
+/// Accepted segment-load accesses, including an empty prefix before the first
+/// operand. Reads and page-walk effects alone leave its attempt unconsumed.
+using X64PagedSegmentContinuation =
+    std::shared_ptr<const detail::X64PagedSegmentContinuation>;
+struct X64PagedSegmentResult : X64PagedInstructionTransitionResult {
+  X64PagedSegmentContinuation Continuation;
+};
 
 /// Execute an authenticated 64-bit-mode IRET/IRETD/IRETQ after instruction
 /// fetch. Descriptor/page-table writes and NMI unblocking survive a later
@@ -210,7 +219,7 @@ resumeX64PagedReturn(X64ContinuationStateV6 &State,
 /// Execute an authenticated 64-bit-mode LSS/LFS/LGS. Explicit operands use
 /// the current CPL; descriptors use implicit supervisor privilege. Both
 /// destinations commit together. Fault delivery belongs to the executor.
-llvm::Expected<X64PagedInstructionTransitionResult>
+llvm::Expected<X64PagedSegmentResult>
 loadX64PagedFarPointer(X64ContinuationStateV6 &State,
                        translate::X86PagedMemory &Memory,
                        llvm::ArrayRef<uint8_t> Instruction,
@@ -222,13 +231,27 @@ loadX64PagedFarPointer(X64ContinuationStateV6 &State,
 /// state. The caller owns MOV-SS interruptibility; generated source uses its
 /// persistent scheduler. Fault delivery and instruction-budget accounting
 /// belong to the executor, not this descriptor/operand transition.
-llvm::Expected<X64PagedInstructionTransitionResult>
+llvm::Expected<X64PagedSegmentResult>
 moveX64PagedSegment(X64ContinuationStateV6 &State,
                     translate::X86PagedMemory &Memory,
                     llvm::ArrayRef<uint8_t> Instruction,
                     X64PagedAlignmentPriority AlignmentPriority,
                     X64PagedSegmentMoveProfile Profile,
                     std::optional<X64NullSegmentBasePolicy> NullBasePolicy);
+
+/// Check the complete retained state and paging bindings without RAM access.
+/// A refused resume leaves the immutable continuation available for repair.
+llvm::Error
+validateX64PagedSegmentResume(const X64ContinuationStateV6 &State,
+                              const translate::X86PagedMemory &Memory,
+                              const X64PagedSegmentContinuation &Continuation);
+
+/// Resume the original MOV/PUSH/POP/LxS, without fetching its bytes or reading
+/// completed operands again. Only a newly consumed attempt is reported.
+llvm::Expected<X64PagedSegmentResult>
+resumeX64PagedSegment(X64ContinuationStateV6 &State,
+                      translate::X86PagedMemory &Memory,
+                      const X64PagedSegmentContinuation &Continuation);
 
 } // namespace neverd::analysis
 
