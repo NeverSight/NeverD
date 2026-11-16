@@ -4548,3 +4548,12 @@ CPU/generated-state and complete-RAM comparisons per SDK. High-end wrapping and
 accessed-update protection checks are included. Return/event descriptor-tail
 profiles and remaining full-machine owners stay open; no final LLVM release
 or production pin update is claimed.
+
+The [code64 return descriptor qualification](x86-paged-execution.md#code64-return-descriptor-profiles)
+adds explicit target tail-fault profiles for IRET and RETF, including all operand
+widths, immediate cleanup and return CS/outer SS. Both SDKs pass 535 tests
+with 1 LA57 skip each; the new groups contain 2,496 original CPU/generated
+state and complete-RAM comparisons per SDK. Return, event and full-mode
+continuations preserve the accepted fault choice and charge the instruction
+once. Event descriptor-tail qualification and remaining mode/machine owners
+remain open. No final LLVM release or production pin update is included.

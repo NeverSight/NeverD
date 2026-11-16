@@ -597,9 +597,9 @@ always produces #GP(selector). When the start is canonical but the tail is not:
 These are independent original code64 MOV/POP/LFS/LGS/LSS observations, not an
 inference from compatibility instructions or the host running generated C.
 Existing enum values retain their meaning and value. Unknown profile values
-fail before direct-owner effects. Code64 return and event owners retain their
-established descriptor policy; these selector-load measurements do not qualify
-a different return or event profile.
+fail before direct-owner effects. Returns have a separate
+[original instruction qualification](#code64-return-descriptor-profiles);
+event descriptor policies remain independent of these selector-load results.
 
 An accepted instruction stores its neutral descriptor choice in the lower
 continuation. A reconstructed `X64PagedExecution` refuses changed profile
@@ -762,6 +762,58 @@ including 3,712 fault cases. The 568 captured source/header/manifest files match
 between SDKs, and all 280 selector exports also match between core classes.
 The 272 inherited IRET #AC VMX/NMI discrepancies are recorded separately.
 
+## Code64 return descriptor profiles
+
+IRET and RETF have an independent descriptor-range qualification for return CS
+and outer SS. They use the shared descriptor owner, with an explicit target
+choice retained by each accepted return:
+
+| IRET binding | RETF binding | Noncanonical descriptor tail | Qualified local core |
+| --- | --- | --- | --- |
+| `FlagsFirst` | `SelectorFirstTruncatedIP` | #GP(selector) | Intel hybrid E, type `0x20` |
+| `FlagsFirstTailGPZero` | `SelectorFirstTailGPZero` | #GP(0) | Intel hybrid P, type `0x40` |
+
+Both choices report #GP(selector) for a noncanonical starting address, and
+check the complete eight-byte descriptor extent before paging. RETF's existing
+`SelectorFirst` value keeps its original-IP check and #GP(selector) range
+policy. Old numeric values are unchanged; production does not infer a target
+choice from the host. Event descriptor-tail policies remain separate work.
+
+A return continuation stores the neutral descriptor choice alongside accepted
+reads/writes and its budget state. Changing either return binding in an ordinary
+reconstructed context refuses before resume effects. Full-mode accepted work
+uses its frozen options. IRET's NMI unblocking, and an earlier descriptor
+accessed write, remain charged across repeated backing stops with zero budget.
+Once a return faults, the instruction token retires; a paused fault entry resumes
+through `Delivery->Continuation` and the event API, preserving the accepted
+error code. The direct return APIs reject unknown enum values before CPU,
+NMI, paging-control or RAM effects; source authentication and fetch still
+precede those direct calls.
+
+The [November 16 evidence](evidence/x86-code64-return-descriptors-2026-11-16.json) at
+`378710cf20` records 535 passing tests and 1 LA57 skip per SDK.
+Six new groups contain 312 original observations and 2,496 complete
+original/generated CPU-state and RAM comparisons per SDK: IRET widths 2/4/8,
+RETF widths 2/4/8 with no immediate or cleanup 16/65535, both CS/outer SS,
+thirteen descriptor cases, both C emitters, host-x64 Clang/NeverC and O0/O2.
+The existing complete IRET/RETF matrices also exercise the new P-core profiles
+through privilege, flags and compatibility returns. Comparison counts are
+within the test groups, not additional test totals.
+
+The new groups include 288 backing-resume comparisons, eight IRET frame/fault
+entry double suspensions and 64 full-mode comparisons per SDK. The matrix
+compares all output RAM without masks, including first-fragment Dirty effects
+before a second-fragment write fault. Like the selector suite, it pre-accesses
+the oracle's HLT page and the ancestors of an absent first wrapped descriptor
+page in both inputs. Data caches start usable at the outer CPL3 so their
+inactive metadata does not become a hardware witness. This does not define
+arbitrary initially-clear fault-walk A effects, unusable-cache metadata or a
+partial descriptor-data store. Original CPU runs remain uninterrupted.
+
+Selector and return suites share neutral range-input construction. Generated
+source, library and artifact names include the test suite, preventing same-name
+tests from reusing a permanent library handle or overwriting evidence.
+
 ## Faultable IRET, IRETD and IRETQ
 
 Canonical `66 cf`, `cf` and `48 cf` use the same descriptor, return-frame,
@@ -772,9 +824,10 @@ the existing paged bridge; no host pointer or inline assembly executes the
 return. Source admission authenticates the original bytes and LowIR shape.
 
 Bind `X64PagedExecutionOptions::IretAccessOrder` to the target processor's
-qualified order. The currently qualified `FlagsFirst` profile reads FLAGS,
-CS and IP, validates and updates CS's descriptor, then reads SS and SP,
-validates and updates SS's descriptor, and finally validates the target IP.
+qualified `FlagsFirst` or `FlagsFirstTailGPZero` profile
+[described above](#code64-return-descriptor-profiles). Both read FLAGS,
+CS and IP, validate and update CS's descriptor, then read SS and SP,
+validate and update SS's descriptor, and finally validate the target IP.
 CS and SS read only their two-byte selectors, independently of frame-slot width.
 Descriptor reads precede RPL validation, so a missing descriptor page wins over
 a simultaneous RPL error. A compatibility target is truncated before the final
@@ -824,17 +877,18 @@ and Intel SDM volume 2, IRET/IRETD/IRETQ.
 
 Canonical `CB` and `CA imm16`, with no prefix, `66` or `48`, use the same
 faultable return owner. Bind `X64PagedExecutionOptions::FarReturnProfile` before
-executing them. Both profiles read CS before IP, validate and update the CS
+executing them. All profiles read CS before IP, validate and update the CS
 descriptor, then read SS before SP only for an outer return. Descriptor fetch
 precedes RPL validation; descriptor accessed writes precede late target faults.
 A same-CPL return never speculatively accesses an outer frame. NT is retained,
 RF clears on successful completion, and NMI inhibition remains unchanged.
 
-The two profiles differ in the final compatibility target check:
+The qualified profiles differ in the final compatibility target check as well
+as the [descriptor-tail fault code](#code64-return-descriptor-profiles):
 
 | Profile | Canonical-address input | Locally qualified CPU |
 | --- | --- | --- |
-| `SelectorFirst` | Original saved IP | Core i9-13900H performance core, CPUID core type `0x40` |
+| `SelectorFirstTailGPZero` | Original saved IP | Core i9-13900H performance core, CPUID core type `0x40` |
 | `SelectorFirstTruncatedIP` | Truncated compatibility EIP | Core i9-13900H efficient core, CPUID core type `0x20` |
 
 This difference was reproduced by executing the same original RETFQ bytes on

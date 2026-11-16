@@ -68,7 +68,8 @@ streams distinguish these cases, including a missing first-page translation;
 runtime code does not infer the profile from its host. This compatibility
 measurement alone does not select a code64 policy. Code64 MOV/POP/LFS/LGS/LSS
 now have an [independent descriptor qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles);
-return/event tail profiles remain separate work.
+returns have a [separate code64 qualification](x86-paged-execution.md#code64-return-descriptor-profiles),
+and event descriptor-tail profiles remain separate work.
 
 The existing transfer journal retains completed pointer fields, selector
 reads and descriptor accessed writes, including aliases with paging A bits
@@ -217,7 +218,7 @@ operands, original bytes and paging effects, and charges the attempt once.
 The [runtime contract](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
 and [evidence](evidence/x86-code64-segment-continuation-2026-11-16.json) record 524 passing cases and 1 LA57
 skip per SDK. This closes code64 segment progress; remaining mode-aware
-owners, return/event descriptor-tail qualification, real/unreal/VM86 composition, software
+owners, event descriptor-tail qualification, real/unreal/VM86 composition, software
 SMM/SGX and unbound asynchronous producers remain separate work. NeverC remains
 host x64 and the production LLVM release pin remains r6.
 
@@ -232,3 +233,14 @@ records 529 passing tests and 1 LA57 skip per SDK, including sixteen
 full-mode profile comparisons. This does not expand NeverC source targets,
 qualify return/event descriptor-tail choices, or close the remaining mode and
 machine-owner work. The production LLVM release pin remains r6.
+
+### Code64 return descriptor profiles (2026-11-16)
+
+IRET and RETF now expose the independently measured `TailGPZero` variants.
+Lower return continuations retain that choice, and full-mode pending work keeps
+its accepted options across backing repair. New caller options apply after the
+accepted work. The [return descriptor evidence](evidence/x86-code64-return-descriptors-2026-11-16.json) records
+535 passing tests and 1 LA57 skip per SDK, including 64 full-mode profile
+comparisons. Guest operand widths do not add NeverC source targets. Event
+descriptor-tail choices and the remaining full-machine work are still open;
+production LLVM remains r6.

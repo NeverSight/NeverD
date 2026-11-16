@@ -5024,6 +5024,19 @@ The same group tests frozen profile choices, ordinary-context refusal,
 full-mode continuation and invalid public profiles. Counts and invalid KVM
 entry diagnostics are recorded in the [descriptor boundary evidence](evidence/x86-code64-descriptor-boundaries-2026-11-16.json).
 
+`X64PagedReturnDescriptorTest.*` independently checks return CS and outer SS
+ranges, all IRET operand widths and RETF cleanup 0/16/65535. It compares complete
+represented state and RAM through both emitters, host-x64 compilers and O0/O2.
+The shared `X64PagedDescriptorBoundaryFixture.inc` owns explicit inputs; each
+instruction suite retains its own native streams. Full data caches remain
+usable after outer CPL3 returns. The same documented HLT and absent-wrapped-page
+ancestor A inputs apply. Unknown core types skip the native profile comparison.
+The suite also checks NMI/descriptor-write budget consumption, changed-profile
+refusal, retained full-mode options and separate event continuation after a
+return fault. Source/library/artifact names include suite identity to avoid
+permanent dynamic-library reuse across identically named tests. See the
+[return descriptor evidence](evidence/x86-code64-return-descriptors-2026-11-16.json).
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry
