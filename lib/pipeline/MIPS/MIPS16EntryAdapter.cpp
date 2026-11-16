@@ -18,12 +18,14 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
+#include "neverd/loader/FunctionNames.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <array>
+#include <map>
 #include <vector>
 
 namespace neverd::pipeline_detail {
@@ -311,6 +313,7 @@ void projectMIPS16EntryCalls(const BinaryImage &Image,
     return;
   llvm::DenseMap<va_t, std::optional<MIPS16EntryAdapter>> Adapters;
   std::optional<ExecutableCodeOwnerIndex> Owners;
+  std::optional<std::map<va_t, std::string>> Names;
   for (MedFunc &Function : Functions) {
     llvm::DenseMap<std::pair<int, int>, MedCallInfo *> Calls;
     for (auto &Call : Function.CallInfos)
@@ -336,6 +339,18 @@ void projectMIPS16EntryCalls(const BinaryImage &Image,
             Owners.emplace(Image);
           Known->second =
               proveMIPS16EntryAdapter(Image, Call.TargetAddr, *Debug, &*Owners);
+          if (Known->second && Known->second->BodyName.empty()) {
+            // Address-bound user types need not carry a DWARF name. Naming
+            // does not establish the transport proof; reuse the image's
+            // naming policy once the body is proven, with one shared index.
+            if (!Names)
+              Names.emplace(imageFunctionNames(Image));
+            const auto Named = Names->find(Known->second->Body);
+            Known->second->BodyName =
+                Named != Names->end()
+                    ? Named->second
+                    : Image.getFunctionNameAt(Known->second->Body);
+          }
         }
         const auto &Adapter = Known->second;
         if (!Adapter || Adapter->BodyName.empty())
