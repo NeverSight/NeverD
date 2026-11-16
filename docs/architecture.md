@@ -3877,6 +3877,12 @@ object extents do not. `debug/CompressedSections` expands SHF_COMPRESSED
 sections before the DWARF reader sees them, since the LLVM NeverD links may
 lack the decompressors.
 
+DWARF function parameters and callback parameters retain unknown types when
+their type attribute is absent or its reference is malformed, including an
+inherited declaration. The reader does not substitute a four-byte integer.
+Consumers that require a complete source signature must reject that missing
+parameter; its independently declared return contract remains available.
+
 A debug file loaded into an open session (`neverd_session_load_pdb_ex`,
 `neverd_session_load_dwarf`, `neverd_session_load_map`) reads the image again
 with the options it was loaded with and publishes the session's whole request

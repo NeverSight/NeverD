@@ -1972,8 +1972,7 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     if (const char *RawName = Child.getName(llvm::DINameKind::ShortName))
       Name = RawName;
     auto ParamDie = declaredTypeDie(Child);
-    TypeRef Type =
-        ParamDie.isValid() ? convertDwarfType(ParamDie) : NdType::makeInt(4);
+    TypeRef Type = ParamDie.isValid() ? convertDwarfType(ParamDie) : nullptr;
     if (ParamDie.isValid() && Type)
       describeRecordPassing(ParamDie, *Type);
     Sym.Params.emplace_back(std::move(Name), std::move(Type));
