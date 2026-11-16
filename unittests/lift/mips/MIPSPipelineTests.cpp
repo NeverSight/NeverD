@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -407,6 +408,87 @@ TEST_P(MIPSPipeline, SinglePrecisionUpperWordCannotEscapeToMemory) {
   EXPECT_NE(Result.Error.find("architecturally unpredictable"),
             std::string::npos)
       << Result.Error;
+}
+
+TEST(MIPSScalarCalls, IntegerCallsDoNotRequireFloatingPointProfiles) {
+  for (const Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const bool Wide = isMIPS64(Target);
+    const bool NarrowPointer =
+        Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+    mips_test::ELFBytes File(
+        NarrowPointer
+            ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+            : Target);
+    File.abiFlags();
+    if (NarrowPointer) {
+      File.put(36, 0x80000020, 4);
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe4] = 2;
+    }
+    const uint32_t Words[] = {
+        Wide ? 0x67bdffe0u : 0x27bdffe0u, // allocate 32 bytes
+        Wide ? 0xffbf0018u : 0xafbf001cu, // save the incoming link
+        0x0c004080u,
+        0,           // call 0x10200; nop
+        0x24020007u, // return a constant after the call
+        Wide ? 0xdfbf0018u : 0x8fbf001cu,
+        0x03e00008u,
+        Wide ? 0x67bd0020u : 0x27bd0020u};
+    for (unsigned I = 0; I < std::size(Words); ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    auto Pointer = NdType::makePtr();
+    Pointer->Size = getTargetRegInfo(Target).PointerSize;
+    struct SignatureCase {
+      TypeRef Result;
+      std::vector<TypeRef> Parameters;
+      bool NeedsFloating;
+    };
+    const SignatureCase Signatures[] = {
+        {NdType::makeVoid(), {}, false},
+        {NdType::makeInt(4), {NdType::makeInt(4)}, false},
+        {Pointer, {Pointer}, false},
+        {NdType::makeVoid(), {NdType::makeFloat(4)}, true},
+        {NdType::makeFloat(8), {}, true}};
+    // Unspecified, soft-float and o32 FPXX do not establish the scalar FPR
+    // profile. None is needed by a complete integer/pointer/void call.
+    for (const uint8_t Profile : {0, 3, 5}) {
+      SCOPED_TRACE(Profile);
+      File.Bytes[0xe7] = Profile;
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "scalar_call");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      for (const auto &Case : Signatures) {
+        SCOPED_TRACE(Case.NeedsFloating);
+        SCOPED_TRACE(static_cast<int>(Case.Result->Kind));
+        const auto Signature = floatingCallArguments(
+            Target, BinaryFormat::ELF, Case.Result, Case.Parameters);
+        ASSERT_TRUE(Signature);
+        const std::map<va_t, FloatingCallArguments> Calls{
+            {0x10200, *Signature}};
+        Convert.setCallEntryFloatingArguments(&Calls);
+        if (Case.NeedsFloating)
+          EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                       LowToMedConversionError);
+        else {
+          EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          auto Invalid = Calls;
+          Invalid.begin()->second.ReturnBytes = 3;
+          EXPECT_THROW(
+              requireMIPSSourceVectors(Low, Target, &*Image, &Invalid, nullptr),
+              LowToMedConversionError);
+        }
+      }
+    }
+  }
 }
 
 TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
