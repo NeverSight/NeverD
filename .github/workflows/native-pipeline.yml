@@ -14,6 +14,7 @@ on:
         default: qualification
         options:
           - qualification
+          - macos-qualification
           - constructor-repro
           - render-store-probe
 
@@ -100,28 +101,13 @@ jobs:
           if-no-files-found: error
           path: constructor-evidence/
   native:
-    if: inputs.scope == 'qualification'
+    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Linux Clang 18 libstdc++ 14
-            runner: ubuntu-24.04
-            cc: clang-18
-            cxx: clang++-18
-            parallel: 4
-          - name: macOS Apple Clang
-            runner: macos-15
-            cc: clang
-            cxx: clang++
-            parallel: 3
-          - name: Windows MSVC
-            runner: windows-latest
-            cc: cl
-            cxx: cl
-            parallel: 4
+      matrix: >-
+        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
     timeout-minutes: 180
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
@@ -210,6 +196,8 @@ jobs:
           mkdir -p build-mips-ci/evidence
           cp build-mips-ci/neverd-build-receipt.json build-mips-ci/evidence/portability-build-receipt.json
       - name: Build and verify complete mock worker transport owner
+        id: mock_worker
+        continue-on-error: true
         timeout-minutes: 20
         run: |
           python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target neverd-worker-test-server
@@ -334,6 +322,11 @@ jobs:
           assert actual_names == expected_names, 'incomplete inventory execution'
           assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped and not local_type_skipped, audit
           PYTHON
+      - name: Preserve mock-worker failure after owner diagnostics
+        if: always() && steps.mock_worker.outcome == 'failure'
+        run: |
+          echo "::error::Mock-worker qualification failed; owner diagnostics do not waive it."
+          exit 1
       - name: Upload bounded qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
