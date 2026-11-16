@@ -302,18 +302,49 @@ TEST_P(MIPS16Pipeline,
             } Debug;
             Debug.Bytes = Bytes;
             Debug.FloatingInput = FloatingInput;
-            enum class Surface { HighC, LLVMC, MachineLift };
+            enum class Surface {
+              HighC,
+              LLVMC,
+              MachineLift,
+              HighCClosure,
+              LLVMCClosure,
+              HighCHelper,
+              LLVMCHelper
+            };
             for (Surface S :
-                 {Surface::HighC, Surface::LLVMC, Surface::MachineLift}) {
+                 {Surface::HighC, Surface::LLVMC, Surface::MachineLift,
+                  Surface::HighCClosure, Surface::LLVMCClosure,
+                  Surface::HighCHelper, Surface::LLVMCHelper}) {
               SCOPED_TRACE(int(S));
-              const bool LLVM = S == Surface::LLVMC;
+              const bool Closure =
+                  S == Surface::HighCClosure || S == Surface::LLVMCClosure;
+              const bool Helper =
+                  S == Surface::HighCHelper || S == Surface::LLVMCHelper;
+              if ((Closure || Helper) &&
+                  (BadHelper || FrameArgument || ExternalEscape))
+                continue;
+              const bool LLVM = S == Surface::LLVMC ||
+                                S == Surface::LLVMCClosure ||
+                                S == Surface::LLVMCHelper;
               llvm::LLVMContext Context;
               PipelineOptions Options;
-              Options.OnlyFunctionEntries = {0x10100, 0x10180};
-              Options.LiftMode = S != Surface::HighC;
+              Options.OnlyFunctionEntries =
+                  Helper ? std::set<va_t>{0x101a0}
+                         : std::set<va_t>{0x10100, 0x10180};
+              if (Closure)
+                Options.OnlyFunctionEntries.insert(0x101a0);
+              Options.OmitRefusedFunctions = Closure;
+              Options.LiftMode = LLVM || S == Surface::MachineLift;
               Options.SourceProjection = LLVM;
               Options.EmitDumpOutput = false;
               auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+              if (Helper) {
+                EXPECT_FALSE(Result.Success);
+                EXPECT_NE(Result.Error.find("retain the native runtime helper"),
+                          std::string::npos)
+                    << Result.Error;
+                continue;
+              }
               if (BadHelper || FrameArgument || ExternalEscape ||
                   S == Surface::MachineLift) {
                 EXPECT_FALSE(Result.Success);
@@ -323,6 +354,18 @@ TEST_P(MIPS16Pipeline,
                   Result.CallEntryFloatingArguments.get().contains(0x10180));
               ASSERT_TRUE(Result.Success) << Result.Error;
               EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+              if (Closure) {
+                const auto Audit =
+                    llvm::find_if(Result.FunctionAudits, [](const auto &A) {
+                      return A.Entry == 0x101a0;
+                    });
+                ASSERT_NE(Audit, Result.FunctionAudits.end());
+                EXPECT_EQ(Audit->Disposition,
+                          PipelineFunctionDisposition::MedIRFailed);
+                EXPECT_NE(
+                    Audit->Diagnostic.find("retain the native runtime helper"),
+                    std::string::npos);
+              }
               if (FloatingInput && Repeated) {
                 const auto CallerLow =
                     llvm::find_if(Result.LowFuncs, [](const auto &F) {

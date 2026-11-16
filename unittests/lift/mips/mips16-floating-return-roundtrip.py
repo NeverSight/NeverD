@@ -8,6 +8,8 @@ both against the same runtime. Observe all result bits, the return mode,
 FCSR, stack/link and preserved GPR/FPR state in an independent emulator.
 Without --neverd, qualify compiler interworking using the owned original C.
 With --floating-input, also traverse the classic hard-float entry stub.
+With --whole-unit, rebuild the complete HighC call closure or LLVMC image as
+one translation unit, retaining the original runtime helper at link time.
 """
 
 import argparse
@@ -167,7 +169,8 @@ def run(args, artifacts):
                     originals.append({'profile': profile, 'sha256': original_hash,
                                       'cases': len(expected)})
                     artifacts.write('originals.json', originals)
-                    routes = ('highc', 'llvmc') if args.neverd else ('original-source',)
+                    routes = (('highc-callees', 'llvmc-unit') if args.whole_unit else
+                              ('highc', 'llvmc') if args.neverd else ('original-source',))
                     if args.neverd:
                         declaration = directory / 'declaration.h'
                         declared_parameter = (parameter if args.floating_input
@@ -178,7 +181,14 @@ def run(args, artifacts):
                         artifacts.discard(declaration)
                     for route in routes:
                         sources = {'caller': caller, 'callee': callee}
-                        if args.neverd:
+                        if args.whole_unit:
+                            sources = {'caller': directory / f'{route}.c'}
+                            selection = (['--func', 'kernel', '--callees']
+                                         if route == 'highc-callees' else ['--llvm'])
+                            command([args.neverd, 'decompile', original, *selection,
+                                     '-o', sources['caller']])
+                            artifacts.keep_source(sources['caller'])
+                        elif args.neverd:
                             for which, function in [('caller', 'kernel'), ('callee', 'fp_callee')]:
                                 sources[which] = directory / f'{which}-{route}.c'
                                 command([args.neverd, 'decompile', original, '--func', function,
@@ -187,16 +197,18 @@ def run(args, artifacts):
                                 artifacts.keep_source(sources[which])
                         for compiler_name in args.rebuild_compiler or ('clang', 'gcc'):
                             compiler = compilers[compiler_name]
-                            for which in ('caller', 'callee', 'both'):
+                            for which in (('unit',) if args.whole_unit else
+                                          ('caller', 'callee', 'both')):
                                 for opt in ('-O0', '-O2'):
                                     newc, newf = directory / 'newcaller.o', directory / 'newcallee.o'
-                                    if which in ('caller', 'both'):
+                                    if which in ('caller', 'both', 'unit'):
                                         build(compiler, sources['caller'], newc,
                                               'classic' if args.neverd else mode, opt)
                                     if which in ('callee', 'both'):
                                         build(compiler, sources['callee'], newf, 'classic', opt)
                                     image = directory / 'rebuilt.elf'
-                                    link([newc if which != 'callee' else cobj,
+                                    link([newc] if args.whole_unit else
+                                         [newc if which != 'callee' else cobj,
                                           newf if which != 'caller' else fobj], image)
                                     assert observe(image, little, fr, samples) == expected
                                     rows.append({'profile': profile, 'changed': which,
@@ -204,7 +216,8 @@ def run(args, artifacts):
                                                  'optimization': opt, 'cases': len(expected),
                                                  'original_sha256': original_hash,
                                                  'caller_source_sha256': digest(sources['caller']),
-                                                 'callee_source_sha256': digest(sources['callee']),
+                                                 'callee_source_sha256': digest(
+                                                     sources['caller' if args.whole_unit else 'callee']),
                                                  'rebuilt_sha256': digest(image)})
                                     artifacts.write('results.json', rows)
                                     artifacts.discard(image)
@@ -218,6 +231,7 @@ def run(args, artifacts):
                'profiles': len(originals), 'original_cases': sum(r['cases'] for r in originals),
                'runtime_source_sha256': digest(args.runtime_source),
                'floating_input': args.floating_input,
+               'whole_unit': args.whole_unit,
                'neverd': str(args.neverd) if args.neverd else None}
     artifacts.write('summary.json', summary)
     print(json.dumps(summary))
@@ -229,12 +243,15 @@ if __name__ == '__main__':
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--neverd', type=Path)
     parser.add_argument('--floating-input', action='store_true')
+    parser.add_argument('--whole-unit', action='store_true')
     parser.add_argument('--kind', action='append', choices=('sf', 'df', 'sc', 'dc'))
     parser.add_argument('--endian', action='append', choices=('be', 'le'))
     parser.add_argument('--mode', action='append', choices=('classic', 'mips16'))
     parser.add_argument('--fr', action='append', type=int, choices=(0, 1))
     parser.add_argument('--rebuild-compiler', action='append', choices=('clang', 'gcc'))
     args = parser.parse_args()
+    if args.whole_unit and not args.neverd:
+        parser.error('--whole-unit requires --neverd')
     if args.floating_input and any(k not in ('sf', 'df') for k in args.kind or ()):
         parser.error('--floating-input currently requires scalar sf/df results')
     with MIPSValidationArtifacts(args.output, 'mips16-floating-return-roundtrip',

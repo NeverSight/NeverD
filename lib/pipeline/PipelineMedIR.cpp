@@ -1293,6 +1293,12 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   auto ConvertOne = [&](LowToMedConverter &Local, size_t I) {
     Converted[I] = 0;
     PendingStackProof[I] = 0;
+    if (MIPS16Returns.contains(Result.LowFuncs[I].Entry)) {
+      ConversionErrors[I] =
+          "MIPS16 result transport uses incoming result registers, not an "
+          "ordinary source function ABI; retain the native runtime helper";
+      return;
+    }
     try {
       Local.setCallSiteIntegerArguments(&VirtualArguments[I].Integers);
       Local.setCallSiteFloatingArguments(&VirtualArguments[I].Floating);

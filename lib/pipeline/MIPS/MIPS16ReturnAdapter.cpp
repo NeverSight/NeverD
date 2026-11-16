@@ -29,8 +29,24 @@ mips16ReturnTransports(const BinaryImage &Image,
     return Result;
   std::set<va_t> Entries;
   for (const auto &Function : Functions) {
-    if (Image.instructionModeAt(Function.Entry) != InstructionMode::MIPS16)
+    if (Image.instructionModeAt(Function.Entry) != InstructionMode::MIPS16) {
+      // A selected helper needs the same byte proof even without a selected
+      // caller. Its incoming v0/v1 words are not ordinary C parameters.
+      // Only a first instruction unit writing an FPR can match this transport;
+      // avoid decoding every classic body again during source admission.
+      if (!Function.Blocks.empty() &&
+          !Function.Blocks.front().InstructionBoundaries.empty()) {
+        const auto &Block = Function.Blocks.front();
+        const auto &First = Block.InstructionBoundaries.front();
+        for (size_t I = First.FirstOp; I < First.FirstOp + First.OpCount; ++I)
+          if (Block.Ops[I].Output.isReg() &&
+              mipsreg::isVector(Block.Ops[I].Output.Offset)) {
+            Entries.insert(Function.Entry);
+            break;
+          }
+      }
       continue;
+    }
     for (const auto &Block : Function.Blocks)
       for (const auto &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
