@@ -136,6 +136,9 @@ ChooserModel::ChooserModel(Session &session, const AddressSpace &space,
             else
               reload();
           });
+  // The open reply changes the revision before Session clears opening_.
+  // Reload then clears the old rows, but only opened() can request new ones.
+  connect(&session_, &Session::opened, this, &ChooserModel::reload);
   connect(&session_, &Session::unloaded, this, &ChooserModel::reload);
   connect(&session_, &Session::readsCancelled, this, [this] {
     if (loading() || locationDone_)
