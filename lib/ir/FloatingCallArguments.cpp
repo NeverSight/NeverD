@@ -153,7 +153,10 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
         isMIPS(A) && ReturnType && ReturnType->Kind == NdTypeKind::Int &&
         ReturnType->Size == 2 * getTargetRegInfo(A).FullRegWidth;
     const bool ScalarIntegerResult =
-        (A == Arch::X64 || A == Arch::AArch64) && ScalarParameter(ReturnType);
+        (A == Arch::X64 || A == Arch::AArch64 ||
+         (A == Arch::X86 && ReturnType &&
+          ReturnType->Size <= getTargetRegInfo(A).FullRegWidth)) &&
+        ScalarParameter(ReturnType);
     if ((!isMIPS(A) && !VoidReturn && !ScalarIntegerResult) || !ReturnType ||
         (!isMIPS(A) && !llvm::any_of(Parameters, Scalar)) ||
         (ReturnType->Kind != NdTypeKind::Void && !IntegerPair &&

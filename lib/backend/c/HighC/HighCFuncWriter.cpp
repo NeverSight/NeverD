@@ -5160,7 +5160,7 @@ bool HighCWriter::positionalDebugSignature(const FunctionSym &FS) const {
   if (!FS.PlatformConvention || !FS.ParamEntryLocations.empty())
     return false;
   if (const auto Signature =
-          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format);
+          libc::floatingCallArguments(FS, Opts.TheArch, Opts.Format, Dbg);
       Signature && (Opts.TheArch == Arch::X86 || !Signature->Scalars.empty() ||
                     Signature->ReturnElements))
     return true;
@@ -6113,6 +6113,20 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     IndirectReturnName = "result";
   PrintedIndirectReturn = false;
   Analysis = {};
+  // The passes below ask which statements C hides, and a copy of a frame
+  // address into a name that is an alias of it is one.  They run before this
+  // definition collects its frame slots, so they read the aliases the
+  // declaration pass found in it, which is what a unit of this definition
+  // alone has always given them.  The slots and aliases of the definition
+  // this writer printed before must not answer instead: the text would depend
+  // on the order the definitions are printed in, and so on how the threads
+  // that print them were scheduled.
+  FrameSlots.clear();
+  FrameAliases.clear();
+  if (DeclaredFrameAliases)
+    if (const auto Own = DeclaredFrameAliases->find(&Func);
+        Own != DeclaredFrameAliases->end())
+      FrameAliases = Own->second;
   runAnalysisPasses(Func);
   collectNamedFrameSlots(Func);
   // A fixed slot write can be read later through an indexed address even if

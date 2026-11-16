@@ -840,11 +840,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     E.forEachChildExpr([&](const ExprPtr &Child) { Visit(*Child); });
   };
 
+  auto Aliases = std::make_shared<
+      std::unordered_map<const HighFunc *, std::map<std::string, int64_t>>>();
   for (const HighFunc &Func : Funcs) {
     CurrentFunc = &Func;
     // Shared expressions can have different memory spellings in each body.
     Seen.clear();
     collectNamedFrameSlots(Func);
+    // What this definition's analysis passes read before it collects its
+    // slots again (writeFunctionProjection).
+    if (!FrameAliases.empty())
+      Aliases->emplace(&Func, FrameAliases);
     CollectWideType(Func.ReturnType);
     for (const HighParam &Param : Func.Params)
       CollectWideType(Param.Type);
@@ -901,6 +907,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   CurrentFunc = nullptr;
   FrameSlots.clear();
   FrameSlotOffsetsByName.emplace();
+  DeclaredFrameAliases = std::move(Aliases);
 
   MemoryTypes = std::move(Names);
 }

@@ -719,6 +719,11 @@ public:
   void writeInstructionImpl(llvm::Instruction &Inst, int Indent);
   void writeCall(llvm::CallInst &Call, const std::string &Name, int Indent);
   void writeCallLike(llvm::CallBase &Call, const std::string &Name, int Indent);
+  /// The call of \p Invoke as a statement of its own, for a form that prints
+  /// the block's exits itself.  An invoke is a terminator, which the
+  /// instruction writer never sees: this marks its text for the source map as
+  /// that writer marks a call's.
+  void writeInvokedCall(llvm::InvokeInst &Invoke, int Indent);
   bool writeAnalysisDispatchCall(llvm::CallBase &Call, int Indent);
   /// Join `p ? field : 0` is the PHI dest, not a rematerialized then-arm
   /// field load used as a call arg (`Find(..., this->m.p->id)`).

@@ -154,8 +154,8 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         // Definitions are collected before headers are written. Known
         // library headers supply their own value records, but cannot supply
         // a user declaration's records merely because its name matches.
-        if (const auto Floating =
-                libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+        if (const auto Floating = libc::floatingCallArguments(
+                *Callee, Opts.TheArch, Opts.Format, Dbg);
             Floating &&
             (Callee->PrototypeLibrary == UserPrototypeLibrary ||
              !libc::headerFor(Callee->Name)) &&

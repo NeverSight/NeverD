@@ -79,6 +79,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace neverd {
@@ -3628,6 +3629,26 @@ bool forwardsToGuardDispatch(const BinaryImage &Img,
               Slot.Offset, RuntimeCallablePointerSlotKind::GuardXFGDispatch));
 }
 
+using DeclaredCallArguments =
+    std::variant<FixedIntegerCallArguments, FloatingCallArguments>;
+
+std::optional<DeclaredCallArguments>
+declaredCallArguments(const FunctionSym &Function, const BinaryImage &Image,
+                      const DebugContext *Debug) {
+  // MIPS keeps integer-only signatures in its scalar descriptor too.
+  if (!isMIPS(Image.Arch))
+    if (auto Integer = libc::fixedIntegerCallArguments(
+            Function, Image.Arch, Image.abiFormat(), Debug))
+      return std::move(*Integer);
+  if (auto Floating = libc::floatingCallArguments(
+          Function, Image.Arch, Image.abiFormat(), Debug,
+          isMIPS(Image.Arch) ? Image.instructionModeAt(Function.Addr)
+                                   .value_or(InstructionMode::Default)
+                             : InstructionMode::Default))
+    return std::move(*Floating);
+  return std::nullopt;
+}
+
 /// The arguments of the libc imports that \p Funcs and the callees
 /// \p Effects summarizes call: the registers each reads, and with \p
 /// StackArguments the argument positions its stack arguments imply.
@@ -4041,39 +4062,52 @@ ImportPrototypeArguments importPrototypeArguments(
         Routine = DecoratedArguments(Addr);
     } else {
       // Both scalar and floating calls use the same exact native declaration.
-      // Private MIPS targets need the same authenticated contract as exports.
+      // Private targets need the same authenticated contract as exports.
       // A stripped internal target has neither contract.
-      if (!Dbg || !RegisterArguments)
+      if (!Dbg)
         return;
       const bool IsExported = Exported(Addr);
-      if (!IsExported &&
-          (!isMIPS(Img.Arch) || !Dbg->hasAuthenticatedFunctionSignatures()))
+      if (!IsExported && !Dbg->hasAuthenticatedFunctionSignatures())
         return;
       const auto Function = Dbg->resolveFunction(Addr);
       if (!Function)
         return;
-      if (isMIPS(Img.Arch) && Function->Addr == Addr && Convention &&
-          (Convention->ArgumentsFromCallSetup ||
-           Convention->RegisterArgumentsFromCalleeSummary))
-        if (auto Floating = libc::floatingCallArguments(
-                *Function, Img.Arch, Img.abiFormat(), Dbg,
-                Img.instructionModeAt(Addr).value_or(
-                    InstructionMode::Default))) {
-          if (Floating->ReturnKind == NdTypeKind::Float)
-            Result.FloatReturns[Addr] = Floating->ReturnBytes;
-          Result.FloatingArguments.emplace(Addr, std::move(*Floating));
+      if (Function->Addr == Addr && Convention &&
+          Convention->ImportArgumentsFromPrototype) {
+        if (auto Arguments = declaredCallArguments(*Function, Img, Dbg)) {
+          if (auto *Integer =
+                  std::get_if<FixedIntegerCallArguments>(&*Arguments))
+            Result.IntegerArguments.emplace(Addr, std::move(*Integer));
+          else {
+            auto *Floating = std::get_if<FloatingCallArguments>(&*Arguments);
+            if (Floating->ReturnKind == NdTypeKind::Float)
+              Result.FloatReturns[Addr] = Floating->ReturnBytes;
+            Result.FloatingArguments.emplace(Addr, std::move(*Floating));
+          }
+          PrototypeOwnsArguments = true;
+        }
+        if (PrototypeOwnsArguments) {
           Result.PrototypeDeclared.insert(Addr);
           if (Function->PrototypeLibrary == UserPrototypeLibrary)
             Result.UserDeclared.insert(Addr);
-          return;
+          if (RegisterArguments && Img.Arch != Arch::X64)
+            return;
+          // x64 forwarders read the declared registers too. i386 also needs
+          // its physical stack-slot count and stdcall cleanup.
+          Routine = SignatureArguments(*Function);
+          Joins = RegisterArguments && Effects.count(Addr) != 0;
         }
-      if (!IsExported || Function->PrototypeLibrary.empty())
-        return;
-      Routine = SignatureArguments(*Function);
-      if (!Routine)
-        return;
-      Joins = Effects.count(Addr) != 0;
-      PrototypeOwnsArguments = true;
+      }
+      if (!PrototypeOwnsArguments) {
+        if (!RegisterArguments || !IsExported ||
+            Function->PrototypeLibrary.empty())
+          return;
+        Routine = SignatureArguments(*Function);
+        if (!Routine)
+          return;
+        Joins = Effects.count(Addr) != 0;
+        PrototypeOwnsArguments = true;
+      }
     }
     if (Routine && !Routine->Floats.empty() && !SlotVectors &&
         (!VectorArguments ||
@@ -4211,9 +4245,8 @@ std::map<va_t, va_t> callArgumentSourcesOf(
   return Sources;
 }
 
-/// The argument counts of every prototyped import of \p Img, as \p Kept
-/// holds them where they were read from the image as it is with \p Dbg; read
-/// now, and kept there, otherwise (PipelineAnalysisCache::ImportCounts).
+/// Import counts and native call declarations of \p Img, reused from \p Kept
+/// when its image and debug inputs match (PipelineAnalysisCache::ImportCounts).
 std::shared_ptr<const ImageImportCounts> imageImportArguments(
     const BinaryImage &Img, const DebugContext *Dbg,
     const std::map<va_t, PointerVariableCallee> &PointerCallees,
@@ -4237,11 +4270,49 @@ std::shared_ptr<const ImageImportCounts> imageImportArguments(
         /*RegisterArguments=*/!Convention ||
             !Convention->RegparmOnlyForInternalCalls,
         &PointerCallees, /*ExportStarts=*/nullptr, &Addresses);
+    // Omitted bodies need the same private native declarations as selected
+    // bodies. Resolve this image inventory once, in parallel, rather than
+    // scanning it or rebuilding type graphs for each selected function.
+    if (Dbg && Dbg->hasAuthenticatedFunctionSignatures()) {
+      std::vector<va_t> NativeEntries;
+      for (const Symbol &Symbol : Img.Symbols)
+        if (Symbol.IsFunc && !Symbol.IsBoundaryGuess &&
+            !Prototyped.IntegerArguments.count(Symbol.Addr) &&
+            !Prototyped.FloatingArguments.count(Symbol.Addr))
+          NativeEntries.push_back(Symbol.Addr);
+      for (const auto &[Slot, Callee] : PointerCallees)
+        if (Callee.ImportName.empty())
+          NativeEntries.push_back(Callee.LocalEntry);
+      std::sort(NativeEntries.begin(), NativeEntries.end());
+      NativeEntries.erase(
+          std::unique(NativeEntries.begin(), NativeEntries.end()),
+          NativeEntries.end());
+      std::vector<std::optional<DeclaredCallArguments>> NativeArguments(
+          NativeEntries.size());
+      parallelForEach(NativeEntries.size(), [&](auto Claim, size_t Total) {
+        for (size_t I; (I = Claim()) < Total;)
+          if (const auto Function = Dbg->resolveFunction(NativeEntries[I]);
+              Function && Function->Addr == NativeEntries[I])
+            NativeArguments[I] = declaredCallArguments(*Function, Img, Dbg);
+      });
+      for (size_t I = 0; I < NativeEntries.size(); ++I)
+        if (auto &Arguments = NativeArguments[I]) {
+          if (auto *Integer =
+                  std::get_if<FixedIntegerCallArguments>(&*Arguments))
+            Prototyped.IntegerArguments.try_emplace(NativeEntries[I],
+                                                    std::move(*Integer));
+          else
+            Prototyped.FloatingArguments.try_emplace(
+                NativeEntries[I],
+                std::move(std::get<FloatingCallArguments>(*Arguments)));
+        }
+    }
     Everywhere = std::make_shared<const ImageImportCounts>(ImageImportCounts{
         &Img, Dbg, Img.Imports.data(), Img.Imports.size(),
         Img.Relocations.data(), Img.Relocations.size(), Img.Exports.data(),
-        Img.Exports.size(), std::move(Prototyped.Counts),
-        std::move(Prototyped.StackArgs), std::move(Prototyped.StackSlots),
+        Img.Exports.size(), Img.Symbols.data(), Img.Symbols.size(),
+        std::move(Prototyped.Counts), std::move(Prototyped.StackArgs),
+        std::move(Prototyped.StackSlots),
         std::move(Prototyped.FloatingArguments),
         std::move(Prototyped.IntegerArguments),
         std::move(Prototyped.VariadicArguments)});
@@ -4265,6 +4336,12 @@ void setOmittedImportArguments(
   Result.OmittedCalleeVariadicArguments =
       std::shared_ptr<const std::map<va_t, std::vector<uint16_t>>>(
           Arguments, &Arguments->VariadicArguments);
+  Result.OmittedCalleeIntegerArguments =
+      std::shared_ptr<const std::map<va_t, FixedIntegerCallArguments>>(
+          Arguments, &Arguments->IntegerArguments);
+  Result.OmittedCalleeFloatingArguments =
+      std::shared_ptr<const std::map<va_t, FloatingCallArguments>>(
+          Arguments, &Arguments->FloatingArguments);
   if (Convention->RegparmOnlyForInternalCalls) {
     Result.OmittedCalleeStackArgs = std::shared_ptr<const std::map<va_t, int>>(
         Arguments, &Arguments->StackArgs);
@@ -4274,12 +4351,6 @@ void setOmittedImportArguments(
     Result.OmittedCalleeArgumentCounts =
         std::shared_ptr<const std::map<va_t, int>>(Arguments,
                                                    &Arguments->Counts);
-    Result.OmittedCalleeIntegerArguments =
-        std::shared_ptr<const std::map<va_t, FixedIntegerCallArguments>>(
-            Arguments, &Arguments->IntegerArguments);
-    Result.OmittedCalleeFloatingArguments =
-        std::shared_ptr<const std::map<va_t, FloatingCallArguments>>(
-            Arguments, &Arguments->FloatingArguments);
   }
 }
 

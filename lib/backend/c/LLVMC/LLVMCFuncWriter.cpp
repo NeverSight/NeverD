@@ -11486,9 +11486,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       PartBase = Block.Body.size();
       Block.Body += PrintApart([&] {
         if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
-          writeCallLike(*Invoke,
-                        Invoke->getType()->isVoidTy() ? "" : getName(Invoke),
-                        Indent);
+          writeInvokedCall(*Invoke, Indent);
           if (!AfterCxxThrow)
             Edge(&BB, Invoke->getNormalDest(), Indent);
         } else if (const auto *Branch =
@@ -11591,10 +11589,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                 const auto *Term = Body->getTerminator();
                 if (const auto *Invoke =
                         llvm::dyn_cast<llvm::InvokeInst>(Term)) {
-                  writeCallLike(*const_cast<llvm::InvokeInst *>(Invoke),
-                                Invoke->getType()->isVoidTy() ? ""
-                                                              : getName(Invoke),
-                                Indent + 2);
+                  writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
+                                   Indent + 2);
                   if (!AfterCxxThrow)
                     CleanupEdge(Body, Invoke->getNormalDest(), Indent + 2);
                 } else if (const auto *Branch =
@@ -11645,10 +11641,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                 const llvm::BasicBlock *Next = nullptr;
                 if (const auto *Invoke =
                         llvm::dyn_cast<llvm::InvokeInst>(CleanupTerm)) {
-                  writeCallLike(*const_cast<llvm::InvokeInst *>(Invoke),
-                                Invoke->getType()->isVoidTy() ? ""
-                                                              : getName(Invoke),
-                                Indent + 2);
+                  writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
+                                   Indent + 2);
                   Next = Invoke->getNormalDest();
                 } else if (const auto *Branch =
                                llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
