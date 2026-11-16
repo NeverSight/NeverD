@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Private access progress shared by frame returns and VM86 far branches.
+/// Private access progress for returns, far branches and segment loads.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_TRANSLATE_X86_X86LEGACYTRANSFERJOURNAL_H
@@ -21,7 +21,7 @@
 
 namespace neverd::translate::detail {
 
-enum class X86LegacyTransferKind : uint8_t { Far, Return };
+enum class X86LegacyTransferKind : uint8_t { Far, Return, Segment };
 
 /// Each attempt works on a private copy. Only a backing stop publishes its
 /// immutable progress; guest faults, completion and owner refusals retire it.

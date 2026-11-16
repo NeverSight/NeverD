@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Ambiente di ricerca</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Anteprima del file di progetto</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Conversazione del progetto  /  Oggetti di analisi: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Organizza gli oggetti, collega le piste, conserva le evidenze</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Obiettivo</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Imposta un obiettivo persistente…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>Invio per inviare · Shift+Invio per andare a capo</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>Annulla</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>Ripeti</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>Taglia</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Copia</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>Incolla</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>Seleziona tutto</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Revisione dell’analisi %3 · %4</translation>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Ambiente di ricerca</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Impostazioni…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Chat laterale · Richiesta di approvazione in sospeso</translation>
     </message>
@@ -598,10 +597,6 @@ Revisione dell’analisi %3 · %4</translation>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Lettura delle impronte dei file…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Ambiente di ricerca locale</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Revisione dell’analisi %3 · %4</translation>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Obiettivo</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Imposta un obiettivo persistente…</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>Rimuovi progetto…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>Riprova ad aprire</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>Rimuovere %1?</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>Il progetto viene solo tolto dall’elenco. Sul disco non viene eliminato nulla: cartella, conversazione e memoria restano dove sono, e “Apri progetto” lo riporta.</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>Rimuovi progetto</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>Elimina anche i dati dell’Agent di questo progetto (la cartella .nd-agent)</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>Il progetto viene tolto dall’elenco e la conversazione, la memoria e le evidenze vengono eliminate con la cartella .nd-agent. L’operazione non può essere annullata. Gli altri file della cartella vengono conservati.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>Rimuovi ed elimina</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Qui compaiono note, script e rapporti.</translation>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>Una chiave API viene inviata solo tramite HTTPS, o tramite HTTP verso questo computer. Usa un indirizzo HTTPS per un server remoto.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>Arresta l’analisi di questo progetto prima di rimuoverlo.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>Il progetto è stato tolto dall’elenco, ma non è stato possibile eliminarne i dati: %1</translation>
     </message>
 </context>
 <context>

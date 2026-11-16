@@ -11,6 +11,7 @@ ColumnLayout {
     spacing: 12
 
     Label {
+        textFormat: Text.PlainText
         Layout.fillWidth: true
         text: view.backend.memoryStatus || qsTr("After a task ends, memory is organized while idle and recalled for related questions later.")
         color: Theme.secondary
@@ -19,6 +20,7 @@ ColumnLayout {
     RowLayout {
         Layout.fillWidth: true
         Label {
+            textFormat: Text.PlainText
             text: (view.backend.useMemory ? qsTr("Recall on") : qsTr("Recall off")) + " · " +
                 (view.backend.generateMemory ? qsTr("Auto-organize on") : qsTr("Auto-organize off"))
             color: Theme.secondary
@@ -39,6 +41,7 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 8
         Label {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: (entry.record.state === "needs_review" ? qsTr("%1 · Conflict needs confirmation") :
                  entry.record.state === "superseded" ? qsTr("%1 · Superseded") :
@@ -57,6 +60,7 @@ ColumnLayout {
         RowLayout {
             Layout.fillWidth: true
             Label {
+                textFormat: Text.PlainText
                 text: entry.record.automatic ?
                     ({preference: qsTr("User preference"), procedure: qsTr("Research method"), finding: qsTr("Past finding · Needs verification"), hypothesis: qsTr("Hypothesis")}[entry.record.category] || qsTr("Extracted automatically")) : qsTr("Added manually")
                 color: Theme.secondary; Layout.fillWidth: true
@@ -81,6 +85,7 @@ ColumnLayout {
             Layout.fillWidth: true
             spacing: 8
             Label {
+                textFormat: Text.PlainText
                 text: entry.record.source ? qsTr("Original quote · %1").arg(entry.record.source.createdAt) : ""
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
@@ -92,6 +97,7 @@ ColumnLayout {
                 color: Theme.secondary
             }
             Label {
+                textFormat: Text.PlainText
                 text: entry.record.source ? qsTr("Source task: %1").arg(entry.record.source.runId) : ""
                 color: Theme.secondary; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true
             }
@@ -118,10 +124,11 @@ ColumnLayout {
             spacing: 14
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: qsTr("Project memory"); color: Theme.secondary; Layout.fillWidth: true }
+                Label { textFormat: Text.PlainText; text: qsTr("Project memory"); color: Theme.secondary; Layout.fillWidth: true }
                 ActionButton { glyph: "plus"; hint: qsTr("Add project memory…"); onClicked: view.addRequested("") }
             }
             Label {
+                textFormat: Text.PlainText
                 visible: view.backend.projectMemory.length === 0
                 text: qsTr("Project preferences, research methods and leads across objects are kept here.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
@@ -131,11 +138,13 @@ ColumnLayout {
                 delegate: Entry { required property var modelData; record: modelData; scopeId: "" }
             }
             Label {
+                textFormat: Text.PlainText
                 visible: !!view.backend.selectedObjectId
                 text: qsTr("%1 · Object memory").arg(view.backend.selectedObject.name || "")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
             Label {
+                textFormat: Text.PlainText
                 visible: !!view.backend.selectedObjectId && view.backend.memory.length === 0
                 text: qsTr("No object memory yet. Extracted findings are always tied to this file's SHA-256.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
@@ -145,6 +154,7 @@ ColumnLayout {
                 delegate: Entry { required property var modelData; record: modelData; scopeId: view.backend.selectedObjectId }
             }
             Label {
+                textFormat: Text.PlainText
                 text: view.backend.sharing ? qsTr("From other projects · Read-only") : qsTr("Object memory sharing across projects is off.")
                 color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true
             }
@@ -153,7 +163,7 @@ ColumnLayout {
                 delegate: ColumnLayout {
                     required property var modelData
                     Layout.fillWidth: true
-                    Label { text: modelData.sourceProject; color: Theme.secondary }
+                    Label { textFormat: Text.PlainText; text: modelData.sourceProject; color: Theme.secondary }
                     TextEdit {
                         Layout.fillWidth: true
                         text: modelData.text; textFormat: TextEdit.PlainText

@@ -1,22 +1,6 @@
 name: NPH process plugins
 
 on:
-  pull_request:
-    paths:
-      - 'include/neverd/plugin/**'
-      - 'include/neverd/tools/**'
-      - 'lib/plugin/**'
-      - 'lib/tools/**'
-      - 'tools/neverd-plugin-host/**'
-      - 'pluginsdk/gui/**'
-      - 'pluginsdk/common/**'
-      - 'unittests/plugin/**'
-      # Limits compiled into the standalone host through sdk/Limits.h and the
-      # worker client.
-      - 'include/neverd/*/Limits.h'
-      - 'tools/common/transport/ResourceLimits.h'
-      - 'cmake/NeverDJson.cmake'
-      - '.github/workflows/plugin-host.yml'
   workflow_dispatch:
 
 permissions:

@@ -25,6 +25,17 @@ llvm::Error admitLegacyExecution(const X86LegacyExecutionState &State,
                                  const X86LegacyExecutionOptions &Options,
                                  bool Non64Mode = false);
 
+struct X86LegacySegmentInstruction;
+
+/// The instruction boundary has authenticated the original fetch and bindings.
+/// Stage coupled destinations in Next while retaining completed RAM accesses
+/// with State across backing stops, using the shared segment executor.
+llvm::Expected<X86LegacySegmentExecutionResult> executeLegacySegmentTransfer(
+    X86LegacyExecutionState &State, X86LegacySegmentState &Next,
+    X86PagedMemory &Memory, const X86LegacySegmentInstruction &Form,
+    llvm::ArrayRef<uint8_t> Instruction,
+    const X86LegacyExecutionOptions &Options);
+
 /// Authenticated return, with staged register/cache state and retained RAM
 /// effects and a private transfer journal. The caller publishes retained
 /// progress and NMI unblocking even when the staged register image is rejected.

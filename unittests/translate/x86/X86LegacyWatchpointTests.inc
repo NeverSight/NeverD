@@ -300,3 +300,31 @@ TEST_F(X86LegacyWatchpointTest, ZeroEventWorkRefusesBeforeFetch) {
   EXPECT_EQ(M->physicalMemory().snapshotMemoryRegions().front().Bytes,
             OriginalRAM.front().Bytes);
 }
+
+TEST_F(X86LegacyWatchpointTest, SegmentWriteReceiptSurvivesImmediateDataTrap) {
+  for (bool Backing : {false, true}) {
+    SetUp();
+    if (Backing)
+      put(0x11018, 0x40007, GuestScalarWidth::I32);
+    const auto R = run({0x8e, 0x27}); // MOV FS,[EDI], followed by #DB.
+    EXPECT_TRUE(R.InstructionCompleted);
+    ASSERT_TRUE(R.SegmentWritten);
+    EXPECT_EQ(R.SegmentWritten->Register, X86SegmentRegister::FS);
+    EXPECT_FALSE(R.SegmentWritten->NullBase);
+    EXPECT_EQ(S.Core.Segments[4].Selector, 35);
+    if (!Backing) {
+      EXPECT_EQ(R.Status, X86LegacyExecutionStatus::EventDelivered);
+      EXPECT_EQ(R.DeliveredVector, 1);
+      continue;
+    }
+    ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+    ASSERT_TRUE(S.PendingEvent);
+    put(0x11018, 0x6007, GuestScalarWidth::I32);
+    auto Got = resumeX86LegacyEvent(S, *M, O);
+    ASSERT_TRUE(bool(Got)) << llvm::toString(Got.takeError());
+    EXPECT_EQ(Got->DeliveredVector, 1);
+    EXPECT_FALSE(Got->SegmentWritten);
+    EXPECT_FALSE(Got->InstructionCompleted);
+    EXPECT_FALSE(S.PendingEvent);
+  }
+}

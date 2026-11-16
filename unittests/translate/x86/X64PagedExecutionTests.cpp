@@ -973,6 +973,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 }
 #endif
 #include "X64PagedDebugTests.inc"
+#include "X64PagedDescriptorCanonicalityTests.inc"
 #include "X64PagedExecutionBreakpointTests.inc"
 #include "X64PagedFarPointerTests.inc"
 #include "X64PagedFarReturnTests.inc"
@@ -984,6 +985,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedReturnContinuationTests.inc"
 #include "X64PagedReturnTests.inc"
 #include "X64PagedScheduleTests.inc"
+#include "X64PagedSegmentContinuationTests.inc"
 #include "X64PagedSegmentMoveBoundaryTests.inc"
 #include "X64PagedSegmentMoveTests.inc"
 #include "X64PagedSegmentPushTests.inc"
@@ -994,5 +996,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedDebugFunctionTests.inc"
 #include "X86ModeExecutionTests.inc"
 #include "X86ModeInterruptTests.inc"
+#include "X86ModeSegmentTests.inc"
+
+// Native comparisons extend the selector fixture above.
+#include "X86ModeSegmentNativeTests.inc"
 
 } // namespace

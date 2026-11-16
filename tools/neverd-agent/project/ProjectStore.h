@@ -40,6 +40,9 @@ struct FingerprintResult {
 class ProjectStore {
 public:
   static QString stateDirectory(const Project &project);
+  /// Delete the state kept in \p directory, and nothing else there. False
+  /// when something of it remains.
+  static bool deleteState(const QString &directory);
   static QString sessionDirectory(const Project &project,
                                   const QString &sessionId);
   static QString objectDirectory(const Project &project,

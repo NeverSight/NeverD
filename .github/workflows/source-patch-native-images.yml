@@ -4,17 +4,6 @@ name: Source patch process image qualification
 # The ordinary source-patch-windows workflow also rebuilds the engine.
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/native-source-patching]
-    paths:
-      - '.github/workflows/source-patch-native-images.yml'
-      - 'scripts/check_source_patch_snapshot_runtime.py'
-      - 'scripts/check_source_patch_additional_runtime.py'
-      - 'scripts/prepare_source_patch_additional_fixtures.py'
-      - 'scripts/tests/test_check_source_patch_snapshot_runtime.py'
-      - 'scripts/tests/test_check_source_patch_additional_runtime.py'
-      - 'unittests/Inputs/source-patch/native-processes/**'
-      - 'unittests/Inputs/source-patch/additional-processes/**'
 
 permissions:
   contents: read

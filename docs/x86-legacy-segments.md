@@ -92,6 +92,13 @@ source registers. It refuses malformed forms, real/IA-32e state, and missing
 or invalid profiles before any RAM access. Explicit VM86 state uses the same
 operand grammar and the paragraph-cache loading rules below.
 
+The [full-width mode owner](x86-mode-execution.md#selector-loads-and-full-caches)
+uses an internal bridge to this same executor for compatibility16/32. It binds
+complete table addresses, null FS/GS base actions and descriptor-tail fault
+policy, and retains accepted accesses in the shared transfer journal. The
+standalone low-width API keeps its existing protected/VM86 admission. This
+adds no NeverC 32-bit source target.
+
 `ir/X86/X86SegmentDescriptorRules` is the shared owner of data/stack type,
 privilege, present checks and descriptor field extraction. The existing x64
 continuation templates emit these rules as IR; the legacy executor evaluates

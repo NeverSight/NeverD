@@ -36,15 +36,23 @@
 
 namespace neverd::analysis {
 namespace detail {
-struct X64PagedReturnContinuation {
+struct X64PagedTransitionProgress {
   X64ContinuationStateV6 State;
   translate::X86PagingState Controls;
   translate::X86PagingFeatures Features;
   llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses;
-  uint16_t FieldBytes = 0, Discard = 0;
   X64PagedAlignmentPriority AlignmentPriority;
-  bool Interrupt = false, TruncateCompatibilityIP = false;
   bool AttemptConsumed = false;
+};
+struct X64PagedReturnContinuation : X64PagedTransitionProgress {
+  uint16_t FieldBytes = 0, Discard = 0;
+  bool Interrupt = false, TruncateCompatibilityIP = false;
+};
+struct X64PagedSegmentContinuation : X64PagedTransitionProgress {
+  llvm::SmallVector<uint8_t, 15> Bytes;
+  std::optional<X64NullSegmentBasePolicy> NullBasePolicy;
+  X86DescriptorCanonicalityProfile Canonicality;
+  bool FarPointer = false;
 };
 } // namespace detail
 namespace {
@@ -577,6 +585,31 @@ resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
 }
 
 namespace {
+void retainProgress(detail::X64PagedTransitionProgress &Pending,
+                    const X64ContinuationStateV6 &State,
+                    const X86PagedMemory &Memory, TransitionWriter &Writer,
+                    bool AttemptConsumed) {
+  Pending.State = State;
+  Pending.Controls = Memory.controls();
+  Pending.Features = Memory.features();
+  Pending.CompletedAccesses = std::move(Writer.CompletedAccesses);
+  Pending.AlignmentPriority = *Writer.AlignmentPriority;
+  Pending.AttemptConsumed = AttemptConsumed;
+}
+
+llvm::Error
+validateProgress(const X64ContinuationStateV6 &State,
+                 const X86PagedMemory &Memory,
+                 const detail::X64PagedTransitionProgress *Pending) {
+  if (!Pending || State != Pending->State ||
+      Memory.controls() != Pending->Controls ||
+      Memory.features() != Pending->Features)
+    return llvm::createStringError(
+        llvm::errc::invalid_argument,
+        "paged transition resume changed CPU, paging controls or features");
+  return llvm::Error::success();
+}
+
 llvm::Expected<X64PagedReturnResult>
 returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
             uint16_t FieldBytes, uint16_t Discard, bool Interrupt,
@@ -614,16 +647,12 @@ returnFrame(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
       (Result.Completed || bool(Result.Exception) || W.InstructionEffects);
   if (Result.BackingFault) {
     auto Pending = std::make_shared<detail::X64PagedReturnContinuation>();
-    Pending->State = State;
-    Pending->Controls = Memory.controls();
-    Pending->Features = Memory.features();
-    Pending->CompletedAccesses = std::move(W.CompletedAccesses);
+    retainProgress(*Pending, State, Memory, W,
+                   Consumed || Result.InstructionAttempted);
     Pending->FieldBytes = FieldBytes;
     Pending->Discard = Discard;
-    Pending->AlignmentPriority = AlignmentPriority;
     Pending->Interrupt = Interrupt;
     Pending->TruncateCompatibilityIP = TruncateCompatibilityIP;
-    Pending->AttemptConsumed = Consumed || Result.InstructionAttempted;
     Result.Continuation = std::move(Pending);
   }
   if (Result.Completed) {
@@ -641,13 +670,7 @@ llvm::Error
 validateX64PagedReturnResume(const X64ContinuationStateV6 &State,
                              const X86PagedMemory &Memory,
                              const X64PagedReturnContinuation &Continuation) {
-  if (!Continuation || State != Continuation->State ||
-      Memory.controls() != Continuation->Controls ||
-      Memory.features() != Continuation->Features)
-    return llvm::createStringError(
-        llvm::errc::invalid_argument,
-        "paged return resume changed CPU, paging controls or features");
-  return llvm::Error::success();
+  return validateProgress(State, Memory, Continuation.get());
 }
 
 llvm::Expected<X64PagedReturnResult>
@@ -682,69 +705,128 @@ returnX64PagedFar(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
       Profile == X64PagedFarReturnProfile::SelectorFirstTruncatedIP);
 }
 
-llvm::Expected<X64PagedInstructionTransitionResult>
+namespace {
+llvm::Expected<X64PagedSegmentResult> segmentTransfer(
+    X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+    llvm::ArrayRef<uint8_t> Instruction,
+    X64PagedAlignmentPriority AlignmentPriority,
+    std::optional<X64NullSegmentBasePolicy> NullBasePolicy, bool FarPointer,
+    X86DescriptorCanonicalityProfile Canonicality,
+    const detail::X64PagedSegmentContinuation *Continuation = nullptr) {
+  auto Next = State;
+  const X64ContinuationEventV1 Event{};
+  TransitionWriter W(Next, Memory, Event, 0);
+  W.AlignmentPriority = AlignmentPriority;
+  W.CaptureAccesses = true;
+  W.Resuming = Continuation != nullptr;
+  if (Continuation)
+    W.CompletedAccesses = Continuation->CompletedAccesses;
+  const auto AddressBits = Memory.controls().CR4 & 0x1000 ? 57 : 48;
+  const auto NextPC = State.Core.Core.Core.Core.PC + Instruction.size();
+  if (FarPointer) {
+    const auto Pointer = detail::x64FarPointerLoad(Instruction);
+    if (!Pointer)
+      return llvm::createStringError(llvm::errc::invalid_argument,
+                                     "invalid paged far-pointer encoding");
+    detail::X64ContinuationEvents<TransitionWriter>(W, AddressBits,
+                                                    Canonicality)
+        .farPointerLoad(*Pointer, NextPC, NullBasePolicy);
+  } else {
+    const auto Move = detail::x64SegmentMove(Instruction);
+    if (!Move)
+      return llvm::createStringError(
+          llvm::errc::invalid_argument,
+          "invalid paged selector transfer encoding");
+    detail::X64ContinuationSegmentMoves<TransitionWriter>(W, AddressBits,
+                                                          Canonicality)
+        .execute(*Move, NextPC, NullBasePolicy);
+  }
+  if (W.Error)
+    return std::move(*W.Error);
+  X64PagedSegmentResult Result;
+  Result.Exception = W.Fault;
+  Result.BackingFault = W.Result.BackingFault;
+  Result.Completed = W.Exit == X64ContinuationExitV1::Continue;
+  const bool Consumed = Continuation && Continuation->AttemptConsumed;
+  Result.InstructionAttempted =
+      !Consumed &&
+      (Result.Completed || bool(Result.Exception) || W.InstructionEffects);
+  if (Result.BackingFault) {
+    auto Pending = std::make_shared<detail::X64PagedSegmentContinuation>();
+    retainProgress(*Pending, State, Memory, W,
+                   Consumed || Result.InstructionAttempted);
+    Pending->Bytes.assign(Instruction.begin(), Instruction.end());
+    Pending->NullBasePolicy = NullBasePolicy;
+    Pending->Canonicality = Canonicality;
+    Pending->FarPointer = FarPointer;
+    Result.Continuation = std::move(Pending);
+  }
+  if (Result.Completed)
+    State = Next;
+  return Result;
+}
+} // namespace
+
+llvm::Expected<X64PagedSegmentResult>
 loadX64PagedFarPointer(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                        llvm::ArrayRef<uint8_t> Instruction,
                        X64PagedAlignmentPriority AlignmentPriority,
                        X64PagedFarPointerProfile Profile,
                        std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
-  const auto Pointer = detail::x64FarPointerLoad(Instruction);
-  if (!Pointer)
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (Profile) {
+  case X64PagedFarPointerProfile::OffsetFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedFarPointerProfile::OffsetFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
     return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "invalid paged far-pointer encoding");
-  assert(Profile == X64PagedFarPointerProfile::OffsetFirst);
-  auto Next = State;
-  const X64ContinuationEventV1 Event{};
-  TransitionWriter W(Next, Memory, Event, 0);
-  W.AlignmentPriority = AlignmentPriority;
-  detail::X64ContinuationEvents<TransitionWriter> Transfer(
-      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
-  Transfer.farPointerLoad(*Pointer,
-                          State.Core.Core.Core.Core.PC + Instruction.size(),
-                          NullBasePolicy);
-  if (W.Error)
-    return std::move(*W.Error);
-  X64PagedInstructionTransitionResult Result;
-  Result.Exception = W.Fault;
-  Result.BackingFault = W.Result.BackingFault;
-  Result.Completed = W.Exit == X64ContinuationExitV1::Continue;
-  Result.InstructionAttempted =
-      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
-  if (Result.Completed)
-    State = Next;
-  return Result;
+                                   "unknown paged far-pointer profile");
+  }
+  return segmentTransfer(State, Memory, Instruction, AlignmentPriority,
+                         NullBasePolicy, true, Canonicality);
 }
 
-llvm::Expected<X64PagedInstructionTransitionResult>
+llvm::Expected<X64PagedSegmentResult>
 moveX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
                     llvm::ArrayRef<uint8_t> Instruction,
                     X64PagedAlignmentPriority AlignmentPriority,
                     X64PagedSegmentMoveProfile Profile,
                     std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
-  const auto Move = detail::x64SegmentMove(Instruction);
-  if (!Move)
+  X86DescriptorCanonicalityProfile Canonicality;
+  switch (Profile) {
+  case X64PagedSegmentMoveProfile::SelectorFirst:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForRange;
+    break;
+  case X64PagedSegmentMoveProfile::SelectorFirstTailGPZero:
+    Canonicality = X86DescriptorCanonicalityProfile::SelectorForStart;
+    break;
+  default:
     return llvm::createStringError(llvm::errc::invalid_argument,
-                                   "invalid paged selector transfer encoding");
-  assert(Profile == X64PagedSegmentMoveProfile::SelectorFirst);
-  auto Next = State;
-  const X64ContinuationEventV1 Event{};
-  TransitionWriter W(Next, Memory, Event, 0);
-  W.AlignmentPriority = AlignmentPriority;
-  detail::X64ContinuationSegmentMoves<TransitionWriter> Transfer(
-      W, Memory.controls().CR4 & 0x1000 ? 57 : 48);
-  Transfer.execute(*Move, State.Core.Core.Core.Core.PC + Instruction.size(),
-                   NullBasePolicy);
-  if (W.Error)
-    return std::move(*W.Error);
-  X64PagedInstructionTransitionResult Result;
-  Result.Exception = W.Fault;
-  Result.BackingFault = W.Result.BackingFault;
-  Result.Completed = W.Exit == X64ContinuationExitV1::Continue;
-  Result.InstructionAttempted =
-      Result.Completed || bool(Result.Exception) || W.InstructionEffects;
-  if (Result.Completed)
-    State = Next;
-  return Result;
+                                   "unknown paged selector-transfer profile");
+  }
+  return segmentTransfer(State, Memory, Instruction, AlignmentPriority,
+                         NullBasePolicy, false, Canonicality);
+}
+
+llvm::Error
+validateX64PagedSegmentResume(const X64ContinuationStateV6 &State,
+                              const X86PagedMemory &Memory,
+                              const X64PagedSegmentContinuation &Continuation) {
+  return validateProgress(State, Memory, Continuation.get());
+}
+
+llvm::Expected<X64PagedSegmentResult>
+resumeX64PagedSegment(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
+                      const X64PagedSegmentContinuation &Continuation) {
+  if (auto Error = validateX64PagedSegmentResume(State, Memory, Continuation))
+    return std::move(Error);
+  return segmentTransfer(State, Memory, Continuation->Bytes,
+                         Continuation->AlignmentPriority,
+                         Continuation->NullBasePolicy, Continuation->FarPointer,
+                         Continuation->Canonicality, Continuation.get());
 }
 
 } // namespace neverd::analysis

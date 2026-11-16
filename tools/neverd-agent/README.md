@@ -71,24 +71,38 @@ Catalogs for the workbench's eleven languages are in `i18n/`; the CLI writes its
 progress and errors in the same language. Model instructions stay English and
 ask for replies in the language of the user's latest message.
 
-The Agent shell shares the workbench's frame metrics, window controls and look.
-Every color in `ui/Theme.qml` is a role of the workbench's `ChromeColors.def`
-(Visual Studio Code Dark+, Light+ and the high contrast themes), read through
-`AgentAppearance::chromeColor`:
-the title band, panes a step apart parted by hairlines, the selection blue
-under white text, fields, check boxes, menus and one main button in the accent
-per window. Corners follow the workbench (fields and push buttons 2, tool
-buttons and menu highlights 3, cards and sheets 6, panes none), and the window
-frame is the workbench's square edge and fading shadow. There are no gradients,
-blur or translucent panels.
-The product logo appears only at the top-left of the caption; conversation
-messages and empty states use text hierarchy without repeated brand avatars.
-Project/object navigation and the initially hidden right pane keep their existing
-behavior. Caption-level controls and keyboard focus remain visible and reachable.
-Action glyphs share an 18-pixel optical size and 34-pixel hit target, including
-the send/stop and disclosure controls. Spacing follows 8/16/24-pixel steps.
+The Agent keeps the workbench's colors, window frame and window controls, and
+takes its shapes from a conversation application. Every color in `ui/Theme.qml`
+is a role of the workbench's `ChromeColors.def` (Visual Studio Code Dark+,
+Light+ and the high contrast themes), read through
+`AgentAppearance::chromeColor`. There are no color literals, gradients, blur
+or translucent panels.
+
+The window is two columns. The side list takes the window's fill: the
+application's name on the strip that moves the window, the two ways to begin,
+the projects with their analysis objects, and the settings at its foot. The
+conversation takes the fill of views, under a strip with the project's name,
+its commands and the window's controls. The right pane is a card in the
+conversation's ground and starts hidden. Only the high contrast themes, where
+the fills are one, part these with lines and outline the cards.
+
+Rows, buttons, fields and menu items have corners of 8, cards, menus and sheets
+12, the composer and the person's messages 20; the window and its panes have
+none. A row is at least 30 pixels high, action glyphs are 16 pixels, and
+spacing follows a 4-pixel grid. A conversation is read in one column at most
+768 pixels wide: the person's messages in a bubble at the trailing edge, the
+answers plain across the column, and when it was said and what can be done
+with a message only while the pointer or keyboard is on it. The composer is a
+floating surface that grows from two lines to eight. The row that is open and
+a toggle that is on carry a quiet fill, so each window keeps one main button
+in the accent. The product logo appears at the head of the side list and once
+more on the start page.
+
 Text uses the bundled Noto Sans and Noto Sans CJK at the desktop's interface
-size, as the workbench does; secondary text is quieted by color, not size.
+size, with a small scale around it: notes a little under it, titles a step
+above it, and one line at twice its size where a window has nothing else to
+show. What the application reports while it works shows as a note over the
+conversation that leaves again; there is no status bar.
 Markdown receives the actual view font explicitly instead of retaining a
 separate document default. JetBrains Mono is limited to code.
 
@@ -279,6 +293,28 @@ binary/version is refused. A successful rebind preserves the object ID, memory,
 conversations and evidence references, retires cached analysis processes, and
 updates side chats. Rebinding is refused while that project is analyzing or
 applying changes, including if work starts while the file is being hashed.
+
+Right-click a project and choose **Remove project…** to take it off the list.
+By itself, removing forgets the project and deletes nothing: its folder and
+the `.nd-agent` state in it stay where they are, and **Open project…** brings
+the project back with its conversation and memory. A draft that was not saved
+yet is written first. A project that is analyzing or applying changes is not
+removed until it stops.
+
+The sheet that confirms a removal has a check box, never on by itself, that
+also deletes the Agent's records of the project: the `.nd-agent` folder with
+its conversation, memory and evidence. That cannot be undone. Nothing else in
+the project's folder is deleted, and the folder itself stays. Records are
+deleted only under the project's own lock, so a folder another Agent has open
+keeps everything; a link standing in place of `.nd-agent` is not followed; and
+when something of the records remains, the project still leaves the list and
+a message names the folder.
+
+A listed folder that does not open when the application starts (moved,
+deleted, or on a drive that is away) keeps a quieter row in the side list, and
+its tool tip gives the folder and the reason. A click on the row tries it
+again, and its menu removes it from the list. Nothing is written into a folder
+that is gone.
 
 State uses versioned UTF-8 JSON and `QSaveFile` replacement. Malformed state is
 reported without resetting it. A data-directory lock and retained project locks
@@ -699,6 +735,22 @@ loads. Clicked web links open the browser; existing text-file links within the
 current project open in the preview. Code is selectable/wrapped, without syntax
 highlighting in this version.
 
+Everything else the window shows is plain text: a project's name comes from a
+file, a path or a function's name from a binary, a summary from a model, and
+none of it is laid out as markup. Qt Quick would read a label left to its
+default as styled text when the text looks like markup, and fetch the image it
+names; so every `Label` and `Text` states `textFormat: Text.PlainText`
+(`scripts/check_agent_qml_text.py`), an `Image` takes a literal path in the
+application's resources, and the window's QML engine answers any request with
+an error instead of a connection (`platform/OfflineQml.h`). The window reaches
+no machine; model requests are made by `neverd-agent-cli`.
+
+A right click or the menu key in a text input offers Undo, Redo, Cut, Copy,
+Paste and Select all in the Agent's own menu (`ui/EditMenu.qml`). From Qt 6.9
+Qt Quick Controls gives every text input a context menu of its own, in the
+style's look and with Qt's words; each input names the Agent's menu as its
+`ContextMenu.menu` instead, which the same check requires.
+
 The current executable opens the original file in ND GUI; it does not attach
 the Agent's conversation or memory to an existing GUI analysis session. The
 file pane is a manual-refresh UTF-8 preview (up to 256 KiB), not an editor.
@@ -740,6 +792,9 @@ forces pre-turn and in-task compaction, bounded summary requests, failed/empty
 and cancelled summaries, checkpoint resume, whole tool-batch boundaries, and
 provider/cache token accounting. `NeverDAgent.Markdown` exercises real document
 structure, tables, code copying, incomplete fences and literal HTML/image labels.
+`NeverDAgent.Offline` listens on a local port and checks that a label whose
+text names an image there makes a connection under Qt's defaults, none as
+plain text, and none in an engine with the window's network access.
 `NeverDAgentLiveRunner` is an explicit integration-test executable (not installed
 with the product). It reads JSON from stdin so credentials need not be placed in
 command-line arguments or fixture files. It drives the same controller and

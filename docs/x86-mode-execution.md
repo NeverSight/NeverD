@@ -24,10 +24,10 @@ The complete V7 register, segment, descriptor-table, CR2 and SYSENTER banks,
 plus debug state, STI/SS/halt and terminal shutdown state, belong to
 `X86ModeState`. The non-64-bit
 executor receives a temporary low-width view. Explicit write receipts publish
-CR2 and CS/SS changes; unchanged low halves never prove that a full-width write
-did not occur. Full GDTR/LDTR addresses remain available to compatibility far
-transfers and full DR addresses remain available to instruction/event
-comparators. Upper halves cannot alias a low-32-bit watchpoint address.
+CR2, CS/SS and data-segment changes; unchanged low halves never prove that a
+full-width write did not occur. Full GDTR/LDTR addresses remain available to
+compatibility far transfers and selector loads. Full DR addresses remain
+available to instruction/event comparators. Upper halves cannot alias a low-32-bit watchpoint address.
 
 `planX86PagingControlWrite` owns CR0/CR3/CR4 transition checks. Its consumer
 validates the destination domain and performs any legacy PAE PDPTE reload
@@ -42,6 +42,42 @@ read-only. Reserved bits and changing LME while paging is active produce #GP;
 LOCK and privilege checks follow authenticated fetch. Other MSR banks are
 explicit refusals. These checks follow [Intel SDM Volume 3A, sections 2.2.1
 and 5.1.1](https://cdrdv2.intel.com/v1/dl/getContent/671190).
+
+## Selector loads and full caches
+
+MOV in both directions, selector PUSH/POP and all five LxS forms use the existing
+`X86LegacySegmentExecution` owner in protected16/32 and compatibility16/32.
+Operand offsets keep their declared 16/32-bit rules. Descriptor addresses use
+complete GDTR/LDTR bases while LMA is set; legacy tables retain their 32-bit
+wrapping domain. A nonnull load replaces the complete cache and zero-extends
+its descriptor base even when the low half equals the old base. A non-CS
+cache's L/D metadata never changes execution mode.
+
+Bind `Legacy.Segments.NullBasePolicy` before a mixed-mode FS/GS load. A null
+load updates selector/unusable and the declared Clear/Preserve base action;
+Preserve keeps the complete old base for later code64 observation. Other null
+cache fields stay opaque, and KernelGSBase is unaffected. The shared enum is
+`X86NullSegmentBasePolicy`; the existing x64 spelling remains an alias.
+
+Compatibility loads also require `Legacy.Segments.DescriptorCanonicality`
+before authenticated fetch. Both profiles check the complete eight-byte
+extent before any page walk. `SelectorForStart` reports #GP(selector) for a
+noncanonical starting address and #GP(0) for only a noncanonical tail;
+`SelectorForRange` uses #GP(selector) in either case. Original local P/E-core
+streams distinguish these cases, including a missing first-page translation;
+runtime code does not infer the profile from its host. This compatibility
+measurement alone does not select a code64 policy. Code64 MOV/POP/LFS/LGS/LSS
+now have an [independent descriptor qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles);
+return/event tail profiles remain separate work.
+
+The existing transfer journal retains completed pointer fields, selector
+reads and descriptor accessed writes, including aliases with paging A bits
+or original instruction bytes. Empty journals retain a paid attempt.
+Watchpoint causes and MOV/POP SS inhibition survive backing repair. LSS does
+not acquire MOV-SS inhibition. GPR/cache publication waits for the complete
+load, and a guest fault retires that journal before retaining event entry.
+`SegmentWritten` accompanies the completing step even when immediate #DB
+entry suspends; event-only resumes do not repeat it or the completion count.
 
 ## Events and retained progress
 
@@ -108,8 +144,8 @@ wire layouts and host-x64 NeverC targets are unchanged.
 ## Admitted scope and evidence
 
 The non-64-bit boundary deliberately admits the existing ordinary scalar,
-stack, direct far-JMP, control-register and EFER forms whose state ownership is
-complete here. Segment reloads, debug-register instructions, port/string/MPX,
+stack, selector transfer, direct far-JMP, control-register and EFER forms whose
+state ownership is complete here. Debug-register instructions, port/string/MPX,
 legacy returns, task/system selectors, descriptor queries, fast-system entry,
 call gates and VM86 require their separate mode-aware integration. Real/unreal
 mode, software SMM/SGX and unbound asynchronous producers remain open. A
@@ -139,3 +175,60 @@ SDK, with 29 alternate-core replays and five upstream integration checks per
 SDK reported separately; none fails or skips.
 This checkpoint does not declare global x86 completion or authorize the final
 LLVM release. The production r6 pin and LLVM gitlink remain unchanged.
+
+The [selector-transfer evidence](evidence/x86-mode-segments-2026-11-11.json)
+records the full lower paging, paged source, legacy source, instruction boundary
+and SDK qualification. Each SDK passes 1,342 primary cases, with
+2 LA57 hardware skips; 48 mode and 13 control passes on the other core are
+counted separately (1 alternate LA57 skip). Original comparisons cover 144 MOV/LxS
+metadata cases, 32 null-base observations after real far jumps into generated
+code64, and 16 descriptor faults per primary core. Every independent stream
+starts with a fresh VM/vCPU and one initial SREGS write. The complete CPU/RAM
+comparison remains strict; this avoids stale TLBs between reset RAM images.
+
+
+### Integration with current dev (2026-11-16)
+
+The [integration evidence](evidence/x86-mode-segment-integration-2026-11-16.json) records a fresh rebuild at
+`de0eabb090` after merging upstream `eb173c9ec7`. Each SDK passes
+1,058 cases across the full HighIR control-flow, paged-source, legacy-source,
+instruction-boundary and SDK suites, with no skips. These counts are separate
+from the November 11 full paging qualification above.
+
+The replay exposed a shared HighIR address-index regression: two reserved hash
+keys collided with valid synthetic continuation return labels. Restoring the
+original complete address domain fixes the generated validator crash; explicit
+label-retention and branch-result tests cover those addresses. The expanded
+host-C suite also needed its POSIX FMA fixture to link the math library.
+
+Upstream independently advanced the LLVM source gitlink to `09ff60dd1ddb`; this
+merge preserves that change. The development SDK remains the existing intrinsic
+snapshot and the production SDK remains r6. This integration creates no LLVM
+release and does not close the outstanding x86 qualification boundaries.
+
+
+### Retained code64 segment instructions (2026-11-16)
+
+The long-mode branch now retains MOV/PUSH/POP segment and LFS/LGS/LSS across
+physical backing stops, including an unpaid stop before the first completed
+access. Full-mode reconstruction keeps the original instruction and excludes
+new event selection until it completes or faults. Resume preserves aliased
+operands, original bytes and paging effects, and charges the attempt once.
+The [runtime contract](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
+and [evidence](evidence/x86-code64-segment-continuation-2026-11-16.json) record 524 passing cases and 1 LA57
+skip per SDK. This closes code64 segment progress; remaining mode-aware
+owners, return/event descriptor-tail qualification, real/unreal/VM86 composition, software
+SMM/SGX and unbound asynchronous producers remain separate work. NeverC remains
+host x64 and the production LLVM release pin remains r6.
+
+
+### Code64 descriptor fault profiles (2026-11-16)
+
+The long-mode branch accepts the explicit `TailGPZero` variants for selector
+loads, using the same shared descriptor owner as the plain paged context.
+Pending full-mode work retains its original profile even when a new context
+supplies the opposite choice. The [boundary qualification](evidence/x86-code64-descriptor-boundaries-2026-11-16.json)
+records 529 passing tests and 1 LA57 skip per SDK, including sixteen
+full-mode profile comparisons. This does not expand NeverC source targets,
+qualify return/event descriptor-tail choices, or close the remaining mode and
+machine-owner work. The production LLVM release pin remains r6.

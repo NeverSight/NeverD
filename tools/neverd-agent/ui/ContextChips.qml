@@ -25,12 +25,12 @@ Flow {
                     parent: Overlay.overlay
                     anchors.centerIn: parent
                     width: Math.min(600, parent.width - 40); height: Math.min(400, parent.height - 40)
-                    padding: 18; modal: true
+                    padding: Theme.dialogPadding; modal: true
                     Overlay.modal: ModalDim {}
                     background: Surface { glass: true }
                     contentItem: ScrollView {
                         clip: true
-                        TextArea { text: JSON.stringify(modelData, null, 2); readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; color: Theme.text; background: null }
+                        TextArea { id: referenceText; text: JSON.stringify(modelData, null, 2); readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; color: Theme.text; background: null; ContextMenu.menu: EditMenu { editor: referenceText } }
                     }
                 }
             }

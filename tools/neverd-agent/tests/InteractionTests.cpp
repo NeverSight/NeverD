@@ -374,6 +374,51 @@ private slots:
     QCOMPARE(terminal.readAllStandardOutput().trimmed(), "Terminal answer");
   }
 
+  // The list is edited through the same pipe as everything else. A project
+  // that is working stays; once it stops, its side conversation and its
+  // place in the list go together.
+  void removingAProjectGoesThroughTheCli() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    ModelServer server;
+    const auto first = directory.filePath("first");
+    const auto second = directory.filePath("second");
+    QString error;
+    WorkspaceClient workspace(directory.filePath("agent"));
+    QVERIFY2(workspace.initialize({}, error), qPrintable(error));
+    QVERIFY(workspace.createProject("Second", second));
+    const auto secondId = workspace.activeId();
+    QVERIFY(workspace.createProject("First", first));
+    QVERIFY(workspace.createSideChat());
+    QVERIFY(workspace.sideChat());
+    QVERIFY(workspace.updateModelSettings(
+        server.profile().toJson().toVariantMap(), "", false, ""));
+    workspace.setDraft("still working");
+    QVERIFY(workspace.sendRequest(""));
+    QTRY_COMPARE(server.Requests.size(), 1);
+    QSignalSpy errors(&workspace, &WorkspaceClient::operationError);
+    QVERIFY(!workspace.removeProject(first));
+    QTRY_COMPARE(errors.count(), 1);
+    QCOMPARE(workspace.projects().size(), 2);
+    workspace.cancelRun();
+    QTRY_VERIFY(!workspace.running());
+    QVERIFY(workspace.removeProject(first));
+    QCOMPARE(workspace.projects().size(), 1);
+    QCOMPARE(workspace.activeId(), secondId);
+    QVERIFY(!workspace.sideChat());
+    QCOMPARE(workspace.messages().size(), 0);
+    // Its records go with the other one, asked for through the same pipe.
+    QVERIFY(workspace.removeProject(second, true));
+    QVERIFY(workspace.activeId().isEmpty());
+    QCOMPARE(workspace.projects().size(), 0);
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(!QFileInfo::exists(QDir(second).filePath(".nd-agent")));
+    QVERIFY(QFileInfo(QDir(first).filePath(".nd-agent/project.json")).isFile());
+    QVERIFY(workspace.openProject(first));
+    QCOMPARE(workspace.messages().size(), 2);
+    QVERIFY(workspace.sideChat());
+    QVERIFY(workspace.prepareClose());
+  }
   void workerSessionAnswersEachCommandOnce() {
     // A command's callback runs once, and the session takes the next command
     // after it. A moved-from std::function may keep its callable (libc++

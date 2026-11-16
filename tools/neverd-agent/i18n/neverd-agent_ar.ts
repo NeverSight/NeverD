@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>بيئة البحث</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>معاينة ملف المشروع</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>محادثة المشروع  /  كائنات التحليل: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>نظّم الكائنات، واربط الخيوط، واحتفظ بالأدلة</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>الهدف</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>تعيين هدف مستمر…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>اضغط Enter للإرسال · Shift+Enter لسطر جديد</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>تراجع</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>إعادة</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>قص</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>نسخ</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>لصق</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>تحديد الكل</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>بيئة البحث</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>الإعدادات…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>الدردشة الجانبية · طلب موافقة معلّق</translation>
     </message>
@@ -598,10 +597,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>جارٍ قراءة بصمات الملفات…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>بيئة عمل محلية</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>موافق</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>الهدف</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>تعيين هدف مستمر…</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>إزالة المشروع…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>محاولة الفتح مجددًا</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>إزالة %1؟</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>يُزال المشروع من القائمة فقط. لا يُحذف شيء من القرص: يبقى مجلده ومحادثته وذاكرته في مكانها، ويعيده «فتح مشروع».</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>إزالة المشروع</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>حذف سجلات الوكيل لهذا المشروع أيضًا (مجلد ‎.nd-agent)</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>يُزال المشروع من القائمة، ويُحذف مجلد ‎.nd-agent بما فيه من محادثة وذاكرة وأدلة. لا يمكن التراجع عن ذلك. تبقى الملفات الأخرى في المجلد.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>إزالة وحذف</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>لا يُرسَل مفتاح API إلا عبر HTTPS، أو عبر HTTP إلى هذا الكمبيوتر. استخدم عنوان HTTPS للخادم البعيد.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>أوقف تحليل هذا المشروع قبل إزالته.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>أُزيل المشروع من القائمة، لكن تعذّر حذف سجلاته: %1</translation>
     </message>
 </context>
 <context>

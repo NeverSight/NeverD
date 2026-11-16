@@ -45,6 +45,7 @@ public:
   ShutdownStatus prepareShutdown();
   bool prepareClose();
   QVariantList projects() const;
+  QVariantList unavailableProjects() const;
   QVariantMap activeProject() const;
   QString activeId() const { return ActiveId; }
   QString selectedObjectId() const { return SelectedObjectId; }
@@ -100,6 +101,7 @@ public:
 
   bool createProject(const QString &name, const QString &directory);
   bool openProject(const QString &directory);
+  bool removeProject(const QString &directory, bool deleteRecords = false);
   bool selectProject(const QString &id);
   void selectObject(const QString &id);
   void addObject(const QString &path);
@@ -217,6 +219,8 @@ private:
   const AnalysisObject *findObject(const Project &project,
                                    const QString &id) const;
   bool bindProject(Project project, QString &error);
+  void releaseProject(qsizetype index);
+  void leaveActiveProject();
   bool saveSettings(QString &error);
   bool readModelKey(QString &key, QString &error) const;
   bool keyMayTravel(const ModelProfile &candidate, const QString &key,
@@ -254,7 +258,13 @@ private:
   void pauseProjectGoal(const QString &projectId);
   QString DataDirectory;
   QString WorkbenchAttachment;
+  // A listed folder that did not open: its name as far as it is known,
+  // and the reason.
+  struct UnavailableProject {
+    QString Name, Directory, Issue;
+  };
   QList<Project> Projects;
+  QList<UnavailableProject> Unavailable;
   QStringList KnownDirectories;
   std::vector<std::unique_ptr<QLockFile>> ProjectLocks;
   QString ActiveId;

@@ -15,6 +15,7 @@
 #include "platform/AgentAppearance.h"
 #include "platform/AgentWindowFrame.h"
 #include "platform/AppPaths.h"
+#include "platform/OfflineQml.h"
 
 #include <QCommandLineParser>
 #include <QCryptographicHash>
@@ -163,7 +164,10 @@ int main(int argc, char **argv) {
   neverd::agent::AgentWindowFrame frame;
   qmlRegisterType<neverd::agent::MarkdownDocument>("NeverD.Agent", 1, 0,
                                                    "MarkdownDocument");
+  // Declared before the engine, which asks it for a manager while it lives.
+  neverd::agent::OfflineAccessFactory offline;
   QQmlApplicationEngine engine;
+  engine.setNetworkAccessManagerFactory(&offline);
   engine.rootContext()->setContextProperty("controller", &controller);
   engine.rootContext()->setContextProperty("windowFrame", &frame);
   engine.rootContext()->setContextProperty("appearance", &appearance);
@@ -220,8 +224,11 @@ int main(int argc, char **argv) {
     QMetaObject::invokeMethod(window, "showModelSettings");
 
   if (parser.isSet("capture")) {
-    if (!startupError.isEmpty())
+    if (!startupError.isEmpty()) {
+      // A capture has no dialog to say this in.
+      qCritical("%s", qPrintable(startupError));
       return 1;
+    }
     const auto size = parser.value("capture-size").split('x');
     bool widthOK = false, heightOK = false;
     const int width = size.value(0).toInt(&widthOK);

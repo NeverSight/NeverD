@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>연구 작업 공간</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>프로젝트 파일 미리 보기</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>프로젝트 대화  /  분석 대상: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>대상 정리, 단서 연결, 증거 보관</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>목표</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>지속 목표 설정…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>Enter 키로 보내기 · Shift+Enter 키로 줄 바꿈</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>실행 취소</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>다시 실행</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>잘라내기</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>복사</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>붙여넣기</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>모두 선택</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>연구 작업 공간</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>설정…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>사이드 채팅 · 승인 요청 대기 중</translation>
     </message>
@@ -598,10 +597,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>파일 지문을 읽는 중…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>로컬 작업 공간</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>확인</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>목표</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>지속 목표 설정…</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>프로젝트 제거…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>다시 열어 보기</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>%1 프로젝트를 목록에서 제거할까요?</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>프로젝트를 목록에서만 제거합니다. 디스크의 내용은 아무것도 삭제되지 않습니다. 폴더, 대화, 메모리는 그대로 남으며 &apos;프로젝트 열기&apos;로 다시 불러올 수 있습니다.</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>프로젝트 제거</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>이 프로젝트의 Agent 기록(.nd-agent 폴더)도 삭제</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>프로젝트가 목록에서 제거되고 대화, 메모리, 증거가 .nd-agent 폴더와 함께 삭제됩니다. 이 작업은 되돌릴 수 없습니다. 폴더의 다른 파일은 그대로 유지됩니다.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>제거 및 삭제</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API 키는 HTTPS 또는 이 컴퓨터로의 HTTP 연결로만 전송됩니다. 원격 서버에는 HTTPS 주소를 사용하세요.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>프로젝트를 제거하기 전에 이 프로젝트의 분석을 중지하세요.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>프로젝트를 목록에서 제거했지만 기록을 삭제하지 못했습니다: %1</translation>
     </message>
 </context>
 <context>

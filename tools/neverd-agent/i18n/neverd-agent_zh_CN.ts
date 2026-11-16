@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>研究工作区</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>项目文件预览</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>项目对话  /  %1 个分析对象</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>组织对象，连接线索，留下证据</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>目标</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>设置持续目标</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>回车发送 · Shift+回车换行</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>撤销</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>重做</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>剪切</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>粘贴</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>全选</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>研究工作区</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>设置</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>侧边聊天 · 有待审批请求</translation>
     </message>
@@ -598,10 +597,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>正在读取文件指纹…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>本地工作区</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>知道了</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>目标</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>设置持续目标</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>移除项目…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>重新尝试打开</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>移除 %1？</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>只是把项目从列表中移除，不会删除磁盘上的任何内容：项目文件夹、对话和记忆都原样保留，用“打开项目”即可重新加入。</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>移除项目</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>同时删除该项目的 Agent 记录（.nd-agent 文件夹）</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>项目会从列表中移除，它的对话、记忆和证据会随 .nd-agent 文件夹一起删除，且无法恢复。文件夹里的其他文件保留不动。</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>移除并删除</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API Key 只通过 HTTPS 发送，或通过 HTTP 发送到本机。远程服务器请使用 HTTPS 地址。</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>请先停止该项目的分析，再移除项目。</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>项目已从列表中移除，但未能删除它的记录：%1</translation>
     </message>
 </context>
 <context>

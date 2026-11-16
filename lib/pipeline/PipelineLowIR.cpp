@@ -4037,9 +4037,14 @@ ImportPrototypeArguments importPrototypeArguments(
       if (!Routine)
         Routine = DecoratedArguments(Addr);
     } else {
-      // Both scalar and floating calls use the same exported declaration.
-      // Look it up once; a stripped internal target has neither contract.
-      if (!Dbg || !RegisterArguments || !Exported(Addr))
+      // Both scalar and floating calls use the same exact native declaration.
+      // Private MIPS targets need the same authenticated contract as exports.
+      // A stripped internal target has neither contract.
+      if (!Dbg || !RegisterArguments)
+        return;
+      const bool IsExported = Exported(Addr);
+      if (!IsExported &&
+          (!isMIPS(Img.Arch) || !Dbg->hasAuthenticatedFunctionSignatures()))
         return;
       const auto Function = Dbg->resolveFunction(Addr);
       if (!Function)
@@ -4057,7 +4062,7 @@ ImportPrototypeArguments importPrototypeArguments(
             Result.UserDeclared.insert(Addr);
           return;
         }
-      if (Function->PrototypeLibrary.empty())
+      if (!IsExported || Function->PrototypeLibrary.empty())
         return;
       Routine = SignatureArguments(*Function);
       if (!Routine)

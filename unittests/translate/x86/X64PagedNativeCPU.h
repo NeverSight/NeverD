@@ -170,7 +170,7 @@ public:
     S.cr3 = 0x10000;
     S.cr4 = CR4;
     S.efer = 0xd00;
-    S.cr2 = 0;
+    S.cr2 = State.Core.Core.CR2;
     S.cs = segment(State.Core.CS);
     S.ss = segment(State.Core.SS);
     S.ds = S.es = S.ss;

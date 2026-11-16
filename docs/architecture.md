@@ -3877,6 +3877,12 @@ object extents do not. `debug/CompressedSections` expands SHF_COMPRESSED
 sections before the DWARF reader sees them, since the LLVM NeverD links may
 lack the decompressors.
 
+DWARF function parameters and callback parameters retain unknown types when
+their type attribute is absent or its reference is malformed, including an
+inherited declaration. The reader does not substitute a four-byte integer.
+Consumers that require a complete source signature must reject that missing
+parameter; its independently declared return contract remains available.
+
 A debug file loaded into an open session (`neverd_session_load_pdb_ex`,
 `neverd_session_load_dwarf`, `neverd_session_load_map`) reads the image again
 with the options it was loaded with and publishes the session's whole request
@@ -4971,8 +4977,11 @@ of the adapted call.
 `floatingCallArguments` uses the same placement authority for complete fixed
 float/double signatures, including scalar floating arguments with a `void`
 result. A void signature has no result carrier; LowIR-to-MedIR binding, cached
-import pointers and both emitters preserve that absence. It still needs at
-least one floating parameter; integer-only calls keep their own adapter. LLVM
+import pointers and both emitters preserve that absence. Outside MIPS this
+adapter requires a floating parameter or result; integer-only calls keep their
+own adapter. MIPS uses this complete descriptor for integer/pointer/void calls too;
+only actual floating values or vector-register accesses require a floating
+profile. Its descriptors remain validated even without those accesses. LLVM
 import emission verifies those exact SSA operands and widths before declaring
 the typed callee, including immutable import identities absent from libc tables.
 Windows x64 and ARM64 publish these operands before SSA and record the scalar
@@ -21615,6 +21624,13 @@ IRQ/NMI entry uses the same committed-mode event owner, reports original input
 acceptance once and retains full-bank progress across frame suspension. The
 mode owner authenticates pending state before stop/budget exits and keeps
 shutdown terminal; the event producer owns arrival and interrupt arbitration.
+
+Non64 selector transfers reuse `X86LegacySegmentExecution` and the shared
+transfer journal. Explicit segment-write receipts publish full caches before
+event handoff; emitters never reconstruct writes from low-half equality.
+`ir/X86` owns the null-base and descriptor-canonicality profile types. The
+runtime freezes those choices and complete table addresses with accepted
+instruction progress; pure canonical checks precede all descriptor paging.
 
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and

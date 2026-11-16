@@ -62,6 +62,7 @@ ColumnLayout {
         onLinkRequested: link => view.backend.openTextLink(link)
         onQuoteRequested: messageId => view.backend.quoteSideAnswer(messageId)
         Label {
+            textFormat: Text.PlainText
             anchors.centerIn: parent; width: parent.width - 24
             visible: (!view.chat || view.chat.messages.length === 0) && !view.showInherited
             text: qsTr("Explore a side question here, with the main conversation's context.")
@@ -90,12 +91,15 @@ ColumnLayout {
         onDecision: (id, allow) => view.backend.resolveAnalysisObjectApproval(id, allow)
     }
     Surface {
-        Layout.fillWidth: true; Layout.preferredHeight: 132
-        color: Theme.composerTint
+        Layout.fillWidth: true; Layout.preferredHeight: 124
+        // In the panel's card the composer is a well of the conversation's
+        // ground, inside a floating surface's outline.
+        color: Theme.content
         radius: Theme.radius
-        border.color: composer.activeFocus ? Theme.focusBorder : Theme.inputBorder
+        border.width: 1
+        border.color: composer.activeFocus ? Theme.focusBorder : Theme.borderStrong
         ColumnLayout {
-            anchors.fill: parent; anchors.margins: 14; spacing: Theme.spaceSmall
+            anchors.fill: parent; anchors.margins: 10; spacing: Theme.spaceSmall
             ScrollView {
                 Layout.fillWidth: true; Layout.fillHeight: true; clip: true
                 ChatComposer {
@@ -116,6 +120,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     ActionButton { glyph: "plus"; hint: qsTr("Add context…"); onClicked: view.contextRequested() }
                 Label {
+                    textFormat: Text.PlainText
                     text: view.objectApproval ? qsTr("Waiting for approval")
                           : view.chat && view.chat.running ? qsTr("Analyzing…") : qsTr("Side chat")
                     color: Theme.quiet; font.pointSize: Theme.smallPointSize

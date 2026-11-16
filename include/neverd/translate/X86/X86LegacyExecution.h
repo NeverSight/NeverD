@@ -150,7 +150,7 @@ struct X86LegacyExecutionState {
   /// stop or a fault after loading the incoming task. Preserve this with the
   /// CPU and RAM; only that owner may resume or retire it.
   std::shared_ptr<const detail::X86LegacyTaskContinuation> PendingTask;
-  /// Return and VM86 far-transfer progress across unavailable backing. Retain
+  /// Segment, return and far-transfer progress across backing stops. Retain
   /// this opaque state with the CPU, bindings and original instruction bytes;
   /// repair only backing. Completed RAM accesses are never repeated.
   std::shared_ptr<const detail::X86LegacyTransferContinuation> PendingTransfer;
@@ -460,6 +460,7 @@ struct X86LegacyExecutionResult {
   bool CR2Written = false;
   bool CSWritten = false;
   bool SSWritten = false;
+  std::optional<X86LegacySegmentWrite> SegmentWritten;
 };
 
 /// Authenticate a complete instruction extent with the executor's own byte

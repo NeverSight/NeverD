@@ -101,7 +101,7 @@ qt_add_qml_module(neverd-agent
     ui/WindowControl.qml ui/ChoiceField.qml ui/ModelSettings.qml ui/MarkdownView.qml ui/ContextMeter.qml ui/Backdrop.qml
     ui/ChatTranscript.qml ui/SideChatView.qml ui/GoalStrip.qml ui/GoalEditor.qml ui/InputQueue.qml ui/ObjectApprovalCard.qml ui/ExecutionView.qml ui/EvidenceView.qml ui/ContextPicker.qml ui/ContextChips.qml ui/ReviewView.qml ui/ResearchView.qml ui/MemoryView.qml ui/CheckField.qml
     ui/ThemedMenu.qml ui/ThemedMenuItem.qml ui/ThemedSeparator.qml ui/ThemedScrollBar.qml ui/ThemedToolTip.qml
-    ui/ModalDim.qml)
+    ui/ModalDim.qml ui/SidebarRow.qml ui/WindowDrag.qml ui/EditMenu.qml)
 
 # Interface translations: the workbench's languages (i18n/*.ts), compiled into
 # the application and its CLI, which writes progress and errors.
@@ -163,6 +163,16 @@ if(BUILD_TESTING)
   add_test(NAME NeverDAgent.Markdown COMMAND NeverDAgentMarkdownTests)
   set_tests_properties(NeverDAgent.Markdown PROPERTIES
     LABELS "NeverDAgent" ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+  qt_add_executable(NeverDAgentOfflineTests tests/OfflineQmlTests.cpp)
+  target_compile_features(NeverDAgentOfflineTests PRIVATE cxx_std_20)
+  target_include_directories(NeverDAgentOfflineTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(NeverDAgentOfflineTests PRIVATE Qt6::Quick Qt6::Network Qt6::Test)
+  if(MSVC)
+    target_compile_options(NeverDAgentOfflineTests PRIVATE /utf-8)
+  endif()
+  add_test(NAME NeverDAgent.Offline COMMAND NeverDAgentOfflineTests)
+  set_tests_properties(NeverDAgent.Offline PROPERTIES
+    LABELS "NeverDAgent" TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
   qt_add_executable(NeverDAgentTests tests/ProjectStoreTests.cpp)
   target_compile_features(NeverDAgentTests PRIVATE cxx_std_20)
   target_include_directories(NeverDAgentTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

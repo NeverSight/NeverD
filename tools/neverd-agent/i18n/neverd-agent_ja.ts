@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>調査ワークスペース</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>プロジェクトファイルのプレビュー</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>プロジェクトの会話  /  解析対象：%1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>解析対象を整理し、手がかりをつなぎ、証拠を残す</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>目標</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>継続目標を設定…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>Enter で送信 · Shift+Enter で改行</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>元に戻す</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>やり直す</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>切り取り</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>コピー</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>貼り付け</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>すべて選択</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>調査ワークスペース</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>設定…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>サイドチャット · 承認待ちのリクエストあり</translation>
     </message>
@@ -598,10 +597,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>ファイルのフィンガープリントを読み取り中…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>ローカルワークスペース</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>OK</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>目標</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>継続目標を設定…</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>プロジェクトを一覧から削除…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>もう一度開く</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>%1 を一覧から削除しますか？</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>プロジェクトを一覧から外すだけです。ディスク上のものは何も削除されません。フォルダー、会話、記憶はそのまま残り、「プロジェクトを開く」で元に戻せます。</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>一覧から削除</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>このプロジェクトの Agent の記録（.nd-agent フォルダー）も削除する</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>プロジェクトは一覧から外れ、会話、記憶、証拠は .nd-agent フォルダーごと削除されます。この操作は元に戻せません。フォルダー内のほかのファイルは残ります。</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>記録ごと削除</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>API キーは HTTPS 経由、またはこのコンピューターへの HTTP 経由でのみ送信されます。リモートサーバーには HTTPS のアドレスを使用してください。</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>このプロジェクトを一覧から削除する前に、解析を停止してください。</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>プロジェクトは一覧から外しましたが、記録を削除できませんでした: %1</translation>
     </message>
 </context>
 <context>

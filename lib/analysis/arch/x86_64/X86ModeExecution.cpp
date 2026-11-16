@@ -79,6 +79,7 @@ void mergeEvent(X86ModeExecutionResult &R,
   const bool Completed = R.InstructionCompleted;
   const bool CR2Written = R.CR2Written, CSWritten = R.CSWritten,
              SSWritten = R.SSWritten;
+  const auto SegmentWritten = R.SegmentWritten;
   auto Effects = std::move(R.SelfModifications);
   const auto Exception = R.Exception;
   static_cast<X86LegacyExecutionResult &>(R) = Event;
@@ -87,6 +88,8 @@ void mergeEvent(X86ModeExecutionResult &R,
   R.CR2Written |= CR2Written;
   R.CSWritten |= CSWritten;
   R.SSWritten |= SSWritten;
+  if (SegmentWritten)
+    R.SegmentWritten = SegmentWritten;
   if (!R.Exception)
     R.Exception = Exception;
   R.SelfModifications.insert(R.SelfModifications.begin(), Effects.begin(),

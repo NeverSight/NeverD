@@ -216,6 +216,37 @@ private slots:
     QTRY_VERIFY(!dialog->isVisible());
   }
 
+  // The same on Wayland, where no test can read the desktop back: the
+  // shadow composites only if the dialog's surface has an alpha channel, and
+  // QtWayland settles that as the native window is made, which Qt does
+  // before the dialog is polished and its frame comes.
+  void framedDialogSurfaceHasAnAlphaChannel_data() {
+    QTest::addColumn<QString>("kind");
+    for (const char *kind :
+         {"dialog", "early-native", "quick-start", "early-native-quick-start"})
+      QTest::newRow(kind) << QString::fromLatin1(kind);
+  }
+
+  void framedDialogSurfaceHasAnAlphaChannel() {
+    if (!QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+      QSKIP("Checks the format QtWayland settles when a surface is made.");
+    QFETCH(QString, kind);
+    std::unique_ptr<QDialog> dialog;
+    if (kind.endsWith(QLatin1String("quick-start")))
+      dialog = std::make_unique<QuickStartDialog>(
+          [](QWidget *) { return QString(); }, nullptr);
+    else {
+      dialog = std::make_unique<QDialog>();
+      dialog->resize(320, 240);
+    }
+    if (kind.startsWith(QLatin1String("early-native")))
+      dialog->winId();
+    dialog->show();
+    QVERIFY(QTest::qWaitForWindowExposed(dialog.get()));
+    QVERIFY(dialog->windowFlags() & Qt::FramelessWindowHint);
+    QVERIFY(dialog->windowHandle()->format().hasAlpha());
+  }
+
   void windowShadowCompositesWithDesktop_data() {
     QTest::addColumn<QString>("kind");
     QTest::addColumn<bool>("modal");

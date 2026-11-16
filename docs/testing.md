@@ -93,6 +93,20 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+`X86ModeSegmentTest.*` covers full-cache writes, null base choices, high
+GDT/LDT addresses, MOV/PUSH/POP/LxS widths, L/D metadata, descriptor/operand
+backing, paging aliases, self-modified original bytes, watchpoint/SS state and
+completion receipts across event suspension. Descriptor-tail profiles require
+refusal before fetch or effects and frozen-choice resumption tests.
+`X86ModeSegmentNativeTest.*` uses a fresh KVM VM/vCPU for each independent
+stream, one initial SREGS write and no host mode rewrites. Reusing a vCPU after
+resetting RAM may retain translations and suppress expected paging A updates.
+Keep complete RAM comparison and record the pinned P/E-core profile. Both
+emitters and host-x64 Clang/NeverC observe null FS/GS bases after a real far JMP.
+The original CPU's terminal long HLT is outside that source observation.
+Changes to the common cache or transfer journal require the full paging and
+legacy-source suites, including standalone legacy and VM86 paths, on both SDKs.
+
 The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
 protected/compatibility/64-bit modes, deferred/refused inputs without effects,
 NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget
@@ -4983,6 +4997,33 @@ the subsequent original CALL/RET through both scheduled and plain interfaces.
 These host-stop tests complement the uninterrupted original-CPU return matrix;
 they do not claim physical intra-instruction suspension.
 
+`X64PagedSegmentContinuationTest.*` checks code64 segment MOV/PUSH/POP and
+LFS/LGS/LSS across operand/descriptor backing stops, page-table aliases,
+original-code mutation, context reconstruction, unpaid/zero budgets, frozen
+bindings, producer exclusion, debug/SS state, fault-event handoff and full-mode
+dispatch. Direct-owner tests validate complete state and paging features before
+RAM access. Generated cases use both emitters, O0/O2 and host-x64 Clang/NeverC.
+`AliasesMatchOriginalInstructions` requires KVM pre-fault support, uses a fresh
+VM/vCPU per stream and compares all represented CPU state and physical RAM,
+including guest page tables. Pre-faulting builds only stage-2 mappings: it
+removes the observed cold-stage-2 discrepancy without warming or rewriting
+guest translations.
+Run on both pinned core classes. See the [segment continuation evidence](evidence/x86-code64-segment-continuation-2026-11-16.json).
+
+`X64PagedDescriptorCanonicalityTest.*` independently qualifies code64
+MOV/POP/LFS/LGS/LSS descriptor starts, tails, high canonical addresses and
+end-to-zero wrapping, including both fragment write protections. Run on both
+pinned qualified core classes with KVM pre-fault support and
+`NEVERD_TEST_NEVERC`. The complete input CR2 is loaded into the native fixture;
+full output state, exception frames and RAM are compared. The handler PTE A
+bit is pre-set in both inputs to remove the original HLT observation's extra
+fetch effect. For an absent first wrapped descriptor page, ancestor A bits are
+also pre-set in both inputs; this does not qualify the raw fault-walk difference.
+No output bytes are masked. Unknown Intel core types skip profile comparison.
+The same group tests frozen profile choices, ordinary-context refusal,
+full-mode continuation and invalid public profiles. Counts and invalid KVM
+entry diagnostics are recorded in the [descriptor boundary evidence](evidence/x86-code64-descriptor-boundaries-2026-11-16.json).
+
 Faultable RETF is covered by `PagedFarReturnsMatchOriginalCPU` and
 `PagedFarReturnRetainedEffectsControlProgress` in
 `unittests/translate/x86/X64PagedFarReturnTests.inc`. The common return retry
@@ -8443,6 +8484,11 @@ recovery after unknown or incompatible type words across those models.
 containing underscores, digits and dollar signs, quoted encoding prefixes,
 CRLF and tab positions, macro invocation diagnostics, and identifiers ending
 at EOF on all three data models. Failed declarations keep the library intact.
+`TypeParse.TokenSpansKeepWhitespaceNumbersAndErrorPositions` checks horizontal
+whitespace runs, indented directives, CRLF, numeric spellings and punctuation
+across the same models. Batched position updates preserve packing, variadics,
+constant expressions, exact error columns and transactional failure at EOF,
+on invalid numbers and at macro invocations.
 `TypeParse.NestedDeclaratorsKeepTheirCompositionAndQualifiers` covers plain
 and parenthesized names, pointer arrays, callbacks returning array pointers,
 array references and calling conventions on ILP32, LP64 and LLP64, including
@@ -11655,6 +11701,14 @@ scalar offsets. The existing expression-expansion bound remains enforced.
 `NegativeOffsetSpellingKeepsTheOperationWidth` additionally retains the
 original extension in mixed-width additions and positive low-64-bit constants
 in a 128-bit operation.
+
+`HighControlFlowSemantics.StatementIndexRetainsSyntheticReturnLabels` keeps
+both high-address continuation return labels in the shared statement index.
+`SyntheticHighAddressReturnsKeepBothPaths` checks both branch results with an
+independent interpreter at low/high addresses and in either label layout.
+The generated paged execution suite exercises the actual HighC validator that
+exposed the reserved-key collision. Host floating-conversion fixtures link
+`libm` on POSIX when scalar FMA needs a library call.
 
 `HighControlFlowDAG.*` in `NeverDHighControlFlowTests` checks single-use
 condition folding on large shared expression graphs. Shared reads retain
@@ -25323,25 +25377,35 @@ constant body requires the GCC compatibility prelude.
 
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all
-six MIPS ABI/byte-order profiles. `MIPSN32Calls` checks the four-byte pointer
+six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void
+calls without a qualified floating profile; floating signatures and malformed
+descriptors must still fail. `MIPSN32Calls` checks the four-byte pointer
 spill beside an eight-byte saved RA, both stack-adjustment widths, both byte
-orders and both pipeline routes. Names-only providers, unknown return contracts,
+orders, public/private callees and both pipeline routes. Names-only providers,
+unknown return contracts,
 containing-function matches, non-platform or variadic declarations, custom
 parameter locations and incomplete types must still fail. A declaration also
 cannot admit an overlapping write to the saved link.
 
-The owned `n32-pointer-call.c` fixture exercises the real ELF/DWARF reader and
-external `void(void)` call. Its runner compares original execution with HighC
-and LLVMC recompiled at O0/O2, in both byte orders. It checks the full return
-register (including n32 word sign extension), unchanged object bytes, SP, RA,
+`DWARFSourceTypes.MissingFunctionParameterTypesRemainUnknown` checks absent and
+malformed parameter types through the real shared DWARF reader, including
+inherited declarations. A complete void return does not supply the missing
+parameter type.
+
+The owned `scalar-pointer-call.c` fixture exercises the real ELF/DWARF reader
+and global or private `void(void)` callees. Its runner compares original
+execution with HighC and LLVMC recompiled at O0/O2 for o32, n32 and n64, in both
+byte orders, with default and soft-float compiler profiles. Add `--abi n32` to
+narrow a diagnostic run. It checks the full return register (including n32/n64
+word sign extension), unchanged object bytes, SP, RA,
 preserved GPRs and exactly one callee entry. Commands, hashes and source evidence
 are retained; generated binaries are removed on success or failure.
 
 ```sh
 PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
-  python3 unittests/lift/mips/n32-call-roundtrip.py \
+  python3 unittests/lift/mips/scalar-call-roundtrip.py \
   --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
-  --output build-mips/n32-call-roundtrip
+  --output build-mips/scalar-call-roundtrip
 ```
 
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,

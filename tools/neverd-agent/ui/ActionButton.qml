@@ -3,27 +3,32 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import NeverD.Agent
 
-// The workbench's three button faces: a command with a glyph is a tool
-// button (flat until hovered, the selection color while checked), a text-only
-// command is a push button in the button gray, and `primary` marks the one
-// main action of a window in the accent. `quiet` gives a text command the tool
-// face, for secondary actions in rows and cards.
+// Three button faces. A command with a glyph is a tool button: flat until
+// hovered, a quiet fill while it is on, and with a label also a row of a list.
+// A text-only command is a push button in the button gray, and `primary` marks
+// the one main action of a window in the accent. `quiet` gives a text command
+// the tool face, for secondary actions in rows and cards.
 ToolButton {
     id: control
     property string glyph: ""
     property string hint: text
     property bool primary: false
     property bool quiet: false
+    // A glyph in a disc, for the button that sends.
+    property bool round: false
     property int elideMode: Text.ElideRight
     readonly property bool push: primary || (!quiet && glyph.length === 0 && text.length > 0)
     readonly property color foreground: primary ? (enabled ? Theme.primaryText : Theme.primaryDisabledText)
                                       : !enabled ? Theme.disabledText
-                                      : checked ? Theme.toolCheckedText
+                                      : checked ? Theme.rowSelectedText
                                       : push ? Theme.buttonText : Theme.text
-    implicitHeight: Theme.controlHeight
     readonly property bool labelled: text.length > 0
-    implicitWidth: Math.max(push && labelled ? 75 : 34, contentItem.implicitWidth + leftPadding + rightPadding)
-    leftPadding: push && labelled ? 14 : labelled ? 10 : 7
+    implicitHeight: push && !round ? Theme.controlHeight : Theme.rowHeight
+    // A glyph alone sits in a square; a push button is never narrower than
+    // a short word and its padding.
+    implicitWidth: Math.max(push && labelled ? 76 : implicitHeight,
+                            contentItem.implicitWidth + leftPadding + rightPadding)
+    leftPadding: push && labelled ? 14 : labelled ? 8 : 7
     rightPadding: push && labelled ? 14 : labelled ? 10 : 7
     topPadding: 4
     bottomPadding: 4
@@ -58,13 +63,17 @@ ToolButton {
         }
     }
     background: Rectangle {
-        radius: control.push ? Theme.controlRadius : Theme.toolRadius
+        radius: control.round ? height / 2 : control.push ? Theme.controlRadius : Theme.toolRadius
         color: control.primary ? (!control.enabled ? Theme.primaryDisabled
                                   : control.hovered || control.down ? Theme.primaryHover : Theme.primary)
              : control.push ? (!control.enabled ? Theme.controlDisabled
                                : control.hovered || control.down ? Theme.buttonHover : Theme.button)
-             : control.checked ? Theme.toolChecked
-             : control.down || control.hovered && control.enabled ? Theme.toolHover : "transparent"
+             : control.checked ? Theme.rowSelected
+             : !control.enabled ? "transparent"
+             : control.down ? Theme.toolHover
+             // A row answers the pointer as a list does, a glyph alone as a
+             // tool bar's button.
+             : control.hovered ? (control.labelled ? Theme.hover : Theme.toolHover) : "transparent"
         // Keyboard focus rings any face; high contrast also outlines push
         // and main faces, whose fills match the window there, and a tool
         // face under the pointer, as the workbench does.

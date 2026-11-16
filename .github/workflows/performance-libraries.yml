@@ -2,61 +2,6 @@ name: Performance library compatibility
 
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/performance-libraries]
-    paths:
-      - '.github/workflows/performance-libraries.yml'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'cmake/NeverDGoogleTest.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/SortedSearch.h'
-      - 'include/neverd/support/Limits.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/ByteScan.cpp'
-      - 'lib/support/SortedSearch.cpp'
-      - 'lib/support/Unicode.cpp'
-      - 'lib/support/Parallel.cpp'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
-  pull_request:
-    paths:
-      - '.github/workflows/performance-libraries.yml'
-      - 'cmake/NeverDPerformance.cmake'
-      - 'cmake/NeverDForks*'
-      - '.gitmodules'
-      - 'third_party/forks.json'
-      - 'third_party/highway'
-      - 'third_party/simdutf'
-      - 'third_party/simdjson'
-      - 'third_party/oneTBB'
-      - 'third_party/mimalloc'
-      - 'cmake/NeverDMimalloc.cmake'
-      - 'cmake/NeverDGoogleTest.cmake'
-      - 'scripts/build.py'
-      - 'scripts/fork_dependencies.py'
-      - 'scripts/tests/test_fork_dependencies.py'
-      - 'include/neverd/support/ByteScan.h'
-      - 'include/neverd/support/SortedSearch.h'
-      - 'include/neverd/support/Limits.h'
-      - 'include/neverd/support/Parallel.h'
-      - 'lib/support/ByteScan.cpp'
-      - 'lib/support/SortedSearch.cpp'
-      - 'lib/support/Unicode.cpp'
-      - 'lib/support/Parallel.cpp'
-      - 'tools/common/transport/**'
-      - 'unittests/acceleration/**'
 
 permissions:
   contents: read

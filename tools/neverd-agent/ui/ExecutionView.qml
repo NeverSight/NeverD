@@ -32,10 +32,12 @@ ColumnLayout {
             spacing: 10
             Icon { name: "file"; Layout.preferredWidth: 14; Layout.preferredHeight: 14; color: Theme.quiet }
             Label {
+                textFormat: Text.PlainText
                 text: modelData.label
                 color: Theme.text; font.pointSize: Theme.smallPointSize
             }
             Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 text: modelData.state === "queued" ? qsTr("Queued")
                     : modelData.state === "succeeded" ? qsTr("Concluded")
@@ -47,6 +49,7 @@ ColumnLayout {
                 elide: Text.ElideRight; font.pointSize: Theme.smallPointSize
             }
             Label {
+                textFormat: Text.PlainText
                 text: modelData.steps ? qsTr("Steps: %1").arg(modelData.steps) : ""
                 color: Theme.quiet; font.pointSize: Theme.smallPointSize
             }
@@ -75,11 +78,13 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     Label {
+                        textFormat: Text.PlainText
                         Layout.fillWidth: true; wrapMode: Text.Wrap
                         text: (row.modelData.label || "") + " · " + (row.modelData.name || "") + (row.modelData.address ? " · " + row.modelData.address : "")
                         color: Theme.text; font.pointSize: Theme.smallPointSize
                     }
                     Label {
+                        textFormat: Text.PlainText
                         text: ({running: qsTr("Running"), succeeded: qsTr("Done"), failed: qsTr("Failed"), cancelled: qsTr("Stopped"), skipped: qsTr("Skipped")}[row.modelData.state] || "") + (row.modelData.elapsedMs ? " · " + qsTr("%1 s").arg(Number(row.modelData.elapsedMs / 1000).toLocaleString(Qt.locale(), "f", 1)) : "")
                         color: row.modelData.state === "failed" ? Theme.error : Theme.quiet; font.pointSize: Theme.smallPointSize
                     }
@@ -92,6 +97,8 @@ ColumnLayout {
                     sourceComponent: ScrollView {
                         clip: true
                         TextArea {
+                            id: callText
+                            ContextMenu.menu: EditMenu { editor: callText }
                             text: JSON.stringify({arguments: row.modelData.arguments || {}, result: row.modelData.result || {}}, null, 2)
                             readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap
                             color: Theme.secondary; font.family: "JetBrains Mono NL"; font.pointSize: Theme.smallPointSize
@@ -101,6 +108,6 @@ ColumnLayout {
                 }
             }
         }
-        Label { visible: trace.records.length === 0; text: qsTr("No tool calls in this round yet."); color: Theme.quiet; font.pointSize: Theme.smallPointSize }
+        Label { textFormat: Text.PlainText; visible: trace.records.length === 0; text: qsTr("No tool calls in this round yet."); color: Theme.quiet; font.pointSize: Theme.smallPointSize }
     }
 }

@@ -845,7 +845,8 @@ std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
 /// DW_AT_specification of its declaration.  Only the declarations hold types.
 std::vector<uint8_t>
 makeELFDWARFOriginFixture(std::optional<bool> ConflictingGlobals = {},
-                          unsigned RegisterLocal = 0) {
+                          unsigned RegisterLocal = 0,
+                          unsigned ParameterType = 0) {
   using namespace llvm::dwarf;
   std::vector<uint8_t> Abbrev;
   const auto declare =
@@ -870,8 +871,11 @@ makeELFDWARFOriginFixture(std::optional<bool> ConflictingGlobals = {},
           {{DW_AT_byte_size, DW_FORM_data1}, {DW_AT_type, DW_FORM_ref4}});
   declare(5, DW_TAG_subprogram, true,
           {{DW_AT_name, DW_FORM_string}, {DW_AT_inline, DW_FORM_data1}});
-  declare(6, DW_TAG_formal_parameter, false,
-          {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
+  if (ParameterType == 1)
+    declare(6, DW_TAG_formal_parameter, false, {{DW_AT_name, DW_FORM_string}});
+  else
+    declare(6, DW_TAG_formal_parameter, false,
+            {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
   declare(7, DW_TAG_variable, false,
           {{DW_AT_name, DW_FORM_string}, {DW_AT_type, DW_FORM_ref4}});
   declare(8, DW_TAG_subprogram, true,
@@ -933,7 +937,8 @@ makeELFDWARFOriginFixture(std::optional<bool> ConflictingGlobals = {},
   const uint32_t AbstractParameter = here();
   appendULEB(Info, 6);
   name("p");
-  appendU32LE(Info, PairPointer);
+  if (ParameterType != 1)
+    appendU32LE(Info, ParameterType == 2 ? 0xffffffffu : PairPointer);
   const uint32_t AbstractLocal = here();
   appendULEB(Info, 7);
   name("count");
@@ -2255,6 +2260,27 @@ TEST(DWARFSourceTypes, RegisterLocalsRequireWholeValuesAndExactScope) {
     EXPECT_EQ(
         Context->resolveRegisterVariableAt(0x1000, 0x1005, x86reg::R12).Status,
         Status::NotFound);
+  }
+}
+
+TEST(DWARFSourceTypes, MissingFunctionParameterTypesRemainUnknown) {
+  ScratchDir Dir;
+  for (unsigned Kind : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Kind);
+    const auto Bytes = makeELFDWARFOriginFixture({}, 0, Kind);
+    const auto Path = Dir.writeBytes("parameter.elf", Bytes);
+    auto Context = DWARFDebugContext::load(Path, BinaryFormat::ELF,
+                                           DWARFLoadTrust::InImage, Bytes);
+    ASSERT_TRUE(Context && Context->hasAuthenticatedFunctionSignatures());
+    const auto Function = Context->resolveFunction(0x1000);
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->Params.size(), 1u);
+    EXPECT_EQ(Function->Params.front().first, "p");
+    EXPECT_EQ(bool(Function->Params.front().second), Kind == 0);
+    // A missing parameter does not change the independently declared void
+    // result, but it cannot become an invented four-byte integer argument.
+    EXPECT_EQ(Context->resolveAuthenticatedReturnValueState(0x1000).Kind,
+              AuthenticatedReturnKind::NoValue);
   }
 }
 

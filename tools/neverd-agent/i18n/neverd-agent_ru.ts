@@ -164,28 +164,8 @@
 <context>
     <name>Conversation</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Рабочее пространство исследований</translation>
-    </message>
-    <message>
         <source>Project file preview</source>
         <translation>Предпросмотр файла проекта</translation>
-    </message>
-    <message>
-        <source>Project conversation  /  Analysis objects: %1</source>
-        <translation>Беседа проекта  /  Объектов анализа: %1</translation>
-    </message>
-    <message>
-        <source>Organize objects, connect leads, keep evidence</source>
-        <translation>Упорядочивайте объекты, связывайте зацепки, сохраняйте свидетельства</translation>
-    </message>
-    <message>
-        <source>Goal</source>
-        <translation>Цель</translation>
-    </message>
-    <message>
-        <source>Set a persistent goal…</source>
-        <translation>Задать постоянную цель…</translation>
     </message>
     <message>
         <source>Add analysis object…</source>
@@ -294,6 +274,33 @@
     <message>
         <source>Enter to send · Shift+Enter for a new line</source>
         <translation>Enter — отправка · Shift+Enter — новая строка</translation>
+    </message>
+</context>
+<context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>Отменить</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>Повторить</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>Вырезать</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Копировать</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>Вставить</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>Выделить всё</translation>
     </message>
 </context>
 <context>
@@ -576,14 +583,6 @@ Analysis revision %3 · %4</source>
 <context>
     <name>Main</name>
     <message>
-        <source>Research workspace</source>
-        <translation>Рабочее пространство исследований</translation>
-    </message>
-    <message>
-        <source>Settings…</source>
-        <translation>Настройки…</translation>
-    </message>
-    <message>
         <source>Side chat · Approval request pending</source>
         <translation>Побочный чат · Ожидает подтверждения</translation>
     </message>
@@ -598,10 +597,6 @@ Analysis revision %3 · %4</source>
     <message>
         <source>Reading file fingerprints…</source>
         <translation>Чтение отпечатков файлов…</translation>
-    </message>
-    <message>
-        <source>Local workspace</source>
-        <translation>Локальное рабочее пространство</translation>
     </message>
     <message>
         <source>Open in the NeverD workbench</source>
@@ -826,6 +821,46 @@ Analysis revision %3 · %4</source>
     <message>
         <source>OK</source>
         <translation>ОК</translation>
+    </message>
+    <message>
+        <source>Goal</source>
+        <translation>Цель</translation>
+    </message>
+    <message>
+        <source>Set a persistent goal…</source>
+        <translation>Задать постоянную цель…</translation>
+    </message>
+    <message>
+        <source>Remove project…</source>
+        <translation>Убрать проект…</translation>
+    </message>
+    <message>
+        <source>Try opening again</source>
+        <translation>Попробовать открыть снова</translation>
+    </message>
+    <message>
+        <source>Remove %1?</source>
+        <translation>Убрать %1?</translation>
+    </message>
+    <message>
+        <source>This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.</source>
+        <translation>Проект только убирается из списка. С диска ничего не удаляется: папка, беседа и память остаются на месте, а «Открыть проект» вернёт его.</translation>
+    </message>
+    <message>
+        <source>Remove project</source>
+        <translation>Убрать проект</translation>
+    </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>Также удалить записи Agent этого проекта (папка .nd-agent)</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>Проект убирается из списка, а его беседа, память и свидетельства удаляются вместе с папкой .nd-agent. Это действие нельзя отменить. Остальные файлы в папке сохраняются.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>Убрать и удалить</translation>
     </message>
 </context>
 <context>
@@ -1901,6 +1936,14 @@ Notes, scripts and reports appear here.</source>
     <message>
         <source>An API key is sent only over HTTPS, or over HTTP to this computer. Use an HTTPS address for a remote server.</source>
         <translation>Ключ API передаётся только по HTTPS или по HTTP на этот компьютер. Для удалённого сервера используйте адрес HTTPS.</translation>
+    </message>
+    <message>
+        <source>Stop this project&apos;s analysis before removing it.</source>
+        <translation>Перед тем как убрать проект, остановите его анализ.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>Проект убран из списка, но его записи не удалось удалить: %1</translation>
     </message>
 </context>
 <context>

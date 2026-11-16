@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -409,6 +410,87 @@ TEST_P(MIPSPipeline, SinglePrecisionUpperWordCannotEscapeToMemory) {
       << Result.Error;
 }
 
+TEST(MIPSScalarCalls, IntegerCallsDoNotRequireFloatingPointProfiles) {
+  for (const Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const bool Wide = isMIPS64(Target);
+    const bool NarrowPointer =
+        Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+    mips_test::ELFBytes File(
+        NarrowPointer
+            ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+            : Target);
+    File.abiFlags();
+    if (NarrowPointer) {
+      File.put(36, 0x80000020, 4);
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe4] = 2;
+    }
+    const uint32_t Words[] = {
+        Wide ? 0x67bdffe0u : 0x27bdffe0u, // allocate 32 bytes
+        Wide ? 0xffbf0018u : 0xafbf001cu, // save the incoming link
+        0x0c004080u,
+        0,           // call 0x10200; nop
+        0x24020007u, // return a constant after the call
+        Wide ? 0xdfbf0018u : 0x8fbf001cu,
+        0x03e00008u,
+        Wide ? 0x67bd0020u : 0x27bd0020u};
+    for (unsigned I = 0; I < std::size(Words); ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    auto Pointer = NdType::makePtr();
+    Pointer->Size = getTargetRegInfo(Target).PointerSize;
+    struct SignatureCase {
+      TypeRef Result;
+      std::vector<TypeRef> Parameters;
+      bool NeedsFloating;
+    };
+    const SignatureCase Signatures[] = {
+        {NdType::makeVoid(), {}, false},
+        {NdType::makeInt(4), {NdType::makeInt(4)}, false},
+        {Pointer, {Pointer}, false},
+        {NdType::makeVoid(), {NdType::makeFloat(4)}, true},
+        {NdType::makeFloat(8), {}, true}};
+    // Unspecified, soft-float and o32 FPXX do not establish the scalar FPR
+    // profile. None is needed by a complete integer/pointer/void call.
+    for (const uint8_t Profile : {0, 3, 5}) {
+      SCOPED_TRACE(Profile);
+      File.Bytes[0xe7] = Profile;
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "scalar_call");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      for (const auto &Case : Signatures) {
+        SCOPED_TRACE(Case.NeedsFloating);
+        SCOPED_TRACE(static_cast<int>(Case.Result->Kind));
+        const auto Signature = floatingCallArguments(
+            Target, BinaryFormat::ELF, Case.Result, Case.Parameters);
+        ASSERT_TRUE(Signature);
+        const std::map<va_t, FloatingCallArguments> Calls{
+            {0x10200, *Signature}};
+        Convert.setCallEntryFloatingArguments(&Calls);
+        if (Case.NeedsFloating)
+          EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                       LowToMedConversionError);
+        else {
+          EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          auto Invalid = Calls;
+          Invalid.begin()->second.ReturnBytes = 3;
+          EXPECT_THROW(
+              requireMIPSSourceVectors(Low, Target, &*Image, &Invalid, nullptr),
+              LowToMedConversionError);
+        }
+      }
+    }
+  }
+}
+
 TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
   for (const bool Little : {false, true})
     for (const bool WordAdjustment : {false, true}) {
@@ -506,56 +588,62 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
       Export Callee;
       Callee.Name = "touch";
       Callee.Addr = 0x10200;
-      Image->Exports.push_back(Callee);
-      for (unsigned Variant = 0; Variant < 10; ++Variant) {
-        SCOPED_TRACE(Variant);
-        NativeDebug Debug;
-        switch (Variant) {
-        case 1:
-          Debug.Authenticated = false;
-          break;
-        case 2:
-          Debug.ReturnState = {};
-          break;
-        case 3:
-          Debug.Function.Addr -= 4;
-          break;
-        case 4:
-          Debug.Function.IsVariadic = true;
-          break;
-        case 5:
-          Debug.Function.PlatformConvention = false;
-          break;
-        case 6:
-          Debug.Function.CallConv = DebugCallConv::Fastcall;
-          break;
-        case 7:
-          Debug.Function.ParamEntryLocations.emplace_back();
-          break;
-        case 8:
-          Debug.Function.Params = {{"unknown", TypeRef()}};
-          break;
-        case 9:
-          Debug.Function.ReturnType = {};
-          break;
-        }
-        for (bool LLVM : {false, true}) {
-          SCOPED_TRACE(LLVM);
-          llvm::LLVMContext Context;
-          PipelineOptions Options;
-          Options.OnlyFunctionEntries = {Image->Entry};
-          Options.LiftMode = LLVM;
-          Options.EmitDumpOutput = false;
-          auto Result = Pipeline().run(*Image, Context, Options, &Debug);
-          EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
-          if (Variant == 0 && LLVM) {
-            ASSERT_NE(Result.LlvmModule, nullptr);
-            EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      for (const bool Exported : {false, true}) {
+        SCOPED_TRACE(Exported);
+        Image->Exports.clear();
+        if (Exported)
+          Image->Exports.push_back(Callee);
+        for (unsigned Variant = 0; Variant < 10; ++Variant) {
+          SCOPED_TRACE(Variant);
+          NativeDebug Debug;
+          switch (Variant) {
+          case 1:
+            Debug.Authenticated = false;
+            break;
+          case 2:
+            Debug.ReturnState = {};
+            break;
+          case 3:
+            Debug.Function.Addr -= 4;
+            break;
+          case 4:
+            Debug.Function.IsVariadic = true;
+            break;
+          case 5:
+            Debug.Function.PlatformConvention = false;
+            break;
+          case 6:
+            Debug.Function.CallConv = DebugCallConv::Fastcall;
+            break;
+          case 7:
+            Debug.Function.ParamEntryLocations.emplace_back();
+            break;
+          case 8:
+            Debug.Function.Params = {{"unknown", TypeRef()}};
+            break;
+          case 9:
+            Debug.Function.ReturnType = {};
+            break;
           }
-          if (Variant != 0)
-            EXPECT_NE(Result.Error.find("MIPS source return target"),
-                      std::string::npos)
-                << Result.Error;
+          for (bool LLVM : {false, true}) {
+            SCOPED_TRACE(LLVM);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.OnlyFunctionEntries = {Image->Entry};
+            Options.LiftMode = LLVM;
+            Options.EmitDumpOutput = false;
+            auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+            EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
+            if (Variant == 0 && LLVM && Result.Success) {
+              ASSERT_NE(Result.LlvmModule, nullptr);
+              EXPECT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            }
+            if (Variant != 0)
+              EXPECT_NE(Result.Error.find("MIPS source return target"),
+                        std::string::npos)
+                  << Result.Error;
+          }
         }
       }
     }
