@@ -21,6 +21,7 @@
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -517,6 +518,32 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
                   Call.TargetAddr == 0x10140 && Call.TargetName == "fp_callee";
         EXPECT_TRUE(OriginalTarget);
         EXPECT_TRUE(SourceTarget);
+        if (Together) {
+          const auto Low = llvm::find_if(Result.LowFuncs, [](const auto &F) {
+            return F.Entry == 0x10160;
+          });
+          const auto Med = llvm::find_if(Result.MedFuncs, [](const auto &F) {
+            return F.Entry == 0x10160;
+          });
+          ASSERT_NE(Low, Result.LowFuncs.end());
+          ASSERT_NE(Med, Result.MedFuncs.end());
+          EXPECT_TRUE(hasMIPSSourceReturnTargets(*Low, *Med, GetParam(),
+                                                 BinaryFormat::ELF));
+          for (uint64_t Register :
+               {mipsreg::RA, mipsreg::SP, mipsreg::RA + 1}) {
+            auto Changed = *Low;
+            Changed.Blocks.front().Ops.front().Output = NdVar::reg(Register, 4);
+            EXPECT_FALSE(hasMIPSSourceReturnTargets(Changed, *Med, GetParam(),
+                                                    BinaryFormat::ELF));
+          }
+          auto Unbound = *Med;
+          for (auto &Block : Unbound.Blocks)
+            for (auto &Op : Block.Ops)
+              if (Op.IsTailCall)
+                Op.ScalarCallSignature.reset();
+          EXPECT_FALSE(hasMIPSSourceReturnTargets(*Low, Unbound, GetParam(),
+                                                  BinaryFormat::ELF));
+        }
         CEmitterOptions Emit;
         Emit.TheArch = GetParam();
         Emit.Format = BinaryFormat::ELF;
