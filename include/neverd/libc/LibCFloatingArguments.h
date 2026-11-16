@@ -24,7 +24,8 @@ namespace neverd::libc {
 
 inline std::optional<FloatingCallArguments>
 floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
-                      const DebugContext *NativeDebug = nullptr) {
+                      const DebugContext *NativeDebug = nullptr,
+                      InstructionMode EntryMode = InstructionMode::Default) {
   // A native declaration must come from the exact image's validated type
   // reader. Names alone, ambiguous entries and missing return contracts do
   // not establish a complete call ABI.
@@ -43,7 +44,8 @@ floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
   std::vector<TypeRef> Parameters;
   for (const auto &[Name, Type] : Function.Params)
     Parameters.push_back(Type);
-  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters);
+  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters,
+                                       std::nullopt, EntryMode);
 }
 
 } // namespace neverd::libc

@@ -474,6 +474,51 @@ TEST(SourceParameterPlacement, MIPSScalarOnlyCallsKeepCompleteSignatures) {
   }
 }
 
+TEST(SourceParameterPlacement, MIPS16BodyAndClassicStubHaveDistinctCarriers) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    const bool Little = archLittleEndian(A);
+    const std::vector<TypeRef> Types{floatType(4), floatType(8), floatType(4)};
+    const auto Body =
+        placeSourceParameters(A, ELF, intType(4), Types, false, std::nullopt,
+                              InstructionMode::MIPS16);
+    ASSERT_TRUE(Body);
+    ASSERT_EQ(Body->Parameters.size(), 3u);
+    expectRegister(Body->Parameters[0][0], IntegerReg, mipsreg::r(4), 0, 4);
+    ASSERT_EQ(Body->Parameters[1].size(), 2u);
+    expectRegister(Body->Parameters[1][0], IntegerReg, mipsreg::r(6),
+                   Little ? 0 : 4, 4);
+    expectRegister(Body->Parameters[1][1], IntegerReg, mipsreg::r(7),
+                   Little ? 4 : 0, 4);
+    expectStack(Body->Parameters[2][0], 16, 4);
+    const auto Bound = floatingCallArguments(
+        A, ELF, intType(4), Types, std::nullopt, InstructionMode::MIPS16);
+    ASSERT_TRUE(Bound);
+    EXPECT_TRUE(Bound->MIPS16Parameters);
+    EXPECT_FALSE(floatingCallArguments(A, ELF, floatType(4), Types,
+                                       std::nullopt, InstructionMode::MIPS16));
+    EXPECT_EQ(Bound->Scalars[1].Bytes, 8u);
+    EXPECT_EQ(Bound->Scalars[1].Register, mipsreg::r(6));
+    EXPECT_TRUE(floatingCallTypes(A, ELF, *Bound));
+    auto Altered = *Bound;
+    Altered.MIPS16Parameters = false;
+    EXPECT_FALSE(floatingCallTypes(A, ELF, Altered));
+    for (InstructionMode Mode :
+         {InstructionMode::Default, InstructionMode::MIPSClassic,
+          InstructionMode::MicroMIPS}) {
+      const auto Stub =
+          floatingCallArguments(A, ELF, intType(4), Types, std::nullopt, Mode);
+      ASSERT_TRUE(Stub);
+      EXPECT_FALSE(Stub->MIPS16Parameters);
+      EXPECT_EQ(Stub->Scalars[0].Register, mipsreg::w(12));
+      EXPECT_EQ(Stub->Scalars[1].Register, mipsreg::w(14));
+      EXPECT_TRUE(floatingCallTypes(A, ELF, *Stub));
+    }
+  }
+  EXPECT_FALSE(floatingCallArguments(Arch::MIPS64, ELF, intType(4),
+                                     {floatType(4)}, std::nullopt,
+                                     InstructionMode::MIPS16));
+}
+
 TEST(SourceParameterPlacement,
      MIPSVariadicFloatingCallsKeepTheirNamedBoundary) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,

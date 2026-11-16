@@ -1,0 +1,127 @@
+{
+  "implementation_commit": "c320c8b90ecba45f2e4810a0043c13ef8fe124df",
+  "base_commit": "011b60b31fcc5d99180585f846e4237fa4fa716c",
+  "host": "macOS arm64, Release, Apple Clang 17",
+  "qualified_binaries": {
+    "neverd": "cafe843659fbdae694d71abddad8bbbea0c34487eb317aa09d8110a20a8897f6",
+    "libneverd.dylib": "d42b314215df39919c58a55237602ae459d94d677f940f878b8c3dfaa128026e",
+    "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e"
+  },
+  "dependency_manifest_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+  "reference": {
+    "commit": "0b976580a5447dff2fd6822f07b4683c33392d78",
+    "sha256": "317c11b60bd78971ab52bf0da72d9bc6f035b24e2ef0fac9edf8cfaef847b1d5"
+  },
+  "corrections": [
+    "Place leading o32 MIPS16 floating parameters in GPRs using the actual function mode",
+    "Carry that mode through source entry/call binding and descriptor validation",
+    "Keep instruction mode attributes on HighC and LLVM declarations of omitted bodies",
+    "Use logical fixed parameter types for complete individual GPR matches without guessing split or variadic entries"
+  ],
+  "owner_tests": {
+    "tests": 1319,
+    "initial_passed": 1315,
+    "initial_timeout_tests": [
+      "IncomingHomeSource.ExplicitStackCarrierReachesBothCPaths",
+      "IncomingHomeSource.ExplicitStackInputSurvivesAFrame",
+      "IncomingHomeSource.ExplicitStackInputSurvivesAnAllocatedFrame",
+      "IncomingHomeSource.SelectedCallerRetainsExplicitScalarDeclarations"
+    ],
+    "serial_retry_passed": 4,
+    "final_unique_passed": 1319,
+    "skipped": 0,
+    "repository_timeouts_unchanged": true,
+    "retry_details": "serial-retry.json"
+  },
+  "execution": {
+    "calls": {
+      "profiles": 8,
+      "original_cases": 1024,
+      "builds": 96,
+      "rebuilt_cases": 12288,
+      "expected_refusals": 8
+    },
+    "leading": {
+      "leading": true,
+      "profiles": 12,
+      "original_cases": 1536,
+      "builds": 96,
+      "rebuilt_cases": 12288
+    },
+    "after-int-final": {
+      "leading": false,
+      "profiles": 12,
+      "original_cases": 1536,
+      "builds": 96,
+      "rebuilt_cases": 12288
+    }
+  },
+  "execution_totals": {
+    "builds": 288,
+    "rebuilt_cases": 36864,
+    "original_cases": 4096
+  },
+  "matrix": {
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "fpr_modes": [
+      "FR=0",
+      "FR=1"
+    ],
+    "source_compilers": [
+      "Homebrew clang version 22.1.6",
+      "mips64-linux-gnuabi64-gcc (Debian 12.2.0-14) 12.2.0"
+    ],
+    "source_routes": [
+      "HighC",
+      "LLVMC"
+    ],
+    "optimization": [
+      "O0",
+      "O2"
+    ],
+    "source_compilation_default": "classic; emitted attributes must establish compressed mode",
+    "call_selections": [
+      "caller only against original callee",
+      "callee only against original caller",
+      "both reconstructed together"
+    ],
+    "checks": [
+      "result bit patterns, including NaN payloads and signed zero",
+      "FCSR",
+      "preserved GPRs/FPRs",
+      "SP, return link and an executed classic instruction after return"
+    ]
+  },
+  "negative_controls": [
+    "The previous library fails the actual leading-float MIPS16 definition check; prototype comments are not accepted as evidence.",
+    "The previous library refuses the typed MIPS16 direct call with overlapping FP/integer entry arguments.",
+    "Four classic-to-MIPS16 compiler stub profiles execute originally but both source routes remain explicitly refused (8 source refusals, excluded from successful build totals)."
+  ],
+  "receipts": {
+    "owner-tests.xml": "eeff1d93735335ba76177d321ef2609bdbd4293447df12318b2e59309124e5ce",
+    "serial-retry.json": "b17116a03d3619e4851534f306e146d1d5510fcd8a91c28692d4bf89009b21db",
+    "execution-qualification.json": "2c79dc3e0f107fc4cca986960d79403ee6d3341b133087fac7e1fb4a773bbdd6",
+    "calls/results.json": "71c96ca3aa9fdbc4955bb355604466e394fc2e81e8d24bfa246fb8c347470956",
+    "leading/results.json": "66dbec573838a0595a628c74dc85da2eb62c0a926b996818ae8f5c648f222689",
+    "after-int-final/results.json": "4e10d50a2b3b76e001799a832765671f27c675ef602ce1dc3f04fb630a59ee58",
+    "performance.json": "839a98521b52e1e6d294590a45118e40cbcc1df63247c7bd642a4c25e98e0f9f"
+  },
+  "performance": {
+    "baseline": "011b60b31fcc5d99180585f846e4237fa4fa716c",
+    "cold": "31 randomized triples per startup/HighC/LLVMC group; identical-baseline control; threads=1/default",
+    "warm": "9 alternating pairs, 100 requests/process; HighC/LLVMC, threads=1/default",
+    "output": "Complete ubus call C is byte-identical; no normalization",
+    "result": "No statistically resolved CPU or wall slowdown in this run; warm intervals remain wide. No optimization or global speed claim.",
+    "raw_results": "ignored build-mips/mips-legacy-completion/mips16-carriers/performance.json"
+  },
+  "limits": [
+    "MIPS16 execution qualification here is float,uint32_t parameters and a uint32_t result, plus the earlier uint32_t,float leaf.",
+    "Split double entry adapters, variadic entry reconstruction, linker/runtime prototype association and floating-return helpers remain unqualified.",
+    "The ordinary scalar descriptor declines MIPS16 floating results and MIPS64 MIPS16 placement.",
+    "Old DSP64 rounded/saturating extraction, signed DMADD/DMSUB and historical MIPS I-III timing are unchanged.",
+    "Three-platform CI and merge to dev are tracked separately; this receipt records local verification."
+  ]
+}

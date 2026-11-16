@@ -5084,7 +5084,11 @@ void HighCWriter::bindParams(const HighFunc &Func) const {
           {Param.RegOff, Param.MedIndex,
            static_cast<uint16_t>(Param.Type ? Param.Type->Size : 0)});
     DebugParamBindings Bound =
-        bindDebugParams(Opts.TheArch, Opts.Format, *DebugFn, Sites, Dbg);
+        bindDebugParams(Opts.TheArch, Opts.Format, *DebugFn, Sites, Dbg,
+                        Opts.Image && isMIPS(Opts.TheArch)
+                            ? Opts.Image->instructionModeAt(Func.Entry)
+                                  .value_or(InstructionMode::Default)
+                            : InstructionMode::Default);
     ParamBindings = std::move(Bound.Params);
     ParamsPlaced = Bound.Placed;
     for (size_t PI = 0; PI < ParamBindings.size(); ++PI)

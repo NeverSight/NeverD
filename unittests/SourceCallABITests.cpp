@@ -8,6 +8,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
@@ -16,6 +17,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <memory>
 #include <vector>
 using namespace neverd;
 namespace {
@@ -54,6 +56,36 @@ TEST(SourceCallABI, PlacesFixedScalarArgumentsByPlatform) {
       Windows.Signature.Parameters[1].Location.RegisterOffset,
       getTargetRegInfo(Arch::X64).floatingParamRegs(BinaryFormat::COFF)[1]);
 }
+TEST(SourceCallABI, MIPS16BodyCarriersRemainPartOfTheCheckedContract) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto H = contract({NdType::makeFloat(4), NdType::makeInt(4, false)});
+    H.Signature.ReturnType = NdType::makeInt(4, false);
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error,
+                                     InstructionMode::MIPS16))
+        << Error;
+    ASSERT_TRUE(H.Signature.MIPSScalars);
+    EXPECT_TRUE(H.Signature.MIPSScalars->MIPS16Parameters);
+    const auto &First = H.Signature.Parameters.front().Location;
+    EXPECT_EQ(First.Kind, SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(First.RegisterOffset,
+              getTargetRegInfo(A)
+                  .integerArgumentLayout(BinaryFormat::ELF)
+                  .Registers[0]);
+    EXPECT_TRUE(validateSourceABI(H.Signature, Error)) << Error;
+    auto Changed = H.Signature;
+    auto WrongMode =
+        std::make_shared<FloatingCallArguments>(*Changed.MIPSScalars);
+    WrongMode->MIPS16Parameters = false;
+    Changed.MIPSScalars = std::move(WrongMode);
+    EXPECT_FALSE(validateSourceABI(Changed, Error));
+    H.Signature.ReturnType = NdType::makeFloat(4);
+    EXPECT_FALSE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error,
+                                      InstructionMode::MIPS16));
+    EXPECT_NE(Error.find("integer, pointer or void result"), std::string::npos);
+  }
+}
+
 TEST(SourceCallABI, MIPSCallContractsRejectChangedCarriersAndVariadicTypes) {
   const auto Double = NdType::makeFloat(8);
   for (auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
