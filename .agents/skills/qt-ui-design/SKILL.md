@@ -5,7 +5,7 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.15"
+  version: "1.16"
   qt-version: "6.x"
   category: conceptual
   changelog: "Section 1.9: an entry of a kept list can always leave it and a removal that only forgets says what stays; text the application did not write is shown in the plain format, because a label left to Qt's default lays out markup and Qt Quick fetches an image it names"

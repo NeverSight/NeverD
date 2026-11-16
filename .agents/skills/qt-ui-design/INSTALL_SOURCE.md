@@ -54,3 +54,8 @@ the application keeps, the rule on text the application did not write, and
 their two checklist items came the same day from adding project removal to
 that window and from finding that a project's name could make it fetch an
 image.
+
+The profile's "When the Qt version changes" section and the first rule of
+"Plugin views and the Agent" came on 2026-11-16 from comparing the workbench
+built against Qt 6.8.3 and Qt 6.12, window by window and under a real
+compositor, after the move to 6.12 took a window's shadow.
