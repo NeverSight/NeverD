@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mips-native-qualification-${{ inputs.source_sha }}
+  group: mips-native-qualification-${{ inputs.scope }}-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 jobs:
