@@ -343,6 +343,12 @@ ASYNC_FRAME_TEXT(kSignalLiveLR, "-DNEVERD_LIVE_LR")
 ASYNC_FRAME_TEXT(kSignalCompactLiveLR, "-DNEVERD_COMPACT_LIVE_LR")
 ASYNC_FRAME_TEXT(kSignalUnsignedLR, "-DNEVERD_UNSIGNED_LR")
 ASYNC_FRAME_TEXT(kSignalIALR, "-DNEVERD_IA_LR")
+ASYNC_FRAME_TEXT(kSignalPACMLR, "-DNEVERD_PACM_LR")
+ASYNC_FRAME_TEXT(kSignalExplicitLR, "-DNEVERD_EXPLICIT_LR")
+ASYNC_FRAME_TEXT(kSignalExplicitProbe, "--probe-pauth-lr")
+ASYNC_FRAME_TEXT(kSignalPCImages, "structural_pc_signing_images")
+ASYNC_FRAME_TEXT(kSignalPCNative, "native_pc_recipe_deliveries")
+ASYNC_FRAME_VALUE(unsigned, kSignalSigningOffset, 4)
 ASYNC_FRAME_TEXT(kSignalCatchSymbol, "_signal_finish_catch")
 ASYNC_FRAME_TEXT(kSignalCatchMapping, "signal_finish_catch")
 // A bad authenticated resume can repeatedly trap in the installed observer.
@@ -381,7 +387,19 @@ Lfunc_begin:
 #ifdef NEVERD_COMPACT_FRAME
  nop
 #endif
-#ifdef NEVERD_UNSIGNED_LR
+#ifdef NEVERD_PACM_LR
+ .inst 0xd50324ff
+#elif defined(NEVERD_EXPLICIT_LR)
+ nop
+#endif
+Lsign:
+#ifdef NEVERD_EXPLICIT_LR
+#ifdef NEVERD_IA_LR
+ .inst 0xdac1a3fe
+#else
+ .inst 0xdac1a7fe
+#endif
+#elif defined(NEVERD_UNSIGNED_LR)
  nop
 #elif defined(NEVERD_IA_LR)
  paciasp
@@ -463,10 +481,22 @@ Lcleanup:
  sub x9, x9, #0x5a
  cbnz x9, Lresume_end
  add sp, sp, #32
+#ifdef NEVERD_EXPLICIT_LR
+#ifdef NEVERD_IA_LR
+ .long 0xf380001f | ((.-Lsign)/4)<<5
+#else
+ .long 0xf3a0001f | ((.-Lsign)/4)<<5
+#endif
+#else
+#ifdef NEVERD_PACM_LR
+ adr x16, Lsign
+ .inst 0xd50324ff
+#endif
 #ifdef NEVERD_IA_LR
  autiasp
 #elif !defined(NEVERD_UNSIGNED_LR)
  autibsp
+#endif
 #endif
 Lresume:
 #ifdef NEVERD_LOCAL_CATCH
@@ -478,10 +508,25 @@ Lresume:
 #ifdef NEVERD_LIVE_LR
  // The source uses Darwin's normal synchronous ABI when it starts calling.
  // The bridge must restore the original recipe before this conversion.
-#if defined(NEVERD_UNSIGNED_LR) || defined(NEVERD_IA_LR)
+#if defined(NEVERD_UNSIGNED_LR) || defined(NEVERD_IA_LR) || \
+    defined(NEVERD_PACM_LR) || defined(NEVERD_EXPLICIT_LR)
  add sp, sp, #32
+#ifdef NEVERD_EXPLICIT_LR
+#ifdef NEVERD_IA_LR
+ .long 0xf380001f | ((.-Lsign)/4)<<5
+#else
+ .long 0xf3a0001f | ((.-Lsign)/4)<<5
+#endif
+#else
+#ifdef NEVERD_PACM_LR
+ adr x16, Lsign
+ .inst 0xd50324ff
+#endif
 #ifdef NEVERD_IA_LR
  autiasp
+#elif defined(NEVERD_PACM_LR)
+ autibsp
+#endif
 #endif
  pacibsp
  sub sp, sp, #32
@@ -692,6 +737,7 @@ ASYNC_FRAME_TEXT(kSignalScopeDriver, R"cpp(
 #include <signal.h>
 #include <unistd.h>
 
+static bool hasPAuthLR;
 struct SignalMarker {
   int value;
 };
@@ -833,12 +879,12 @@ static void observe(int, siginfo_t *, void *ctx) {
       _exit(32);
     interrupted = ndDarwinArm64eSignalCursor(uc);
     if (!ndDarwinArm64eReadCaller(uc, row, saved, savedCount, low, high,
-                                  false, &caller, callerRegisters))
+                                  hasPAuthLR, &caller, callerRegisters))
       _exit(28);
     const auto sp = arm_thread_state64_get_sp(uc->uc_mcontext->__ss);
     const auto tightLow = sp - NDArm64eLiveLRBridgeBytes + NDArm64eStackAlignment;
     if (ndDarwinArm64eDeliverSignalException(
-            uc, site, row, saved, savedCount, &vectors, tightLow, high, false,
+            uc, site, row, saved, savedCount, &vectors, tightLow, high, hasPAuthLR,
             deliver, &exception) ||
         memcmp(&before, uc->uc_mcontext, sizeof(before)))
       _exit(20);
@@ -867,7 +913,7 @@ static void observe(int, siginfo_t *, void *ctx) {
   }
 #endif
   if (!ndDarwinArm64eDeliverSignalException(uc, site, row, saved, savedCount,
-                                            &vectors, low, high, false, deliver,
+                                            &vectors, low, high, hasPAuthLR, deliver,
                                             &exception))
     _exit(13);
   if (site.AtProtectedCall && !row.SavedLR &&
@@ -892,7 +938,24 @@ static void *interrupt(void *) {
 struct Outer {
   ~Outer() { trace = trace * 10 + 2; }
 };
+static void unavailablePAuthLR(int) { _exit(2); }
+static int probePAuthLR() {
+  struct sigaction action{};
+  action.sa_handler = unavailablePAuthLR;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGILL, &action, nullptr))
+    return 1;
+  auto pc = (uintptr_t)ptrauth_strip((void *)&probePAuthLR,
+                                     ptrauth_key_function_pointer);
+  volatile uintptr_t a = ndDarwinArm64eSignExplicitIA(pc, pc, pc);
+  volatile uintptr_t b = ndDarwinArm64eSignExplicitIB(pc, pc, pc);
+  (void)a;
+  (void)b;
+  return 0;
+}
 int main(int argc, char **argv) {
+  if (argc == 2 && !strcmp(argv[1], "--probe-pauth-lr"))
+    return probePAuthLR();
   if (argc != 6)
     return 1;
   alarm(30);
@@ -926,6 +989,12 @@ int main(int argc, char **argv) {
            ? (uintptr_t)ptrauth_strip(scope, ptrauth_key_function_pointer)
            : (uintptr_t)ptrauth_strip(tick, ptrauth_key_function_pointer)) +
       strtoull(argv[3], nullptr, 10);
+  const bool explicitPC = row.Signing == NDArm64eSignedIAWithCFAPC ||
+                          row.Signing == NDArm64eSignedIBWithCFAPC;
+  hasPAuthLR = explicitPC;
+  if (explicitPC || row.Signing == NDArm64eSignedIAWithCFAPACM ||
+      row.Signing == NDArm64eSignedIBWithCFAPACM)
+    row.SigningPC += owner;
   site.Begin += owner;
   site.End += owner;
   if (site.ProtectedReturn)

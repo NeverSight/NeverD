@@ -156,6 +156,18 @@ enum class Leave {
   Spin,
 };
 
+/// How the table's language handler is reached.
+enum class Cookie {
+  /// `__C_specific_handler` itself.
+  None,
+  /// `__GSHandlerCheck_SEH`, which checks the frame's stack cookie and then
+  /// calls it for exceptions and for unwinds, as its record says.
+  Checked,
+  /// The same, with a record that keeps exceptions from the handler: the
+  /// table's `__except` never runs.
+  CheckedForUnwindsOnly,
+};
+
 /// MSVC's table for
 ///   __try { __try { __try { body } __finally { inner } }
 ///           __except (1) { handler } } __finally { outer }
@@ -165,7 +177,8 @@ enum class Leave {
 /// local unwind runs between the other two.
 std::vector<MedFunc> threeScopesOverOneRange(Leave How,
                                              bool MiddleIsFinally = false,
-                                             bool BodyCalls = true) {
+                                             bool BodyCalls = true,
+                                             Cookie Wrapped = Cookie::None) {
   MedFunc Parent;
   Parent.Entry = ParentVA;
   Parent.Name = "three_scopes_parent";
@@ -224,6 +237,18 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
   EH.ParseStatus = ExceptionParseStatus::Complete;
   EH.Personality = ExceptionPersonality::CSpecificHandler;
   EH.PersonalityVA = PersonalityVA;
+  if (Wrapped != Cookie::None) {
+    EH.Personality = ExceptionPersonality::GSHandlerCheckSEH;
+    EH.PersonalityName = "__GSHandlerCheck_SEH";
+    GSCookieInfo Record;
+    Record.ParseStatus = ExceptionParseStatus::Complete;
+    Record.CookieOffset = 0x40;
+    Record.HasExceptionHandler = Wrapped == Cookie::Checked;
+    Record.HasUnwindHandler = true;
+    Record.Payload = {uint8_t(0x40 | (Record.HasExceptionHandler ? 3 : 2)), 0,
+                      0, 0};
+    EH.GSCookie = std::move(Record);
+  }
   EH.SEH.emplace();
   EH.SEH->Scopes = {finallyRow(InnerFinallyVA),
                     MiddleIsFinally ? finallyRow(MiddleFinallyVA) : exceptRow(),
@@ -693,6 +718,29 @@ TEST(TableSEHSourceScopes, LLVMCKeepsALoopOfBlocksThatOnlyJump) {
   EXPECT_EQ(countOf(Function, "__try {"), 3u) << Function;
   // The blocks that lead into the loop only jump, and are passed as any.
   EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
+}
+
+// A scope table this view does not lower says so whatever its language
+// handler is called: one behind a cookie check whose record keeps exceptions
+// from the handler has an `__except` that never runs, so it is not lowered,
+// and the function must not read as one without SEH.
+TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+      Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
+      Cookie::CheckedForUnwindsOnly);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const std::string Source = printedC(*Module);
+  const std::string Function = parentIn(Source);
+  ASSERT_FALSE(Function.empty()) << Source;
+  EXPECT_NE(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+  EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
+  EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
 }
 
 // The render that marks source positions drops the same blocks as the

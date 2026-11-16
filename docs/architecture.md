@@ -1255,7 +1255,10 @@ stack and its return address. The frame a filter takes is captured before the
 first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
-lowered instead.
+lowered instead. The note follows the scope table in the function's exception
+metadata, not the name of its language handler: a table whose handler checks
+a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
+function this view leaves unlowered behind that check says so too.
 This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because
