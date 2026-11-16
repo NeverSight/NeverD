@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MIPS/MIPS16EntryAdapter.h"
 #include "PipelineCallAbiDetail.h"
 #include "PipelineFunctionNames.h"
 #include "PipelineLLVMDetail.h"
@@ -348,6 +349,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
         !admitsSomeFunction(Result, ModeName, Result.Error))
       return false;
   }
+
+  if (Opts.SourceProjection && !Opts.PatchMode)
+    pipeline_detail::projectMIPS16EntryCalls(Img, Result.MedFuncs, Dbg);
 
   std::vector<std::pair<va_t, std::string>> ImportMap;
   for (const auto &[Addr, Name] : Img.getImportAddressNames())

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Execute typed MIPS16 calls and classic entry stubs after C reconstruction.
 
-An owned C callee receives a leading float and returns its bits XOR an integer.
-Classic linker entry stubs are recorded as expected source refusals until their
-prototype propagation is qualified. The caller takes integer payloads, so its
-entry does not hide an FP transport
-mistake. Rebuild each side separately against the original other side; check
+An owned C callee receives a leading float or double and returns its observed
+bits XOR an integer. Classic callers execute the compiler's actual FP entry
+stub. The caller takes integer payloads, so its entry does not hide an FP
+transport mistake. Rebuild each side separately against the original other side; check
 both byte orders, FR=0/1, HighC/LLVMC and O0/O2 with Clang and optional GCC.
 """
 
@@ -61,7 +60,6 @@ u32 kernel(u32 mask, u32 low, u32 high) {
 
 def run(args, artifacts):
     rows = []
-    refusals = []
     rng = random.Random(0x4d313646)
     patterns = [0, 1, 0x80000000, 0x007fffff, 0x00800000, 0x7f7fffff,
                 0x7f800000, 0xff800000, 0x7fa12345, 0xffc54321,
@@ -81,6 +79,11 @@ def run(args, artifacts):
     def command(argv):
         roundtrip.run_command(artifacts, argv, artifacts.work / "command.log")
 
+    compilers = {"clang": args.clang, "gcc": args.gcc}
+    original_compiler = compilers[args.original_compiler]
+    rebuild_names = args.rebuild_compiler or (["clang", "gcc"] if args.gcc else ["clang"])
+    if original_compiler is None or any(compilers[name] is None for name in rebuild_names):
+        raise ValueError("selected GNU compiler requires --gcc")
     modes = args.mode or ("mips16", "classic")
     for little in (False, True):
         for mode in modes:
@@ -117,8 +120,8 @@ def run(args, artifacts):
                 caller.write_text(DOUBLE_CALLER if args.double else CALLER)
                 callee.write_text(DOUBLE_CALLEE if args.double else CALLEE)
                 caller_obj, callee_obj = directory / "caller.o", directory / "callee.o"
-                compile(args.clang, caller, caller_obj, mode, "-O2")
-                compile(args.clang, callee, callee_obj, "mips16", "-O2")
+                compile(original_compiler, caller, caller_obj, mode, "-O2")
+                compile(original_compiler, callee, callee_obj, "mips16", "-O2")
                 original = directory / "original.elf"
                 link([caller_obj, callee_obj], original)
                 expected = gpr_float.observe(original, little, mode, fr, cases,
@@ -127,27 +130,8 @@ def run(args, artifacts):
                 scalar = "double" if args.double else "float"
                 header.write_text(f"unsigned int fp_callee({scalar} value, unsigned int mask);\n")
                 command([args.neverd, "types", original, "--declare", header, "--save"])
-                # This separate linker-created local symbol does not yet acquire
-                # the callee's source signature. Keep the refusal explicit, rather
-                # than silently skipping that compiler-produced call boundary.
-                if mode == "classic":
-                    for route in ("highc", "llvmc"):
-                        try:
-                            command([args.neverd, "decompile", original, "--func", "kernel",
-                                     *(["--llvm"] if route == "llvmc" else []),
-                                     "-o", directory / "refused.c"])
-                        except RuntimeError as error:
-                            assert "MIPS floating call ABI is not qualified" in str(error)
-                            refusals.append({"profile": profile, "route": route,
-                                             "reason": "unbound classic MIPS16 entry stub"})
-                            artifacts.write("expected-refusals.json", refusals)
-                        else:
-                            raise AssertionError("classic stub admission changed: execute and qualify it")
-                    artifacts.discard(original, caller_obj, callee_obj, caller, callee, header)
-                    continue
-                functions = [("kernel", callee_obj), ("together", None)]
-                if mode == "mips16":
-                    functions.append(("fp_callee", caller_obj))
+                functions = [("kernel", callee_obj), ("fp_callee", caller_obj),
+                             ("together", None)]
                 for function, other in functions:
                     for route in ("highc", "llvmc"):
                         source = directory / f"{function}-{route}.c"
@@ -157,7 +141,8 @@ def run(args, artifacts):
                         command([args.neverd, "decompile", original, *selection,
                                  *(["--llvm"] if route == "llvmc" else []), "-o", source])
                         artifacts.keep_source(source)
-                        for compiler in (args.clang, *([args.gcc] if args.gcc else [])):
+                        for compiler_name in rebuild_names:
+                            compiler = compilers[compiler_name]
                             for opt in ("-O0", "-O2"):
                                 obj, rebuilt = directory / "rebuilt.o", directory / "rebuilt.elf"
                                 compile(compiler, source, obj, "classic", opt)
@@ -179,7 +164,8 @@ def run(args, artifacts):
                                     "profiles": 4 * len(modes),
                                     "original_cases": 4 * len(modes) * len(cases),
                                     "builds": len(rows), "rebuilt_cases": len(rows) * len(cases),
-                                    "expected_refusals": len(refusals)})
+                                    "original_compiler": args.original_compiler,
+                                    "rebuild_compilers": rebuild_names})
     print(json.dumps({"builds": len(rows), "rebuilt_cases": len(rows) * len(cases)}))
 
 
@@ -192,7 +178,10 @@ if __name__ == "__main__":
     for name in ("neverd", "clang", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--gcc", type=Path)
+    parser.add_argument("--original-compiler", choices=("clang", "gcc"), default="clang")
+    parser.add_argument("--rebuild-compiler", action="append", choices=("clang", "gcc"))
     args = parser.parse_args()
     with MIPSValidationArtifacts(args.output, "mips16-floating-call-roundtrip",
-                                 (args.neverd, args.clang, args.assembler, args.ld)) as artifacts:
+                                 (args.neverd, args.clang, args.assembler, args.ld,
+                                  *([args.gcc] if args.gcc else []))) as artifacts:
         run(args, artifacts)

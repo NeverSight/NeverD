@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/c/DebugParamBinding.h"
+#include "../../../lib/pipeline/MIPS/MIPS16EntryAdapter.h"
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
@@ -501,6 +502,21 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
         EXPECT_EQ(Signature->second.Scalars[0].Kind,
                   SourceABICarrierKind::FloatingRegister);
         EXPECT_EQ(Signature->second.Scalars[0].Register, mipsreg::w(12));
+        bool OriginalTarget = false, SourceTarget = false;
+        for (const auto &Function : Result.LowFuncs)
+          if (Function.Entry == 0x10100)
+            for (const auto &Block : Function.Blocks)
+              for (const auto &Op : Block.Ops)
+                OriginalTarget |= Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                                  Op.Inputs[0].isConst() &&
+                                  Op.Inputs[0].Offset == 0x10160;
+        for (const auto &Function : Result.MedFuncs)
+          if (Function.Entry == 0x10100)
+            for (const auto &Call : Function.CallInfos)
+              SourceTarget |=
+                  Call.TargetAddr == 0x10140 && Call.TargetName == "fp_callee";
+        EXPECT_TRUE(OriginalTarget);
+        EXPECT_TRUE(SourceTarget);
         CEmitterOptions Emit;
         Emit.TheArch = GetParam();
         Emit.Format = BinaryFormat::ELF;
@@ -515,8 +531,147 @@ TEST_P(MIPS16Pipeline, ClassicEntryStubUsesItsDeclaredCompressedBody) {
         } else {
           ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
         }
+        EXPECT_NE(Text.find("fp_callee("), std::string::npos) << Text;
+        if (!Together)
+          EXPECT_EQ(Text.find("entry_adapter"), std::string::npos) << Text;
       }
   }
+}
+
+TEST_P(MIPS16Pipeline, EntryAdapterProofChecksEveryParameterByteAndEffect) {
+  enum class Change {
+    None,
+    WrongFloatRegister,
+    WrongHighWord,
+    WriteStackPointer,
+    WriteReturnAddress,
+    Store,
+    Load,
+    Call,
+    MissingSlot,
+    MissingModeTag,
+    MissingDeclaration,
+    UnauthenticatedDeclaration,
+    Variadic,
+    FloatingResult,
+    ExistingEntryDeclaration
+  };
+  for (bool Double : {false, true})
+    for (bool FP64 : {false, true})
+      for (Change C :
+           {Change::None, Change::WrongFloatRegister, Change::WrongHighWord,
+            Change::WriteStackPointer, Change::WriteReturnAddress,
+            Change::Store, Change::Load, Change::Call, Change::MissingSlot,
+            Change::MissingModeTag, Change::MissingDeclaration,
+            Change::UnauthenticatedDeclaration, Change::Variadic,
+            Change::FloatingResult, Change::ExistingEntryDeclaration}) {
+        if (!Double && C == Change::WrongHighWord)
+          continue;
+        SCOPED_TRACE(Double);
+        SCOPED_TRACE(FP64);
+        SCOPED_TRACE(int(C));
+        mips_test::ELFBytes File(GetParam());
+        File.Bytes.resize(0x180);
+        File.put(52 + 16, File.Bytes.size(), 4);
+        File.put(52 + 20, File.Bytes.size(), 4);
+        File.abiFlags();
+        File.Bytes[0xe5] = FP64 ? 2 : 1;
+        File.Bytes[0xe7] = FP64 ? 6 : 1;
+        File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+        File.put(24, 0x10100, 4);
+        File.put(0xec, 0x400, 4);
+        // Independently compiled GCC12.4 adapter words. A double's low word
+        // occupies a0 on little endian and a1 on big endian. FR=1 must read
+        // the high half of f12; FR=0 reads the low half of f13 instead.
+        const bool Little = GetParam() == Arch::MIPS32EL;
+        const unsigned Low = Little ? 4 : 5, High = Little ? 5 : 4;
+        const uint32_t First = 0x44006000 | ((Double ? Low : 4) << 16);
+        const uint32_t Second = (FP64 ? 0x44606000 : 0x44006800) | (High << 16);
+        std::vector<uint32_t> Words = {0x3c190001, 0x27390141};
+        if (Double)
+          Words.push_back(First);
+        Words.push_back(0x03200008);
+        Words.push_back(Double ? Second : First);
+        switch (C) {
+        case Change::WrongFloatRegister:
+          Words[Double ? 2 : 3] += 2 << 11;
+          break;
+        case Change::WrongHighWord:
+          Words.back() = 0x44006000 | (High << 16);
+          break;
+        case Change::WriteStackPointer:
+          Words.insert(Words.end() - 2, 0x27bdfff8);
+          break;
+        case Change::WriteReturnAddress:
+          Words.insert(Words.end() - 2, 0x27ff0004);
+          break;
+        case Change::Store:
+          Words.insert(Words.end() - 2, 0xafa40000);
+          break;
+        case Change::Load:
+          Words.insert(Words.end() - 2, 0x8fa60000);
+          break;
+        case Change::Call:
+          Words[Words.size() - 2] = 0x0320f809;
+          break;
+        case Change::MissingSlot:
+          Words.pop_back();
+          break;
+        case Change::MissingModeTag:
+          --Words[1];
+          break;
+        default:
+          break;
+        }
+        for (size_t I = 0; I < Words.size(); ++I)
+          File.put(0x100 + I * 4, Words[I], 4);
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        Image->Symbols.push_back(Symbol::makeFunc(0x10100, Words.size() * 4));
+        Image->Symbols.push_back(Symbol::makeFunc(0x10140, 6));
+        Image->MIPS->CodeModeEntries.emplace(0x10100,
+                                             InstructionMode::MIPSClassic);
+        Image->MIPS->CodeModeEntries.emplace(0x10140, InstructionMode::MIPS16);
+        Image->MIPS->CodeRegions.push_back({0x10100, 0x10100 + Words.size() * 4,
+                                            InstructionMode::MIPSClassic});
+        Image->MIPS->CodeRegions.push_back(
+            {0x10140, 0x10146, InstructionMode::MIPS16});
+        class BodyDebug final : public NullDebugContext {
+        public:
+          bool Double;
+          Change C;
+          BodyDebug(bool D, Change X) : Double(D), C(X) {}
+          std::optional<FunctionSym>
+          resolveFunction(va_t Address) const override {
+            if (C == Change::MissingDeclaration ||
+                (Address != 0x10140 &&
+                 !(C == Change::ExistingEntryDeclaration &&
+                   Address == 0x10100)))
+              return std::nullopt;
+            FunctionSym F;
+            F.Name = "declared_body";
+            F.Addr = Address;
+            F.ReturnType = C == Change::FloatingResult
+                               ? NdType::makeFloat(4)
+                               : NdType::makeInt(4, false);
+            F.Params = {{"value", NdType::makeFloat(Double ? 8 : 4)},
+                        {"mask", NdType::makeInt(4, false)}};
+            F.IsVariadic = C == Change::Variadic;
+            if (C != Change::UnauthenticatedDeclaration)
+              F.PrototypeLibrary = UserPrototypeLibrary.str();
+            return F;
+          }
+        } Debug(Double, C);
+        const auto Proof =
+            pipeline_detail::proveMIPS16EntryAdapter(*Image, 0x10100, Debug);
+        EXPECT_EQ(bool(Proof), C == Change::None);
+        if (Proof) {
+          EXPECT_EQ(Proof->Body, 0x10140u);
+          EXPECT_FALSE(Proof->EntryArguments.MIPS16Parameters);
+          EXPECT_TRUE(Proof->BodyArguments.MIPS16Parameters);
+        }
+      }
 }
 
 TEST_P(MIPS16Pipeline, ExtendAndScalarLeavesReachBothSourcesWithExactMode) {
