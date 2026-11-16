@@ -7,6 +7,7 @@ caller and callee independently through HighC/LLVMC, then link each side and
 both against the same runtime. Observe all result bits, the return mode,
 FCSR, stack/link and preserved GPR/FPR state in an independent emulator.
 Without --neverd, qualify compiler interworking using the owned original C.
+With --floating-input, also traverse the classic hard-float entry stub.
 """
 
 import argparse
@@ -75,7 +76,7 @@ def run(args, artifacts):
              'sc': ('_Complex float', 2), 'dc': ('_Complex double', 4)}
     compilers = {'clang': args.clang, 'gcc': args.gcc}
     rng = random.Random(0x4d313652)
-    for kind in args.kind or kinds:
+    for kind in args.kind or (('sf', 'df') if args.floating_input else kinds):
         ctype, count = kinds[kind]
         patterns = [0, 1, 0x80000000, 0x7f800000, 0xff800000, 0x7fa12345,
                     0xffc54321, 0x7ff12345, 0xffffffff]
@@ -83,16 +84,27 @@ def run(args, artifacts):
                     0x71395217) for j in range(len(patterns))]
         samples += [([rng.getrandbits(32) for _ in range(count)], rng.getrandbits(32))
                     for _ in range(23)]
+        parameter = f'{ctype} value' if args.floating_input else 'const u32 *input'
         prelude = ('typedef unsigned int u32;\n'
                    '#define M16 __attribute__((mips16,noinline))\n'
                    f'union payload {{ {ctype} value; u32 words[{count}]; }};\n'
-                   f'M16 {ctype} fp_callee(const u32 *input);\n')
-        callee_text = prelude + f'M16 {ctype} fp_callee(const u32 *input) {{\n'
-        callee_text += 'union payload p;\n' + ''.join(
-            f'p.words[{i}] = input[{i}];\n' for i in range(count))
-        callee_text += 'return p.value;\n}\n'
+                   f'M16 {ctype} fp_callee({parameter});\n')
+        callee_text = prelude + f'M16 {ctype} fp_callee({parameter}) {{\n'
+        if args.floating_input:
+            callee_text += 'return value;\n}\n'
+        else:
+            callee_text += 'union payload p;\n' + ''.join(
+                f'p.words[{i}] = input[{i}];\n' for i in range(count))
+            callee_text += 'return p.value;\n}\n'
         caller_text = prelude + 'u32 kernel(const u32 *input, u32 mask) {\n'
-        caller_text += 'union payload p; p.value = fp_callee(input);\nu32 out = mask;\n'
+        caller_text += 'union payload p;\n'
+        if args.floating_input:
+            caller_text += ''.join(f'p.words[{i}] = input[{i}];\n'
+                                   for i in range(count))
+            caller_text += 'p.value = fp_callee(p.value);\n'
+        else:
+            caller_text += 'p.value = fp_callee(input);\n'
+        caller_text += 'u32 out = mask;\n'
         for i in range(count):
             caller_text += (f'out ^= p.words[{i}];\n' if i == 0 else
                             f'out ^= (p.words[{i}] << {i*7}) | (p.words[{i}] >> {32-i*7});\n')
@@ -158,7 +170,9 @@ def run(args, artifacts):
                     routes = ('highc', 'llvmc') if args.neverd else ('original-source',)
                     if args.neverd:
                         declaration = directory / 'declaration.h'
-                        declaration.write_text(f'{ctype} fp_callee(const unsigned int *input);\n')
+                        declared_parameter = (parameter if args.floating_input
+                                              else 'const unsigned int *input')
+                        declaration.write_text(f'{ctype} fp_callee({declared_parameter});\n')
                         artifacts.keep_source(declaration)
                         command([args.neverd, 'types', original, '--declare', declaration, '--save'])
                         artifacts.discard(declaration)
@@ -203,6 +217,7 @@ def run(args, artifacts):
     summary = {'builds': len(rows), 'executions': sum(r['cases'] for r in rows),
                'profiles': len(originals), 'original_cases': sum(r['cases'] for r in originals),
                'runtime_source_sha256': digest(args.runtime_source),
+               'floating_input': args.floating_input,
                'neverd': str(args.neverd) if args.neverd else None}
     artifacts.write('summary.json', summary)
     print(json.dumps(summary))
@@ -213,12 +228,15 @@ if __name__ == '__main__':
     for name in ('gcc', 'clang', 'assembler', 'ld', 'runtime-source', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--neverd', type=Path)
+    parser.add_argument('--floating-input', action='store_true')
     parser.add_argument('--kind', action='append', choices=('sf', 'df', 'sc', 'dc'))
     parser.add_argument('--endian', action='append', choices=('be', 'le'))
     parser.add_argument('--mode', action='append', choices=('classic', 'mips16'))
     parser.add_argument('--fr', action='append', type=int, choices=(0, 1))
     parser.add_argument('--rebuild-compiler', action='append', choices=('clang', 'gcc'))
     args = parser.parse_args()
+    if args.floating_input and any(k not in ('sf', 'df') for k in args.kind or ()):
+        parser.error('--floating-input currently requires scalar sf/df results')
     with MIPSValidationArtifacts(args.output, 'mips16-floating-return-roundtrip',
                                  (args.gcc, args.clang, args.assembler, args.ld,
                                   args.runtime_source, *([args.neverd] if args.neverd else []))) as artifacts:
