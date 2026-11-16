@@ -1253,9 +1253,17 @@ dense tool window; a window that holds a conversation takes these instead
   project's menu, after a separator, and its sheet names the project in its
   title, says what the removal keeps (the folder, the conversation and the
   memory in it, and that **Open project…** brings it back), shows the folder,
-  and puts the accent on **Remove project**. Removing deletes nothing, so the
-  word is "remove", never "delete". The project that followed it opens; with
-  none left the window shows its start page and the right panel closes.
+  and puts the accent on **Remove project**. Removing by itself deletes
+  nothing, so the word is "remove", never "delete". The project that followed
+  it opens; with none left the window shows its start page and the right
+  panel closes.
+- Offer what cannot be undone as a box that is never ticked for the person:
+  the same sheet can also delete the Agent's records (`.nd-agent`). While the
+  box is ticked the sentence above it says what is deleted, what is kept and
+  that it cannot be undone, and the button reads **Remove and delete**; the
+  box is clear again each time the sheet opens, and is absent where there are
+  no records to delete. A check box leads its label, so in a right-to-left
+  layout its box stands at the right.
 - Keep a listed folder that did not open as a row, in the quiet text color
   with a folder glyph that carries a mark; its tool tip gives the folder and
   the reason, a click tries it again, and its menu removes it. The window
