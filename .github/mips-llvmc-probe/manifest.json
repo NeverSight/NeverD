@@ -1,0 +1,38 @@
+{
+  "failed_source": "3fa110414f27c804e0970b6b7361b6e673618622",
+  "artifact": 14272889208,
+  "artifact_sha256": "2e51d65a070d2acb82598895816039f829cbc1f3596e3478839976f2496eb364",
+  "cases": [
+    {
+      "name": "CLibraryObjectsTheImageCopiesAreTheHeaders",
+      "file": "CLibraryObjectsTheImageCopiesAreTheHeaders.c",
+      "sha256": "54c9e47235fab519d069ae52d44346690bc454e8bf7a25465aa5dd1d2172acc0"
+    },
+    {
+      "name": "ALibraryRoutineCalledThroughItsImportTakesItsDeclaration",
+      "file": "ALibraryRoutineCalledThroughItsImportTakesItsDeclaration.c",
+      "sha256": "b2d8f3fbf36da304a3dfcc47185416020f386f53696576d37334694b5cf766b6"
+    },
+    {
+      "name": "WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations",
+      "file": "WindowsCRTEnumsAndCallbacksAgreeWithHeaderDeclarations.c",
+      "sha256": "22285363ffdccd9ff821e35cb903a6d73f2ed8081264a196e5efce2db97fdba4"
+    },
+    {
+      "name": "ARuntimeRoutineReturningAFunctionPointerIsDeclared",
+      "file": "ARuntimeRoutineReturningAFunctionPointerIsDeclared.c",
+      "sha256": "c2b3c8ec7701e9cb9723785e632b21fd62e13255775cb80ea8c2ea2ac10a0553"
+    },
+    {
+      "name": "ARuntimeRoutineCalledDirectlyTakesItsPrototype",
+      "file": "ARuntimeRoutineCalledDirectlyTakesItsPrototype.c",
+      "sha256": "9d9bf30a142fd83715a13473d02d8bff75eb4c30d7b8aa3b7f9579cbeafc2d53"
+    },
+    {
+      "name": "WideFrameStoreRetainsBothRuntimeSelectedWords",
+      "file": "WideFrameStoreRetainsBothRuntimeSelectedWords.c",
+      "sha256": "a4f7f3318698adbf664d00baa0b52abc992ab7172c084b3faf404540b9daa694"
+    }
+  ],
+  "scope": "Exact generated C and driver extracted from failure XML; independent fixture/toolchain replay, not the failed NeverD executable."
+}

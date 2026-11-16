@@ -28,6 +28,7 @@ on:
           - render-store-profile
           - worker-cadence
           - dsp64-reference
+          - llvmc-source-repro
 
 permissions:
   contents: read
@@ -37,6 +38,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  llvmc_source_repro:
+    if: inputs.scope == 'llvmc-source-repro'
+    name: Windows LLVMC fixture and sanitizer reproduction
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Install the original pinned fixture compiler
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+      - name: Replay captured source and test isolated causes
+        run: python .github/mips-llvmc-probe/replay.py
+      - name: Upload bounded diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: llvmc-source-repro-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: llvmc-source-evidence/
   constructor:
     if: inputs.scope == 'constructor-repro'
     name: MSVC noncopyable constructor reproducer
