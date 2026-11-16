@@ -7349,6 +7349,10 @@ could not walk through the index a finished job wrote, walks a file whose index 
 not fit it, and loses only the record an index misplaces. An index whose page
 count exceeds its record's length is discarded; complete records in the original
 file still reproduce their exact source without asking the engine.
+The mock warming pass advances a cumulative steady-clock deadline by 20 ms
+per chunk and resets it for each pass. This keeps the preparation phase
+observable without adding each late timer wakeup to all subsequent chunks.
+The same functions, render pages, assertions and CTest limits remain covered.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
 checks that a replica's dispatcher names the page it kept after its owner's change
