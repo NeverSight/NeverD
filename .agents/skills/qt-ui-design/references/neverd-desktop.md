@@ -1249,6 +1249,21 @@ dense tool window; a window that holds a conversation takes these instead
   well of the conversation's `Base` in the same outline.
 - Size a menu to its longest command (`ThemedMenu.fit`). At a desktop's 11
   point text a 230-pixel menu cut "Show project files in the sidebar".
+- Let a project leave the side list. **Remove project…** stands last in the
+  project's menu, after a separator, and its sheet names the project in its
+  title, says what the removal keeps (the folder, the conversation and the
+  memory in it, and that **Open project…** brings it back), shows the folder,
+  and puts the accent on **Remove project**. Removing deletes nothing, so the
+  word is "remove", never "delete". The project that followed it opens; with
+  none left the window shows its start page and the right panel closes.
+- Keep a listed folder that did not open as a row, in the quiet text color
+  with a folder glyph that carries a mark; its tool tip gives the folder and
+  the reason, a click tries it again, and its menu removes it. The window
+  first answered such a folder with an error sheet at every start and no way
+  to take it off the list.
+- A row's tool tip leaves when the row is clicked or its menu opens and
+  comes back with the pointer, so it never lies over the menu. A tool tip
+  wraps at 460 pixels; a path with a reason ran past the window on one line.
 - Check the window with `neverd-agent --capture`, which needs no display, on
   illustrative data in a private home: an empty workspace, a conversation, an
   empty project, a paused goal with queued inputs, each right panel and the
