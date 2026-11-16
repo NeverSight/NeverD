@@ -74,6 +74,18 @@ QString ProjectStore::stateDirectory(const Project &project) {
   return QDir(project.Directory).filePath(".nd-agent");
 }
 
+bool ProjectStore::deleteState(const QString &directory) {
+  const QString state = stateDirectory(Project{{}, {}, directory, {}});
+  const QFileInfo info(state);
+  // A link in its place is left alone: following it would delete what it
+  // points at, which is not in this folder.
+  if (info.isSymLink() || info.isJunction())
+    return false;
+  if (!info.exists())
+    return true;
+  return info.isDir() && QDir(state).removeRecursively();
+}
+
 QString ProjectStore::objectDirectory(const Project &project,
                                       const AnalysisObject &object) {
   return QDir(stateDirectory(project)).filePath("objects/" + object.Id);

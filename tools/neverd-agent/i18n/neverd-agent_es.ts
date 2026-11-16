@@ -823,6 +823,18 @@ Revisión del análisis %3 · %4</translation>
         <source>Remove project</source>
         <translation>Quitar proyecto</translation>
     </message>
+    <message>
+        <source>Also delete the Agent&apos;s records of this project (the .nd-agent folder)</source>
+        <translation>Eliminar también los registros de Agent de este proyecto (la carpeta .nd-agent)</translation>
+    </message>
+    <message>
+        <source>The project leaves the list, and its conversation, memory and evidence are deleted with the .nd-agent folder. This cannot be undone. Other files in the folder are kept.</source>
+        <translation>El proyecto se quita de la lista, y su conversación, su memoria y su evidencia se eliminan con la carpeta .nd-agent. Esto no se puede deshacer. Los demás archivos de la carpeta se conservan.</translation>
+    </message>
+    <message>
+        <source>Remove and delete</source>
+        <translation>Quitar y eliminar</translation>
+    </message>
 </context>
 <context>
     <name>MarkdownView</name>
@@ -1901,6 +1913,10 @@ Aquí aparecen las notas, los scripts y los informes.</translation>
     <message>
         <source>Stop this project&apos;s analysis before removing it.</source>
         <translation>Detenga el análisis de este proyecto antes de quitarlo.</translation>
+    </message>
+    <message>
+        <source>The project was removed from the list, but its records could not be deleted: %1</source>
+        <translation>El proyecto se quitó de la lista, pero no se pudieron eliminar sus registros: %1</translation>
     </message>
 </context>
 <context>

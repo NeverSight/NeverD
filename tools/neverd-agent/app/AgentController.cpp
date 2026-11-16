@@ -21,6 +21,7 @@
 #include <QFileInfo>
 #include <QFutureWatcher>
 #include <QJsonArray>
+#include <QLockFile>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QStringDecoder>
@@ -288,10 +289,16 @@ QVariantList AgentController::projects() const {
 
 QVariantList AgentController::unavailableProjects() const {
   QVariantList values;
+  // `records` says whether the folder holds Agent state that removing it
+  // could also delete.
   for (const auto &entry : Unavailable)
-    values.append(QVariantMap{{"name", entry.Name},
-                              {"directory", entry.Directory},
-                              {"issue", entry.Issue}});
+    values.append(QVariantMap{
+        {"name", entry.Name},
+        {"directory", entry.Directory},
+        {"issue", entry.Issue},
+        {"records", QFileInfo(ProjectStore::stateDirectory(Project{
+                                  {}, {}, localPath(entry.Directory), {}}))
+                        .isDir()}});
   return values;
 }
 
@@ -496,77 +503,107 @@ void AgentController::leaveActiveProject() {
   emit runChanged();
 }
 
-bool AgentController::removeProject(const QString &directory) {
+bool AgentController::removeProject(const QString &directory,
+                                    bool deleteRecords) {
   // The workbench binds one conversation of its own and keeps no list.
   if (!WorkbenchAttachment.isEmpty())
     return false;
   const QString folder = localPath(directory);
+  const QString state =
+      ProjectStore::stateDirectory(Project{{}, {}, folder, {}});
+  const auto listed = [&](const QString &entry) {
+    return sameDirectory(entry, folder);
+  };
+  const auto unavailable = [&](const UnavailableProject &entry) {
+    return listed(entry.Directory);
+  };
   qsizetype index = 0;
-  while (index < Projects.size() &&
-         !sameDirectory(Projects[index].Directory, folder))
+  while (index < Projects.size() && !listed(Projects[index].Directory))
     ++index;
   QString error;
+  bool deleted = true;
   if (index == Projects.size()) {
-    // A folder that did not open holds nothing here to let go of.
-    const auto listed = KnownDirectories.size() + Unavailable.size();
-    KnownDirectories.removeIf(
-        [&](const QString &entry) { return sameDirectory(entry, folder); });
-    Unavailable.removeIf([&](const UnavailableProject &entry) {
-      return sameDirectory(entry.Directory, folder);
-    });
-    if (KnownDirectories.size() + Unavailable.size() == listed)
+    // A folder that did not open holds nothing here to let go of. Only one
+    // on the list is touched.
+    if (std::none_of(KnownDirectories.cbegin(), KnownDirectories.cend(),
+                     listed) &&
+        std::none_of(Unavailable.cbegin(), Unavailable.cend(), unavailable))
       return false;
+    if (deleteRecords) {
+      // Records go only under the project's own lock: another Agent may
+      // have the folder open.
+      if (QFileInfo(state).isDir()) {
+        QLockFile lock(QDir(state).filePath("editor.lock"));
+        if (!lock.tryLock()) {
+          emit operationError(
+              tr("The project is open in another Agent window, or its "
+                 "directory cannot be written: %1")
+                  .arg(folder));
+          return false;
+        }
+      }
+      deleted = ProjectStore::deleteState(folder);
+    }
+    KnownDirectories.removeIf(listed);
+    Unavailable.removeIf(unavailable);
     if (!saveSettings(error))
       emit operationError(error);
-    emit workspaceChanged();
-    return true;
-  }
-  const Project project = Projects[index];
-  if (WritingProjects.contains(project.Id) || projectHasAnalysis(project.Id)) {
-    emit operationError(tr("Stop this project's analysis before removing it."));
-    return false;
-  }
-  // Removing forgets the project and deletes nothing. What has not reached
-  // its folder goes there first, unless the folder is gone: a save would
-  // make it again.
-  QString unsaved;
-  if (QFileInfo(ProjectStore::stateDirectory(project)).isDir()) {
-    pauseProjectGoal(project.Id);
-    if (project.Id == ActiveId && DraftDirty &&
-        !ProjectStore::saveConversation(project, Conversation, error))
-      unsaved = error;
-    for (const auto &chat : SideChatIds.value(project.Id))
-      if (!SideChats.value(project.Id + '/' + chat)->flush(error))
-        unsaved = error;
-  }
-  releaseProject(index);
-  KnownDirectories.removeIf([&](const QString &entry) {
-    return sameDirectory(entry, folder) ||
-           sameDirectory(entry, project.Directory);
-  });
-  bool saved = false;
-  if (project.Id == ActiveId) {
-    // The project that followed it opens, or the last one; with none left,
-    // none is open.
-    ActiveId.clear();
-    DraftDirty = false;
-    DraftTimer.stop();
-    saved = !Projects.isEmpty() &&
-            selectProject(Projects[qMin(index, Projects.size() - 1)].Id);
-    if (!saved)
-      leaveActiveProject();
   } else {
-    // Memory shared from the removed project leaves the open one's view.
-    readMemoryViews();
-    emit objectChanged();
+    const Project project = Projects[index];
+    if (WritingProjects.contains(project.Id) ||
+        projectHasAnalysis(project.Id)) {
+      emit operationError(
+          tr("Stop this project's analysis before removing it."));
+      return false;
+    }
+    // Removing forgets the project. What is kept and has not reached its
+    // folder goes there first, unless the folder is gone: a save would make
+    // it again.
+    QString unsaved;
+    if (!deleteRecords && QFileInfo(state).isDir()) {
+      pauseProjectGoal(project.Id);
+      if (project.Id == ActiveId && DraftDirty &&
+          !ProjectStore::saveConversation(project, Conversation, error))
+        unsaved = error;
+      for (const auto &chat : SideChatIds.value(project.Id))
+        if (!SideChats.value(project.Id + '/' + chat)->flush(error))
+          unsaved = error;
+    }
+    // Its lock goes with it, so nothing here holds the records still.
+    releaseProject(index);
+    if (deleteRecords)
+      deleted = ProjectStore::deleteState(project.Directory);
+    KnownDirectories.removeIf([&](const QString &entry) {
+      return listed(entry) || sameDirectory(entry, project.Directory);
+    });
+    bool saved = false;
+    if (project.Id == ActiveId) {
+      // The project that followed it opens, or the last one; with none
+      // left, none is open.
+      ActiveId.clear();
+      DraftDirty = false;
+      DraftTimer.stop();
+      saved = !Projects.isEmpty() &&
+              selectProject(Projects[qMin(index, Projects.size() - 1)].Id);
+      if (!saved)
+        leaveActiveProject();
+    } else {
+      // Memory shared from the removed project leaves the open one's view.
+      readMemoryViews();
+      emit objectChanged();
+    }
+    if (!saved && !saveSettings(error))
+      emit operationError(error);
+    if (!writeCatalog(error))
+      emit operationError(error);
+    if (!unsaved.isEmpty())
+      emit operationError(unsaved);
   }
-  if (!saved && !saveSettings(error))
-    emit operationError(error);
-  if (!writeCatalog(error))
-    emit operationError(error);
   emit workspaceChanged();
-  if (!unsaved.isEmpty())
-    emit operationError(unsaved);
+  if (!deleted)
+    emit operationError(tr("The project was removed from the list, but its "
+                           "records could not be deleted: %1")
+                            .arg(QDir::toNativeSeparators(state)));
   return true;
 }
 

@@ -8,6 +8,7 @@
 /// real temporary files. No binary execution or model service is involved.
 //===----------------------------------------------------------------------===//
 
+#include "Config.h"
 #include "app/AgentController.h"
 #include "platform/AppPaths.h"
 #include "project/ProjectStore.h"
@@ -20,6 +21,7 @@
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QtTest>
+#include <memory>
 
 using namespace neverd::agent;
 
@@ -410,6 +412,130 @@ private slots:
     QVERIFY(ProjectStore::readJson(QDir(global).filePath("config.json"), config,
                                    error));
     QCOMPARE(config["projects"].toArray().size(), 2);
+  }
+
+  // Asked to, removal deletes the project's own state and nothing beside it:
+  // what the person keeps in the folder stays, and nothing writes the state
+  // back afterwards.
+  void removingWithItsRecordsDeletesTheStateAndNothingElse() {
+    QTemporaryDir workspace;
+    QString error;
+    const QString global = workspace.filePath("global");
+    const QString folder = workspace.filePath("project");
+    const QString state = QDir(folder).filePath(".nd-agent");
+    {
+      AgentController controller(global);
+      QVERIFY(controller.initialize(error));
+      QVERIFY(controller.createProject("kept", workspace.filePath("kept")));
+      QVERIFY(controller.createProject("project", folder));
+      QVERIFY(QDir(folder).mkpath("reports"));
+      for (const char *name : {"note.txt", "reports/result.md"}) {
+        QFile file(QDir(folder).filePath(name));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("the person's own");
+      }
+      controller.setDraft("a request");
+      QVERIFY(controller.saveRequest(""));
+      QVERIFY(controller.createSideChat());
+      controller.setDraft("typed and not saved");
+      QSignalSpy errors(&controller, &AgentController::operationError);
+      QVERIFY(controller.removeProject(folder, true));
+      QCOMPARE(errors.count(), 0);
+      QVERIFY(!QFileInfo::exists(state));
+      QVERIFY(QFileInfo(QDir(folder).filePath("note.txt")).isFile());
+      QVERIFY(QFileInfo(QDir(folder).filePath("reports/result.md")).isFile());
+      QCOMPARE(controller.projects().size(), 1);
+      QCOMPARE(controller.activeProject()["name"].toString(), QString("kept"));
+      // The folder is a project no longer.
+      QVERIFY(!controller.openProject(folder));
+      QCOMPARE(errors.count(), 1);
+      QVERIFY(controller.prepareClose());
+      QVERIFY(!QFileInfo::exists(state));
+    }
+    AgentController reopened(global);
+    QVERIFY(reopened.initialize(error));
+    QCOMPARE(reopened.projects().size(), 1);
+    QCOMPARE(reopened.unavailableProjects().size(), 0);
+    // And it can become one again, from nothing.
+    QVERIFY(reopened.createProject("again", folder));
+    QCOMPARE(reopened.messages().size(), 0);
+    QVERIFY(reopened.prepareClose());
+  }
+
+  // A link where the state folder should be is not followed: what it points
+  // at is not in the project's folder.
+  void aLinkInPlaceOfTheStateIsNotFollowed() {
+#ifdef Q_OS_WIN
+    QSKIP("Making a link to a folder needs a privilege on Windows.");
+#endif
+    QTemporaryDir workspace;
+    QString error;
+    const QString folder = workspace.filePath("project");
+    const QString link = QDir(folder).filePath(".nd-agent");
+    const QString elsewhere = workspace.filePath("elsewhere");
+    {
+      AgentController setup(workspace.filePath("setup"));
+      QVERIFY(setup.initialize(error));
+      QVERIFY(setup.createProject("linked", folder));
+      QVERIFY(setup.prepareClose());
+    }
+    QVERIFY(QDir().rename(link, elsewhere));
+    QVERIFY(QFile::link(elsewhere, link));
+    AgentController controller(workspace.filePath("global"));
+    QVERIFY(controller.initialize(error));
+    QVERIFY(controller.openProject(folder));
+    QSignalSpy errors(&controller, &AgentController::operationError);
+    QVERIFY(controller.removeProject(folder, true));
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(errors[0][0].toString().contains(".nd-agent"));
+    QCOMPARE(controller.projects().size(), 0);
+    QVERIFY(QFileInfo(QDir(elsewhere).filePath("project.json")).isFile());
+    QVERIFY(QFileInfo(link).isSymLink());
+    QVERIFY(controller.prepareClose());
+  }
+
+  // Records are deleted only under the project's own lock. A folder that did
+  // not open because another Agent has it open keeps everything, and so does
+  // a folder that is not on the list at all.
+  void recordsOfAProjectOpenElsewhereAreNotDeleted() {
+    QTemporaryDir workspace;
+    QString error;
+    const QString folder = workspace.filePath("project");
+    const QString state = QDir(folder).filePath(".nd-agent");
+    const QString second = workspace.filePath("second");
+    auto holder =
+        std::make_unique<AgentController>(workspace.filePath("first"));
+    QVERIFY(holder->initialize(error));
+    QVERIFY(holder->createProject("held", folder));
+    QVERIFY(ProjectStore::writeJson(
+        QDir(second).filePath("config.json"),
+        {{"version", kStorageVersion}, {"projects", QJsonArray{folder}}},
+        error));
+    AgentController controller(second);
+    QVERIFY(controller.initialize(error));
+    QCOMPARE(controller.projects().size(), 0);
+    QCOMPARE(controller.unavailableProjects().size(), 1);
+    QVERIFY(controller.unavailableProjects()[0].toMap()["records"].toBool());
+    QSignalSpy errors(&controller, &AgentController::operationError);
+    QVERIFY(!controller.removeProject(folder, true));
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(QFileInfo(QDir(state).filePath("project.json")).isFile());
+    QCOMPARE(controller.unavailableProjects().size(), 1);
+
+    const auto stranger =
+        ProjectStore::create(workspace.filePath("stranger"), "stranger", error);
+    QVERIFY(stranger.has_value());
+    QVERIFY(!controller.removeProject(stranger->Directory, true));
+    QVERIFY(QFileInfo(ProjectStore::stateDirectory(*stranger)).isDir());
+
+    // Once the other Agent lets go, the same request deletes them.
+    QVERIFY(holder->prepareClose());
+    holder.reset();
+    QVERIFY(controller.removeProject(folder, true));
+    QCOMPARE(errors.count(), 1);
+    QVERIFY(!QFileInfo::exists(state));
+    QCOMPARE(controller.unavailableProjects().size(), 0);
+    QVERIFY(controller.prepareClose());
   }
 
   void sharedMemoryFollowsToggleWithoutCopyingConversations() {

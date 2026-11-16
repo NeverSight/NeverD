@@ -101,7 +101,7 @@ public:
 
   bool createProject(const QString &name, const QString &directory);
   bool openProject(const QString &directory);
-  bool removeProject(const QString &directory);
+  bool removeProject(const QString &directory, bool deleteRecords = false);
   bool selectProject(const QString &id);
   void selectObject(const QString &id);
   void addObject(const QString &path);
