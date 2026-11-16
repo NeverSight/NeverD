@@ -1312,6 +1312,11 @@ f12–f19. Floating overflow values start at the lowest addressed bytes of their
 stack slots in either byte order.
 
 Complete declarations bind integer, pointer and floating operands before SSA.
+This includes scalar-only signatures and `void(void)` in o32, n32 and n64.
+For exported local callees, an exact-entry declaration from the loaded image's
+authenticated debug reader supplies the same contract as a fixed C prototype.
+Names-only information, unknown return types, variadic declarations and custom
+parameter locations do not establish this fixed call contract.
 For a variadic call, supply the prototype and the promoted types of the
 unnamed arguments at its original call occurrence. O32 passes even named
 floating arguments of a variadic call in the integer argument slots. N32 and
@@ -1336,6 +1341,9 @@ own reaching-store proof. A validated alignment guard preserves computed stack
 addresses and reaching stores; malformed guards and opaque effects invalidate
 that evidence. This also qualifies the aligned pre-R6 floating stores used for
 outgoing overflow and variadic arguments.
+In n32, an eight-byte saved link can survive a declared call beside a four-byte
+pointer spill, including word-sized or doubleword-sized stack adjustments.
+Unknown callees and writes overlapping that link slot still fail qualification.
 Function-scoped instruction mode is preserved, including physical microMIPS FP
 assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.

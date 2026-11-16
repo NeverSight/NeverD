@@ -25281,6 +25281,29 @@ FP state (including f0 after a declared non-floating call).
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
 
+`SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
+integer, pointer and void signatures without any floating parameters in all
+six MIPS ABI/byte-order profiles. `MIPSN32Calls` checks the four-byte pointer
+spill beside an eight-byte saved RA, both stack-adjustment widths, both byte
+orders and both pipeline routes. Names-only providers, unknown return contracts,
+containing-function matches, non-platform or variadic declarations, custom
+parameter locations and incomplete types must still fail. A declaration also
+cannot admit an overlapping write to the saved link.
+
+The owned `n32-pointer-call.c` fixture exercises the real ELF/DWARF reader and
+external `void(void)` call. Its runner compares original execution with HighC
+and LLVMC recompiled at O0/O2, in both byte orders. It checks the full return
+register (including n32 word sign extension), unchanged object bytes, SP, RA,
+preserved GPRs and exactly one callee entry. Commands, hashes and source evidence
+are retained; generated binaries are removed on success or failure.
+
+```sh
+PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
+  python3 unittests/lift/mips/n32-call-roundtrip.py \
+  --neverd build-mips/bin/neverd --clang /path/to/clang --ld /path/to/ld.lld \
+  --output build-mips/n32-call-roundtrip
+```
+
 `MIPSLegacyFP` in `NeverDMIPSIntegerTests` covers classic FR=1 pre-R6 arithmetic,
 conversions, sign operations, COP1X multiply-add and all 32 S/D predicates at
 every FCC selector. Literal machine encodings are independent of the lifter's
