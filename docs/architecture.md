@@ -19946,6 +19946,13 @@ acceptance once and retains full-bank progress across frame suspension. The
 mode owner authenticates pending state before stop/budget exits and keeps
 shutdown terminal; the event producer owns arrival and interrupt arbitration.
 
+Non64 selector transfers reuse `X86LegacySegmentExecution` and the shared
+transfer journal. Explicit segment-write receipts publish full caches before
+event handoff; emitters never reconstruct writes from low-half equality.
+`ir/X86` owns the null-base and descriptor-canonicality profile types. The
+runtime freezes those choices and complete table addresses with accepted
+instruction progress; pure canonical checks precede all descriptor paging.
+
 The native SMM continuation projection owns canonical RSM admission in
 `X64ContinuationSmm.h`. SVM and SMM share standard XSAVE image checks and
 SIMD import in `X64ContinuationAvxImage.h`. The LLVM terminal context intrinsic

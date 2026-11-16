@@ -93,6 +93,20 @@ For a real save, compile projected bank initializers at O0/O2,
 inspect constant bytes, and keep hypothetical register transitions distinct
 from captured observations. No guest, handler or device callback need run.
 
+`X86ModeSegmentTest.*` covers full-cache writes, null base choices, high
+GDT/LDT addresses, MOV/PUSH/POP/LxS widths, L/D metadata, descriptor/operand
+backing, paging aliases, self-modified original bytes, watchpoint/SS state and
+completion receipts across event suspension. Descriptor-tail profiles require
+refusal before fetch or effects and frozen-choice resumption tests.
+`X86ModeSegmentNativeTest.*` uses a fresh KVM VM/vCPU for each independent
+stream, one initial SREGS write and no host mode rewrites. Reusing a vCPU after
+resetting RAM may retain translations and suppress expected paging A updates.
+Keep complete RAM comparison and record the pinned P/E-core profile. Both
+emitters and host-x64 Clang/NeverC observe null FS/GS bases after a real far JMP.
+The original CPU's terminal long HLT is outside that source observation.
+Changes to the common cache or transfer journal require the full paging and
+legacy-source suites, including standalone legacy and VM86 paths, on both SDKs.
+
 The `X86ModeInterruptTest.*` subset checks selected IRQ/NMI input in all five
 protected/compatibility/64-bit modes, deferred/refused inputs without effects,
 NMI-under-STI choices, high-half stack witnesses, suspended frame/event-budget

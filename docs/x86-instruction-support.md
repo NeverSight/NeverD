@@ -4492,3 +4492,35 @@ Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
 and unbound event producers remain open. NeverC remains host x64 only. The
 production r6 pin and LLVM gitlink are unchanged; no final LLVM release is
 declared.
+
+## Continuous-mode selector transfers and retained faults (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md#selector-loads-and-full-caches)
+now admits MOV/PUSH/POP segment registers and all five LxS forms in protected
+and compatibility code. Complete GDT/LDT addresses, full cache/base replacement,
+null FS/GS choices, accessed writes and coupled pointer publication use the
+existing segment owner. Its shared journal retains operands, watchpoints and
+paid attempts across backing repair; successful-load receipts survive immediate
+#DB entry, while a guest fault retires instruction progress before event resume.
+
+Original CPU streams found distinct descriptor-tail error codes on the local
+hybrid core types. Both reject a noncanonical eight-byte range before paging;
+explicit `SelectorForStart` and `SelectorForRange` bindings preserve the measured
+#GP(0)/#GP(selector) distinction without host inference. A high-address #PF
+retains full CR2. The same run checks non-CS L/D metadata and null FS/GS base
+observability after actual far jumps into code64.
+
+At implementation `ecc5c3c22b`, each SDK passes 1,342 primary cases across full
+paged source, paging, legacy source, instruction boundary and SDK suites, with
+2 LA57 hardware skips. Alternate-core replay adds 48 mode and 13 control passes
+per SDK, with 1 LA57 skip, counted separately. The
+[dated evidence](evidence/x86-mode-segments-2026-11-11.json) retains source,
+binary, report and artifact hashes, the failing pre-implementation cases,
+original fault probes and verified recovery archives. Generated sources use
+both emitters and host-x64 Clang/NeverC; NeverC gains no 32-bit target.
+
+This closes the selector-transfer integration unit. Other mode-aware state
+owners, real/unreal/VM86 composition, software SMM/SGX and unbound event producers
+remain open. Code64 descriptor-tail policy needs its own original-byte evidence.
+The production LLVM r6 pin and gitlink remain unchanged; no final LLVM release
+is declared.
