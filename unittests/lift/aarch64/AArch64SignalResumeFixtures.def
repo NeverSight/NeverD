@@ -340,6 +340,14 @@ ASYNC_FRAME_TEXT(kSignalNonCallSource, "noncall.S")
 ASYNC_FRAME_TEXT(kSignalObjCPersonality, "-DNEVERD_OBJC_PERSONALITY")
 ASYNC_FRAME_TEXT(kSignalCompactFrame, "-DNEVERD_COMPACT_FRAME")
 ASYNC_FRAME_TEXT(kSignalLiveLR, "-DNEVERD_LIVE_LR")
+ASYNC_FRAME_TEXT(kSignalCompactLiveLR, "-DNEVERD_COMPACT_LIVE_LR")
+ASYNC_FRAME_TEXT(kSignalUnsignedLR, "-DNEVERD_UNSIGNED_LR")
+ASYNC_FRAME_TEXT(kSignalIALR, "-DNEVERD_IA_LR")
+ASYNC_FRAME_TEXT(kSignalCatchSymbol, "_signal_finish_catch")
+ASYNC_FRAME_TEXT(kSignalCatchMapping, "signal_finish_catch")
+// A bad authenticated resume can repeatedly trap in the installed observer.
+// Bound that child so its case reports failure and the remaining matrix runs.
+ASYNC_FRAME_VALUE(unsigned, kSignalDeliverySeconds, 30)
 ASYNC_FRAME_TEXT(kSignalLocalCatch, "-DNEVERD_LOCAL_CATCH")
 ASYNC_FRAME_TEXT(kSignalLiveLRBridge, "_ndDarwinArm64eLiveLRBridge")
 ASYNC_FRAME_TEXT(kSignalLiveLRResume, "_ndDarwinArm64eLiveLRResume")
@@ -373,12 +381,24 @@ Lfunc_begin:
 #ifdef NEVERD_COMPACT_FRAME
  nop
 #endif
+#ifdef NEVERD_UNSIGNED_LR
+ nop
+#elif defined(NEVERD_IA_LR)
+ paciasp
+#else
  pacibsp
+#endif
 #ifdef NEVERD_LIVE_LR
+#ifdef NEVERD_COMPACT_LIVE_LR
+ sub sp, sp, #32
+ .cfi_def_cfa_offset 32
+ stp x0, x2, [sp]
+#else
  stp x20, x19, [sp, #-32]!
  .cfi_def_cfa_offset 32
  .cfi_offset x20, -32
  .cfi_offset x19, -24
+#endif
  mov x9, #0x5a
  stur x9, [sp, #-8]
 #elif defined(NEVERD_FRAMELESS_FRAME)
@@ -406,19 +426,66 @@ Lfunc_begin:
  mov x29, sp
  .cfi_def_cfa_register x29
 #endif
+#ifndef NEVERD_COMPACT_LIVE_LR
  mov x19, x0
 #ifdef NEVERD_LOCAL_CATCH
  mov x20, x2
 #endif
-#ifndef NEVERD_COMPACT_FRAME
+#endif
+#if !defined(NEVERD_COMPACT_FRAME) && !defined(NEVERD_COMPACT_LIVE_LR)
  .cfi_escape 0x2e, 0
 #endif
 Lprotected:
+#ifdef NEVERD_COMPACT_LIVE_LR
+ ldr x9, [sp]
+ ldr w10, [x9]
+#else
  ldr w9, [x19]
+#endif
 Lprotected_end:
  b Lprotected
 Lcleanup:
+#ifdef NEVERD_COMPACT_LIVE_LR
+ // No preserved register pairs and no calls: the compact recipe retains LR.
+ // Locals survive the throw in their original stack slots and red zone.
+ ldr x9, [sp]
+ ldr w10, [x9]
+ mov w11, #10
+ madd w10, w10, w11, wzr
+#ifdef NEVERD_RESUME_PUBLISHED
+ add w10, w10, #3
+#else
+ add w10, w10, #1
+#endif
+ str w10, [x9]
+ ldr x1, [sp, #8]
+ ldur x9, [sp, #-8]
+ sub x9, x9, #0x5a
+ cbnz x9, Lresume_end
+ add sp, sp, #32
+#ifdef NEVERD_IA_LR
+ autiasp
+#elif !defined(NEVERD_UNSIGNED_LR)
+ autibsp
+#endif
+Lresume:
+#ifdef NEVERD_LOCAL_CATCH
+ b _signal_finish_catch
+#else
+ b __Unwind_Resume
+#endif
+#else
 #ifdef NEVERD_LIVE_LR
+ // The source uses Darwin's normal synchronous ABI when it starts calling.
+ // The bridge must restore the original recipe before this conversion.
+#if defined(NEVERD_UNSIGNED_LR) || defined(NEVERD_IA_LR)
+ add sp, sp, #32
+#ifdef NEVERD_IA_LR
+ autiasp
+#endif
+ pacibsp
+ sub sp, sp, #32
+#endif
  // The caller return is live at the protected instruction. The cleanup now
  // calls _Unwind_Resume, so its own CFI must describe this later LR spill.
  str x30, [sp, #16]
@@ -462,6 +529,7 @@ Lresume:
 #else
  bl __Unwind_Resume
 #endif
+#endif
 Lresume_end:
  brk #1
 Lfunction_end:
@@ -472,6 +540,43 @@ _signal_tick:
  .cfi_startproc
  ret
  .cfi_endproc
+#if defined(NEVERD_COMPACT_LIVE_LR) && defined(NEVERD_LOCAL_CATCH)
+ // The compact scope tail-calls a normal language helper after restoring SP
+ // and authenticating its original LR. This helper owns all call-site saves.
+ .globl _signal_finish_catch
+ .p2align 2
+_signal_finish_catch:
+ .cfi_startproc
+ .cfi_b_key_frame
+ pacibsp
+ stp x29, x30, [sp, #-32]!
+ .cfi_def_cfa_offset 32
+ .cfi_offset x29, -32
+ .cfi_offset x30, -24
+ str x19, [sp, #16]
+ .cfi_offset x19, -16
+ mov x29, sp
+ .cfi_def_cfa_register x29
+ mov x19, x1
+#ifdef NEVERD_OBJC_PERSONALITY
+ bl _objc_begin_catch
+#else
+ bl ___cxa_begin_catch
+#endif
+ cmp x0, x19
+ b.ne Lcatch_bad
+#ifdef NEVERD_OBJC_PERSONALITY
+ bl _objc_end_catch
+#else
+ bl ___cxa_end_catch
+#endif
+ ldr x19, [sp, #16]
+ ldp x29, x30, [sp], #32
+ retab
+Lcatch_bad:
+ brk #1
+ .cfi_endproc
+#endif
  .section __TEXT,__gcc_except_tab
  .p2align 2
 Lexception:
@@ -628,6 +733,8 @@ static void inspectLandingResume(ucontext_t *uc) {
     if (unw_set_reg(&cursor, UNW_ARM64_X0 + reg, state.__x[reg]))
       _exit(23);
   const auto sp = arm_thread_state64_get_sp(state);
+  if (state.__x[NDArm64eCallerLRRegister] != interrupted.LR)
+    _exit(30);
   // Both resume instructions share one row. An interior PC selects that row
   // with either signal-PC or return-PC lookup, without crossing either FDE
   // boundary when the second instruction is interrupted.
@@ -648,7 +755,9 @@ static void inspectLandingResume(ucontext_t *uc) {
       (uintptr_t)ptrauth_strip((void *)value, ptrauth_key_return_address) !=
           virtualReturn ||
       unw_get_reg(&cursor, UNW_REG_SP, &value) || value != interrupted.SP ||
-      unw_get_reg(&cursor, UNW_ARM64_LR, &value) || value != interrupted.LR ||
+      unw_get_reg(&cursor, UNW_ARM64_LR, &value) ||
+      value != (uintptr_t)ptrauth_sign_unauthenticated(
+          (void *)caller.PC, ptrauth_key_return_address, caller.SP) ||
       unw_step(&cursor) <= 0 ||
       unw_get_reg(&cursor, UNW_REG_IP, &value) ||
       (uintptr_t)ptrauth_strip((void *)value, ptrauth_key_return_address) !=
@@ -709,6 +818,19 @@ static void observe(int, siginfo_t *, void *ctx) {
       memcmp(&before, uc->uc_mcontext, sizeof(before)))
     _exit(12);
   if (site.AtProtectedCall && !row.SavedLR) {
+    auto unknown = row;
+    unknown.Signing = NDArm64eSigningUnknown;
+    if (ndDarwinArm64eDeliverSignalException(
+            uc, site, unknown, saved, savedCount, &vectors, low, high, false,
+            deliver, &exception) ||
+        memcmp(&before, uc->uc_mcontext, sizeof(before)))
+      _exit(31);
+    unknown.Signing = NDArm64eSignedIBWithCFAPC;
+    if (ndDarwinArm64eDeliverSignalException(
+            uc, site, unknown, saved, savedCount, &vectors, low, high, false,
+            deliver, &exception) ||
+        memcmp(&before, uc->uc_mcontext, sizeof(before)))
+      _exit(32);
     interrupted = ndDarwinArm64eSignalCursor(uc);
     if (!ndDarwinArm64eReadCaller(uc, row, saved, savedCount, low, high,
                                   false, &caller, callerRegisters))

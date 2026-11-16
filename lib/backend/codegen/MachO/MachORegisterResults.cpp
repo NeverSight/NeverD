@@ -13,6 +13,7 @@
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
@@ -107,9 +108,13 @@ bool independent(const DecodedInsn &I) {
         llvm::ArrayRef(D.operands, D.op_count),
         [](const cs_aarch64_op &Op) { return Op.type == AARCH64_OP_MEM; });
   case AARCH64_INS_HINT:
-    return I.Raw->alias_id == AARCH64_INS_ALIAS_NOP ||
-           I.Raw->alias_id == AARCH64_INS_ALIAS_PACIBSP ||
-           I.Raw->alias_id == AARCH64_INS_ALIAS_AUTIBSP;
+    switch (I.Raw->alias_id) {
+#define MACHO_REGISTER_HINT(Name) case AARCH64_INS_ALIAS_##Name:
+#include "MachORegisterResults.def"
+      return true;
+    default:
+      return false;
+    }
   case AARCH64_INS_RETAB:
   case AARCH64_INS_RET:
   case AARCH64_INS_PACIBSPPC:
@@ -955,6 +960,19 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     F->removeFnAttr(llvm::Attribute::AlwaysInline);
     F->addFnAttr(llvm::Attribute::NoInline);
     F->setMemoryEffects(llvm::MemoryEffects::unknown());
+    // This proved native body owns its signing instructions and CFI. A
+    // compiler prologue policy inferred from one source return cannot also
+    // own this frame, especially when a landing pad changes signing recipes.
+    for (auto Name : {kReturnSigningScopeAttribute, kReturnSigningKeyAttribute,
+                      kReturnSigningArm64eAttribute, kReturnSigningPCAttribute})
+      F->removeFnAttr(Name);
+    auto Features = F->getFnAttribute(kReturnSigningFeaturesAttribute)
+                        .getValueAsString()
+                        .str();
+    if (!Features.empty())
+      Features += ',';
+    Features += kReturnSigningFeature;
+    F->addFnAttr(kReturnSigningFeaturesAttribute, Features);
     F->setUWTableKind(llvm::UWTableKind::Sync);
     llvm::IRBuilder<> B(
         llvm::BasicBlock::Create(M.getContext(), kEntryBlock, F));
