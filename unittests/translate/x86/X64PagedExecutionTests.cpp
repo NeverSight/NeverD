@@ -1002,6 +1002,9 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedSegmentPushTests.inc"
 #include "X64PagedWatchpointTests.inc"
 
+// Accessed-update cases extend the event descriptor fixture above.
+#include "X64PagedEventAccessedTests.inc"
+
 // These cases reuse the debug/watchpoint fixtures above.
 #include "X64PagedBranchDebugTests.inc"
 #include "X64PagedDebugFunctionTests.inc"

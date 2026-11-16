@@ -225,6 +225,15 @@ public:
       emit(NdOp::STORE, {}, {Address, Value});
   }
 
+  NdVar updateEventDescriptorAccessed(NdVar Address, NdVar Original) {
+    if (Stopped || (value(Original) & (uint64_t{1} << 40)))
+      return Original;
+    const auto Image = temporary();
+    memory(NdOp::STORE, Image, {Address, NdVar::scalar(uint64_t{1} << 40, 8)},
+           true);
+    return Image;
+  }
+
   NdVar loadMemoryIf(NdVar Condition, NdVar Address, NdVar Fallback) {
     if (!value(Condition))
       return Fallback;
@@ -314,7 +323,8 @@ public:
   }
 
 private:
-  void memory(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs) {
+  void memory(NdOp Code, NdVar Output, std::initializer_list<NdVar> Inputs,
+              bool DescriptorAccessed = false) {
     const bool Write = Code == NdOp::STORE;
     const unsigned Size = Write ? Inputs.begin()[1].Size : Output.Size;
     assert(Size && Size <= 8);
@@ -327,14 +337,16 @@ private:
       const auto &Completed = CompletedAccesses[AccessCursor++];
       if (Completed.Address != Access.Address || Completed.Bytes != Size ||
           Completed.Write != Write ||
-          (Write && Completed.Value != value(Inputs.begin()[1]))) {
+          Completed.DescriptorAccessed != DescriptorAccessed ||
+          (Write && !DescriptorAccessed &&
+           Completed.Value != value(Inputs.begin()[1]))) {
         Error = llvm::createStringError(
             llvm::errc::invalid_argument,
             "paged transition resume changed a completed access");
         Stopped = true;
         return;
       }
-      if (!Write)
+      if (!Write || DescriptorAccessed)
         Values[Output.Offset] = Completed.Value;
       return;
     }
@@ -368,8 +380,18 @@ private:
         return Prepared.takeError();
       // A post-translation #AC must retain page-walk effects without
       // publishing the explicit selector store.
-      if (Prepared->Status == X86PageWalkStatus::Completed && !AlignmentFault)
+      if (Prepared->Status == X86PageWalkStatus::Completed && !AlignmentFault) {
+        if (DescriptorAccessed) {
+          // Use the exact prepared physical fragments. Its page walks can
+          // update A/D bits inside this descriptor; a second translation or
+          // writing the earlier check image would lose those effects.
+          auto Current = Memory.loadPreparedStore(*Prepared, Bytes);
+          if (!Current || Current->Status != X86PageWalkStatus::Completed)
+            return Current;
+          Bytes[5] |= 1;
+        }
         Memory.commitStore(*Prepared, llvm::ArrayRef(Bytes).take_front(Size));
+      }
       return std::move(
           static_cast<translate::X86MemoryAccessResult &>(*Prepared));
     };
@@ -390,8 +412,9 @@ private:
       Fault = X86MemoryException{17, 0, std::nullopt};
       Stopped = true;
     } else {
-      uint64_t Value = Write ? value(Inputs.begin()[1]) : 0;
-      if (!Write) {
+      uint64_t Value =
+          Write && !DescriptorAccessed ? value(Inputs.begin()[1]) : 0;
+      if (!Write || DescriptorAccessed) {
         for (unsigned I = 0; I != Size; ++I)
           Value |= uint64_t(Bytes[I]) << (I * 8);
         Values[Output.Offset] = Value;
@@ -400,7 +423,7 @@ private:
       }
       if (CaptureAccesses) {
         CompletedAccesses.push_back(
-            {Access.Address, Value, uint8_t(Size), Write});
+            {Access.Address, Value, uint8_t(Size), Write, DescriptorAccessed});
         ++AccessCursor;
       }
     }
@@ -438,6 +461,12 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     return llvm::createStringError(
         llvm::errc::invalid_argument,
         "unaccepted event cannot retain partial accesses");
+  for (const auto &Access : CompletedAccesses)
+    if (Access.DescriptorAccessed && (!Access.Write || Access.Bytes != 8 ||
+                                      !(Access.Value & (uint64_t{1} << 40))))
+      return llvm::createStringError(
+          llvm::errc::invalid_argument,
+          "invalid completed event descriptor update");
   if (!(Memory.controls().EFER & 0x400))
     return llvm::createStringError(
         llvm::errc::not_supported,

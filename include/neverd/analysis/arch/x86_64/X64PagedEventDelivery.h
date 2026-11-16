@@ -118,6 +118,10 @@ struct X64PagedEventContinuation {
     uint64_t Value = 0;
     uint8_t Bytes = 0;
     bool Write = false;
+    /// A completed event descriptor read/modify/write. Requires Write, eight
+    /// bytes and Value.A=1. Value is its committed image, also used by the
+    /// hidden cache; replay must neither reload nor rewrite guest memory.
+    bool DescriptorAccessed = false;
   };
   X64ContinuationEventV1 Event;
   uint64_t FaultPC = 0;
@@ -154,6 +158,8 @@ struct X64PagedEventResult {
 /// the handler privilege. CR2 is published whenever #PF is detected, including
 /// a fault while delivering #DF. Already completed descriptor/page-table/frame
 /// RAM writes remain visible. Shutdown is reported, never implemented as reset.
+/// An A=0 code descriptor uses one prepared eight-byte read/modify/write;
+/// its post-translation image supplies the loaded cache. A=1 performs no write.
 /// Options bounds entry attempts per call. BudgetExhausted preserves a
 /// continuation without inventing a guest exception or executing the handler.
 /// For Software events, State.PC identifies the original INT/INT3 while
