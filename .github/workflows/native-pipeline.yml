@@ -17,6 +17,7 @@ on:
           - macos-qualification
           - constructor-repro
           - render-store-probe
+          - render-store-profile
 
 permissions:
   contents: read
@@ -479,3 +480,210 @@ jobs:
             build-mips-ci/CMakeCache.txt
             build-mips-ci/neverd-build-receipt.json
             build-mips-ci/neverd-dependency-inputs.json
+
+  render_store_profile:
+    if: inputs.scope == 'render-store-profile'
+    name: macOS RenderStore phase and wait profile
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ inputs.source_sha }}
+        persist-credentials: false
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: '3.12'
+    - name: Verify exact source and pinned dependencies
+      run: |
+        test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+        git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+    - name: Install matching macOS build and fixture tools
+      run: |
+        brew install cmake lld ninja llvm@22
+        echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+        echo "NEVERD_SOURCE_CLANG=$(brew --prefix llvm@22)/bin/clang" >> "$GITHUB_ENV"
+    - name: Configure the failing Release profile and build only the mock worker
+      run: |
+        cmake -S . -B build-mips-ci -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+          -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
+          -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+          -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
+          "-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$NEVERD_SOURCE_CLANG"
+        python scripts/build.py build-mips-ci --config Release --parallel 3 --target neverd-worker-test-server
+    - name: Record native phase samples and fixture sleep calibration
+      run: |
+        cat > build-mips-ci/worker-phase-profile.py <<'PROFILE'
+        from pathlib import Path
+        import datetime
+        import hashlib
+        import json
+        import os
+        import platform
+        import resource
+        import shutil
+        import signal
+        import subprocess
+        import sys
+        import time
+  
+        root = Path.cwd()
+        build = root / "build-mips-ci"
+        out = build / "evidence"
+        out.mkdir(exist_ok=True)
+        binary = build / "bin/neverd-worker-test-server"
+        expected = os.environ["EXPECTED_SOURCE_SHA"]
+        actual = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        assert actual == expected
+        assert not subprocess.check_output(["git", "status", "--porcelain"], text=True)
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        identity = {
+            "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "source_sha": actual,
+            "workflow_sha": os.environ["GITHUB_SHA"],
+            "platform": platform.platform(),
+            "cpu_count": os.cpu_count(),
+            "python": sys.version,
+            "compiler": subprocess.check_output(["clang++", "--version"], text=True),
+            "binary_sha256": digest(binary),
+            "script_sha256": digest(Path(__file__)),
+            "fixture_sha256": {
+                name: digest(root / "tools/neverd-worker/tests" / name)
+                for name in ["render_store_test.py", "render_ahead_test.py", "transport_test.py", "mock_engine.cpp"]
+            },
+            "scope": "Diagnostic only. Unmodified RenderStore assertions observed with heartbeat phase logs and native thread sampling; the 600-second outer observation does not qualify the original 240-second CTest. No production scheduling or fixture sleep changes.",
+        }
+        (out / "profile-source.json").write_text(json.dumps(identity, indent=2) + "\n")
+  
+        calibration = out / "sleep-calibration.cpp"
+        calibration.write_text(r'''#include <chrono>
+        #include <cstdio>
+        #include <thread>
+        int main() {
+          using Clock = std::chrono::steady_clock;
+          std::puts("[");
+          for (int i = 0; i < 150; ++i) {
+            const auto start = Clock::now();
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::printf("%.9f%s\n", std::chrono::duration<double>(Clock::now() - start).count(), i == 149 ? "" : ",");
+          }
+          std::puts("]");
+        }
+        ''')
+        calibration_binary = build / "sleep-calibration"
+        subprocess.run(["clang++", "-std=c++20", "-O3", str(calibration), "-o", str(calibration_binary)], check=True, timeout=60)
+        calibration_results = []
+        try:
+            for index in range(3):
+                started = time.monotonic()
+                result = subprocess.run([str(calibration_binary)], capture_output=True, text=True, timeout=90, check=True)
+                values = json.loads(result.stdout)
+                assert len(values) == 150 and all(value >= 0 for value in values)
+                calibration_results.append({"trial": index, "wall_seconds": time.monotonic() - started, "requested_sleep_seconds": 0.02, "observed_seconds": values})
+                (out / "sleep-calibration.json").write_text(json.dumps(calibration_results, indent=2) + "\n")
+        finally:
+            if calibration_binary.exists():
+                identity["removed_calibration_binary"] = {"sha256": digest(calibration_binary), "bytes": calibration_binary.stat().st_size}
+                calibration_binary.unlink()
+            (out / "profile-source.json").write_text(json.dumps(identity, indent=2) + "\n")
+  
+        wrapper = out / "trace-render-phases.py"
+        wrapper.write_text(r'''from pathlib import Path
+        import faulthandler,json,subprocess,sys,time
+        sys.path.insert(0,str(Path.cwd()/"tools/neverd-worker/tests"))
+        import render_store_test as target
+        from transport_test import Client
+        start=time.monotonic()
+        out=Path(sys.argv[2]);sampler=None;sample_log=None
+        def emit(event,**data):
+            print(json.dumps({"event":event,"elapsed":time.monotonic()-start,**data}),flush=True)
+        original_session=target.session
+        original_end=target.end
+        original_next=Client.next
+        def next_message(self,*args,**kwargs):
+            message=original_next(self,*args,**kwargs)
+            if message.get("type")=="heartbeat":
+                emit("heartbeat",pid=self.process.pid,background=message.get("background"))
+            return message
+        def session(*args,**kwargs):
+            global sampler,sample_log
+            name=Path(args[2]).name
+            emit("session.begin",fixture=name)
+            result=original_session(*args,**kwargs)
+            emit("session.ready",fixture=name,owner=result[0].process.pid,replica=result[1].process.pid)
+            if sampler is None:
+                sample_log=(out/"sample-command.log").open("w")
+                command=["/usr/bin/sample",str(result[1].process.pid),"20","5","-mayDie","-file",str(out/"worker-native-sample.txt")]
+                emit("sample.begin",command=command)
+                sampler=subprocess.Popen(command,stdout=sample_log,stderr=subprocess.STDOUT)
+            return result
+        def end(*clients):
+            emit("close.begin",clients=[client.process.pid for client in clients])
+            result=original_end(*clients)
+            emit("close.end")
+            return result
+        target.session=session;target.end=end;Client.next=next_message
+        faulthandler.dump_traceback_later(60,repeat=True)
+        try:
+            target.run(Path(sys.argv[1]))
+            emit("completed")
+        finally:
+            faulthandler.cancel_dump_traceback_later()
+            if sampler is not None:
+                try: code=sampler.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    sampler.kill();code=sampler.wait()
+                emit("sample.end",exit=code)
+                sample_log.close()
+        ''')
+        temporary = build / "profile-tmp"
+        temporary.mkdir()
+        started = time.monotonic()
+        before = resource.getrusage(resource.RUSAGE_CHILDREN)
+        timed_out = False
+        code = None
+        try:
+            with (out / "phase-profile.log").open("w") as log:
+                child = subprocess.Popen([sys.executable, str(wrapper), str(binary), str(out)], env=dict(os.environ, TMPDIR=str(temporary), PYTHONUNBUFFERED="1"), stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    code = child.wait(timeout=600)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    os.killpg(child.pid, signal.SIGKILL)
+                    code = child.wait()
+                finally:
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        finally:
+            after = resource.getrusage(resource.RUSAGE_CHILDREN)
+            files = [path for path in temporary.rglob("*") if path.is_file()]
+            cleanup = {"files": len(files), "logical_bytes": sum(path.stat().st_size for path in files)}
+            shutil.rmtree(temporary)
+            (out / "profile-results.json").write_text(json.dumps({"exit": code, "outer_timeout": timed_out, "wall_seconds": time.monotonic() - started, "all_children_including_sampler_user_seconds": after.ru_utime - before.ru_utime, "all_children_including_sampler_system_seconds": after.ru_stime - before.ru_stime, "removed_temporary_products": cleanup, "scope": identity["scope"]}, indent=2) + "\n")
+            (out / "profile-source.json").write_text(json.dumps(identity, indent=2) + "\n")
+        assert code == 0 and not timed_out
+        assert (out / "worker-native-sample.txt").stat().st_size > 0
+        PROFILE
+        python build-mips-ci/worker-phase-profile.py
+    - name: Upload only diagnostic evidence and configuration
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: mips-render-store-profile-${{ inputs.source_sha }}
+        retention-days: 7
+        if-no-files-found: error
+        path: |
+          build-mips-ci/evidence/
+          build-mips-ci/worker-phase-profile.py
+          build-mips-ci/CMakeCache.txt
+          build-mips-ci/neverd-build-receipt.json
+          build-mips-ci/neverd-dependency-inputs.json
