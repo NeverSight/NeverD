@@ -4530,3 +4530,11 @@ The [November 16 integration](x86-mode-execution.md#integration-with-current-dev
 rebuilds and replays 1,058 cases per SDK after merging current dev and repairing
 a shared HighIR synthetic-label collision. The upstream LLVM gitlink update is
 preserved; the production r6 pin and final-release boundary remain unchanged.
+
+
+The [code64 segment continuation qualification](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
+adds retained MOV/PUSH/POP segment and LFS/LGS/LSS progress through generated C,
+direct runtime and full-mode dispatch. Both SDKs pass 524 cases with
+1 LA57 skip each; original CPU alias comparisons preserve complete RAM.
+This does not close the remaining full-machine qualification gaps or authorize
+a final LLVM release.

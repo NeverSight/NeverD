@@ -203,3 +203,18 @@ Upstream independently advanced the LLVM source gitlink to `09ff60dd1ddb`; this
 merge preserves that change. The development SDK remains the existing intrinsic
 snapshot and the production SDK remains r6. This integration creates no LLVM
 release and does not close the outstanding x86 qualification boundaries.
+
+
+### Retained code64 segment instructions (2026-11-16)
+
+The long-mode branch now retains MOV/PUSH/POP segment and LFS/LGS/LSS across
+physical backing stops, including an unpaid stop before the first completed
+access. Full-mode reconstruction keeps the original instruction and excludes
+new event selection until it completes or faults. Resume preserves aliased
+operands, original bytes and paging effects, and charges the attempt once.
+The [runtime contract](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
+and [evidence](evidence/x86-code64-segment-continuation-2026-11-16.json) record 524 passing cases and 1 LA57
+skip per SDK. This closes code64 segment progress; remaining mode-aware
+owners, descriptor-tail qualification, real/unreal/VM86 composition, software
+SMM/SGX and unbound asynchronous producers remain separate work. NeverC remains
+host x64 and the production LLVM release pin remains r6.

@@ -174,6 +174,51 @@ C/header/manifest artifacts per SDK. The initially skipped REP watchpoint
 cases passed in explicit P/E-core reruns. This qualifies retained return
 progress, not complete machine-mode or SMM/SGX execution.
 
+## Resuming a suspended segment transfer
+
+Code64 MOV/PUSH/POP segment and LFS/LGS/LSS use the same immutable instruction
+progress contract as [returns](#resuming-a-suspended-return). Retain
+`context.continuation()` when reconstructing an execution context. The direct
+owner returns `X64PagedSegmentResult::Continuation`; authenticate with
+`validateX64PagedSegmentResume` and continue with `resumeX64PagedSegment`.
+The full-mode owner also preserves this record while the guest is in code64.
+
+Completed operand and descriptor accesses are replayed, preserving values when
+a later page walk changes an aliased selector, offset or original opcode.
+Resume does not fetch or authenticate those instruction bytes again. Even a
+stop before the first completed access retains the admitted instruction and
+blocks new event selection. A read-only prefix remains unpaid: it needs a
+positive instruction budget to resume, and completion, a guest fault or an
+instruction effect consumes the attempt once. Page-table A/D updates alone do
+not consume it. State, controls, paging features, access profiles, source body,
+validator and debug/shadow bindings must match before any further effects.
+
+Successful loads publish offset/cache/SP together, clear RF and retain entry
+TF/data watchpoints. MOV SS can start the bound SS inhibition window;
+LSS does not. A guest fault retires instruction progress before event delivery,
+and an unbound null-base policy refusal is not an instruction boundary. If
+subsequent fault or #DB delivery pauses, continue its event record separately.
+
+The [November 16 qualification](evidence/x86-code64-segment-continuation-2026-11-16.json) at
+`7e8a478eec` passes 524 cases per SDK with 1 recorded
+LA57 skip per SDK. It covers complete paged-source and legacy-source suites,
+shared code64 event/return execution, instruction boundaries and SDK adapters.
+The ten new segment groups include HighC/LLVMC, host-x64 Clang/NeverC and direct
+owner checks. Each SDK additionally records twelve full-state/full-RAM original
+CPU alias comparisons, including page-table A/D effects.
+
+Each original stream uses a fresh VM/vCPU and the existing helper's two initial
+SREGS writes, with no intermediate host state rewrites.
+[KVM pre-faulting](https://docs.kernel.org/virt/kvm/api.html#kvm-pre-fault-memory)
+populates only stage-2 mappings; guest PTEs and original bytes remain cold and
+unchanged.
+Both pinned core classes then agree. The earlier cold-stage-2 discrepancy is
+consistent with instruction retry but does not identify its exact VM-exit
+sequence. This compares uninterrupted hardware with software host suspension;
+it does not observe hardware pausing within an instruction. The accessed-write
+backing fixture checks progress recovery, but its unchanged descriptor value
+does not independently establish descriptor read-count preservation.
+
 ## Instruction-step debug events
 
 Add `"paged_debug": true` to a paged V6 instruction-region export and bind a
