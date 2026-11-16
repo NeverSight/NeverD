@@ -208,6 +208,10 @@ TEST_P(MIPS16Pipeline,
                   Word = 0x0c004070;
               Caller.insert(Caller.begin(),
                             Bytes == 8 ? 0xd48c0000 : 0xc48c0000);
+              // Keep the load in a successor block. The negative store then
+              // reaches it through a predecessor, before the ABI call.
+              if (Repeated)
+                Caller.insert(Caller.begin(), {0x10000001, 0x00000000});
               if (ExternalEscape)
                 Caller.insert(Caller.begin(), 0xac9d0000); // sw sp,0(a0).
               Callee = {0x64c1, 0x6744, 0x1c00, 0x4068,
@@ -319,6 +323,14 @@ TEST_P(MIPS16Pipeline,
                   Result.CallEntryFloatingArguments.get().contains(0x10180));
               ASSERT_TRUE(Result.Success) << Result.Error;
               EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+              if (FloatingInput && Repeated) {
+                const auto CallerLow =
+                    llvm::find_if(Result.LowFuncs, [](const auto &F) {
+                      return F.Entry == 0x10100;
+                    });
+                ASSERT_NE(CallerLow, Result.LowFuncs.end());
+                EXPECT_GT(CallerLow->Blocks.size(), 1u);
+              }
               const auto Low =
                   llvm::find_if(Result.LowFuncs, [](const auto &F) {
                     return F.Entry == 0x10180;
