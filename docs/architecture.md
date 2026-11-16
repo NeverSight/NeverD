@@ -11755,6 +11755,8 @@ closure rejects values derived from unspecified inputs, missing definitions or
 unbound call clobbers, rather than accepting an arithmetic copy of unknown bits.
 The image and current call-summary reads own cached conversions, so changing the
 selection or warming the cache cannot supply a missing second result. HighC
+return-block inlining leaves multi-register results to the complete return
+lowering; a scalar epilogue shortcut cannot replace their packed value. HighC
 externs retain the complete recovered call-result width, and source LLVM cannot
 replace that result with a cached scalar callee declaration. A wide assignment
 alone does not widen a scalar call. Omitted floating aggregates still require

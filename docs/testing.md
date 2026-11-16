@@ -21896,6 +21896,8 @@ callers link an independently written C provider of both fields.
 `SharedAggregateReturnKeepsBothFields` exercises two loop entries and shared
 return blocks whose second fields differ. HighC and LLVM-C must preserve the
 complete record on every exit and compile/run at O0/O2 in all three formats.
+The shared return blocks also prevent scalar goto-to-return inlining from
+dropping a field after the complete return value has already been lowered.
 This also checks selected callers together with their callee definitions;
 individual scalar-looking views cannot validate a joint record-return unit.
 `ReturnFieldsConsumedThroughPhisStayObserved` checks a caller joining a pair
