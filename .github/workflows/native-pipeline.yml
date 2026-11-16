@@ -1,4 +1,4 @@
-name: MIPS Windows qualification (temporary)
+name: MIPS native qualification (temporary)
 
 # Diagnostic branch only. Retire after the pending MIPS chain is qualified.
 on:
@@ -13,16 +13,36 @@ permissions:
   contents: read
 
 concurrency:
-  group: mips-windows-qualification-${{ inputs.source_sha }}
+  group: mips-native-qualification-${{ inputs.source_sha }}
   cancel-in-progress: false
 
 jobs:
-  windows:
-    name: Windows MSVC MIPS and source ABI
-    runs-on: windows-latest
+  native:
+    name: ${{ matrix.name }} MIPS and source ABI
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux Clang 18 libstdc++ 14
+            runner: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+            parallel: 4
+          - name: macOS Apple Clang
+            runner: macos-15
+            cc: clang
+            cxx: clang++
+            parallel: 3
+          - name: Windows MSVC
+            runner: windows-latest
+            cc: cl
+            cxx: cl
+            parallel: 4
     timeout-minutes: 180
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      QUALIFICATION_CXX: ${{ matrix.cxx }}
     defaults:
       run:
         shell: bash
@@ -43,39 +63,76 @@ jobs:
           actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           assert actual == expected, (actual, expected)
           PYTHON
-          git submodule update --init --depth 1 third_party/capstone third_party/unicorn
+          git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+      - name: Install Linux build and fixture tools
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+            --output "$RUNNER_TEMP/neverd-llvm.asc"
+          gpg --show-keys --with-colons "$RUNNER_TEMP/neverd-llvm.asc" \
+            | grep '^fpr:.*6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          sudo install -m 0644 "$RUNNER_TEMP/neverd-llvm.asc" /usr/share/keyrings/neverd-llvm.asc
+          echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' \
+            | sudo tee /etc/apt/sources.list.d/neverd-llvm.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib g++-14 zlib1g-dev
+          printf '%s\n' /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+          printf '%s\n' 'NEVERD_SOURCE_CLANG=/usr/lib/llvm-23/bin/clang' >> "$GITHUB_ENV"
+          sudo sysctl -w kernel.core_pattern=/dev/null
+      - name: Install macOS build and fixture tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake lld ninja llvm@22
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "NEVERD_SOURCE_CLANG=$(brew --prefix llvm@22)/bin/clang" >> "$GITHUB_ENV"
       - name: Install Windows build tools
+        if: runner.os == 'Windows'
         shell: pwsh
         run: choco install ninja --yes --no-progress
       - name: Install pinned fixture compiler
+        if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/ci/Install-WindowsFixtureClang.ps1
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: runner.os == 'Windows'
         with:
           arch: x64
       - name: Configure bounded Release qualification
         run: |
+          platform_args=()
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            test -d /usr/lib/gcc/x86_64-linux-gnu/14
+            platform_args+=("-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14")
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            platform_args+=("-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")")
+          else
+            platform_args+=("-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$NEVERD_SOURCE_CLANG")
+          fi
           cmake -S . -B build-mips-ci -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
-            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
             -DNEVERD_LLVM_PREBUILT=ON \
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
-            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
-            "-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")"
-      - name: Compile type JSON owner first
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
+      - name: Compile known portability boundaries first
         timeout-minutes: 60
         run: |
-          python scripts/build.py build-mips-ci --config Release --parallel 4 --target NeverDTypes
+          object_suffix=o
+          if [ "$RUNNER_OS" = "Windows" ]; then object_suffix=obj; fi
+          python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target \
+            "lib/types/CMakeFiles/NeverDTypes.dir/TypeJSON.cpp.$object_suffix" \
+            "lib/sdk/CMakeFiles/neverd_shared.dir/capi/NeverDCAPILocalTypes.cpp.$object_suffix" \
+            "unittests/CMakeFiles/NeverDSessionLLVMTests.dir/__/lib/sdk/capi/NeverDCAPILocalTypes.cpp.$object_suffix"
           mkdir -p build-mips-ci/evidence
-          cp build-mips-ci/neverd-build-receipt.json build-mips-ci/evidence/types-library-build-receipt.json
+          cp build-mips-ci/neverd-build-receipt.json build-mips-ci/evidence/portability-build-receipt.json
       - name: Build complete owning test targets
         timeout-minutes: 125
         run: |
-          python scripts/build.py build-mips-ci --config Release --parallel 4 --target \
+          python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target \
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
-            NeverDSourceAnchorTests NeverDTypesTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -90,7 +147,8 @@ jobs:
                     'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests',
                     'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
                     'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
-                    'NeverDSourceAnchorTests', 'NeverDTypesTests']
+                    'NeverDSourceAnchorTests', 'NeverDTypesTests',
+                    'NeverDSessionCAPITests', 'NeverDSessionLLVMTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -107,27 +165,32 @@ jobs:
           assert all(counts[owner] > 0 for owner in owners), counts
           assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
           assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
+          assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
           (output / 'inventory.json').write_text(json.dumps(name_to_owner, indent=2) + '\n')
           source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           binary_hashes = {}
           for owner in owners:
-              binary = Path('build-mips-ci/bin') / (owner + '.exe')
+              binary = Path('build-mips-ci/bin') / (owner + ('.exe' if os.name == 'nt' else ''))
               binary_hashes[owner] = hashlib.file_digest(binary.open('rb'), 'sha256').hexdigest()
           def version(args):
               result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
               return {'exit': result.returncode, 'output': result.stdout}
+          compiler_tools = {'cl': ['cl'], 'link': ['link', '/?']} if os.name == 'nt' else {
+              'cxx': [os.environ['QUALIFICATION_CXX'], '--version']}
+          if platform.system() == 'Linux':
+              compiler_tools['libstdcxx'] = ['g++-14', '--version']
           receipt = {
               'source_sha': source, 'expected_source_sha': os.environ['EXPECTED_SOURCE_SHA'],
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS, shared source ABI, source mapping and type-system owners; not the full repository CI profile',
+              'scope': 'complete MIPS, shared source ABI, source mapping, type-system and C API/SessionLLVM owners; not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
                                               '--output-junit', str((output / 'results.xml').resolve())]},
               'tools': {name: version(args) for name, args in {
-                  'cl': ['cl'], 'link': ['link', '/?'], 'cmake': ['cmake', '--version'],
+                  **compiler_tools, 'cmake': ['cmake', '--version'],
                   'fixture_clang': [os.environ['NEVERD_SOURCE_CLANG'], '--version']}.items()},
               'submodules': subprocess.check_output(['git', 'submodule', 'status'], text=True)
           }
@@ -145,22 +208,24 @@ jobs:
           mips_skipped = [name for name in skipped if name_to_owner[name].startswith('NeverDMIPS')]
           source_anchor_skipped = [name for name in skipped if name_to_owner[name] == 'NeverDSourceAnchorTests']
           type_json_skipped = [name for name in skipped if name.startswith(('TypeJSONFixture.', 'TypeFit.'))]
+          local_type_skipped = [name for name in skipped if name.startswith('SessionCAPITest.LocalType')]
           audit = {'exit': result.returncode, 'total': len(cases), 'failed': failed,
                    'skipped': skipped, 'mips_skipped': mips_skipped,
                    'source_anchor_skipped': source_anchor_skipped,
                    'type_json_skipped': type_json_skipped,
+                   'local_type_skipped': local_type_skipped,
                    'missing': list((expected_names - actual_names).elements()),
                    'unexpected': list((actual_names - expected_names).elements())}
           (output / 'outcomes.json').write_text(json.dumps(audit, indent=2) + '\n')
           print(json.dumps(audit, indent=2))
           assert actual_names == expected_names, 'incomplete inventory execution'
-          assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped, audit
+          assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped and not local_type_skipped, audit
           PYTHON
       - name: Upload bounded qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mips-windows-${{ inputs.source_sha }}
+          name: mips-native-${{ runner.os }}-${{ inputs.source_sha }}
           retention-days: 7
           if-no-files-found: error
           path: |
