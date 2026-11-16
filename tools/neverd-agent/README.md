@@ -726,6 +726,16 @@ loads. Clicked web links open the browser; existing text-file links within the
 current project open in the preview. Code is selectable/wrapped, without syntax
 highlighting in this version.
 
+Everything else the window shows is plain text: a project's name comes from a
+file, a path or a function's name from a binary, a summary from a model, and
+none of it is laid out as markup. Qt Quick would read a label left to its
+default as styled text when the text looks like markup, and fetch the image it
+names; so every `Label` and `Text` states `textFormat: Text.PlainText`
+(`scripts/check_agent_qml_text.py`), an `Image` takes a literal path in the
+application's resources, and the window's QML engine answers any request with
+an error instead of a connection (`platform/OfflineQml.h`). The window reaches
+no machine; model requests are made by `neverd-agent-cli`.
+
 The current executable opens the original file in ND GUI; it does not attach
 the Agent's conversation or memory to an existing GUI analysis session. The
 file pane is a manual-refresh UTF-8 preview (up to 256 KiB), not an editor.
@@ -767,6 +777,9 @@ forces pre-turn and in-task compaction, bounded summary requests, failed/empty
 and cancelled summaries, checkpoint resume, whole tool-batch boundaries, and
 provider/cache token accounting. `NeverDAgent.Markdown` exercises real document
 structure, tables, code copying, incomplete fences and literal HTML/image labels.
+`NeverDAgent.Offline` listens on a local port and checks that a label whose
+text names an image there makes a connection under Qt's defaults, none as
+plain text, and none in an engine with the window's network access.
 `NeverDAgentLiveRunner` is an explicit integration-test executable (not installed
 with the product). It reads JSON from stdin so credentials need not be placed in
 command-line arguments or fixture files. It drives the same controller and

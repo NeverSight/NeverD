@@ -11,6 +11,6 @@ ToolTip {
     leftPadding: 9
     rightPadding: 9
     contentWidth: Math.min(Math.ceil(label.implicitWidth), 460)
-    contentItem: Text { id: label; text: tip.text; font: tip.font; color: Theme.menuText; wrapMode: Text.Wrap }
+    contentItem: Text { id: label; textFormat: Text.PlainText; text: tip.text; font: tip.font; color: Theme.menuText; wrapMode: Text.Wrap }
     background: Rectangle { radius: Theme.toolRadius; color: Theme.menu; border.width: 1; border.color: Theme.borderStrong }
 }

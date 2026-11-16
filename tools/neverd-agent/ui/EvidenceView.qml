@@ -43,12 +43,13 @@ ColumnLayout {
         }
     }
     Label {
+        textFormat: Text.PlainText
         Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.secondary; font.pointSize: Theme.smallPointSize
         text: view.backend.evidenceBusy ? qsTr("Reading and saving evidence…") : view.record.id
               ? qsTr("%1 · %2\nAnalysis revision %3 · %4").arg(view.record.objectName).arg(view.record.address || view.record.tool).arg(view.record.revision || "—").arg(new Date(view.record.createdAt).toLocaleString(Qt.locale(), Locale.ShortFormat))
               : qsTr("Read a function, or click an evidence link in an answer.")
     }
-    Label { visible: !!view.record.issue; text: view.record.issue || ""; color: Theme.error; wrapMode: Text.Wrap; Layout.fillWidth: true }
+    Label { textFormat: Text.PlainText; visible: !!view.record.issue; text: view.record.issue || ""; color: Theme.error; wrapMode: Text.Wrap; Layout.fillWidth: true }
     RowLayout {
         visible: !!view.record.id; Layout.fillWidth: true
         ActionButton { quiet: true; glyph: "plus"; text: qsTr("Attach as reference"); onClicked: view.backend.attachEvidence(view.record.id) }
@@ -68,7 +69,7 @@ ColumnLayout {
     }
     RowLayout {
         visible: !!view.record.id; Layout.fillWidth: true
-        Label { text: view.record.complete === false ? qsTr("Partially saved") : qsTr("Saved to the current project"); color: Theme.quiet; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+        Label { textFormat: Text.PlainText; text: view.record.complete === false ? qsTr("Partially saved") : qsTr("Saved to the current project"); color: Theme.quiet; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
         ActionButton { visible: view.record.offset > 0; text: qsTr("Back to start"); onClicked: view.backend.openEvidence(view.record.id, 0) }
         ActionButton { visible: view.record.nextOffset >= 0; text: qsTr("Next page"); onClicked: view.backend.openEvidence(view.record.id, view.record.nextOffset) }
     }

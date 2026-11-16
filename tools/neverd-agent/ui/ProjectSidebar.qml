@@ -37,6 +37,7 @@ Surface {
                     Layout.preferredHeight: 20
                 }
                 Label {
+                    textFormat: Text.PlainText
                     text: "NeverD Agent"
                     color: sidebar.windowActive ? Theme.titleText : Theme.titleInactiveText
                     font.weight: Font.Medium
@@ -63,6 +64,7 @@ Surface {
             }
         }
         Label {
+            textFormat: Text.PlainText
             text: qsTr("Projects")
             color: Theme.secondary
             font.pointSize: Theme.smallPointSize
@@ -135,6 +137,7 @@ Surface {
                             }
                         }
                         Label {
+                            textFormat: Text.PlainText
                             visible: projectNode.expanded && projectNode.modelData.objects.length === 0
                             text: qsTr("No analysis objects yet")
                             color: Theme.quiet
@@ -164,6 +167,7 @@ Surface {
                     }
                 }
                 Label {
+                    textFormat: Text.PlainText
                     visible: sidebar.backend.projects.length === 0 && sidebar.backend.unavailableProjects.length === 0
                     text: qsTr("Create a project for one line of research, then add the files to analyze together.")
                     color: Theme.quiet

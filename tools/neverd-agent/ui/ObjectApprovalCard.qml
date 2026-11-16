@@ -34,6 +34,7 @@ Surface {
             spacing: 8
             Icon { name: "file_load"; color: Theme.secondary; Layout.preferredWidth: 16; Layout.preferredHeight: 16 }
             Label {
+                textFormat: Text.PlainText
                 id: title
                 text: qsTr("Allow adding this analysis object?")
                 color: Theme.text; font.weight: Font.DemiBold

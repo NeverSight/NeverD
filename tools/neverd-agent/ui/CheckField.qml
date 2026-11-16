@@ -26,6 +26,7 @@ CheckBox {
         }
     }
     contentItem: Text {
+        textFormat: Text.PlainText
         leftPadding: control.indicator.width + control.spacing
         text: control.text
         font: control.font

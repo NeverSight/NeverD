@@ -62,6 +62,7 @@ ColumnLayout {
         onLinkRequested: link => view.backend.openTextLink(link)
         onQuoteRequested: messageId => view.backend.quoteSideAnswer(messageId)
         Label {
+            textFormat: Text.PlainText
             anchors.centerIn: parent; width: parent.width - 24
             visible: (!view.chat || view.chat.messages.length === 0) && !view.showInherited
             text: qsTr("Explore a side question here, with the main conversation's context.")
@@ -119,6 +120,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     ActionButton { glyph: "plus"; hint: qsTr("Add context…"); onClicked: view.contextRequested() }
                 Label {
+                    textFormat: Text.PlainText
                     text: view.objectApproval ? qsTr("Waiting for approval")
                           : view.chat && view.chat.running ? qsTr("Analyzing…") : qsTr("Side chat")
                     color: Theme.quiet; font.pointSize: Theme.smallPointSize

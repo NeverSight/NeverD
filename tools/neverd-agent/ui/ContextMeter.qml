@@ -73,8 +73,8 @@ ToolButton {
             HoverHandler { id: popupHover; onHoveredChanged: { if (!hovered) closeTimer.restart() } }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: meter.usage.compacting ? qsTr("Compacting") : qsTr("Context"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
-                Label { visible: meter.known; text: Math.round(meter.fraction * 100) + "%"; color: meter.fraction >= 1 ? Theme.error : Theme.text; font.pointSize: Theme.smallPointSize; font.weight: Font.Medium }
+                Label { textFormat: Text.PlainText; text: meter.usage.compacting ? qsTr("Compacting") : qsTr("Context"); color: Theme.secondary; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+                Label { textFormat: Text.PlainText; visible: meter.known; text: Math.round(meter.fraction * 100) + "%"; color: meter.fraction >= 1 ? Theme.error : Theme.text; font.pointSize: Theme.smallPointSize; font.weight: Font.Medium }
             }
             Rectangle {
                 visible: meter.known
@@ -82,11 +82,13 @@ ToolButton {
                 Rectangle { width: parent.width * Math.min(1, meter.fraction); height: parent.height; radius: 1.5; color: meter.fraction >= 1 ? Theme.error : Theme.accent }
             }
             Label {
+                textFormat: Text.PlainText
                 Layout.fillWidth: true
                 text: meter.known ? (meter.usage.estimated ? qsTr("%1 / %2 tokens · Estimated") : qsTr("%1 / %2 tokens")).arg(meter.compactNumber(meter.usage.tokens)).arg(meter.compactNumber(meter.usage.trigger)) : qsTr("Measured after the first request")
                 color: Theme.secondary; font.pointSize: Theme.smallPointSize
             }
             Label {
+                textFormat: Text.PlainText
                 visible: (meter.usage.compactions || 0) > 0
                 Layout.fillWidth: true
                 text: qsTr("Compactions: %1").arg(meter.usage.compactions || 0)
