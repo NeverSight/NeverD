@@ -2002,3 +2002,27 @@ The latter target's CLI dependency was built with the real shared SDK enabled.
 C11/C++20 multi-translation-unit checks, clang-format 22.1.2 and the documentation
 inventory also passed. Generated products were removed after recording hashes;
 the active Release build and r6 were retained.
+
+
+### PC-signing publication and live-LR language delivery
+
+The native register producer retains PACM prefixes, IA/IB explicit SP/PC
+signing and authentication, and instruction-relative returns as exact words.
+A local ADR can materialize a signing point only inside the same copied body;
+external addresses still require their relocation owner. Instruction offsets
+and final linked words are verified, preserving PACM adjacency and signing-PC
+distances. Explicit authentication displacements cannot point before the body.
+Classic compact frames still cannot publish saved PC-signed returns. Compact
+frameless bodies with no calls or saved register pairs can retain a live LR;
+the signal bridge authenticates its recovered recipe before presenting its
+separate IB/CFA return to the system unwinder.
+
+The language matrix adds IA/IB PACM and explicit PAuth_LR across indexed and
+compact frames, replacement objects and NeverD-generated images, C++ and
+Objective-C, cleanup and local catch, O0/O2 and both signal stacks. The runtime
+fixture binds the serialized signing offset to the actual loaded owner before
+reading or delivering the interrupted context. Every case reports four
+structural original/published images. Explicit native execution is conditional
+on an independent instruction probe. PACM native delivery and PC-modifier
+qualification are recorded separately; hint-compatible execution cannot prove
+that the PC contributes to the signature.
