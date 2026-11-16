@@ -1015,4 +1015,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 // Native comparisons extend the selector fixture above.
 #include "X86ModeSegmentNativeTests.inc"
 
+// These cases reuse the mixed-mode native fixture above.
+#include "X86ModeDebugRegisterTests.inc"
+
 } // namespace
