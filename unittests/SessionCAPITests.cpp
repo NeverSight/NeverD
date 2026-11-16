@@ -7426,6 +7426,83 @@ TEST_F(SessionCAPITest, NamesReadAheadLeaveNameChecksAsTheyRead) {
   EXPECT_EQ(neverd_names_prepare(nullptr), 0);
 }
 
+TEST_F(SessionCAPITest, LocalTypePagesKeepQueryChangesIndependent) {
+  const auto Input = write("type-pages.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto Declared = llvm::json::parse(takeString(neverd_local_types_declare(
+      Session,
+      "struct Zulu { char Tag; }; struct Alpha { int Value; }; "
+      "struct Middle { long long Value; };",
+      nullptr)));
+  ASSERT_TRUE(static_cast<bool>(Declared));
+  ASSERT_TRUE(Declared->getAsObject());
+  ASSERT_TRUE(Declared->getAsObject()->getArray("problems"));
+  ASSERT_TRUE(Declared->getAsObject()->getArray("problems")->empty());
+
+  const auto page = [&](const char *Query) {
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_local_types_json(Session, Query)));
+    EXPECT_TRUE(static_cast<bool>(Parsed))
+        << takeString(neverd_last_error(Session));
+    return Parsed && Parsed->getAsObject() ? *Parsed->getAsObject()
+                                           : llvm::json::Object();
+  };
+  struct QueryCase {
+    const char *Query;
+    std::vector<std::string> Names;
+    int64_t Total, Offset, Next;
+  };
+  const QueryCase Cases[] = {
+      {R"({"origin":"user","limit":2})", {"Zulu", "Alpha"}, 3, 0, 2},
+      {R"({"origin":"user","limit":2,"offset":2})", {"Middle"}, 3, 2, 3},
+      {R"({"origin":"user","limit":2,"sort":"name","descending":true})",
+       {"Zulu", "Middle"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"sort":"name"})",
+       {"Alpha", "Middle"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"sort":"size"})",
+       {"Zulu", "Alpha"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"filter":"alp"})", {"Alpha"}, 1, 0, 1},
+      {R"({"origin":"user","limit":2,"filter":"MID"})", {"Middle"}, 1, 0, 1},
+      {R"({"origin":"pdb","limit":2})", {}, 0, 0, 0},
+      {R"({"origin":"user","limit":2})", {"Zulu", "Alpha"}, 3, 0, 2},
+  };
+  std::vector<llvm::json::Value> Expected;
+  for (const QueryCase &Case : Cases) {
+    SCOPED_TRACE(Case.Query);
+    auto Page = page(Case.Query);
+    ASSERT_TRUE(Page.getArray("types"));
+    std::vector<std::string> Names;
+    for (const auto &Row : *Page.getArray("types")) {
+      ASSERT_TRUE(Row.getAsObject());
+      ASSERT_TRUE(Row.getAsObject()->getString("name"));
+      Names.push_back(Row.getAsObject()->getString("name")->str());
+    }
+    EXPECT_EQ(Names, Case.Names);
+    EXPECT_EQ(Page.getInteger("total"), Case.Total);
+    EXPECT_EQ(Page.getInteger("offset"), Case.Offset);
+    EXPECT_EQ(Page.getInteger("next_offset"), Case.Next);
+    ASSERT_TRUE(Page.getObject("stats"));
+    ASSERT_TRUE(Page.getObject("stats")->getObject("origins"));
+    EXPECT_EQ(Page.getObject("stats")->getObject("origins")->getInteger("user"),
+              3);
+    Expected.emplace_back(std::move(Page));
+  }
+  EXPECT_EQ(Expected.front(), Expected.back());
+  for (size_t I = Expected.size(); I > 0; --I) {
+    SCOPED_TRACE(Cases[I - 1].Query);
+    EXPECT_EQ(llvm::json::Value(page(Cases[I - 1].Query)), Expected[I - 1]);
+  }
+}
+
 TEST_F(SessionCAPITest, LocalTypePagesAndRenderersRefreshAfterEdits) {
   const auto Input = write("types.elf", makeNativeELF(false));
   ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);

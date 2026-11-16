@@ -8384,7 +8384,11 @@ recovery and explicit failure when that definition never arrives.
 them with the complete inventory. `LocalTypeLocateSurvivesAByteLimitedPage`
 checks exact-name navigation when a row-count page exceeds its byte limit;
 `LocalTypePagesAndRenderersRefreshAfterEdits` checks list/layout/source cache
-invalidation. `TypeRender.ReusedNameMappingsKeepCollisionsAndRequestOptions`
+invalidation. `LocalTypePagesKeepQueryChangesIndependent` checks complete page
+responses while changing filters, origins, sort keys and directions, then
+replays the queries in reverse order. Building both Session C API and Session
+LLVM test owners also exercises the nested index's construction on each native
+toolchain. `TypeRender.ReusedNameMappingsKeepCollisionsAndRequestOptions`
 compares cached and uncached output across spelling, language and dependency
 options. The worker local-types test and GUI
 `localTypesPageAndLocateBeyondTheFirstPage` cover the corresponding transport

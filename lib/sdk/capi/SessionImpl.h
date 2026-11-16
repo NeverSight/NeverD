@@ -165,8 +165,10 @@ struct Session {
   /// One filtered/sorted type index, reused across pages. Invalidated with
   /// the library or a successful declaration/removal, before the next query.
   struct LocalTypeListIndex {
+    LocalTypeListIndex() : Descending(false) {}
+
     std::string Filter, Origin, Sort;
-    bool Descending = false;
+    bool Descending;
     std::vector<const types::LocalType *> Rows;
     llvm::StringMap<int64_t> Origins;
   };
