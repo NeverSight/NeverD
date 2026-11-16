@@ -21969,6 +21969,8 @@ image bytes, absence from the literal catalogue, and deferred HighIR/LLVM/C
 emission. `NeverDWorkerComputedStrings` checks the 601-function transport
 fixture, an entry discovered during analysis, retained failures, non-advancing
 filtered pages, exact 64-bit addresses and invalidation after a function edit.
+The replacement catalogue starts its rows, counters and ordering anew while
+rejecting the previous generation's page token.
 `WorkbenchUnitTests.computedStringDetailsRetainConditionsAndNavigate` checks
 full escaped text and the initializer link, including addresses above 2^53.
 `WorkbenchTests.computedStringsScanPausesAndFiltersInReplica` checks pause,
