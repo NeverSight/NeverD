@@ -18,7 +18,7 @@ Surface {
         RowLayout {
             Layout.fillWidth: true
             Icon { name: "bookmark"; Layout.preferredWidth: Theme.iconSize; Layout.preferredHeight: Theme.iconSize }
-            Label { text: strip.goal.objective || ""; color: Theme.text; elide: Text.ElideRight; Layout.fillWidth: true }
+            Label { textFormat: Text.PlainText; text: strip.goal.objective || ""; color: Theme.text; elide: Text.ElideRight; Layout.fillWidth: true }
             ActionButton {
                 text: strip.goal.status === "active" ? qsTr("Pause") : qsTr("Resume")
                 visible: strip.goal.status !== "completed"
@@ -33,6 +33,7 @@ Surface {
             ActionButton { text: qsTr("Details…"); implicitHeight: 26; onClicked: strip.editRequested() }
         }
         Label {
+            textFormat: Text.PlainText
             text: qsTr("%1  ·  Round %2 of %3  ·  %4%5 / %6 tokens").arg(strip.stateText).arg(strip.goal.rounds || 0).arg(strip.goal.roundLimit || 0).arg(strip.goal.estimated ? "≈ " : "").arg(Number(strip.goal.usedTokens || 0).toLocaleString(Qt.locale(), 'f', 0)).arg(Number(strip.goal.tokenBudget || 0).toLocaleString(Qt.locale(), 'f', 0))
             color: Theme.quiet; font.pointSize: Theme.smallPointSize
             elide: Text.ElideRight; Layout.fillWidth: true

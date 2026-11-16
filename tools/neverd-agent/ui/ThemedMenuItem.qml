@@ -12,6 +12,7 @@ MenuItem {
     bottomPadding: 4
     readonly property bool lit: item.highlighted && item.enabled
     contentItem: Text {
+        textFormat: Text.PlainText
         text: item.text
         font: item.font
         color: !item.enabled ? Theme.disabledText : item.lit ? Theme.menuSelectionText : Theme.menuText

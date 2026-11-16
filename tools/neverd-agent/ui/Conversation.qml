@@ -46,6 +46,7 @@ Surface {
                     elide: Text.ElideMiddle
                 }
                 Label {
+                    textFormat: Text.PlainText
                     text: qsTr("Project file preview")
                     color: Theme.quiet
                     font.pointSize: Theme.smallPointSize
@@ -104,6 +105,7 @@ Surface {
                     Layout.bottomMargin: Theme.spaceSmall
                 }
                 Label {
+                    textFormat: Text.PlainText
                     text: conversation.backend.activeId ? qsTr("Bring your leads together here") : qsTr("Your next research project starts here")
                     color: Theme.text
                     font.pointSize: Theme.heroPointSize
@@ -112,6 +114,7 @@ Surface {
                     Layout.fillWidth: true
                 }
                 Label {
+                    textFormat: Text.PlainText
                     text: conversation.backend.activeId
                           ? qsTr("Add related programs, libraries or drivers, and keep questions, notes and object memory in one project.")
                           : qsTr("One project, one working directory. Keep related analysis objects together and leave a research log you can build on.")
@@ -288,6 +291,7 @@ Surface {
             Layout.rightMargin: Theme.spaceMedium - Theme.spaceTiny
             Layout.topMargin: -Theme.spaceSmall
             Label {
+                textFormat: Text.PlainText
                 id: composerStatus
                 text: conversation.approvalVisible ? qsTr("Waiting for approval")
                       : conversation.backend.running ? qsTr("Analyzing · Object progress is in the sidebar.")
@@ -299,6 +303,7 @@ Surface {
             }
             // The key hint gives way first when both do not fit.
             Label {
+                textFormat: Text.PlainText
                 visible: composerStatus.implicitWidth + implicitWidth + parent.spacing <= parent.width
                 text: qsTr("Enter to send · Shift+Enter for a new line"); color: Theme.quiet; font.pointSize: Theme.smallPointSize
             }

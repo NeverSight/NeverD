@@ -12,10 +12,10 @@ Dialog {
     modal: true; padding: Theme.dialogPadding; topPadding: Theme.spaceSmall
     Overlay.modal: ModalDim {}
     background: Surface { glass: true }
-    header: Label { text: qsTr("Add analysis context"); color: Theme.text; padding: Theme.dialogPadding; bottomPadding: Theme.spaceSmall; font.pointSize: Theme.titlePointSize; font.weight: Font.Medium }
+    header: Label { textFormat: Text.PlainText; text: qsTr("Add analysis context"); color: Theme.text; padding: Theme.dialogPadding; bottomPadding: Theme.spaceSmall; font.pointSize: Theme.titlePointSize; font.weight: Font.Medium }
     contentItem: ColumnLayout {
         spacing: 12
-        Label { text: qsTr("Reference an object, function or address in the current project. You can review and remove references before sending."); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { textFormat: Text.PlainText; text: qsTr("Reference an object, function or address in the current project. You can review and remove references before sending."); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }
         ChoiceField { id: objects; Layout.fillWidth: true; model: picker.backend.activeProject.objects || []; textRole: "name"; valueRole: "id" }
         Field { id: address; Layout.fillWidth: true; placeholderText: qsTr("Function name or address (leave empty for the whole object)") }
         ActionButton {
@@ -33,7 +33,7 @@ Dialog {
             text: qsTr("Attach the current file: %1").arg(picker.backend.previewTitle)
             onClicked: { picker.backend.attachPreview(picker.side); picker.close() }
         }
-        Label { text: qsTr("You can also select text in the conversation or in pseudocode, then right-click to attach it as a reference or start a side chat."); color: Theme.quiet; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pointSize: Theme.smallPointSize }
+        Label { textFormat: Text.PlainText; text: qsTr("You can also select text in the conversation or in pseudocode, then right-click to attach it as a reference or start a side chat."); color: Theme.quiet; wrapMode: Text.Wrap; Layout.fillWidth: true; font.pointSize: Theme.smallPointSize }
         RowLayout {
             Layout.fillWidth: true
             Item { Layout.fillWidth: true }

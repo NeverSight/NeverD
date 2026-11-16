@@ -197,6 +197,7 @@ ApplicationWindow {
                     Layout.preferredHeight: Theme.topBarHeight
                     WindowDrag { anchors.fill: parent }
                     Label {
+                        textFormat: Text.PlainText
                         anchors.left: parent.left
                         anchors.leftMargin: Theme.spaceLarge
                         anchors.right: titleActions.left
@@ -300,6 +301,7 @@ ApplicationWindow {
                             border.width: 1
                             border.color: Theme.borderStrong
                             Label {
+                                textFormat: Text.PlainText
                                 id: noticeLabel
                                 anchors.fill: parent
                                 anchors.leftMargin: Theme.spaceMedium
@@ -482,6 +484,7 @@ ApplicationWindow {
         contentItem: ColumnLayout {
             spacing: 12
             Label {
+                textFormat: Text.PlainText
                 text: qsTr("This only takes the project off the list. Nothing on disk is deleted: its folder, conversation and memory stay where they are, and Open project brings it back.")
                 color: Theme.text
                 Layout.fillWidth: true
@@ -519,15 +522,16 @@ ApplicationWindow {
         title: qsTr("New project")
         contentItem: ColumnLayout {
             spacing: 12
-            Label { text: qsTr("Project name"); color: Theme.secondary }
+            Label { textFormat: Text.PlainText; text: qsTr("Project name"); color: Theme.secondary }
             Field { id: projectName; placeholderText: qsTr("e.g. Windows API research"); Layout.fillWidth: true }
-            Label { text: qsTr("Project folder"); color: Theme.secondary }
+            Label { textFormat: Text.PlainText; text: qsTr("Project folder"); color: Theme.secondary }
             RowLayout {
                 Layout.fillWidth: true
                 Field { id: projectFolder; placeholderText: qsTr("Holds notes, reports and project memory"); Layout.fillWidth: true }
                 ActionButton { glyph: "open"; text: qsTr("Browse…"); onClicked: createFolderDialog.open() }
             }
             Label {
+                textFormat: Text.PlainText
                 text: qsTr("A .nd-agent folder is created in this directory to hold this project's own context. Analysis objects can be in other directories.")
                 color: Theme.secondary
                 Layout.fillWidth: true
@@ -564,6 +568,7 @@ ApplicationWindow {
                 onClicked: { settingsDialog.close(); modelSettingsDialog.open() }
             }
             Label {
+                textFormat: Text.PlainText
                 text: qsTr("Language and theme follow the NeverD workbench: Options ▸ Language and Options ▸ Colors.")
                 color: Theme.secondary
                 wrapMode: Text.Wrap
@@ -571,7 +576,7 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: qsTr("Analysis objects added by AI"); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                Label { textFormat: Text.PlainText; text: qsTr("Analysis objects added by AI"); color: Theme.secondary; wrapMode: Text.Wrap; Layout.fillWidth: true }
                 ChoiceField {
                     id: objectApprovalMode
                     model: [qsTr("Require approval each time"), qsTr("Allow automatically")]
@@ -590,6 +595,7 @@ ApplicationWindow {
 
             }
             Label {
+                textFormat: Text.PlainText
                 text: qsTr("Organizing uses the current model and incurs additional API usage. It processes only completed exchanges and their evidence references, and pauses when a new analysis starts. Turning off recall does not delete saved memory.")
                 color: Theme.secondary
                 wrapMode: Text.Wrap; font.pointSize: Theme.smallPointSize
@@ -601,19 +607,20 @@ ApplicationWindow {
 
             }
             Label {
+                textFormat: Text.PlainText
                 text: qsTr("Reads object memory from other registered projects by file fingerprint. Project conversations stay separate, and memory from other projects is read-only.")
                 color: Theme.secondary
                 wrapMode: Text.Wrap; font.pointSize: Theme.smallPointSize
                 Layout.fillWidth: true
             }
-            Label { text: qsTr("NeverD workbench executable"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
+            Label { textFormat: Text.PlainText; text: qsTr("NeverD workbench executable"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
             RowLayout {
                 Layout.fillWidth: true
                 Field { id: guiField; placeholderText: qsTr("Leave empty to search the adjacent directory and PATH"); Layout.fillWidth: true }
                 ActionButton { glyph: "open"; hint: qsTr("Choose executable…"); onClicked: guiFileDialog.open() }
             }
-            Label { text: qsTr("Global data directory"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
-            Label { text: backend.dataDirectory; color: Theme.secondary; wrapMode: Text.WrapAnywhere; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
+            Label { textFormat: Text.PlainText; text: qsTr("Global data directory"); color: Theme.secondary; font.pointSize: Theme.smallPointSize }
+            Label { textFormat: Text.PlainText; text: backend.dataDirectory; color: Theme.secondary; wrapMode: Text.WrapAnywhere; font.pointSize: Theme.smallPointSize; Layout.fillWidth: true }
             RowLayout {
                 Layout.topMargin: 8
                 Item { Layout.fillWidth: true }
@@ -638,7 +645,7 @@ ApplicationWindow {
         title: window.memoryRecordId ? qsTr("Edit and confirm memory") : window.memoryObject ? qsTr("Add object memory") : qsTr("Add project memory")
         contentItem: ColumnLayout {
             spacing: 12
-            Label { text: qsTr("Record a confirmed fact and its evidence source."); color: Theme.secondary; Layout.fillWidth: true }
+            Label { textFormat: Text.PlainText; text: qsTr("Record a confirmed fact and its evidence source."); color: Theme.secondary; Layout.fillWidth: true }
             ScrollView {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 220
@@ -671,7 +678,7 @@ ApplicationWindow {
         closePolicy: startupError ? Popup.NoAutoClose : Popup.CloseOnEscape
         contentItem: ColumnLayout {
             spacing: 16
-            Label { id: failureText; color: Theme.text; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
+            Label { id: failureText; textFormat: Text.PlainText; color: Theme.text; wrapMode: Text.WrapAnywhere; Layout.fillWidth: true }
             ActionButton {
                 text: startupError ? qsTr("Quit") : qsTr("OK")
                 primary: true

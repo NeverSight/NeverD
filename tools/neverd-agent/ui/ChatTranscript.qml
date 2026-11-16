@@ -72,6 +72,7 @@ ListView {
             width: parent.width
             spacing: Theme.spaceTiny
             Label {
+                textFormat: Text.PlainText
                 visible: messageRow.named
                 text: messageRow.speaker
                 color: Theme.quiet
@@ -139,6 +140,7 @@ ListView {
                 readonly property bool shown: messageHover.hovered || copyButton.activeFocus || quoteButton.activeFocus
                                               || copyButton.hovered || quoteButton.hovered || copyTimer.running
                 Label {
+                    textFormat: Text.PlainText
                     visible: messageRow.statusText.length > 0
                     text: messageRow.statusText
                     color: messageRow.entry.status === "failed" ? Theme.error : Theme.secondary
@@ -178,6 +180,7 @@ ListView {
                     ThemedToolTip { visible: parent.hovered; text: qsTr("Quote in the main conversation draft") }
                 }
                 Label {
+                    textFormat: Text.PlainText
                     opacity: parent.shown ? 1 : 0
                     text: new Date(messageRow.entry.createdAt).toLocaleTimeString(Qt.locale(), Locale.ShortFormat)
                     color: Theme.quiet
