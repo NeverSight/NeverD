@@ -81,8 +81,9 @@ def run(args, artifacts):
     def command(argv):
         roundtrip.run_command(artifacts, argv, artifacts.work / "command.log")
 
+    modes = args.mode or ("mips16", "classic")
     for little in (False, True):
-        for mode in ("mips16", "classic"):
+        for mode in modes:
             for fr in (0, 1):
                 profile = f'{"le" if little else "be"}-{mode}-fr{fr}'
                 directory = artifacts.work / profile
@@ -102,6 +103,8 @@ def run(args, artifacts):
                              "-fno-unwind-tables", "-fno-asynchronous-unwind-tables",
                              *(["-mips16"] if source_mode == "mips16" else []),
                              opt, "-S", source, "-o", assembly])
+                    if obj.name in ("caller.o", "callee.o"):
+                        artifacts.keep_source(assembly)
                     command([args.assembler, "-march=mips32r2", "-mabi=32", fp,
                              endian, assembly, "-o", obj])
                     artifacts.discard(assembly)
@@ -173,7 +176,8 @@ def run(args, artifacts):
                         artifacts.discard(source)
                 artifacts.discard(original, caller_obj, callee_obj, caller, callee, header)
     artifacts.write("summary.json", {"scalar": "double" if args.double else "float",
-                                    "profiles": 8, "original_cases": 8 * len(cases),
+                                    "profiles": 4 * len(modes),
+                                    "original_cases": 4 * len(modes) * len(cases),
                                     "builds": len(rows), "rebuilt_cases": len(rows) * len(cases),
                                     "expected_refusals": len(refusals)})
     print(json.dumps({"builds": len(rows), "rebuilt_cases": len(rows) * len(cases)}))
@@ -183,6 +187,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--double", action="store_true",
                         help="check both words of a split double parameter")
+    parser.add_argument("--mode", action="append", choices=("mips16", "classic"),
+                        help="select direct compressed calls or classic entry-stub calls")
     for name in ("neverd", "clang", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--gcc", type=Path)
