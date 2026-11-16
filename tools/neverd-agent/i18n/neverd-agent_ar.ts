@@ -277,6 +277,33 @@
     </message>
 </context>
 <context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>تراجع</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>إعادة</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>قص</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>نسخ</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>لصق</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>تحديد الكل</translation>
+    </message>
+</context>
+<context>
     <name>EvidenceView</name>
     <message>
         <source>Analysis object for evidence</source>

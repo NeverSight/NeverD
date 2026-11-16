@@ -15,6 +15,7 @@ TextField {
     implicitHeight: Theme.controlHeight
     selectionColor: Theme.selection
     selectedTextColor: Theme.selectionText
+    ContextMenu.menu: EditMenu { editor: control }
     background: Rectangle {
         radius: Theme.controlRadius
         color: control.enabled ? Theme.raised : Theme.controlDisabled

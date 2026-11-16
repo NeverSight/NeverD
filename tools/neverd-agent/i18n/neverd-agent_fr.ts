@@ -277,6 +277,33 @@
     </message>
 </context>
 <context>
+    <name>EditMenu</name>
+    <message>
+        <source>Undo</source>
+        <translation>Annuler</translation>
+    </message>
+    <message>
+        <source>Redo</source>
+        <translation>Rétablir</translation>
+    </message>
+    <message>
+        <source>Cut</source>
+        <translation>Couper</translation>
+    </message>
+    <message>
+        <source>Copy</source>
+        <translation>Copier</translation>
+    </message>
+    <message>
+        <source>Paste</source>
+        <translation>Coller</translation>
+    </message>
+    <message>
+        <source>Select all</source>
+        <translation>Tout sélectionner</translation>
+    </message>
+</context>
+<context>
     <name>EvidenceView</name>
     <message>
         <source>Analysis object for evidence</source>

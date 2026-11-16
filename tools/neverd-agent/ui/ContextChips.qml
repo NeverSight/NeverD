@@ -30,7 +30,7 @@ Flow {
                     background: Surface { glass: true }
                     contentItem: ScrollView {
                         clip: true
-                        TextArea { text: JSON.stringify(modelData, null, 2); readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; color: Theme.text; background: null }
+                        TextArea { id: referenceText; text: JSON.stringify(modelData, null, 2); readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; color: Theme.text; background: null; ContextMenu.menu: EditMenu { editor: referenceText } }
                     }
                 }
             }

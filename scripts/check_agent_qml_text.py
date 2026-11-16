@@ -9,7 +9,9 @@ images that Qt then fetches. So every Label and Text element states
 document loads no resources, and an Image's source is a literal path in the
 application's own resources. A control that draws its own label (a button, a
 menu item, a tool tip) either lays it out itself with such a Text or shows
-only words written in the source."""
+only words written in the source. A text input names the Agent's own editing
+menu as its ContextMenu.menu: from Qt 6.9 the style gives it a menu otherwise,
+in the style's look and with Qt's words."""
 from __future__ import annotations
 
 import argparse
@@ -25,7 +27,10 @@ UI = REPOSITORY / "tools" / "neverd-agent" / "ui"
 CONTROLS = ("Button", "ToolButton", "RoundButton", "DelayButton", "TabButton", "CheckBox",
             "RadioButton", "Switch", "MenuItem", "ItemDelegate", "CheckDelegate",
             "RadioDelegate", "SwitchDelegate", "SwipeDelegate", "ToolTip", "GroupBox", "Dialog")
-ELEMENT = re.compile(r"(?<![\w.])(Label|Text|Image|" + "|".join(CONTROLS) + r")\s*\{")
+# Text inputs Qt Quick Controls gives a context menu of its own.
+INPUTS = ("TextArea", "TextField")
+ELEMENT = re.compile(r"(?<![\w.])(Label|Text|Image|" + "|".join(CONTROLS + INPUTS) +
+                     r")\s*\{")
 RICH = re.compile(r"\b(?:Text|TextEdit)\.(?:RichText|StyledText|AutoText|MarkdownText)\b")
 PLAIN = re.compile(r"\btextFormat\s*:\s*Text\.PlainText\b")
 # The conversation's Markdown is laid out by MarkdownDocument, whose text
@@ -161,6 +166,11 @@ def check_text(name: str, source: str) -> tuple[list[str], int, int]:
             if not re.fullmatch(r'"qrc:/[^"]*"', value):
                 problems.append(f"{name}:{line}: an Image's source is a literal qrc:/ "
                                 f"path, not {value or 'unset'}")
+            continue
+        if match.group(1) in INPUTS:
+            if binding(body, r"ContextMenu\.menu") is None:
+                problems.append(f"{name}:{line}: {match.group(1)} takes Qt's own context "
+                                "menu; name the Agent's as ContextMenu.menu")
             continue
         if match.group(1) in CONTROLS:
             shown, own = ("title", "header") if match.group(1) == "Dialog" else ("text", "contentItem")
