@@ -20534,7 +20534,13 @@ inner handler call unwinds to the `__except` after the inner range's end marker
 and its outer handler call is a plain call, that three termination handlers of
 one unwind give two invokes at one address which the exception contract counts
 apart, and that a call after the handler calls or handler calls in another
-order leave the function without pads.
+order leave the function without pads. The `LLVMC*` cases print that IR as C:
+range markers and empty continuations get no `__try` and no text, so the
+body's call stands in three compounds, the inner handler's in two and the outer
+handler's in none; a scope whose blocks only jump keeps one nest with all its
+clauses; an empty loop after the scopes keeps its label and jump while the
+blocks leading to it are passed; and the render that marks source positions
+agrees with the ordinary one and publishes its definitions and a call anchor.
 `WindowsEHModesCorpus.LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges` reads
 the same in the LLVM C of xcpt4's MSVC x64 /O2 image: `0x1400037D0` and
 `0x140003870` print their clauses with no not-lowered note, the inner handler's

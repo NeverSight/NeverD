@@ -8,7 +8,9 @@
 /// The scopes a `__C_specific_handler` table gives the IR that LLVM C prints:
 /// rows over one range, which nest by their order in the table, and the
 /// termination handler calls of a local unwind, each of which runs outside
-/// the scope it ends and inside the scopes around that one.
+/// the scope it ends and inside the scopes around that one.  And the C that
+/// IR prints: each block inside the scopes it runs in, with no `__try` around
+/// a block that only jumps.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -16,12 +18,16 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/c/CSourceMap.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/ExceptionInfo.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
@@ -145,6 +151,9 @@ enum class Leave {
   LocalUnwindThenCall,
   /// The two handler calls in the order the runtime does not run them.
   LocalUnwindOuterFirst,
+  /// It branches to the target, which branches to itself: an empty loop
+  /// after the three scopes.
+  Spin,
 };
 
 /// MSVC's table for
@@ -155,7 +164,8 @@ enum class Leave {
 /// With \p MiddleIsFinally the middle scope is a third `__finally`, which a
 /// local unwind runs between the other two.
 std::vector<MedFunc> threeScopesOverOneRange(Leave How,
-                                             bool MiddleIsFinally = false) {
+                                             bool MiddleIsFinally = false,
+                                             bool BodyCalls = true) {
   MedFunc Parent;
   Parent.Entry = ParentVA;
   Parent.Name = "three_scopes_parent";
@@ -166,13 +176,15 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
   Entry.Succs = {1};
 
   MedBlock Body = blockAt(1, GuardedBegin, ParentVA + 0x20);
-  Body.Ops.push_back(callOf(GuardedBegin + 4, MayThrowVA));
+  if (BodyCalls)
+    Body.Ops.push_back(callOf(GuardedBegin + 4, MayThrowVA));
   Body.Ops.push_back(branchTo(GuardedBegin + 8, ParentVA + 0x20));
   Body.Preds = {0};
   Body.Succs = {2};
 
+  const bool Unwinds = How != Leave::Branch && How != Leave::Spin;
   MedBlock Leaving = blockAt(2, ParentVA + 0x20, GuardedEnd);
-  if (How != Leave::Branch) {
+  if (Unwinds) {
     const bool OuterFirst = How == Leave::LocalUnwindOuterFirst;
     Leaving.Ops.push_back(
         callOf(UnwindCallVA, OuterFirst ? OuterFinallyVA : InnerFinallyVA));
@@ -191,8 +203,14 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
   Except.Ops.push_back(returnAt(ExceptVA + 8));
 
   MedBlock Target = blockAt(4, TargetVA, ParentVA + 0x60);
-  Target.Ops.push_back(returnAt(TargetVA + 8));
   Target.Preds = {2};
+  if (How == Leave::Spin) {
+    Target.Ops.push_back(branchTo(TargetVA + 8, TargetVA));
+    Target.Preds.push_back(4);
+    Target.Succs = {4};
+  } else {
+    Target.Ops.push_back(returnAt(TargetVA + 8));
+  }
 
   Parent.Blocks.push_back(std::move(Entry));
   Parent.Blocks.push_back(std::move(Body));
@@ -212,7 +230,7 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
                     finallyRow(OuterFinallyVA)};
   Parent.ExceptionMetadata = std::move(EH);
 
-  if (How != Leave::Branch) {
+  if (Unwinds) {
     MedSEHLocalUnwindExit Exit;
     Exit.CallAddr = UnwindCallVA;
     Exit.CallSeq = 1;
@@ -543,6 +561,174 @@ TEST(TableSEHSourceScopes, LocalUnwindCallsThatMatchNoExitAreNotPlaced) {
     for (const llvm::BasicBlock &Block : *Parent)
       EXPECT_FALSE(Block.isEHPad()) << printed(*Parent);
   }
+}
+
+/// The LLVM C of \p Module, with \p Map filled from \p Sources when given.
+std::string printedC(llvm::Module &Module, CSourceMap *Map = nullptr,
+                     const LLVMSourceMap *Sources = nullptr) {
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.TheArch = Arch::X64;
+  Options.SourceMap = Map;
+  Options.LLVMSources = Sources;
+  EXPECT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  OS.flush();
+  return Source;
+}
+
+/// The parent's definition in \p Source, from its name to its closing brace.
+std::string parentIn(llvm::StringRef Source) {
+  const size_t Start = Source.find("three_scopes_parent() {\n");
+  if (Start == llvm::StringRef::npos)
+    return {};
+  return Source.slice(Start, Source.find("\n}\n", Start)).str();
+}
+
+size_t countOf(llvm::StringRef Text, llvm::StringRef Needle) {
+  size_t Count = 0;
+  for (size_t At = Text.find(Needle); At != llvm::StringRef::npos;
+       At = Text.find(Needle, At + 1))
+    ++Count;
+  return Count;
+}
+
+/// The text printed under the label that holds \p Statement, to the next
+/// label.
+llvm::StringRef blockHolding(llvm::StringRef Function,
+                             llvm::StringRef Statement) {
+  const size_t At = Function.find(Statement);
+  if (At == llvm::StringRef::npos)
+    return {};
+  size_t Label = 0;
+  for (size_t Next = Function.find("\nL_"); Next < At;
+       Next = Function.find("\nL_", Next + 1))
+    Label = Next + 1;
+  return Function.slice(Label, Function.find("\nL_", At));
+}
+
+// The range markers and the blocks a call's continuation or a split leaves
+// empty print only a jump.  They get no `__try`, and no text where a jump
+// can pass them: what is left is the statements, each in its scopes.
+TEST(TableSEHSourceScopes, LLVMCPrintsNoTryAroundBlocksThatOnlyJump) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::LocalUnwind);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+  EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
+  EXPECT_EQ(Function.find("seh_cont:"), std::string::npos) << Function;
+
+  // The body's call runs in all three scopes.
+  const llvm::StringRef Body = blockHolding(Function, "            may_throw(");
+  ASSERT_FALSE(Body.empty()) << Function;
+  EXPECT_EQ(countOf(Body, "__try {"), 3u) << Body.str();
+  EXPECT_EQ(countOf(Body, "} __finally {"), 2u) << Body.str();
+  EXPECT_EQ(countOf(Body, "} __except ("), 1u) << Body.str();
+  // The inner handler's call runs in the two around its own, and the outer
+  // handler's in none.
+  const llvm::StringRef Inner = blockHolding(
+      Function,
+      "\n            inner_finally();\n            neverd_seh_normal");
+  ASSERT_FALSE(Inner.empty()) << Function;
+  EXPECT_EQ(countOf(Inner, "__try {"), 2u) << Inner.str();
+  EXPECT_EQ(countOf(Inner, "inner_finally();"), 1u) << Inner.str();
+  EXPECT_EQ(countOf(Inner, "} __except ("), 1u) << Inner.str();
+  const llvm::StringRef Outer =
+      blockHolding(Function, "\n    outer_finally();");
+  ASSERT_FALSE(Outer.empty()) << Function;
+  EXPECT_EQ(Outer.find("__try"), llvm::StringRef::npos) << Outer.str();
+  // Nothing else has a nest.
+  EXPECT_EQ(countOf(Function, "__try {"), 5u) << Function;
+  // Execution enters the first block from above: it keeps its label and jump.
+  const size_t First = Function.find("\nL_");
+  ASSERT_NE(First, std::string::npos) << Function;
+  EXPECT_TRUE(llvm::StringRef(Function).substr(First).starts_with(
+      "\nL_frame_setup:\n    goto L_"))
+      << Function;
+}
+
+// A scope none of whose blocks prints a statement still shows its clause, on
+// the first of them.
+TEST(TableSEHSourceScopes, LLVMCKeepsEveryClauseOfScopesThatOnlyJump) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+      Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/false);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(countOf(Function, "__try {"), 3u) << Function;
+  EXPECT_EQ(countOf(Function, "} __finally {"), 2u) << Function;
+  EXPECT_EQ(countOf(Function, "} __except ("), 1u) << Function;
+  EXPECT_NE(Function.find("inner_finally();"), std::string::npos) << Function;
+  EXPECT_NE(Function.find("outer_finally();"), std::string::npos) << Function;
+}
+
+// Blocks that only jump to one another in a ring are a loop, not a detour:
+// the jump into it must not be followed round for ever, and the loop stays.
+TEST(TableSEHSourceScopes, LLVMCKeepsALoopOfBlocksThatOnlyJump) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Spin);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  bool Loops = false;
+  for (size_t At = Function.find("\nL_"); At != std::string::npos;
+       At = Function.find("\nL_", At + 1)) {
+    const size_t Colon = Function.find(":\n", At);
+    const std::string Label = Function.substr(At + 1, Colon - At - 1);
+    llvm::StringRef Rest = llvm::StringRef(Function).substr(Colon + 2);
+    Loops |= Rest.consume_front("    goto " + Label + ";") &&
+             (Rest.empty() || Rest.starts_with("\n"));
+  }
+  EXPECT_TRUE(Loops) << Function;
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+  EXPECT_EQ(countOf(Function, "__try {"), 3u) << Function;
+  // The blocks that lead into the loop only jump, and are passed as any.
+  EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
+}
+
+// The render that marks source positions drops the same blocks as the
+// ordinary one, so the two still agree and a call keeps its anchor.
+TEST(TableSEHSourceScopes, LLVMCSourceMapAgreesWithTheTextThatDropsBlocks) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::LocalUnwind);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  LLVMSourceMap Sources;
+  Sources.Functions[ParentVA] = Parent;
+  va_t Address = ParentVA;
+  for (llvm::BasicBlock &Block : *Parent)
+    for (llvm::Instruction &Instruction : Block)
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          Call && Call->getCalledFunction() &&
+          !Call->getCalledFunction()->isIntrinsic())
+        Sources.Observations.push_back(
+            {ParentVA, {Address += 4, 0}, &Instruction});
+  ASSERT_FALSE(Sources.Observations.empty());
+
+  const std::string Ordinary = printedC(*Module);
+  CSourceMap Map;
+  Map.RecordCallExpressions = true;
+  const std::string Mapped = printedC(*Module, &Map, &Sources);
+  EXPECT_EQ(Ordinary, Mapped);
+  // A render that disagreed with the ordinary one would publish nothing.
+  EXPECT_FALSE(Map.Definitions.empty());
+  bool Anchored = false;
+  for (const auto &Anchor : Map.Anchors)
+    Anchored |= llvm::StringRef(Mapped)
+                    .slice(Anchor.Span.Begin, Anchor.Span.End)
+                    .contains("outer_finally();");
+  EXPECT_TRUE(Anchored) << Mapped;
 }
 
 } // namespace

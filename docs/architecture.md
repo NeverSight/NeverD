@@ -1221,7 +1221,13 @@ For fragmented Windows SEH ranges, LLVM C follows the begin/end markers along
 the CFG and retains each block's complete ordered unwind chain. Independent
 handlers and a handler nested within a finally keep their own clauses. Normal
 edges assign PHIs before leaving the generated compounds; a block's finally
-executes the recovered cleanup only on unwind. Closed lexical ranges retain
+executes the recovered cleanup only on unwind. A block that prints only its
+jump, such as a range marker or what a call's continuation or a split left
+empty, runs nothing a scope could guard: it prints no `__try`, and a jump to
+it goes where it goes, so it prints no text. The first block, blocks that
+only jump to one another in a ring, and the deepest block of a scope none of
+whose blocks prints a statement keep theirs, the last with its nest so that
+every clause still shows. Closed lexical ranges retain
 their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
