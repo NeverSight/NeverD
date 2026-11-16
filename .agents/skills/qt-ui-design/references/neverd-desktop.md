@@ -1264,6 +1264,14 @@ dense tool window; a window that holds a conversation takes these instead
 - A row's tool tip leaves when the row is clicked or its menu opens and
   comes back with the pointer, so it never lies over the menu. A tool tip
   wraps at 460 pixels; a path with a reason ran past the window on one line.
+- Show every string as plain text. A project's name comes from a file, a
+  function's name from a binary and a summary from a model; a Qt Quick label
+  left to its default lays such text out as markup when it looks like markup
+  and fetches the image it names, so a name could call another machine by
+  being displayed. Every `Label` and `Text` states
+  `textFormat: Text.PlainText`, which `scripts/check_agent_qml_text.py`
+  checks, and the window's engine has no network (`platform/OfflineQml.h`).
+  A long title wraps to a second line before it is cut.
 - Check the window with `neverd-agent --capture`, which needs no display, on
   illustrative data in a private home: an empty workspace, a conversation, an
   empty project, a paused goal with queued inputs, each right panel and the
