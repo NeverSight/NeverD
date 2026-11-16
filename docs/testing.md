@@ -20502,6 +20502,22 @@ allocates four bytes the body's arithmetic does not show; a handler's own call
 becomes a jump out of its clause. `AnExceptArmRejoiningLeavesTheRegistersValue`
 publishes r4 across the PHI an `__except` arm leaves before a later `__try`, and
 `ATryAfterAnExceptArmFillsItsClause` prints that clause.
+`TableSEHSourceScopeTests.cpp` gives the LLVM emitter an x64 parent whose
+`__finally`, `__except` and outer `__finally` rows guard one range:
+`TableSEHSourceScopes.*` checks that the IR printed as C nests the three pads in
+table order while native output and both code-producing capabilities still
+refuse the table, that such a table has a scope identity only on request and a
+table without repeated ranges keeps the identity it had, that a local unwind's
+inner handler call unwinds to the `__except` after the inner range's end marker
+and its outer handler call is a plain call, that three termination handlers of
+one unwind give two invokes at one address which the exception contract counts
+apart, and that a call after the handler calls or handler calls in another
+order leave the function without pads.
+`WindowsEHModesCorpus.LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges` reads
+the same in the LLVM C of xcpt4's MSVC x64 /O2 image: `0x1400037D0` and
+`0x140003870` print their clauses with no not-lowered note, the inner handler's
+call stands under the `__except` and the outer `__finally` only, and the outer
+handler's call stands in no `__try`.
 Its `ARMSEHFinallyBodyTests.cpp`
 builds AArch64 and
 Thumb parents whose handler reads them through callee-saved registers:

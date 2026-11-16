@@ -1,0 +1,548 @@
+//===- TableSEHSourceScopeTests.cpp - Table SEH scopes for printed C -----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// The scopes a `__C_specific_handler` table gives the IR that LLVM C prints:
+/// rows over one range, which nest by their order in the table, and the
+/// termination handler calls of a local unwind, each of which runs outside
+/// the scope it ends and inside the scopes around that one.
+///
+//===----------------------------------------------------------------------===//
+
+#include "gtest/gtest.h"
+
+#include "neverd/Common.h"
+#include "neverd/backend/ExceptionRewriteContract.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/ir/med/MedIR.h"
+#include "neverd/loader/ExceptionInfo.h"
+
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using namespace neverd;
+
+constexpr va_t ParentVA = 0x140001000;
+constexpr va_t InnerFinallyVA = 0x140002000;
+constexpr va_t OuterFinallyVA = 0x140002100;
+constexpr va_t MiddleFinallyVA = 0x140002200;
+constexpr va_t MayThrowVA = 0x140003000;
+constexpr va_t PersonalityVA = 0x140004000;
+constexpr va_t CounterVA = 0x140005000;
+constexpr va_t GuardedBegin = ParentVA + 0x10;
+constexpr va_t GuardedEnd = ParentVA + 0x30;
+constexpr va_t UnwindCallVA = ParentVA + 0x24;
+constexpr va_t ExceptVA = ParentVA + 0x40;
+constexpr va_t TargetVA = ParentVA + 0x50;
+
+MedOp branchTo(va_t From, va_t To) {
+  MedOp Branch;
+  Branch.Opcode = NdOp::BRANCH;
+  Branch.Addr = From;
+  Branch.addInput(MedVar::makeConst(To, 8));
+  return Branch;
+}
+
+MedOp callOf(va_t From, va_t Callee) {
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = From;
+  Call.addInput(MedVar::makeConst(Callee, 8));
+  return Call;
+}
+
+MedOp returnAt(va_t From) {
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = From;
+  return Return;
+}
+
+MedBlock blockAt(int Id, va_t Begin, va_t End) {
+  MedBlock Block;
+  Block.Id = Id;
+  Block.StartAddr = Begin;
+  Block.EndAddr = End;
+  return Block;
+}
+
+/// A termination handler that reads nothing of its parent: it counts a run.
+MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step) {
+  MedFunc Handler;
+  Handler.Entry = Entry;
+  Handler.Name = Name;
+  Handler.ReturnType = NdType::makeVoid();
+  MedBlock Body = blockAt(0, Entry, Entry + 8);
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.Addr = Entry;
+  Store.addInput(MedVar::makeConst(CounterVA, 8));
+  Store.addInput(MedVar::makeConst(Step, 4));
+  Body.Ops.push_back(std::move(Store));
+  Body.Ops.push_back(returnAt(Entry + 4));
+  Handler.Blocks.push_back(std::move(Body));
+  return Handler;
+}
+
+MedFunc personality() {
+  MedFunc Personality;
+  Personality.Entry = PersonalityVA;
+  Personality.Name = "\01__C_specific_handler";
+  MedBlock Body = blockAt(0, PersonalityVA, PersonalityVA + 1);
+  Body.Ops.push_back(returnAt(PersonalityVA));
+  Personality.Blocks.push_back(std::move(Body));
+  return Personality;
+}
+
+SEHScopeRecord finallyRow(va_t Handler) {
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {GuardedBegin, GuardedEnd};
+  Scope.Kind = SEHScopeKind::Finally;
+  Scope.FilterOrFinallyVA = Handler;
+  Scope.HandlerVA = Handler;
+  return Scope;
+}
+
+SEHScopeRecord exceptRow() {
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {GuardedBegin, GuardedEnd};
+  Scope.Kind = SEHScopeKind::CatchAll;
+  Scope.HandlerVA = ExceptVA;
+  Scope.ContinuationVA = ExceptVA;
+  return Scope;
+}
+
+/// What the block that leaves the three scopes does once it has called
+/// may_throw.
+enum class Leave {
+  /// It branches to the target: nothing unwinds.
+  Branch,
+  /// A local unwind to the target, spelled as MedIR spells it: a call of the
+  /// inner and then of the outer termination handler at the runtime call's
+  /// address, and a branch.
+  LocalUnwind,
+  /// The same, with a third call after the two that belongs to no handler.
+  LocalUnwindThenCall,
+  /// The two handler calls in the order the runtime does not run them.
+  LocalUnwindOuterFirst,
+};
+
+/// MSVC's table for
+///   __try { __try { __try { body } __finally { inner } }
+///           __except (1) { handler } } __finally { outer }
+/// when the three bodies begin and end together: three rows over one range,
+/// innermost first.  Block 1 calls may_throw inside it and block 2 leaves it.
+/// With \p MiddleIsFinally the middle scope is a third `__finally`, which a
+/// local unwind runs between the other two.
+std::vector<MedFunc> threeScopesOverOneRange(Leave How,
+                                             bool MiddleIsFinally = false) {
+  MedFunc Parent;
+  Parent.Entry = ParentVA;
+  Parent.Name = "three_scopes_parent";
+  Parent.ReturnType = NdType::makeVoid();
+
+  MedBlock Entry = blockAt(0, ParentVA, GuardedBegin);
+  Entry.Ops.push_back(branchTo(ParentVA + 8, GuardedBegin));
+  Entry.Succs = {1};
+
+  MedBlock Body = blockAt(1, GuardedBegin, ParentVA + 0x20);
+  Body.Ops.push_back(callOf(GuardedBegin + 4, MayThrowVA));
+  Body.Ops.push_back(branchTo(GuardedBegin + 8, ParentVA + 0x20));
+  Body.Preds = {0};
+  Body.Succs = {2};
+
+  MedBlock Leaving = blockAt(2, ParentVA + 0x20, GuardedEnd);
+  if (How != Leave::Branch) {
+    const bool OuterFirst = How == Leave::LocalUnwindOuterFirst;
+    Leaving.Ops.push_back(
+        callOf(UnwindCallVA, OuterFirst ? OuterFinallyVA : InnerFinallyVA));
+    if (MiddleIsFinally)
+      Leaving.Ops.push_back(callOf(UnwindCallVA, MiddleFinallyVA));
+    Leaving.Ops.push_back(
+        callOf(UnwindCallVA, OuterFirst ? InnerFinallyVA : OuterFinallyVA));
+    if (How == Leave::LocalUnwindThenCall)
+      Leaving.Ops.push_back(callOf(UnwindCallVA + 4, MayThrowVA));
+  }
+  Leaving.Ops.push_back(branchTo(ParentVA + 0x2c, TargetVA));
+  Leaving.Preds = {1};
+  Leaving.Succs = {4};
+
+  MedBlock Except = blockAt(3, ExceptVA, TargetVA);
+  Except.Ops.push_back(returnAt(ExceptVA + 8));
+
+  MedBlock Target = blockAt(4, TargetVA, ParentVA + 0x60);
+  Target.Ops.push_back(returnAt(TargetVA + 8));
+  Target.Preds = {2};
+
+  Parent.Blocks.push_back(std::move(Entry));
+  Parent.Blocks.push_back(std::move(Body));
+  Parent.Blocks.push_back(std::move(Leaving));
+  Parent.Blocks.push_back(std::move(Except));
+  Parent.Blocks.push_back(std::move(Target));
+
+  ExceptionFunction EH;
+  EH.CodeRange = {ParentVA, ParentVA + 0x60};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = PersonalityVA;
+  EH.SEH.emplace();
+  EH.SEH->Scopes = {finallyRow(InnerFinallyVA),
+                    MiddleIsFinally ? finallyRow(MiddleFinallyVA) : exceptRow(),
+                    finallyRow(OuterFinallyVA)};
+  Parent.ExceptionMetadata = std::move(EH);
+
+  if (How != Leave::Branch) {
+    MedSEHLocalUnwindExit Exit;
+    Exit.CallAddr = UnwindCallVA;
+    Exit.CallSeq = 1;
+    Exit.Target = TargetVA;
+    Exit.OwnsTarget = true;
+    Exit.Handlers = {{InnerFinallyVA, 0}};
+    if (MiddleIsFinally)
+      Exit.Handlers.push_back({MiddleFinallyVA, 1});
+    Exit.Handlers.push_back({OuterFinallyVA, 2});
+    Parent.SEHLocalUnwindExits.push_back(std::move(Exit));
+  }
+
+  return {
+      std::move(Parent), terminationHandler(InnerFinallyVA, "inner_finally", 1),
+      terminationHandler(OuterFinallyVA, "outer_finally", 2),
+      terminationHandler(MiddleFinallyVA, "middle_finally", 3), personality()};
+}
+
+std::unique_ptr<llvm::Module> emitUnit(const std::vector<MedFunc> &Unit,
+                                       llvm::LLVMContext &Context,
+                                       bool ForPrintedC) {
+  MedLLVMEmitter Emitter;
+  Emitter.setPreserveUnknownSourceValues(ForPrintedC);
+  Emitter.setAnalysisRecoveryForSource(ForPrintedC);
+  auto Module =
+      Emitter.emit(Unit, Context, "table_seh_scopes", Arch::X64,
+                   {{MayThrowVA, "may_throw"}}, nullptr, BinaryFormat::COFF);
+  if (Module) {
+    std::string Verification;
+    llvm::raw_string_ostream OS(Verification);
+    EXPECT_FALSE(llvm::verifyModule(*Module, &OS)) << Verification;
+  }
+  return Module;
+}
+
+std::string printed(const llvm::Function &Function) {
+  std::string Text;
+  llvm::raw_string_ostream OS(Text);
+  Function.print(OS);
+  return Text;
+}
+
+/// The pads of the rows, found by what each runs.
+struct Pads {
+  /// A `__finally` row's pad, by the name of its termination handler.
+  std::map<std::string, const llvm::BasicBlock *> Cleanup;
+  const llvm::BasicBlock *Except = nullptr;
+  const llvm::BasicBlock *cleanup(const char *Handler) const {
+    const auto Found = Cleanup.find(Handler);
+    return Found == Cleanup.end() ? nullptr : Found->second;
+  }
+};
+
+const llvm::Function *cleanupCallee(const llvm::CleanupPadInst &Pad) {
+  for (const llvm::User *User : Pad.users())
+    if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(User))
+      if (Call->getCalledFunction() &&
+          !Call->getCalledFunction()->isIntrinsic())
+        return Call->getCalledFunction();
+  return nullptr;
+}
+
+Pads padsOf(const llvm::Function &Parent) {
+  Pads Found;
+  for (const llvm::BasicBlock &Block : Parent) {
+    if (llvm::isa<llvm::CatchSwitchInst>(Block.getTerminator())) {
+      EXPECT_EQ(Found.Except, nullptr);
+      Found.Except = &Block;
+    }
+    const auto *Cleanup =
+        llvm::dyn_cast<llvm::CleanupPadInst>(Block.getFirstNonPHIIt());
+    if (!Cleanup)
+      continue;
+    const llvm::Function *Callee = cleanupCallee(*Cleanup);
+    if (!Callee) {
+      ADD_FAILURE() << "a cleanup pad runs no handler";
+      continue;
+    }
+    EXPECT_TRUE(Found.Cleanup.emplace(Callee->getName().str(), &Block).second)
+        << "two pads run " << Callee->getName().str();
+  }
+  return Found;
+}
+
+/// Where what a cleanup pad's handler raises, and its end, go next: the
+/// pad of the scope around it, or null for the caller.
+const llvm::BasicBlock *unwindOfCleanup(const llvm::BasicBlock &PadBlock) {
+  const auto *Pad =
+      llvm::cast<llvm::CleanupPadInst>(PadBlock.getFirstNonPHIIt());
+  const llvm::BasicBlock *Next = nullptr;
+  bool Seen = false;
+  auto Note = [&](const llvm::BasicBlock *Dest) {
+    EXPECT_TRUE(!Seen || Next == Dest) << "one pad unwinds to two places";
+    Seen = true;
+    Next = Dest;
+  };
+  for (const llvm::User *User : Pad->users()) {
+    if (const auto *Ret = llvm::dyn_cast<llvm::CleanupReturnInst>(User))
+      Note(Ret->getUnwindDest());
+    else if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(User))
+      Note(Invoke->getUnwindDest());
+  }
+  EXPECT_TRUE(Seen);
+  return Next;
+}
+
+/// The calls of \p Callee that the function's own code makes, outside pads.
+std::vector<const llvm::CallBase *> ownCallsOf(const llvm::Function &Parent,
+                                               llvm::StringRef Callee) {
+  std::vector<const llvm::CallBase *> Calls;
+  for (const llvm::BasicBlock &Block : Parent)
+    for (const llvm::Instruction &Inst : Block) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Inst);
+      if (Call && Call->getCalledFunction() &&
+          Call->getCalledFunction()->getName() == Callee &&
+          !Call->getOperandBundle(llvm::LLVMContext::OB_funclet))
+        Calls.push_back(Call);
+    }
+  return Calls;
+}
+
+// Rows over one range nest by their order, the earlier inside the later: the
+// handler's scan meets them in that order.
+TEST(TableSEHSourceScopes, RowsOverOneRangeNestInTableOrder) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+  const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::SourceIRLowering)
+          .canLowerNativeIR());
+
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+  EXPECT_EQ(llvm::cast<llvm::CatchSwitchInst>(Found.Except->getTerminator())
+                ->getUnwindDest(),
+            Found.cleanup("outer_finally"));
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("outer_finally")), nullptr);
+
+  // The body's call is in all three: it unwinds to the innermost.
+  const auto Calls = ownCallsOf(*Parent, "may_throw");
+  ASSERT_EQ(Calls.size(), 1u) << printed(*Parent);
+  const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Calls.front());
+  ASSERT_NE(Invoke, nullptr) << printed(*Parent);
+  EXPECT_EQ(Invoke->getUnwindDest(), Found.cleanup("inner_finally"));
+}
+
+// Native output writes the table again and keeps such a function as
+// metadata; the capabilities that produce code still refuse the table.
+TEST(TableSEHSourceScopes, NativeOutputLeavesRowsOverOneRangeUnlowered) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+  const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
+  for (WindowsEHNativeCapability Capability :
+       {WindowsEHNativeCapability::IRLowering,
+        WindowsEHNativeCapability::OutputPatch}) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                      Capability);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason,
+              WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph);
+  }
+
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/false);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+}
+
+// A table without such rows keeps the identity it had, and one with them has
+// an identity only where the caller takes their order.
+TEST(TableSEHSourceScopes, RepeatedRangesHaveAnIdentityOnlyOnRequest) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+  const ExceptionFunction &Repeated = *Unit.front().ExceptionMetadata;
+  for (uint32_t Row = 0; Row < 3; ++Row) {
+    SCOPED_TRACE(Row);
+    EXPECT_FALSE(
+        windows_eh_semantics::getSEHScopeSemanticToken(Repeated, Arch::X64, Row)
+            .has_value());
+    EXPECT_TRUE(windows_eh_semantics::getSEHScopeSemanticToken(
+                    Repeated, Arch::X64, Row, /*AllowRepeatedRanges=*/true)
+                    .has_value());
+  }
+
+  // The same rows in the other order are another graph.
+  ExceptionFunction Reordered = Repeated;
+  std::swap(Reordered.SEH->Scopes[0], Reordered.SEH->Scopes[2]);
+  const auto First = windows_eh_semantics::getSEHScopeSemanticToken(
+      Repeated, Arch::X64, 1, /*AllowRepeatedRanges=*/true);
+  const auto Second = windows_eh_semantics::getSEHScopeSemanticToken(
+      Reordered, Arch::X64, 1, /*AllowRepeatedRanges=*/true);
+  ASSERT_TRUE(First.has_value());
+  ASSERT_TRUE(Second.has_value());
+  EXPECT_NE(First->Digest, Second->Digest);
+
+  ExceptionFunction Nested = Repeated;
+  Nested.SEH->Scopes[0].GuardedRange.End = GuardedEnd - 0x10;
+  Nested.SEH->Scopes[1].GuardedRange.End = GuardedEnd - 8;
+  for (uint32_t Row = 0; Row < 3; ++Row) {
+    SCOPED_TRACE(Row);
+    const auto Plain =
+        windows_eh_semantics::getSEHScopeSemanticToken(Nested, Arch::X64, Row);
+    const auto Allowed = windows_eh_semantics::getSEHScopeSemanticToken(
+        Nested, Arch::X64, Row, /*AllowRepeatedRanges=*/true);
+    ASSERT_TRUE(Plain.has_value());
+    ASSERT_TRUE(Allowed.has_value());
+    EXPECT_EQ(Plain->Digest, Allowed->Digest);
+    EXPECT_EQ(Plain->Region, Allowed->Region);
+  }
+}
+
+// The runtime calls the handler of row k with its scan past k.  What the
+// inner handler raises meets the __except and the outer __finally, and what
+// the outer handler raises meets no scope of this frame.
+TEST(TableSEHSourceScopes, LocalUnwindHandlerCallsLeaveTheScopesTheyEnd) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::LocalUnwind);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+
+  const auto Inner = ownCallsOf(*Parent, "inner_finally");
+  ASSERT_EQ(Inner.size(), 1u) << printed(*Parent);
+  const auto *InnerInvoke = llvm::dyn_cast<llvm::InvokeInst>(Inner.front());
+  ASSERT_NE(InnerInvoke, nullptr) << printed(*Parent);
+  EXPECT_EQ(InnerInvoke->getUnwindDest(), Found.Except) << printed(*Parent);
+
+  const auto Outer = ownCallsOf(*Parent, "outer_finally");
+  ASSERT_EQ(Outer.size(), 1u) << printed(*Parent);
+  EXPECT_TRUE(llvm::isa<llvm::CallInst>(Outer.front())) << printed(*Parent);
+
+  // The body's call still unwinds to the innermost scope.
+  const auto Calls = ownCallsOf(*Parent, "may_throw");
+  ASSERT_EQ(Calls.size(), 1u);
+  const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Calls.front());
+  ASSERT_NE(Invoke, nullptr);
+  EXPECT_EQ(Invoke->getUnwindDest(), Found.cleanup("inner_finally"));
+
+  // Each handler call follows the end of the range it ends: an end marker
+  // of the inner scope stands between the body and the inner handler's call.
+  const llvm::BasicBlock *Before = InnerInvoke->getParent();
+  bool LeftInnerScope = false;
+  for (unsigned Step = 0; Step < 4 && Before && !LeftInnerScope; ++Step) {
+    Before = Before->getSinglePredecessor();
+    if (!Before)
+      break;
+    const auto *Marker =
+        llvm::dyn_cast<llvm::InvokeInst>(Before->getTerminator());
+    LeftInnerScope = Marker &&
+                     Marker->getIntrinsicID() == llvm::Intrinsic::seh_try_end &&
+                     Marker->getUnwindDest() == Found.cleanup("inner_finally");
+  }
+  EXPECT_TRUE(LeftInnerScope) << printed(*Parent);
+}
+
+// Three termination handlers of one unwind: the frame still protects the first
+// two, which become two invokes at one source address.  The contract counts
+// them apart, so the unit's optimization takes the module.
+TEST(TableSEHSourceScopes, EachProtectedHandlerCallCountsInTheContract) {
+  const std::vector<MedFunc> Unit =
+      threeScopesOverOneRange(Leave::LocalUnwind, /*MiddleIsFinally=*/true);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  const llvm::BasicBlock *Middle = Found.cleanup("middle_finally");
+  const llvm::BasicBlock *Outer = Found.cleanup("outer_finally");
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Middle, nullptr) << printed(*Parent);
+  ASSERT_NE(Outer, nullptr) << printed(*Parent);
+
+  const auto InnerCalls = ownCallsOf(*Parent, "inner_finally");
+  const auto MiddleCalls = ownCallsOf(*Parent, "middle_finally");
+  const auto OuterCalls = ownCallsOf(*Parent, "outer_finally");
+  ASSERT_EQ(InnerCalls.size(), 1u) << printed(*Parent);
+  ASSERT_EQ(MiddleCalls.size(), 1u) << printed(*Parent);
+  ASSERT_EQ(OuterCalls.size(), 1u) << printed(*Parent);
+  const auto *InnerInvoke =
+      llvm::dyn_cast<llvm::InvokeInst>(InnerCalls.front());
+  const auto *MiddleInvoke =
+      llvm::dyn_cast<llvm::InvokeInst>(MiddleCalls.front());
+  ASSERT_NE(InnerInvoke, nullptr) << printed(*Parent);
+  ASSERT_NE(MiddleInvoke, nullptr) << printed(*Parent);
+  EXPECT_EQ(InnerInvoke->getUnwindDest(), Middle) << printed(*Parent);
+  EXPECT_EQ(MiddleInvoke->getUnwindDest(), Outer) << printed(*Parent);
+  EXPECT_TRUE(llvm::isa<llvm::CallInst>(OuterCalls.front()))
+      << printed(*Parent);
+
+  auto Contracts =
+      exception_rewrite::validateExceptionRewriteContracts(*Module);
+  EXPECT_TRUE(static_cast<bool>(Contracts))
+      << llvm::toString(Contracts.takeError());
+}
+
+// A call the exit does not account for, or handler calls in another order
+// than the runtime's, are not placed by guess: the function stays unlowered.
+TEST(TableSEHSourceScopes, LocalUnwindCallsThatMatchNoExitAreNotPlaced) {
+  for (Leave How : {Leave::LocalUnwindThenCall, Leave::LocalUnwindOuterFirst}) {
+    SCOPED_TRACE(How == Leave::LocalUnwindThenCall ? "call after the handlers"
+                                                   : "outer handler first");
+    const std::vector<MedFunc> Unit = threeScopesOverOneRange(How);
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+    for (const llvm::BasicBlock &Block : *Parent)
+      EXPECT_FALSE(Block.isEHPad()) << printed(*Parent);
+  }
+}
+
+} // namespace

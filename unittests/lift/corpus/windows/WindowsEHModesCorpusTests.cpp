@@ -90,9 +90,11 @@ selectUnique(ArrayRef<WindowsEHArtifactExpectation> Expectations,
   return Match;
 }
 
+/// The C the CLI prints for \p Input: HighC, or LLVM C with \p LLVMC.
 Expected<std::string> decompileToSource(const std::filesystem::path &Input,
                                         unsigned TimeoutSeconds = 120,
-                                        ArrayRef<StringRef> Options = {}) {
+                                        ArrayRef<StringRef> Options = {},
+                                        bool LLVMC = false) {
   SmallString<128> OutputPath;
   if (std::error_code EC = sys::fs::createTemporaryFile(
           "neverd-windows-eh-mode", "c", OutputPath))
@@ -113,10 +115,12 @@ Expected<std::string> decompileToSource(const std::filesystem::path &Input,
 
   const std::string InputString = Input.string();
   const std::string OutputString = OutputPath.str().str();
-  SmallVector<StringRef, 10> Args{
-      NEVERD_BINARY,       "decompile", "--no-debug", "--no-opt",
-      "--language=source", "-o",        OutputString,
-  };
+  SmallVector<StringRef, 10> Args{NEVERD_BINARY, "decompile", "--no-debug"};
+  if (LLVMC)
+    Args.push_back("--llvm");
+  else
+    Args.append({"--no-opt", "--language=source"});
+  Args.append({"-o", OutputString});
   Args.append(Options.begin(), Options.end());
   Args.push_back(InputString);
   std::optional<StringRef> Redirects[] = {std::nullopt, StdoutPath.str(),
@@ -844,6 +848,72 @@ TEST(WindowsEHModesCorpus, LocalUnwindExitsKeepTheirLoopRegionsStructured) {
         << Function.str();
     EXPECT_FALSE(Function.contains("_local_unwind")) << Function.str();
   }
+}
+
+/// The text of the block LLVM C prints under \p Label, to the next label.
+StringRef llvmcBlock(StringRef Function, StringRef Label) {
+  const size_t Start = Function.find(("\n" + Label + ":\n").str());
+  if (Start == StringRef::npos)
+    return {};
+  const size_t End = Function.find("\nL_", Start + 1);
+  return Function.slice(Start + 1, End);
+}
+
+// The same two functions through LLVM C, which prints each block inside the
+// scopes it runs in. 0x140003870's `__finally`, `__except` and outer
+// `__finally` rows guard one range twice over, and both functions leave by
+// local unwinds: every row keeps its clause, the inner handler's call runs
+// under the `__except` and the outer `__finally` but outside its own scope,
+// and the outer handler's call runs outside every scope.
+TEST(WindowsEHModesCorpus, LLVMCPlacesLocalUnwindHandlersUnderRepeatedRanges) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86_64", "fh4", true, "o2"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                            (*ExpectationOrErr)->Path,
+                        /*TimeoutSeconds=*/240, {}, /*LLVMC=*/true);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  // Each is declared ahead of its definition, which alone opens a body.
+  auto DefinitionOf = [&](StringRef Name) {
+    const size_t Start =
+        OutputOrErr->find(("\nuint64_t " + Name + "() {\n").str());
+    if (Start == std::string::npos)
+      return std::string();
+    const size_t End = OutputOrErr->find("\n}\n", Start);
+    return OutputOrErr->substr(Start, End - Start);
+  };
+  for (StringRef Name : {"sub_1400037D0", "sub_140003870"}) {
+    const std::string Function = DefinitionOf(Name);
+    ASSERT_FALSE(Function.empty()) << Name.str();
+    EXPECT_FALSE(StringRef(Function).contains("neverd.seh: not lowered"))
+        << Function;
+    EXPECT_TRUE(StringRef(Function).contains("} __finally {")) << Function;
+    EXPECT_FALSE(StringRef(Function).contains("_local_unwind")) << Function;
+  }
+
+  const std::string Loop = DefinitionOf("sub_140003870");
+  EXPECT_TRUE(
+      StringRef(Loop).contains("} __except (EXCEPTION_EXECUTE_HANDLER) {"))
+      << Loop;
+  const StringRef Inner = llvmcBlock(Loop, "L_bb_3_seh_unwind");
+  ASSERT_FALSE(Inner.empty()) << Loop;
+  EXPECT_EQ(occurrencesIn(Inner, "sub_140005DA0();"), 1u) << Inner.str();
+  EXPECT_LT(Inner.find("sub_140005DA0();"),
+            Inner.find("} __except (EXCEPTION_EXECUTE_HANDLER) {"))
+      << Inner.str();
+  EXPECT_LT(Inner.find("} __finally {"), Inner.find("sub_140005DBA();"))
+      << Inner.str();
+  const StringRef Outer =
+      llvmcBlock(Loop, "L_bb_3_seh_unwind_seh_cont_seh_unwind");
+  ASSERT_FALSE(Outer.empty()) << Loop;
+  EXPECT_TRUE(Outer.contains("\n    sub_140005DBA();\n")) << Outer.str();
+  EXPECT_FALSE(Outer.contains("__try")) << Outer.str();
 }
 
 // xcpt4's Test85 and Test86 at /O2. Test85's three termination handlers end a
