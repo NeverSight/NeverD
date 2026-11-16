@@ -20,6 +20,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/MIPS/MIPS16ReturnTransport.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -40,6 +41,114 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPS16Pipeline, ReturnHelpersRequireExactByteTransport) {
+  enum class Change {
+    None,
+    WrongSource,
+    WrongDestination,
+    WrongLink,
+    Memory,
+    FCSR,
+    MissingDelay,
+    Padding,
+    CompressedMode
+  };
+  for (bool FP64 : {false, true})
+    for (unsigned Bytes : {4u, 8u})
+      for (unsigned Elements : {1u, 2u})
+        for (Change C :
+             {Change::None, Change::WrongSource, Change::WrongDestination,
+              Change::WrongLink, Change::Memory, Change::FCSR,
+              Change::MissingDelay, Change::Padding, Change::CompressedMode}) {
+          SCOPED_TRACE(FP64);
+          SCOPED_TRACE(Bytes);
+          SCOPED_TRACE(Elements);
+          SCOPED_TRACE(int(C));
+          mips_test::ELFBytes File(GetParam());
+          File.Bytes.resize(0x180);
+          File.put(52 + 16, File.Bytes.size(), 4);
+          File.put(52 + 20, File.Bytes.size(), 4);
+          File.abiFlags();
+          File.Bytes[0xe5] = FP64 ? 2 : 1;
+          File.Bytes[0xe7] = FP64 ? 6 : 1;
+          File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+          File.put(24, 0x10100, 4);
+          File.put(0xec, 0x400, 4);
+          const bool Little = GetParam() == Arch::MIPS32EL;
+          std::vector<uint32_t> Words;
+          const auto Move = [&](unsigned GPR, unsigned FPR, bool High = false) {
+            Words.push_back((High ? 0x44e00000 : 0x44800000) | (GPR << 16) |
+                            (FPR << 11));
+          };
+          // GNU libgcc's scalar/complex return contracts, with the final
+          // transfer in jr's actual delay slot. No symbol grants this proof.
+          for (unsigned E = 0; E != Elements; ++E) {
+            if (Bytes == 4) {
+              Move(2 + E, 2 * E);
+            } else if (FP64) {
+              Move(2 + 2 * E + !Little, 2 * E);
+              Move(2 + 2 * E + Little, 2 * E, true);
+            } else {
+              Move(2 + 2 * E, 2 * E + !Little);
+              Move(3 + 2 * E, 2 * E + Little);
+            }
+          }
+          Words.insert(Words.end() - 1, 0x03e00008);
+          switch (C) {
+          case Change::WrongSource:
+            Words.back() ^= 1u << 16;
+            break;
+          case Change::WrongDestination:
+            Words.back() ^= 4u << 11;
+            break;
+          case Change::WrongLink:
+            Words[Words.size() - 2] = 0x03200008;
+            break;
+          case Change::Memory:
+            Words.back() = 0xafa20000;
+            break;
+          case Change::FCSR:
+            Words.back() = 0x44c2f800;
+            break;
+          case Change::MissingDelay:
+            Words.pop_back();
+            break;
+          case Change::Padding:
+            Words.insert(Words.begin(), 0);
+            break;
+          default:
+            break;
+          }
+          for (size_t I = 0; I < Words.size(); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          auto Symbol = Symbol::makeFunc(0x10100, Words.size() * 4);
+          Symbol.Name =
+              C == Change::None ? "anonymous_transfer" : "__mips16_ret_df";
+          Image->Symbols.push_back(std::move(Symbol));
+          const auto Mode = C == Change::CompressedMode
+                                ? InstructionMode::MIPS16
+                                : InstructionMode::MIPSClassic;
+          Image->MIPS->CodeModeEntries.emplace(0x10100, Mode);
+          Image->MIPS->CodeRegions.push_back(
+              {0x10100, 0x10100 + Words.size() * 4, Mode});
+          const auto Proof = proveMIPS16ReturnTransport(*Image, 0x10100);
+          ASSERT_EQ(bool(Proof), C == Change::None);
+          if (!Proof)
+            continue;
+          EXPECT_EQ(Proof->ElementBytes, Bytes);
+          EXPECT_EQ(Proof->Elements, Elements);
+          EXPECT_FALSE(Proof->Effects.empty());
+          for (const auto &Op : Proof->Effects) {
+            EXPECT_NE(Op.Opcode, NdOp::RETURN);
+            if (Op.Output.isReg())
+              EXPECT_TRUE(mipsreg::isVector(Op.Output.Offset));
+          }
+        }
+}
 
 TEST_P(MIPS16Pipeline, DoubleParameterNamesDistinguishWholeFromPhysicalWords) {
   FunctionSym Signature;
