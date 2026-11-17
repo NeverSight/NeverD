@@ -3482,6 +3482,20 @@ std::string LLVMCWriter::valueStr(const llvm::Value *V, bool *PointerSpelling) {
         return SourceRecorder->expression(
             *LI, memberAsAccessed(*LI, Text->second, Member));
     }
+    // A PHI whose incoming values all read one member prints as that read
+    // (markRedundantPhiCopies), which evaluates memory as each load does: the
+    // reference is where the PHI's own machine operations are emitted.  An
+    // optimizer that replaces a load by such a PHI leaves the load's origin
+    // on it.
+    if (SourceRecorder)
+      if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(V);
+          Phi && llvm::any_of(Phi->incoming_values(), [&](const llvm::Use &In) {
+            const auto *Read =
+                llvm::dyn_cast<llvm::LoadInst>(In->stripPointerCasts());
+            const auto Cached = Read ? ValueTexts.find(Read) : ValueTexts.end();
+            return Cached != ValueTexts.end() && Cached->second == Text->second;
+          }))
+        return SourceRecorder->expression(*Phi, Text->second);
     return LI ? memberAsAccessed(*LI, Text->second, Member) : Text->second;
   }
   if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(V)) {

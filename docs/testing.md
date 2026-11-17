@@ -20698,6 +20698,14 @@ pad, or both in that order; each carries one mark with the runtime call's
 address and the row it ends; the contract counts only the invokes; and
 `planCOFFExceptionPatch` refuses the module by the mark's name, before and
 after optimization.
+`COFFExceptionIR.OutputRefusesACallbackThatUsesItsOriginalFrame` gives a
+`__finally` row and a filter row a callback that returns, keeps its frame
+argument in a home or in its own frame, reads through what either holds, lets
+that frame's address go to a call, reads or writes through the argument,
+passes it on, recovers a local of its parent or of another function with
+`llvm.localrecover`, or has no body in the module: `planCOFFExceptionPatch`
+takes the module where the callback only keeps the argument or recovers its
+parent's local and refuses the others by name.
 `WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
 x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that

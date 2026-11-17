@@ -6751,4 +6751,273 @@ TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
   }
 }
 
+// Native IR calls a termination handler from its pad with
+// `llvm.localaddress()`, and the runtime calls a filter with the frame of the
+// function the code generator wrote.  A callback lifted from the image reads
+// its parent's locals at the offsets the original frame gave them, which that
+// frame does not hold there, so output refuses a function whose callback does
+// anything with the frame it is passed.  Keeping the argument in a home or in
+// the callback's own frame is no use of it until something reads it back or
+// the frame's address leaves, and a compiler's helper that reads its parent's
+// locals through `llvm.localrecover` is what that frame is for.
+TEST(COFFExceptionIR, OutputRefusesACallbackThatUsesItsOriginalFrame) {
+  constexpr va_t ParentVA = 0x140201000;
+  constexpr va_t HandlerVA = ParentVA + 0x20;
+  constexpr va_t EndVA = ParentVA + 0x40;
+  constexpr va_t CallbackVA = 0x140202000;
+  constexpr va_t MayThrowVA = 0x140203000;
+  constexpr va_t PersonalityVA = 0x140204000;
+  constexpr const char *Refusal = "uses its parent's original frame";
+  enum class Use {
+    /// It returns.
+    None,
+    /// The argument rests in a home: an alloca only loads and stores name.
+    KeptInAHome,
+    /// The home read back and a load through what it held.
+    ReadThroughAHome,
+    /// The argument rests in the callback's own frame.
+    KeptInItsFrame,
+    /// A load from that frame and a load through what it held.
+    ReadThroughItsFrame,
+    /// The argument rests in the callback's frame, whose address goes to a
+    /// call.
+    KeptInAFrameThatLeaves,
+    /// `mov rax, [rdx+0x38]`: a local of the parent at its original offset.
+    ReadsThroughIt,
+    /// `mov dword [rdx+0x38], 1`.
+    WritesThroughIt,
+    /// The argument goes to a call.
+    PassesIt,
+    /// `llvm.localrecover` of the parent with the argument, and a load of
+    /// the local it names: what a compiler's helper does.
+    RecoversALocal,
+    /// The same of a function that is not the parent: the callback itself.
+    RecoversAnothersLocal,
+    /// The module declares the callback and holds no body of it.
+    BodyElsewhere,
+  };
+  struct Case {
+    Use How;
+    bool Accepted;
+  };
+  const Case Cases[] = {
+      {Use::None, true},
+      {Use::KeptInAHome, true},
+      {Use::ReadThroughAHome, false},
+      {Use::KeptInItsFrame, true},
+      {Use::ReadThroughItsFrame, false},
+      {Use::KeptInAFrameThatLeaves, false},
+      {Use::ReadsThroughIt, false},
+      {Use::WritesThroughIt, false},
+      {Use::PassesIt, false},
+      {Use::RecoversALocal, true},
+      {Use::RecoversAnothersLocal, false},
+      {Use::BodyElsewhere, false},
+  };
+  for (const bool Filter : {false, true})
+    for (const Case &C : Cases) {
+      SCOPED_TRACE(Filter ? "filter" : "termination handler");
+      SCOPED_TRACE(static_cast<int>(C.How));
+
+      MedFunc Parent;
+      Parent.Entry = ParentVA;
+      Parent.Name = "frame_callback_parent";
+      Parent.ReturnType = NdType::makeVoid();
+      MedBlock Protected;
+      Protected.Id = 0;
+      Protected.StartAddr = ParentVA;
+      Protected.EndAddr = ParentVA + 0x10;
+      MedOp Call;
+      Call.Opcode = NdOp::CALL;
+      Call.Addr = ParentVA + 4;
+      Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+      Protected.Ops.push_back(std::move(Call));
+      MedOp ProtectedReturn;
+      ProtectedReturn.Opcode = NdOp::RETURN;
+      ProtectedReturn.Addr = ParentVA + 8;
+      Protected.Ops.push_back(std::move(ProtectedReturn));
+      Parent.Blocks.push_back(std::move(Protected));
+      if (Filter) {
+        MedBlock Handler;
+        Handler.Id = 1;
+        Handler.StartAddr = HandlerVA;
+        Handler.EndAddr = HandlerVA + 0x10;
+        MedOp HandlerReturn;
+        HandlerReturn.Opcode = NdOp::RETURN;
+        HandlerReturn.Addr = HandlerVA;
+        Handler.Ops.push_back(std::move(HandlerReturn));
+        Parent.Blocks.push_back(std::move(Handler));
+      }
+
+      ExceptionFunction EH;
+      EH.CodeRange = {ParentVA, EndVA};
+      EH.Encoding = ExceptionEncoding::X64UnwindV1;
+      EH.ParseStatus = ExceptionParseStatus::Complete;
+      EH.Personality = ExceptionPersonality::CSpecificHandler;
+      EH.PersonalityVA = PersonalityVA;
+      EH.SEH.emplace();
+      SEHScopeRecord Scope;
+      Scope.ParseStatus = ExceptionParseStatus::Complete;
+      Scope.GuardedRange = {ParentVA, ParentVA + 0x10};
+      Scope.Kind = Filter ? SEHScopeKind::Filter : SEHScopeKind::Finally;
+      Scope.FilterOrFinallyVA = CallbackVA;
+      Scope.HandlerVA = Filter ? HandlerVA : CallbackVA;
+      Scope.ContinuationVA = Filter ? HandlerVA : 0;
+      EH.SEH->Scopes.push_back(Scope);
+      Parent.ExceptionMetadata = EH;
+
+      MedFunc Callback;
+      Callback.Entry = CallbackVA;
+      Callback.Name = "frame_callback";
+      Callback.ReturnType =
+          Filter ? NdType::makeInt(4, /*Signed=*/true) : NdType::makeVoid();
+      for (unsigned I = 0; I < 2; ++I) {
+        MedVar Param;
+        Param.Kind = MedVar::Param;
+        Param.TheArch = Arch::X64;
+        Param.Id = static_cast<int>(I);
+        Param.Size = I == 0 && !Filter ? 1 : 8;
+        Param.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+        Callback.Params.push_back(Param);
+        Callback.TypedParams.push_back(
+            {I == 1   ? "establisher_frame"
+             : Filter ? "exception_pointers"
+                      : "abnormal_termination",
+             I == 0 && !Filter ? NdType::makeInt(1, /*Signed=*/false)
+                               : NdType::makePtr()});
+      }
+      MedBlock Body;
+      Body.Id = 0;
+      Body.StartAddr = CallbackVA;
+      Body.EndAddr = CallbackVA + 1;
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = CallbackVA;
+      if (Filter)
+        Return.addInput(MedVar::makeConst(1, 4));
+      Body.Ops.push_back(std::move(Return));
+      Callback.Blocks.push_back(std::move(Body));
+
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit(
+          {Parent, Callback,
+           makeAddressBackedPersonality(PersonalityVA,
+                                        "\01__C_specific_handler")},
+          Context, "frame_callback", Arch::X64, {{MayThrowVA, "may_throw"}},
+          nullptr, BinaryFormat::COFF);
+      ASSERT_NE(Module, nullptr);
+      llvm::Function *Owner = Module->getFunction(Parent.Name);
+      llvm::Function *Lifted = Module->getFunction(Callback.Name);
+      ASSERT_NE(Owner, nullptr);
+      ASSERT_NE(Lifted, nullptr);
+      ASSERT_TRUE(Owner->hasPersonalityFn()) << printModuleIR(*Module);
+      ASSERT_EQ(Lifted->arg_size(), 2u);
+
+      // The callback's body as a lifted or a compiled one spells each use.
+      // Its blocks go and what the function itself carries stays.
+      for (llvm::BasicBlock &Block : *Lifted)
+        Block.dropAllReferences();
+      while (!Lifted->empty())
+        Lifted->begin()->eraseFromParent();
+      llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Lifted));
+      llvm::Argument *Frame = Lifted->getArg(1);
+      auto *I64 = B.getInt64Ty();
+      auto *Pointer = B.getPtrTy();
+      const auto ReadThrough = [&](llvm::Value *Base) {
+        B.CreateLoad(I64, B.CreateIntToPtr(B.CreateAdd(Base, B.getInt64(0x38)),
+                                           Pointer));
+      };
+      const auto OwnSlot = [&](llvm::Value *Stack) {
+        return B.CreateIntToPtr(B.CreateAdd(Stack, B.getInt64(16)), Pointer);
+      };
+      switch (C.How) {
+      case Use::None:
+      case Use::BodyElsewhere:
+        break;
+      case Use::KeptInAHome:
+      case Use::ReadThroughAHome: {
+        llvm::AllocaInst *Home = B.CreateAlloca(I64);
+        B.CreateStore(B.CreatePtrToInt(Frame, I64), Home);
+        if (C.How == Use::ReadThroughAHome)
+          ReadThrough(B.CreateLoad(I64, Home));
+        break;
+      }
+      case Use::KeptInItsFrame:
+      case Use::ReadThroughItsFrame:
+      case Use::KeptInAFrameThatLeaves: {
+        llvm::AllocaInst *Own =
+            B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 64));
+        llvm::Value *Stack = B.CreatePtrToInt(Own, I64);
+        B.CreateStore(B.CreatePtrToInt(Frame, I64), OwnSlot(Stack));
+        if (C.How == Use::ReadThroughItsFrame)
+          ReadThrough(B.CreateLoad(I64, OwnSlot(Stack)));
+        if (C.How == Use::KeptInAFrameThatLeaves)
+          B.CreateCall(
+              Module->getOrInsertFunction(
+                  "takes_a_pointer",
+                  llvm::FunctionType::get(B.getVoidTy(), {Pointer}, false)),
+              {Own});
+        break;
+      }
+      case Use::ReadsThroughIt:
+        ReadThrough(B.CreatePtrToInt(Frame, I64));
+        break;
+      case Use::WritesThroughIt:
+        B.CreateStore(B.getInt32(1),
+                      B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), Frame, 0x38));
+        break;
+      case Use::PassesIt:
+        B.CreateCall(
+            Module->getOrInsertFunction(
+                "takes_a_pointer",
+                llvm::FunctionType::get(B.getVoidTy(), {Pointer}, false)),
+            {Frame});
+        break;
+      case Use::RecoversALocal:
+      case Use::RecoversAnothersLocal: {
+        // The function whose local is recovered escapes one: the parent, or
+        // the callback itself, which is not its own parent.
+        llvm::Function *Escaping =
+            C.How == Use::RecoversALocal ? Owner : Lifted;
+        llvm::IRBuilder<> Entry(&*Escaping->getEntryBlock().begin());
+        llvm::IRBuilder<> &Escape = Escaping == Lifted ? B : Entry;
+        llvm::AllocaInst *Local = Escape.CreateAlloca(Escape.getInt32Ty());
+        Escape.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                              Module.get(), llvm::Intrinsic::localescape),
+                          {Local});
+        B.CreateLoad(
+            B.getInt32Ty(),
+            B.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                             Module.get(), llvm::Intrinsic::localrecover),
+                         {Escaping, Frame, B.getInt32(0)}));
+        break;
+      }
+      }
+      if (Filter)
+        B.CreateRet(B.getInt32(1));
+      else
+        B.CreateRetVoid();
+      if (C.How == Use::BodyElsewhere)
+        B.GetInsertBlock()->eraseFromParent();
+      expectVerifierClean(*Module);
+
+      BinaryImage Image;
+      Image.Arch = Arch::X64;
+      Image.Bits = Bitness::Bits64;
+      Image.Format = BinaryFormat::COFF;
+      Image.Base = 0x140000000;
+      Image.ExceptionMetadata.Functions.push_back(EH);
+      Image.ExceptionMetadata.rebuildIndex();
+      auto Plan = planCOFFExceptionPatch(*Module, Image, Arch::X64);
+      const std::string Error =
+          Plan ? std::string() : llvm::toString(Plan.takeError());
+      if (C.Accepted)
+        EXPECT_TRUE(Error.empty()) << Error << '\n' << printModuleIR(*Module);
+      else
+        EXPECT_NE(Error.find(Refusal), std::string::npos)
+            << Error << '\n'
+            << printModuleIR(*Module);
+    }
+}
+
 } // namespace

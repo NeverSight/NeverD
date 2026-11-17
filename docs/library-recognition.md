@@ -89,7 +89,10 @@ existing clients may ignore these optional JSON fields. See the
 Recognition and foldability are separate results. A fold requires complete
 mapping of every retained occurrence to the actual emitted source. Weak LLVM
 handles and HighIR expression observations follow surviving values; deleted or
-ambiguous observations stay unknown. The marked emission must reproduce the
+ambiguous observations stay unknown. A load the optimizer replaces by a PHI of
+loads of one member leaves its observation on the PHI; LLVMC prints such a PHI
+as that member read, and the read is where the occurrence is emitted. The
+marked emission must reproduce the
 ordinary C byte for byte before any spans are published. Disjoint spans do not
 hide intervening caller code. Overlapping regions stay expanded, except that
 a proved containing operation can own a nested fold.
@@ -98,7 +101,9 @@ Shared-tail functions can retain byte identity while their expanded source
 body stays unfolded. The retained musl memmove fixture exercises this case.
 The real ATL noexcept fixtures preserve their exception metadata; when the
 native rewrite contract excludes optimization, LLVMC uses the existing
-verified source fallback with temporary-alloca promotion. This does not claim
+verified source fallback with temporary-alloca promotion. A table of
+destructors alone does not exclude it: those fixtures print optimized, and
+their regions map there too. This does not claim
 native exception rewriting or execution support. Unknown cleanup targets,
 partial metadata and unsupported exception paths cannot prove a COM policy.
 

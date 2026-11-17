@@ -26,6 +26,8 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/IR/Constants.h"
@@ -583,6 +585,179 @@ bool hasExactSourceFunctionIdentity(const llvm::Function &Owner,
   return *Identity && **Identity == SourceVA;
 }
 
+/// Whether \p Callback, a Windows x64 termination handler or filter of
+/// \p Parent, does anything with the EstablisherFrame it is passed, its second
+/// argument, that the frame output passes it does not serve.  The pad passes
+/// a termination handler `llvm.localaddress()` and the runtime passes a
+/// filter the frame of the function the code generator wrote.  A helper a
+/// compiler outlined reads its parent's locals through `llvm.localrecover`,
+/// after `llvm.eh.recoverfp` in a filter, which that frame is for.  A callback
+/// lifted from the image reads them at the offsets the original frame gave
+/// them, where that frame holds something else: such a rewrite runs and reads
+/// the wrong bytes.
+///
+/// Keeping the argument is no use of it.  It may rest in a home, an alloca
+/// that only its own loads and stores name, as a lifted register does, or in
+/// the callback's own frame, at an address made from one of its allocas, as
+/// the argument a prologue saves does.  What a load of that home, or once
+/// the frame holds it any load from the frame, then reaches is reached by the
+/// argument, and so is everything once an address of that frame leaves the
+/// callback's own loads, stores and comparisons.  A body the module does not
+/// hold may do anything.
+bool sehCallbackUsesOriginalFrame(const llvm::Function &Callback,
+                                  const llvm::Function &Parent) {
+  if (Callback.arg_size() < 2)
+    return false;
+  if (Callback.isDeclaration())
+    return true;
+  const auto Home = [](const llvm::Value *Pointer) -> const llvm::AllocaInst * {
+    const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(Pointer);
+    if (!Slot)
+      return nullptr;
+    for (const llvm::User *User : Slot->users()) {
+      if (llvm::isa<llvm::LoadInst>(User))
+        continue;
+      const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+      if (!Store || Store->getValueOperand() == Slot)
+        return nullptr;
+    }
+    return Slot;
+  };
+  const auto Computes = [](const llvm::Instruction &User,
+                           const llvm::Use &Use) {
+    return llvm::isa<llvm::CastInst>(User) ||
+           llvm::isa<llvm::FreezeInst>(User) ||
+           llvm::isa<llvm::PHINode>(User) ||
+           llvm::isa<llvm::BinaryOperator>(User) ||
+           llvm::isa<llvm::GetElementPtrInst>(User) ||
+           (llvm::isa<llvm::SelectInst>(User) && Use.getOperandNo() != 0);
+  };
+  size_t Remaining = limits::backend::kCOFFExceptionPatchMaxCallbackFrameUses;
+
+  // The callback's own frame: its allocas' addresses, what is computed from
+  // them, and what a home holding one of those reads back.
+  llvm::SmallPtrSet<const llvm::Value *, 32> Own;
+  bool OwnLeaves = false;
+  {
+    llvm::SmallVector<const llvm::Value *, 32> Work;
+    llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Homes;
+    const auto Add = [&](const llvm::Value *Value) {
+      if (Own.insert(Value).second)
+        Work.push_back(Value);
+    };
+    for (const llvm::BasicBlock &Block : Callback)
+      for (const llvm::Instruction &Instruction : Block)
+        if (llvm::isa<llvm::AllocaInst>(Instruction) && !Home(&Instruction))
+          Add(&Instruction);
+    while (!Work.empty()) {
+      const llvm::Value *Value = Work.pop_back_val();
+      for (const llvm::Use &Use : Value->uses()) {
+        if (!Remaining--)
+          return true;
+        const auto *User = llvm::dyn_cast<llvm::Instruction>(Use.getUser());
+        if (!User) {
+          OwnLeaves = true;
+          continue;
+        }
+        if (Computes(*User, Use)) {
+          Add(User);
+          continue;
+        }
+        if (llvm::isa<llvm::LoadInst>(User) || llvm::isa<llvm::ICmpInst>(User))
+          continue;
+        // A compiler shares a frame with its own helpers and marks a slot's
+        // lifetime: neither hands an address to code this does not follow.
+        if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(User))
+          if (const llvm::Function *Callee = Call->getCalledFunction();
+              Callee &&
+              (Callee->getIntrinsicID() == llvm::Intrinsic::localescape ||
+               Callee->getIntrinsicID() == llvm::Intrinsic::lifetime_start ||
+               Callee->getIntrinsicID() == llvm::Intrinsic::lifetime_end))
+            continue;
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User)) {
+          if (Use.getOperandNo() == 1)
+            continue;
+          if (const llvm::AllocaInst *Slot = Home(Store->getPointerOperand())) {
+            if (Homes.insert(Slot).second)
+              for (const llvm::User *Reader : Slot->users())
+                if (llvm::isa<llvm::LoadInst>(Reader))
+                  Add(Reader);
+            continue;
+          }
+        }
+        // Stored anywhere else, passed, returned or decided by.
+        OwnLeaves = true;
+      }
+    }
+  }
+
+  llvm::SmallPtrSet<const llvm::Value *, 32> Derived;
+  llvm::SmallVector<const llvm::Value *, 32> Work;
+  llvm::SmallPtrSet<const llvm::AllocaInst *, 8> Kept;
+  bool KeptInFrame = false;
+  const auto Derive = [&](const llvm::Value *Value) {
+    if (Derived.insert(Value).second)
+      Work.push_back(Value);
+  };
+  Derive(Callback.getArg(1));
+  while (!Work.empty()) {
+    const llvm::Value *Value = Work.pop_back_val();
+    for (const llvm::Use &Use : Value->uses()) {
+      if (!Remaining--)
+        return true;
+      const auto *User = llvm::dyn_cast<llvm::Instruction>(Use.getUser());
+      if (!User)
+        return true;
+      if (Computes(*User, Use)) {
+        Derive(User);
+        continue;
+      }
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User);
+          Store && Use.getOperandNo() == 0) {
+        const llvm::Value *Pointer = Store->getPointerOperand();
+        if (const llvm::AllocaInst *Slot = Home(Pointer)) {
+          if (Kept.insert(Slot).second)
+            for (const llvm::User *Reader : Slot->users())
+              if (llvm::isa<llvm::LoadInst>(Reader))
+                Derive(Reader);
+          continue;
+        }
+        if (Own.count(Pointer) && !Derived.count(Pointer)) {
+          if (OwnLeaves)
+            return true;
+          if (!KeptInFrame) {
+            KeptInFrame = true;
+            for (const llvm::BasicBlock &Block : Callback)
+              for (const llvm::Instruction &Instruction : Block)
+                if (const auto *Load =
+                        llvm::dyn_cast<llvm::LoadInst>(&Instruction);
+                    Load && Own.count(Load->getPointerOperand()))
+                  Derive(Load);
+          }
+          continue;
+        }
+      }
+      if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(User)) {
+        const llvm::Function *Callee = Call->getCalledFunction();
+        const llvm::Intrinsic::ID Recovery =
+            Callee ? Callee->getIntrinsicID() : llvm::Intrinsic::not_intrinsic;
+        if ((Recovery == llvm::Intrinsic::localrecover ||
+             Recovery == llvm::Intrinsic::eh_recoverfp) &&
+            Call->isArgOperand(&Use) && Call->getArgOperandNo(&Use) == 1 &&
+            Call->getArgOperand(0)->stripPointerCasts() == &Parent) {
+          // What `llvm.eh.recoverfp` returns is a frame for
+          // `llvm.localrecover` alone; what that returns is a local.
+          if (Recovery == llvm::Intrinsic::eh_recoverfp)
+            Derive(Call);
+          continue;
+        }
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                                           const ExceptionFunction &EH,
                                           Arch TargetArch) {
@@ -1027,6 +1202,14 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
           return patchError("native SEH filter callback was altered in "
                             "function " +
                             F.getName());
+        } else if (sehCallbackUsesOriginalFrame(
+                       *llvm::cast<llvm::Function>(
+                           Pad.getArgOperand(0)->stripPointerCasts()),
+                       F)) {
+          return patchError("native SEH filter callback uses its parent's "
+                            "original frame, which output does not rebuild, "
+                            "in function " +
+                            F.getName());
         }
         continue;
       }
@@ -1145,6 +1328,11 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
           (!HasExactAbnormalTermination && !IsProvablyDiscardedArgument(0)) ||
           (!HasExactFrame && !HasDiscardedFrame))
         return patchError("native SEH finally callback ABI was altered in "
+                          "function " +
+                          F.getName());
+      if (HasExactFrame && sehCallbackUsesOriginalFrame(*CallbackFunction, F))
+        return patchError("native SEH finally callback uses its parent's "
+                          "original frame, which output does not rebuild, in "
                           "function " +
                           F.getName());
     }
