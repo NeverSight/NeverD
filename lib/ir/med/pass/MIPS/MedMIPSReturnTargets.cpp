@@ -21,6 +21,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
@@ -276,17 +277,40 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             // Trace their exact reaching stores; a frame address stored there
             // is still an escape, and an intervening unknown call invalidates
             // the proof. Only the bytes this operand reads matter.
-            const auto Reaching = safety::detail::reachingStackValues(
-                Function, D.Block->Id, int(&Op - D.Block->Ops.data()), *At,
-                Op.Output.Size, Offset,
-                [&](const MedVar &Address) { return !IsNonFrame(Address); },
-                [](const MedVar &) { return true; }, true);
-            Safe = Reaching.Complete && Reaching.Reachable &&
-                   !Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites &&
-                   !Reaching.Values.empty() &&
-                   llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
-                     return NonFrameBytes(Stored, First, Bytes);
-                   });
+            const auto FromStores = [&](auto &&Self, unsigned Begin,
+                                        unsigned Size) -> bool {
+              const unsigned Start = std::max(Begin, First);
+              const unsigned End = std::min(Begin + Size, First + Bytes);
+              if (Start >= End)
+                return true;
+              if (!Remaining)
+                return false;
+              --Remaining;
+              const unsigned MemoryByte = archLittleEndian(Target)
+                                              ? Begin
+                                              : Op.Output.Size - Begin - Size;
+              const auto Reaching = safety::detail::reachingStackValues(
+                  Function, D.Block->Id, int(&Op - D.Block->Ops.data()),
+                  *At + MemoryByte, Size, Offset,
+                  [&](const MedVar &Address) { return !IsNonFrame(Address); },
+                  [](const MedVar &) { return true; }, true);
+              if (!Reaching.Complete || !Reaching.Reachable)
+                return false;
+              if (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites &&
+                  !Reaching.Values.empty())
+                return llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
+                  return NonFrameBytes(Stored, Start - Begin, End - Start);
+                });
+              // GCC can assemble one double from separate word stores.
+              // Prove every requested byte on every predecessor, retaining
+              // the existing rejection of unknown writes and frame escapes.
+              if (Size == 1)
+                return false;
+              const unsigned Half = Size / 2;
+              return Self(Self, Begin, Half) &&
+                     Self(Self, Begin + Half, Size - Half);
+            };
+            Safe = FromStores(FromStores, 0, Op.Output.Size);
           } else if (!At && IsNonFrame(Op.Inputs[0])) {
             Safe = BeforeFrameEscape(*D.Block, &Op - D.Block->Ops.data());
           }
