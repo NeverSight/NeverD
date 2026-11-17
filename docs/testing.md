@@ -6305,6 +6305,12 @@ Refused attempts clear prior undefined-output and preserved-state evidence,
 including real x64 certificates retained across an architecture change.
 Operand queries reject a mismatched requested architecture for both owned
 snapshots and expired borrowed records before reading their detail.
+`NativeRegisterQueriesDoNotReadStaleAccessCounts` compares native and owned
+snapshots against a fresh full decode after an implicit LR write. Poisoned
+implicit register counts must remain unread: the native lift detail carries
+operand values but does not supply Capstone register-access metadata. Register
+queries obtain that metadata separately without invalidating the original
+occurrence; immediate-only queries do not need it.
 Raw classifiers and BL targets still work without detail, while operand queries
 and expired records remain conservative. These are decode/lift lifecycle checks,
 not qualification of native PAC/CPA execution or additional ISA families.

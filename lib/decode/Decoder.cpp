@@ -409,7 +409,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
-    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   // The lift path and CFG classification read the mnemonic (when they need it
   // at all, e.g. x86 push/pop/VCMP width, ARM push/pop, NEON lane) directly
   // from Out.Raw->mnemonic, which capstone already filled.  Copying it into a
@@ -443,7 +443,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
-    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   return Out.Size;
 }
 
