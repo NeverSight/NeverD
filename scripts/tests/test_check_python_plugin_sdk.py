@@ -14,6 +14,28 @@ from scripts import generate_python_plugin_limits as limits
 
 
 class PythonPluginSDKAuditTests(unittest.TestCase):
+    def test_workflow_checks_manual_validation_and_release_publishing(self) -> None:
+        errors: list[str] = []
+        audit.check_workflows(errors)
+        self.assertEqual(errors, [])
+        source = audit.SDK_WORKFLOW.read_text(encoding="utf-8")
+        for before, after, diagnostic in (
+            ("  workflow_dispatch:\n", "", "missing manual trigger"),
+            ("  release:\n    types: [published]\n", "",
+             "missing published-release trigger"),
+            ("  workflow_dispatch:\n", "  workflow_dispatch:\n  pull_request:\n",
+             "routine checks must be manual"),
+        ):
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "sdk.yml"
+                self.assertIn(before, source)
+                path.write_text(source.replace(before, after), encoding="utf-8")
+                with mock.patch.object(audit, "SDK_WORKFLOW", path):
+                    errors = []
+                    audit.check_workflows(errors)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(diagnostic, errors[0])
+
     def test_generated_limits_match_native_authorities(self) -> None:
         self.assertEqual(limits.check(), [])
 

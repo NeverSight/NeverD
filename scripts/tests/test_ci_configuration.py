@@ -31,6 +31,12 @@ CONFIGURE_ONLY_OPTIONS = tuple(
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def assert_manually_dispatched(self, source, *, callable=False):
+        triggers = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^  ([a-z_]+):", triggers),
+                         ["workflow_dispatch", "workflow_call"] if callable
+                         else ["workflow_dispatch"])
+
     def test_web_release_gate_honors_cancellation_and_requires_complete_results(self):
         shell = "/bin/bash" if Path("/bin/bash").is_file() else shutil.which("bash")
         if shell is None:
@@ -111,18 +117,11 @@ find() { return 0; }
                             if path_type(name).match(selection.group(1))}
                 self.assertEqual(selected, audits)
 
-    def assert_manual_triggers(self, source, *, reusable=False):
-        triggers = source.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
-        expected = ["workflow_dispatch"]
-        if reusable:
-            expected.append("workflow_call")
-        self.assertCountEqual(re.findall(r"(?m)^  ([a-z_]+):", triggers), expected)
-
-    def test_manual_native_and_product_workflows_keep_capstone_contracts(self):
+    def test_dispatched_capstone_checks_keep_native_and_product_contracts(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text()
         product = WORKFLOW.with_name("web-windows-qualification.yml").read_text()
-        self.assert_manual_triggers(native)
-        self.assert_manual_triggers(product, reusable=True)
+        self.assert_manually_dispatched(native)
+        self.assert_manually_dispatched(product, callable=True)
 
         owners = {"NeverDX86NativeStateAuditTests", "NeverDX86LegacyAlignedMoveTests",
                   "NeverDX86UndefinedEffectsTests"}
@@ -135,12 +134,12 @@ find() { return 0; }
         for owner in owners:
             self.assertIn("('" + owner + "',", audit)
 
-    def test_manual_capstone_fork_suite_keeps_every_compiler(self):
+    def test_dispatched_capstone_fork_suite_keeps_every_compiler(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
         contract = WORKFLOW.with_name("capstone-contract.yml").read_text(encoding="utf-8")
         self.assertNotIn("build-capstone-core", native)
         self.assertIn("build-capstone-core", contract)
-        self.assert_manual_triggers(contract)
+        self.assert_manually_dispatched(contract)
         for source in (native, contract):
             matrix = source.split("        include:\n", 1)[1].split("\n    env:", 1)[0]
             matrix = matrix.split("\n    defaults:", 1)[0]
@@ -148,9 +147,9 @@ find() { return 0; }
                 "Linux x64", "macOS arm64", "Windows x64 MSVC", "Windows x64 clang-cl",
             ])
 
-    def test_manual_native_pipeline_keeps_worker_contracts(self):
+    def test_native_pipeline_requires_manual_dispatch(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
-        self.assert_manual_triggers(native)
+        self.assert_manually_dispatched(native)
         step = self.workflow_step_containing(
             native, "Verify actual SDK allocation and native worker requests")
         for test in ("NeverDWorkerCallSiteTypes", "NeverDWorkerNativeMapping"):
@@ -437,8 +436,8 @@ find() { return 0; }
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_llvm_style_workflow_pins_formatter_and_checks_event_diff(self):
-        self.assert_manual_triggers(STYLE_WORKFLOW.read_text(encoding="utf-8"))
         source = STYLE_WORKFLOW.read_text(encoding="utf-8")
+        self.assert_manually_dispatched(source)
 
         declarations = STYLE_EXPECTATIONS.read_text(encoding="utf-8")
         pattern = r'NEVERD_CI_STYLE_EXPECTATION\(\s*((?:"(?:[^"\\]|\\.)*"\s*)+)\)'
@@ -607,22 +606,23 @@ find() { return 0; }
         concurrency = source.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}", concurrency)
 
-    def test_manual_engine_and_gui_workflows_keep_separate_test_ownership(self):
+    def test_dispatched_engine_and_gui_keep_separate_owners(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        self.assert_manual_triggers(source)
+        self.assert_manually_dispatched(source)
+        # Ignoring the GUI is only correct while this build leaves it out.
         self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
+        # The GUI workflow owns the GUI's Python test and its checks.
         gui = WORKFLOW.with_name("gui.yml").read_text(encoding="utf-8")
-        self.assert_manual_triggers(gui)
+        self.assert_manually_dispatched(gui)
         self.assertIn("-s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py", gui)
-        self.assertNotIn("test_startup_bench", source)
+        self.assertNotIn("test_startup_bench", WORKFLOW.read_text(encoding="utf-8"))
 
-    def test_mobile_runs_only_when_dispatched(self):
-        mobile = WORKFLOW.with_name("mobile.yml").read_text(encoding="utf-8")
-        self.assert_manual_triggers(mobile)
+    def test_mobile_requires_manual_dispatch(self):
+        self.assert_manually_dispatched(WORKFLOW.with_name("mobile.yml").read_text())
 
-    def test_manual_arm64_component_builds_keep_both_backends(self):
+    def test_dispatched_arm64_component_builds_keep_backend_owners(self):
         arm64 = WORKFLOW.with_name("arm64-native-build.yml").read_text(encoding="utf-8")
-        self.assert_manual_triggers(arm64)
+        self.assert_manually_dispatched(arm64)
         for backend, runner in (("kvm", "ubuntu-24.04-arm"), ("whp", "windows-11-arm")):
             self.assertIn(f"- backend: {backend}\n            runner: {runner}\n", arm64)
         self.assertIn("--target NeverDEmulationNative", arm64)
@@ -1004,7 +1004,7 @@ find() { return 0; }
                     f"            arch: {arch}\n"
                     f"            runner: {runner}\n", host)
         self.assertIn("fail-fast: false", host)
-        self.assert_manual_triggers(host)
+        self.assert_manually_dispatched(host)
         self.assertIn("--backend ${{ matrix.backend }} --arch ${{ matrix.arch }}", host)
         self.assertIn("name: native-host-${{ matrix.backend }}-${{ matrix.arch }}", host)
         self.assertIn("build-native-host-probe/summary.json", host)

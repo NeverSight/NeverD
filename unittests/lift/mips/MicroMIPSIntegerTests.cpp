@@ -199,6 +199,117 @@ TEST_P(MicroMIPSInteger, ScalarResultsMatchPinnedOriginalTargetExecution) {
 #endif
 }
 
+TEST_P(MicroMIPSInteger, UpperImmediateUsesWordSignExtensionAndLegacyEncoding) {
+  for (bool Wide : {false, true}) {
+    SCOPED_TRACE(Wide);
+    BinaryImage Image;
+    Image.Arch =
+        Wide ? (archLittleEndian(GetParam()) ? Arch::MIPS64EL : Arch::MIPS64)
+             : GetParam();
+    Image.Bits = Wide ? Bitness::Bits64 : Bitness::Bits32;
+    Image.Mode = InstructionMode::MicroMIPS;
+    Image.MIPS.emplace();
+    Image.MIPS->HasMicroMIPS = true;
+    Image.MIPS->ISARevision = 2;
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+    uc_engine *Raw = nullptr;
+    ASSERT_EQ(uc_open(UC_ARCH_MIPS,
+                      static_cast<uc_mode>(
+                          (Wide ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+                          (archLittleEndian(GetParam()) ? UC_MODE_LITTLE_ENDIAN
+                                                        : UC_MODE_BIG_ENDIAN)),
+                      &Raw),
+              UC_ERR_OK);
+    std::unique_ptr<uc_engine, decltype(&uc_close)> Reference(Raw, uc_close);
+    ASSERT_EQ(
+        uc_ctl_set_cpu_model(Raw, Wide ? UC_CPU_MIPS64_MICROMIPS64R2_GENERIC
+                                       : UC_CPU_MIPS32_M14KC),
+        UC_ERR_OK);
+    ASSERT_EQ(uc_mem_map(Raw, 0x10000, 0x1000, UC_PROT_ALL), UC_ERR_OK);
+#endif
+    struct Row {
+      uint16_t Immediate;
+      uint64_t Expected;
+    };
+    constexpr Row Cases[] = {{0, 0},
+                             {0x7fff, 0x7fff0000},
+                             {0x8000, 0xffffffff80000000},
+                             {0xffff, 0xffffffffffff0000}};
+    uint64_t PC = 0x10002;
+    for (unsigned Reg : {2u, 8u, 31u})
+      for (auto [Immediate, Expected] : Cases) {
+        SCOPED_TRACE(Reg);
+        SCOPED_TRACE(Immediate);
+        if (!Wide)
+          Expected = uint32_t(Expected);
+        const auto Code = bytes(0x41a0 | Reg, Immediate, 4, GetParam());
+        DecodedInsn Insn;
+        ASSERT_EQ(Decode.decodeOneForLift(Code.data(), Code.size(), PC, Insn),
+                  4);
+        std::vector<LowOp> Ops;
+        ASSERT_NO_THROW(Decode.liftToLow(Insn, Ops));
+        NdOpEmulator E(Image);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::r(Reg), 0x12345678);
+        for (const auto &Op : Ops)
+          ASSERT_TRUE(E.step(Op));
+        EXPECT_EQ(E.getRegister(mipsreg::r(Reg)), Expected);
+        EXPECT_FALSE(E.skips().any());
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+        ASSERT_EQ(uc_mem_write(Raw, PC, Code.data(), Code.size()), UC_ERR_OK);
+        ASSERT_EQ(uc_emu_start(Raw, PC | 1, PC + 4, 0, 1), UC_ERR_OK);
+        uint64_t Actual = 0;
+        ASSERT_EQ(uc_reg_read(Raw, UC_MIPS_REG_0 + Reg, &Actual), UC_ERR_OK);
+        EXPECT_EQ(Actual, Expected);
+#endif
+        PC += 8;
+      }
+    Image.MIPS->ISARevision = 6;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Legacy = bytes(0x41a2, 0x8000, 4, GetParam());
+    DecodedInsn Insn;
+    if (Decode.decodeOneForLift(Legacy.data(), Legacy.size(), PC, Insn)) {
+      std::vector<LowOp> Ops;
+      EXPECT_THROW(Decode.liftToLow(Insn, Ops), UnliftedInstruction);
+    }
+  }
+}
+
+TEST_P(MicroMIPSInteger, WideWordShufflesPreserveSignAndAliasedSource) {
+  BinaryImage Image;
+  Image.Arch = archLittleEndian(GetParam()) ? Arch::MIPS64EL : Arch::MIPS64;
+  Image.Bits = Bitness::Bits64;
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(Image.Arch, InstructionMode::MicroMIPS));
+  struct Row {
+    uint16_t Minor;
+    uint64_t Expected;
+  };
+  constexpr Row Cases[] = {{0x2b3c, 0xffffffffffffffef},
+                           {0x3b3c, 0xffffffffffffcdef},
+                           {0x7b3c, 0xffffffffab89efcd}};
+  for (unsigned Reg : {2u, 4u})
+    for (auto [Minor, Expected] : Cases) {
+      SCOPED_TRACE(Minor);
+      SCOPED_TRACE(Reg);
+      const auto Code = bytes((Reg << 5) | 4, Minor, 4, GetParam());
+      DecodedInsn Insn;
+      ASSERT_EQ(
+          Decode.decodeOneForLift(Code.data(), Code.size(), 0x10002, Insn), 4);
+      std::vector<LowOp> Ops;
+      ASSERT_NO_THROW(Decode.liftToLow(Insn, Ops));
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::r(4), 0xffffffff89abcdef);
+      for (const auto &Op : Ops)
+        ASSERT_TRUE(E.step(Op));
+      EXPECT_EQ(E.getRegister(mipsreg::r(Reg)), Expected);
+      EXPECT_FALSE(E.skips().any());
+    }
+}
+
 TEST_P(MicroMIPSInteger, MemoryUsesTargetOrderExactWidthAndCapturedBase) {
   Decoder Decode;
   ASSERT_TRUE(Decode.init(GetParam(), InstructionMode::MicroMIPS));

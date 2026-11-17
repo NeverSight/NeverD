@@ -2356,6 +2356,7 @@ add_neverd_unittest(NeverDSEHTerminationHandlerTests
   eh/ARMSEHFinallyBodyTests.cpp
   eh/ARM64SEHLocalUnwindTests.cpp
   eh/ARMSEHLocalUnwindTests.cpp
+  eh/SEHDefinitionOrderTests.cpp
   eh/TableSEHSourceScopeTests.cpp
   eh/X86SEHDisplayTests.cpp
   LINK_COMPONENTS Pipeline BackendC

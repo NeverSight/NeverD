@@ -57,6 +57,16 @@ def run(executable):
             assert stale['status'] == 'error' and stale['error']['code'] == 'catalogue_changed', stale
             resumed = ok(client, 'computed_strings_step')
             assert resumed['done'] == 1 and resumed['generation'] != status['generation'], resumed
+            assert resumed['total'] == 599 and not resumed['complete'], resumed
+            assert resumed['rows'] == resumed['failures'] == 1, resumed
+            assert resumed['discovery_error'] == '', resumed
+            fresh_query = {'generation': resumed['generation'], 'limit': 1}
+            fresh = ok(client, 'computed_strings', fresh_query)
+            assert fresh['total'] == 1 and len(fresh['items']) == 1, fresh
+            assert fresh['items'][0]['status'] == 'failed', fresh
+            assert int(fresh['items'][0]['function_address'], 16) == int(BASE, 16) + 16, fresh
+            missing = ok(client, 'computed_strings', {**fresh_query, 'filter': 'mix'})
+            assert missing['total'] == 0 and missing['items'] == [], missing
     print('computed string catalogue: conditions, paging, full inventory and invalidation passed')
 
 

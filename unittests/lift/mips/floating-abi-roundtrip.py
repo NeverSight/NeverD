@@ -119,12 +119,16 @@ class CallSiteViews:
             self.destroy(session)
 
 
-def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None, revision=6, fr=1):
+def observe(path, bits, little, scalar_bytes, cases, n32=False, callbacks=None,
+            revision=6, fr=1, micro=False):
     model = (
         (mips.UC_CPU_MIPS64_I6400 if bits == 64 else mips.UC_CPU_MIPS32_MIPS32R6_GENERIC)
         if revision == 6 else
         (mips.UC_CPU_MIPS64_MIPS64R2_GENERIC if bits == 64 else mips.UC_CPU_MIPS32_74KF)
     )
+    if micro:
+        model = (mips.UC_CPU_MIPS64_MICROMIPS64R2_GENERIC if bits == 64 else
+                 mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC)
     uc, entry = roundtrip.emulator(path, bits, little, "kernel", cpu_model=model)
     uc.reg_write(mips.UC_MIPS_REG_CP0_STATUS,
                  (uc.reg_read(mips.UC_MIPS_REG_CP0_STATUS) & ~0x04000000) |
@@ -305,11 +309,22 @@ def run(args, artifacts):
         for bias in (-17, 0, 3, 1024)
     ]
     report = {"complete": False, "revision": args.revision, "fr": args.fr,
-              "neverd_sha256": digest(args.neverd), "builds": []}
+              "micro": args.micro, "interwork": args.interwork,
+              "neverd_sha256": digest(args.neverd), "sdk_sha256": digest(sdk),
+              "builds": []}
     artifacts.write("results.json", report)
     for abi in args.abi or ("32", "n32", "64"):
         bits = 32 if abi == "32" else 64
         pointer_bits = 64 if abi == "64" else 32
+        gcc = args.micro and args.micro64_cc is not None
+        if args.micro and bits == 64 and not gcc:
+            raise ValueError("microMIPS n32/n64 requires --micro64-cc")
+        compiler = args.micro64_cc if gcc else args.clang
+        compiler_headers = (
+            subprocess.check_output([compiler, "-print-file-name=include"],
+                                    text=True).strip()
+            if gcc else resource + "/include"
+        )
         for little in (False, True):
             target = ("mips64" if bits == 64 else "mips") + ("el" if little else "")
             cpu = f"mips{bits}r{args.revision}"
@@ -417,6 +432,11 @@ def run(args, artifacts):
                             setup += [f"mfc1 ${low},$f12", f"mfhc1 ${high},$f12"]
                             incoming = f"mtc1 ${low},$f12\nmthc1 ${high},$f12"
                     prefix = ".text\n.set noreorder\n"
+                    caller_prefix = prefix + (".set micromips\n" if args.micro else "")
+                    callee_prefix = prefix + (
+                        ".set nomicromips\n.balign 4\n" if args.interwork else
+                        ".set micromips\n" if args.micro else ""
+                    )
                     callee = (
                         f"{load} $f2,"
                         + ("0" if bits == 64 else "64" if scalar_bytes == 8 else "32")
@@ -556,7 +576,7 @@ def run(args, artifacts):
                             # Observe the conversion's inexact sticky flag across the call.
                             after_call = "cfc1 $2,$31\nandi $2,$2,4\n" + after_call
                     callee_text = (
-                        prefix
+                        callee_prefix
                         + ".globl fp_callee\n.ent fp_callee\nfp_callee:\n"
                         + callee
                         + "\njr $ra\nnop\n.end fp_callee\n"
@@ -565,7 +585,9 @@ def run(args, artifacts):
                     transfer = (
                         ("jalrc $25" if indirect else "balc fp_callee")
                         if args.revision == 6 else
-                        ("jalr $25\nnop" if indirect else "jal fp_callee\nnop")
+                        ("jalr $25\nnop" if indirect else
+                         "jalx fp_callee\nnop" if args.interwork else
+                         "jal fp_callee\nnop")
                     )
                     if indirect:
                         # Snapshot the original target before o32 overwrites its argument word.
@@ -576,14 +598,14 @@ def run(args, artifacts):
                         if pair_result:
                             alternate_callee = callee + f"\n{d}addiu ${high},${high},37"
                         callee_text += (
-                            prefix
+                            callee_prefix
                             + ".globl fp_other\n.ent fp_other\nfp_other:\n"
                             + alternate_callee
                             + "\njr $ra\nnop\n.end fp_other\n"
                         )
                     sp_op = "addiu" if pointer_bits == 32 else "daddiu"
                     caller = (
-                        prefix
+                        caller_prefix
                         + ".globl kernel\n.ent kernel\nkernel:\n"
                         + f"{sp_op} $sp,$sp,-96\n{'sd' if bits == 64 else 'sw'} $ra,{slot}($sp)\n"
                         + f"mtc1 ${5 if bits == 64 or scalar_bytes == 4 else 6},$f2\ncvt.{fmt}.w $f2,$f2\nadd.{fmt} $f12,$f12,$f2\n"
@@ -591,7 +613,7 @@ def run(args, artifacts):
                         + f"\n{transfer}\n{after_call}\n"
                         + f"{'ld' if bits == 64 else 'lw'} $ra,{slot}($sp)\n{sp_op} $sp,$sp,96\njr $ra\nnop\n.end kernel\n"
                     )
-                    assembly = directory / "original.s"
+                    assembly = directory / "original.S"
                     assembly.write_text(caller + callee_text)
                     obj, original = directory / "original.o", directory / "original.elf"
                     asm_flags = [
@@ -625,7 +647,8 @@ def run(args, artifacts):
                                 ".symtab"
                             )
                             return [
-                                symbols.get_symbol_by_name(name)[0]["st_value"]
+                                symbols.get_symbol_by_name(name)[0]["st_value"] |
+                                bool(symbols.get_symbol_by_name(name)[0]["st_other"]["local"] & 4)
                                 for name in ("fp_callee", "fp_other")
                             ]
 
@@ -637,7 +660,7 @@ def run(args, artifacts):
                         cases,
                         abi == "n32",
                         callbacks(original),
-                        revision=args.revision, fr=args.fr,
+                        revision=args.revision, fr=args.fr, micro=args.micro,
                     )
                     for index, ((value, bias), (actual, _)) in enumerate(
                         zip(cases, wanted, strict=True)
@@ -695,7 +718,7 @@ def run(args, artifacts):
                         validate_narrow_llvm(ir.read_text())
                         artifacts.discard(ir)
                     callee_source, callee_obj = (
-                        directory / "callee.s",
+                        directory / "callee.S",
                         directory / "callee.o",
                     )
                     callee_source.write_text(callee_text)
@@ -707,7 +730,7 @@ def run(args, artifacts):
                         # Execute decompiled callees through the original assembly caller.
                         # Its unequal limb weights detect swapped or missing return registers.
                         caller_source, caller_obj = (
-                            directory / "caller.s",
+                            directory / "caller.S",
                             directory / "caller.o",
                         )
                         caller_source.write_text(caller)
@@ -753,32 +776,35 @@ def run(args, artifacts):
                                 )
                             artifacts.keep_source(source)
                             for opt in ("-O0", "-O2"):
-                                rebuilt = directory / "rebuilt.elf"
+                                rebuilt = directory / (source.stem + opt + ".elf")
+                                rebuilt_obj = rebuilt.with_suffix(".o")
                                 command(
                                     [
-                                        args.clang,
-                                        "--target="
+                                        compiler,
+                                        *(["-EL" if little else "-EB", "-minterlink-compressed"]
+                                          if gcc else ["--target="
                                         + target
                                         + "-linux-gnu"
-                                        + ("abin32" if abi == "n32" else ""),
+                                        + ("abin32" if abi == "n32" else "")]),
                                         "-march=" + cpu,
                                         "-mabi=" + abi,
                                         "-mfp64" if args.fr else "-mfp32",
                                         "-mnan=" + nan,
                                         "-mno-abicalls",
                                         "-fno-pic",
+                                        "-fno-strict-aliasing",
                                         "-G0",
                                         "-ffreestanding",
                                         "-nostdinc",
                                         "-isystem",
-                                        resource + "/include",
+                                        compiler_headers,
                                         "-I",
                                         headers,
                                         opt,
                                         "-c",
                                         source,
                                         "-o",
-                                        obj,
+                                        rebuilt_obj,
                                     ]
                                 )
                                 command(
@@ -790,7 +816,7 @@ def run(args, artifacts):
                                         "0x30000",
                                         "-e",
                                         "kernel",
-                                        obj,
+                                        rebuilt_obj,
                                         assembly_obj,
                                         "-o",
                                         rebuilt,
@@ -804,7 +830,7 @@ def run(args, artifacts):
                                     cases,
                                     abi == "n32",
                                     callbacks(rebuilt),
-                                    revision=args.revision, fr=args.fr,
+                                    revision=args.revision, fr=args.fr, micro=args.micro,
                                 )
                                 if actual != wanted:
                                     index = next(
@@ -828,12 +854,12 @@ def run(args, artifacts):
                                     }
                                 )
                                 artifacts.write("results.json", report)
-                                artifacts.discard(obj, rebuilt)
+                                artifacts.discard(rebuilt_obj, rebuilt)
                             artifacts.discard(source)
                     if len(functions) == 2:
                         artifacts.discard(caller_obj, caller_source)
                     artifacts.discard(
-                        original, assembly, callee_source, callee_obj, declarations, log
+                        original, obj, assembly, callee_source, callee_obj, declarations, log
                     )
     report["complete"] = True
     artifacts.write("results.json", report)
@@ -852,9 +878,19 @@ def main():
     parser.add_argument("--revision", type=int, choices=(2, 6), default=6,
                         help="classic ISA revision (default: 6)")
     parser.add_argument("--fr", type=int, choices=(0, 1), default=1)
+    parser.add_argument("--micro", action="store_true",
+                        help="execute physical microMIPS r2 callers and callees")
+    parser.add_argument("--interwork", action="store_true",
+                        help="call classic callees from microMIPS r2 callers")
+    parser.add_argument("--micro64-cc", type=Path,
+                        help="GCC compiler for compressed output (required for n32/n64)")
     parser.add_argument("--abi", action="append", choices=("32", "n32", "64"))
     parser.add_argument("--layout", action="append", choices=LAYOUTS)
     args = parser.parse_args()
+    if args.interwork:
+        args.micro = True
+    if args.micro and args.revision != 2:
+        parser.error("compressed floating calls require --revision 2")
     if not args.fr:
         if args.revision != 2 or (args.abi and args.abi != ["32"]):
             parser.error("FR=0 requires --revision 2 and o32")
@@ -862,7 +898,8 @@ def main():
     with MIPSValidationArtifacts(
         args.output,
         "mips-floating-abi-roundtrip",
-        [args.neverd, args.assembler, args.linker, args.clang],
+        [args.neverd, args.assembler, args.linker, args.clang,
+         *([args.micro64_cc] if args.micro64_cc else [])],
     ) as artifacts:
         run(args, artifacts)
 

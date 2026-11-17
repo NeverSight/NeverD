@@ -5,8 +5,13 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
+#include "neverd/Common.h"
 #include "neverd/DataAccessWidths.h"
 #include "neverd/sdk/NeverDCAPITypes.h"
+
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 
 #include <optional>
 #include <utility>
@@ -20,8 +25,10 @@ struct DecodedInsn;
 
 namespace neverd::sdk {
 struct Session;
+struct FuncInfo;
 struct FunctionPage;
 struct InstructionFlow;
+struct ReferenceImageIndex;
 
 // Same-build test seam. Mutations that destroy engine objects run in the
 // shared library; this header is not installed with the public SDK.
@@ -47,6 +54,17 @@ struct SessionTestAccess {
                                                     const DecodedInsn &Insn);
   NEVERD_API static FunctionPage functionPage(const Session &State,
                                               neverd_va_t First, int Limit);
+  NEVERD_API static FunctionPage
+  functionPage(llvm::ArrayRef<FuncInfo> Functions, neverd_va_t First,
+               int Limit);
+  NEVERD_API static bool decodeFunctionReferences(
+      const BinaryImage &Img, const FunctionPage &Page,
+      llvm::function_ref<void(
+          size_t Index, va_t Address, llvm::StringRef Instruction,
+          const InstructionFlow &Flow, unsigned Size, InstructionMode Mode)>
+          Visit);
+  NEVERD_API static const ReferenceImageIndex &
+  referenceImageIndex(const Session &State);
   /// findProgramMain of \p Img.
   NEVERD_API static std::optional<neverd_va_t>
   programMain(const BinaryImage &Img);

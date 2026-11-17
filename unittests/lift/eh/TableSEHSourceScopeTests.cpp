@@ -28,6 +28,7 @@
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
@@ -36,6 +37,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstring>
 #include <map>
 #include <memory>
 #include <string>
@@ -91,11 +93,16 @@ MedBlock blockAt(int Id, va_t Begin, va_t End) {
 }
 
 /// A termination handler that reads nothing of its parent: it counts a run.
-MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step) {
+/// A termination handler that stores \p Step and returns, or, unless
+/// \p Returns, never does: a `__finally` that leaves by `longjmp`, here a
+/// loop.
+MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step,
+                           bool Returns = true) {
   MedFunc Handler;
   Handler.Entry = Entry;
   Handler.Name = Name;
   Handler.ReturnType = NdType::makeVoid();
+  Handler.DoesNotReturn = !Returns;
   MedBlock Body = blockAt(0, Entry, Entry + 8);
   MedOp Store;
   Store.Opcode = NdOp::STORE;
@@ -103,7 +110,13 @@ MedFunc terminationHandler(va_t Entry, const char *Name, uint64_t Step) {
   Store.addInput(MedVar::makeConst(CounterVA, 8));
   Store.addInput(MedVar::makeConst(Step, 4));
   Body.Ops.push_back(std::move(Store));
-  Body.Ops.push_back(returnAt(Entry + 4));
+  if (Returns) {
+    Body.Ops.push_back(returnAt(Entry + 4));
+  } else {
+    Body.Ops.push_back(branchTo(Entry + 4, Entry));
+    Body.Preds = {0};
+    Body.Succs = {0};
+  }
   Handler.Blocks.push_back(std::move(Body));
   return Handler;
 }
@@ -166,6 +179,9 @@ enum class Cookie {
   /// The same, with a record that keeps exceptions from the handler: the
   /// table's `__except` never runs.
   CheckedForUnwindsOnly,
+  /// The same, with a record that keeps unwinds from the handler: the table's
+  /// `__finally` rows never run for one.
+  CheckedForExceptionsOnly,
 };
 
 /// MSVC's table for
@@ -175,10 +191,11 @@ enum class Cookie {
 /// innermost first.  Block 1 calls may_throw inside it and block 2 leaves it.
 /// With \p MiddleIsFinally the middle scope is a third `__finally`, which a
 /// local unwind runs between the other two.
-std::vector<MedFunc> threeScopesOverOneRange(Leave How,
-                                             bool MiddleIsFinally = false,
-                                             bool BodyCalls = true,
-                                             Cookie Wrapped = Cookie::None) {
+/// \p NeverReturns names a termination handler that does not return.
+std::vector<MedFunc>
+threeScopesOverOneRange(Leave How, bool MiddleIsFinally = false,
+                        bool BodyCalls = true, Cookie Wrapped = Cookie::None,
+                        llvm::StringRef NeverReturns = {}) {
   MedFunc Parent;
   Parent.Entry = ParentVA;
   Parent.Name = "three_scopes_parent";
@@ -243,10 +260,11 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
     GSCookieInfo Record;
     Record.ParseStatus = ExceptionParseStatus::Complete;
     Record.CookieOffset = 0x40;
-    Record.HasExceptionHandler = Wrapped == Cookie::Checked;
-    Record.HasUnwindHandler = true;
-    Record.Payload = {uint8_t(0x40 | (Record.HasExceptionHandler ? 3 : 2)), 0,
-                      0, 0};
+    Record.HasExceptionHandler = Wrapped != Cookie::CheckedForUnwindsOnly;
+    Record.HasUnwindHandler = Wrapped != Cookie::CheckedForExceptionsOnly;
+    Record.Payload = {uint8_t(0x40 | (Record.HasExceptionHandler ? 1 : 0) |
+                              (Record.HasUnwindHandler ? 2 : 0)),
+                      0, 0, 0};
     EH.GSCookie = std::move(Record);
   }
   EH.SEH.emplace();
@@ -268,18 +286,22 @@ std::vector<MedFunc> threeScopesOverOneRange(Leave How,
     Parent.SEHLocalUnwindExits.push_back(std::move(Exit));
   }
 
-  return {
-      std::move(Parent), terminationHandler(InnerFinallyVA, "inner_finally", 1),
-      terminationHandler(OuterFinallyVA, "outer_finally", 2),
-      terminationHandler(MiddleFinallyVA, "middle_finally", 3), personality()};
+  const auto Handler = [&](va_t Entry, const char *Name, uint64_t Step) {
+    return terminationHandler(Entry, Name, Step, NeverReturns != Name);
+  };
+  return {std::move(Parent), Handler(InnerFinallyVA, "inner_finally", 1),
+          Handler(OuterFinallyVA, "outer_finally", 2),
+          Handler(MiddleFinallyVA, "middle_finally", 3), personality()};
 }
 
 std::unique_ptr<llvm::Module> emitUnit(const std::vector<MedFunc> &Unit,
                                        llvm::LLVMContext &Context,
-                                       bool ForPrintedC) {
+                                       bool ForPrintedC,
+                                       LLVMSourceMap *Sources = nullptr) {
   MedLLVMEmitter Emitter;
   Emitter.setPreserveUnknownSourceValues(ForPrintedC);
   Emitter.setAnalysisRecoveryForSource(ForPrintedC);
+  Emitter.setSourceMap(Sources);
   auto Module =
       Emitter.emit(Unit, Context, "table_seh_scopes", Arch::X64,
                    {{MayThrowVA, "may_throw"}}, nullptr, BinaryFormat::COFF);
@@ -720,27 +742,213 @@ TEST(TableSEHSourceScopes, LLVMCKeepsALoopOfBlocksThatOnlyJump) {
   EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
 }
 
-// A scope table this view does not lower says so whatever its language
-// handler is called: one behind a cookie check whose record keeps exceptions
-// from the handler has an `__except` that never runs, so it is not lowered,
-// and the function must not read as one without SEH.
-TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
+// A `__finally` that never returns, as one that leaves by `longjmp`, is a
+// clause the printed C can show: the call, and that the path ends there, once.
+// Native output, whose clauses the code generator writes again, still leaves
+// such a function as metadata (here the rows over one range already do).
+TEST(TableSEHSourceScopes, AFinallyThatDoesNotReturnIsLoweredForPrintedC) {
   const std::vector<MedFunc> Unit = threeScopesOverOneRange(
       Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
-      Cookie::CheckedForUnwindsOnly);
+      Cookie::None, "outer_finally");
   llvm::LLVMContext Context;
   auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
   ASSERT_NE(Module, nullptr);
   const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
   ASSERT_NE(Parent, nullptr);
-  EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
-  const std::string Source = printedC(*Module);
-  const std::string Function = parentIn(Source);
-  ASSERT_FALSE(Function.empty()) << Source;
-  EXPECT_NE(Function.find("neverd.seh: not lowered"), std::string::npos)
+  const llvm::Function *Outer = Module->getFunction("outer_finally");
+  ASSERT_NE(Outer, nullptr);
+  ASSERT_TRUE(Outer->doesNotReturn()) << printed(*Outer);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
       << Function;
-  EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
-  EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
+  // Each clause that runs the handler says once that it does not return.
+  size_t Clauses = 0;
+  for (size_t At = Function.find("outer_finally("); At != std::string::npos;
+       At = Function.find("outer_finally(", At + 1)) {
+    ++Clauses;
+    const size_t Next = Function.find('\n', At) + 1;
+    const llvm::StringRef After = llvm::StringRef(Function).substr(Next);
+    EXPECT_TRUE(After.ltrim().starts_with("__builtin_unreachable();"))
+        << Function;
+    EXPECT_FALSE(After.ltrim()
+                     .drop_front(std::strlen("__builtin_unreachable();"))
+                     .ltrim()
+                     .starts_with("__builtin_unreachable();"))
+        << Function;
+  }
+  EXPECT_NE(Clauses, 0u) << Function;
+}
+
+// A local unwind whose first handler never returns runs that handler outside
+// the scope it ends and inside the ones around it, as any other does; what
+// follows the call is never reached.
+TEST(TableSEHSourceScopes, ALocalUnwindHandlerThatDoesNotReturnIsPlaced) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+      Leave::LocalUnwind, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
+      Cookie::None, "inner_finally");
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  const auto Inner = ownCallsOf(*Parent, "inner_finally");
+  ASSERT_EQ(Inner.size(), 1u) << printed(*Parent);
+  const auto *InnerInvoke = llvm::dyn_cast<llvm::InvokeInst>(Inner.front());
+  ASSERT_NE(InnerInvoke, nullptr) << printed(*Parent);
+  EXPECT_EQ(InnerInvoke->getUnwindDest(), Found.Except) << printed(*Parent);
+
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+}
+
+// `__GSHandlerCheck_SEH` checks the frame's stack cookie and hands the table
+// to `__C_specific_handler`: printed C shows the same scopes as for the table
+// alone.  Its identity is another one, and native output, which would have to
+// write the cookie record again, leaves the function as metadata.
+TEST(TableSEHSourceScopes, ATableBehindACookieCheckIsLoweredForPrintedC) {
+  const std::vector<MedFunc> Plain = threeScopesOverOneRange(Leave::Branch);
+  const std::vector<MedFunc> Unit =
+      threeScopesOverOneRange(Leave::Branch, /*MiddleIsFinally=*/false,
+                              /*BodyCalls=*/true, Cookie::Checked);
+  const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::SourceIRLowering)
+          .isEligible());
+  for (WindowsEHNativeCapability Capability :
+       {WindowsEHNativeCapability::IRLowering,
+        WindowsEHNativeCapability::OutputPatch}) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                      Capability);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
+  }
+  // The wrapper of another architecture is not this one until it is read.
+  for (const Arch Other : {Arch::AArch64, Arch::ARM, Arch::X86}) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            EH, Other, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason,
+              WindowsEHNativeSourceReason::UnsupportedArchitecture);
+  }
+
+  for (uint32_t Row = 0; Row < 3; ++Row) {
+    SCOPED_TRACE(Row);
+    const auto Bare = windows_eh_semantics::getSEHScopeSemanticToken(
+        *Plain.front().ExceptionMetadata, Arch::X64, Row,
+        /*AllowRepeatedRanges=*/true, /*AllowCookieCheck=*/true);
+    const auto Checked = windows_eh_semantics::getSEHScopeSemanticToken(
+        EH, Arch::X64, Row, /*AllowRepeatedRanges=*/true,
+        /*AllowCookieCheck=*/true);
+    ASSERT_TRUE(Bare.has_value());
+    ASSERT_TRUE(Checked.has_value());
+    EXPECT_NE(Bare->Digest, Checked->Digest);
+    // The plain table's identity is what it was without the allowance.
+    const auto BareBefore = windows_eh_semantics::getSEHScopeSemanticToken(
+        *Plain.front().ExceptionMetadata, Arch::X64, Row,
+        /*AllowRepeatedRanges=*/true);
+    ASSERT_TRUE(BareBefore.has_value());
+    EXPECT_EQ(Bare->Digest, BareBefore->Digest);
+    EXPECT_FALSE(windows_eh_semantics::getSEHScopeSemanticToken(
+                     EH, Arch::X64, Row, /*AllowRepeatedRanges=*/true)
+                     .has_value());
+  }
+  // Another cookie slot is another frame.
+  ExceptionFunction Moved = EH;
+  Moved.GSCookie->CookieOffset += 8;
+  EXPECT_NE(windows_eh_semantics::getSEHScopeSemanticToken(
+                EH, Arch::X64, 0, /*AllowRepeatedRanges=*/true,
+                /*AllowCookieCheck=*/true)
+                ->Digest,
+            windows_eh_semantics::getSEHScopeSemanticToken(
+                Moved, Arch::X64, 0, /*AllowRepeatedRanges=*/true,
+                /*AllowCookieCheck=*/true)
+                ->Digest);
+
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+  const Pads Found = padsOf(*Parent);
+  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+  const std::string Function = parentIn(printedC(*Module));
+  ASSERT_FALSE(Function.empty());
+  EXPECT_EQ(Function.find("neverd.seh: not lowered"), std::string::npos)
+      << Function;
+  EXPECT_NE(Function.find("__try {"), std::string::npos) << Function;
+  EXPECT_NE(Function.find("__except"), std::string::npos) << Function;
+
+  llvm::LLVMContext NativeContext;
+  auto Native = emitUnit(Unit, NativeContext, /*ForPrintedC=*/false);
+  ASSERT_NE(Native, nullptr);
+  const llvm::Function *NativeParent =
+      Native->getFunction("three_scopes_parent");
+  ASSERT_NE(NativeParent, nullptr);
+  EXPECT_FALSE(NativeParent->hasPersonalityFn()) << printed(*NativeParent);
+}
+
+// The wrapper calls `__C_specific_handler` for an exception only when its
+// record's EHANDLER bit is set and for an unwind only when its UHANDLER bit
+// is.  A table with a row the record keeps from the handler runs that row
+// never: its `__except` or `__finally` must not print as one that runs, so
+// the function says it is not lowered.
+TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
+  for (const Cookie Record :
+       {Cookie::CheckedForUnwindsOnly, Cookie::CheckedForExceptionsOnly}) {
+    SCOPED_TRACE(static_cast<int>(Record));
+    const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+        Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true, Record);
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            *Unit.front().ExceptionMetadata, Arch::X64, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Parent, nullptr);
+    EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+    const std::string Source_ = printedC(*Module);
+    const std::string Function = parentIn(Source_);
+    ASSERT_FALSE(Function.empty()) << Source_;
+    EXPECT_NE(Function.find("neverd.seh: not lowered"), std::string::npos)
+        << Function;
+    EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
+    EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
+  }
+  // A table of termination handlers alone needs no exceptions passed on.
+  const std::vector<MedFunc> Finallys = threeScopesOverOneRange(
+      Leave::Branch, /*MiddleIsFinally=*/true, /*BodyCalls=*/true,
+      Cookie::CheckedForUnwindsOnly);
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(*Finallys.front().ExceptionMetadata,
+                                    Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::SourceIRLowering)
+          .isEligible());
 }
 
 // The render that marks source positions drops the same blocks as the
@@ -771,12 +979,180 @@ TEST(TableSEHSourceScopes, LLVMCSourceMapAgreesWithTheTextThatDropsBlocks) {
   EXPECT_EQ(Ordinary, Mapped);
   // A render that disagreed with the ordinary one would publish nothing.
   EXPECT_FALSE(Map.Definitions.empty());
-  bool Anchored = false;
-  for (const auto &Anchor : Map.Anchors)
-    Anchored |= llvm::StringRef(Mapped)
-                    .slice(Anchor.Span.Begin, Anchor.Span.End)
-                    .contains("outer_finally();");
-  EXPECT_TRUE(Anchored) << Mapped;
+  // The last handler of the unwind is a plain call.  The body's call and the
+  // inner handler's are invokes, each the terminator of its block, in the
+  // body and in the clauses that print a handler: every one of them keeps its
+  // anchor, so a click on any call finds its address.
+  const std::string Function = parentIn(Mapped);
+  ASSERT_FALSE(Function.empty()) << Mapped;
+  const size_t Base = Mapped.find(Function);
+  for (const char *Callee :
+       {"outer_finally(", "may_throw(", "inner_finally("}) {
+    size_t Calls = 0;
+    for (size_t At = Function.find(Callee); At != std::string::npos;
+         At = Function.find(Callee, At + 1)) {
+      ++Calls;
+      const size_t Offset = Base + At;
+      EXPECT_TRUE(llvm::any_of(Map.Anchors,
+                               [&](const auto &Anchor) {
+                                 return Anchor.Span.Begin <= Offset &&
+                                        Offset < Anchor.Span.End;
+                               }))
+          << Callee << " at " << At << "\n"
+          << Function;
+    }
+    EXPECT_NE(Calls, 0u) << Callee << "\n" << Function;
+  }
+}
+
+// What the emitter itself observes reaches the page: the body's call keeps its
+// instruction when the lowering makes it an invoke, and the handlers of the
+// local unwind, which have no instruction of their own, name the runtime call
+// they stand for.  The calls a `__finally` clause prints are the clause, not
+// an instruction of the function, and name none.
+TEST(TableSEHSourceScopes, LLVMCSourceMapNamesTheUnwindCallForItsHandlers) {
+  std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::LocalUnwind);
+  // The body's call is the first operation decoded at its address.
+  MedOp &BodyCall = Unit.front().Blocks[1].Ops.front();
+  ASSERT_EQ(BodyCall.Opcode, NdOp::CALL);
+  BodyCall.OriginSeq = 0;
+  llvm::LLVMContext Context;
+  LLVMSourceMap Sources;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true, &Sources);
+  ASSERT_NE(Module, nullptr);
+  ASSERT_NE(Module->getFunction("three_scopes_parent"), nullptr);
+
+  const std::string Ordinary = printedC(*Module);
+  CSourceMap Map;
+  Map.RecordCallExpressions = true;
+  const std::string Mapped = printedC(*Module, &Map, &Sources);
+  EXPECT_EQ(Ordinary, Mapped);
+  EXPECT_FALSE(Map.Definitions.empty());
+  const std::string Function = parentIn(Mapped);
+  ASSERT_FALSE(Function.empty()) << Mapped;
+  const size_t Base = Mapped.find(Function);
+  // The address a call printed at \p At came from, or 0.
+  const auto AddressAt = [&](size_t At) -> va_t {
+    for (const auto &Anchor : Map.Anchors)
+      if (Anchor.Span.Begin <= Base + At && Base + At < Anchor.Span.End &&
+          !Anchor.Occurrences.empty())
+        return Anchor.Occurrences.front().Address;
+    return 0;
+  };
+  size_t BodyCalls = 0, UnwindCalls = 0;
+  for (const auto &[Callee, Address] :
+       {std::pair<const char *, va_t>{"may_throw(", GuardedBegin + 4},
+        {"inner_finally(", UnwindCallVA},
+        {"outer_finally(", UnwindCallVA}})
+    for (size_t At = Function.find(Callee); At != std::string::npos;
+         At = Function.find(Callee, At + 1)) {
+      if (AddressAt(At) == 0)
+        continue;
+      EXPECT_EQ(AddressAt(At), Address) << Callee << "\n" << Function;
+      (Address == UnwindCallVA ? UnwindCalls : BodyCalls) += 1;
+    }
+  EXPECT_EQ(BodyCalls, 1u) << Function;
+  // The inner handler's call is an invoke, the outer one a plain call.
+  EXPECT_EQ(UnwindCalls, 2u) << Function;
+
+  // Only the handlers: another call a unit puts at that address without an
+  // instruction of its own names nothing.
+  std::vector<MedFunc> Odd = threeScopesOverOneRange(Leave::LocalUnwind);
+  std::vector<MedOp> &Leaving = Odd.front().Blocks[2].Ops;
+  Leaving.insert(Leaving.begin(), callOf(UnwindCallVA, MayThrowVA));
+  llvm::LLVMContext OddContext;
+  LLVMSourceMap OddSources;
+  const auto OddModule =
+      emitUnit(Odd, OddContext, /*ForPrintedC=*/true, &OddSources);
+  ASSERT_NE(OddModule, nullptr);
+  size_t Named = 0;
+  for (const LLVMSourceObservation &Observation : OddSources.Observations) {
+    if (Observation.Occurrence.Address != UnwindCallVA)
+      continue;
+    ++Named;
+    const auto *Call =
+        llvm::dyn_cast_or_null<llvm::CallBase>(Observation.Value);
+    ASSERT_NE(Call, nullptr);
+    ASSERT_NE(Call->getCalledFunction(), nullptr);
+    EXPECT_TRUE(Call->getCalledFunction()->getName().ends_with("_finally"))
+        << Call->getCalledFunction()->getName().str();
+  }
+  EXPECT_EQ(Named, 2u);
+}
+
+// A cleanup whose body branches prints as labelled blocks of its own.  The
+// lowering writes none, but an optimizer may: an invoke there is marked too.
+TEST(TableSEHSourceScopes, LLVMCSourceMapMarksInvokesOfACleanupThatBranches) {
+  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+  llvm::LLVMContext Context;
+  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
+  ASSERT_NE(Module, nullptr);
+  llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+  ASSERT_NE(Parent, nullptr);
+  llvm::InvokeInst *Handler = nullptr;
+  for (llvm::BasicBlock &Block : *Parent)
+    if (auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator());
+        Invoke && Invoke->getCalledFunction() &&
+        Invoke->getCalledFunction()->getName() == "inner_finally" &&
+        Block.isEHPad())
+      Handler = Invoke;
+  ASSERT_NE(Handler, nullptr) << printed(*Parent);
+  llvm::BasicBlock *Continue = Handler->getNormalDest();
+  ASSERT_FALSE(llvm::isa<llvm::PHINode>(Continue->front())) << printed(*Parent);
+  // pad: if (*flag) call; else skip;  call: invoke handler -> continue
+  auto *Flag = new llvm::GlobalVariable(
+      *Module, llvm::Type::getInt8Ty(Context), /*isConstant=*/false,
+      llvm::GlobalValue::ExternalLinkage, nullptr, "cleanup_flag");
+  llvm::BasicBlock *Pad = Handler->getParent();
+  llvm::BasicBlock *Call =
+      Pad->splitBasicBlock(Handler->getIterator(), "seh.cleanup.call");
+  llvm::BasicBlock *Skip =
+      llvm::BasicBlock::Create(Context, "seh.cleanup.skip", Parent, Continue);
+  llvm::IRBuilder<>(Skip).CreateBr(Continue);
+  Pad->getTerminator()->eraseFromParent();
+  llvm::IRBuilder<> AtPad(Pad);
+  AtPad.CreateCondBr(
+      AtPad.CreateIsNotNull(AtPad.CreateLoad(llvm::Type::getInt8Ty(Context),
+                                             Flag, /*isVolatile=*/true)),
+      Call, Skip);
+  ASSERT_FALSE(llvm::verifyFunction(*Parent, &llvm::errs()));
+
+  LLVMSourceMap Sources;
+  Sources.Functions[ParentVA] = Parent;
+  va_t Address = ParentVA;
+  for (llvm::BasicBlock &Block : *Parent)
+    for (llvm::Instruction &Instruction : Block)
+      if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          Site && Site->getCalledFunction() &&
+          !Site->getCalledFunction()->isIntrinsic())
+        Sources.Observations.push_back(
+            {ParentVA, {Address += 4, 0}, &Instruction});
+
+  const std::string Ordinary = printedC(*Module);
+  CSourceMap Map;
+  Map.RecordCallExpressions = true;
+  const std::string Mapped = printedC(*Module, &Map, &Sources);
+  EXPECT_EQ(Ordinary, Mapped);
+  EXPECT_FALSE(Map.Definitions.empty());
+  const std::string Function = parentIn(Mapped);
+  ASSERT_FALSE(Function.empty()) << Mapped;
+  // The clause printed its blocks under labels of its own.
+  EXPECT_NE(Function.find("seh_cleanup"), std::string::npos) << Function;
+  const size_t Base = Mapped.find(Function);
+  size_t Calls = 0;
+  for (size_t At = Function.find("inner_finally("); At != std::string::npos;
+       At = Function.find("inner_finally(", At + 1)) {
+    ++Calls;
+    const size_t Offset = Base + At;
+    EXPECT_TRUE(llvm::any_of(Map.Anchors,
+                             [&](const auto &Anchor) {
+                               return Anchor.Span.Begin <= Offset &&
+                                      Offset < Anchor.Span.End;
+                             }))
+        << "inner_finally( at " << At << "\n"
+        << Function;
+  }
+  EXPECT_NE(Calls, 0u) << Function;
 }
 
 } // namespace

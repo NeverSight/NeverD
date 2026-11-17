@@ -3183,10 +3183,10 @@ TEST(InstructionFlow, UnsizedReferenceTraversalReachesThePhysicalEnd) {
   Image.Segments.push_back(std::move(Data));
   neverd::sdk::FuncInfo Function{};
   Function.Entry = 0x1000;
-  const auto Page = neverd::sdk::functionPage(
+  const auto Page = neverd::sdk::SessionTestAccess::functionPage(
       llvm::ArrayRef<neverd::sdk::FuncInfo>(Function), 0, 1);
   size_t Instructions = 0, Reads = 0;
-  ASSERT_TRUE(neverd::sdk::decodeFunctionReferences(
+  ASSERT_TRUE(neverd::sdk::SessionTestAccess::decodeFunctionReferences(
       Image, Page,
       [&](size_t, neverd::va_t Address, llvm::StringRef,
           const neverd::sdk::InstructionFlow &Flow, unsigned,
@@ -6271,7 +6271,8 @@ TEST_F(SessionCAPITest, IdentifyListsWhatLoadingReads) {
   EXPECT_EQ(text(Rows[0]), "ELF64 for MIPS (Executable)");
   EXPECT_FALSE(loadable(Rows[0]));
   const auto Reason = Rows[0].getString("reason").value_or("");
-  EXPECT_TRUE(Reason.starts_with("elf: MIPS requires matching ELF"));
+  EXPECT_TRUE(Reason.starts_with("elf: MIPS requires matching ELF"))
+      << Reason.str();
   EXPECT_EQ(neverd_session_load(Session, MipsPath.c_str()), 0);
   const std::string LoadError = takeString(neverd_last_error(Session));
   EXPECT_EQ(llvm::StringRef(LoadError).rtrim(), Reason);
@@ -7423,6 +7424,83 @@ TEST_F(SessionCAPITest, NamesReadAheadLeaveNameChecksAsTheyRead) {
   EXPECT_EQ(answer(Session, named("main")).rfind("0 ", 0), 0u);
   neverd_session_destroy(Plain);
   EXPECT_EQ(neverd_names_prepare(nullptr), 0);
+}
+
+TEST_F(SessionCAPITest, LocalTypePagesKeepQueryChangesIndependent) {
+  const auto Input = write("type-pages.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1);
+  auto Declared = llvm::json::parse(takeString(neverd_local_types_declare(
+      Session,
+      "struct Zulu { char Tag; }; struct Alpha { int Value; }; "
+      "struct Middle { long long Value; };",
+      nullptr)));
+  ASSERT_TRUE(static_cast<bool>(Declared));
+  ASSERT_TRUE(Declared->getAsObject());
+  ASSERT_TRUE(Declared->getAsObject()->getArray("problems"));
+  ASSERT_TRUE(Declared->getAsObject()->getArray("problems")->empty());
+
+  const auto page = [&](const char *Query) {
+    auto Parsed =
+        llvm::json::parse(takeString(neverd_local_types_json(Session, Query)));
+    EXPECT_TRUE(static_cast<bool>(Parsed))
+        << takeString(neverd_last_error(Session));
+    return Parsed && Parsed->getAsObject() ? *Parsed->getAsObject()
+                                           : llvm::json::Object();
+  };
+  struct QueryCase {
+    const char *Query;
+    std::vector<std::string> Names;
+    int64_t Total, Offset, Next;
+  };
+  const QueryCase Cases[] = {
+      {R"({"origin":"user","limit":2})", {"Zulu", "Alpha"}, 3, 0, 2},
+      {R"({"origin":"user","limit":2,"offset":2})", {"Middle"}, 3, 2, 3},
+      {R"({"origin":"user","limit":2,"sort":"name","descending":true})",
+       {"Zulu", "Middle"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"sort":"name"})",
+       {"Alpha", "Middle"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"sort":"size"})",
+       {"Zulu", "Alpha"},
+       3,
+       0,
+       2},
+      {R"({"origin":"user","limit":2,"filter":"alp"})", {"Alpha"}, 1, 0, 1},
+      {R"({"origin":"user","limit":2,"filter":"MID"})", {"Middle"}, 1, 0, 1},
+      {R"({"origin":"pdb","limit":2})", {}, 0, 0, 0},
+      {R"({"origin":"user","limit":2})", {"Zulu", "Alpha"}, 3, 0, 2},
+  };
+  std::vector<llvm::json::Value> Expected;
+  for (const QueryCase &Case : Cases) {
+    SCOPED_TRACE(Case.Query);
+    auto Page = page(Case.Query);
+    ASSERT_TRUE(Page.getArray("types"));
+    std::vector<std::string> Names;
+    for (const auto &Row : *Page.getArray("types")) {
+      ASSERT_TRUE(Row.getAsObject());
+      ASSERT_TRUE(Row.getAsObject()->getString("name"));
+      Names.push_back(Row.getAsObject()->getString("name")->str());
+    }
+    EXPECT_EQ(Names, Case.Names);
+    EXPECT_EQ(Page.getInteger("total"), Case.Total);
+    EXPECT_EQ(Page.getInteger("offset"), Case.Offset);
+    EXPECT_EQ(Page.getInteger("next_offset"), Case.Next);
+    ASSERT_TRUE(Page.getObject("stats"));
+    ASSERT_TRUE(Page.getObject("stats")->getObject("origins"));
+    EXPECT_EQ(Page.getObject("stats")->getObject("origins")->getInteger("user"),
+              3);
+    Expected.emplace_back(std::move(Page));
+  }
+  EXPECT_EQ(Expected.front(), Expected.back());
+  for (size_t I = Expected.size(); I > 0; --I) {
+    SCOPED_TRACE(Cases[I - 1].Query);
+    EXPECT_EQ(llvm::json::Value(page(Cases[I - 1].Query)), Expected[I - 1]);
+  }
 }
 
 TEST_F(SessionCAPITest, LocalTypePagesAndRenderersRefreshAfterEdits) {
@@ -9811,9 +9889,10 @@ TEST_F(SessionCAPITest, DarwinCallsPassWhatLibSystemDeclares) {
       {"_SetFlags", "fcntl(arg0, 4, arg1)", "fcntl(arg0, 4, arg1)"},
       {"_Request", "ioctl(arg0, arg1, arg2)", "ioctl(arg0, arg1, "},
       // Named pointer parameters retain the header's character type even
-      // though the variadic tail follows Apple's stack convention.
+      // though the variadic tail follows Apple's stack convention. LLVMC
+      // projects openat's mode to the bounded int variadic carrier.
       {"_OpenAt", "openat(arg0, (char*)(uintptr_t)arg1, 0x201, arg2)",
-       "0x201, arg2)"},
+       "0x201, (int32_t)(uintptr_t)(arg2))"},
       // Preserve the recovered wide carrier in the untyped variadic tail.
       {"_Shared", "shm_open((char*)(uintptr_t)arg0, 0x202, (uint64_t)0x180)",
        "0x202, 0x180)"},
@@ -12627,7 +12706,7 @@ TEST_F(SessionCAPITest, PEAnalysisCacheRetiresOnlyWhenHandlersGrowMetadata) {
   ASSERT_NE(Facts, nullptr);
   const auto Source = takeString(neverd_decompile(Session, Entries[0]));
   ASSERT_FALSE(Source.empty()) << takeString(neverd_last_error(Session));
-  (void)State.referenceImageIndex();
+  (void)neverd::sdk::SessionTestAccess::referenceImageIndex(State);
   const auto ReferenceFacts = State.ReferenceImage;
   ASSERT_EQ(neverd_prepare_function(Session, Entries[1]), 1);
   EXPECT_EQ(neverd::PipelineTestPeer::analysisFacts(State.AnalysisCache),

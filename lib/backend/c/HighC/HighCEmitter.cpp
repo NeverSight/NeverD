@@ -18,6 +18,7 @@
 #include "../../../loader/Swift/SwiftErrorRuntime.h"
 #include "../../AArch64ImmediateMemoryBase.h"
 #include "../LibraryPrototype.h"
+#include "../NativeIntegerTypes.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
 #include "../render/MIPS/MIPSScalar.h"
@@ -663,8 +664,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   // x86 values and checked aggregate-call result bridges use scalar carriers.
   const bool ProjectsScalarWideIntegers =
       Opts.TheArch == Arch::X86 || Opts.TheArch == Arch::X64;
-  // C compilers provide __int128 on targets with 64-bit pointers only.
-  const bool TargetHasInt128 = pointerBytes(Opts.TheArch) >= sizeof(uint64_t);
+  const bool TargetHasInt128 = cTargetHasInt128(Opts.TheArch);
   auto CollectWideType = [&](const TypeRef &Type, bool ScalarResult = false) {
     if (const unsigned Bytes = partialIntegerBytes(Type))
       PartialIntegerBytes.emplace(typeToC(Type), Bytes);
@@ -840,11 +840,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     E.forEachChildExpr([&](const ExprPtr &Child) { Visit(*Child); });
   };
 
+  auto Aliases = std::make_shared<
+      std::unordered_map<const HighFunc *, std::map<std::string, int64_t>>>();
   for (const HighFunc &Func : Funcs) {
     CurrentFunc = &Func;
     // Shared expressions can have different memory spellings in each body.
     Seen.clear();
     collectNamedFrameSlots(Func);
+    // What this definition's analysis passes read before it collects its
+    // slots again (writeFunctionProjection).
+    if (!FrameAliases.empty())
+      Aliases->emplace(&Func, FrameAliases);
     CollectWideType(Func.ReturnType);
     for (const HighParam &Param : Func.Params)
       CollectWideType(Param.Type);
@@ -901,6 +907,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   CurrentFunc = nullptr;
   FrameSlots.clear();
   FrameSlotOffsetsByName.emplace();
+  DeclaredFrameAliases = std::move(Aliases);
 
   MemoryTypes = std::move(Names);
 }
@@ -1886,6 +1893,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     c_float::writeContractionPolicy(OS);
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
+  if (isMIPS(Opts.TheArch))
+    OS << mips::BitCastCPrelude;
   if (Opts.TheArch == Arch::AArch64 && NeedsAArch64RawCall)
     OS << kAArch64PAuthCRawCallHeader;
   if (NeedsAArch64ResultStorageCall)

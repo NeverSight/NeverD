@@ -25,9 +25,14 @@ MIPS_SOURCE_TEXT(
     "#define NEVERD_MICROMIPS __attribute__((micromips,nomips16))\n"
     "#else\n"
     "#define NEVERD_MICROMIPS __attribute__((micromips))\n"
-    // GCC supplies the microMIPS64 C backend, but its C frontend lacks
-    // bit_cast. Preserve raw bits and single evaluation in that frontend.
-    "#if !__has_builtin(__builtin_bit_cast)\n"
+    "#endif\n\n")
+// GCC also compiles classic functions participating in mixed-mode calls.
+// Preserve raw bits and single evaluation independently of instruction mode.
+MIPS_SOURCE_TEXT(BitCastCallPrefix, "__builtin_bit_cast(")
+MIPS_SOURCE_TEXT(
+    BitCastCPrelude,
+    "#if defined(__GNUC__) && !defined(__clang__) && "
+    "!__has_builtin(__builtin_bit_cast)\n"
     "#define __builtin_bit_cast(T, V) __extension__ ({ \\\n"
     "    __auto_type __neverd_bit_cast_source = (V); \\\n"
     "    T __neverd_bit_cast_result; \\\n"
@@ -36,7 +41,6 @@ MIPS_SOURCE_TEXT(
     "    __builtin_memcpy(&__neverd_bit_cast_result, "
     "&__neverd_bit_cast_source, sizeof(T)); \\\n"
     "    __neverd_bit_cast_result; })\n"
-    "#endif\n"
     "#endif\n\n")
 #undef MIPS_SOURCE_TEXT
 #endif

@@ -18,6 +18,7 @@
 #include "../FloatConversion.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
+#include "../NativeIntegerTypes.h"
 #include "../StdcallImportPops.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
@@ -114,6 +115,7 @@
 #include "llvm/Transforms/Scalar/InstSimplifyPass.h"
 #include "llvm/Transforms/Scalar/ScalarizeMaskedMemIntrin.h"
 #include "llvm/Transforms/Scalar/Scalarizer.h"
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
@@ -585,10 +587,16 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     OS.retarget(&RecordsOS);
     writeRecordDefinitions(Rest);
   }
+  // The bodies already exist here. Pure integer requests need no GCC bit
+  // copy helper; keep their cached source payload as small as before.
+  if (isMIPS(Opts.TheArch) &&
+      (llvm::StringRef(Rest).contains(mips::BitCastCallPrefix) ||
+       llvm::StringRef(Records).contains(mips::BitCastCallPrefix)))
+    OS << mips::BitCastCPrelude;
   // A 16-byte integer spelled by its type, as a frame record's member is, is
-  // `__int128`, which a 32-bit target's compiler lacks: there it is the C23
-  // type of that width, as in HighC.
-  if (getTargetRegInfo(Opts.TheArch).PointerSize < 8 &&
+  // `__int128`. Targets without that compiler type use C23 _BitInt, as in
+  // HighC. Pointer width alone cannot distinguish n32 from a 32-bit ISA.
+  if (!cTargetHasInt128(Opts.TheArch) &&
       (spellsInt128Keyword(Records) || spellsInt128Keyword(Rest)))
     OS << "#define __int128 _BitInt(128)\n\n";
   OS << Records << Rest;
@@ -3210,6 +3218,65 @@ static bool isCVectorBoundaryType(llvm::Type *Type) {
   return isCIntegerVectorType(Type) || !containsVectorType(Type);
 }
 
+namespace {
+/// A vector an invoke returns, read for now through a stand-in call.
+struct ParkedInvokeResult {
+  llvm::CallInst *StandIn;
+  llvm::InvokeInst *Invoke;
+};
+} // namespace
+
+/// LLVM's scalarizer writes the lanes of a vector value right after the
+/// instruction that defines it, which for an invoke is past the end of its
+/// block.  Until the pass has run, every user of a vector an invoke returns
+/// reads a stand-in call at the start of the invoke's normal destination
+/// instead: in a block of its own when that destination is entered from
+/// elsewhere too or merges the value in a PHI.  The invoke itself stays the
+/// call the function makes.
+static std::vector<ParkedInvokeResult>
+parkVectorInvokeResults(llvm::Module &Module) {
+  std::vector<llvm::InvokeInst *> Invokes;
+  for (llvm::Function &Function : Module)
+    for (llvm::BasicBlock &Block : Function)
+      if (auto *Invoke =
+              llvm::dyn_cast<llvm::InvokeInst>(Block.getTerminator());
+          Invoke && Invoke->getType()->isVectorTy() && !Invoke->use_empty())
+        Invokes.push_back(Invoke);
+  std::vector<ParkedInvokeResult> Parked;
+  for (llvm::InvokeInst *Invoke : Invokes) {
+    llvm::BasicBlock *Home = Invoke->getNormalDest();
+    if (!Home->getSinglePredecessor() ||
+        llvm::isa<llvm::PHINode>(Home->front()))
+      Home = llvm::SplitEdge(Invoke->getParent(), Home);
+    if (!Home)
+      throw std::runtime_error(
+          "C projection cannot place the lanes of a vector an invoke returns");
+    auto *Carrier = llvm::Function::Create(
+        llvm::FunctionType::get(Invoke->getType(), false),
+        llvm::GlobalValue::ExternalLinkage, "neverd.invoke.result", Module);
+    auto *StandIn =
+        llvm::CallInst::Create(Carrier, "", Home->getFirstInsertionPt());
+    // The users move and the invoke stays: a source observation of the call
+    // must not follow them, as it would follow a replaced value.
+    for (llvm::Use &Use : llvm::make_early_inc_range(Invoke->uses()))
+      Use.set(StandIn);
+    Parked.push_back({StandIn, Invoke});
+  }
+  return Parked;
+}
+
+static void
+restoreVectorInvokeResults(std::vector<ParkedInvokeResult> &Parked) {
+  for (const auto &[StandIn, Invoke] : Parked) {
+    llvm::Function *Carrier = StandIn->getCalledFunction();
+    for (llvm::Use &Use : llvm::make_early_inc_range(StandIn->uses()))
+      Use.set(Invoke);
+    StandIn->eraseFromParent();
+    Carrier->eraseFromParent();
+  }
+  Parked.clear();
+}
+
 static bool isCVectorBoundarySignature(const llvm::FunctionType *Type) {
   return isCVectorBoundaryType(Type->getReturnType()) &&
          llvm::all_of(Type->params(), isCVectorBoundaryType);
@@ -3615,6 +3682,9 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
   llvm::ModulePassManager Pipeline;
   Pipeline.addPass(
       llvm::createModuleToFunctionPassAdaptor(std::move(Normalize)));
+  std::vector<ParkedInvokeResult> ParkedInvokeResults;
+  if (HasVectors)
+    ParkedInvokeResults = parkVectorInvokeResults(*Projection);
   Pipeline.run(*Projection, Modules);
   if (HasVectors) {
     // Lane-width-changing vector casts create new scalar/vector bitcasts in
@@ -3623,6 +3693,7 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
     lowerPackedVectorBitcasts(*Projection);
     Modules.invalidate(*Projection, llvm::PreservedAnalyses::none());
     Pipeline.run(*Projection, Modules);
+    restoreVectorInvokeResults(ParkedInvokeResults);
   }
   // DCE can retire every consumer of an architectural EFLAGS snapshot while
   // retaining its side-effecting inline-asm carrier. Drop only the exact
@@ -3732,7 +3803,8 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
         continue;
       const auto Function = Sources->Functions.find(Observation.Function);
       if (Function == Sources->Functions.end() ||
-          Function->second != Instruction->getFunction())
+          static_cast<llvm::Value *>(Function->second) !=
+              Instruction->getFunction())
         continue;
       const auto [At, Added] = SourceAddresses.try_emplace(
           Instruction, Observation.Occurrence.Address);
