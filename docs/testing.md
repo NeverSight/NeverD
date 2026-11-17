@@ -26170,3 +26170,7 @@ checks the matching local declarations and anonymous/nested union boundary.
 Run those owners plus `NeverDTypesTests` and the source-call owners when
 changing the complete-value metadata path. These tests qualify classification
 and type evidence; they do not establish general record source reconstruction.
+`MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass` keeps
+an unbound v0/v1 result in its recovered representation when debug information
+describes an equally sized f0/f2 record. Run it for n32/n64 in both byte orders;
+complete field metadata alone cannot replace a source entry ABI contract.
