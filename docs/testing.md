@@ -6289,6 +6289,10 @@ classification never publishes stale operands. Tests cover failed attempts,
 reset/reinitialization, reconstructed decoder objects, altered records, direct
 missing-detail calls and copied MOVPRFX records with a changed follower.
 Deep snapshots remain usable across decoder replacement; shallow copies expire.
+Switching a reused output from AArch64 to either byte order of MIPS32 or MIPS64
+clears its occurrence evidence on both successful and truncated decodes. The
+native-fast entry retains the same invalidation and fallback contract when
+its architecture-specific work is dispatched directly.
 Refused attempts clear prior undefined-output and preserved-state evidence,
 including real x64 certificates retained across an architecture change.
 Operand queries reject a mismatched requested architecture for both owned

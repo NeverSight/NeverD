@@ -412,13 +412,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
 
 int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                               DecodedInsn &Out) {
-  if (AArch64) {
-    if (!beginDecode(Out))
-      return 0;
-    if (const int Size = decodeAArch64ForLift(Bytes, Len, Addr, Out))
-      return Size;
-  }
-  return decodeOne(Bytes, Len, Addr, Out);
+  return AArch64 ? decodeAArch64ForLift(Bytes, Len, Addr, Out)
+                 : decodeOne(Bytes, Len, Addr, Out);
 }
 
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,

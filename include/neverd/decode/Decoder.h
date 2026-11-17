@@ -366,7 +366,7 @@ private:
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
-  /// Use the AArch64 native decoder, returning zero when it declines.
+  /// Decode AArch64 with its native path and full Capstone fallback.
   int decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                            DecodedInsn &Out);
 

@@ -278,20 +278,23 @@ TEST(AArch64DecodeOccurrence, SwitchingToMIPSClearsReusedOutputEvidence) {
   writeLE<uint32_t>(Pair.data() + kWordBytes, kFollower);
   const std::array<uint8_t, kWordBytes> MIPSNop{};
   for (Route Path : Routes)
-    for (const unsigned Size : {kWordBytes, kWordBytes / 2}) {
-      Decoder D;
-      ASSERT_TRUE(D.init(Arch::AArch64));
-      DecodedInsn I;
-      ASSERT_EQ(decode(D, Route::Full, Pair.data(), Pair.size(), kEntry, I),
-                kWordBytes);
-      ASSERT_TRUE(I.AArch64Prefix);
-      ASSERT_TRUE(I.AArch64Occurrence);
-      ASSERT_TRUE(D.init(Arch::MIPS32));
-      EXPECT_EQ(decode(D, Path, MIPSNop.data(), Size, kEntry, I),
-                Size == kWordBytes ? kWordBytes : 0);
-      EXPECT_FALSE(I.AArch64Prefix);
-      EXPECT_FALSE(I.AArch64Occurrence);
-    }
+    for (Arch Target :
+         {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+      for (const unsigned Size : {kWordBytes, kWordBytes / 2}) {
+        SCOPED_TRACE(static_cast<unsigned>(Target));
+        Decoder D;
+        ASSERT_TRUE(D.init(Arch::AArch64));
+        DecodedInsn I;
+        ASSERT_EQ(decode(D, Route::Full, Pair.data(), Pair.size(), kEntry, I),
+                  kWordBytes);
+        ASSERT_TRUE(I.AArch64Prefix);
+        ASSERT_TRUE(I.AArch64Occurrence);
+        ASSERT_TRUE(D.init(Target));
+        EXPECT_EQ(decode(D, Path, MIPSNop.data(), Size, kEntry, I),
+                  Size == kWordBytes ? kWordBytes : 0);
+        EXPECT_FALSE(I.AArch64Prefix);
+        EXPECT_FALSE(I.AArch64Occurrence);
+      }
 }
 
 TEST(AArch64DecodeOccurrence, OnlyOwnedSnapshotsSurviveDecoderReplacement) {
