@@ -947,14 +947,21 @@ TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
           Target, BinaryFormat::ELF, NdType::makeVoid(), {Pointer});
       ASSERT_TRUE(Signature);
       const std::map<va_t, FloatingCallArguments> Calls{{0x10200, *Signature}};
-      for (bool Declared : {false, true}) {
-        SCOPED_TRACE(Declared);
+      // The converter consumes complete summaries; merely supplying the
+      // image does not derive the empty callee's argument extent. Exercise
+      // an unbounded native call, its known zero-argument contract, and a
+      // complete pointer declaration separately.
+      const std::map<va_t, int> Counts{{0x10200, 0}};
+      for (unsigned Contract = 0; Contract != 3; ++Contract) {
+        SCOPED_TRACE(Contract);
         LowToMedConverter Convert;
         Convert.setBinaryImage(&*Image);
-        if (Declared)
+        if (Contract == 1)
+          Convert.setCallEntryArgumentCounts(&Counts);
+        else if (Contract == 2)
           Convert.setCallEntryFloatingArguments(&Calls);
-        if (Variant == 0 || Variant == 1 || Variant == 8 ||
-            (Variant == 11 && !Declared))
+        if (Contract && (Variant == 0 || Variant == 1 || Variant == 8 ||
+                         (Variant == 11 && Contract == 1)))
           EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
         else
           EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
