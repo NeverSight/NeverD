@@ -1320,6 +1320,22 @@ handler ends). The output gate refuses that role by name: its rule for a
 protected call is the innermost source scope at the call's address, which is
 the scope such a call has just left, and no execution has yet shown that the
 rewritten table gives the call the scopes the runtime gave it.
+The gate also refuses a function whose termination handler or filter uses
+the EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The pad
+passes a termination handler `llvm.localaddress()` and the runtime passes a
+filter the frame of the function the code generator wrote; a callback lifted
+from the image reads its parent's locals at the offsets the original frame
+gave them, where that frame holds something else, and such a rewrite ran and
+read the wrong bytes. A helper a compiler outlined reads them through
+`llvm.localrecover`, after `llvm.eh.recoverfp` in a filter, which that frame
+is for, and stays accepted. Keeping the argument in a home (an alloca only
+loads and stores name, as a lifted register is) or in the callback's own
+frame is no use of it until a load reads it back into one, or the frame's
+address leaves the callback; a callback whose body the module does not hold
+may do anything. The lifted parent does keep its original frame (the `frame`
+alloca and `rsp_init`), and a local unwind's handler calls in its body already
+pass the frame's address there; an output form that passes a pad's callback
+that address as well does not exist yet.
 A termination handler that leaves its `__finally` by a jump is the other
 side of a local unwind: it calls the runtime with a block of its parent to
 resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block
