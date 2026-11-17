@@ -376,7 +376,7 @@ private:
 
   /// Publish complete operand detail and any available MOVPRFX follower.
   void recordAArch64Decode(const uint8_t *Bytes, size_t Len, DecodedInsn &Out,
-                           bool HasOperandDetail) const;
+                           bool HasOperandDetail, bool HasRegisterAccess) const;
 
   /// Check raw identity without requiring operand detail for classification.
   bool hasAArch64DecodeOccurrence(const DecodedInsn &Insn) const;

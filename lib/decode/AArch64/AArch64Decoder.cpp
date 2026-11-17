@@ -41,8 +41,8 @@ bool Decoder::advanceAArch64DecodeGeneration() {
 }
 
 void Decoder::recordAArch64Decode(const uint8_t *Bytes, size_t Len,
-                                  DecodedInsn &Out,
-                                  bool HasOperandDetail) const {
+                                  DecodedInsn &Out, bool HasOperandDetail,
+                                  bool HasRegisterAccess) const {
   using namespace aarch64_sve;
   Out.AArch64Prefix.reset();
   Out.AArch64Occurrence.reset();
@@ -50,13 +50,14 @@ void Decoder::recordAArch64Decode(const uint8_t *Bytes, size_t Len,
   // Native decoding, however, supplies complete operands even without text.
   if (!Out.Raw || Out.Size != sizeof(uint32_t) || Len < sizeof(uint32_t))
     return;
-  Out.AArch64Occurrence =
-      AArch64DecodeOccurrence{Out.Raw,
-                              Out.Raw->detail,
-                              AArch64DecodeIdentity,
-                              AArch64DecodeGeneration,
-                              readLE<uint32_t>(Bytes),
-                              HasOperandDetail && Out.Raw->detail};
+  Out.AArch64Occurrence = AArch64DecodeOccurrence{
+      Out.Raw,
+      Out.Raw->detail,
+      AArch64DecodeIdentity,
+      AArch64DecodeGeneration,
+      readLE<uint32_t>(Bytes),
+      HasOperandDetail && Out.Raw->detail,
+      HasOperandDetail && Out.Raw->detail && HasRegisterAccess};
   if (Out.AArch64Occurrence->HasOperandDetail &&
       Out.Id == AARCH64_INS_MOVPRFX && Len >= kPrefixPairBytes)
     Out.AArch64Prefix =
@@ -119,7 +120,7 @@ int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       Out.Size = static_cast<uint16_t>(InsnBuf->size);
       Out.Id = InsnBuf->id;
       Out.Raw = InsnBuf;
-      recordAArch64Decode(Bytes, Len, Out, true);
+      recordAArch64Decode(Bytes, Len, Out, true, false);
       return Out.Size;
     }
   }

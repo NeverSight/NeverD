@@ -19,6 +19,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 using namespace neverd;
@@ -516,6 +517,47 @@ TEST(AArch64DecodeOccurrence, OperandQueriesKeepTheOccurrenceArchitecture) {
         EXPECT_TRUE(Missing.Immediates.empty());
         EXPECT_TRUE(Missing.Registers.empty());
       }
+  }
+}
+
+TEST(AArch64DecodeOccurrence, NativeRegisterQueriesDoNotReadStaleAccessCounts) {
+  const auto Registers = [](const NativeOperands &Operands) {
+    std::vector<std::tuple<std::string, bool, bool>> Result;
+    for (const auto &Register : Operands.Registers)
+      Result.emplace_back(Register.Name, Register.Read, Register.Write);
+    return Result;
+  };
+  Decoder Reference, Fast;
+  ASSERT_TRUE(Reference.init(Arch::AArch64));
+  ASSERT_TRUE(Fast.init(Arch::AArch64));
+  for (const auto &Case : Cases) {
+    SCOPED_TRACE(Case.Name);
+    DecodedInsn Full, Previous, Native;
+    ASSERT_EQ(decode(Reference, Route::Full, Case.Word, Full), kWordBytes);
+    const auto Expected =
+        Registers(describeNativeOperands(Reference, Full, Arch::AArch64));
+    // BL leaves an implicit LR write. Native operand decoding does not fill
+    // Capstone's implicit register counts or per-operand access flags.
+    ASSERT_EQ(decode(Fast, Route::Full, kCall, Previous), kWordBytes);
+    ASSERT_EQ(decode(Fast, Route::Fast, Case.Word, Native), kWordBytes);
+    OwnedInsn Owned(Native);
+    if (!Native.Raw->mnemonic[0]) {
+      // The iterator's detail allocation is initially uninitialized. Even
+      // counts exceeding cs_regs capacity must remain unread on this path.
+      Owned.Detail.regs_read_count = UINT8_MAX;
+      Owned.Detail.regs_read[0] = AARCH64_REG_X19;
+      Owned.Detail.regs_write_count = UINT8_MAX;
+      Owned.Detail.regs_write[0] = AARCH64_REG_X20;
+    }
+    for (const auto &Instruction : {Native, Owned.Instruction}) {
+      EXPECT_TRUE(
+          describeNativeOperands(Fast, Instruction, Arch::AArch64, false)
+              .Registers.empty());
+      EXPECT_EQ(
+          Registers(describeNativeOperands(Fast, Instruction, Arch::AArch64)),
+          Expected);
+      EXPECT_TRUE(Fast.hasAArch64OperandDetail(Native));
+    }
   }
 }
 

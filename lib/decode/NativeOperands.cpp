@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -55,6 +56,19 @@ NativeOperands describeNativeOperands(const Decoder &D, const DecodedInsn &I,
     break;
   default:
     break;
+  }
+  if (IncludeRegisters && A == Arch::AArch64 &&
+      !I.AArch64Occurrence->HasRegisterAccess) {
+    // The fast lifter needs operand values, not Capstone's complete access
+    // metadata. Decode that metadata only when queried, without changing the
+    // caller's reusable buffer, generation, text setting or owned snapshot.
+    Decoder Reference;
+    DecodedInsn Complete;
+    if (!Reference.init(Arch::AArch64) ||
+        Reference.decodeOne(I.Raw->bytes, I.Size, I.Addr, Complete) != I.Size)
+      throw std::runtime_error(aarch64_decode::kRegisterAccessUnavailable);
+    Result.Registers = describeNativeOperands(Reference, Complete, A).Registers;
+    return Result;
   }
   cs_regs Reads{}, Writes{};
   uint8_t ReadCount = 0, WriteCount = 0;
