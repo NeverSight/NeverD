@@ -288,6 +288,24 @@ SAVED_TEXT(kDriverBody, R"c(
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef TEST_PAUTH_LR
+#include "neverd/runtime/DarwinArm64eSignalCursor.h"
+#include <signal.h>
+#include <unistd.h>
+static void unavailablePAuthLR(int Signal) {
+  (void)Signal;
+  _exit(2);
+}
+static int probePAuthLR(void) {
+  if (signal(SIGILL, unavailablePAuthLR) == SIG_ERR)
+    return 1;
+  uintptr_t PC =
+      (uintptr_t)ptrauth_strip(&probePAuthLR, ptrauth_key_function_pointer);
+  volatile uintptr_t Signed = ndDarwinArm64eSignExplicitIB(PC, PC, PC);
+  (void)Signed;
+  return 0;
+}
+#endif
 #ifdef TEST_SIGNAL
 #include "neverd/runtime/DarwinArm64eSystemUnwind.h"
 #include <pthread.h>
@@ -317,10 +335,15 @@ static pthread_t Worker;
 static volatile sig_atomic_t Handled;
 static int SystemUnwind;
 static const uint64_t *ExpectedRegisters;
+#ifdef TEST_PAUTH_LR
+static const bool HasPAuthLR = true;
+#else
+static const bool HasPAuthLR = false;
+#endif
 
 // Seed a fresh public system cursor from a genuine interrupted register set.
-// Its unwind step consumes only the published image's registered DWARF. The
-// independently supplied caller values catch shifted slots or a wrong SP.
+// Its unwind step consumes only the image's compact or registered DWARF rows.
+// Independently supplied caller values catch shifted slots or a wrong SP.
 static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) {
   unw_context_t Capture;
   unw_cursor_t Cursor;
@@ -344,12 +367,16 @@ static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) 
   void *PC = ptrauth_sign_unauthenticated((void *)Interrupted.PC,
                                           ptrauth_key_return_address,
                                           Interrupted.SP);
+  uintptr_t Return = Interrupted.LR;
+  if (Plan->Frame.SavedLR &&
+      !ndDarwinArm64eStackSlot(CFA, Plan->Frame.LROffset, Low, High, &Return))
+    return 0;
   unw_word_t Value;
   if (unw_set_reg(&Cursor, UNW_REG_IP, (uintptr_t)PC) ||
       unw_step(&Cursor) <= 0 || unw_get_reg(&Cursor, UNW_REG_SP, &Value) ||
       Value != CFA || unw_get_reg(&Cursor, UNW_REG_IP, &Value) ||
       (uintptr_t)ptrauth_strip((void *)Value, ptrauth_key_return_address) !=
-          (uintptr_t)ptrauth_strip((void *)Interrupted.LR,
+          (uintptr_t)ptrauth_strip((void *)Return,
                                          ptrauth_key_return_address))
     return 0;
   for (unsigned I = 0; I < GPRCount; ++I)
@@ -369,17 +396,18 @@ static int checkSystemFrame(const ucontext_t *Context, const struct Plan *Plan) 
 
 static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
   intptr_t Delta;
-  unsigned FromFP, SavedFP, SavedLR, LowMask, HighMask;
-  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %u %u %td %td %td %zu %u %u",
+  unsigned FromFP, SavedFP, SavedLR, LowMask, HighMask, Signing;
+  if (fscanf(File, "%" SCNdPTR " %" SCNuPTR " %" SCNuPTR " %u %u %u %td %td %td %zu %u %u %u %" SCNuPTR,
              &Delta, &Plan->Begin, &Plan->End, &FromFP, &SavedFP, &SavedLR,
              &Plan->Frame.CFAOffset,
              &Plan->Frame.FPOffset, &Plan->Frame.LROffset, &Plan->Count,
-             &LowMask, &HighMask) != 12 || Plan->Count > GPRCount)
+             &LowMask, &HighMask, &Signing, &Plan->Frame.SigningPC) != 14 ||
+      Plan->Count > GPRCount)
     return 0;
   Plan->Frame.CFAFromFP = FromFP;
   Plan->Frame.SavedFP = SavedFP;
   Plan->Frame.SavedLR = SavedLR;
-  Plan->Frame.Signing = NDArm64eSignedIBWithCFA;
+  Plan->Frame.Signing = (NDDarwinArm64eSigning)Signing;
   Plan->Vectors.Complete = true;
   Plan->Vectors.LowMask = LowMask;
   Plan->Vectors.HighMask = HighMask;
@@ -393,6 +421,8 @@ static int readPlan(FILE *File, Entry Run, struct Plan *Plan) {
       return 0;
   uintptr_t Owner =
       (uintptr_t)ptrauth_strip(Run, ptrauth_key_function_pointer) + Delta;
+  if (Plan->Frame.Signing == NDArm64eSignedIBWithCFAPC)
+    Plan->Frame.SigningPC += Owner;
   Plan->Begin += Owner;
   Plan->End += Owner;
   return 1;
@@ -409,7 +439,7 @@ static void observe(int Signal, siginfo_t *Info, void *Data) {
   if (Signal != SIGUSR1 || PC < Plan->Begin || PC >= Plan->End ||
       !ndDarwinArm64eResumeSignalCaller(
           Context, Plan->Frame, Plan->Saved, Plan->Count, &Plan->Vectors,
-          Low, High, false))
+          Low, High, HasPAuthLR))
     _exit(10);
   Context->uc_mcontext->__ss.__x[0] = Returned;
   Handled = 1;
@@ -426,6 +456,10 @@ static void *deliver(void *Unused) {
 #endif
 
 int main(int Argc, char **Argv) {
+#ifdef TEST_PAUTH_LR
+  if (Argc == 2 && !strcmp(Argv[1], "--probe-pauth-lr"))
+    return probePAuthLR();
+#endif
   if (Argc != 4)
     return 1;
   void *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
