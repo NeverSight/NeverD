@@ -2028,18 +2028,27 @@ masks, additional stack allocation and coalescing. They validate NeverD's
 instruction-derived caller resumption; they do not independently qualify the
 system unwinder's frameless saved-pair implementation.
 
-Two PAuth_LR cases independently encode final mode-5 image records and check
+Four PAuth_LR cases independently encode final mode-5 image records and check
 complete publication with zero/nonzero signing-PC offsets, full/sparse saves
 and both PC-relative epilogues. The fixtures write their one validated encoding
-slot in an unsigned structural input after Apple linking: Xcode 27
-canonicalizes the raw nonzero object record to ordinary FP mode. The linker
-word is recorded before fixture construction.
+slot after Apple linking: Xcode 27 canonicalizes the raw nonzero object record to ordinary FP mode. The linker
+word is recorded before fixture construction. Publication leaves that unsigned
+input unchanged. Separate original/published execution copies are ad-hoc signed
+and strictly verified, then reloaded to bind recovered rows and hashes to the
+actual executable files.
 A contradictory ordinary-FP input and removal of the signing CFI must both
 refuse publication.
-They report `structural_pauth_lr_images` and zero native executions: these
-cases do not run PAuth_LR instructions on older CPUs. The updated LLVM fork's
-MC producer is required; the unchanged r6 prebuilt explicitly skips these
-two cases. LLVM MC tests separately check offset limits, fixed fragment
+They report `structural_pauth_lr_images` independently from native execution.
+With `NEVERD_ARM64E_LIFTED_NATIVE=1`, a separate process first probes the
+explicit signing instruction. Supported hosts run original and published
+normal calls, signal-driven caller resumption and public system-unwinder steps;
+unsupported hosts retain zero native counts. Signal plans preserve the signing
+recipe and relocate its PC to the actual loaded owner. System-step comparisons
+read the saved LR when the body has clobbered its live LR. The six classic
+compact signal cases execute this same path without requiring PAuth_LR and
+report `native_system_saved_frame_steps`.
+The updated LLVM fork's MC producer is required; the unchanged r6 prebuilt
+explicitly skips these four cases. LLVM MC tests separately check offset limits, fixed fragment
 boundaries, ordinary-arm64 rejection and DWARF fallback for unrepresentable
 rules. Ordinary relocatable objects retain DWARF for a nonzero signing offset;
 only the provenance-bound final-image writer and explicit native object
@@ -2053,6 +2062,13 @@ PAuth_LR profiles; an unavailable explicit instruction is not counted.
 modifier changes signatures, rather than treating old-CPU PACM hint fallback
 as full PC-signing qualification. See the
 [native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
+`verify_arm64e_native.py qualify-x1` combines the original PAC/language,
+signal-cursor and CPTA probes. It succeeds only when every probe passes and
+all seven required native claims hold, including explicit PAuth_LR, PACM PC
+sensitivity and checked scalar/writeback arithmetic. The aggregate report
+records each component report's path and SHA-256. Exit 2 means unavailable;
+exit 1 means a failed check. Neither outcome qualifies hardware. See the
+[x1 runner setup](arm64e-native-validation.md#native-x1-runner-qualification).
 The same test host separately exercises signed language unwinding. With
 `NEVERD_ARM64E_ASYNC_NATIVE=1`, the signal cleanup cases compare the original
 and published code at O0 and O2, on the ordinary and alternate stacks. They
