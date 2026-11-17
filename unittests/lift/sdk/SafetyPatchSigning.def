@@ -1,0 +1,21 @@
+//===- SafetyPatchSigning.def - Signing fixture arguments -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// SDK_SIGNING_TEXT(Name, Text) defines sanitizer signing fixture arguments.
+///
+//===----------------------------------------------------------------------===//
+
+#ifndef SDK_SIGNING_TEXT
+#define SDK_SIGNING_TEXT(Name, Text)
+#endif
+
+SDK_SIGNING_TEXT(kCodesign, "/usr/bin/codesign")
+SDK_SIGNING_TEXT(kForceSign, "--force")
+SDK_SIGNING_TEXT(kSign, "--sign")
+SDK_SIGNING_TEXT(kAdHocIdentity, "-")
+
+#undef SDK_SIGNING_TEXT

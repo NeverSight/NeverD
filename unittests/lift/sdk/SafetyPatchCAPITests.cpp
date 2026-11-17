@@ -44,6 +44,9 @@
 
 namespace {
 
+#define SDK_SIGNING_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "SafetyPatchSigning.def"
+
 bool hasRuntimeFixtureCompiler() {
   return !llvm::StringRef(NEVERD_RUNTIME_FIXTURE_COMPILER).empty();
 }
@@ -314,10 +317,8 @@ private:
       ArgumentStorage.emplace_back("-c");
 #ifdef __APPLE__
     if (!Relocatable) {
-      // Exercise the only input signature profile accepted for automatic
-      // publication: a linker's identityless signature with no requirements
-      // or special-slot hashes. A later codesign invocation would synthesize
-      // an empty requirements blob and therefore would not be a simple input.
+      // Exercise automatic publication from a linker's identityless
+      // signature, before codesign adds its canonical empty metadata.
       ArgumentStorage.emplace_back("-Wl,-adhoc_codesign");
       if (NeedsSlack)
         ArgumentStorage.emplace_back("-Wl,-no_compact_unwind");
@@ -393,11 +394,21 @@ private:
   bool Active = false;
 };
 
-void expectExactGuardPublish(uint32_t Strategy) {
+void expectExactGuardPublish(uint32_t Strategy, bool CodesignInput = false) {
   REQUIRE_RUNTIME_FIXTURE_COMPILER();
   TemporaryFixture Fixture;
   ASSERT_TRUE(Fixture.valid()) << Fixture.Error;
   ASSERT_TRUE(Fixture.compileRuntimeFixture()) << Fixture.Error;
+
+#ifdef __APPLE__
+  if (CodesignInput) {
+    const std::string Path = Fixture.Input.string();
+    ASSERT_EQ(runProgram({kCodesign, kForceSign, kSign, kAdHocIdentity, Path},
+                         Fixture.Error),
+              0)
+        << Fixture.Error;
+  }
+#endif
 
   SessionGuard Session;
   ASSERT_EQ(neverd_session_load(Session.Value, Fixture.Input.string().c_str()),
@@ -1183,6 +1194,13 @@ TEST(NeverDSafetyPatchCAPI, SectionPublishesOneExactCountedWriteGuard) {
 TEST(NeverDSafetyPatchCAPI, InplacePublishesOneExactCountedWriteGuard) {
   expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_INPLACE);
 }
+
+#ifdef __APPLE__
+TEST(NeverDSafetyPatchCAPI, CodesignAdHocInputPublishesExactGuards) {
+  expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_SECTION, true);
+  expectExactGuardPublish(NEVERD_SANITIZE_STRATEGY_INPLACE, true);
+}
+#endif
 
 TEST(NeverDSafetyPatchCAPI,
      RelocatableObjectFailsTargetGateBeforePipelineOrPublication) {

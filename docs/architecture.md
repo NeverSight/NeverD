@@ -1731,7 +1731,10 @@ entry with a single relative branch. The new function owns its signing prologue;
 the branch does not change LR. Explicit pointer providers are admitted by the
 existing dependency owner. The shared signing transaction passes the input
 CodeDirectory page size explicitly to codesign and retains exact page-size
-validation after reloading. After signing, recipe replay verifies every pointer
+validation after reloading. Its shared signature-policy owner admits both
+bare linker ad-hoc signatures and codesign's authenticated exact empty
+requirements/CMS shape as inputs. Strong or unknown metadata is not discarded;
+the canonical output remains eligible for a later native-object publication. After signing, recipe replay verifies every pointer
 slot and its RELRO contract, while the remaining section bytes must match the
 relocated object exactly. Both staging and publication use the same final
 unwind validator, including exact personality slot and LSDA identities.

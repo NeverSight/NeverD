@@ -779,8 +779,7 @@ TEST(MachOSignaturePolicy, UniversalEligibilityRequiresEveryMatchingSlice) {
   EXPECT_FALSE(canTransactionallyAdHocResign(*DifferentIdentity));
 }
 
-TEST(MachOSignaturePolicy,
-     CanonicalCodesignOutputIsSeparateFromInputResignEligibility) {
+TEST(MachOSignaturePolicy, CanonicalCodesignOutputCanBeResignedAgain) {
   using namespace llvm::MachO;
   llvm::Expected<Profile> Before = inspectBytes(thinMachO(superBlob(
       {{CSSLOT_CODEDIRECTORY,
@@ -792,12 +791,72 @@ TEST(MachOSignaturePolicy,
   ASSERT_TRUE(static_cast<bool>(After)) << llvm::toString(After.takeError());
   ASSERT_EQ(After->Slices.size(), 1u);
   EXPECT_TRUE(After->Slices[0].HasCanonicalCodesignOutputShape);
-  EXPECT_FALSE(canTransactionallyAdHocResign(*After));
+  EXPECT_TRUE(canTransactionallyAdHocResign(*After));
   EXPECT_TRUE(isCanonicalCodesignAdHocOutput(*After));
   llvm::Error Validation =
       validateTransactionallyAdHocResigned(*Before, *After);
   EXPECT_FALSE(static_cast<bool>(Validation))
       << llvm::toString(std::move(Validation));
+  Validation = validateTransactionallyAdHocResigned(*After, *After);
+  EXPECT_FALSE(static_cast<bool>(Validation))
+      << llvm::toString(std::move(Validation));
+}
+
+TEST(MachOSignaturePolicy, CanonicalEmptySlotsDoNotDiscardSigningPolicy) {
+  using namespace llvm::MachO;
+  for (uint32_t Flags :
+       {CS_ADHOC | CS_RUNTIME, CS_ADHOC | CS_GET_TASK_ALLOW,
+        CS_ADHOC | CS_INSTALLER, CS_ADHOC | CS_REQUIRE_LV,
+        CS_ADHOC | CS_ENFORCEMENT, uint32_t(CS_LINKER_SIGNED)}) {
+    SCOPED_TRACE(Flags);
+    auto Slots = canonicalCodesignOutputSlots();
+    writeBE32(Slots.front().Blob, offsetof(CS_CodeDirectory, flags), Flags);
+    auto Result = inspectBytes(thinMachO(superBlob(std::move(Slots))));
+    ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+    ASSERT_TRUE(Result->Slices.front().HasCanonicalCodesignOutputShape);
+    EXPECT_FALSE(canTransactionallyAdHocResign(*Result));
+    EXPECT_FALSE(isCanonicalCodesignAdHocOutput(*Result));
+  }
+
+  auto Slots = canonicalCodesignOutputSlots();
+  writeBE64(Slots.front().Blob, offsetof(CS_CodeDirectory, execSegFlags),
+            CS_EXECSEG_ALLOW_UNSIGNED);
+  auto Result = inspectBytes(thinMachO(superBlob(std::move(Slots))));
+  ASSERT_TRUE(bool(Result)) << llvm::toString(Result.takeError());
+  ASSERT_TRUE(Result->Slices.front().HasCanonicalCodesignOutputShape);
+  EXPECT_FALSE(canTransactionallyAdHocResign(*Result));
+  EXPECT_FALSE(isCanonicalCodesignAdHocOutput(*Result));
+}
+
+TEST(MachOSignaturePolicy, UniversalResigningAdmitsEachKnownAdHocShape) {
+  using namespace llvm::MachO;
+  const auto CanonicalX64 =
+      thinMachO(superBlob(canonicalCodesignOutputSlots()));
+  const auto CanonicalARM =
+      thinMachO(superBlob(canonicalCodesignOutputSlots()), CPU_TYPE_ARM64);
+  auto Canonical = inspectBytes(fatMachO(CanonicalX64, CanonicalARM));
+  ASSERT_TRUE(bool(Canonical)) << llvm::toString(Canonical.takeError());
+  const auto &Identifier = Canonical->Slices.front().Identifier;
+  const auto LinkerSignature =
+      superBlob({{CSSLOT_CODEDIRECTORY,
+                  codeDirectory(CS_ADHOC | CS_LINKER_SIGNED, Identifier)}});
+  const auto LinkerX64 = thinMachO(LinkerSignature);
+  const auto LinkerARM = thinMachO(LinkerSignature, CPU_TYPE_ARM64);
+  for (bool SignedX64 : {false, true}) {
+    for (bool SignedARM : {false, true}) {
+      SCOPED_TRACE(SignedX64);
+      SCOPED_TRACE(SignedARM);
+      auto Before =
+          inspectBytes(fatMachO(SignedX64 ? CanonicalX64 : LinkerX64,
+                                SignedARM ? CanonicalARM : LinkerARM));
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      EXPECT_TRUE(canTransactionallyAdHocResign(*Before));
+      EXPECT_EQ(isCanonicalCodesignAdHocOutput(*Before),
+                SignedX64 && SignedARM);
+      auto Error = validateTransactionallyAdHocResigned(*Before, *Canonical);
+      EXPECT_FALSE(bool(Error)) << llvm::toString(std::move(Error));
+    }
+  }
 }
 
 TEST(MachOSignaturePolicy,
@@ -811,6 +870,7 @@ TEST(MachOSignaturePolicy,
     ASSERT_EQ(Result->Slices.size(), 1u);
     EXPECT_FALSE(Result->Slices[0].HasCanonicalCodesignOutputShape);
     EXPECT_FALSE(isCanonicalCodesignAdHocOutput(*Result));
+    EXPECT_FALSE(canTransactionallyAdHocResign(*Result));
   };
 
   std::vector<Slot> BadRequirementsHash = canonicalCodesignOutputSlots();
@@ -846,6 +906,7 @@ TEST(MachOSignaturePolicy,
     ASSERT_EQ(Result->Slices.size(), 1u);
     EXPECT_FALSE(Result->Slices[0].HasCanonicalCodesignOutputShape);
     EXPECT_FALSE(isCanonicalCodesignAdHocOutput(*Result));
+    EXPECT_FALSE(canTransactionallyAdHocResign(*Result));
   };
 
   std::vector<Slot> WrongRequirementsMagic = canonicalCodesignOutputSlots();
@@ -897,6 +958,7 @@ TEST(MachOSignaturePolicy, CanonicalCodesignOutputForbidsSuperBlobGaps) {
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
   EXPECT_FALSE(Result->Slices[0].HasCanonicalCodesignOutputShape);
   EXPECT_FALSE(isCanonicalCodesignAdHocOutput(*Result));
+  EXPECT_FALSE(canTransactionallyAdHocResign(*Result));
 }
 
 TEST(MachOSignaturePolicy, ResignedArtifactMustPreserveEveryIdentifier) {
