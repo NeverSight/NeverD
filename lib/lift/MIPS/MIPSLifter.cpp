@@ -584,13 +584,6 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
              : liftInteger(S, Code.Word) || liftMemory(S, Code.Word);
 }
 
-void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
-                      std::optional<bool> ForbiddenFollower) const {
-  if (TimedInstructions)
-    return liftHistoricalInstruction(Instruction, Ops, ForbiddenFollower);
-  return liftInstruction<false>(Instruction, Ops, ForbiddenFollower);
-}
-
 // Keep historical retirement emission out of the modern/compressed hot path
 // while sharing the instruction semantics and validation in one implementation.
 template <bool Timed>
@@ -630,6 +623,15 @@ MIPSLifter::liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
   Ops.resize(Begin);
   throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
                             Instruction.op_str);
+}
+
+// Keep this entry below the template definition so its first instantiation
+// sees the inlining attribute.
+void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+                      std::optional<bool> ForbiddenFollower) const {
+  if (TimedInstructions)
+    return liftHistoricalInstruction(Instruction, Ops, ForbiddenFollower);
+  return liftInstruction<false>(Instruction, Ops, ForbiddenFollower);
 }
 
 // The modern entry stays in place instead of adding a second out-of-line
