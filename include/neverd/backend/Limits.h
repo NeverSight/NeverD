@@ -121,6 +121,9 @@ inline constexpr size_t kCTypeFormatStringWindow = 4096;
 // lib/backend/codegen/COFF/COFFExceptionPatch.cpp
 inline constexpr uint32_t kCOFFExceptionPatchMaxGeneratedLanguageRecords =
     1u << 16;
+/// Uses followed from an SEH callback's EstablisherFrame argument; a callback
+/// with more is taken to use its frame.
+inline constexpr size_t kCOFFExceptionPatchMaxCallbackFrameUses = 1u << 16;
 
 // lib/backend/codegen/COFF/COFFPatchObject.cpp
 inline constexpr uint64_t kCOFFPatchObjectMaxStorage = 64 * 1024 * 1024;
