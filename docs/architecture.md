@@ -1580,6 +1580,11 @@ can supply complete detail with text disabled, while the Capstone fallback
 cannot. Every decode attempt, reset and successful reinitialization expires
 borrowed records, including copies at the same PC and word. An owned snapshot
 must copy both the instruction and its detail and retain the occurrence fields.
+Register-access metadata has separate availability: the native lift path fills
+operand values but leaves Capstone's implicit register counts and access flags
+unpopulated. `describeNativeOperands` obtains a full decode only when those
+register facts are requested. That query uses an independent decoder and keeps
+the original borrowed or owned occurrence intact.
 Lifting and operand queries share that admission contract. Operand queries
 reject a different requested architecture before accessing the record. Raw
 classification remains available without detail; direct BL targets use the shared encoding

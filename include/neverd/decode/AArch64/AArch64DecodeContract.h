@@ -24,6 +24,9 @@ struct AArch64DecodeOccurrence {
   uint64_t Generation;
   uint32_t Word;
   bool HasOperandDetail;
+  /// Native lift detail does not populate Capstone's implicit register
+  /// counts or operand access flags. Queries must obtain those separately.
+  bool HasRegisterAccess;
 };
 
 namespace aarch64_decode {
