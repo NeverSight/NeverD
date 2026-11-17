@@ -440,21 +440,11 @@ HighCWriter::printedReturn(const HighFunc &Func) const {
   return {false, DeclaredReturn ? DeclaredReturn : Func.ReturnType};
 }
 
-void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
-  SEHExceptionCodeNames.clear();
-  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
-    std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
-      if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
-          E.Var.Kind == MedVar::SEHExceptionCode)
-        SEHExceptionCodeNames.emplace(E.Var.ConstVal, varName(E.Var));
-      E.forEachChildExpr([&](const ExprPtr &Child) { Visit(*Child); });
-    };
-    for (const ExprPtr *E :
-         {&Stmt.Cond, &Stmt.Dst, &Stmt.Val, &Stmt.CallExpr, &Stmt.RetVal,
-          &Stmt.StoreAddr, &Stmt.StoreVal, &Stmt.SwitchExpr})
-      if (*E)
-        Visit(**E);
-  });
+/// Decides which addresses get a label: where a jump the text prints lands,
+/// and where the exception runtime enters.  The exits of a try are settled
+/// against the statements the current frame projection prints, so a jump that
+/// falls through asks for no label.
+void HighCWriter::collectLabelTargets(const HighFunc &Func) {
   GotoTargets.clear();
   EmittedLabels.clear();
   GotoTargetUses.clear();
@@ -521,6 +511,24 @@ void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
       FallthroughTryExits.erase(Exit);
   }
   collectGotoTargets(Func.Body);
+}
+
+void HighCWriter::runAnalysisPasses(const HighFunc &Func) {
+  SEHExceptionCodeNames.clear();
+  walkStmts(Func.Body, [&](const HighStmt &Stmt) {
+    std::function<void(const HighExpr &)> Visit = [&](const HighExpr &E) {
+      if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
+          E.Var.Kind == MedVar::SEHExceptionCode)
+        SEHExceptionCodeNames.emplace(E.Var.ConstVal, varName(E.Var));
+      E.forEachChildExpr([&](const ExprPtr &Child) { Visit(*Child); });
+    };
+    for (const ExprPtr *E :
+         {&Stmt.Cond, &Stmt.Dst, &Stmt.Val, &Stmt.CallExpr, &Stmt.RetVal,
+          &Stmt.StoreAddr, &Stmt.StoreVal, &Stmt.SwitchExpr})
+      if (*E)
+        Visit(**E);
+  });
+  collectLabelTargets(Func);
 
   auto VarFn = [this](const MedVar &V) { return varName(V); };
   auto ExprFn = [this](const HighExpr &E) { return exprStr(E); };
@@ -7091,17 +7099,10 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   collectBitFieldStatements(Func);
 
   // Frame projection can hide an ordinary-edge PHI copy after a try. Settle
-  // clause exits against the statements that will actually be printed, while
-  // retaining all previously required labels as conservative entry evidence.
-  decideExceptArms(Func);
-  FallthroughTryExits.clear();
-  {
-    std::set<std::pair<va_t, va_t>> Kept;
-    decideTryExits(Func.Body, {}, Kept);
-    for (const auto &Exit : Kept)
-      FallthroughTryExits.erase(Exit);
-  }
-  collectGotoTargets(Func.Body);
+  // clause exits against the statements that will actually be printed, and
+  // the labels with them: one that only a jump the first pass kept asked for
+  // would stand in the text with nothing to name it.
+  collectLabelTargets(Func);
   // Render the body first: a name the declaration pass expected to be
   // forwarded or dead may still be printed, and it must be declared.
   std::string Body;

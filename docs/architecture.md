@@ -12097,10 +12097,10 @@ definition collects its frame slots, and a copy of a frame address into a name
 that is an alias of it is hidden: they read the aliases the declaration pass
 found in that definition (`DeclaredFrameAliases`), never those the writer's
 previous definition left behind, which made an `__except` exit print or omit a
-label by the order the threads claimed the definitions in. A label those
-passes ask for stays when the later pass, which sees every hidden statement,
-finds that nothing jumps to it: the unit prints it unreferenced, as a unit of
-that definition alone does. A unit of fewer than `kMinParallelCFunctionDefinitions`
+label by the order the threads claimed the definitions in. The later pass,
+which sees every hidden statement, decides the labels again from nothing
+(`collectLabelTargets`): a label that only a jump the first pass kept asked
+for goes with that jump instead of standing in the text unreferenced. A unit of fewer than `kMinParallelCFunctionDefinitions`
 definitions, or one rendered with a source map, recorded positions or source
 names, which follow the text as one pass prints it, is written on one thread.
 

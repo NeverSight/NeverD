@@ -20680,6 +20680,9 @@ directory the suite also writes each function as IR and as printed C, and
 for every argument, and requires the two programs to write the same traces at
 `-O0` and `-O2` (Wine runs them on other hosts; `--compiler`, `--linker` and
 `--dlltool` name clang, lld-link and llvm-dlltool).
+`WindowsEHModesCorpus.ALabelGoesWithTheJumpThatAskedForIt` prints xcpt4's
+x86 /Od function at 0x405AE0, whose `__except` arm resumes where its try
+falls through: the text holds no `goto` and no label.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one
