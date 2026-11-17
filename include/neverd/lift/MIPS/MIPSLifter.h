@@ -147,6 +147,9 @@ private:
   template <bool Timed>
   void liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
                        std::optional<bool> ForbiddenFollower) const;
+  void liftHistoricalInstruction(const cs_insn &Instruction,
+                                 std::vector<LowOp> &Ops,
+                                 std::optional<bool> ForbiddenFollower) const;
   template <bool Timed>
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;
@@ -157,6 +160,7 @@ private:
   bool LittleEndian;
   uint8_t RegisterBytes;
   uint16_t EncodingProfile;
+  bool TimedInstructions;
   bool HasDSP = false;
   bool HasDSPR2 = false;
   bool HasMSA = false;

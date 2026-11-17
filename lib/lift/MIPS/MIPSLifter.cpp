@@ -29,7 +29,8 @@ MIPSLifter::MIPSLifter(Arch Target, InstructionMode Mode, uint8_t Revision,
     : Target(Target), Mode(Mode), ISARevision(Revision),
       HistoricalISA(Historical), LittleEndian(archLittleEndian(Target)),
       RegisterBytes(isMIPS64(Target) ? 8 : 4),
-      EncodingProfile(Revision | uint16_t(Historical) << 8) {}
+      EncodingProfile(Revision | uint16_t(Historical) << 8),
+      TimedInstructions(Historical >= 1 && Historical <= 3) {}
 
 uint32_t MIPSLifter::word(const cs_insn &Instruction) const {
   if (Instruction.size != 4)
@@ -585,17 +586,17 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
 
 void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
                       std::optional<bool> ForbiddenFollower) const {
-  if (HistoricalISA && HistoricalISA <= 3)
-    return liftInstruction<true>(Instruction, Ops, ForbiddenFollower);
+  if (TimedInstructions)
+    return liftHistoricalInstruction(Instruction, Ops, ForbiddenFollower);
   return liftInstruction<false>(Instruction, Ops, ForbiddenFollower);
 }
 
 // Keep historical retirement emission out of the modern/compressed hot path
 // while sharing the instruction semantics and validation in one implementation.
 template <bool Timed>
-void MIPSLifter::liftInstruction(const cs_insn &Instruction,
-                                std::vector<LowOp> &Ops,
-                                std::optional<bool> ForbiddenFollower) const {
+LLVM_ATTRIBUTE_ALWAYS_INLINE void
+MIPSLifter::liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+                            std::optional<bool> ForbiddenFollower) const {
   const auto Code = encoding(Instruction);
   if (!Code)
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -631,6 +632,14 @@ void MIPSLifter::liftInstruction(const cs_insn &Instruction,
                             Instruction.op_str);
 }
 
+// The modern entry stays in place instead of adding a second out-of-line
+// dispatch. Keep the larger historical body in its own call boundary.
+LLVM_ATTRIBUTE_NOINLINE void MIPSLifter::liftHistoricalInstruction(
+    const cs_insn &Instruction, std::vector<LowOp> &Ops,
+    std::optional<bool> ForbiddenFollower) const {
+  liftInstruction<true>(Instruction, Ops, ForbiddenFollower);
+}
+
 LowDelaySlot MIPSLifter::liftUnit(const cs_insn &Head, const cs_insn &Slot,
                                   std::vector<LowOp> &Ops) const {
   const auto Code = encoding(Head);
@@ -638,7 +647,7 @@ LowDelaySlot MIPSLifter::liftUnit(const cs_insn &Head, const cs_insn &Slot,
       (Code->SlotBytes != 1 && Slot.size != Code->SlotBytes))
     throw UnliftedInstruction(Head.address, Head.mnemonic,
                               "invalid MIPS delayed-control unit");
-  if (HistoricalISA && HistoricalISA <= 3)
+  if (TimedInstructions)
     return liftControl<true>(Head, &Slot, *Code, Ops);
   return liftControl<false>(Head, &Slot, *Code, Ops);
 }
