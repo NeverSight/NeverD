@@ -12,9 +12,20 @@
 
 namespace llvm {
 class Argument;
+class AttributeList;
+class Type;
 } // namespace llvm
 
 namespace neverd {
+#define NEVERD_LLVM_SOURCE_TYPE_TEXT(Name, Text)                               \
+  inline constexpr llvm::StringLiteral Name = Text;
+#include "neverd/backend/llvm/LLVMSourceTypeHints.def"
+
+/// Preserve the explicit complex calling class over LLVM's two-field result.
+/// Absence is unclassified; an attribute with an incompatible carrier fails.
+TypeRef readLLVMSourceComplexResult(llvm::Type *Result,
+                                    const llvm::AttributeList &Attributes);
+
 // LLVM integers are signless. These producer-supplied spelling facts preserve
 // an imported C declaration without inventing signext/zeroext machine ABI
 // attributes. Consumers must still validate the actual LLVM scalar width.

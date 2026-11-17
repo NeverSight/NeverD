@@ -25644,6 +25644,57 @@ qualified. These refusals are separate from successful source-build counts.
 `MIPS16Pipeline.TypedDirectCallReadsGPRFloatInEitherSelection` checks both a
 selected caller and the caller/callee selection through HighC and LLVMC.
 
+`mips16-floating-return-roundtrip.py` supplies an independent result-transport
+matrix. Give it an external, unmodified GCC
+`libgcc/config/mips/mips16.S` with its generated include directory, rather than
+substituting a handwritten helper. For example:
+
+```bash
+python3 unittests/lift/mips/mips16-floating-return-roundtrip.py \
+  --neverd build-mips/bin/neverd --clang /path/to/qualified/clang \
+  --gcc /path/to/mips-linux-gnu-gcc --assembler /path/to/mips-as \
+  --ld /path/to/mips-ld --runtime-source /path/to/gcc/mips16.S \
+  --kind sf --kind df --output build-mips/mips16-fp-results
+```
+
+The GNU compiler, assembler and actual runtime produce the original image.
+Each C route rebuilds the caller, callee and both translation units at O0/O2
+with GCC and Clang. Both byte orders, FR=0/1 and classic/MIPS16 callers must
+preserve every result bit, FCSR, saved registers, SP, RA and the return mode.
+NaN payloads and asymmetric word combinations detect accidental numeric
+conversion or swapped double halves. `--kind sc` and `--kind dc` exercise
+complex results; the driver does not treat a source refusal as success.
+Rebuilt freestanding images also link `mips-source-memory-runtime.S` when the
+compiler lowers an aggregate copy to `memcpy`. The driver independently
+executes that guest routine with zero and nonzero lengths, unaligned separate
+buffers and identical source/destination addresses, checking every surrounding
+byte, its pointer result and preserved registers. Original reference images
+retain their compiler-generated code and GNU result helpers.
+Omit `--neverd` to qualify compiler interworking separately from reconstruction.
+`--endian`, `--fr`, `--mode` and `--rebuild-compiler` select a diagnosis slice.
+Add `--floating-input` to pass a scalar float/double through the classic entry
+stub and the compressed body, then return through the real GNU result helper.
+This selection qualifies entry and result transport together. It defaults to
+`sf` and `df`; complex input signatures are not silently substituted.
+Add `--whole-unit` to reconstruct the HighC caller with `--callees` and the
+complete LLVMC image. Each rebuilt translation unit links with the original
+runtime, without original caller/callee objects. This exposes duplicate or
+incorrect runtime definitions that isolated-function reconstruction misses.
+Every attempt records tool/source hashes and removes generated binaries via
+the shared artifact lifecycle. Compiler-only success does not qualify NeverD.
+
+`MIPS16Pipeline.RuntimeScalarReturnPreservesOriginalCallAndSourceResult`
+checks both source routes, original LowIR call retention, repeated helpers,
+double result spills and external input loads across predecessor blocks.
+Altered helpers, frame-derived arguments and a frame address stored before the
+input load must fail; machine lift remains outside the source projection.
+The same test checks explicit result-helper source refusal and audited omission
+from a selected source unit. `FunctionAdmission.SourceUnitOmissionsDoNotRelaxMachineAdmission`
+checks a truncated body alone and alongside a valid leaf: source-unit omission
+can retain the leaf, while machine output still refuses the incomplete request.
+`EntryAdapterProofChecksEveryParameterByteAndEffect` also checks scalar
+floating results through both single and split-double parameter adapters.
+
 `HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
 separately executes direct, forwarded and logical-shift reads through signed
 and unsigned 32/64-bit machine carriers at O0/O2 with undefined-behavior
@@ -25651,9 +25702,25 @@ checks. `MIPS16Pipeline.DeclaredGPRFloatKeepsItsIntegerBitUse` covers loader
 and source binding in both byte orders. MIPS16 source mode spelling uses a
 compiler-specific `.def` prelude because GCC rejects the Clang attribute
 pair; the selected LLVMC caller must retain its callee's prelude too.
-The leading MIPS16 execution case has one `float` followed by `uint32_t` and a
-`uint32_t` result. Split double inputs, variadic entry reconstruction, floating
-return helpers and linker/runtime floating-call stubs remain unqualified.
+The older leading MIPS16 execution case has one `float` followed by `uint32_t`
+and a `uint32_t` result. The separate call and result matrices above qualify
+split double inputs, proven classic entry stubs and scalar return helpers.
+`MIPS16Pipeline.ComplexCallsDefineEveryIntegerResultWord` verifies MedIR as
+well as every integer and floating result carrier, including double components
+that already fill the ABI register. Complex result matrices cover `sc` and
+`dc` in both isolated and whole-unit reconstructions. With `--floating-input`,
+these profiles take two scalar float/double parameters and reconstruct the
+real and imaginary components independently. This checks GCC's separate word
+spills, `ldc1` arguments and subsequent result spills through the original
+runtime, including all result bits and preserved machine state.
+`MIPSSourceReturnTargets.SplitFloatingSpillsKeepEveryReachingByte` checks
+both byte orders and FR modes, complete and incomplete predecessor writes,
+requested subranges, frame-derived values and saved-link overlaps.
+`FloatingResultSpillsDoNotPoisonArgumentProofs` checks scalar and complex
+result spills whose provenance depends on an active argument proof, alongside
+unknown calls and invalid frame access. Complex parameters,
+variadic complex calls, n32/n64 complex results, variadic entry reconstruction
+and general indirect runtime adapters remain unqualified.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

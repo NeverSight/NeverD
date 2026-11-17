@@ -436,6 +436,56 @@ void appendAttributeSpec(std::vector<uint8_t> &Abbrev,
 std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
                                       const std::vector<uint8_t> &Info);
 
+std::vector<uint8_t> makeELFDWARFComplexFixture(llvm::StringRef Name,
+                                                unsigned Bytes, bool CFamily) {
+  using namespace llvm::dwarf;
+  std::vector<uint8_t> Abbrev, Info;
+  const auto declare =
+      [&](unsigned Code, Tag TheTag, bool Children,
+          std::initializer_list<std::pair<Attribute, Form>> Attributes) {
+        appendULEB(Abbrev, Code);
+        appendULEB(Abbrev, TheTag);
+        Abbrev.push_back(Children ? DW_CHILDREN_yes : DW_CHILDREN_no);
+        for (const auto &[Attr, Form] : Attributes)
+          appendAttributeSpec(Abbrev, Attr, Form);
+        appendULEB(Abbrev, 0);
+        appendULEB(Abbrev, 0);
+      };
+  declare(1, DW_TAG_compile_unit, true, {{DW_AT_language, DW_FORM_data2}});
+  declare(2, DW_TAG_base_type, false,
+          {{DW_AT_name, DW_FORM_string},
+           {DW_AT_byte_size, DW_FORM_data1},
+           {DW_AT_encoding, DW_FORM_data1}});
+  declare(3, DW_TAG_subprogram, false,
+          {{DW_AT_name, DW_FORM_string},
+           {DW_AT_low_pc, DW_FORM_addr},
+           {DW_AT_high_pc, DW_FORM_data4},
+           {DW_AT_type, DW_FORM_ref4}});
+  appendULEB(Abbrev, 0);
+  appendU32LE(Info, 0);
+  appendU16LE(Info, 4);
+  appendU32LE(Info, 0);
+  Info.push_back(8);
+  appendULEB(Info, 1);
+  appendU16LE(Info, CFamily ? DW_LANG_C99 : DW_LANG_Rust);
+  const auto Base = static_cast<uint32_t>(Info.size());
+  appendULEB(Info, 2);
+  Info.insert(Info.end(), Name.begin(), Name.end());
+  Info.push_back(0);
+  Info.push_back(Bytes);
+  Info.push_back(DW_ATE_complex_float);
+  appendULEB(Info, 3);
+  constexpr llvm::StringLiteral Function = "complex_result";
+  Info.insert(Info.end(), Function.begin(), Function.end());
+  Info.push_back(0);
+  appendU64LE(Info, 0x1000);
+  appendU32LE(Info, 0x10);
+  appendU32LE(Info, Base);
+  Info.push_back(0);
+  patchU32LE(Info, 0, static_cast<uint32_t>(Info.size() - 4));
+  return makeELFWithDWARF(Abbrev, Info);
+}
+
 /// A function returning a callback with a scalar argument. The callback's
 /// signature has no object size; only its containing pointer has one.
 std::vector<uint8_t> makeELFDWARFCallbackFixture(
@@ -2071,6 +2121,35 @@ TEST(DWARFSubprogramExtentRegistry, SweepMatchesOverlapPolicyAfterMerging) {
   EXPECT_FALSE(Registry.isAmbiguous(0x100000));
   Registry.insert(0x100000, Fresh);
   EXPECT_TRUE(Registry.isAmbiguous(0x100000));
+}
+
+TEST(DWARFSourceTypes, ComplexResultsKeepIdentityWithoutGuessingExtendedTypes) {
+  ScratchDir Dir;
+  for (const bool CFamily : {false, true})
+    for (const auto &[Name, Size, Component] :
+         {std::tuple{"complex float", 8u, 4u},
+          std::tuple{"complex double", 16u, 8u},
+          std::tuple{"complex long double", 16u, 0u},
+          std::tuple{"complex long double", 32u, 0u}}) {
+      SCOPED_TRACE(Name);
+      SCOPED_TRACE(CFamily);
+      const auto Bytes = makeELFDWARFComplexFixture(Name, Size, CFamily);
+      auto Context = DWARFDebugContext::load(
+          Dir.writeBytes("complex.elf", Bytes), BinaryFormat::ELF,
+          DWARFLoadTrust::InImage, Bytes);
+      ASSERT_TRUE(Context);
+      const auto Function = Context->resolveFunction(0x1000);
+      ASSERT_TRUE(Function && Function->ReturnType);
+      EXPECT_EQ(Function->ReturnType->Size, Size);
+      EXPECT_EQ(sourceComplexComponentBytes(Function->ReturnType),
+                CFamily ? Component : 0u);
+      if (CFamily && Component)
+        EXPECT_TRUE(equalSourceTypes(Function->ReturnType,
+                                     NdType::makeComplex(Component)));
+      else
+        EXPECT_FALSE(
+            equalSourceTypes(Function->ReturnType, Function->ReturnType));
+    }
 }
 
 TEST(DWARFSourceTypes, ReferencesPreserveQualifiedRecordIdentity) {

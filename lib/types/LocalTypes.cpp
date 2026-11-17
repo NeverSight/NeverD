@@ -452,6 +452,8 @@ uint32_t TypeLibrary::alignOf(const TypeExpr &Type) const {
     if (Type.TheBuiltin == Builtin::LongDouble)
       if (const uint32_t Align = longDoubleAlignOf(ABI))
         return Align;
+    if (builtinInfo(Type.TheBuiltin).Class == BuiltinClass::Complex)
+      return scalarAlignment(builtinBytes(Type.TheBuiltin) / 2, ABI);
     return scalarAlignment(builtinBytes(Type.TheBuiltin), ABI);
   case TypeExprKind::Pointer:
     return Type.PointerBytes;
