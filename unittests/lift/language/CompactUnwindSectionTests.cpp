@@ -22,6 +22,10 @@ using namespace neverd::macho_unwind;
 using namespace neverd::compact_unwind_test;
 
 namespace fixture {
+#define NEVERD_COMPACT_OWNER_VALUE(Type, Name, Value)                          \
+  constexpr Type Name = Value;
+#define NEVERD_COMPACT_OWNER_TEXT(Name, Text) constexpr char Name[] = Text;
+#include "CompactUnwindOwnershipFixtures.def"
 #define NEVERD_COMPACT_ARM64_FIXTURE_VALUE(Type, Name, Value)                  \
   [[maybe_unused]] constexpr Type Name = Value;
 #include "CompactUnwindARM64Fixtures.def"
@@ -452,6 +456,65 @@ TEST(CompactUnwindSection, ModeZeroIsAnAbsenceOfInformation) {
   ASSERT_EQ(Result.Entries.size(), 1u);
   EXPECT_EQ(Result.Entries.front().Kind, CompactUnwindKind::None);
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+}
+
+TEST(DarwinUnwindSymbols, EmptyLookupRecipesDoNotGrantCodeOrEntryOwnership) {
+  for (Arch Target : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    auto Img = makeImage(Target);
+    const va_t Entry = kImageBase + fixture::kOwnerFirstRVA;
+    Img.Symbols.push_back(
+        {fixture::kOwnerSymbol, Entry, fixture::kOwnerFunctionSize, true});
+    attachUnwindInfo(Img, buildUnwindInfo({{fixture::kOwnerFirstRVA, 0},
+                                           {fixture::kOwnerGapRVA, 0},
+                                           {fixture::kOwnerLastRVA, 0}},
+                                          fixture::kOwnerEndRVA));
+    auto Raw = parseCompactUnwindRaw(Img.Sections.back().Data);
+    ASSERT_TRUE(bool(Raw));
+    const auto Decoded = parseCompactUnwind(Img);
+    ASSERT_EQ(Decoded.Entries.size(), 3u);
+
+    parseDarwinExceptions(Img);
+
+    EXPECT_TRUE(Img.ExceptionMetadata.Functions.empty());
+    EXPECT_TRUE(Img.KnownCodeRanges.empty());
+    ASSERT_EQ(Img.Symbols.size(), 1u);
+    EXPECT_TRUE(Img.hasAuthenticatedFunctionEntryAt(Entry));
+    EXPECT_FALSE(
+        Img.hasExecutableCodeOwnerAt(kImageBase + fixture::kOwnerGapRVA));
+    EXPECT_FALSE(Img.hasAuthenticatedFunctionEntryAt(kImageBase +
+                                                     fixture::kOwnerLastRVA));
+  }
+}
+
+TEST(DarwinUnwindSymbols, EmptyLookupRecipeLeavesTheFDEExtentAuthoritative) {
+  auto Img = makeImage();
+  const va_t Entry = kImageBase + fixture::kOwnerFirstRVA;
+  const va_t FrameVA = kImageBase + fixture::kOwnerFrameRVA;
+  const auto Frame = language_eh_test::buildSimpleFrame(
+      FrameVA, Entry, fixture::kOwnerFunctionSize, fixture::kOwnerAugmentation,
+      0, 0);
+  Section Frames;
+  Frames.Name = section_names::macho::EhFrame;
+  Frames.VA = FrameVA;
+  Frames.Size = Frame.Bytes.size();
+  Frames.Data = Frame.Bytes;
+  Img.Sections.push_back(std::move(Frames));
+  attachUnwindInfo(Img, buildUnwindInfo({{fixture::kOwnerFirstRVA, 0}},
+                                        fixture::kOwnerEndRVA));
+
+  parseDarwinExceptions(Img);
+
+  ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+  const auto &Function = Img.ExceptionMetadata.Functions.front();
+  EXPECT_EQ(Function.Encoding, ExceptionEncoding::DwarfFDE);
+  EXPECT_FALSE(Function.Compact);
+  ASSERT_TRUE(Function.Dwarf);
+  EXPECT_EQ(Function.CodeRange.Begin, Entry);
+  EXPECT_EQ(Function.CodeRange.End, Entry + fixture::kOwnerFunctionSize);
+  EXPECT_TRUE(Img.hasAuthenticatedFunctionEntryAt(Entry));
+  EXPECT_FALSE(
+      Img.hasExecutableCodeOwnerAt(kImageBase + fixture::kOwnerGapRVA));
 }
 
 TEST(CompactUnwindSection, PAuthLRSigningPCUsesEachRegularRecipeStart) {

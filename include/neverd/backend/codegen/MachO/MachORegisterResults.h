@@ -20,6 +20,8 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace llvm {
@@ -31,6 +33,20 @@ struct BinaryImage;
 struct CompactUnwindEntry;
 struct ExceptionFunction;
 struct MedFunc;
+
+/// File-backed source extent shared by the register producer and publisher.
+/// A forwarding entry consists solely of its first unconditional branch; the
+/// old instructions after it are unreachable from that entry.
+struct MachOLiftedSource {
+  llvm::ArrayRef<uint8_t> Bytes;
+  std::optional<va_t> ForwardTarget;
+};
+
+/// Bound an authenticated entry by its instruction section or, for sectionless
+/// installed code, its unwind range. NextEntry is the next mapped function, or
+/// InvalidVA at the end of the mapping inventory.
+std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
+                                                   va_t Start, va_t NextEntry);
 
 /// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
 /// Darwin's system compact walker cannot restore that layout correctly.
