@@ -46,6 +46,7 @@ TEST_P(MIPSLoader, MapsLinkedImageAndReadsTargetOrderPointers) {
   ASSERT_TRUE(Image->MIPS);
   EXPECT_EQ(Image->MIPS->ABI, File.Is64 ? MIPSABI::N64 : MIPSABI::O32);
   EXPECT_FALSE(Image->MIPS->HasABIFlags);
+  EXPECT_FALSE(Image->MIPS->EntryGP);
   const uint64_t Expected =
       File.Is64 ? (File.Little ? 0x8877665544332211ull : 0x1122334455667788ull)
                 : (File.Little ? 0x44332211ull : 0x11223344ull);
@@ -85,6 +86,94 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     auto Invalid = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Invalid));
     llvm::consumeError(Invalid.takeError());
+  }
+}
+
+TEST_P(MIPSLoader, GlobalPointerUsesLinkedRegisterInfoAndPhysicalGPRWidth) {
+  ELFLoader Loader;
+  for (bool N32 : {false, true}) {
+    ELFBytes File(GetParam());
+    if (N32 && File.Is64)
+      continue;
+    if (N32)
+      File.put(36, 0x80000020, 4); // ELF32, MIPS64r2, ABI2.
+    const uint64_t GP = File.Is64 ? 0x12345678fedc8000ull : 0xfedc8000;
+    File.globalPointer(GP);
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_EQ(Image->MIPS->EntryGP, N32 ? 0xfffffffffedc8000ull : GP);
+
+    const uint32_t Flags = File.Is64 ? 0x80000000
+                           : N32     ? 0x80000020
+                                     : 0x70001000;
+    for (unsigned Extra : {2u, 4u, 0u}) {
+      if (!Extra)
+        File.put(16, 3, 2); // ET_DYN
+      File.put(File.Is64 ? 48 : 36, Flags | Extra, 4);
+      auto PositionIndependent = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(PositionIndependent))
+          << llvm::toString(PositionIndependent.takeError());
+      EXPECT_FALSE(PositionIndependent->MIPS->EntryGP);
+    }
+  }
+}
+
+TEST_P(MIPSLoader, SectionAndProgramGlobalPointerRecordsMustAgree) {
+  ELFBytes File(GetParam());
+  File.globalPointer(0x18340);
+  const size_t Width = File.Is64 ? 8 : 4, Header = File.Is64 ? 64 : 40;
+  File.Bytes.resize(0x180 + 2 * Header);
+  File.put(File.Is64 ? 40 : 32, 0x180, Width); // Section table.
+  File.put(File.Is64 ? 60 : 48, 2, 2);
+  const size_t Section = 0x180 + Header;
+  File.put(Section + 4, File.Is64 ? 0x7000000d : 0x70000006, 4);
+  File.put(Section + (File.Is64 ? 24 : 16), 0x120, Width);
+  const size_t Size = File.Is64 ? 48 : 24;
+  File.put(Section + (File.Is64 ? 32 : 20), Size, Width);
+  std::copy_n(File.Bytes.begin() + 0xb8, Size, File.Bytes.begin() + 0x120);
+  ELFLoader Loader;
+  for (unsigned Programs : {1u, 2u}) {
+    File.put(File.Is64 ? 56 : 44, Programs, 2);
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_EQ(Image->MIPS->EntryGP, 0x18340u);
+  }
+  File.put(0x120 + Size - Width, 0x18348, Width);
+  auto Conflict = Loader.loadBuffer(File.buffer());
+  ASSERT_FALSE(bool(Conflict));
+  EXPECT_NE(
+      llvm::toString(Conflict.takeError()).find("conflicting global pointer"),
+      std::string::npos);
+  std::vector<LoadCandidate> Rows;
+  ELFLoader::identify(File.buffer(), Rows);
+  ASSERT_EQ(Rows.size(), 1u);
+  EXPECT_FALSE(Rows.front().Loadable);
+}
+
+TEST_P(MIPSLoader, GlobalPointerRecordsRequireBoundedPayloadsAndImageScope) {
+  ELFLoader Loader;
+  ELFBytes File(GetParam());
+  File.globalPointer(0x18340);
+  if (File.Is64) {
+    for (bool Group : {false, true}) {
+      ELFBytes Scoped = File;
+      if (Group)
+        Scoped.Bytes[0xb8] = 9; // ODK_GP_GROUP
+      else
+        Scoped.put(0xc2, 1, 2); // Section-specific ODK_REGINFO.
+      auto Image = Loader.loadBuffer(Scoped.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      EXPECT_FALSE(Image->MIPS->EntryGP);
+    }
+  }
+  for (unsigned Size : {0u, 7u, 23u, 41u, 255u}) {
+    if (File.Is64)
+      File.Bytes[0xc1] = Size;
+    else
+      File.put(84 + 16, Size, 4);
+    auto Malformed = Loader.loadBuffer(File.buffer());
+    ASSERT_FALSE(bool(Malformed)) << Size;
+    llvm::consumeError(Malformed.takeError());
   }
 }
 

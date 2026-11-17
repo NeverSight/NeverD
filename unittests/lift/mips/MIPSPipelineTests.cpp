@@ -46,6 +46,90 @@ namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
 
+TEST(MIPSEntryGP, AnExplicitWriteReachesLaterReadsAtRegisterWidth) {
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "n32=" << N32 << ", little=" << Little);
+      mips_test::ELFBytes File(N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                                   : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+      if (N32)
+        File.put(36, 0x80000020, 4);
+      const uint64_t GP = N32 ? 0xffffffffffff9000ull : 0x12345678ffff9000ull;
+      File.globalPointer(GP);
+      File.put(0x100, 0x0384e026, 4); // xor gp,gp,a0
+      File.put(0x104, 0x03801025, 4); // or v0,gp,zero
+      File.put(0x108, 0x03e00008, 4); // jr ra
+      File.put(0x10c, 0x0384e026, 4); // restore gp in the delay slot
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Symbol = Symbol::makeFunc(Image->Entry, 16);
+      Symbol.Name = "gp_update";
+      Image->Symbols.push_back(std::move(Symbol));
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.OnlyFunctionEntries = {Image->Entry};
+      Options.LiftMode = true;
+      Options.EmitDumpOutput = false;
+      auto Result = Pipeline().run(*Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_TRUE(Result.LlvmModule);
+      Pipeline::optimizeModule(*Result.LlvmModule);
+      ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      const auto *Body = Result.LlvmModule->getFunction("gp_update");
+      ASSERT_NE(Body, nullptr);
+      ASSERT_EQ(Body->arg_size(), 1u);
+      const auto *Ret =
+          llvm::dyn_cast<llvm::ReturnInst>(Body->back().getTerminator());
+      ASSERT_NE(Ret, nullptr);
+      const auto *Xor =
+          llvm::dyn_cast<llvm::BinaryOperator>(Ret->getReturnValue());
+      ASSERT_NE(Xor, nullptr);
+      ASSERT_EQ(Xor->getOpcode(), llvm::Instruction::Xor);
+      EXPECT_EQ(Xor->getOperand(0), Body->getArg(0));
+      const auto *Seed = llvm::dyn_cast<llvm::ConstantInt>(Xor->getOperand(1));
+      ASSERT_NE(Seed, nullptr);
+      EXPECT_EQ(Seed->getZExtValue(), GP);
+    }
+}
+
+TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
+  for (bool Little : {false, true}) {
+    mips_test::ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+    const uint32_t Base = 0x80040000;
+    File.put(36, 0x80000020, 4);
+    File.put(24, Base + 0x100, 4);
+    File.put(52 + 8, Base, 4);
+    File.put(52 + 12, Base, 4);
+    File.globalPointer(Base + 0x8000);
+    File.put(84 + 8, Base + 0xb8, 4);
+    File.put(0x100, 0x67828110, 4); // daddiu v0,gp,-0x7ef0
+    File.put(0x104, 0x03e00008, 4); // jr ra
+    File.put(0x108, 0, 4);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 12));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(*Image));
+    auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "gp_address");
+    ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+    LowToMedConverter Convert;
+    Convert.setBinaryImage(&*Image);
+    const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+    bool Found = false;
+    for (const auto &Block : Med.Blocks)
+      for (const auto &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INT_SEXT && Op.Output.Size == 8 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].Size == 4 &&
+            Op.Inputs[0].ConstVal == Base + 0x110 &&
+            Op.Inputs[0].Provenance == ConstantAddressProvenance::Address)
+          Found = true;
+    EXPECT_TRUE(Found) << getArchName(Image->Arch);
+  }
+}
+
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
     for (const uint16_t Bytes : {4, 8}) {
