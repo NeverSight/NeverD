@@ -944,11 +944,33 @@ TEST(TableSEHSourceScopes, ATableBehindACookieCheckIsLoweredForPrintedC) {
     EXPECT_FALSE(Source.isEligible());
     EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
   }
-  // The wrapper of another architecture is not this one until it is read.
-  for (const Arch Other : {Arch::AArch64, Arch::ARM, Arch::X86}) {
+  // AArch64's wrapper reads the same two bits and ARM's hands every row on:
+  // printed C takes their tables too, and no other capability does.
+  for (const Arch Other : {Arch::AArch64, Arch::ARM}) {
+    SCOPED_TRACE(Other == Arch::ARM ? "ARM" : "AArch64");
+    ExceptionFunction There = EH;
+    There.Encoding = Other == Arch::ARM ? ExceptionEncoding::ARM32Unpacked
+                                        : ExceptionEncoding::ARM64Unpacked;
+    EXPECT_TRUE(classifyWindowsEHNativeSource(
+                    There, Other, BinaryFormat::COFF,
+                    WindowsEHNativeCapability::SourceIRLowering)
+                    .isEligible());
+    for (WindowsEHNativeCapability Capability :
+         {WindowsEHNativeCapability::IRLowering,
+          WindowsEHNativeCapability::OutputPatch}) {
+      const WindowsEHNativeSourceClassification Source =
+          classifyWindowsEHNativeSource(There, Other, BinaryFormat::COFF,
+                                        Capability);
+      EXPECT_FALSE(Source.isEligible());
+      EXPECT_EQ(Source.Reason,
+                WindowsEHNativeSourceReason::UnsupportedArchitecture);
+    }
+  }
+  // x86 has no such wrapper.
+  {
     const WindowsEHNativeSourceClassification Source =
         classifyWindowsEHNativeSource(
-            EH, Other, BinaryFormat::COFF,
+            EH, Arch::X86, BinaryFormat::COFF,
             WindowsEHNativeCapability::SourceIRLowering);
     EXPECT_FALSE(Source.isEligible());
     EXPECT_EQ(Source.Reason,
@@ -1045,6 +1067,28 @@ TEST(TableSEHSourceScopes, LLVMCSaysAWrappedTableIsNotLowered) {
         << Function;
     EXPECT_EQ(Function.find("__try {"), std::string::npos) << Function;
     EXPECT_NE(Function.find("may_throw("), std::string::npos) << Function;
+  }
+  // AArch64's wrapper holds the same rows back.  ARM's record has neither
+  // bit, and its wrapper calls the handler for every row.
+  {
+    const std::vector<MedFunc> Unit = threeScopesOverOneRange(
+        Leave::Branch, /*MiddleIsFinally=*/false, /*BodyCalls=*/true,
+        Cookie::CheckedForUnwindsOnly);
+    ExceptionFunction There = *Unit.front().ExceptionMetadata;
+    There.Encoding = ExceptionEncoding::ARM64Unpacked;
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(
+            There, Arch::AArch64, BinaryFormat::COFF,
+            WindowsEHNativeCapability::SourceIRLowering);
+    EXPECT_FALSE(Source.isEligible());
+    EXPECT_EQ(Source.Reason, WindowsEHNativeSourceReason::GSWrappedPersonality);
+    There.Encoding = ExceptionEncoding::ARM32Unpacked;
+    There.GSCookie->HasExceptionHandler = false;
+    There.GSCookie->HasUnwindHandler = false;
+    EXPECT_TRUE(classifyWindowsEHNativeSource(
+                    There, Arch::ARM, BinaryFormat::COFF,
+                    WindowsEHNativeCapability::SourceIRLowering)
+                    .isEligible());
   }
   // A table of termination handlers alone needs no exceptions passed on.
   const std::vector<MedFunc> Finallys = threeScopesOverOneRange(

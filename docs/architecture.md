@@ -1273,13 +1273,17 @@ A termination handler that never returns, a `__finally` that leaves by
 once that the path ends there. Native output, whose clauses the code generator
 writes again from what the optimizer leaves, does not take one, and no view
 takes a filter that never returns.
-On x64 this view also takes a table behind `__GSHandlerCheck_SEH`. That
-wrapper checks the frame's stack cookie and then calls `__C_specific_handler`
-for an exception only when its record's EHANDLER bit is set and for an unwind
-only when its UHANDLER bit is, and otherwise continues the search
-(`cookieCheckPassesEveryScope`): a table whose every `__except` row has the
-first and every `__finally` row the second runs as the same table alone, and
-any other keeps the note, since a row the record holds back never runs. The
+This view also takes a table behind `__GSHandlerCheck_SEH`. On x64 and
+AArch64 that wrapper checks the frame's stack cookie and then calls
+`__C_specific_handler` for an exception only when its record's EHANDLER bit
+is set and for an unwind only when its UHANDLER bit is, and otherwise
+continues the search (`cookieCheckPassesEveryScope`): a table whose every
+`__except` row has the first and every `__finally` row the second runs as the
+same table alone, and any other keeps the note, since a row the record holds
+back never runs. The ARM wrapper, whose record has room for neither bit,
+calls the handler always. A wrapped table is then lowered or left by the
+rules of its architecture's bare tables, the callbacks that read their
+parent's registers among them. The
 identity of such a table covers the record, so it is never the identity of
 the same rows under `__C_specific_handler`, and native output, which would
 have to write the record again, leaves the function as metadata.

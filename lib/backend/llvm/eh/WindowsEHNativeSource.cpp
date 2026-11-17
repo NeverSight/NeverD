@@ -88,14 +88,18 @@ bool hasExactBoundedX64GSCookie(const ExceptionFunction &EH) {
 }
 
 /// Whether `__GSHandlerCheck_SEH` hands every row of \p EH's table to
-/// `__C_specific_handler`.  After its cookie check the wrapper calls that
-/// handler for an exception only when its record's EHANDLER bit is set and
-/// for an unwind only when its UHANDLER bit is, and otherwise continues the
-/// search: an `__except` row needs the first, a `__finally` row the second.
-bool cookieCheckPassesEveryScope(const ExceptionFunction &EH) {
+/// `__C_specific_handler`.  After its cookie check the x64 and AArch64
+/// routines call that handler for an exception only when their record's
+/// EHANDLER bit is set and for an unwind only when its UHANDLER bit is, and
+/// otherwise continue the search: an `__except` row needs the first, a
+/// `__finally` row the second.  The ARM routine, whose record has room for
+/// neither bit, calls the handler always.
+bool cookieCheckPassesEveryScope(const ExceptionFunction &EH, Arch TargetArch) {
   if (!EH.GSCookie || !EH.SEH ||
       EH.GSCookie->ParseStatus != ExceptionParseStatus::Complete)
     return false;
+  if (TargetArch == Arch::ARM)
+    return true;
   return llvm::all_of(EH.SEH->Scopes, [&](const SEHScopeRecord &Scope) {
     return Scope.Kind == SEHScopeKind::Finally
                ? EH.GSCookie->HasUnwindHandler
@@ -732,14 +736,21 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
   if (EH.ParseStatus != ExceptionParseStatus::Complete)
     return reject(WindowsEHNativeSourceModel::None,
                   WindowsEHNativeSourceReason::IncompleteDecode, Capability);
+  // Printed C also takes these architectures' scope table behind a
+  // stack-cookie check (below).
+  const bool WrappedTableForSource =
+      EH.Personality == ExceptionPersonality::GSHandlerCheckSEH &&
+      Capability == WindowsEHNativeCapability::SourceIRLowering;
   if (TargetArch == Arch::ARM &&
-      EH.Personality != ExceptionPersonality::CSpecificHandler)
+      EH.Personality != ExceptionPersonality::CSpecificHandler &&
+      !WrappedTableForSource)
     return reject(WindowsEHNativeSourceModel::None,
                   WindowsEHNativeSourceReason::UnsupportedArchitecture,
                   Capability);
   if (TargetArch == Arch::AArch64 &&
       EH.Personality != ExceptionPersonality::CSpecificHandler &&
-      EH.Personality != ExceptionPersonality::CxxFrameHandler3)
+      EH.Personality != ExceptionPersonality::CxxFrameHandler3 &&
+      !WrappedTableForSource)
     return reject(WindowsEHNativeSourceModel::None,
                   WindowsEHNativeSourceReason::UnsupportedArchitecture,
                   Capability);
@@ -764,8 +775,6 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     // The scopes are `__C_specific_handler`'s, behind a check of the frame's
     // stack cookie.  Printed C shows them when the check lets every row
     // through (below); native output would have to write the record again.
-    // Only the x64 wrapper gets here: the ARM and AArch64 guards above take
-    // no wrapped personality.
     if (Capability != WindowsEHNativeCapability::SourceIRLowering)
       return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                     Capability);
@@ -802,7 +811,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       EH.Personality == ExceptionPersonality::GSHandlerCheckEH4 &&
       (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH));
   if (EH.Personality == ExceptionPersonality::GSHandlerCheckSEH) {
-    if (!cookieCheckPassesEveryScope(EH))
+    if (!cookieCheckPassesEveryScope(EH, TargetArch))
       return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                     Capability);
   } else if (EH.Personality != ExceptionPersonality::GSHandlerCheckEH4 &&
