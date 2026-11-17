@@ -276,6 +276,35 @@ Decoder::decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
   return false;
 }
 
+std::optional<bool> Decoder::decodeMIPSDSP64(const uint8_t *Bytes, size_t Len,
+                                             va_t Addr) {
+  if (Len < 4)
+    return std::nullopt;
+  const auto Physical =
+      readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+  const auto Packed = mips::dsp64PackedForm(Physical);
+  if (!Packed)
+    return std::nullopt;
+  if (!decodeMIPSEquivalent(Bytes, Packed->OperandTemplate, Addr))
+    return false;
+  InsnBuf->id = MIPS_INS_ENDING + 32 + (Physical & 0x7ff);
+  if (Text)
+    std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
+                  Packed->Mnemonic);
+  if (Packed->LastImmediate) {
+    if (Detail) {
+      auto &Operands = InsnBuf->detail->mips;
+      Operands.operands[Operands.op_count - 1].imm = *Packed->LastImmediate;
+    }
+    if (Text) {
+      char *Out = std::strrchr(InsnBuf->op_str, ',') + 1;
+      std::snprintf(Out, sizeof(InsnBuf->op_str) - (Out - InsnBuf->op_str),
+                    " %d", int(*Packed->LastImmediate));
+    }
+  }
+  return true;
+}
+
 bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (Len < 4)
     return false;
@@ -320,30 +349,6 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
       return decodeR6HardwareRegister(Bytes, Physical, Addr);
   }
   if (isMIPS64(TargetArch) && CurrentMode != InstructionMode::MicroMIPS) {
-    if (MIPS->hasClassicDSP64()) {
-      if (const auto Packed = mips::dsp64PackedForm(Physical)) {
-        if (!decodeMIPSEquivalent(Bytes, Packed->OperandTemplate, Addr))
-          return false;
-        InsnBuf->id = MIPS_INS_ENDING + 32 + (Physical & 0x7ff);
-        if (Text)
-          std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
-                        Packed->Mnemonic);
-        if (Packed->LastImmediate) {
-          if (Detail) {
-            auto &Operands = InsnBuf->detail->mips;
-            Operands.operands[Operands.op_count - 1].imm =
-                *Packed->LastImmediate;
-          }
-          if (Text) {
-            char *Out = std::strrchr(InsnBuf->op_str, ',') + 1;
-            std::snprintf(Out,
-                          sizeof(InsnBuf->op_str) - (Out - InsnBuf->op_str),
-                          " %d", int(*Packed->LastImmediate));
-          }
-        }
-        return true;
-      }
-    }
     if (MIPS->isDSPIndexedDoubleword(Physical)) {
       if (!decodeMIPSEquivalent(Bytes, Physical & ~0x200u, Addr))
         return false;

@@ -17347,6 +17347,12 @@ fields produce fresh unknown values in LowIR. LLVM and C retain a source-domain
 guard when those values are observed. HighC helper identity includes the result
 width, so a function can use both extraction widths without truncating either.
 
+Classic DSP64 physical decoding uses the same validated `MIPSDSP64Forms.def`
+selector before Capstone's ordinary decoder. These legacy forms have no native
+Capstone entry; the adapter decodes their operand template once. The profile
+guard is recomputed when reusing a decoder with DSP enabled or disabled.
+Other words still follow the ordinary physical decode and fallback path.
+
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
 `MIPSCP0.def` owns built-in CP0 word views, context fields and write

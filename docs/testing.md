@@ -25267,6 +25267,11 @@ rounded/non-rounded shifts, packing, expansion, replication, BITREV/RADDU,
 destination/input aliases and discarded
 results. Shift tests enumerate immediate and variable count boundaries against
 independent expectations, including pure operations with absent DSPControl.
+`MIPSDSP64.PhysicalDecodeTracksProfileChangesAndOutputModes` exercises public,
+lift and light decode in both byte orders, with text/detail independently on
+and off. Truncated packed words refuse; switching the same decoder between
+DSP-enabled and ordinary profiles must update admission without changing
+ordinary integer decoding.
 The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
