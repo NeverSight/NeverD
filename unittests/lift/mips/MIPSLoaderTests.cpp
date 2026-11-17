@@ -121,6 +121,49 @@ TEST(MIPSHistoricalLoader,
         }
 }
 
+TEST(MIPSHistoricalLoader, EarlyProfilesKeepWidthFPAndExtensionBoundaries) {
+  for (bool Little : {false, true})
+    for (unsigned Level : {1u, 2u, 3u})
+      for (bool N32 : {false, true}) {
+        if (Level < 3 && N32)
+          continue;
+        const bool WideFile = Level == 3 && !N32;
+        ELFBytes File(WideFile ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                               : (Little ? Arch::MIPS32EL : Arch::MIPS32));
+        const uint32_t Flags = ((Level - 1) << 28) | (Level < 3 ? 0x1000u
+                                                      : N32     ? 0x20u
+                                                                : 0u);
+        File.put(WideFile ? 48 : 36, Flags, 4);
+        File.abiFlags();
+        File.Bytes[0xe2] = Level;
+        File.Bytes[0xe3] = 0;
+        File.Bytes[0xe4] = File.Bytes[0xe5] = Level < 3 ? 1 : 2;
+        File.Bytes[0xe7] = 1;
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        EXPECT_EQ(Image->MIPS->HistoricalISA, Level);
+        EXPECT_EQ(isMIPS64(Image->Arch), Level == 3);
+        EXPECT_EQ(Image->MIPS->hasScalarFP32ABI(Level == 3), Level < 3);
+        for (uint32_t Extension : {0x2000000u, 0x4000000u, 0x400u}) {
+          File.put(WideFile ? 48 : 36, Flags | Extension, 4);
+          auto Invalid = Loader.loadBuffer(File.buffer());
+          EXPECT_FALSE(bool(Invalid));
+          if (!Invalid)
+            llvm::consumeError(Invalid.takeError());
+        }
+        if (Level < 3) {
+          File.put(36, Flags | 0x200, 4);
+          File.Bytes[0xe5] = 2;
+          File.Bytes[0xe7] = 6;
+          auto Invalid = Loader.loadBuffer(File.buffer());
+          EXPECT_FALSE(bool(Invalid));
+          if (!Invalid)
+            llvm::consumeError(Invalid.takeError());
+        }
+      }
+}
+
 TEST_P(MIPSLoader, ProgramABIFlagsAgreeWithHeader) {
   ELFBytes File(GetParam());
   File.abiFlags();

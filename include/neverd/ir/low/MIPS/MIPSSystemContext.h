@@ -10,6 +10,8 @@
 #ifndef NEVERD_IR_LOW_MIPS_MIPSSYSTEMCONTEXT_H
 #define NEVERD_IR_LOW_MIPS_MIPSSYSTEMCONTEXT_H
 
+#include "neverd/ir/low/MIPS/MIPSHistoricalSchedule.h"
+
 #include <cstdint>
 #include <optional>
 
@@ -52,6 +54,9 @@ struct MIPSMSAPartition {
 };
 class MIPSScalarFPExecutor;
 struct MIPSSystemContext {
+  // Retained for the issuing processor across blocks and calls. Absence is
+  // unknown scheduling state, never an implicit quiescent function entry.
+  std::optional<mips::HistoricalSchedule> Historical;
   bool CP0Usable = false;
   bool ImplementedMT = false;
   uint32_t HWREna = 0;
