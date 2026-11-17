@@ -585,6 +585,17 @@ bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
 
 void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
                       std::optional<bool> ForbiddenFollower) const {
+  if (HistoricalISA && HistoricalISA <= 3)
+    return liftInstruction<true>(Instruction, Ops, ForbiddenFollower);
+  return liftInstruction<false>(Instruction, Ops, ForbiddenFollower);
+}
+
+// Keep historical retirement emission out of the modern/compressed hot path
+// while sharing the instruction semantics and validation in one implementation.
+template <bool Timed>
+void MIPSLifter::liftInstruction(const cs_insn &Instruction,
+                                std::vector<LowOp> &Ops,
+                                std::optional<bool> ForbiddenFollower) const {
   const auto Code = encoding(Instruction);
   if (!Code)
     throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
@@ -596,12 +607,11 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
   const size_t Begin = Ops.size();
   if (!Code->R6 && !Code->hasSequence() &&
       hasDelaySlot(Word)) { // A compact JRC has no physical slot.
-    liftControl(Instruction, nullptr, *Code, Ops);
+    liftControl<Timed>(Instruction, nullptr, *Code, Ops);
     return;
   }
   State S(Instruction.address, Ops, RegisterBytes, Instruction.size);
-  const bool Timed = HistoricalISA && HistoricalISA <= 3;
-  if (Timed)
+  if constexpr (Timed)
     S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
                     {NdVar::cst(Word, 4), NdVar::cst(FP32Registers, 1)});
   if (Code->R6 && isR6Compact(Word)) {
@@ -612,7 +622,7 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
     if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
       return;
   } else if (liftNonControl(S, *Code, Instruction.address)) {
-    if (Timed)
+    if constexpr (Timed)
       S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
     return;
   }
@@ -628,9 +638,12 @@ LowDelaySlot MIPSLifter::liftUnit(const cs_insn &Head, const cs_insn &Slot,
       (Code->SlotBytes != 1 && Slot.size != Code->SlotBytes))
     throw UnliftedInstruction(Head.address, Head.mnemonic,
                               "invalid MIPS delayed-control unit");
-  return liftControl(Head, &Slot, *Code, Ops);
+  if (HistoricalISA && HistoricalISA <= 3)
+    return liftControl<true>(Head, &Slot, *Code, Ops);
+  return liftControl<false>(Head, &Slot, *Code, Ops);
 }
 
+template <bool Timed>
 LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                                      Encoding Code,
                                      std::vector<LowOp> &Ops) const {
@@ -655,8 +668,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const unsigned Function = Word & 63;
   const size_t Begin = Ops.size();
   State S(Head.address, Ops, RegisterBytes, Head.size);
-  const bool Timed = HistoricalISA && HistoricalISA <= 3;
-  if (Timed)
+  if constexpr (Timed)
     S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
                     {NdVar::cst(Word, 4), NdVar::cst(FP32Registers, 1)});
   const auto Address = [&](uint64_t Value) {
@@ -773,7 +785,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   if (Link)
     S.write(Link,
             NdVar::cst(Resume | (isMIPSCompressedMode(Mode) ? 1 : 0), S.Width));
-  if (Timed)
+  if constexpr (Timed)
     S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
   const auto GuardFalsePath = [&] {
     NdVar Inverted = S.makeTemp(1);
@@ -792,7 +804,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     S.Addr = Slot->address;
     S.InsnSize = Slot->size;
     S.Seq = 0;
-    if (Timed)
+    if constexpr (Timed)
       S.emitIntrinsic(
           Intrinsic::MIPSHistoricalBegin, {},
           {NdVar::cst(SlotCode->Word, 4), NdVar::cst(FP32Registers, 1)});
@@ -801,7 +813,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
       Ops.resize(Begin);
       throw UnliftedInstruction(Slot->address, Slot->mnemonic, Slot->op_str);
     }
-    if (Timed)
+    if constexpr (Timed)
       S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
   }
   Member.OpCount = static_cast<uint32_t>(Ops.size() - Begin - Member.FirstOp);

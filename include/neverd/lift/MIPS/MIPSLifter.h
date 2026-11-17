@@ -144,6 +144,10 @@ private:
   std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16E2Encoding(uint16_t First, uint16_t Half) const;
   std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;
+  template <bool Timed>
+  void liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+                       std::optional<bool> ForbiddenFollower) const;
+  template <bool Timed>
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;
   Arch Target;
