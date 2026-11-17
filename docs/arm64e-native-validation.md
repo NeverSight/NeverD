@@ -2148,3 +2148,17 @@ is still unsupported: the leaf installer requires one original instruction
 section, and a diagnostic relift exposes a compact-unwind gap promoted to a
 function plus an omitted first appended definition. Those failure diagnostics
 are retained separately; they are not successful arbitrary-image coverage.
+
+At `1f1bd9eec18406c0567efab3fa743de986ff08d0`, the local Release suites pass
+235 publication, 28 signature-policy, 7 signer and 42 sanitizer C API tests,
+with zero failures or skips. The [hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44053487204)
+passes all 235 publication cases on both macos-26 and xcode-27. Each host
+executes the original and three published images through the authenticated
+caller, while the nonempty-requirement control remains refused. Windows
+frontend checks pass. Both Macs report Apple M1 (Virtual); the strict x1 gate
+still reports `unavailable` for explicit PAuth_LR, PACM-PC, scalar CPTA and
+checked memory writeback. The [source-bound evidence](evidence/arm64e-adhoc-publication-2026-11-17.json)
+records the exact package, report and per-generation image hashes. The temporary
+release, asset, tag and replay files were retired after verification, and unused
+local packages and compiled probe copies were removed. The active source build
+and archived diagnostics remain available; r6 and all fork pins are unchanged.
