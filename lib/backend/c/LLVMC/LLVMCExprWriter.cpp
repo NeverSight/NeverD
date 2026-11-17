@@ -40,6 +40,7 @@
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Argument.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/SaveAndRestore.h"
@@ -1721,6 +1722,163 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
   return SlotReadAtUses[&Load] = Decide();
 }
 
+void LLVMCWriter::forgetReadCrossings() const {
+  ReadCrossesItsStore.clear();
+  StoresByBase.reset();
+}
+
+bool LLVMCWriter::readCrossesItsStore(const llvm::LoadInst &Load) const {
+  if (const auto Known = ReadCrossesItsStore.find(&Load);
+      Known != ReadCrossesItsStore.end())
+    return Known->second;
+  auto Decide = [&] {
+    if (!Load.isSimple() || !Load.getFunction())
+      return false;
+    const auto At = peelPointerOffset(Load.getPointerOperand());
+    // A local's bytes have their own rule (slotReadAtUses).
+    if (!At || llvm::isa<llvm::AllocaInst>(At->first->stripPointerCasts()))
+      return false;
+    if (!StoresByBase) {
+      StoresByBase.emplace();
+      for (const llvm::BasicBlock &Block : *Load.getFunction())
+        for (const llvm::Instruction &I : Block)
+          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
+            if (const auto To = peelPointerOffset(Store->getPointerOperand()))
+              (*StoresByBase)[To->first].push_back(
+                  {Store, To->second,
+                   llvmAccessSize(Store->getValueOperand()->getType())});
+    }
+    const auto Known = StoresByBase->find(At->first);
+    if (Known == StoresByBase->end())
+      return false;
+    // Stores of the bytes the load read; one of no known size may be any.
+    const uint64_t Bytes = llvmAccessSize(Load.getType());
+    llvm::SmallVector<const llvm::StoreInst *, 4> Writers;
+    for (const StoreAt &Store : Known->second)
+      if (!Bytes || !Store.Bytes || At->second - Store.Off < Store.Bytes ||
+          Store.Off - At->second < Bytes)
+        Writers.push_back(Store.Store);
+    if (Writers.empty())
+      return false;
+
+    size_t Remaining = limits::backend::kLLVMCReadStoreCrossingWork;
+    // Whether \p Value reads the member the load reads, through casts.
+    const auto ReadsItToo = [&](const llvm::Value *Value) {
+      while (llvm::isa<llvm::CastInst, llvm::FreezeInst>(Value))
+        Value = llvm::cast<llvm::Instruction>(Value)->getOperand(0);
+      if (llvm::isa<llvm::PHINode>(Value))
+        return true;
+      const auto *Read = llvm::dyn_cast<llvm::LoadInst>(Value);
+      if (!Read || Read->getType() != Load.getType())
+        return false;
+      const auto From = peelPointerOffset(Read->getPointerOperand());
+      return From && *From == *At;
+    };
+    // The statements that evaluate the read where it prints at its uses:
+    // the users of its value, through the values computed from it. A PHI's
+    // copy runs where its incoming block ends; a PHI whose every incoming
+    // value reads the member prints as the read too
+    // (markRedundantPhiCopies). A value stored to a local home prints again
+    // where the home is read later in the block (allocaStoredValueBefore).
+    llvm::SmallVector<const llvm::Instruction *, 16> Uses;
+    llvm::SmallVector<const llvm::Instruction *, 16> Work{&Load};
+    llvm::SmallPtrSet<const llvm::Instruction *, 16> Seen;
+    while (!Work.empty()) {
+      const llvm::Instruction *Value = Work.pop_back_val();
+      for (const llvm::Use &Use : Value->uses()) {
+        if (!Remaining--)
+          return true;
+        const auto *User = llvm::dyn_cast<llvm::Instruction>(Use.getUser());
+        if (!User)
+          return true;
+        if (const auto *Phi = llvm::dyn_cast<llvm::PHINode>(User)) {
+          Uses.push_back(Phi->getIncomingBlock(Use)->getTerminator());
+          if (llvm::all_of(Phi->incoming_values(), ReadsItToo) &&
+              Seen.insert(Phi).second)
+            Work.push_back(Phi);
+          continue;
+        }
+        Uses.push_back(User);
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User)) {
+          const llvm::AllocaInst *Home =
+              Store->getValueOperand() == Value
+                  ? asAllocaPointer(Store->getPointerOperand())
+                  : nullptr;
+          if (!Home)
+            continue;
+          // The home of the read itself prints as the member wherever it is
+          // read (isThisFieldValueHome, noteAllocaStore): that form has no
+          // temporary to name.
+          const llvm::Value *Kept = Value;
+          while (llvm::isa<llvm::CastInst, llvm::FreezeInst>(Kept))
+            Kept = llvm::cast<llvm::Instruction>(Kept)->getOperand(0);
+          if (Kept == &Load)
+            return false;
+          for (const llvm::User *Reader : Home->users())
+            if (const auto *Reload = llvm::dyn_cast<llvm::LoadInst>(Reader);
+                Reload && Reload->getParent() == Store->getParent() &&
+                Store->comesBefore(Reload) && Seen.insert(Reload).second)
+              Work.push_back(Reload);
+          continue;
+        }
+        if (User->getType()->isVoidTy() || User->isTerminator())
+          continue;
+        if (Seen.insert(User).second)
+          Work.push_back(User);
+      }
+    }
+
+    // Blocks control enters after leaving one of \p From without running
+    // the load again: the load's own block is entered, and runs up to it.
+    const llvm::BasicBlock *Own = Load.getParent();
+    using BlockSet = llvm::SmallPtrSet<const llvm::BasicBlock *, 32>;
+    const auto Enter = [&](const llvm::BasicBlock *From, BlockSet &Entered) {
+      llvm::SmallVector<const llvm::BasicBlock *, 16> Pending(
+          llvm::succ_begin(From), llvm::succ_end(From));
+      while (!Pending.empty()) {
+        if (!Remaining--)
+          return false;
+        const llvm::BasicBlock *Block = Pending.pop_back_val();
+        if (Entered.insert(Block).second && Block != Own)
+          Pending.append(llvm::succ_begin(Block), llvm::succ_end(Block));
+      }
+      return true;
+    };
+    BlockSet AfterLoad;
+    if (!Enter(Own, AfterLoad))
+      return true;
+    for (const llvm::StoreInst *Store : Writers) {
+      const llvm::BasicBlock *Block = Store->getParent();
+      // The store ahead of the load in its block runs before the load does
+      // again; any other leaves its block as its block's end does.
+      const bool Ahead = Block == Own && Store->comesBefore(&Load);
+      if (Block == Own ? Ahead && !AfterLoad.count(Own)
+                       : !AfterLoad.count(Block))
+        continue;
+      BlockSet AfterStore;
+      if (!Ahead && !Enter(Block, AfterStore))
+        return true;
+      for (const llvm::Instruction *Use : Uses) {
+        if (!Remaining--)
+          return true;
+        const llvm::BasicBlock *Where = Use->getParent();
+        // Whether the use runs before the load does in the load's block.
+        const bool BeforeLoad = Where == Own && !Load.comesBefore(Use);
+        if (Where == Block && Store->comesBefore(Use)) {
+          // Later in the store's block, unless the load is between them.
+          if (!Ahead || BeforeLoad)
+            return true;
+          continue;
+        }
+        if (AfterStore.count(Where) && (Where != Own || BeforeLoad))
+          return true;
+      }
+    }
+    return false;
+  };
+  return ReadCrossesItsStore[&Load] = Decide();
+}
+
 bool LLVMCWriter::frameRecordAdmits(uint64_t Off, const TypeRef &Ty) const {
   const uint64_t Size = frameMemberSize(Ty);
   const auto *Bytes =
@@ -2431,11 +2589,22 @@ LLVMCWriter::typedRecordAccess(const llvm::Value *Ptr, uint16_t AccessSize,
       if (TyIt == ValueTypes.end() || !TyIt->second ||
           TyIt->second->Kind != NdTypeKind::Ptr || !TyIt->second->Pointee ||
           TyIt->second->Pointee->Kind != NdTypeKind::Struct ||
-          TyIt->second->Pointee->SourceName.empty() ||
-          Text == ValueTexts.end() || Text->second.empty())
+          TyIt->second->Pointee->SourceName.empty())
         return std::nullopt;
       Rec = TyIt->second->Pointee;
-      BaseName = Text->second;
+      if (Text != ValueTexts.end() && !Text->second.empty()) {
+        BaseName = Text->second;
+      } else {
+        // A member read into its temporary (readCrossesItsStore). The
+        // temporary keeps the scalar carrier; the typed view of what it
+        // points to casts it, as a variable of a stated type is cast above.
+        const auto Name = ValNames.find(LI);
+        if (!readCrossesItsStore(*LI) || Name == ValNames.end() ||
+            Name->second.empty())
+          return std::nullopt;
+        BaseName = "((" + declarationToC(TyIt->second, "") + ")(uintptr_t)" +
+                   Name->second + ")";
+      }
     }
   } else if (const auto *Arg = llvm::dyn_cast<llvm::Argument>(Peeled->first)) {
     // A parameter the signature types as a record's address, in a unit
@@ -2669,7 +2838,7 @@ std::string LLVMCWriter::indexExprStr(const llvm::Value *V) {
     }
   }
   if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(V)) {
-    if (auto Acc = typedLoadAccess(*LI))
+    if (auto Acc = typedLoadAccess(*LI); Acc && !readCrossesItsStore(*LI))
       return Acc->Text;
   }
   if (auto Acc = typedRecordAccess(V, 4))
@@ -3099,8 +3268,8 @@ std::string LLVMCWriter::indirectCalleeStr(const llvm::Value *Callee,
   // A slot a typed record names prints as its member, which the call reads:
   // a UEFI protocol's SystemTable->ConOut->OutputString, t->boot->reset.
   if (const std::optional<TypedAccess> Member = typedLoadAccess(*SlotLI);
-      Member && !Member->Text.empty() && Member->Type &&
-      Member->Type->Kind == NdTypeKind::Ptr &&
+      Member && !readCrossesItsStore(*SlotLI) && !Member->Text.empty() &&
+      Member->Type && Member->Type->Kind == NdTypeKind::Ptr &&
       llvmAccessSize(SlotLI->getType()) == PtrSize) {
     // The member's address is the record's plus the slot's offset, which
     // the member names.
@@ -3187,7 +3356,8 @@ std::string LLVMCWriter::indirectCalleeStr(const llvm::Value *Callee,
         ObjStr = valueStr(Home->second);
     }
     if (ObjStr.empty())
-      if (auto Acc = typedLoadAccess(*ObjLI))
+      if (auto Acc = typedLoadAccess(*ObjLI);
+          Acc && !readCrossesItsStore(*ObjLI))
         ObjStr = Acc->Text;
   }
   // The member at the object's address is what the address holds: the

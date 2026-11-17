@@ -14457,6 +14457,29 @@ the frame does, so there a write through the pointer reaches the named member
 where it is, and only the place a read through one starts at stays unnamed
 (`RawFrameLocationsInRecord`).
 
+A read of a record's member or of an element through a pointer
+(`typedLoadAccess`, `typedIndexAccess`) prints as the member at each use of
+its value, and so reads the member again there.
+`LLVMCWriter::readCrossesItsStore` looks for a store to bytes the load read,
+at an address the same value and offsets name, that can run after the load and
+before a statement that would evaluate the read: `old = p->next; p->next = 0;
+return old;` must not return a second read of `p->next`. Such a load reads
+into its temporary where it stands, as a frame member does, a member read
+through its value casts the temporary, and from its statement on a member
+read is one of the expressions computed where they stand
+(`MaterializedExpressions`). The statements that
+evaluate a read are the users of its value through the values computed from
+it, a PHI's copies where its incoming blocks end, the users of a PHI every
+incoming value of which reads that member, and the later reads in its block of
+a local such a value is stored to. A load the store cannot reach, and a store
+ahead of the load in its block, leave the read where it was. Only that store
+is looked for, and not for a read whose value is also stored to a local, which
+may print as the member wherever it is read. That read, a call, a store
+through another pointer value or at a computed index, and the callee a call
+reads through a chain of loads still leave a read at its uses, where it can
+read a later value. A PHI has no statement but its copies, so the source map
+records its occurrences there.
+
 ## Cross-architecture translation contract
 
 `include/neverd/translate` defines a contract layer, not an
