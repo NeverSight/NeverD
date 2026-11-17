@@ -1,6 +1,6 @@
-// A freestanding o32 C environment supplies memcpy, including compiler-emitted
-// aggregate copies. Execute every byte in the guest; no emulator interception.
-// Exact source/destination equality is supported as required by GCC.
+# A freestanding o32 C environment supplies memcpy, including compiler-emitted
+# aggregate copies. Execute every byte in the guest; no emulator interception.
+# Exact source/destination equality is supported as required by GCC.
 .set noreorder
 .set nomips16
 .set nomicromips
