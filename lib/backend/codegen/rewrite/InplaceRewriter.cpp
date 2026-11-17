@@ -201,26 +201,52 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   };
   std::vector<FuncPlan> Plans;
 
+  // A function's source identity names the original function it replaces or
+  // calls, as it does on the section path. The names of the image's symbols
+  // need not be the module's: a module lifted without the PDB or MAP that
+  // patching loads calls a function sub_<address>, and the image calls it by
+  // its debug name. Matched by name alone, a replacement would be left out,
+  // or would replace another function of that name, and a call to it would
+  // resolve to nothing.
+  std::map<std::string, va_t> SourceEntries;
+  for (const llvm::Function &F : Mod) {
+    auto OriginalVA = rewrite_source::getOriginalVA(F);
+    if (!OriginalVA) {
+      llvm::WithColor::error()
+          << "inplace: " << llvm::toString(OriginalVA.takeError()) << "\n";
+      return PatchResult{};
+    }
+    if (*OriginalVA && Image.hasAuthenticatedFunctionEntryAt(**OriginalVA))
+      SourceEntries.emplace(F.getName().str(), **OriginalVA);
+  }
   for (auto &F : Mod) {
     if (F.isDeclaration())
       continue;
     std::string Resolved = resolveSymbolAlias(F.getName().str(), SymByName);
-    if (Resolved.empty() && Image.isELF() && Image.Entry != 0) {
-      // A stripped ELF entry point, or one marked STT_NOTYPE, has no function
-      // symbol to match.  Its exact lifted source identity and the loader's
-      // authenticated entry are sufficient to recover this one replacement.
-      auto OriginalVA = rewrite_source::getOriginalVA(F);
-      if (!OriginalVA) {
+    if (const auto Source = SourceEntries.find(F.getName().str());
+        Source != SourceEntries.end()) {
+      if (!Resolved.empty() && SymByName.at(Resolved).Addr != Source->second) {
         llvm::WithColor::error()
-            << "inplace: " << llvm::toString(OriginalVA.takeError()) << "\n";
+            << "inplace: replacement '" << F.getName() << "' replaces 0x"
+            << llvm::utohexstr(Source->second)
+            << ", but the image's function of that name is at 0x"
+            << llvm::utohexstr(SymByName.at(Resolved).Addr) << "\n";
         return PatchResult{};
       }
-      if (*OriginalVA && **OriginalVA == Image.Entry &&
-          Image.hasAuthenticatedFunctionEntryAt(Image.Entry)) {
-        Symbol EntrySymbol = Symbol::makeFunc(Image.Entry);
-        EntrySymbol.Name = F.getName().str();
-        SymByName.emplace(EntrySymbol.Name, std::move(EntrySymbol));
-        Resolved = F.getName().str();
+      if (Resolved.empty()) {
+        // The image's symbol at that entry, when it has one, gives the
+        // function's extent; a stripped entry has none.
+        for (const auto &[Name, Sym] : SymByName)
+          if (Sym.Addr == Source->second) {
+            Resolved = Name;
+            break;
+          }
+        if (Resolved.empty()) {
+          Symbol EntrySymbol = Symbol::makeFunc(Source->second);
+          EntrySymbol.Name = F.getName().str();
+          SymByName.emplace(EntrySymbol.Name, std::move(EntrySymbol));
+          Resolved = F.getName().str();
+        }
       }
     }
     if (Resolved.empty())
@@ -329,6 +355,16 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
   for (const auto &E : Image.Exports)
     if (!E.Name.empty())
       ExportAddrs[E.Name] = E.Addr;
+  // A function of the module that names its original entry is that entry,
+  // under the object's spelling of its name too.
+  auto SourceEntryOf = [&](const std::string &Name) -> std::optional<va_t> {
+    auto Source = SourceEntries.find(Name);
+    if (Source == SourceEntries.end() && !Name.empty() && Name[0] == '_')
+      Source = SourceEntries.find(Name.substr(1));
+    if (Source == SourceEntries.end())
+      return std::nullopt;
+    return Source->second;
+  };
 
   for (auto &Plan : Plans) {
     auto ClonedMod = llvm::CloneModule(Mod);
@@ -346,6 +382,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       auto FIt = FuncOrigVAs.find(Name);
       if (FIt != FuncOrigVAs.end())
         return SerializeResolvedCode(FIt->second, true);
+      if (const auto Source = SourceEntryOf(Name))
+        return SerializeResolvedCode(*Source, true);
       if (const auto *Entry = Resolver->findEntry(Name))
         return SerializeResolvedCode(Entry->Addr, Entry->IsCode);
       std::string ExportKey = resolveSymbolAlias(Name, ExportAddrs);
@@ -495,6 +533,8 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       auto FIt = FuncOrigVAs.find(Name);
       if (FIt != FuncOrigVAs.end())
         return SerializeResolvedCode(FIt->second, true);
+      if (const auto Source = SourceEntryOf(Name))
+        return SerializeResolvedCode(*Source, true);
       if (const auto *Entry = Resolver->findEntry(Name))
         return SerializeResolvedCode(Entry->Addr, Entry->IsCode);
       std::string ExportKey = resolveSymbolAlias(Name, ExportAddrs);

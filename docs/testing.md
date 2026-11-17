@@ -3433,6 +3433,13 @@ consistent and relaxed atomic stores through a pointer, and a release store
 into a local whose address escapes. The LLVM C writes each with
 `__atomic_store` of its order and runs at O0 and O2.
 
+`PatchCOFF_X64.InplaceBindsFunctionsByTheirSourceIdentity` lifts the entry of
+`test_patch_coff.exe` alone, so it calls each function `sub_<address>`, and
+patches it in place into the image under the names a PDB gives its functions.
+Named as the image names it or as it was lifted, the replacement is installed
+and its relocated code calls the original functions; named as another function
+of the image, it is refused.
+
 `LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
 optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,

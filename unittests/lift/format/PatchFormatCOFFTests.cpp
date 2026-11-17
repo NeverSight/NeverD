@@ -7,10 +7,12 @@
 #include "PatchFormatTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFFH4Encoding.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/SHA256.h"
@@ -1386,6 +1388,134 @@ TEST_F(PatchCOFF_X64, RejectsBorrowedGeneratedCxxUnwindAgainstReceipt) {
   EXPECT_EQ(llvm::toString(std::move(Validation)),
             "coff exception patch: final generated language owner does not "
             "match the prepared receipt");
+}
+
+// A module lifted without the PDB or MAP that patching loads names a function
+// sub_<address>, where the image names it by its debug name. In place, a
+// replacement and each function it calls are bound by their source identities,
+// as on the section path. By name alone a call resolved to nothing and was
+// written as a call of the new section's start minus four, a replacement of
+// another name was left out, and one whose name the image gives another
+// function would replace that function.
+TEST_F(PatchCOFF_X64, InplaceBindsFunctionsByTheirSourceIdentity) {
+  auto PE = fs::path(TEST_OBJ_DIR) / "test_patch_coff.exe";
+  if (!fs::exists(PE))
+    GTEST_SKIP() << "COFF executable not built";
+
+  // The targets of the direct calls in the \p Size bytes at \p VA, through
+  // the jump a relocated function's entry holds.
+  const auto CallTargets = [](const BinaryImage &In, va_t VA, size_t Size) {
+    std::vector<va_t> Targets;
+    const uint8_t *Code = In.readVA(VA, Size);
+    if (Code && Code[0] == 0xE9) {
+      int32_t Displacement = 0;
+      std::memcpy(&Displacement, Code + 1, sizeof(Displacement));
+      VA = VA + 5 + static_cast<int64_t>(Displacement);
+      Code = In.readVA(VA, Size);
+    }
+    for (size_t I = 0; Code && I + 5 <= Size; ++I)
+      if (Code[I] == 0xE8) {
+        int32_t Displacement = 0;
+        std::memcpy(&Displacement, Code + I + 1, sizeof(Displacement));
+        Targets.push_back(VA + I + 5 + static_cast<int64_t>(Displacement));
+        I += 4;
+      }
+    return Targets;
+  };
+
+  struct Case {
+    const char *Trace;
+    /// The replacement's name: empty keeps the one it was lifted with.
+    std::string Name;
+    bool Accepted;
+  };
+  const Case Cases[] = {
+      {"named as the image names it", "mainCRTStartup", true},
+      {"named as the module was lifted", "", true},
+      {"named as another function of the image", "coff_unwind_helper", false},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Trace);
+    auto Loaded = loadBinary(PE);
+    ASSERT_TRUE(static_cast<bool>(Loaded))
+        << llvm::toString(Loaded.takeError());
+    BinaryImage Image = std::move(*Loaded);
+    // mainCRTStartup calls coff_switch_simple, coff_switch_offset and
+    // coff_unwind_helper.
+    const va_t Entry = Image.Entry;
+    const std::vector<va_t> Callees = CallTargets(Image, Entry, 64);
+    ASSERT_EQ(Callees.size(), 3u);
+
+    // The entry lifted alone, without debug names: it calls each function
+    // sub_<address>.
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = true;
+    Options.OnlyFunctionEntries.insert(Entry);
+    PipelineResult Lifted = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+    ASSERT_NE(Lifted.LlvmModule, nullptr);
+    llvm::Module &Module = *Lifted.LlvmModule;
+    llvm::Function *Replacement = nullptr;
+    for (llvm::Function &F : Module)
+      if (!F.isDeclaration()) {
+        auto Source = rewrite_source::getOriginalVA(F);
+        ASSERT_TRUE(static_cast<bool>(Source))
+            << llvm::toString(Source.takeError());
+        if (*Source && **Source == Entry)
+          Replacement = &F;
+      }
+    ASSERT_NE(Replacement, nullptr);
+    for (const va_t VA : Callees) {
+      llvm::Function *Callee = Module.getFunction("sub_" + llvm::utohexstr(VA));
+      ASSERT_NE(Callee, nullptr) << llvm::utohexstr(VA);
+      ASSERT_TRUE(Callee->isDeclaration());
+    }
+    if (!C.Name.empty())
+      Replacement->setName(C.Name);
+
+    // The image's debug names, as a PDB gives them.
+    const std::pair<va_t, const char *> DebugNames[] = {
+        {Entry, "mainCRTStartup"},
+        {Callees[0], "coff_switch_simple"},
+        {Callees[1], "coff_switch_offset"},
+        {Callees[2], "coff_unwind_helper"}};
+    Image.Symbols.erase(
+        std::remove_if(Image.Symbols.begin(), Image.Symbols.end(),
+                       [&](const Symbol &S) {
+                         return llvm::any_of(DebugNames, [&](const auto &Name) {
+                           return S.Addr == Name.first;
+                         });
+                       }),
+        Image.Symbols.end());
+    for (const auto &[VA, Name] : DebugNames) {
+      Symbol Function = Symbol::makeFunc(VA);
+      Function.Name = Name;
+      Image.Symbols.push_back(std::move(Function));
+    }
+
+    const fs::path Output = tmpFile("inplace-source-identity.exe");
+    fs::remove(Output);
+    testing::internal::CaptureStderr();
+    const PatchResult Result =
+        InplaceRewriter::create(BinaryFormat::COFF)
+            ->rewrite(PE, Output, Module, Image, Arch::X64);
+    const std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (!C.Accepted) {
+      EXPECT_FALSE(Result.Success) << Diagnostic;
+      EXPECT_NE(Diagnostic.find("the image's function of that name is at"),
+                std::string::npos)
+          << Diagnostic;
+      continue;
+    }
+    ASSERT_TRUE(Result.Success) << Diagnostic;
+    EXPECT_EQ(Diagnostic.find("unresolved"), std::string::npos) << Diagnostic;
+    auto Patched = loadBinary(Output);
+    ASSERT_TRUE(static_cast<bool>(Patched))
+        << llvm::toString(Patched.takeError());
+    EXPECT_EQ(CallTargets(*Patched, Entry, 64), Callees) << Diagnostic;
+  }
 }
 
 //===----------------------------------------------------------------------===//
