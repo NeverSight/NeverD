@@ -323,7 +323,10 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
   std::set<va_t> UntypedCOFFExports;
   if (Img.Format == BinaryFormat::MachO && !Img.IsRelocatable) {
     for (const auto &Seg : Img.Segments)
-      SkipAddrs.insert(Seg.VA);
+      // A linked header marker is not code. Other segments can begin with a
+      // real function, including sectionless code installed by publication.
+      if (Seg.FileOff == 0)
+        SkipAddrs.insert(Seg.VA);
   }
 
   for (const auto &Exp : Img.Exports) {

@@ -606,6 +606,90 @@ TEST(HighCSourceCalls, UserAndIndirectCalleesKeepOpaqueUnionTags) {
   }
 }
 
+TEST(HighCSourceCalls, IndirectCalleeRecordsAreDeclaredInCallOrder) {
+  // The checked prototype of an indirect call is a type built for that call
+  // and gone after it.  The pass that declares the records signatures name
+  // must not take a later call's prototype, allocated where an earlier one
+  // was, for one it has visited: each record is declared where the first call
+  // that names it stands, whatever addresses the prototypes had.  Enough
+  // calls follow one another here for an allocator to hand addresses out
+  // again.
+  class CalleeDebug : public NullDebugContext {
+  public:
+    std::map<va_t, FunctionSym> Callees;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      const auto Found = Callees.find(Address);
+      return Found == Callees.end() ? std::nullopt
+                                    : std::optional(Found->second);
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  constexpr unsigned Calls = 512;
+  HighFunc Caller;
+  Caller.Name = "calls_many";
+  Caller.ReturnType = NdType::makeVoid();
+  Caller.Params = {{"arg0", NdType::makeInt(8, false)}};
+  std::vector<std::string> Records;
+  for (unsigned I = 0; I < Calls; ++I) {
+    // The records' names sort against the order of their calls: what the
+    // walk over the calls leaves out is declared afterwards by name, in the
+    // other order.
+    const std::string Function = "callee_" + std::to_string(1000 + I);
+    Records.push_back("Record" + std::to_string(2000 - I));
+    const va_t Address = 0x2000 + 0x10 * I;
+    FunctionSym Callee;
+    Callee.Name = Function;
+    Callee.Addr = Address;
+    Callee.ReturnType = NdType::makeInt(8, true);
+    Callee.Params = {
+        {"value", NdType::makePtr(NdType::makeNamedRecord(Records.back()))}};
+    Callee.PrototypeFromCLibrary = true;
+    Debug.Callees.emplace(Address, Callee);
+    auto Call =
+        HighExpr::makeCall(Function, Address, {HighExpr::makeConst(0, 8)});
+    Call->Type = Callee.ReturnType;
+    Call->IsIndirectCall = true;
+    Call->IndirectParamIdx = 0;
+    Call->IndirectTarget = parameter(0, NdType::makeInt(8, false));
+    HighStmt Statement;
+    Statement.Kind = StmtKind::Call;
+    Statement.CallExpr = std::move(Call);
+    Caller.Body.push_back(std::move(Statement));
+  }
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Caller.Body.push_back(std::move(Return));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  // Win64 is a convention under which an indirect call is written through
+  // its callee's prototype.
+  Options.Format = BinaryFormat::COFF;
+  Options.RecordDefinitions = [](const std::vector<TypeRef> &Types) {
+    CRecordDefinitions Result;
+    for (const TypeRef &Type : Types)
+      if (Type->Kind == NdTypeKind::Ptr && Type->Pointee &&
+          !Type->Pointee->SourceName.empty())
+        Result.Tags[Type->Pointee->SourceName] = false;
+    return Result;
+  };
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Caller}, OS, Options, &Debug));
+  // Each call is written through its own prototype.
+  EXPECT_NE(Source.find("(*)(Record2000*)"), std::string::npos)
+      << Source.substr(0, 2000);
+  size_t Last = 0;
+  for (const std::string &Record : Records) {
+    const size_t Declared =
+        Source.find("typedef struct " + Record + " " + Record + ";");
+    ASSERT_NE(Declared, std::string::npos) << Record;
+    EXPECT_GE(Declared, Last) << Record << " is declared out of call order";
+    Last = Declared;
+  }
+  source_call_execution_test::checkSyntax(Source,
+                                          {"--target=x86_64-w64-windows-gnu"});
+}
+
 TEST(HighCSourceCalls, CallbackBorrowsDeclareNestedRecordTags) {
   class CalleeDebug final : public NullDebugContext {
   public:

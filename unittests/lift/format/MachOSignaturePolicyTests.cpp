@@ -19,6 +19,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <utility>
@@ -27,6 +28,8 @@
 namespace {
 
 using namespace neverd::macho_signature;
+
+#include "MachOSignaturePolicyFixtures.def"
 
 constexpr uint32_t DerEntitlementsSlot = 7;
 constexpr uint32_t DerEntitlementsMagic = 0xfade7172;
@@ -339,6 +342,56 @@ TEST(MachOSignaturePolicy, ZeroAlignmentPaddingIsAccepted) {
 
   ASSERT_TRUE(static_cast<bool>(Result)) << llvm::toString(Result.takeError());
   EXPECT_TRUE(canTransactionallyAdHocResign(*Result));
+}
+
+TEST(MachOSignaturePolicy, ReservedSignatureStorageDoesNotChangeProfile) {
+  using namespace llvm::MachO;
+  for (std::vector<Slot> Slots :
+       {std::vector<Slot>{
+            {CSSLOT_CODEDIRECTORY,
+             codeDirectory(CS_ADHOC | CS_LINKER_SIGNED, kStorageIdentifier)}},
+        canonicalCodesignOutputSlots(kStorageIdentifier)}) {
+    std::vector<uint8_t> Signature = superBlob(Slots);
+    llvm::Expected<Profile> Before = inspectBytes(thinMachO(Signature));
+    ASSERT_TRUE(static_cast<bool>(Before))
+        << llvm::toString(Before.takeError());
+    Signature.insert(Signature.end(), std::begin(kReservedSignatureBytes),
+                     std::end(kReservedSignatureBytes));
+
+    llvm::Expected<Profile> After = inspectBytes(thinMachO(Signature));
+
+    ASSERT_TRUE(static_cast<bool>(After)) << llvm::toString(After.takeError());
+    EXPECT_EQ(*After, *Before);
+    EXPECT_TRUE(canTransactionallyAdHocResign(*After));
+    EXPECT_EQ(isCanonicalCodesignAdHocOutput(*After),
+              isCanonicalCodesignAdHocOutput(*Before));
+  }
+}
+
+TEST(MachOSignaturePolicy, SignatureSlotsCannotClaimReservedStorage) {
+  using namespace llvm::MachO;
+  std::vector<uint8_t> Signature =
+      superBlob(canonicalCodesignOutputSlots(kStorageIdentifier));
+  const uint32_t SuperLength = static_cast<uint32_t>(Signature.size());
+  const size_t OffsetField =
+      sizeof(CS_SuperBlob) + offsetof(CS_BlobIndex, offset);
+  const uint32_t FirstOffset =
+      llvm::support::endian::read32be(Signature.data() + OffsetField);
+  Signature.insert(Signature.end(), std::begin(kReservedSignatureBytes),
+                   std::end(kReservedSignatureBytes));
+  std::vector<uint8_t> IndexOutside = Signature;
+  writeBE32(IndexOutside, OffsetField, SuperLength);
+  std::vector<uint8_t> LengthOutside = Signature;
+  writeBE32(LengthOutside, FirstOffset + offsetof(CS_CodeDirectory, length),
+            static_cast<uint32_t>(Signature.size() - FirstOffset));
+
+  llvm::Expected<Profile> BadIndex = inspectBytes(thinMachO(IndexOutside));
+  llvm::Expected<Profile> BadLength = inspectBytes(thinMachO(LengthOutside));
+
+  ASSERT_FALSE(BadIndex);
+  EXPECT_NE(takeError(BadIndex).find(kReservedIndexError), std::string::npos);
+  ASSERT_FALSE(BadLength);
+  EXPECT_NE(takeError(BadLength).find(kReservedLengthError), std::string::npos);
 }
 
 TEST(MachOSignaturePolicy, EntitlementsFailClosed) {
@@ -671,10 +724,6 @@ TEST(MachOSignaturePolicy, MalformedSignatureStructuresAreRejected) {
   writeBE32(BadSuperLength, offsetof(CS_SuperBlob, length),
             static_cast<uint32_t>(Valid.size() + 1));
   Cases.emplace_back("SuperBlob length", thinMachO(BadSuperLength));
-
-  std::vector<uint8_t> BadPadding = Valid;
-  BadPadding.push_back(0x5a);
-  Cases.emplace_back("SuperBlob padding", thinMachO(BadPadding));
 
   std::vector<uint8_t> BadInternalTrailing = Valid;
   BadInternalTrailing.push_back(0x5a);

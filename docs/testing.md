@@ -8656,6 +8656,13 @@ system header. HighC must retain that union's tag; LLVM-C still uses machine
 carriers for this user-only prototype. `HighCSourceCalls.UserAndIndirectCalleesKeepOpaqueUnionTags`
 also compiles direct and indirect calls whose opaque union type is supplied
 only by the resolved callee, with no typed argument hiding a missing declaration.
+`HighCSourceCalls.IndirectCalleeRecordsAreDeclaredInCallOrder` writes 512
+indirect calls through their callees' prototypes, each naming a record of its
+own, with the records' names sorted against the calls: every record is
+declared where its call stands. The pass that declares them visits each call's
+prototype, a type built for that call and gone after it, and once took a later
+prototype at a reused address for one it had visited, so a unit's
+declarations moved from run to run.
 
 `TypeImport.*` checks independent prototype providers with equal-size but
 different pointees, recursive dependencies, callback conventions and

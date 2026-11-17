@@ -9,6 +9,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
 #include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
@@ -44,6 +45,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -64,19 +66,29 @@ void verifyTailTargets(llvm::Module &Module, MachOPatcher &Patcher,
   auto *Callee = Candidate->getFunction(kSum);
   ASSERT_NE(Forwarder, nullptr);
   ASSERT_NE(Callee, nullptr);
-  auto *Return =
-      llvm::dyn_cast<llvm::ReturnInst>(Forwarder->back().getTerminator());
-  ASSERT_NE(Return, nullptr);
-  auto *Call = llvm::dyn_cast_or_null<llvm::CallInst>(Return->getReturnValue());
-  ASSERT_NE(Call, nullptr);
-  ASSERT_EQ(Call->getCalledFunction(), Callee);
-  ASSERT_TRUE(Call->isTailCall());
-  Call->setCalledFunction(Forwarder);
+  llvm::Use *Target = nullptr;
+  if (Forwarder->hasFnAttribute(llvm::Attribute::Naked)) {
+    auto *Call = llvm::dyn_cast<llvm::CallInst>(&Forwarder->front().front());
+    ASSERT_TRUE(Call && Call->isInlineAsm());
+    ASSERT_EQ(Call->arg_size(), 1u);
+    Target = &Call->getArgOperandUse(0);
+  } else {
+    auto *Return =
+        llvm::dyn_cast<llvm::ReturnInst>(Forwarder->back().getTerminator());
+    ASSERT_NE(Return, nullptr);
+    auto *Call =
+        llvm::dyn_cast_or_null<llvm::CallInst>(Return->getReturnValue());
+    ASSERT_NE(Call, nullptr);
+    ASSERT_TRUE(Call->isTailCall());
+    Target = &Call->getCalledOperandUse();
+  }
+  ASSERT_EQ(Target->get(), Callee);
+  Target->set(Forwarder);
   EXPECT_FALSE(
       Patcher.patch(Input, Rejected, *Candidate, Architecture).Success);
   EXPECT_FALSE(std::filesystem::exists(Rejected));
 
-  Call->setCalledFunction(Callee);
+  Target->set(Callee);
   auto &Functions = Candidate->getFunctionList();
   Functions.splice(Functions.begin(), Functions, Forwarder->getIterator());
   auto Reordered =
@@ -126,6 +138,7 @@ enum class LeafCheck {
   IndexedError,
   AsyncIndexedError,
   Resigned,
+  Relifted,
   SigningRequirements
 };
 
@@ -161,7 +174,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
-  if (Check == LeafCheck::Resigned || Check == LeafCheck::SigningRequirements) {
+  if (Check == LeafCheck::Resigned || Check == LeafCheck::Relifted ||
+      Check == LeafCheck::SigningRequirements) {
     llvm::SmallVector<llvm::StringRef> Sign{kCodesign,       kForceSign,
                                             kSign,           kAdHocIdentity,
                                             kSignIdentifier, kRepeatIdentity};
@@ -319,14 +333,29 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     auto MissingWrite = llvm::CloneModule(Module);
     auto *Writer = MissingWrite->getFunction(kDifference);
     ASSERT_NE(Writer, nullptr);
-    llvm::SmallVector<llvm::IntrinsicInst *> Writes;
-    for (auto &BB : *Writer)
-      for (auto &I : BB)
-        if (auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
-            Call && Call->getIntrinsicID() == llvm::Intrinsic::write_register)
-          Writes.push_back(Call);
-    ASSERT_EQ(Writes.size(), 1u);
-    Writes.front()->eraseFromParent();
+    if (Writer->hasFnAttribute(llvm::Attribute::Naked)) {
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(&Writer->front().front());
+      ASSERT_TRUE(Call && Call->isInlineAsm());
+      auto *Assembly = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
+      std::string Text = Assembly->getAsmString().str();
+      const auto At = Text.find(kNativeErrorWrite);
+      ASSERT_NE(At, std::string::npos);
+      Text.replace(At, llvm::StringRef(kNativeErrorWrite).size(),
+                   kMissingReturnSign);
+      Call->setCalledOperand(llvm::InlineAsm::get(
+          Assembly->getFunctionType(), Text, Assembly->getConstraintString(),
+          Assembly->hasSideEffects(), Assembly->isAlignStack(),
+          Assembly->getDialect(), Assembly->canThrow()));
+    } else {
+      llvm::SmallVector<llvm::IntrinsicInst *> Writes;
+      for (auto &BB : *Writer)
+        for (auto &I : BB)
+          if (auto *Call = llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+              Call && Call->getIntrinsicID() == llvm::Intrinsic::write_register)
+            Writes.push_back(Call);
+      ASSERT_EQ(Writes.size(), 1u);
+      Writes.front()->eraseFromParent();
+    }
     EXPECT_FALSE(
         Patcher.patch(Input, Rejected, *MissingWrite, Image->Arch).Success);
     EXPECT_FALSE(std::filesystem::exists(Rejected));
@@ -564,17 +593,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                                     : kCount);
   testing::Test::RecordProperty(kAuthenticatedSites, AuthenticatedCalls);
   std::vector<std::string> ExecutionPaths{Input, Output};
-  if (Check == LeafCheck::Resigned) {
-    const auto Object = (Root / kRepublishObject).string();
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
-                                        {kCompiler, kTargetFlag, kTarget,
-                                         kCompileObject, Source, kOut, Object}),
-              0);
-    auto NativeObject = llvm::MemoryBuffer::getFile(Object);
-    ASSERT_TRUE(bool(NativeObject));
-    // The initial publication consumes the lifted module. Later generations
-    // exercise native replacement of that signed output; automatic relifting
-    // of appended executable segments has a separate ownership boundary.
+  if (Check == LeafCheck::Resigned || Check == LeafCheck::Relifted) {
+    std::unique_ptr<llvm::MemoryBuffer> NativeObject;
+    if (Check == LeafCheck::Resigned) {
+      const auto Object = (Root / kRepublishObject).string();
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag,
+                                                      kTarget, kCompileObject,
+                                                      Source, kOut, Object}),
+                0);
+      auto File = llvm::MemoryBuffer::getFile(Object);
+      ASSERT_TRUE(bool(File));
+      NativeObject = std::move(*File);
+    }
     for (unsigned I = 0; I < kRepeatedPublications; ++I) {
       SCOPED_TRACE(I);
       const auto PreviousPath = ExecutionPaths.back();
@@ -583,22 +613,124 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       auto Before = macho_signature::inspect(Previous->Raw);
       ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
       ASSERT_TRUE(macho_signature::isCanonicalCodesignAdHocOutput(*Before));
-      std::vector<SourcePatchMapping> Mappings;
-      for (const auto &[Name, Symbol] :
-           {std::pair{kSum, kSumSymbol},
-            std::pair{kDifference, kDifferenceSymbol}}) {
-        const auto *Entry = Previous->findSymbol(Symbol);
-        ASSERT_NE(Entry, nullptr);
-        Mappings.push_back({Name, Entry->Addr});
-      }
       const auto NextPath =
           (Root / (kRepeatedPrefix + std::to_string(I) + kOutput)).string();
-      auto Repeated = installMachOObjectPatch(
-          (*NativeObject)->getBuffer(), *Previous, Mappings, {}, NextPath, {});
-      ASSERT_TRUE(bool(Repeated)) << llvm::toString(Repeated.takeError());
-      ASSERT_TRUE(Repeated->Success);
-      ASSERT_EQ(Repeated->PatchedFunctions.size(), ExpectedEntries);
-      for (const auto &Entry : Repeated->PatchedFunctions)
+      PatchResult Repeated;
+      if (Check == LeafCheck::Relifted) {
+        testing::Test::RecordProperty(kReliftStartsPrefix + std::to_string(I),
+                                      Previous->MachOHasFunctionStarts ? 1 : 0);
+        const auto *Unwind =
+            Previous->getSectionByName(section_names::macho::Unwind);
+        ASSERT_NE(Unwind, nullptr);
+        EXPECT_FALSE(Previous->hasAuthenticatedFunctionEntryAt(Unwind->VA));
+        llvm::LLVMContext NextContext;
+        auto Next = Pipeline().run(*Previous, NextContext, Options);
+        for (const auto &Audit : Next.FunctionAudits)
+          testing::Test::RecordProperty(
+              kReliftAuditPrefix + std::to_string(I) + kReliftSeparator +
+                  llvm::utohexstr(Audit.Entry),
+              pipelineFunctionDispositionName(Audit.Disposition));
+        ASSERT_TRUE(Next.Success) << Next.Error;
+        ASSERT_TRUE(Next.LlvmModule);
+        std::vector<va_t> Entries;
+        for (const auto &Audit : Next.FunctionAudits) {
+          if (Audit.HasLLVMDefinition)
+            Entries.push_back(Audit.Entry);
+          else
+            EXPECT_EQ(Audit.Disposition,
+                      PipelineFunctionDisposition::SkippedImportStub);
+        }
+        ASSERT_EQ(Entries.size(), ExpectedEntries << (I + 1));
+        testing::Test::RecordProperty(
+            kReliftFunctionsPrefix + std::to_string(I), int(Entries.size()));
+        unsigned CheckedForwarders = 0;
+        for (size_t J = 0; J < Entries.size(); ++J) {
+          SCOPED_TRACE(llvm::utohexstr(Entries[J]));
+          const auto Body = machOLiftedSource(
+              *Previous, Entries[J],
+              J + 1 == Entries.size() ? InvalidVA : Entries[J + 1]);
+          ASSERT_TRUE(Body);
+          if (Body->ForwardTarget && !Previous->getSectionFor(Entries[J])) {
+            ++CheckedForwarders;
+            auto Overlap = *Previous;
+            Section Data;
+            Data.VA = Entries[J] + Body->Bytes.size();
+            Data.Size = sizeof(uint8_t);
+            Overlap.Sections.push_back(Data);
+            EXPECT_TRUE(machOLiftedSource(Overlap, Entries[J], InvalidVA));
+            --Overlap.Sections.back().VA;
+            EXPECT_FALSE(machOLiftedSource(Overlap, Entries[J], InvalidVA));
+          }
+        }
+        if (I)
+          EXPECT_GT(CheckedForwarders, 0u);
+        // A compact extent must not turn intervening data or virtual-only
+        // bytes into the tail of a sectionless installed function.
+        const auto InstalledBody = llvm::find_if(Entries, [&](va_t Entry) {
+          if (Previous->getSectionFor(Entry))
+            return false;
+          const auto Body = machOLiftedSource(*Previous, Entry, InvalidVA);
+          return Body && !Body->ForwardTarget &&
+                 Body->Bytes.size() > aarch64::kInsnSize;
+        });
+        ASSERT_NE(InstalledBody, Entries.end());
+        const auto Last = *InstalledBody;
+        auto Overlap = *Previous;
+        Section Data;
+        Data.VA = Last + aarch64::kInsnSize;
+        Data.Size = aarch64::kInsnSize;
+        Overlap.Sections.push_back(Data);
+        EXPECT_FALSE(machOLiftedSource(Overlap, Last, InvalidVA));
+        auto Truncated = *Previous;
+        auto Segment = llvm::find_if(Truncated.Segments, [&](const auto &S) {
+          return S.contains(Last);
+        });
+        ASSERT_NE(Segment, Truncated.Segments.end());
+        Segment->FileSz = Last - Segment->VA + aarch64::kInsnSize - 1;
+        EXPECT_FALSE(machOLiftedSource(Truncated, Last, InvalidVA));
+        symbolizeImageAbsolutePointers(*Next.LlvmModule, *Previous);
+        MachOPatcher NextPatcher;
+        NextPatcher.setImageContext(&*Previous);
+        auto Redirected = llvm::CloneModule(*Next.LlvmModule);
+        auto *Forwarder = Redirected->getFunction(kSum);
+        ASSERT_TRUE(Forwarder &&
+                    Forwarder->hasFnAttribute(llvm::Attribute::Naked));
+        auto *Branch =
+            llvm::dyn_cast<llvm::CallInst>(&Forwarder->front().front());
+        ASSERT_TRUE(Branch && Branch->isInlineAsm());
+        ASSERT_EQ(Branch->arg_size(), 1u);
+        Branch->setArgOperand(0, Forwarder);
+        EXPECT_FALSE(
+            NextPatcher
+                .patch(PreviousPath, Rejected, *Redirected, Previous->Arch)
+                .Success);
+        EXPECT_FALSE(std::filesystem::exists(Rejected));
+        auto Partial = llvm::CloneModule(*Next.LlvmModule);
+        Partial->getFunction(kDifference)->deleteBody();
+        EXPECT_FALSE(
+            NextPatcher.patch(PreviousPath, Rejected, *Partial, Previous->Arch)
+                .Success);
+        EXPECT_FALSE(std::filesystem::exists(Rejected));
+        Repeated = NextPatcher.patch(PreviousPath, NextPath, *Next.LlvmModule,
+                                     Previous->Arch);
+      } else {
+        std::vector<SourcePatchMapping> Mappings;
+        for (const auto &[Name, Symbol] :
+             {std::pair{kSum, kSumSymbol},
+              std::pair{kDifference, kDifferenceSymbol}}) {
+          const auto *Entry = Previous->findSymbol(Symbol);
+          ASSERT_NE(Entry, nullptr);
+          Mappings.push_back({Name, Entry->Addr});
+        }
+        auto Native = installMachOObjectPatch(
+            NativeObject->getBuffer(), *Previous, Mappings, {}, NextPath, {});
+        ASSERT_TRUE(bool(Native)) << llvm::toString(Native.takeError());
+        Repeated = std::move(*Native);
+        ASSERT_EQ(Repeated.PatchedFunctions.size(), ExpectedEntries);
+      }
+      ASSERT_TRUE(Repeated.Success);
+      ASSERT_FALSE(Repeated.PatchedFunctions.empty());
+      for (const auto &Entry : Repeated.PatchedFunctions)
         EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
       auto Reloaded = Reader->load(NextPath);
       ASSERT_TRUE(bool(Reloaded)) << llvm::toString(Reloaded.takeError());
@@ -1093,6 +1225,32 @@ TEST(AArch64LiftedImage,
      CodesignSignedLiftedOutputAllowsRepeatedNativePublication) {
   verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
                         LeafCheck::Resigned);
+}
+
+TEST(AArch64LiftedImage, AppendedFunctionsSurviveRepeatedAutomaticLifting) {
+  verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
+                        LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, AppendedMemorySurvivesRepeatedAutomaticLifting) {
+  verifyPublishedLeaves(kVectorCopyLeaves, kVectorCopyCaller, kAssemblyName, {},
+                        LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, AppendedSIMDRegistersSurviveRepeatedAutomaticLifting) {
+  verifyPublishedLeaves(kSIMDRegisterLeaves, kSIMDRegisterCaller, kAssemblyName,
+                        {}, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, AppendedIndexedFramesSurviveRepeatedAutomaticLifting) {
+  verifyPublishedLeaves(kScratchResultSource, kCaller, kAssemblyName,
+                        kScratchFrameSIMD, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage,
+     AppendedGlobalAndImportSurviveRepeatedAutomaticLifting) {
+  verifyPublishedLeaves(kGlobalLeaves, kGlobalCaller, kSource, {},
+                        LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, AdHocRequirementsRefusePublicationWithoutMutation) {

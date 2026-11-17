@@ -735,7 +735,6 @@ bool sameFramelessSpillFrame(const ExceptionFunction &Original,
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
-                         const Section &Text,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
@@ -768,11 +767,11 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     if (!FDEs.try_emplace(F.InitialLocation, &F).second)
       return refuse(kLeafFrame);
   if (!Code || Ranges.size() != Mappings.size())
-    return llvm::createStringError(
-        llvm::errc::not_supported,
-        llvm::formatv(kGeneratedCoverage, Ranges.size(), Mappings.size(),
-                      Code ? Code->Size : 0, Text.Size)
-            .str());
+    return llvm::createStringError(llvm::errc::not_supported,
+                                   llvm::formatv(kGeneratedCoverage,
+                                                 Ranges.size(), Mappings.size(),
+                                                 Code ? Code->Size : 0)
+                                       .str());
   std::map<va_t, const NativeMachOCompactRange *> ByAddress;
   for (const auto &R : Ranges)
     if (!ByAddress.emplace(R.BeginVA, &R).second)
@@ -795,8 +794,13 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
   for (size_t I = 0; I < Mappings.size(); ++I) {
     const auto &Mapping = Mappings[I];
     const va_t Start = Mapping.OriginalVA;
-    const va_t End = I + 1 == Mappings.size() ? Text.VA + Text.Size
-                                              : Mappings[I + 1].OriginalVA;
+    const auto SourceBody = machOLiftedSource(
+        Original, Start,
+        I + 1 == Mappings.size() ? InvalidVA : Mappings[I + 1].OriginalVA);
+    if (!SourceBody)
+      return refuse(kSourceText);
+    const auto Source = SourceBody->Bytes;
+    const va_t End = Start + Source.size();
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
     if (Owner == Generated.SymbolAddrs.end())
@@ -808,6 +812,24 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kGeneratedRange, Mapping.Symbol, Start, End).str());
+    const auto Native = Range.mapped()->Encoding;
+    const auto Emitted = llvm::ArrayRef(Generated.Bytes)
+                             .slice(Code->Offset + (Owner->second - Code->VA),
+                                    Range.mapped()->EndVA - Owner->second);
+    if (SourceBody->ForwardTarget) {
+      // The entry branch has no register, stack or LR side effects. Its old
+      // trailing body and unwind recipe do not describe this forwarding path.
+      if (!RegisterEntries.contains(Start) ||
+          Emitted.size() != aarch64::kInsnSize ||
+          Native != macho_unwind::kARM64ModeFrameless ||
+          Range.mapped()->LSDAVA || Range.mapped()->PersonalitySlotVA ||
+          FDEs.count(Owner->second) ||
+          !matchesDirectTransfer(Source, Start, Emitted, Owner->second,
+                                 Mappings, Generated, Original, Slide,
+                                 {.Jumps = true}))
+        return refuse(kDirectTarget);
+      continue;
+    }
     if (!Frame || !Frame->Compact ||
         (!Frame->describesUnwindOnly() &&
          !(RegisterEntries.contains(Start) &&
@@ -817,12 +839,6 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     if (Frame->Itanium &&
         !sameLanguageTable(*Frame, Layout, *Range.mapped(), Slide))
       return refuse(kLeafFrame);
-    const auto Native = Range.mapped()->Encoding;
-    const auto Source = llvm::ArrayRef(Original.Raw)
-                            .slice(Text.FileOff + Start - Text.VA, End - Start);
-    const auto Emitted = llvm::ArrayRef(Generated.Bytes)
-                             .slice(Code->Offset + (Owner->second - Code->VA),
-                                    Range.mapped()->EndVA - Owner->second);
     if (Source.empty() || Source.size() % aarch64::kInsnSize)
       return refuse(kLeafCode);
     if (!RegisterEntries.contains(Start) &&
@@ -1052,11 +1068,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
           llvm::formatv(kSourceSection, S.SegmentName, S.Name).str());
     Text = &S;
   }
-  if (!Text || !Image.MachOHasFunctionStarts ||
-      !rangeInBounds(Text->FileOff, Text->Size, Image.Raw.size()) ||
-      llvm::any_of(Image.Segments, [](const auto &S) {
-        return S.isExecutable() && S.Name != section_names::macho::TextSeg;
-      }))
+  if (!Text || !rangeInBounds(Text->FileOff, Text->Size, Image.Raw.size()))
     return refuse(kSourceText);
   auto RegisterEntries = validateMachORegisterResults(Module, Image);
   if (!RegisterEntries)
@@ -1077,7 +1089,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
             {F.getName().str(), SourcePatchBindingKind::Function, **Entry, 0});
       continue;
     }
-    if (F.isDeclaration() || !*Entry || !Text->contains(**Entry) ||
+    if (F.isDeclaration() || !*Entry ||
         !Image.hasAuthenticatedFunctionEntryAt(**Entry))
       return llvm::createStringError(
           llvm::errc::not_supported,
@@ -1100,7 +1112,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     return refuse(kLeafCoverage);
 
   const auto Missing = [&](va_t Address) {
-    if (!Text->contains(Address))
+    if (!Image.isFunctionEntryCandidateAt(Address) ||
+        Image.isImportStubAt(Address))
       return false;
     const auto It = std::lower_bound(
         Mappings.begin(), Mappings.end(), Address,
@@ -1236,8 +1249,8 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       Image, Mappings, Bindings, Output,
       [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-        return verifyLeaves(Image, Layout, *Text, Mappings, Generated, Slide,
-                            Ranges, *RegisterEntries);
+        return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
+                            *RegisterEntries);
       });
 }
 } // namespace neverd

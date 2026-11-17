@@ -64,6 +64,7 @@ struct RegisterBody {
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
   bool HasBareReturn = false;
+  bool IsForwarder = false;
   bool LoadsStackArgument = false;
   bool MaterializesCursor = false;
 };
@@ -493,20 +494,27 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
                                          const Entries &Functions,
                                          Entries::const_iterator Owner) {
   const va_t Start = Owner->first;
-  const Section *Text = Image.getSectionFor(Start);
-  if (!Text || Text->Name != section_names::macho::Text ||
-      Text->SegmentName != section_names::macho::TextSeg ||
-      !Image.hasAuthenticatedFunctionEntryAt(Start))
-    return std::nullopt;
   auto Next = std::next(Owner);
-  const va_t End = Next != Functions.end() && Text->contains(Next->first)
-                       ? Next->first
-                       : Text->VA + Text->Size;
-  const size_t Word = aarch64::kInsnSize;
-  if (End <= Start || (End - Start) % Word ||
-      !rangeInBounds(Text->FileOff + Start - Text->VA, End - Start,
-                     Image.Raw.size()))
+  auto Source = machOLiftedSource(
+      Image, Start, Next == Functions.end() ? InvalidVA : Next->first);
+  if (!Source)
     return std::nullopt;
+  if (Source->ForwardTarget) {
+    const auto Target = Functions.find(*Source->ForwardTarget);
+    if (Target == Functions.end())
+      return std::nullopt;
+    RegisterBody Body;
+    Body.IsForwarder = true;
+    Body.TailCallees.push_back(Target->second);
+    llvm::raw_string_ostream OS(Body.Assembly);
+    OS << kTail;
+    emitOperand(Body, OS, Target->second, kSymbolConstraint);
+    OS << '\n';
+    Body.Constraints += kEffects;
+    return Body;
+  }
+  const va_t End = Start + Source->Bytes.size();
+  const size_t Word = aarch64::kInsnSize;
   const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
   if (!Frame || !Frame->Compact ||
       (!Frame->describesUnwindOnly() &&
@@ -588,7 +596,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         return std::nullopt;
   } else if (!Indexed)
     emitCompactFrame(Compact, OS);
-  const uint8_t *Code = Image.Raw.data() + Text->FileOff + Start - Text->VA;
+  const uint8_t *Code = Source->Bytes.data();
   bool HasCall = false;
   for (size_t Offset = 0; Offset < End - Start; Offset += Word)
     if (decodeDirectBranch(Image.Arch, InstructionMode::Default, Code + Offset,
@@ -803,6 +811,56 @@ llvm::InlineAsm *assembly(llvm::Function &F, const RegisterBody &Body) {
 }
 } // namespace
 
+std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
+                                                   va_t Start, va_t NextEntry) {
+  const size_t Word = aarch64::kInsnSize;
+  if (!Image.hasAuthenticatedFunctionEntryAt(Start) || NextEntry <= Start ||
+      NextEntry - Start < Word)
+    return std::nullopt;
+  const auto *Segment = Image.getSegmentFor(Start);
+  if (!Segment || !Segment->isExecutable() || Segment->isWritable() ||
+      !rangeInBounds(Start - Segment->VA, Word, Segment->FileSz))
+    return std::nullopt;
+  const auto *Section = Image.getSectionFor(Start);
+  if (Section && (!(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) ||
+                  Section->FileSz != Section->Size ||
+                  !rangeInBounds(Start - Section->VA, Word, Section->Size)))
+    return std::nullopt;
+  const auto *First = Image.readVA(Start, Word);
+  if (!First)
+    return std::nullopt;
+  std::optional<va_t> ForwardTarget;
+  if (const auto Jump =
+          decodeDirectBranch(Arch::AArch64, InstructionMode::Default, First,
+                             Word, Start, {.Jumps = true}))
+    if (const auto Target = Jump->target();
+        Target && *Target != Start &&
+        Image.hasAuthenticatedFunctionEntryAt(*Target))
+      ForwardTarget = Target;
+  va_t End = Start + Word;
+  if (!ForwardTarget) {
+    const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
+    if (!Frame || !Frame->Compact)
+      return std::nullopt;
+    const va_t Limit =
+        Section ? Section->VA + Section->Size : Frame->CodeRange.End;
+    End = std::min(NextEntry, Limit);
+    if (End <= Start || (End - Start) % Word || Frame->CodeRange.End < End ||
+        !rangeInBounds(Start - Segment->VA, End - Start, Segment->FileSz))
+      return std::nullopt;
+  }
+  if (!Section && llvm::any_of(Image.Sections, [&](const auto &S) {
+        return S.Size && S.VA < End && S.VA + S.Size > Start;
+      }))
+    return std::nullopt;
+  if (ForwardTarget)
+    return MachOLiftedSource{{First, Word}, ForwardTarget};
+  const auto *Bytes = Image.readVA(Start, End - Start);
+  if (!Bytes)
+    return std::nullopt;
+  return MachOLiftedSource{{Bytes, size_t(End - Start)}, std::nullopt};
+}
+
 std::vector<CFIInstruction>
 machOFramelessSpillRows(const CompactUnwindEntry &Compact) {
   // A zero outgoing-argument adjustment forces MC to retain an indexed FDE.
@@ -957,7 +1015,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // Keep physical addressing, vector lanes and FP status effects within
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
-        Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn)
+        Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
+        Body.IsForwarder)
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))

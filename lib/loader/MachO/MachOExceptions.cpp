@@ -249,6 +249,11 @@ void parseDarwinExceptions(BinaryImage &Img) {
   };
 
   for (const CompactUnwindEntry &Entry : Compact.Entries) {
+    // A zero recipe only delimits a lookup interval without unwind information.
+    // It supplies neither an entry nor a code extent. An independent FDE keeps
+    // its own range when normalized below; raw compact parsing retains the gap.
+    if (Entry.NativeEncoding == 0)
+      continue;
     ExceptionFunction F;
     F.Encoding = ExceptionEncoding::CompactUnwind;
     F.Kind = RuntimeFunctionKind::Primary;
