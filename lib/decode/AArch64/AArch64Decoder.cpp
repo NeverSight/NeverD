@@ -99,15 +99,17 @@ bool Decoder::hasAArch64OperandDetail(const DecodedInsn &Insn) const {
 
 int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                                   DecodedInsn &Out) {
+  if (!beginDecode(Out))
+    return 0;
   // AArch64 is fixed 4-byte width and 4-byte aligned; the common instruction
   // classes decode with a few mask+shift extractions straight into InsnBuf,
   // bypassing Capstone's DFA (the front-end throughput ceiling).  The native
   // decoder is a strict subset of Capstone's accept set and lifts identically
   // (locked by AArch64_NativeDecodeParityTests); anything it declines falls
-  // back to the caller's full Capstone decode.  Detail must be on — the native
+  // back to the full Capstone decode. Detail must be on — the native
   // path fills operand detail the lifter reads — and InsnBuf->detail is
   // allocated whenever detail is on (see init()).
-  if (AArch64 && Detail && Len >= 4 && InsnBuf && InsnBuf->detail) {
+  if (Detail && Len >= 4 && InsnBuf && InsnBuf->detail) {
     uint32_t Word = static_cast<uint32_t>(Bytes[0]) |
                     (static_cast<uint32_t>(Bytes[1]) << 8) |
                     (static_cast<uint32_t>(Bytes[2]) << 16) |
@@ -121,7 +123,7 @@ int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       return Out.Size;
     }
   }
-  return 0;
+  return decodeOne(Bytes, Len, Addr, Out);
 }
 
 void Decoder::liftAArch64ToLow(

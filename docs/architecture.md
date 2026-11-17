@@ -1571,6 +1571,9 @@ reconstruction; x1 cannot bypass authenticated-ABI requirements. All use
 the AArch64 decoder.
 
 `AArch64DecodeContract` separates raw occurrence identity from operand detail.
+The AArch64 lift-decode entry owns native attempt setup and its full-decode
+fallback; the shared lift-decode entry dispatches other architectures directly
+to their ordinary decoder.
 The decoder records the original word, producer identity and buffer generation;
 classification-only results cannot reuse old operands. Native fast decoding
 can supply complete detail with text disabled, while the Capstone fallback
