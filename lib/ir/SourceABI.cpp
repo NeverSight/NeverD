@@ -687,7 +687,9 @@ bool validateSourceABI(const SourceFunctionTypeHint &Hint,
     }
     const auto Expected =
         floatingCallArguments(Hint.Architecture, BinaryFormat::ELF,
-                              Hint.ReturnType, Types, S.FixedCount);
+                              Hint.ReturnType, Types, S.FixedCount,
+                              S.MIPS16Parameters ? InstructionMode::MIPS16
+                                                 : InstructionMode::Default);
     SourceABIValueLocation Return;
     std::vector<SourceABIValueLocation> Pieces;
     mips::placeScalarResult(getTargetRegInfo(Hint.Architecture), S, Return,

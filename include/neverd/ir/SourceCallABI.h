@@ -15,7 +15,8 @@ std::optional<int64_t> sourceCallReturnAddressBias(const BinaryImage *Image,
 /// are not converted to new source-level by-value copies. This does not
 /// authenticate the declaration or authorize native effects.
 bool assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
-                          BinaryFormat Format, std::string &Diagnostic);
+                          BinaryFormat Format, std::string &Diagnostic,
+                          InstructionMode EntryMode = InstructionMode::Default);
 /// Value type for an ABI-lowered call parameter of a validated C signature.
 /// An indirect aggregate transports its existing address, without an extra
 /// load/copy, alignment promise, lifetime change or aliasing attribute.

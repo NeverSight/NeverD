@@ -1840,6 +1840,11 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
         Expr->Op == NdOp::FLOAT_ADD || Expr->Op == NdOp::FLOAT_SUB ||
         Expr->Op == NdOp::FLOAT_MULT || Expr->Op == NdOp::FLOAT_DIV;
     if (Expr->Kind == ExprKind::Call) {
+      if (HasMicroModes && !Expr->IsIndirectCall && Expr->CallAddr) {
+        const auto Mode = Opts.Image->instructionModeAt(Expr->CallAddr);
+        NeedsMicroMode |= Mode == InstructionMode::MicroMIPS;
+        NeedsMIPS16Mode |= Mode == InstructionMode::MIPS16;
+      }
       NeedsAArch64ResultStorageCall |=
           Expr->SourceCallHint &&
           sourceCallUsesMachineABI(*Expr->SourceCallHint, Opts.Format,
@@ -2139,6 +2144,9 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   std::set<std::string> PairIntegerResults;
   std::map<std::string, std::vector<uint16_t>> FloatingParameters;
   std::set<std::string> ConflictingFloatingParameters;
+  std::map<std::string, InstructionMode> MIPSCallModes;
+  const bool HasMIPSCallModes = Opts.Image && isMIPS(Opts.TheArch) &&
+                                hasCompressedMIPSCode(Opts.Image->Mode);
   bool NeedsExceptionReturn = false;
   const uint16_t RegisterBytes = pointerBytes(Opts.TheArch);
   for (const HighFunc &F : Funcs)
@@ -2149,6 +2157,14 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         NeedsExceptionReturn |=
             E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::Eret;
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
+          if (HasMIPSCallModes && !E.IsIndirectCall && E.CallAddr)
+            if (const auto Mode = Opts.Image->instructionModeAt(E.CallAddr)) {
+              const auto [It, Inserted] =
+                  MIPSCallModes.emplace(callIdentifier(E), *Mode);
+              if (!Inserted && It->second != *Mode)
+                throw std::invalid_argument(
+                    "HighC callees disagree on MIPS instruction mode");
+            }
           if (E.SourceCalleeType) {
             const auto [It, New] = SourceCalleeTypes.emplace(
                 callIdentifier(E), E.SourceCalleeType);
@@ -2528,6 +2544,9 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         }
       }
     }
+    if (const auto Mode = MIPSCallModes.find(Name);
+        Mode != MIPSCallModes.end() && !ImportSlot)
+      OS << mips::instructionModeCAttribute(Mode->second);
     auto SourceSignature = SourceNativeSignatures.find(Name);
     if (SourceSignature != SourceNativeSignatures.end() &&
         !ConflictingSourceNativeSignatures.count(Name)) {

@@ -120,7 +120,8 @@ SourceParameterPiece source_placement::stackPiece(int64_t EntryOffset,
 std::optional<SourceParameterPlacement>
 neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                               llvm::ArrayRef<TypeRef> ParamTypes, bool Variadic,
-                              std::optional<unsigned> FixedCount) {
+                              std::optional<unsigned> FixedCount,
+                              InstructionMode EntryMode) {
   if (FixedCount && (!Variadic || !isMIPS(A) || !*FixedCount ||
                      *FixedCount > ParamTypes.size()))
     return std::nullopt;
@@ -142,7 +143,8 @@ neverd::placeSourceParameters(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return placeMIPS(TRI, F, ReturnType, ParamTypes,
                      Variadic ? std::optional<unsigned>(
                                     FixedCount.value_or(ParamTypes.size()))
-                              : std::nullopt);
+                              : std::nullopt,
+                     EntryMode);
   case Arch::X86:
     return placeI386(TRI, F, ReturnType, ParamTypes);
   default:

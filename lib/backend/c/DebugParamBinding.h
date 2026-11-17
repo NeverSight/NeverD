@@ -73,10 +73,11 @@ stackParamOffset(Arch A, BinaryFormat F,
 /// Binds \p Signature's parameters to the recovered parameters at \p Sites,
 /// completing the signature's types through \p Dbg.  A function of a
 /// language with conventions of its own, such as Go, binds none.
-DebugParamBindings bindDebugParams(Arch A, BinaryFormat F,
-                                   const FunctionSym &Signature,
-                                   llvm::ArrayRef<RecoveredParamSite> Sites,
-                                   const DebugContext *Dbg);
+DebugParamBindings
+bindDebugParams(Arch A, BinaryFormat F, const FunctionSym &Signature,
+                llvm::ArrayRef<RecoveredParamSite> Sites,
+                const DebugContext *Dbg,
+                InstructionMode EntryMode = InstructionMode::Default);
 
 /// The name a recovered parameter reads as by \p Binding: `result`, the
 /// debug parameter's, `<name>_<offset>` for a later piece of one, or empty.

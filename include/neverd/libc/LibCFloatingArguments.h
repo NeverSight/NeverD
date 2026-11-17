@@ -23,13 +23,15 @@ namespace neverd::libc {
 
 inline std::optional<FloatingCallArguments>
 floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
-                      const DebugContext *NativeDebug = nullptr) {
+                      const DebugContext *NativeDebug = nullptr,
+                      InstructionMode EntryMode = InstructionMode::Default) {
   if (!hasFixedPlatformCallDeclaration(Function, NativeDebug))
     return std::nullopt;
   std::vector<TypeRef> Parameters;
   for (const auto &[Name, Type] : Function.Params)
     Parameters.push_back(Type);
-  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters);
+  return neverd::floatingCallArguments(A, F, Function.ReturnType, Parameters,
+                                       std::nullopt, EntryMode);
 }
 
 } // namespace neverd::libc

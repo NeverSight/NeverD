@@ -3640,8 +3640,11 @@ declaredCallArguments(const FunctionSym &Function, const BinaryImage &Image,
     if (auto Integer = libc::fixedIntegerCallArguments(
             Function, Image.Arch, Image.abiFormat(), Debug))
       return std::move(*Integer);
-  if (auto Floating = libc::floatingCallArguments(Function, Image.Arch,
-                                                  Image.abiFormat(), Debug))
+  if (auto Floating = libc::floatingCallArguments(
+          Function, Image.Arch, Image.abiFormat(), Debug,
+          isMIPS(Image.Arch) ? Image.instructionModeAt(Function.Addr)
+                                   .value_or(InstructionMode::Default)
+                             : InstructionMode::Default))
     return std::move(*Floating);
   return std::nullopt;
 }
@@ -4023,8 +4026,11 @@ ImportPrototypeArguments importPrototypeArguments(
           (Convention->ArgumentsFromCallSetup ||
            Convention->RegisterArgumentsFromCalleeSummary))
         if (Function)
-          if (auto Floating = libc::floatingCallArguments(*Function, Img.Arch,
-                                                          Img.abiFormat())) {
+          if (auto Floating = libc::floatingCallArguments(
+                  *Function, Img.Arch, Img.abiFormat(), nullptr,
+                  isMIPS(Img.Arch) ? Img.instructionModeAt(Addr).value_or(
+                                         InstructionMode::Default)
+                                   : InstructionMode::Default)) {
             Result.FloatingArguments.emplace(Addr, std::move(*Floating));
             Result.PrototypeDeclared.insert(Addr);
             if (Function->PrototypeLibrary == UserPrototypeLibrary)

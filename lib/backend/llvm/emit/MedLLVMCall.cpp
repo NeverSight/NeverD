@@ -17,6 +17,7 @@
 #include "neverd/backend/LLVMSourceUnknownValue.h"
 #include "neverd/backend/LLVMValueProvenance.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/AArch64SourceResultCall.h"
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
@@ -75,9 +76,12 @@ namespace {
 /// verifies that ABI recovery retained those exact operands and scalar lanes.
 bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
                         BinaryFormat Format, const MedOp &Op,
-                        const MedCallInfo &Call) {
-  const auto Signature =
-      libc::floatingCallArguments(Function, Architecture, Format);
+                        const MedCallInfo &Call, const BinaryImage *Image) {
+  const auto Signature = libc::floatingCallArguments(
+      Function, Architecture, Format, nullptr,
+      Image && isMIPS(Architecture) ? Image->instructionModeAt(Call.TargetAddr)
+                                          .value_or(InstructionMode::Default)
+                                    : InstructionMode::Default);
   const auto &Registers = getTargetRegInfo(Architecture);
   if (Signature && (Architecture == Arch::X86 || !Signature->Scalars.empty() ||
                     Signature->ReturnElements)) {
@@ -650,8 +654,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     const std::string Name = importCalleeName(*Img, CI->TargetAddr);
     if (!Name.empty())
       if (const auto Header = Dbg->resolvePrototype(Name);
-          Header &&
-          !floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) {
+          Header && !floatingHeaderCall(*Header, TargetArch, TargetFormat, Op,
+                                        *CI, Img)) {
         syncError() << "med_llvm_emitter: selected header disagrees with the "
                        "bound call carriers\n";
         FatalCodePointerResolution = true;
@@ -900,7 +904,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     if (!Name.empty())
       if (const auto Header = Dbg->resolvePrototype(Name);
           Header &&
-          floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) {
+          floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI, Img)) {
         IndirectImportName = Name;
         // A declaration proves the ABI of this import slot. It does not
         // replace a writable slot's current contents with the initial symbol.
@@ -928,8 +932,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                             : std::nullopt;
     if (It != ImportedSymbolPlaceholders.end() && It->second == KnownTarget &&
         (libc::libcArityForSymbol(It->first, TargetLibC) ||
-         (Header &&
-          floatingHeaderCall(*Header, TargetArch, TargetFormat, Op, *CI)) ||
+         (Header && floatingHeaderCall(*Header, TargetArch, TargetFormat, Op,
+                                       *CI, Img)) ||
          (Op.X87ImportArguments && isX87CRTImportName(It->first)) ||
          libc::varArgFixedCount(stripLeadingUnderscores(It->first),
                                 TargetLibC)))
@@ -1576,10 +1580,13 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
           (!IndirectImportName.empty() || Img->findImportAt(CI->TargetAddr) ||
            Img->findImportStubAt(CI->TargetAddr)))
         if (const auto Function = Dbg->resolvePrototype(CalleeName);
-            Function &&
-            floatingHeaderCall(*Function, TargetArch, TargetFormat, Op, *CI)) {
-          const auto Signature =
-              libc::floatingCallArguments(*Function, TargetArch, TargetFormat);
+            Function && floatingHeaderCall(*Function, TargetArch, TargetFormat,
+                                           Op, *CI, Img)) {
+          const auto Signature = libc::floatingCallArguments(
+              *Function, TargetArch, TargetFormat, nullptr,
+              isMIPS(TargetArch) ? Img->instructionModeAt(CI->TargetAddr)
+                                       .value_or(InstructionMode::Default)
+                                 : InstructionMode::Default);
           auto *FT = floatingCallType(*Ctx, *Signature);
           Callee = llvm::Function::Create(
               FT, llvm::GlobalValue::ExternalLinkage, CalleeName, Mod);
@@ -1953,6 +1960,12 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   }
 
   if (Callee) {
+    // An omitted body still has a physical instruction mode. In particular,
+    // a MIPS16 declaration selects GPR floating-argument transport in C.
+    if (Img && isMIPS(TargetArch) && hasCompressedMIPSCode(Img->Mode) && CI &&
+        !CI->IsIndirect)
+      if (const auto Mode = Img->instructionModeAt(CallAddr))
+        mips::applyInstructionModeLLVMAttributes(*Callee, *Mode);
     auto *CalleeTy = Callee->getFunctionType();
     // A formatted call's recovered arguments are the inputs its format
     // names, in the source's order (MedOp::ExactArguments).
