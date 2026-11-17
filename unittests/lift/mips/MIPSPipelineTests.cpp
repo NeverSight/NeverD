@@ -771,6 +771,68 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
     }
 }
 
+TEST(MIPSSourceReturnTargets, LogicalZeroMovesRetainExactFrameIdentity) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Function : {37u, 38u})
+      for (bool ZeroFirst : {false, true})
+        for (bool UnknownRegister : {false, true}) {
+          SCOPED_TRACE(getArchName(Target));
+          SCOPED_TRACE(Function);
+          SCOPED_TRACE(ZeroFirst);
+          SCOPED_TRACE(UnknownRegister);
+          const bool Wide = isMIPS64(Target);
+          const auto Move = [&](unsigned To, unsigned From) {
+            const unsigned Other = UnknownRegister ? 8 : 0;
+            return ((ZeroFirst ? Other : From) << 21) |
+                   ((ZeroFirst ? From : Other) << 16) | (To << 11) | Function;
+          };
+          mips_test::ELFBytes File(Target);
+          const uint32_t Words[] = {Wide ? 0x67bdfff0u : 0x27bdfff8u,
+                                    Wide ? 0xffbf0008u : 0xafbf0004u,
+                                    Wide ? 0xffbe0000u : 0xafbe0000u,
+                                    Move(30, 29),
+                                    0x24020007,
+                                    Move(29, 30),
+                                    Wide ? 0xdfbe0000u : 0x8fbe0000u,
+                                    Wide ? 0xdfbf0008u : 0x8fbf0004u,
+                                    Wide ? 0x67bd0010u : 0x27bd0008u,
+                                    0x03e00008,
+                                    0};
+          File.Bytes.resize(0x100 + sizeof(Words));
+          const size_t Program = Wide ? 64 : 52;
+          File.put(Program + (Wide ? 32 : 16), File.Bytes.size(), Wide ? 8 : 4);
+          File.put(Program + (Wide ? 40 : 20), File.Bytes.size(), Wide ? 8 : 4);
+          for (size_t I = 0; I != std::size(Words); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Image->MIPS->FPABI = 1;
+          auto Symbol = Symbol::makeFunc(Image->Entry, 44);
+          Symbol.Name = "logical_frame";
+          Image->Symbols.push_back(std::move(Symbol));
+          for (bool LLVM : {false, true}) {
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.OnlyFunctionEntries = {Image->Entry};
+            Options.LiftMode = LLVM;
+            Options.EmitDumpOutput = false;
+            auto Result = Pipeline().run(*Image, Context, Options);
+            EXPECT_EQ(Result.Success, !UnknownRegister) << Result.Error;
+            if (!UnknownRegister && LLVM && Result.Success) {
+              ASSERT_TRUE(Result.LlvmModule);
+              EXPECT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            }
+            if (UnknownRegister)
+              EXPECT_NE(Result.Error.find("MIPS source return target"),
+                        std::string::npos)
+                  << Result.Error;
+          }
+        }
+}
+
 TEST(MIPSSourceReturnTargets, SplitFloatingSpillsKeepEveryReachingByte) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
     for (bool FP64 : {false, true})
