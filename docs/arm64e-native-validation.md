@@ -2243,3 +2243,55 @@ hashes, including the preceding signature failure and its successful replay.
 Temporary releases, assets, tags and replay files were retired. Unused test
 executables, object files and packages were removed; diagnostic logs remain in
 a compressed archive with verified decompressed hashes and a recovery index.
+
+### Signals at original entries and discontiguous executable sections
+
+Publishing an arm64e function replaces its first instruction with a direct
+branch to the installed body. At the address of that branch, SP still has its
+incoming value and the return address is live in LR. The loader supplies the
+same four-byte extent and callable target to the publisher and to instruction
+unwind recovery. The signal exception planner forwards that instruction to its
+caller. The displaced prologue and its LSDA describe a scope that the branch
+never entered. The original metadata remains available to metadata queries.
+Within a shared compact range, each independent function keeps its own recovery
+rows. Bytes following a forwarded entry have an unknown instruction state up
+to the next independently established entry.
+
+Whole-image publication accepts multiple regular pure-instruction sections
+with file-backed, nonwritable executable mappings. It checks the address and
+file coverage of each section and requires a definition at every section start
+and independently authenticated callable entry. A data export can sit between
+two code sections covered by one compact unwind range. Its section and symbol
+identity continue to describe data.
+
+Two fixtures use an empty standard text section, aligned discontiguous code
+and an exported read-only marker. One places both functions in `__TEXT`, the
+other places the second in `__TEXT_EXEC`. The tests verify the marker bytes and
+strict code signature in the input and three consecutive publications. Relifting
+recovers four definitions after the first publication and eight after the second.
+The native caller reads the exported data and calls both public functions in
+each image.
+
+The signal fixture samples an authenticated call loop. It accepts only a
+SIGUSR1 context whose actual PC equals the original branch address, recovers
+the caller's live LR, SP and X19, crosses the system signal trampoline, and
+steps Darwin libunwind to the outer caller. It then returns normally through the
+published image. This exercises NeverD's instruction-level signal recovery.
+The original synchronous unwind table retains its own semantics.
+
+Both Actions hosts reported Apple M1 (Virtual). Each passed all 242 Release
+cases, recorded an exact old-entry signal and one public libunwind step to the
+outer caller, and executed eight images across the two new layouts. Windows
+frontend checks also passed. The strict native x1 probes reported unavailable
+for explicit PAuth_LR, PACM-PC, CPTA-on and checked writeback. Local Release
+passed all 242 publication and 36 unwind cases. The broader local analysis and
+unwind run recorded 760 passes and 47 skips. A separate parity run passed on
+653 instructions from the system `/usr/bin/wc` arm64e text section. The
+[validation record](evidence/arm64e-original-entry-and-sections-2026-11-18.json)
+includes the identities of the sources, binaries, fixtures, hosts and reports
+from the [Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/44153408139).
+
+Mixed code/data sections, inputs with missing entry or machine ABI facts, and
+asynchronous language cleanup without lifetime metadata still need additional
+evidence. Platform-wide asynchronous recovery through the original tables
+alone also remains unqualified. LLVM r6 stays pinned.
