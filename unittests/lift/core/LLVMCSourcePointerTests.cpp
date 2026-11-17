@@ -69,6 +69,10 @@ TEST(LLVMCSourcePointers, ComplexResultIdentitySurvivesCallsAndSerialization) {
                      Make->getAttributes()),
                  std::invalid_argument);
     Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Make));
+    auto *NoteCall = llvm::Function::Create(
+        llvm::FunctionType::get(Builder.getVoidTy(), false),
+        llvm::GlobalValue::ExternalLinkage, "note_complex_call", Module);
+    Builder.CreateCall(NoteCall);
     llvm::Value *Value = llvm::PoisonValue::get(Pair);
     Value = Builder.CreateInsertValue(
         Value, Builder.CreateBitCast(Make->getArg(0), Scalar), {0});
@@ -100,17 +104,22 @@ TEST(LLVMCSourcePointers, ComplexResultIdentitySurvivesCallsAndSerialization) {
     const std::string ScalarName = Bytes == 4 ? "float" : "double";
     EXPECT_NE(Source.find(ScalarName + " _Complex make_complex"),
               std::string::npos);
-    Source += "\nint main(void) { const " + Word + " values[] = {0, " +
+    Source += "\nstatic unsigned complex_calls;\n"
+              "void note_complex_call(void) { ++complex_calls; }\n"
+              "int main(void) { const " +
+              Word + " values[] = {0, " +
               (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
                           : "0x8000000000000000ull, 0x7ff8000000001234ull, "
                             "0xfff0000000000000ull") +
-              "}; for(unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { " +
+              "}; for(unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { "
+              "complex_calls=0; " +
               ScalarName + " _Complex z=make_complex(values[i],values[j]); " +
               ScalarName + " r=__real__ z, m=__imag__ z; " + Word +
               " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
               "__builtin_memcpy(&b,&m,sizeof(b)); "
               "if(a!=values[i] || b!=values[j] || "
-              "imaginary_bits(values[i],values[j])!=values[j]) return 1; "
+              "imaginary_bits(values[i],values[j])!=values[j] || "
+              "complex_calls!=2) return 1; "
               "} return 0; }\n";
     for (const auto Optimization : {"-O0", "-O2"})
       source_call_execution_test::compileAndRun(Source, {Optimization});

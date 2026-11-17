@@ -6958,10 +6958,18 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
             Function->ReturnType->Size)
       throw std::runtime_error(
           "A record call has an incompatible result carrier");
-    if (sourceComplexComponentBytes(Function->ReturnType))
-      return c_detail::sourceRecordValue(Function->ReturnType,
-                                         typeToC(Function->ReturnType),
-                                         typeToCLLVM(Call.getType()), Expr);
+    if (const auto Bytes = sourceComplexComponentBytes(Function->ReturnType)) {
+      const auto *Record = llvm::cast<llvm::StructType>(Call.getType());
+      auto *Scalar = Bytes == 4 ? llvm::Type::getFloatTy(Call.getContext())
+                                : llvm::Type::getDoubleTy(Call.getContext());
+      if (Record->isPacked() || Record->getNumElements() != 2 ||
+          Record->getElementType(0) != Scalar ||
+          Record->getElementType(1) != Scalar)
+        throw std::runtime_error(
+            "A complex call has incompatible floating carriers");
+      return c_detail::sourceComplexToRecord(typeToC(Function->ReturnType),
+                                             typeToCLLVM(Call.getType()), Expr);
+    }
     return "__builtin_bit_cast(" + typeToCLLVM(Call.getType()) + ", " + Expr +
            ")";
   }

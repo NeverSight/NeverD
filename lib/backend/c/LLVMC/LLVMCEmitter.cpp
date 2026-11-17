@@ -2589,8 +2589,8 @@ std::string LLVMCWriter::callResult(const llvm::CallBase &Call,
   if (const auto *Callee = Call.getCalledFunction())
     if (const auto Complex = readLLVMSourceComplexResult(
             Callee->getReturnType(), Callee->getAttributes()))
-      return c_detail::sourceRecordValue(Complex, typeToC(Complex),
-                                         typeToCLLVM(Type), Expr);
+      return c_detail::sourceComplexToRecord(typeToC(Complex),
+                                             typeToCLLVM(Type), Expr);
   if (!Type->isIntegerTy() && !Type->isPointerTy() &&
       !Type->isFloatingPointTy())
     return Expr;

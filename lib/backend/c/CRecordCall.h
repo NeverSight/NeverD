@@ -70,6 +70,20 @@ inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
       .str();
 }
 
+/// Capture the complex call once and preserve both floating components in the
+/// validated two-field LLVM carrier, without subobject copies.
+inline std::string sourceComplexToRecord(llvm::StringRef ComplexType,
+                                         llvm::StringRef RecordType,
+                                         llvm::StringRef Expression) {
+  std::string Source = kSourceRecordSource;
+  while (ComplexType.contains(Source) || RecordType.contains(Source) ||
+         Expression.contains(Source))
+    Source += '_';
+  return llvm::formatv(kSourceComplexCallResult, ComplexType, RecordType,
+                       Expression, Source)
+      .str();
+}
+
 inline std::string recordCallType(const TypeRef &Type,
                                   const CEmitterOptions &Options) {
   if (sourceComplexComponentBytes(Type))
