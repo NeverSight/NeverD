@@ -363,6 +363,10 @@ private:
   bool decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word, va_t Addr);
   bool decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
                               va_t Addr);
+  /// Classic DSP64 forms have no native Capstone entry. Absent means the
+  /// word belongs to the ordinary decoder; false means its adapter failed.
+  std::optional<bool> decodeMIPSDSP64(const uint8_t *Bytes, size_t Len,
+                                      va_t Addr);
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
