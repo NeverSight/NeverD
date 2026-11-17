@@ -2,19 +2,19 @@
 
 #include "neverd/translate/TranslationTargetMachine.h"
 
+#include "neverd/support/LLVMTargetInitialization.h"
+
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 
 #include <memory>
-#include <mutex>
 #include <string>
 #include <utility>
 
@@ -79,15 +79,6 @@ llvm::CodeGenOptLevel codeGenerationLevel(const TranslationOptions &Options) {
     return llvm::CodeGenOptLevel::Aggressive;
   }
   return llvm::CodeGenOptLevel::None;
-}
-
-void registerTranslationTargets() {
-  static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-  });
 }
 
 bool isSupportedHostArchitecture(GuestArchitecture Architecture) {
@@ -156,7 +147,7 @@ createTranslationTargetMachineV1(const TranslationOptions &Options) {
         TranslationTargetMachineErrorCode::UnsupportedHostArchitecture,
         Resolved->triple());
 
-  registerTranslationTargets();
+  initializeLLVMCodegenTargets();
   const llvm::Triple Triple(Resolved->triple());
   std::string LookupError;
   const llvm::Target *Target =

@@ -14885,6 +14885,7 @@ discovered case a CTest label equal to that executable's target name.
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Cross-platform child-process invocation, quoting, redirects, and exit codes |
+| `unittests/LLVMTargetInitializationTests.cpp` | `NeverDLLVMTargetInitializationTests` | Repeated initialization registers exactly the linked LLVM backends, including target machines, MC backends and assembly parsers; run with `NeverDTranslationContractTests` to exercise object emission for every supported host architecture |
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
 | `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and the mandatory six-cell PE/ELF/Mach-O × x86-64/AArch64 matrix |
 | `unittests/loader` | `NeverDRawISATests` | Binary files: instruction-set identification from the bytes (data, the test's own code, code two bytes in, 32- versus 64-bit encodings per family, files that start with zeros) and the Cortex-M vector table. `scripts/validate_isa_model.py --engine build/bin/libneverd.so` checks the model on 180 real programs and libraries it never saw, downloaded by hash; it needs the network and is not part of CTest |
