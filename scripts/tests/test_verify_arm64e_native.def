@@ -430,5 +430,12 @@
         0
       ]
     }
-  ]
+  ],
+  "x1_components": {
+    "probe": "probe",
+    "probe-cursor": "probe_signal_cursor",
+    "probe-cpta": "probe_cpta"
+  },
+  "x1_failed_tool": "controlled x1 compiler failure",
+  "x1_claim": "native_arm64e_x1_environment_qualified"
 }

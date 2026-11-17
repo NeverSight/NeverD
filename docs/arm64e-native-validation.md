@@ -2051,3 +2051,57 @@ localized documentation inventory passed. The temporary release, asset and
 tag were removed with verified HTTP 404 responses; the replay repository was
 restored to its baseline tree. The 42,325,529-byte local replay package was
 removed after recording its hash. The active build and prebuilt r6 are retained.
+
+### Native x1 runner qualification
+
+Apple specifies M6 or later Macs and A20 Pro or later iPhones for arm64e.x1;
+the simulator cannot execute this ABI. Standard GitHub macOS ARM runners use
+M1, and larger ARM runners use M2. Changing their image to Xcode 27 therefore
+does not provide the required hardware. The local M4 Max also does not qualify.
+See [Apple's pointer-authentication requirements](https://developer.apple.com/documentation/security/preparing-your-app-to-work-with-pointer-authentication),
+[standard runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [larger runners](https://docs.github.com/en/actions/reference/runners/larger-runners).
+
+On an M6 Mac with an arm64e.x1-capable Apple SDK and operating system, run:
+
+```bash
+python3 scripts/verify_arm64e_native.py qualify-x1 --output native-x1
+```
+
+The probe compiles fresh O0/O2 signing/cursor controls, checks actual signatures
+and PC sensitivity, signs an arm64e.x1 slice with the required Enhanced Security
+entitlements, and measures checked scalar arithmetic and ordinary writeback.
+It also requires the original authenticated call and language-unwind controls.
+The top report binds all three component reports by SHA-256 and qualifies the
+environment only when every required native claim is true. Exit 2 records an
+unavailable environment; exit 1 records failure. CPU names, successful assembly,
+PACM hint execution and a green negative-control workflow do not qualify x1.
+Temporary executables and entitlements are removed; reports remain available.
+
+A registered GitHub Actions runner with labels `self-hosted`, `macOS`, `ARM64`
+and `neverd-arm64e-x1` can run the manual **Arm64e x1 native qualification**
+workflow. It has read-only repository permissions, requires the same strict
+probe to return success and uploads the component diagnostics on failure too.
+It is not dispatched until a suitable runner is available. With no device
+available, `gmh5225/test_mac_intel` uses its hosted runners to exercise the
+same gate as a negative control and continue publication regression tests.
+An unavailable aggregate report remains unqualified even if that regression
+workflow succeeds.
+
+After the environment qualifies, build `NeverDArm64eLiftedImageTests` through
+`scripts/build.py` using the integrated LLVM fork and execute it with both
+`NEVERD_ARM64E_LIFTED_NATIVE=1` and `NEVERD_ARM64E_ASYNC_NATIVE=1`. The four compact
+PAuth_LR publication cases now probe capability before execution, retain the
+actual signing recipe/PC in signal plans and exercise both original and
+published signed images. They explicitly sign execution copies after publication,
+strictly verify them and recover the execution plans again from those copies;
+the unsigned source fixture remains unchanged through publication. They separately count normal calls, caller resumptions
+and public system-unwinder steps. Six classic compact signal controls also
+exercise the saved-LR system-step path on ordinary arm64e hosts. Unsupported
+hardware still reports zero
+native PAuth_LR executions. The r6 prebuilt remains unchanged and skips these
+four cases because its MC producer lacks mode-5 support.
+
+The aggregate probe qualifies only the checked environment controls. It does
+not establish complete arm64e instruction, arbitrary-image publication or
+asynchronous language-exception coverage.
