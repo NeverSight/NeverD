@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MIPS/MIPS16ReturnAdapter.h"
 #include "PipelineCallAbiDetail.h"
 #include "PipelineDebugReceivers.h"
 #include "PipelineIncomingStack.h"
@@ -1165,6 +1166,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   std::map<va_t, const LowFunc *> SourceCalleeFunctions;
   for (const auto &F : Result.LowFuncs)
     SourceCalleeFunctions.emplace(F.Entry, &F);
+  const auto MIPS16Returns =
+      !Opts.usesSourceDeclarations()
+          ? std::map<va_t, MIPS16ReturnTransport>{}
+          : pipeline_detail::mips16ReturnTransports(Img, Result.LowFuncs);
   if (Opts.usesSourceDeclarations())
     for (const auto &[Entry, Hint] : Opts.SourceCalleeTypeHints)
       SourceCalleeHints.insert_or_assign(Entry, Hint);
@@ -1288,6 +1293,12 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   auto ConvertOne = [&](LowToMedConverter &Local, size_t I) {
     Converted[I] = 0;
     PendingStackProof[I] = 0;
+    if (MIPS16Returns.contains(Result.LowFuncs[I].Entry)) {
+      ConversionErrors[I] =
+          "MIPS16 result transport uses incoming result registers, not an "
+          "ordinary source function ABI; retain the native runtime helper";
+      return;
+    }
     try {
       Local.setCallSiteIntegerArguments(&VirtualArguments[I].Integers);
       Local.setCallSiteFloatingArguments(&VirtualArguments[I].Floating);
@@ -1299,10 +1310,14 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       const auto Frame = Opts.SourceStackFrames.find(Result.LowFuncs[I].Entry);
       auto &Projected = ProjectedFunctions[I];
       Projected.reset();
+      if (auto Returns = pipeline_detail::projectMIPS16ReturnCalls(
+              Img, Result.LowFuncs[I], MIPS16Returns))
+        Projected = std::make_unique<LowFunc>(std::move(*Returns));
       if (!Opts.usesMachineMedIR() && Frame != Opts.SourceStackFrames.end()) {
         std::string Error;
-        auto FrameSource = projectSourceStackFrame(Result.LowFuncs[I], Img.Arch,
-                                                   Frame->second, Error);
+        auto FrameSource =
+            projectSourceStackFrame(Projected ? *Projected : Result.LowFuncs[I],
+                                    Img.Arch, Frame->second, Error);
         if (!FrameSource)
           throw std::runtime_error(Error);
         Projected = std::make_unique<LowFunc>(std::move(*FrameSource));
@@ -1310,7 +1325,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       Result.MedFuncs[I] =
           Local.convert(Projected ? *Projected : Result.LowFuncs[I], Img.Arch,
                         Img.abiFormat());
-      Result.MedFuncs[I].AnalystStackFrame = bool(Projected);
+      Result.MedFuncs[I].AnalystStackFrame =
+          !Opts.usesMachineMedIR() && Frame != Opts.SourceStackFrames.end();
       auto &MF = Result.MedFuncs[I];
       auto &LF = Result.LowFuncs[I];
       trimFuncStorage(MF);

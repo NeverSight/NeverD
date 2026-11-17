@@ -23,7 +23,7 @@
 
 namespace neverd::mips {
 #define NEVERD_MIPS_BARRIER_TEXT(Name, Text)                                   \
-  inline constexpr char Name[] = Text;
+  inline constexpr const char *Name = Text;
 #include "neverd/backend/MIPS/MIPSBarrierSource.def"
 
 inline std::string barrierAssembly(Intrinsic Id, unsigned Stype = 0) {

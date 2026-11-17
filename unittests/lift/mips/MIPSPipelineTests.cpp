@@ -14,6 +14,8 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
@@ -43,6 +45,64 @@ using namespace neverd;
 namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (const uint16_t Bytes : {4, 8}) {
+      for (const auto Mode :
+           {InstructionMode::MIPSClassic, InstructionMode::MIPS16}) {
+        SCOPED_TRACE(testing::Message() << getArchName(Target) << ':' << Bytes
+                                        << ':' << static_cast<unsigned>(Mode));
+        auto Pointer = NdType::makePtr();
+        Pointer->Size = 4;
+        const auto Result = NdType::makeComplex(Bytes);
+        const auto Signature = floatingCallArguments(
+            Target, BinaryFormat::ELF, Result, {Pointer}, std::nullopt, Mode);
+        ASSERT_TRUE(Signature);
+        EXPECT_TRUE(Signature->ReturnComplex);
+        EXPECT_EQ(Signature->ReturnElements, 2u);
+        const auto Types =
+            floatingCallTypes(Target, BinaryFormat::ELF, *Signature);
+        ASSERT_TRUE(Types);
+        EXPECT_TRUE(equalSourceTypes(Result, Types->Result));
+        EXPECT_EQ(Types->Parameters.size(), 1u);
+        auto Corrupt = *Signature;
+        Corrupt.ReturnComplex = false;
+        EXPECT_FALSE(floatingCallTypes(Target, BinaryFormat::ELF, Corrupt));
+        Corrupt = *Signature;
+        Corrupt.ReturnElements = 1;
+        EXPECT_FALSE(floatingCallTypes(Target, BinaryFormat::ELF, Corrupt));
+        SourceCallTypeHint Call;
+        Call.Signature.ReturnType = Result;
+        Call.Signature.Parameters = {{"input", Pointer}};
+        std::string Error;
+        ASSERT_TRUE(
+            assignAnalystCallABI(Call, Target, BinaryFormat::ELF, Error, Mode))
+            << Error;
+        ASSERT_EQ(Call.Signature.ReturnComponents.size(), 2u);
+        for (unsigned I = 0; I != 2; ++I) {
+          const auto &Part = Call.Signature.ReturnComponents[I];
+          EXPECT_EQ(Part.Kind, SourceABICarrierKind::FloatingRegister);
+          EXPECT_EQ(Part.RegisterOffset, mipsreg::w(2 * I));
+          EXPECT_EQ(Part.ValueBytes, Bytes);
+        }
+        Call.Signature.ReturnComponents[1].RegisterOffset = mipsreg::w(1);
+        EXPECT_FALSE(validateSourceABI(Call.Signature, Error));
+        auto Record = NdType::makeStruct(
+            {NdType::makeFloat(Bytes), NdType::makeFloat(Bytes)});
+        Record->Passing = NdRecordPassing::ByValue;
+        EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF, Record,
+                                           {Pointer}));
+        EXPECT_FALSE(
+            floatingCallArguments(Target, BinaryFormat::ELF, Result, {Result}));
+      }
+    }
+  }
+  for (const auto Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF,
+                                       NdType::makeComplex(8), {}));
+}
 
 TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
@@ -647,6 +707,140 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
         }
       }
     }
+}
+
+TEST(MIPSSourceReturnTargets, SplitFloatingSpillsKeepEveryReachingByte) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool FP64 : {false, true})
+      for (unsigned Flow = 0; Flow != 3; ++Flow)
+        for (unsigned Variant = 0; Variant != 7; ++Variant) {
+          SCOPED_TRACE(getArchName(Target));
+          SCOPED_TRACE(FP64);
+          SCOPED_TRACE(Flow);
+          SCOPED_TRACE(Variant);
+          mips_test::ELFBytes File(Target);
+          File.abiFlags();
+          File.put(36, FP64 ? 0x70001200 : 0x70001000, 4);
+          File.Bytes[0xe5] = FP64 ? 2 : 1;
+          File.Bytes[0xe7] = FP64 ? 6 : 1;
+          // GCC stages a double argument with two word stores before LDC1.
+          // A whole double spill is the control. Neither a missing word nor
+          // frame-derived bits may establish that the call preserves RA.
+          uint32_t FirstStore = Variant == 1   ? 0xf7ac0010u // sdc1 f12,16(sp)
+                                : Variant == 2 ? 0xafbd0010u // sw sp,16(sp)
+                                               : 0xafa40010u;
+          uint32_t SecondStore = Variant == 1 || Variant == 3 ? 0u
+                                 : Variant == 4 ? 0xafa5001cu // overwrite RA
+                                                : 0xafa50014u;
+          if (Variant >= 5) {
+            // A float call reads only the low word of the double load. The
+            // uninitialized high word must not poison that proof, and swapping
+            // the initialized word must fail in both byte orders.
+            const bool FirstWord = archLittleEndian(Target) == (Variant == 5);
+            FirstStore = FirstWord ? 0xafa40010u : 0u;
+            SecondStore = FirstWord ? 0u : 0xafa50014u;
+          }
+          std::vector<uint32_t> Words{0x27bdffe0, 0xafbf001c, FirstStore};
+          if (Flow)
+            // Both predecessors must initialize every byte used by the call.
+            Words.insert(Words.end(), {0x10c00004, 0, SecondStore, 0x10000002,
+                                       0, Flow == 2 ? 0u : SecondStore});
+          else
+            Words.push_back(SecondStore);
+          Words.insert(Words.end(),
+                       {0xd7ac0010, 0x0c008000, 0, // ldc1; jal; nop
+                        0x8fbf001c, 0x24020007, 0x03e00008, 0x27bd0020});
+          File.Bytes.resize(0x100 + Words.size() * 4);
+          File.put(52 + 16, File.Bytes.size(), 4);
+          File.put(52 + 20, File.Bytes.size(), 4);
+          for (unsigned I = 0; I != std::size(Words); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                              "split_fp_argument");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          const auto Signature = floatingCallArguments(
+              Target, BinaryFormat::ELF, NdType::makeFloat(8),
+              {NdType::makeFloat(Variant >= 5 ? 4 : 8)});
+          ASSERT_TRUE(Signature);
+          const std::map<va_t, FloatingCallArguments> Calls{
+              {0x20000, *Signature}};
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          Convert.setCallEntryFloatingArguments(&Calls);
+          const bool Expected =
+              Variant == 1 ||
+              ((Variant == 0 || Variant == 5) &&
+               (Flow != 2 || (Variant == 5 && archLittleEndian(Target))));
+          if (Expected)
+            EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
+}
+
+TEST(MIPSSourceReturnTargets, FloatingResultSpillsDoNotPoisonArgumentProofs) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool FP64 : {false, true})
+      for (unsigned ResultKind = 0; ResultKind != 3; ++ResultKind)
+        for (unsigned Variant = 0; Variant != 4; ++Variant) {
+          SCOPED_TRACE(getArchName(Target));
+          SCOPED_TRACE(FP64);
+          SCOPED_TRACE(ResultKind);
+          SCOPED_TRACE(Variant);
+          mips_test::ELFBytes File(Target);
+          File.abiFlags();
+          File.put(36, FP64 ? 0x70001200 : 0x70001000, 4);
+          File.Bytes[0xe5] = FP64 ? 2 : 1;
+          File.Bytes[0xe7] = FP64 ? 6 : 1;
+          // The incoming double is assembled from two word stores. Querying
+          // its reaching values also visits the later result spill, whose
+          // numerical provenance depends on this same argument proof.
+          // A failed recursive query must not become a permanent negative.
+          const uint32_t Spill =
+              ResultKind == 1 ? (Variant == 2 ? 0xe7a00024u : 0xe7a00018u)
+                              : (Variant == 2 ? 0xf7a00020u : 0xf7a00018u);
+          const uint32_t Words[] = {
+              0x27bdffd8, 0xafbf0024, Variant == 1 ? 0xafbd0010u : 0xafa40010u,
+              0xafa50014, 0xd7ac0010, 0x0c008000,
+              0,          Spill,      0x8fbf0024,
+              0x24020007, 0x03e00008, 0x27bd0028};
+          File.Bytes.resize(0x100 + sizeof(Words));
+          File.put(52 + 16, File.Bytes.size(), 4);
+          File.put(52 + 20, File.Bytes.size(), 4);
+          for (unsigned I = 0; I != std::size(Words); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                              "fp_result_spill");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          const auto Result =
+              ResultKind == 0 ? NdType::makeFloat(8)
+                              : NdType::makeComplex(ResultKind == 1 ? 4 : 8);
+          const auto Signature = floatingCallArguments(
+              Target, BinaryFormat::ELF, Result, {NdType::makeFloat(8)});
+          ASSERT_TRUE(Signature);
+          const std::map<va_t, FloatingCallArguments> Calls{
+              {0x20000, *Signature}};
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          if (Variant != 3)
+            Convert.setCallEntryFloatingArguments(&Calls);
+          if (Variant == 0)
+            EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
 }
 
 TEST_P(MIPSPipeline, FloatingCallPreservesOnlyPrivateLinkSlots) {

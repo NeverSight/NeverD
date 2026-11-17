@@ -18,6 +18,10 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
@@ -38,19 +42,51 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     return false;
   using Site = std::pair<va_t, int>;
   std::set<Site> Required;
+  std::map<Site, Site> TailReturns;
   for (const auto &Block : Low.Blocks)
     for (const auto &Boundary : Block.InstructionBoundaries) {
-      // A synthetic return does not prove the link supplied to the tail
-      // callee. Qualify that pre-transfer identity before admitting tails.
-      if (Boundary.Control == LowInstructionControl::TailCall)
-        return false;
-      for (size_t I = Boundary.FirstOp; I < Boundary.FirstOp + Boundary.OpCount;
-           ++I)
-        if (const auto &Op = Block.Ops[I]; Op.Opcode == NdOp::RETURN)
-          Required.emplace(Op.Addr, Op.Seq);
+      if (Boundary.Control == LowInstructionControl::TailCall) {
+        // CFG lowering appends a synthetic result return. Its value is not
+        // the physical link. First establish a complete, unframed leaf tail:
+        // no earlier call, memory, opaque effect, or write of RA/SP can have
+        // changed the incoming return context before the terminal transfer.
+        if (Low.Blocks.size() != 1 || Boundary.OpCount < 2 ||
+            Boundary.FirstOp + Boundary.OpCount != Block.Ops.size())
+          return false;
+        const auto &Call = Block.Ops[Block.Ops.size() - 2];
+        const auto &Return = Block.Ops.back();
+        if ((Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
+            Return.Opcode != NdOp::RETURN)
+          return false;
+        const unsigned Width = isMIPS64(Target) ? 8 : 4;
+        for (size_t I = 0; I < Block.Ops.size(); ++I) {
+          const auto &Op = Block.Ops[I];
+          if (Op.Output.isReg() && Op.Output.Size)
+            for (uint64_t Register : {mipsreg::RA, mipsreg::SP})
+              if (Op.Output.Offset < Register + Width &&
+                  Register < Op.Output.Offset + Op.Output.Size)
+                return false;
+          if (I + 2 >= Block.Ops.size())
+            continue;
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+              Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::BRANCH ||
+              Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||
+              Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE ||
+              Op.Opcode == NdOp::INTRINSIC)
+            return false;
+        }
+        TailReturns.emplace(Site{Return.Addr, Return.Seq},
+                            Site{Call.Addr, Call.Seq});
+      } else {
+        for (size_t I = Boundary.FirstOp;
+             I < Boundary.FirstOp + Boundary.OpCount; ++I)
+          if (const auto &Op = Block.Ops[I]; Op.Opcode == NdOp::RETURN)
+            Required.emplace(Op.Addr, Op.Seq);
+      }
     }
-  if (Required.empty())
+  if (Required.empty() && TailReturns.empty())
     return true;
+  std::set<Site> QualifiedTails;
   using Key = std::tuple<int, int, int, uint64_t, uint16_t>;
   const auto key = [](const MedVar &V) -> Key {
     return {int(V.Kind), V.Id, V.SSAVer, V.RegOff, V.Size};
@@ -87,10 +123,13 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         HasCalls = true;
         const auto Signature = boundFloatingCallArguments(Op, Target, Format);
-        if (Signature)
+        if (Signature) {
           Calls.emplace(&Op, *Signature);
-        else
+          if (Op.IsTailCall)
+            QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
+        } else {
           NeedsNativeArguments = true;
+        }
       }
       if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
@@ -118,11 +157,64 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
+  std::optional<llvm::DenseMap<int, const MedBlock *>> BlocksById;
+  const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
+                                     size_t LoadIndex) {
+    if (!BlocksById) {
+      BlocksById.emplace();
+      for (const auto &Block : Function.Blocks)
+        BlocksById->try_emplace(Block.Id, &Block);
+    }
+    // An external read cannot recover this function's frame address before
+    // any operation publishes it. Private stack saves are harmless here;
+    // external stores and calls need a stronger memory contract. Visit every
+    // predecessor, including a loop's later operations on its back edge.
+    llvm::SmallPtrSet<const MedBlock *, 16> Seen;
+    std::vector<std::pair<const MedBlock *, size_t>> Pending{
+        {&LoadBlock, LoadIndex}};
+    bool ReachesEntry = false;
+    while (!Pending.empty()) {
+      const auto [Block, End] = Pending.back();
+      Pending.pop_back();
+      if (End == Block->Ops.size() && !Seen.insert(Block).second)
+        continue;
+      if (!Graph.hasCompleteNormalPredecessors(*Block))
+        return false;
+      for (size_t I = 0; I < End; ++I) {
+        if (!Remaining)
+          return false;
+        --Remaining;
+        const auto &Op = Block->Ops[I];
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          return false;
+        if (Op.Opcode != NdOp::STORE)
+          continue;
+        const auto *Address = safety::detail::memoryAddress(Op);
+        const auto *Value = safety::detail::storedValue(Op);
+        const auto At = Address ? Offset(*Address) : std::nullopt;
+        if (!Value || !At || *At >= 0 ||
+            *At < -limits::ir::kSourceFrameAnalysisMaxFrame ||
+            *At + Value->Size > 0)
+          return false;
+      }
+      if (Block->StartAddr == Function.Entry)
+        ReachesEntry = true;
+      else if (Block->Preds.empty())
+        return false;
+      for (int Id : Block->Preds) {
+        const auto Found = BlocksById->find(Id);
+        if (Found == BlocksById->end())
+          return false;
+        Pending.emplace_back(Found->second, Found->second->Ops.size());
+      }
+    }
+    return ReachesEntry;
+  };
   std::map<Key, bool> Results;
   std::set<Key> Active;
   const auto &TRI = getTargetRegInfo(Target);
   using SliceKey = std::tuple<Key, unsigned, unsigned>;
-  std::map<SliceKey, bool> NonFrame;
+  std::set<SliceKey> ProvenNonFrame;
   std::set<SliceKey> NonFrameActive;
   std::function<bool(const MedVar &, unsigned, unsigned)> NonFrameBytes;
   const auto IsNonFrame = [&](const MedVar &V) {
@@ -134,8 +226,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     if (V.isConst())
       return true;
     const SliceKey K{key(V), First, Bytes};
-    if (const auto It = NonFrame.find(K); It != NonFrame.end())
-      return It->second;
+    if (ProvenNonFrame.count(K))
+      return true;
     if (!Remaining ||
         NonFrameActive.size() >= limits::ir::kMIPSReturnIdentityDepth ||
         !NonFrameActive.insert(K).second)
@@ -189,18 +281,58 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             // Trace their exact reaching stores; a frame address stored there
             // is still an escape, and an intervening unknown call invalidates
             // the proof. Only the bytes this operand reads matter.
-            const auto Reaching = safety::detail::reachingStackValues(
-                Function, D.Block->Id, int(&Op - D.Block->Ops.data()), *At,
-                Op.Output.Size, Offset,
-                [&](const MedVar &Address) { return !IsNonFrame(Address); },
-                [](const MedVar &) { return true; }, true);
-            Safe = Reaching.Complete && Reaching.Reachable &&
-                   !Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites &&
-                   !Reaching.Values.empty() &&
-                   llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
-                     return NonFrameBytes(Stored, First, Bytes);
-                   });
+            const auto FromStores = [&](auto &&Self, unsigned Begin,
+                                        unsigned Size) -> bool {
+              const unsigned Start = std::max(Begin, First);
+              const unsigned End = std::min(Begin + Size, First + Bytes);
+              if (Start >= End)
+                return true;
+              if (!Remaining)
+                return false;
+              --Remaining;
+              const unsigned MemoryByte = archLittleEndian(Target)
+                                              ? Begin
+                                              : Op.Output.Size - Begin - Size;
+              const auto Reaching = safety::detail::reachingStackValues(
+                  Function, D.Block->Id, int(&Op - D.Block->Ops.data()),
+                  *At + MemoryByte, Size, Offset,
+                  [&](const MedVar &Address) { return !IsNonFrame(Address); },
+                  [](const MedVar &) { return true; }, true);
+              if (!Reaching.Reachable)
+                return false;
+              if (Reaching.Complete)
+                return llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
+                  return NonFrameBytes(Stored, Start - Begin, End - Start);
+                });
+              // GCC can assemble one double from separate word stores.
+              // Prove every requested byte on every predecessor, retaining
+              // the existing rejection of unknown writes and frame escapes.
+              if (Size == 1)
+                return false;
+              const unsigned Half = Size / 2;
+              return Self(Self, Begin, Half) &&
+                     Self(Self, Begin + Half, Size - Half);
+            };
+            Safe = FromStores(FromStores, 0, Op.Output.Size);
+          } else if (!At && IsNonFrame(Op.Inputs[0])) {
+            Safe = BeforeFrameEscape(*D.Block, &Op - D.Block->Ops.data());
           }
+        }
+        break;
+      case NdOp::CALL:
+      case NdOp::INDIR_CALL:
+        // Follow a bound numerical result only when the target and every
+        // argument have no provenance in this frame. Spilling that result
+        // beside the saved link does not escape the link slot. Unknown and
+        // pointer-returning calls still provide no such proof.
+        if (const auto Call = Calls.find(&Op);
+            Call != Calls.end() &&
+            Call->second.ReturnKind == NdTypeKind::Float &&
+            First + Bytes <= Call->second.ReturnBytes) {
+          Safe = IsNonFrame(Op.Inputs[0]);
+          for (size_t I = 0; Safe && I < Call->second.Scalars.size(); ++I)
+            Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
+                                 Call->second.Scalars[I].Bytes);
         }
         break;
       case NdOp::INT_ZEXT:
@@ -231,7 +363,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       }
     }
     NonFrameActive.erase(K);
-    NonFrame.emplace(K, Safe);
+    // A reaching-store walk can visit a later call-result spill while that
+    // call's argument is still being proved. Such a recursive failure depends
+    // on the active query; only completed positive proofs are reusable.
+    if (Safe)
+      ProvenNonFrame.insert(K);
     return Safe;
   };
   // Native calls preserve the caller's allocated private frame under the
@@ -388,11 +524,18 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     for (const auto &Op : Block.Ops)
       if (Op.Opcode == NdOp::RETURN) {
         const Site Origin{Op.Addr, Op.OriginSeq};
+        if (const auto Tail = TailReturns.find(Origin);
+            Tail != TailReturns.end()) {
+          if (!QualifiedTails.erase(Tail->second))
+            return false;
+          TailReturns.erase(Tail);
+          continue;
+        }
         if (!Required.erase(Origin) || Op.NumInputs != 1 ||
             !Prove(Op.Inputs[0]))
           return false;
       }
-  return Required.empty();
+  return Required.empty() && TailReturns.empty() && QualifiedTails.empty();
 }
 
 } // namespace neverd

@@ -93,6 +93,7 @@ add_neverd_component_library(NeverDBackendC
   LLVMScalarLoopRecovery
   PassIR
   Support
+  Types
 )
 
 # Pure integer display folding uses LLVM's width and poison semantics.

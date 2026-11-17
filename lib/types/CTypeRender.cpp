@@ -82,6 +82,8 @@ std::string portableBuiltin(Builtin Type, const TypeLibrary &Library) {
     if (Bytes == 4)
       return "float";
     return Bytes == 8 ? "double" : "long double";
+  case BuiltinClass::Complex:
+    return Info.Keywords;
   case BuiltinClass::Character:
     if (Type == Builtin::Char)
       return "char";

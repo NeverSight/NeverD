@@ -90,11 +90,14 @@ void appendCheck(std::string &Checks, const std::string &Name,
 void compileAndExecute(const std::string &Source, bool CheckShiftUB,
                        bool CheckArithmeticUB = false,
                        llvm::StringRef Optimization = "-O1",
-                       llvm::ArrayRef<llvm::StringRef> ExtraArgs = {}) {
+                       llvm::ArrayRef<llvm::StringRef> ExtraArgs = {},
+                       llvm::StringRef CompilerOverride = {}) {
 #ifdef NEVERD_TEST_CLANG
-  const std::string Compiler = NEVERD_TEST_CLANG;
+  const std::string Compiler =
+      CompilerOverride.empty() ? NEVERD_TEST_CLANG : CompilerOverride.str();
 #else
-  auto FoundCompiler = llvm::sys::findProgramByName("clang");
+  auto FoundCompiler = llvm::sys::findProgramByName(
+      CompilerOverride.empty() ? llvm::StringRef("clang") : CompilerOverride);
   ASSERT_TRUE(static_cast<bool>(FoundCompiler)) << "clang is required";
   const std::string Compiler = *FoundCompiler;
 #endif
@@ -146,6 +149,86 @@ void compileAndExecute(const std::string &Source, bool CheckShiftUB,
                           << (RunErrors ? (*RunErrors)->getBuffer().str() : "")
                           << "\n"
                           << Source;
+}
+
+std::string rotateExecutionSource() {
+  std::vector<HighFunc> Functions;
+  std::string Checks;
+  for (unsigned Bytes : {1u, 2u, 4u, 8u}) {
+    const unsigned Bits = Bytes * 8;
+    const auto Type = NdType::makeInt(Bytes, false);
+    for (unsigned Amount : {1u, Bits - 1}) {
+      HighFunc Function;
+      Function.Name =
+          "rotate_" + std::to_string(Bits) + "_" + std::to_string(Amount);
+      Function.ReturnType = Type;
+      Function.Params = {{"value", Type}};
+      auto Value = parameter(0, Type);
+      auto Left = HighExpr::makeBinop(NdOp::INT_LEFT, Value,
+                                      HighExpr::makeConst(Amount, 4));
+      auto Right = HighExpr::makeBinop(NdOp::INT_RIGHT, Value,
+                                       HighExpr::makeConst(Bits - Amount, 4));
+      Left->Type = Right->Type = Type;
+      auto Rotated = HighExpr::makeBinop(NdOp::INT_OR, Left, Right);
+      Rotated->Type = Type;
+      returnValue(Function, Rotated);
+      for (uint64_t Input : {UINT64_C(0), UINT64_C(1), UINT64_MAX,
+                             UINT64_C(0x8173c52a49bd06ef)}) {
+        const auto Expected =
+            llvm::APInt(Bits, Input).rotl(Amount).getZExtValue();
+        Checks += "    check_value(\"rotate\", " + Function.Name +
+                  "(UINT64_C(" + std::to_string(Input) + ")), UINT64_C(" +
+                  std::to_string(Expected) + "));\n";
+      }
+      Functions.push_back(std::move(Function));
+    }
+    for (unsigned Amount : {0u, 1u, Bits - 1, Bits, Bits + 1, UINT32_MAX}) {
+      const uint64_t Input = UINT64_C(0x8173c52a49bd06ef);
+      const auto Expected =
+          llvm::APInt(Bits, Input).rotl(Amount % Bits).getZExtValue();
+      Checks += "    value_reads = count_reads = 0;\n"
+                "    check_value(\"builtin rotate\", __builtin_rotateleft" +
+                std::to_string(Bits) + "(next_value(), next_count(" +
+                std::to_string(Amount) + "u)), UINT64_C(" +
+                std::to_string(Expected) +
+                "));\n"
+                "    if (value_reads != 1 || count_reads != 1) return 9;\n";
+    }
+  }
+  return emitFunctions(Functions) + R"(
+static unsigned value_reads, count_reads;
+static uint64_t next_value(void) {
+    ++value_reads;
+    return UINT64_C(0x8173c52a49bd06ef);
+}
+static unsigned next_count(unsigned value) {
+    ++count_reads;
+    return value;
+}
+)" + executionHarness(Checks);
+}
+
+TEST(HighCIntegerWidths, FixedWidthRotatesKeepBitsAndEvaluationCount) {
+  const auto Source = rotateExecutionSource();
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndExecute(Source, true, true, Optimization);
+}
+
+TEST(HighCIntegerWidths, FixedWidthRotatesCompileWithGNU) {
+#if defined(__linux__)
+  const auto Compiler = llvm::sys::findProgramByName("gcc");
+  ASSERT_TRUE(bool(Compiler))
+      << "GNU C is required for the compatibility check";
+  const auto Source = rotateExecutionSource();
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndExecute(Source, false, false, Optimization,
+                      {"-fsanitize=shift,signed-integer-overflow",
+                       "-fsanitize-undefined-trap-on-error"},
+                      *Compiler);
+#else
+  GTEST_SKIP() << "GNU native execution runs on Linux; MIPS GCC cross-calls "
+                  "are qualified separately";
+#endif
 }
 
 TEST(HighCIntegerWidths, UnsignedMachineWidthArithmeticUsesDeclaredType) {

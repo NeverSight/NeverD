@@ -136,6 +136,44 @@ TEST(TypeRender, CallbackReferencesUsePointersOnlyInC) {
     }
 }
 
+TEST(TypeRender, ComplexStorageDoesNotInventAForeignCallbackABI) {
+  TypeLibrary Library(DataModel::LP64);
+  ASSERT_TRUE(parseCTypes(R"(
+    typedef float _Complex CF;
+    typedef double _Complex CD;
+    struct Payload { CF single; CD pair; };
+    typedef void Visit(CD value);
+    typedef CF (*Make)(double value);
+    typedef void (*Inspect)(const CF *value);
+    struct Callbacks { Visit *visit; Make make; Inspect inspect; };
+  )",
+                          Library)
+                  .ok());
+  const auto Rust = renderTypes(Library, {}, in(Language::Rust));
+  EXPECT_TRUE(contains(Rust, "pub type CF = [f32; 2];")) << Rust;
+  EXPECT_TRUE(contains(Rust, "pub type CD = [f64; 2];")) << Rust;
+  EXPECT_TRUE(contains(Rust, "pub type Visit = *mut c_void;")) << Rust;
+  EXPECT_TRUE(contains(Rust, "pub type Make = *mut c_void;")) << Rust;
+  EXPECT_FALSE(contains(Rust, "Option<Visit>")) << Rust;
+  EXPECT_TRUE(contains(Rust, "unsafe extern \"C\" fn(value: *const CF)"))
+      << Rust;
+  const auto Python = renderTypes(Library, {}, in(Language::Python));
+  EXPECT_TRUE(contains(Python, "ctypes.c_float * 2")) << Python;
+  EXPECT_TRUE(contains(Python, "ctypes.c_double * 2")) << Python;
+  const auto Go = renderTypes(Library, {}, in(Language::Go));
+  EXPECT_TRUE(contains(Go, "complex64")) << Go;
+  EXPECT_TRUE(contains(Go, "complex128")) << Go;
+  TypeLibrary Back(DataModel::LP64);
+  const auto Read = parseTypes(Go, Back, {.Lang = Language::Go});
+  for (const auto &Problem : Read.Problems)
+    ADD_FAILURE() << Problem.Line << ':' << Problem.Column << ' '
+                  << Problem.Message;
+  ASSERT_TRUE(Read.ok()) << Go;
+  ASSERT_TRUE(Back.find("CF") && Back.find("CD"));
+  EXPECT_EQ(Back.find("CF")->Target->TheBuiltin, Builtin::ComplexFloat);
+  EXPECT_EQ(Back.find("CD")->Target->TheBuiltin, Builtin::ComplexDouble);
+}
+
 TEST(TypeRender, NamesItsLanguages) {
   for (Language Lang :
        {Language::C, Language::Cpp, Language::Rust, Language::Go})
