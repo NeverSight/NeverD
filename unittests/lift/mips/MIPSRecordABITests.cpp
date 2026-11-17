@@ -13,11 +13,13 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -258,5 +260,31 @@ TEST(MIPSRecordABI, RefusesPartialLayoutsAndUnqualifiedConventions) {
   }
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::X64, Arch::AArch64})
     EXPECT_FALSE(mips::placeRecordCall(A, BinaryFormat::ELF, Good, {Good}));
+}
+
+TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
+  for (Arch A : Architectures)
+    for (const auto &Type :
+         {bytes(3), record({NdType::makeFloat(8)}),
+          record({NdType::makeInt(8), NdType::makeInt(8)}), bytes(17)}) {
+      ASSERT_TRUE(mips::placeRecordCall(A, BinaryFormat::ELF, Type, {Type}));
+      SourceCallTypeHint Hint;
+      Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
+      Hint.Signature.Architecture = A;
+      Hint.Signature.Origin =
+          SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Hint.Signature.ReturnType = Type;
+      Hint.Signature.Parameters.push_back({"", Type});
+      Hint.Signature.HasExplicitABI = true;
+      std::string Diagnostic;
+      EXPECT_FALSE(validateSourceABI(Hint.Signature, Diagnostic));
+      EXPECT_TRUE(sourceABIParameters(Hint.Signature).empty());
+      EXPECT_FALSE(sourceABICallResultType(Hint.Signature));
+      // The scalar declaration path cannot silently reinterpret record bytes
+      // as a register scalar while the complete record call proof is absent.
+      EXPECT_FALSE(
+          assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic));
+      EXPECT_FALSE(Diagnostic.empty());
+    }
 }
 } // namespace
