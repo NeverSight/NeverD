@@ -57,6 +57,19 @@ inline std::string sourceRecordValue(const TypeRef &Record,
       .str();
 }
 
+/// The caller has proved an unpacked carrier with two equal floating fields.
+/// Construct the complex value directly: byte-copying into its subobjects can
+/// introduce runtime memcpy calls in unoptimized compressed-ISA code.
+inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
+                                           llvm::StringRef Expression) {
+  std::string Source = kSourceRecordSource;
+  while (RecordType.contains(Source) || Expression.contains(Source))
+    Source += '_';
+  return llvm::formatv(kSourceComplexRecordResult, RecordType, Expression,
+                       Source)
+      .str();
+}
+
 inline std::string recordCallType(const TypeRef &Type,
                                   const CEmitterOptions &Options) {
   if (sourceComplexComponentBytes(Type))

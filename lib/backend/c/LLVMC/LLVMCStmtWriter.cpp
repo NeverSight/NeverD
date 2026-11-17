@@ -9048,8 +9048,8 @@ void LLVMCWriter::writeReturn(llvm::ReturnInst &Ret, int Indent) {
       }
       if (const auto Complex = readLLVMSourceComplexResult(
               FnRetTy, Ret.getFunction()->getAttributes()))
-        RetExpr = c_detail::sourceRecordValue(Complex, typeToCLLVM(FnRetTy),
-                                              typeToC(Complex), RetExpr);
+        RetExpr =
+            c_detail::sourceComplexFromRecord(typeToCLLVM(FnRetTy), RetExpr);
       OS << "return " << RetExpr << ";\n";
     }
   } else {
