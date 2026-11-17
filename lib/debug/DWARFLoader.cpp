@@ -1320,6 +1320,14 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
       auto Enc = Encoding->getAsUnsignedConstant().value_or(0);
       if (Enc == llvm::dwarf::DW_ATE_float)
         return NdType::makeFloat(Sz);
+      if (Enc == llvm::dwarf::DW_ATE_complex_float && (Sz == 8 || Sz == 16) &&
+          recordPassing(Die) == NdRecordPassing::Complex &&
+          !llvm::StringRef(Die.getShortName() ? Die.getShortName() : "")
+               .contains("long")) {
+        auto T = NdType::makeComplex(Sz / 2);
+        describeRecordPassing(Die, *T);
+        return T;
+      }
       // A complex number, decimal floating point and vendor encodings are
       // neither integers nor binary floating point: a record of their size,
       // which C cannot spell from it and conventions place by its parts.

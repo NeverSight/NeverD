@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -39,6 +40,179 @@ namespace {
 using namespace neverd;
 
 void executeC(const std::string &Source, bool Math);
+
+TEST(SourceABI, ComplexValuesAreNotOrdinaryFloatingRecords) {
+  for (const uint16_t Bytes : {4, 8}) {
+    auto Complex = NdType::makeComplex(Bytes);
+    ASSERT_TRUE(Complex);
+    EXPECT_EQ(sourceComplexComponentBytes(Complex), Bytes);
+    EXPECT_TRUE(equalSourceTypes(Complex, NdType::makeComplex(Bytes)));
+    auto Record = NdType::makeStruct(
+        {NdType::makeFloat(Bytes), NdType::makeFloat(Bytes)});
+    ASSERT_TRUE(Record);
+    Record->Passing = NdRecordPassing::ByValue;
+    EXPECT_FALSE(equalSourceTypes(Complex, Record));
+    EXPECT_FALSE(equalSourceTypes(Record, Complex));
+    EXPECT_TRUE(sourceAggregateMembers(Complex).empty());
+    EXPECT_TRUE(sourceAggregateMembers(NdType::makeStruct({Complex})).empty());
+    EXPECT_EQ(typeToC(Complex),
+              Bytes == 4 ? "float _Complex" : "double _Complex");
+    Complex->SourceName = typeToC(Complex);
+    EXPECT_FALSE(
+        isMsvcClassValueReturn(Complex, Arch::X64, BinaryFormat::COFF));
+    auto Bad = std::make_shared<NdType>(*Complex);
+    Bad->ScalarLeaves[1].Offset = 0;
+    EXPECT_FALSE(sourceComplexComponentBytes(Bad));
+    EXPECT_FALSE(equalSourceTypes(Bad, Bad));
+    EXPECT_THROW(typeToC(Bad), std::invalid_argument);
+    Bad = std::make_shared<NdType>(*Complex);
+    Bad->Fields[1] = NdType::makeInt(Bytes);
+    EXPECT_FALSE(equalSourceTypes(Bad, Bad));
+  }
+  EXPECT_FALSE(NdType::makeComplex(0));
+  EXPECT_FALSE(NdType::makeComplex(2));
+  EXPECT_FALSE(NdType::makeComplex(16));
+}
+
+TEST(SourceABI, ComplexConstructionAndProjectionPreserveComponentBits) {
+  for (const uint16_t Bytes : {4, 8}) {
+    SCOPED_TRACE(Bytes);
+    const auto Scalar = NdType::makeFloat(Bytes);
+    const auto Complex = NdType::makeComplex(Bytes);
+    const auto Integer = NdType::makeInt(Bytes, false);
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "make_complex";
+    Function.ReturnType = Complex;
+    std::vector<ExprPtr> Parts;
+    for (unsigned I = 0; I != 2; ++I) {
+      Function.Params.push_back({I ? "imaginary" : "real", Integer});
+      MedVar Parameter;
+      Parameter.Kind = MedVar::Param;
+      Parameter.Id = I;
+      Parameter.Size = Bytes;
+      Parts.push_back(
+          HighExpr::makeBitCast(HighExpr::makeVar(Parameter, Integer), Scalar));
+    }
+    auto Value = HighExpr::makeRecord(Complex, Parts);
+    ASSERT_EQ(Value->Kind, ExprKind::Record);
+    auto Imaginary = HighExpr::makeRecordField(Value, Bytes, Bytes);
+    EXPECT_TRUE(equalSourceTypes(Imaginary->Type, Scalar));
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Value;
+    Function.Body = {Return};
+    HighFunc Projection = Function;
+    Projection.Entry += 0x100;
+    Projection.Name = "imaginary_bits";
+    Projection.ReturnType = Integer;
+    Projection.Body[0].RetVal = HighExpr::makeBitCast(Imaginary, Integer);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(HighCEmitter().emit({Function, Projection}, OS, Options));
+    EXPECT_NE(Source.find("__builtin_complex("), std::string::npos);
+    const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+    Source += "\nint main(void) { const " + Word + " values[] = {0, " +
+              (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
+                          : "0x8000000000000000ull, 0x7ff8000000001234ull, "
+                            "0xfff0000000000000ull") +
+              "}; for (unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { " +
+              typeToC(Complex) + " z=make_complex(values[i],values[j]); " +
+              typeToC(Scalar) + " r=__real__ z, m=__imag__ z; " + Word +
+              " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
+              "__builtin_memcpy(&b,&m,sizeof(b)); "
+              "if(a!=values[i] || b!=values[j] || "
+              "imaginary_bits(values[i],values[j])!=values[j]) return 1; "
+              "} return 0; }\n";
+    executeC(Source, false);
+  }
+}
+
+TEST(SourceABI, ParameterOnlyBindingKeepsPhysicalComplexResults) {
+  for (const Arch Architecture : {Arch::MIPS32, Arch::MIPS32EL})
+    for (const uint16_t Bytes : {4, 8}) {
+      SCOPED_TRACE(getArchName(Architecture));
+      SCOPED_TRACE(Bytes);
+      const auto &Registers = getTargetRegInfo(Architecture);
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.Name = "physical_complex";
+      Function.ReturnType = NdType::makeComplex(Bytes);
+      Function.SourceParametersBound = true;
+      // The entry adapter binds parameters, without replacing the RETURN's
+      // physical carriers with a source aggregate operand.
+      ASSERT_FALSE(Function.SourceTypeHint);
+      Function.Blocks.resize(1);
+      auto &Block = Function.Blocks.front();
+      Block.Id = 0;
+      Block.StartAddr = Function.Entry;
+      for (unsigned I = 0; I != 2; ++I) {
+        MedVar Parameter;
+        Parameter.Kind = MedVar::Param;
+        Parameter.Id = I;
+        Parameter.RegOff = Registers.IntParamRegs[I];
+        Parameter.Size = Bytes;
+        Parameter.TheArch = Architecture;
+        Function.Params.push_back(Parameter);
+        Function.TypedParams.push_back(
+            {I ? "imaginary" : "real", NdType::makeInt(Bytes, false)});
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Addr = Function.Entry + 4 * I;
+        Copy.Output.Kind = MedVar::Reg;
+        Copy.Output.RegOff = Registers.FPReturnRegs[I];
+        Copy.Output.Id = 10 + I;
+        Copy.Output.SSAVer = 1;
+        Copy.Output.Size = Bytes;
+        Copy.Output.TheArch = Architecture;
+        Copy.addInput(Parameter);
+        Block.Ops.push_back(Copy);
+        Function.MultiReturn.push_back(
+            {Registers.FPReturnRegs[I], Bytes, true});
+      }
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Function.Entry + 8;
+      Return.addInput(MedVar::makeConst(123, 4));
+      Block.Ops.push_back(Return);
+      auto High = MedToHighConverter().convert(Function, Architecture);
+      unsigned Returns = 0;
+      walkStmts(High.Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind != StmtKind::Return)
+          return;
+        ++Returns;
+        ASSERT_TRUE(Statement.RetVal);
+        EXPECT_EQ(Statement.RetVal->Kind, ExprKind::Record);
+        EXPECT_TRUE(
+            equalSourceTypes(Statement.RetVal->Type, Function.ReturnType));
+      });
+      ASSERT_EQ(Returns, 1u);
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = BinaryFormat::ELF;
+      ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+      const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+      Source += "\nint main(void) { const " + Word + " values[] = {0, " +
+                (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
+                            : "0x8000000000000000ull, 0x7ff8000000001234ull, "
+                              "0xfff0000000000000ull") +
+                "}; for (unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { " +
+                typeToC(Function.ReturnType) +
+                " z=physical_complex(values[i],values[j]); " +
+                typeToC(NdType::makeFloat(Bytes)) +
+                " r=__real__ z, m=__imag__ z; " + Word +
+                " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
+                "__builtin_memcpy(&b,&m,sizeof(b)); "
+                "if(a!=values[i] || b!=values[j]) return 1; "
+                "} return 0; }\n";
+      executeC(Source, false);
+    }
+}
 
 TEST(SourceABI, SourceCallsReplaceGenericRegisterArgumentSummaries) {
   for (const auto Architecture : {Arch::X64, Arch::AArch64}) {

@@ -147,6 +147,7 @@ public:
   /// shown alone, keeps that name, which says what the code does.
   void requireCSpelling(const llvm::Function &Callee) const;
   std::string sourceScalarType(llvm::Type *Type, bool Signed) const;
+  std::string sourceFunctionResultType(const llvm::Function &Function) const;
   /// \p Fn's C declaration of \p Declarator; with \p Params, of its first
   /// that many parameters only.
   std::string sourceFunctionDeclaration(

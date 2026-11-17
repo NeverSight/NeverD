@@ -109,6 +109,9 @@ std::optional<ViewValue> ViewPlanner::builtin(Builtin Type,
   case BuiltinClass::Integer:
     integer();
     break;
+  case BuiltinClass::Complex:
+    Value.TheForm = ViewValue::Form::Bytes;
+    break;
   }
   // Windows' name, which the module declares.
   if (Spelled && Spelling == BuiltinSpelling::Windows && windowsTypedef(Type) &&

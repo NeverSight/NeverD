@@ -10,7 +10,7 @@
 ///
 /// NEVERD_BUILTIN_TYPE(Name, Class, Signed, LLP64, LP64, ILP32, Keywords,
 ///                     Windows)
-///   Class     Void, Bool, Character, Integer or Float.
+///   Class     Void, Bool, Character, Integer, Float or Complex.
 ///   Signed    Whether an integer or character type is signed.
 ///   LLP64     Its size in bytes on 64-bit Windows,
 ///   LP64      on 64-bit Unix,
@@ -56,5 +56,9 @@ NEVERD_BUILTIN_TYPE(Double, Float, true, 8, 8, 8, "double", "DOUBLE")
 NEVERD_BUILTIN_TYPE(LongDouble, Float, true, 0, 0, 0, "long double",
                     "long double")
 NEVERD_BUILTIN_TYPE(HResult, Integer, true, 4, 4, 4, "HRESULT", "HRESULT")
+NEVERD_BUILTIN_TYPE(ComplexFloat, Complex, false, 8, 8, 8, "float _Complex",
+                    "float _Complex")
+NEVERD_BUILTIN_TYPE(ComplexDouble, Complex, false, 16, 16, 16,
+                    "double _Complex", "double _Complex")
 
 #undef NEVERD_BUILTIN_TYPE

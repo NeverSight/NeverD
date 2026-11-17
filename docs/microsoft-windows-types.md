@@ -264,6 +264,15 @@ The emitted records also compile with size and offset assertions. Fixed-width
 `__ptr32` and `__ptr64` pointers survive C/C++ round trips; Rust, Go and Python
 represent foreign-width addresses as integers. These checks establish type
 layouts, not native ARM64 driver execution or ARM64EC/ARM64X qualification.
+
+C declarations and DWARF retain binary32/binary64 complex types and align their
+storage as their components. C rendering preserves `_Complex`; Go storage uses
+`complex64`/`complex128`, and Rust/Python storage uses two real components.
+That storage representation does not supply a foreign call ABI: Rust callbacks
+passing a complex value by value remain opaque pointers. Extended complex
+source declarations are refused; same-sized DWARF long-double complex encodings
+are not renamed to double complex.
+
 Microsoft required alignment survives intermediate records, unions and arrays,
 including a later packed parent and a rendered declaration round trip.
 Microsoft C anonymous members include references to existing struct/union tags

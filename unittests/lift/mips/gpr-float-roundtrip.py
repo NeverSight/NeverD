@@ -29,7 +29,7 @@ u32 kernel(u32 mask, float value) {
 DECLARATION = "unsigned int kernel(unsigned int mask, float value);\n"
 
 
-def observe(path, little, mode, fr, cases, leading=False):
+def observe(path, little, mode, fr, cases, leading=False, split_double=False):
     model = (mips.UC_CPU_MIPS32_MICROMIPS32R2_GENERIC if mode == "micro"
              else mips.UC_CPU_MIPS32_74KF)
     uc, entry = roundtrip.emulator(path, 32, little, "kernel", cpu_model=model)
@@ -63,7 +63,9 @@ def observe(path, little, mode, fr, cases, leading=False):
             uc.reg_write(mips.UC_MIPS_REG_A1, mask)
         else:
             uc.reg_write(mips.UC_MIPS_REG_A0, mask)
-            uc.reg_write(mips.UC_MIPS_REG_A1, bits)
+            uc.reg_write(mips.UC_MIPS_REG_A1, bits & 0xffffffff)
+            if split_double:
+                uc.reg_write(mips.UC_MIPS_REG_A2, bits >> 32)
         uc.reg_write(mips.UC_MIPS_REG_FCSR, 0)
         uc.emu_start(entry, roundtrip.STOP + 4, count=10000)
         assert returned == [4] and uc.reg_read(mips.UC_MIPS_REG_V1) == 0x51
@@ -75,7 +77,11 @@ def observe(path, little, mode, fr, cases, leading=False):
         for r, value in saved_fprs.items():
             assert uc.reg_read(getattr(mips, f"UC_MIPS_REG_F{r}")) == value
         value = uc.reg_read(mips.UC_MIPS_REG_V0) & 0xffffffff
-        assert value == mask ^ bits, (path, hex(mask), hex(bits), hex(value))
+        expected = mask ^ bits
+        if split_double:
+            high = bits >> 32
+            expected = mask ^ (bits & 0xffffffff) ^ ((high << 7 | high >> 25) & 0xffffffff)
+        assert value == expected, (path, hex(mask), hex(bits), hex(value))
         result.append(value)
     return result
 

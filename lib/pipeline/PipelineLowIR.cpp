@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MIPS/MIPS16EntryAdapter.h"
 #include "PipelineAnalysis.h"
 #include "PipelineCallAbiDetail.h"
 #include "PipelineLowIRDetail.h"
@@ -3953,9 +3954,33 @@ ImportPrototypeArguments importPrototypeArguments(
   };
   ImportPrototypeArguments Result;
   std::set<va_t> Seen;
+  std::optional<ExecutableCodeOwnerIndex> MIPS16Owners;
   auto Classify = [&](va_t Addr) {
     if (!Seen.insert(Addr).second)
       return;
+    if (Dbg && isMIPS(Img.Arch) && !isMIPS64(Img.Arch) && Img.MIPS &&
+        Img.MIPS->HasMIPS16 &&
+        Img.instructionModeAt(Addr) == InstructionMode::MIPSClassic) {
+      if (!MIPS16Owners)
+        MIPS16Owners.emplace(Img);
+      if (auto Adapter = pipeline_detail::proveMIPS16EntryAdapter(
+              Img, Addr, *Dbg, &*MIPS16Owners)) {
+        // The classic entry keeps its own physical parameter transport. The
+        // compressed body is a separate callee even though both implement one
+        // logical declaration; no machine target or symbol is rewritten here.
+        Result.FloatingArguments.emplace(Addr,
+                                         std::move(Adapter->EntryArguments));
+        Result.FloatingArguments.try_emplace(Adapter->Body,
+                                             std::move(Adapter->BodyArguments));
+        Result.PrototypeDeclared.insert(Addr);
+        Result.PrototypeDeclared.insert(Adapter->Body);
+        if (Adapter->UserDeclared) {
+          Result.UserDeclared.insert(Addr);
+          Result.UserDeclared.insert(Adapter->Body);
+        }
+        return;
+      }
+    }
     std::string Name = importCalleeName(Img, Addr);
     // A function-pointer variable another module's routine starts at takes
     // that routine's arguments, keyed by the variable's address.
@@ -4176,7 +4201,9 @@ ImportPrototypeArguments importPrototypeArguments(
   // Whether a call's target is a value the caller computed: an indirect call
   // through one, or a dispatcher call, which MedIR gives its target register.
   bool ComputedTargets = false;
-  for (const LowFunc &F : Funcs)
+  for (const LowFunc &F : Funcs) {
+    if (isMIPS(Img.Arch) && Img.MIPS && Img.MIPS->HasMIPS16)
+      Classify(F.Entry);
     for (const LowBlock &Block : F.Blocks)
       for (size_t I = 0; I < Block.Ops.size(); ++I) {
         const LowOp &Op = Block.Ops[I];
@@ -4197,6 +4224,7 @@ ImportPrototypeArguments importPrototypeArguments(
                   loadedCallSlot(F, Block, I, Op.Inputs[0]))
             Classify(*Slot);
       }
+  }
   // An import's declaration belongs to the image, independently of whether
   // the caller loads its IAT word directly or caches that value in its frame.
   // Late target discovery (MedCallTarget.h) must find the same pre-SSA
