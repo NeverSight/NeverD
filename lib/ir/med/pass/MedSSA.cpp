@@ -26,7 +26,9 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationDisplayJoins.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/BinaryImageModel.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -761,6 +763,9 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           SEHProtectedSPRoots.insert(Root);
       }
 
+    const auto EntryGP = Image && Image->Arch == TargetArch && Image->MIPS
+                             ? Image->MIPS->EntryGP
+                             : std::nullopt;
     for (int Root : Roots) {
       if (Root != 0)
         NonEntryRootLiveIns.insert(LiveIn[Root].begin(), LiveIn[Root].end());
@@ -859,6 +864,12 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         Init.Opcode = NdOp::COPY;
         Init.Output = VIt->second;
         MedVar Input = VIt->second;
+        if (EntryGP && Root == 0 &&
+            Func.Blocks[Root].ExceptionalPreds.empty() &&
+            Input.Kind == MedVar::Reg && Input.RegOff == mipsreg::GP &&
+            Input.Size == TRI.FullRegWidth)
+          Input = MedVar::makeConst(*EntryGP, Input.Size,
+                                    ConstantAddressProvenance::Address);
         const bool Callback =
             SEHEntry.value_or(false) || IsCxxHandlerRoot ||
             std::any_of(Func.Blocks[Root].ExceptionalPreds.begin(),

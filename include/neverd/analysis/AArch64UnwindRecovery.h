@@ -49,6 +49,8 @@ struct AArch64RecoveredUnwindRow {
   std::optional<int64_t> StackOffset;
   /// Live FP relative to incoming SP, independently of the chosen CFA base.
   std::optional<int64_t> FramePointerOffset;
+  /// One authenticated entry instruction tail-branches before entering a scope.
+  bool IsForwardingEntry = false;
 };
 
 struct AArch64UnwindRecoveryLimits {
@@ -62,7 +64,9 @@ struct AArch64UnwindRecoveryLimits {
 /// A DWARF row with a proven CFA retains its declared register locations.
 /// Compact and partial-prologue/epilogue rows use live incoming values or
 /// active frame saves. A declared undefined register stays undefined.
-/// Explicit signing columns retain the loader's separate metadata query.
+/// A range consisting of forwarding entries gets one live-LR row per branch.
+/// Intervening bytes have no recovery rule. Explicit signing columns retain
+/// the loader's separate metadata query.
 /// Coalesced unwind-only compact ranges use independent known function
 /// entries; returned offsets remain relative to the shared metadata range.
 llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>

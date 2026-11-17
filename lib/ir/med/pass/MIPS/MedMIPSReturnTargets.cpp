@@ -94,7 +94,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::vector<MedVar> MemoryAddresses;
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
-  bool HasCalls = false;
+  size_t CallCount = 0;
   bool NeedsNativeArguments = false;
   std::map<const MedOp *, FloatingCallArguments> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
@@ -121,7 +121,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       if ((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && Op.NumInputs)
         MemoryAddresses.push_back(Op.Inputs[0]);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        HasCalls = true;
+        ++CallCount;
         const auto Signature = boundFloatingCallArguments(Op, Target, Format);
         if (Signature) {
           Calls.emplace(&Op, *Signature);
@@ -139,6 +139,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         QualifiedMemory = false;
     }
   }
+  const bool HasCalls = CallCount != 0;
   const auto CallSP = HasCalls && QualifiedMemory
                           ? sourceCallStackPointers(Function, Target, Remaining)
                           : std::map<const MedOp *, MedVar>{};
@@ -370,16 +371,69 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       ProvenNonFrame.insert(K);
     return Safe;
   };
+  const auto IntegerLayout = TRI.integerArgumentLayout(Format);
+  const auto CallPrivateStart =
+      [&](const MedOp &Call) -> std::optional<int64_t> {
+    const auto P = CallSP.find(&Call);
+    if (P == CallSP.end())
+      return std::nullopt;
+    const auto SP = Offset(P->second);
+    if (!SP || *SP % (isMIPS64(Target) ? 16 : 8) ||
+        *SP < -limits::ir::kSourceFrameAnalysisMaxFrame)
+      return std::nullopt;
+    const int64_t SlotBytes = isMIPS64(Target) ? 8 : 4;
+    int64_t Extent = isMIPS64(Target) ? 0 : 16;
+    if (const auto S = Calls.find(&Call); S != Calls.end()) {
+      for (const auto &A : S->second.Scalars)
+        if (A.Kind == SourceABICarrierKind::Stack) {
+          const auto End = A.StackOffset + A.Bytes;
+          // A big-endian n64 float occupies the first word, but the callee
+          // still owns its complete eight-byte argument slot.
+          Extent =
+              std::max(Extent, (End + SlotBytes - 1) / SlotBytes * SlotBytes);
+        }
+    } else if (Call.CalleeStackArgs > int(IntegerLayout.Registers.size())) {
+      Extent = std::max<int64_t>(
+          Extent, IntegerLayout.CallStackBase +
+                      (Call.CalleeStackArgs - IntegerLayout.Registers.size()) *
+                          SlotBytes);
+    }
+    return *SP + Extent;
+  };
+  // A saved frame pointer does not publish its value when every call leaves
+  // the complete spill slot private. Use the same outgoing-area boundary as
+  // the saved-link proof, but require a complete argument extent before
+  // admitting pointer spills. An unknown or open variadic call can read more
+  // stack arguments than the ABI's minimum outgoing area.
+  std::optional<int64_t> SharedPrivateStart;
+  if (CallSP.size() == CallCount)
+    for (const auto &Entry : CallSP) {
+      const auto &Call = *Entry.first;
+      const auto Start = CallPrivateStart(Call);
+      if (!Start ||
+          (!Calls.contains(&Call) &&
+           (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
+            Call.CalleeVariadicRegisterFrom >= 0))) {
+        SharedPrivateStart.reset();
+        break;
+      }
+      SharedPrivateStart =
+          SharedPrivateStart ? std::max(*SharedPrivateStart, *Start) : *Start;
+    }
+  const auto PrivateFrameStore = [&](const MedOp &Op) {
+    const auto At = Offset(Op.Inputs[0]);
+    return SharedPrivateStart && At && *At >= *SharedPrivateStart &&
+           *At + Op.Inputs[1].Size <= 0;
+  };
   // Native calls preserve the caller's allocated private frame under the
   // platform ABI even when the callee has no fixed declaration. Check every
   // possible argument definition once: an unmodified incoming register has
   // no address into this frame; a modified one must retain that provenance.
-  // The whole-function check is deliberately conservative about private
-  // pointer spills, and prevents an escape before the RA save from being
-  // forgotten when reachingStackValues sees the later exact store.
+  // Check all stores and calls so an escape before the RA save cannot be
+  // forgotten when reachingStackValues sees the later exact store. Reloading
+  // a private pointer into an argument still has to prove non-frame provenance.
   bool UnexposedFrame = QualifiedMemory;
   bool NativeArgumentsNonFrame = true;
-  const auto IntegerLayout = TRI.integerArgumentLayout(Format);
   const auto FPArguments = TRI.floatingParamRegs(Format);
   const auto CheckNativeArgument = [&](const MedVar &Value) {
     if (Value.Kind != MedVar::Reg || !Value.Size)
@@ -410,7 +464,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             NativeArgumentsNonFrame &= CheckNativeArgument(Value);
         }
         if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
-          UnexposedFrame &= IsNonFrame(Op.Inputs[1]);
+          UnexposedFrame &= PrivateFrameStore(Op) || IsNonFrame(Op.Inputs[1]);
         if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
           if (!Op.NumInputs) {
             UnexposedFrame = false;
@@ -429,36 +483,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     }
   UnexposedFrame &= !NeedsNativeArguments || NativeArgumentsNonFrame;
   const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
-    const auto S = Calls.find(&Call);
-    const auto P = CallSP.find(&Call);
-    if (!UnexposedFrame || P == CallSP.end() ||
-        (S == Calls.end() && !NativeArgumentsNonFrame))
+    if (!UnexposedFrame)
       return false;
-    const auto SP = Offset(P->second);
-    if (!SP || *SP % (isMIPS64(Target) ? 16 : 8))
-      return false;
-    const int64_t SlotBytes = isMIPS64(Target) ? 8 : 4;
-    int64_t Extent = isMIPS64(Target) ? 0 : 16;
-    if (S != Calls.end()) {
-      for (const auto &A : S->second.Scalars)
-        if (A.Kind == SourceABICarrierKind::Stack) {
-          const auto End = A.StackOffset + A.Bytes;
-          // A big-endian n64 float occupies the first word, but the callee
-          // still owns its complete eight-byte argument slot.
-          Extent =
-              std::max(Extent, (End + SlotBytes - 1) / SlotBytes * SlotBytes);
-        }
-    } else if (Call.CalleeStackArgs > int(IntegerLayout.Registers.size())) {
-      Extent = std::max<int64_t>(
-          Extent, IntegerLayout.CallStackBase +
-                      (Call.CalleeStackArgs - IntegerLayout.Registers.size()) *
-                          SlotBytes);
-    }
-    // The callee owns everything below SP and its complete outgoing area.
-    if (*SP < -limits::ir::kSourceFrameAnalysisMaxFrame || At < *SP + Extent ||
-        At + Size > 0)
-      return false;
-    return true;
+    const auto Start = CallPrivateStart(Call);
+    return Start && At >= *Start && At + Size <= 0;
   };
   const uint16_t LinkBytes = isMIPS64(Target) ? 8 : 4;
   std::function<bool(const MedVar &)> Prove = [&](const MedVar &Value) {
@@ -505,8 +533,13 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
               [&](const MedVar &V) {
                 return HasCalls ? !IsNonFrame(V) : !V.isConst();
               },
-              [](const MedVar &) { return true; }, true, HasCalls,
-              PreservesCall);
+              // The complete function proof already distinguishes private
+              // pointer spills from escapes. Do not invalidate the same
+              // slot merely because one of those private stores contains FP
+              // or SP. Exact writes, overlaps and each call's outgoing area
+              // are still checked by this walk and PreservesCall.
+              [](const MedVar &) { return true; }, true,
+              HasCalls && !UnexposedFrame, PreservesCall);
           // Exact stores and complete calls must preserve this private slot.
           // Escaped frame addresses, overlap and unresolved writes reject it.
           Valid = Reaching.Complete && Reaching.Reachable &&

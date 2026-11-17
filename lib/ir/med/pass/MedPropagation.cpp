@@ -22,6 +22,7 @@
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <optional>
 #include <tuple>
@@ -509,6 +510,7 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         }
 
         bool ResultHasAddressOrigin = false;
+        uint16_t ConstantSize = Op.Output.Size;
         // An address less itself is 0 however the loader places it: the same
         // object, at the same offset, on both sides.
         const bool SameAddress = Op.Opcode == NdOp::INT_SUB &&
@@ -516,6 +518,13 @@ void LowToMedConverter::propagate(MedFunc &Func) {
                                  B->HasAddressOrigin &&
                                  A->AddressOwnerVA == B->AddressOwnerVA;
         if ((A->MayRelocate || B->MayRelocate) && !SameAddress) {
+          // n32 carries a high-half ELF32 pointer sign-extended in a GPR.
+          // Look up the ELF VA and retain the extension on the rebuilt pointer.
+          if (isMIPSN32(TargetArch) && Op.Output.Size == 8 &&
+              int64_t(Result) < 0 && llvm::isInt<32>(int64_t(Result))) {
+            Result = uint32_t(Result);
+            ConstantSize = PointerSize;
+          }
           // Preserve expressions whose value depends on two independently
           // rebuilt symbols, or on pointer bit patterns. The one safe fold is
           // canonical address construction: address +/- a numeric displacement
@@ -543,7 +552,8 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           ResultHasAddressOrigin = true;
         }
 
-        Op.Opcode = NdOp::COPY;
+        Op.Opcode =
+            ConstantSize == Op.Output.Size ? NdOp::COPY : NdOp::INT_SEXT;
         ConstantAddressProvenance ResultProvenance =
             ConstantAddressProvenance::Unknown;
         uint64_t ResultOwnerVA = InvalidVA;
@@ -561,8 +571,8 @@ void LowToMedConverter::propagate(MedFunc &Func) {
                    (A->Provenance == ConstantAddressProvenance::Scalar &&
                     B->Provenance == ConstantAddressProvenance::Scalar))
           ResultProvenance = ConstantAddressProvenance::Scalar;
-        Op.Inputs[0] = MedVar::makeConst(Result, Op.Output.Size,
-                                         ResultProvenance, ResultOwnerVA);
+        Op.Inputs[0] = MedVar::makeConst(Result, ConstantSize, ResultProvenance,
+                                         ResultOwnerVA);
         Op.NumInputs = 1;
         Changed = true;
       }

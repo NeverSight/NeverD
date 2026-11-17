@@ -81,8 +81,8 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     }
     return End == Type->Size ? Leaves : std::nullopt;
   };
-  const bool ComplexResult = isMIPS(A) && !isMIPS64(A) && !FixedCount &&
-                             sourceComplexComponentBytes(ReturnType);
+  const bool ComplexResult =
+      isMIPS(A) && !FixedCount && sourceComplexComponentBytes(ReturnType);
   bool HasRecord = ReturnType && ReturnType->Kind == NdTypeKind::Struct &&
                    !ReturnType->IsEnum && !ComplexResult;
   for (const auto &Type : Parameters)

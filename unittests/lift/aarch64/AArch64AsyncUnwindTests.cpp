@@ -322,6 +322,30 @@ TEST(AArch64AsyncUnwind,
   const auto *After = Published->readVA(Owner, Size);
   ASSERT_TRUE(Before && After);
   ASSERT_EQ(llvm::ArrayRef(Before, Size), llvm::ArrayRef(After, Size));
+  const va_t OldEntry = Entry + Patch->OriginalSectionSlide;
+  const auto *Trampoline = Published->ExceptionMetadata.findFunction(OldEntry);
+  ASSERT_TRUE(Trampoline && Trampoline->Dwarf);
+  ASSERT_EQ(Trampoline->CodeRange.Begin, OldEntry);
+  auto EntryRows = recoverDarwinAArch64Unwind(*Published, *Trampoline);
+  ASSERT_TRUE(bool(EntryRows)) << llvm::toString(EntryRows.takeError());
+  const auto &First = EntryRows->front();
+  ASSERT_TRUE(First.IsForwardingEntry);
+  const auto EntryPlan =
+      prepareDarwinArm64eSystemCaller(First, Trampoline->CodeRange, OldEntry);
+  ASSERT_TRUE(EntryPlan);
+  ASSERT_TRUE(EntryPlan->Vectors.Complete);
+  ASSERT_FALSE(EntryPlan->Frame.CFAFromFP || EntryPlan->Frame.SavedFP ||
+               EntryPlan->Frame.SavedLR || EntryPlan->Count);
+  ASSERT_EQ(EntryPlan->Frame.Signing, NDArm64eUnsigned);
+  ASSERT_EQ(EntryPlan->Frame.CFAOffset, 0);
+  const auto EntrySite = prepareDarwinArm64eExceptionSite(
+      *Published, *Trampoline, *EntryRows, OldEntry, OldEntry);
+  ASSERT_TRUE(EntrySite);
+  EXPECT_EQ(EntrySite->Begin, OldEntry);
+  EXPECT_EQ(EntrySite->End, OldEntry + aarch64::kInsnSize);
+  EXPECT_FALSE(EntrySite->AtProtectedCall);
+  EXPECT_FALSE(prepareDarwinArm64eExceptionSite(
+      *Published, *Trampoline, *EntryRows, EntrySite->End, OldEntry));
   auto Recovered = recoverDarwinAArch64Unwind(*Published, *NewFrame);
   ASSERT_TRUE(bool(Recovered)) << llvm::toString(Recovered.takeError());
   for (uint64_t Off = 0; Off < Size; Off += aarch64::kInsnSize) {
@@ -412,6 +436,29 @@ TEST(AArch64AsyncUnwind,
               0);
     ASSERT_NO_FATAL_FAILURE(checkFrame(*Published, Owner, InstalledSamples,
                                        PublishedRows, *Recovered));
+    const auto EntryRules = (Root / kEntryRules).string();
+    const auto EntrySamples = (Root / kEntrySamples).string();
+    std::ofstream(EntryRules)
+        << 1 << '\n'
+        << First.CodeOffset << ' ' << EntryPlan->Frame.CFAOffset << ' '
+        << EntryPlan->Frame.SavedLR << ' '
+        << (EntryPlan->Frame.Signing == NDArm64eSignedIBWithCFA) << ' '
+        << EntryPlan->Count << '\n';
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver,
+                                        {Driver, Output, std::to_string(0),
+                                         std::to_string(kNewValue),
+                                         EntrySamples, EntryRules, kEntryMode}),
+              0);
+    std::ifstream Sample(EntrySamples);
+    uint64_t Offset, Depth;
+    int Signed, Saved;
+    ASSERT_TRUE(Sample >> Offset >> Signed >> Depth >> Saved);
+    EXPECT_EQ(Offset, 0u);
+    EXPECT_EQ(Depth, 0u);
+    EXPECT_EQ(Signed, 0);
+    EXPECT_EQ(Saved, 0);
+    EXPECT_TRUE((Sample >> std::ws).eof());
+    RecordProperty(kEntrySteps, 1);
     for (auto [Path, Property] :
          {std::pair(OriginalSamples, kOriginalRows),
           std::pair(InstalledSamples, kPublishedRows)}) {
