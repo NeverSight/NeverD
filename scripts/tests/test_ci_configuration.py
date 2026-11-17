@@ -150,6 +150,10 @@ find() { return 0; }
     def test_native_pipeline_requires_manual_dispatch(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
         self.assert_manually_dispatched(native)
+        step = self.workflow_step_containing(
+            native, "Verify actual SDK allocation and native worker requests")
+        for test in ("NeverDWorkerCallSiteTypes", "NeverDWorkerNativeMapping"):
+            self.assertIn(test, step)
 
     def test_msvc_test_targets_select_extended_coff_objects(self):
         for msvc_style in (False, True):
