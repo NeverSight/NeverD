@@ -644,6 +644,112 @@ size_t countOf(llvm::StringRef Text, llvm::StringRef Needle) {
   return Count;
 }
 
+/// The value \p Function stores first, a constant.
+const llvm::Constant *firstStoredConstant(const llvm::Function &Function) {
+  for (const llvm::BasicBlock &Block : Function)
+    for (const llvm::Instruction &Instruction : Block)
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+        return llvm::dyn_cast<llvm::Constant>(Store->getValueOperand());
+  return nullptr;
+}
+
+// A termination handler that leaves its `__finally` by a jump passes the
+// runtime the block of its parent to resume at: a code address inside another
+// function.  C has no name for another function's label, and nothing in the
+// parent need reach that block, which is then removed with its address.  For
+// printed C that target is the parent plus the offset, as code is in a
+// function the module only declares.  Native IR keeps the block's address, a
+// function keeps it for a block of its own, and so does another function for
+// a block that is no such target, as a catch funclet does for where its
+// parent goes on.
+TEST(TableSEHSourceScopes,
+     AHandlerNamesItsUnwindTargetAsTheParentPlusAnOffset) {
+  enum class Case { PrintedC, NativeIR, PrintedCOfAnotherAddress };
+  for (const Case Which :
+       {Case::PrintedC, Case::NativeIR, Case::PrintedCOfAnotherAddress}) {
+    SCOPED_TRACE(static_cast<int>(Which));
+    std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+    // The outer handler stores the address of the parent's last block, and
+    // the parent the same address, in place of a count.
+    for (const char *Name : {"outer_finally", "three_scopes_parent"})
+      for (MedFunc &Function : Unit) {
+        if (Function.Name != Name)
+          continue;
+        MedOp Store;
+        Store.Opcode = NdOp::STORE;
+        Store.Addr = Function.Entry;
+        Store.addInput(MedVar::makeConst(CounterVA, 8));
+        MedVar Code = MedVar::makeConst(TargetVA, 8);
+        Code.Provenance = ConstantAddressProvenance::CodeAddress;
+        Store.addInput(Code);
+        auto &Ops = Function.Blocks.front().Ops;
+        Ops.insert(Ops.begin(), std::move(Store));
+      }
+    // What the certified local unwinds of the parent's handlers resume at.
+    if (Which != Case::PrintedCOfAnotherAddress)
+      Unit.front().SEHHandlerUnwindTargets = {TargetVA};
+
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, Which != Case::NativeIR);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+    const llvm::Function *Handler = Module->getFunction("outer_finally");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_NE(Handler, nullptr);
+
+    const llvm::DataLayout &Layout = Module->getDataLayout();
+    auto BaseAndOffset = [&](const llvm::Constant *Value)
+        -> std::pair<const llvm::Value *, int64_t> {
+      if (!Value)
+        return {nullptr, 0};
+      llvm::APInt Offset(64, 0);
+      const llvm::Value *Pointer = Value;
+      if (const auto *Cast = llvm::dyn_cast<llvm::ConstantExpr>(Value);
+          Cast && Cast->getOpcode() == llvm::Instruction::PtrToInt)
+        Pointer = Cast->getOperand(0);
+      const llvm::Value *Base = Pointer->stripAndAccumulateConstantOffsets(
+          Layout, Offset, /*AllowNonInbounds=*/true);
+      return {Base, Offset.getSExtValue()};
+    };
+
+    const auto [InHandler, HandlerOffset] =
+        BaseAndOffset(firstStoredConstant(*Handler));
+    ASSERT_NE(InHandler, nullptr) << printed(*Handler);
+    if (Which == Case::PrintedC) {
+      EXPECT_EQ(InHandler, Parent) << printed(*Handler);
+      EXPECT_EQ(HandlerOffset, static_cast<int64_t>(TargetVA - ParentVA))
+          << printed(*Handler);
+    } else {
+      const auto *Address = llvm::dyn_cast<llvm::BlockAddress>(InHandler);
+      ASSERT_NE(Address, nullptr) << printed(*Handler);
+      EXPECT_EQ(Address->getFunction(), Parent) << printed(*Handler);
+      EXPECT_EQ(HandlerOffset, 0) << printed(*Handler);
+    }
+    // The parent names its own block either way.
+    const auto [InParent, ParentOffset] =
+        BaseAndOffset(firstStoredConstant(*Parent));
+    const auto *Own = llvm::dyn_cast_or_null<llvm::BlockAddress>(InParent);
+    ASSERT_NE(Own, nullptr) << printed(*Parent);
+    EXPECT_EQ(Own->getFunction(), Parent) << printed(*Parent);
+    EXPECT_EQ(ParentOffset, 0) << printed(*Parent);
+    if (Which != Case::PrintedC)
+      continue;
+
+    // The handler prints, with the address spelled from the parent's name.
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.EmitIncludes = false;
+    Options.TheArch = Arch::X64;
+    EXPECT_TRUE(LLVMCEmitter().emit(*Module, OS, Options, nullptr, nullptr,
+                                    Module->getFunction("outer_finally")));
+    OS.flush();
+    EXPECT_NE(Source.find("(three_scopes_parent) + 0x50"), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("blockaddress"), std::string::npos) << Source;
+  }
+}
+
 // The range markers and the blocks a call's continuation or a split leaves
 // empty print only a jump.  They get no `__try`, and no text where a jump
 // can pass them: what is left is the statements, each in its scopes, and the

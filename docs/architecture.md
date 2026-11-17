@@ -1316,6 +1316,16 @@ handler ends). The output gate refuses that role by name: its rule for a
 protected call is the innermost source scope at the call's address, which is
 the scope such a call has just left, and no execution has yet shown that the
 rewritten table gives the call the scopes the runtime gave it.
+A termination handler that leaves its `__finally` by a jump is the other
+side of a local unwind: it calls the runtime with a block of its parent to
+resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block
+address, which C can name only inside the block's own function, and which the
+optimizer turns into the constant one when nothing in the parent reaches the
+block. For printed C the emitter spells such a target as the parent's address
+plus the offset (`resolveLiftedFunctionInterior`), so the handler prints in a
+whole unit as it does alone. Native IR keeps the block address, and so does
+every other code address inside another function, such as the continuation a
+catch funclet returns.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call

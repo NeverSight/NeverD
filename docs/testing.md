@@ -20646,6 +20646,11 @@ another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
 record that holds back exceptions from an `__except` row or unwinds from a
 `__finally` row, and takes a table of termination handlers whose record
 passes unwinds only.
+`AHandlerNamesItsUnwindTargetAsTheParentPlusAnOffset` lets a termination
+handler and its parent store the address of a block of the parent: for printed
+C the handler's value is the parent plus the offset when the block is one its
+local unwinds resume at, and it prints so; native IR, the parent itself and a
+block that is no such target keep the block address.
 `COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
 x64 IR for a local unwind out of the only scope, out of the inner of two and
 out of both: the handler's call is a plain one, an invoke to the outer row's

@@ -1194,6 +1194,7 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   DirectDataByteGlobals.clear();
   PreparedFuncBlocks.clear();
   LiftedCodeBlocks.clear();
+  SEHHandlerUnwindTargets.clear();
   EmittedFuncCodeRanges.clear();
   SEHCallbackKinds.clear();
   ConflictingLiftedCodeBlocks.clear();
@@ -1612,6 +1613,10 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
       declareX86RegistrationJumpRuntimes(Func);
       declareX86RegistrationLocalUnwinds(Func);
     }
+
+  for (const MedFunc &Func : Funcs)
+    SEHHandlerUnwindTargets.insert(Func.SEHHandlerUnwindTargets.begin(),
+                                   Func.SEHHandlerUnwindTargets.end());
 
   // Build every ordinary block skeleton before emitting the first operation.
   // A code-pointer mirror requested by an early consumer can then name an
