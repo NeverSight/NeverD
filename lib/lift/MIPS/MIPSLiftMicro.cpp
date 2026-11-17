@@ -359,6 +359,8 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
       return Encoding{*Classic};
     return std::nullopt;
   case 0x10:
+    if (RT == 13) // Pre-R6 LUI: the destination occupies the rs field.
+      return Encoding{immediateForm(15, RS, 0, uint16_t(Word))};
     return microLegacyJump(First, uint16_t(Word));
   case 0x18: { // Pre-R6 POOL32C, signed twelve-bit displacement.
     const unsigned Sub = (Word >> 12) & 15;
@@ -391,6 +393,11 @@ MIPSLifter::microEncoding(const cs_insn &Instruction) const {
   case 0x00: {
     if (!R6) {
       switch (uint16_t(Word)) {
+#define NEVERD_MICRO_SHUFFLE(Micro, Classic)                                   \
+  case Micro:                                                                  \
+    return Encoding{(31u << 26) | (RS << 16) | (RT << 11) | (Classic << 6) |   \
+                    32u};
+#include "neverd/lift/MIPS/MicroMIPSInteger.def"
       case 0xab3c:
       case 0xbb3c: // DIV / DIVU
         return Encoding{registerForm(Word & 0x1000 ? 27 : 26, 0, RS, RT)};

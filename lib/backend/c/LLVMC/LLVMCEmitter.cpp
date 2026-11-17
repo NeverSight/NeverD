@@ -18,6 +18,7 @@
 #include "../FloatConversion.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
+#include "../NativeIntegerTypes.h"
 #include "../StdcallImportPops.h"
 #include "../UnalignedMemory.h"
 #include "../VariadicImportStub.h"
@@ -586,10 +587,16 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
     OS.retarget(&RecordsOS);
     writeRecordDefinitions(Rest);
   }
+  // The bodies already exist here. Pure integer requests need no GCC bit
+  // copy helper; keep their cached source payload as small as before.
+  if (isMIPS(Opts.TheArch) &&
+      (llvm::StringRef(Rest).contains(mips::BitCastCallPrefix) ||
+       llvm::StringRef(Records).contains(mips::BitCastCallPrefix)))
+    OS << mips::BitCastCPrelude;
   // A 16-byte integer spelled by its type, as a frame record's member is, is
-  // `__int128`, which a 32-bit target's compiler lacks: there it is the C23
-  // type of that width, as in HighC.
-  if (getTargetRegInfo(Opts.TheArch).PointerSize < 8 &&
+  // `__int128`. Targets without that compiler type use C23 _BitInt, as in
+  // HighC. Pointer width alone cannot distinguish n32 from a 32-bit ISA.
+  if (!cTargetHasInt128(Opts.TheArch) &&
       (spellsInt128Keyword(Records) || spellsInt128Keyword(Rest)))
     OS << "#define __int128 _BitInt(128)\n\n";
   OS << Records << Rest;
@@ -3796,7 +3803,8 @@ bool LLVMCEmitter::emit(llvm::Module &Mod, llvm::raw_ostream &Out,
         continue;
       const auto Function = Sources->Functions.find(Observation.Function);
       if (Function == Sources->Functions.end() ||
-          Function->second != Instruction->getFunction())
+          static_cast<llvm::Value *>(Function->second) !=
+              Instruction->getFunction())
         continue;
       const auto [At, Added] = SourceAddresses.try_emplace(
           Instruction, Observation.Occurrence.Address);

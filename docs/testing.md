@@ -7492,6 +7492,10 @@ could not walk through the index a finished job wrote, walks a file whose index 
 not fit it, and loses only the record an index misplaces. An index whose page
 count exceeds its record's length is discarded; complete records in the original
 file still reproduce their exact source without asking the engine.
+The mock warming pass advances a cumulative steady-clock deadline by 20 ms
+per chunk and resets it for each pass. This keeps the preparation phase
+observable without adding each late timer wakeup to all subsequent chunks.
+The same functions, render pages, assertions and CTest limits remain covered.
 `WorkbenchTests::pseudocodeViewReadsWhatAnEarlierSessionRendered` checks that
 through a real view. `QueryServiceTests::sourcePageKeptAcrossAReadContextIsNamed`
 checks that a replica's dispatcher names the page it kept after its owner's change
@@ -8527,7 +8531,11 @@ recovery and explicit failure when that definition never arrives.
 them with the complete inventory. `LocalTypeLocateSurvivesAByteLimitedPage`
 checks exact-name navigation when a row-count page exceeds its byte limit;
 `LocalTypePagesAndRenderersRefreshAfterEdits` checks list/layout/source cache
-invalidation. `TypeRender.ReusedNameMappingsKeepCollisionsAndRequestOptions`
+invalidation. `LocalTypePagesKeepQueryChangesIndependent` checks complete page
+responses while changing filters, origins, sort keys and directions, then
+replays the queries in reverse order. Building both Session C API and Session
+LLVM test owners also exercises the nested index's construction on each native
+toolchain. `TypeRender.ReusedNameMappingsKeepCollisionsAndRequestOptions`
 compares cached and uncached output across spelling, language and dependency
 options. The worker local-types test and GUI
 `localTypesPageAndLocateBeyondTheFirstPage` cover the corresponding transport
@@ -8651,6 +8659,10 @@ rendered size and offset check must hold.
 `TypeFit.*` lands accesses on members (union alternatives, bitfield units,
 array elements, padding and bytes outside a record) and ranks records by
 them, a pointer into a record and quick-open matching included.
+`TypeJSONFixture.SharedSpellerMatchesOwnedLayouts` compares complete layout
+JSON with shared and per-request type spelling in both library orders and
+both builtin spelling modes. It belongs to `NeverDTypesTests`, whose native
+Windows build also checks construction of the noncopyable spelling state.
 `NeverDMedPointerAccessesTests` gathers the accesses through one pointer from
 hand-built MedIR, through copies and constant additions.
 `SessionCAPITest.LocalTypesFitWhatTheCodeDoesThroughAPointer` ranks the
@@ -11838,7 +11850,7 @@ handler and landing-pad cases retain the exception-boundary coverage.
 
 `HighValueForward.*` in `NeverDHighControlFlowTests` checks when the HighC writer may fold a single-use value into its use. A loop condition keeps a value whose variables the loop assigns, since one name can denote several SSA values; a reloaded frame slot keeps its value across a store to that slot and folds past a store to another slot. A copy keeps its value when its source is reassigned before the use. Each case runs at `-O0` and `-O2` with undefined-behavior traps.
 
-`HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic.
+`HighCIntegerConversion.*` in `NeverDHighControlFlowTests` checks the integer conversions the HighC writer leaves to C. A conversion inside an operand that keeps the bytes an outer conversion keeps prints no cast of its own; an assignment to a declared integer local and a return convert implicitly, and a literal is spelled as the value it converts to, while a pointer keeps its explicit conversion. Stores convert like assignments, and a zero-extended argument to a typed wider parameter keeps its extension. A callee whose debug symbol has no type, or that nothing declares while the code reads more than an int of its result, returns its whole register, so a 64-bit pointer keeps its upper half. Each case runs at `-O0` and `-O2` with undefined-behavior traps against reference arithmetic. Non-Windows fixture executables link the math library so fused floating operations also execute on hosts where those builtins lower to library calls.
 
 `HighCIntegerConversion.FloatingCallKeepsAConstantBitCast` executes typed local
 float/double calls for x86, x64, ARM32 and ARM64 at O0/O2. The call must retain
@@ -11865,6 +11877,13 @@ FMUL/FCSEL/FCVTZS/SCVTF/FMADD kernel and executes both C routes at O0/O2 for 1,0
 edge/random bit patterns. AArch64 hosts compare against native instructions;
 other hosts use an explicit scalar reference with saturating truncation. NaN
 results are compared by classification, while other results require exact bits.
+
+`HighCSourceCalls.FloatingCallCarriersRemainBitsAtSourceBoundaries` also executes
+float/double entry parameters read through signed and unsigned integer views
+before native calls. O0/O2 comparisons retain signed zero, infinities and NaN
+payloads. Run its `NeverDSourceEntryBindingTests` owner together with
+`NeverDAArch64AuthenticatedCallTests`: the authenticated-call regression
+requires reconstructed caller IR to contain no numeric FP/integer conversion.
 
 `HighCIntegerConversion.NarrowCopyKeepsLowBytesThroughSourceProjection` starts
 from MedIR and checks narrowing copies followed by zero extension for i386,
@@ -18050,6 +18069,11 @@ validating only freshly rebuilt dedicated lift targets.
 reference reuse, newly independent function entries, relocated code roots and
 reload invalidation. Run the computed-string/reference, function-disassembly
 and function-discovery suites after changing the shared page/index owner.
+The unsized reference traversal and PE analysis-cache tests call internal
+page/index operations through `SessionTestAccess`. This same-build interface
+is compiled only with testing enabled and supplies the DLL exports needed by
+the Windows test executable; the internal operations remain outside the public
+C SDK.
 GUI `largeImageViewsShareOnePreparedReplica` checks queued source views and
 independent owner reads; worker `analysis_snapshot_test.py` compares prepared
 and ordinary replicas and verifies snapshot/name-update identity.
@@ -21296,6 +21320,14 @@ The earlier 204-observation translation-profile receipt is historical. Current f
 
 ## Native Lift qualification
 
+Windows source fixtures use the AddressSanitizer DLL reported by their pinned
+Clang driver. The installer prepends that runtime directory to the job's DLL
+search path; MSVC's independently installed ASan DLL is not interchangeable.
+LLVMC tests inspect original Windows runtime declarations before renaming
+mock definitions for execution, so they cannot collide with the host CRT.
+The POSIX `optarg`/`optind` case checks emitted declarations on every host and
+explicitly skips native execution on Windows, which lacks `<unistd.h>`.
+
 The `Lift native qualification` workflow owns the 108 previously unqualified cases (62 failures and 46 skips). It installs Clang 23 or newer, GNU GCC and the i386 development libraries on a native Linux x86-64 runner, and initializes the pinned binary corpus. `unittests/Inputs/lift-qualification.json` retains every original test identity. `scripts/run_lift_qualification.py` rejects missing, duplicate, disabled, skipped or failed cases and a nonzero process exit; `qualification.json` records individual passes, source/corpus revisions, compiler versions and binary hashes.
 
 The profile executes native i386/x86-64 controls, x87 extended precision, and generated Swift SSE result, state and unmasked-trap checks at both optimization levels. The AArch64 parity controls decode the actual `.text` of a pinned Rust runtime. Cross-target decoding does not establish native execution on that target; use the separate source-patch native process jobs for Windows/Linux x64/ARM64 and the local macOS checks.
@@ -21914,6 +21946,11 @@ checks byte/word wrapping and the distinct unwrapped 64-bit selector.
 and unsigned bounded tails, small constants, negative/high-bit words and
 dynamic integer and pointer carriers. Its independent providers check both exact C expression types
 and values at O0/O2 with UBSan.
+`LLVMCValues.PointerForwardingCarriersDoNotRetypeScalarVarargs` checks MIPS32/64
+in both byte orders. Integer parameters and small word-sized literals remain
+integers through `fcntl`/`ioctl`, while pointer parameters remain pointers.
+Independent variadic providers check C expression types before conversion and
+read the original values at O0/O2 with UBSan.
 These tests execute scalar C on the host with local providers; they neither
 invoke real kernel services nor qualify native x64 execution on an ARM host.
 `LargeCalleeSignaturesDoNotNeedStructuredHighIR` exceeds the block and operation
@@ -22179,6 +22216,8 @@ image bytes, absence from the literal catalogue, and deferred HighIR/LLVM/C
 emission. `NeverDWorkerComputedStrings` checks the 601-function transport
 fixture, an entry discovered during analysis, retained failures, non-advancing
 filtered pages, exact 64-bit addresses and invalidation after a function edit.
+The replacement catalogue starts its rows, counters and ordering anew while
+rejecting the previous generation's page token.
 `WorkbenchUnitTests.computedStringDetailsRetainConditionsAndNavigate` checks
 full escaped text and the initializer link, including addresses above 2^53.
 `WorkbenchTests.computedStringsScanPausesAndFiltersInReplica` checks pause,
@@ -25476,6 +25515,15 @@ Add `--revision 2 --fr 0 --abi 32` for o32 physical register pairs, including
 single/double entry and call results, variadic/indirect calls and preserved
 f20–f31 words. `--abi` and `--layout` narrow a diagnostic rerun; omitting them
 runs all cases for the selected mode.
+Add `--revision 2 --micro --micro64-cc /path/to/mips64-linux-gnuabi64-gcc`
+to execute physical microMIPS callers and callees. Despite the option name,
+the GNU compiler supplies all three compressed ABIs; Clang remains the classic
+compiler. Add `--interwork` to select classic callees instead, with direct JALX
+and runtime-tagged indirect targets. `--fr 0` narrows either compressed matrix
+to o32 register pairs. Run each selection in a separate `--output` directory.
+The ELF files retain each function's instruction mode, and generated source is
+compiled with `-minterlink-compressed`. This does not qualify MIPS16 floating
+linker/runtime stubs.
 `SourceCallABI.AlignmentGuardPreservesOutgoingStackBytesAndAddresses` checks
 the reaching-store proof in all six MIPS ABI/byte-order profiles, with malformed
 alignment and opaque-effect controls that must still fail qualification.
@@ -25498,6 +25546,18 @@ FP state (including f0 after a declared non-floating call).
 `NeverDMIPSFlowTests` covers delayed snapshots with detail disabled and poisoned
 operand counts. `NeverDLLVMCAllocaTests` executes floating/integer storage views
 against original LLVM, including negative zero and NaN payloads.
+`MicroMIPSInteger` checks physical LUI word sign extension and SEB/SEH/WSBH
+with aliased operands in both GPR widths and byte orders; the legacy LUI
+encoding remains rejected on R6. `MicroMIPSSequence` compares LWM/SWM with
+the pinned Unicorn's full word memory accesses and independent untouched-byte
+guards. The oracle's own tests also cover sign extension on 64-bit loads.
+`MicroMIPSPipelineSource.N32RetainsNativeWideRecordTypes` and
+`HighCIntegerWidths.A32BitTargetSpellsA128BitIntegerAsBitInt` distinguish n32's
+native 128-bit type from a target with only 32-bit registers in both emitters.
+`MicroMIPSPipelineSource.GCCBitCastPreludeFollowsTheSelectedBody` separates an
+integer identity from a NaN payload constant in the same module, across all
+six ABI/byte-order targets and classic/micro attributes. Only the selected
+constant body requires the GCC compatibility prelude.
 
 `SourceParameterPlacement.MIPSScalarOnlyCallsKeepCompleteSignatures` covers
 integer, pointer and void signatures without any floating parameters in all
@@ -25543,6 +25603,11 @@ all eight low address offsets. The loader test rejects inconsistent FP ABI and
 CPR1 width evidence. `MIPSFR0` compares physical even/odd word pairs,
 alignment faults and untouched FPR words in both byte orders. Odd doubles,
 long formats, PS and unaligned indexed transfers are rejected under FR=0.
+The pinned Unicorn MSVC MIPS target snapshots enable the same default memory
+alignment as Unix builds. Its independent `test_mips_fp_memory_alignment` and
+`test_mips_r6_fp_unaligned_memory` cover 576 profile/address combinations.
+The native Windows negative control fails with the previous reference; the
+fixed reference passes all 18 MIPS tests in three consecutive Release runs.
 Paired-single tests cover both lanes' exception flags, all even FCC pairs,
 conditional moves, packing, overlapping registers and defined/undefined ALNV
 offsets. The reference CPU supplies PS even for MIPS32 LowIR; this does not

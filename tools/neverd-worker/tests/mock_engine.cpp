@@ -159,6 +159,7 @@ struct MockSession {
   unsigned computedStringQueries = 0;
   /// The functions the current neverd_warm_functions_json pass prepared.
   int warmed = 0;
+  std::chrono::steady_clock::time_point warmDeadline;
   /// neverd_prepare_call_summaries_json calls this session answered.
   int summarySolves = 0;
   std::string preparedView;
@@ -1129,8 +1130,14 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   // warm-slow.bin takes long enough per step for heartbeats to show a pass;
   // so does summaries-ready.bin, for its call-summary job.
   if (state.path.find("warm-slow") != std::string::npos ||
-      state.path.find("summaries-ready") != std::string::npos)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      state.path.find("summaries-ready") != std::string::npos) {
+    // Keep the pass observable without accumulating late timer wakeups at
+    // every chunk. The real worker's scheduling and batch sizes stay intact.
+    if (state.warmed == 0)
+      state.warmDeadline = std::chrono::steady_clock::now();
+    state.warmDeadline += std::chrono::milliseconds(20);
+    std::this_thread::sleep_until(state.warmDeadline);
+  }
   auto next = std::lower_bound(state.functions.begin(), state.functions.end(),
                                firstEntry);
   int prepared = 0;

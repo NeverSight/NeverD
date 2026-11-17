@@ -35,3 +35,12 @@ NEVERD_MICRO_REGISTER(0x0d, 0x2a) // SLT
 NEVERD_MICRO_REGISTER(0x0e, 0x2b) // SLTU
 #undef NEVERD_MICRO_REGISTER
 #endif
+
+// POOL32A low halfword, classic SPECIAL3 BSHFL selector. Source is rs and
+// destination is rt in the microMIPS encoding.
+#ifdef NEVERD_MICRO_SHUFFLE
+NEVERD_MICRO_SHUFFLE(0x2b3c, 0x10) // SEB
+NEVERD_MICRO_SHUFFLE(0x3b3c, 0x18) // SEH
+NEVERD_MICRO_SHUFFLE(0x7b3c, 0x02) // WSBH
+#undef NEVERD_MICRO_SHUFFLE
+#endif

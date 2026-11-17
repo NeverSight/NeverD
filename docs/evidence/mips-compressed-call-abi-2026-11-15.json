@@ -1,0 +1,198 @@
+{
+  "implementation_commit": "094120516dae79ef7512cc44c70f763beb252fe1",
+  "dev_base": "71c27bd7003f3781c2a048e4ed038b030d53da10",
+  "host": "macOS arm64, Release",
+  "capstone_commit": "0e6390fe9f8fa38c431ccbf7e8c54692afd3181e",
+  "unicorn_commit": "0b976580a5447dff2fd6822f07b4683c33392d78",
+  "unicorn_reference_sha256": "92f0e64e9eec8ef02c710a2b5ed998b68b980d3ea637803b3607fa51686e4d82",
+  "qualified_binary_sha256": {
+    "neverd": "b3b5b0cffb8f36acf4784e4367f35576d5c70ab38573d19db1558cf033b624bf",
+    "libneverd.dylib": "b7b6864f1c8e09c01f7332a62c6751bb224750d479e58bb9bd68c04311afcbb0",
+    "neverd-mips-bench": "7091f68c0de55214fa0fc0ac77a412feca08c4368e50e74c98a56e43f4fa6930",
+    "neverd-mips-request-bench": "5f18baa849687945e3b804b102f7ca9da1f196e845f399f2f43851b7883adf9e"
+  },
+  "same_base_dependency_inputs_sha256": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde",
+  "source_roundtrips": {
+    "micro-fr0": {
+      "complete": true,
+      "abis": [
+        "o32"
+      ],
+      "fr": 0,
+      "byte_orders": [
+        "big",
+        "little"
+      ],
+      "caller_encoding": "microMIPS",
+      "callee_encoding": "microMIPS",
+      "original_elf_profiles": 56,
+      "original_cases": 1120,
+      "source_builds": 272,
+      "rebuilt_comparisons": 5440,
+      "result_sha256": "ddc5035a6528977929be10fa3abe2b1f18224c07733d372cfc85fe7032bc0562",
+      "commands_sha256": "cc55373755d298a70b0f4a219345e457bf754ee83e78d8db9d8d7035275d861d",
+      "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ]
+    },
+    "micro-fr1": {
+      "complete": true,
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "fr": 1,
+      "byte_orders": [
+        "big",
+        "little"
+      ],
+      "caller_encoding": "microMIPS",
+      "callee_encoding": "microMIPS",
+      "original_elf_profiles": 168,
+      "original_cases": 3360,
+      "source_builds": 816,
+      "rebuilt_comparisons": 16320,
+      "result_sha256": "a5a2baad5c18837bacd6ae2005333fa3d63f1074d20d06e2451fa025c3eda1df",
+      "commands_sha256": "9ed67762b1eb708ef181f5cf012e387fc66e18a0fb7903ffed375dc33391475b",
+      "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ]
+    },
+    "interwork-fr0": {
+      "complete": true,
+      "abis": [
+        "o32"
+      ],
+      "fr": 0,
+      "byte_orders": [
+        "big",
+        "little"
+      ],
+      "caller_encoding": "microMIPS",
+      "callee_encoding": "classic",
+      "original_elf_profiles": 56,
+      "original_cases": 1120,
+      "source_builds": 272,
+      "rebuilt_comparisons": 5440,
+      "result_sha256": "a37880f323d58660b7ca798377a47b5f5abb99feaec62545cd394889f62c5dc1",
+      "commands_sha256": "e7161eed39b39fb3c8a65b62ff3e576883e220af362037bea144b9ffae10106a",
+      "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ]
+    },
+    "interwork-fr1": {
+      "complete": true,
+      "abis": [
+        "o32",
+        "n32",
+        "n64"
+      ],
+      "fr": 1,
+      "byte_orders": [
+        "big",
+        "little"
+      ],
+      "caller_encoding": "microMIPS",
+      "callee_encoding": "classic",
+      "original_elf_profiles": 168,
+      "original_cases": 3360,
+      "source_builds": 816,
+      "rebuilt_comparisons": 16320,
+      "result_sha256": "2a703c85ec631bf69e5385610573be98872501c4b7fe3e469ffb95b547e54acd",
+      "commands_sha256": "de88fa4f133cf9b5486d5d5a90e551ff05eb8f3294fe9596b46428a42cb5a3c8",
+      "compiler": "GNU MIPS64 GCC 12.2.0 (Debian 12.2.0-14cross5)",
+      "views": [
+        "highc",
+        "llvmc"
+      ],
+      "optimization_levels": [
+        "-O0",
+        "-O2"
+      ]
+    }
+  },
+  "scalar_instruction_changes": {
+    "forms": [
+      "pre-R6 microMIPS LUI",
+      "SEB",
+      "SEH",
+      "WSBH"
+    ],
+    "gpr_widths": [
+      32,
+      64
+    ],
+    "byte_orders": [
+      "big",
+      "little"
+    ],
+    "reference": "GNU as literal encodings, pinned Unicorn execution and independent arithmetic expectations",
+    "checks": [
+      "word sign extension",
+      "aliased source/destination",
+      "LUI zero and extremal immediates with v0, t0 and ra destinations",
+      "R6 rejects the legacy LUI encoding"
+    ]
+  },
+  "reference_fix": {
+    "pr": "https://github.com/NeverSight/unicorn/pull/33",
+    "merge_commit": "0b976580a5447dff2fd6822f07b4683c33392d78",
+    "correction": "microMIPS SWM stores full words; 64-bit LWM sign-extends loaded words",
+    "negative_control": {
+      "test": "test_micromips_multiple_words",
+      "previous_library_sha256": "018547559f3609eb09ec04a64572eefc99bc378ff4e2c3a2f6b2f0728531200e",
+      "exit": 1
+    },
+    "owner_log_sha256": "4a40ffabf180143c9e91797099ecbc8c62a57b774c1533c2144c2f7538edae10"
+  },
+  "owner_tests": {
+    "total": 1431,
+    "passed": 1412,
+    "skipped": 19,
+    "failed": 0,
+    "skip_scope": "17 session tests require unavailable local/platform fixtures; two Windows segment source tests are platform-specific",
+    "junit_sha256": "f635c1aa415c6ada3f5bfd50d6407addf1487d00eb8cb0aea1addd7e3aaa7f2e",
+    "log_sha256": "6537942650bd1a0cf566725b8ea6595a0651c7917f648d74270858cf81d165d8",
+    "artifact_lifecycle_passed": 8,
+    "artifact_log_sha256": "6a39533282923fd58a7ffae876c26f6c4727a82552f356685c0aa8d4482b4ba8"
+  },
+  "ubus_call": {
+    "original_cases": 12,
+    "rebuilt_comparisons": 48,
+    "result_sha256": "35353c39a97c04a4bc702b8d5b75a0cc9b8339e89bcca6e2d705a64296835ef9",
+    "firmware_sha256": "6e1129aa58cb398a2453876ea4aa2395feecc84ecf78ed8ab43efd534b40e475",
+    "entry": "0x4012d0"
+  },
+  "limits": [
+    "The generic Unicorn profiles are bounded execution references, not complete physical processor models.",
+    "The call matrix qualifies microMIPS Release 2. MIPS16 GPR/FPR linker and runtime stubs remain unqualified.",
+    "Old DSP64 rounded/saturating DEXTR and signed DMADD/DMSUB remain unsupported pending resolution of primary semantics and conflicting reference behavior.",
+    "Historical MIPS I-III scheduling remains unsupported. Instruction availability alone does not satisfy load, HI/LO, FP comparison or coprocessor timing.",
+    "This receipt does not certify complete MIPS ISA, system or ABI coverage.",
+    "Performance samples and dependency/toolchain manifests are retained in the ignored build directory; performance and three-platform CI are separate qualification gates."
+  ],
+  "source_output_regressions": [
+    "n32 native __int128 fields in HighC and LLVMC",
+    "GCC bit-copy compatibility for compressed callers and classic callees",
+    "LLVMC emits GCC compatibility only when the selected body or records require bit casts, including exact NaN payloads"
+  ]
+}

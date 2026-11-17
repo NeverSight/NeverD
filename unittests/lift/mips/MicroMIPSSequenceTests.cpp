@@ -191,9 +191,8 @@ TEST(MicroMIPSSequence, OriginalHalfwordsMatchAllGPRsPCAndStackBytes) {
         const bool Store =
             Revision == 6 ? (W & 0xfc0f) == 0x440a : (W & 0xffc0) == 0x4540;
         if (Store) {
-          // The pinned Unicorn helper_swm stores halfwords. Compare the full
-          // architectural words here; micro-swm.S independently runs SWM16
-          // with the same selectors under Linux QEMU.
+          // Check full words and untouched memory independently as well as
+          // against the original-target execution.
           auto Memory = Data;
           const unsigned Count =
               1 + (Revision == 6 ? (W >> 8) & 3 : (W >> 4) & 3);
@@ -206,6 +205,11 @@ TEST(MicroMIPSSequence, OriginalHalfwordsMatchAllGPRsPCAndStackBytes) {
                                                ? llvm::endianness::little
                                                : llvm::endianness::big);
           }
+          auto ReferenceMemory = Data;
+          ASSERT_EQ(uc_mem_read(Raw, 0x2000, ReferenceMemory.data(),
+                                ReferenceMemory.size()),
+                    UC_ERR_OK);
+          EXPECT_EQ(ReferenceMemory, Memory);
           for (unsigned N = 0; N < Memory.size(); ++N) {
             LowOp Read;
             Read.Opcode = NdOp::LOAD;
