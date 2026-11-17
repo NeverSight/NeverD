@@ -1428,11 +1428,16 @@ TEST_F(PatchCOFF_X64, InplaceBindsFunctionsByTheirSourceIdentity) {
     /// The replacement's name: empty keeps the one it was lifted with.
     std::string Name;
     bool Accepted;
+    /// Whether the first callee is a static of the entry's name in another
+    /// file, whose symbol the image lists after the entry's.
+    bool SharedName = false;
   };
   const Case Cases[] = {
       {"named as the image names it", "mainCRTStartup", true},
       {"named as the module was lifted", "", true},
       {"named as another function of the image", "coff_unwind_helper", false},
+      {"named as a static another file also defines", "mainCRTStartup", true,
+       true},
   };
   for (const Case &C : Cases) {
     SCOPED_TRACE(C.Trace);
@@ -1478,7 +1483,7 @@ TEST_F(PatchCOFF_X64, InplaceBindsFunctionsByTheirSourceIdentity) {
     // The image's debug names, as a PDB gives them.
     const std::pair<va_t, const char *> DebugNames[] = {
         {Entry, "mainCRTStartup"},
-        {Callees[0], "coff_switch_simple"},
+        {Callees[0], C.SharedName ? "mainCRTStartup" : "coff_switch_simple"},
         {Callees[1], "coff_switch_offset"},
         {Callees[2], "coff_unwind_helper"}};
     Image.Symbols.erase(

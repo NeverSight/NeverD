@@ -219,51 +219,69 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     if (*OriginalVA && Image.hasAuthenticatedFunctionEntryAt(**OriginalVA))
       SourceEntries.emplace(F.getName().str(), **OriginalVA);
   }
+  // Entries matched by identity alone, which bound their neighbours' extents
+  // as symbols do.
+  std::vector<va_t> SymbolLessEntries;
+  for (const auto &[Name, Entry] : SourceEntries)
+    if (const llvm::Function *F = Mod.getFunction(Name);
+        F && !F->isDeclaration() &&
+        llvm::none_of(Image.Symbols, [&, Entry = Entry](const Symbol &Sym) {
+          return isValidFunctionSymbol(Image, Sym) && Sym.Addr == Entry;
+        }))
+      SymbolLessEntries.push_back(Entry);
   for (auto &F : Mod) {
     if (F.isDeclaration())
       continue;
     std::string Resolved = resolveSymbolAlias(F.getName().str(), SymByName);
+    std::optional<Symbol> Target;
+    if (!Resolved.empty())
+      Target = SymByName.at(Resolved);
     if (const auto Source = SourceEntries.find(F.getName().str());
         Source != SourceEntries.end()) {
-      if (!Resolved.empty() && SymByName.at(Resolved).Addr != Source->second) {
+      // The image's function symbol at that entry gives the function's
+      // extent, one of the replacement's name first: statics of one name in
+      // two files share it, and the name alone keeps only one of them. A
+      // stripped entry has none.
+      const Symbol *AtEntry = nullptr;
+      for (const Symbol &Sym : Image.Symbols)
+        if (isValidFunctionSymbol(Image, Sym) && Sym.Addr == Source->second &&
+            (!AtEntry || (!Resolved.empty() && Sym.Name == Resolved)))
+          AtEntry = &Sym;
+      if (Target && Target->Addr != Source->second &&
+          !(AtEntry && AtEntry->Name == Resolved)) {
         llvm::WithColor::error()
             << "inplace: replacement '" << F.getName() << "' replaces 0x"
             << llvm::utohexstr(Source->second)
             << ", but the image's function of that name is at 0x"
-            << llvm::utohexstr(SymByName.at(Resolved).Addr) << "\n";
+            << llvm::utohexstr(Target->Addr) << "\n";
         return PatchResult{};
       }
-      if (Resolved.empty()) {
-        // The image's symbol at that entry, when it has one, gives the
-        // function's extent; a stripped entry has none.
-        for (const auto &[Name, Sym] : SymByName)
-          if (Sym.Addr == Source->second) {
-            Resolved = Name;
-            break;
-          }
-        if (Resolved.empty()) {
-          Symbol EntrySymbol = Symbol::makeFunc(Source->second);
-          EntrySymbol.Name = F.getName().str();
-          SymByName.emplace(EntrySymbol.Name, std::move(EntrySymbol));
-          Resolved = F.getName().str();
-        }
+      if (AtEntry) {
+        Target = *AtEntry;
+      } else {
+        Symbol EntrySymbol = Symbol::makeFunc(Source->second);
+        EntrySymbol.Name = F.getName().str();
+        Target = std::move(EntrySymbol);
       }
     }
-    if (Resolved.empty())
+    if (!Target)
       continue;
-    auto It = SymByName.find(Resolved);
-    uint64_t OrigVA = It->second.Addr;
+    uint64_t OrigVA = Target->Addr;
     if (OrigVA < State.TL.SectionVA ||
         OrigVA >= State.TL.SectionVA + State.TL.SectionSize)
       continue;
 
-    uint64_t OrigSize = It->second.Size;
+    uint64_t OrigSize = Target->Size;
     if (OrigSize == 0) {
       uint64_t SectionEnd = State.TL.SectionVA + State.TL.SectionSize;
       uint64_t Closest = SectionEnd;
-      for (auto &[_, S] : SymByName)
-        if (S.Addr > OrigVA && S.Addr < Closest && S.IsFunc)
+      for (const Symbol &S : Image.Symbols)
+        if (isValidFunctionSymbol(Image, S) && S.Addr > OrigVA &&
+            S.Addr < Closest)
           Closest = S.Addr;
+      for (const va_t Entry : SymbolLessEntries)
+        if (Entry > OrigVA && Entry < Closest)
+          Closest = Entry;
       if (const va_t Next = Image.nextKnownFunctionEntryAfter(OrigVA);
           Next > OrigVA && Next < Closest)
         Closest = Next;
@@ -271,7 +289,7 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     }
 
     FuncPlan P;
-    P.Name = Resolved;
+    P.Name = Target->Name.empty() ? F.getName().str() : Target->Name;
     P.IRName = F.getName().str();
     P.OrigVA = OrigVA;
     P.OrigSize = OrigSize;
