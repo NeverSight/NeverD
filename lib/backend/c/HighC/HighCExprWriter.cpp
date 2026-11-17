@@ -4826,7 +4826,8 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
   if (E.IsIndirectCall && E.IndirectTarget)
     if (const TypeRef Function = typedSlotFunction(*E.IndirectTarget);
         Function && !Function->ParamTypes.empty())
-      return Clamp(Function->ParamTypes.size());
+      return Function->FunctionVariadic ? Have
+                                        : Clamp(Function->ParamTypes.size());
   const std::string Name = callIdentifier(E);
   const MsvcCallee *Msvc = msvcCallee(Name, Opts.Format);
   auto UnknownAt = [&](size_t I) {
@@ -7011,8 +7012,16 @@ TypeRef HighCWriter::indirectCallFunctionType(const HighExpr &Call) const {
       Call.IntrinsicId != Intrinsic::None)
     return nullptr;
   const auto Callee = debugCallee(Call);
-  if (!Callee)
+  if (!Callee) {
+    // A member's declared function type already owns its named arguments.
+    // Keep its ellipsis in the callee cast as well: an unprototyped call can
+    // place the unnamed values differently, as on Darwin AArch64.
+    const TypeRef Function = typedSlotFunction(*Call.IndirectTarget);
+    if (Function && Function->FunctionVariadic &&
+        hasCSpelling(NdType::makePtr(Function)))
+      return Function;
     return nullptr;
+  }
   return checkedCalleeFunctionType(Call, *Callee);
 }
 

@@ -516,8 +516,8 @@ TEST(HighCSourceCalls, IncludedReturnRecordsDeclareTheirLocalType) {
   HighStmt Read;
   Read.Kind = StmtKind::Assign;
   Read.Dst = Value;
-  Read.Val =
-      HighExpr::makeCall("localtime", Debug.Callee.Addr, {parameter(0, Pointer)});
+  Read.Val = HighExpr::makeCall("localtime", Debug.Callee.Addr,
+                                {parameter(0, Pointer)});
   Read.Val->Type = Integer;
   Function.Body.insert(Function.Body.begin(), Read);
   bool RequestedOpaqueReturn = false;
@@ -2848,6 +2848,83 @@ int main(void) {
         << AllocateSource;
   }
 }
+
+class HighCCallbackArguments : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(HighCCallbackArguments, MembersKeepFixedAndVariadicArguments) {
+  const Arch Architecture = GetParam();
+  for (bool Variadic : {false, true}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    SCOPED_TRACE(Variadic);
+    const auto Integer = NdType::makeInt(4, true);
+    const auto Callback = NdType::makePtr(NdType::makeFunc(
+        Integer, {Integer}, types::CallingConvention::Unspecified, Variadic));
+    const unsigned PointerBytes = getTargetRegInfo(Architecture).PointerSize;
+    Callback->Size = PointerBytes;
+    const auto Record = NdType::makeNamedRecord("Callbacks", PointerBytes);
+    Record->FieldDisplayNames = {"invoke"};
+    Record->FieldDisplayOffsets = {0};
+    Record->FieldDisplayTypes = {Callback};
+    const auto Pointer = NdType::makePtr(Record);
+    Pointer->Size = PointerBytes;
+    auto Call = HighExpr::makeCall("indirect", 0,
+                                   {HighExpr::makeConst(2, 4),
+                                    HighExpr::makeConst(11, 4),
+                                    HighExpr::makeConst(23, 4)});
+    Call->IsIndirectCall = true;
+    Call->IndirectTarget = HighExpr::makeLoad(parameter(0, Pointer), Callback);
+    Call->Type = Integer;
+    const auto Function = returning("dispatch", Call, {Pointer});
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::ELF;
+    Options.RecordDefinitions = [&](const std::vector<TypeRef> &) {
+      CRecordDefinitions Definitions;
+      Definitions.Text = "typedef struct Callbacks { " +
+                         declarationToC(Callback, "invoke") +
+                         "; } Callbacks;\n";
+      Definitions.Records["Callbacks"] = false;
+      return Definitions;
+    };
+    std::string Source;
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+    EXPECT_NE(Source.find("arg0->invoke"), std::string::npos) << Source;
+    const bool HasTail = Source.find(", 11, 23)") != std::string::npos ||
+                         Source.find(", 0xB, 0x17)") != std::string::npos;
+    ASSERT_EQ(HasTail, Variadic) << Source;
+    if (Variadic)
+      Source += R"(
+#include <stdarg.h>
+static int sum(int count, ...) {
+  va_list args;
+  va_start(args, count);
+  int result = 0;
+  for (int i = 0; i < count; ++i) result += va_arg(args, int);
+  va_end(args);
+  return result;
+}
+int main(void) {
+  Callbacks table = {sum};
+  return dispatch(&table) != 34;
+}
+)";
+    else
+      Source += R"(
+static int fixed(int count) { return count + 3; }
+int main(void) {
+  Callbacks table = {fixed};
+  return dispatch(&table) != 5;
+}
+)";
+    for (const auto Optimization : {"-O0", "-O2"})
+      compileAndRun(Source, {Optimization, "-fsanitize=undefined"});
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(ByArchitecture, HighCCallbackArguments,
+                         ::testing::Values(Arch::X64, Arch::AArch64,
+                                           Arch::MIPS64EL));
 
 TEST(HighCSourceCalls, CallbackDeclarationsKeepRecordsArraysAndEllipses) {
   const auto Record = NdType::makeNamedRecord("Item", 4);

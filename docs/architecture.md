@@ -5015,6 +5015,10 @@ or incoming tail-forwarded parameters. The same summary retains the named
 prefix, including Darwin AArch64's transition from named registers to unnamed
 stack arguments. Fixed pointer contracts still require every declared input.
 
+HighC retains the complete operand list and the ellipsis of a typed variadic
+callback member. The member's named parameters do not bound its unnamed tail,
+and an unprototyped cast must not change how C passes that tail.
+
 Header-declared integer record arguments use `SourceParameterPlacement` through
 `integerCallArguments`, both when recovering the call and when printing it.
 The type-library adapter preserves the record's alignment and complete scalar
