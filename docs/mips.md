@@ -107,8 +107,8 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   actual LowIR transfers and delay slot prove every parameter byte; a name
   alone never establishes that association. The original call graph shares
   the transport proof without requiring a prototype. MIPS16 floating results
-  still need a dual GPR/FPR result adapter and are declined by the scalar-call
-  classifier. General runtime call and return helpers remain unqualified.
+  require the byte-proven dual GPR/FPR result adapters described below.
+  General runtime call and return helpers remain unqualified.
 
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
@@ -486,8 +486,10 @@ inside a classic compilation unit; its FR=1 double stubs also use the wrong
 high-word register. Independent original-code executions distinguish these
 compiler failures from source reconstruction. The corrected compiler in
 [NeverSight LLVM PR #12](https://github.com/NeverSight/llvm-project/pull/12)
-passes the float/double reconstruction matrix locally; fork CI and merge
-qualification remain separate.
+passed the float/double reconstruction matrix and three-host fork CI and has
+been merged. The installed MIPS backend is also qualified by
+[LLVM PR #13](https://github.com/NeverSight/llvm-project/pull/13); consuming a
+new NeverD dependency snapshot requires its own build qualification.
 
 MIPS16 o32 scalar `float` and `double` results now admit byte-proven classic
 return helpers. The proof checks the decoded operations, physical delay slot,
@@ -513,17 +515,29 @@ double words and preserved machine state. The return-link proof follows
 numerical result spills and external scalar input loads before any possible
 frame escape, including predecessor blocks. Passing a frame-derived argument,
 or reading after an external store or call without a stronger memory contract,
-does not acquire that proof. Complex helper byte transfers have unit coverage
-but do not establish a general complex source ABI. Complex source results,
-variadic/runtime conversion adapters and MIPS64 compressed floating results
-remain unqualified.
+does not acquire that proof. Variadic/runtime conversion adapters and MIPS64
+compressed floating results remain unqualified.
 
 Type declarations now retain `float _Complex` and `double _Complex` through
 C parsing/rendering, DWARF import and source prototype conversion. They keep
 their complex passing class rather than becoming a same-sized integer or
-ordinary two-field record. This type support does not admit the unqualified
-complex MIPS call/entry projection above. Extended complex types remain opaque
-when DWARF describes them and are refused as source declarations.
+ordinary two-field record. Fixed o32 calls with scalar parameters can return
+these two-component complex values. The source ABI uses f0/f2 and preserves
+the MIPS16 v0/v1 and a0/a1 word aliases in target byte order. A component that
+already occupies its full ABI register is not zero-extended into the same
+width. HighC and LLVMC construct and extract components as raw floating values,
+including NaN payloads and signed zero, and evaluate each call once.
+
+The [complex result receipt](evidence/mips16-complex-runtime-2026-11-17.json)
+records separate caller/callee objects and
+complete source units with GCC and Clang at O0/O2, for both byte orders,
+FR=0/1 and classic/MIPS16 callers. The original uses the unmodified GNU
+runtime; rebuilt freestanding programs also link the tested guest `memcpy`
+required by compiler-generated aggregate copies. No emulator-side memory
+hook replaces that code. This qualifies complex results with scalar parameters,
+not complex parameters, variadic complex calls, n32/n64 complex ABI or general
+indirect runtime adapters. Extended complex types remain opaque when DWARF
+describes them and are refused as source declarations.
 
 Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
 image, linking only the resulting translation unit and the original runtime.

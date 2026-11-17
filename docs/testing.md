@@ -25585,6 +25585,12 @@ preserve every result bit, FCSR, saved registers, SP, RA and the return mode.
 NaN payloads and asymmetric word combinations detect accidental numeric
 conversion or swapped double halves. `--kind sc` and `--kind dc` exercise
 complex results; the driver does not treat a source refusal as success.
+Rebuilt freestanding images also link `mips-source-memory-runtime.S` when the
+compiler lowers an aggregate copy to `memcpy`. The driver independently
+executes that guest routine with zero and nonzero lengths, unaligned separate
+buffers and identical source/destination addresses, checking every surrounding
+byte, its pointer result and preserved registers. Original reference images
+retain their compiler-generated code and GNU result helpers.
 Omit `--neverd` to qualify compiler interworking separately from reconstruction.
 `--endian`, `--fr`, `--mode` and `--rebuild-compiler` select a diagnosis slice.
 Add `--floating-input` to pass a scalar float/double through the classic entry
@@ -25620,8 +25626,12 @@ pair; the selected LLVMC caller must retain its callee's prelude too.
 The older leading MIPS16 execution case has one `float` followed by `uint32_t`
 and a `uint32_t` result. The separate call and result matrices above qualify
 split double inputs, proven classic entry stubs and scalar return helpers.
-Variadic entry reconstruction, complex source results and general indirect
-runtime adapters remain unqualified.
+`MIPS16Pipeline.ComplexCallsDefineEveryIntegerResultWord` verifies MedIR as
+well as every integer and floating result carrier, including double components
+that already fill the ABI register. Complex result matrices cover `sc` and
+`dc` in both isolated and whole-unit reconstructions. Complex parameters,
+variadic complex calls, n32/n64 complex results, variadic entry reconstruction
+and general indirect runtime adapters remain unqualified.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

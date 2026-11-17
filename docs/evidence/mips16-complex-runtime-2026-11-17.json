@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "scope": "Local MIPS16 o32 fixed complex result source reconstruction with scalar parameters; not whole-ISA or n32/n64 qualification",
+  "source_base": "210993d0b7331c6f8932a3a2c8ed42318b1bfc00",
+  "original": "GCC 12.4 caller/callee with unmodified libgcc/config/mips/mips16.S",
+  "rebuilds": "GCC 12.4 and qualified NeverSight Clang 22, HighC/LLVMC at O0/O2",
+  "profiles": "float/double complex, big/little endian, FR=0/1, classic/MIPS16 caller",
+  "observations": [
+    "every result bit including NaN payloads and signed zero",
+    "FCSR",
+    "SP and incoming RA",
+    "preserved GPR/FPR state",
+    "classic return mode"
+  ],
+  "memory_runtime": "Guest memcpy is executed independently with complete memory canaries, unaligned buffers, identity copies and zero length; no emulator hook substitutes its behavior",
+  "matrices": [
+    {
+      "source_commit": "bac721919a6d47582a6ad81dfe88b93df5fc9f15",
+      "scope": "separate caller, callee and both",
+      "driver_sha256": "e061e8f8ffca12eb35a6d67e69eb9d9acb1e0b18de9609a56596cbce42492eed",
+      "libneverd_sha256": "73315606a396ab3566143248351fc8a2c5b9a8caa2f08eb22881bb747c0550e5",
+      "summary": {
+        "builds": 384,
+        "executions": 12288,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493",
+        "memory_runtime_sha256": "9e84fb7c741f57c4c89b8b73bf1c8baf6857b83a4aacda92b34eabf77bc87022",
+        "memory_runtime_cases": 288,
+        "floating_input": false,
+        "whole_unit": false
+      },
+      "results_sha256": "f75a1b7506a3ce1f602793b17fca9b205d0718be92a0b0dccf6b6302c6dbb300",
+      "cleanup_sha256": "518c67bcc18f27d99c6d21b2e76f9894c4f5f9197ebcf7d10b5d14f9626f4658",
+      "removed_bytes": 42444314
+    },
+    {
+      "source_commit": "bac721919a6d47582a6ad81dfe88b93df5fc9f15",
+      "scope": "whole source unit",
+      "driver_sha256": "e061e8f8ffca12eb35a6d67e69eb9d9acb1e0b18de9609a56596cbce42492eed",
+      "libneverd_sha256": "73315606a396ab3566143248351fc8a2c5b9a8caa2f08eb22881bb747c0550e5",
+      "summary": {
+        "builds": 128,
+        "executions": 4096,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493",
+        "memory_runtime_sha256": "9e84fb7c741f57c4c89b8b73bf1c8baf6857b83a4aacda92b34eabf77bc87022",
+        "memory_runtime_cases": 288,
+        "floating_input": false,
+        "whole_unit": true
+      },
+      "results_sha256": "60fef99abecc878d3e772b366458547ba9c987afd637956e79fdfa913a1cd631",
+      "cleanup_sha256": "ded63283544a6f7c7313284cf0da546c165d1488f5dacd42c0c128094db4ca2f",
+      "removed_bytes": 14726660
+    }
+  ],
+  "unqualified": [
+    "complex parameters",
+    "variadic complex calls",
+    "n32/n64 complex ABI",
+    "general indirect runtime adapters",
+    "historical I\u2013III timing"
+  ]
+}
