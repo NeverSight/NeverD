@@ -106,6 +106,8 @@ bool floatingHeaderCall(const FunctionSym &Function, Arch Architecture,
 static llvm::AttributeList
 mipsFloatingCallAttributes(llvm::LLVMContext &C, llvm::AttributeList Attrs,
                            const FloatingCallArguments &Signature, Arch A) {
+  if (Signature.ReturnComplex)
+    Attrs = Attrs.addFnAttribute(C, LLVMSourceComplexResult);
   if (Signature.ReturnKind == NdTypeKind::Int)
     Attrs = mips::integerResultAttributes(C, Attrs, Signature.ReturnBytes,
                                           Signature.SignedResult, A);
@@ -1141,8 +1143,7 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         MachineCall ? llvm::Type::getVoidTy(*Ctx)
                     : llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
                                               /*Parameter=*/false);
-    const auto ReturnMembers =
-        sourceAggregateMembers(Hint.Signature.ReturnType);
+    const auto ReturnMembers = sourceValueMembers(Hint.Signature.ReturnType);
     auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
                                        Hint.AnalystFixedCount >= 0);
     llvm::Value *Callable = Target;

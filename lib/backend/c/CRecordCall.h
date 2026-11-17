@@ -17,18 +17,23 @@
 #include "CIdentifier.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/SourceABI.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <stdexcept>
 #include <string>
 
 namespace neverd::c_detail {
-#define NEVERD_C_RECORD_TEXT(Name, Text) inline constexpr char Name[] = Text;
+// Value views fold to literals; addressable inline arrays require weak-symbol
+// lookup when a shared-backed frontend starts, even without a record call.
+#define NEVERD_C_RECORD_TEXT(Name, Text)                                       \
+  inline constexpr llvm::StringLiteral Name(Text);
 #include "CRecordCall.def"
 
 /// Copy each logical member once between complete C value representations.
@@ -47,17 +52,46 @@ inline std::string sourceRecordValue(const TypeRef &Record,
   const auto Destination = Temporary(kSourceRecordDestination);
   const auto Source = Temporary(kSourceRecordSource);
   std::string Copies;
-  for (const auto &Member : sourceAggregateMembers(Record))
-    Copies += llvm::formatv(kSourceRecordFieldCopy, Member.ByteOffset,
+  for (const auto &Member : sourceValueMembers(Record))
+    Copies += llvm::formatv(kSourceRecordFieldCopy.data(), Member.ByteOffset,
                             Member.Type->Size, Destination, Source)
                   .str();
-  return llvm::formatv(kSourceRecordValue, To, From, Expression, Copies,
+  return llvm::formatv(kSourceRecordValue.data(), To, From, Expression, Copies,
                        Destination, Source)
+      .str();
+}
+
+/// The caller has proved an unpacked carrier with two equal floating fields.
+/// Construct the complex value directly: byte-copying into its subobjects can
+/// introduce runtime memcpy calls in unoptimized compressed-ISA code.
+inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
+                                           llvm::StringRef Expression) {
+  std::string Source = kSourceRecordSource.str();
+  while (RecordType.contains(Source) || Expression.contains(Source))
+    Source += '_';
+  return llvm::formatv(kSourceComplexRecordResult.data(), RecordType,
+                       Expression, Source)
+      .str();
+}
+
+/// Capture the complex call once and preserve both floating components in the
+/// validated two-field LLVM carrier, without subobject copies.
+inline std::string sourceComplexToRecord(llvm::StringRef ComplexType,
+                                         llvm::StringRef RecordType,
+                                         llvm::StringRef Expression) {
+  std::string Source = kSourceRecordSource.str();
+  while (ComplexType.contains(Source) || RecordType.contains(Source) ||
+         Expression.contains(Source))
+    Source += '_';
+  return llvm::formatv(kSourceComplexCallResult.data(), ComplexType, RecordType,
+                       Expression, Source)
       .str();
 }
 
 inline std::string recordCallType(const TypeRef &Type,
                                   const CEmitterOptions &Options) {
+  if (sourceComplexComponentBytes(Type))
+    return typeToC(Type);
   if (!Type || !Options.RecordDefinitions)
     throw std::runtime_error("A record call needs its header's complete type");
   const auto Definitions = Options.RecordDefinitions({Type});

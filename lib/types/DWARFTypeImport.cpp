@@ -671,8 +671,7 @@ private:
   }
 
   /// A base type: the builtin of its encoding and size, a name telling
-  /// those of equal size apart; else bytes of its size, as a complex
-  /// number, which local types do not spell, is.
+  /// those of equal size apart; else bytes of its size.
   TypeExprRef builtin(const llvm::DWARFDie &Die, std::optional<Refusal> &Why) {
     const uint64_t Bytes = unsignedOf(Die, dw::DW_AT_byte_size).value_or(0);
     const uint64_t Encoding = unsignedOf(Die, dw::DW_AT_encoding).value_or(0);
@@ -745,6 +744,15 @@ private:
           Found = Type;
           break;
         }
+      break;
+    case dw::DW_ATE_complex_float:
+      // A same-sized long double still has a different source identity.
+      if (Name.contains("long"))
+        break;
+      if (Bytes == 8)
+        Found = Builtin::ComplexFloat;
+      else if (Bytes == 16)
+        Found = Builtin::ComplexDouble;
       break;
     default:
       break;

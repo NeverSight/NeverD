@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MIPS/MIPS16EntryAdapter.h"
 #include "PipelineCallAbiDetail.h"
 #include "PipelineDebugReceivers.h"
 #include "PipelineFunctionNames.h"
@@ -292,6 +293,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
       }
     }
   });
+  pipeline_detail::projectMIPS16EntryCalls(Img, Result.MedFuncs, Dbg);
   // Call-setup recovery adds the parameter an unwritten return register still
   // holds. The settlement above ran before that parameter existed, so a
   // caller reading the preserved register left the function void. Settle

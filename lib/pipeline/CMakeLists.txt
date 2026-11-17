@@ -37,6 +37,8 @@ add_neverd_component_library(NeverDPipeline
   PipelineLLVMPlan.cpp
   PipelineLibraryRecognition.cpp
   PipelineLowIR.cpp
+  MIPS/MIPS16EntryAdapter.cpp
+  MIPS/MIPS16ReturnAdapter.cpp
   PipelineSEHRuntimeMemory.cpp
   Windows/SEHRuntimeFormat.cpp
   PipelineMedIR.cpp

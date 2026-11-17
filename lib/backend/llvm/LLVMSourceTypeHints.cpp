@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -47,6 +48,21 @@ bool identifier(llvm::StringRef Name) {
                      [](char C) { return llvm::isAlnum(C) || C == '_'; });
 }
 } // namespace
+
+TypeRef readLLVMSourceComplexResult(llvm::Type *Result,
+                                    const llvm::AttributeList &Attributes) {
+  if (!Attributes.hasFnAttr(LLVMSourceComplexResult))
+    return nullptr;
+  const auto *Record = llvm::dyn_cast<llvm::StructType>(Result);
+  if (!Record || Record->isOpaque() || Record->isPacked() ||
+      Record->getNumElements() != 2 ||
+      Record->getElementType(0) != Record->getElementType(1) ||
+      (!Record->getElementType(0)->isFloatTy() &&
+       !Record->getElementType(0)->isDoubleTy()))
+    throw std::invalid_argument(
+        "An LLVM complex result has incompatible carriers");
+  return NdType::makeComplex(Record->getElementType(0)->isFloatTy() ? 4 : 8);
+}
 
 void writeLLVMSourcePointerParameter(llvm::Argument &Argument,
                                      const TypeRef &Type) {

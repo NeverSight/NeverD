@@ -750,6 +750,11 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (sourceComplexComponentBytes(Func.ReturnType)) {
+    LLVMFunc->addFnAttr(LLVMSourceComplexResult);
+    if (!readLLVMSourceComplexResult(RetType, LLVMFunc->getAttributes()))
+      throw std::invalid_argument("A complex source result lost its LLVM type");
+  }
   if (Func.HasDeclaredMIPSIntegerResult &&
       RetType->isIntegerTy(Func.ReturnType->Size * 8))
     LLVMFunc->setAttributes(mips::integerResultAttributes(

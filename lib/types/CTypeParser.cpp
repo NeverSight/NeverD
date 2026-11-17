@@ -610,10 +610,11 @@ const llvm::StringMap<Builtin> &builtinWords() {
 bool builtinKeyword(llvm::StringRef Word) {
   return llvm::is_contained(
       std::initializer_list<llvm::StringRef>{
-          "void",    "char",     "short",     "int",        "long",
-          "signed",  "unsigned", "float",     "double",     "bool",
-          "_Bool",   "wchar_t",  "__wchar_t", "__int8",     "__int16",
-          "__int32", "__int64",  "__int128",  "__signed__", "__signed"},
+          "void",     "char",        "short",     "int",        "long",
+          "signed",   "unsigned",    "float",     "double",     "bool",
+          "_Bool",    "wchar_t",     "__wchar_t", "__int8",     "__int16",
+          "__int32",  "__int64",     "__int128",  "__signed__", "__signed",
+          "_Complex", "__complex__", "__complex"},
       Word);
 }
 
@@ -1353,7 +1354,7 @@ private:
     struct {
       int Signed = 0, Unsigned = 0, Short = 0, Long = 0, Int = 0, Char = 0;
       int Int8 = 0, Int16 = 0, Int32 = 0, Int64 = 0, Int128 = 0;
-      int Void = 0, Bool = 0, Float = 0, Double = 0, WChar = 0;
+      int Void = 0, Bool = 0, Float = 0, Double = 0, WChar = 0, Complex = 0;
     } Words;
     bool AnyWord = false;
     const Token Start = peek();
@@ -1500,6 +1501,8 @@ private:
           ++Words.Float;
         else if (W == "double")
           ++Words.Double;
+        else if (W == "_Complex" || W == "__complex__" || W == "__complex")
+          ++Words.Complex;
         else
           ++Words.WChar;
       } else if (!Spec.Type && !AnyWord) {
@@ -1585,6 +1588,17 @@ private:
         Type = U ? Builtin::ULong : Builtin::Long;
       else
         Type = U ? Builtin::UInt : Builtin::Int;
+      if (Words.Complex) {
+        if (Words.Complex != 1 || Words.Float + Words.Double != 1 ||
+            Words.Signed || Words.Unsigned || Words.Short || Words.Long ||
+            Words.Int || Words.Char || Words.Int8 || Words.Int16 ||
+            Words.Int32 || Words.Int64 || Words.Int128 || Words.Void ||
+            Words.Bool || Words.WChar) {
+          fail(Start, "a complex type requires exactly float or double");
+          return false;
+        }
+        Type = Words.Float ? Builtin::ComplexFloat : Builtin::ComplexDouble;
+      }
       Spec.Type = makeBuiltin(Type);
     }
     if (!Spec.Type) {
@@ -2013,6 +2027,10 @@ private:
             Field.Bitfield = true;
         }
         if (Field.Bitfield) {
+          if (passing(Field.Type).first == BuiltinClass::Complex) {
+            fail(MemberAt, "a complex type cannot be a bitfield");
+            return;
+          }
           const Token At = peek();
           std::optional<int64_t> Width = constant();
           if (!Width)
@@ -2071,6 +2089,12 @@ private:
         return nullptr;
       }
       Fixed = true;
+      const auto Class = builtinInfo(Underlying).Class;
+      if (Class != BuiltinClass::Integer && Class != BuiltinClass::Character &&
+          Class != BuiltinClass::Bool) {
+        fail(peek(), "an enumeration's underlying type must be an integer");
+        return nullptr;
+      }
     }
     if (!accept("{")) {
       if (Name.empty()) {
@@ -2518,6 +2542,10 @@ private:
         TypeExprRef Type = declarator(Spec.Type, Ignored, NameToken, true);
         if (Failed || !expect(")", "after a cast's type"))
           return std::nullopt;
+        if (passing(Type).first == BuiltinClass::Complex) {
+          fail(At, "a complex cast is not an integer constant");
+          return std::nullopt;
+        }
         std::optional<int64_t> V = unary();
         if (!V)
           return V;

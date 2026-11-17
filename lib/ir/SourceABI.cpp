@@ -50,6 +50,32 @@ bool isSourceBooleanType(const TypeRef &Type) {
          !Type->IsSigned && Type->SourceName == kSourceBooleanCType;
 }
 
+unsigned sourceComplexComponentBytes(const TypeRef &Type) {
+  if (!Type || Type->Kind != NdTypeKind::Struct || Type->IsEnum ||
+      Type->Passing != NdRecordPassing::Complex ||
+      (Type->Size != 8 && Type->Size != 16) || Type->Fields.size() != 2 ||
+      Type->FieldOffsets.size() != 2 || Type->ScalarLeaves.size() != 2)
+    return 0;
+  const unsigned Bytes = Type->Size / 2;
+  if ((Type->Alignment != 4 && Type->Alignment != Bytes) ||
+      Type->FieldOffsets[0] != 0 || Type->FieldOffsets[1] != Bytes)
+    return 0;
+  for (unsigned I = 0; I != 2; ++I)
+    if (!Type->Fields[I] || Type->Fields[I]->Kind != NdTypeKind::Float ||
+        Type->Fields[I]->Size != Bytes ||
+        Type->ScalarLeaves[I].Offset != I * Bytes ||
+        Type->ScalarLeaves[I].Size != Bytes || !Type->ScalarLeaves[I].Floating)
+      return 0;
+  return Bytes;
+}
+
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+  if (const auto Bytes = sourceComplexComponentBytes(Type))
+    return {{Type->Fields[0], 0},
+            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
+  return sourceAggregateMembers(Type);
+}
+
 namespace {
 #define SOURCE_ABI_CARRIER_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define SOURCE_ABI_CARRIER_TEXT(Name, Text) constexpr char Name[] = Text;
@@ -106,6 +132,12 @@ bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
              Left->Pointee->Size == Right->Pointee->Size;
     return equalTypes(Left->Pointee, Right->Pointee, Depth + 1, Remaining);
   case NdTypeKind::Struct: {
+    if (Left->Passing == NdRecordPassing::Complex ||
+        Right->Passing == NdRecordPassing::Complex) {
+      const unsigned Bytes = sourceComplexComponentBytes(Left);
+      return Bytes && Bytes == sourceComplexComponentBytes(Right) &&
+             Left->Alignment == Right->Alignment;
+    }
     const auto Layout = NdType::makeStruct(Left->Fields);
     if (!Layout || Left->Size != Layout->Size || Right->Size != Layout->Size ||
         Left->Alignment != Layout->Alignment ||
@@ -475,6 +507,10 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
     auto Member = std::move(Pending.back());
     Pending.pop_back();
     if (Member.Type->Kind == NdTypeKind::Struct) {
+      // Generic record projection emits field access and a record ABI. A
+      // complex value needs its own component expressions and call rules.
+      if (Member.Type->Passing == NdRecordPassing::Complex)
+        return {};
       for (size_t I = Member.Type->Fields.size(); I-- > 0;)
         Pending.push_back(
             {Member.Type->Fields[I],
