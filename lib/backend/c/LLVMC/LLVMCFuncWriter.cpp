@@ -3016,6 +3016,7 @@ void LLVMCWriter::setupFunction(llvm::Function &Fn) {
   SpLocalAmbiguousNames.clear();
   FrameSlots.clear();
   SlotReadAtUses.clear();
+  forgetReadCrossings();
   FrameRecord = false;
   FrameRecordName.clear();
   OverlappingFrameAccessOffsets.clear();
@@ -4163,7 +4164,8 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedLoadAccess(*LI)) {
           ValueTypes[LI] = Acc->Type;
-          ValueTexts[LI] = Acc->Text;
+          if (!readCrossesItsStore(*LI))
+            ValueTexts[LI] = Acc->Text;
         } else if (auto Acc =
                        frameSlotAccess(LI->getPointerOperand(), Size,
                                        /*AddressOf=*/false,
@@ -4174,7 +4176,8 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
             ValueTexts[LI] = Acc->Text;
         } else if (auto Acc = typedIndexAccess(LI->getPointerOperand())) {
           ValueTypes[LI] = Acc->Type;
-          ValueTexts[LI] = Acc->Text;
+          if (!readCrossesItsStore(*LI))
+            ValueTexts[LI] = Acc->Text;
         } else if (const llvm::AllocaInst *Slot =
                        asAllocaPointer(LI->getPointerOperand())) {
           if (auto It = AllocaTypes.find(Slot); It != AllocaTypes.end()) {
@@ -4276,6 +4279,8 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
                    kLLVMCFuncWriterLLVMCWriterCollectTypedHomesGuardLimit;
        ++Guard) {
     Changed = false;
+    // An address peels through the homes and texts known so far.
+    forgetReadCrossings();
     for (auto &BB : Fn) {
       for (auto &Inst : BB) {
         auto *SI = llvm::dyn_cast<llvm::StoreInst>(&Inst);
@@ -4310,9 +4315,14 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
           continue;
         const uint16_t Size = llvmAccessSize(LI->getType());
         if (auto Acc = typedLoadAccess(*LI)) {
-          if (ValueTexts[LI] != Acc->Text) {
+          // A read a store to its member follows has no text: its temporary
+          // names its value. The store can come to light only now, through
+          // a home an earlier round did not know.
+          const std::string Text =
+              readCrossesItsStore(*LI) ? std::string() : Acc->Text;
+          if (ValueTexts[LI] != Text) {
             ValueTypes[LI] = Acc->Type;
-            ValueTexts[LI] = Acc->Text;
+            ValueTexts[LI] = Text;
             Changed = true;
           }
           continue;
@@ -4332,8 +4342,10 @@ void LLVMCWriter::collectTypedHomes(llvm::Function &Fn) {
         }
         if (auto Acc = typedIndexAccess(LI->getPointerOperand())) {
           ValueTypes[LI] = Acc->Type;
-          ValueTexts[LI] = Acc->Text;
-          Changed = true;
+          if (!readCrossesItsStore(*LI)) {
+            ValueTexts[LI] = Acc->Text;
+            Changed = true;
+          }
           continue;
         }
         const llvm::AllocaInst *Slot = asAllocaPointer(LI->getPointerOperand());
@@ -5669,7 +5681,8 @@ bool LLVMCWriter::instructionIsPrinted(const llvm::Instruction &Inst) {
   }
   if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(&Inst)) {
     if (isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
-        typedLoadAccess(*LI) || typedIndexAccess(LI->getPointerOperand()) ||
+        ((typedLoadAccess(*LI) || typedIndexAccess(LI->getPointerOperand())) &&
+         !readCrossesItsStore(*LI)) ||
         isTypedRecordCursorSlot(asAllocaPointer(LI->getPointerOperand())) ||
         isJoinCallArgAlloca(asAllocaPointer(LI->getPointerOperand())) ||
         joinFieldDefaultText(asAllocaPointer(LI->getPointerOperand())))
@@ -9574,14 +9587,15 @@ void LLVMCWriter::emitFunctionDecls(llvm::Function &Fn) {
             continue;
           }
           if (isImportCalleeOnlyLoad(LI) || computedAllocaLoadIsForwarded(LI) ||
-              typedLoadAccess(*LI) ||
+              (typedLoadAccess(*LI) && !readCrossesItsStore(*LI)) ||
               (slotReadAtUses(*LI) &&
                frameSlotAccess(LI->getPointerOperand(),
                                llvmAccessSize(LI->getType()),
                                /*AddressOf=*/false,
                                /*Synthesize=*/false,
                                /*Overlay=*/false, LI->getType())) ||
-              typedIndexAccess(LI->getPointerOperand()) ||
+              (typedIndexAccess(LI->getPointerOperand()) &&
+               !readCrossesItsStore(*LI)) ||
               joinFieldDefaultText(asAllocaPointer(LI->getPointerOperand())) ||
               isTypedRecordCursorSlot(
                   asAllocaPointer(LI->getPointerOperand())) ||

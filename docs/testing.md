@@ -3433,6 +3433,16 @@ consistent and relaxed atomic stores through a pointer, and a release store
 into a local whose address escapes. The LLVM C writes each with
 `__atomic_store` of its order and runs at O0 and O2.
 
+`LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
+optimized functions that read a record's member, store to it, and then use the
+value read: an exchange, an advanced index, a byte written inside the member,
+a cleared callback slot, a callee read through the old object, an element of a
+pointer table, a store on one path, a store in a loop, a PHI's copy and a PHI
+of two reads. The unit runs at O0 and O2 against what the C of each function
+computes. A store to another member, a store that runs before the load each
+time the load runs, a read on the path the store is not on, and a local that
+holds the value keep their shorter forms.
+
 `LLVMCValues.LocalRegister*` checks direct and import-slot scalar declarations
 on x64 and ARM64 across COFF, ELF and Mach-O. Independent C providers observe
 nested qualified pointers, void and pointer results, narrow signed/unsigned

@@ -1241,6 +1241,36 @@ public:
   /// Otherwise the load reads the slot into its temporary where it is.
   bool slotReadAtUses(const llvm::LoadInst &Load) const;
   mutable std::map<const llvm::LoadInst *, bool> SlotReadAtUses;
+  /// Whether a store to bytes \p Load read, at an address the same value and
+  /// offsets name (peelPointerOffset), can run after the load and before a
+  /// statement that would evaluate the read where it prints at its uses. A
+  /// member or element read (typedLoadAccess, typedIndexAccess) prints there
+  /// as the member, which would then read what the store left: `old =
+  /// p->next; p->next = 0; return old;` must not return a second read of
+  /// `p->next`. Such a load reads into its temporary where it is, as a frame
+  /// slot's does (slotReadAtUses), and a member read is from its statement on
+  /// one of the expressions computed where they stand
+  /// (MaterializedExpressions).
+  ///
+  /// Only that store is looked for, and not for a read whose value is also
+  /// stored to a local: that local may print as the member wherever it is
+  /// read, a form with no temporary to name. A call, a store through another
+  /// pointer value or at a computed index, and the callee a call reads
+  /// through a chain of loads leave a read at its uses as well.
+  bool readCrossesItsStore(const llvm::LoadInst &Load) const;
+  /// Drops what readCrossesItsStore decided: an address can peel to another
+  /// value once more homes and texts are known.
+  void forgetReadCrossings() const;
+  struct StoreAt {
+    const llvm::StoreInst *Store;
+    uint64_t Off;
+    uint64_t Bytes;
+  };
+  mutable std::map<const llvm::LoadInst *, bool> ReadCrossesItsStore;
+  /// The function's stores by the value their address is an offset from.
+  mutable std::optional<
+      std::map<const llvm::Value *, llvm::SmallVector<StoreAt, 2>>>
+      StoresByBase;
   /// Different overlapping memory extents cannot become independent scalar
   /// locals. Keep unnamed views of those bytes in the shared backing frame.
   std::set<uint64_t> OverlappingFrameAccessOffsets;

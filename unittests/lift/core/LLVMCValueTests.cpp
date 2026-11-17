@@ -56,6 +56,7 @@
 #include <array>
 #include <cstdlib>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
@@ -9823,4 +9824,569 @@ int main(void) {
 )",
                                                 {Level});
   }
+}
+
+// A member read prints as the member at each use of its value, which reads
+// the member again there. A store to that member between the load and a use
+// would make the use read what the store left, so such a load reads into its
+// temporary where it stands. Each function below is the optimized form of the
+// C its comment gives, and the printed unit must compute what that C does.
+TEST(LLVMCValues, AMemberReadKeepsItsValueAcrossAStoreToTheMember) {
+  class NodeDebug : public neverd::NullDebugContext {
+  public:
+    static neverd::TypeRef nodePointer() {
+      auto Node = neverd::NdType::makeNamedRecord("node", 32);
+      fill(*Node);
+      return neverd::NdType::makePtr(Node);
+    }
+    void completeType(const neverd::TypeRef &Type) const override {
+      if (Type && Type->SourceName == "node" && Type->FieldDisplayNames.empty())
+        fill(*Type);
+    }
+    std::optional<neverd::FunctionSym>
+    resolveFunction(neverd::va_t VA) const override {
+      const auto Known = Functions.find(VA);
+      return Known == Functions.end() ? std::nullopt
+                                      : std::optional(Known->second);
+    }
+    bool hasInfo() const override { return true; }
+    std::map<neverd::va_t, neverd::FunctionSym> Functions;
+
+  private:
+    static void fill(neverd::NdType &Node) {
+      const auto Other = [] {
+        return neverd::NdType::makePtr(
+            neverd::NdType::makeNamedRecord("node", 32));
+      };
+      Node.FieldDisplayNames = {"next", "v", "notify", "bins"};
+      Node.FieldDisplayOffsets = {0, 8, 16, 24};
+      Node.FieldDisplayTypes = {
+          Other(), neverd::NdType::makeInt(4, /*S=*/true),
+          neverd::NdType::makePtr(
+              neverd::NdType::makeFunc(neverd::NdType::makeVoid(), {Other()})),
+          neverd::NdType::makePtr(Other())};
+    }
+  } Debug;
+
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Error;
+  auto Module = llvm::parseAssemblyString(R"ir(
+target datalayout = "e-p:64:64"
+declare void @observe(ptr)
+
+; old = n->next; n->next = 0; return old;
+define ptr @take(ptr %n) {
+  %old = load ptr, ptr %n
+  store ptr null, ptr %n
+  ret ptr %old
+}
+
+; old = n->v; n->v = v; return old + 1;
+define i32 @bump(ptr %n, i32 %v) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  store i32 %v, ptr %slot
+  %sum = add i32 %old, 1
+  ret i32 %sum
+}
+
+; old = n->next; n->next = s->next; if (old) observe(old);
+define void @assign(ptr %n, ptr %s) {
+entry:
+  %old = load ptr, ptr %n
+  %new = load ptr, ptr %s
+  store ptr %new, ptr %n
+  %none = icmp eq ptr %old, null
+  br i1 %none, label %done, label %release
+release:
+  call void @observe(ptr %old)
+  br label %done
+done:
+  ret void
+}
+
+; old = n->next; n->next = 0; return old->v;
+define i32 @value_of_old(ptr %n) {
+  %old = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %old, i64 8
+  store ptr null, ptr %n
+  %v = load i32, ptr %slot
+  ret i32 %v
+}
+
+; old = n->v; ((char *)&n->v)[1] = 1; return old;
+define i32 @value_before_byte(ptr %n) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  %byte = getelementptr i8, ptr %n, i64 9
+  store i8 1, ptr %byte
+  ret i32 %old
+}
+
+; old = n->next; n->next = 0; return flag ? 0 : old;
+define ptr @take_unless(ptr %n, i1 %flag) {
+entry:
+  %old = load ptr, ptr %n
+  store ptr null, ptr %n
+  br i1 %flag, label %other, label %join
+other:
+  br label %join
+join:
+  %picked = phi ptr [ %old, %entry ], [ null, %other ]
+  call void @observe(ptr %picked)
+  ret ptr %picked
+}
+
+; The same as take, with the address as an integer.
+define i64 @take_as_node(ptr %n) {
+  %old = load i64, ptr %n
+  store i64 0, ptr %n
+  ret i64 %old
+}
+
+; if (first || second) { old = n->next; observe(old); n->next = 0;
+; return old; } return 0;
+define ptr @take_after_tail(ptr %n, i1 %first, i1 %second) {
+entry:
+  br i1 %first, label %one, label %middle
+middle:
+  br i1 %second, label %two, label %none
+one:
+  br label %tail
+two:
+  br label %tail
+none:
+  ret ptr null
+tail:
+  %old = load ptr, ptr %n
+  call void @observe(ptr %old)
+  br label %next
+next:
+  store ptr null, ptr %n
+  ret ptr %old
+}
+
+; v = n->bins[i]->v; n->bins[i] = 0; return v; with n->bins and v in
+; locals.
+define i32 @kept_value_of_bin(ptr %n, i64 %i) {
+  %home = alloca i64
+  %kept = alloca i32
+  %slot = getelementptr i8, ptr %n, i64 24
+  %bins = load i64, ptr %slot
+  store i64 %bins, ptr %home
+  %base = load i64, ptr %home
+  %scaled = shl i64 %i, 3
+  %address = add i64 %base, %scaled
+  %at = inttoptr i64 %address to ptr
+  %old = load i64, ptr %at
+  %object = inttoptr i64 %old to ptr
+  %member = getelementptr i8, ptr %object, i64 8
+  %v = load i32, ptr %member
+  store i32 %v, ptr %kept
+  store i64 0, ptr %at
+  %value = load i32, ptr %kept
+  ret i32 %value
+}
+
+; The same as take, with the old pointer in a local.
+define ptr @kept_take(ptr %n) {
+  %home = alloca ptr
+  %old = load ptr, ptr %n
+  store ptr %old, ptr %home
+  store ptr null, ptr %n
+  %kept = load ptr, ptr %home
+  ret ptr %kept
+}
+
+; v = n->next->v; n->next = 0; return v; with v in a local.
+define i32 @kept_value_of_old(ptr %n) {
+  %home = alloca i32
+  %old = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %old, i64 8
+  %v = load i32, ptr %slot
+  store i32 %v, ptr %home
+  store ptr null, ptr %n
+  %kept = load i32, ptr %home
+  ret i32 %kept
+}
+
+; return table[n->v++];
+define i32 @next_entry(ptr %n, ptr %table) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %i = load i32, ptr %slot
+  %bumped = add i32 %i, 1
+  store i32 %bumped, ptr %slot
+  %wide = zext i32 %i to i64
+  %at = getelementptr i32, ptr %table, i64 %wide
+  %value = load i32, ptr %at
+  ret i32 %value
+}
+
+; old = n->next; if (flag) n->next = 0; observe(old); return old;
+define ptr @take_if(ptr %n, i1 %flag) {
+entry:
+  %old = load ptr, ptr %n
+  br i1 %flag, label %wipe, label %done
+wipe:
+  store ptr null, ptr %n
+  br label %done
+done:
+  call void @observe(ptr %old)
+  ret ptr %old
+}
+
+; old = n->next; if (flag) { observe(n); old = n->next; } n->next = 0;
+; return old;
+define ptr @take_latest(ptr %n, i1 %flag) {
+entry:
+  %first = load ptr, ptr %n
+  br i1 %flag, label %more, label %join
+more:
+  call void @observe(ptr %n)
+  %second = load ptr, ptr %n
+  br label %join
+join:
+  %old = phi ptr [ %first, %entry ], [ %second, %more ]
+  store ptr null, ptr %n
+  ret ptr %old
+}
+
+; notify = n->notify; n->notify = 0; notify(n);
+define void @fire(ptr %n) {
+  %slot = getelementptr i8, ptr %n, i64 16
+  %notify = load ptr, ptr %slot
+  store ptr null, ptr %slot
+  call void %notify(ptr %n)
+  ret void
+}
+
+; old = n->bins[i]; n->bins[i] = s; return old; with n->bins in a local.
+define i64 @replace_bin(ptr %n, i64 %s, i64 %i) {
+  %home = alloca i64
+  %slot = getelementptr i8, ptr %n, i64 24
+  %bins = load i64, ptr %slot
+  store i64 %bins, ptr %home
+  %base = load i64, ptr %home
+  %scaled = shl i64 %i, 3
+  %address = add i64 %base, %scaled
+  %at = inttoptr i64 %address to ptr
+  %old = load i64, ptr %at
+  store i64 %s, ptr %at
+  ret i64 %old
+}
+
+; return n->bins[n->v++]; with n->bins in a local.
+define i64 @next_bin(ptr %n) {
+  %home = alloca i64
+  %slot = getelementptr i8, ptr %n, i64 24
+  %bins = load i64, ptr %slot
+  store i64 %bins, ptr %home
+  %counter = getelementptr i8, ptr %n, i64 8
+  %i = load i32, ptr %counter
+  %bumped = add i32 %i, 1
+  store i32 %bumped, ptr %counter
+  %base = load i64, ptr %home
+  %wide = zext i32 %i to i64
+  %scaled = shl i64 %wide, 3
+  %address = add i64 %base, %scaled
+  %at = inttoptr i64 %address to ptr
+  %picked = load i64, ptr %at
+  ret i64 %picked
+}
+
+; old = n->next; n->next = 0; ((void (**)(node *))old->next)[5](old);
+define void @call_old(ptr %n) {
+  %old = load i64, ptr %n
+  store i64 0, ptr %n
+  %object = inttoptr i64 %old to ptr
+  %table = load i64, ptr %object
+  %address = add i64 %table, 40
+  %slot = inttoptr i64 %address to ptr
+  %method = load ptr, ptr %slot
+  call void %method(i64 %old)
+  ret void
+}
+
+; if (flag) n->next = 0; n->v++; return n->next;
+define ptr @next_after_either(ptr %n, i1 %flag) {
+entry:
+  br i1 %flag, label %wipe, label %keep
+keep:
+  %first = load ptr, ptr %n
+  br label %join
+wipe:
+  store ptr null, ptr %n
+  %second = load ptr, ptr %n
+  br label %join
+join:
+  %next = phi ptr [ %first, %keep ], [ %second, %wipe ]
+  %counter = getelementptr i8, ptr %n, i64 8
+  %count = load i32, ptr %counter
+  %more = add i32 %count, 1
+  store i32 %more, ptr %counter
+  ret ptr %next
+}
+
+; old = n->v; for (k = 0; k != count; ++k) { total += old; n->v = k; }
+; return total;
+define i32 @sum_first(ptr %n, i32 %count) {
+entry:
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  %none = icmp eq i32 %count, 0
+  br i1 %none, label %done, label %loop
+loop:
+  %k = phi i32 [ 0, %entry ], [ %k.next, %loop ]
+  %total = phi i32 [ 0, %entry ], [ %total.next, %loop ]
+  %total.next = add i32 %total, %old
+  store i32 %k, ptr %slot
+  %k.next = add i32 %k, 1
+  %more = icmp ne i32 %k.next, %count
+  br i1 %more, label %loop, label %done
+done:
+  %result = phi i32 [ 0, %entry ], [ %total.next, %loop ]
+  ret i32 %result
+}
+
+; for (k = 0; k != count; ++k) { n->v = k; total += n->v; } return total;
+define i32 @sum_stored(ptr %n, i32 %count) {
+entry:
+  %slot = getelementptr i8, ptr %n, i64 8
+  %none = icmp eq i32 %count, 0
+  br i1 %none, label %done, label %loop
+loop:
+  %k = phi i32 [ 0, %entry ], [ %k.next, %loop ]
+  %total = phi i32 [ 0, %entry ], [ %total.next, %loop ]
+  store i32 %k, ptr %slot
+  %stored = load i32, ptr %slot
+  %total.next = add i32 %total, %stored
+  %k.next = add i32 %k, 1
+  %more = icmp ne i32 %k.next, %count
+  br i1 %more, label %loop, label %done
+done:
+  %result = phi i32 [ 0, %entry ], [ %total.next, %loop ]
+  ret i32 %result
+}
+
+; next = n->next; n->v = 7; return next;
+define ptr @next_after_value(ptr %n) {
+  %next = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %n, i64 8
+  store i32 7, ptr %slot
+  ret ptr %next
+}
+
+; n->next = n; return n->next;
+define ptr @next_after_store_before(ptr %n) {
+  store ptr %n, ptr %n
+  %next = load ptr, ptr %n
+  ret ptr %next
+}
+)ir",
+                                          Error, Context);
+  ASSERT_TRUE(Module) << Error.getMessage().str();
+  neverd::va_t VA = 0x1000;
+  for (llvm::Function &Function : *Module) {
+    if (Function.isDeclaration())
+      continue;
+    // A pointer is a node's address, but for the table of integers.
+    const auto TypeOf = [](const llvm::Type *Type,
+                           llvm::StringRef Name) -> neverd::TypeRef {
+      if (Type->isVoidTy())
+        return neverd::NdType::makeVoid();
+      if (Type->isPointerTy())
+        return Name == "table"
+                   ? neverd::NdType::makePtr(neverd::NdType::makeInt(4))
+                   : NodeDebug::nodePointer();
+      return neverd::NdType::makeInt(
+          Type->isIntegerTy(1) ? 1 : Type->getIntegerBitWidth() / 8,
+          /*S=*/false);
+    };
+    neverd::FunctionSym Symbol;
+    Symbol.Addr = VA;
+    Symbol.Name = Function.getName().str();
+    Symbol.ReturnType = Function.getName().ends_with("_as_node")
+                            ? NodeDebug::nodePointer()
+                            : TypeOf(Function.getReturnType(), "");
+    for (const llvm::Argument &Argument : Function.args())
+      Symbol.Params.emplace_back(
+          Argument.getName().str(),
+          TypeOf(Argument.getType(), Argument.getName()));
+    Debug.Functions[VA] = std::move(Symbol);
+    neverd::rewrite_source::setOriginalVA(Function, VA);
+    VA += 0x10;
+  }
+  neverd::CEmitterOptions Options;
+  Options.EmitIncludes = false;
+  Options.RecordDefinitions = [](const std::vector<neverd::TypeRef> &) {
+    neverd::CRecordDefinitions Definitions;
+    Definitions.Text = "struct node { struct node *next; int32_t v; "
+                       "void (*notify)(struct node *); "
+                       "struct node **bins; };\n";
+    Definitions.Records = {{"node", false}};
+    Definitions.Tags = {{"node", false}};
+    return Definitions;
+  };
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, Out, Options, &Debug));
+  Out.flush();
+  // A store to another member, or one that runs before the load each time
+  // the load runs, leaves the read at its use.
+  const auto Body = [&](llvm::StringRef Head) {
+    const size_t At = Source.find(Head.str() + " {\n");
+    if (At == std::string::npos)
+      return std::string();
+    return Source.substr(At, Source.find("\n}\n", At) - At);
+  };
+  EXPECT_NE(Body("node* next_after_value(node* n)")
+                .find("    n->v = 7;\n    return n->next;"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Body("node* next_after_store_before(node* n)")
+                .find(";\n    return n->next;"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(
+      Body("uint32_t sum_stored(node* n, uint32_t count)").find(" + n->v;\n"),
+      std::string::npos)
+      << Source;
+  const std::string Either =
+      Body("node* next_after_either(node* n, uint8_t flag)");
+  EXPECT_NE(Either.find("    n->v += 1;\n    return n->next;"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Either.find(" = n->next;"), std::string::npos) << Source;
+  // A member read through the temporary names the member still.
+  EXPECT_NE(Body("uint32_t value_of_old(node* n)")
+                .find("return ((node*)(uintptr_t)old0)->v;"),
+            std::string::npos)
+      << Source;
+  // A local that holds the read's value is assigned where the load stands,
+  // and needs no temporary beside it.
+  const std::string Kept = Body("node* kept_take(node* n)");
+  EXPECT_NE(Kept.find("    home0 = n->next;\n    n->next = ((void*)0);\n"
+                      "    return home0;"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Kept.find("old"), std::string::npos) << Source;
+  const std::string Program = R"c(
+#include <stdint.h>
+typedef struct node {
+  struct node *next;
+  int32_t v;
+  void (*notify)(struct node *);
+  struct node **bins;
+} node;
+)c" + Source + R"c(
+static void *seen;
+void observe(void *n) { seen = n; }
+static int fired;
+static void on_fire(void *n) { fired += ((node *)n)->v; }
+static uint64_t called;
+static void on_called(uint64_t object) { called = object; }
+int main(void) {
+  node a = {0, 5, 0, 0}, b = {&a, 7, 0, 0}, c = {0, 1, 0, 0};
+  if ((node *)take(&b) != &a || b.next)
+    return 1;
+  if (bump(&a, 40) != 6 || a.v != 40)
+    return 2;
+  node t = {&a, 2, 0, 0}, s = {&c, 3, 0, 0};
+  assign(&t, &s);
+  if (seen != &a || t.next != &c)
+    return 3;
+  b.next = &a;
+  a.v = 9;
+  if (value_of_old(&b) != 9 || b.next)
+    return 4;
+  b.next = &a;
+  if (kept_value_of_old(&b) != 9 || b.next)
+    return 5;
+  a.v = 0x0505;
+  if (value_before_byte(&a) != 0x0505 || a.v != 0x0105)
+    return 17;
+  b.next = &a;
+  if ((node *)take_unless(&b, 0) != &a || b.next || seen != &a)
+    return 18;
+  b.next = &a;
+  if (take_unless(&b, 1) || b.next || seen)
+    return 19;
+  b.next = &a;
+  if ((node *)take_as_node(&b) != &a || b.next)
+    return 25;
+  b.next = &a;
+  if ((node *)take_after_tail(&b, 1, 0) != &a || b.next || seen != &a)
+    return 26;
+  b.next = &a;
+  if ((node *)take_after_tail(&b, 0, 1) != &a || b.next)
+    return 27;
+  b.next = &a;
+  if (take_after_tail(&b, 0, 0) || b.next != &a)
+    return 28;
+  b.next = &a;
+  if ((node *)kept_take(&b) != &a || b.next)
+    return 20;
+  int32_t table[4] = {10, 11, 12, 13};
+  a.v = 2;
+  if (next_entry(&a, table) != 12 || a.v != 3)
+    return 6;
+  b.next = &a;
+  seen = 0;
+  if ((node *)take_if(&b, 1) != &a || b.next || seen != &a)
+    return 7;
+  b.next = &a;
+  if ((node *)take_if(&b, 0) != &a || b.next != &a)
+    return 8;
+  b.next = &a;
+  seen = 0;
+  if ((node *)take_latest(&b, 0) != &a || b.next || seen)
+    return 9;
+  b.next = &c;
+  if ((node *)take_latest(&b, 1) != &c || b.next || seen != &b)
+    return 10;
+  a.v = 4;
+  a.notify = (void (*)(node *))on_fire;
+  fire(&a);
+  if (fired != 4 || a.notify)
+    return 11;
+  node *bins[3] = {&a, &b, &c};
+  node holder = {0, 0, 0, bins};
+  if (replace_bin(&holder, (uint64_t)(uintptr_t)&c, 1) !=
+          (uint64_t)(uintptr_t)&b ||
+      bins[1] != &c)
+    return 12;
+  holder.v = 0;
+  if (next_bin(&holder) != (uint64_t)(uintptr_t)&a || holder.v != 1)
+    return 21;
+  bins[2] = &b;
+  b.v = 33;
+  if (kept_value_of_bin(&holder, 2) != 33 || bins[2])
+    return 29;
+  void *methods[6] = {0, 0, 0, 0, 0, (void *)on_called};
+  node object = {(node *)methods, 3, 0, 0};
+  b.next = &object;
+  call_old(&b);
+  if (called != (uint64_t)(uintptr_t)&object || b.next)
+    return 22;
+  b.next = &a;
+  b.v = 0;
+  if ((node *)next_after_either(&b, 0) != &a || b.next != &a || b.v != 1)
+    return 23;
+  if (next_after_either(&b, 1) || b.next || b.v != 2)
+    return 24;
+  a.v = 5;
+  if (sum_first(&a, 3) != 15 || a.v != 2)
+    return 13;
+  if (sum_stored(&a, 4) != 6 || a.v != 3)
+    return 14;
+  a.next = &c;
+  if ((node *)next_after_value(&a) != &c || a.v != 7)
+    return 15;
+  if ((node *)next_after_store_before(&a) != &a)
+    return 16;
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }

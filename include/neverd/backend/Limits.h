@@ -56,6 +56,9 @@ inline constexpr unsigned kLLVMCFieldDefaultShapeWork = 256;
 inline constexpr unsigned kLLVMCFieldDefaultQueryWork = 4096;
 /// Optional storage forwarding retains explicit loads/stores on exhaustion.
 inline constexpr unsigned kLLVMCStorageUseQueryWork = 512;
+/// Uses and blocks LLVMCWriter::readCrossesItsStore visits for one load before
+/// it takes the store to run between the load and a use.
+inline constexpr size_t kLLVMCReadStoreCrossingWork = 1u << 14;
 /// Optional branch-chain recognition retains the original CFG on exhaustion.
 inline constexpr unsigned kLLVMCBranchFeedQueryWork = 4096;
 

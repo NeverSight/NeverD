@@ -2187,6 +2187,14 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     }
     if (auto Member = typedLoadAccess(*LI)) {
       ValueTypes[&Inst] = Member->Type;
+      // A store to the member follows before a use: read it here.
+      if (readCrossesItsStore(*LI)) {
+        MaterializedExpressions.insert(LI);
+        emitIndent(Indent);
+        OS << Name << " = " << memberAsAccessed(*LI, Member->Text, Member->Type)
+           << ";\n";
+        return;
+      }
       ValueTexts[&Inst] = Member->Text;
       return;
     }
@@ -2210,6 +2218,12 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     }
     if (auto Index = typedIndexAccess(LI->getPointerOperand())) {
       ValueTypes[&Inst] = Index->Type;
+      if (readCrossesItsStore(*LI)) {
+        emitIndent(Indent);
+        OS << Name << " = " << memberAsAccessed(*LI, Index->Text, Index->Type)
+           << ";\n";
+        return;
+      }
       ValueTexts[&Inst] = Index->Text;
       return;
     }
@@ -8603,13 +8617,13 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
     OS << "{\n";
   }
   const int CopyIndent = Indent + (HasTemps ? 1 : 0);
-  for (const auto &Copy : Copies) {
+  const auto WriteCopy = [&](const PhiCopy &Copy) {
     emitIndent(CopyIndent);
     if (Copy.Phi && Copy.Phi == Declare && !HasTemps && Indent == 1) {
       ScopedScalarNames.insert(Copy.Destination);
       OS << typeToCLLVM(Copy.Phi->getType()) << " " << Copy.Destination << " = "
          << Copy.RHS << ";\n";
-      continue;
+      return;
     }
     if (Copy.Temp.empty() && Copy.Phi && !DeferredUnknownFlags.count(Copy.Phi))
       if (auto Update = scalarConditionalUpdate(Copy.Phi, Copy.Incoming)) {
@@ -8618,18 +8632,30 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
           emitIndent(CopyIndent);
         }
         OS << "if (" << Update->Condition << ") " << Update->Update << ";\n";
-        continue;
+        return;
       }
     if (Copy.Temp.empty() && Copy.Phi && !DeferredUnknownFlags.count(Copy.Phi))
       if (auto Update = scalarUpdateText(Copy.Phi, Copy.Incoming)) {
         OS << *Update << ";\n";
-        continue;
+        return;
       }
     if (!Copy.Temp.empty())
       OS << typeToCLLVM(Copy.Type) << " " << Copy.Temp;
     else
       OS << Copy.Destination;
     OS << " = " << Copy.RHS << ";\n";
+  };
+  for (const auto &Copy : Copies) {
+    // A PHI has no statement but its copies: they are where its own machine
+    // operations are emitted, as those of a load an optimizer replaced by it.
+    const auto Event = SourceRecorder && Copy.Phi
+                           ? SourceRecorder->instruction(*Copy.Phi)
+                           : std::nullopt;
+    if (Event)
+      OS << SourceRecorder->begin(*Event);
+    WriteCopy(Copy);
+    if (Event)
+      OS << SourceRecorder->end(*Event);
   }
   for (const auto &Copy : Copies) {
     if (Copy.Temp.empty())
@@ -9030,7 +9056,8 @@ void LLVMCWriter::writeReturn(llvm::ReturnInst &Ret, int Indent) {
         std::optional<std::string> Address;
         if (const auto *LI = llvm::dyn_cast<llvm::LoadInst>(RV))
           if (auto Acc = typedLoadAccess(*LI);
-              Acc && Acc->Type && Acc->Type->Kind == NdTypeKind::Ptr)
+              Acc && !readCrossesItsStore(*LI) && Acc->Type &&
+              Acc->Type->Kind == NdTypeKind::Ptr)
             Address = SourceRecorder
                           ? SourceRecorder->expression(*LI, Acc->Text)
                           : Acc->Text;
