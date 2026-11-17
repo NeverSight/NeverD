@@ -2923,8 +2923,10 @@ int main(void) {
 }
 
 INSTANTIATE_TEST_SUITE_P(ByArchitecture, HighCCallbackArguments,
-                         ::testing::Values(Arch::X64, Arch::AArch64,
-                                           Arch::MIPS64EL));
+                         ::testing::Values(Arch::X86, Arch::X64, Arch::AArch64,
+                                           Arch::MIPS32, Arch::MIPS32EL,
+                                           Arch::MIPS64N32, Arch::MIPS64N32EL,
+                                           Arch::MIPS64, Arch::MIPS64EL));
 
 TEST(HighCSourceCalls, CallbackDeclarationsKeepRecordsArraysAndEllipses) {
   const auto Record = NdType::makeNamedRecord("Item", 4);

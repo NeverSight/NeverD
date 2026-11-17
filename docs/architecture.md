@@ -5017,7 +5017,9 @@ stack arguments. Fixed pointer contracts still require every declared input.
 
 HighC retains the complete operand list and the ellipsis of a typed variadic
 callback member. The member's named parameters do not bound its unnamed tail,
-and an unprototyped cast must not change how C passes that tail.
+and an unprototyped cast must not change how C passes that tail. Member-slot
+lookup and indirect-target rendering both use the target's pointer width,
+including four-byte MIPS o32/n32 pointers.
 
 Header-declared integer record arguments use `SourceParameterPlacement` through
 `integerCallArguments`, both when recovering the call and when printing it.

@@ -6760,7 +6760,7 @@ TypeRef HighCWriter::typedMemberType(const HighExpr &Addr, uint16_t AccessSize,
 }
 
 TypeRef HighCWriter::typedSlotFunction(const HighExpr &Callee) const {
-  const unsigned PtrSize = Opts.TheArch == Arch::X86 ? 4u : 8u;
+  const unsigned PtrSize = getTargetRegInfo(Opts.TheArch).PointerSize;
   const HighExpr *Slot = peelIntegerViewOps(&Callee);
   if (!Slot || Slot->Kind != ExprKind::Load || Slot->Operands.empty() ||
       !Slot->Operands[0])
@@ -7165,7 +7165,7 @@ std::string HighCWriter::indirectCalleeStr(const HighExpr &E,
   auto UntypedCallee = [&](const std::string &Code) {
     return "(" + CalleeType + Code + ")";
   };
-  const unsigned PtrSize = Opts.TheArch == Arch::X86 ? 4u : 8u;
+  const unsigned PtrSize = getTargetRegInfo(Opts.TheArch).PointerSize;
   const HighExpr *Cur = peelIntegerViewOps(&E);
   unsigned Depth = 0;
   const HighExpr *Base = Cur;
