@@ -8794,8 +8794,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         E.Operands.size() !=
             (Array ? E.Type->ArrayCount : E.Type->Fields.size()))
       llvm::report_fatal_error(c_detail::kInvalidSourceRecord);
-    std::string Result = Complex ? c_detail::kSourceComplexInitializerOpen
-                         : Array ? c_detail::kSourceArrayInitializerOpen
+    std::string Result = Complex ? c_detail::kSourceComplexInitializerOpen.str()
+                         : Array ? c_detail::kSourceArrayInitializerOpen.str()
                                  : "(" + typeToC(E.Type) + "){";
     for (size_t I = 0; I < E.Operands.size(); ++I) {
       const TypeRef &Field = Array ? E.Type->ElemType : E.Type->Fields[I];
@@ -8860,7 +8860,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
           Record->FieldOffsets[E.ConstVal], E.Type->Size,
           /*EnterNestedAtZero=*/false);
       if (!Field)
-        throw std::runtime_error(c_detail::kUnknownNamedRecordField);
+        throw std::runtime_error(c_detail::kUnknownNamedRecordField.str());
       return "(" + exprStr(*E.Operands[0]) + ")." + *Field;
     }
     return "(" + exprStr(*E.Operands[0]) + ").field_" +

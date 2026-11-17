@@ -23,13 +23,17 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
 
 #include <stdexcept>
 #include <string>
 
 namespace neverd::c_detail {
-#define NEVERD_C_RECORD_TEXT(Name, Text) inline constexpr char Name[] = Text;
+// Value views fold to literals; addressable inline arrays require weak-symbol
+// lookup when a shared-backed frontend starts, even without a record call.
+#define NEVERD_C_RECORD_TEXT(Name, Text)                                       \
+  inline constexpr llvm::StringLiteral Name(Text);
 #include "CRecordCall.def"
 
 /// Copy each logical member once between complete C value representations.
@@ -62,7 +66,7 @@ inline std::string sourceRecordValue(const TypeRef &Record,
 /// introduce runtime memcpy calls in unoptimized compressed-ISA code.
 inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
                                            llvm::StringRef Expression) {
-  std::string Source = kSourceRecordSource;
+  std::string Source = kSourceRecordSource.str();
   while (RecordType.contains(Source) || Expression.contains(Source))
     Source += '_';
   return llvm::formatv(kSourceComplexRecordResult, RecordType, Expression,
@@ -75,7 +79,7 @@ inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
 inline std::string sourceComplexToRecord(llvm::StringRef ComplexType,
                                          llvm::StringRef RecordType,
                                          llvm::StringRef Expression) {
-  std::string Source = kSourceRecordSource;
+  std::string Source = kSourceRecordSource.str();
   while (ComplexType.contains(Source) || RecordType.contains(Source) ||
          Expression.contains(Source))
     Source += '_';

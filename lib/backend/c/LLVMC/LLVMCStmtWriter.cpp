@@ -6438,7 +6438,7 @@ LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
   if (!validateSourceABI(Found->Signature, Diagnostic) ||
       Found->Signature.ReturnLocation.Kind ==
           SourceABICarrierKind::IndirectResultPointer)
-    throw std::runtime_error(c_detail::kInvalidSourceRecordABI);
+    throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
   if (Call.getType() != llvmSourceCallValueType(Call.getContext(),
                                                 Found->Signature.ReturnType,
                                                 /*Parameter=*/false))

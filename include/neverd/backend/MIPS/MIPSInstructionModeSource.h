@@ -13,6 +13,7 @@
 #include "neverd/Common.h"
 #include "neverd/loader/BinaryImageModel.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/IR/Function.h"
 
@@ -21,7 +22,8 @@
 namespace neverd::mips {
 
 #define MIPS_SOURCE_MODE(Name, Feature, Exclude, Attribute)
-#define MIPS_SOURCE_TEXT(Name, Value) inline constexpr char Name[] = Value;
+#define MIPS_SOURCE_TEXT(Name, Value)                                          \
+  inline constexpr llvm::StringLiteral Name(Value);
 #include "neverd/backend/MIPS/MIPSInstructionModes.def"
 
 /// A reconstructed definition cannot take the assembler name the compiler
