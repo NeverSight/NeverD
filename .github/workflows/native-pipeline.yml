@@ -245,7 +245,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDFunctionAdmissionTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -264,7 +264,7 @@ jobs:
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
                     'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDLLVMCVectorTests',
                     'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests',
-                    'NeverDCallArgumentRecoveryTests', 'NeverDFunctionAdmissionTests']
+                    'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
