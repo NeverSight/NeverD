@@ -3210,7 +3210,7 @@ void recoverCallAbi(
           P.Kind = MedVar::Param;
           P.Id = Incoming;
           P.RegOff = kNoParamReg;
-          P.Size = static_cast<uint16_t>(TRI.PointerSize);
+          P.Size = CallLayout.SlotBytes;
           P.TheArch = TheArch;
           Found[K] = P;
           FoundMask[K] = true;
@@ -3787,9 +3787,8 @@ void recoverCallAbi(
         MedVar A =
             !Gap ? Found[K]
             : RequiredStackPosition && (!FillGaps || StackSetupIncomplete)
-                ? MedVar::makeUnspecified(
-                      static_cast<uint16_t>(TRI.PointerSize), TheArch)
-                : MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
+                ? MedVar::makeUnspecified(CallLayout.SlotBytes, TheArch)
+                : MedVar::makeConst(0, CallLayout.SlotBytes);
         // A slot found by the stack scan is a stack argument even when its
         // index falls in the integer-register range (i386 FP-register callee
         // with no integer register argument); assemble it after the FP
@@ -3806,16 +3805,18 @@ void recoverCallAbi(
                                      IntegerLayout.SlotBytes);
         }
         // A wide stack argument (an 8-byte double passed whole) covers several
-        // pointer slots.  For an INDIRECT call the callee arity is unknown, so
+        // argument slots. For an INDIRECT call the callee arity is unknown, so
         // SplitWide above leaves the wide store unsplit and its high slot a gap
         // that would otherwise truncate the rest of the argument list -- skip
         // the slots it occupies.  Restricted to indirect calls: a direct call
         // splits its wide stores into per-slot lanes (SplitWide), so a "wide"
         // found arg there is followed by genuine separate-argument slots that
         // must NOT be skipped.
-        if (!Gap && CI.IsIndirect && Found[K].Size > TRI.PointerSize &&
-            TRI.PointerSize > 0) {
-          int Span = Found[K].Size / TRI.PointerSize;
+        // Register values occupy one register position. n32's pointers are
+        // four bytes, but its integer registers and stack slots are eight.
+        if (!Gap && CI.IsIndirect && FromStackScan[K] &&
+            Found[K].Size > CallLayout.SlotBytes && CallLayout.SlotBytes > 0) {
+          int Span = Found[K].Size / CallLayout.SlotBytes;
           if (Span > 1)
             K += Span - 1;
         }
@@ -4283,7 +4284,7 @@ void recoverCallAbi(
       P.Kind = MedVar::Param;
       P.Id = K;
       P.RegOff = kNoParamReg;
-      P.Size = static_cast<uint16_t>(TRI.PointerSize);
+      P.Size = DefaultIntegerLayout.SlotBytes;
       P.TheArch = TheArch;
       Func.Params.insert(ordinaryParameterEnd(), P);
     }

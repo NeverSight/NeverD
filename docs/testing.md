@@ -18065,6 +18065,13 @@ running their labels. An older aggregate `NeverDLiftTests` executable may still
 register duplicate cases with those labels; use `-LE '^NeverDLiftTests$'` when
 validating only freshly rebuilt dedicated lift targets.
 
+`NeverDCallArgumentRecoveryTests` checks indirect calls and tail forwarding at
+the shared Med ABI boundary on x86, x64, AArch64 and all six MIPS profiles.
+It covers n32's eight-byte carriers despite four-byte pointers, wide stack
+stores followed by another argument, and fixed contracts with unwritten
+inputs. Run this target together with the architecture call-contract and MIPS
+pipeline suites when changing these recovery rules.
+
 `SessionCAPITest.ReferencePagesReuseImageFactsAndObserveChangedRoots` checks
 reference reuse, newly independent function entries, relocated code roots and
 reload invalidation. Run the computed-string/reference, function-disassembly

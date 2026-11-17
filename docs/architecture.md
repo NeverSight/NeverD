@@ -5001,6 +5001,13 @@ effects, exceptional entries, joins and cycles; entry live-in self-copies do
 not establish extra arguments. Existing PHI and known-prototype rules still
 own joins and arguments forwarded without setup.
 
+Indirect argument recovery counts physical argument slots using the target's
+integer argument layout. A wide stack store covers its occupied stack slots;
+a register value still occupies one register position. In particular, MIPS n32
+has four-byte pointers but eight-byte argument registers and stack slots.
+Tail-forwarded stack operands and the caller parameters they introduce retain
+that slot width.
+
 Header-declared integer record arguments use `SourceParameterPlacement` through
 `integerCallArguments`, both when recovering the call and when printing it.
 The type-library adapter preserves the record's alignment and complete scalar
