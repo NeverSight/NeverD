@@ -244,7 +244,7 @@ jobs:
           python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target \
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
-            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests \
+            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
             NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
@@ -260,6 +260,7 @@ jobs:
                     'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests',
                     'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
                     'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
+                    'NeverDAArch64DecodeValidityTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
                     'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDLLVMCVectorTests',
