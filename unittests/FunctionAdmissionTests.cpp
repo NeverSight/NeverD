@@ -396,5 +396,43 @@ TEST(FunctionAdmission, SelectedLiftReportsUnsupportedInstructionSemantics) {
             std::string::npos);
 }
 
+TEST(FunctionAdmission, SourceUnitOmissionsDoNotRelaxMachineAdmission) {
+  constexpr va_t Entry = 0x401000;
+  // Unsupported incoming x87 state, followed by an independent integer leaf.
+  auto Image =
+      makeCodeFixture(Entry, {0xd9, 0xe0, 0xc3, 0x90, 0xb8, 5, 0, 0, 0, 0xc3});
+  Image.Arch = Arch::X86;
+  Image.Bits = Bitness::Bits32;
+  Image.Base = 0x400000;
+  Image.Symbols.push_back(Symbol::makeFunc(Entry, 3));
+  Image.Symbols.push_back(Symbol::makeFunc(Entry + 4, 6));
+  for (bool Source : {false, true})
+    for (bool IncludeLeaf : {false, true}) {
+      SCOPED_TRACE(Source);
+      SCOPED_TRACE(IncludeLeaf);
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.NoOpt = true;
+      Options.LiftMode = true;
+      Options.SourceProjection = Source;
+      Options.OmitRefusedFunctions = true;
+      Options.OnlyFunctionEntries = {Entry};
+      if (IncludeLeaf)
+        Options.OnlyFunctionEntries.insert(Entry + 4);
+      auto Result = Pipeline().run(Image, Context, Options);
+      const bool Admitted = Source && IncludeLeaf;
+      EXPECT_EQ(Result.Success, Admitted) << Result.Error;
+      EXPECT_EQ(bool(Result.LlvmModule), Admitted);
+      const auto Rejected =
+          llvm::find_if(Result.FunctionAudits, [&](const auto &Audit) {
+            return Audit.Entry == Entry;
+          });
+      ASSERT_NE(Rejected, Result.FunctionAudits.end());
+      EXPECT_EQ(Rejected->UnsupportedInstructions, std::vector<va_t>{Entry});
+      EXPECT_FALSE(Rejected->HasMedIR);
+    }
+}
+
 } // namespace
 } // namespace neverd

@@ -92,6 +92,10 @@ bool admitsRequestedFunctions(const BinaryImage &Img,
                               const PipelineOptions &Opts,
                               const PipelineResult &Result,
                               const char *ModeName, std::string &Error) {
+  // Selected source units share whole-image omission and audit semantics.
+  // A machine lift or patch must still admit every requested entry.
+  if (Opts.usesSourceDeclarations() && Opts.OmitRefusedFunctions)
+    return true;
   std::set<va_t> AdmittedEntries;
   for (const auto &Function : Result.MedFuncs)
     AdmittedEntries.insert(
