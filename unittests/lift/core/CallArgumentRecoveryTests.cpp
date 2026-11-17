@@ -12,6 +12,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MedABIPass.h"
 
@@ -159,6 +160,42 @@ TEST(CallArgumentRecovery, TailForwardersKeepTheWholeStackCarrier) {
   }
 }
 
+TEST(CallArgumentRecovery, VariadicPointersDoNotTurnAnOpenArityIntoInputs) {
+  for (const Arch A : Architectures)
+    for (bool Indirect : {false, true})
+      for (bool Tail : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(A));
+        SCOPED_TRACE(Indirect);
+        SCOPED_TRACE(Tail);
+        auto Image = image(A);
+        auto Function = callWithSetup(A, 2, Indirect, Tail);
+        std::map<va_t, int> Registers{{Callee, A == Arch::X86 ? 0 : 2}};
+        // This is the pipeline's open recovery bound, not a parameter count.
+        std::map<va_t, int> Total{{Callee, limits::kMaxCallArgs}};
+        std::map<va_t, bool> Variadic{{Callee, true}};
+        const std::map<va_t, PointerVariableCallee> Pointers{
+            {Slot, {"", Callee}}};
+        recoverCallAbi(Function, A, {}, &Image, &Registers, &Total, nullptr,
+                       nullptr, nullptr, nullptr, &Variadic, nullptr, nullptr,
+                       nullptr, nullptr, &Pointers);
+        ASSERT_EQ(Function.CallInfos.size(), 1u);
+        const auto &Call = Function.CallInfos.front();
+        EXPECT_EQ(Call.IsIndirect, Indirect);
+        EXPECT_EQ(Function.Blocks.front().Ops[Call.OpIdx].Opcode,
+                  Indirect ? NdOp::INDIR_CALL : NdOp::CALL);
+        EXPECT_EQ(Call.Args.size(), registerCount(A) + 2);
+        if (Call.Args.size() != registerCount(A) + 2)
+          continue;
+        for (unsigned I = 0; I < Call.Args.size(); ++I) {
+          ASSERT_TRUE(Call.Args[I].isConst());
+          EXPECT_EQ(Call.Args[I].ConstVal, 41 + I);
+        }
+        EXPECT_TRUE(Function.Params.empty());
+        if (A != Arch::X86)
+          EXPECT_EQ(Call.VarArgFixedCount, 2);
+      }
+}
+
 TEST(CallArgumentRecovery, WideIndirectStackValuesSkipOnlyTheirCoveredSlots) {
   for (const Arch A : Architectures) {
     SCOPED_TRACE(static_cast<unsigned>(A));
@@ -218,4 +255,31 @@ TEST(CallArgumentRecovery, FixedPointerContractsStillRequireUnwrittenInputs) {
     }
 }
 
+TEST(CallArgumentRecovery, DarwinVariadicPointersUseTheNamedRegisterPrefix) {
+  for (bool Tail : {false, true}) {
+    SCOPED_TRACE(Tail);
+    auto Image = image(Arch::AArch64);
+    Image.Format = BinaryFormat::MachO;
+    auto Function = callWithSetup(Arch::AArch64, 2, true, Tail);
+    // Only x0 and x1 are named. The other register writes are scratch values;
+    // Darwin passes both unnamed arguments at the start of the stack area.
+    std::map<va_t, int> Registers{{Callee, 2}};
+    std::map<va_t, int> Total{{Callee, limits::kMaxCallArgs}};
+    std::map<va_t, bool> Variadic{{Callee, true}};
+    const std::map<va_t, PointerVariableCallee> Pointers{{Slot, {"", Callee}}};
+    recoverCallAbi(Function, Arch::AArch64, {}, &Image, &Registers, &Total,
+                   nullptr, nullptr, nullptr, nullptr, &Variadic, nullptr,
+                   nullptr, nullptr, nullptr, &Pointers);
+    ASSERT_EQ(Function.CallInfos.size(), 1u);
+    const auto &Call = Function.CallInfos.front();
+    EXPECT_TRUE(Call.IsIndirect);
+    EXPECT_EQ(Call.VarArgFixedCount, 2);
+    ASSERT_EQ(Call.Args.size(), 4u);
+    for (unsigned I = 0; I < 4; ++I) {
+      ASSERT_TRUE(Call.Args[I].isConst());
+      EXPECT_EQ(Call.Args[I].ConstVal, I < 2 ? 41 + I : 47 + I);
+    }
+    EXPECT_TRUE(Function.Params.empty());
+  }
+}
 } // namespace

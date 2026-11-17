@@ -5008,6 +5008,13 @@ has four-byte pointers but eight-byte argument registers and stack slots.
 Tail-forwarded stack operands and the caller parameters they introduce retain
 that slot width.
 
+A writable function-pointer variable may borrow its initializer's known call
+contract while keeping its runtime target. Its variadic summary is an open
+scan bound, not a fixed argument count: it cannot manufacture unwritten inputs
+or incoming tail-forwarded parameters. The same summary retains the named
+prefix, including Darwin AArch64's transition from named registers to unnamed
+stack arguments. Fixed pointer contracts still require every declared input.
+
 Header-declared integer record arguments use `SourceParameterPlacement` through
 `integerCallArguments`, both when recovering the call and when printing it.
 The type-library adapter preserves the record's alignment and complete scalar
