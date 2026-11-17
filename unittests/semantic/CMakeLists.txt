@@ -1549,6 +1549,7 @@ target_link_libraries(NeverDSemanticFixtureTests PRIVATE
 set(_neverd_semantic_fixture_targets
     NeverDSemanticFixtureTests
     NeverDSemanticTests
+    NeverDSelfCompareFlagTests
     NeverDX86DivisionRoundTripTests
     NeverDComputedGotoTests
     NeverDSwitchXformTests
