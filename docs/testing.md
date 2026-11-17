@@ -26027,6 +26027,33 @@ while mapped and ordinary C stay byte-identical. Full-output audits must compare
 nonempty instruction mappings to their established baseline; valid-address checks
 alone must not pass vacuously when all anchors disappear.
 
+### Historical MIPS I–III scheduling qualification
+
+`MIPSHistoricalScheduling.*` exercises physical dependencies across instruction,
+basic-block, delay-slot and call boundaries, retaining the same caller-bound
+state. Both byte orders cover load delays, annulled likely slots, merge-load
+forwarding and base aliases, FR=0 word pairs, HI/LO hazards, malformed state
+and failed attempts. Strict and lenient unbound execution both refuse ordered
+timing operations. A modern scalar FPU must not claim an early historical
+execution profile.
+
+The valid-integer-trace test runs 120 original-instruction comparisons across
+MIPS32/64 and both byte orders. Its interlocked Unicorn reference checks
+values of properly scheduled traces; it does not qualify non-interlocked
+hardware timing. CP0 propagation and historical FPU execution are not included.
+`MIPSControl.HistoricalRetirementKeepsPhysicalAndGuardedBoundaries` checks
+LowIR-to-MedIR branch/slot boundaries, while
+`MIPSPipeline.HistoricalTimingCannotDisappearIntoUnboundSource` checks that
+dead results cannot remove the contract or silently enable HighC/LLVM output.
+Decoder reuse checks that switching back to a modern profile does not retain
+historical scheduling state.
+
+Run the `NeverDMIPSIntegerTests`, `NeverDMIPSTests`, `NeverDMIPSFlowTests` and
+`NeverDMIPSPipelineTests` owners for changes to this contract. A focused first
+check uses `ctest -R '(MIPSHistorical|HistoricalRetirement|HistoricalTiming)'`.
+The loader fixtures include I/II o32 and III n32/n64 admission and contradictory
+register-width and ABI metadata.
+
 ### Historical MIPS IV/V qualification
 
 `MIPSHistoricalLoader.*` checks both byte orders, n32/n64, missing and matching
@@ -26036,7 +26063,7 @@ decoder/architecture reuse and all eight FCSR condition bits.
 `MIPSHistoricalFP.*` executes 84 IV and 109 V scalar/paired arithmetic forms
 against compatible original machine instructions, including rounding, FCSR and
 faulting write suppression.
-The older I–III timing profiles remain rejected rather than silently using r2.
+The I–III profiles use the separate bound scheduling contract above.
 
 Run `unittests/lift/mips/profile-roundtrip.py` with `--historical-isa 4` or `5`
 and `--historical-abi n32` or `n64`, plus the ordinary assembler, linker,

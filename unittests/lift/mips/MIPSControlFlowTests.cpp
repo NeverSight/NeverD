@@ -549,6 +549,49 @@ TEST_P(MIPSControl, TailCallRetainsSlotArgumentSetup) {
   }
 }
 
+TEST_P(MIPSControl, HistoricalRetirementKeepsPhysicalAndGuardedBoundaries) {
+  auto Image =
+      image({0x50800003, 0x8ca20000, 0x03e00008, 0, 0x03e00008, 0}, GetParam());
+  Image.MIPS.emplace();
+  Image.MIPS->ISARevision = 0;
+  Image.MIPS->HistoricalISA = isMIPS64(GetParam()) ? 3 : 2;
+  Image.MIPS->ABI = isMIPS64(GetParam()) ? MIPSABI::N64 : MIPSABI::O32;
+  const auto Func = build(Image);
+  ASSERT_FALSE(Func.Blocks.empty());
+  unsigned Begins = 0, Retires = 0;
+  for (const auto &Block : Func.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INTRINSIC) {
+        Begins +=
+            Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSHistoricalBegin);
+        Retires +=
+            Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSHistoricalRetire);
+      }
+  EXPECT_EQ(Begins, 6u);
+  EXPECT_EQ(Retires, Begins);
+  LowToMedConverter Converter;
+  const auto Med = Converter.convert(Func, GetParam());
+  ASSERT_GE(Med.Blocks.size(), 3u);
+  unsigned MedBegins = 0, MedRetires = 0;
+  int SlotBlock = -1;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      if (Op.Opcode == NdOp::INTRINSIC) {
+        if (Op.Inputs[0].ConstVal == unsigned(Intrinsic::MIPSHistoricalBegin)) {
+          ++MedBegins;
+          if (Op.Addr == 0x1004)
+            SlotBlock = Block.Id;
+        }
+        MedRetires +=
+            Op.Inputs[0].ConstVal == unsigned(Intrinsic::MIPSHistoricalRetire);
+      }
+  EXPECT_EQ(MedBegins, Begins);
+  EXPECT_EQ(MedRetires, Retires);
+  EXPECT_NE(SlotBlock, -1);
+  EXPECT_NE(SlotBlock, Med.Blocks.front().Id);
+  EXPECT_EQ(Med.Blocks.front().Ops.back().Opcode, NdOp::COND_BR);
+}
+
 INSTANTIATE_TEST_SUITE_P(Profiles, MIPSControl,
                          ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
                                            Arch::MIPS64, Arch::MIPS64EL));

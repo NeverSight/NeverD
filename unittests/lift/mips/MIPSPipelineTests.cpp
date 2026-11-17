@@ -46,6 +46,64 @@ namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
 
+TEST_P(MIPSPipeline, HistoricalTimingCannotDisappearIntoUnboundSource) {
+  const unsigned Level = isMIPS64(GetParam()) ? 3 : 1;
+  mips_test::ELFBytes File(GetParam());
+  File.put(File.Is64 ? 48 : 36,
+           ((Level - 1) << 28) | (File.Is64 ? 0u : 0x1000u), 4);
+  // Even a dead load result retains its physical instruction period. The
+  // lifted trace needs caller-bound incoming state; C cannot assume it empty.
+  const uint32_t Words[] = {0x8c820000, 0x24020007, 0x03e00008, 0};
+  for (unsigned I = 0; I != 4; ++I)
+    File.put(0x100 + 4 * I, Words[I], 4);
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  for (bool LLVM : {false, true}) {
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries = {Image->Entry};
+    Options.LiftMode = LLVM;
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options);
+    if (LLVM) {
+      EXPECT_FALSE(Result.Success);
+      EXPECT_NE(Result.Error.find(mips::kStatefulSourceUnsupported),
+                std::string::npos)
+          << Result.Error;
+      continue;
+    }
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+    unsigned Begins = 0, Retires = 0;
+    for (const auto &Function : Result.MedFuncs)
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::INTRINSIC) {
+            Begins += Op.Inputs[0].ConstVal ==
+                      unsigned(Intrinsic::MIPSHistoricalBegin);
+            Retires += Op.Inputs[0].ConstVal ==
+                       unsigned(Intrinsic::MIPSHistoricalRetire);
+          }
+    EXPECT_EQ(Begins, 4u);
+    EXPECT_EQ(Retires, 4u);
+    CEmitterOptions Emit;
+    Emit.TheArch = GetParam();
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    try {
+      (void)HighCEmitter().emit(Result.HighFuncs, Out, Emit);
+      FAIL() << "historical scheduling emitted without a bound processor";
+    } catch (const std::runtime_error &Error) {
+      EXPECT_NE(
+          std::string(Error.what()).find(mips::kStatefulSourceUnsupported),
+          std::string::npos);
+    }
+  }
+}
+
 TEST(MIPSEntryGP, AnExplicitWriteReachesLaterReadsAtRegisterWidth) {
   for (bool N32 : {false, true})
     for (bool Little : {false, true}) {

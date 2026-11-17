@@ -144,6 +144,13 @@ private:
   std::optional<Encoding> mips16JumpEncoding(const cs_insn &Instruction) const;
   std::optional<Encoding> mips16E2Encoding(uint16_t First, uint16_t Half) const;
   std::optional<Encoding> mips16Encoding(const cs_insn &Instruction) const;
+  template <bool Timed>
+  void liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
+                       std::optional<bool> ForbiddenFollower) const;
+  void liftHistoricalInstruction(const cs_insn &Instruction,
+                                 std::vector<LowOp> &Ops,
+                                 std::optional<bool> ForbiddenFollower) const;
+  template <bool Timed>
   LowDelaySlot liftControl(const cs_insn &Head, const cs_insn *Slot,
                            Encoding Code, std::vector<LowOp> &Ops) const;
   Arch Target;
@@ -160,7 +167,10 @@ private:
   bool FP32Registers = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;
-  bool HasMT = false;
+  // Share the final capability byte so historical timing does not grow the
+  // common lifter or move the existing DSP/MSA/floating capability fields.
+  bool HasMT : 1 = false;
+  bool TimedInstructions : 1;
 };
 
 } // namespace neverd

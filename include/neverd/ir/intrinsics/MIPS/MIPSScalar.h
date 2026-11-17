@@ -231,7 +231,9 @@ constexpr bool scalarMayWriteMemory(Intrinsic Id) {
 constexpr bool isStatefulScalar(Intrinsic Id) {
   return isScalarFPArithmetic(Id) || isScalarFPControl(Id) ||
          reservationTransfer(Id).has_value() || isSystemIntrinsic(Id) ||
-         Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id);
+         Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id) ||
+         Id == Intrinsic::MIPSHistoricalBegin ||
+         Id == Intrinsic::MIPSHistoricalRetire;
 }
 constexpr bool localCP0Word(uint64_t Index, bool Write) {
   switch (Index) {
@@ -332,6 +334,11 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
            S.SecondBytes == GPR && (!R->Paired || S.ThirdBytes == GPR);
   }
   if (isStatefulScalar(Id)) {
+    if (Id == Intrinsic::MIPSHistoricalBegin)
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 4 &&
+             S.FirstConstant && S.SecondBytes == 1;
+    if (Id == Intrinsic::MIPSHistoricalRetire)
+      return S.Inputs == 1 && !S.OutputBytes;
     if (isCacheIntrinsic(Id))
       return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&
              (S.SecondBytes == 4 || S.SecondBytes == 8) &&
