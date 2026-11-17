@@ -498,6 +498,13 @@ call targets remain intact. Machine lift does not inherit this source-only
 qualification. Proven classic parameter adapters can also accompany a scalar
 floating result.
 
+Complete source units omit these result helpers with an explicit function
+audit and retain the native runtime when linking the rebuilt program. A
+standalone source request for a helper fails clearly: its incoming result
+registers do not form an ordinary C function signature. This prevents an empty
+helper definition from replacing the actual register transport. Selected source
+units honor audited omissions; machine lift still requires every selected body.
+
 The [scalar runtime receipt](evidence/mips16-scalar-runtime-2026-11-17.json)
 records separate pointer-input and floating-input matrices against unmodified
 GCC 12.4 runtime helpers. Each matrix has 16 profiles, 384 source rebuilds and
@@ -510,6 +517,12 @@ does not acquire that proof. Complex helper byte transfers have unit coverage
 but do not establish a general complex source ABI. Complex source results,
 variadic/runtime conversion adapters and MIPS64 compressed floating results
 remain unqualified.
+
+Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
+image, linking only the resulting translation unit and the original runtime.
+Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
+orders, FR modes, compilers and observations. The unit and isolated-function
+receipts identify their different tested commits explicitly.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some

@@ -25560,6 +25560,10 @@ Add `--floating-input` to pass a scalar float/double through the classic entry
 stub and the compressed body, then return through the real GNU result helper.
 This selection qualifies entry and result transport together. It defaults to
 `sf` and `df`; complex input signatures are not silently substituted.
+Add `--whole-unit` to reconstruct the HighC caller with `--callees` and the
+complete LLVMC image. Each rebuilt translation unit links with the original
+runtime, without original caller/callee objects. This exposes duplicate or
+incorrect runtime definitions that isolated-function reconstruction misses.
 Every attempt records tool/source hashes and removes generated binaries via
 the shared artifact lifecycle. Compiler-only success does not qualify NeverD.
 
@@ -25568,6 +25572,10 @@ checks both source routes, original LowIR call retention, repeated helpers,
 double result spills and external input loads across predecessor blocks.
 Altered helpers, frame-derived arguments and a frame address stored before the
 input load must fail; machine lift remains outside the source projection.
+The same test checks explicit result-helper source refusal and audited omission
+from a selected source unit. `FunctionAdmission.SourceUnitOmissionsDoNotRelaxMachineAdmission`
+checks a truncated body alone and alongside a valid leaf: source-unit omission
+can retain the leaf, while machine output still refuses the incomplete request.
 `EntryAdapterProofChecksEveryParameterByteAndEffect` also checks scalar
 floating results through both single and split-double parameter adapters.
 
