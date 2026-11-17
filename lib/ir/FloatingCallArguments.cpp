@@ -13,6 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -80,8 +81,10 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     }
     return End == Type->Size ? Leaves : std::nullopt;
   };
+  const bool ComplexResult = isMIPS(A) && !isMIPS64(A) && !FixedCount &&
+                             sourceComplexComponentBytes(ReturnType);
   bool HasRecord = ReturnType && ReturnType->Kind == NdTypeKind::Struct &&
-                   !ReturnType->IsEnum;
+                   !ReturnType->IsEnum && !ComplexResult;
   for (const auto &Type : Parameters)
     HasRecord |= Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum;
   if (HasRecord) {
@@ -149,7 +152,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return Result;
   }
   const bool VoidReturn = ReturnType && ReturnType->Kind == NdTypeKind::Void;
-  if (!Scalar(ReturnType)) {
+  if (!Scalar(ReturnType) && !ComplexResult) {
     const bool IntegerPair =
         isMIPS(A) && ReturnType && ReturnType->Kind == NdTypeKind::Int &&
         ReturnType->Size == 2 * getTargetRegInfo(A).FullRegWidth;
@@ -188,7 +191,13 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return std::nullopt;
   FloatingCallArguments Result;
   Result.ReturnBytes = ReturnType->Size;
-  Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
+  Result.ReturnComplex = ComplexResult;
+  Result.ReturnElements = ComplexResult ? 2 : 0;
+  if (ComplexResult)
+    Result.ParameterElements.assign(Parameters.size(), 0);
+  Result.ReturnKind = ComplexResult        ? NdTypeKind::Float
+                      : ReturnType->IsEnum ? NdTypeKind::Int
+                                           : ReturnType->Kind;
   Result.SignedResult = MIPSSignedInteger(ReturnType);
   Result.FixedCount = FixedCount;
   Result.MIPS16Parameters = isMIPS(A) && EntryMode == InstructionMode::MIPS16;
@@ -323,7 +332,14 @@ floatingCallTypes(Arch A, BinaryFormat F,
   default:
     return std::nullopt;
   }
-  if (Signature.ReturnElements) {
+  if (Signature.ReturnComplex) {
+    if (Signature.ReturnElements != 2 ||
+        Signature.ReturnKind != NdTypeKind::Float)
+      return std::nullopt;
+    Types.Result = NdType::makeComplex(Signature.ReturnBytes / 2);
+    if (!Types.Result || Types.Result->Size != Signature.ReturnBytes)
+      return std::nullopt;
+  } else if (Signature.ReturnElements) {
     if (Signature.ReturnBytes % Signature.ReturnElements)
       return std::nullopt;
     Types.Result = Record(std::vector<TypeRef>(

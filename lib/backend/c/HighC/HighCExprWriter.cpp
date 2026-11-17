@@ -3336,7 +3336,9 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
           E.Type->Alignment != Callee->ReturnType->Alignment)
         return false;
       const auto Members = sourceAggregateMembers(E.Type);
-      const auto Leaves = aapcs64FloatingAggregate(Callee->ReturnType);
+      const auto Leaves = sourceComplexComponentBytes(Callee->ReturnType)
+                              ? std::optional(Callee->ReturnType->ScalarLeaves)
+                              : aapcs64FloatingAggregate(Callee->ReturnType);
       return !Members.empty() && Leaves &&
              std::equal(Members.begin(), Members.end(), Leaves->begin(),
                         Leaves->end(),
@@ -3367,6 +3369,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
     S = c_detail::recordCallResult(
         c_detail::recordCallType(Callee->ReturnType, Opts),
         exprStr(*E.Operands[Index]), S);
+  }
+  if (Defined && sourceComplexComponentBytes(Defined->ReturnType) && E.Type &&
+      !sourceComplexComponentBytes(E.Type)) {
+    if (E.Type->Size != Defined->ReturnType->Size)
+      throw std::runtime_error(
+          "A complex call lost its complete result carrier");
+    S = c_detail::sourceRecordValue(
+        Defined->ReturnType, typeToC(Defined->ReturnType), typeToC(E.Type), S);
   }
   return S;
 }
@@ -8561,7 +8571,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
           Return && Return->Kind == NdTypeKind::Struct && !Return->IsEnum) {
         const TypeRef Carrier =
             E.Type ? E.Type : NdType::makeInt(Return->Size, false);
-        const auto Members = sourceAggregateMembers(Return);
+        const auto Members = sourceValueMembers(Return);
         uint16_t Packed = 0;
         for (const auto &Member : Members)
           Packed += Member.Type->Size;
@@ -8759,14 +8769,16 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
   }
   case ExprKind::Record: {
     const bool Array = E.Type && E.Type->Kind == NdTypeKind::Array;
+    const bool Complex = sourceComplexComponentBytes(E.Type);
     if (!E.Type ||
         (Array ? !equalSourceTypes(E.Type, E.Type)
-               : sourceAggregateMembers(E.Type).empty()) ||
+               : sourceValueMembers(E.Type).empty()) ||
         E.Operands.size() !=
             (Array ? E.Type->ArrayCount : E.Type->Fields.size()))
       llvm::report_fatal_error(c_detail::kInvalidSourceRecord);
-    std::string Result = Array ? c_detail::kSourceArrayInitializerOpen
-                               : "(" + typeToC(E.Type) + "){";
+    std::string Result = Complex ? c_detail::kSourceComplexInitializerOpen
+                         : Array ? c_detail::kSourceArrayInitializerOpen
+                                 : "(" + typeToC(E.Type) + "){";
     for (size_t I = 0; I < E.Operands.size(); ++I) {
       const TypeRef &Field = Array ? E.Type->ElemType : E.Type->Fields[I];
       const HighExpr *Operand = E.Operands[I].get();
@@ -8798,12 +8810,21 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         Result += Text;
       }
     }
-    return Result + "}";
+    return Result + (Complex ? ")" : "}");
   }
   case ExprKind::Field: {
     if (E.Operands.size() != 1 || !E.Operands[0] || !E.Operands[0]->Type)
       llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
     const auto &Record = E.Operands[0]->Type;
+    if (sourceComplexComponentBytes(Record)) {
+      if (E.ConstVal >= 2 ||
+          !equalSourceTypes(E.Type, Record->Fields[E.ConstVal]))
+        llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
+      return llvm::formatv(E.ConstVal ? c_detail::kSourceComplexImaginary
+                                      : c_detail::kSourceComplexReal,
+                           exprStr(*E.Operands[0]))
+          .str();
+    }
     if (Record->Kind == NdTypeKind::Array) {
       if (E.ConstVal >= Record->ArrayCount ||
           !equalSourceTypes(E.Type, Record->ElemType))

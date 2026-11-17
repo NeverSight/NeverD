@@ -15,6 +15,7 @@
 
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 
+#include "../CRecordCall.h"
 #include "../FloatConversion.h"
 #include "../HeaderPrototype.h"
 #include "../LibraryPrototype.h"
@@ -2585,6 +2586,11 @@ LLVMCWriter::libraryCallee(const llvm::CallBase &Call) const {
 std::string LLVMCWriter::callResult(const llvm::CallBase &Call,
                                     std::string Expr) const {
   llvm::Type *Type = Call.getType();
+  if (const auto *Callee = Call.getCalledFunction())
+    if (const auto Complex = readLLVMSourceComplexResult(
+            Callee->getReturnType(), Callee->getAttributes()))
+      return c_detail::sourceRecordValue(Complex, typeToC(Complex),
+                                         typeToCLLVM(Type), Expr);
   if (!Type->isIntegerTy() && !Type->isPointerTy() &&
       !Type->isFloatingPointTy())
     return Expr;
@@ -2791,6 +2797,15 @@ std::string LLVMCWriter::sourceScalarType(llvm::Type *T, bool Signed) const {
 }
 
 std::string
+LLVMCWriter::sourceFunctionResultType(const llvm::Function &Function) const {
+  if (const auto Complex = readLLVMSourceComplexResult(
+          Function.getReturnType(), Function.getAttributes()))
+    return typeToC(Complex);
+  return sourceScalarType(Function.getReturnType(),
+                          Function.hasFnAttribute(LLVMSourceSignedResult));
+}
+
+std::string
 LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
                                        llvm::StringRef Declarator,
                                        std::optional<unsigned> Params) const {
@@ -2798,9 +2813,7 @@ LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
   const unsigned Count =
       Params ? std::min(*Params, FT->getNumParams()) : FT->getNumParams();
   std::string Result =
-      sourceScalarType(FT->getReturnType(),
-                       Fn.hasFnAttribute(LLVMSourceSignedResult)) +
-      " " + Declarator.str() + "(";
+      sourceFunctionResultType(Fn) + " " + Declarator.str() + "(";
   if (Count == 0 && !FT->isVarArg()) {
     Result += "void";
   } else if (Count) {

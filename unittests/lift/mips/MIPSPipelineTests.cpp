@@ -14,6 +14,8 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
@@ -43,6 +45,64 @@ using namespace neverd;
 namespace {
 
 class MIPSPipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    for (const uint16_t Bytes : {4, 8}) {
+      for (const auto Mode :
+           {InstructionMode::MIPSClassic, InstructionMode::MIPS16}) {
+        SCOPED_TRACE(testing::Message() << getArchName(Target) << ':' << Bytes
+                                        << ':' << static_cast<unsigned>(Mode));
+        auto Pointer = NdType::makePtr();
+        Pointer->Size = 4;
+        const auto Result = NdType::makeComplex(Bytes);
+        const auto Signature = floatingCallArguments(
+            Target, BinaryFormat::ELF, Result, {Pointer}, std::nullopt, Mode);
+        ASSERT_TRUE(Signature);
+        EXPECT_TRUE(Signature->ReturnComplex);
+        EXPECT_EQ(Signature->ReturnElements, 2u);
+        const auto Types =
+            floatingCallTypes(Target, BinaryFormat::ELF, *Signature);
+        ASSERT_TRUE(Types);
+        EXPECT_TRUE(equalSourceTypes(Result, Types->Result));
+        EXPECT_EQ(Types->Parameters.size(), 1u);
+        auto Corrupt = *Signature;
+        Corrupt.ReturnComplex = false;
+        EXPECT_FALSE(floatingCallTypes(Target, BinaryFormat::ELF, Corrupt));
+        Corrupt = *Signature;
+        Corrupt.ReturnElements = 1;
+        EXPECT_FALSE(floatingCallTypes(Target, BinaryFormat::ELF, Corrupt));
+        SourceCallTypeHint Call;
+        Call.Signature.ReturnType = Result;
+        Call.Signature.Parameters = {{"input", Pointer}};
+        std::string Error;
+        ASSERT_TRUE(
+            assignAnalystCallABI(Call, Target, BinaryFormat::ELF, Error, Mode))
+            << Error;
+        ASSERT_EQ(Call.Signature.ReturnComponents.size(), 2u);
+        for (unsigned I = 0; I != 2; ++I) {
+          const auto &Part = Call.Signature.ReturnComponents[I];
+          EXPECT_EQ(Part.Kind, SourceABICarrierKind::FloatingRegister);
+          EXPECT_EQ(Part.RegisterOffset, mipsreg::w(2 * I));
+          EXPECT_EQ(Part.ValueBytes, Bytes);
+        }
+        Call.Signature.ReturnComponents[1].RegisterOffset = mipsreg::w(1);
+        EXPECT_FALSE(validateSourceABI(Call.Signature, Error));
+        auto Record = NdType::makeStruct(
+            {NdType::makeFloat(Bytes), NdType::makeFloat(Bytes)});
+        Record->Passing = NdRecordPassing::ByValue;
+        EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF, Record,
+                                           {Pointer}));
+        EXPECT_FALSE(
+            floatingCallArguments(Target, BinaryFormat::ELF, Result, {Result}));
+      }
+    }
+  }
+  for (const auto Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF,
+                                       NdType::makeComplex(8), {}));
+}
 
 TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,

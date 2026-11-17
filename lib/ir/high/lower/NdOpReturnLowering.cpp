@@ -267,7 +267,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
 
   if (Med.SourceParametersBound && Func.SourceTypeHint &&
       Func.ReturnType->Kind == NdTypeKind::Struct) {
-    const auto Members = sourceAggregateMembers(Func.ReturnType);
+    const auto Members = sourceValueMembers(Func.ReturnType);
     std::vector<ExprPtr> Leaves;
     if (CurOp.NumInputs == Members.size())
       for (size_t I = 0; I < Members.size(); ++I)

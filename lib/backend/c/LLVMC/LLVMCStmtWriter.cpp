@@ -6958,6 +6958,10 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
             Function->ReturnType->Size)
       throw std::runtime_error(
           "A record call has an incompatible result carrier");
+    if (sourceComplexComponentBytes(Function->ReturnType))
+      return c_detail::sourceRecordValue(Function->ReturnType,
+                                         typeToC(Function->ReturnType),
+                                         typeToCLLVM(Call.getType()), Expr);
     return "__builtin_bit_cast(" + typeToCLLVM(Call.getType()) + ", " + Expr +
            ")";
   }
@@ -9042,6 +9046,10 @@ void LLVMCWriter::writeReturn(llvm::ReturnInst &Ret, int Indent) {
             Address ? "(" + PointerReturnType + ")" + *Address
                     : "(" + PointerReturnType + ")(uintptr_t)(" + RetExpr + ")";
       }
+      if (const auto Complex = readLLVMSourceComplexResult(
+              FnRetTy, Ret.getFunction()->getAttributes()))
+        RetExpr = c_detail::sourceRecordValue(Complex, typeToCLLVM(FnRetTy),
+                                              typeToC(Complex), RetExpr);
       OS << "return " << RetExpr << ";\n";
     }
   } else {

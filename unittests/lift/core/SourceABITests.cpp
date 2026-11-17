@@ -74,6 +74,63 @@ TEST(SourceABI, ComplexValuesAreNotOrdinaryFloatingRecords) {
   EXPECT_FALSE(NdType::makeComplex(16));
 }
 
+TEST(SourceABI, ComplexConstructionAndProjectionPreserveComponentBits) {
+  for (const uint16_t Bytes : {4, 8}) {
+    SCOPED_TRACE(Bytes);
+    const auto Scalar = NdType::makeFloat(Bytes);
+    const auto Complex = NdType::makeComplex(Bytes);
+    const auto Integer = NdType::makeInt(Bytes, false);
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "make_complex";
+    Function.ReturnType = Complex;
+    std::vector<ExprPtr> Parts;
+    for (unsigned I = 0; I != 2; ++I) {
+      Function.Params.push_back({I ? "imaginary" : "real", Integer});
+      MedVar Parameter;
+      Parameter.Kind = MedVar::Param;
+      Parameter.Id = I;
+      Parameter.Size = Bytes;
+      Parts.push_back(
+          HighExpr::makeBitCast(HighExpr::makeVar(Parameter, Integer), Scalar));
+    }
+    auto Value = HighExpr::makeRecord(Complex, Parts);
+    ASSERT_EQ(Value->Kind, ExprKind::Record);
+    auto Imaginary = HighExpr::makeRecordField(Value, Bytes, Bytes);
+    EXPECT_TRUE(equalSourceTypes(Imaginary->Type, Scalar));
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = Value;
+    Function.Body = {Return};
+    HighFunc Projection = Function;
+    Projection.Entry += 0x100;
+    Projection.Name = "imaginary_bits";
+    Projection.ReturnType = Integer;
+    Projection.Body[0].RetVal = HighExpr::makeBitCast(Imaginary, Integer);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(HighCEmitter().emit({Function, Projection}, OS, Options));
+    EXPECT_NE(Source.find("__builtin_complex("), std::string::npos);
+    const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+    Source += "\nint main(void) { const " + Word + " values[] = {0, " +
+              (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
+                          : "0x8000000000000000ull, 0x7ff8000000001234ull, "
+                            "0xfff0000000000000ull") +
+              "}; for (unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { " +
+              typeToC(Complex) + " z=make_complex(values[i],values[j]); " +
+              typeToC(Scalar) + " r=__real__ z, m=__imag__ z; " + Word +
+              " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
+              "__builtin_memcpy(&b,&m,sizeof(b)); "
+              "if(a!=values[i] || b!=values[j] || "
+              "imaginary_bits(values[i],values[j])!=values[j]) return 1; "
+              "} return 0; }\n";
+    executeC(Source, false);
+  }
+}
+
 TEST(SourceABI, SourceCallsReplaceGenericRegisterArgumentSummaries) {
   for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
     for (const bool SwiftContext : {false, true}) {

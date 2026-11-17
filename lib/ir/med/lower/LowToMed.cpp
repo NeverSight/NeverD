@@ -1780,22 +1780,29 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         // o32 integer words. Define the aliases before SSA so compressed and
         // classic callers observe the same logical result.
         const auto &Signature = *MOp.ScalarCallSignature;
+        const unsigned ComponentBytes = Signature.ReturnComplex
+                                            ? Signature.ReturnBytes / 2
+                                            : Signature.ReturnBytes;
         for (unsigned I = 0; I < Signature.ReturnBytes / 4; ++I) {
           MedOp Word;
           Word.Opcode = NdOp::SUBBYTES;
           Word.Addr = LOp.Addr;
-          Word.Output =
-              ndVarToMedVar(NdVar::reg(ConventionRegs.IntReturnRegs[I], 4));
+          Word.Output = ndVarToMedVar(NdVar::reg(mipsreg::r(2 + I), 4));
           Word.addInput(MOp.Output);
-          Word.addInput(
-              MedVar::makeConst(Signature.ReturnBytes == 4
-                                    ? 0
-                                    : ConventionRegs.integerReturnWordOffset(I),
-                                4, ConstantAddressProvenance::Scalar));
+          const unsigned Component = I / (ComponentBytes / 4);
+          const unsigned WordInComponent = I % (ComponentBytes / 4);
+          const unsigned Offset =
+              ComponentBytes == 4
+                  ? 0
+                  : ConventionRegs.integerReturnWordOffset(WordInComponent);
+          Word.addInput(MedVar::makeConst(Component * ComponentBytes + Offset,
+                                          4,
+                                          ConstantAddressProvenance::Scalar));
           MB.Ops.push_back(std::move(Word));
         }
       }
       if (isMIPS(TheArch) && MOp.ScalarCallSignature && MOp.Output.Size &&
+          MOp.ScalarCallSignature->ReturnKind != NdTypeKind::Float &&
           MOp.Output.Kind == MedVar::Temp) {
         const auto &Signature = *MOp.ScalarCallSignature;
         const uint16_t Word = ConventionRegs.FullRegWidth;

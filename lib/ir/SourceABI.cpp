@@ -69,6 +69,13 @@ unsigned sourceComplexComponentBytes(const TypeRef &Type) {
   return Bytes;
 }
 
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+  if (const auto Bytes = sourceComplexComponentBytes(Type))
+    return {{Type->Fields[0], 0},
+            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
+  return sourceAggregateMembers(Type);
+}
+
 namespace {
 #define SOURCE_ABI_CARRIER_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define SOURCE_ABI_CARRIER_TEXT(Name, Text) constexpr char Name[] = Text;

@@ -700,6 +700,83 @@ TEST_P(MIPS16Pipeline, SplitDoubleEntryKeepsBothPhysicalWords) {
   }
 }
 
+TEST_P(MIPS16Pipeline, ComplexCallsDefineEveryIntegerResultWord) {
+  for (const uint16_t ElementBytes : {4, 8}) {
+    for (const bool FP64 : {false, true}) {
+      SCOPED_TRACE(testing::Message() << ElementBytes << ':' << FP64);
+      mips_test::ELFBytes File(GetParam());
+      File.Bytes.resize(0x140);
+      File.put(52 + 16, File.Bytes.size(), 4);
+      File.put(52 + 20, File.Bytes.size(), 4);
+      File.abiFlags();
+      File.Bytes[0xe5] = FP64 ? 2 : 1;
+      File.Bytes[0xe7] = FP64 ? 6 : 1;
+      File.put(36, 0x74001000, 4);
+      File.put(24, 0x10101, 4);
+      File.put(0xec, 0x400, 4);
+      // GNU-as MIPS16 caller: save ra; jal 0x10120; nop; restore; jrc ra.
+      const uint16_t Caller[] = {0x64c3, 0x1800, 0x4048, 0x6500,
+                                 0x6500, 0x6443, 0xe8a0};
+      for (unsigned I = 0; I < std::size(Caller); ++I)
+        File.put(0x100 + I * 2, Caller[I], 2);
+      File.put(0x120, 0xe8a0, 2);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      for (const auto &[Address, Size] :
+           {std::pair{0x10100u, unsigned(sizeof(Caller))},
+            std::pair{0x10120u, 2u}}) {
+        Image->Symbols.push_back(Symbol::makeFunc(Address, Size));
+        Image->MIPS->CodeModeEntries.emplace(Address, InstructionMode::MIPS16);
+        Image->MIPS->CodeRegions.push_back(
+            {Address, Address + Size, InstructionMode::MIPS16});
+      }
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low = CFGBuilder().build(*Image, Decode, 0x10100, "caller");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      const auto Signature = floatingCallArguments(
+          GetParam(), BinaryFormat::ELF, NdType::makeComplex(ElementBytes), {},
+          std::nullopt, InstructionMode::MIPS16);
+      ASSERT_TRUE(Signature);
+      const std::map<va_t, FloatingCallArguments> Calls{{0x10120, *Signature}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      Convert.setCallEntryFloatingArguments(&Calls);
+      const auto Med = Convert.convert(Low, GetParam(), BinaryFormat::ELF);
+      std::set<unsigned> Words;
+      std::set<unsigned> Floating;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops) {
+          for (unsigned I = 0; I != 2; ++I)
+            if (Op.Output.Kind == MedVar::Reg &&
+                Op.Output.RegOff == mipsreg::w(2 * I) &&
+                Op.Output.Size >= ElementBytes)
+              Floating.insert(I);
+          if (Op.Opcode != NdOp::SUBBYTES || Op.NumInputs != 2 ||
+              Op.Output.Kind != MedVar::Reg || !Op.Inputs[1].isConst() ||
+              Op.Inputs[0].Size != ElementBytes * 2)
+            continue;
+          for (unsigned I = 0; I < ElementBytes / 2; ++I)
+            if (Op.Output.RegOff == mipsreg::r(2 + I)) {
+              const unsigned Component = I / (ElementBytes / 4);
+              const unsigned Word = I % (ElementBytes / 4);
+              const unsigned Offset =
+                  ElementBytes == 4 || archLittleEndian(GetParam())
+                      ? Word * 4
+                      : (1 - Word) * 4;
+              EXPECT_EQ(Op.Inputs[1].ConstVal,
+                        Component * ElementBytes + Offset);
+              EXPECT_EQ(Op.Output.Size, 4u);
+              Words.insert(I);
+            }
+        }
+      EXPECT_EQ(Words.size(), ElementBytes / 2u);
+      EXPECT_EQ(Floating.size(), 2u);
+    }
+  }
+}
+
 TEST_P(MIPS16Pipeline, TypedDirectCallReadsGPRFloatInEitherSelection) {
   mips_test::ELFBytes File(GetParam());
   File.Bytes.resize(0x140);

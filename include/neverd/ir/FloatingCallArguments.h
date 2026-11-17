@@ -64,6 +64,9 @@ struct FloatingCallArguments {
   /// stubs and ordinary function pointers retain the platform FP transport.
   /// An o32 scalar FP result defines both f0 and its v0/v1 bit carriers.
   bool MIPS16Parameters = false;
+  /// o32 C complex results use two floating components in f0/f2. Preserve
+  /// this calling class: an ordinary two-field record has a different ABI.
+  bool ReturnComplex = false;
   bool operator==(const FloatingCallArguments &) const = default;
 };
 

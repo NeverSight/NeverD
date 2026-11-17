@@ -33,4 +33,8 @@ NEVERD_C_RECORD_TEXT(kSourceArrayInitializerOpen, "{")
 NEVERD_C_RECORD_TEXT(kSourceVectorRecordCode, "v{0}")
 NEVERD_C_RECORD_TEXT(kSourceArrayRecordCode, "a{0}_{1}_e")
 
+NEVERD_C_RECORD_TEXT(kSourceComplexInitializerOpen, "__builtin_complex(")
+NEVERD_C_RECORD_TEXT(kSourceComplexReal, "(__real__ ({0}))")
+NEVERD_C_RECORD_TEXT(kSourceComplexImaginary, "(__imag__ ({0}))")
+
 #undef NEVERD_C_RECORD_TEXT

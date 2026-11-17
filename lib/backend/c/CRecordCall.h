@@ -17,6 +17,7 @@
 #include "CIdentifier.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/SourceABI.h"
 
@@ -47,7 +48,7 @@ inline std::string sourceRecordValue(const TypeRef &Record,
   const auto Destination = Temporary(kSourceRecordDestination);
   const auto Source = Temporary(kSourceRecordSource);
   std::string Copies;
-  for (const auto &Member : sourceAggregateMembers(Record))
+  for (const auto &Member : sourceValueMembers(Record))
     Copies += llvm::formatv(kSourceRecordFieldCopy, Member.ByteOffset,
                             Member.Type->Size, Destination, Source)
                   .str();
@@ -58,6 +59,8 @@ inline std::string sourceRecordValue(const TypeRef &Record,
 
 inline std::string recordCallType(const TypeRef &Type,
                                   const CEmitterOptions &Options) {
+  if (sourceComplexComponentBytes(Type))
+    return typeToC(Type);
   if (!Type || !Options.RecordDefinitions)
     throw std::runtime_error("A record call needs its header's complete type");
   const auto Definitions = Options.RecordDefinitions({Type});

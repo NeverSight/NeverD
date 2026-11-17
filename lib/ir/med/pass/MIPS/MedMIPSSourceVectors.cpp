@@ -184,9 +184,13 @@ void requireMIPSSourceVectors(
         T.Defines &= ~Clobbered;
         T.Kills |= Clobbered;
         if (Signature->ReturnKind == NdTypeKind::Float) {
-          const auto Result = ABIBytes(TRI.FPReturnReg, Signature->ReturnBytes);
-          T.Defines |= Result;
-          T.Kills &= ~Result;
+          const unsigned Count = Signature->ReturnComplex ? 2 : 1;
+          for (unsigned I = 0; I < Count; ++I) {
+            const auto Result =
+                ABIBytes(TRI.FPReturnRegs[I], Signature->ReturnBytes / Count);
+            T.Defines |= Result;
+            T.Kills &= ~Result;
+          }
         }
       }
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
@@ -572,19 +576,27 @@ void discardUnobservedMIPSFPUpperBits(
                           : Local                        ? &*Local
                                                          : nullptr;
   bool Declared = false;
-  if (Signature && !Signature->ReturnElements)
+  if (Signature && (!Signature->ReturnElements || Signature->ReturnComplex))
     if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, *Signature)) {
       Declared = true;
       Function.ReturnType = Types->Result;
       Function.HasDeclaredMIPSIntegerResult =
           Types->Result->Kind == NdTypeKind::Int;
       Function.MultiReturn.clear();
+      if (Signature->ReturnComplex)
+        for (unsigned I = 0; I != 2; ++I)
+          Function.MultiReturn.push_back(
+              {getTargetRegInfo(Target).FPReturnRegs[I],
+               static_cast<uint16_t>(Signature->ReturnBytes / 2), true});
       Function.ReturnsVectorRegister = false;
       bindMIPS16ScalarEntry(Function, Target, *Signature, *Types);
     }
-  if (!Function.ReturnType || !Function.MultiReturn.empty())
+  const unsigned ComplexBytes =
+      sourceComplexComponentBytes(Function.ReturnType);
+  if (!Function.ReturnType || (!Function.MultiReturn.empty() && !ComplexBytes))
     return;
-  const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
+  const bool Floating =
+      Function.ReturnType->Kind == NdTypeKind::Float || ComplexBytes;
   if (!Declared && !Floating &&
       !(Function.ReturnType->Kind == NdTypeKind::Int &&
         !Function.ReturnsVectorRegister))
@@ -678,8 +690,9 @@ void discardUnobservedMIPSFPUpperBits(
       // Keep every potentially returned FPR definition conservative unless
       // a later full write proves it cannot supply the implicit ABI result.
       if (Floating && Value.Kind == MedVar::Reg &&
-          Value.RegOff == TRI.FPReturnReg &&
-          First < Function.ReturnType->Size &&
+          (Value.RegOff == TRI.FPReturnReg ||
+           (ComplexBytes && Value.RegOff == TRI.FPReturnRegs[1])) &&
+          First < (ComplexBytes ? ComplexBytes : Function.ReturnType->Size) &&
           !Overwritten.contains(KeyOf(Value)))
         return true;
       // RETURN may still carry only its branch target here. Integer
