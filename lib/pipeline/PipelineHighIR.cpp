@@ -208,26 +208,38 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
        pipeline_detail::debugFunctionNames(Result, AllFuncNames, Dbg))
     Names.assign(Address, Name);
   // A positional register/stack ABI needs one final argument prefix on both
-  // source routes. Independent register banks keep their existing source
-  // recovery, including floating return veneers and variadic format joins.
+  // source routes. Dynamic targets also need shared recovery: their setup
+  // can establish an untouched leading input without a callee declaration.
+  // Independent register banks retain their existing variadic finalization.
   const CallArgumentConvention *Convention =
       callArgumentConvention(Img.Arch, Img.abiFormat());
-  if (Convention && (Convention->ArgumentsFromCallSetup ||
+  const bool SetupArguments =
+      Convention && (Convention->ArgumentsFromCallSetup ||
                      (Convention->StackArgumentSummary &&
-                      Convention->PositionalArgumentSlots))) {
+                      Convention->PositionalArgumentSlots));
+  const bool HasIndirectCalls =
+      llvm::any_of(Result.MedFuncs, [](const auto &F) {
+        return llvm::any_of(F.Blocks, [](const auto &B) {
+          return llvm::any_of(B.Ops, [](const auto &Op) {
+            return Op.Opcode == NdOp::INDIR_CALL;
+          });
+        });
+      });
+  if (SetupArguments || HasIndirectCalls) {
     recoverModuleCallAbi(Img, Result, AllFuncNames,
                          /*SourceDeclarations=*/false,
                          /*SourceParameterReads=*/true);
     propagateForwardedPointerParams(Result.MedFuncs, Img.Arch);
+  }
+  if (SetupArguments) {
     // A variadic callee takes its call sites' overflow arguments as trailing
     // stack parameters, which MedToHigh seeds where its va_arg walk reads
     // them, as lift mode does for the LLVM emitter.
     finalizeVariadicCallees(Result.MedFuncs, Img.Arch, Img.abiFormat(),
                             Img.Exports);
   } else {
-    // A convention whose calls take their arguments from callee summaries
-    // recovers no call arguments here: a System V variadic callee's overflow
-    // is the stack its calls store.
+    // A System V variadic callee's overflow remains the stack its calls
+    // store, including when indirect-call recovery ran above.
     sizeVariadicOverflowFromStores(Result.MedFuncs, Img.Arch, Img.abiFormat());
   }
   // A tail call that forwards a multi-register return (`return g(x);`, an

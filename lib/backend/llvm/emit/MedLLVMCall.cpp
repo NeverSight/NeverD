@@ -2242,8 +2242,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     for (size_t AI = 0; AI < Args.size(); ++AI) {
       llvm::Value *AV = Args[AI];
       llvm::Type *Want = ParamTys[AI];
-      if (Want->isIntegerTy() && AV->getType()->isIntegerTy() && CI &&
-          AI < CI->Args.size())
+      // Only a pointer-width carrier can round-trip through a pointer. In
+      // n32, an untyped integer argument occupies eight bytes even though
+      // pointers occupy four; symbolization must not discard its high word.
+      if (Want->isIntegerTy(ITRI.PointerSize * 8) &&
+          AV->getType()->isIntegerTy() && CI && AI < CI->Args.size())
         if (llvm::Value *Sym = tryResolvePointerArg(
                 CI->Args[AI], /*FailClosed=*/false, Builder))
           AV = Builder.CreatePtrToInt(Sym, AV->getType());

@@ -39,7 +39,8 @@ std::vector<uint8_t> encode(llvm::ArrayRef<uint32_t> Words, Arch Target) {
 BinaryImage image(llvm::ArrayRef<uint32_t> Words, Arch Target) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) && !isMIPSN32(Target) ? Bitness::Bits64
+                                                      : Bitness::Bits32;
   Image.Format = BinaryFormat::ELF;
   Image.Base = Image.Entry = 0x1000;
   Segment Text;
@@ -193,6 +194,68 @@ TEST_P(MIPSControl, SourceReturnRequiresTheWholeIncomingLink) {
   Check({0xafbffffc, ClearRA, 0x8fbffffc, Return, 0}, !Wide);
   if (Wide)
     Check({0xffbffff8, ClearRA, 0xdfbffff8, Return, 0}, true);
+}
+
+TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Wide = isMIPS64(Target);
+    for (unsigned Variant = 0; Variant != 9; ++Variant) {
+      SCOPED_TRACE(static_cast<unsigned>(Target));
+      SCOPED_TRACE(Variant);
+      // Load a changing external pointer. There is no fixed callee signature.
+      std::vector<uint32_t> Words{Wide ? 0x67bdffe0u : 0x27bdffe0u,
+                                  Wide ? 0xffbf0018u : 0xafbf001cu,
+                                  0x3c190002,
+                                  Wide && !isMIPSN32(Target) ? 0xdf390000u
+                                                             : 0x8f390000u,
+                                  Variant == 1 ? 0x0c000800u : 0x0320f809u,
+                                  0x24050025,
+                                  Wide ? 0xdfbf0018u : 0x8fbf001cu,
+                                  0x03e00008,
+                                  Wide ? 0x67bd0020u : 0x27bd0020u};
+      if (Variant == 2)
+        Words[5] = 0x03a02025; // The call receives the allocated frame in a0.
+      if (Variant == 3) {
+        // An escape before saving RA remains visible after the exact save.
+        Words.insert(Words.begin() + 1,
+                     {0x3c010002, Wide ? 0xfc3d0000u : 0xac3d0000u});
+      }
+      if (Variant == 4)
+        Words.insert(Words.begin() + 6,
+                     0xa3a0001f); // Partial saved-link write.
+      if (Variant == 5) {
+        Words[0] = 0; // The saved link lies outside any allocated frame.
+        Words[8] = 0;
+      }
+      if (Variant == 6)
+        Words[0] = Wide ? 0x67bdffdf : 0x27bdffdf; // Misaligned call SP.
+      if (Variant == 7)
+        Words.insert(Words.begin() + 4,
+                     Wide ? 0xffbd0000u : 0xafbd0000u); // Escaping stack arg.
+      if (Variant == 8)
+        Words[3] = 0x03a0c825; // The dynamic target itself exposes SP.
+      auto Image = image(Words, Target);
+      Image.MIPS.emplace();
+      Image.MIPS->HasDSP = true;
+      Image.MIPS->ABI = isMIPSN32(Target) ? MIPSABI::N32
+                        : Wide            ? MIPSABI::N64
+                                          : MIPSABI::O32;
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      for (bool WithImage : {false, true}) {
+        SCOPED_TRACE(WithImage);
+        LowToMedConverter Convert;
+        if (WithImage)
+          Convert.setBinaryImage(&Image);
+        if (Variant == 0 || (Variant == 1 && WithImage))
+          EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+        else
+          EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                       LowToMedConversionError);
+      }
+    }
+  }
 }
 
 TEST_P(MIPSControl, ReusedExecutionUnitClearsAnOldSlotAndFailedHead) {

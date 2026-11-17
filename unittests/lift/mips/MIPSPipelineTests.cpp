@@ -656,8 +656,8 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
       const std::map<va_t, FloatingCallArguments> Calls{{0x10200, *Signature}};
       LowToMedConverter Convert;
       Convert.setBinaryImage(&*Image);
-      EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
-                   LowToMedConversionError);
+      // Return identity is independent of the callee's source declaration.
+      EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
       Convert.setCallEntryFloatingArguments(&Calls);
       EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
       // The declaration does not excuse an overlapping write to the saved
@@ -751,16 +751,16 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
             Options.LiftMode = LLVM;
             Options.EmitDumpOutput = false;
             auto Result = Pipeline().run(*Image, Context, Options, &Debug);
-            EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
-            if (Variant == 0 && LLVM && Result.Success) {
+            // Unauthenticated or incomplete types cannot grant a signature,
+            // but do not invalidate the independently proven private RA slot.
+            ASSERT_TRUE(Result.Success) << Result.Error;
+            if (Variant != 0)
+              EXPECT_FALSE(Result.CallEntryFloatingArguments.count(0x10200));
+            if (LLVM) {
               ASSERT_NE(Result.LlvmModule, nullptr);
               EXPECT_FALSE(
                   llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
             }
-            if (Variant != 0)
-              EXPECT_NE(Result.Error.find("MIPS source return target"),
-                        std::string::npos)
-                  << Result.Error;
           }
         }
       }
