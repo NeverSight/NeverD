@@ -19,6 +19,7 @@
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/high/HighSourceFlow.h"
@@ -112,6 +113,70 @@ std::string emit(const std::vector<HighFunc> &Functions, bool Includes = true,
 }
 
 using source_call_execution_test::compileAndRun;
+
+TEST(HighCSourceCalls, AnalystResultLocalKeepsConvertedBits) {
+  const auto Integer = NdType::makeInt(8, false);
+  const auto Floating = NdType::makeFloat(8);
+  const auto Pointer = NdType::makePtr(NdType::makeFunc(Floating, {}));
+  SourceCallTypeHint Hint;
+  Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
+  Hint.AnalystSite = SourceCallOccurrenceKey{0x1008, 0, NdOp::INDIR_CALL, 0};
+  Hint.Signature.ReturnType = Floating;
+  std::string Error;
+  ASSERT_TRUE(assignAnalystCallABI(Hint, Arch::X64, BinaryFormat::ELF, Error))
+      << Error;
+  auto Call = call(Hint, Integer);
+  Call->IsIndirectCall = true;
+  Call->IndirectTarget = parameter(0, Pointer);
+  Call->CallSiteAddr = 0x1008;
+  MedVar Temporary;
+  Temporary.Kind = MedVar::Temp;
+  Temporary.Id = 33;
+  Temporary.Size = 8;
+  Temporary.TheArch = Arch::X64;
+  auto Value = HighExpr::makeVar(Temporary, Integer);
+  auto Function = returning(
+      "project_result",
+      HighExpr::makeBinop(NdOp::INT_XOR, Value,
+                          HighExpr::makeBinop(NdOp::INT_RIGHT, Value,
+                                              HighExpr::makeConst(32, 8))),
+      {Pointer});
+  Function.Entry = 0x1000;
+  HighStmt Assign;
+  Assign.Kind = StmtKind::Assign;
+  Assign.Dst = Value;
+  Assign.Val = Call;
+  Function.Body.insert(Function.Body.begin(), std::move(Assign));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::ELF;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+  Source += R"(
+static unsigned calls;
+static uint64_t bits;
+static double callback(void) {
+  double value;
+  __builtin_memcpy(&value, &bits, sizeof(value));
+  ++calls;
+  return value;
+}
+int main(void) {
+  const uint64_t cases[] = {0, UINT64_C(0x8000000000000000),
+    UINT64_C(0x7ff8abcdef123456), UINT64_C(0xfff0000000000000),
+    UINT64_C(0x3ff123456789abcd)};
+  for (unsigned i = 0; i != sizeof(cases) / sizeof(cases[0]); ++i) {
+    bits = cases[i];
+    if (project_result(callback) != (bits ^ (bits >> 32)) || calls != i + 1)
+      return 1;
+  }
+  return 0;
+}
+)";
+  for (const auto Optimization : {"-O0", "-O2"})
+    compileAndRun(Source, {Optimization, "-fsanitize=undefined"});
+}
 
 TEST(HighCSourceCalls, RuntimeHeaderOwnsItsEnumerationDefinitions) {
   for (unsigned Mode = 0; Mode != 3; ++Mode) {
