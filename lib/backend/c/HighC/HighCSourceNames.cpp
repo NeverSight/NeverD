@@ -32,12 +32,16 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   // Every named record and enumeration the unit's types reach, and the
   // typedefs its declarations name them by, which a signature spells.
   std::vector<TypeRef> Records;
-  std::set<const NdType *> Seen;
+  // A walk also visits types built for the occasion, such as a call's checked
+  // prototype.  The sets of visited types own what they hold: an address
+  // alone would name whatever is allocated there once its type is gone, and
+  // skip that as already visited.
+  std::set<TypeRef> Seen;
   std::set<std::string> Named;
   std::set<std::string> PointerRecords;
   std::set<const libc::LibCPrototype *> HeaderPrototypes;
   std::function<void(const TypeRef &)> Visit = [&](const TypeRef &Type) {
-    if (!Type || !Seen.insert(Type.get()).second)
+    if (!Type || !Seen.insert(Type).second)
       return;
     if (!Type->TypedefName.empty() && Named.insert(Type->TypedefName).second)
       Records.push_back(NdType::makeNamedRecord(Type->TypedefName));
@@ -83,7 +87,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
   };
   // Import pointers need the library's tag kind, but do not require its
   // layout. In particular, a union must not acquire a struct forward tag.
-  std::set<const NdType *> SeenImportTypes;
+  std::set<TypeRef> SeenImportTypes;
   std::function<void(TypeRef, bool)> VisitImportType =
       [&](TypeRef Type, bool NeedsDeclaration) {
         VisitEnumeration(Type);
@@ -91,8 +95,7 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
         // Requesting a fresh tag here can redeclare an anonymous header typedef
         // (pthread_mutex_t) as a different struct. Body-used types still go
         // through Visit and the shared record-definition owner above.
-        if (!NeedsDeclaration || !Type ||
-            !SeenImportTypes.insert(Type.get()).second)
+        if (!NeedsDeclaration || !Type || !SeenImportTypes.insert(Type).second)
           return;
         if (Type->Kind == NdTypeKind::Ptr) {
           if (Type->Pointee && Type->Pointee->Kind == NdTypeKind::Struct &&
@@ -247,9 +250,9 @@ void HighCWriter::writeSourceRecordDeclarations(
   for (const HighFunc &Function : Funcs)
     Defined.insert(Function.Name);
   std::set<std::string> Declared;
-  std::set<const NdType *> Seen;
+  std::set<TypeRef> Seen;
   std::function<void(const TypeRef &)> Visit = [&](const TypeRef &Type) {
-    if (!Type || !Seen.insert(Type.get()).second)
+    if (!Type || !Seen.insert(Type).second)
       return;
     if (Type->Kind == NdTypeKind::Ptr) {
       const TypeRef &Record = Type->Pointee;
@@ -482,9 +485,9 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   // Keep source type identity beside the C projection. A tag shared by two
   // template instantiations is deliberately left in C, as for colliding
   // function names; replacing either by the other would invent a layout.
-  std::set<const NdType *> Seen;
+  std::set<TypeRef> Seen;
   std::function<void(const TypeRef &)> AddType = [&](const TypeRef &Type) {
-    if (!Type || !Seen.insert(Type.get()).second)
+    if (!Type || !Seen.insert(Type).second)
       return;
     const llvm::StringRef Source = Type->SourceName;
     if (Type->Kind == NdTypeKind::Struct &&
