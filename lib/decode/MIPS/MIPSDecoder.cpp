@@ -292,7 +292,9 @@ std::optional<bool> Decoder::decodeMIPSDSP64(const uint8_t *Bytes, size_t Len,
     std::snprintf(InsnBuf->mnemonic, sizeof(InsnBuf->mnemonic), "%s",
                   Packed->Mnemonic);
   if (Packed->LastImmediate) {
-    if (Detail) {
+    // Capstone populates MIPS operands while rendering. Classification-only
+    // decoding has no last operand, even with its detail option enabled.
+    if (Detail && Text) {
       auto &Operands = InsnBuf->detail->mips;
       Operands.operands[Operands.op_count - 1].imm = *Packed->LastImmediate;
     }
