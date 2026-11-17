@@ -245,6 +245,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
+            NeverDLLVMTargetInitializationTests NeverDTranslationContractTests \
             NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
@@ -261,6 +262,7 @@ jobs:
                     'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests',
                     'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests',
                     'NeverDAArch64DecodeValidityTests',
+                    'NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
                     'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDLLVMCVectorTests',
@@ -303,7 +305,7 @@ jobs:
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS, shared source ABI, source mapping, type-system, DebugInfo, integer-width source and C API/SessionLLVM owners; not the full repository CI profile',
+              'scope': 'complete MIPS, AArch64 decode validity, linked LLVM targets and translation contract, shared source ABI, source mapping, type-system, DebugInfo, integer-width source and C API/SessionLLVM owners; not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
