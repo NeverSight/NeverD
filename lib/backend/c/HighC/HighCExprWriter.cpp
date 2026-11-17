@@ -8838,8 +8838,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
       if (E.ConstVal >= 2 ||
           !equalSourceTypes(E.Type, Record->Fields[E.ConstVal]))
         llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
-      return llvm::formatv(E.ConstVal ? c_detail::kSourceComplexImaginary
-                                      : c_detail::kSourceComplexReal,
+      return llvm::formatv(E.ConstVal ? c_detail::kSourceComplexImaginary.data()
+                                      : c_detail::kSourceComplexReal.data(),
                            exprStr(*E.Operands[0]))
           .str();
     }
@@ -8847,8 +8847,8 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
       if (E.ConstVal >= Record->ArrayCount ||
           !equalSourceTypes(E.Type, Record->ElemType))
         llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
-      return llvm::formatv(c_detail::kSourceArrayField, exprStr(*E.Operands[0]),
-                           E.ConstVal)
+      return llvm::formatv(c_detail::kSourceArrayField.data(),
+                           exprStr(*E.Operands[0]), E.ConstVal)
           .str();
     }
     if (Record->Kind != NdTypeKind::Struct ||

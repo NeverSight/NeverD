@@ -53,10 +53,10 @@ inline std::string sourceRecordValue(const TypeRef &Record,
   const auto Source = Temporary(kSourceRecordSource);
   std::string Copies;
   for (const auto &Member : sourceValueMembers(Record))
-    Copies += llvm::formatv(kSourceRecordFieldCopy, Member.ByteOffset,
+    Copies += llvm::formatv(kSourceRecordFieldCopy.data(), Member.ByteOffset,
                             Member.Type->Size, Destination, Source)
                   .str();
-  return llvm::formatv(kSourceRecordValue, To, From, Expression, Copies,
+  return llvm::formatv(kSourceRecordValue.data(), To, From, Expression, Copies,
                        Destination, Source)
       .str();
 }
@@ -69,8 +69,8 @@ inline std::string sourceComplexFromRecord(llvm::StringRef RecordType,
   std::string Source = kSourceRecordSource.str();
   while (RecordType.contains(Source) || Expression.contains(Source))
     Source += '_';
-  return llvm::formatv(kSourceComplexRecordResult, RecordType, Expression,
-                       Source)
+  return llvm::formatv(kSourceComplexRecordResult.data(), RecordType,
+                       Expression, Source)
       .str();
 }
 
@@ -83,7 +83,7 @@ inline std::string sourceComplexToRecord(llvm::StringRef ComplexType,
   while (ComplexType.contains(Source) || RecordType.contains(Source) ||
          Expression.contains(Source))
     Source += '_';
-  return llvm::formatv(kSourceComplexCallResult, ComplexType, RecordType,
+  return llvm::formatv(kSourceComplexCallResult.data(), ComplexType, RecordType,
                        Expression, Source)
       .str();
 }
