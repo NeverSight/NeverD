@@ -25737,8 +25737,28 @@ requested subranges, frame-derived values and saved-link overlaps.
 `FloatingResultSpillsDoNotPoisonArgumentProofs` checks scalar and complex
 result spills whose provenance depends on an active argument proof, alongside
 unknown calls and invalid frame access. Complex parameters,
-variadic complex calls, n32/n64 complex results, variadic entry reconstruction
+variadic complex calls, variadic entry reconstruction
 and general indirect runtime adapters remain unqualified.
+
+`MIPSFloatingResult.ComplexResultsKeepTheirClassAndBothRegisters` and
+`SourceParameterPlacement.MIPSWideComplexResultsKeepScalarPositions` check
+n32/n64 complex float/double results, their f0/f2 components and scalar
+parameter positions in both byte orders. The descriptor rejects ordinary
+two-field records, complex parameters, variadic complex results and MIPS16
+wide targets. `SourceABI.ParameterOnlyBindingKeepsPhysicalComplexResults`
+also checks the physical-return adapter for all six MIPS profiles.
+`unittests/lift/mips/n32-n64-complex-roundtrip.py` separately compiles GCC and
+Clang originals at O0/O2. With `--neverd`, it regenerates the callee and the
+direct/indirect callers through HighC and LLVMC, replacing one object at a
+time while retaining the other original objects. Each execution checks both
+result bit patterns, exactly one callee entry, preserved GPR/FPR values, SP,
+RA, PC and FCSR. The freestanding C memory runtime is compiled for the guest
+pointer/size_t widths; guest copies are never replaced by emulator hooks.
+Pass `--clang`, `--gcc`, `--assembler`, `--ld` and an owned `--output` path;
+omitting `--neverd` runs only the independent original-program oracle.
+Optional ABI, byte-order, component-size and original-compiler filters narrow
+a diagnostic run. This driver covers classic MIPS64r2 n32/n64, not compressed
+code, complex parameters or variadic complex calls.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

@@ -535,8 +535,8 @@ compressed floating results remain unqualified.
 Type declarations now retain `float _Complex` and `double _Complex` through
 C parsing/rendering, DWARF import and source prototype conversion. They keep
 their complex passing class rather than becoming a same-sized integer or
-ordinary two-field record. Fixed o32 calls with scalar parameters can return
-these two-component complex values. The source ABI uses f0/f2 and preserves
+ordinary two-field record. Fixed o32, n32 and n64 calls with scalar parameters
+can return these two-component complex values. The source ABI uses f0/f2 and preserves
 the MIPS16 v0/v1 and a0/a1 word aliases in target byte order. A component that
 already occupies its full ABI register is not zero-extended into the same
 width. HighC and LLVMC construct and extract components as raw floating values,
@@ -557,9 +557,18 @@ FR=0/1 and classic/MIPS16 callers. The original uses the unmodified GNU
 runtime; rebuilt freestanding programs also link the tested guest `memcpy`
 required by compiler-generated aggregate copies. No emulator-side memory
 hook replaces that code. This qualifies complex results with scalar parameters,
-not complex parameters, variadic complex calls, n32/n64 complex ABI or general
+not complex parameters, variadic complex calls or general
 indirect runtime adapters. Extended complex types remain opaque when DWARF
 describes them and are refused as source declarations.
+
+The n32/n64 complex-result checks have their own independent compiler
+fixtures in `unittests/lift/mips/n32-n64-complex-roundtrip.py`. They bind
+classic MIPS64r2 hard-float declarations with scalar parameters and compare
+both C routes with separately compiled GCC/Clang objects, including direct
+and indirect calls. n32 retains four-byte pointers and eight-byte argument
+positions; the result's real and imaginary components occupy f0 and f2 in
+both byte orders. This does not qualify compressed n32/n64 complex runtime
+adapters, complex parameters, variadic complex calls or general record ABIs.
 
 Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
 image, linking only the resulting translation unit and the original runtime.
