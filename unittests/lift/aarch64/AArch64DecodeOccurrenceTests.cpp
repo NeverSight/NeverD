@@ -542,9 +542,11 @@ TEST(AArch64DecodeOccurrence, NativeRegisterQueriesDoNotReadStaleAccessCounts) {
     ASSERT_EQ(decode(Fast, Route::Fast, Case.Word, Native), kWordBytes);
     OwnedInsn Owned(Native);
     if (!Native.Raw->mnemonic[0]) {
-      Owned.Detail.regs_read_count = 1;
+      // The iterator's detail allocation is initially uninitialized. Even
+      // counts exceeding cs_regs capacity must remain unread on this path.
+      Owned.Detail.regs_read_count = UINT8_MAX;
       Owned.Detail.regs_read[0] = AARCH64_REG_X19;
-      Owned.Detail.regs_write_count = 1;
+      Owned.Detail.regs_write_count = UINT8_MAX;
       Owned.Detail.regs_write[0] = AARCH64_REG_X20;
     }
     for (const auto &Instruction : {Native, Owned.Instruction}) {
