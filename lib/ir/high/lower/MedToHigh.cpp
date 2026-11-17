@@ -396,7 +396,8 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
       return Type;
   if (Op.SourceCallHint)
     if (auto Type = sourceABICallResultType(Op.SourceCallHint->Signature);
-        Type && Type->Size == Op.Output.Size)
+        Type && Type->Size == Op.Output.Size &&
+        !sourceComplexComponentBytes(Type))
       return Type;
   if (Op.ScalarCallSignature &&
       Op.ScalarCallSignature->ReturnKind != NdTypeKind::Float)
@@ -1998,7 +1999,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       Med.MultiReturn[0].Size == ReturnTRI.PointerSize &&
       Med.MultiReturn[1].Size == ReturnTRI.PointerSize)
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
-  else if (!Med.SourceParametersBound && Med.MultiReturn.size() >= 2)
+  else if (!Med.SourceParametersBound && Med.MultiReturn.size() >= 2 &&
+           !sourceComplexComponentBytes(Func.ReturnType))
     if (TypeRef Record = multiRegisterReturnType(Med.MultiReturn))
       Func.ReturnType = std::move(Record);
   Func.SourceTypeHint = Med.SourceTypeHint;

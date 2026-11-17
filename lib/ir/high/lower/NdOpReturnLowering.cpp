@@ -267,7 +267,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
 
   if (Med.SourceParametersBound && Func.SourceTypeHint &&
       Func.ReturnType->Kind == NdTypeKind::Struct) {
-    const auto Members = sourceAggregateMembers(Func.ReturnType);
+    const auto Members = sourceValueMembers(Func.ReturnType);
     std::vector<ExprPtr> Leaves;
     if (CurOp.NumInputs == Members.size())
       for (size_t I = 0; I < Members.size(); ++I)
@@ -317,7 +317,9 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // A struct returned across several registers is the record of the values
   // its field registers hold at this RETURN, each found as the integer pair's
   // high register is below.
-  if (!Med.SourceParametersBound && Func.ReturnType &&
+  // Parameter-only adapters (including MIPS16 entry transport) leave the
+  // result in physical registers. A source return needs its own type hint.
+  if ((!Med.SourceParametersBound || !Func.SourceTypeHint) && Func.ReturnType &&
       Func.ReturnType->Kind == NdTypeKind::Struct &&
       Med.MultiReturn.size() >= 2 &&
       Func.ReturnType->Fields.size() == Med.MultiReturn.size()) {

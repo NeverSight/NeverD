@@ -67,6 +67,56 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 
 } // namespace
 
+TEST(TypeParse, ComplexDeclarationsKeepTheirScalarIdentityAndLayout) {
+  for (const auto ABI :
+       {RecordABI::Itanium, RecordABI::I386SystemV, RecordABI::AAPCS32}) {
+    auto Library = parsed(
+        R"(
+      typedef _Complex float CF;
+      typedef double __complex__ CD;
+      struct ComplexValues { char first; CF single; CD pair; };
+      CD transform(CF input, const CD *other);
+    )",
+        {}, ABI == RecordABI::Itanium ? DataModel::LP64 : DataModel::ILP32,
+        ABI);
+    ASSERT_TRUE(Library.find("CF") && Library.find("CD"));
+    EXPECT_EQ(Library.find("CF")->Target->TheBuiltin, Builtin::ComplexFloat);
+    EXPECT_EQ(Library.find("CD")->Target->TheBuiltin, Builtin::ComplexDouble);
+    EXPECT_EQ(Library.sizeOf(*makeBuiltin(Builtin::ComplexFloat)), 8u);
+    EXPECT_EQ(Library.sizeOf(*makeBuiltin(Builtin::ComplexDouble)), 16u);
+    EXPECT_EQ(Library.alignOf(*makeBuiltin(Builtin::ComplexFloat)), 4u);
+    EXPECT_EQ(Library.alignOf(*makeBuiltin(Builtin::ComplexDouble)),
+              ABI == RecordABI::I386SystemV ? 4u : 8u);
+    const auto &Record = recordOf(Library, "ComplexValues");
+    ASSERT_EQ(Record.Members.size(), 3u);
+    EXPECT_EQ(Record.Members[1].BitOffset, 32u);
+    EXPECT_EQ(Record.Members[2].BitOffset,
+              ABI == RecordABI::I386SystemV ? 96u : 128u);
+    EXPECT_EQ(Record.Size, ABI == RecordABI::I386SystemV ? 28u : 32u);
+    const std::string Text = renderTypes(Library, {}, {});
+    auto Back = parsed(Text, {}, Library.dataModel(), ABI);
+    ASSERT_TRUE(Back.find("CF") && Back.find("CD"));
+    EXPECT_EQ(Back.find("CF")->Target->TheBuiltin, Builtin::ComplexFloat);
+    EXPECT_EQ(Back.find("CD")->Target->TheBuiltin, Builtin::ComplexDouble);
+    EXPECT_EQ(recordOf(Back, "ComplexValues").Size, Record.Size);
+    ASSERT_TRUE(Library.findPrototype("transform"));
+    for (const char *Invalid :
+         {"typedef long double _Complex Unsupported;",
+          "typedef _Complex Unsupported;",
+          "typedef unsigned float _Complex Unsupported;",
+          "typedef float double _Complex Unsupported;",
+          "typedef float _Complex _Complex Unsupported;",
+          "struct Invalid { CF field : 2; };", "enum Invalid : CD { item };",
+          "typedef int Invalid[(CF)4];",
+          "CD transform(CF input, const CD *other); "
+          "double transform(CF input, const CD *other);"}) {
+      SCOPED_TRACE(Invalid);
+      EXPECT_FALSE(parseCTypes(Invalid, Library).ok());
+      EXPECT_EQ(renderTypes(Library, {}, {}), Text);
+    }
+  }
+}
+
 TEST(TypeParse, TokenSpansKeepWhitespaceNumbersAndErrorPositions) {
   const std::vector<std::string> Spaces = {
       " ", "\t", "\r", "\v", "\f", " \t\r\v\f", std::string(4096, ' ')};

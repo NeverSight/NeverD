@@ -877,10 +877,12 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
   if (isMIPS(TheArch))
     requireMIPSSourceVectors(Low, TheArch, Image, CallEntryFloatingArguments,
                              SourceCallHintsEnabled ? SourceCallSiteHints
-                                                    : nullptr);
+                                                    : nullptr,
+                             &ScalarCallTargets);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image
@@ -1271,7 +1273,6 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   }
   size_t LowBlockIndex = 0;
   size_t CallTargetWork = limits::ir::kSourceFrameAnalysisRemaining;
-  std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
 
   const auto CachedImports =
       Image && Image->Arch == TheArch && Image->abiFormat() == Fmt &&
@@ -1772,7 +1773,36 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         Save.addInput(MOp.Output);
         MB.Ops.push_back(std::move(Save));
       }
+      if (isMIPS(TheArch) && !isMIPS64(TheArch) && MOp.ScalarCallSignature &&
+          MOp.ScalarCallSignature->MIPS16Parameters &&
+          MOp.ScalarCallSignature->ReturnKind == NdTypeKind::Float) {
+        // MIPS16 returns scalar FP bits in both the classic FPR carrier and
+        // o32 integer words. Define the aliases before SSA so compressed and
+        // classic callers observe the same logical result.
+        const auto &Signature = *MOp.ScalarCallSignature;
+        const unsigned ComponentBytes = Signature.ReturnComplex
+                                            ? Signature.ReturnBytes / 2
+                                            : Signature.ReturnBytes;
+        for (unsigned I = 0; I < Signature.ReturnBytes / 4; ++I) {
+          MedOp Word;
+          Word.Opcode = NdOp::SUBBYTES;
+          Word.Addr = LOp.Addr;
+          Word.Output = ndVarToMedVar(NdVar::reg(mipsreg::r(2 + I), 4));
+          Word.addInput(MOp.Output);
+          const unsigned Component = I / (ComponentBytes / 4);
+          const unsigned WordInComponent = I % (ComponentBytes / 4);
+          const unsigned Offset =
+              ComponentBytes == 4
+                  ? 0
+                  : ConventionRegs.integerReturnWordOffset(WordInComponent);
+          Word.addInput(MedVar::makeConst(Component * ComponentBytes + Offset,
+                                          4,
+                                          ConstantAddressProvenance::Scalar));
+          MB.Ops.push_back(std::move(Word));
+        }
+      }
       if (isMIPS(TheArch) && MOp.ScalarCallSignature && MOp.Output.Size &&
+          MOp.ScalarCallSignature->ReturnKind != NdTypeKind::Float &&
           MOp.Output.Kind == MedVar::Temp) {
         const auto &Signature = *MOp.ScalarCallSignature;
         const uint16_t Word = ConventionRegs.FullRegWidth;
@@ -1802,7 +1832,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         }
       }
       if (MOp.ScalarCallSignature && MOp.ScalarCallSignature->ReturnElements) {
-        // The selected header owns every HFA result register before SSA.
+        // The selected header owns every aggregate result register before SSA.
         // A following call may consume those fields without a single move.
         const auto &Signature = *MOp.ScalarCallSignature;
         const uint16_t Bytes = Signature.ReturnBytes / Signature.ReturnElements;
@@ -1815,14 +1845,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           Field.addInput(MOp.Output);
           Field.addInput(MedVar::makeConst(I * Bytes, 4,
                                            ConstantAddressProvenance::Scalar));
-          MedOp Register;
-          Register.Opcode = NdOp::INT_ZEXT;
-          Register.Addr = LOp.Addr;
-          Register.Output = ndVarToMedVar(NdVar::reg(
-              ConventionRegs.FPReturnRegs[I], ConventionRegs.FPABIRegWidth));
-          Register.addInput(Field.Output);
           MB.Ops.push_back(std::move(Field));
-          MB.Ops.push_back(std::move(Register));
+          // A full-width field already defines the complete ABI carrier.
+          // Only a narrow component needs a second, widened register view.
+          if (Bytes < ConventionRegs.FPABIRegWidth) {
+            MedOp Register;
+            Register.Opcode = NdOp::INT_ZEXT;
+            Register.Addr = LOp.Addr;
+            Register.Output = ndVarToMedVar(NdVar::reg(
+                ConventionRegs.FPReturnRegs[I], ConventionRegs.FPABIRegWidth));
+            Register.addInput(MB.Ops.back().Output);
+            MB.Ops.push_back(std::move(Register));
+          }
         }
       }
 

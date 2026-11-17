@@ -114,7 +114,7 @@ ExprPtr HighExpr::makeBitCast(ExprPtr Value, TypeRef Type) {
 }
 
 ExprPtr HighExpr::makeRecord(TypeRef Type, std::vector<ExprPtr> Leaves) {
-  const auto Members = sourceAggregateMembers(Type);
+  const auto Members = sourceValueMembers(Type);
   if (Members.empty() || Members.size() != Leaves.size())
     return makeUndef(Type ? Type->Size : 0);
   for (size_t I = 0; I < Members.size(); ++I)
@@ -141,7 +141,7 @@ ExprPtr HighExpr::makeRecord(TypeRef Type, std::vector<ExprPtr> Leaves) {
 
 ExprPtr HighExpr::makeRecordField(ExprPtr Record, uint16_t Offset,
                                   uint16_t Bytes) {
-  if (!Record || sourceAggregateMembers(Record->Type).empty())
+  if (!Record || sourceValueMembers(Record->Type).empty())
     return makeUndef(Bytes);
   while (Record->Type->Kind == NdTypeKind::Struct ||
          Record->Type->Kind == NdTypeKind::Array) {

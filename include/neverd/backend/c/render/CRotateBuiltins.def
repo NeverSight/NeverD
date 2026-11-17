@@ -1,0 +1,18 @@
+//===- CRotateBuiltins.def - Fixed-width C rotate builtins ----------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// GCC lacks Clang's fixed-width rotate builtins. Predefined unsigned types
+// let their compatibility definitions precede a caller-supplied C header.
+
+#ifndef NEVERD_C_ROTATE_BUILTIN
+#define NEVERD_C_ROTATE_BUILTIN(Bytes, Bits, Type)
+#endif
+
+NEVERD_C_ROTATE_BUILTIN(1, 8, "__UINT8_TYPE__")
+NEVERD_C_ROTATE_BUILTIN(2, 16, "__UINT16_TYPE__")
+NEVERD_C_ROTATE_BUILTIN(4, 32, "__UINT32_TYPE__")
+NEVERD_C_ROTATE_BUILTIN(8, 64, "__UINT64_TYPE__")
+
+#undef NEVERD_C_ROTATE_BUILTIN

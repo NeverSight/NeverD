@@ -181,6 +181,8 @@ std::string PythonWriter::exact(Builtin Type) const {
       return "c_longdouble";
     }
     return integer(Bytes, false);
+  case BuiltinClass::Complex:
+    return Bytes == 8 ? "ctypes.c_float * 2" : "ctypes.c_double * 2";
   case BuiltinClass::Character:
     // C's char is ctypes' own; the wide ones are their widths, which
     // ctypes.c_wchar is not on every platform.

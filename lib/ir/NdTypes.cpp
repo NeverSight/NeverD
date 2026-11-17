@@ -161,6 +161,16 @@ NdType::makeStruct(std::vector<std::shared_ptr<NdType>> Fields) {
   return T;
 }
 
+std::shared_ptr<NdType> NdType::makeComplex(uint16_t ComponentBytes) {
+  if (ComponentBytes != 4 && ComponentBytes != 8)
+    return nullptr;
+  auto T = makeStruct({makeFloat(ComponentBytes), makeFloat(ComponentBytes)});
+  T->Passing = NdRecordPassing::Complex;
+  T->ScalarLeaves = {{0, ComponentBytes, true},
+                     {ComponentBytes, ComponentBytes, true}};
+  return T;
+}
+
 std::string NdType::str() const {
   switch (Kind) {
   case NdTypeKind::Void:

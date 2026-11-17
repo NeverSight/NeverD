@@ -87,7 +87,14 @@ std::optional<unsigned> exactLongDoubleBytes(llvm::StringRef Name);
 RecordABI defaultRecordABI(DataModel Model);
 
 /// What a builtin type is.
-enum class BuiltinClass : uint8_t { Void, Bool, Character, Integer, Float };
+enum class BuiltinClass : uint8_t {
+  Void,
+  Bool,
+  Character,
+  Integer,
+  Float,
+  Complex
+};
 
 /// The builtin types (BuiltinTypes.def).
 enum class Builtin : uint8_t {

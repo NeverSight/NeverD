@@ -16,7 +16,9 @@
 #include "JSONText.h"
 #include "SessionImpl.h"
 
+#include "neverd/ir/low/MIPS/MIPS16EntryTransport.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/sdk/Limits.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -187,6 +189,12 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
     va_t Site;
   };
   std::vector<std::vector<Reference>> Slots(Bodies.size());
+  const bool HasMIPS16Entries = isMIPS(Img.Arch) && !isMIPS64(Img.Arch) &&
+                                Img.MIPS && Img.MIPS->HasMIPS16;
+  // Each worker writes its own byte. Unlike vector<bool>, these cannot share
+  // one packed word across concurrently decoded functions.
+  std::vector<uint8_t> UnresolvedEntryTransfers(HasMIPS16Entries ? Bodies.size()
+                                                                 : 0);
   // The references of one instruction of body \p Index.
   const auto Collect = [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
                            InstructionFlowScratch &Scratch) {
@@ -196,6 +204,8 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
         Out.push_back({*To, Kind, DI.Addr});
     };
     const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
+    if (HasMIPS16Entries && Flow.Kind == "ijump" && Flow.Target == InvalidVA)
+      UnresolvedEntryTransfers[Index] = 1;
     const bool Indirect = Flow.Kind == "icall" || Flow.Kind == "ijump";
     if (Flow.Target != InvalidVA && !Flow.Kind.empty() &&
         Flow.Kind != UnliftedFlow) {
@@ -254,6 +264,24 @@ std::shared_ptr<const CallReferenceGraph> buildGraph(Session &S) {
             {}, nullptr, NoReturnTargets ? &*NoReturnTargets : nullptr)) {
       S.setError("failed to initialize a decoder for the image");
       return nullptr;
+    }
+  }
+
+  // A compiler's classic MIPS16 FP entry constructs t9 across instructions.
+  // Reuse the exact LowIR byte proof, independent of debug declarations, to
+  // include its compressed body in the original-address call graph. Other
+  // unresolved transfers remain unresolved.
+  if (HasMIPS16Entries) {
+    std::optional<ExecutableCodeOwnerIndex> Owners;
+    for (size_t I = 0; I < Bodies.size(); ++I) {
+      if (!UnresolvedEntryTransfers[I])
+        continue;
+      if (!Owners)
+        Owners.emplace(Img);
+      if (const auto Transport =
+              proveMIPS16EntryTransport(Img, Bodies[I]->Entry, &*Owners))
+        if (const auto To = nodeAt(*G, Img, Transport->Body))
+          Slots[I].push_back({*To, IndirectEdge, Transport->Transfer});
     }
   }
 
