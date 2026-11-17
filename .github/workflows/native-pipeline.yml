@@ -19,17 +19,13 @@ jobs:
   qualify:
     name: ${{ matrix.runner }} semantic fixture linkage
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
-            cc: clang-18
-            cxx: clang++-18
-          - runner: macos-15
-            cc: clang
-            cxx: clang++
+          # Linux and macOS remain recorded in run 43999843307. This rerun
+          # completes the Windows build that exceeded its one-hour limit.
           - runner: windows-latest
             cc: cl
             cxx: cl

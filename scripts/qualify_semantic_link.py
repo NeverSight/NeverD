@@ -32,20 +32,28 @@ def digest(path):
 
 def run(name, command, timeout=3600):
     path = evidence / (name + ".log")
+    expired = None
     with path.open("wb") as log:
-        result = subprocess.run(list(map(str, command)), cwd=source,
-                                stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
+        try:
+            result = subprocess.run(list(map(str, command)), cwd=source,
+                                    stdout=log, stderr=subprocess.STDOUT, timeout=timeout)
+            code = result.returncode
+        except subprocess.TimeoutExpired as error:
+            expired, code = error, 124
     data = path.read_bytes()
     archive = path.with_suffix(".log.gz")
     archive.write_bytes(gzip.compress(data, mtime=0))
     assert gzip.decompress(archive.read_bytes()) == data
     path.unlink()
     report["commands"].append(dict(name=name, command=list(map(str, command)),
-                                   exit=result.returncode, log=archive.name,
+                                   exit=code, timeout=timeout, expired=expired is not None,
+                                   log=archive.name,
                                    decompressed_sha256=hashlib.sha256(data).hexdigest()))
     save()
-    print(name, result.returncode, flush=True)
-    return result.returncode
+    print(name, code, flush=True)
+    if expired:
+        raise expired
+    return code
 
 def configure(role, revision):
     assert not subprocess.check_output(["git", "status", "--porcelain"], cwd=source)
@@ -65,7 +73,7 @@ def configure(role, revision):
         command.append("-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14")
     assert run(role + "-configure", command, 900) == 0
     code = run(role + "-build", [sys.executable, "scripts/build.py", build, "--config",
-               "Release", "--target", "NeverDSelfCompareFlagTests", "--parallel", "3"])
+               "Release", "--target", "NeverDSelfCompareFlagTests", "--parallel", "3"], 7200)
     row = report["roles"][role] = dict(source=revision, build_exit=code, binaries={})
     for name in ["neverd-build-receipt.json", "neverd-dependency-inputs.json", "CMakeCache.txt"]:
         if (build / name).exists():
