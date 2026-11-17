@@ -13,7 +13,8 @@
 
 namespace neverd::mips {
 
-#define NEVERD_MIPS_SOURCE_TEXT(Name, Text) inline constexpr char Name[] = Text;
+#define NEVERD_MIPS_SOURCE_TEXT(Name, Text)                                    \
+  inline constexpr const char *Name = Text;
 #include "neverd/backend/MIPS/MIPSSourceCompiler.def"
 
 inline bool sourceAvoidsMSA(Arch Target, const BinaryImage *Image) {
