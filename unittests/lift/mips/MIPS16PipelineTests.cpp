@@ -13,9 +13,12 @@
 
 #include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/debug/DebugContext.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
@@ -27,6 +30,104 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST(MIPS16PipelineSource, SelectedClassicCallerRetainsCompressedDeclaration) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("mixed", Context);
+  llvm::IRBuilder<> IR(Context);
+  auto *Type = llvm::FunctionType::get(IR.getInt32Ty(), false);
+  auto *Compressed = llvm::Function::Create(
+      Type, llvm::Function::ExternalLinkage, "compressed_target", Module);
+  mips::applyInstructionModeLLVMAttributes(*Compressed,
+                                           InstructionMode::MIPS16);
+  IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Compressed));
+  IR.CreateRet(IR.getInt32(7));
+  CEmitterOptions Options;
+  Options.TheArch = Arch::MIPS32;
+  Options.Format = BinaryFormat::ELF;
+  for (bool CallsCompressed : {false, true}) {
+    auto *Classic = llvm::Function::Create(
+        Type, llvm::Function::ExternalLinkage,
+        CallsCompressed ? "calls_compressed" : "leaf", Module);
+    IR.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Classic));
+    IR.CreateRet(CallsCompressed ? IR.CreateCall(Compressed)
+                                 : static_cast<llvm::Value *>(IR.getInt32(42)));
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(
+        LLVMCEmitter().emit(Module, Out, Options, nullptr, nullptr, Classic));
+    EXPECT_EQ(Text.find(mips::MIPS16ModeCPrelude) != std::string::npos,
+              CallsCompressed)
+        << Text;
+  }
+}
+
+TEST_P(MIPS16Pipeline, DeclaredGPRFloatKeepsItsIntegerBitUse) {
+  for (bool Compressed : {false, true}) {
+    SCOPED_TRACE(Compressed);
+    mips_test::ELFBytes File(GetParam());
+    File.abiFlags();
+    File.Bytes[0xe5] = 1; // FR=0 hard float.
+    File.Bytes[0xe7] = 1;
+    if (Compressed) {
+      File.put(36, 0x74001000, 4);
+      File.put(24, 0x10101, 4);
+      File.put(0xec, 0x400, 4); // AFL_ASE_MIPS16.
+      // xor a0,a1; move v0,a0; jrc ra (Clang 22 MIPS16).
+      const uint16_t Words[] = {0xecae, 0x6744, 0xe8a0};
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 2, Words[I], 2);
+    } else {
+      // xor v0,a0,a1; jr ra; nop.
+      const uint32_t Words[] = {0x00851026, 0x03e00008, 0};
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+    }
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(File.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    auto Symbol = Symbol::makeFunc(Image->Entry, Compressed ? 6 : 12);
+    Symbol.Name = "after_int";
+    Image->Symbols.push_back(std::move(Symbol));
+    class FloatDebug final : public NullDebugContext {
+    public:
+      va_t Entry = 0;
+      std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+        if (Address != Entry)
+          return std::nullopt;
+        FunctionSym F;
+        F.Name = "after_int";
+        F.Addr = Address;
+        F.ReturnType = NdType::makeInt(4, false);
+        // o32 passes floating arguments after an integer through GPRs.
+        F.Params = {{"mask", NdType::makeInt(4, false)},
+                    {"value", NdType::makeFloat(4)}};
+        return F;
+      }
+      bool hasInfo() const override { return true; }
+    } Debug;
+    Debug.Entry = Image->Entry;
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.OnlyFunctionEntries = {Image->Entry};
+    Options.EmitDumpOutput = false;
+    auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.HighFuncs.size(), 1u);
+    CEmitterOptions Emit;
+    Emit.TheArch = GetParam();
+    Emit.Format = BinaryFormat::ELF;
+    Emit.Image = &*Image;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit, &Debug));
+    EXPECT_NE(Text.find("uint32_t mask, float value"), std::string::npos)
+        << Text;
+    EXPECT_NE(Text.find("__builtin_bit_cast(int32_t, value)"),
+              std::string::npos)
+        << Text;
+  }
+}
 
 TEST_P(MIPS16Pipeline, ExtendAndScalarLeavesReachBothSourcesWithExactMode) {
   for (bool Extended : {false, true}) {
