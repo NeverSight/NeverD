@@ -574,8 +574,9 @@ n32/n64 compressed numerical projections remain refused. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
 roles. The LLVM r7 SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
-Recompiling numeric observations requires the matching qualified NeverSight
-Clang: ordinary Clang 22 can fold the low bit to zero despite a mode attribute.
+Recompiling numeric observations requires NeverSight Clang with the qualified
+[MIPS function-pointer layout fix](https://github.com/NeverSight/llvm-project/commit/df115daf54a117501223f3a6a88bfcd9bf4fa5a8):
+ordinary Clang 22 can fold the low bit to zero despite a mode attribute.
 The runtime matrix relocates rebuilt callees, then checks symbol-relative
 integer values, masks, offsets, equality and actual indirect calls.
 
@@ -702,7 +703,8 @@ the captured-entry-RA proof shared with microMIPS. A call may preserve the entry
 link in a callee-saved GPR and restore it before return; a caller-saved register,
 an overwritten save or an unproved stack restore across a call is refused.
 Direct calls also require image evidence for the destination mode. Numeric
-r2/o32 code identities use the toolchain contract described above. Source tests use Clang assembly
+r2/o32 code identities use the toolchain contract described above. Source tests
+use Clang assembly
 output plus GNU MIPS as/ld, with adverse `-mmicromips` compiler defaults, and
 verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
 The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
