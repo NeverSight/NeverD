@@ -52,6 +52,24 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   const bool Wide = isMIPS64(Img.Arch);
   const bool R6 = Img.MIPS && Img.MIPS->ISARevision == 6;
+  if (Id == Intrinsic::MIPSHistoricalBegin ||
+      Id == Intrinsic::MIPSHistoricalRetire) {
+    if (!Img.MIPS || Img.MIPS->ISARevision || !Context.Historical ||
+        Context.Historical->historicalISA() != Img.MIPS->HistoricalISA ||
+        Wide != (Img.MIPS->HistoricalISA == 3) || Img.MIPS->HasMicroMIPS ||
+        Img.MIPS->HasMIPS16 || Img.MIPS->HasMIPS16E2 || Img.MIPS->HasMT ||
+        Img.MIPS->HasDSP || Img.MIPS->HasDSPR2 || Img.MIPS->HasMSA ||
+        Context.FloatingPointException)
+      return false;
+    if (Id == Intrinsic::MIPSHistoricalRetire)
+      return Context.Historical->retire(Op.Addr);
+    for (unsigned I = 1; I != 4; ++I)
+      if (!knownOperandBytes(Op.Inputs[I], 0, Op.Inputs[I].Size))
+        return false;
+    return Context.Historical->begin(Op.Addr, readOperand(Op.Inputs[1]),
+                                     readOperand(Op.Inputs[2]),
+                                     readOperand(Op.Inputs[3]));
+  }
   if (mips::isScalarFPControl(Id)) {
     if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
         !Context.ScalarFPU ||
