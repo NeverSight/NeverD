@@ -335,6 +335,62 @@ TEST(MIPSFloatingResult, DeclaredComplexCallsRequireCompleteFloatingCarriers) {
       }
 }
 
+TEST(MIPSRecordSource, DebugLayoutAloneCannotChangeThePhysicalReturnClass) {
+  // These words are returned in v0/v1. A complete debug declaration of two
+  // doubles would return in f0/f2; retaining its fields must not silently
+  // change that calling convention without a bound source entry contract.
+  const auto Carrier = NdType::makeStruct(
+      {NdType::makeInt(8, false), NdType::makeInt(8, false)});
+  Carrier->RegisterReturnRecord = true;
+  const auto Declared =
+      NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
+  Declared->Passing = NdRecordPassing::ByValue;
+  Declared->SourceName = "declared_floating_result";
+  class RecordDebug final : public NullDebugContext {
+  public:
+    FunctionSym Function;
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      return Address == Function.Addr ? std::optional(Function) : std::nullopt;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  Debug.Function.Addr = 0x10000;
+  Debug.Function.Name = "record_result";
+  Debug.Function.ReturnType = Declared;
+  Debug.Function.PlatformConvention = true;
+  HighFunc Function;
+  Function.Entry = Debug.Function.Addr;
+  Function.Name = Debug.Function.Name;
+  Function.ReturnType = Carrier;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeRecord(
+      Carrier, {HighExpr::makeConst(0x3ff0000000000000, 8),
+                HighExpr::makeConst(0x4000000000000000, 8)});
+  Function.Body.push_back(std::move(Return));
+  for (Arch Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::ELF;
+    Options.EmitComments = false;
+    std::string RawText, DeclaredText;
+    llvm::raw_string_ostream Raw(RawText), WithDeclaration(DeclaredText);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Raw, Options));
+    try {
+      ASSERT_TRUE(
+          HighCEmitter().emit({Function}, WithDeclaration, Options, &Debug));
+      EXPECT_EQ(DeclaredText, RawText);
+    } catch (const std::invalid_argument &Error) {
+      // An unsupported value bridge may refuse emission. It may not publish
+      // C whose declared result uses another register bank.
+      EXPECT_NE(std::string(Error.what()).find("record"), std::string::npos)
+          << Error.what();
+    }
+  }
+}
+
 TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                             Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
