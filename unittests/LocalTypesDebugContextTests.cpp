@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/libc/LibCFloatingArguments.h"
@@ -645,6 +646,63 @@ TEST(LocalTypesDebugContext, SourceCallDeclarationsRetainCompleteValueLayouts) {
   ASSERT_TRUE(Unsupported.ok());
   for (const auto &Parameter : Unsupported.Function->Params)
     EXPECT_FALSE(sdk::sourceCallTypeOf(Library, *Parameter.Type));
+}
+
+TEST(LocalTypesDebugContext,
+     SourceRecordValuesRetainTargetPointersAndDirectMemberKinds) {
+  using namespace neverd;
+  for (const auto Model : {types::DataModel::ILP32, types::DataModel::LP64}) {
+    SCOPED_TRACE(unsigned(Model));
+    types::TypeLibrary Library(Model);
+    Library.setRecordABI(types::RecordABI::Itanium);
+    ASSERT_TRUE(types::parseCTypes(kMIPSRecordValueDeclarations, Library).ok());
+    const auto Parsed =
+        types::parseFunctionDeclaration(kMIPSRecordValueCall, Library);
+    ASSERT_TRUE(Parsed.ok() && Parsed.Function);
+    const auto Signature =
+        sdk::signatureOf(Library, *Parsed.Function, Parsed.Name);
+    ASSERT_TRUE(Signature && Signature->ReturnType);
+    ASSERT_EQ(Signature->ReturnType->Fields.size(), 2u);
+    const auto Result =
+        sdk::sourceCallTypeOf(Library, *Parsed.Function->Return);
+    ASSERT_TRUE(Result);
+    const unsigned PointerBytes = types::pointerBytes(Model);
+    ASSERT_EQ(Result->Fields.size(), 2u);
+    EXPECT_EQ(Result->Fields[0]->Size, PointerBytes);
+    EXPECT_EQ(Result->FieldOffsets[1], PointerBytes);
+    EXPECT_EQ(Result->Size, 2 * PointerBytes);
+    std::vector<TypeRef> Params;
+    for (const auto &Param : Parsed.Function->Params) {
+      Params.push_back(sdk::sourceCallTypeOf(Library, *Param.Type));
+      ASSERT_TRUE(Params.back());
+    }
+    EXPECT_EQ(Params[0]->Fields[0]->Kind, NdTypeKind::Float);
+    EXPECT_EQ(Params[1]->Fields[0]->Kind, NdTypeKind::Struct);
+    EXPECT_EQ(Params[2]->Fields[0]->Kind, NdTypeKind::Array);
+    const Arch Target = PointerBytes == 4 ? Arch::MIPS64N32 : Arch::MIPS64;
+    const auto Placement =
+        mips::placeRecordCall(Target, BinaryFormat::ELF, Result, Params);
+    ASSERT_TRUE(Placement);
+    EXPECT_EQ(Placement->Arguments.Parameters[0][0].Location.Kind,
+              SourceABICarrierKind::FloatingRegister);
+    for (unsigned I : {1u, 2u})
+      EXPECT_EQ(Placement->Arguments.Parameters[I][0].Location.Kind,
+                SourceABICarrierKind::IntegerRegister);
+    const auto Unions =
+        types::parseFunctionDeclaration(kMIPSRecordUnionCall, Library);
+    ASSERT_TRUE(Unions.ok() && Unions.Function);
+    for (const auto &Param : Unions.Function->Params) {
+      EXPECT_FALSE(sdk::sourceCallTypeOf(Library, *Param.Type));
+      EXPECT_TRUE(sdk::decompilerTypeOf(Library, *Param.Type));
+    }
+    const auto Unqualified =
+        sdk::signatureOf(Library, *Unions.Function, Unions.Name);
+    ASSERT_TRUE(Unqualified);
+    for (const auto &[Name, Type] : Unqualified->Params) {
+      ASSERT_TRUE(Type);
+      EXPECT_TRUE(Type->Fields.empty());
+    }
+  }
 }
 
 TEST(LocalTypesDebugContext,

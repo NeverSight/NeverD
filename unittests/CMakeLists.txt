@@ -175,6 +175,7 @@ add_neverd_unittest(NeverDRegisterFlowTests
 )
 add_neverd_unittest(NeverDSourceCallABITests
   SourceCallABITests.cpp
+  lift/mips/MIPSRecordABITests.cpp
   LINK_COMPONENTS IR
 )
 add_neverd_unittest(NeverDHighVariableEditsTests

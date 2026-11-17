@@ -26112,3 +26112,23 @@ must retain the selected historical ISA, ABI and byte order. Receipts record
 source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
 The same artifact owner records failed source/commands and removes generated
 ELFs, objects and superseded source after each attempt.
+
+### MIPS natural record transport
+
+`MIPSRecordABI.*` in `NeverDSourceCallABITests` checks fixed n32/n64 natural
+record placement in both byte orders: partial chunks, a7-to-stack splits,
+direct versus nested/array floating fields, target-width pointers, and hidden
+result storage without a v0 result. Invalid layouts and unqualified conventions
+must fail as complete contracts rather than publish a partial parameter prefix.
+The cases distinguish object offsets from register significance offsets.
+
+`DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
+`DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in
+`NeverDDebugInfoTests` use independent ELF32/64, little/big-endian DWARF bytes.
+They reject missing or duplicate type/layout attributes, unbounded arrays,
+unions, recursion, overflowing sizes, wrong pointer widths and packed layouts.
+`LocalTypesDebugContext.SourceRecordValuesRetainTargetPointersAndDirectMemberKinds`
+checks the matching local declarations and anonymous/nested union boundary.
+Run those owners plus `NeverDTypesTests` and the source-call owners when
+changing the complete-value metadata path. These tests qualify classification
+and type evidence; they do not establish general record source reconstruction.
