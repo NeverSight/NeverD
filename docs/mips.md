@@ -575,8 +575,10 @@ adapters, complex parameters, variadic complex calls or general record ABIs.
 The return-link proof permits saved FP/SP values only in stack storage that
 remains private at every call. The boundary includes each callee's entire
 outgoing argument area, including unused bytes of a partial argument slot.
-External stores, passed or reloaded frame addresses, an unknown call SP, and
-a second call that exposes an earlier spill remain unproved. Logical OR/XOR
+Pointer spills need a bounded argument extent; an unknown or open variadic
+call's minimum ABI area does not establish that bound. External stores,
+passed or reloaded frame addresses, an unknown call SP, and a second call
+that exposes an earlier spill remain unproved. Logical OR/XOR
 with architectural zero retains its full-width copy identity before this
 proof; word ADDU still has its distinct truncation and extension semantics.
 
