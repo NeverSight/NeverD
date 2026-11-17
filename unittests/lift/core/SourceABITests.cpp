@@ -131,6 +131,89 @@ TEST(SourceABI, ComplexConstructionAndProjectionPreserveComponentBits) {
   }
 }
 
+TEST(SourceABI, ParameterOnlyBindingKeepsPhysicalComplexResults) {
+  for (const Arch Architecture : {Arch::MIPS32, Arch::MIPS32EL})
+    for (const uint16_t Bytes : {4, 8}) {
+      SCOPED_TRACE(getArchName(Architecture));
+      SCOPED_TRACE(Bytes);
+      const auto &Registers = getTargetRegInfo(Architecture);
+      MedFunc Function;
+      Function.Entry = 0x1000;
+      Function.Name = "physical_complex";
+      Function.ReturnType = NdType::makeComplex(Bytes);
+      Function.SourceParametersBound = true;
+      // The entry adapter binds parameters, without replacing the RETURN's
+      // physical carriers with a source aggregate operand.
+      ASSERT_FALSE(Function.SourceTypeHint);
+      Function.Blocks.resize(1);
+      auto &Block = Function.Blocks.front();
+      Block.Id = 0;
+      Block.StartAddr = Function.Entry;
+      for (unsigned I = 0; I != 2; ++I) {
+        MedVar Parameter;
+        Parameter.Kind = MedVar::Param;
+        Parameter.Id = I;
+        Parameter.RegOff = Registers.IntParamRegs[I];
+        Parameter.Size = Bytes;
+        Parameter.TheArch = Architecture;
+        Function.Params.push_back(Parameter);
+        Function.TypedParams.push_back(
+            {I ? "imaginary" : "real", NdType::makeInt(Bytes, false)});
+        MedOp Copy;
+        Copy.Opcode = NdOp::COPY;
+        Copy.Addr = Function.Entry + 4 * I;
+        Copy.Output.Kind = MedVar::Reg;
+        Copy.Output.RegOff = Registers.FPReturnRegs[I];
+        Copy.Output.Id = 10 + I;
+        Copy.Output.SSAVer = 1;
+        Copy.Output.Size = Bytes;
+        Copy.Output.TheArch = Architecture;
+        Copy.addInput(Parameter);
+        Block.Ops.push_back(Copy);
+        Function.MultiReturn.push_back(
+            {Registers.FPReturnRegs[I], Bytes, true});
+      }
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Function.Entry + 8;
+      Return.addInput(MedVar::makeConst(123, 4));
+      Block.Ops.push_back(Return);
+      auto High = MedToHighConverter().convert(Function, Architecture);
+      unsigned Returns = 0;
+      walkStmts(High.Body, [&](const HighStmt &Statement) {
+        if (Statement.Kind != StmtKind::Return)
+          return;
+        ++Returns;
+        ASSERT_TRUE(Statement.RetVal);
+        EXPECT_EQ(Statement.RetVal->Kind, ExprKind::Record);
+        EXPECT_TRUE(
+            equalSourceTypes(Statement.RetVal->Type, Function.ReturnType));
+      });
+      ASSERT_EQ(Returns, 1u);
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = BinaryFormat::ELF;
+      ASSERT_TRUE(HighCEmitter().emit({High}, OS, Options));
+      const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+      Source += "\nint main(void) { const " + Word + " values[] = {0, " +
+                (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
+                            : "0x8000000000000000ull, 0x7ff8000000001234ull, "
+                              "0xfff0000000000000ull") +
+                "}; for (unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { " +
+                typeToC(Function.ReturnType) +
+                " z=physical_complex(values[i],values[j]); " +
+                typeToC(NdType::makeFloat(Bytes)) +
+                " r=__real__ z, m=__imag__ z; " + Word +
+                " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
+                "__builtin_memcpy(&b,&m,sizeof(b)); "
+                "if(a!=values[i] || b!=values[j]) return 1; "
+                "} return 0; }\n";
+      executeC(Source, false);
+    }
+}
+
 TEST(SourceABI, SourceCallsReplaceGenericRegisterArgumentSummaries) {
   for (const auto Architecture : {Arch::X64, Arch::AArch64}) {
     for (const bool SwiftContext : {false, true}) {
