@@ -2853,9 +2853,11 @@ class HighCCallbackArguments : public ::testing::TestWithParam<Arch> {};
 
 TEST_P(HighCCallbackArguments, MembersKeepFixedAndVariadicArguments) {
   const Arch Architecture = GetParam();
-  for (bool Variadic : {false, true}) {
+  for (unsigned Mode = 0; Mode != 3; ++Mode) {
+    const bool Variadic = Mode != 0;
+    const bool WideResult = Mode == 2;
     SCOPED_TRACE(static_cast<unsigned>(Architecture));
-    SCOPED_TRACE(Variadic);
+    SCOPED_TRACE(Mode);
     const auto Integer = NdType::makeInt(4, true);
     const auto Callback = NdType::makePtr(NdType::makeFunc(
         Integer, {Integer}, types::CallingConvention::Unspecified, Variadic));
@@ -2873,7 +2875,7 @@ TEST_P(HighCCallbackArguments, MembersKeepFixedAndVariadicArguments) {
                                     HighExpr::makeConst(23, 4)});
     Call->IsIndirectCall = true;
     Call->IndirectTarget = HighExpr::makeLoad(parameter(0, Pointer), Callback);
-    Call->Type = Integer;
+    Call->Type = WideResult ? NdType::makeInt(8, false) : Integer;
     const auto Function = returning("dispatch", Call, {Pointer});
     CEmitterOptions Options;
     Options.TheArch = Architecture;
@@ -2893,7 +2895,25 @@ TEST_P(HighCCallbackArguments, MembersKeepFixedAndVariadicArguments) {
     const bool HasTail = Source.find(", 11, 23)") != std::string::npos ||
                          Source.find(", 0xB, 0x17)") != std::string::npos;
     ASSERT_EQ(HasTail, Variadic) << Source;
-    if (Variadic)
+    if (WideResult)
+      // A member's display return type cannot narrow the recovered machine
+      // result. Convert the stored pointer back to the actual callee type.
+      Source += R"(
+#include <stdarg.h>
+static uint64_t wide(int count, ...) {
+  va_list args;
+  va_start(args, count);
+  uint64_t result = UINT64_C(0x1234567800000000);
+  for (int i = 0; i < count; ++i) result += va_arg(args, int);
+  va_end(args);
+  return result;
+}
+int main(void) {
+  Callbacks table = {(int32_t (*)(int32_t, ...))wide};
+  return dispatch(&table) != UINT64_C(0x1234567800000022);
+}
+)";
+    else if (Variadic)
       Source += R"(
 #include <stdarg.h>
 static int sum(int count, ...) {

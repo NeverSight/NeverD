@@ -18092,7 +18092,9 @@ and MIPS pipeline suites when changing these recovery rules.
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
 receive both unnamed values, while a fixed member retains only its declared
-prefix. This checks source behavior, not native execution on each guest ISA.
+prefix. A conflicting display return type must also retain a complete
+64-bit result. This checks source behavior, not native execution on each guest
+ISA.
 
 `SessionCAPITest.ReferencePagesReuseImageFactsAndObserveChangedRoots` checks
 reference reuse, newly independent function entries, relocated code roots and
