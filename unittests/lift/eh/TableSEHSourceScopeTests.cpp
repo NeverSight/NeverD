@@ -14,6 +14,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "PrintedTries.h"
 #include "gtest/gtest.h"
 
 #include "neverd/Common.h"
@@ -630,7 +631,9 @@ std::string parentIn(llvm::StringRef Source) {
   const size_t Start = Source.find("three_scopes_parent() {\n");
   if (Start == llvm::StringRef::npos)
     return {};
-  return Source.slice(Start, Source.find("\n}\n", Start)).str();
+  const size_t End = Source.find("\n}\n", Start);
+  return Source.slice(Start, End == llvm::StringRef::npos ? End : End + 3)
+      .str();
 }
 
 size_t countOf(llvm::StringRef Text, llvm::StringRef Needle) {
@@ -641,23 +644,10 @@ size_t countOf(llvm::StringRef Text, llvm::StringRef Needle) {
   return Count;
 }
 
-/// The text printed under the label that holds \p Statement, to the next
-/// label.
-llvm::StringRef blockHolding(llvm::StringRef Function,
-                             llvm::StringRef Statement) {
-  const size_t At = Function.find(Statement);
-  if (At == llvm::StringRef::npos)
-    return {};
-  size_t Label = 0;
-  for (size_t Next = Function.find("\nL_"); Next < At;
-       Next = Function.find("\nL_", Next + 1))
-    Label = Next + 1;
-  return Function.slice(Label, Function.find("\nL_", At));
-}
-
 // The range markers and the blocks a call's continuation or a split leaves
 // empty print only a jump.  They get no `__try`, and no text where a jump
-// can pass them: what is left is the statements, each in its scopes.
+// can pass them: what is left is the statements, each in its scopes, and the
+// scopes two blocks in a row share are printed once around both.
 TEST(TableSEHSourceScopes, LLVMCPrintsNoTryAroundBlocksThatOnlyJump) {
   const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::LocalUnwind);
   llvm::LLVMContext Context;
@@ -669,28 +659,38 @@ TEST(TableSEHSourceScopes, LLVMCPrintsNoTryAroundBlocksThatOnlyJump) {
       << Function;
   EXPECT_EQ(Function.find("seh_try_"), std::string::npos) << Function;
   EXPECT_EQ(Function.find("seh_cont:"), std::string::npos) << Function;
+  EXPECT_EQ(printed_tries::jumpIntoATry(Function), "") << Function;
 
   // The body's call runs in all three scopes.
-  const llvm::StringRef Body = blockHolding(Function, "            may_throw(");
-  ASSERT_FALSE(Body.empty()) << Function;
-  EXPECT_EQ(countOf(Body, "__try {"), 3u) << Body.str();
-  EXPECT_EQ(countOf(Body, "} __finally {"), 2u) << Body.str();
-  EXPECT_EQ(countOf(Body, "} __except ("), 1u) << Body.str();
-  // The inner handler's call runs in the two around its own, and the outer
-  // handler's in none.
-  const llvm::StringRef Inner = blockHolding(
-      Function,
-      "\n            inner_finally();\n            neverd_seh_normal");
-  ASSERT_FALSE(Inner.empty()) << Function;
-  EXPECT_EQ(countOf(Inner, "__try {"), 2u) << Inner.str();
-  EXPECT_EQ(countOf(Inner, "inner_finally();"), 1u) << Inner.str();
-  EXPECT_EQ(countOf(Inner, "} __except ("), 1u) << Inner.str();
-  const llvm::StringRef Outer =
-      blockHolding(Function, "\n    outer_finally();");
-  ASSERT_FALSE(Outer.empty()) << Function;
-  EXPECT_EQ(Outer.find("__try"), llvm::StringRef::npos) << Outer.str();
-  // Nothing else has a nest.
-  EXPECT_EQ(countOf(Function, "__try {"), 5u) << Function;
+  EXPECT_EQ(printed_tries::depthOf(Function, "may_throw("), 3) << Function;
+  // The inner handler's call runs in the two around its own, which it shares
+  // with the body, and the outer handler's in none.
+  EXPECT_EQ(
+      printed_tries::depthOf(
+          Function,
+          "\n            inner_finally();\n            neverd_seh_normal"),
+      2)
+      << Function;
+  EXPECT_EQ(printed_tries::depthOf(Function, "\n    outer_finally();"), 0)
+      << Function;
+  const size_t Body = Function.find("may_throw(");
+  const size_t InnerCall =
+      Function.find("\n            inner_finally();\n            neverd_seh");
+  ASSERT_NE(Body, std::string::npos) << Function;
+  ASSERT_NE(InnerCall, std::string::npos) << Function;
+  const std::vector<unsigned> AroundBody = printed_tries::at(Function, Body);
+  const std::vector<unsigned> AroundCall =
+      printed_tries::at(Function, InnerCall + 1);
+  ASSERT_EQ(AroundBody.size(), 3u) << Function;
+  ASSERT_EQ(AroundCall.size(), 2u) << Function;
+  EXPECT_EQ(AroundCall[0], AroundBody[0]) << Function;
+  EXPECT_EQ(AroundCall[1], AroundBody[1]) << Function;
+  // Each scope has one try, and its clause is printed once.
+  EXPECT_EQ(countOf(Function, "__try {"), 3u) << Function;
+  EXPECT_EQ(countOf(Function, "} __finally {"), 2u) << Function;
+  EXPECT_EQ(countOf(Function, "} __except ("), 1u) << Function;
+  EXPECT_EQ(countOf(Function, "inner_finally();"), 2u) << Function;
+  EXPECT_EQ(countOf(Function, "outer_finally();"), 2u) << Function;
   // Execution enters the first block from above: it keeps its label and jump.
   const size_t First = Function.find("\nL_");
   ASSERT_NE(First, std::string::npos) << Function;

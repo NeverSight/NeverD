@@ -20623,8 +20623,9 @@ one unwind give two invokes at one address which the exception contract counts
 apart, and that a call after the handler calls or handler calls in another
 order leave the function without pads. The `LLVMC*` cases print that IR as C:
 range markers and empty continuations get no `__try` and no text, so the
-body's call stands in three compounds, the inner handler's in two and the outer
-handler's in none; a scope whose blocks only jump keeps one nest with all its
+body's call stands in three compounds, the inner handler's in the outer two of
+them, which the two blocks share, and the outer handler's in none; a scope
+whose blocks only jump keeps one nest with all its
 clauses; an empty loop after the scopes keeps its label and jump while the
 blocks leading to it are passed; and the render that marks source positions
 agrees with the ordinary one, publishes its definitions and anchors every call
@@ -20657,6 +20658,22 @@ x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that
 passes unwinds only, a table the writer or IR lowering would take is refused
 for the check and a destructor-only one for its own reason.
+`SEHSharedTryLayoutTests.cpp` prints hand-written IR with fragmented SEH
+ranges as LLVM C and reads the text with `PrintedTries.h`, which tells which
+`__try` statements hold a line and whether any `goto` enters one:
+`SEHSharedTryLayout.*` checks that the blocks of a scope and of a scope inside
+it print one try each, that two scopes in sequence keep their own, that a
+block jumped to from outside its scope, from a block printed after it or from
+its own `__except` clause opens a try of its own, that a split leaves no other
+jump inside a try it is not in, and that the normal-exit flag is set only by
+the jumps and the return that leave a `__finally` try and cleared only where a
+block can be reached with it set. With `NEVERD_SEH_LAYOUT_OUTPUT` set to a
+directory the suite also writes each function as IR and as printed C, and
+`scripts/check_llvmc_seh_layout_runtime.py` builds both for Windows x64 beside
+`fixtures/seh_layout_runtime.c`, which raises from every subset of the calls
+for every argument, and requires the two programs to write the same traces at
+`-O0` and `-O2` (Wine runs them on other hosts; `--compiler`, `--linker` and
+`--dlltool` name clang, lld-link and llvm-dlltool).
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one

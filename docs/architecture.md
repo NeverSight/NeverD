@@ -1227,8 +1227,19 @@ empty, runs nothing a scope could guard: it prints no `__try`, and a jump to
 it goes where it goes, so it prints no text. The first block, blocks that
 only jump to one another in a ring, and the deepest block of a scope none of
 whose blocks prints a statement keep theirs, the last with its nest so that
-every clause still shows. Closed lexical ranges retain
-their compact rendering. C also runs a `__finally` when its try falls through,
+every clause still shows. Blocks that follow one another under the same
+clauses share one `__try` for each clause they have in common, so a scope
+whose blocks are laid out together prints one try around them, with its
+clause once. C forbids a jump into a `__try`: a block's label stands before
+the tries that open at the block, and a jump that would land inside a try it
+is not in takes the sharing away there, so that block opens tries of its own.
+Taking one away can leave another jump outside its label's try, and the
+layout repeats until every jump lands. An `__except` clause stands inside the
+tries around its own, and its handler is entered from there. The normal-exit
+flag a block-form `__finally` reads is set by the jumps and returns that leave
+the try of a `__finally`, and cleared at a block under one unless every jump
+to it comes from under a `__finally` it stays under. Closed lexical ranges
+retain their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
 the try as abnormal too: a closed finally range that can leave before its end
