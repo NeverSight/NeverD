@@ -10,11 +10,20 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/ir/low/MIPS/MIPSHistoricalSchedule.h"
+#include "neverd/ir/low/MIPS/MIPSScalarFPExecution.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <vector>
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+#include "unicorn/mips.h"
+#include "unicorn/unicorn.h"
+
+#include <memory>
+#endif
 
 namespace neverd::mips {
 namespace {
@@ -135,7 +144,7 @@ TEST(MIPSHistoricalScheduling,
   EXPECT_FALSE(S.retire(0x1000));
   EXPECT_FALSE(S.begin(0x1002, 0, 0, 0));
   EXPECT_FALSE(S.begin(0x1000, 0, 1, 0));
-  EXPECT_FALSE(S.begin(0x1000, 0x78000000));
+  EXPECT_FALSE(S.begin(0x1000, 0, 0, 0x100));
   EXPECT_EQ(S.snapshot(), HistoricalSchedulingState{});
   EXPECT_FALSE(S.hasActiveInstruction());
 }
@@ -453,6 +462,113 @@ TEST(MIPSHistoricalScheduling, AFirstHILOWriteInvalidatesTheCompanionProduct) {
       EXPECT_EQ(E.getRegister(mipsreg::V0), 3u);
     }
 }
+
+TEST(MIPSHistoricalScheduling,
+     AModernFPUEvaluatorDoesNotImplyAnEarlyProcessor) {
+  class ModernFPU : public MIPSScalarFPExecutor {
+  public:
+    unsigned Calls = 0;
+    bool supportsRevision(unsigned R) const override { return R == 2; }
+    std::optional<MIPSScalarFPResult> control(unsigned, bool, uint32_t,
+                                              uint32_t FCSR) override {
+      ++Calls;
+      return MIPSScalarFPResult{FCSR, 0};
+    }
+    std::optional<MIPSScalarFPResult>
+    execute(Intrinsic, uint32_t FCSR, llvm::ArrayRef<uint64_t>) override {
+      ++Calls;
+      return MIPSScalarFPResult{FCSR, 0};
+    }
+  };
+  for (bool Little : {false, true})
+    for (unsigned Level : {1u, 2u, 3u}) {
+      auto Img = image(Level == 3 ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                                  : (Little ? Arch::MIPS32EL : Arch::MIPS32),
+                       Level);
+      Img.MIPS->FPABI = 1;
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::V0, 99);
+      ModernFPU FPU;
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(Level, {});
+      C.ScalarFPU = &FPU;
+      C.FCSR = 0;
+      EXPECT_FALSE(execute(lift(Img, 0x1000, {0x4442f800}), E, C));
+      EXPECT_EQ(FPU.Calls, 0u);
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 99u);
+      EXPECT_EQ(C.FCSR, 0u);
+      ASSERT_TRUE(C.Historical->hasActiveInstruction());
+      EXPECT_EQ(C.Historical->snapshot(), HistoricalSchedulingState{});
+      ASSERT_TRUE(C.Historical->abort());
+    }
+}
+
+#ifdef NEVERD_MIPS_UNICORN_REFERENCE
+TEST(MIPSHistoricalScheduling,
+     ScheduledIntegerTracesMatchIndependentExecution) {
+  // An interlocked executor can check values on valid schedules. It cannot
+  // establish the early-processor behavior of an invalid schedule; the manual
+  // dependency and annulment cases above deliberately test those separately.
+  const uint32_t Words[] = {0x8c820000, 0,          0x00451821, 0x00650018,
+                            0x00001012, 0,          0,          0x00a00011,
+                            0x00001812, 0x03e00008, 0};
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (uint32_t Input :
+         {0u, 1u, 0xffffffffu, 0x7fffffffu, 0x80000000u, 0x12345678u})
+      for (uint32_t Addend : {0u, 1u, 7u, 31u, 512u}) {
+        const unsigned Level = isMIPS64(A) ? 3 : 1;
+        auto Img = image(A, Level);
+        data(Img);
+        for (unsigned I = 0; I != 4; ++I)
+          Img.Segments[0].Data[I] =
+              Input >> (8 * (archLittleEndian(A) ? I : 3 - I));
+        NdOpEmulator E(Img);
+        E.setStrictMode(true);
+        E.setRegister(mipsreg::A0, 0x2000);
+        E.setRegister(mipsreg::A1, Addend);
+        E.setRegister(mipsreg::RA, 0x1100);
+        MIPSSystemContext C;
+        C.Historical = HistoricalSchedule::fromSnapshot(Level, {});
+        for (unsigned I = 0; I != 9; ++I)
+          ASSERT_TRUE(execute(lift(Img, 0x1000 + 4 * I, {Words[I]}), E, C));
+        ASSERT_TRUE(execute(lift(Img, 0x1024, {Words[9], Words[10]}), E, C));
+
+        uc_engine *Raw = nullptr;
+        const auto Mode = static_cast<uc_mode>(
+            (isMIPS64(A) ? UC_MODE_MIPS64 : UC_MODE_MIPS32) |
+            (archLittleEndian(A) ? UC_MODE_LITTLE_ENDIAN : UC_MODE_BIG_ENDIAN));
+        ASSERT_EQ(uc_open(UC_ARCH_MIPS, Mode, &Raw), UC_ERR_OK);
+        const auto Close = [](uc_engine *U) { uc_close(U); };
+        std::unique_ptr<uc_engine, decltype(Close)> U(Raw, Close);
+        ASSERT_EQ(uc_mem_map(Raw, 0x1000, 0x2000, UC_PROT_ALL), UC_ERR_OK);
+        std::vector<uint8_t> Bytes;
+        for (uint32_t Word : Words)
+          for (unsigned I = 0; I != 4; ++I)
+            Bytes.push_back(Word >> (8 * (archLittleEndian(A) ? I : 3 - I)));
+        ASSERT_EQ(uc_mem_write(Raw, 0x1000, Bytes.data(), Bytes.size()),
+                  UC_ERR_OK);
+        ASSERT_EQ(uc_mem_write(Raw, 0x2000, Img.Segments[0].Data.data(), 8),
+                  UC_ERR_OK);
+        uint64_t Base = 0x2000, Argument = Addend, Return = 0x1100;
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_4, &Base), UC_ERR_OK);
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_5, &Argument), UC_ERR_OK);
+        ASSERT_EQ(uc_reg_write(Raw, UC_MIPS_REG_31, &Return), UC_ERR_OK);
+        ASSERT_EQ(uc_emu_start(Raw, 0x1000, 0x1100, 0, 128), UC_ERR_OK);
+        for (const auto &[Original, Lifted] :
+             {std::pair{UC_MIPS_REG_2, mipsreg::V0},
+              std::pair{UC_MIPS_REG_3, mipsreg::V1},
+              std::pair{UC_MIPS_REG_HI, mipsreg::HI},
+              std::pair{UC_MIPS_REG_LO, mipsreg::LO}}) {
+          uint64_t Value = 0;
+          ASSERT_EQ(uc_reg_read(Raw, Original, &Value), UC_ERR_OK);
+          const auto Actual = E.getRegister(Lifted);
+          ASSERT_TRUE(Actual);
+          EXPECT_EQ(isMIPS64(A) ? *Actual : uint64_t(uint32_t(*Actual)), Value);
+        }
+      }
+}
+#endif
 
 } // namespace
 } // namespace neverd::mips
