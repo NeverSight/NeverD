@@ -212,6 +212,25 @@ TEST(MIPSFloatingResult, DeclaredComplexCallsRequireCompleteFloatingCarriers) {
         HighStmt Return;
         Return.Kind = StmtKind::Return;
         Return.RetVal = Call;
+        if (Variant == 0) {
+          // Keep two field reads of the same call result. Its local must
+          // retain the emitted register record, not the callee's complex type.
+          MedVar Temporary;
+          Temporary.Kind = MedVar::Temp;
+          Temporary.Id = 33;
+          Temporary.Size = Carrier->Size;
+          Temporary.TheArch = Target;
+          auto Value = HighExpr::makeVar(Temporary, Carrier);
+          HighStmt Assign;
+          Assign.Kind = StmtKind::Assign;
+          Assign.Dst = Value;
+          Assign.Val = Call;
+          Function.Body.push_back(std::move(Assign));
+          Return.RetVal = HighExpr::makeBinop(
+              NdOp::FLOAT_ADD, HighExpr::makeRecordField(Value, 0, Bytes),
+              HighExpr::makeRecordField(Value, Bytes, Bytes));
+          Function.ReturnType = NdType::makeFloat(Bytes);
+        }
         Function.Body.push_back(std::move(Return));
         CEmitterOptions Options;
         Options.TheArch = Target;
@@ -222,6 +241,9 @@ TEST(MIPSFloatingResult, DeclaredComplexCallsRequireCompleteFloatingCarriers) {
           ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
           EXPECT_NE(Text.find("__real__"), std::string::npos) << Text;
           EXPECT_NE(Text.find("__imag__"), std::string::npos) << Text;
+          EXPECT_NE(Text.find("struct nd_record_r2_"), std::string::npos)
+              << Text;
+          EXPECT_EQ(Text.find("_Complex t33"), std::string::npos) << Text;
         } else {
           EXPECT_THROW(HighCEmitter().emit({Function}, Out, Options),
                        std::invalid_argument);
