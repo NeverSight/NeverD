@@ -528,6 +528,14 @@ already occupies its full ABI register is not zero-extended into the same
 width. HighC and LLVMC construct and extract components as raw floating values,
 including NaN payloads and signed zero, and evaluate each call once.
 
+The return-link proof also handles GCC's double arguments assembled by two
+word stores before `ldc1`. It follows every requested byte in target byte
+order on every reaching predecessor; missing bytes, frame-derived values and
+overwrites of the saved link still reject source reconstruction. A later
+floating result spill can depend on the argument currently being proved.
+Only completed positive provenance proofs are cached, so a recursive query's
+temporary failure cannot invalidate an otherwise proven call.
+
 The [complex result receipt](evidence/mips16-complex-runtime-2026-11-17.json)
 records separate caller/callee objects and
 complete source units with GCC and Clang at O0/O2, for both byte orders,

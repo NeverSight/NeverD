@@ -54,6 +54,48 @@
       "results_sha256": "60fef99abecc878d3e772b366458547ba9c987afd637956e79fdfa913a1cd631",
       "cleanup_sha256": "ded63283544a6f7c7313284cf0da546c165d1488f5dacd42c0c128094db4ca2f",
       "removed_bytes": 14726660
+    },
+    {
+      "source_commit": "cfd47004d1e6462bff707a5ee7299fbd4df9133b",
+      "source_base": "432d4a9c33ad777bd8da57c47c6249460e4caa1d",
+      "scope": "two scalar floating inputs, whole source unit",
+      "driver_sha256": "124b034acaa3af5c55b9efc062dec06944bc3f3b75d4a9928e3af8245c0d9c0c",
+      "libneverd_sha256": "9be6b76eda5be788c1873e4db0d207aacdb8b06039234481d870b3a530c2017f",
+      "summary": {
+        "builds": 128,
+        "executions": 4096,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493",
+        "memory_runtime_sha256": "9e84fb7c741f57c4c89b8b73bf1c8baf6857b83a4aacda92b34eabf77bc87022",
+        "memory_runtime_cases": 288,
+        "floating_input": true,
+        "whole_unit": true
+      },
+      "results_sha256": "68c00108a9c055a4f100950ad6da9d43d300253d7940e5f365842f4e0dbb1e9f",
+      "cleanup_sha256": "6c227afd021e43b02352e4d4f0611076b8416f0d62bad930bef8f48d188d7ebd",
+      "removed_bytes": 16315082
+    },
+    {
+      "source_commit": "cfd47004d1e6462bff707a5ee7299fbd4df9133b",
+      "source_base": "432d4a9c33ad777bd8da57c47c6249460e4caa1d",
+      "scope": "two scalar floating inputs, separate caller, callee and both",
+      "driver_sha256": "124b034acaa3af5c55b9efc062dec06944bc3f3b75d4a9928e3af8245c0d9c0c",
+      "libneverd_sha256": "9be6b76eda5be788c1873e4db0d207aacdb8b06039234481d870b3a530c2017f",
+      "summary": {
+        "builds": 384,
+        "executions": 12288,
+        "profiles": 16,
+        "original_cases": 512,
+        "runtime_source_sha256": "f848c2497a6666364916d48a300ef4a8f73c251b2ec817b9eef77770df5bf493",
+        "memory_runtime_sha256": "9e84fb7c741f57c4c89b8b73bf1c8baf6857b83a4aacda92b34eabf77bc87022",
+        "memory_runtime_cases": 288,
+        "floating_input": true,
+        "whole_unit": false
+      },
+      "results_sha256": "473fc452f012820c1888f0476adbba93fc9123dbbc74d15802a0f2d342770f7d",
+      "cleanup_sha256": "eaeb520bf6629393b789137454493d0e770f81c2bc2ec37fa43aa58c1996e92d",
+      "removed_bytes": 43804634
     }
   ],
   "unqualified": [
@@ -62,5 +104,14 @@
     "n32/n64 complex ABI",
     "general indirect runtime adapters",
     "historical I\u2013III timing"
-  ]
+  ],
+  "provenance_regressions": {
+    "source_commit": "cfd47004d1e6462bff707a5ee7299fbd4df9133b",
+    "cases": 132,
+    "scope": "Big/little endian and FR0/1 split-word argument loads, complete/missing predecessor writes, requested byte subranges, scalar/complex result spills, frame-derived values, saved-link overlaps and unknown calls",
+    "tests": [
+      "MIPSSourceReturnTargets.SplitFloatingSpillsKeepEveryReachingByte",
+      "MIPSSourceReturnTargets.FloatingResultSpillsDoNotPoisonArgumentProofs"
+    ]
+  }
 }

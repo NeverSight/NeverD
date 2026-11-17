@@ -25629,7 +25629,17 @@ split double inputs, proven classic entry stubs and scalar return helpers.
 `MIPS16Pipeline.ComplexCallsDefineEveryIntegerResultWord` verifies MedIR as
 well as every integer and floating result carrier, including double components
 that already fill the ABI register. Complex result matrices cover `sc` and
-`dc` in both isolated and whole-unit reconstructions. Complex parameters,
+`dc` in both isolated and whole-unit reconstructions. With `--floating-input`,
+these profiles take two scalar float/double parameters and reconstruct the
+real and imaginary components independently. This checks GCC's separate word
+spills, `ldc1` arguments and subsequent result spills through the original
+runtime, including all result bits and preserved machine state.
+`MIPSSourceReturnTargets.SplitFloatingSpillsKeepEveryReachingByte` checks
+both byte orders and FR modes, complete and incomplete predecessor writes,
+requested subranges, frame-derived values and saved-link overlaps.
+`FloatingResultSpillsDoNotPoisonArgumentProofs` checks scalar and complex
+result spills whose provenance depends on an active argument proof, alongside
+unknown calls and invalid frame access. Complex parameters,
 variadic complex calls, n32/n64 complex results, variadic entry reconstruction
 and general indirect runtime adapters remain unqualified.
 
