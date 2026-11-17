@@ -213,7 +213,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::set<Key> Active;
   const auto &TRI = getTargetRegInfo(Target);
   using SliceKey = std::tuple<Key, unsigned, unsigned>;
-  std::map<SliceKey, bool> NonFrame;
+  std::set<SliceKey> ProvenNonFrame;
   std::set<SliceKey> NonFrameActive;
   std::function<bool(const MedVar &, unsigned, unsigned)> NonFrameBytes;
   const auto IsNonFrame = [&](const MedVar &V) {
@@ -225,8 +225,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     if (V.isConst())
       return true;
     const SliceKey K{key(V), First, Bytes};
-    if (const auto It = NonFrame.find(K); It != NonFrame.end())
-      return It->second;
+    if (ProvenNonFrame.count(K))
+      return true;
     if (!Remaining ||
         NonFrameActive.size() >= limits::ir::kMIPSReturnIdentityDepth ||
         !NonFrameActive.insert(K).second)
@@ -359,7 +359,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       }
     }
     NonFrameActive.erase(K);
-    NonFrame.emplace(K, Safe);
+    // A reaching-store walk can visit a later call-result spill while that
+    // call's argument is still being proved. Such a recursive failure depends
+    // on the active query; only completed positive proofs are reusable.
+    if (Safe)
+      ProvenNonFrame.insert(K);
     return Safe;
   };
   const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
