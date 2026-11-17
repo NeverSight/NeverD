@@ -294,10 +294,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                   *At + MemoryByte, Size, Offset,
                   [&](const MedVar &Address) { return !IsNonFrame(Address); },
                   [](const MedVar &) { return true; }, true);
-              if (!Reaching.Complete || !Reaching.Reachable)
+              if (!Reaching.Reachable)
                 return false;
-              if (!Reaching.MayBeUninitialized && !Reaching.HasUnknownWrites &&
-                  !Reaching.Values.empty())
+              if (Reaching.Complete)
                 return llvm::all_of(Reaching.Values, [&](const MedVar &Stored) {
                   return NonFrameBytes(Stored, Start - Begin, End - Start);
                 });
