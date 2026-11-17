@@ -518,6 +518,13 @@ but do not establish a general complex source ABI. Complex source results,
 variadic/runtime conversion adapters and MIPS64 compressed floating results
 remain unqualified.
 
+Type declarations now retain `float _Complex` and `double _Complex` through
+C parsing/rendering, DWARF import and source prototype conversion. They keep
+their complex passing class rather than becoming a same-sized integer or
+ordinary two-field record. This type support does not admit the unqualified
+complex MIPS call/entry projection above. Extended complex types remain opaque
+when DWARF describes them and are refused as source declarations.
+
 Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
 image, linking only the resulting translation unit and the original runtime.
 Each covers 16 profiles, 128 builds and 4,096 executions with the same byte

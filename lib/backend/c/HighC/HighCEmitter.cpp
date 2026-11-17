@@ -5378,7 +5378,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
       RecordType(Type->ElemType);
       return;
     }
-    if (!Type || Type->Kind != NdTypeKind::Struct || !Type->SourceName.empty())
+    if (!Type || Type->Kind != NdTypeKind::Struct ||
+        !Type->SourceName.empty() || Type->Passing == NdRecordPassing::Complex)
       return;
     const auto Name = typeToC(Type);
     if (!Records.insert(Name).second)

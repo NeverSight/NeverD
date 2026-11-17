@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -39,6 +40,39 @@ namespace {
 using namespace neverd;
 
 void executeC(const std::string &Source, bool Math);
+
+TEST(SourceABI, ComplexValuesAreNotOrdinaryFloatingRecords) {
+  for (const uint16_t Bytes : {4, 8}) {
+    auto Complex = NdType::makeComplex(Bytes);
+    ASSERT_TRUE(Complex);
+    EXPECT_EQ(sourceComplexComponentBytes(Complex), Bytes);
+    EXPECT_TRUE(equalSourceTypes(Complex, NdType::makeComplex(Bytes)));
+    auto Record = NdType::makeStruct(
+        {NdType::makeFloat(Bytes), NdType::makeFloat(Bytes)});
+    ASSERT_TRUE(Record);
+    Record->Passing = NdRecordPassing::ByValue;
+    EXPECT_FALSE(equalSourceTypes(Complex, Record));
+    EXPECT_FALSE(equalSourceTypes(Record, Complex));
+    EXPECT_TRUE(sourceAggregateMembers(Complex).empty());
+    EXPECT_TRUE(sourceAggregateMembers(NdType::makeStruct({Complex})).empty());
+    EXPECT_EQ(typeToC(Complex),
+              Bytes == 4 ? "float _Complex" : "double _Complex");
+    Complex->SourceName = typeToC(Complex);
+    EXPECT_FALSE(
+        isMsvcClassValueReturn(Complex, Arch::X64, BinaryFormat::COFF));
+    auto Bad = std::make_shared<NdType>(*Complex);
+    Bad->ScalarLeaves[1].Offset = 0;
+    EXPECT_FALSE(sourceComplexComponentBytes(Bad));
+    EXPECT_FALSE(equalSourceTypes(Bad, Bad));
+    EXPECT_THROW(typeToC(Bad), std::invalid_argument);
+    Bad = std::make_shared<NdType>(*Complex);
+    Bad->Fields[1] = NdType::makeInt(Bytes);
+    EXPECT_FALSE(equalSourceTypes(Bad, Bad));
+  }
+  EXPECT_FALSE(NdType::makeComplex(0));
+  EXPECT_FALSE(NdType::makeComplex(2));
+  EXPECT_FALSE(NdType::makeComplex(16));
+}
 
 TEST(SourceABI, SourceCallsReplaceGenericRegisterArgumentSummaries) {
   for (const auto Architecture : {Arch::X64, Arch::AArch64}) {

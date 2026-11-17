@@ -30,6 +30,10 @@ bool isSourceAArch64Vector128Type(const TypeRef &Type);
 /// logical storage is one byte; physical definedness belongs to the carrier.
 bool isSourceBooleanType(const TypeRef &Type);
 
+/// Component width of a complete binary32/binary64 C complex value; zero
+/// for records, unknown encodings or malformed complex layouts.
+unsigned sourceComplexComponentBytes(const TypeRef &Type);
+
 /// Compare supported source types structurally, including fixed C callback
 /// signatures. Malformed, cyclic, and excessively deep types never compare
 /// equal, even when both references identify the same object.

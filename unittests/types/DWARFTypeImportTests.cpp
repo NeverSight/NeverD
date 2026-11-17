@@ -36,6 +36,49 @@ using neverd::types::test::shapeOf;
 
 namespace {
 
+llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
+complexTypeSections(llvm::StringRef Name, unsigned Bytes, bool Little) {
+  using namespace llvm::dwarf;
+  llvm::SmallString<128> Abbrev, Info;
+  llvm::raw_svector_ostream A(Abbrev), I(Info);
+  const auto abbrev = [&](unsigned Code, unsigned Tag, bool Children,
+                          std::initializer_list<unsigned> Attributes) {
+    llvm::encodeULEB128(Code, A);
+    llvm::encodeULEB128(Tag, A);
+    A << char(Children);
+    for (unsigned Attribute : Attributes)
+      llvm::encodeULEB128(Attribute, A);
+    A << char(0) << char(0);
+  };
+  abbrev(1, DW_TAG_compile_unit, true, {});
+  abbrev(2, DW_TAG_base_type, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_encoding, DW_FORM_data1,
+          DW_AT_byte_size, DW_FORM_data1});
+  abbrev(3, DW_TAG_typedef, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4});
+  A << char(0);
+  const auto order = Little ? llvm::endianness::little : llvm::endianness::big;
+  const auto u32 = [&](uint32_t Value) {
+    char Data[4];
+    llvm::support::endian::write32(Data, Value, order);
+    I.write(Data, sizeof(Data));
+  };
+  u32(0);
+  I << char(Little ? 4 : 0) << char(Little ? 0 : 4);
+  u32(0);
+  I << char(8) << char(1);
+  const uint32_t Base = Info.size();
+  I << char(2) << Name << char(0) << char(DW_ATE_complex_float) << char(Bytes);
+  I << char(3) << "ComplexAlias" << char(0);
+  u32(Base);
+  I << char(0);
+  llvm::support::endian::write32(Info.data(), Info.size() - 4, order);
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> Sections;
+  Sections["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(Abbrev);
+  Sections["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(Info);
+  return Sections;
+}
+
 // A signed subrange in raw DWARF exercises boundary values without asking a
 // compiler to create an object of that size.
 llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
@@ -626,6 +669,34 @@ TEST(DWARFTypeImportGo, ExplicitInputMarkersKeepANamedVoidFunction) {
   ASSERT_EQ(Function.Function->Params.size(), 1u);
   EXPECT_EQ(Function.Function->Params[0].Type->Kind, TypeExprKind::Pointer);
   EXPECT_EQ(Function.Function->Return->TheBuiltin, Builtin::Void);
+}
+
+TEST(DWARFTypeImport, ComplexTypesKeepEncodingAndRejectExtendedAliases) {
+  for (bool Little : {false, true})
+    for (const auto &[Name, Bytes, Expected] :
+         {std::tuple{"complex float", 8u, std::optional(Builtin::ComplexFloat)},
+          std::tuple{"complex double", 16u,
+                     std::optional(Builtin::ComplexDouble)},
+          std::tuple{"complex long double", 16u, std::optional<Builtin>{}},
+          std::tuple{"complex long double", 32u, std::optional<Builtin>{}},
+          std::tuple{"complex extended", 20u, std::optional<Builtin>{}}}) {
+      SCOPED_TRACE(Name);
+      SCOPED_TRACE(Little);
+      auto Sections = complexTypeSections(Name, Bytes, Little);
+      auto Context = llvm::DWARFContext::create(Sections, 8, Little);
+      auto Library = importDWARFTypes(*Context, DataModel::LP64);
+      ASSERT_TRUE(static_cast<bool>(Library))
+          << llvm::toString(Library.takeError());
+      const auto *Alias = (*Library)->find("ComplexAlias");
+      ASSERT_TRUE(Alias && Alias->Target);
+      EXPECT_EQ((*Library)->sizeOf(*Alias->Target), Bytes);
+      if (Expected) {
+        EXPECT_EQ(Alias->Target->Kind, TypeExprKind::Builtin);
+        EXPECT_EQ(Alias->Target->TheBuiltin, *Expected);
+      } else {
+        EXPECT_EQ(Alias->Target->Kind, TypeExprKind::Array);
+      }
+    }
 }
 
 TEST(DWARFTypeImportArray, CountsSignedBoundsWithoutOverflow) {
