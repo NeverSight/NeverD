@@ -1229,8 +1229,8 @@ TEST_P(MIPS16Pipeline, ExtendAndScalarLeavesReachBothSourcesWithExactMode) {
             << Text;
       }
     }
-    EXPECT_THROW(mips::requireNumericCodePointerSource(&*Image, Image->Entry),
-                 std::invalid_argument);
+    EXPECT_NO_THROW(
+        mips::requireNumericCodePointerSource(&*Image, Image->Entry));
   }
 }
 

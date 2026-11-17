@@ -25204,8 +25204,20 @@ The ordinary four-profile run remains the default. Only the micro fixture's
 functions may be selected with `--function` in that mode. The instruction-level
 `MicroMIPSInteger` tests separately check independent literal memory encodings,
 signed/unsigned loads, exact store bytes, failed writes and original-target
-execution. Source numeric callable/import values remain explicitly unqualified;
-the pipeline suite checks those refusals as well as ordinary leaf emission.
+execution. Numeric r2/o32 defined code identities require the LLVM r7 SDK and
+the matching NeverSight Clang; unknown-mode imports and wide compressed
+profiles remain refused. The pipeline suite checks the boundary and ensures
+LLVM does not infer a zero callable tag from a function's code alignment.
+
+`unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
+`--neverd`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
+pinned Unicorn bindings on `PYTHONPATH`, it executes microMIPS, MIPS16 and a
+classic control in both byte orders, original and rebuilt O0/O2, and both C
+backends. The callee is separately compiled with stronger code alignment;
+rebuilt images use a different link address. Pointer bits, tag/mask/offset
+expressions, equality and indirect calls are compared to each image's actual
+callee symbol, so matching link addresses cannot conceal a literal-address
+substitution. Generated objects and images are retired after every comparison.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
