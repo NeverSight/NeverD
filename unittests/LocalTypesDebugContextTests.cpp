@@ -7,7 +7,6 @@
 #include "LocalTypesDebugContext.h"
 #include "gtest/gtest.h"
 
-#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/libc/LibCFloatingArguments.h"
@@ -95,10 +94,11 @@ TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {
   for (const auto *Function : {&*Full, &*ABI}) {
     EXPECT_EQ(sourceComplexComponentBytes(Function->ReturnType), 8u);
     EXPECT_EQ(Function->ReturnType->TypedefName, "Complex");
-    EXPECT_EQ(typeToC(Function->ReturnType), "double _Complex");
+    EXPECT_EQ(Function->ReturnType->SourceName, "double _Complex");
     ASSERT_EQ(Function->Params.size(), 2u);
     EXPECT_EQ(sourceComplexComponentBytes(Function->Params[0].second), 4u);
-    EXPECT_EQ(typeToC(Function->Params[1].second), "double _Complex*");
+    EXPECT_EQ(sourceComplexComponentBytes(Function->Params[1].second->Pointee),
+              8u);
     // Parsing a type is not permission to project an unimplemented ABI.
     EXPECT_FALSE(libc::floatingCallArguments(*Function, Arch::MIPS32EL,
                                              BinaryFormat::ELF));
