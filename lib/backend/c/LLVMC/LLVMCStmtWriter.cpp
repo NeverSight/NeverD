@@ -2703,15 +2703,6 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
     if (isFloatingPointBitcast(Inst)) {
       const auto *Cast = llvm::cast<llvm::BitCastInst>(&Inst);
       const unsigned Bytes = Cast->getSrcTy()->getPrimitiveSizeInBits() / 8;
-      if (isMIPS(Opts.TheArch) && (Bytes == 4 || Bytes == 8)) {
-        // Keep both objects in the shared GCC bit-cast expression. Separate
-        // address-taken FP locals make MIPS16 GCC -O0 emit runtime memcpy
-        // calls even for these complete scalar representations.
-        emitIndent(Indent);
-        OS << Name << " = __builtin_bit_cast(" << typeToCLLVM(Cast->getDestTy())
-           << ", (" << typeToCLLVM(Cast->getSrcTy()) << ")(" << Src << "));\n";
-        return;
-      }
       const std::string Source = freshVar("bitcast_source");
       emitIndent(Indent);
       OS << Name << " = 0;\n";

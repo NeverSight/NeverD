@@ -10,6 +10,8 @@ Without --neverd, qualify compiler interworking using the owned original C.
 With --floating-input, also traverse the classic hard-float entry stub.
 With --whole-unit, rebuild the complete HighC call closure or LLVMC image as
 one translation unit, retaining the original runtime helper at link time.
+Rebuilt images also link a guest byte-copy routine for compiler-emitted C
+aggregate copies. Its independent memory/canary checks do not bypass execution.
 """
 
 import argparse
@@ -21,6 +23,32 @@ import roundtrip
 from mips_validation_artifacts import MIPSValidationArtifacts, digest
 from unicorn import UC_HOOK_CODE
 from unicorn import mips_const as mips
+
+MEMORY_RUNTIME = Path(__file__).with_name('mips-source-memory-runtime.S')
+
+
+def verify_memory_runtime(image, little):
+    uc, entry = roundtrip.emulator(image, 32, little, 'memcpy')
+    cases = 0
+    for count in (0, 1, 2, 3, 7, 8, 15, 16, 31):
+        for same in (False, True):
+            source, destination = 3, 3 if same else 133
+            before = bytearray((i * 37 + 11) & 255 for i in range(256))
+            expected = before.copy()
+            expected[destination:destination + count] = before[source:source + count]
+            uc.mem_write(roundtrip.DATA, bytes(before))
+            saved = {r: 0xa5010000 + r for r in (*range(16, 24), 30)}
+            result, _ = roundtrip.invoke(
+                uc, entry, 32, little,
+                [roundtrip.DATA + destination, roundtrip.DATA + source, count],
+                initial_registers=saved)
+            assert result == roundtrip.DATA + destination
+            assert bytes(uc.mem_read(roundtrip.DATA, 256)) == expected
+            assert uc.reg_read(mips.UC_MIPS_REG_SP) == roundtrip.STACK
+            for reg, value in saved.items():
+                assert uc.reg_read(getattr(mips, f'UC_MIPS_REG_{reg}')) == value
+            cases += 1
+    return cases
 
 def observe(image, little, fr, samples):
     uc, entry = roundtrip.emulator(image, 32, little, 'kernel',
@@ -74,6 +102,7 @@ def run(args, artifacts):
 
     rows = []
     originals = []
+    memory_runtime_checks = []
     kinds = {'sf': ('float', 1), 'df': ('double', 2),
              'sc': ('_Complex float', 2), 'dc': ('_Complex double', 4)}
     compilers = {'clang': args.clang, 'gcc': args.gcc}
@@ -157,11 +186,15 @@ def run(args, artifacts):
                     build(args.gcc, caller, cobj, mode, '-O2')
                     build(args.gcc, callee, fobj, 'mips16', '-O2')
                     original = directory / 'original.elf'
+                    memory_obj = directory / 'memory.o'
+                    command([args.assembler, '-march=mips32r2', '-mabi=32', fp,
+                             endian, MEMORY_RUNTIME, '-o', memory_obj])
 
-                    def link(objects, image):
+                    def link(objects, image, rebuilt=False):
                         command([args.ld, '-m', 'elf32ltsmip' if little else 'elf32btsmip',
                                  '-Ttext', '0x10000', '-e', 'kernel', *objects,
-                                 runtime_obj, '-o', image])
+                                 runtime_obj, *([memory_obj] if rebuilt else []),
+                                 '-o', image])
 
                     link([cobj, fobj], original)
                     expected = observe(original, little, fr, samples)
@@ -209,7 +242,12 @@ def run(args, artifacts):
                                     image = directory / 'rebuilt.elf'
                                     link([newc] if args.whole_unit else
                                          [newc if which != 'callee' else cobj,
-                                          newf if which != 'caller' else fobj], image)
+                                          newf if which != 'caller' else fobj], image, rebuilt=True)
+                                    if len(memory_runtime_checks) < len(originals):
+                                        memory_runtime_checks.append({
+                                            'profile': profile,
+                                            'cases': verify_memory_runtime(image, little)})
+                                        artifacts.write('memory-runtime.json', memory_runtime_checks)
                                     assert observe(image, little, fr, samples) == expected
                                     rows.append({'profile': profile, 'changed': which,
                                                  'route': route, 'compiler': compiler_name,
@@ -226,10 +264,12 @@ def run(args, artifacts):
                                             artifacts.discard(obj)
                         if args.neverd:
                             artifacts.discard(*sources.values())
-                    artifacts.discard(caller, callee, cobj, fobj, runtime_obj, original)
+                    artifacts.discard(caller, callee, cobj, fobj, runtime_obj, memory_obj, original)
     summary = {'builds': len(rows), 'executions': sum(r['cases'] for r in rows),
                'profiles': len(originals), 'original_cases': sum(r['cases'] for r in originals),
                'runtime_source_sha256': digest(args.runtime_source),
+               'memory_runtime_sha256': digest(MEMORY_RUNTIME),
+               'memory_runtime_cases': sum(r['cases'] for r in memory_runtime_checks),
                'floating_input': args.floating_input,
                'whole_unit': args.whole_unit,
                'neverd': str(args.neverd) if args.neverd else None}
@@ -256,6 +296,7 @@ if __name__ == '__main__':
         parser.error('--floating-input currently requires scalar sf/df results')
     with MIPSValidationArtifacts(args.output, 'mips16-floating-return-roundtrip',
                                  (args.gcc, args.clang, args.assembler, args.ld,
-                                  args.runtime_source, *([args.neverd] if args.neverd else []))) as artifacts:
+                                  args.runtime_source, MEMORY_RUNTIME,
+                                  *([args.neverd] if args.neverd else []))) as artifacts:
         run(args, artifacts)
 
