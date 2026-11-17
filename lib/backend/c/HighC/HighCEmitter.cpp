@@ -495,8 +495,10 @@ void HighCWriter::prepareFunctionIdentifiers(
     // header's name, as LLVM-C's does: by the identifier it would take, as a
     // C++ `sigaddset(unsigned long*, int)` would take `sigaddset`, or by its
     // prototype, which a C library's headers give (`__strlen_chk`).
-    std::string Stem =
-        canonicalizeCProjectionIdentifier(RenderedName, "nd_function");
+    std::string Stem = mips::entryStubDefinitionStem(Opts.Image, RenderedName);
+    if (Stem.empty())
+      Stem = RenderedName.str();
+    Stem = canonicalizeCProjectionIdentifier(Stem, "nd_function");
     if (Func.Entry && (copiesHeaderRoutine(Stem, Opts.Format) ||
                        libraryDeclaresDefinition(Func))) {
       Stem += "_" + llvm::utohexstr(Func.Entry);
@@ -1817,6 +1819,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   bool NeedsMIPS16Mode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
+  unsigned PossibleRotateWidths = 0;
   bool NeedsAArch64RawCall = false;
   bool NeedsAArch64ResultStorageCall = false;
   const auto CheckType = [&](const TypeRef &Type) {
@@ -1839,6 +1842,13 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     HasFloatingArithmetic |=
         Expr->Op == NdOp::FLOAT_ADD || Expr->Op == NdOp::FLOAT_SUB ||
         Expr->Op == NdOp::FLOAT_MULT || Expr->Op == NdOp::FLOAT_DIV;
+    // renderBinOp may spell an integer shift/OR as a rotate builtin. Header
+    // collection need not repeat that expression-equivalence proof: a guarded
+    // unused macro has no runtime effect.
+    if (Expr->Kind == ExprKind::BinOp && Expr->Op == NdOp::INT_OR &&
+        Expr->Type && Expr->Type->Kind == NdTypeKind::Int &&
+        Expr->Type->Size <= sizeof(uint64_t))
+      PossibleRotateWidths |= 1u << Expr->Type->Size;
     if (Expr->Kind == ExprKind::Call) {
       if (HasMicroModes && !Expr->IsIndirectCall && Expr->CallAddr) {
         const auto Mode = Opts.Image->instructionModeAt(Expr->CallAddr);
@@ -1899,6 +1909,28 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   };
   if (HasFloatingArithmetic)
     c_float::writeContractionPolicy(OS);
+  const auto WriteRotate = [&](unsigned Bytes, unsigned Bits,
+                               llvm::StringRef Type) {
+    if (!(PossibleRotateWidths & (1u << Bytes)))
+      return;
+    OS << "#if defined(__GNUC__) && !defined(__clang__) && "
+          "!__has_builtin(__builtin_rotateleft"
+       << Bits << ")\n#define __builtin_rotateleft" << Bits
+       << "(V, A) __extension__ ({ \\\n"
+       << "    __auto_type __neverd_rotate_value = (" << Type << ")(V); \\\n"
+       << "    unsigned int __neverd_rotate_amount = (A) & " << Bits - 1
+       << "u; \\\n"
+       << "    (" << Type
+       << ")(__neverd_rotate_amount ? "
+          "((__neverd_rotate_value << __neverd_rotate_amount) | "
+          "(__neverd_rotate_value >> ("
+       << Bits
+       << " - __neverd_rotate_amount))) : "
+          "__neverd_rotate_value); })\n#endif\n\n";
+  };
+#define NEVERD_C_ROTATE_BUILTIN(Bytes, Bits, Type)                             \
+  WriteRotate(Bytes, Bits, Type);
+#include "neverd/backend/c/render/CRotateBuiltins.def"
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
   if (NeedsMIPS16Mode)
@@ -2157,14 +2189,6 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         NeedsExceptionReturn |=
             E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::Eret;
         if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None) {
-          if (HasMIPSCallModes && !E.IsIndirectCall && E.CallAddr)
-            if (const auto Mode = Opts.Image->instructionModeAt(E.CallAddr)) {
-              const auto [It, Inserted] =
-                  MIPSCallModes.emplace(callIdentifier(E), *Mode);
-              if (!Inserted && It->second != *Mode)
-                throw std::invalid_argument(
-                    "HighC callees disagree on MIPS instruction mode");
-            }
           if (E.SourceCalleeType) {
             const auto [It, New] = SourceCalleeTypes.emplace(
                 callIdentifier(E), E.SourceCalleeType);
@@ -2173,6 +2197,14 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                   "HighC external calls disagree on scalar projection: " +
                   callIdentifier(E));
           }
+          if (HasMIPSCallModes && !E.IsIndirectCall && E.CallAddr)
+            if (const auto Mode = Opts.Image->instructionModeAt(E.CallAddr)) {
+              const auto [It, Inserted] =
+                  MIPSCallModes.emplace(callIdentifier(E), *Mode);
+              if (!Inserted && It->second != *Mode)
+                throw std::invalid_argument(
+                    "HighC callees disagree on MIPS instruction mode");
+            }
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
           if (E.Type && E.Type->RegisterReturnRecord) {
             const auto [It, Inserted] =
@@ -5346,7 +5378,8 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
       RecordType(Type->ElemType);
       return;
     }
-    if (!Type || Type->Kind != NdTypeKind::Struct || !Type->SourceName.empty())
+    if (!Type || Type->Kind != NdTypeKind::Struct ||
+        !Type->SourceName.empty() || Type->Passing == NdRecordPassing::Complex)
       return;
     const auto Name = typeToC(Type);
     if (!Records.insert(Name).second)

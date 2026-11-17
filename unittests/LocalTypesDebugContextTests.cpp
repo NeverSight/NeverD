@@ -73,6 +73,39 @@ TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
   EXPECT_FALSE(Context.resolvePrototypeABI("missing"));
 }
 
+TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LP64);
+  ASSERT_TRUE(types::parseCTypes(R"(
+    typedef double _Complex Complex;
+    Complex transform(float _Complex input, Complex *output);
+    struct Pair { double real, imag; };
+    struct Pair record(float _Complex input, Complex *output);
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Full = Context.resolvePrototype("transform");
+  const auto ABI = Context.resolvePrototypeABI("transform");
+  const auto Record = Context.resolvePrototype("record");
+  ASSERT_TRUE(Full && ABI && Record);
+  EXPECT_TRUE(sdk::passesAlike(*Full, *ABI));
+  EXPECT_FALSE(sdk::passesAlike(*Full, *Record));
+  for (const auto *Function : {&*Full, &*ABI}) {
+    EXPECT_EQ(sourceComplexComponentBytes(Function->ReturnType), 8u);
+    EXPECT_EQ(Function->ReturnType->TypedefName, "Complex");
+    EXPECT_EQ(Function->ReturnType->SourceName, "double _Complex");
+    ASSERT_EQ(Function->Params.size(), 2u);
+    EXPECT_EQ(sourceComplexComponentBytes(Function->Params[0].second), 4u);
+    EXPECT_EQ(sourceComplexComponentBytes(Function->Params[1].second->Pointee),
+              8u);
+    // Parsing a type is not permission to project an unimplemented ABI.
+    EXPECT_FALSE(libc::floatingCallArguments(*Function, Arch::MIPS32EL,
+                                             BinaryFormat::ELF));
+  }
+}
+
 TEST(LocalTypesDebugContext, TakesDeclarationsAndNewTypesInPlace) {
   using namespace neverd;
   auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);

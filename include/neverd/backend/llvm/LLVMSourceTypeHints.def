@@ -1,0 +1,11 @@
+//===- LLVMSourceTypeHints.def - Source value spelling ------------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+#ifndef NEVERD_LLVM_SOURCE_TYPE_TEXT
+#define NEVERD_LLVM_SOURCE_TYPE_TEXT(Name, Text)
+#endif
+NEVERD_LLVM_SOURCE_TYPE_TEXT(LLVMSourceComplexResult,
+                             "neverd.source.complex_result")
+#undef NEVERD_LLVM_SOURCE_TYPE_TEXT

@@ -16,6 +16,7 @@
 
 #include "TypeRenderShared.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -62,6 +63,8 @@ private:
   std::string integer(uint64_t Bytes, bool Signed) const;
   std::string builtin(Builtin Type, bool Pointee) const;
   std::string function(const FunctionDef &Function) const;
+  bool complexValue(const TypeExpr &Type) const;
+  bool complexFunction(const FunctionDef &Function) const;
   std::string abi(CallingConvention Convention) const;
   void record(const RecordPlan &Plan, bool Outer, std::string &Out);
   std::string slotType(const Slot &Place) const;
@@ -163,6 +166,8 @@ std::string RustWriter::exact(Builtin Type, bool Pointee) const {
       return "c_longdouble";
     }
     return "[u8; " + std::to_string(Bytes) + "]";
+  case BuiltinClass::Complex:
+    return "[f" + std::to_string(Bytes * 4) + "; 2]";
   case BuiltinClass::Character:
     return integer(Bytes, Type == Builtin::Char);
   case BuiltinClass::Integer:
@@ -185,7 +190,39 @@ std::string RustWriter::abi(CallingConvention Convention) const {
   return "C";
 }
 
+bool RustWriter::complexValue(const TypeExpr &Type) const {
+  if (Type.Kind == TypeExprKind::Builtin)
+    return builtinInfo(Type.TheBuiltin).Class == BuiltinClass::Complex;
+  if (Type.Kind == TypeExprKind::Array)
+    return Type.Element && complexValue(*Type.Element);
+  const RecordDef *Record = Type.Record.get();
+  if (Type.Kind == TypeExprKind::Named) {
+    const auto *Named = Library.resolve(Type.Name);
+    if (!Named)
+      return false;
+    if (Named->Target)
+      return complexValue(*Named->Target);
+    Record = Named->Record.get();
+  }
+  return Record && llvm::any_of(Record->Members, [&](const Member &Field) {
+           return Field.Type && complexValue(*Field.Type);
+         });
+}
+
+bool RustWriter::complexFunction(const FunctionDef &Function) const {
+  return (Function.Return && complexValue(*Function.Return)) ||
+         llvm::any_of(Function.Params, [&](const Parameter &Param) {
+           return Param.Type && complexValue(*Param.Type);
+         });
+}
+
 std::string RustWriter::function(const FunctionDef &Function) const {
+  // A storage pair does not give Rust C's complex calling convention.
+  // Keep such callbacks opaque instead of declaring a callable wrong ABI.
+  if (complexFunction(Function)) {
+    Void = true;
+    return "*mut c_void";
+  }
   std::string Text = "unsafe extern \"" + abi(Function.Convention) + "\" fn(";
   for (size_t I = 0; I < Function.Params.size(); ++I) {
     if (I)
@@ -219,12 +256,17 @@ std::string RustWriter::type(const TypeExpr &Type, bool Pointee) const {
     }
     const TypeExpr &Target = *Type.Element;
     // A function pointer may be null: Option of the fn type.
-    if (Target.Kind == TypeExprKind::Function && Target.Function)
-      return "Option<" + function(*Target.Function) + ">";
+    if (Target.Kind == TypeExprKind::Function && Target.Function) {
+      const auto Function = function(*Target.Function);
+      return complexFunction(*Target.Function) ? Function
+                                               : "Option<" + Function + ">";
+    }
     if (Target.Kind == TypeExprKind::Named) {
       const LocalType *Named = Library.resolve(Target.Name);
       if (Named && Named->Kind == TypeKind::Function)
-        return "Option<" + Names.type(Target.Name) + ">";
+        return Named->Function && complexFunction(*Named->Function)
+                   ? Names.type(Target.Name)
+                   : "Option<" + Names.type(Target.Name) + ">";
     }
     return std::string(Target.Const ? "*const " : "*mut ") +
            type(Target, /*Pointee=*/true);

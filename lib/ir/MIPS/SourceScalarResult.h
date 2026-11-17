@@ -21,7 +21,12 @@ inline void placeScalarResult(const TargetRegInfo &Registers,
                               std::vector<SourceABIValueLocation> &Pieces) {
   Single = {};
   Pieces.clear();
-  if (Signature.ReturnKind == NdTypeKind::Float) {
+  if (Signature.ReturnComplex) {
+    for (unsigned I = 0; I != 2; ++I)
+      Pieces.push_back({SourceABICarrierKind::FloatingRegister,
+                        Registers.FPReturnRegs[I], 0,
+                        static_cast<uint16_t>(Signature.ReturnBytes / 2)});
+  } else if (Signature.ReturnKind == NdTypeKind::Float) {
     Single = {SourceABICarrierKind::FloatingRegister, Registers.FPReturnReg, 0,
               Signature.ReturnBytes};
   } else if (Signature.ReturnKind != NdTypeKind::Void) {

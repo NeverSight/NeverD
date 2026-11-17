@@ -536,6 +536,9 @@ struct NdType {
   /// malformed member layouts return null rather than guessing padding.
   static std::shared_ptr<NdType>
   makeStruct(std::vector<std::shared_ptr<NdType>> Fields);
+  /// A C complex value with two binary32 or binary64 components. Its
+  /// calling convention remains distinct from a two-field C record.
+  static std::shared_ptr<NdType> makeComplex(uint16_t ComponentBytes);
   static std::shared_ptr<NdType>
   makeNamedRecord(std::string Name, uint16_t Size = 0, bool Enum = false) {
     auto T = std::make_shared<NdType>();

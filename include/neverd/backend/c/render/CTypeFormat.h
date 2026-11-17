@@ -166,7 +166,7 @@ inline bool isMsvcClassValueReturn(const TypeRef &Ty, Arch Architecture,
   // reads it too; a class may not.
   return Architecture == Arch::X64 && Format == BinaryFormat::COFF && Ty &&
          Ty->Kind == NdTypeKind::Struct && !Ty->SourceName.empty() &&
-         !Ty->IsEnum &&
+         !Ty->IsEnum && Ty->Passing != NdRecordPassing::Complex &&
          !(Ty->Passing == NdRecordPassing::ByValue &&
            (Ty->Size == 1 || Ty->Size == 2 || Ty->Size == 4 || Ty->Size == 8));
 }

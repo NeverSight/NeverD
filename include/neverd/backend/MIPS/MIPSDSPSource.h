@@ -22,8 +22,10 @@
 
 namespace neverd::mips {
 
+// These are text values, with no cross-module address identity. Keeping the
+// literal pointer constant avoids a dyld weak-symbol lookup for each string.
 #define NEVERD_MIPS_DSP_SOURCE_TEXT(Name, Text)                                \
-  inline constexpr char Name[] = Text;
+  inline constexpr const char *Name = Text;
 #include "neverd/backend/MIPS/MIPSDSPSource.def"
 
 struct DSPPartialAssembly {

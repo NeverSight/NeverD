@@ -30,6 +30,10 @@ bool isSourceAArch64Vector128Type(const TypeRef &Type);
 /// logical storage is one byte; physical definedness belongs to the carrier.
 bool isSourceBooleanType(const TypeRef &Type);
 
+/// Component width of a complete binary32/binary64 C complex value; zero
+/// for records, unknown encodings or malformed complex layouts.
+unsigned sourceComplexComponentBytes(const TypeRef &Type);
+
 /// Compare supported source types structurally, including fixed C callback
 /// signatures. Malformed, cyclic, and excessively deep types never compare
 /// equal, even when both references identify the same object.
@@ -56,6 +60,11 @@ struct SourceAggregateMember {
 /// One to four homogeneous short vectors retain their full 64/128-bit members.
 /// Nested records and arrays retain their declared layout. Other mixtures fail.
 std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type);
+
+/// Members of a validated logical C value used by representation bridges.
+/// Complex values have two scalar components but retain their distinct
+/// calling class; this does not authorize ordinary record ABI placement.
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type);
 
 /// A complete natural HVA: one to four equally sized 64/128-bit short vectors,
 /// including nested records and arrays. Other record classifications return

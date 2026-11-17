@@ -19,6 +19,7 @@
 #include "llvm/ADT/STLFunctionalExtras.h"
 
 #include <map>
+#include <optional>
 
 namespace neverd {
 struct BinaryImage;
@@ -29,10 +30,14 @@ struct MedVar;
 
 /// Refuse unqualified vector-bearing source functions before SSA/DCE can hide
 /// their incoming machine state or a clobbered callee-preserved FPR view.
+/// ConstantTargets, when supplied, is this function's initially empty cache;
+/// the converter reuses the exact occurrence proof for later call binding.
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
     const std::map<va_t, FloatingCallArguments> *Calls = nullptr,
     const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites =
+        nullptr,
+    std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets =
         nullptr);
 
 /// After physical byte qualification, project FR=0 word FPRs into the paired

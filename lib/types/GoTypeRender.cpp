@@ -180,6 +180,8 @@ std::string GoWriter::exact(Builtin Type) const {
     if (Bytes == 8)
       return "float64";
     return "[" + std::to_string(Bytes) + "]byte";
+  case BuiltinClass::Complex:
+    return "complex" + std::to_string(Bytes * 8);
   case BuiltinClass::Character:
   case BuiltinClass::Integer:
     if (Bytes > 8)

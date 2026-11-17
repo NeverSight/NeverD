@@ -11,20 +11,26 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSControlTarget.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include "llvm/ADT/DenseMap.h"
 
+#include <algorithm>
 #include <bitset>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -61,25 +67,43 @@ static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
 void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
     const std::map<va_t, FloatingCallArguments> *Calls,
-    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites) {
+    const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites,
+    std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
   };
-  const auto SignatureOf =
-      [&](const LowOp &Op) -> const FloatingCallArguments * {
+  std::optional<std::map<SourceCallOccurrenceKey, va_t>> LocalTargets;
+  auto &Targets = ConstantTargets ? *ConstantTargets : LocalTargets;
+  const auto SignatureOf = [&](const LowBlock &Block,
+                               size_t Index) -> const FloatingCallArguments * {
+    const auto &Op = Block.Ops[Index];
     if (const auto *Site = mipsFloatingCallSite(Op, Target, Sites))
       return Site->Signature.MIPSScalars.get();
-    if (Calls && (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
-        Op.NumInputs && Op.Inputs[0].isConst())
-      if (const auto Call = Calls->find(Op.Inputs[0].Offset);
-          Call != Calls->end())
+    if (!Calls || Calls->empty() || Op.NumInputs == 0 ||
+        (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL))
+      return nullptr;
+    std::optional<va_t> Address;
+    if (Op.Inputs[0].isConst()) {
+      Address = Op.Inputs[0].Offset;
+    } else if (Image && !Image->IsRelocatable) {
+      if (const auto Site = sourceCallOccurrenceKey(Op, Target)) {
+        if (!Targets)
+          Targets = constantRegisterCallTargets(Function);
+        if (const auto Found = Targets->find(*Site); Found != Targets->end())
+          Address =
+              qualifiedMIPSCallTarget(*Image, Block, Index, Found->second);
+      }
+    }
+    if (Address)
+      if (const auto Call = Calls->find(*Address); Call != Calls->end())
         return &Call->second;
     return nullptr;
   };
   bool HasVectors = false;
   for (const auto &Block : Function.Blocks)
-    for (const auto &Op : Block.Ops) {
-      if (const auto *Signature = SignatureOf(Op)) {
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const auto &Op = Block.Ops[I];
+      if (const auto *Signature = SignatureOf(Block, I)) {
         if (!floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
@@ -136,9 +160,10 @@ void requireMIPSSourceVectors(
     if (!Block.ExceptionalSuccs.empty() || !Block.ExceptionalPreds.empty())
       throw LowToMedConversionError(
           "MSA source requires ordinary control flow");
-    for (const auto &Op : Block.Ops) {
+    for (size_t J = 0; J < Block.Ops.size(); ++J) {
+      const auto &Op = Block.Ops[J];
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const FloatingCallArguments *Signature = SignatureOf(Op);
+        const FloatingCallArguments *Signature = SignatureOf(Block, J);
         if (!Scalar || !Signature)
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
@@ -159,9 +184,13 @@ void requireMIPSSourceVectors(
         T.Defines &= ~Clobbered;
         T.Kills |= Clobbered;
         if (Signature->ReturnKind == NdTypeKind::Float) {
-          const auto Result = ABIBytes(TRI.FPReturnReg, Signature->ReturnBytes);
-          T.Defines |= Result;
-          T.Kills &= ~Result;
+          const unsigned Count = Signature->ReturnComplex ? 2 : 1;
+          for (unsigned I = 0; I < Count; ++I) {
+            const auto Result =
+                ABIBytes(TRI.FPReturnRegs[I], Signature->ReturnBytes / Count);
+            T.Defines |= Result;
+            T.Kills &= ~Result;
+          }
         }
       }
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
@@ -354,6 +383,176 @@ void projectMIPSFP32Registers(MedFunc &Function,
   First = std::move(Entry);
 }
 
+namespace {
+/// Keep source parameters whole while their machine users still read physical
+/// words. Placement owns the significance of each word, including big endian.
+void bindMIPS16ScalarEntry(MedFunc &Function, Arch Target,
+                           const FloatingCallArguments &Signature,
+                           const FloatingCallTypes &Types) {
+  if (!Signature.MIPS16Parameters || Signature.FixedCount ||
+      Function.SourceTypeHint || Function.SourceParametersBound ||
+      Function.Blocks.empty())
+    return;
+  const auto Placement = placeSourceParameters(
+      Target, BinaryFormat::ELF, Types.Result, Types.Parameters, false,
+      std::nullopt, InstructionMode::MIPS16);
+  if (!Placement || Placement->ResultPointer ||
+      Placement->Parameters.size() != Types.Parameters.size())
+    return;
+  struct Piece {
+    SourceParameterPiece Physical;
+    MedVar Value;
+  };
+  std::vector<Piece> Pieces;
+  std::vector<MedVar> Parameters;
+  for (size_t I = 0; I < Placement->Parameters.size(); ++I) {
+    const auto &Locations = Placement->Parameters[I];
+    if (Locations.empty())
+      return;
+    MedVar Parameter;
+    Parameter.Kind = MedVar::Param;
+    Parameter.TheArch = Target;
+    Parameter.Id = static_cast<int>(I);
+    Parameter.Size = Types.Parameters[I]->Size;
+    Parameter.RegOff = Locations.front().Location.RegisterOffset;
+    Parameters.push_back(Parameter);
+    for (const auto &Location : Locations) {
+      if (Location.Indirect ||
+          Location.Location.Kind != SourceABICarrierKind::IntegerRegister)
+        return; // Stack and variadic entries require their own range proof.
+      Pieces.push_back({Location, Parameter});
+    }
+  }
+  if (Pieces.size() != Function.Params.size())
+    return;
+  for (size_t I = 0; I < Pieces.size(); ++I)
+    if (Function.Params[I].RegOff !=
+            Pieces[I].Physical.Location.RegisterOffset ||
+        Function.Params[I].Size != Pieces[I].Physical.Location.ValueBytes)
+      return;
+
+  using Key = std::tuple<MedVar::VarKind, int, int>;
+  std::map<Key, bool> EntryValues;
+  size_t SeedCount = 0;
+  for (const auto &Op : Function.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::COPY || Op.Output.Kind != MedVar::Reg ||
+        !isEntryLiveInValue(Function, Op.Output, Op.Output.RegOff))
+      break;
+    EntryValues[{Op.Output.Kind, Op.Output.Id, Op.Output.SSAVer}] = true;
+    ++SeedCount;
+  }
+  std::vector<std::pair<MedVar *, size_t>> Rewrites;
+  int MaximumId = 0;
+  bool Valid = true;
+  const auto RecordId = [&](const MedVar &Value) {
+    if (!Value.isConst())
+      MaximumId = std::max(MaximumId, Value.Id);
+  };
+  const auto Read = [&](MedVar &Value) {
+    RecordId(Value);
+    if (Value.Kind != MedVar::Param && Value.Kind != MedVar::Reg)
+      return;
+    for (size_t I = 0; I < Pieces.size(); ++I) {
+      const auto &Location = Pieces[I].Physical.Location;
+      if (Value.RegOff != Location.RegisterOffset)
+        continue;
+      if (Value.Kind == MedVar::Reg) {
+        const Key K{Value.Kind, Value.Id, Value.SSAVer};
+        auto [It, New] = EntryValues.try_emplace(K, false);
+        if (New)
+          It->second = isEntryLiveInValue(Function, Value, Value.RegOff);
+        if (!It->second)
+          return;
+      }
+      Valid &= Value.Size == Location.ValueBytes;
+      Rewrites.emplace_back(&Value, I);
+      return;
+    }
+    // An ordinary source parameter outside this complete placement cannot be
+    // dropped. Other physical registers retain their existing SSA ownership.
+    Valid &= Value.Kind != MedVar::Param;
+  };
+  for (auto &Block : Function.Blocks) {
+    for (auto &Phi : Block.Phis) {
+      RecordId(Phi.Output);
+      for (auto &[Pred, Argument] : Phi.Args)
+        Read(Argument);
+      if (Phi.ExceptionalEntry)
+        Read(*Phi.ExceptionalEntry);
+    }
+    for (auto &Op : Block.Ops) {
+      RecordId(Op.Output);
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        Read(Op.Inputs[I]);
+    }
+  }
+  for (auto &Call : Function.CallInfos)
+    for (auto &Argument : Call.Args)
+      Read(Argument);
+  for (const auto &Clobber : Function.CallClobbers)
+    RecordId(Clobber.Value);
+  for (const auto &Local : Function.Locals)
+    RecordId(Local);
+  if (!Valid ||
+      Pieces.size() >
+          static_cast<size_t>(std::numeric_limits<int>::max() - MaximumId))
+    return;
+  std::vector<MedOp> Slices;
+  for (auto &Piece : Pieces) {
+    if (Piece.Physical.Location.ValueBytes == Piece.Value.Size)
+      continue;
+    MedOp Slice;
+    Slice.Opcode = NdOp::SUBBYTES;
+    Slice.Addr = Function.Entry;
+    Slice.Output.Kind = MedVar::Temp;
+    Slice.Output.TheArch = Target;
+    Slice.Output.Id = ++MaximumId;
+    Slice.Output.SSAVer = 1;
+    Slice.Output.Size = Piece.Physical.Location.ValueBytes;
+    Slice.addInput(Piece.Value);
+    Slice.addInput(MedVar::makeConst(Piece.Physical.Offset, 4,
+                                     ConstantAddressProvenance::Scalar));
+    Piece.Value = Slice.Output;
+    Slices.push_back(std::move(Slice));
+  }
+  for (const auto &[Value, I] : Rewrites)
+    *Value = Pieces[I].Value;
+  // Entry-register proofs recognize an uninterrupted prefix of seed COPYs.
+  // The projected registers no longer need those seeds; preserve the others
+  // before adding slices so later stack/source proofs keep seeing them.
+  auto &Entry = Function.Blocks.front().Ops;
+  std::vector<MedOp> Projected;
+  Projected.reserve(Entry.size() + Slices.size());
+  std::vector<int> Indices(Entry.size());
+  for (size_t I = 0; I < Entry.size(); ++I) {
+    auto &Op = Entry[I];
+    if (I == SeedCount)
+      Projected.insert(Projected.end(), Slices.begin(), Slices.end());
+    if (I < SeedCount && std::any_of(
+                             Pieces.begin(), Pieces.end(),
+                             [&](const Piece &P) {
+                               return Op.Output.RegOff ==
+                                      P.Physical.Location.RegisterOffset;
+                             }))
+      continue;
+    Indices[I] = static_cast<int>(Projected.size());
+    Projected.push_back(std::move(Op));
+  }
+  if (SeedCount == Entry.size())
+    Projected.insert(Projected.end(), Slices.begin(), Slices.end());
+  for (auto &Call : Function.CallInfos)
+    if (Call.BlockId == Function.Blocks.front().Id && Call.OpIdx >= 0)
+      Call.OpIdx = Indices[Call.OpIdx];
+  Entry = std::move(Projected);
+  Function.Params = std::move(Parameters);
+  Function.SourceParametersBound = true;
+  Function.TypedParams.clear();
+  for (size_t I = 0; I < Function.Params.size(); ++I)
+    Function.TypedParams.push_back(
+        {Function.Params[I].display(), Types.Parameters[I]});
+}
+} // namespace
+
 void discardUnobservedMIPSFPUpperBits(
     MedFunc &Function, const BinaryImage &Image,
     const std::map<va_t, FloatingCallArguments> &EntrySignatures,
@@ -377,37 +576,27 @@ void discardUnobservedMIPSFPUpperBits(
                           : Local                        ? &*Local
                                                          : nullptr;
   bool Declared = false;
-  if (Signature && !Signature->ReturnElements)
+  if (Signature && (!Signature->ReturnElements || Signature->ReturnComplex))
     if (auto Types = floatingCallTypes(Target, BinaryFormat::ELF, *Signature)) {
       Declared = true;
       Function.ReturnType = Types->Result;
       Function.HasDeclaredMIPSIntegerResult =
           Types->Result->Kind == NdTypeKind::Int;
       Function.MultiReturn.clear();
+      if (Signature->ReturnComplex)
+        for (unsigned I = 0; I != 2; ++I)
+          Function.MultiReturn.push_back(
+              {getTargetRegInfo(Target).FPReturnRegs[I],
+               static_cast<uint16_t>(Signature->ReturnBytes / 2), true});
       Function.ReturnsVectorRegister = false;
-      // A MIPS16 body and its typed direct callers must share the logical
-      // parameter types. Retain exact register identities and widths: a
-      // split double or an omitted input needs a separate entry adapter.
-      if (Signature->MIPS16Parameters && !Signature->FixedCount &&
-          Signature->Scalars.size() == Function.Params.size()) {
-        bool Exact = true;
-        for (size_t I = 0; I < Function.Params.size(); ++I) {
-          const auto &P = Function.Params[I];
-          const auto &S = Signature->Scalars[I];
-          Exact &= S.Kind == SourceABICarrierKind::IntegerRegister &&
-                   P.RegOff == S.Register && P.Size == S.Bytes;
-        }
-        if (Exact) {
-          Function.TypedParams.clear();
-          for (size_t I = 0; I < Function.Params.size(); ++I)
-            Function.TypedParams.push_back(
-                {Function.Params[I].display(), Types->Parameters[I]});
-        }
-      }
+      bindMIPS16ScalarEntry(Function, Target, *Signature, *Types);
     }
-  if (!Function.ReturnType || !Function.MultiReturn.empty())
+  const unsigned ComplexBytes =
+      sourceComplexComponentBytes(Function.ReturnType);
+  if (!Function.ReturnType || (!Function.MultiReturn.empty() && !ComplexBytes))
     return;
-  const bool Floating = Function.ReturnType->Kind == NdTypeKind::Float;
+  const bool Floating =
+      Function.ReturnType->Kind == NdTypeKind::Float || ComplexBytes;
   if (!Declared && !Floating &&
       !(Function.ReturnType->Kind == NdTypeKind::Int &&
         !Function.ReturnsVectorRegister))
@@ -501,8 +690,9 @@ void discardUnobservedMIPSFPUpperBits(
       // Keep every potentially returned FPR definition conservative unless
       // a later full write proves it cannot supply the implicit ABI result.
       if (Floating && Value.Kind == MedVar::Reg &&
-          Value.RegOff == TRI.FPReturnReg &&
-          First < Function.ReturnType->Size &&
+          (Value.RegOff == TRI.FPReturnReg ||
+           (ComplexBytes && Value.RegOff == TRI.FPReturnRegs[1])) &&
+          First < (ComplexBytes ? ComplexBytes : Function.ReturnType->Size) &&
           !Overwritten.contains(KeyOf(Value)))
         return true;
       // RETURN may still carry only its branch target here. Integer

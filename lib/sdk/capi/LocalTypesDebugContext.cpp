@@ -155,6 +155,13 @@ private:
     case types::Builtin::Double:
     case types::Builtin::LongDouble:
       return NdType::makeFloat(Bytes);
+    case types::Builtin::ComplexFloat:
+    case types::Builtin::ComplexDouble: {
+      auto Complex = NdType::makeComplex(Bytes / 2);
+      Complex->SourceName = Info.Keywords;
+      Complex->Alignment = Library.alignOf(*types::makeBuiltin(Builtin));
+      return Complex;
+    }
     default:
       break;
     }
@@ -191,7 +198,8 @@ private:
       // A type this conversion made, a scalar, a pointer or an enumeration,
       // keeps the typedef's name for display; a record is shared, and
       // keeps its tag's.
-      if (!Target || (Target->Kind == NdTypeKind::Struct && !Target->IsEnum))
+      if (!Target || (Target->Kind == NdTypeKind::Struct && !Target->IsEnum &&
+                      Target->Passing != NdRecordPassing::Complex))
         return Target;
       TypeRef Named = std::make_shared<NdType>(*Target);
       Named->TypedefName = Name.str();
@@ -690,13 +698,13 @@ namespace {
 
 /// How a value of \p Type passes: void, a float, a record or an integer or
 /// pointer, with its size.
-std::pair<NdTypeKind, uint16_t> passing(const TypeRef &Type) {
+std::tuple<NdTypeKind, uint16_t, bool> passing(const TypeRef &Type) {
   if (!Type || Type->Kind == NdTypeKind::Void)
-    return {NdTypeKind::Void, 0};
+    return {NdTypeKind::Void, 0, false};
   if (Type->Kind == NdTypeKind::Float ||
       (Type->Kind == NdTypeKind::Struct && !Type->IsEnum))
-    return {Type->Kind, Type->Size};
-  return {NdTypeKind::Int, Type->Size};
+    return {Type->Kind, Type->Size, Type->Passing == NdRecordPassing::Complex};
+  return {NdTypeKind::Int, Type->Size, false};
 }
 
 } // namespace

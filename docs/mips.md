@@ -100,12 +100,15 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   mode enters call classification, source binding and descriptor validation;
   classic and microMIPS entry rules keep their FPR prefix. Both C routes retain
   the target's mode on declarations even when its body is omitted. A complete
-  fixed MIPS16 signature whose parameters match individual recovered GPRs also
-  supplies the definition's logical types. Split values, missing inputs and
-  variadic entry adapters require separate qualification. MIPS16 floating
-  results still need a dual GPR/FPR result adapter and are declined by the
-  scalar-call classifier. Automatic typing of linker/runtime stubs remains
-  outside this qualification.
+  fixed MIPS16 signature supplies logical parameter types when all recovered
+  GPR bytes match, including both words of an o32 double in target byte order.
+  Missing inputs, stack and variadic entry adapters need separate proof.
+  Classic entry stubs can inherit an exact body declaration only after their
+  actual LowIR transfers and delay slot prove every parameter byte; a name
+  alone never establishes that association. The original call graph shares
+  the transport proof without requiring a prototype. MIPS16 floating results
+  require the byte-proven dual GPR/FPR result adapters described below.
+  General runtime call and return helpers remain unqualified.
 
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions
@@ -476,8 +479,93 @@ separately from successful reconstruction.
 Classic linker entry stubs remain distinct physical functions and need a
 verified prototype association; their names alone do not establish it.
 [GCC's MIPS16 function-stub implementation](https://gnu.googlesource.com/gcc/+/refs/tags/releases/gcc-12.1.0/gcc/config/mips/mips.cc)
-describes this FPR-to-GPR bridge. Floating-return helpers and indirect runtime
-stubs still require separate result and control-flow qualification.
+describes this FPR-to-GPR bridge. Indirect runtime stubs still require their
+own result and control-flow qualification.
+
+The [MIPS16 call roundtrip](../unittests/lift/mips/mips16-floating-call-roundtrip.py)
+also covers split double parameters and proven classic entry stubs, in both
+byte orders and FR=0/1. GCC originals are compared with GCC and Clang rebuilds
+of either isolated side and of the combined caller/callee, through HighC and
+LLVMC at O0/O2. The proof rejects altered target tags, unproven register
+targets, stores in the delay slot, and missing or mismatched declarations.
+Source definitions of compiler-generated stubs use a distinct identifier so
+regenerated stubs cannot collide; original addresses and names remain in
+metadata. GNU rebuilds use fixed-width rotate helpers with modulo counts and
+single evaluation. Tests and paired performance receipts are retained in the
+task's ignored build directory; the entry adapter does not establish a
+universal speed ranking or qualify other firmware.
+
+Clang 22 misses an entry stub when only a function attribute enables MIPS16
+inside a classic compilation unit; its FR=1 double stubs also use the wrong
+high-word register. Independent original-code executions distinguish these
+compiler failures from source reconstruction. The corrected compiler in
+[NeverSight LLVM PR #12](https://github.com/NeverSight/llvm-project/pull/12)
+passed the float/double reconstruction matrix and three-host fork CI and has
+been merged. The installed MIPS backend is also qualified by
+[LLVM PR #13](https://github.com/NeverSight/llvm-project/pull/13); consuming a
+new NeverD dependency snapshot requires its own build qualification.
+
+MIPS16 o32 scalar `float` and `double` results now admit byte-proven classic
+return helpers. The proof checks the decoded operations, physical delay slot,
+unchanged incoming link and exact GPR-to-FPR words in both byte orders and
+FR=0/1. Names do not confer a contract. HighC and LLVMC project the helper's
+effects into a private source body before SSA; published LowIR and original
+call targets remain intact. Machine lift does not inherit this source-only
+qualification. Proven classic parameter adapters can also accompany a scalar
+floating result.
+
+Complete source units omit these result helpers with an explicit function
+audit and retain the native runtime when linking the rebuilt program. A
+standalone source request for a helper fails clearly: its incoming result
+registers do not form an ordinary C function signature. This prevents an empty
+helper definition from replacing the actual register transport. Selected source
+units honor audited omissions; machine lift still requires every selected body.
+
+The [scalar runtime receipt](evidence/mips16-scalar-runtime-2026-11-17.json)
+records separate pointer-input and floating-input matrices against unmodified
+GCC 12.4 runtime helpers. Each matrix has 16 profiles, 384 source rebuilds and
+12,288 independent execution comparisons, including NaN payloads, asymmetric
+double words and preserved machine state. The return-link proof follows
+numerical result spills and external scalar input loads before any possible
+frame escape, including predecessor blocks. Passing a frame-derived argument,
+or reading after an external store or call without a stronger memory contract,
+does not acquire that proof. Variadic/runtime conversion adapters and MIPS64
+compressed floating results remain unqualified.
+
+Type declarations now retain `float _Complex` and `double _Complex` through
+C parsing/rendering, DWARF import and source prototype conversion. They keep
+their complex passing class rather than becoming a same-sized integer or
+ordinary two-field record. Fixed o32 calls with scalar parameters can return
+these two-component complex values. The source ABI uses f0/f2 and preserves
+the MIPS16 v0/v1 and a0/a1 word aliases in target byte order. A component that
+already occupies its full ABI register is not zero-extended into the same
+width. HighC and LLVMC construct and extract components as raw floating values,
+including NaN payloads and signed zero, and evaluate each call once.
+
+The return-link proof also handles GCC's double arguments assembled by two
+word stores before `ldc1`. It follows every requested byte in target byte
+order on every reaching predecessor; missing bytes, frame-derived values and
+overwrites of the saved link still reject source reconstruction. A later
+floating result spill can depend on the argument currently being proved.
+Only completed positive provenance proofs are cached, so a recursive query's
+temporary failure cannot invalidate an otherwise proven call.
+
+The [complex result receipt](evidence/mips16-complex-runtime-2026-11-17.json)
+records separate caller/callee objects and
+complete source units with GCC and Clang at O0/O2, for both byte orders,
+FR=0/1 and classic/MIPS16 callers. The original uses the unmodified GNU
+runtime; rebuilt freestanding programs also link the tested guest `memcpy`
+required by compiler-generated aggregate copies. No emulator-side memory
+hook replaces that code. This qualifies complex results with scalar parameters,
+not complex parameters, variadic complex calls, n32/n64 complex ABI or general
+indirect runtime adapters. Extended complex types remain opaque when DWARF
+describes them and are refused as source declarations.
+
+Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
+image, linking only the resulting translation unit and the original runtime.
+Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
+orders, FR modes, compilers and observations. The unit and isolated-function
+receipts identify their different tested commits explicitly.
 
 Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
 Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
