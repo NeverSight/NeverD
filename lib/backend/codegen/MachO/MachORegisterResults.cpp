@@ -829,26 +829,32 @@ std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
   const auto *First = Image.readVA(Start, Word);
   if (!First)
     return std::nullopt;
+  std::optional<va_t> ForwardTarget;
   if (const auto Jump =
           decodeDirectBranch(Arch::AArch64, InstructionMode::Default, First,
                              Word, Start, {.Jumps = true}))
     if (const auto Target = Jump->target();
         Target && *Target != Start &&
         Image.hasAuthenticatedFunctionEntryAt(*Target))
-      return MachOLiftedSource{{First, Word}, Target};
-  const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
-  if (!Frame || !Frame->Compact)
-    return std::nullopt;
-  const va_t Limit =
-      Section ? Section->VA + Section->Size : Frame->CodeRange.End;
-  const va_t End = std::min(NextEntry, Limit);
-  if (End <= Start || (End - Start) % Word || Frame->CodeRange.End < End ||
-      !rangeInBounds(Start - Segment->VA, End - Start, Segment->FileSz))
-    return std::nullopt;
+      ForwardTarget = Target;
+  va_t End = Start + Word;
+  if (!ForwardTarget) {
+    const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
+    if (!Frame || !Frame->Compact)
+      return std::nullopt;
+    const va_t Limit =
+        Section ? Section->VA + Section->Size : Frame->CodeRange.End;
+    End = std::min(NextEntry, Limit);
+    if (End <= Start || (End - Start) % Word || Frame->CodeRange.End < End ||
+        !rangeInBounds(Start - Segment->VA, End - Start, Segment->FileSz))
+      return std::nullopt;
+  }
   if (!Section && llvm::any_of(Image.Sections, [&](const auto &S) {
         return S.Size && S.VA < End && S.VA + S.Size > Start;
       }))
     return std::nullopt;
+  if (ForwardTarget)
+    return MachOLiftedSource{{First, Word}, ForwardTarget};
   const auto *Bytes = Image.readVA(Start, End - Start);
   if (!Bytes)
     return std::nullopt;

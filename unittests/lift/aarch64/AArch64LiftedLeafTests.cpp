@@ -643,13 +643,27 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         ASSERT_EQ(Entries.size(), ExpectedEntries << (I + 1));
         testing::Test::RecordProperty(
             kReliftFunctionsPrefix + std::to_string(I), int(Entries.size()));
+        unsigned CheckedForwarders = 0;
         for (size_t J = 0; J < Entries.size(); ++J) {
           SCOPED_TRACE(llvm::utohexstr(Entries[J]));
           const auto Body = machOLiftedSource(
               *Previous, Entries[J],
               J + 1 == Entries.size() ? InvalidVA : Entries[J + 1]);
           ASSERT_TRUE(Body);
+          if (Body->ForwardTarget && !Previous->getSectionFor(Entries[J])) {
+            ++CheckedForwarders;
+            auto Overlap = *Previous;
+            Section Data;
+            Data.VA = Entries[J] + Body->Bytes.size();
+            Data.Size = sizeof(uint8_t);
+            Overlap.Sections.push_back(Data);
+            EXPECT_TRUE(machOLiftedSource(Overlap, Entries[J], InvalidVA));
+            --Overlap.Sections.back().VA;
+            EXPECT_FALSE(machOLiftedSource(Overlap, Entries[J], InvalidVA));
+          }
         }
+        if (I)
+          EXPECT_GT(CheckedForwarders, 0u);
         // A compact extent must not turn intervening data or virtual-only
         // bytes into the tail of a sectionless installed function.
         const auto InstalledBody = llvm::find_if(Entries, [&](va_t Entry) {

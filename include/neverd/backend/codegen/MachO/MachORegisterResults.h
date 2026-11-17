@@ -20,6 +20,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
 
+#include <cstdint>
 #include <optional>
 #include <vector>
 

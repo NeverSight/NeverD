@@ -2185,6 +2185,10 @@ installed callee, with no register, SP or LR changes, and its generated unwind
 record must describe a zero-stack frameless body. Unreachable instructions
 following an old entry trampoline are not emitted as its new body. The native
 register producer and final-machine verifier both check this contract.
+Sectionless forwarding bodies share the data-overlap check with ordinary
+bodies: an adjacent data range is outside the four-byte branch, while a range
+covering even its last byte refuses the source extent. The repeated-publication
+fixtures exercise both boundaries on installed forwarding entries.
 
 The tight-layout publisher may reclaim `LC_FUNCTION_STARTS` command space.
 Republishing uses the independently authenticated symbol/unwind inventory and
@@ -2192,8 +2196,8 @@ checks that every original callable entry has a definition; it does not require
 a function-start command which the previous publication legitimately removed.
 The signed-leaf, vector-memory, SIMD-register, indexed-frame and global/import
 fixtures each exercise three automatic publication generations. They check the
-complete 4-entry and 8-entry relift inventories, reject redirected forwarding operands
-and missing definitions, verify each signature and preserve every prior input.
+complete 4-entry and 8-entry relift inventories, reject redirected forwarding
+operands and missing definitions, verify each signature and preserve every prior input.
 Native-enabled runs execute the original and all three outputs through an
 independent authenticated caller.
 
@@ -2216,7 +2220,7 @@ support. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
 
 Local Release validation passes all 240 publication cases, 30 signature-policy
 cases, 7 signer cases, 323 language-EH cases, 161 image-boundary cases and 68
-relocated-entry cases. Two unrelated
-checks remain unavailable locally: the optional real-binary unwind sample and
+relocated-entry cases. Two unrelated checks remain unavailable locally: the
+optional real-binary unwind sample and
 the native i386 reference. Formatting, whitespace and documentation checks
 pass. No LLVM fork changes or prebuilt revision changes are needed.
