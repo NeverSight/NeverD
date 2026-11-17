@@ -10661,6 +10661,17 @@ them, so the read-only data a linker maps with the code (the single R+X
 segment of an Android image) still prints as its literals, and by the segment
 only without section headers.
 
+In-place rewriting binds a replacement, and each function it calls, by its
+source identity (`rewrite_source::getOriginalVA`) before its name, as section
+rewriting does. The image's symbol names, which a PDB or MAP gives, need not
+be the module's: a module lifted without them names a function
+`sub_<address>`. A replacement no symbol names is matched at its authenticated
+entry, one whose name the image gives only functions at other addresses is
+refused, and a call of a function the module names by its entry resolves to
+that entry. Statics of one name in two files share a name, so the symbol at the
+entry decides among them, and every function symbol bounds a function's
+extent.
+
 ELF GOT data identities come from the exact relocation symbol snapshot through
 `collectDataSymbolBindings`, shared by HighC and LLVM emission. The loader's
 relocation inventory owns addend rules; whether the slot is read-only once
