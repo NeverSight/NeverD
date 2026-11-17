@@ -1,0 +1,40 @@
+{
+  "schema": 1,
+  "date": "2026-11-17",
+  "source_commit": "178a333abb9d69b9834f50e89a4b6df2bf495980",
+  "base_commit": "73e24c6ff7b1a508e4c487c76a49bdcc5c829979",
+  "scope": "Classic n64 legacy DSP64 signed DMADD/DMSUB and ten rounded/saturated DEXTR forms; existing unsigned products remain covered.",
+  "reference": {
+    "repository": "https://github.com/NeverSight/unicorn",
+    "commit": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79",
+    "merged_repairs": [35, 36],
+    "native_run": "https://github.com/NeverSight/NeverD/actions/runs/43913164590",
+    "platforms": ["Linux x64", "macOS arm64", "Windows x64"],
+    "cases_per_platform": 29,
+    "model": "MIPS64DSPR2 with original classic instruction encodings",
+    "independent_oracles": ["LLVM APInt", "Python unbounded integers", "bit-serial unsigned accumulation and sign/magnitude products"]
+  },
+  "local_tests": {
+    "configuration": "Release, Apple Clang 17, arm64, semantic reference enabled",
+    "owners": ["NeverDMIPSTests", "NeverDMIPSFlowTests", "NeverDMIPSIntegerTests", "NeverDMIPSPipelineTests", "NeverDMIPSSDKTests"],
+    "passed": 888,
+    "failed": 0,
+    "skipped": 0,
+    "rounded_original_comparisons": 297920,
+    "word_product_original_comparisons": 1536
+  },
+  "source_roundtrips": {
+    "byte_orders": ["big", "little"],
+    "views": ["HighC", "LLVMC"],
+    "optimizations": ["O0", "O2"],
+    "rounded": {"profiles": 35, "source_builds": 280, "executions": 5320},
+    "word_products": {"profiles": 8, "source_builds": 64, "executions": 2176},
+    "driver": "unittests/lift/mips/profile-roundtrip.py"
+  },
+  "limits": [
+    "This receipt does not qualify historical physical CPUs or deprecated microMIPS64 DSP encodings.",
+    "Historical MIPS I-III timing, compressed floating runtime adapters and general source ABI gaps remain separate work.",
+    "NeverD native Linux/Windows qualification and the pending parent PR integration remain separate from the reference executor's three-platform result."
+  ],
+  "artifacts": "Raw samples, source diagnostics and verified compressed recovery indexes are retained in the ignored mips-legacy-completion/remaining-dsp64 task directory; generated roundtrip products were removed."
+}

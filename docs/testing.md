@@ -25445,6 +25445,20 @@ the resulting DSPControl value. Native zero-result regressions additionally
 check DSP-disabled exceptions and an unchanged zero register. These checks
 do not qualify hardware execution.
 
+The `mips64rounded_*` selections cover all ten immediate/register rounded or
+saturated legacy DSP64 extraction forms. The source matrix uses counts
+0/1/31 and additionally 63 for variable forms, both byte orders, both C views
+and O0/O2. The original result and DSPControl must first agree with independent
+unbounded integer arithmetic. `mips64acc_dmadd_{hi,lo}` and
+`mips64acc_dmsub_{hi,lo}`, together with their unsigned counterparts, include
+products wider than 32 bits, signed extrema and full accumulator carry/borrow.
+The owning `MIPSDSP64` tests additionally cover every immediate count,
+variable count masking, all four banks, discarded/aliased destinations,
+sticky overflow and untouched state. Their APInt oracle is separate from the
+reference executor's sign/magnitude and bit-serial regressions. Use the pinned
+Unicorn: older helpers truncate signed products and mishandle several rounded
+and saturated extraction boundaries.
+
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.
 Use a GNU MIPS simulator built for `mipsisa32r2-unknown-elf`. It compares two
