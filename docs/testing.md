@@ -25760,6 +25760,14 @@ Optional ABI, byte-order, component-size and original-compiler filters narrow
 a diagnostic run. This driver covers classic MIPS64r2 n32/n64, not compressed
 code, complex parameters or variadic complex calls.
 
+`MIPSSourceReturnTargets.LogicalZeroMovesRetainExactFrameIdentity` checks
+OR/XOR zero on both operand sides, both widths and byte orders, with an
+unknown-register negative control. `PrivateFrameSpillsDoNotPublishTheFrame`
+checks 132 o32/n32/n64 cases across both byte orders and declared/native
+callees: private FP/SP spills, callee-owned and external storage, direct and
+reloaded frame-address escape, unknown call SP, and two-call intersections.
+Every saved-link byte still needs an exact reaching-store proof.
+
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
 ```sh

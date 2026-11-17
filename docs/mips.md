@@ -570,6 +570,14 @@ positions; the result's real and imaginary components occupy f0 and f2 in
 both byte orders. This does not qualify compressed n32/n64 complex runtime
 adapters, complex parameters, variadic complex calls or general record ABIs.
 
+The return-link proof permits saved FP/SP values only in stack storage that
+remains private at every call. The boundary includes each callee's entire
+outgoing argument area, including unused bytes of a partial argument slot.
+External stores, passed or reloaded frame addresses, an unknown call SP, and
+a second call that exposes an earlier spill remain unproved. Logical OR/XOR
+with architectural zero retains its full-width copy identity before this
+proof; word ADDU still has its distinct truncation and extension semantics.
+
 Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
 image, linking only the resulting translation unit and the original runtime.
 Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
