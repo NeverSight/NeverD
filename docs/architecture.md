@@ -1571,6 +1571,9 @@ reconstruction; x1 cannot bypass authenticated-ABI requirements. All use
 the AArch64 decoder.
 
 `AArch64DecodeContract` separates raw occurrence identity from operand detail.
+The AArch64 lift-decode entry owns native attempt setup and its full-decode
+fallback; the shared lift-decode entry dispatches other architectures directly
+to their ordinary decoder.
 The decoder records the original word, producer identity and buffer generation;
 classification-only results cannot reuse old operands. Native fast decoding
 can supply complete detail with text disabled, while the Capstone fallback
@@ -14481,6 +14484,13 @@ read a later value. A PHI has no statement but its copies, so the source map
 records its occurrences there.
 
 ## Cross-architecture translation contract
+
+`support/LLVMCodegenTargets.def` owns the LLVM backends NeverD links for
+code generation. CMake derives both integrated-build components and prebuilt
+SDK libraries from this table. `initializeLLVMCodegenTargets()` registers
+exactly those backends once for `Codegen` and `TranslationTargetMachine`.
+An SDK may include additional targets; its inventory neither expands NeverD's
+supported host architectures nor introduces references to unlinked backends.
 
 `include/neverd/translate` defines a contract layer, not an
 execution backend. `GuestState` models architecture-neutral, machine-visible

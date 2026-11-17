@@ -6289,6 +6289,10 @@ classification never publishes stale operands. Tests cover failed attempts,
 reset/reinitialization, reconstructed decoder objects, altered records, direct
 missing-detail calls and copied MOVPRFX records with a changed follower.
 Deep snapshots remain usable across decoder replacement; shallow copies expire.
+Switching a reused output from AArch64 to either byte order of MIPS32 or MIPS64
+clears its occurrence evidence on both successful and truncated decodes. The
+native-fast entry retains the same invalidation and fallback contract when
+its architecture-specific work is dispatched directly.
 Refused attempts clear prior undefined-output and preserved-state evidence,
 including real x64 certificates retained across an architecture change.
 Operand queries reject a mismatched requested architecture for both owned
@@ -14881,6 +14885,7 @@ discovered case a CTest label equal to that executable's target name.
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Cross-platform child-process invocation, quoting, redirects, and exit codes |
+| `unittests/LLVMTargetInitializationTests.cpp` | `NeverDLLVMTargetInitializationTests` | Repeated initialization registers exactly the linked LLVM backends, including target machines, MC backends and assembly parsers; run with `NeverDTranslationContractTests` to exercise object emission for every supported host architecture |
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
 | `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and the mandatory six-cell PE/ELF/Mach-O × x86-64/AArch64 matrix |
 | `unittests/loader` | `NeverDRawISATests` | Binary files: instruction-set identification from the bytes (data, the test's own code, code two bytes in, 32- versus 64-bit encodings per family, files that start with zeros) and the Cortex-M vector table. `scripts/validate_isa_model.py --engine build/bin/libneverd.so` checks the model on 180 real programs and libraries it never saw, downloaded by hash; it needs the network and is not part of CTest |
