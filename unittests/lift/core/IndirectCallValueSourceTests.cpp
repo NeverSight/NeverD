@@ -13,6 +13,7 @@
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -22,6 +23,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -30,6 +32,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -244,5 +247,175 @@ TEST(IndirectCallValueSource, ExactTargetKeepsForwardedInputBeforeSSA) {
 
 TEST(IndirectCallValueSource, DirectEdgeKeepsForwardedInputBeforeSSA) {
   checkForwardedInput(true);
+}
+BinaryImage dynamicForwardingImage(Arch Architecture, BinaryFormat Format,
+                                   bool Tail) {
+  BinaryImage Image;
+  Image.Arch = Architecture;
+  Image.Format = Format;
+  Image.Bits = getTargetRegInfo(Architecture).PointerSize == 4
+                   ? Bitness::Bits32
+                   : Bitness::Bits64;
+  Image.Entry = Image.Base = 0x1000;
+  Segment Text;
+  Text.VA = Image.Entry;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  if (Architecture == Arch::X64) {
+    Text.Data = {
+        0x48, 0x83, 0xec, 0x28,
+        0x48, 0x8b, 0x05, 0xf5,
+        2,    0,    0,    uint8_t(Format == BinaryFormat::COFF ? 0xba : 0xbe),
+        37,   0,    0,    0};
+    if (Tail)
+      Text.Data.insert(Text.Data.end(), {0x48, 0x83, 0xc4, 0x28, 0xff, 0xe0});
+    else
+      Text.Data.insert(Text.Data.end(),
+                       {0xff, 0xd0, 0x48, 0x83, 0xc4, 0x28, 0xc3});
+  } else if (Architecture == Arch::X86) {
+    Text.Data = {0x6a, 37, 0xff, 0x74, 0x24, 8, // push 37; push [esp+8]
+                 0xa1, 0,  0x13, 0,    0,    0xff, 0xd0, 0x83, 0xc4, 8, 0xc3};
+  } else {
+    std::vector<uint32_t> Words;
+    if (Architecture == Arch::AArch64) {
+      Words = {0xa9bf7bfd, 0x910003fd, 0xd2826010, 0xf9400210, 0xd28004a1};
+      if (Tail)
+        Words.insert(Words.end(), {0xa8c17bfd, 0xd61f0200});
+      else
+        Words.insert(Words.end(), {0xd63f0200, 0xa8c17bfd, 0xd65f03c0});
+    } else {
+      const bool Wide = isMIPS64(Architecture);
+      Words = {Wide ? 0x67bdffe0u : 0x27bdffe0u,
+               Wide ? 0xffbf0018u : 0xafbf001cu,
+               0x24191300,
+               Wide && !isMIPSN32(Architecture) ? 0xdf390000u : 0x8f390000u,
+               0x0320f809,
+               0x24050025,
+               Wide ? 0xdfbf0018u : 0x8fbf001cu,
+               0x03e00008,
+               Wide ? 0x67bd0020u : 0x27bd0020u};
+      Image.MIPS.emplace();
+      Image.MIPS->HasDSP = true;
+      Image.MIPS->ABI = isMIPSN32(Architecture) ? MIPSABI::N32
+                        : Wide                  ? MIPSABI::N64
+                                                : MIPSABI::O32;
+    }
+    Text.Data.resize(4 * Words.size());
+    for (size_t I = 0; I < Words.size(); ++I)
+      llvm::support::endian::write32(Text.Data.data() + 4 * I, Words[I],
+                                     archLittleEndian(Architecture)
+                                         ? llvm::endianness::little
+                                         : llvm::endianness::big);
+  }
+  Text.Size = Text.FileSz = Text.Data.size();
+  Image.Symbols.push_back({"dynamic_probe", Image.Entry, Text.Size, true});
+  Image.Segments.push_back(std::move(Text));
+  Segment Data;
+  Data.VA = 0x1300;
+  Data.Size = Data.FileSz = 8;
+  Data.Data.resize(8);
+  Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Image.Segments.push_back(std::move(Data));
+  return Image;
+}
+
+TEST(IndirectCallValueSource,
+     DynamicPointerForwardingAgreesAcrossSourceRoutes) {
+  for (Arch Architecture :
+       {Arch::X86, Arch::X64, Arch::AArch64, Arch::MIPS32, Arch::MIPS32EL,
+        Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool Tail : {false, true}) {
+      if (Tail && Architecture != Arch::X64 && Architecture != Arch::AArch64)
+        continue;
+      for (bool LLVM : {false, true})
+        for (bool NoOpt : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(Architecture) << ':' << Tail << ':' << LLVM
+                       << ':' << NoOpt);
+          auto Image =
+              dynamicForwardingImage(Architecture, BinaryFormat::ELF, Tail);
+          llvm::LLVMContext Context;
+          PipelineOptions Options;
+          Options.EmitDumpOutput = false;
+          Options.OnlyFunctionEntries = {Image.Entry};
+          Options.LiftMode = LLVM;
+          Options.NoOpt = NoOpt;
+          auto Result = Pipeline().run(Image, Context, Options);
+          ASSERT_TRUE(Result.Success) << Result.Error;
+          ASSERT_EQ(Result.MedFuncs.size(), 1u);
+          const auto &Function = Result.MedFuncs.front();
+          ASSERT_EQ(Function.Params.size(), 1u);
+          ASSERT_EQ(Function.CallInfos.size(), 1u);
+          const auto &Call = Function.CallInfos.front();
+          EXPECT_TRUE(Call.IsIndirect);
+          ASSERT_EQ(Call.Args.size(), 2u);
+          if (Call.Args.back().isConst())
+            EXPECT_EQ(Call.Args.back().ConstVal, 37u);
+          EXPECT_FALSE(Function.Blocks.front().Ops.empty());
+          std::string Source;
+          llvm::raw_string_ostream Output(Source);
+          CEmitterOptions COptions;
+          COptions.TheArch = Architecture;
+          COptions.Format = Image.Format;
+          COptions.Image = &Image;
+          if (LLVM) {
+            ASSERT_TRUE(Result.LlvmModule);
+            ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            const auto *Caller =
+                Result.LlvmModule->getFunction("dynamic_probe");
+            ASSERT_TRUE(Caller);
+            EXPECT_EQ(Caller->arg_size(), 1u);
+            unsigned Indirect = 0;
+            for (const auto &Block : *Caller)
+              for (const auto &Instruction : Block)
+                if (const auto *Call =
+                        llvm::dyn_cast<llvm::CallBase>(&Instruction);
+                    Call && !Call->getCalledFunction()) {
+                  EXPECT_EQ(Call->arg_size(), 2u);
+                  if (isMIPS64(Architecture) && Call->arg_size() == 2)
+                    EXPECT_EQ(Call->getArgOperand(0), Caller->getArg(0));
+                  ++Indirect;
+                }
+            EXPECT_EQ(Indirect, 1u);
+            ASSERT_TRUE(
+                LLVMCEmitter().emit(*Result.LlvmModule, Output, COptions));
+          } else {
+            ASSERT_TRUE(
+                HighCEmitter().emit(Result.HighFuncs, Output, COptions));
+          }
+          EXPECT_EQ(Source.find("incoming register has no definition"),
+                    std::string::npos)
+              << Source;
+          EXPECT_EQ(Source.find("no recovered machine state"),
+                    std::string::npos)
+              << Source;
+          source_call_execution_test::checkSyntax(Source, {});
+          if (Architecture == Arch::X64 || Architecture == Arch::AArch64) {
+            // The slot has no target or signature evidence. Change it between
+            // calls so an accidentally devirtualized call cannot pass.
+            ASSERT_NE(Source.find("off_1300"), std::string::npos) << Source;
+            Source += R"c(
+#include <string.h>
+static uint64_t first_callback(uint64_t x, uint64_t y) { return x ^ y; }
+static uint64_t second_callback(uint64_t x, uint64_t y) { return x + y; }
+int main(void) {
+  uint64_t values[] = {0, 17, UINT64_C(0x100000002), UINT64_MAX};
+  for (unsigned variant = 0; variant != 2; ++variant) {
+    uintptr_t pointer = (uintptr_t)(variant ? second_callback : first_callback);
+    memcpy(&off_1300, &pointer, sizeof(pointer));
+    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+      uint64_t expected = variant ? values[i] + 37 : values[i] ^ 37;
+      if ((uint64_t)dynamic_probe(values[i]) != expected) return 1;
+    }
+  }
+  return 0;
+}
+)c";
+            for (const char *Optimization : {"-O0", "-O2"})
+              source_call_execution_test::compileAndRun(
+                  Source, {Optimization, "-fsanitize=undefined",
+                           "-fno-sanitize-recover=all"});
+          }
+        }
+    }
 }
 } // namespace

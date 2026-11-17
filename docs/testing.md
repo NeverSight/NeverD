@@ -18096,8 +18096,30 @@ variadic pointer summaries at the shared Med ABI boundary on x86, x64,
 AArch64 and all six MIPS profiles. It covers n32's eight-byte carriers despite
 four-byte pointers, wide stack stores followed by another argument, fixed
 contracts with unwritten inputs, and Darwin AArch64's named-register/variadic-
-stack boundary. Run this target together with the architecture call-contract
+stack boundary. Dynamic-prefix cases distinguish unchanged incoming inputs
+from prior-call clobbers and a register used only as the target. Run this target
+together with the architecture call-contract
 and MIPS pipeline suites when changing these recovery rules.
+`IndirectCallValueSource.DynamicPointerForwardingAgreesAcrossSourceRoutes`
+checks an untyped mutable pointer with no relocation or debug declaration on
+those nine profiles, plus x64/AArch64 tail forwarding, with and without
+optimization. It verifies LLVM and recompiles both C routes; the x64/AArch64
+sources execute changing callback targets and full-width values at O0/O2 under
+UBSan. `MIPSReturnTargets.NativeCallsRequireAnUnexposedAllocatedReturnSlot`
+checks both byte orders of o32/n32/n64, with and without image metadata, and
+rejects frame escapes, partial saved links, unallocated slots, misaligned SP,
+stack pointer arguments and unknown direct-target modes.
+The MIPS16 call-return cases also distinguish private saved links from slots
+inside o32's outgoing register home area.
+`unittests/lift/mips/dynamic-call-roundtrip.py` uses cross-target Clang/lld,
+pyelftools and the repository-pinned Unicorn to execute originals and both
+regenerated C routes on all six MIPS profiles at O0/O2. Changing targets, word
+boundary values and full-width n32/n64 integers check argument forwarding,
+return values, SP, RA and callee-saved registers. The owned fixture has no debug
+declaration or retained relocation and uses `-G0` to avoid a separate GP entry
+binding requirement. Pass `--neverd`, `--clang`, `--ld` and an owned `--output`
+directory; generated binaries are discarded after source/hash receipts are
+recorded by `MIPSValidationArtifacts`.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
