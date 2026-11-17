@@ -1832,7 +1832,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         }
       }
       if (MOp.ScalarCallSignature && MOp.ScalarCallSignature->ReturnElements) {
-        // The selected header owns every HFA result register before SSA.
+        // The selected header owns every aggregate result register before SSA.
         // A following call may consume those fields without a single move.
         const auto &Signature = *MOp.ScalarCallSignature;
         const uint16_t Bytes = Signature.ReturnBytes / Signature.ReturnElements;
@@ -1845,14 +1845,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           Field.addInput(MOp.Output);
           Field.addInput(MedVar::makeConst(I * Bytes, 4,
                                            ConstantAddressProvenance::Scalar));
-          MedOp Register;
-          Register.Opcode = NdOp::INT_ZEXT;
-          Register.Addr = LOp.Addr;
-          Register.Output = ndVarToMedVar(NdVar::reg(
-              ConventionRegs.FPReturnRegs[I], ConventionRegs.FPABIRegWidth));
-          Register.addInput(Field.Output);
           MB.Ops.push_back(std::move(Field));
-          MB.Ops.push_back(std::move(Register));
+          // A full-width field already defines the complete ABI carrier.
+          // Only a narrow component needs a second, widened register view.
+          if (Bytes < ConventionRegs.FPABIRegWidth) {
+            MedOp Register;
+            Register.Opcode = NdOp::INT_ZEXT;
+            Register.Addr = LOp.Addr;
+            Register.Output = ndVarToMedVar(NdVar::reg(
+                ConventionRegs.FPReturnRegs[I], ConventionRegs.FPABIRegWidth));
+            Register.addInput(MB.Ops.back().Output);
+            MB.Ops.push_back(std::move(Register));
+          }
         }
       }
 

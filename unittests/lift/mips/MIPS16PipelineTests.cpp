@@ -744,6 +744,7 @@ TEST_P(MIPS16Pipeline, ComplexCallsDefineEveryIntegerResultWord) {
       Convert.setBinaryImage(&*Image);
       Convert.setCallEntryFloatingArguments(&Calls);
       const auto Med = Convert.convert(Low, GetParam(), BinaryFormat::ELF);
+      ASSERT_TRUE(verifyMedFunc(Med, "MIPS16 complex call result carriers"));
       std::set<unsigned> Words;
       std::set<unsigned> Floating;
       for (const auto &Block : Med.Blocks)
