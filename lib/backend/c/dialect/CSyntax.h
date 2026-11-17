@@ -17,6 +17,7 @@
 #ifndef NEVERD_LIB_BACKEND_C_DIALECT_CSYNTAX_H
 #define NEVERD_LIB_BACKEND_C_DIALECT_CSYNTAX_H
 
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
@@ -60,6 +61,11 @@ struct Token {
 /// first byte no C token starts with or an unterminated comment, string or
 /// character.
 llvm::Expected<std::vector<Token>> lex(llvm::StringRef Source);
+
+/// Visit the same tokens without retaining a token array for a large unit.
+/// Token text borrows \p Source; \p Visit must not mutate that storage.
+llvm::Error forEachToken(llvm::StringRef Source,
+                         llvm::function_ref<void(const Token &)> Visit);
 
 } // namespace csyntax
 } // namespace neverd

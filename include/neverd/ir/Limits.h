@@ -475,15 +475,15 @@ inline constexpr int
 
 // lib/ir/SourceStackFrame.cpp
 inline constexpr int kSourceStackFrameAnalyzeSourceStackFrameFBlocksSizeLimit =
-    4096;
+    65536;
 inline constexpr int
     kSourceStackFrameAnalyzeSourceStackFramePolicyPointsSizeLimit = 256;
 inline constexpr int
     kSourceStackFrameAnalyzeSourceStackFramePolicyVariablesSizeLimit = 256;
 inline constexpr int
-    kSourceStackFrameAnalyzeSourceStackFrameOperationCountLimit = 200000;
+    kSourceStackFrameAnalyzeSourceStackFrameOperationCountLimit = 4000000;
 inline constexpr int kSourceStackFrameAnalyzeSourceStackFrameRunRunWorkLimit =
-    1000000;
+    64000000;
 
 // lib/ir/SourceVariableFlow.cpp
 inline constexpr int kSourceVariableFlowNeverdSplitSourceVariableCountLimit =
@@ -848,6 +848,9 @@ inline constexpr int
         256;
 
 // lib/ir/med/abi/MedABIPassSupport.cpp
+// Shared by one function's virtual-receiver proofs. Bound predecessor slicing
+// after copy propagation; exhaustion cannot establish a receiver argument.
+inline constexpr size_t kMedABIVirtualReceiverWorkBudget = 262144;
 inline constexpr int kMedABIPassSupportReduceAddrDepthLimit = 128;
 inline constexpr int kMedABIPassSupportResolveIndirectTargetAddrDepthLimit = 16;
 inline constexpr int kMedABIPassSupportPeelCopyDefIndexDepthLimit = 16;

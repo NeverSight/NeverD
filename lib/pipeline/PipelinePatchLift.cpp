@@ -304,6 +304,8 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
   // interprocedural facts before either serial or sharded LLVM emission.
   propagateInternalNoReturn(Result.MedFuncs, Img.Arch, Img.UserNoReturn,
                             importCallAddresses(Img));
+  // Call-setup recovery adds parameters the first settlement could not see.
+  settleReturnContracts(Img, Result, Opts.SourceProjection ? Dbg : nullptr);
 
   for (const MedFunc &Function : Result.MedFuncs)
     for (const MedBlock &Block : Function.Blocks)

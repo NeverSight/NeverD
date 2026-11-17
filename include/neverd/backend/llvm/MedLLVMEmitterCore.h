@@ -68,6 +68,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -210,6 +211,8 @@ private:
   bool PreserveUnknownSourceValues = false;
   bool OriginalImageStorageForSource = false;
   bool usesOriginalImageStorage() const;
+  bool isOriginalImagePageAddress(const MedVar &Value) const;
+  bool isOriginalImagePageBase(uint64_t Page) const;
 
   std::pair<llvm::GlobalVariable *, uint64_t>
   originalImageStorage(uint64_t OwnerVA);
@@ -509,6 +512,8 @@ private:
 
   llvm::Type *sizeToType(uint16_t Size);
   llvm::Type *mapNdtype(const TypeRef &Ty);
+  llvm::Value *getIncomingParameter(const MedVar &V,
+                                    llvm::IRBuilder<> &Builder);
   llvm::Value *getVar(const MedVar &V, llvm::IRBuilder<> &Builder);
   /// Materialize an x86 FS/GS offset as an integer expression.  Segment
   /// offsets occupy a distinct address domain: constants whose bit pattern
@@ -589,6 +594,10 @@ private:
   /// an incomplete page/truncated-address relation (or invent one) on a deep
   /// forwarding chain.
   bool occurrenceHasAddressFragmentTaint(const MedVar &V) const;
+  /// Prove one raw AArch64 page through complete, pointer-width forwarding
+  /// components. Every component must reach an identical fragment seed.
+  /// This proves the page bits only; a memory owner must complete the address.
+  std::optional<uint64_t> uniformAddressFragment(const MedVar &V) const;
   /// A page-base fragment may be spilled only to a canonical, nonescaping
   /// synthetic-frame slot so a later address-forming use can complete it.
   /// Every other STORE of the fragment is a true value escape.
@@ -1138,6 +1147,13 @@ private:
   /// assembled privately and published only after the complete walk.
   void ensureFeasibleEdgeCache() const;
 
+  /// Refine a conservative graph with a joint finite-scalar/executable-edge
+  /// fixed point. Unknown entries and unsupported recurrences keep their edges.
+  void refineFiniteControlEdges(const std::map<int, const MedBlock *> &Blocks,
+                                const std::vector<int> &Roots,
+                                std::set<std::pair<int, int>> &Edges,
+                                std::set<int> &LiveBlocks) const;
+
   /// Drop every semantic memo whose result can transitively depend on PHI-edge
   /// feasibility. Both cache contents and per-function owners are reset.
   void invalidateFeasibleEdgeDependentCaches() const;
@@ -1160,13 +1176,13 @@ private:
   /// pointer proofs fail closed.
   bool phiIncomingEdgeFeasible(const PhiNode &Phi, int PredId) const;
 
-  struct PureReadOnlyBaseIdentity {
+  struct DataBaseIdentity {
     uint64_t VA = 0;
     uint16_t Width = 0;
     bool Symbolized = false;
     uint64_t OwnerVA = InvalidVA;
 
-    bool operator==(const PureReadOnlyBaseIdentity &) const = default;
+    bool operator==(const DataBaseIdentity &) const = default;
   };
 
   /// Recover the identity of a full-width immutable object-data base carried
@@ -1176,7 +1192,7 @@ private:
   /// An authenticated immutable pointer slot can also establish an identity.
   /// PHIs, other loads, arithmetic, truncation, and numeric coincidences
   /// cannot.
-  std::optional<PureReadOnlyBaseIdentity>
+  std::optional<DataBaseIdentity>
   pureReadOnlyBaseIdentity(const MedVar &V,
                            bool DirectPhiConstantBypassesGetVar) const;
 
@@ -1569,7 +1585,7 @@ private:
   /// leaf must carry architectural address origin or exact loader provenance.
   bool resolveMaterializableDataAddress(const MedVar &V, uint64_t &Value,
                                         uint64_t *OwnerVA = nullptr) const;
-  bool constUsedAsPointerImpl(uint64_t Val) const;
+  void buildConstUsedAsPointerIndex() const;
   bool constValueUsedAsIntegerImpl(uint64_t Val) const;
 
   /// True when constant \p Val is used as a genuine pointer in the current
@@ -2162,6 +2178,9 @@ private:
   // back to a bounded recursive approximation.
   mutable const MedFunc *AddressFragmentTaintFor = nullptr;
   mutable std::set<AddressProvenanceVarKey> AddressFragmentTaint;
+  mutable const MedFunc *UniformAddressFragmentCacheFor = nullptr;
+  mutable std::map<AddressProvenanceVarKey, std::optional<uint64_t>>
+      UniformAddressFragmentCache;
 
   // Completed clean top-level indexed-base proofs for the current function.
   // The cached record contains only MedIR facts, never llvm::Value objects.
@@ -2400,13 +2419,13 @@ private:
                    PointerTableLoadRoleSummary>
       PointerTableLoadRoleCache;
 
-  // Per-function memoized results of the two const classifiers, dropped when
-  // CurMedFunc changes (see ensureConstClassCache).  std::unordered_map rather
-  // than DenseMap so EVERY 64-bit ConstVal is a valid key — a
+  // Per-function pointer-use index and integer-classification cache, dropped
+  // when CurMedFunc changes (see ensureConstClassCache). The standard hash
+  // containers admit EVERY 64-bit ConstVal as a key — a
   // DenseMap<uint64_t> reserves ~0 and ~0-1 as its empty/tombstone sentinels,
   // which a genuine pointer constant can legitimately equal.
   mutable const MedFunc *ConstClassCacheFor = nullptr;
-  mutable std::unordered_map<uint64_t, bool> ConstUsedAsPointerCache;
+  mutable std::optional<std::unordered_set<uint64_t>> ConstUsedAsPointerValues;
   mutable std::unordered_map<uint64_t, bool> ConstValueUsedAsIntegerCache;
 
   llvm::LLVMContext *Ctx = nullptr;

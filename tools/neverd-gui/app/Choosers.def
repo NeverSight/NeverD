@@ -165,5 +165,23 @@ NEVERD_CHOOSER_COLUMN(StringReferences, "type",
 NEVERD_CHOOSER_COLUMN(StringReferences, "text",
                       QT_TRANSLATE_NOOP("Choosers", "String"), Literal, "text")
 
+NEVERD_CHOOSER(ComputedStrings, "computed_strings",
+               QT_TRANSLATE_NOOP("Choosers", "Computed strings"), "strings",
+               true, true)
+NEVERD_CHOOSER_COLUMN(ComputedStrings, "address",
+                      QT_TRANSLATE_NOOP("Choosers", "Observed after"),
+                      SegmentAddress, "address")
+NEVERD_CHOOSER_COLUMN(ComputedStrings, "function",
+                      QT_TRANSLATE_NOOP("Choosers", "Function"), Text,
+                      "function")
+NEVERD_CHOOSER_COLUMN(ComputedStrings, "string_address",
+                      QT_TRANSLATE_NOOP("Choosers", "Data address"), Address,
+                      "string_address")
+NEVERD_CHOOSER_COLUMN(ComputedStrings, "status",
+                      QT_TRANSLATE_NOOP("Choosers", "Evidence"), Text, "status")
+NEVERD_CHOOSER_COLUMN(ComputedStrings, "text",
+                      QT_TRANSLATE_NOOP("Choosers", "Text / diagnostic"),
+                      Literal, "text")
+
 #undef NEVERD_CHOOSER
 #undef NEVERD_CHOOSER_COLUMN

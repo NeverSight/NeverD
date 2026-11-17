@@ -75,7 +75,7 @@ void PaintCheck::painted(const QWidget &widget, const QPainter &painter,
     picture.image_ = QImage(extent, QImage::Format_RGB32);
     picture.image_.setDevicePixelRatio(scale);
     picture.image_.fill(Qt::magenta);
-    picture.whole_ = false;
+    picture.known_ = {};
   }
   const auto painting = [&](QImage &image, const QRegion &clip, bool afresh) {
     QPainter again(&image);
@@ -85,20 +85,19 @@ void PaintCheck::painted(const QWidget &widget, const QPainter &painter,
     paint(again, clip, afresh);
   };
   painting(picture.image_, region, false);
-  if (!picture.whole_) {
-    // Until the window has painted all of the widget once, part of the
-    // picture is no one's.
-    picture.whole_ = (QRegion(widget.rect()) - region).isEmpty();
-    if (!picture.whole_)
-      return;
-  }
+  // Qt clips a parent's paints around opaque children, such as the listing's
+  // loading label. Compare only pixels the parent currently owns. When a
+  // child disappears, its exposed region is painted and checked again.
+  const QRegion visible = widget.visibleRegion();
+  // A child can disappear before its exposed pixels reach a paint event.
+  // Retire covered pixels and admit them again only when actually painted;
+  // an unrelated row paint in between cannot certify that exposure.
+  picture.known_ = (picture.known_ & visible) | (region & visible);
   // A change still to be painted is in neither picture alike.
-  if (!settled)
+  if (!settled || picture.known_.isEmpty())
     return;
-  QImage afresh(extent, QImage::Format_RGB32);
-  afresh.setDevicePixelRatio(scale);
-  afresh.fill(Qt::magenta);
-  painting(afresh, widget.rect(), true);
+  QImage afresh = picture.image_.copy();
+  painting(afresh, picture.known_, true);
   ++checked.checks;
   if (picture.image_ == afresh)
     return;

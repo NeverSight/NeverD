@@ -121,7 +121,7 @@ TEST(X86LegacySegments, FullFourGiBLimitRequiresAPerExecutionChoice) {
 }
 
 TEST(X86LegacySegments, MalformedSnapshotsAreBindingErrors) {
-  for (uint16_t Attributes : {0x4090, 0x4083, 0x4193, 0x6093, 0x4099, 0xc093}) {
+  for (uint16_t Attributes : {0x4090, 0x4083, 0x4193, 0x4099, 0xc093}) {
     X86LegacySegmentCache C{0, 0x1234, 16, Attributes, false};
     auto E = validateX86LegacySegmentCache(X86SegmentRegister::SS, C);
     EXPECT_TRUE(bool(E)) << Attributes;

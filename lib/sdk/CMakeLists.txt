@@ -26,6 +26,7 @@ set(NEVERD_SDK_SOURCES
     capi/NeverDCAPISwift.cpp
     capi/BytecodeOperands.cpp
     capi/NeverDCAPIDisasm.cpp
+    capi/NeverDCAPIEmbeddedObjects.cpp
     capi/InstructionFlow.cpp
     capi/BinaryComparison.cpp
     capi/ComparisonInitializers.cpp

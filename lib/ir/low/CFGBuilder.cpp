@@ -35,6 +35,7 @@
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ExceptionEntryPoints.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
 #include "neverd/loader/PointerRelocation.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -1446,8 +1447,6 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         BlockStarts.insert(Address);
     };
     auto AddExceptionalRoot = [&](va_t Address) {
-      if (Address == 0 || !Exception->ownsCode(Address))
-        return;
       AddBoundary(Address);
       PersistentCFGRoots.insert(Address);
       DurableCFGRoots.insert(Address);
@@ -1455,11 +1454,16 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         ExceptionalRoots.push_back(Address);
     };
     auto AddContinuationRoot = [&](va_t Address) {
-      if (Address == 0 || !Exception->ownsCode(Address))
-        return;
       if (Address != EntryAddr)
         ContinuationRoots.push_back(Address);
     };
+    visitExceptionEntryPoints(*Exception,
+                              [&](va_t Address, ExceptionEntryKind Kind) {
+                                if (Kind == ExceptionEntryKind::Continuation)
+                                  AddContinuationRoot(Address);
+                                else
+                                  AddExceptionalRoot(Address);
+                              });
     if (Exception->SEH)
       for (const SEHScopeRecord &Scope : Exception->SEH->Scopes) {
         if (const auto Range =
@@ -1467,8 +1471,6 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
           AddBoundary(Range->Begin);
           AddBoundary(Range->End);
         }
-        AddExceptionalRoot(Scope.FilterOrFinallyVA);
-        AddExceptionalRoot(Scope.HandlerVA);
         AddBoundary(Scope.ContinuationVA);
       }
     if (Exception->Cxx) {
@@ -1482,14 +1484,6 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
           AddBoundary(State.IP);
         PrevState = State.State;
       }
-      for (const CxxUnwindAction &Action : Exception->Cxx->UnwindMap)
-        AddExceptionalRoot(Action.ActionVA);
-      for (const CxxTryBlock &Try : Exception->Cxx->TryBlocks)
-        for (const CxxCatchHandler &Catch : Try.Handlers) {
-          AddExceptionalRoot(Catch.HandlerVA);
-          for (va_t Continuation : Catch.ContinuationVAs)
-            AddContinuationRoot(Continuation);
-        }
     }
     if (Exception->Itanium)
       for (const ItaniumCallSite &Site : Exception->Itanium->CallSites) {
@@ -1500,11 +1494,7 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
         AddBoundary(Site.GuardedRange.Begin);
         if (Site.GuardedRange.End != Exception->CodeRange.End)
           AddBoundary(Site.GuardedRange.End);
-        AddExceptionalRoot(Site.LandingPadVA);
       }
-    if (Exception->Rust)
-      for (const RustLandingPad &Pad : Exception->Rust->LandingPads)
-        AddExceptionalRoot(Pad.PadVA);
     if (Exception->Registration) {
       const RegistrationChainInfo &Chain = *Exception->Registration;
       const auto InstallSize = coff_loader::getX86RegistrationChainStoreSize(
@@ -1518,11 +1508,6 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
       if (const auto Prologue =
               coff_loader::getCheckedX86SEH4PrologueCall(Img, *Exception))
         AddBoundary(Prologue->Caller.End);
-      for (const RegistrationScopeRecord &Scope :
-           Exception->Registration->Scopes) {
-        AddExceptionalRoot(Scope.FilterVA);
-        AddExceptionalRoot(Scope.HandlerVA);
-      }
       // A store of the current try level ends the region the previous level
       // guarded and begins the next one.  Cutting the block after it keeps one
       // level current throughout every block, which is what lets a block be
@@ -1532,27 +1517,12 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
            Exception->Registration->TryLevelStores)
         AddBoundary(Store.EndVA);
     }
-    if (Exception->Delphi) {
-      AddExceptionalRoot(Exception->Delphi->FinallyBodyVA);
-      AddExceptionalRoot(Exception->Delphi->ExceptBodyVA);
-      for (const DelphiOnExceptionEntry &Arm : Exception->Delphi->OnExceptions)
-        AddExceptionalRoot(Arm.HandlerVA);
-    }
     if (Exception->DelphiScopes)
       for (const DelphiScopeRecord &Scope : Exception->DelphiScopes->Scopes) {
         AddBoundary(Scope.GuardedRange.Begin);
         if (Scope.GuardedRange.End != Exception->CodeRange.End)
           AddBoundary(Scope.GuardedRange.End);
-        AddExceptionalRoot(Scope.TargetVA);
-        for (const DelphiOnExceptionEntry &Arm : Scope.OnExceptions)
-          AddExceptionalRoot(Arm.HandlerVA);
       }
-    if (Exception->Go && Exception->Go->DeferReturnOffset) {
-      // The runtime resumes a panicking frame at this offset to run what the
-      // frame deferred, so it is entered without any branch reaching it.
-      AddExceptionalRoot(Exception->CodeRange.Begin +
-                         *Exception->Go->DeferReturnOffset);
-    }
   }
   CurrentExceptionalEntries.insert(ExceptionalRoots.begin(),
                                    ExceptionalRoots.end());

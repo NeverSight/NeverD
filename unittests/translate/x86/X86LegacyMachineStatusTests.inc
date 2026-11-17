@@ -142,6 +142,88 @@ TEST_F(X86LegacyMachineStatusTest, BackingStopRetainsEntryControlAndCanResume) {
   EXPECT_EQ(M->controls().CR0, 0x80050019u);
 }
 
+TEST_F(X86LegacyMachineStatusTest, OperandFaultRetiresBeforeSuspendedEntry) {
+  for (unsigned Form : {0u, 1u}) {
+    SetUp();
+    kernel();
+    controls(0x80050011);
+    O.MachineStatus = X86LegacyMachineStatusProfile::FullCR0;
+    S.Core.GPR[3] = 0x8000;
+    put(0x11020, 0x40007, GuestScalarWidth::I32);
+    const auto Bytes =
+        test::legacyMachineStatusBytes(Form, true, true, true, -1);
+    const auto R = run(Bytes);
+    ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+    ASSERT_TRUE(S.PendingTransfer);
+    ASSERT_TRUE(S.PendingInstructionAttempted);
+    // The accepted operand now faults; its #PF entry needs absent IDT RAM.
+    put(0x11020, 0, GuestScalarWidth::I32);
+    put(0x11018, 0x40007, GuestScalarWidth::I32);
+    auto Fault = executeX86LegacyInstruction(S, *M, Bytes, O);
+    ASSERT_TRUE(bool(Fault)) << llvm::toString(Fault.takeError());
+    EXPECT_EQ(Fault->Status, X86LegacyExecutionStatus::BackingFault);
+    EXPECT_FALSE(Fault->InstructionAttempted);
+    EXPECT_FALSE(Fault->InstructionCompleted);
+    EXPECT_FALSE(S.PendingTransfer);
+    EXPECT_FALSE(S.PendingInstructionAttempted);
+    ASSERT_TRUE(S.PendingEvent);
+    EXPECT_EQ(M->controls().CR0, 0x80050011u);
+    EXPECT_EQ(S.CR2, 0x8000u);
+    put(0x11018, 0x6007, GuestScalarWidth::I32);
+    auto Delivered = resumeX86LegacyEvent(S, *M, O);
+    ASSERT_TRUE(bool(Delivered)) << llvm::toString(Delivered.takeError());
+    EXPECT_EQ(Delivered->DeliveredVector, 14);
+    EXPECT_FALSE(Delivered->InstructionAttempted);
+    EXPECT_FALSE(Delivered->InstructionCompleted);
+    EXPECT_FALSE(S.PendingEvent);
+    EXPECT_FALSE(S.PendingTransfer);
+    EXPECT_EQ(get(S.Core.GPR[4]), Form == 0 ? 2u : 0u);
+    EXPECT_EQ(get(S.Core.GPR[4] + 4), 0x1000u);
+    EXPECT_EQ(M->controls().CR0, 0x80050011u);
+  }
+}
+
+TEST_F(X86LegacyMachineStatusTest, OperandProgressFreezesBindingsAndAttempt) {
+  for (unsigned Form : {0u, 1u}) {
+    SetUp();
+    kernel();
+    controls(0x80050011);
+    O.MachineStatus = X86LegacyMachineStatusProfile::FullCR0;
+    S.Core.GPR[3] = 0x8000;
+    put(0x11020, 0x40007, GuestScalarWidth::I32);
+    const auto Bytes =
+        test::legacyMachineStatusBytes(Form, true, true, true, -1);
+    const auto R = run(Bytes);
+    ASSERT_EQ(R.Status, X86LegacyExecutionStatus::BackingFault);
+    ASSERT_TRUE(S.PendingTransfer);
+    ASSERT_TRUE(S.PendingInstructionAttempted);
+    const auto Pending = S.PendingTransfer;
+    for (bool ChangeProfile : {false, true}) {
+      auto Changed = O;
+      if (ChangeProfile)
+        Changed.MachineStatus.reset();
+      else
+        Changed.Scalars.reset();
+      auto Rejected = executeX86LegacyInstruction(S, *M, Bytes, Changed);
+      ASSERT_FALSE(bool(Rejected));
+      llvm::consumeError(Rejected.takeError());
+      EXPECT_EQ(S.PendingTransfer, Pending);
+      EXPECT_TRUE(S.PendingInstructionAttempted);
+    }
+    put(0x11020, 0x8007, GuestScalarWidth::I32);
+    put(0x8000, 8, GuestScalarWidth::I16);
+    put(0x1000, 0xff, GuestScalarWidth::I8);
+    auto Resumed = executeX86LegacyInstruction(S, *M, Bytes, O);
+    ASSERT_TRUE(bool(Resumed)) << llvm::toString(Resumed.takeError());
+    EXPECT_FALSE(Resumed->InstructionAttempted);
+    EXPECT_TRUE(Resumed->InstructionCompleted);
+    EXPECT_FALSE(S.PendingTransfer);
+    EXPECT_FALSE(S.PendingInstructionAttempted);
+    EXPECT_EQ(M->controls().CR0, Form == 1 ? 0x80050019u : 0x80050011u);
+    EXPECT_EQ(S.EIP, 0x1000u + Bytes.size());
+  }
+}
+
 TEST_F(X86LegacyMachineStatusTest, ControlCommitsBeforeSingleStepDelivery) {
   for (unsigned Form : {1u, 2u}) {
     SetUp();

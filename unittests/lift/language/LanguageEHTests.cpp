@@ -267,6 +267,42 @@ TEST(DwarfEHFrame, StopsAtZeroLengthTerminator) {
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
 }
 
+TEST(DwarfEHFrame, ReadsEveryPhysicallyPresentRecordInALargeSection) {
+  BinaryImage Img = makeImage();
+  const auto Frame = buildSimpleFrame(kDataVA, kTextVA, 4, "zR", 0, 0);
+  ByteBuilder B;
+  B.data().assign(Frame.Bytes.begin(), Frame.Bytes.begin() + Frame.FDEOffset);
+  constexpr size_t Count = (1u << 20) + 3;
+  for (size_t I = 0; I < Count; ++I) {
+    B.u32(13); // identifier, pcrel start, range, empty augmentation
+    B.u32(static_cast<uint32_t>(B.size())); // owning CIE at offset zero
+    B.i32(static_cast<int32_t>(kTextVA + I * 4 - (kDataVA + B.size())));
+    B.u32(4);
+    B.u8(0);
+  }
+  B.u32(0);
+  const FrameSection Sec{B.data().data(), B.size(), kDataVA};
+  auto Result = parseEHFrame(Img, Sec, {});
+  ASSERT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
+  ASSERT_EQ(Result.FDEs.size(), Count);
+  EXPECT_EQ(Result.FDEs.front().InitialLocation, kTextVA);
+  EXPECT_EQ(Result.FDEs.back().InitialLocation, kTextVA + (Count - 1) * 4);
+  EXPECT_TRUE(Result.Diagnostics.empty());
+}
+
+TEST(DwarfEHFrame, ExplicitEntryLimitStillReportsIncompleteDecoding) {
+  BinaryImage Img = makeImage();
+  const auto Frame = buildSimpleFrame(kDataVA, kTextVA, 4, "zR", 0, 0);
+  ParseLimits Limits;
+  Limits.MaxEntries = 1;
+  auto Result = parseEHFrame(
+      Img, {Frame.Bytes.data(), Frame.Bytes.size(), kDataVA}, {}, Limits);
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Partial);
+  EXPECT_EQ(Result.CIEs.size(), 1u);
+  EXPECT_TRUE(Result.FDEs.empty());
+  EXPECT_FALSE(Result.Diagnostics.empty());
+}
+
 TEST(DwarfEHFrame, RejectsEntryLengthPastTheSection) {
   BinaryImage Img = makeImage();
   ByteBuilder B;

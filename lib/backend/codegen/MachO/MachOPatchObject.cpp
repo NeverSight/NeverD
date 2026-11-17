@@ -129,16 +129,22 @@ struct NativeMachO {
   std::map<size_t, unsigned> WeakData;
 };
 
-// dyld discovers runtime sections from segment commands. Reserve their
-// command bytes before assigning code, unwind and fixup addresses.
-uint64_t runtimeCommandBytes(const NativeMachO &Object) {
+// New data mappings and dyld runtime sections require segment commands.
+// Reserve them before assigning code, unwind and fixup addresses.
+uint64_t installationCommandBytes(const NativeMachO &Object) {
   const auto Sections =
       ((Object.Descriptors || !Object.ThreadInitializers.empty())
            ? kTLVSectionCount
            : 0) +
       unsigned(Object.InitializerOffsets.has_value());
-  return Sections
-             ? sizeof(segment_command_64) * kRuntimeSegmentCount +
+  const bool HasData = llvm::any_of(Object.Image.Sections, [](const auto &S) {
+    return S.IsAllocated && S.Size &&
+           (S.Kind == Kind::WritableData || S.Kind == Kind::UninitializedData);
+  });
+  return Sections || HasData
+             ? getMachOSegmentCmdSize(Object.Image.PointerWidth ==
+                                      sizeof(uint64_t)) *
+                       kRuntimeSegmentCount +
                    sizeof(section_64) * Sections + sizeof(linkedit_data_command)
              : 0;
 }
@@ -2411,7 +2417,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   auto Candidate = Binary;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, Candidate);
   std::optional<MachODependencyState> SlidDependencies;
-  const auto CommandBytes = runtimeCommandBytes(*Object);
+  const auto CommandBytes = installationCommandBytes(*Object);
   auto Slide = reserveMachOPublishedUnwind(
       Candidate, Original->Arch, ExtraEH, unwindFunctionCounts(*Object),
       CommandBytes != 0, SlidDependencies, CommandBytes);
@@ -2480,7 +2486,10 @@ static llvm::Expected<PatchResult> installObject(
     const DynCodePatchEvidence *DynCode,
     const SourcePatchPreparation *Preparation,
     llvm::ArrayRef<SourcePatchDependency> Dependencies,
-    MachOLiftedObjectVerifier VerifyGenerated) {
+    llvm::function_ref<llvm::Error(const CompiledImage &,
+                                   llvm::ArrayRef<NativeMachOCompactRange>)>
+        VerifyGenerated,
+    MachOLiftedObjectVerifier VerifyLiftedImage) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -2534,7 +2543,7 @@ static llvm::Expected<PatchResult> installObject(
   auto Slide = reserveMachOPublishedUnwind(
       LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
       Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-      runtimeCommandBytes(*Object));
+      installationCommandBytes(*Object));
   if (!Slide)
     return Slide.takeError();
   for (auto &[Name, Binding] : Bindings)
@@ -2570,8 +2579,7 @@ static llvm::Expected<PatchResult> installObject(
       return E;
   }
   if (VerifyGenerated)
-    if (auto E = VerifyGenerated(Object->Image, *LayoutImage, *Slide,
-                                 Object->Compact))
+    if (auto E = VerifyGenerated(Object->Image, Object->Compact))
       return E;
   if (DynCode)
     if (auto E =
@@ -2684,6 +2692,12 @@ static llvm::Expected<PatchResult> installObject(
         }
         if (auto E = verifyNativeObjectUnwind(Final, Object->Compact))
           return E;
+        // LSDA references must be read from the installed candidate, including
+        // newly generated tables. This still precedes atomic publication.
+        if (VerifyLiftedImage)
+          if (auto E = VerifyLiftedImage(Object->Image, Final, *Slide,
+                                         Object->Compact))
+            return E;
         if (Original.isArm64e()) {
           auto After = readMachODependencyState(Final.Raw);
           if (!After)
@@ -2716,12 +2730,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         VerifyGenerated) {
   return installObject(Object, Original, Mappings, Bindings, Output,
                        PrepareReceipt, DynCode, Preparation, Dependencies,
-                       [&](const CompiledImage &Image, const BinaryImage &,
-                           va_t,
-                           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
-                         return VerifyGenerated ? VerifyGenerated(Image, Ranges)
-                                                : llvm::Error::success();
-                       });
+                       VerifyGenerated, {});
 }
 
 llvm::Expected<PatchResult>
@@ -2731,6 +2740,6 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          const std::filesystem::path &Output,
                          MachOLiftedObjectVerifier Verify) {
   return installObject(Object, Original, Mappings, Bindings, Output, {},
-                       nullptr, nullptr, {}, Verify);
+                       nullptr, nullptr, {}, {}, Verify);
 }
 } // namespace neverd

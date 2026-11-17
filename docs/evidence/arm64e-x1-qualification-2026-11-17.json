@@ -1,0 +1,559 @@
+{
+  "neverd_revision": "a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb",
+  "llvm_revision": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "capstone_revision": "106380545da022533aa28bb9af6ba4df9f6e9970",
+  "unicorn_revision": "7efa71088d7a4057e87a50dd443d786002f97fa6",
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44003787806",
+  "ci_revision": "020c2f82fb8d8708a5eb9a80384242d00b519c8f",
+  "package": {
+    "revision": "a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb",
+    "tag": "neverd-x1-qualification-a2e577a8791b",
+    "host": "NeverDArm64eLiftedImageTests",
+    "asset": "x1-qualification.tgz",
+    "host_sha256": "e816eda680f7b7b6c0814eb1305d6c3c2083a29715fa12812072860823241688",
+    "archive_sha256": "9b874c0df0971b20ee86c455cc3264cfd540df3954da65ed15c5ca25b5cb08d0",
+    "host_bytes": 126925040,
+    "archive_bytes": 42351097
+  },
+  "hosts": {
+    "macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "host_sha256": "e816eda680f7b7b6c0814eb1305d6c3c2083a29715fa12812072860823241688",
+      "tests_passed": 233,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "native_system_saved_frame_steps": 48,
+      "compact_pauth_lr_structural_images": 8,
+      "cases": {
+        "SignalResumesAllPreservedPairs": {
+          "original_sha256": "a1acf543b83543f8e71792496597238e821dc107f8d23d946b1b4130df6abce6",
+          "published_sha256": "7a71dcaed9242983fc08c2856c92c56bb0ac5ac5e196a0326b853aafa103682c",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePreservedPairs": {
+          "original_sha256": "25b86b4b9d199c1637fc533a3c52fbf175806953329eb747c27bd98caf914755",
+          "published_sha256": "efe5bd3e4c4ec3bc36a8a152c1ef7bb0c5be009ce113b78e05a8ce2bdebd9980",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesAllPairsWithAdditionalStack": {
+          "original_sha256": "47cae1d4c1dd669606ea405a907a3c6926756358926748f21c5fbca719e36a63",
+          "published_sha256": "a9cffa8e78c363e7523e585000919ce477c3035487ff043689ccac7d6583e28a",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePairsWithAdditionalStack": {
+          "original_sha256": "5c310e2be7fbdec0a17cb2857872babeaf9ed877fb08ec77490b233da21e5ed7",
+          "published_sha256": "193ce386bab8f2c4a238de679d5a701258e6ed6a0c0f5a4e4647b2284d38d9a1",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesCoalescedAllPairFrames": {
+          "original_sha256": "8edc82ec910dc1d6f82ebc9180a0e1d4246cf156d697f0f2930d25d927f80a15",
+          "published_sha256": "2e68d85a53e6124726aedd1f35f8708b86b8d4a834bca798c9460a04f28c2105",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "12",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SignalResumesCoalescedSparseFrames": {
+          "original_sha256": "37e7f4ed6033e43cf59c28d625dd287500bffc2218db9202e7a21c9b3de2d37b",
+          "published_sha256": "3774c16bbebb79732d3c2680ad4edb4c28eec00692362a5e9914c2ab19a21f4c",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "12",
+          "native_signal_caller_resumptions": "12"
+        },
+        "PublishesPAuthLRAllPairs": {
+          "linker_compact_word_before_fixture_encoding": "83889951",
+          "original_sha256": "eaf6222fb80d17ccdfb24315baa44adc2691b1f8e84ec2aec4f0bb292b3a15ab",
+          "published_sha256": "35708bd71209a11e4d6a64c90e01735c213633f069061e92fe60ee5ee7e3c050",
+          "unsigned_fixture_sha256": "e70012b162f6f664d6e3f9e73eb3370fe18092ee0cc28205b4329087bf4f36aa",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_preserved_register_calls": "0"
+        },
+        "PublishesPAuthLROffsetAndSparsePairs": {
+          "linker_compact_word_before_fixture_encoding": "83895573",
+          "original_sha256": "4f91613739184be4a24923881bc2bc4fa7a8fd8860d8014f24740760fcf12a87",
+          "published_sha256": "108b21ac777508c053a0cfab2aa1ce484d1447359cbbd9c6c1a65cb8c68485ba",
+          "unsigned_fixture_sha256": "525e9ee7fea972458a4f2d981fbef1a5834f70c03d54330d3df677b30c7a528f",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_preserved_register_calls": "0"
+        },
+        "SystemUnwindsPAuthLRAllPairs": {
+          "linker_compact_word_before_fixture_encoding": "83889951",
+          "original_sha256": "4bb33448deed888ee54584675f4e4189d31246cf60eeb952803185cffe97de90",
+          "published_sha256": "ec2ca6f6256e381f407842ba68ed5b0a4ee56fe7704b42f26e3514b9a5bf7b57",
+          "unsigned_fixture_sha256": "b59ea94741c150fbee1ce58b1641962f0d1fdf60869e2824e5f0b5683d3ce8b7",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_system_pauth_lr_steps": "0",
+          "native_signal_caller_resumptions": "0"
+        },
+        "SystemUnwindsPAuthLROffsetAndSparsePairs": {
+          "linker_compact_word_before_fixture_encoding": "83895573",
+          "original_sha256": "07761b94a32c06d10757ddd94f8b688b6e300f04ff22e2582045549e0ec225d1",
+          "published_sha256": "7f09357cdd3d632eff7241bf5e4370deb363f108ce25924d4bfba31092a469c7",
+          "unsigned_fixture_sha256": "e46628d928e772ea72c082f2b347e24863d8b6cf1fd3fd8f62873c544e3dfa8f",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_system_pauth_lr_steps": "0",
+          "native_signal_caller_resumptions": "0"
+        }
+      },
+      "x1_environment": {
+        "source_revision": "a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "30a4cc98a78b871dfcd6450a78bcb34ba04e95a3103ab8921091c9e8bf0e0a50"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "be2d253fb5e6506eb0cc4a01b93c718034731c1c3402b12c751f24999b08b77b"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "6333d550daf956f7ec5a135d4b1efda5be8e16a69cf4a31ec15a3566329be640"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_pac_qualified": true,
+      "compiler_original_call_unwind_qualified": true,
+      "native_cursor_qualified": true,
+      "explicit_pauth_lr_qualified": false,
+      "pacm_pc_qualified": false,
+      "x1_el0_cpta_qualified": false,
+      "x1_el0_checked_writeback_qualified": false,
+      "cpta_profiles": {
+        "arm64": {
+          "outcome": "undefined-instruction",
+          "sha256": "61ee4ce24e923e16ed8fae952c45890c0a1c5687c5dac5d7cda828889c492c0a",
+          "cpu_subtype": 0,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e": {
+          "outcome": "undefined-instruction",
+          "sha256": "33cbc4e7d028fe7f0b9521f026fddb0e9e214ae2b65c23d4d63f79832a507346",
+          "cpu_subtype": 2164260866,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e.x1": {
+          "outcome": "slice-unavailable"
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "5a252a01c51aa677545587fcb9dd058c5a3c4cdc60667526739fad7219882832",
+        "native-image/results.xml": "ba73bf0044a564f31cbd009d2efb7574ded10412993ea8f0bc7854aa5c4d5bf1",
+        "x1/report.json": "99fe19350f5e6c9469f00d87ceface1956e4219386cadd4c3592a83e2a776abe",
+        "x1/probe/report.json": "30a4cc98a78b871dfcd6450a78bcb34ba04e95a3103ab8921091c9e8bf0e0a50",
+        "x1/probe-cursor/report.json": "be2d253fb5e6506eb0cc4a01b93c718034731c1c3402b12c751f24999b08b77b",
+        "x1/probe-cpta/report.json": "6333d550daf956f7ec5a135d4b1efda5be8e16a69cf4a31ec15a3566329be640"
+      }
+    },
+    "xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "host_sha256": "e816eda680f7b7b6c0814eb1305d6c3c2083a29715fa12812072860823241688",
+      "tests_passed": 233,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "native_system_saved_frame_steps": 48,
+      "compact_pauth_lr_structural_images": 8,
+      "cases": {
+        "SignalResumesAllPreservedPairs": {
+          "original_sha256": "c4dfd825c7ba44ed159f83dad7834f8eb3b92b09f1faaadd222c50d904c3b6e3",
+          "published_sha256": "93af5ebf29a657cb9ba520110663841f6eb0452c113ae46ab2b909cf1ceb5007",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePreservedPairs": {
+          "original_sha256": "26ff4543b8bd96e00cf1560caf1302533f13b13c8a91982b787a845de0c8aaf1",
+          "published_sha256": "b1469d9f50409f69345dc421527a45e2a972df528fc1221cd5595ad15fc0c659",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesAllPairsWithAdditionalStack": {
+          "original_sha256": "8d52679ad4aa520d237cc8afd1dc4bf898c7f8963a89ad35ec6ab14e0b0ed14f",
+          "published_sha256": "1e32ab9e3028d018ec1c8781dff7b105c2bdc8d5e39a145a80f877ff5c4622e2",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesSparsePairsWithAdditionalStack": {
+          "original_sha256": "a7b559afe950259cbaad0a0e47acd09ce1b1dd246d31606f69d7c65aec515c77",
+          "published_sha256": "b2580b53901e7bd4024af64b114af4e5d928157dccd4b6c69234b2e2765926b1",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "6",
+          "native_signal_caller_resumptions": "6"
+        },
+        "SignalResumesCoalescedAllPairFrames": {
+          "original_sha256": "bdd2bd3fe356882c8ebdeccde89bd1adda572f0d03ac8bd3fb52ab6fd8461364",
+          "published_sha256": "005d788bb554a8a40c8d96699ba5f7e03b48683d416b2f694dd0e5b2b8c86a40",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "12",
+          "native_signal_caller_resumptions": "12"
+        },
+        "SignalResumesCoalescedSparseFrames": {
+          "original_sha256": "27a72eb89dcc3a51c31ea6e8aefae95764ed257a817bf3050110b40147e93071",
+          "published_sha256": "b9fc71bd17f14dd01b29ad1befb9053a0d81d31210ac0b63bc7bb444bae7d811",
+          "executed_native_images": "2",
+          "native_system_saved_frame_steps": "12",
+          "native_signal_caller_resumptions": "12"
+        },
+        "PublishesPAuthLRAllPairs": {
+          "linker_compact_word_before_fixture_encoding": "83889951",
+          "original_sha256": "bccfa812c3fbdc44db0de485e0eaf6cbcc455ffe3f25aed6dd9736494b3e9bc9",
+          "published_sha256": "fd28097c3617bd1832b45225962b99fac8c8ea8126f01adfb85278392aa0f80f",
+          "unsigned_fixture_sha256": "0c3aae328bd879b0627381c70d0b2222c00c343230f3e643c24595537760e250",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_preserved_register_calls": "0"
+        },
+        "PublishesPAuthLROffsetAndSparsePairs": {
+          "linker_compact_word_before_fixture_encoding": "67110165",
+          "original_sha256": "7a84b40492cdc6561f2b63257ef5ca96c8556386a5df2ef2a02d77541f0aa4e7",
+          "published_sha256": "1a993fa1c7bc16e7d7cf40454ea40312521fb7b43ed57370cd728f80773c8944",
+          "unsigned_fixture_sha256": "b73b3f38f210bc83b6b395fe362543da4b9d4b9318347745e4e14fc764e2eb16",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_preserved_register_calls": "0"
+        },
+        "SystemUnwindsPAuthLRAllPairs": {
+          "linker_compact_word_before_fixture_encoding": "83889951",
+          "original_sha256": "38ad8345d978227d4dc0f6b5840c19b08d918705826b7aab7cec32c26a8b0a4b",
+          "published_sha256": "1e63165946b183c462e870c9d77db642b17639998b004e7753fb5cf06b0235b8",
+          "unsigned_fixture_sha256": "2fa1243816563ca0cecd3c6a5c220657ecdee249f66b64e4d83c0b45086fbfeb",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_system_pauth_lr_steps": "0",
+          "native_signal_caller_resumptions": "0"
+        },
+        "SystemUnwindsPAuthLROffsetAndSparsePairs": {
+          "linker_compact_word_before_fixture_encoding": "67110165",
+          "original_sha256": "6d617f447581ec77219bf41d7c9c98e7798f81252806a0d1d80456e201df1d02",
+          "published_sha256": "5d5b3580ccb4e0e68eb40bb678c85d7bf3e5c84270c6f0a052934aa173dc583e",
+          "unsigned_fixture_sha256": "3fcaf541c7379b62943b8c0cce86af80a032a0d98b0bc0fca13fdfc15095b558",
+          "executed_native_images": "0",
+          "structural_pauth_lr_images": "2",
+          "native_system_pauth_lr_steps": "0",
+          "native_signal_caller_resumptions": "0"
+        }
+      },
+      "x1_environment": {
+        "source_revision": "a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "43aa2adf1ad6e92241d489bf4a56789c167b4b2680b6d7ddd53c41eb62fba62f"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "8a12dca08209fb1f18ce1b7cd6b8aef8624beb0aef2553d6f106349366f6f010"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "72741e09a3830881992ef374eeba53a534d4f2cac024919ffd80ecb774f53947"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_pac_qualified": true,
+      "compiler_original_call_unwind_qualified": true,
+      "native_cursor_qualified": true,
+      "explicit_pauth_lr_qualified": false,
+      "pacm_pc_qualified": false,
+      "x1_el0_cpta_qualified": false,
+      "x1_el0_checked_writeback_qualified": false,
+      "cpta_profiles": {
+        "arm64": {
+          "outcome": "undefined-instruction",
+          "sha256": "352c4e085f577250ddcd2dd6115e4ced847298854eba0029c69551bac0310455",
+          "cpu_subtype": 0,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e": {
+          "outcome": "undefined-instruction",
+          "sha256": "3499bee71456d43fff499bf099842d07743abfe6764528ff08842c52330638df",
+          "cpu_subtype": 2164260866,
+          "results": [],
+          "ordinary_memory_writeback": "unchecked"
+        },
+        "arm64e.x1": {
+          "outcome": "did-not-start",
+          "signed_entitlements": {
+            "com.apple.security.hardened-process": true,
+            "com.apple.security.hardened-process.checked-allocations": true,
+            "com.apple.security.hardened-process.checked-allocations.enforce-checked-pointer-arithmetic-overflow": true,
+            "com.apple.security.hardened-process.enhanced-security-version-string": "*"
+          },
+          "sha256": "eb2128e9c9f9cc3b046273addae00bf6b7114077216d7ea3d2b06f6520734411",
+          "cpu_subtype": 2147483660,
+          "errno": 86
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "35bbf0460b8a8ac2277625defc171b0536b7da715f81d93542eaae91aafc722c",
+        "native-image/results.xml": "7ca738db53ebf8a2a0e9553f57a0051095bc8f098b5370e5834064ff3e66595a",
+        "x1/report.json": "0d3fd983b8d8f0d7b996629e265735dc27ebab12ea1a6c2667804b86f0d3e036",
+        "x1/probe/report.json": "43aa2adf1ad6e92241d489bf4a56789c167b4b2680b6d7ddd53c41eb62fba62f",
+        "x1/probe-cursor/report.json": "8a12dca08209fb1f18ce1b7cd6b8aef8624beb0aef2553d6f106349366f6f010",
+        "x1/probe-cpta/report.json": "72741e09a3830881992ef374eeba53a534d4f2cac024919ffd80ecb774f53947"
+      }
+    }
+  },
+  "local": {
+    "publication_passed": 233,
+    "publication_failed": 0,
+    "publication_skipped": 0,
+    "script_tests_passed": 83,
+    "driver_compile_profiles": 4,
+    "clang_format": "22.1.2",
+    "actionlint": "1.7.12",
+    "documentation_files": 309,
+    "locales": 10,
+    "native_x1": {
+      "source_revision": "a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb",
+      "source_sha256": {
+        "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+        "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+        "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+        "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+        "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+      },
+      "status": "unavailable",
+      "native_arm64e_x1_environment_qualified": false,
+      "probes": {
+        "probe": {
+          "status": "unavailable",
+          "report": "probe/report.json",
+          "sha256": "4a330559945b14622c70d1044791fce0c6f7088c2c93fdaf57faa57a9f9bb8ed"
+        },
+        "probe-cursor": {
+          "status": "unavailable",
+          "report": "probe-cursor/report.json",
+          "sha256": "8108dd73cc7f6ccdca39d3ecc7d29cd5bb1b7c7b462766ec159ccb8dac11591b"
+        },
+        "probe-cpta": {
+          "status": "unavailable",
+          "report": "probe-cpta/report.json",
+          "sha256": "a05438bac3a6a0ece724e34828fe6014f75b3b8006acc9fb35ed436e5851c6c6"
+        }
+      },
+      "missing": [
+        {
+          "probe": "probe",
+          "feature": "native_pac_qualified"
+        },
+        {
+          "probe": "probe",
+          "feature": "compiler_original_call_unwind_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "native_cursor_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "explicit_pauth_lr_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "pacm_pc_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_cpta_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_checked_writeback_qualified"
+        }
+      ]
+    },
+    "report_sha256": {
+      "publication-committed.xml": "7c18ddf27c53243bf860b8cf7d6bca487a7ae61c76300a6df1c0de879a4cd767",
+      "scripts-committed.log": "7a0a7d3af076193079f765141d142d8d3ab5a14fd8b7f703ad3ec2a47a4e970e",
+      "driver-compilation.json": "2b4ddec704638f66ac9e9c64a70e5947b9305a9698d989cbacb454034509c3dc",
+      "workflow-validation.json": "5d0eae47cc341ed3b96d0bcb2bc5219fb2c50b3c64cd5c44232b5266ca6322d3",
+      "build-receipt.json": "f5252930362ab95feffd006c05444995891c7e4303a441a76276df3c775ea622"
+    }
+  },
+  "windows_frontend": "passed",
+  "coverage_limits": [
+    "Native PAuth_LR, PC-dependent PACM and CPTA-on remain unavailable on the hosted M1 machines.",
+    "The four compact PAuth_LR cases qualify signed publication structure; their native execution counters remain zero.",
+    "A successful hosted regression run does not qualify the strict x1 environment gate.",
+    "Arbitrary lifted-image publication and arbitrary asynchronous language cleanup are not claimed."
+  ],
+  "resolved_attempts": [
+    {
+      "kind": "local focused test",
+      "failed": 4,
+      "total": 5,
+      "cause": "Signing the synthetic input before publication creates codesign special slots outside automatic input eligibility.",
+      "fix": "Explicitly sign execution copies after publication, preserve the unsigned input, strictly verify and reload the executable copies.",
+      "rerun_passed": 5
+    },
+    {
+      "kind": "workflow lint",
+      "cause": "runner.temp was unavailable at job env scope.",
+      "fix": "Use RUNNER_TEMP in the step and runner.temp in the upload step. Custom runner labels are declared for lint validation."
+    },
+    {
+      "kind": "temporary packaging",
+      "cause": "Capstone license files moved into LICENSES/.",
+      "fix": "Include the actual license directory; record and remove the incomplete archive before rebuilding."
+    }
+  ],
+  "cleanup": {
+    "remote": [
+      {
+        "endpoint": "repos/gmh5225/test_mac_intel/releases/447995292",
+        "verified_absent": true,
+        "exit": 1
+      },
+      {
+        "endpoint": "repos/gmh5225/test_mac_intel/releases/assets/757311389",
+        "verified_absent": true,
+        "exit": 1
+      },
+      {
+        "endpoint": "repos/gmh5225/test_mac_intel/git/ref/tags/neverd-x1-qualification-a2e577a8791b",
+        "verified_absent": true,
+        "exit": 1
+      }
+    ],
+    "local_products": [
+      {
+        "path": "x1-qualification.tgz",
+        "sha256": "9b874c0df0971b20ee86c455cc3264cfd540df3954da65ed15c5ca25b5cb08d0",
+        "bytes": 42351097
+      },
+      {
+        "path": "actions/cursor-macos-26/compact-input/compact.o",
+        "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb",
+        "bytes": 712
+      },
+      {
+        "path": "actions/cursor-macos-26/compact-input/compact.dylib",
+        "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3",
+        "bytes": 16816
+      },
+      {
+        "path": "actions/cursor-xcode-27/compact-input/compact.o",
+        "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb",
+        "bytes": 712
+      },
+      {
+        "path": "actions/cursor-xcode-27/compact-input/compact.dylib",
+        "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263",
+        "bytes": 16816
+      }
+    ],
+    "ci_retired": {
+      "revision": "9e89c1c925a7e3d32fc297a60d36fb29a6de4618",
+      "baseline": "f65dbd9aad36de9adfd714cedb62ced818835121",
+      "identical_tree": "f1a20e77e5cb5382bca5ebfcf96f986839fb5c15"
+    },
+    "diagnostics": {
+      "archive": "arm64e-x1-qualification-20261117-evidence.tar.gz",
+      "sha256": "3c835a48bb0e72db02ad574f1655581051ca871f2387b4d6ee0eecc4fc9c1975",
+      "bytes": 240347,
+      "files": 337,
+      "verified_decompressed_hashes": true,
+      "recovery_index": "arm64e-x1-qualification-20261117-recovery-index.json"
+    }
+  }
+}

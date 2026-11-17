@@ -66,7 +66,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="neverd-gui-analysis-") as directory:
         path = Path(directory) / "native.elf"
         path.write_bytes(analysis_fixture())
-        return subprocess.run([sys.argv[1], "--analysis-test", str(path)], timeout=25).returncode
+        return subprocess.run([sys.argv[1], "--worker", sys.argv[3],
+                               "--analysis-test", str(path)], timeout=25).returncode
 
 
 if __name__ == "__main__":

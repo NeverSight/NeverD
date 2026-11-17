@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>مدير الإضافات(M)...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>السلاسل النصية المحسوبة</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>البحث عن سلاسل نصية مشروطة تحسبها الدوال</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>البايتات المعدلة</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>السلاسل النصية المحسوبة</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>عنوان البيانات</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>الأدلة</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>تم الرصد بعد</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>النص / التشخيص</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>تغيّر التحديد مرات كثيرة أثناء تحديث الجدول.</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>أُلغي البحث</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1958,6 +1990,154 @@
             <numerusform>%n عنصرًا</numerusform>
             <numerusform>%n عنصر</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 ث</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · فشل الاكتشاف: </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · الدوال %2/%3 · الصفوف %4 · المشكلات %5</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>تغيّر التحليل؛ أعد الفحص</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>جارٍ تحليل الدالة %1…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>يفترض أن الذاكرة والسجلات تحمل القيم المذكورة عند دخول الكتلة، وأن التنفيذ ينجح حتى نقطة الرصد. تقترح المُهيِّئات قيمًا؛ ولم تُثبَت إمكانية الوصول.</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>مدخل الكتلة</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>إلغاء</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>شروط السلسلة النصية المحسوبة</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>نص مشروط تحسبه التعليمات</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>الشروط…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>متابعة</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>عنوان البيانات</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>الترميز</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>المُهيِّئ</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>جارٍ التحميل…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>لا توجد نتائج</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>تم الرصد بعد</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>افتح ملفًا ثنائيًا أولًا</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>إيقاف مؤقت</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>متوقف مؤقتًا</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>جارٍ الإيقاف المؤقت بعد الدالة الحالية…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>إزاحة السجل %1، %2 بايت = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>السجلات المطلوبة عند الدخول</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>بايتات الإدخال المطلوبة</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>إعادة المحاولة</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>أعد المحاولة أو تنقّل في القائمة لمتابعة التحميل.</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>فحص جميع الدوال</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>أُلغي الفحص</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>اكتمل الفحص</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>جارٍ الفحص</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>أُلغي البحث</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>تقدّم البحث</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>جارٍ البحث…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>جارٍ الفرز…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>في انتظار البحث…</translation>
     </message>
 </context>
 <context>
@@ -2106,6 +2286,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>توقفت الاستعادة: %1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>يستمر التحليل في الخلفية</translation>
     </message>
 </context>
 <context>
@@ -2938,7 +3122,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>ضع المؤشر داخل دالة لتعيين نوعها</translation>
+        <translation type="vanished">ضع المؤشر داخل دالة لتعيين نوعها</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3462,6 +3646,10 @@ After:
         <source>Plugin tasks</source>
         <translation>مهام الإضافات</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>ضع المؤشر على كائن عام أو داخل دالة لتعيين نوعه</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3857,6 +4045,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>تم حفظ تغييرات المشروع</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>تعذّر إعداد عروض المصدر: %1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>جارٍ إعداد مفكك الترجمة</translation>
     </message>
 </context>
 <context>
@@ -5100,7 +5296,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>الأنواع: %1</translation>
+        <translation type="vanished">الأنواع: %1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5212,6 +5408,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>لا توجد أنواع محلية: لا يحتوي هذا البرنامج على PDB أو DWARF بأنواع.</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · أنواع لم تُستورد: %1</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>التالي</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>لا توجد أنواع تطابق %1.</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>الصفحة </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>السابق</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>الأنواع: %1 · عرض %2–%3</translation>
     </message>
 </context>
 <context>
@@ -5574,6 +5794,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>إزالة تصريح نوع الشيفرة المصدرية هذا واستخدام النوع المستنتج من التحليل</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>%1 عند %3 هو كائن عام بحجم %2 بايت. أدخل نوعًا قياسيًا أو نوع مؤشر من الأنواع المحلية.</translation>
     </message>
 </context>
 <context>
@@ -10440,6 +10664,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>جارٍ التحميل</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>جارٍ إعداد مفكك الترجمة</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10559,14 +10787,6 @@ Your previous graph is still available.</source>
         <translation>استيراد الشفرة إلى الصورة</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>استيراد إضافة تعمل كعملية</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>استيراد إضافة تعمل كعملية…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>سجل %1</translation>
     </message>
@@ -10627,10 +10847,6 @@ Your previous graph is still available.</source>
         <translation>الموضع</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>تم استيراد الإضافة التي تعمل كعملية: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>التقدم</translation>
     </message>
@@ -10673,6 +10889,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>لم يعد تسجيل هذا الإجراء نشطًا.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>استيراد إضافة</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>استيراد إضافة…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>تم استيراد الإضافة: %1</translation>
     </message>
 </context>
 <context>
@@ -10738,16 +10966,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>استورد بيان إضافة تعمل كعملية لإضافة أوامر. لا تبدأ البرامج الموفّرة إلا عند تشغيل أمر.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>استيراد إضافة…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>استيراد إضافة تعمل كعملية</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10760,10 +10980,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>أزيل سجل التثبيت؛ يجري إيقاف المهام النشطة.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>الإضافات المثبّتة التي تعمل كعمليات</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10830,10 +11046,6 @@ Your previous graph is still available.</source>
         <translation>جارٍ الإيقاف</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>النوع: عملية خارجية</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>غير متاح</translation>
     </message>
@@ -10856,6 +11068,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>نعم</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>استيراد إضافة</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>عملية خارجية</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>استورد ملف تعريف إضافة لإضافة أوامر أو عروض إلى مساحة العمل.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>الإضافات المثبتة</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>واجهة رسومية أصلية</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>المصدر: مرفق مع NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>هذه الإضافة مرفقة مع NeverD. استخدم تعطيل لإيقافها.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>النوع: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>غير معروف</translation>
     </message>
 </context>
 <context>
@@ -11034,6 +11282,55 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>إغلاق علامة التبويب</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>فشلت وحدة الواجهة الرسومية أثناء التفعيل.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>تعذر تفعيل وحدة الواجهة الرسومية.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>وحدة الواجهة الرسومية مفقودة أو خارج الحزمة: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>لا توفر الوحدة واجهة GUI المطلوبة.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>إجراء قائمة الإضافة غير صالح أو مكرر أو غير متاح: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>عرض الإضافة غير صالح أو مكرر أو غير متاح: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>تغيرت جلسة التحليل.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>يجب أن يستخدم مصنع إجراءات القائمة الكائن الأب المقدم.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>يجب أن ينشئ مصنع العروض عنصر واجهة تابعًا لمساحة العمل.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>جارٍ تحميل %1…</translation>
     </message>
 </context>
 </TS>

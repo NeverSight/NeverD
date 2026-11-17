@@ -34,9 +34,11 @@ inline bool supportsX86KVMPrefault(int KVM) {
 /// guest page tables, instruction bytes and architectural state stay intact.
 /// Requires KVM_PRE_FAULT_MEMORY (Linux KVM API section 4.143). The caller
 /// checks capability at the test boundary so absence is a skip, not a pass.
-inline void prefaultX86KVMBacking(int CPU, uint64_t Bytes) {
+inline void prefaultX86KVMBacking(int CPU, uint64_t Bytes,
+                                  uint64_t PhysicalAddress = 0) {
 #ifdef KVM_PRE_FAULT_MEMORY
   kvm_pre_fault_memory Range{};
+  Range.gpa = PhysicalAddress;
   Range.size = Bytes;
   while (Range.size) {
     const uint64_t Before = Range.size;

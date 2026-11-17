@@ -92,6 +92,13 @@ source registers. It refuses malformed forms, real/IA-32e state, and missing
 or invalid profiles before any RAM access. Explicit VM86 state uses the same
 operand grammar and the paragraph-cache loading rules below.
 
+The [full-width mode owner](x86-mode-execution.md#selector-loads-and-full-caches)
+uses an internal bridge to this same executor for compatibility16/32. It binds
+complete table addresses, null FS/GS base actions and descriptor-tail fault
+policy, and retains accepted accesses in the shared transfer journal. The
+standalone low-width API keeps its existing protected/VM86 admission. This
+adds no NeverC 32-bit source target.
+
 `ir/X86/X86SegmentDescriptorRules` is the shared owner of data/stack type,
 privilege, present checks and descriptor field extraction. The existing x64
 continuation templates emit these rules as IR; the legacy executor evaluates
@@ -351,6 +358,13 @@ then reports exactly one attempt; completed accesses are not replayed. Ordinary 
 their original attempt in `PendingTransfer`, including completed frame and
 descriptor accesses. A subsequent debug-event backing stop belongs to the event
 continuation and does not repeat the completed return.
+Memory SMSW/LMSW also retain their accepted bytes and paid attempt in a typed
+machine-status `PendingTransfer`. The direct legacy API rejects changed scalar
+or machine-status bindings before effects. Its marker survives only an
+incomplete logical operand access; completion, guest fault and owner refusal
+retire it before any separate event progress. It does not retain partially read
+physical fragments. The [continuous-mode binding](x86-mode-execution.md#machine-status-and-paid-operand-progress)
+reuses this contract with complete controls and frozen accepted options.
 Zero budget permits only an instruction continuation whose attempt was already
 reported and charged. Completion stops before selecting another instruction;
 missing backing or refused bindings preserve the retained charge. Without that
@@ -439,6 +453,12 @@ Those controls cannot be supplied and silently ignored. The additional
 `X86LegacyDebugProfile::ExecuteBreakpoints` profile owns four canonical
 execution comparators in `X86LegacyDebugState::DR`; its control and priority
 rules are shared with [paged x64](x86-paged-execution.md#hardware-execution-breakpoints).
+
+The [continuous-mode debug binding](x86-mode-execution.md#debug-register-transfers-and-complete-addresses)
+now reuses these register rules in protected16/32 and compatibility16/32. Its
+complete DR bank and explicit write receipt preserve high halves across mode
+changes and pending events; the standalone legacy state remains a low-width
+interface.
 
 `X86LegacyDebugProfile::DebugRegisters` additionally owns MOV-DR and GD,
 sharing [the x64 register rules and explicit GD frame choices](x86-paged-execution.md#debug-register-transfers-and-general-detect).

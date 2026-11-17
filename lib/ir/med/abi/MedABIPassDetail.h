@@ -28,6 +28,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/ir/med/MedStackAlignment.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -37,6 +38,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -217,9 +219,6 @@ struct AbiCallPolicy {
   /// block wrote it after that call.
   void (*ResolveFirstArgAfterCall)(AbiCallContext &C,
                                    bool &Arg0FromInBlock) = nullptr;
-  /// For an indirect call without stack arguments: take the consecutive
-  /// argument registers its paths write.
-  void (*TakeIndirectCallRegisters)(AbiCallContext &C) = nullptr;
   /// For a virtual call whose object is the first argument: take the result
   /// buffer the convention passes after it.
   void (*TakeVirtualCallResultBuffer)(AbiCallContext &C) = nullptr;
@@ -252,11 +251,17 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                             const TargetRegInfo &TRI, const MedVar &V,
                             const IntegerArgumentLayout &Layout, int Depth = 0);
 
-/// Object pointer of an MSVC vfptr slot `(*(*obj + imm))`.  The slot load,
-/// `+imm`, and vfptr load must sit in \p Blk before \p CallIdx.  nullopt when
-/// the target is not that shape (a raw function pointer, an import, ...).
-std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
-                                       const MedVar &Target);
+/// Physical first argument of a vfptr slot `(*(*obj + imm))`, including slot
+/// zero without an ADD. Both loads must sit in \p Blk before \p CallIdx, and
+/// the object observed by the vfptr load must still occupy the first argument
+/// register at the call. A callback table's address alone grants no argument.
+/// Propagated temporaries require the same complete physical write on every
+/// predecessor path. The function owns the block index and shared work budget.
+std::optional<MedVar>
+vtableCallObject(const MedFunc &Func, const MedBlock &Blk, int CallIdx,
+                 const MedVar &Target, const TargetRegInfo &TRI,
+                 const IntegerArgumentLayout &Layout, BinaryFormat Format,
+                 const MedBlockIdIndex &Blocks, size_t &WorkRemaining);
 
 //===----------------------------------------------------------------------===//
 // Stack-pointer offset tracing
@@ -281,7 +286,22 @@ public:
   void invalidate() {
     Sites.clear();
     StackDeltas.clear();
+    EntryOffsets.clear();
     Built = false;
+  }
+
+  /// entryStackOffset of \p V, by one proof over the function for as long as
+  /// the definitions stay.
+  std::optional<int64_t> entryStackOffset(const MedVar &V, Arch Architecture,
+                                          BinaryFormat Format,
+                                          StackEntryKind Entry) {
+    for (const auto &Proof : EntryOffsets)
+      if (Proof->provesFor(Architecture, Format, Entry))
+        return Proof->offset(V);
+    return EntryOffsets
+        .emplace_back(std::make_unique<EntryStackOffsetProof>(
+            Func, Architecture, Format, Entry))
+        ->offset(V);
   }
 
   /// A stackPtrDelta answer that no depth cap shaped: the offset, and how
@@ -311,6 +331,7 @@ private:
   const MedFunc &Func;
   llvm::DenseMap<Identity, MedDefSite> Sites;
   llvm::DenseMap<StackDeltaKey, StackDelta> StackDeltas;
+  std::vector<std::unique_ptr<EntryStackOffsetProof>> EntryOffsets;
   bool Built = false;
 };
 

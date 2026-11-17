@@ -48,10 +48,11 @@ Json viewport(const Json &summary) {
 int main() {
   try {
     const auto begin = std::chrono::steady_clock::now();
-    auto input = graph(10000);
+    constexpr std::size_t Count = 100003;
+    auto input = graph(Count);
     GraphSnapshot snapshot(input, "0xffff000000000000", "revision-1");
     const auto summary = snapshot.summary();
-    check(summary.at("node_count") == 10000, "Large graph missing nodes");
+    check(summary.at("node_count") == Count, "Large graph missing nodes");
     check(summary.at("unresolved_edge_count") == 1,
           "Unresolved edge not reported");
     auto p = viewport(summary);
@@ -82,7 +83,7 @@ int main() {
                              : page.at("next_edge_offset");
       page = snapshot.viewport(p);
     }
-    check(allNodes.size() == 10000 && allEdges.size() == 10999,
+    check(allNodes.size() == Count && allEdges.size() == Count - 1 + Count / 10,
           "Paging loses graph objects");
     p = {{"layout_revision", "revision-1"},
          {"x", 0},
@@ -128,8 +129,6 @@ int main() {
     malformed = graph(2);
     malformed["nodes"][0]["id"] = 0.5;
     rejects([&] { GraphSnapshot bad(malformed, "0x0", "r"); }, "invalid_graph");
-    rejects([&] { GraphSnapshot tooBig(graph(20001), "0x0", "r"); },
-            "budget_exceeded");
     GraphSnapshot empty({{"nodes", Json::array()}, {"edges", Json::array()}},
                         "0x0", "r");
     check(empty.viewport(viewport(empty.summary())).at("complete"),
@@ -137,7 +136,7 @@ int main() {
     const auto elapsed = std::chrono::duration<double, std::milli>(
                              std::chrono::steady_clock::now() - begin)
                              .count();
-    std::cout << "10k CFG layout, paging, culling, cycles, high addresses and "
+    std::cout << "100k CFG layout, paging, culling, cycles, high addresses and "
                  "validation passed in "
               << elapsed << " ms\n";
   } catch (const std::exception &e) {

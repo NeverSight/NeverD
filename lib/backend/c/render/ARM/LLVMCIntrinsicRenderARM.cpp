@@ -115,10 +115,10 @@ bool validateAArch64AddressMemoryCall(Arch TheArch,
   return true;
 }
 
-std::optional<InlineAsmRender>
-renderAArch64AddressMemoryCall(Arch TheArch, const llvm::CallInst &Call,
-                               const std::string &ResultName, bool ResultLive,
-                               const std::vector<std::string> &Args) {
+std::optional<InlineAsmRender> renderAArch64AddressMemoryCall(
+    Arch TheArch, const llvm::CallInst &Call, const std::string &ResultName,
+    bool ResultLive, const std::vector<std::string> &Args,
+    const std::function<std::string(uint32_t)> &HelperName) {
   if (!validateAArch64AddressMemoryCall(TheArch, Call))
     return std::nullopt;
   const bool Store = Call.getType()->isVoidTy();
@@ -134,9 +134,10 @@ renderAArch64AddressMemoryCall(Arch TheArch, const llvm::CallInst &Call,
   std::string Data = Store ? Args[kAddressMemoryDataOperand] : std::string{};
   if (Store && Instruction.isVector())
     Data = llvm::formatv(kAddressVectorToBitsC, Data).str();
-  const auto Value =
-      aarch64AddressMemoryC(Instruction, Args[kAddressMemoryBaseOperand],
-                            Args[kAddressMemoryIndexOperand], Data);
+  const auto Value = aarch64AddressMemoryC(
+      Instruction, Args[kAddressMemoryBaseOperand],
+      Args[kAddressMemoryIndexOperand], Data,
+      HelperName ? HelperName(Instruction.scratchWord()) : std::string{});
   const auto Result = !Store && Instruction.isVector()
                           ? llvm::formatv(kAddressVectorFromBitsC, Value).str()
                           : Value;

@@ -304,7 +304,7 @@ TEST(CSymbolNames, UndeterminedKnownArgumentsAreUnknown) {
       << Source;
   EXPECT_NE(
       Source.find("__cxa_begin_catch((void *)(uintptr_t)(__builtin_trap(), "
-                  "0 /* unknown value */));"),
+                  "0 /* no recovered semantics at 0x0 */));"),
       NotFound)
       << Source;
 }

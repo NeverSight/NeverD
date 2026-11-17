@@ -31,6 +31,9 @@ inline constexpr int kInterpreterRecoveryDialogWidth = 640;
 inline constexpr int kInterpreterRecoveryDialogHeight = 600;
 inline constexpr int kInterpreterRecoveryReportWidth = 760;
 inline constexpr int kInterpreterRecoveryReportHeight = 560;
+// Initial size of the scrollable, complete conditional string evidence view.
+inline constexpr int kComputedStringDetailsWidth = 760;
+inline constexpr int kComputedStringDetailsHeight = 560;
 inline constexpr int kPatchPreviewDelayMs = 180;
 inline constexpr int kPatchEditorWidth = 620;
 inline constexpr int kPatchAnchorGap = 4;
@@ -138,6 +141,8 @@ inline constexpr int kChooserViewMaxCachedPages = 64;
 inline constexpr int kChooserViewMaxRefreshLookups = kChooserViewMaxCachedPages;
 inline constexpr int kChooserViewMaxPendingPages = 4;
 inline constexpr int kChooserViewFilterDebounceMs = 150;
+/// Refresh elapsed time without repopulating any table rows.
+inline constexpr int kChooserViewStatusIntervalMs = 500;
 inline constexpr int kChooserViewChooserModelRequestPageTextLimit = 400;
 
 // tools/neverd-gui/app/CodeView.cpp
@@ -384,9 +389,6 @@ inline constexpr int kDefaultMcpStartupSamples = 3;
 
 // tools/neverd-gui/mcp/GuiSessionBroker.cpp
 inline constexpr int kGuiRouteTimeoutMilliseconds = 120000;
-
-// tools/neverd-gui/LibraryCodeView.cpp
-inline constexpr int kMaxLibraryViewByteOffset = 32 * 1024 * 1024;
 
 // tools/neverd-gui/LibraryCodeView.cpp
 inline constexpr int kMaxLibraryViewOrdinal = 8192;

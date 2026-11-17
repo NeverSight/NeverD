@@ -1043,6 +1043,265 @@ in every language and compared every text of the main window across them.
 - Known limit: messages the analysis engine sends, such as why an operand has
   no structure offset, are English in every language.
 
+## Plugin views and the Agent
+
+NeverD Agent (a standalone Qt Quick window and an in-process workbench chat)
+was reviewed against the workbench on 2026-11-14 with real binaries and the
+real engine. These rules hold for it and for any view a plugin floats over
+the workbench.
+
+- A component's views live as long as what its module keeps below the
+  activation's lifetime. The host hides a closing component's views and
+  destroys them with the binding, after the module's own objects, never a
+  turn of the event loop before: an object that watches its views, as the
+  Agent's button follows the workbench's size, would meet a view already
+  gone. That gap crashed the workbench when a file opened while its window
+  was still taking its size.
+- Give a floating entry point the shape people already read as one: an
+  accent button with a mark and a short label ("Ask Agent"), at the
+  workbench's bottom-right corner, as Office places its Copilot button. A
+  48-pixel gray ball with a glyph was too quiet to find. Let it dock at the
+  side as its mark alone, and offer dock, reset and hide in its context menu,
+  with a menu action and a shortcut that keep working while it is hidden.
+- Keep the window's one accent while the entry's panel is open: the entry
+  is a checkable button, checked exactly while the panel shows, drawn as a
+  pressed toggle in the button gray, and the panel's Send keeps the accent.
+  The high contrast themes fill buttons with the window, so there the
+  button gray matched the closed accent button (Dark High Contrast: both
+  black, outlined alike); there the pressed toggle takes
+  `ToolButtonChecked`, the workbench's checked tool button fill.
+- Let a floating entry button take focus by Tab only (`Qt::TabFocus`). A
+  click that moved focus onto it made the panel record the button as the
+  view to return to, so Escape left the keyboard on the button instead of
+  the listing being read.
+- Keep floating views off the command line along the foot of the workbench,
+  under either bottom corner: mirrored, the command field does not reach the
+  right edge, so test the row's width, not its right edge.
+- Make a floating panel a window a person places: it moves by its title (a
+  six-dot grip says so) and resizes by its edges, as VS Code moves its quick
+  input. It opens at the golden section across the workbench, with the smaller
+  golden part of the free width (0.382, `2 - std::numbers::phi` in
+  `AgentUiPlugin.cpp`) before it on the side a line starts from: left of the
+  middle in a left-to-right language, right of it in Arabic. In a 1000 by 700
+  workbench it stands at (199, 70). The corner beside the entry button read
+  worse than the middle, and on 2026-11-15 the user still found the middle
+  uncomfortable and asked for the golden section, further left (SKILL.md
+  section 1.9). Down, it keeps to the middle of the whole workbench, which
+  already sits above the middle of the dock area because the toolbars take the
+  top (137 pixels of a 1440 by 864 workbench); a golden section down the whole
+  workbench would put its top 21 pixels above the dock area there, where the
+  host stops it against the toolbars. It keeps its place as its share
+  of the room it can move in, so it holds its relative place when the
+  workbench resizes. Moved within 20 pixels of where it opens, on either axis,
+  it snaps there (VS Code snaps its quick input to the horizontal center
+  within the same distance), and a double click on the title puts it back
+  there at its first size. It opens at 480 by 560 pixels, about the tallest
+  that still sits in the middle of a 1440 by 864 workbench, whose dock area
+  starts 137 pixels down; 440 by 520 read as cramped. In a small workbench the
+  panel may cover the entry button, so it closes by its own button and Escape
+  too. It stays open until closed, without a hover preview or a pin, and
+  closing gives the keyboard back to the view that had it.
+- Known limit of that place: the share is of the whole workbench, while the
+  host keeps views inside the dock area, between the toolbars and the
+  command line. A panel let go exactly at the dock area's top edge left it
+  when the workbench grew from 864 to 1000 pixels high (54 pixels down); a
+  panel dragged past an edge, or left where it opens, held its place.
+- Take plugin views along into focus mode. Focus mode (F pressed three times
+  in an analysis view) floats the disassembly, the pseudocode and the output
+  into a maximized workspace over the workbench, and the Ask Agent button and
+  the conversation stayed behind it, so the Agent looked gone there. The
+  workbench now lends that workspace every plugin view
+  (`GuiPluginUiHost::lendViews`): each moves there shown or hidden, at the
+  same corner and share, clear of the workspace's command line, and the
+  workspace's window takes the plugins' menu shortcuts, such as Ctrl+Alt+I,
+  which otherwise belong only to the workbench's menu bar. Leaving focus mode
+  returns them before the old layout is restored; a workspace that goes away
+  by any other path returns them from its `destroyed()` signal. A view placed
+  as a share of its parent places itself again on `QEvent::ParentChange`.
+  Known limit: in a right-to-left language the button sits at the bottom-left
+  corner, where the focus workspace's Functions sidebar also opens.
+- Show a view's mark once. The empty conversation's welcome carries the
+  Agent's mark, so the panel's title is the grip and the name alone; a
+  second, smaller mark beside the title repeated it a few lines above.
+- Explain a new entry once, beside it, in a small card with one button, as
+  Fluent teaches a new entry point.
+- Lay out a conversation as VS Code's chat view. An empty conversation says
+  what the view does in the middle of the panel: the mark at 40 pixels in
+  the secondary text color, as VS Code draws its chat welcome's icon, a
+  heading a step larger than the panel's title, and the message centered at
+  a short measure of about 40 average characters. First questions are
+  compact chips as wide as their words, just above the composer. Full-width
+  outlined rows under a top-anchored welcome, with a blue mark beside the
+  blue Send, read as cluttered.
+- Make the composer one box in the input fill, outlined in the focus color
+  while the prompt has focus: the prompt, then what the question takes
+  along, then Send. Show that context as one chip, as VS Code shows a
+  chat's current file: its cross leaves the context out, and the chip
+  turns dashed and italic, with a plus that takes it back. A gray context
+  line above the conversation and an "Attach current selection" check box
+  below the prompt said the same thing twice. Without a binary, a line in
+  the chip's place says to open one, beside a Send that waits for it; a
+  placeholder alone left a disabled Send unexplained once typing hid it.
+- Type prose in the interface font. The workbench's text fields type in the
+  code font (`theme.qss`), so a chat prompt sets the interface font in its
+  own sheet, as VS Code's chat input uses the interface font. Grow a prompt
+  with its lines, two to eight here, and measure the laid-out lines: a
+  Chinese line among Latin text is taller than the font's line, and
+  `QPlainTextEdit` scrolls unless a pixel is left below its bottom margin.
+- To put a text field inside a box of your own, let the field paint the
+  box's fill over its whole frame when its paint event arrives. The
+  workbench paints a box, with its focus outline, on every text field that
+  takes typing (`fieldFace`) just before the field paints, whatever its
+  style sheet says, and the field's page and scroll bar are transparent, so
+  that outline showed inside the box's. No style sheet reaches the box;
+  rules for the field's page (Qt leaves a scroll area's viewport unstyled)
+  or its scroll bar painted nothing either.
+- Outline chips in VS Code's `chat.requestBorder`: a tenth of white in a
+  dark theme and of black in a light one, which shows on the panel and on
+  the input fill alike, and the theme's border in high contrast. A dark
+  theme's toolbar hover gray is its input gray, so a chip in the composer
+  hovers with the same tenth.
+- Show code in a plugin view in the workbench's code font
+  (`AppearanceContext::codeFont`). Markdown asks for a generic monospace
+  family that the workbench process does not resolve, and the workbench's
+  own fallbacks for digits and punctuation then mixed two fonts in one code
+  line, which read as letter-spaced text. Wrap long code lines in a narrow
+  panel instead of scrolling the whole message sideways.
+- A Qt Quick window follows the same rules as the workbench's widgets:
+  colors from `ChromeColors.def` in all four columns, push and main faces
+  outlined in the high contrast themes (their fills equal the window there),
+  a modal dim that leaves the frame's shadow band alone, right-to-left by
+  `LayoutMirroring` set on the window's root item (dialogs and menus live in
+  the overlay, outside any content item), and glyphs that point along the
+  reading direction turned around in Arabic.
+- Size tabs and choosers to their text, and let a hint give way when it and
+  its neighbor do not both fit: German cut a fixed 56-pixel tab and a
+  150-pixel scope chooser. Keep line breaks out of the middle of a sentence
+  in a source string; English then broke a hint after "research,".
+- The Agent and its CLI read the workbench's language and theme from the
+  workbench's own settings, and read them again when the Agent window becomes
+  active, so a choice made in the workbench is the Agent's too.
+
+### The Agent's own window
+
+The standalone Agent window was first shaped as the workbench is: a title
+band, panes parted by hairlines, corners of 2, 3 and 6, one text size, a
+status bar, and an empty state set at the left edge. On 2026-11-15 the user
+found that window not good-looking and asked for the design of OpenAI's Codex
+desktop application, in NeverD's colors. The workbench's shapes belong to a
+dense tool window; a window that holds a conversation takes these instead
+(`tools/neverd-agent/ui/Theme.qml`).
+
+- Take geometry, type and spacing from the reference and every color from a
+  role of `ChromeColors.def`. Codex's desktop stylesheet (version 26.928, the
+  rules for its Electron window) gave: a side list 275 wide (240 to 520), rows
+  30 high with 8 of padding at the sides and corners of 10, a title strip of
+  44, a reading column of 768, a composer and message bubbles with corners of
+  22, dialogs 12 and menus 16, composer buttons of 28, panel padding of 20,
+  text at 12, 13 and 14 pixels with a 28-pixel line on the start page, and
+  weights of 400, 500 and 600. None of its colors, glyphs, fonts or text is in
+  NeverD.
+- Set those on NeverD's own grid of 4: corners of 8 for rows, buttons, fields
+  and menu items, 12 for cards, menus and sheets, 20 for the composer and a
+  message; rows at least 30 high, push buttons and fields 2 more; a side list
+  of 272 (232 in a window under 1100 wide); a strip of 44; a reading column
+  of 768. Codex scales its corners by 1.25 where the browser draws them as
+  superellipses; Qt draws arcs of a circle, where 8 at 30 high reads as its
+  10 does.
+- Keep NeverD's order of surfaces. Codex's content is a card lighter than its
+  side list (5% of white over the window). NeverD's views (`Base`, #1E1E1E)
+  are darker than its chrome (`Window`, #252526), as an editor is beside its
+  side bar. The Agent keeps that: the side list and the right panel take
+  `Window`, the conversation `Base`. No literal or alpha mix copies the lift.
+- Part surfaces by their fills, and by lines only where the fills are one.
+  The hairlines between the side list, the conversation and the panel are
+  gone in the dark and light themes and drawn in the high contrast ones
+  (`Theme.paneLine`), where a message bubble and the panel's card are also
+  outlined.
+- Build the window as two columns, without a band across its top or a bar
+  along its foot. The side list runs the window's height and carries the
+  application's name on a strip that moves the window. The conversation's
+  strip carries the project's name, its commands and the window's controls.
+  A status bar that mostly said "Local workspace" is gone: what the
+  application reports shows as a note over the conversation for six seconds,
+  or for as long as it works.
+- Give the side list rows a list's behavior: the whole row answers the pointer
+  (`Hover`), and the one that is open carries `ToolBarHover`, a quiet gray, not
+  the selection blue. One row carries the fill: the open project's, until one
+  of its objects is chosen. A project's folder turns into the chevron that
+  folds it while the pointer or keyboard is on its row, and the row's menu
+  button shows then too. The same quiet fill marks a toggle that is on and the
+  panel's current tab, whose accent underline went. High contrast fills
+  nothing with `ToolBarHover`, so there these take `ToolButtonChecked`.
+- Use a type scale in steps of the desktop's interface size, never fixed
+  pixels: 0.93 for notes, 1.15 for a sheet's title, and 2 for the one line of
+  a start page. One size with secondary text quieted by
+  color, the workbench's rule, left the window without a first thing to read.
+- Center what an empty window says: the mark, one line at twice the text
+  size in the regular weight, a sentence at a measure of 480, and its two
+  buttons, in the middle of the pane and a twelfth of its height above it. At
+  the left edge of an 800-wide column the same block read as stranded.
+- Show who spoke by where a message stands. The person's words are in a
+  bubble at the trailing edge, as wide as they are within four fifths of the
+  column, in `Window` without an outline; an answer is plain across the
+  column. A name is written only where it says more (a goal's round, a
+  message inherited from the main conversation). The time, Copy and Quote
+  show under a message while the pointer or keyboard is on it. A header in
+  every bubble (a dot, a name, a time, a button) read as a form.
+- Make the composer the window's main object: a floating surface (`Menu` fill,
+  `FloatingWindowBorder` outline, the focus color while typed in) with corners
+  of 20, growing from two lines to eight, its pickers quiet until hovered, and
+  Send a disc in the accent. A flat block in the input gray with a square
+  Send read as a form field. Inside the right panel's card, a composer is a
+  well of the conversation's `Base` in the same outline.
+- Size a menu to its longest command (`ThemedMenu.fit`). At a desktop's 11
+  point text a 230-pixel menu cut "Show project files in the sidebar".
+- Let a project leave the side list. **Remove project…** stands last in the
+  project's menu, after a separator, and its sheet names the project in its
+  title, says what the removal keeps (the folder, the conversation and the
+  memory in it, and that **Open project…** brings it back), shows the folder,
+  and puts the accent on **Remove project**. Removing by itself deletes
+  nothing, so the word is "remove", never "delete". The project that followed
+  it opens; with none left the window shows its start page and the right
+  panel closes.
+- Offer what cannot be undone as a box that is never ticked for the person:
+  the same sheet can also delete the Agent's records (`.nd-agent`). While the
+  box is ticked the sentence above it says what is deleted, what is kept and
+  that it cannot be undone, and the button reads **Remove and delete**; the
+  box is clear again each time the sheet opens, and is absent where there are
+  no records to delete. A check box leads its label, so in a right-to-left
+  layout its box stands at the right.
+- Keep a listed folder that did not open as a row, in the quiet text color
+  with a folder glyph that carries a mark; its tool tip gives the folder and
+  the reason, a click tries it again, and its menu removes it. The window
+  first answered such a folder with an error sheet at every start and no way
+  to take it off the list.
+- A row's tool tip leaves when the row is clicked or its menu opens and
+  comes back with the pointer, so it never lies over the menu. A tool tip
+  wraps at 460 pixels; a path with a reason ran past the window on one line.
+- Show every string as plain text. A project's name comes from a file, a
+  function's name from a binary and a summary from a model; a Qt Quick label
+  left to its default lays such text out as markup when it looks like markup
+  and fetches the image it names, so a name could call another machine by
+  being displayed. Every `Label` and `Text` states
+  `textFormat: Text.PlainText`, which `scripts/check_agent_qml_text.py`
+  checks, and the window's engine has no network (`platform/OfflineQml.h`).
+  A long title wraps to a second line before it is cut.
+- Give a text input the application's own editing menu. From Qt 6.9 Qt Quick
+  Controls opens a context menu of its own on a right click in a `TextField`
+  or `TextArea`: the style's menu, with Qt's icons and Qt's words, beside
+  menus that are the Agent's. Each input names `EditMenu` as its
+  `ContextMenu.menu`: Undo, Redo, Cut, Copy, Paste and Select all in the
+  themed menu and the Agent's catalogs, with Cut and Copy off for a field
+  that hides what is typed. The check for the window's text requires it.
+- Check the window with `neverd-agent --capture`, which needs no display, on
+  illustrative data in a private home: an empty workspace, a conversation, an
+  empty project, a paused goal with queued inputs, each right panel and the
+  settings sheet; in the four themes; in Chinese, German and Arabic; and at
+  800 by 560 and just under 1100 wide. Hover, menus and sheets need the window
+  on a private Xvfb. `--capture` exits with 1 and writes the reason to
+  `agent.log` when the workspace cannot start.
+
 ## Resizing is part of the design
 
 Content-heavy dialogs should support ordinary desktop resizing unless the task
@@ -1158,6 +1417,60 @@ change: for example, a timestamp beside the filename hides a build suffix, so
 move metadata below it. Separate observable defects from aesthetic judgment.
 Show the actual result and state what was verified. Avoid promising objectively
 perfect aesthetics or using decorative effects as a substitute for hierarchy.
+
+## When the Qt version changes
+
+A new Qt changes what the workbench shows and how it answers input without a
+line of ours changing. The move from Qt 6.8.3 to 6.12 changed seven things a
+person would notice; none of them failed a test before it was looked for.
+
+Compare the two versions before trusting either:
+
+1. Build the same source against the old Qt and the new one. A second
+   worktree with the version floors lowered serves for the old side; it is
+   never committed.
+2. Capture every window with both builds: the audit probe of "Auditing every
+   window" and `NEVERD_APPEARANCE_CAPTURES`. Run each build twice first to
+   learn what differs between two runs of one build (times, free disk space,
+   temporary paths), and compare pixel data, colors apart from alpha: a
+   capture can gain an alpha channel and still show the same colors.
+3. Read the differences by window, sizes first. A dialog that changed width
+   is a finding; a column one pixel wide where a caret stands is not.
+4. Run the GUI test programs inside a real compositor with both builds, and
+   drive the application there with real pointer and key events. A test that
+   opens a popup without an input event fails on the newer Qt under Wayland
+   for its own reason, and a wheel's notch arrives differently than a test
+   builds it.
+5. Read Qt's own changes where this application leans on it: the style sheet
+   style, the common and Fusion styles for every metric and element the
+   workbench style overrides or sets to nothing, and the platform plugin's
+   input and window code. A metric set to nothing is a place where Qt's
+   default stood in, and the default can go.
+6. Prove each cause in Qt's source and each fix by a test that fails with the
+   fix taken out.
+
+What 6.8.3 to 6.12 changed, and where the answer lives:
+
+| What a person saw | Why | Where it is answered |
+|---|---|---|
+| A black band where a window's shadow fades | A Wayland surface keeps the pixel format its native window was made with, and loses its alpha channel unless that was asked first | `WindowFrame::attach` makes the native window again |
+| A tab's close button against the tab's edge | The common style stopped keeping four pixels beside a tab's buttons when `PM_TabBarTabHSpace` is none | `WorkbenchStyle::subElementRect`, `kWorkbenchStyleTabButtonInset` |
+| A spin box 18 pixels wider, its number against the frame | The style sheet adds the buttons' width to the box itself, and 6.12.0 places the editor from the box's edge | `theme.qss` keeps no padding for the buttons; `insetSpinBoxText` |
+| No frame on a table's current cell or a tree's current row | The style sheet names itself as the proxy while the base style draws an item, so the frame meets the sheet's `outline: none` | `WorkbenchStyle::drawControl` frames the item itself |
+| Find in view too narrow for its own text | `show()` on an open dialog no longer fits it again, and a width set on a dialog for its title takes the layout's minimum off it | `FindInViewDialog::search` fits the dialog once it has named its view |
+| The listing and pseudocode scroll half a line a notch | A wheel's notch on Wayland also carries the compositor's distance as pixels | `WheelInput::measuresPixels`; a notch is as many lines as Qt's lists scroll rows |
+| A foreign menu in the Agent's text inputs | Qt Quick Controls give every text input a context menu | `EditMenu.qml` |
+
+Left as Qt now draws them, each a pixel or a few: check boxes and radio
+buttons one pixel smaller (Fusion no longer etches disabled text), a caret in
+the text's own color, a push button's menu chevron three pixels further in, a
+tab's icon painted through its engine, and Qt's own color and font dialogs.
+
+A dialog that fills itself in after it opens fits itself then, with its
+layout brought up to date first (`layout()->activate()`, then
+`adjustSize()`): a second `show()` does nothing from Qt 6.11. Widening every
+framed dialog whenever its layout asks was tried and dropped: a dialog would
+then jump wider with each longer status text and never come back.
 
 ## References and implementation
 

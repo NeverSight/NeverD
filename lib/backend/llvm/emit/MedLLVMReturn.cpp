@@ -205,11 +205,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
             RV = &RIt->Output;
         }
         if (!RV)
-          for (auto &Phi : RetBlk->Phis)
-            if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
-                Phi.Output.RegOff == RegOff &&
-                (!RV || Phi.Output.Size > RV->Size))
-              RV = &Phi.Output;
+          if (const PhiNode *Phi = aggregateReturnPhi(*RetBlk, RegOff))
+            RV = &Phi->Output;
         if (RV)
           return RV;
       }
@@ -231,10 +228,8 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                 (!RV || BIt->Output.Size > RV->Size))
               RV = &BIt->Output;
           if (!RV)
-            for (auto &Phi : B.Phis)
-              if (Phi.Output.Kind == MedVar::Reg && Phi.Output.Size > 0 &&
-                  Phi.Output.RegOff == RegOff)
-                RV = &Phi.Output;
+            if (const PhiNode *Phi = aggregateReturnPhi(B, RegOff))
+              RV = &Phi->Output;
           if (RV)
             return RV;
           for (int P : B.Preds)

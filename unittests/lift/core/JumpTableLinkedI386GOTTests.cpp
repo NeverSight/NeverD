@@ -183,7 +183,11 @@ TEST(LinkedI386GOTTable, UnknownImportCannotPreserveTheGOTSpillStack) {
     return Patched;
   };
   ASSERT_TRUE(RemoveRestore(Img->Segments));
-  ASSERT_TRUE(RemoveRestore(Img->Sections));
+  // Linked ELF sections may share their bytes with the owning segment.
+  // Patch any retained section copy too; readVA sees the patched segment.
+  RemoveRestore(Img->Sections);
+  for (va_t Address = Begin->Addr; Address < End->Addr; ++Address)
+    ASSERT_EQ(*Img->readVA(Address, 1), 0x90);
   EXPECT_FALSE(dispatchTargets(*Img, "spilled_got_switch").has_value());
 }
 

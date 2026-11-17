@@ -34,7 +34,7 @@ bool conventionPreserves(const TargetRegInfo &TRI, BinaryFormat Format,
                          uint64_t RegOff, uint16_t Size) {
   if (Size == 0)
     return false;
-  if (TRI.callPreservedPrefixSize(RegOff, Size) >= Size)
+  if (TRI.callPreservedPrefixSize(RegOff, Size, Format) >= Size)
     return true;
   // A run asks about every register of every call with the same target and
   // format, whose ranges never change: build them once per thread.
@@ -71,6 +71,8 @@ bool callClobbersRegister(const MedOp &Call, uint64_t RegOff, uint16_t Size,
     if (TRI.isX87StackReg(RegOff))
       return (Call.X87ClobberedSlots >> x86reg::stRegIndex(RegOff)) & 1;
   }
+  // Platform-register preservation is format- and width-specific, and is
+  // decided by the same range contract as other preserved registers below.
   if (TRI.isFrameOrLinkReg(RegOff) || TRI.isStackPointer(RegOff) ||
       (Call.Output.Kind == MedVar::Reg && Call.Output.RegOff == RegOff))
     return false;

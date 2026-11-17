@@ -427,6 +427,7 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       Op.ScalarCallSignature.reset();
       Op.CalleeRegisterArgs = -1;
       Op.CalleeVariadicFrom = -1;
+      Op.CalleeVariadicRegisterFrom = -1;
       Op.CalleeVectorArgs = -1;
       Op.CalleeVectorSlots = 0;
       Op.CalleeVectorArgWidths = 0;

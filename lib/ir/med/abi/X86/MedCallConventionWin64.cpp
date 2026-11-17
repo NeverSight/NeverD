@@ -71,6 +71,7 @@ bool win64ScalarPrototypeCall(const NdType &Prototype) {
             Type->Size == 8);
   };
   return Prototype.Kind == NdTypeKind::Func && Prototype.RetType &&
+         !Prototype.FunctionVariadic &&
          (Prototype.FunctionConvention ==
               types::CallingConvention::Unspecified ||
           Prototype.FunctionConvention == types::CallingConvention::Cdecl) &&

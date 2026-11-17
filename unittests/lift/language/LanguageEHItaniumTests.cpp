@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/loader/ELF/ELFImageMetadata.h"
+#include "neverd/loader/ExceptionEntryPoints.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/SourceUnwind.h"
 #include "neverd/support/DwarfEH.h"
@@ -197,6 +198,7 @@ TEST(ItaniumLSDA, DecodesCallSitesActionsAndTypes) {
   ASSERT_TRUE(Result.Info.has_value());
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
   const ItaniumEHInfo &Info = *Result.Info;
+  EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Complete);
   EXPECT_EQ(Info.TypeTableEntryKind, ItaniumTypeTableEntryKind::CxxRTTI);
 
   EXPECT_EQ(Info.LandingPadBase, FuncVA);
@@ -443,7 +445,60 @@ TEST(ItaniumLSDA, FlagsCallSiteRangesThatLeaveTheirFunction) {
 
   EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Partial);
   ASSERT_TRUE(Result.Info.has_value());
+  EXPECT_EQ(Result.Info->ParseStatus, ExceptionParseStatus::Partial);
   EXPECT_EQ(Result.Info->CallSites.size(), 1u);
+}
+
+TEST(ItaniumEHDriver, UnnamedPersonalityRetainsTheDecodedEntryInventory) {
+  const va_t FuncVA = kTextVA + 0x100;
+  const va_t LSDAVA = kDataVA + 0x400;
+  for (bool PartialTable : {false, true}) {
+    SCOPED_TRACE(PartialTable);
+    BinaryImage Img = makeImage();
+    auto Frame = buildSimpleFrame(kDataVA, FuncVA, 0x80, "zPLR",
+                                  kTextVA + 0x800, LSDAVA);
+    writeData(Img, kDataVA, Frame.Bytes);
+    Section Frames;
+    Frames.Name = ".eh_frame";
+    Frames.VA = kDataVA;
+    Frames.Size = Frame.Bytes.size();
+    Frames.Data = Frame.Bytes;
+    Img.Sections.push_back(std::move(Frames));
+    // A complete address table can exist without identifying its personality.
+    // Moving the default landing-pad base past the owning function produces
+    // a distinct structural LSDA error, which must still refuse that inventory.
+    auto Table = buildCatchLSDA(LSDAVA, FuncVA, 0);
+    if (PartialTable) {
+      // The first table byte encodes the landing-pad base as omitted. Replace
+      // it with an absolute, explicitly out-of-function base.
+      Table.Bytes[0] = 0;
+      std::vector<uint8_t> Base(8);
+      for (unsigned I = 0; I < 8; ++I)
+        Base[I] = static_cast<uint8_t>((FuncVA + 0x400) >> (8 * I));
+      Table.Bytes.insert(Table.Bytes.begin() + 1, Base.begin(), Base.end());
+    }
+    writeData(Img, LSDAVA, Table.Bytes);
+    parseItaniumExceptions(Img);
+    ASSERT_EQ(Img.ExceptionMetadata.Functions.size(), 1u);
+    const auto &F = Img.ExceptionMetadata.Functions.front();
+    EXPECT_EQ(F.Personality, ExceptionPersonality::Unknown);
+    EXPECT_TRUE(F.PersonalityName.empty());
+    EXPECT_EQ(F.ParseStatus, ExceptionParseStatus::Partial);
+    ASSERT_TRUE(F.Itanium);
+    EXPECT_EQ(F.Itanium->ParseStatus, PartialTable
+                                          ? ExceptionParseStatus::Partial
+                                          : ExceptionParseStatus::Complete);
+    EXPECT_EQ(hasCompleteExceptionEntryInventory(F), !PartialTable);
+    std::vector<va_t> Entries;
+    visitExceptionEntryPoints(F, [&](va_t Address, ExceptionEntryKind Kind) {
+      EXPECT_EQ(Kind, ExceptionEntryKind::Handler);
+      Entries.push_back(Address);
+    });
+    EXPECT_EQ(Entries,
+              (PartialTable ? std::vector<va_t>{}
+                            : std::vector<va_t>{FuncVA + 0x40, FuncVA + 0x60}));
+    EXPECT_FALSE(F.canRegenerateLanguageMetadata());
+  }
 }
 
 TEST(ItaniumLSDA, RejectsCallSiteTablePastMappedData) {
@@ -515,6 +570,7 @@ TEST(ItaniumLSDA, DecodesExceptionSpecificationLists) {
   Req.FunctionEnd = FuncVA + 0x100;
   LSDAParseResult Result = parseLSDA(Img, Req, PointerBases{});
 
+  EXPECT_EQ(Result.ParseStatus, ExceptionParseStatus::Complete);
   ASSERT_TRUE(Result.Info.has_value());
   ASSERT_EQ(Result.Info->Actions.size(), 1u);
   EXPECT_TRUE(Result.Info->Actions[0].isExceptionSpecification());
@@ -522,6 +578,11 @@ TEST(ItaniumLSDA, DecodesExceptionSpecificationLists) {
   EXPECT_EQ(Result.Info->ExceptionSpecs[0].Index, 1u);
   ASSERT_EQ(Result.Info->ExceptionSpecs[0].TypeIndices.size(), 1u);
   EXPECT_EQ(Result.Info->ExceptionSpecs[0].TypeIndices[0], 1u);
+  ASSERT_EQ(Result.Info->TypeTable.size(), 1u);
+  EXPECT_EQ(Result.Info->TypeTable.front().TypeInfoVA, TypeInfoVA);
+  EXPECT_EQ(Result.Info->ActionTableRange.size(), 2u);
+  EXPECT_EQ(Result.Info->ExceptionSpecRange.Begin, Result.Info->TypeTableVA);
+  EXPECT_EQ(Result.Info->ExceptionSpecRange.End, LSDAVA + B.size());
 }
 //===----------------------------------------------------------------------===//
 // End-to-end normalization
@@ -1028,6 +1089,34 @@ TEST(ItaniumEHDriver, RelocatableExtentsDoNotDecodeUnlinkedFrames) {
   const ExceptionFunction &F = Img.ExceptionMetadata.Functions.front();
   EXPECT_EQ(F.CodeRange.Begin, LinkedVA);
   EXPECT_EQ(F.CodeRange.End, LinkedVA + 0x40);
+}
+
+TEST(ItaniumEHDriver, RuntimeIndexCountIsBoundedByItsBackingBytes) {
+  for (uint32_t Count : {0u, 1u, 2u, UINT32_MAX}) {
+    SCOPED_TRACE(Count);
+    const va_t FuncVA = kTextVA + 0x100;
+    const va_t HeaderVA = kDataVA + 0x600;
+    auto Img = makeX64FrameImage(FuncVA, 0x80);
+    const auto Frame = buildSimpleFrame(kDataVA, FuncVA, 0x80, "zR", 0, 0);
+    ByteBuilder Header;
+    Header.u8(1);
+    Header.u8(0); // absolute frame pointer
+    Header.u8(3); // udata4 count
+    Header.u8(0); // absolute index pointers
+    Header.u64(kDataVA);
+    Header.u32(Count);
+    Header.u64(FuncVA);
+    Header.u64(kDataVA + Frame.FDEOffset);
+    writeData(Img, HeaderVA, Header.data());
+    Img.ELFMetadata.emplace();
+    Img.ELFMetadata->ProgramHeaders.push_back({llvm::ELF::PT_GNU_EH_FRAME, 0, 0,
+                                               HeaderVA, Header.size(),
+                                               Header.size(), 1});
+    parseItaniumExceptions(Img);
+    EXPECT_EQ(Img.ExceptionMetadata.ParseStatus,
+              Count <= 1 ? ExceptionParseStatus::Complete
+                         : ExceptionParseStatus::Malformed);
+  }
 }
 
 TEST(ItaniumEHDriver, StandaloneReadsObserveChangedFrameBytes) {

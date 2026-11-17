@@ -1,10 +1,47 @@
 # Desktop distribution
 
+GUI, Agent and their analysis helpers belong to one installed desktop product.
+The GUI's standalone build and the repository build with GUI enabled include
+Agent by default. The `neverd-desktop` target builds GUI, Agent when enabled,
+worker, MCP, the plugin-host CLI and the engine CLI when available. One install puts
+the Windows/Linux executables together in `<prefix>/bin`, sharing the selected
+Qt runtime and plugins. Agent stays a separate executable and does not link the
+GUI or analysis engine.
+
+Agent-enabled installs include `bin/neverd-agent-cli`, which serves both the
+standalone Agent window and the native chat plugin. On Windows and Linux the
+plugin module and `plugin.json` are in `bin/plugins/neverd-agent-ui/`. The
+workbench resolves `plugins/` beside its executable. On macOS the package is in the
+workbench bundle's `Contents/PlugIns/neverd-agent-ui/`. The workbench registers
+and enables the bundled package on first use. The plugin manager can disable
+it and retains that preference when the installation moves or is upgraded.
+
 NeverD embeds zlib and its core acceleration libraries. The CLI, worker and MCP
 server share `libneverd`; Qt libraries and required plugins ship dynamically
 beside the desktop application. A prebuilt Qt library can depend on its own
 dynamic zlib even though NeverD uses static zlib. Keep that private Qt dependency
 in the package.
+
+## Qt baseline
+
+Use Qt 6.12, currently pinned to 6.12.0 in the desktop CI. Rebuild the GUI
+and native Qt plugins against the same Qt headers, compiler, architecture and
+runtime shipped in the package. Private Gui/Widgets APIs do not provide a
+version-independent ABI. The CI kit is a build/test input, not a qualified
+redistributable.
+
+Before distributing a source build of Qt 6.12.0, apply the official QtBase
+security fixes from the [Qt 6.12 download directory](https://download.qt.io/official_releases/qt/6.12/):
+`CVE-2026-105924-qtbase-6.12.diff`, `CVE-2026-105943-qtbase-6.12.diff`, and
+both `CVE-2026-116337-qtbase-6.12-0001.diff` and
+`CVE-2026-116337-qtbase-6.12-0002.diff`. Record source and patch hashes and
+retain the patched corresponding sources. A prebuilt kit must independently
+establish that it contains these fixes; its version string alone is insufficient.
+Review advisories for any additional Qt modules shipped by a custom kit.
+
+The checked-in older Qt license catalogs are historical inputs, not licenses
+for Qt 6.12. Supply a catalog generated from the exact Qt 6.12 source/build;
+do not rename an older catalog to satisfy the packaging check.
 
 ## Linux and Windows
 
@@ -27,13 +64,28 @@ cmake -S tools/neverd-gui -B build-gui -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/path/to/Qt/kit \
   -DNEVERD_ENGINE_LIBRARY=/path/to/core/bin/libneverd.so \
   -DNEVERD_DESKTOP_CLI=/path/to/core/bin/neverd
-python3 scripts/build.py build-gui --target neverd-gui neverd-worker neverd-mcp
+python3 scripts/build.py build-gui --target neverd-desktop --parallel 4
 cmake --install build-gui --prefix "$PWD/build-gui/dist/NeverD"
 ```
 
 Use the platform's engine/CLI filenames on Windows. Multi-config generators
 also require `--config Release` for both build and installation. Build the
 engine with `NEVERD_ENABLE_PYTHON_PLUGINS=OFF` for a package without Python.
+For a Python-enabled Windows engine, set `NEVERD_DESKTOP_PYTHON_RUNTIME` to
+the extracted official CPython embeddable distribution matching that engine's
+Python version and architecture. Installation includes its DLLs, standard-library
+archive, native extension modules, path configuration and license; the runtime
+audit also checks the extension modules. The embedded runtime does not replace
+the separately configured interpreter for process plugins. An unresolved Python
+runtime dependency stops packaging. MSVC builds install the selected compiler's
+redistributable libraries; the Python archive's bundled older VC runtime does
+not overwrite them.
+Agent additionally needs Qt Quick, QuickControls2 and its platform credential
+dependencies listed in the [Agent build guide](../neverd-agent/README.md#build-and-run).
+`NEVERD_BUILD_AGENT` is `AUTO` by default: the Agent is built when its
+dependencies are present, and configuration says which one is missing
+otherwise. Pass `ON` to require it, or `OFF` for a workbench-only desktop
+product; the enabled component set determines the install and runtime audit.
 
 Linux deployment requires `patchelf`. Libraries and plugins receive paths
 relative to the installed package. Original absolute paths and build-relative
@@ -88,10 +140,16 @@ the platform's signing and release qualification process.
 
 ## macOS development bundle
 
+A joint CMake install with Agent enabled places `neverd-agent.app` and
+`neverd-gui.app` under the same prefix, with helpers in `bin` and the chat
+plugin inside the workbench bundle. The helper below produces the separate
+`NeverD.app` bundle. For an Agent-enabled build it includes the chat plugin and
+Agent CLI in the bundle. Place the separately deployed `neverd-agent.app`
+beside `NeverD.app` to open model settings from the chat panel. Each application
+has its own bundle-local Qt deployment and requires native qualification.
+
 Build the GUI and worker in the same configuration as the selected engine, then
 run the packaging helper on macOS. The output path must not already exist.
-The helper reads the GUI from CMake's `bin/neverd-gui.app` bundle when present;
-older builds with a plain `bin/neverd-gui` executable remain supported.
 
 ```sh
 python3 tools/neverd-gui/package_macos.py \
@@ -110,6 +168,38 @@ SPDX catalogs are collected from the libraries actually copied into the bundle.
 The pinned static zlib notice and any notices staged beside the engine in its
 `licenses` directory are retained too; build and package matching engine inputs.
 
+`--qt-platform-plugin /path/to/libqcocoa.dylib` replaces only the bundle's Cocoa
+plugin after Qt deployment, before dependency repair, audit and signing. Use a
+plugin built for the exact Qt kit's private ABI; the helper records its original
+path and hash in `build_inputs`. Keep its matching source/build notice with the
+`--qt-licenses` catalog and validate it through a native accessibility probe and
+an application launch. This supports a locally rebuilt Qt bug fix without
+modifying the installed kit. Qt's upstream accessibility ownership fix for
+[QTBUG-149612](https://qt-project.atlassian.net/browse/QTBUG-149612) is
+[b74d6cb3c5e8418602494ae549b60839d88ef858](https://github.com/qt/qtbase/commit/b74d6cb3c5e8418602494ae549b60839d88ef858):
+native accessibility element disposal must not delete interfaces owned by Qt's
+accessibility cache and item views. A table selection/row-removal probe should
+retain its native element while checking that the table interface stays alive.
+
+Qt 6.11.1 also has a separate CoreGraphics color-space ownership regression
+([QTBUG-147602](https://qt-project.atlassian.net/browse/QTBUG-147602)). A local
+color-space owner expires before `QImage::toCGImage()` calls `CGImageCreate`;
+toolbar and bitmap cursors can therefore crash in `CGColorSpaceGetType`.
+Use a matching Qt kit containing
+[the upstream fix](https://github.com/qt/qtbase/commit/08e464f85597), such as
+6.11.3, or rebuild QtGui with that fix. Replacing the Cocoa plugin alone does
+not repair this QtGui bug. The stock 6.11.3 Cocoa plugin still needs the
+accessibility ownership fix above. Do not mix private headers or plugins
+from different Qt versions. When rebuilding the plugin, use the kit's
+deployment target (13 for the official macOS 6.11.3 kit); an implicit host
+deployment target can reject Qt's compatibility calls to older macOS APIs.
+
+Build `neverd-gui-mac-image-tests` and run it with `QT_QPA_PLATFORM=cocoa`
+against the deployed frameworks and plugins. It checks color-space and pixel
+ownership for default, sRGB, Display P3 and custom-gamma images, plus native
+toolbar and bitmap cursors. Retain the failing kit's crash evidence and the
+replacement kit's probe results separately from accessibility validation.
+
 The helper copies the GUI, worker, engine, Qt plugins and recursive non-system
 dependencies. It rewrites library IDs and dependencies, supplies
 bundle-relative search paths, rejects unresolved references and escaping or
@@ -117,7 +207,9 @@ dangling symlinks, and derives `LSMinimumSystemVersion` from every bundled
 Mach-O image. Engine frameworks' dependencies are collected before
 `macdeployqt` rewrites their original paths, including Python extension
 libraries such as Homebrew's keg-only SQLite. The final repair pass also covers
-the plugins deployed by Qt. `Info.plist` declares the `neverd` URL scheme
+the plugins deployed by Qt. Version-only frameworks, such as Homebrew Python,
+receive the relative framework links required for signing in the copied bundle;
+the installed dependency is unchanged. `Info.plist` declares the `neverd` URL scheme
 (`CFBundleURLTypes`), so that LaunchServices hands a clicked `neverd://` link
 to the workbench; on Linux and Windows, `neverd-gui --register-link-handler`
 registers it for the user instead. `Contents/Resources/dependency-audit.json` records that audit;

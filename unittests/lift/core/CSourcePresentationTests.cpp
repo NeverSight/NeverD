@@ -7,19 +7,25 @@
 /// Source presentation retains storage widths and decodes image text.
 //===----------------------------------------------------------------------===//
 
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/LLVMOriginalImageStorage.h"
+#include "neverd/backend/Limits.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/CSourceMap.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/c/dialect/SourceDialect.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
+#include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
+#include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/RelocationProvenance.h"
 
 #include "llvm/AsmParser/Parser.h"
 #include "llvm/IR/LLVMContext.h"
@@ -27,6 +33,237 @@
 #include "llvm/Support/SourceMgr.h"
 
 using namespace neverd;
+
+TEST(CSourcePresentation, CatalogCNamesDoNotChangeSourceTypes) {
+  const std::string Original = "sample::Box<sample::Pair<int, long>, 3>";
+  auto Record = NdType::makeNamedRecord(Original, 16);
+  auto Pointer = NdType::makePtr(Record);
+  Pointer->Size = 4;
+  const auto Spell = [&](llvm::StringRef Name) -> std::string {
+    return Name == Original ? "sample_Box_Pair_3" : std::string();
+  };
+  {
+    CRecordNameSpelling Scope(Spell);
+    EXPECT_EQ(typeToC(Pointer), "sample_Box_Pair_3*");
+    EXPECT_EQ(declarationToC(Pointer, "", true), Original + "*");
+    EXPECT_EQ(Pointer->Size, 4u);
+    EXPECT_EQ(Record->SourceName, Original);
+    const auto Nested = [](llvm::StringRef) { return std::string("nested"); };
+    {
+      CRecordNameSpelling Inner(Nested);
+      EXPECT_EQ(typeToC(Pointer), "nested*");
+    }
+    EXPECT_EQ(typeToC(Pointer), "sample_Box_Pair_3*");
+  }
+  EXPECT_TRUE(mappedCRecordName(Original).empty());
+}
+
+TEST(CSourcePresentation, ThunkCalleeRetainsItsQualifiedSymbolIdentity) {
+  class MethodDebug final : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != 0x2000)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "draw";
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {{"self", NdType::makeInt(8)}};
+      return Function;
+    }
+  } Debug;
+  const std::string Target = "_ZN6Widget4drawEv";
+  const std::string Thunk = "_ZThn24_N6Widget4drawEv";
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Symbol Method = Symbol::makeFunc(0x2000);
+  Method.Name = Target;
+  Image.Symbols.push_back(Method);
+  for (const std::string Name : {std::string("sub_2000"), std::string("draw"),
+                                 Target, std::string("user_draw")}) {
+    SCOPED_TRACE(Name);
+    HighFunc Function;
+    Function.Name = Thunk;
+    Function.Entry = 0x1000;
+    Function.ReturnType = NdType::makeVoid();
+    Function.Params.push_back({"self", NdType::makeInt(8)});
+    MedVar Self;
+    Self.Kind = MedVar::Param;
+    Self.Id = 0;
+    Self.Size = 8;
+    Self.TheArch = Arch::AArch64;
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr = HighExpr::makeCall(
+        Name, 0x2000,
+        {HighExpr::makeBinop(NdOp::INT_SUB,
+                             HighExpr::makeVar(Self, NdType::makeInt(8)),
+                             HighExpr::makeConst(24, 8))});
+    Function.Body.push_back(Call);
+    CSourceMap SourceMap;
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.Image = &Image;
+    Options.SourceMap = &SourceMap;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+    const bool Renamed = Name == "user_draw";
+    bool LinkedTarget = false, LinkedThunk = false;
+    for (const CSourceName &Source : SourceMap.Names) {
+      LinkedTarget |= Source.Symbol == (Renamed ? Name : Target) &&
+                      Source.Address == 0x2000;
+      LinkedThunk |= Source.Symbol == Thunk && Source.Address == 0x1000;
+    }
+    EXPECT_TRUE(LinkedTarget) << Text;
+    EXPECT_TRUE(LinkedThunk) << Text;
+    SourceDialectOptions Dialect;
+    Dialect.Dialect = SourceDialect::Cpp;
+    Dialect.Names = SourceMap.Names;
+    const auto Cpp = spellInDialect(Text, Dialect);
+    EXPECT_NE(Cpp.Text.find(Renamed ? "user_draw(" : "Widget::draw("),
+              std::string::npos)
+        << Cpp.Text;
+    EXPECT_NE(Cpp.Text.find("0x18"), std::string::npos) << Cpp.Text;
+  }
+}
+
+TEST(CSourcePresentation, CCallsKeepTheirNamesAcrossImplementationVeneers) {
+  class RoutineDebug final : public NullDebugContext {
+  public:
+    std::optional<FunctionSym> resolveFunction(va_t Address) const override {
+      if (Address != 0x2000)
+        return std::nullopt;
+      FunctionSym Function;
+      Function.Addr = Address;
+      Function.Name = "consume";
+      Function.ReturnType = NdType::makeVoid();
+      Function.Params = {{"value", NdType::makeInt(8)}};
+      return Function;
+    }
+  } Debug;
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::ELF;
+  Symbol Veneer = Symbol::makeFunc(0x2000);
+  Veneer.Name = "__AArch64ADRPThunk_consume";
+  Image.Symbols.push_back(Veneer);
+  for (const char *Name : {"sub_2000", "consume"}) {
+    HighFunc Function;
+    Function.Name = "caller";
+    Function.Entry = 0x1000;
+    Function.ReturnType = NdType::makeVoid();
+    HighStmt Call;
+    Call.Kind = StmtKind::Call;
+    Call.CallExpr =
+        HighExpr::makeCall(Name, 0x2000, {HighExpr::makeConst(7, 8)});
+    Function.Body.push_back(Call);
+    CEmitterOptions Options;
+    Options.TheArch = Image.Arch;
+    Options.Format = Image.Format;
+    Options.Image = &Image;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+    EXPECT_NE(Text.find("consume(7)"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find(Veneer.Name), std::string::npos) << Text;
+  }
+}
+
+TEST(CSourcePresentation, ExternalCallAddressesSurviveCProjection) {
+  for (const bool Ambiguous : {false, true}) {
+    HighFunc Function;
+    Function.Name = "caller";
+    Function.Entry = 0x1000;
+    Function.ReturnType = NdType::makeVoid();
+    // No image symbol is needed: the call already owns its exact target.
+    // Repeating a conflicting name must never restore an ambiguous address.
+    for (va_t Address : {va_t(0x2000), Ambiguous ? va_t(0x3000) : va_t(0x2000),
+                         va_t(0x2000)}) {
+      HighStmt Call;
+      Call.Kind = StmtKind::Call;
+      Call.CallExpr = HighExpr::makeCall("Widget::flush", Address, {});
+      Function.Body.push_back(Call);
+    }
+    CSourceMap Map;
+    CEmitterOptions Options;
+    Options.SourceMap = &Map;
+    std::string Text;
+    llvm::raw_string_ostream Out(Text);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+    bool Found = false;
+    for (const auto &Name : Map.Names)
+      if (Name.Symbol == "Widget::flush") {
+        Found = true;
+        EXPECT_EQ(Name.Address,
+                  Ambiguous ? std::nullopt : std::optional<va_t>(0x2000));
+      }
+    EXPECT_TRUE(Found) << Text;
+  }
+}
+
+TEST(CSourcePresentation, IndexedRelocationsPreserveStringStorageProofs) {
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    BinaryImage Image;
+    Image.Format = Format;
+    Image.Arch = Arch::AArch64;
+    Image.Bits = Bitness::Bits64;
+    Segment Data;
+    Data.VA = 0x2000;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Size = Data.FileSz = 0x100;
+    Data.Data.resize(Data.Size, 0);
+    const std::string Text = "indexed text";
+    std::copy(Text.begin(), Text.end(), Data.Data.begin() + 0x20);
+    Image.Segments.push_back(std::move(Data));
+    Section DataSection;
+    DataSection.VA = 0x2000;
+    DataSection.Size = DataSection.FileSz = 0x100;
+    DataSection.Flags = SegmentFlags::Readable;
+    Image.Sections.push_back(DataSection);
+    Image.BaseRelocations.push_back(BaseRelocation{0x2080, 3});
+    RelocationEntry Reloc;
+    Reloc.Address = 0x2070;
+    Image.Relocations.push_back(Reloc);
+    Reloc.Address = 0x2060;
+    Image.Relocations.push_back(Reloc);
+    Image.Relocations.push_back(Reloc);
+    Image.CodePtrRelocSlots.insert(0x2090);
+    Image.DataPtrRelocSlots.insert(0x2098);
+    Image.RelDataPtrRelocSlots.insert(0x20a0);
+    Image.RelCodeRelocSlots.insert(0x20a8);
+    Image.ImportPtrSlots[0x20b0] = "imported";
+    Image.ImportPtrSlots[0x20b9] = "unaligned";
+    Image.DyldBindSlots[0x20c0] = ImportBindSlot{"bound"};
+    for (bool Relocated : {false, true}) {
+      if (Relocated) {
+        // A slot beginning before the text still changes its first bytes.
+        Reloc.Address = 0x201f;
+        Image.Relocations.push_back(Reloc);
+      }
+      const RelocationProvenanceIndex Index(Image);
+      for (va_t First = 0x1ff8; First < 0x2110; ++First)
+        for (va_t Width : {va_t{0}, va_t{1}, va_t{7}, va_t{20}}) {
+          bool Expected = false;
+          for (va_t Byte = First; Byte < First + Width; ++Byte)
+            Expected |= Image.hasRelocationProvenanceAt(Byte);
+          EXPECT_EQ(
+              hasRelocationProvenanceIn(Image, First, First + Width, &Index),
+              Expected);
+        }
+      const auto Plain = imageStringLiteral(&Image, 0x2020);
+      const auto Indexed =
+          imageStringLiteral(&Image, 0x2020, false, false, &Index);
+      EXPECT_EQ(Plain, Indexed);
+      EXPECT_EQ(Indexed.has_value(), !Relocated);
+      EXPECT_EQ(imageCString(&Image, 0x2020, &Index).has_value(), !Relocated);
+    }
+  }
+}
 
 namespace {
 
@@ -353,6 +590,82 @@ TEST(CSourcePresentation, GlobalTypesFollowLoadsFromSharedImageStorage) {
     }
 }
 
+TEST(CSourcePresentation, DebugGlobalPointerKeepsItsRecordMembers) {
+  class GlobalDebug final : public NullDebugContext {
+  public:
+    TypeRef Pointer;
+    std::optional<DataObjectSym>
+    resolveDataObject(va_t Address) const override {
+      if (Address != 0x2000)
+        return std::nullopt;
+      return DataObjectSym{"GlobalRoot", Address, Pointer->Size, false,
+                           Pointer};
+    }
+  } Debug;
+  auto Record = NdType::makeNamedRecord("Device", 16);
+  Record->FieldDisplayNames = {"flags", "value"};
+  Record->FieldDisplayOffsets = {0, 8};
+  Record->FieldDisplayTypes = {NdType::makeInt(8, false),
+                               NdType::makeInt(8, false)};
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const uint16_t Bytes =
+        Architecture == Arch::X86 || Architecture == Arch::ARM ? 4 : 8;
+    Debug.Pointer = NdType::makePtr(Record);
+    Debug.Pointer->Size = Bytes;
+    for (bool MatchingWidth : {true, false}) {
+      SCOPED_TRACE(int(Architecture));
+      SCOPED_TRACE(MatchingWidth);
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Format = BinaryFormat::ELF;
+      Image.Bits = Bytes == 8 ? Bitness::Bits64 : Bitness::Bits32;
+      Segment Data;
+      Data.VA = 0x2000;
+      Data.Data.resize(32);
+      Data.Size = Data.FileSz = Data.Data.size();
+      Data.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      Image.Segments.push_back(std::move(Data));
+      HighFunc Function;
+      Function.Name = "read_value";
+      Function.Entry = 0x1000;
+      Function.ReturnType = NdType::makeInt(8, false);
+      auto Pointer =
+          HighExpr::makeLoad(HighExpr::makeConst(0x2000, Bytes),
+                             NdType::makeInt(MatchingWidth ? Bytes : 2, false));
+      HighStmt Return;
+      Return.Kind = StmtKind::Return;
+      Return.RetVal =
+          HighExpr::makeLoad(HighExpr::makeBinop(NdOp::INT_ADD, Pointer,
+                                                 HighExpr::makeConst(8, Bytes)),
+                             Function.ReturnType);
+      Function.Body.push_back(Return);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = Image.Format;
+      Options.Image = &Image;
+      Options.RecordDefinitions = [](const std::vector<TypeRef> &) {
+        CRecordDefinitions Definitions;
+        Definitions.Text =
+            "struct Device { uint64_t flags; uint64_t value; };\n";
+        Definitions.Records["Device"] = false;
+        return Definitions;
+      };
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      ASSERT_TRUE(HighCEmitter().emit({Function}, Stream, Options, &Debug));
+      EXPECT_EQ(Text.find("GlobalRoot->value") != std::string::npos,
+                MatchingWidth)
+          << Text;
+      if (MatchingWidth && Bytes == sizeof(uintptr_t))
+        source_call_execution_test::compileAndRun(
+            Text + "\nint main(void) { struct Device a = {1, 17}, b = {2, 39}; "
+                   "GlobalRoot = &a; if (read_value() != 17) return 1; "
+                   "GlobalRoot = &b; return read_value() != 39; }\n",
+            {"-Werror=int-conversion", "-Werror=incompatible-pointer-types"});
+    }
+  }
+}
+
 TEST(CSourcePresentation, WideImageReadsShowTextInBothCRoutes) {
   struct Case {
     std::vector<uint8_t> Bytes;
@@ -459,6 +772,96 @@ TEST(CSourcePresentation, WideImageReadsShowTextInBothCRoutes) {
   }
 }
 
+TEST(CSourcePresentation, DataSectionsInExecutableMappingsRetainTextComments) {
+  const std::string Message = "R42独立文本 fixture";
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+    BinaryImage Image;
+    Image.Arch = Arch::AArch64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = Format;
+    Segment Mapping;
+    Mapping.VA = 0x2000;
+    Mapping.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Mapping.Data.resize(0x100, 0);
+    std::copy(Message.begin(), Message.end(), Mapping.Data.begin() + 0x20);
+    Mapping.Size = Mapping.FileSz = Mapping.Data.size();
+    Image.Segments.push_back(std::move(Mapping));
+    Section Data;
+    Data.Name = "stored_text";
+    Data.VA = 0x2020;
+    Data.Size = Data.FileSz = Message.size() + 1;
+    Data.Flags = SegmentFlags::Readable;
+    Image.Sections.push_back(Data);
+    const auto Comment = imageStringComment(&Image, Data.VA);
+    ASSERT_TRUE(Comment) << static_cast<int>(Format);
+    EXPECT_NE(Comment->find(Message), std::string::npos);
+    ASSERT_TRUE(imageCString(&Image, Data.VA));
+
+    HighFunc Function;
+    Function.Entry = 0x1000;
+    Function.Name = "read_rx_data";
+    Function.ReturnType = NdType::makeInt(16, false);
+    MedVar Value;
+    Value.Kind = MedVar::Temp;
+    Value.Id = 7;
+    Value.Size = 16;
+    HighStmt Load;
+    Load.Kind = StmtKind::Assign;
+    Load.Dst = HighExpr::makeVar(Value, Function.ReturnType);
+    Load.Val = HighExpr::makeLoad(HighExpr::makeConst(Data.VA, 8),
+                                  Function.ReturnType);
+    Function.Body.push_back(std::move(Load));
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeVar(Value, Function.ReturnType);
+    Function.Body.push_back(std::move(Return));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Diagnostic;
+    auto Module = llvm::parseAssemblyString(R"(
+      target datalayout = "e-p:64:64-i64:64-i128:128-n8:16:32:64-S128"
+      define i128 @read_rx_data() {
+        %value = load volatile i128, ptr inttoptr (i64 8224 to ptr), align 1
+        ret i128 %value
+      }
+    )",
+                                            Diagnostic, Context);
+    ASSERT_TRUE(Module);
+    for (bool LLVM : {false, true})
+      for (bool Comments : {false, true}) {
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Format;
+        Options.Image = &Image;
+        Options.EmitComments = Comments;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        ASSERT_TRUE(
+            LLVM ? LLVMCEmitter().emit(*Module, Out, Options, nullptr, &Image)
+                 : HighCEmitter().emit({Function}, Out, Options));
+        const auto Start = Text.rfind("read_rx_data(");
+        ASSERT_NE(Start, std::string::npos) << Text;
+        const auto Body = Text.substr(Text.find('{', Start));
+        EXPECT_EQ(Body.find(Message) != std::string::npos, Comments) << Body;
+      }
+
+    // A readable mapping alone does not authorize headers, gaps or code.
+    EXPECT_FALSE(imageStringComment(&Image, 0x2000));
+    Image.Sections[0].Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Sections[0].Type = Format == BinaryFormat::MachO
+                                 ? llvm::MachO::S_ATTR_PURE_INSTRUCTIONS
+                                 : 0;
+    EXPECT_FALSE(imageStringComment(&Image, Data.VA));
+    EXPECT_FALSE(imageCString(&Image, Data.VA));
+    Image.Sections[0] = Data;
+    // A terminator in the next region does not terminate this data object.
+    --Image.Sections[0].Size;
+    EXPECT_FALSE(imageCString(&Image, Data.VA));
+    Image.Sections.clear();
+    EXPECT_FALSE(imageStringComment(&Image, Data.VA));
+  }
+}
+
 TEST(CSourcePresentation, StackTextSurvivesBothRoutesAsCommentsOnly) {
   for (unsigned Unit : {1u, 2u, 4u}) {
     for (bool Big : {false, true}) {
@@ -558,6 +961,208 @@ TEST(CSourcePresentation, StackTextSurvivesBothRoutesAsCommentsOnly) {
           readSourceFrameBytes(*Module->getFunction("frame_text")).empty());
     }
   }
+}
+
+TEST(CSourcePresentation, LLVMRecordInventoryIgnoresCommentsAndLiterals) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO}) {
+      SCOPED_TRACE(unsigned(Architecture));
+      SCOPED_TRACE(unsigned(Format));
+      llvm::LLVMContext Context;
+      llvm::SMDiagnostic Diagnostic;
+      auto Module = llvm::parseAssemblyString(R"(
+        target datalayout = "e-p:64:64"
+        @message = private unnamed_addr constant [15 x i8] c"literal_record\00"
+        declare i32 @puts(ptr)
+        define i64 @real_identifier() {
+          call i32 @puts(ptr @message)
+          ret i64 42
+        }
+      )",
+                                              Diagnostic, Context);
+      ASSERT_TRUE(Module) << Diagnostic.getMessage().str();
+      const std::string Comment = "comment_record entry";
+      SourceImageBytes Value{
+          0x1100, 0x1120, 0x4020, {}, {{0x4000, 0x1000, 0x47}}};
+      Value.Bytes.assign(Comment.begin(), Comment.end());
+      Value.Bytes.push_back(0);
+      writeSourceImageBytes(*Module->getFunction("real_identifier"),
+                            {{Value}, true});
+      auto *Function = Module->getFunction("real_identifier");
+      LLVMSourceMap Sources;
+      Sources.Functions[0x1000] = Function;
+      Sources.Observations.push_back(
+          {0x1000, {0x1010, 0}, &Function->getEntryBlock().front()});
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = Format;
+      Options.PreserveLLVMFunctionTypes = true;
+      Options.LLVMSources = &Sources;
+      bool SawCodeIdentifier = false;
+      Options.RecordDefinitions = [&](const std::vector<TypeRef> &Types) {
+        for (auto Type : Types) {
+          while (Type->Kind == NdTypeKind::Ptr)
+            Type = Type->ElemType;
+          SawCodeIdentifier |= Type->SourceName == "real_identifier";
+          EXPECT_NE(Type->SourceName, "comment_record");
+          EXPECT_NE(Type->SourceName, "literal_record");
+          EXPECT_NE(Type->SourceName, "entry");
+        }
+        return CRecordDefinitions{};
+      };
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, Stream, Options));
+      EXPECT_TRUE(SawCodeIdentifier);
+      EXPECT_NE(Text.find("comment_record entry"), std::string::npos) << Text;
+      EXPECT_NE(Text.find("\"literal_record\""), std::string::npos) << Text;
+      CSourceMap Map;
+      Options.SourceMap = &Map;
+      std::string Mapped;
+      llvm::raw_string_ostream MappedStream(Mapped);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Module, MappedStream, Options));
+      EXPECT_EQ(Mapped, Text);
+      bool CallAnchored = false;
+      for (const auto &Anchor : Map.Anchors)
+        if (llvm::StringRef(Mapped)
+                .slice(Anchor.Span.Begin, Anchor.Span.End)
+                .contains("puts("))
+          for (const auto &Occurrence : Anchor.Occurrences)
+            CallAnchored |= Occurrence.Address == 0x1010;
+      EXPECT_TRUE(CallAnchored) << Mapped;
+    }
+}
+
+TEST(CSourcePresentation, ConditionalImageTextKeepsItsConditionsInBothRoutes) {
+  SourceImageBytes Value{0x1100,
+                         0x1120,
+                         0x4020,
+                         {'*', '/', 'x', 0},
+                         {{0x4000, 0x1000, 0x47}, {0x4001, 0x1004, 0x4e}}};
+  // Conditional observations already have a byte bound. A generic reference
+  // preview limit must not hide the recovered suffix in either C route.
+  const std::string FullText =
+      std::string(limits::backend::kCTypeFormatMaxCharacters + 1, 'a') +
+      " recovered_tail */x";
+  Value.Bytes.assign(FullText.begin(), FullText.end());
+  Value.Bytes.push_back(0);
+  Value.EntryRegisters = {{0x40, 8, 0x4000}, {0x50, 1, 7}};
+  SourceImageByteObservations Observations{{Value}, false};
+  HighFunc Function;
+  Function.Entry = 0x1000;
+  Function.Name = "conditional_text";
+  Function.ReturnType = NdType::makeInt(8);
+  Function.ImageBytes = Observations;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeConst(42, 8);
+  Function.Body.push_back(std::move(Return));
+  llvm::LLVMContext Context;
+  llvm::SMDiagnostic Diagnostic;
+  auto Module = llvm::parseAssemblyString(
+      "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64-S128\"\n"
+      "define i64 @conditional_text() { ret i64 42 }",
+      Diagnostic, Context);
+  ASSERT_TRUE(Module);
+  auto &LLVMFunction = *Module->getFunction("conditional_text");
+  writeSourceImageBytes(LLVMFunction, Observations);
+  const auto RoundTrip = readSourceImageBytes(LLVMFunction);
+  EXPECT_EQ(RoundTrip.Values, Observations.Values);
+  EXPECT_FALSE(RoundTrip.Complete);
+  std::string Annotation;
+  for (bool LLVM : {false, true})
+    for (bool Comments : {false, true}) {
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      Options.Format = BinaryFormat::ELF;
+      Options.EmitComments = Comments;
+      Options.PreserveLLVMFunctionTypes = true;
+      std::string Text;
+      llvm::raw_string_ostream Stream(Text);
+      ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(*Module, Stream, Options)
+                       : HighCEmitter().emit({Function}, Stream, Options));
+      EXPECT_TRUE(Text.find("return 42") != std::string::npos ||
+                  Text.find("return 0x2A") != std::string::npos)
+          << Text;
+      const auto At = Text.find("/* conditional text");
+      if (!Comments) {
+        EXPECT_EQ(At, std::string::npos) << Text;
+        EXPECT_EQ(Text.find("image text observations incomplete"),
+                  std::string::npos)
+            << Text;
+        continue;
+      }
+      ASSERT_NE(At, std::string::npos) << Text;
+      const auto End = Text.find('\n', At);
+      const auto Line = Text.substr(At, End - At);
+      if (Annotation.empty())
+        Annotation = Line;
+      EXPECT_EQ(Line, Annotation);
+      EXPECT_NE(Line.find("after 0x1120 at 0x4020"), std::string::npos);
+      EXPECT_NE(Line.find("requires at block 0x1100 entry:"),
+                std::string::npos);
+      EXPECT_NE(Line.find("[0x4000]=0x47 (initializer 0x1000)"),
+                std::string::npos);
+      EXPECT_NE(Line.find("[0x4001]=0x4E (initializer 0x1004)"),
+                std::string::npos);
+      EXPECT_NE(Line.find("reg[0x40:8]=0x4000"), std::string::npos);
+      EXPECT_NE(Line.find("reg[0x50:1]=0x7"), std::string::npos);
+      EXPECT_NE(Line.find(" recovered_tail * /x\""), std::string::npos);
+      EXPECT_EQ(Line.find("\xE2\x80\xA6"), std::string::npos);
+      // A decoded comment terminator must not create executable C text.
+      EXPECT_EQ(Line.find("*/"), Line.size() - 2);
+      EXPECT_NE(Text.find("image text observations incomplete"),
+                std::string::npos);
+    }
+  writeSourceImageBytes(LLVMFunction, {});
+  EXPECT_FALSE(LLVMFunction.getMetadata(kSourceImageBytesMetadata));
+  EXPECT_TRUE(readSourceImageBytes(LLVMFunction).Complete);
+  auto Legacy = Observations;
+  Legacy.Values.front().EntryRegisters.clear();
+  writeSourceImageBytes(LLVMFunction, Legacy);
+  EXPECT_EQ(readSourceImageBytes(LLVMFunction).Values, Legacy.Values);
+  auto Large = Observations;
+  Large.Values.front().Bytes.assign(4097, 'x');
+  Large.Values.front().Bytes.back() = 0;
+  writeSourceImageBytes(LLVMFunction, Large);
+  EXPECT_EQ(readSourceImageBytes(LLVMFunction).Values, Large.Values);
+  Large.Values.resize(5000, Value);
+  writeSourceImageBytes(LLVMFunction, Large);
+  EXPECT_EQ(readSourceImageBytes(LLVMFunction).Values, Large.Values);
+  for (unsigned Mode = 0; Mode < 10; ++Mode) {
+    auto Invalid = Observations;
+    auto &Bad = Invalid.Values.front();
+    if (Mode == 0)
+      Bad.Inputs.clear();
+    else if (Mode == 1)
+      Bad.Bytes.back() = 'x';
+    else if (Mode == 2)
+      Bad.Address = InvalidVA;
+    else if (Mode == 3)
+      Bad.Inputs.back().Address = Bad.Inputs.front().Address;
+    else if (Mode == 4)
+      Bad.Bytes.clear();
+    else if (Mode == 5)
+      Bad.EntryRegisters.front().Bytes = 0;
+    else if (Mode == 6)
+      Bad.EntryRegisters.front().Bytes = 9;
+    else if (Mode == 7)
+      Bad.EntryRegisters.front().Offset = UINT64_MAX;
+    else if (Mode == 8)
+      Bad.EntryRegisters.back().Value = 0x100;
+    else
+      Bad.EntryRegisters.back().Offset = 0x41;
+    writeSourceImageBytes(LLVMFunction, Invalid);
+    const auto Read = readSourceImageBytes(LLVMFunction);
+    EXPECT_TRUE(Read.Values.empty());
+    EXPECT_FALSE(Read.Complete);
+  }
+  LLVMFunction.setMetadata(
+      kSourceImageBytesMetadata,
+      llvm::MDNode::get(Context, llvm::MDString::get(Context, "bad")));
+  EXPECT_TRUE(readSourceImageBytes(LLVMFunction).Values.empty());
+  EXPECT_FALSE(readSourceImageBytes(LLVMFunction).Complete);
 }
 
 } // namespace

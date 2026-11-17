@@ -4356,6 +4356,9 @@ TEST_F(JTE_X86_32, FullWidthESPPrivateFrameSpillPreservesSwitch) {
   // domain.  The regression is the absence of the two-case switch (the whole
   // indirect branch becoming an unsafe trap), not that sound default block.
   EXPECT_NE(Body.find("jt.default.trap"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("\"neverd.control-flow.failure\"(i32 2, i64 "),
+            std::string::npos)
+      << Body;
 }
 
 //===----------------------------------------------------------------------===//
@@ -10767,6 +10770,14 @@ static fs::path maskedLaneA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_masked_lane_a64.o";
 }
 
+static fs::path fullLaneZextA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_full_lane_zext_a64.o";
+}
+
+static fs::path savedBaseA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_saved_base_a64.o";
+}
+
 static fs::path byteLoopA64Obj() {
   return fs::path(TEST_OBJ_DIR) / "test_jumptable_byte_loop_a64.o";
 }
@@ -10927,6 +10938,122 @@ TEST_F(JTE_AArch64, JoinedGuardsRejectUnboundedOrChangedIncomingPaths) {
                          {"joined_guard_missing", "joined_guard_changed",
                           "joined_guard_unextended"},
                          false);
+}
+
+TEST_F(JTE_AArch64, DominatingEqualityKeepsThePredecessorRange) {
+  verifyNarrowGuardLanes(
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_a64.o",
+      {"joined_after_equality", "joined_after_equality_tight",
+       "joined_after_equality_dominating", "joined_after_equality_wide_literal",
+       "joined_after_signed", "joined_after_signed_dominating"},
+      true);
+}
+
+TEST_F(JTE_AArch64, DominatingEqualityRejectsAnUnguardedPredecessor) {
+  verifyNarrowGuardLanes(
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_a64.o",
+      {"joined_after_equality_missing", "joined_after_signed_missing"}, false);
+}
+
+TEST_F(JTE_AArch64, UbfxWCompareBoundsTheClearedHighHalf) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"ubfx_wcmp_low"}, true);
+}
+
+TEST_F(JTE_AArch64, UbfxWCompareRejectsLiveHighBitsAndReplacedIndex) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"ubfx_wcmp_wide", "ubfx_wcmp_replaced"}, false);
+}
+
+TEST_F(JTE_AArch64, GuardedAdrMaskContinuationUsesTheCompare) {
+  const auto Object =
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_a64.o";
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::Symbol *Table =
+      ImageOrErr->findSymbol("guarded_adr_mask_continues_table");
+  ASSERT_NE(Table, nullptr);
+  ASSERT_EQ(Table->Size, 32u);
+  const neverd::Section *Section = ImageOrErr->getSectionFor(Table->Addr);
+  ASSERT_NE(Section, nullptr);
+  EXPECT_TRUE(Section->isExecutable());
+  EXPECT_GT(Section->Size, 3u * 4u);
+  verifyNarrowGuardLanes(Object, {"guarded_adr_mask_continues"}, true);
+}
+
+TEST_F(JTE_AArch64, GuardedAdrMaskContinuationRejectsReplacedIndex) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"guarded_adr_mask_replaced"}, false);
+}
+
+TEST_F(JTE_AArch64, EqualityExclusionInsideRangePublishesTheTable) {
+  const auto Object =
+      fs::path(TEST_OBJ_DIR) / "test_jumptable_narrow_guard_a64.o";
+  auto ImageOrErr = neverd::loadBinary(Object);
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  neverd::BinaryImage &Image = *ImageOrErr;
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image.Arch, Image.Mode));
+  for (const char *Name : {"equality_hole_word", "equality_hole_byte"}) {
+    SCOPED_TRACE(Name);
+    const neverd::Symbol *Function = Image.findSymbol(Name);
+    ASSERT_NE(Function, nullptr);
+    neverd::CFGBuilder Builder;
+    const neverd::LowFunc Low =
+        Builder.build(Image, Decoder, Function->Addr, Function->Name);
+    ASSERT_EQ(Low.JumpTables.size(), 1u);
+    EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+              (std::vector<uint32_t>{0, 1, 2, 3}));
+
+    llvm::LLVMContext Context;
+    neverd::PipelineOptions Options;
+    Options.LiftMode = true;
+    Options.NoOpt = true;
+    Options.EmitDumpOutput = false;
+    Options.OnlyFunctionEntries.insert(Function->Addr);
+    auto Result = neverd::Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Result.Error.empty()) << Result.Error;
+    ASSERT_NE(Result.LlvmModule, nullptr);
+    EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+    std::string IR;
+    llvm::raw_string_ostream Stream(IR);
+    Result.LlvmModule->print(Stream, nullptr);
+    const std::string Body = llvmFunctionBody(IR, Name);
+    ASSERT_FALSE(Body.empty());
+    EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+    EXPECT_TRUE(llvmHasSwitchCase(Body, 3)) << Body;
+    EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  }
+}
+
+TEST_F(JTE_AArch64, AdjacentExclusionsKeepTheIndependentRange) {
+  // The two equality exits narrow the reaching values, while the independent
+  // unsigned range still proves every access lies in the five-slot table.
+  auto Image = neverd::loadBinary(fs::path(TEST_OBJ_DIR) /
+                                  "test_jumptable_narrow_guard_a64.o");
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  const auto *Function = Image->findSymbol("equality_hole_adjacent");
+  ASSERT_NE(Function, nullptr);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(Image->Arch, Image->Mode));
+  neverd::CFGBuilder Builder;
+  const auto Low =
+      Builder.build(*Image, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+            (std::vector<uint32_t>{0, 1, 2, 3, 4}));
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+}
+
+TEST_F(JTE_AArch64, UnboundedEqualityStaysUnresolved) {
+  verifyNarrowGuardLanes(fs::path(TEST_OBJ_DIR) /
+                             "test_jumptable_narrow_guard_a64.o",
+                         {"equality_hole_unbounded"}, false);
 }
 
 TEST_F(JTE_AArch64, FieldOffsetReloadSharesItsGuard) {
@@ -11414,6 +11541,279 @@ TEST_F(JTE_AArch64, MaskAfterTheDispatchBoundsAByteTable) {
 // register. The guard's 32-bit mask is the low half of that index, so the
 // table keeps the guard's 13 entries, not the 16 the mask allows: the words
 // after the table are no entries.
+// `full_lane_zext_dispatch` compares raw w0, then indexes with
+// `x0 & 0xffffffff` after w0 is overwritten.  The mask keeps the whole
+// compared lane, so the table keeps the guard's 13 entries.  A raw X index
+// leaves the high half unbounded, and a mask of a different register is not
+// the compared lane.
+static bool expectRelativeWordTable(const neverd::BinaryImage &Image,
+                                    const char *FunctionName, bool Recovered,
+                                    size_t Entries = 13) {
+  const neverd::Symbol *Function = Image.findSymbol(FunctionName);
+  if (!Function) {
+    ADD_FAILURE() << FunctionName;
+    return false;
+  }
+  neverd::Decoder Decoder;
+  if (!Decoder.init(Image.Arch, Image.Mode)) {
+    ADD_FAILURE() << FunctionName;
+    return false;
+  }
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(Image, Decoder, Function->Addr, Function->Name);
+  if (!Recovered) {
+    EXPECT_TRUE(Low.JumpTables.empty()) << FunctionName;
+    return Low.JumpTables.empty();
+  }
+  if (Low.JumpTables.size() != 1u) {
+    ADD_FAILURE() << FunctionName << " tables " << Low.JumpTables.size();
+    return false;
+  }
+  const neverd::JumpTable &Table = Low.JumpTables.front();
+  std::vector<neverd::va_t> Expected;
+  for (size_t Case = 0; Case < Entries; ++Case) {
+    const uint8_t *Bytes = Image.readVA(Table.BaseAddr + Case * 4, 4);
+    if (!Bytes) {
+      ADD_FAILURE() << FunctionName;
+      return false;
+    }
+    int32_t Entry = 0;
+    std::memcpy(&Entry, Bytes, sizeof(Entry));
+    Expected.push_back(Table.BaseAddr + static_cast<int64_t>(Entry));
+  }
+  EXPECT_EQ(Table.Targets, Expected) << FunctionName;
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty()) << FunctionName;
+  return Table.Targets == Expected && Low.UnsafeIndirectBranchAddresses.empty();
+}
+
+TEST_F(JTE_AArch64, FullLaneMaskIsTheZeroExtendedComparedLane) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "full_lane_zext_dispatch", true));
+}
+
+TEST_F(JTE_AArch64, RawXIndexIsNotBoundedByAWCompare) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "raw_x_index_dispatch", false));
+}
+
+TEST_F(JTE_AArch64, FullLaneMaskOfAnotherRegisterIsNotTheComparedLane) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "other_reg_mask_dispatch", false));
+}
+
+// `ubfx w8, w0, #16, #8; cmp w8, #2` then a second `ubfx x8, x0, #16, #8`
+// index the same field. The X extract is the W extract. A different bit
+// position, or a write of the source between the extracts, stays unresolved.
+TEST_F(JTE_AArch64, ReextractedUnsignedFieldIsTheComparedLane) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "reextract_ubfx_dispatch", true, 3));
+}
+
+TEST_F(JTE_AArch64, DifferentUnsignedFieldIsNotTheComparedExtract) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(*ImageOrErr, "reextract_ubfx_other_field",
+                                      false, 3));
+}
+
+TEST_F(JTE_AArch64, SourceWriteBetweenExtractsIsNotTheComparedField) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "reextract_ubfx_clobbered_source", false, 3));
+}
+
+// `and w19, w0, #0x18` then, in the successor and after a call, `lsr w8, w19,
+// #3` is the dense index 0..3. The case labels are those shifted slots. A
+// mask whose shifted domain is wider than the table, an arithmetic shift of a
+// live sign bit, or a write of the masked register stays unresolved.
+TEST_F(JTE_AArch64, ShiftedMaskIsTheDenseIndex) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "shifted_mask_dispatch", true, 4));
+
+  const neverd::Symbol *Function =
+      ImageOrErr->findSymbol("shifted_mask_dispatch");
+  ASSERT_TRUE(Function);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const std::vector<int64_t> Labels = Low.JumpTables.front().CaseLabels;
+  if (!Labels.empty())
+    EXPECT_EQ(Labels, (std::vector<int64_t>{0, 1, 2, 3}));
+}
+
+TEST_F(JTE_AArch64, WiderShiftedMaskIsNotTheTable) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(*ImageOrErr, "shifted_mask_wide_dispatch",
+                                      false, 4));
+}
+
+TEST_F(JTE_AArch64, SignedShiftOfMaskIsNotTheIndex) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "shifted_mask_signed_dispatch", false, 2));
+}
+
+TEST_F(JTE_AArch64, WriteBeforeShiftIsNotTheMaskedIndex) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "shifted_mask_clobbered_dispatch", false, 4));
+}
+
+// `lsr w8, w0, #30` is exactly 0..3 with no compare and no mask. A loaded
+// word has the same width; an AND of its low bits is a different value.
+// An arithmetic shift, a remainder wider than the four real entries, a
+// shift of a one-bit mask, or a later write of the index stays unresolved.
+TEST_F(JTE_AArch64, FullWidthLogicalShiftIsTheDenseIndex) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(*ImageOrErr, "full_width_shift_dispatch",
+                                      true, 4));
+
+  const neverd::Symbol *Function =
+      ImageOrErr->findSymbol("full_width_shift_dispatch");
+  ASSERT_TRUE(Function);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  const std::vector<int64_t> Labels = Low.JumpTables.front().CaseLabels;
+  if (!Labels.empty())
+    EXPECT_EQ(Labels, (std::vector<int64_t>{0, 1, 2, 3}));
+}
+
+TEST_F(JTE_AArch64, LoadedFullWidthShiftKeepsThePayloadMaskOffTheIndex) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::Symbol *Function =
+      ImageOrErr->findSymbol("full_width_shift_load_dispatch");
+  ASSERT_TRUE(Function);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().SlotIndices,
+            (std::vector<uint32_t>{0, 1, 2, 3}));
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 4u);
+  EXPECT_TRUE(Low.UnsafeIndirectBranchAddresses.empty());
+  const std::vector<int64_t> Labels = Low.JumpTables.front().CaseLabels;
+  if (!Labels.empty())
+    EXPECT_EQ(Labels, (std::vector<int64_t>{0, 1, 2, 3}));
+}
+
+TEST_F(JTE_AArch64, ArithmeticAndWiderShiftsStayUnresolved) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "full_width_shift_asr_dispatch", false, 4));
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "full_width_shift_wide_dispatch", false, 4));
+  EXPECT_TRUE(expectRelativeWordTable(
+      *ImageOrErr, "full_width_shift_clobber_dispatch", false, 4));
+}
+
+// `and w8, w0, #0x80000000; lsr w8, w8, #30` is {0, 2}, not the four values
+// of an unmasked `lsr #30`. The full-width certificate must not fill the hole.
+TEST_F(JTE_AArch64, ShiftOfAOneBitMaskKeepsTheHole) {
+  auto ImageOrErr = neverd::loadBinary(fullLaneZextA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  const neverd::Symbol *Function =
+      ImageOrErr->findSymbol("full_width_shift_hole_dispatch");
+  ASSERT_TRUE(Function);
+  neverd::Decoder Decoder;
+  ASSERT_TRUE(Decoder.init(ImageOrErr->Arch, ImageOrErr->Mode));
+  neverd::CFGBuilder Builder;
+  const neverd::LowFunc Low =
+      Builder.build(*ImageOrErr, Decoder, Function->Addr, Function->Name);
+  ASSERT_EQ(Low.JumpTables.size(), 1u);
+  EXPECT_EQ(Low.JumpTables.front().SlotIndices, (std::vector<uint32_t>{0, 2}));
+  EXPECT_EQ(Low.JumpTables.front().Targets.size(), 2u);
+  const std::vector<int64_t> Labels = Low.JumpTables.front().CaseLabels;
+  if (!Labels.empty())
+    EXPECT_EQ(Labels, (std::vector<int64_t>{0, 2}));
+}
+
+// The table base stays in x20.  One case saves it, clobbers it, calls a
+// function that returns, restores it, and branches back to the dispatch.
+// The restored register is the same address, so the guarded three entries
+// stay.  Restoring a different register does not make that value the base.
+TEST_F(JTE_AArch64, PlainBackedgeKeepsACarriedTableBase) {
+  auto ImageOrErr = neverd::loadBinary(savedBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "plain_backedge_dispatch", true, 3));
+}
+
+TEST_F(JTE_AArch64, SavedBaseSurvivesAReturningCall) {
+  auto ImageOrErr = neverd::loadBinary(savedBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "saved_base_dispatch", true, 3));
+}
+
+TEST_F(JTE_AArch64, RestoringAnotherRegisterIsNotTheTableBase) {
+  auto ImageOrErr = neverd::loadBinary(savedBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "foreign_base_dispatch", false, 3));
+}
+
+// The save and the restore are in different blocks.  The token has to cross
+// that boundary, and a branch that restores another register still does not.
+TEST_F(JTE_AArch64, SavedBaseSurvivesABranchAndCall) {
+  auto ImageOrErr = neverd::loadBinary(savedBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(expectRelativeWordTable(*ImageOrErr, "saved_base_split_dispatch",
+                                      true, 3));
+}
+
+TEST_F(JTE_AArch64, RestoringAnotherRegisterAcrossABranchIsNotTheTableBase) {
+  auto ImageOrErr = neverd::loadBinary(savedBaseA64Obj());
+  ASSERT_TRUE(static_cast<bool>(ImageOrErr))
+      << llvm::toString(ImageOrErr.takeError());
+  EXPECT_TRUE(
+      expectRelativeWordTable(*ImageOrErr, "foreign_split_dispatch", false, 3));
+}
+
 TEST_F(JTE_AArch64, MaskedLaneGuardBoundsAWideMaskIndex) {
   auto ImageOrErr = neverd::loadBinary(maskedLaneA64Obj());
   ASSERT_TRUE(static_cast<bool>(ImageOrErr))
@@ -12289,6 +12689,518 @@ TEST_F(JTE_AArch64, CompactIndexRejectsWGuardForUnmodifiedXValue) {
   EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
   EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
   EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+}
+
+static fs::path denseMaskA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_dense_mask_a64.o";
+}
+
+// `ubfx w9, w24, #1, #2` then `ldrh [xBase, x9, lsl #1]` has no compare of
+// that lane. The two-bit mask is the domain. Guards on other registers, and
+// the halfword past the four slots, do not change it.
+TEST_F(JTE_AArch64, UbfxDenseMaskPublishesTheHalfwordTable) {
+  auto R = liftToLLVMIRUnopt(denseMaskA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_ubfx_dense_half");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case : {0, 1, 2, 3})
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+  expectSwitchNotOnLoadedEntry(Body, "i16");
+}
+
+// A compare of the masked lane is tighter than the mask. The mask must not
+// publish the slots the compare excludes.
+TEST_F(JTE_AArch64, UbfxDenseMaskDoesNotReplaceATighterCompare) {
+  auto R = liftToLLVMIRUnopt(denseMaskA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_ubfx_dense_half_tighter");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 0)) << Body;
+  EXPECT_TRUE(llvmHasSwitchCase(Body, 1)) << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 2)) << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 3)) << Body;
+  EXPECT_EQ(Body.find("ret i64 498"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A write or a call after the mask replaces the lane. The old mask is not
+// the index.
+TEST_F(JTE_AArch64, UbfxDenseMaskRejectsALaterClobberOrCall) {
+  auto R = liftToLLVMIRUnopt(denseMaskA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  for (const char *Name :
+       {"a64_ubfx_dense_half_clobber", "a64_ubfx_dense_half_call"}) {
+    const std::string Body = llvmFunctionBody(R.out, Name);
+    ASSERT_FALSE(Body.empty()) << Name << "\n" << R.out;
+    EXPECT_EQ(Body.find("switch"), std::string::npos) << Name << "\n" << Body;
+    EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Name << "\n"
+                                                          << Body;
+  }
+}
+
+static fs::path laneIdentityA64Obj() {
+  return fs::path(TEST_OBJ_DIR) / "test_jumptable_lane_identity_a64.o";
+}
+
+// Eighty copies sit past the guard depth. The compare of the subtracted lane
+// is the domain; the copies are not. The word after the four proved slots
+// stays out.
+TEST_F(JTE_AArch64, DeepLaneComparePublishesTheSubIndex) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_deep_w_sub_x_index");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `and x8, x24, #0xffffffff` is the compared W lane. A long copy chain of
+// w24 does not have to be walked. The slot past `cmp #4` stays out.
+TEST_F(JTE_AArch64, DeepLaneComparePublishesTheFullLaneAnd) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_deep_full_lane_and");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 5; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 5)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `cmp x9` does not read the subtracted w8 that indexes the table.
+TEST_F(JTE_AArch64, LaneCompareRejectsADifferentRegister) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_lane_compare_other_reg");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A write of the index after the compare replaces the compared lane.
+TEST_F(JTE_AArch64, LaneCompareRejectsALaterClobber) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_lane_compare_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Other controlling branches compare the incoming argument. That value-query
+// session is not the compare of the subtracted lane. The slot past `cmp #3`
+// stays out.
+TEST_F(JTE_AArch64, GuardBudgetKeepsWordCompareAmongBranches) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_guard_budget_keeps_word_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Add chains ahead of the compare exhaust the guard-syntax account while
+// they are materialized. That unfinished work is not the compare. The slot
+// past `cmp #3` stays out.
+TEST_F(JTE_AArch64, GuardBudgetKeepsTheLaneCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_guard_budget_keeps_lane_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Fifty adds leave too little of the syntax account to build the compare.
+// Walking that compare again on the ordinary account publishes it. The slot
+// past `cmp #3` stays out.
+TEST_F(JTE_AArch64, GuardBudgetRetriesTheLaneCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_guard_budget_retries_lane_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Selects and controlling branches exhaust the alias allowance before the
+// compare. The unfinished scan is not the compare, and the copies of the
+// lane are not the domain. The slot past `cmp #3` stays out.
+TEST_F(JTE_AArch64, AliasBudgetKeepsTheLaneCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_alias_budget_keeps_lane_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `(ldrh >> 12) ^ 8` is 0..15. `cmp #0xf; b.eq` drops 15. The following
+// word is not an entry.
+TEST_F(JTE_AArch64, HalfShiftXorExcludesTheTop) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_half_shift_xor_excludes_top");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 15; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 15)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// The same shift and XOR with `b.hi` keeps all sixteen values. The word
+// after the prefix is not an entry.
+TEST_F(JTE_AArch64, HalfShiftXorKeepsThePrefix) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_half_shift_xor_keeps_prefix");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 16; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 16)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `cmp #0xf; b.eq` on an unbounded register is a hole, not a prefix.
+TEST_F(JTE_AArch64, EqualityWithoutPrefixStaysUnresolved) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_eq_without_prefix");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// An AND before the shift is not the full-width certificate.
+TEST_F(JTE_AArch64, MaskBeforeShiftStaysUnresolved) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_mask_before_shift_excludes_top");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Both ANDs recompute `x0 & 0xff`. `cmp #3` publishes four slots. The byte
+// mask is not a full-lane AND. The following word stays out.
+TEST_F(JTE_AArch64, SameSourceByteAndPublishesTheCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_same_source_byte_and");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A write of the shared source between the two ANDs replaces the lane.
+TEST_F(JTE_AArch64, SameSourceByteAndRejectsASourceClobber) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_same_source_byte_and_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `#0xf` does not repeat the compared `#0xff` lane.
+TEST_F(JTE_AArch64, SameSourceByteAndRejectsADifferentMask) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_same_source_byte_and_mismatch");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `(n ^ 7) & 0xf == 0` removes index 15 of `(n ^ 8) & 0xf`. The raw sixteen
+// slots would include the poison word.
+TEST_F(JTE_AArch64, CorrelatedMaskExcludesTheTop) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_correlated_mask_excludes_top");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 15; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 15)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Excluding index 9 leaves a hole. The mask must not publish 0..15.
+TEST_F(JTE_AArch64, CorrelatedMaskRejectsAnInteriorHole) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_correlated_mask_interior");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `cmp w9, #100` names a register that `and x9, x0, #7` replaces. The mask
+// publishes eight slots. The following word stays out.
+TEST_F(JTE_AArch64, DeadRegisterAndMaskPublishesEight) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_dead_reg_and_mask");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 8; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 8)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// The compare after the mask is the live index. The raw mask of eight must
+// not publish the poison word.
+TEST_F(JTE_AArch64, CompareAfterAndStaysTighter) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_and_then_tighter_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `cmp w10` reads the low lane of an X reload whose slot was stored from the
+// lifter's zero-extend. The four proved slots publish.
+TEST_F(JTE_AArch64, ZeroExtendedSpillComparePublishes) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_w_compare_x_spill");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// An X move stored and reloaded is not a zero-extended W lane.
+TEST_F(JTE_AArch64, PlainXSpillStaysUnresolved) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_x_spill_without_zext");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Two reloads of one slot are the W compare when the store zero-extends a
+// W write. A call before the compare and a later write of the compared
+// register do not replace the index reload. Index 4 stays out.
+TEST_F(JTE_AArch64, SameSlotZeroExtendReloadPublishes) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_same_slot_zext_reload");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Two reloads of a plain X store are not the W compare.
+TEST_F(JTE_AArch64, SameSlotPlainXReloadStaysUnresolved) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_same_slot_plain_x");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A later plain X store of the same slot replaces the zero-extended lane.
+TEST_F(JTE_AArch64, SameSlotZeroExtendClobberStaysUnresolved) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_same_slot_zext_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// The byte-table index is a zero-extended copy of the compared slot.
+TEST_F(JTE_AArch64, CopiedSlotPublishesTheCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_slot_byte_table");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 3; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 3)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// paciasp signs the link with SP. The shadow store of that link does not
+// publish the spilled index, so a case call that branches back still
+// publishes the compare. The next byte stays out.
+TEST_F(JTE_AArch64, CopiedSlotPacRoundTripPublishesTheCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_slot_pac_roundtrip");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 3; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 3)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// Passing SP on the case path that branches back publishes the frame.
+TEST_F(JTE_AArch64, CopiedSlotPacRoundTripRejectsAFrameArgument) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_slot_pac_passes_sp");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A later store to the compared slot is a different value.
+TEST_F(JTE_AArch64, CopiedSlotRejectsALaterStore) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_copied_slot_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// mov w8, w0 before the compare survives adrp x0. cmp #3 publishes four
+// slots. The following byte stays out.
+TEST_F(JTE_AArch64, CopiedRegisterPublishesTheCompare) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_register_byte_table");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A later write of the copied register replaces the lane.
+TEST_F(JTE_AArch64, CopiedRegisterRejectsALaterClobber) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_register_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// The copy has to be from the compared register.
+TEST_F(JTE_AArch64, CopiedRegisterRejectsADifferentSource) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body = llvmFunctionBody(R.out, "a64_copied_register_other");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// A write of the compared register between the copy and the compare is a
+// different value.
+TEST_F(JTE_AArch64, CopiedRegisterRejectsASourceWrite) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_copied_register_source_clobber");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// The b.hi target is a bti j; ret after the next function's paciasp. The
+// in-range slot that names it is that edge. cmp #3 publishes 0..3. The
+// following byte is not a case.
+TEST_F(JTE_AArch64, SharedTailPublishesTheDecodedEdge) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_shared_tail_byte_table");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 4; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 4)) << Body;
+  EXPECT_NE(Body.find("ret i64 140"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("ret i64 141"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("ret i64 143"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// An in-range slot names an interior of the next function that no direct
+// edge decoded. The table stays unresolved.
+TEST_F(JTE_AArch64, SharedTailRejectsAnUndecodedForeignInterior) {
+  auto R = liftToLLVMIRUnopt(laneIdentityA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_foreign_slot_byte_table");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  EXPECT_EQ(Body.find("switch"), std::string::npos) << Body;
+  EXPECT_NE(Body.find("@llvm.trap"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
+}
+
+// `cmp w0, #100` does not read `w0 & 7`. The mask, not the compare, is the
+// domain, so the halfwords after the eight proved slots stay out.
+TEST_F(JTE_AArch64, DenseAndClampsAWiderCompareOfAnotherRegister) {
+  auto R = liftToLLVMIRUnopt(denseMaskA64Obj());
+  ASSERT_EQ(R.exitCode, 0) << R.err;
+  const std::string Body =
+      llvmFunctionBody(R.out, "a64_and_clamps_wide_compare");
+  ASSERT_FALSE(Body.empty()) << R.out;
+  for (uint64_t Case = 0; Case < 8; ++Case)
+    EXPECT_TRUE(llvmHasSwitchCase(Body, Case)) << Case << "\n" << Body;
+  EXPECT_FALSE(llvmHasSwitchCase(Body, 8)) << Body;
+  EXPECT_EQ(Body.find("ret i64 499"), std::string::npos) << Body;
 }
 
 static fs::path worldClassA64Obj() {

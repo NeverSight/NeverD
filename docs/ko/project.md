@@ -1,6 +1,6 @@
 **언어**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](../ja/project.md) | [한국어](project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: edadf84089252d2d8a80ae25926c8013d54fb4a3fea7fc631f3731016652375c -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |------|------|------|
 | `lift` | `.ll` | LLVM IR로 리프트 |
 | `decompile` | `.c` / `.sol` / `.rs` | `--language`로 C, EVM Solidity 또는 SBF Rust 선택 |
+| `decompile --check-all` | 집계 | 로드된 모든 함수를 기본 C 경로로 처리하고 검사 후 각 함수 본문을 해제 |
 | `decompile -llvm` | `.c` | LLVM IR + 최적화 경로 |
 | `decompile --devirtualize` | `.c` + 선택적 JSON | 실험적 x64 인터프리터 복원. `--func` 필수. [계약과 예제](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 실험적: [Android](android.md), [iOS](ios.md) |

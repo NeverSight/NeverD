@@ -31,7 +31,8 @@ enum class NdTypeKind : uint8_t {
   Array,
   Struct,
   Func,
-  Unknown
+  Unknown,
+  Vector
 };
 
 /// How a calling convention passes a record argument.  Unknown where the
@@ -73,6 +74,16 @@ struct NdScalarLeaf {
   bool Floating = false;
 };
 
+/// A bitfield in a validated display definition. Its bit range names a
+/// masked access, never a whole-byte field or an ABI storage extent.
+struct NdDisplayBitField {
+  std::string Name;
+  uint32_t BitOffset = 0;
+  uint32_t BitWidth = 0;
+  bool IsSigned = false;
+  bool operator==(const NdDisplayBitField &) const = default;
+};
+
 struct NdType {
   NdTypeKind Kind = NdTypeKind::Unknown;
   uint16_t Size = 0;
@@ -81,7 +92,7 @@ struct NdType {
   /// For Ptr
   std::shared_ptr<NdType> Pointee;
 
-  /// For Array
+  /// For Array and fixed compiler Vector: element count and lane type.
   uint32_t ArrayCount = 0;
   std::shared_ptr<NdType> ElemType;
 
@@ -94,6 +105,8 @@ struct NdType {
   /// For Func
   std::shared_ptr<NdType> RetType;
   std::vector<std::shared_ptr<NdType>> ParamTypes;
+  /// The trailing ellipsis is part of the signature, never a fixed parameter.
+  bool FunctionVariadic = false;
   /// The callback's declared source convention. Unspecified is the platform
   /// C default; null means a source convention that cannot be represented.
   /// This does not authorize an ordinary-C ABI projection for other
@@ -118,6 +131,15 @@ struct NdType {
   /// Display-only TPI member types, used to name nested slots such as
   /// `TPtr<T>::p` at `outer+8`.  Not an ABI layout.
   std::vector<std::shared_ptr<NdType>> FieldDisplayTypes;
+  std::vector<NdDisplayBitField> FieldDisplayBits;
+  /// A local type definition may complete a display-only forward record.
+  /// Its extent never changes the IR carrier size or establishes a call ABI.
+  uint16_t FieldDisplaySize = 0;
+
+  /// The unique unsigned bitfield occupying exactly this range, through
+  /// nested records and constant array elements. Ambiguous overlays stay raw.
+  std::optional<std::string> displayBitFieldPathAt(uint64_t BitOffset,
+                                                   uint32_t BitWidth) const;
   /// Alignment of the current validated C display definition. Like its
   /// display members, this does not authorize an ABI or native memory extent.
   uint16_t FieldDisplayAlignment = 0;
@@ -532,18 +554,28 @@ struct NdType {
     T->Size = Size;
     return T;
   }
-  /// A fixed function type with its source declaration convention. An ABI
+  /// A compiler vector's declaration shape. This is not an ordinary array
+  /// and does not authorize a vector call ABI or record layout.
+  static std::shared_ptr<NdType> makeVector(std::shared_ptr<NdType> Lane,
+                                            uint32_t Count, uint16_t Size) {
+    auto T = makeArray(std::move(Lane), Count, Size);
+    T->Kind = NdTypeKind::Vector;
+    return T;
+  }
+  /// A function type with its source declaration convention. An ABI
   /// projection must separately validate that it supports this convention.
   static std::shared_ptr<NdType>
   makeFunc(std::shared_ptr<NdType> Return,
            std::vector<std::shared_ptr<NdType>> Parameters = {},
            std::optional<types::CallingConvention> Convention =
-               types::CallingConvention::Unspecified) {
+               types::CallingConvention::Unspecified,
+           bool Variadic = false) {
     auto T = std::make_shared<NdType>();
     T->Kind = NdTypeKind::Func;
     T->RetType = std::move(Return);
     T->ParamTypes = std::move(Parameters);
     T->FunctionConvention = Convention;
+    T->FunctionVariadic = Variadic;
     return T;
   }
 

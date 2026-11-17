@@ -1,6 +1,6 @@
 **言語**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](../zh-TW/project.md) | [日本語](project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: edadf84089252d2d8a80ae25926c8013d54fb4a3fea7fc631f3731016652375c -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |----------|------|------|
 | `lift` | `.ll` | LLVM IR へリフト |
 | `decompile` | `.c` / `.sol` / `.rs` | `--language` で C、EVM Solidity、SBF Rust を選択 |
+| `decompile --check-all` | 件数 | 読み込まれた各関数を既定の C 経路で処理し、確認後に関数本体を破棄 |
 | `decompile -llvm` | `.c` | LLVM IR + 最適化経由 |
 | `decompile --devirtualize` | `.c` + 任意の JSON | 実験的な x64 インタープリター復元。`--func` が必須。[契約と例](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 実験的: [Android](android.md), [iOS](ios.md) |

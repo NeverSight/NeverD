@@ -6,6 +6,7 @@
 /// \file
 /// Compare bounded scalar facts with concrete fixed-width execution.
 
+#include "../../../lib/ir/low/LowScalarTargets.h"
 #include "gtest/gtest.h"
 
 #include "neverd/ir/Limits.h"
@@ -13,6 +14,7 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/NdOpEmulator.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 #include <vector>
@@ -22,6 +24,203 @@ using namespace neverd;
 
 std::optional<uint64_t> constant(const NdVar &Value) {
   return Value.isConst() ? std::optional<uint64_t>{Value.Offset} : std::nullopt;
+}
+
+LowFunc entryValueJoin() {
+  LowFunc F;
+  F.Entry = 0x1000;
+  F.Blocks.resize(4);
+  for (int I = 0; I != 4; ++I) {
+    auto &Block = F.Blocks[I];
+    Block.Id = I;
+    Block.StartAddr = F.Entry + 16 * I;
+  }
+  F.Blocks[0].Succs = {1, 2};
+  for (int I : {1, 2}) {
+    auto &Block = F.Blocks[I];
+    Block.Preds = {0};
+    Block.Succs = {3};
+    LowOp Op;
+    Op.Addr = Block.StartAddr;
+    Op.Opcode = NdOp::COPY;
+    Op.Output = NdVar::reg(160, 8);
+    Op.addInput(NdVar::cst(0x4000, 8));
+    Block.Ops.push_back(Op);
+  }
+  F.Blocks[3].Preds = {1, 2, 3};
+  F.Blocks[3].Succs = {3};
+  return F;
+}
+
+TEST(ScalarEntryValues, JoinsLoopsAndBlockOrderKeepEveryIncomingValue) {
+  for (bool Reverse : {false, true})
+    for (bool Different : {false, true}) {
+      SCOPED_TRACE(Reverse);
+      SCOPED_TRACE(Different);
+      auto F = entryValueJoin();
+      if (Different)
+        F.Blocks[2].Ops[0].Inputs[0].Offset = 0x4020;
+      if (Reverse)
+        std::reverse(F.Blocks.begin(), F.Blocks.end());
+      const auto *Join = F.blockFor(0x1030);
+      ASSERT_NE(Join, nullptr);
+      size_t Work = 10000;
+      const auto Values = finiteScalarBlockEntryValues(
+          F, {{Join, {NdVar::reg(160, 8), NdVar::reg(161, 1)}}}, &Work);
+      ASSERT_TRUE(Values);
+      ASSERT_TRUE(Values->contains(Join));
+      const auto &Rows = Values->at(Join);
+      ASSERT_EQ(Rows.size(), 2u);
+      EXPECT_EQ(Rows[0].second, Different
+                                    ? (std::vector<uint64_t>{0x4000, 0x4020})
+                                    : (std::vector<uint64_t>{0x4000}));
+      EXPECT_EQ(Rows[1].second, (std::vector<uint64_t>{0x40}));
+    }
+}
+
+TEST(ScalarEntryValues, UnknownPathsRootsAndClobbersSupplyNoEntryValue) {
+  for (unsigned Kind = 0; Kind < 8; ++Kind) {
+    SCOPED_TRACE(Kind);
+    auto F = entryValueJoin();
+    auto &Arm = F.Blocks[2];
+    auto &Join = F.Blocks[3];
+    if (Kind == 0)
+      Arm.Ops.clear();
+    if (Kind == 1)
+      F.ModuleAnalysisRoots.insert(Join.StartAddr);
+    if (Kind == 2)
+      F.OrdinaryModuleAnalysisRoots.insert(Join.StartAddr);
+    if (Kind == 3)
+      Join.ExceptionalPreds.emplace_back();
+    if (Kind >= 4) {
+      LowOp Op;
+      Op.Addr = Arm.StartAddr + 4;
+      Op.Opcode = Kind == 4   ? NdOp::CALL
+                  : Kind == 5 ? NdOp::INDIR_CALL
+                  : Kind == 6 ? NdOp::INTRINSIC
+                              : NdOp::COPY;
+      if (Kind == 7) {
+        Op.Output = NdVar::reg(161, 1);
+        Op.addInput(NdVar::reg(80, 1));
+      } else
+        Op.addInput(NdVar::cst(0x2000, 8));
+      Arm.Ops.push_back(Op);
+    }
+    size_t Work = 10000;
+    const auto Values =
+        finiteScalarBlockEntryValues(F, {{&Join, {NdVar::reg(160, 8)}}}, &Work);
+    ASSERT_TRUE(Values);
+    EXPECT_TRUE(Values->empty());
+  }
+}
+
+TEST(ScalarEntryValues, NumericFragmentsGrantNoComputedCodeAuthority) {
+  auto F = entryValueJoin();
+  for (int I : {1, 2})
+    F.Blocks[I].Ops.front().Inputs[0] = NdVar::addressFragment(0x4000, 8);
+  auto &Join = F.Blocks[3];
+  LowOp Branch;
+  Branch.Addr = Join.StartAddr;
+  Branch.Opcode = NdOp::INDIR_BR;
+  Branch.addInput(NdVar::reg(160, 8));
+  Join.Ops.push_back(Branch);
+  const LowScalarEntryQueries Queries{{&Join, {NdVar::reg(160, 8)}}};
+  const auto Complete = finiteScalarBlockEntryValues(F, Queries);
+  ASSERT_TRUE(Complete);
+  ASSERT_TRUE(Complete->contains(&Join));
+  EXPECT_EQ(Complete->at(&Join).front().second,
+            (std::vector<uint64_t>{0x4000}));
+  size_t Work = 1;
+  EXPECT_FALSE(finiteScalarBlockEntryValues(F, Queries, &Work));
+  EXPECT_EQ(finiteScalarBlockEntryValues(F, Queries), Complete);
+  Work = 10000;
+  const auto Code = finiteScalarBranchTargets(F, Work);
+  ASSERT_TRUE(Code);
+  EXPECT_FALSE(Code->contains(Branch.Addr));
+}
+
+TEST(ScalarEntryValues, CallCandidatesRemainSeparateFromExactFacts) {
+  for (bool Reverse : {false, true})
+    for (unsigned Kind = 0; Kind != 7; ++Kind) {
+      SCOPED_TRACE(Reverse);
+      SCOPED_TRACE(Kind);
+      auto F = entryValueJoin();
+      for (int Arm : {1, 2}) {
+        LowOp Call;
+        Call.Addr = F.Blocks[Arm].StartAddr + 4;
+        Call.Opcode = Kind == 1   ? NdOp::INDIR_CALL
+                      : Kind == 2 ? NdOp::INTRINSIC
+                                  : NdOp::CALL;
+        Call.addInput(NdVar::cst(0x2000, 8));
+        F.Blocks[Arm].Ops.push_back(Call);
+      }
+      if (Kind == 3)
+        F.ModuleAnalysisRoots.insert(0x1030);
+      if (Kind == 4)
+        F.Blocks[3].ExceptionalPreds.emplace_back();
+      if (Kind == 5) {
+        LowOp Write;
+        Write.Addr = F.Blocks[2].StartAddr + 8;
+        Write.Opcode = NdOp::COPY;
+        Write.Output = NdVar::reg(162, 1);
+        Write.addInput(NdVar::reg(80, 1));
+        F.Blocks[2].Ops.push_back(Write);
+      }
+      if (Kind == 6)
+        F.Blocks[2].Ops.front().Inputs[0] = NdVar::cst(0x4020, 8);
+      if (Reverse)
+        std::reverse(F.Blocks.begin(), F.Blocks.end());
+      auto *Join = F.blockFor(0x1030);
+      ASSERT_NE(Join, nullptr);
+      const LowScalarEntryQueries Queries{{Join, {NdVar::reg(160, 8)}}};
+      const auto Before = finiteScalarBlockEntryValues(F, Queries);
+      ASSERT_TRUE(Before);
+      EXPECT_TRUE(Before->empty());
+      const auto Candidates = conditionalScalarEntryCandidates(F, Queries);
+      ASSERT_TRUE(Candidates);
+      if (Kind == 0 || Kind == 1 || Kind == 6) {
+        ASSERT_TRUE(Candidates->Entries.contains(Join));
+        EXPECT_EQ(Candidates->Entries.at(Join).front().second,
+                  Kind == 6 ? (std::vector<uint64_t>{0x4000, 0x4020})
+                            : (std::vector<uint64_t>{0x4000}));
+      } else
+        EXPECT_TRUE(Candidates->Entries.empty());
+      EXPECT_EQ(finiteScalarBlockEntryValues(F, Queries), Before);
+      LowOp Branch;
+      Branch.Addr = Join->StartAddr;
+      Branch.Opcode = NdOp::INDIR_BR;
+      Branch.addInput(NdVar::reg(160, 8));
+      Join->Ops.push_back(Branch);
+      size_t Work = 10000;
+      const auto Targets = finiteScalarBranchTargets(F, Work);
+      ASSERT_TRUE(Targets);
+      EXPECT_TRUE(Targets->empty());
+    }
+}
+
+TEST(ScalarEntryValues, IncompleteBodiesAndGuardsNeverPublishAPrefix) {
+  for (unsigned Kind = 0; Kind < 5; ++Kind) {
+    SCOPED_TRACE(Kind);
+    auto F = entryValueJoin();
+    if (Kind == 0)
+      F.TruncatedPathAddresses.push_back(0x1040);
+    if (Kind == 1)
+      F.UnsafeIndirectBranchAddresses.insert(0x1040);
+    if (Kind == 2)
+      F.UnsupportedInstructionAddresses.push_back(0x1040);
+    if (Kind == 3) {
+      auto &Arm = F.Blocks[2];
+      LowOp Guard;
+      Guard.Addr = Arm.StartAddr;
+      Guard.Opcode = NdOp::COND_BR;
+      Guard.addInput(NdVar::cst(Arm.StartAddr + 4, 8));
+      Guard.addInput(NdVar::reg(96, 1));
+      Arm.Ops.insert(Arm.Ops.begin(), Guard);
+    }
+    size_t Work = Kind == 4 ? 1 : 10000;
+    EXPECT_FALSE(finiteScalarBlockEntryValues(
+        F, {{&F.Blocks[3], {NdVar::reg(160, 8)}}}, &Work));
+  }
 }
 
 LowOp binary(NdOp Opcode, uint16_t Width, uint64_t Left, uint64_t Right) {

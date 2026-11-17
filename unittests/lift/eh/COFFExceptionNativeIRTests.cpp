@@ -6456,4 +6456,299 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNestedFH3CatchRegions) {
       << TamperedError;
 }
 
+// A local unwind is, in MedIR, a call of each termination handler it runs at
+// the runtime call's address.  The runtime calls the handler of a row with
+// its scan already past that row, so native IR places the call as printed C
+// does: outside the scope it ends and inside the ones around it, an invoke
+// to the scope around or, when none is left, a plain call.  Each such call
+// carries a mark of its own, and output refuses the mark by name: nothing
+// has yet shown by execution that the rewritten table gives the call the
+// scopes the runtime gave it.
+TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
+  constexpr va_t ParentVA = 0x140201000;
+  constexpr va_t BodyVA = ParentVA + 0x10;
+  constexpr va_t LeavingVA = ParentVA + 0x20;
+  constexpr va_t TargetVA = ParentVA + 0x30;
+  constexpr va_t EndVA = ParentVA + 0x40;
+  constexpr va_t UnwindVA = LeavingVA + 4;
+  constexpr va_t InnerVA = 0x140202000;
+  constexpr va_t OuterVA = 0x140202100;
+  constexpr va_t MayThrowVA = 0x140203000;
+  constexpr va_t PersonalityVA = 0x140204000;
+  enum class Shape {
+    /// One row; the unwind leaves it, so its handler's call is a plain one.
+    OnlyScope,
+    /// Two rows; the unwind leaves the inner one and lands in the outer.
+    InnerOfTwo,
+    /// Two rows; the unwind leaves both.
+    BothOfTwo,
+  };
+  for (const Shape How :
+       {Shape::OnlyScope, Shape::InnerOfTwo, Shape::BothOfTwo}) {
+    SCOPED_TRACE(static_cast<int>(How));
+    const bool TwoRows = How != Shape::OnlyScope;
+    const bool LeavesOuter = How == Shape::BothOfTwo;
+
+    const auto Branch = [](va_t At, va_t To) {
+      MedOp Op;
+      Op.Opcode = NdOp::BRANCH;
+      Op.Addr = At;
+      Op.addInput(MedVar::makeConst(To, 8));
+      return Op;
+    };
+    const auto Call = [](va_t At, va_t Callee) {
+      MedOp Op;
+      Op.Opcode = NdOp::CALL;
+      Op.Addr = At;
+      Op.addInput(MedVar::makeConst(Callee, 8));
+      return Op;
+    };
+    const auto Block = [](int Id, va_t Begin, va_t End) {
+      MedBlock B;
+      B.Id = Id;
+      B.StartAddr = Begin;
+      B.EndAddr = End;
+      return B;
+    };
+    MedFunc Parent;
+    Parent.Entry = ParentVA;
+    Parent.Name = "local_unwind_parent";
+    Parent.ReturnType = NdType::makeVoid();
+    MedBlock Entry = Block(0, ParentVA, BodyVA);
+    Entry.Ops.push_back(Branch(ParentVA + 4, BodyVA));
+    Entry.Succs = {1};
+    MedBlock Body = Block(1, BodyVA, LeavingVA);
+    Body.Ops.push_back(Call(BodyVA + 4, MayThrowVA));
+    Body.Ops.push_back(Branch(BodyVA + 8, LeavingVA));
+    Body.Preds = {0};
+    Body.Succs = {2};
+    MedBlock Leaving = Block(2, LeavingVA, TargetVA);
+    Leaving.Ops.push_back(Call(UnwindVA, InnerVA));
+    if (LeavesOuter)
+      Leaving.Ops.push_back(Call(UnwindVA, OuterVA));
+    Leaving.Ops.push_back(Branch(LeavingVA + 0xc, TargetVA));
+    Leaving.Preds = {1};
+    Leaving.Succs = {3};
+    MedBlock Target = Block(3, TargetVA, EndVA);
+    MedOp Return;
+    Return.Opcode = NdOp::RETURN;
+    Return.Addr = TargetVA + 4;
+    Target.Ops.push_back(std::move(Return));
+    Target.Preds = {2};
+    Parent.Blocks = {Entry, Body, Leaving, Target};
+
+    ExceptionFunction EH;
+    EH.CodeRange = {ParentVA, EndVA};
+    EH.Encoding = ExceptionEncoding::X64UnwindV1;
+    EH.ParseStatus = ExceptionParseStatus::Complete;
+    EH.Personality = ExceptionPersonality::CSpecificHandler;
+    EH.PersonalityVA = PersonalityVA;
+    EH.SEH.emplace();
+    const auto Row = [](va_t Begin, va_t End, va_t Callback) {
+      SEHScopeRecord Scope;
+      Scope.ParseStatus = ExceptionParseStatus::Complete;
+      Scope.GuardedRange = {Begin, End};
+      Scope.Kind = SEHScopeKind::Finally;
+      Scope.FilterOrFinallyVA = Callback;
+      Scope.HandlerVA = Callback;
+      return Scope;
+    };
+    EH.SEH->Scopes.push_back(Row(BodyVA, TargetVA, InnerVA));
+    if (TwoRows)
+      EH.SEH->Scopes.push_back(
+          Row(ParentVA, LeavesOuter ? TargetVA : EndVA, OuterVA));
+    Parent.ExceptionMetadata = EH;
+    MedSEHLocalUnwindExit Exit;
+    Exit.CallAddr = UnwindVA;
+    Exit.CallSeq = 0;
+    Exit.Target = TargetVA;
+    Exit.Handlers = {{InnerVA, 0}};
+    if (LeavesOuter)
+      Exit.Handlers.push_back({OuterVA, 1});
+    Parent.SEHLocalUnwindExits.push_back(std::move(Exit));
+
+    const auto Callback = [](va_t Entry, const char *Name) {
+      MedFunc Handler;
+      Handler.Entry = Entry;
+      Handler.Name = Name;
+      Handler.ReturnType = NdType::makeVoid();
+      MedVar Abnormal;
+      Abnormal.Kind = MedVar::Param;
+      Abnormal.TheArch = Arch::X64;
+      Abnormal.Id = 0;
+      Abnormal.Size = 1;
+      Abnormal.RegOff = x86reg::RCX;
+      Handler.Params.push_back(Abnormal);
+      Handler.TypedParams.push_back(
+          {"abnormal_termination", NdType::makeInt(1, /*Signed=*/false)});
+      MedVar Frame;
+      Frame.Kind = MedVar::Param;
+      Frame.TheArch = Arch::X64;
+      Frame.Id = 1;
+      Frame.Size = 8;
+      Frame.RegOff = x86reg::RDX;
+      Handler.Params.push_back(Frame);
+      Handler.TypedParams.push_back({"establisher_frame", NdType::makePtr()});
+      MedBlock Body;
+      Body.Id = 0;
+      Body.StartAddr = Entry;
+      Body.EndAddr = Entry + 2;
+      MedOp Return;
+      Return.Opcode = NdOp::RETURN;
+      Return.Addr = Entry;
+      Body.Ops.push_back(std::move(Return));
+      Handler.Blocks.push_back(std::move(Body));
+      return Handler;
+    };
+    std::vector<MedFunc> Unit = {Parent, Callback(InnerVA, "inner_finally")};
+    if (TwoRows)
+      Unit.push_back(Callback(OuterVA, "outer_finally"));
+    Unit.push_back(
+        makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler"));
+    llvm::LLVMContext Context;
+    auto Module = MedLLVMEmitter().emit(Unit, Context, "local_unwind",
+                                        Arch::X64, {{MayThrowVA, "may_throw"}},
+                                        nullptr, BinaryFormat::COFF);
+    ASSERT_NE(Module, nullptr);
+    expectVerifierClean(*Module);
+    llvm::Function *Function = Module->getFunction(Parent.Name);
+    ASSERT_NE(Function, nullptr);
+    ASSERT_TRUE(Function->hasPersonalityFn()) << printModuleIR(*Module);
+
+    // The pad of each row, by the handler it runs, and the function's own
+    // calls of each handler.
+    std::map<std::string, const llvm::BasicBlock *> Pads;
+    std::map<std::string, std::vector<const llvm::CallBase *>> Own;
+    for (const llvm::BasicBlock &BB : *Function)
+      for (const llvm::Instruction &Instruction : BB) {
+        const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+        const llvm::Function *Callee =
+            Site ? Site->getCalledFunction() : nullptr;
+        if (!Callee || Callee->isIntrinsic())
+          continue;
+        if (const auto Funclet =
+                Site->getOperandBundle(llvm::LLVMContext::OB_funclet)) {
+          const auto *Pad =
+              llvm::dyn_cast<llvm::CleanupPadInst>(Funclet->Inputs[0].get());
+          if (Pad)
+            Pads[Callee->getName().str()] = Pad->getParent();
+        } else {
+          Own[Callee->getName().str()].push_back(Site);
+        }
+      }
+    ASSERT_NE(Pads["inner_finally"], nullptr) << printModuleIR(*Module);
+    ASSERT_EQ(Own["inner_finally"].size(), 1u) << printModuleIR(*Module);
+    const auto *InnerInvoke =
+        llvm::dyn_cast<llvm::InvokeInst>(Own["inner_finally"].front());
+    uint64_t ProtectedCalls = 1;
+    if (TwoRows) {
+      // Out of the inner scope, still in the outer one.
+      ASSERT_NE(Pads["outer_finally"], nullptr) << printModuleIR(*Module);
+      ASSERT_NE(InnerInvoke, nullptr) << printModuleIR(*Module);
+      EXPECT_EQ(InnerInvoke->getUnwindDest(), Pads["outer_finally"])
+          << printModuleIR(*Module);
+      ++ProtectedCalls;
+      ASSERT_EQ(Own["outer_finally"].size(), LeavesOuter ? 1u : 0u);
+      if (LeavesOuter)
+        EXPECT_TRUE(llvm::isa<llvm::CallInst>(Own["outer_finally"].front()))
+            << printModuleIR(*Module);
+    } else {
+      EXPECT_EQ(InnerInvoke, nullptr) << printModuleIR(*Module);
+    }
+    expectCompleteRewriteContract(*Function, ProtectedCalls);
+
+    // One mark per handler call: the runtime call's address and the row the
+    // handler ends, right before the call it marks.
+    const auto Marks = [](llvm::Function &F) {
+      std::vector<llvm::CallInst *> Found;
+      for (llvm::BasicBlock &BB : F)
+        for (llvm::Instruction &Instruction : BB) {
+          auto *Anchor = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+          const auto Bundle =
+              Anchor ? Anchor->getOperandBundle(windows_eh_md::ProvenanceBundle)
+                     : std::nullopt;
+          if (!Bundle)
+            continue;
+          const auto *Role = llvm::dyn_cast<llvm::ConstantInt>(
+              Bundle->Inputs[windows_eh_md::ProvenanceRole].get());
+          if (Role &&
+              Role->getZExtValue() ==
+                  static_cast<unsigned>(windows_eh_md::NativeProvenanceRole::
+                                            LocalUnwindHandlerCall))
+            Found.push_back(Anchor);
+        }
+      return Found;
+    };
+    const std::vector<llvm::CallInst *> Marked = Marks(*Function);
+    ASSERT_EQ(Marked.size(), LeavesOuter ? 2u : 1u) << printModuleIR(*Module);
+    for (size_t I = 0; I < Marked.size(); ++I) {
+      const auto Bundle =
+          Marked[I]->getOperandBundle(windows_eh_md::ProvenanceBundle);
+      const auto Field = [&](unsigned Index) {
+        return llvm::cast<llvm::ConstantInt>(Bundle->Inputs[Index].get())
+            ->getZExtValue();
+      };
+      EXPECT_EQ(Field(windows_eh_md::ProvenanceSourceVA), UnwindVA);
+      EXPECT_EQ(Field(windows_eh_md::ProvenanceRegion), I);
+      const llvm::Instruction *Next = Marked[I]->getNextNode();
+      while (Next && llvm::isa<llvm::CallInst>(Next) &&
+             llvm::cast<llvm::CallInst>(Next)->getOperandBundle(
+                 windows_eh_md::ProvenanceBundle))
+        Next = Next->getNextNode();
+      const auto *Site = llvm::dyn_cast_or_null<llvm::CallBase>(Next);
+      ASSERT_NE(Site, nullptr) << printModuleIR(*Module);
+      ASSERT_NE(Site->getCalledFunction(), nullptr);
+      EXPECT_EQ(Site->getCalledFunction()->getName(),
+                I == 0 ? "inner_finally" : "outer_finally");
+    }
+
+    BinaryImage Image;
+    Image.Arch = Arch::X64;
+    Image.Bits = Bitness::Bits64;
+    Image.Format = BinaryFormat::COFF;
+    Image.Base = 0x140000000;
+    Image.ExceptionMetadata.Functions.push_back(EH);
+    Image.ExceptionMetadata.rebuildIndex();
+    const auto Refusal = [&](llvm::Module &Candidate) {
+      expectVerifierClean(Candidate);
+      auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
+      EXPECT_FALSE(static_cast<bool>(Plan));
+      return Plan ? std::string() : llvm::toString(Plan.takeError());
+    };
+    EXPECT_NE(Refusal(*Module).find(
+                  "local unwind's handler call has no certified output form"),
+              std::string::npos);
+    // The optimizer keeps the marks.
+    std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Module);
+    Pipeline::OptimizationOptions Options;
+    Options.Strength = Pipeline::OptStrength::Deep;
+    Options.LLVMLevel = llvm::OptimizationLevel::O3;
+    const OptimizationResult Optimization =
+        Pipeline::optimizeModule(*Optimized, Options);
+    EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+    EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+    EXPECT_NE(Refusal(*Optimized)
+                  .find("local unwind's handler call has no certified output "
+                        "form"),
+              std::string::npos);
+    // Without the marks the gate's other rules still refuse a handler that
+    // was invoked: its scope is not the innermost one at its address.  They
+    // have nothing to say about a handler called outside every scope.
+    std::unique_ptr<llvm::Module> Unmarked = llvm::CloneModule(*Module);
+    for (llvm::CallInst *Mark : Marks(*Unmarked->getFunction(Parent.Name)))
+      Mark->eraseFromParent();
+    expectVerifierClean(*Unmarked);
+    auto UnmarkedPlan = planCOFFExceptionPatch(*Unmarked, Image, Arch::X64);
+    const std::string UnmarkedRefusal =
+        UnmarkedPlan ? std::string() : llvm::toString(UnmarkedPlan.takeError());
+    if (TwoRows)
+      EXPECT_NE(UnmarkedRefusal.find("protected invoke does not match its "
+                                     "source SEH scope"),
+                std::string::npos)
+          << UnmarkedRefusal;
+    else
+      EXPECT_TRUE(UnmarkedRefusal.empty()) << UnmarkedRefusal;
+  }
+}
+
 } // namespace

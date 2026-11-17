@@ -1120,7 +1120,7 @@ llvm::Value *MedLLVMEmitter::tryResolveSelectMergeTable(
       // Do not let whole-expression constant folding hide operand provenance.
       // A plain ADD hidden under COPY/ZEXT must still be proven structurally;
       // only a literal-pool fold or a pure forwarding chain introduces a base.
-      std::optional<PureReadOnlyBaseIdentity> PureIdentity;
+      std::optional<DataBaseIdentity> PureIdentity;
       if (!SawLoad && !SawArithmetic)
         PureIdentity = pureReadOnlyBaseIdentity(
             V, /*DirectPhiConstantBypassesGetVar=*/false);

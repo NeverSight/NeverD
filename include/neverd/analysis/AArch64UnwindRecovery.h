@@ -97,6 +97,9 @@ prepareDarwinArm64eSystemCaller(const AArch64RecoveredUnwindRow &Row,
 /// protected range or lead straight back to the same call from its return edge.
 /// An explicitly guarded non-call can supply its own return edge when both
 /// instruction boundaries have the same complete recovery row.
+/// A live LR additionally needs matching system DWARF or compact frameless
+/// rows. Delivery authenticates its recovered recipe, adapts a separate LR
+/// column to Darwin's unwind ABI and restores the original for the landing pad.
 std::optional<NDDarwinArm64eExceptionSite>
 prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
                                  const ExceptionFunction &Function,

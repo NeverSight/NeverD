@@ -29,6 +29,7 @@ and `roadmap.md`. Shared images remain in `assets/`.
 | [MIPS analysis](mips.md) | MIPS32/64 ELF profiles, delay slots, integer ABI, validation and TP-Link firmware example |
 | [Testing](testing.md) | Test suites, generated fixtures, Unicorn roundtrips, and incremental commands |
 | [Desktop workbench](gui.md) | Classic disassembler layout, worker separation, project databases, localization and MCP connections |
+| [NeverD Agent](../tools/neverd-agent/README.md) | Project conversations, model protocols, delegated analysis, portable memory and the GUI chat plugin |
 | [Analysis image sections](analysis-sections.md) | Add materialized code/data through the C ABI, worker, CLI and workbench; native views and project persistence |
 | [Library recognition](library-recognition.md) | Evidence-backed STL, ATL/MFC, COM and libc identities, profiles and reversible C folds |
 | [Desktop qualification](gui-qualification.md) | Supported workflows, verification evidence and platform release requirements |

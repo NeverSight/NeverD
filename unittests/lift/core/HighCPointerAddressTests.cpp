@@ -92,6 +92,22 @@ namespace descriptor_source {
 #include "../x86/X86DescriptorSourceExpectations.def"
 } // namespace descriptor_source
 
+// Alternate predecessors must be reachable so dead-block elimination cannot
+// erase the multiple-entry control-flow contract these fixtures exercise.
+// Keep entry allocations before the new branch so they dominate both paths.
+void addReachableIncomingEdge(llvm::BasicBlock *Additional) {
+  llvm::Function *Function = Additional->getParent();
+  llvm::BasicBlock &Entry = Function->getEntryBlock();
+  auto *Regular = Entry.splitBasicBlock(Entry.getTerminator(), "regular_entry");
+  auto *OldBranch = Entry.getTerminator();
+  llvm::IRBuilder<> Builder(OldBranch);
+  auto Predicate = Function->getParent()->getOrInsertFunction(
+      "take_additional_entry",
+      llvm::FunctionType::get(Builder.getInt1Ty(), false));
+  Builder.CreateCondBr(Builder.CreateCall(Predicate), Additional, Regular);
+  OldBranch->eraseFromParent();
+}
+
 // The synthetic debug records deliberately point to themselves through a
 // next-node field. Their owner drops those display edges after all source
 // consumers finish, including when a fatal test assertion returns early.
@@ -2380,6 +2396,99 @@ TEST(HighCPointerAddresses, StringArgumentConvertsToAnIntegerParameter) {
       << Source;
 }
 
+TEST(HighCPointerAddresses, StringTerminatorConvertsToIntegerAtEveryUse) {
+  BinaryImage Img = makeImageObjectFixture(
+      0x140003400, {'a', 'n', 'c', 'h', 'o', 'r', 0, 0}, false);
+  for (const Arch Architecture : {Arch::X64, Arch::AArch64})
+    for (const bool Signed : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Signed);
+      const auto Integer = NdType::makeInt(8, Signed);
+      HighFunc Sink;
+      Sink.Name = "sink";
+      Sink.Entry = 0x140002000;
+      Sink.ReturnType = Integer;
+      Sink.Params = {{"arg0", Integer}};
+      returnValue(Sink, parameter(0, Integer));
+      HighFunc Call;
+      Call.Name = "call_end";
+      Call.ReturnType = Integer;
+      returnValue(Call,
+                  HighExpr::makeCall("sink", Sink.Entry,
+                                     {HighExpr::makeConst(0x140003406, 8)}));
+      HighFunc Return;
+      Return.Name = "return_end";
+      Return.ReturnType = Integer;
+      returnValue(Return, HighExpr::makeConst(0x140003406, 8));
+      HighFunc Assign;
+      Assign.Name = "assign_end";
+      Assign.ReturnType = Integer;
+      Assign.Params = {{"arg0", Integer}};
+      HighStmt Write;
+      Write.Kind = StmtKind::Assign;
+      Write.Dst = parameter(0, Integer);
+      Write.Val = HighExpr::makeConst(0x140003406, 8);
+      Assign.Body.push_back(Write);
+      returnValue(Assign, parameter(0, Integer));
+      const std::string Source =
+          emitFunctions({Sink, Call, Return, Assign}, Architecture, &Img);
+      compileAndRunCallOrdering(Source + R"c(
+static int check(uintptr_t address) {
+  const unsigned char *end = (const unsigned char *)address;
+  return end[0] == 0 && end[-1] == 'r' && end[-6] == 'a';
+}
+
+int main(void) {
+  return check(call_end()) && check(return_end()) && check(assign_end(0))
+             ? 0 : 1;
+}
+)c");
+    }
+}
+
+TEST(HighCPointerAddresses, EmptyConditionalBranchRetainsTheJoinedReturnValue) {
+  const auto Integer = NdType::makeInt(8, false);
+  HighFunc Producer;
+  Producer.Name = "producer";
+  Producer.Entry = 0x2000;
+  Producer.ReturnType = Integer;
+  Producer.Params = {{"arg0", Integer}};
+  returnValue(Producer,
+              HighExpr::makeBinop(NdOp::INT_ADD, parameter(0, Integer),
+                                  HighExpr::makeConst(7, 8)));
+  HighFunc Function;
+  Function.Name = "conditional_return";
+  Function.ReturnType = Integer;
+  Function.Params = {{"arg0", Integer}, {"arg1", Integer}};
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 20;
+  Local.Size = 8;
+  auto Value = HighExpr::makeVar(Local, Integer);
+  HighStmt Initial;
+  Initial.Kind = StmtKind::Assign;
+  Initial.Dst = Value;
+  Initial.Val = parameter(0, Integer);
+  HighStmt Branch;
+  Branch.Kind = StmtKind::IfElse;
+  Branch.Cond = parameter(1, Integer);
+  HighStmt Changed = Initial;
+  Changed.Val =
+      HighExpr::makeCall("producer", Producer.Entry, {parameter(0, Integer)});
+  Branch.ElseBody.push_back(Changed);
+  Function.Body = {Initial, Branch};
+  returnValue(Function, Value);
+  const auto Source = emitFunctions({Producer, Function});
+  compileAndRunCallOrdering(Source + R"c(
+int main(void) {
+  for (uint64_t value = 0; value < 32; ++value)
+    if (conditional_return(value, 0) != value + 7 ||
+        conditional_return(value, 1) != value) return 1;
+  return 0;
+}
+)c");
+}
+
 TEST(HighCPointerAddresses, HeaderBytesAreNoStringLiteral) {
   // An image loaded at zero maps its file header, where a small integer
   // lands: 32 is `e_phoff`, whose bytes 40 00 00 00 read as L"@".  No
@@ -2590,6 +2699,44 @@ TEST(HighCPointerAddresses, ScalarCollidingWithImageStringStaysNumeric) {
   EXPECT_EQ(Source.find("\"hi\""), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, NarrowConstantsDoNotBecomeImageStringPointers) {
+  for (Arch Architecture : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
+    for (const auto [Bytes, Value] :
+         {std::pair{1U, 0x80U}, {2U, 0x4567U}, {4U, 0x12345678U}}) {
+      if (Bytes >= PointerBytes)
+        continue;
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(Architecture) << ':' << Bytes);
+      auto Image = makeImageObjectFixture(Value, {'h', 'i', 0}, false);
+      Image.Arch = Architecture;
+      Image.Bits = PointerBytes == 4 ? Bitness::Bits32 : Bitness::Bits64;
+      HighFunc Number;
+      Number.Name = "narrow_number";
+      Number.ReturnType = NdType::makeInt(Bytes, false);
+      returnValue(Number, HighExpr::makeConst(Value, Bytes));
+      HighFunc Address;
+      Address.Name = "complete_address";
+      Address.ReturnType = NdType::makePtr(NdType::makeInt(1));
+      Address.ReturnType->Size = PointerBytes;
+      returnValue(Address,
+                  HighExpr::makeConst(Value, PointerBytes,
+                                      ConstantAddressProvenance::DataAddress));
+      const auto Source =
+          emitFunctions({Number, Address}, Architecture, &Image);
+      // One image VA is simultaneously a narrow integer and an authenticated
+      // pointer. Executing both uses checks their distinct values after C
+      // projection, including when the pointer use materializes that object.
+      compileAndRunCallOrdering(
+          Source + "\nint main(void) { return narrow_number() != " +
+              std::to_string(Value) +
+              "U || complete_address()[0] != 'h' || "
+              "complete_address()[1] != 'i' || complete_address()[2] != 0; }\n",
+          true);
+    }
+  }
+}
+
 TEST(HighCPointerAddresses, NumericConstantsDoNotAcquireImageObjectIdentity) {
   using P = ConstantAddressProvenance;
   constexpr va_t Value = 0x140003580;
@@ -2672,7 +2819,7 @@ TEST(HighCPointerAddresses, NestedGotoLabelAfterReturnIsEmitted) {
   EXPECT_LT(GotoAt, JoinAt) << Source;
 }
 
-TEST(HighCPointerAddresses, NonAsciiImageBytesStayAddress) {
+TEST(HighCPointerAddresses, ReadonlyUtf8ImageStringsKeepTheirBytes) {
   BinaryImage Img =
       makeImageObjectFixture(0x140003600, {0xE4, 0xB8, 0xAD, 0}, false);
   HighFunc Func;
@@ -2689,9 +2836,193 @@ TEST(HighCPointerAddresses, NonAsciiImageBytesStayAddress) {
   Options.TheArch = Arch::X64;
   Options.Format = BinaryFormat::COFF;
   Options.Image = &Img;
+  Options.EmitIncludes = false;
   ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("0x140003600"), std::string::npos) << Source;
+  // The renderer accepts valid UTF-8. Verify the bytes passed to the callee,
+  // rather than requiring the old numeric-address spelling.
+  const std::string Program = R"c(
+#include <stdint.h>
+static unsigned calls;
+static unsigned wrong_bytes;
+int puts(const char *text) {
+  const unsigned char *bytes = (const unsigned char *)text;
+  ++calls;
+  wrong_bytes = bytes[0] != 0xe4 || bytes[1] != 0xb8 ||
+                bytes[2] != 0xad || bytes[3] != 0;
+  return 0;
+}
+
+)c" + Source + R"c(
+int main(void) {
+  puts_cjk();
+  return calls != 1 || wrong_bytes;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(
+        Program,
+        {Level, "-fno-builtin", "-fsanitize=undefined", "-fsanitize-trap=all"});
+}
+
+TEST(HighCPointerAddresses, ExecutablePoolLoadsKeepBytesAfterStringTerminator) {
+  // A data section can share an executable mapping without a data symbol.
+  // Its first eight bytes are a string, but the complete vector is not.
+  for (BinaryFormat Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (unsigned Bytes : {8U, 16U})
+      for (bool LLVMRoute : {false, true}) {
+        SCOPED_TRACE(testing::Message()
+                     << unsigned(Format) << ':' << Bytes << ':' << LLVMRoute);
+        BinaryImage Img =
+            makeImageObjectFixture(0x140003600,
+                                   {'A', 'B', 'C', 'D', 'E', 'F', 'G', 0, 0xA1,
+                                    0xB2, 0xC3, 0xD4, 0xE5, 0xF6, 0x17, 0x28},
+                                   false);
+        Img.Format = Format;
+        Img.Segments.front().Flags =
+            SegmentFlags::Readable | SegmentFlags::Executable;
+        Section Pool;
+        Pool.Name = "constant_pool";
+        Pool.VA = Img.Segments.front().VA;
+        Pool.Size = Img.Segments.front().Size;
+        Pool.Flags = SegmentFlags::Readable;
+        Img.Sections.push_back(Pool);
+        std::string Source;
+        llvm::raw_string_ostream OS(Source);
+        CEmitterOptions Options;
+        Options.TheArch = Arch::X64;
+        Options.Format = Format;
+        Options.Image = &Img;
+        if (LLVMRoute) {
+          llvm::LLVMContext Context;
+          llvm::Module Module("pool-read", Context);
+          Module.setDataLayout("e-p:64:64");
+          // The LLVM pipeline supplies the image's storage as a byte array.
+          // Keep the load's constant address: its data-section provenance
+          // must connect it to these bytes even in an executable mapping.
+          auto *Data =
+              llvm::ConstantDataArray::get(Context, Img.Segments.front().Data);
+          new llvm::GlobalVariable(Module, Data->getType(), true,
+                                   llvm::GlobalValue::ExternalLinkage, Data,
+                                   makeNdDataSymbol(Pool.VA));
+          llvm::IRBuilder<> Builder(Context);
+          auto *Result = Builder.getIntNTy(Bytes * 8);
+          auto *Function = llvm::Function::Create(
+              llvm::FunctionType::get(Result, false),
+              llvm::GlobalValue::ExternalLinkage, "read_pool", Module);
+          Builder.SetInsertPoint(
+              llvm::BasicBlock::Create(Context, "entry", Function));
+          auto *Address = llvm::ConstantExpr::getIntToPtr(
+              Builder.getInt64(Pool.VA), Builder.getPtrTy());
+          Builder.CreateRet(Builder.CreateLoad(Result, Address));
+          ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+          ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img));
+        } else {
+          HighFunc Func;
+          Func.Name = "read_pool";
+          Func.Entry = 0x1000;
+          Func.ReturnType = NdType::makeInt(Bytes, false);
+          returnValue(Func, HighExpr::makeLoad(HighExpr::makeConst(Pool.VA, 8),
+                                               Func.ReturnType));
+          ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options));
+        }
+        OS.flush();
+        // A readability comment may quote the string prefix. Execute the
+        // complete loaded value to prove bytes after the terminator survive.
+        const std::string Program =
+            Source + R"c(
+int main(void) {
+  __uint128_t actual = read_pool();
+  __uint128_t expected = UINT64_C(0x0047464544434241);
+)c" +
+            (Bytes == 16 ? "  expected |= "
+                           "(__uint128_t)UINT64_C(0x2817F6E5D4C3B2A1) << 64;\n"
+                         : "") +
+            R"c(
+  return actual != expected;
+}
+)c";
+        for (llvm::StringRef Level : {"-O0", "-O2"})
+          source_call_execution_test::compileAndRun(
+              Program, {Level, "-fno-strict-aliasing", "-fsanitize=address"});
+      }
+}
+
+TEST(HighCPointerAddresses, MalformedUtf8ImageBytesStayAddress) {
+  BinaryImage Img = makeImageObjectFixture(0x140003600, {0xE4, 0xB8, 0}, false);
+  HighFunc Func;
+  Func.Name = "puts_malformed";
+  Func.ReturnType = NdType::makeVoid();
+  HighStmt Call;
+  Call.Kind = StmtKind::Call;
+  Call.CallExpr = HighExpr::makeCall("puts", 0x140002000,
+                                     {HighExpr::makeConst(0x140003600, 8)});
+  Func.Body = {Call};
+  EXPECT_NE(emitFunctions({Func}, Arch::X64, &Img).find("0x140003600"),
+            std::string::npos);
+}
+
+TEST(LLVMCPointerAddresses, NumericImageCollisionsKeepTheirBitsEverywhere) {
+  constexpr uint64_t Bits = 0x140003B80;
+  for (bool Executable : {false, true}) {
+    SCOPED_TRACE(Executable);
+    BinaryImage Img = makeImageObjectFixture(Bits, {'h', 'i', 0}, false);
+    if (Executable)
+      Img.Segments.front().Flags =
+          Img.Segments.front().Flags | SegmentFlags::Executable;
+    llvm::LLVMContext Context;
+    llvm::Module Module("numeric-image-collision", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> B(Context);
+    auto *I64 = B.getInt64Ty();
+    auto *Pointer = B.getPtrTy();
+    auto *Scalar = B.getInt64(Bits);
+    auto *Observe = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64}, false),
+        llvm::GlobalValue::ExternalLinkage, "observe_scalar", Module);
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, Pointer}, false),
+        llvm::GlobalValue::ExternalLinkage, "numeric_bits", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    B.CreateStore(Scalar, Fn->getArg(1))->setVolatile(true);
+    auto *Observed = B.CreateCall(Observe, {Scalar});
+    B.CreateRet(B.CreateXor(B.CreateAdd(Fn->getArg(0), Scalar), Observed));
+    auto *Return = llvm::Function::Create(llvm::FunctionType::get(I64, false),
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "numeric_return", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Return));
+    B.CreateRet(Scalar);
+    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    Options.Format = BinaryFormat::COFF;
+    Options.PreserveLLVMFunctionTypes = true;
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options, nullptr, &Img));
+    EXPECT_EQ(Source.find("\"hi\""), std::string::npos) << Source;
+    Source += R"c(
+static unsigned calls;
+uint64_t observe_scalar(uint64_t value) {
+  ++calls;
+  return value;
+}
+int main(void) {
+  const uint64_t bits = UINT64_C(0x140003B80);
+  const uint64_t inputs[] = {0, 1, UINT64_MAX, UINT64_C(0x8000000000000000)};
+  if (numeric_return() != bits) return 1;
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+    uint64_t stored = 0;
+    if (numeric_bits(inputs[i], &stored) != ((inputs[i] + bits) ^ bits) ||
+        stored != bits || calls != i + 1) return 2;
+  }
+  return 0;
+}
+)c";
+    compileAndRunCallOrdering(Source, true);
+  }
 }
 
 TEST(LLVMCPointerAddresses, ReadonlyWideImageStringPrintsLLiteral) {
@@ -2847,8 +3178,8 @@ TEST(HighCPointerAddresses, StatedLiteralsKeepEveryCharacterAndTheirZeros) {
 }
 
 TEST(LLVMCPointerAddresses, DebugNamedDataAmongCodeKeepsItsNames) {
-  // The LLVM module keeps addresses among the code as numbers; they print as
-  // HighC prints them, and the table is declared.
+  // An explicit object address retains its debug name; a plain integer with
+  // the same bits must not acquire that object's identity.
   const BinaryImage Img = makeDataAmongCodeFixture();
   DataAmongCodeDbg Dbg;
   BinaryImage Debugged = Img;
@@ -2862,6 +3193,9 @@ TEST(LLVMCPointerAddresses, DebugNamedDataAmongCodeKeepsItsNames) {
                               {llvm::PointerType::getUnqual(I8)}, false);
   llvm::Function *Format = llvm::Function::Create(
       FormatTy, llvm::GlobalValue::ExternalLinkage, "Format", Module);
+  auto *Table = new llvm::GlobalVariable(
+      Module, I8, false, llvm::GlobalValue::ExternalLinkage, nullptr,
+      makeNdDataSymbol(0x140005010));
   llvm::Function *Function = llvm::Function::Create(
       llvm::FunctionType::get(I64, false), llvm::GlobalValue::ExternalLinkage,
       "page_data", Module);
@@ -2870,9 +3204,15 @@ TEST(LLVMCPointerAddresses, DebugNamedDataAmongCodeKeepsItsNames) {
   Builder.CreateCall(Format, {llvm::ConstantExpr::getIntToPtr(
                                  llvm::ConstantInt::get(I64, 0x140005008),
                                  llvm::PointerType::getUnqual(I8))});
+  Builder.CreateRet(llvm::ConstantExpr::getPtrToInt(Table, I64));
+  auto *Numeric = llvm::Function::Create(llvm::FunctionType::get(I64, false),
+                                         llvm::GlobalValue::ExternalLinkage,
+                                         "numeric_bits", Module);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Numeric));
   Builder.CreateRet(llvm::ConstantInt::get(I64, 0x140005010));
 
-  const auto Emit = [&](const BinaryImage &Image, DebugContext *Debug) {
+  const auto Emit = [&](const BinaryImage &Image, DebugContext *Debug,
+                        llvm::Function *Selected) {
     std::string Source;
     llvm::raw_string_ostream OS(Source);
     CEmitterOptions Options;
@@ -2880,17 +3220,20 @@ TEST(LLVMCPointerAddresses, DebugNamedDataAmongCodeKeepsItsNames) {
     Options.Format = BinaryFormat::COFF;
     Options.EmitIncludes = false;
     EXPECT_TRUE(
-        LLVMCEmitter().emit(Module, OS, Options, Debug, &Image, Function));
+        LLVMCEmitter().emit(Module, OS, Options, Debug, &Image, Selected));
     OS.flush();
     return Source;
   };
-  const std::string Named = Emit(Debugged, &Dbg);
+  const std::string Named = Emit(Debugged, &Dbg, Function);
   EXPECT_NE(Named.find("L\"SA\""), std::string::npos) << Named;
-  EXPECT_NE(Named.find("(uintptr_t)&KeyTable"), std::string::npos) << Named;
+  EXPECT_NE(Named.find("&KeyTable"), std::string::npos) << Named;
   EXPECT_NE(Named.find("extern uint8_t KeyTable;"), std::string::npos) << Named;
-  const std::string Bare = Emit(Img, nullptr);
+  const std::string Bare = Emit(Img, nullptr, Function);
   EXPECT_EQ(Bare.find("KeyTable"), std::string::npos) << Bare;
   EXPECT_EQ(Bare.find("L\"SA\""), std::string::npos) << Bare;
+  const std::string Scalar = Emit(Debugged, &Dbg, Numeric);
+  EXPECT_NE(Scalar.find("return 0x140005010;"), std::string::npos) << Scalar;
+  EXPECT_EQ(Scalar.find("KeyTable"), std::string::npos) << Scalar;
 }
 
 TEST(LLVMCPointerAddresses, DataOnlyAddressedIsDeclared) {
@@ -2978,6 +3321,313 @@ void expectCSyntax(const std::string &Source, llvm::StringRef Target = {},
   EXPECT_EQ(CompileStatus, 0)
       << Error << (ErrorBuffer ? (*ErrorBuffer)->getBuffer().str() : "") << "\n"
       << Source;
+}
+
+TEST(HighCPointerAddresses, SupervisorCallsPassTypedPointersAsRegisterBits) {
+  for (const Arch Architecture : {Arch::AArch64, Arch::ARM}) {
+    const bool A64 = Architecture == Arch::AArch64;
+    const unsigned Bytes = A64 ? 8 : 4;
+    auto Pointer = NdType::makePtr(NdType::makeVoid());
+    Pointer->Size = Bytes;
+    HighFunc Function;
+    Function.Name = "pointer_supervisor_call";
+    Function.ReturnType = NdType::makeInt(Bytes, false);
+    Function.Params = {{"buffer", Pointer}};
+    std::vector<ExprPtr> Arguments(A64 ? 7 : 8);
+    for (auto &Argument : Arguments)
+      Argument = HighExpr::makeConst(0, Bytes);
+    Arguments[0] = HighExpr::makeConst(A64 ? 64 : 4, Bytes);
+    Arguments[1] = HighExpr::makeConst(1, Bytes);
+    Arguments[2] = parameter(0, Pointer);
+    Arguments[3] = HighExpr::makeConst(8, Bytes);
+    auto Call = HighExpr::makeCall(A64 ? "neverd_a64_linux_syscall"
+                                       : "neverd_arm_linux_syscall",
+                                   0, std::move(Arguments));
+    Call->IntrinsicId =
+        A64 ? Intrinsic::A64LinuxSyscall : Intrinsic::ArmLinuxSyscall;
+    Call->Type = Function.ReturnType;
+    returnValue(Function, Call);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(HighCEmitter().emit({Function}, OS, Options));
+    EXPECT_NE(Source.find("(uintptr_t)buffer"), std::string::npos) << Source;
+    expectCSyntax(Source, A64 ? "aarch64-linux-gnu" : "armv7-linux-gnueabi");
+  }
+}
+
+TEST(LLVMCPointerAddresses, SupervisorCallsTakeFrameAddressesAsRegisterBits) {
+  for (const Arch Architecture : {Arch::AArch64, Arch::ARM}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    const bool A64 = Architecture == Arch::AArch64;
+    llvm::LLVMContext Context;
+    llvm::Module Module("supervisor_frame", Context);
+    Module.setDataLayout(A64 ? "e-p:64:64" : "e-p:32:32");
+    llvm::IRBuilder<> Builder(Context);
+    auto *Word = Builder.getIntNTy(A64 ? 64 : 32);
+    auto *Function = llvm::Function::Create(
+        llvm::FunctionType::get(Word, false),
+        llvm::GlobalValue::ExternalLinkage, "frame_call", Module);
+    Builder.SetInsertPoint(
+        llvm::BasicBlock::Create(Context, "entry", Function));
+    auto *Frame =
+        Builder.CreateAlloca(Builder.getInt8Ty(), Builder.getInt32(16));
+    auto *Pointer = Builder.CreateInBoundsGEP(Builder.getInt8Ty(), Frame,
+                                              Builder.getInt32(8));
+    auto *Address = Builder.CreatePtrToInt(Pointer, Word);
+    llvm::SmallVector<llvm::Value *, 8> Arguments(
+        A64 ? 7 : 8, llvm::ConstantInt::get(Word, 0));
+    Arguments[0] = llvm::ConstantInt::get(Word, A64 ? 64 : 4); // write
+    Arguments[1] = llvm::ConstantInt::get(Word, 1);
+    Arguments[2] = Address;
+    Arguments[3] = llvm::ConstantInt::get(Word, 8);
+    llvm::SmallVector<llvm::Type *, 8> Types(Arguments.size(), Word);
+    auto *Asm = llvm::InlineAsm::get(
+        llvm::FunctionType::get(Word, Types, false), "svc #0",
+        A64 ? "={x0},{x8},0,{x1},{x2},{x3},{x4},{x5},~{memory}"
+            : "={r0},{r7},0,{r1},{r2},{r3},{r4},{r5},{r6},~{memory}",
+        true);
+    Builder.CreateRet(Builder.CreateFreeze(Builder.CreateCall(Asm, Arguments)));
+    ASSERT_FALSE(llvm::verifyModule(Module));
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+    OS.flush();
+    EXPECT_NE(
+        Source.find(A64 ? "(uint64_t)(uintptr_t)(" : "(uint32_t)(uintptr_t)("),
+        std::string::npos)
+        << Source;
+    expectCSyntax(Source, A64 ? "aarch64-linux-gnu" : "armv7-linux-gnueabi");
+  }
+}
+
+TEST(LLVMCPointerAddresses, NarrowPointerBitsUseAnIntegerCarrier) {
+  for (unsigned Bits : {1u, 8u, 16u, 32u}) {
+    SCOPED_TRACE(Bits);
+    llvm::LLVMContext Context;
+    llvm::Module Module("narrow-pointer-bits", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> B(Context);
+    auto *Narrow = B.getIntNTy(Bits);
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            Narrow, {B.getPtrTy(), B.getPtrTy(), B.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage, "pointer_bits", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    auto *Full = B.CreatePtrToInt(Fn->getArg(0), B.getInt64Ty());
+    auto *Low = B.CreateTrunc(Full, Narrow);
+    B.CreateStore(Low, Fn->getArg(1));
+    B.CreateStore(Full, Fn->getArg(2));
+    B.CreateRet(Low);
+    auto *Address = llvm::Function::Create(
+        llvm::FunctionType::get(B.getInt64Ty(), {Narrow}, false),
+        llvm::GlobalValue::ExternalLinkage, "integer_address", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Address));
+    auto *Pointer = B.CreateIntToPtr(Address->getArg(0), B.getPtrTy());
+    auto *Consumer = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage, "observe_pointer", Module);
+    B.CreateCall(Consumer, {Pointer});
+    B.CreateRet(B.CreatePtrToInt(Pointer, B.getInt64Ty()));
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.PreserveLLVMFunctionTypes = true;
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+    Source = "#pragma clang diagnostic error \"-Wpointer-to-int-cast\"\n"
+             "#pragma clang diagnostic error \"-Wint-to-pointer-cast\"\n" +
+             Source;
+    Source += "\n#define Bits " + std::to_string(Bits) + R"c(
+static uintptr_t observed;
+void observe_pointer(void *p) { observed = (uintptr_t)p; }
+int main(void) {
+  unsigned char bytes[32];
+  const uint64_t mask = (UINT64_C(1) << Bits) - 1;
+  for (unsigned i = 0; i != sizeof(bytes); ++i) {
+    uint64_t low = 0, full = 0;
+    uint64_t value = pointer_bits(&bytes[i], &low, &full);
+    if (value != ((uintptr_t)&bytes[i] & mask) || low != value ||
+        full != (uintptr_t)&bytes[i]) return 1;
+  }
+  for (unsigned i = 0; i != 256; ++i) {
+    const uint64_t value = (mask - i) & mask;
+    if (integer_address(value) != value || observed != value) return 2;
+  }
+  return 0;
+}
+)c";
+    compileAndRunCallOrdering(Source, true);
+  }
+}
+
+TEST(LLVMCPointerAddresses, FarFrameIntegerArithmeticKeepsModularBits) {
+  for (unsigned Bits : {32u, 64u}) {
+    for (uint64_t Offset : {UINT64_C(65), UINT64_C(0x80000000),
+                            UINT64_C(0x8000000000000000), UINT64_MAX}) {
+      SCOPED_TRACE(Bits);
+      SCOPED_TRACE(Offset);
+      llvm::LLVMContext Context;
+      llvm::Module Module("far-frame-integer", Context);
+      Module.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> B(Context);
+      auto *I64 = B.getInt64Ty();
+      auto *Integer = B.getIntNTy(Bits);
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+          llvm::GlobalValue::ExternalLinkage, "frame_bits", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      auto *Frame = B.CreateAlloca(llvm::ArrayType::get(B.getInt8Ty(), 64));
+      auto *Base = B.CreatePtrToInt(Frame, Integer);
+      auto *Address =
+          B.CreateAdd(Base, llvm::ConstantInt::get(Integer, Offset));
+      B.CreateStore(B.CreateZExtOrTrunc(Base, I64), Fn->getArg(0));
+      B.CreateStore(B.CreateZExtOrTrunc(Address, I64),
+                    B.CreateGEP(I64, Fn->getArg(0), B.getInt64(1)));
+      B.CreateRetVoid();
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Arch::AArch64;
+      Options.PreserveLLVMFunctionTypes = true;
+      ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+      // A scalar computation beyond the array must not create an invalid C
+      // pointer, even if a compiler happens to fold that pointer back to bits.
+      EXPECT_EQ(Source.find("((char*)&"), std::string::npos) << Source;
+      Source +=
+          "\nint main(void) { uint64_t result[2]; frame_bits(result);\n"
+          "const uint64_t mask = UINT64_MAX >> " +
+          std::to_string(64 - Bits) +
+          ";\n"
+          "return (result[0] & ~mask) || result[1] != ((result[0] + UINT64_C(" +
+          std::to_string(Offset) + ")) & mask); }\n";
+      compileAndRunCallOrdering(Source, true);
+    }
+  }
+}
+
+TEST(LLVMCPointerAddresses, IntegerSelectsKeepPointerViewsAsBits) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("integer-select-pointer-views", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *I64 = B.getInt64Ty();
+  for (bool Reused : {false, true}) {
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(I64, {I64, I64, B.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        Reused ? "selected_values" : "selected_inline", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    auto *Frame = B.CreateAlloca(I64, B.getInt32(4));
+    auto *First = B.CreatePtrToInt(Frame, I64);
+    auto *Second =
+        B.CreatePtrToInt(B.CreateGEP(B.getInt8Ty(), Frame, B.getInt64(3)), I64);
+    auto Store = [&](unsigned Index, llvm::Value *Value) {
+      B.CreateStore(Value, B.CreateGEP(I64, Fn->getArg(2), B.getInt64(Index)))
+          ->setVolatile(true);
+    };
+    Store(0, First);
+    Store(1, Second);
+    auto *Condition = B.CreateICmpNE(Fn->getArg(0), B.getInt64(0));
+    auto *BothPointers = B.CreateSelect(Condition, First, Second);
+    auto *PointerAndScalar = B.CreateSelect(Condition, First, Fn->getArg(1));
+    if (Reused) {
+      Store(2, BothPointers);
+      Store(3, PointerAndScalar);
+    }
+    B.CreateRet(B.CreateXor(BothPointers, PointerAndScalar));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.PreserveLLVMFunctionTypes = true;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  Source = "#pragma clang diagnostic error \"-Wconditional-type-mismatch\"\n"
+           "#pragma clang diagnostic error \"-Wpointer-type-mismatch\"\n" +
+           Source;
+  Source += R"c(
+int main(void) {
+  const uint64_t values[] = {0, 1, UINT64_MAX, UINT64_C(0x8000000000000000)};
+  for (unsigned condition = 0; condition < 2; ++condition) {
+    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+      uint64_t observed[4] = {0, 0, 0, 0};
+      uint64_t result = selected_values(condition, values[i], observed);
+      uint64_t first = observed[condition ? 0 : 1];
+      uint64_t second = condition ? observed[0] : values[i];
+      if (observed[2] != first || observed[3] != second ||
+          result != (first ^ second)) return 1;
+      result = selected_inline(condition, values[i], observed);
+      first = observed[condition ? 0 : 1];
+      second = condition ? observed[0] : values[i];
+      if (result != (first ^ second)) return 2;
+    }
+  }
+  return 0;
+}
+)c";
+  compileAndRunCallOrdering(Source, true);
+}
+
+TEST(LLVMCPointerAddresses, RelocatableConstantExpressionsKeepEveryIntegerBit) {
+  for (unsigned Bits : {1u, 7u, 8u, 16u, 32u, 64u, 128u}) {
+    SCOPED_TRACE(Bits);
+    llvm::LLVMContext Context;
+    llvm::Module Module("relocatable-bitvector-constants", Context);
+    Module.setDataLayout("e-p:64:64");
+    llvm::IRBuilder<> B(Context);
+    auto *Integer = B.getIntNTy(Bits);
+    auto *Data = new llvm::GlobalVariable(Module, B.getInt8Ty(), false,
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          nullptr, "reloc_data");
+    auto *Code = llvm::Function::Create(
+        llvm::FunctionType::get(B.getVoidTy(), false),
+        llvm::GlobalValue::ExternalLinkage, "reloc_code", Module);
+    std::string Checks;
+    for (bool CodeAddress : {false, true}) {
+      llvm::Constant *Base =
+          CodeAddress ? static_cast<llvm::Constant *>(Code) : Data;
+      auto *Address = llvm::ConstantExpr::getPtrToInt(Base, Integer);
+      auto *Mask = llvm::ConstantInt::getAllOnesValue(Integer);
+      for (unsigned Op : {llvm::Instruction::Add, llvm::Instruction::Sub,
+                          llvm::Instruction::Xor}) {
+        const std::string Name = std::string(CodeAddress ? "code_" : "data_") +
+                                 llvm::Instruction::getOpcodeName(Op);
+        auto *Fn = llvm::Function::Create(
+            llvm::FunctionType::get(Integer, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+        B.CreateRet(llvm::ConstantExpr::get(Op, Address, Mask));
+        const std::string BaseText = CodeAddress ? "reloc_code" : "&reloc_data";
+        const char *Token = Op == llvm::Instruction::Add   ? " + "
+                            : Op == llvm::Instruction::Sub ? " - "
+                                                           : " ^ ";
+        Checks += "if ((__uint128_t)" + Name +
+                  "() != ((((__uint128_t)(uintptr_t)" + BaseText + " & mask)" +
+                  Token + "mask) & mask)) return 1;\n";
+      }
+    }
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.PreserveLLVMFunctionTypes = true;
+    ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+    Source =
+        "#pragma clang diagnostic error \"-Wpointer-to-int-cast\"\n" + Source;
+    Source += "\nuint8_t reloc_data = 37;\nvoid reloc_code(void) {}\n"
+              "int main(void) {\nconst __uint128_t mask = "
+              "~(__uint128_t)0 >> " +
+              std::to_string(128 - Bits) + ";\n" + Checks + "return 0;\n}\n";
+    compileAndRunCallOrdering(Source, true);
+  }
 }
 
 TEST(LLVMCPointerAddresses, OneFunctionDeclaresTheImagesPointerStorage) {
@@ -5651,8 +6301,9 @@ TEST(HighCPointerAddresses, PhiCopyUndefAssignRetainsUnknownState) {
   // Availability may start at zero; the unknown payload must not become a
   // recovered zero argument. Execution coverage is in CallExitRegisters.
   EXPECT_EQ(Source.find("t13 = 0;"), std::string::npos) << Source;
-  EXPECT_NE(Source.find("__builtin_trap(), 0 /* unknown value */"),
-            std::string::npos)
+  EXPECT_NE(
+      Source.find("__builtin_trap(), 0 /* no recovered semantics at 0x0 */"),
+      std::string::npos)
       << Source;
   EXPECT_EQ(Source.find(", 0);"), std::string::npos) << Source;
 }
@@ -6422,7 +7073,10 @@ TEST(HighCPointerAddresses, UnusedFieldLoadIsNotARegistersEntryValue) {
   Guard.Body = {Work};
   Func.Body = {Guard, Load};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("if (this->m_completedCount"), std::string::npos)
       << Source;
 }
@@ -8825,7 +9479,7 @@ TEST(HighCPointerAddresses, UnusedFieldLoadAliasesWidenedRegCompare) {
   EXPECT_EQ(Source.find("v98"), std::string::npos) << Source;
 }
 
-TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
+TEST(HighCPointerAddresses, FieldLoadViewAssignComposesIntoCondAndStore) {
   auto Record = NdType::makeNamedRecord("CRecord", 512);
   Record->FieldDisplayNames = {"m_completedCount"};
   Record->FieldDisplayOffsets = {32};
@@ -8853,6 +9507,12 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   Wide.RegOff = 0;
   Wide.RenameTag = 98;
   Wide.TheArch = Arch::X64;
+  HighStmt BindWide;
+  BindWide.Kind = StmtKind::Assign;
+  BindWide.Dst = HighExpr::makeVar(Wide, NdType::makeInt(8));
+  BindWide.Val = HighExpr::makeUnary(
+      NdOp::INT_ZEXT, HighExpr::makeVar(Loaded, NdType::makeInt(4)));
+  BindWide.Val->Type = NdType::makeInt(8);
   MedVar View;
   View.Kind = MedVar::Temp;
   View.Id = 97;
@@ -8879,21 +9539,12 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   Len.Dst = HighExpr::makeVar(LenDest, NdType::makeInt(4));
   Len.Val = HighExpr::makeCall("GetLength", 0x140003000,
                                {parameter(0, NdType::makeInt(8))});
-  MedVar Ghost;
-  Ghost.Kind = MedVar::Reg;
-  Ghost.Id = 0;
-  Ghost.Size = 8;
-  Ghost.RegOff = 0;
-  Ghost.RenameTag = 106;
-  Ghost.TheArch = Arch::X64;
   HighStmt LenStore;
   LenStore.Kind = StmtKind::Store;
   LenStore.StoreAddr = HighExpr::makeConst(0x140008008, 8);
   LenStore.StoreVal = HighExpr::makeUnary(
-      NdOp::INT_ZEXT,
-      HighExpr::makeBinop(NdOp::SUBBYTES,
-                          HighExpr::makeVar(Ghost, NdType::makeInt(8)),
-                          HighExpr::makeConst(0, 4)));
+      NdOp::INT_ZEXT, HighExpr::makeVar(LenDest, NdType::makeInt(4)));
+  LenStore.StoreVal->Type = NdType::makeInt(8);
   HighStmt Inner;
   Inner.Kind = StmtKind::If;
   Inner.Cond = HighExpr::makeBinop(NdOp::INT_NOTEQUAL,
@@ -8910,11 +9561,10 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
                                    HighExpr::makeConst(10, 8));
   Guard.Body = {Work};
   Guard.ElseBody = {Inner};
-  Func.Body = {Load, Slice, Guard};
+  Func.Body = {Load, BindWide, Slice, Guard};
   const std::string Source = emitFunctions({Func});
-  // This legacy undefined-register recovery fixture checks display composition.
-  // The defined view must retain its snapshot across the potentially mutating
-  // GetLength call; valid-IR execution is covered by HighValueForward tests.
+  // Both the loaded value and call result have explicit producers. The view
+  // must retain its snapshot across the potentially mutating GetLength call.
   EXPECT_NE(Source.find("if (t97)"), std::string::npos) << Source;
   const auto Snapshot = Source.find("t97 = (int32_t)(this->m_completedCount);");
   const auto Call = Source.find("GetLength(this)");
@@ -8925,7 +9575,7 @@ TEST(HighCPointerAddresses, UnusedFieldLoadViewAssignComposesIntoCondAndStore) {
   EXPECT_EQ(Source.find("GetLength(this)", Call + 1), std::string::npos)
       << Source;
   EXPECT_NE(Source.find("this->m_completedCount"), std::string::npos) << Source;
-  expectPortableStore(Source, "int64_t", "0x140008008", "GetLength(this)");
+  expectPortableStore(Source, "int64_t", "0x140008008", "Length");
   EXPECT_EQ(Source.find("\n    GetLength("), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v97 ="), std::string::npos) << Source;
   EXPECT_EQ(Source.find("v97"), std::string::npos) << Source;
@@ -9913,9 +10563,155 @@ TEST(HighCPointerAddresses, SlotCalleeThroughUnknownRegisterFailsAtUse) {
       NdType::makeInt(8));
   Func.Body = {Call};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("(__builtin_trap(), 0 /* unknown register */)) + 0x70"),
+  EXPECT_NE(Source.find("(__builtin_trap(), 0 /* incoming register has no "
+                        "definition at 0x0 */)) + 0x70"),
             std::string::npos)
       << Source;
+}
+
+HighStmt storeEntryGpr(unsigned Reg, int Id, uint64_t Disp) {
+  HighStmt Store;
+  Store.Kind = StmtKind::Store;
+  MedVar Base;
+  Base.Kind = MedVar::Param;
+  Base.Id = 0;
+  Base.Size = 8;
+  Base.TheArch = Arch::AArch64;
+  MedVar Value;
+  Value.Kind = MedVar::Reg;
+  Value.TheArch = Arch::AArch64;
+  Value.Id = Id;
+  Value.Size = 8;
+  Value.SSAVer = 0;
+  Value.RegOff = a64reg::X0 + static_cast<uint64_t>(Reg) * 8;
+  Store.StoreAddr = HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeVar(Base, NdType::makeInt(8)),
+      HighExpr::makeConst(Disp, 8));
+  Store.StoreVal = HighExpr::makeVar(Value, NdType::makeInt(8));
+  return Store;
+}
+
+HighFunc contextSaveFunction() {
+  HighFunc Func;
+  Func.Name = "save_context";
+  Func.Entry = 0x11000;
+  Func.ReturnType = NdType::makeVoid();
+  Func.DoesNotReturn = true;
+  Func.Params.push_back({"base", NdType::makePtr(NdType::makeVoid())});
+  Func.Body.push_back(storeEntryGpr(9, 9, 0x48));
+  Func.Body.push_back(storeEntryGpr(10, 10, 0x50));
+  Func.Body.push_back(storeEntryGpr(11, 11, 0x58));
+  Func.Body.push_back(storeEntryGpr(12, 12, 0x60));
+  Func.Body.push_back(storeEntryGpr(19, 19, 0x98));
+  return Func;
+}
+
+TEST(HighCPointerAddresses, ContextSaveNamesStoredEntryRegisters) {
+  // stp of x9-x12 and x19, with no other use, is a register-context save.
+  // Each stored entry value is that register.
+  const std::string Source =
+      emitFunctions({contextSaveFunction()}, Arch::AArch64);
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x9"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x12"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x19"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, OneUsedEntryRegisterIsNotAContextSave) {
+  // Using x9 as a call argument leaves only three store-only caller-saved
+  // registers. That is not a context save, so none of them is named.
+  HighFunc Func = contextSaveFunction();
+  HighStmt Use;
+  Use.Kind = StmtKind::ExprStmt;
+  MedVar X9;
+  X9.Kind = MedVar::Reg;
+  X9.TheArch = Arch::AArch64;
+  X9.Id = 9;
+  X9.Size = 8;
+  X9.SSAVer = 0;
+  X9.RegOff = a64reg::X9;
+  Use.Val = HighExpr::makeCall("observe", 0,
+                               {HighExpr::makeVar(X9, NdType::makeInt(8))});
+  Func.Body.push_back(std::move(Use));
+  const std::string Source = emitFunctions({Func}, Arch::AArch64);
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("mov %0, x10"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("mov %0, x19"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, CalleeSavedSpillsStayUnknown) {
+  HighFunc Func;
+  Func.Name = "spill_callee";
+  Func.Entry = 0x12000;
+  Func.ReturnType = NdType::makeVoid();
+  Func.Params.push_back({"base", NdType::makePtr(NdType::makeVoid())});
+  Func.Body.push_back(storeEntryGpr(19, 19, 0x98));
+  Func.Body.push_back(storeEntryGpr(20, 20, 0xA0));
+  Func.Body.push_back(storeEntryGpr(21, 21, 0xA8));
+  Func.Body.push_back(storeEntryGpr(22, 22, 0xB0));
+  const std::string Source = emitFunctions({Func}, Arch::AArch64);
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("mov %0, x19"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, RenamedLaterDefinitionIsNotTheIncomingRegister) {
+  // mrs x28, sp_el0 overwrites x28 after the context save. HighVarRename
+  // keeps the register offset, clears the new SSA version, and tags the
+  // local. Using that local as an address must not hide the stored x28.
+  HighFunc Func = contextSaveFunction();
+  Func.Body.push_back(storeEntryGpr(22, 22, 0xB0));
+  Func.Body.push_back(storeEntryGpr(23, 23, 0xB8));
+  Func.Body.push_back(storeEntryGpr(28, 28, 0xE0));
+  auto Later = [](unsigned Reg, int16_t Tag) {
+    MedVar V;
+    V.Kind = MedVar::Reg;
+    V.TheArch = Arch::AArch64;
+    V.Id = 40000 + Tag;
+    V.Size = 8;
+    V.SSAVer = 0;
+    V.RenameTag = Tag;
+    V.RegOff = a64reg::X0 + static_cast<uint64_t>(Reg) * 8;
+    return V;
+  };
+  auto Define = [&](unsigned Reg, int16_t Tag) {
+    HighStmt Defined;
+    Defined.Kind = StmtKind::Assign;
+    Defined.Dst = HighExpr::makeVar(Later(Reg, Tag), NdType::makeInt(8));
+    Defined.Val = HighExpr::makeCall("mrs", 0, {});
+    Func.Body.push_back(std::move(Defined));
+  };
+  Define(22, 22);
+  Define(23, 23);
+  Define(28, 40);
+  HighStmt Address;
+  Address.Kind = StmtKind::Store;
+  Address.StoreAddr = HighExpr::makeBinop(
+      NdOp::INT_ADD, HighExpr::makeVar(Later(28, 40), NdType::makeInt(8)),
+      HighExpr::makeConst(8, 8));
+  Address.StoreVal = HighExpr::makeConst(1, 8);
+  Func.Body.push_back(std::move(Address));
+  const std::string Source = emitFunctions({Func}, Arch::AArch64);
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x22"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x23"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("mov %0, x28"), std::string::npos) << Source;
+}
+
+TEST(HighCPointerAddresses, VariadicSaveDoesNotNameEntryRegisters) {
+  HighFunc Func = contextSaveFunction();
+  Func.IsVariadic = true;
+  const std::string Source = emitFunctions({Func}, Arch::AArch64);
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("mov %0, x9"), std::string::npos) << Source;
 }
 
 TEST(HighCPointerAddresses, ParameterUsedOnlyAsCallTargetStaysDeclared) {
@@ -10152,7 +10948,11 @@ TEST(LLVMCPointerAddresses, CallClobberPrintsAsUnknownWithoutName) {
   Options.EmitIncludes = false;
   ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
   OS.flush();
-  EXPECT_NE(Source.find("0 /* unknown */"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("no recovered semantics (source address unavailable)"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("_call_clobber"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("RDX_3_013"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("dead_poison_freeze"), std::string::npos) << Source;
@@ -15535,6 +16335,9 @@ TEST(LLVMCPointerAddresses, InlinesSinglePredPhiAssignArm) {
   JoinBuilder.CreateCall(Use, {Loaded});
   JoinBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Also);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -16138,6 +16941,9 @@ TEST(LLVMCPointerAddresses, KeepsCondRegionGotoWhenRegionHasAnotherEntry) {
   JoinBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Region);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -16928,6 +17734,9 @@ TEST(LLVMCPointerAddresses, KeepsSharedTailGotoWhenWorkLeavesJoin) {
   JoinBuilder.CreateCall(Tail);
   JoinBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -17153,6 +17962,9 @@ TEST(LLVMCPointerAddresses, KeepsPrivateJoinGotoWhenJoinHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Join);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -17312,6 +18124,9 @@ TEST(LLVMCPointerAddresses, KeepsCondArmGotoWhenJoinHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Join);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -17401,7 +18216,7 @@ TEST(LLVMCPointerAddresses, InvertsSkipOverRegionBeforeTarget) {
   EXPECT_EQ(Source.find("tail_step(", TailAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
+TEST(LLVMCPointerAddresses, PreservesSkipEffectsWhenTargetHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-skip-region-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -17443,6 +18258,9 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Skip);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -17451,13 +18269,34 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenTargetHasAnotherEntry) {
   OS.flush();
   const auto BodyAt = Source.find("skip_region_extra(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("goto L_skip;", BodyAt), std::string::npos) << Source;
-  EXPECT_EQ(Source.find("if (!(flag))", BodyAt), std::string::npos) << Source;
   const auto TailAt = Source.find("tail_step(", BodyAt);
   ASSERT_NE(TailAt, std::string::npos) << Source;
   EXPECT_EQ(Source.find("tail_step(", TailAt + 1), std::string::npos) << Source;
   EXPECT_NE(Source.find("work_step(", BodyAt), std::string::npos) << Source;
   EXPECT_NE(Source.find("skip_step(", BodyAt), std::string::npos) << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void work_step(void) { observed = observed * 10 + 1; }
+void more_step(void) { observed = observed * 10 + 2; }
+void skip_step(void) { observed = observed * 10 + 3; }
+void tail_step(void) { observed = observed * 10 + 4; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      skip_region_extra(flag);
+      const int expected = (additional || flag) ? 3 : 124;
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, KeepsSkipRegionWhenSideExitFollowsJoin) {
@@ -18377,6 +19216,9 @@ TEST(LLVMCPointerAddresses, InvertsSkipReachedThroughPassthroughs) {
   TailBuilder.CreateCall(TailFn);
   TailBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Outside);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18519,6 +19361,10 @@ TEST(LLVMCPointerAddresses, KeepsSkipGotoWhenPassthroughHasOutsideEntry) {
   TailBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Skip);
+
+  addReachableIncomingEdge(Outside);
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -18785,6 +19631,9 @@ TEST(LLVMCPointerAddresses, PassthroughToSharedBlockKeepsRegionInsideTest) {
   LateBuilder.CreateCall(LateFn);
   LateBuilder.CreateRetVoid();
 
+  addReachableIncomingEdge(Outside);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18899,7 +19748,8 @@ TEST(LLVMCPointerAddresses, LaterTrueArmJoinsFallthroughAsIfElse) {
       << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
+TEST(LLVMCPointerAddresses,
+     PreservesJoinEffectsWhenLaterArmJoinHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-later-arm-join-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -18939,6 +19789,9 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   SideBuilder.CreateCall(SideFn);
   SideBuilder.CreateBr(Release);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -18947,9 +19800,6 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   OS.flush();
   const auto BodyAt = Source.find("later_arm_join_extra(");
   ASSERT_NE(BodyAt, std::string::npos) << Source;
-  EXPECT_NE(Source.find("goto L_release;", BodyAt), std::string::npos)
-      << Source;
-  EXPECT_EQ(Source.find("else {", BodyAt), std::string::npos) << Source;
   const auto CtorAt = Source.find("ctor_step(", BodyAt);
   const auto WorkAt = Source.find("work_step(", BodyAt);
   const auto ReleaseAt = Source.find("release_step(", BodyAt);
@@ -18960,6 +19810,29 @@ TEST(LLVMCPointerAddresses, KeepsJoinGotoWhenLaterArmJoinHasAnotherEntry) {
   EXPECT_EQ(Source.find("work_step(", WorkAt + 1), std::string::npos) << Source;
   EXPECT_EQ(Source.find("release_step(", ReleaseAt + 1), std::string::npos)
       << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void work_step(void) { observed = observed * 10 + 1; }
+void release_step(void) { observed = observed * 10 + 2; }
+void ctor_step(void) { observed = observed * 10 + 3; }
+void side_step(void) { observed = observed * 10 + 4; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      later_arm_join_extra(flag);
+      const int expected = additional ? 42 : (flag ? 32 : 12);
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, SharedCtorBetweenTestsPrintsInBothMissArms) {
@@ -19196,6 +20069,9 @@ TEST(LLVMCPointerAddresses, KeepsSharedCtorGotoWhenThirdEdgeEnters) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateCall(SideFn);
   SideBuilder.CreateBr(Shared);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -19705,6 +20581,9 @@ TEST(LLVMCPointerAddresses, KeepsAssignSelectGotoWhenArmHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(ArmLabel);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19775,6 +20654,9 @@ TEST(LLVMCPointerAddresses, KeepsTailGotoWhenTailHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Later);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19801,7 +20683,7 @@ TEST(LLVMCPointerAddresses, KeepsTailGotoWhenTailHasAnotherEntry) {
   EXPECT_EQ(Source.find("use_step(", UseAt + 1), std::string::npos) << Source;
 }
 
-TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
+TEST(LLVMCPointerAddresses, PreservesPassthroughEffectsWhenArmHasAnotherEntry) {
   llvm::LLVMContext Context;
   llvm::Module Module("llvm-c-pass-arm-extra", Context);
   llvm::FunctionType *WorkTy =
@@ -19842,6 +20724,9 @@ TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(Later);
 
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+
   std::string Source;
   llvm::raw_string_ostream OS(Source);
   CEmitterOptions Options;
@@ -19853,16 +20738,36 @@ TEST(LLVMCPointerAddresses, KeepsPassthroughGotoWhenArmHasAnotherEntry) {
   const auto LaterAt = Source.find("later_step(", BodyAt);
   const auto OtherAt = Source.find("other_step(", BodyAt);
   const auto UseAt = Source.find("use_step(", BodyAt);
-  const auto GotoAt = Source.find("goto L_later;", BodyAt);
   ASSERT_NE(LaterAt, std::string::npos) << Source;
   ASSERT_NE(OtherAt, std::string::npos) << Source;
   ASSERT_NE(UseAt, std::string::npos) << Source;
-  ASSERT_NE(GotoAt, std::string::npos) << Source;
   EXPECT_EQ(Source.find("later_step(", LaterAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("other_step(", OtherAt + 1), std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("use_step(", UseAt + 1), std::string::npos) << Source;
+
+  // Every reachable entry must keep its exact effects, whether the writer
+  // uses a label or combines the now-reachable outer condition.
+  const std::string Program = "#include <stdint.h>\n" + Source + R"c(
+static int additional, observed, decisions;
+uint8_t take_additional_entry(void) { ++decisions; return additional; }
+void later_step(void) { observed = observed * 10 + 1; }
+void other_step(void) { observed = observed * 10 + 2; }
+void use_step(void) { observed = observed * 10 + 3; }
+int main(void) {
+  for (additional = 0; additional != 2; ++additional)
+    for (int flag = 0; flag != 2; ++flag) {
+      observed = decisions = 0;
+      pass_arm_extra(flag);
+      const int expected = (additional || flag) ? 13 : 23;
+      if (observed != expected || decisions != 1) return 1;
+    }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    source_call_execution_test::compileAndRun(Program, {Level});
 }
 
 TEST(LLVMCPointerAddresses, KeepsSharedAssignGotoWhenDefaultHasAnotherEntry) {
@@ -19987,6 +20892,9 @@ TEST(LLVMCPointerAddresses, KeepsConditionChainGotoWhenDefaultHasAnotherEntry) {
   AfterBuilder.CreateRetVoid();
   llvm::IRBuilder<> SideBuilder(Side);
   SideBuilder.CreateBr(MissBB);
+
+  addReachableIncomingEdge(Side);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -20994,6 +21902,9 @@ TEST(LLVMCPointerAddresses, KeepsFalseBodyLabelWhenItHasAnotherEntry) {
   OtherBuilder.CreateBr(Body);
   llvm::IRBuilder<> AfterBuilder(After);
   AfterBuilder.CreateRetVoid();
+
+  addReachableIncomingEdge(Other);
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
 
   std::string Source;
   llvm::raw_string_ostream OS(Source);
@@ -23061,7 +23972,7 @@ TEST(HighCPointerAddresses, UnassignedRegisterReturnTrapsAtUse) {
   Ret.RetVal = HighExpr::makeVar(Rax);
   Func.Body.push_back(std::move(Ret));
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("__builtin_trap(); /* unknown return value */"),
+  EXPECT_NE(Source.find("__builtin_trap(); /* no recovered result at 0x0 */"),
             std::string::npos)
       << Source;
   EXPECT_EQ(Source.find("return;"), std::string::npos) << Source;
@@ -42423,7 +43334,11 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   EXPECT_EQ(Source.find("_140003000"), std::string::npos) << Source;
   // Split ranges can share an out-of-line handler. Keep both the conditional
   // skip and handler rejoin edges without requiring one lexical try body.
-  const auto SkipAt = Source.find("goto L_seh_try_end_0_");
+  // The skip is the first jump of the protected body, and lands past the
+  // range's end marker, which only jumps and prints nothing.
+  const auto FirstTryAt = Source.find("__try {");
+  ASSERT_NE(FirstTryAt, std::string::npos) << Source;
+  const auto SkipAt = Source.find("goto L_", FirstTryAt);
   ASSERT_NE(SkipAt, std::string::npos) << Source;
   const auto SkipEnd = Source.find(';', SkipAt);
   ASSERT_NE(SkipEnd, std::string::npos) << Source;
@@ -43044,7 +43959,10 @@ TEST(HighCPointerAddresses, X86ExceptEbpStoreUsesTryResultSlot) {
   Func.Body.push_back(std::move(Ret));
 
   const std::string Unrestored = emitFunctions({Func}, Arch::X86);
-  EXPECT_NE(Unrestored.find("unknown register"), std::string::npos)
+  EXPECT_NE(Unrestored.find("incoming register has no definition"),
+            std::string::npos)
+      << Unrestored;
+  EXPECT_EQ(Unrestored.find("unknown register"), std::string::npos)
       << Unrestored;
 
   HighStmt RestoreFrame;
@@ -44284,7 +45202,7 @@ TEST(HighCPointerAddresses, ReadOfADestructorResultIsUnknown) {
     EXPECT_NE(Source.find("    SC_DEVICE_dtor((SC_DEVICE*)(uintptr_t)arg0);"),
               std::string::npos)
         << Source;
-    EXPECT_EQ(Source.find(" = 0 /* unknown */;") != std::string::npos,
+    EXPECT_EQ(Source.find("no recovered semantics at 0x") != std::string::npos,
               !OnlyReturned)
         << Source;
     EXPECT_EQ(Source.find("void release_disk(") != std::string::npos,
@@ -44307,7 +45225,7 @@ TEST(HighCPointerAddresses, UnprovenIndirectBranchTrapsInsteadOfNamingNoLabel) {
   Branch.GotoTarget = InvalidVA;
   Func.Body = {Branch};
   const std::string Source = emitFunctions({Func});
-  EXPECT_NE(Source.find("__builtin_trap(); /* unresolved indirect branch at "
+  EXPECT_NE(Source.find("__builtin_trap(); /* indirect targets not proved at "
                         "0x14000101D */"),
             std::string::npos)
       << Source;
@@ -46466,7 +47384,10 @@ TEST(HighCPointerAddresses, BranchOnAnEntryFlagStaysUnknown) {
   const std::string HighC =
       highcOnlyFunction(makeCodeFixture(Entry, Code), Entry);
   EXPECT_NE(HighC.find("__readeflags()"), std::string::npos) << HighC;
-  EXPECT_NE(HighC.find("/* unknown register */"), std::string::npos) << HighC;
+  EXPECT_NE(HighC.find("incoming register has no definition"),
+            std::string::npos)
+      << HighC;
+  EXPECT_EQ(HighC.find("unknown register"), std::string::npos) << HighC;
 }
 
 TEST(HighCPointerAddresses,
@@ -49815,6 +50736,118 @@ TEST(HighCPointerAddresses, ForwardedVaListsPassToPointerParameters) {
   expectCSyntax(Source);
 }
 
+TEST(HighCPointerAddresses, AAPCS64VaListCallsReadTheIndirectRecordOnce) {
+  const auto Word = NdType::makeInt(8, false);
+  HighFunc Function;
+  Function.Name = "format_list";
+  Function.ReturnType = NdType::makeInt(4);
+  Function.Params = {
+      {"arg0", Word}, {"arg1", Word}, {"arg2", Word}, {"arg3", Word}};
+  auto Call = HighExpr::makeCall(
+      "vsnprintf", 0x2000,
+      {parameter(0), parameter(1), parameter(2), parameter(3)});
+  Call->Type = Function.ReturnType;
+  returnValue(Function, Call);
+  llvm::LLVMContext Context;
+  llvm::Module Module("va-list-call", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Type = llvm::FunctionType::get(
+      B.getInt32Ty(),
+      {B.getInt64Ty(), B.getInt64Ty(), B.getInt64Ty(), B.getInt64Ty()}, false);
+  auto *Callee = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "vsnprintf", Module);
+  auto *Caller = llvm::Function::Create(
+      Type, llvm::GlobalValue::ExternalLinkage, "format_list", Module);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Caller));
+  B.CreateRet(B.CreateCall(Callee, {Caller->getArg(0), Caller->getArg(1),
+                                    Caller->getArg(2), Caller->getArg(3)}));
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::ELF;
+    ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(Module, OS, Options)
+                     : HighCEmitter().emit({Function}, OS, Options));
+    OS.flush();
+    EXPECT_NE(Source.find("__builtin_va_list va_argument"), std::string::npos)
+        << Source;
+    EXPECT_NE(Source.find("__builtin_memcpy(&va_argument"), std::string::npos)
+        << Source;
+    // The compiler owns va_list's target representation. Supply an
+    // independent stdio declaration, so this test needs no target sysroot.
+    const auto Header = Source.find("#include <stdio.h>");
+    ASSERT_NE(Header, std::string::npos) << Source;
+    Source.replace(Header, std::string("#include <stdio.h>").size(), R"c(
+#include <stddef.h>
+#include <stdarg.h>
+_Static_assert(sizeof(va_list) == 32, "AAPCS64 va_list record");
+extern int vsnprintf(char *, size_t, const char *, va_list);
+)c");
+    expectCSyntax(Source, "aarch64-linux-gnu");
+  }
+}
+
+TEST(HighCPointerAddresses,
+     VariadicForwardingDoesNotRequireABuiltinHeaderEntry) {
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Bits = Bitness::Bits64;
+  Segment Text;
+  Text.VA = 0x1000;
+  Text.Size = 4;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.resize(Text.Size);
+  Image.Segments.push_back(std::move(Text));
+  Import Imported;
+  Imported.Name = "syslog";
+  Imported.IATAddr = 0x3000;
+  Image.Imports.push_back(Imported);
+  ASSERT_TRUE(Image.recordImportStub(0x1000, 0));
+  HighFunc Stub;
+  Stub.Name = "logging_stub";
+  Stub.Entry = 0x1000;
+  Stub.ReturnType = NdType::makeVoid();
+  llvm::LLVMContext Context;
+  llvm::Module Module("variadic-stub", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  auto *Function = llvm::Function::Create(
+      llvm::FunctionType::get(B.getVoidTy(), false),
+      llvm::GlobalValue::ExternalLinkage, "logging_stub", Module);
+  rewrite_source::setOriginalVA(*Function, Stub.Entry);
+  B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
+  B.CreateRetVoid();
+  for (bool LLVM : {false, true}) {
+    SCOPED_TRACE(LLVM);
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    ASSERT_TRUE(LLVM ? LLVMCEmitter().emit(Module, OS, Options, nullptr, &Image)
+                     : HighCEmitter().emit({Stub}, OS, Options));
+    OS.flush();
+    EXPECT_NE(Source.find("va_start(arguments, format);"), std::string::npos)
+        << Source;
+    compileAndRunCallOrdering(Source + R"c(
+static int observed;
+void vsyslog(int priority, const char *format, va_list arguments) {
+  observed = priority == 5 && format[0] == 'x' &&
+             va_arg(arguments, int) == 37 && va_arg(arguments, double) == 1.5;
+}
+int main(void) {
+  logging_stub(5, "x", 37, 1.5);
+  return observed ? 0 : 1;
+}
+)c");
+  }
+}
+
 TEST(HighCPointerAddresses, FloatingLocalsKeepTheirRegistersBits) {
   // find keeps difftime's double in a local, which HighIR assigns and reads
   // as the integer bits of its vector register: C declared it double and
@@ -50455,6 +51488,7 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
   public:
     bool LiveVoid = false;
     bool WrongArity = false;
+    bool CLibrary = false;
     unsigned PointerBytes = 8;
     std::optional<FunctionSym>
     resolvePrototype(llvm::StringRef Name) const override {
@@ -50462,7 +51496,9 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
         return std::nullopt;
       FunctionSym F;
       F.Name = Name.str();
-      F.PrototypeLibrary = "windows-kernel-arm64";
+      F.PrototypeLibrary =
+          CLibrary ? "c-library-fixture" : "windows-kernel-arm64";
+      F.PrototypeFromCLibrary = CLibrary;
       F.Params = {{"Object", NdType::makePtr()}};
       F.Params[0].second->Size = PointerBytes;
       F.ReturnType = Name == "SdkAcquire" ? NdType::makePtr()
@@ -50479,9 +51515,12 @@ TEST(LLVMCPointerAddresses, HeaderImportsKeepScalarTypesAndVoidEffects) {
     }
   } Debug;
   for (const auto Arch : {Arch::X64, Arch::AArch64, Arch::X86})
-    for (unsigned Mode = 0; Mode < 6; ++Mode) {
+    for (unsigned Case = 0; Case < 12; ++Case) {
+      const unsigned Mode = Case % 6;
+      Debug.CLibrary = Case >= 6;
       SCOPED_TRACE(static_cast<unsigned>(Arch));
       SCOPED_TRACE(Mode);
+      SCOPED_TRACE(Debug.CLibrary);
       Debug.LiveVoid = Mode == 1;
       Debug.WrongArity = Mode == 2;
       Debug.PointerBytes = Arch == Arch::X86 ? 4 : 8;

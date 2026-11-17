@@ -29,7 +29,9 @@
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <algorithm>
@@ -46,6 +48,28 @@ namespace neverd {
 
 bool isAbiRecoveryBarrier(const MedOp &Op, bool RegistersOnly) {
   return endsCallArgumentSetup(Op, RegistersOnly);
+}
+
+/// A call ends argument setup for a register it may change. A direct callee
+/// that provably never writes that register leaves the incoming value in
+/// place, so the call is not a barrier for that one argument.
+static bool callKeepsArgumentRegister(const AbiCallContext &C, const MedOp &Op,
+                                      int ArgIndex) {
+  if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+    return false;
+  if (ArgIndex < 0 || ArgIndex >= static_cast<int>(C.Layout.Registers.size()))
+    return false;
+  const auto Writes = [&](const MedVar &Value) {
+    return Value.Kind == MedVar::Reg && Value.Size != 0 &&
+           C.Layout.registerIndex(Value.RegOff) == ArgIndex;
+  };
+  if (Writes(Op.Output) || llvm::any_of(Op.IntrinsicOutputs, Writes))
+    return false;
+  if (Op.PreservesCallerSaved)
+    return true;
+  const uint64_t Reg = C.Layout.Registers[static_cast<size_t>(ArgIndex)];
+  return callPreservesRegisterBytes(C.TheArch, Op.CallPreservedGPRs, Reg,
+                                    static_cast<uint16_t>(C.TRI.PointerSize));
 }
 
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
@@ -78,7 +102,8 @@ bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
       if (!Remaining--)
         return false;
       const auto &Op = B->Ops[I];
-      if (endsCallArgumentSetup(Op, /*RegistersOnly=*/true))
+      if (endsCallArgumentSetup(Op, /*RegistersOnly=*/true) &&
+          !callKeepsArgumentRegister(C, Op, ArgIndex))
         return false;
       if (Op.Output.Kind == MedVar::Reg && Op.Output.Size &&
           C.Layout.registerIndex(Op.Output.RegOff) == ArgIndex &&
@@ -192,7 +217,7 @@ callSetupStackStores(const AbiCallContext &C, CallSetupStackJoins *Joins,
       }
       --Remaining;
       const MedOp &Op = B.Ops[I - 1];
-      if (isAbiRecoveryBarrier(Op) || Op.Opcode == NdOp::ATOMIC_XCHG ||
+      if (endsCallStackSetup(Op) || Op.Opcode == NdOp::ATOMIC_XCHG ||
           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
           Op.MemoryOrdering != NdMemoryOrdering::None) {
         markIncomplete();
@@ -885,9 +910,14 @@ static int peelCopyDefIndex(const MedBlock &Blk, int FromIdx, MedVar &V) {
   return Idx;
 }
 
-std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
-                                       const MedVar &Target) {
-  if (CallIdx <= 0 || Target.isConst())
+static MedVar argRegSourceValue(const MedOp &Op);
+
+std::optional<MedVar>
+vtableCallObject(const MedFunc &Func, const MedBlock &Blk, int CallIdx,
+                 const MedVar &Target, const TargetRegInfo &TRI,
+                 const IntegerArgumentLayout &Layout, BinaryFormat Format,
+                 const MedBlockIdIndex &Blocks, size_t &WorkRemaining) {
+  if (CallIdx <= 0 || Target.isConst() || Layout.Registers.empty())
     return std::nullopt;
   MedVar Slot = Target;
   const int SlotIdx = peelCopyDefIndex(Blk, CallIdx, Slot);
@@ -900,29 +930,113 @@ std::optional<MedVar> vtableCallObject(const MedBlock &Blk, int CallIdx,
   const int AddrIdx = peelCopyDefIndex(Blk, SlotIdx, Addr);
   if (AddrIdx < 0)
     return std::nullopt;
-  const MedOp &Add = Blk.Ops[AddrIdx];
-  if ((Add.Opcode != NdOp::INT_ADD && Add.Opcode != NdOp::INT_OR) ||
-      Add.NumInputs != 2)
-    return std::nullopt;
-  const MedVar *Vtbl = nullptr;
-  uint64_t Off = 0;
-  if (Add.Inputs[1].isConst()) {
-    Off = Add.Inputs[1].ConstVal;
-    Vtbl = &Add.Inputs[0];
-  } else if (Add.Inputs[0].isConst()) {
-    Off = Add.Inputs[0].ConstVal;
-    Vtbl = &Add.Inputs[1];
+  const MedOp &Address = Blk.Ops[AddrIdx];
+  // Slot zero loads directly from the vfptr; it needs no intervening ADD.
+  int VtblIdx = AddrIdx;
+  if ((Address.Opcode == NdOp::INT_ADD || Address.Opcode == NdOp::INT_OR) &&
+      Address.NumInputs == 2) {
+    const MedVar *Vtbl = Address.Inputs[1].isConst()   ? &Address.Inputs[0]
+                         : Address.Inputs[0].isConst() ? &Address.Inputs[1]
+                                                       : nullptr;
+    if (!Vtbl)
+      return std::nullopt;
+    MedVar VtblVal = *Vtbl;
+    VtblIdx = peelCopyDefIndex(Blk, AddrIdx, VtblVal);
   }
-  if (!Vtbl || Off == 0)
-    return std::nullopt;
-  MedVar VtblVal = *Vtbl;
-  const int VtblIdx = peelCopyDefIndex(Blk, AddrIdx, VtblVal);
   if (VtblIdx < 0)
     return std::nullopt;
   const MedOp &VtblLoad = Blk.Ops[VtblIdx];
   if (VtblLoad.Opcode != NdOp::LOAD || VtblLoad.NumInputs < 1)
     return std::nullopt;
-  return VtblLoad.Inputs[0];
+  MedVar Object = VtblLoad.Inputs[0];
+  const uint64_t Register = Layout.Registers.front();
+  if (Object.isConst() || Object.Size != TRI.PointerSize)
+    return std::nullopt;
+  // Local full-width copies do not change the observed pointer. Width-changing
+  // aliases cannot establish the identity of a complete receiver.
+  int ObjectBefore = VtblIdx;
+  for (int Depth = 0;
+       Object.Kind == MedVar::Temp &&
+       Depth < limits::ir::kMedABIPassSupportPeelCopyDefIndexDepthLimit;
+       ++Depth) {
+    const int Idx = defIndexInBlock(Blk, ObjectBefore, Object);
+    if (Idx < 0)
+      break;
+    const MedOp &Def = Blk.Ops[Idx];
+    if (Def.Opcode != NdOp::COPY || Def.NumInputs != 1 ||
+        Def.Inputs[0].Size != Object.Size || Def.Inputs[0].isConst() ||
+        sameAddressValue(Def.Inputs[0], Object))
+      break;
+    Object = Def.Inputs[0];
+    ObjectBefore = Idx;
+  }
+  const auto WritesArgument = [&](const MedVar &V) {
+    return V.Kind == MedVar::Reg && V.Size &&
+           V.RegOff < Register + TRI.PointerSize &&
+           Register < V.RegOff + V.Size;
+  };
+  if ((Object.Kind == MedVar::Reg || Object.Kind == MedVar::Param) &&
+      Object.RegOff == Register) {
+    for (int I = ObjectBefore; I < CallIdx; ++I) {
+      const MedOp &Op = Blk.Ops[I];
+      if (WritesArgument(Op.Output) ||
+          llvm::any_of(Op.IntrinsicOutputs, WritesArgument) ||
+          isAbiRecoveryBarrier(Op) ||
+          callClobbersRegister(Op, Register, TRI.PointerSize, TRI, Format))
+        return std::nullopt;
+    }
+    return Object;
+  }
+  // Copy propagation can replace the vfptr load's register operand with its
+  // temporary source in an earlier block. Require that exact SSA value in the
+  // physical argument register on every incoming path; a single matching
+  // predecessor or a callback-table address is insufficient evidence.
+  llvm::DenseSet<int> Seen;
+  llvm::SmallVector<std::pair<const MedBlock *, int>, 8> Work{{&Blk, CallIdx}};
+  bool FoundWrite = false;
+  while (!Work.empty()) {
+    const auto [Block, Before] = Work.pop_back_val();
+    // The seed scans only the prefix before this call. A loop back to its
+    // block must inspect the complete prior iteration, including the call.
+    if (Before == static_cast<int>(Block->Ops.size()) &&
+        !Seen.insert(Block->Id).second)
+      continue;
+    if (!consumeCallTargetWork(&WorkRemaining))
+      return std::nullopt;
+    bool Matched = false;
+    for (int I = Before - 1; I >= 0; --I) {
+      if (!consumeCallTargetWork(&WorkRemaining))
+        return std::nullopt;
+      const MedOp &Op = Block->Ops[I];
+      if (isAbiRecoveryBarrier(Op) ||
+          callClobbersRegister(Op, Register, TRI.PointerSize, TRI, Format) ||
+          llvm::any_of(Op.IntrinsicOutputs, WritesArgument))
+        return std::nullopt;
+      if (!WritesArgument(Op.Output))
+        continue;
+      if (Op.Output.RegOff != Register || Op.Output.Size != TRI.PointerSize ||
+          !sameAddressValue(argRegSourceValue(Op), Object))
+        return std::nullopt;
+      Matched = FoundWrite = true;
+      break;
+    }
+    if (Matched)
+      continue;
+    if (llvm::any_of(
+            Block->Phis,
+            [&](const PhiNode &Phi) { return WritesArgument(Phi.Output); }) ||
+        Block->Preds.empty() || !Block->ExceptionalPreds.empty() ||
+        Block == &Func.Blocks.front() ||
+        Func.ModuleAnalysisRoots.contains(Block->StartAddr))
+      return std::nullopt;
+    for (const int Id : Block->Preds) {
+      const MedBlock *Pred = Blocks.last(Id);
+      if (!Pred)
+        return std::nullopt;
+      Work.emplace_back(Pred, static_cast<int>(Pred->Ops.size()));
+    }
+  }
+  return FoundWrite ? std::optional<MedVar>(Object) : std::nullopt;
 }
 
 std::optional<int>

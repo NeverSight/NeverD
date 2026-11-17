@@ -374,6 +374,7 @@ void expectSameSelection(const PipelineResult &Kept,
     EXPECT_EQ(Kept.LowFuncs[I].hasCompleteInstructionLift(),
               Cold.LowFuncs[I].hasCompleteInstructionLift());
   EXPECT_EQ(Kept.CallMayWriteGPRs, Cold.CallMayWriteGPRs);
+  EXPECT_EQ(Kept.CallBodyMayWriteGPRs, Cold.CallBodyMayWriteGPRs);
   EXPECT_EQ(Kept.CallEntryReadGPRs, Cold.CallEntryReadGPRs);
   EXPECT_EQ(Kept.CallEntryStackArgs, Cold.CallEntryStackArgs);
   EXPECT_EQ(Kept.CallVariadicFrom, Cold.CallVariadicFrom);
@@ -702,7 +703,7 @@ TEST(PipelineOutcome, AnalysisCacheServesAArch64Selections) {
     EXPECT_EQ(PipelineTestPeer::symbolInventory(Cache), Inventory);
     expectSameSelection(Kept, Cold);
     EXPECT_EQ(Kept.CallEntryArgumentCounts, Cold.CallEntryArgumentCounts);
-    EXPECT_EQ(Kept.CallArgumentSources, Cold.CallArgumentSources);
+    EXPECT_EQ(Kept.callArgumentSources(), Cold.callArgumentSources());
   }
 }
 
@@ -738,6 +739,65 @@ BinaryImage arm32SelectionCacheImage() {
   Image.Symbols.push_back(Symbol::makeFunc(0x2000, 8));
   Image.Segments.push_back(std::move(Text));
   return Image;
+}
+
+TEST(PipelineOutcome, GraphViewsDeferCallEffectsAndOwnTheirInputs) {
+  for (unsigned Count : {1u, 4u}) {
+    ScopedThreadCount Threads(Count);
+    for (unsigned Kind = 0; Kind != 4; ++Kind)
+      for (bool Shared : {false, true}) {
+        SCOPED_TRACE(Count);
+        SCOPED_TRACE(Kind);
+        SCOPED_TRACE(Shared);
+        const BinaryImage Image = Kind < 2    ? selectionCacheImage(Kind != 0)
+                                  : Kind == 2 ? aarch64SelectionCacheImage()
+                                              : arm32SelectionCacheImage();
+        llvm::LLVMContext Context;
+        PipelineOptions Options;
+        Options.OnlyFunctionEntries = {Image.Entry};
+        Options.DeferHighIR = true;
+        auto Eager = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Eager.Success) << Eager.Error;
+
+        auto Cache = std::make_unique<PipelineAnalysisCache>();
+        Options.AnalysisCache = Shared ? Cache.get() : nullptr;
+        Options.DeferMedIR = true;
+        auto Deferred = Pipeline().run(Image, Context, Options);
+        ASSERT_TRUE(Deferred.Success) << Deferred.Error;
+        ASSERT_TRUE(Deferred.MedIRDeferred);
+        EXPECT_TRUE(Deferred.PendingCallEffects);
+        EXPECT_TRUE(Deferred.CallMayWriteGPRs.empty());
+        EXPECT_TRUE(Deferred.MedFuncs.empty());
+        const auto *Low = Deferred.LowFuncs.data();
+
+        // A run borrows its optional cache only until it returns. Resumption
+        // retains its inputs even when that cache has since been destroyed.
+        Cache.reset();
+        Options.AnalysisCache = nullptr;
+        Options.DeferMedIR = false;
+        ASSERT_TRUE(Pipeline().resumeMedIR(Image, Options, Deferred))
+            << Deferred.Error;
+        EXPECT_FALSE(Deferred.PendingCallEffects);
+        EXPECT_FALSE(Deferred.MedIRDeferred);
+        EXPECT_EQ(Deferred.LowFuncs.data(), Low);
+        expectSameSelection(Deferred, Eager);
+        EXPECT_EQ(Deferred.callArgumentSources(), Eager.callArgumentSources());
+        std::string EagerMed, DeferredMed;
+        llvm::raw_string_ostream EagerStream(EagerMed),
+            DeferredStream(DeferredMed);
+        Pipeline::dumpMedIR(Eager.MedFuncs, EagerStream);
+        Pipeline::dumpMedIR(Deferred.MedFuncs, DeferredStream);
+        EXPECT_EQ(DeferredMed, EagerMed);
+        ASSERT_TRUE(Pipeline().resumeHighIR(Image, Options, Eager));
+        ASSERT_TRUE(Pipeline().resumeHighIR(Image, Options, Deferred));
+        std::string EagerHigh, DeferredHigh;
+        llvm::raw_string_ostream EagerHighStream(EagerHigh),
+            DeferredHighStream(DeferredHigh);
+        Pipeline::dumpHighIR(Eager.HighFuncs, EagerHighStream);
+        Pipeline::dumpHighIR(Deferred.HighFuncs, DeferredHighStream);
+        EXPECT_EQ(DeferredHigh, EagerHigh);
+      }
+  }
 }
 
 TEST(PipelineOutcome, AnalysisCacheBindsExactEntryInventories) {
@@ -798,7 +858,7 @@ TEST(PipelineOutcome, AnalysisCacheKeepsUnnamedCallersIndependent) {
         EXPECT_TRUE(Kept.LowFuncs.front().hasCompleteInstructionLift());
         expectSameSelection(Kept, Cold);
         EXPECT_EQ(Kept.CallEntryArgumentCounts, Cold.CallEntryArgumentCounts);
-        EXPECT_EQ(Kept.CallArgumentSources, Cold.CallArgumentSources);
+        EXPECT_EQ(Kept.callArgumentSources(), Cold.callArgumentSources());
       };
       for (va_t Entry : {0x1000, 0x1100, 0x1800, 0x1000, 0x1100})
         Check(Entry);
@@ -1076,6 +1136,7 @@ TEST(PipelineOutcome, ParallelCalleeFrontiersPreserveEveryRegisterSummary) {
   EXPECT_EQ(Parallel.LowFuncs.front().Entry, Image.Entry);
   EXPECT_EQ(Serial.CallMayWriteGPRs.size(), 2 * CalleeCount + 1);
   EXPECT_EQ(Parallel.CallMayWriteGPRs, Serial.CallMayWriteGPRs);
+  EXPECT_EQ(Parallel.CallBodyMayWriteGPRs, Serial.CallBodyMayWriteGPRs);
   EXPECT_EQ(Parallel.CallEntryReadGPRs, Serial.CallEntryReadGPRs);
   EXPECT_EQ(Parallel.CallEntryStackArgs, Serial.CallEntryStackArgs);
   EXPECT_EQ(Parallel.CallVariadicFrom, Serial.CallVariadicFrom);

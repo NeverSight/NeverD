@@ -42,6 +42,7 @@
 #include "llvm/Passes/OptimizationLevel.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -199,6 +200,11 @@ struct PipelineOptions {
   /// (true) or no longer one (false).  Whole-program detection follows them;
   /// a restricted run lifts its OnlyFunctionEntries.
   std::map<va_t, bool> FunctionEdits;
+  /// Function entries the caller already found in the image beyond its
+  /// symbols, as a session's function discovery lists them. The callees a
+  /// run omits are read at them for their call contracts, and the lifts of
+  /// those bodies stop at one another; no run's own boundaries change.
+  std::shared_ptr<const std::set<va_t>> KnownFunctionEntries;
   /// Explicit declarations for source rendering, including LLVM-to-C. Machine
   /// lifting, patching and analysis never consume them as ABI evidence.
   std::map<va_t, SourceFunctionTypeHint> SourceTypeHints;
@@ -375,6 +381,9 @@ struct PipelineResult {
   /// Direct-callee GPR write summaries (see CallRegisterEffects.h), keyed by
   /// callee entry.  Absent entries keep the ABI clobber set.
   SharedValue<std::map<va_t, uint32_t>> CallMayWriteGPRs;
+  /// Original-body GPR writes, without ABI-only or save/restore preservation.
+  /// Used only for scalar image-byte observations; not a call signature.
+  SharedValue<std::map<va_t, uint32_t>> CallBodyMayWriteGPRs;
   /// Scalar register words proved equal at every ordinary callee return.
   SharedValue<std::map<va_t, GPRExitConstants>> CallExitConstants;
   /// Validated register-only leaves, shared with the bounded callee cache.
@@ -389,8 +398,15 @@ struct PipelineResult {
   /// the key of the routine whose summary gives that call its arguments: the
   /// routine the variable starts at (collectPointerVariableCallees), or the
   /// variable itself for another module's routine, whose prototype fixes the
-  /// summary kept under the variable's address.
+  /// summary kept under the variable's address. Shared across runs that read
+  /// the same image inputs; nothing mutates the map after it is built.
   SharedValue<std::map<va_t, va_t>> CallArgumentSources;
+
+  const std::map<va_t, va_t> &callArgumentSources() const {
+    // SharedValue::get() 对空实例返回静态空 map，语义与 fork 版本的
+    // Empty 保护一致：读取方无需判空即可安全访问。
+    return CallArgumentSources.get();
+  }
   /// The bodies recoverModuleCallAbi lifted for the direct callees these
   /// functions leave out, as lifted: another recovery over the same functions
   /// (the native LLVM route of a session) reuses them instead of lifting them
@@ -404,6 +420,9 @@ struct PipelineResult {
   /// runs of the image (PipelineAnalysisCache): one selection's callees are
   /// mostly another's.
   std::shared_ptr<OmittedCalleeMemo> CalleeSignatureMemo;
+  /// The entries omitted callees are read at beside the image's function
+  /// symbols (PipelineOptions::KnownFunctionEntries).
+  std::shared_ptr<const std::set<va_t>> KnownFunctionEntries;
   /// Bytes of the scalar float each prototyped import returns in the vector
   /// return register, keyed by the stub or slot a call names it by.
   SharedValue<std::map<va_t, uint16_t>> CallFloatReturns;
@@ -485,6 +504,11 @@ struct PipelineResult {
   bool HighIRDeferred = false;
   /// LowIR is ready; MedIR and everything after it have not been requested.
   bool MedIRDeferred = false;
+  /// A graph-only view keeps the exact inputs for the call summaries MedIR
+  /// will consume. The callable owns those inputs, not the optional run cache;
+  /// the image and debug context must remain unchanged until resumption.
+  std::function<void(PipelineResult &, PipelineAnalysisCache *)>
+      PendingCallEffects;
   std::vector<sigs::LibraryRecognition> LibraryRecognitions;
   /// Includes analyzed functions with no match, for cheap identity queries.
   std::map<va_t, std::vector<size_t>> LibraryRecognitionsByFunction;
@@ -573,10 +597,9 @@ public:
   /// Solve the call-register summaries of every function of \p Img once, as
   /// a whole-image run solves them, and keep them in Opts.AnalysisCache.
   /// Later selected-function runs of the image's symbol starts read these
-  /// instead of solving their own callees, whose depth and lift bounds leave
-  /// farther calls unread, so those runs can decompile differently than
-  /// before.  Whether the cache holds them: none for an image that is not
-  /// x86-64, without a cache, or past limits::kMaxImageCallSummaryFunctions.
+  /// instead of solving their own complete dependency closure. Neither path
+  /// truncates the call graph by depth or function count. Whether the cache
+  /// holds them: none for an image that is not x86-64 or without a cache.
   /// \p Solved, where given, says whether this call solved them rather than
   /// finding them kept.
   bool prepareCallSummaries(const BinaryImage &Img, const PipelineOptions &Opts,
@@ -613,6 +636,7 @@ public:
   /// Continue a run that deferred MedIR from its LowIR, as the run would
   /// have: MedIR and the shared source analysis, then HighIR unless \p Opts
   /// defers it.  \p Opts are the run's own, apart from the deferrals.
+  /// The original image and debug context must remain alive and unchanged.
   bool resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
                    PipelineResult &Result, DebugContext *Dbg = nullptr);
 
@@ -886,9 +910,14 @@ private:
                   const PipelineOptions &Opts, DebugContext *Dbg,
                   PipelineResult &Result);
 
+  /// Finish the call summaries a graph-only run left for MedIR. Candidate
+  /// cleanup also calls this before changing the bodies those summaries read.
+  static void completeCallEffects(const PipelineOptions &Opts,
+                                  PipelineResult &Result);
+
   /// Phase 2: convert LowIR -> MedIR in parallel.
   void buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
-                  PipelineResult &Result);
+                  PipelineResult &Result, DebugContext *Dbg);
 
   void recognizeLibraries(const BinaryImage &Img, const PipelineOptions &Opts,
                           PipelineResult &Result, DebugContext *Dbg);

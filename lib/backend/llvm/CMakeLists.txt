@@ -138,6 +138,7 @@ add_neverd_component_library(NeverDBackendLLVM
   emit/MedLLVMSwitch.cpp
   emit/MedLLVMSwitchIndex.cpp
   resolve/MedLLVMAddrResolve.cpp
+  resolve/MedLLVMControlFlow.cpp
   resolve/MedLLVMCodePtrResolve.cpp
   resolve/MedLLVMFrameResolve.cpp
   resolve/MedLLVMVarAccess.cpp

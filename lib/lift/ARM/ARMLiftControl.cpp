@@ -176,13 +176,13 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
     const auto Source = static_cast<arm_reg>(ARM.operands[1].reg);
     if (Source == ARM_REG_SPSR) {
       S.emitIntrinsic(Intrinsic::ArmMrs, operandWrite(ARM.operands[0]),
-                      {NdVar::cst(ArmMrsSpsr, 4)});
+                      {NdVar::scalar(ArmMrsSpsr, 4)});
       break;
     }
     if (Source != ARM_REG_APSR && Source != ARM_REG_CPSR)
       return false;
     NdVar Machine = S.makeTemp(4);
-    S.emitIntrinsic(Intrinsic::ArmMrs, Machine, {NdVar::cst(ArmMrsApsr, 4)});
+    S.emitIntrinsic(Intrinsic::ArmMrs, Machine, {NdVar::scalar(ArmMrsApsr, 4)});
     emitMrsApsr(S, operandWrite(ARM.operands[0]), Machine);
     break;
   }
@@ -200,7 +200,7 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
       return false;
     const NdVar Value = operandRead(S, ARM.operands[1]);
     if (*Field & ArmMsrSpsr) {
-      S.emitVoidIntrinsic(Intrinsic::ArmMsr, {NdVar::cst(*Field, 4), Value});
+      S.emitVoidIntrinsic(Intrinsic::ArmMsr, {NdVar::scalar(*Field, 4), Value});
       break;
     }
     if (*Field & 8)
@@ -208,13 +208,14 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
     if (*Field & 4)
       emitMsrGe(S, Value);
     if (const uint64_t Machine = *Field & 0xB)
-      S.emitVoidIntrinsic(Intrinsic::ArmMsr, {NdVar::cst(Machine, 4), Value});
+      S.emitVoidIntrinsic(Intrinsic::ArmMsr,
+                          {NdVar::scalar(Machine, 4), Value});
     break;
   }
   // A CPS changes the interrupt masks or the mode, which the machine keeps.
   case ARM_INS_CPS:
     if (const std::optional<uint64_t> Field = cpsField(ARM)) {
-      S.emitVoidIntrinsic(Intrinsic::ArmCps, {NdVar::cst(*Field, 4)});
+      S.emitVoidIntrinsic(Intrinsic::ArmCps, {NdVar::scalar(*Field, 4)});
       break;
     }
     return false;
@@ -270,9 +271,9 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
       return false;
     if (Insn->id == ARM_INS_MRC)
       S.emitIntrinsic(Intrinsic::ArmMrc, operandWrite(ARM.operands[2]),
-                      {NdVar::cst(*Field, 4)});
+                      {NdVar::scalar(*Field, 4)});
     else
-      S.emitVoidIntrinsic(Intrinsic::ArmMcr, {NdVar::cst(*Field, 4),
+      S.emitVoidIntrinsic(Intrinsic::ArmMcr, {NdVar::scalar(*Field, 4),
                                               operandRead(S, ARM.operands[2])});
     break;
   }
@@ -290,13 +291,14 @@ bool ARMLifter::liftControl(LiftState &S, const cs_insn *Insn,
       S.emit(
           NdOp::CONCAT, Value,
           {operandRead(S, ARM.operands[3]), operandRead(S, ARM.operands[2])});
-      S.emitVoidIntrinsic(Intrinsic::ArmMcrr, {NdVar::cst(*Field, 4), Value});
+      S.emitVoidIntrinsic(Intrinsic::ArmMcrr,
+                          {NdVar::scalar(*Field, 4), Value});
       break;
     }
     // An MRRC that writes one register twice is UNPREDICTABLE.
     if (ARM.operands[2].reg == ARM.operands[3].reg)
       return false;
-    S.emitIntrinsic(Intrinsic::ArmMrrc, Value, {NdVar::cst(*Field, 4)});
+    S.emitIntrinsic(Intrinsic::ArmMrrc, Value, {NdVar::scalar(*Field, 4)});
     S.emit(NdOp::SUBBYTES, operandWrite(ARM.operands[2]),
            {Value, NdVar::cst(0, 4)});
     S.emit(NdOp::SUBBYTES, operandWrite(ARM.operands[3]),

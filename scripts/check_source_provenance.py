@@ -296,6 +296,15 @@ class Allowance:
 
 ALLOWED: tuple[Allowance, ...] = (
     Allowance(
+        path="tools/neverd-agent/tests/MemoryTests.cpp",
+        rule="private-path",
+        reason=(
+            "Synthetic Windows and Unix home paths test memory redaction, "
+            "including adjacent CJK text. They are fixture inputs without "
+            "a real developer identity; the assertions require their removal."
+        ),
+    ),
+    Allowance(
         path="unittests/fixtures/x86/3dnow-context/README.md",
         rule="provenance-phrase",
         reason=(

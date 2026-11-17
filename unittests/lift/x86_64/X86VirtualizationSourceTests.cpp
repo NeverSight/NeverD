@@ -184,7 +184,7 @@ void sourceRoutes(BinaryImage &Image, bool NoOpt, va_t Address,
     (void)Pipeline::optimizeOrPromoteModule(*Module, &Sources);
   ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
   CSourceMap LLVMMap;
-  LLVMMap.LLVMSources = &Sources;
+  Options.LLVMSources = &Sources;
   Options.SourceMap = &LLVMMap;
   std::string LLVM;
   llvm::raw_string_ostream LLVMOS(LLVM);
@@ -5613,8 +5613,8 @@ void saveX86SourceArtifact(llvm::StringRef Name, llvm::StringRef Data) {
 #include "../x86/X86BoundSourceTests.inc"
 #include "../x86/X86HresetSourceTests.inc"
 #include "../x86/X86PortableSystemSourceTests.inc"
-#include "../x86/X86ScalarSystemSourceTests.inc"
 #include "../x86/X86SVMSourceTests.inc"
+#include "../x86/X86ScalarSystemSourceTests.inc"
 #include "../x86/X86VMXSourceTests.inc"
 #include "X86FlagsSourceTests.inc"
 #include "X86SegmentMoveSourceTests.inc"

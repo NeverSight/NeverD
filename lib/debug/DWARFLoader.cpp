@@ -13,9 +13,13 @@
 
 #include "neverd/debug/CompressedSections.h"
 #include "neverd/debug/Limits.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/ARM/ARMRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/support/FilePath.h"
+#include "neverd/types/DWARFCallingConvention.h"
 
 #define DEBUG_TYPE "neverd-dwarf-loader"
 #include "neverd/support/Parallel.h"
@@ -271,14 +275,14 @@ DecodedLocationExpression decodeLocationExpressionShape(
     } else {
       // A register location holds the value itself and therefore cannot
       // overlap a memory-backed stack object.
-      finish(Base::NonStack, 0);
+      finish(Base::Register, Register);
     }
   } else if (Opcode == llvm::dwarf::DW_OP_regx && Operands.size() == 1) {
     if (IsFrameBase) {
       if (const auto Coordinate = coordinateForRegister(Operands[0]))
         finish(*Coordinate, 0);
     } else {
-      finish(Base::NonStack, 0);
+      finish(Base::Register, Operands[0]);
     }
   } else if (!IsFrameBase && Opcode == llvm::dwarf::DW_OP_addr &&
              Operands.size() == 1) {
@@ -334,10 +338,24 @@ struct DWARFDebugContext::Impl {
   struct FunctionInfo {
     std::vector<AddressRange> Ranges;
     std::vector<Location> FrameBases;
-    std::vector<LocalObject> Objects;
+    /// The subprogram DIE, parsed again when a decompile asks for its locals.
+    /// Keeping every function's locations resident is a second copy of the
+    /// debug line and location lists.
+    uint64_t LocalDieOffset = 0;
+    unsigned LocalUnitIndex = 0;
+    bool HasLocalDie = false;
   };
 
   std::map<va_t, FunctionInfo> Functions;
+  /// Locals of the one function a decompile is reading. The unit that owns
+  /// the next function replaces both the cache and the parsed unit.
+  mutable std::unique_ptr<llvm::DWARFContext> LocalCtx;
+  mutable llvm::DWARFUnit *LocalUnit = nullptr;
+  mutable unsigned LocalUnitIndex = 0;
+  mutable bool LocalUnitReady = false;
+  mutable va_t CachedLocalEntry = 0;
+  mutable bool CachedLocalValid = false;
+  mutable std::vector<LocalObject> CachedLocals;
   /// Each range of each of Functions, by its start, and the greatest end of
   /// the ranges up to each, so that the functions whose ranges contain an
   /// address are found without reading every function (functionsContaining).
@@ -355,6 +373,10 @@ struct DWARFDebugContext::Impl {
   llvm::SmallVector<va_t, 4> functionsContaining(va_t PC) const;
   dwarf_loader_detail::SubprogramExtentRegistry SubprogramExtents;
   std::vector<DataObjectSym> DataObjects;
+  /// Indexes of DataObjects in address order. Equal addresses keep the
+  /// order they were parsed, which resolveDataObject walks.
+  std::vector<size_t> DataObjectByAddress;
+  void indexDataObjects();
 
   std::optional<unsigned> DwarfStackPointerReg;
   std::optional<unsigned> DwarfFramePointerReg;
@@ -370,7 +392,7 @@ struct DWARFDebugContext::Impl {
     llvm::DWARFDie TypeDie;
   };
 
-  TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0);
+  TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0) const;
   std::optional<AuthenticatedRecordParameter>
   recordParameter(llvm::DWARFDie Die, va_t Entry) const;
   /// Where each formal parameter of the i386 function \p Die enters it at
@@ -395,11 +417,19 @@ struct DWARFDebugContext::Impl {
                                         bool IsFrameBase) const;
   VariableExtentLookup lookupLocal(va_t FuncAddr, va_t UsePC, int64_t Offset,
                                    StackCoordinate Coordinate) const;
+  /// The subprogram's locals. The caller holds ContextMutex.
+  const std::vector<LocalObject> &localsFor(va_t Entry,
+                                            const FunctionInfo &Function) const;
   void parseCompileUnits(const llvm::object::ObjectFile &Object);
   void parseUnits(size_t Begin, size_t End);
-  void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit);
-  void parseLocalVariable(llvm::DWARFDie Die, va_t FuncAddr, bool IsParam,
-                          llvm::ArrayRef<AddressRange> ScopeRanges);
+  void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit,
+                     unsigned UnitIndex);
+  void parseFunctionLocals(llvm::DWARFDie Die,
+                           llvm::ArrayRef<AddressRange> ScopeRanges,
+                           std::vector<LocalObject> &Objects) const;
+  void parseLocalVariable(llvm::DWARFDie Die, bool IsParam,
+                          llvm::ArrayRef<AddressRange> ScopeRanges,
+                          std::vector<LocalObject> &Objects) const;
   void parseGlobalVariable(llvm::DWARFDie Die, llvm::DWARFUnit *Unit);
 };
 
@@ -1150,6 +1180,8 @@ std::optional<ValueShape> layOut(llvm::DWARFDie Type, uint64_t Base, int Depth,
   case llvm::dwarf::DW_TAG_union_type:
     return layOutRecord(Type, Base, Depth, Layout);
   case llvm::dwarf::DW_TAG_array_type: {
+    if (constantAttribute(Type, llvm::dwarf::DW_AT_GNU_vector).value_or(0))
+      break; // Vector lanes are not independent scalar ABI members.
     const std::optional<uint64_t> Count = arrayElements(Type);
     ValueLayout Element;
     const std::optional<ValueShape> Shape =
@@ -1270,7 +1302,7 @@ bool platformConvention(llvm::DWARFDie Die) {
 } // namespace
 
 TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
-                                                  int Depth) {
+                                                  int Depth) const {
   if (!Die.isValid() ||
       Depth > ::neverd::limits::debug::
                   kDWARFLoaderDWARFDebugContextImplConvertDwarfTypeDepthLimit)
@@ -1335,10 +1367,14 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
                          : NdType::makeVoid();
   }
   case llvm::dwarf::DW_TAG_array_type: {
+    const bool Vector =
+        constantAttribute(Die, llvm::dwarf::DW_AT_GNU_vector).value_or(0);
     auto ElemDie =
         Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
     auto Elem = ElemDie.isValid() ? convertDwarfType(ElemDie, Depth + 1)
                                   : NdType::makeInt(1, false);
+    if (!Elem)
+      return nullptr;
     uint32_t Count = 0;
     for (auto Child : Die.children()) {
       if (Child.getTag() == llvm::dwarf::DW_TAG_subrange_type) {
@@ -1353,12 +1389,34 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
               1;
       }
     }
-    auto T = std::make_shared<NdType>();
-    T->Kind = NdTypeKind::Array;
-    T->ArrayCount = Count;
-    T->ElemType = Elem;
-    T->Size = static_cast<uint16_t>(Count * Elem->Size);
-    return T;
+    if (Vector) {
+      const auto Lane = unqualifiedType(ElemDie);
+      if (!Lane.isValid())
+        return nullptr;
+      const auto Encoding =
+          constantAttribute(Lane, llvm::dwarf::DW_AT_encoding);
+      if (Lane.getTag() != llvm::dwarf::DW_TAG_base_type || !Encoding ||
+          (*Encoding != llvm::dwarf::DW_ATE_signed &&
+           *Encoding != llvm::dwarf::DW_ATE_unsigned &&
+           *Encoding != llvm::dwarf::DW_ATE_signed_char &&
+           *Encoding != llvm::dwarf::DW_ATE_unsigned_char &&
+           *Encoding != llvm::dwarf::DW_ATE_float))
+        return nullptr;
+      const auto Elements = arrayElements(Die);
+      if (!Elements || !*Elements || *Elements > UINT32_MAX ||
+          !ElemDie.isValid() ||
+          (Elem->Kind != NdTypeKind::Int && Elem->Kind != NdTypeKind::Float) ||
+          !llvm::isPowerOf2_64(*Elements) || !Elem->Size ||
+          *Elements > UINT16_MAX / Elem->Size)
+        return nullptr;
+      Count = static_cast<uint32_t>(*Elements);
+      if (auto Bytes = constantAttribute(Die, llvm::dwarf::DW_AT_byte_size);
+          Bytes && *Bytes != uint64_t(Count) * Elem->Size)
+        return nullptr;
+    }
+    const auto Bytes = static_cast<uint16_t>(Count * Elem->Size);
+    return Vector ? NdType::makeVector(Elem, Count, Bytes)
+                  : NdType::makeArray(Elem, Count, Bytes);
   }
   case llvm::dwarf::DW_TAG_structure_type:
   case llvm::dwarf::DW_TAG_class_type:
@@ -1375,19 +1433,26 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
     return T;
   }
   case llvm::dwarf::DW_TAG_subroutine_type: {
-    auto T = std::make_shared<NdType>();
-    T->Kind = NdTypeKind::Func;
-    T->Size = 8;
-    auto RetDie = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-    T->RetType = RetDie.isValid() ? convertDwarfType(RetDie, Depth + 1)
-                                  : NdType::makeVoid();
+    const auto Return = resolveDeclaredType(Die);
+    auto T = NdType::makeFunc(
+        Return.TheStatus == DeclaredTypeResolution::Status::Found
+            ? convertDwarfType(Return.TypeDie, Depth + 1)
+        : Return.TheStatus == DeclaredTypeResolution::Status::Absent
+            ? NdType::makeVoid()
+            : nullptr);
+    if (auto Convention = Die.find(llvm::dwarf::DW_AT_calling_convention))
+      T->FunctionConvention = types::dwarfCallingConvention(
+          Convention->getAsUnsignedConstant().value_or(0));
     for (auto Child : Die.children()) {
+      if (Child.getTag() == llvm::dwarf::DW_TAG_unspecified_parameters) {
+        T->FunctionVariadic = true;
+        continue;
+      }
       if (Child.getTag() == llvm::dwarf::DW_TAG_formal_parameter) {
-        auto ParamDie =
-            Child.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
+        auto ParamDie = declaredTypeDie(Child);
         T->ParamTypes.push_back(ParamDie.isValid()
                                     ? convertDwarfType(ParamDie, Depth + 1)
-                                    : NdType::makeInt(4));
+                                    : nullptr);
       }
     }
     return T;
@@ -1673,11 +1738,31 @@ bool containsPC(va_t PC, llvm::ArrayRef<std::pair<va_t, va_t>> AddressRanges) {
                      });
 }
 
+std::optional<uint64_t> dwarfIntegerRegister(llvm::Triple::ArchType Arch,
+                                             uint64_t Number) {
+  if (Arch == llvm::Triple::aarch64 && Number <= 30)
+    return a64reg::X0 + Number * (a64reg::X1 - a64reg::X0);
+  if ((Arch == llvm::Triple::arm || Arch == llvm::Triple::thumb) && Number < 16)
+    return armreg::R0 + Number * (armreg::R1 - armreg::R0);
+  if (Arch == llvm::Triple::x86_64) {
+    constexpr uint64_t Registers[] = {
+        x86reg::RAX, x86reg::RDX, x86reg::RCX, x86reg::RBX,
+        x86reg::RSI, x86reg::RDI, x86reg::RBP, x86reg::RSP,
+        x86reg::R8,  x86reg::R9,  x86reg::R10, x86reg::R11,
+        x86reg::R12, x86reg::R13, x86reg::R14, x86reg::R15};
+    if (Number < std::size(Registers))
+      return Registers[Number];
+  }
+  if (Arch == llvm::Triple::x86 && Number < 8)
+    return x86reg::generalReg(Number);
+  return std::nullopt;
+}
+
 } // namespace
 
 void DWARFDebugContext::Impl::parseLocalVariable(
-    llvm::DWARFDie Die, va_t FuncAddr, bool IsParam,
-    llvm::ArrayRef<AddressRange> ScopeRanges) {
+    llvm::DWARFDie Die, bool IsParam, llvm::ArrayRef<AddressRange> ScopeRanges,
+    std::vector<LocalObject> &Objects) const {
   auto TypeDie = declaredTypeDie(Die);
   TypeRef Type =
       TypeDie.isValid() ? convertDwarfType(TypeDie) : NdType::makeInt(4);
@@ -1693,7 +1778,7 @@ void DWARFDebugContext::Impl::parseLocalVariable(
   Object.Locations = decodeLocations(Die, llvm::dwarf::DW_AT_location,
                                      Die.getDwarfUnit(), false);
   if (!Object.Locations.empty())
-    Functions[FuncAddr].Objects.push_back(std::move(Object));
+    Objects.push_back(std::move(Object));
 }
 
 void DWARFDebugContext::Impl::parseGlobalVariable(llvm::DWARFDie Die,
@@ -1749,11 +1834,66 @@ void DWARFDebugContext::Impl::parseGlobalVariable(llvm::DWARFDie Die,
   Object.Addr = *Address;
   Object.Size = *Size;
   Object.IsBuffer = Type->Kind == NdTypeKind::Array;
+  if (TypeDie.isValid())
+    Object.Type = std::move(Type);
   DataObjects.push_back(std::move(Object));
 }
 
+void DWARFDebugContext::Impl::parseFunctionLocals(
+    llvm::DWARFDie Die, llvm::ArrayRef<AddressRange> ScopeRanges,
+    std::vector<LocalObject> &Objects) const {
+  std::function<void(llvm::DWARFDie, const std::vector<AddressRange> &)> Walk =
+      [&](llvm::DWARFDie Scope, const std::vector<AddressRange> &Ranges) {
+        for (llvm::DWARFDie Child : Scope.children()) {
+          const auto Tag = Child.getTag();
+          if (Tag == llvm::dwarf::DW_TAG_variable ||
+              Tag == llvm::dwarf::DW_TAG_formal_parameter) {
+            parseLocalVariable(Child,
+                               Tag == llvm::dwarf::DW_TAG_formal_parameter,
+                               Ranges, Objects);
+            continue;
+          }
+          if (Tag != llvm::dwarf::DW_TAG_lexical_block &&
+              Tag != llvm::dwarf::DW_TAG_inlined_subroutine)
+            continue;
+
+          std::vector<AddressRange> ChildRanges = Ranges;
+          llvm::Expected<llvm::DWARFAddressRangesVector> RawChildRanges =
+              Child.getAddressRanges();
+          if (!RawChildRanges) {
+            llvm::consumeError(RawChildRanges.takeError());
+            LocalObject Poison;
+            Poison.Variable.Type = NdType::makeInt(1, false);
+            Poison.ScopeRanges = Ranges;
+            Poison.Locations.push_back(
+                Location{std::nullopt, StackCoordinate::Malformed, 0});
+            Objects.push_back(std::move(Poison));
+            continue;
+          }
+          if (!RawChildRanges->empty()) {
+            ChildRanges.clear();
+            for (const llvm::DWARFAddressRange &ChildRange : *RawChildRanges) {
+              if (!ChildRange.valid() || ChildRange.LowPC >= ChildRange.HighPC)
+                continue;
+              for (const AddressRange &ParentRange : Ranges) {
+                const va_t Low = std::max(ChildRange.LowPC, ParentRange.first);
+                const va_t High =
+                    std::min(ChildRange.HighPC, ParentRange.second);
+                if (Low < High)
+                  ChildRanges.emplace_back(Low, High);
+              }
+            }
+          }
+          if (!ChildRanges.empty())
+            Walk(Child, ChildRanges);
+        }
+      };
+  Walk(Die, std::vector<AddressRange>(ScopeRanges.begin(), ScopeRanges.end()));
+}
+
 void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
-                                            llvm::DWARFUnit *Unit) {
+                                            llvm::DWARFUnit *Unit,
+                                            unsigned UnitIndex) {
   llvm::Expected<llvm::DWARFAddressRangesVector> DwarfRanges =
       Die.getAddressRanges();
   if (!DwarfRanges) {
@@ -1820,6 +1960,10 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
   }
   std::vector<AuthenticatedRecordParameter> EntryRecords;
   for (llvm::DWARFDie Child : Die.children()) {
+    if (Child.getTag() == llvm::dwarf::DW_TAG_unspecified_parameters) {
+      Sym.IsVariadic = true;
+      continue;
+    }
     if (Child.getTag() != llvm::dwarf::DW_TAG_formal_parameter)
       continue;
     if (auto Record = recordParameter(Child, Addr))
@@ -1828,8 +1972,7 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     if (const char *RawName = Child.getName(llvm::DINameKind::ShortName))
       Name = RawName;
     auto ParamDie = declaredTypeDie(Child);
-    TypeRef Type =
-        ParamDie.isValid() ? convertDwarfType(ParamDie) : NdType::makeInt(4);
+    TypeRef Type = ParamDie.isValid() ? convertDwarfType(ParamDie) : nullptr;
     if (ParamDie.isValid() && Type)
       describeRecordPassing(ParamDie, *Type);
     Sym.Params.emplace_back(std::move(Name), std::move(Type));
@@ -1843,54 +1986,9 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
   Info.Ranges = Ranges;
   Info.FrameBases =
       decodeLocations(Die, llvm::dwarf::DW_AT_frame_base, Unit, true);
-
-  std::function<void(llvm::DWARFDie, const std::vector<AddressRange> &)> Walk =
-      [&](llvm::DWARFDie Scope, const std::vector<AddressRange> &ScopeRanges) {
-        for (llvm::DWARFDie Child : Scope.children()) {
-          const auto Tag = Child.getTag();
-          if (Tag == llvm::dwarf::DW_TAG_variable ||
-              Tag == llvm::dwarf::DW_TAG_formal_parameter) {
-            parseLocalVariable(Child, Addr,
-                               Tag == llvm::dwarf::DW_TAG_formal_parameter,
-                               ScopeRanges);
-            continue;
-          }
-          if (Tag != llvm::dwarf::DW_TAG_lexical_block &&
-              Tag != llvm::dwarf::DW_TAG_inlined_subroutine)
-            continue;
-
-          std::vector<AddressRange> ChildRanges = ScopeRanges;
-          llvm::Expected<llvm::DWARFAddressRangesVector> RawChildRanges =
-              Child.getAddressRanges();
-          if (!RawChildRanges) {
-            llvm::consumeError(RawChildRanges.takeError());
-            LocalObject Poison;
-            Poison.Variable.Type = NdType::makeInt(1, false);
-            Poison.ScopeRanges = ScopeRanges;
-            Poison.Locations.push_back(
-                Location{std::nullopt, StackCoordinate::Malformed, 0});
-            Info.Objects.push_back(std::move(Poison));
-            continue;
-          }
-          if (!RawChildRanges->empty()) {
-            ChildRanges.clear();
-            for (const llvm::DWARFAddressRange &ChildRange : *RawChildRanges) {
-              if (!ChildRange.valid() || ChildRange.LowPC >= ChildRange.HighPC)
-                continue;
-              for (const AddressRange &ParentRange : ScopeRanges) {
-                const va_t Low = std::max(ChildRange.LowPC, ParentRange.first);
-                const va_t High =
-                    std::min(ChildRange.HighPC, ParentRange.second);
-                if (Low < High)
-                  ChildRanges.emplace_back(Low, High);
-              }
-            }
-          }
-          if (!ChildRanges.empty())
-            Walk(Child, ChildRanges);
-        }
-      };
-  Walk(Die, Ranges);
+  Info.LocalDieOffset = Die.getOffset();
+  Info.LocalUnitIndex = UnitIndex;
+  Info.HasLocalDie = true;
 
   SubprogramExtents.insert(Addr, Ranges);
   ReturnValueStates[Addr] = ReturnState;
@@ -1908,12 +2006,13 @@ void DWARFDebugContext::Impl::parseUnits(size_t Begin, size_t End) {
     auto Root = CU->getUnitDIE(false);
     if (!Root.isValid())
       continue;
+    const unsigned UnitIndex = static_cast<unsigned>(Index - 1);
 
     std::function<void(llvm::DWARFDie)> Walk = [&](llvm::DWARFDie Die) {
       if (!Die.isValid())
         return;
       if (Die.getTag() == llvm::dwarf::DW_TAG_subprogram) {
-        parseFunction(Die, CU.get());
+        parseFunction(Die, CU.get(), UnitIndex);
         return;
       }
       if (Die.getTag() == llvm::dwarf::DW_TAG_variable)
@@ -2013,6 +2112,77 @@ void DWARFDebugContext::Impl::parseCompileUnits(
               return A.Addr < B.Addr;
             });
   indexFunctionRanges();
+  indexDataObjects();
+  // The units parsed above keep every DIE. Signatures and frame bases no
+  // longer reference them, so the next query starts from the mapped file.
+  if (auto Fresh = llvm::DWARFContext::create(InputObject))
+    DwarfCtx = std::move(Fresh);
+}
+
+const std::vector<DWARFDebugContext::Impl::LocalObject> &
+DWARFDebugContext::Impl::localsFor(va_t Entry,
+                                   const FunctionInfo &Function) const {
+  if (CachedLocalValid && CachedLocalEntry == Entry)
+    return CachedLocals;
+  CachedLocals.clear();
+  CachedLocalEntry = Entry;
+  CachedLocalValid = true;
+  if (!Function.HasLocalDie || !Object)
+    return CachedLocals;
+  if (!LocalUnitReady || LocalUnitIndex != Function.LocalUnitIndex ||
+      !LocalCtx || !LocalUnit) {
+    LocalCtx = llvm::DWARFContext::create(*Object);
+    LocalUnit = nullptr;
+    LocalUnitReady = false;
+    if (!LocalCtx)
+      return CachedLocals;
+    unsigned Seen = 0;
+    for (auto &CU : LocalCtx->compile_units()) {
+      if (Seen++ != Function.LocalUnitIndex)
+        continue;
+      LocalUnit = CU.get();
+      LocalUnitIndex = Function.LocalUnitIndex;
+      LocalUnitReady = true;
+      break;
+    }
+  }
+  if (!LocalUnit)
+    return CachedLocals;
+  const llvm::DWARFDie Die =
+      LocalUnit->getDIEForOffset(Function.LocalDieOffset);
+  if (!Die.isValid())
+    return CachedLocals;
+  parseFunctionLocals(Die, Function.Ranges, CachedLocals);
+  return CachedLocals;
+}
+
+void DWARFDebugContext::Impl::indexDataObjects() {
+  DataObjectByAddress.resize(DataObjects.size());
+  for (size_t Index = 0; Index < DataObjects.size(); ++Index)
+    DataObjectByAddress[Index] = Index;
+  std::stable_sort(DataObjectByAddress.begin(), DataObjectByAddress.end(),
+                   [&](size_t Left, size_t Right) {
+                     return DataObjects[Left].Addr < DataObjects[Right].Addr;
+                   });
+  // Duplicate declarations may name one storage object. Agree once while
+  // indexing, so every later name/type lookup sees the same evidence.
+  for (size_t Begin = 0, End; Begin < DataObjectByAddress.size(); Begin = End) {
+    End = Begin + 1;
+    const auto &First = DataObjects[DataObjectByAddress[Begin]];
+    TypeRef Type = First.Type;
+    bool Conflict = false;
+    while (End < DataObjectByAddress.size() &&
+           DataObjects[DataObjectByAddress[End]].Addr == First.Addr) {
+      const TypeRef &Other = DataObjects[DataObjectByAddress[End]].Type;
+      if (Type && Other && !equalSourceTypes(Type, Other))
+        Conflict = true;
+      else if (!Type)
+        Type = Other;
+      ++End;
+    }
+    for (size_t I = Begin; I < End; ++I)
+      DataObjects[DataObjectByAddress[I]].Type = Conflict ? nullptr : Type;
+  }
 }
 
 void DWARFDebugContext::Impl::indexFunctionRanges() {
@@ -2055,7 +2225,9 @@ DWARFDebugContext::Impl::functionsContaining(va_t PC) const {
 VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
     va_t FuncAddr, va_t UsePC, int64_t Offset,
     StackCoordinate RequestedCoordinate) const {
+  std::lock_guard<std::mutex> Guard(ContextMutex);
   const FunctionInfo *Function = nullptr;
+  va_t LocalEntry = FuncAddr;
   if (auto It = Functions.find(FuncAddr); It != Functions.end()) {
     if (SubprogramExtents.isAmbiguous(It->first))
       return VariableExtentLookup::ambiguous();
@@ -2067,6 +2239,7 @@ VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
       if (Function)
         return VariableExtentLookup::ambiguous();
       Function = &Functions.at(Entry);
+      LocalEntry = Entry;
     }
   }
   if (!Function)
@@ -2111,8 +2284,21 @@ VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
     int64_t End = 0;
   };
   std::vector<ResolvedObject> Objects;
-  for (const LocalObject &Object : Function->Objects) {
+  std::optional<VariableSym> RegisterVariable;
+  for (const LocalObject &Object : localsFor(LocalEntry, *Function)) {
     if (!containsPC(UsePC, Object.ScopeRanges))
+      continue;
+    // An entry-value expression, stack object or register fragment is not
+    // a whole live-register declaration. Its unsupported stack-coordinate
+    // shape must not poison an unrelated register's exact declaration.
+    if (RequestedCoordinate == StackCoordinate::Register &&
+        llvm::none_of(Object.Locations, [&](const Location &L) {
+          return L.Coordinate == StackCoordinate::Register &&
+                 dwarfIntegerRegister(MachineArch, L.Offset) ==
+                     uint64_t(Offset) &&
+                 (!L.Range ||
+                  (L.Range->first <= UsePC && UsePC < L.Range->second));
+        }))
       continue;
 
     bool Ambiguous = false;
@@ -2126,12 +2312,23 @@ VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
 
     StackCoordinate Coordinate = SelectedLocation->Coordinate;
     int64_t Base = SelectedLocation->Offset;
+    if (RequestedCoordinate == StackCoordinate::Register) {
+      if (Coordinate != StackCoordinate::Register ||
+          dwarfIntegerRegister(MachineArch, Base) != uint64_t(Offset))
+        continue;
+      if (RegisterVariable &&
+          !equalSourceTypes(RegisterVariable->Type, Object.Variable.Type))
+        return VariableExtentLookup::ambiguous();
+      RegisterVariable = Object.Variable;
+      continue;
+    }
     if (Coordinate == StackCoordinate::FrameBase) {
       std::optional<Location> FrameBase =
           selectLocation(Function->FrameBases, Ambiguous);
       int64_t AbsoluteBase = 0;
       if (Ambiguous || !FrameBase ||
           FrameBase->Coordinate == StackCoordinate::NonStack ||
+          FrameBase->Coordinate == StackCoordinate::Register ||
           FrameBase->Coordinate == StackCoordinate::FrameBase ||
           FrameBase->Coordinate == StackCoordinate::Malformed ||
           llvm::AddOverflow(FrameBase->Offset, Base, AbsoluteBase))
@@ -2157,6 +2354,11 @@ VariableExtentLookup DWARFDebugContext::Impl::lookupLocal(
     Resolved.End = End;
     Objects.push_back(std::move(Resolved));
   }
+
+  if (RequestedCoordinate == StackCoordinate::Register)
+    return RegisterVariable
+               ? VariableExtentLookup::unique(std::move(*RegisterVariable))
+               : VariableExtentLookup::notFound();
 
   std::vector<const ResolvedObject *> Candidates;
   for (const ResolvedObject &Object : Objects)
@@ -2256,6 +2458,16 @@ DWARFDebugContext::resolveFramePointerVariableAt(va_t FuncAddr, va_t UsePC,
                             Impl::StackCoordinate::FramePointer);
 }
 
+VariableExtentLookup
+DWARFDebugContext::resolveRegisterVariableAt(va_t FuncAddr, va_t UsePC,
+                                             uint64_t Register) const {
+  if (!PImpl || !PImpl->Loaded ||
+      Register > uint64_t(std::numeric_limits<int64_t>::max()))
+    return VariableExtentLookup::notFound();
+  return PImpl->lookupLocal(FuncAddr, UsePC, int64_t(Register),
+                            Impl::StackCoordinate::Register);
+}
+
 std::optional<TypeSym> DWARFDebugContext::resolveType(uint64_t) const {
   return std::nullopt;
 }
@@ -2283,7 +2495,12 @@ llvm::Error DWARFDebugContext::withDWARFContext(
     return llvm::createStringError(llvm::inconvertibleErrorCode(),
                                    "no DWARF was read");
   std::lock_guard<std::mutex> Guard(PImpl->ContextMutex);
-  return Use(*PImpl->DwarfCtx);
+  // A whole-unit walk populates every lazy DIE cache. Its consumer keeps
+  // owned facts, so release that reader when the walk ends rather than
+  // retaining the full debug graph beside the imported type library. The
+  // line and local-variable query readers keep their independent caches.
+  auto Reader = llvm::DWARFContext::create(*PImpl->Object);
+  return Use(*Reader);
 }
 
 std::vector<FunctionSym> DWARFDebugContext::allFunctions() const {
@@ -2296,6 +2513,43 @@ std::vector<DataObjectSym> DWARFDebugContext::allDataObjects() const {
   if (!PImpl || !PImpl->Loaded)
     return {};
   return PImpl->DataObjects;
+}
+
+std::optional<DataObjectSym>
+DWARFDebugContext::resolveDataObject(va_t Addr) const {
+  if (!PImpl || !PImpl->Loaded)
+    return std::nullopt;
+  const std::vector<DataObjectSym> &Objects = PImpl->DataObjects;
+  const std::vector<size_t> &Order = PImpl->DataObjectByAddress;
+  const auto Begin = std::lower_bound(
+      Order.begin(), Order.end(), Addr,
+      [&](size_t Index, va_t Value) { return Objects[Index].Addr < Value; });
+  const auto End =
+      std::upper_bound(Begin, Order.end(), Addr, [&](va_t Value, size_t Index) {
+        return Value < Objects[Index].Addr;
+      });
+  for (auto Index = Begin; Index != End; ++Index)
+    if (!Objects[*Index].Name.empty())
+      return Objects[*Index];
+  return std::nullopt;
+}
+
+std::pair<std::optional<va_t>, std::optional<va_t>>
+DWARFDebugContext::dataSymbolsAround(va_t Addr) const {
+  if (!PImpl || !PImpl->Loaded)
+    return {};
+  const std::vector<DataObjectSym> &Objects = PImpl->DataObjects;
+  const std::vector<size_t> &Order = PImpl->DataObjectByAddress;
+  const auto After = std::upper_bound(
+      Order.begin(), Order.end(), Addr,
+      [&](va_t Value, size_t Index) { return Value < Objects[Index].Addr; });
+  std::optional<va_t> BeforeAddr;
+  std::optional<va_t> AfterAddr;
+  if (After != Order.begin())
+    BeforeAddr = Objects[*std::prev(After)].Addr;
+  if (After != Order.end())
+    AfterAddr = Objects[*After].Addr;
+  return {BeforeAddr, AfterAddr};
 }
 
 bool DWARFDebugContext::hasAuthenticatedFunctionSignatures() const {

@@ -87,8 +87,25 @@ bool hasExactBoundedX64GSCookie(const ExceptionFunction &EH) {
   return readLE<uint32_t>(Cookie.Payload.data()) == Expected;
 }
 
+/// Whether `__GSHandlerCheck_SEH` hands every row of \p EH's table to
+/// `__C_specific_handler`.  After its cookie check the wrapper calls that
+/// handler for an exception only when its record's EHANDLER bit is set and
+/// for an unwind only when its UHANDLER bit is, and otherwise continues the
+/// search: an `__except` row needs the first, a `__finally` row the second.
+bool cookieCheckPassesEveryScope(const ExceptionFunction &EH) {
+  if (!EH.GSCookie || !EH.SEH ||
+      EH.GSCookie->ParseStatus != ExceptionParseStatus::Complete)
+    return false;
+  return llvm::all_of(EH.SEH->Scopes, [&](const SEHScopeRecord &Scope) {
+    return Scope.Kind == SEHScopeKind::Finally
+               ? EH.GSCookie->HasUnwindHandler
+               : EH.GSCookie->HasExceptionHandler;
+  });
+}
+
 WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
-                                        Arch TargetArch) {
+                                        Arch TargetArch,
+                                        bool AllowRepeatedRanges) {
   if (!EH.SEH)
     return WindowsEHNativeSourceReason::MissingSEHTable;
   if (EH.SEH->Scopes.empty())
@@ -142,8 +159,12 @@ WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
       const ExceptionAddressRange &B = SemanticRanges[J];
       if (!A.overlaps(B))
         continue;
-      if ((A.Begin == B.Begin && A.End == B.End) ||
-          (!A.contains(B) && !B.contains(A)))
+      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
+      // Two rows over one range nest by their order: the scan reaches the
+      // earlier row first, so that one is the inner scope.
+      if (Repeated && AllowRepeatedRanges)
+        continue;
+      if (Repeated || (!A.contains(B) && !B.contains(A)))
         return WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph;
       // __C_specific_handler scans the native table in order. For one PC that
       // lies in nested ranges, the inner row must precede its enclosing row or
@@ -154,6 +175,14 @@ WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
     }
   }
   return WindowsEHNativeSourceReason::Eligible;
+}
+
+/// Whether the unwind map of \p Cxx runs anything: a destructor or another
+/// action at some state.
+bool runsCxxUnwindActions(const CxxExceptionInfo &Cxx) {
+  return llvm::any_of(Cxx.UnwindMap, [](const CxxUnwindAction &Action) {
+    return Action.ActionVA != 0;
+  });
 }
 
 WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
@@ -168,11 +197,16 @@ WindowsEHNativeSourceReason validateCxxFH3(const ExceptionFunction &EH,
     return WindowsEHNativeSourceReason::UnsupportedCxxVersion;
   if (!Cxx.hasValidStateGraph())
     return WindowsEHNativeSourceReason::InvalidCxxStateGraph;
-  if (Cxx.TryBlocks.empty() &&
-      (!Registration || llvm::none_of(Cxx.UnwindMap, [](const auto &Action) {
-        return Action.ActionVA != 0;
-      })))
-    return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+  if (Cxx.TryBlocks.empty()) {
+    // A table of unwind actions alone is a function with destructors and no
+    // try block: a complete table of a kind that is not lowered, where one
+    // with no action either is empty.  A registration frame's is lowered.
+    const bool RunsActions = runsCxxUnwindActions(Cxx);
+    if (!RunsActions)
+      return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+    if (!Registration)
+      return WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction;
+  }
   if (!Registration && Cxx.IPMap.empty())
     return WindowsEHNativeSourceReason::EmptyCxxIPMap;
   if (Registration &&
@@ -281,7 +315,9 @@ WindowsEHNativeSourceReason validateCxxFH4(const ExceptionFunction &EH) {
   if (!Cxx.hasValidStateGraph())
     return WindowsEHNativeSourceReason::InvalidCxxStateGraph;
   if (Cxx.TryBlocks.empty())
-    return WindowsEHNativeSourceReason::EmptyCxxTryMap;
+    return runsCxxUnwindActions(Cxx)
+               ? WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction
+               : WindowsEHNativeSourceReason::EmptyCxxTryMap;
   if (Cxx.IPMap.empty())
     return WindowsEHNativeSourceReason::EmptyCxxIPMap;
 
@@ -725,6 +761,16 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
     return reject(Model, WindowsEHNativeSourceReason::UnknownPersonality,
                   Capability);
   case ExceptionPersonality::GSHandlerCheckSEH:
+    // The scopes are `__C_specific_handler`'s, behind a check of the frame's
+    // stack cookie.  Printed C shows them when the check lets every row
+    // through (below); native output would have to write the record again.
+    // Only the x64 wrapper gets here: the ARM and AArch64 guards above take
+    // no wrapped personality.
+    if (Capability != WindowsEHNativeCapability::SourceIRLowering)
+      return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
+                    Capability);
+    Model = WindowsEHNativeSourceModel::SEH;
+    break;
   case ExceptionPersonality::GSHandlerCheckEH:
     return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                   Capability);
@@ -749,11 +795,18 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
   if (EH.PersonalityVA == 0)
     return reject(Model, WindowsEHNativeSourceReason::MissingPersonalityAddress,
                   Capability);
-  if (EH.Personality == ExceptionPersonality::GSHandlerCheckEH4) {
-    if (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH))
+  // A cookie check other than the one the writer knows refuses a table that
+  // would otherwise be lowered.  One that is refused anyway is refused for
+  // its own reason, found below: the check decides nothing for it.
+  const bool UnknownCookieCheck =
+      EH.Personality == ExceptionPersonality::GSHandlerCheckEH4 &&
+      (TargetArch != Arch::X64 || !hasExactBoundedX64GSCookie(EH));
+  if (EH.Personality == ExceptionPersonality::GSHandlerCheckSEH) {
+    if (!cookieCheckPassesEveryScope(EH))
       return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
                     Capability);
-  } else if (EH.GSCookie) {
+  } else if (EH.Personality != ExceptionPersonality::GSHandlerCheckEH4 &&
+             EH.GSCookie) {
     return reject(Model, WindowsEHNativeSourceReason::UnexpectedGSCookie,
                   Capability);
   }
@@ -762,11 +815,15 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                   Capability);
 
   WindowsEHNativeSourceReason Reason =
-      Model == WindowsEHNativeSourceModel::SEH ? validateSEH(EH, TargetArch)
+      Model == WindowsEHNativeSourceModel::SEH
+          ? validateSEH(EH, TargetArch,
+                        Capability ==
+                            WindowsEHNativeCapability::SourceIRLowering)
       : Model == WindowsEHNativeSourceModel::CxxFH3 ? validateCxxFH3(EH)
                                                     : validateCxxFH4(EH);
   // Output patch stays fail-closed for every unwind action and for an
-  // out-of-line catch. IR lowering can represent one destructor chain, and a
+  // out-of-line catch. IR lowering can represent one destructor chain beside
+  // a try block (a table of unwind actions alone stays metadata), and a
   // catch whose funclet is outside the function when every continuation is
   // inside the function, or when that catch names no continuation at all.
   // Two or more continuations are resumed from the funclet's pointer result.
@@ -774,12 +831,16 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
       (Model == WindowsEHNativeSourceModel::CxxFH3 ||
        Model == WindowsEHNativeSourceModel::CxxFH4) &&
       ((Reason == WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction &&
+        !EH.Cxx->TryBlocks.empty() &&
         !cxxLowerableDestructorChain(EH).empty()) ||
        (Reason == WindowsEHNativeSourceReason::InvalidCxxHandler &&
         cxxStandaloneOutOfLineCatch(EH))))
     Reason = WindowsEHNativeSourceReason::Eligible;
   if (Reason != WindowsEHNativeSourceReason::Eligible)
     return reject(Model, Reason, Capability);
+  if (UnknownCookieCheck)
+    return reject(Model, WindowsEHNativeSourceReason::GSWrappedPersonality,
+                  Capability);
   if (Model == WindowsEHNativeSourceModel::SEH) {
     const bool HasNormalizedFilter =
         std::any_of(EH.SEH->Scopes.begin(), EH.SEH->Scopes.end(),

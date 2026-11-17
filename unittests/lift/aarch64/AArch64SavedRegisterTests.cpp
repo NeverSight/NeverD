@@ -63,7 +63,7 @@ struct CompactPairCase {
 // This is a final-image format fixture, not a test of Apple's selection of
 // compact object records. Xcode 27 rewrites the nonzero-offset input record
 // into ordinary FP mode. Install the independently specified fixture word in
-// its single validated encoding slot in an unsigned structural test image.
+// its single validated encoding slot before signing the test image.
 void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
                          uint32_t Encoding) {
   const auto *Section = Image.getSectionByName(section_names::macho::Unwind);
@@ -93,10 +93,12 @@ void writeCompactFixture(const std::string &Path, const BinaryImage &Image,
 }
 #endif
 
-void verifySavedRegisters(
-    bool Quad, bool Signal, std::optional<unsigned> CompactPairs = std::nullopt,
-    bool ExtraStack = false, bool Coalesced = false, bool Frameless = false,
-    std::optional<unsigned> SigningOffset = std::nullopt) {
+void verifySavedRegisters(bool Quad, bool Signal,
+                          std::optional<unsigned> CompactPairs = std::nullopt,
+                          bool ExtraStack = false, bool Coalesced = false,
+                          bool Frameless = false,
+                          std::optional<unsigned> SigningOffset = std::nullopt,
+                          bool Language = false) {
 #if defined(__APPLE__) && defined(__aarch64__)
 #if !__has_include("llvm/BinaryFormat/AArch64CompactUnwind.def")
   if (SigningOffset)
@@ -157,7 +159,11 @@ void verifySavedRegisters(
       std::string(kPAuthLRFlag) + std::to_string(SigningOffset.value_or(0));
   if (SigningOffset)
     Common.push_back(PAuthFlag);
+  if (Language)
+    Common.push_back(kLanguageFlag);
   auto Compile = Common;
+  if (Language)
+    Compile.push_back(kCXXRuntime);
   Compile.append({kDylib, kTight, Source, kOutputFlag, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
   const auto *Override = std::getenv(kHeaderRoot);
@@ -223,6 +229,13 @@ void verifySavedRegisters(
     ASSERT_TRUE(Frame && Frame->Compact);
     ASSERT_EQ(Frame->CodeRange.Begin, Symbol->Addr);
     ASSERT_EQ(Frame->Compact->NativeEncoding, Encoding);
+  }
+  bool Execute = std::getenv(kExecute);
+  if (Execute && SigningOffset) {
+    const int Probe =
+        llvm::sys::ExecuteAndWait(Driver, {Driver, kPAuthLRProbe});
+    ASSERT_TRUE(Probe == 0 || Probe == kPAuthLRUnavailableCode);
+    Execute = Probe == 0;
   }
   const auto Snapshot = Image->Raw;
   if (Coalesced) {
@@ -306,7 +319,18 @@ void verifySavedRegisters(
     if (Compact) {
       ASSERT_TRUE(Before->Compact && After->Compact);
       EXPECT_FALSE(Before->Dwarf);
-      if (Frameless) {
+      if (Language) {
+        ASSERT_TRUE(Before->Itanium && After->Itanium);
+        EXPECT_EQ(Before->Personality, After->Personality);
+        EXPECT_EQ(Before->Itanium->LSDAVA + Installed.OriginalSectionSlide,
+                  After->Itanium->LSDAVA);
+        ASSERT_EQ(After->Itanium->CallSites.size(), 1u);
+        EXPECT_EQ(After->Itanium->CallSites.front().LandingPadVA -
+                      After->CodeRange.Begin,
+                  Before->Itanium->CallSites.front().LandingPadVA -
+                      Before->CodeRange.Begin);
+      }
+      if (Frameless && !CompactSpills.empty()) {
         ASSERT_TRUE(After->Dwarf);
         EXPECT_EQ(After->Compact->NativeEncoding & macho_unwind::kModeMask,
                   macho_unwind::kARM64ModeDwarf);
@@ -340,7 +364,9 @@ void verifySavedRegisters(
               ? kCompactPAuthLRMode | (*SigningOffset / aarch64::kInsnSize)
                                           << kPAuthLRShift
               : kCompactFrameMode;
-      EXPECT_EQ(Before->Compact->NativeEncoding, Mode | *CompactPairs);
+      EXPECT_EQ(Before->Compact->NativeEncoding &
+                    ~(macho_unwind::kPersonalityMask | macho_unwind::kHasLSDA),
+                Mode | *CompactPairs);
       continue;
     }
     ASSERT_TRUE(Before->Dwarf && After->Dwarf);
@@ -377,7 +403,30 @@ void verifySavedRegisters(
   unsigned Executions = 0;
   for (bool InstalledImage : {false, true}) {
     SCOPED_TRACE(InstalledImage);
-    const auto &View = InstalledImage ? *Published : *Image;
+    auto ExecutionPath = InstalledImage ? Output : Input;
+    if (SigningOffset) {
+      const auto SignedPath =
+          (Root / (kSignedFixturePrefix +
+                   std::filesystem::path(ExecutionPath).filename().string()))
+              .string();
+      ASSERT_TRUE(std::filesystem::copy_file(ExecutionPath, SignedPath));
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                    kFixtureCodesign, {kFixtureCodesign, kFixtureAdHocSignature,
+                                       kFixtureAdHocIdentity, SignedPath}),
+                0);
+      ASSERT_EQ(
+          llvm::sys::ExecuteAndWait(kFixtureCodesign,
+                                    {kFixtureCodesign, kFixtureVerifySignature,
+                                     kFixtureStrictSignature, SignedPath}),
+          0);
+      ExecutionPath = SignedPath;
+    }
+    auto Reloaded = Reader->load(ExecutionPath);
+    ASSERT_TRUE(bool(Reloaded)) << llvm::toString(Reloaded.takeError());
+    const auto &View = *Reloaded;
+    testing::Test::RecordProperty(
+        InstalledImage ? kPublishedHash : kOriginalHash,
+        llvm::toHex(llvm::SHA256::hash(View.Raw), true));
     std::ofstream Rules(RulesPath);
     for (const auto &[Name, Symbol] :
          {std::pair{kSum, kSumSymbol},
@@ -447,7 +496,9 @@ void verifySavedRegisters(
             << ' ' << Plan->Frame.SavedFP << ' ' << Plan->Frame.SavedLR << ' '
             << Plan->Frame.CFAOffset << ' ' << Plan->Frame.FPOffset << ' '
             << Plan->Frame.LROffset << ' ' << Plan->Count << ' '
-            << Plan->Vectors.LowMask << ' ' << Plan->Vectors.HighMask << '\n';
+            << Plan->Vectors.LowMask << ' ' << Plan->Vectors.HighMask << ' '
+            << unsigned(Plan->Frame.Signing) << ' '
+            << (SigningOffset ? Plan->Frame.SigningPC - VA : 0) << '\n';
       for (unsigned I = 0; I < Plan->Count; ++I) {
         EXPECT_EQ(Plan->Saved[I].Register, Compact
                                                ? CompactSpills[I].first
@@ -482,28 +533,31 @@ void verifySavedRegisters(
     }
     Rules.close();
     ASSERT_TRUE(Rules);
-    if (!SigningOffset && std::getenv(kExecute)) {
-      ASSERT_EQ(
-          llvm::sys::ExecuteAndWait(
-              Driver, {Driver, InstalledImage ? Output : Input, RulesPath,
-                       std::to_string(InstalledImage && Frameless && Signal)}),
-          0);
+    if (Execute) {
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                    Driver, {Driver, ExecutionPath, RulesPath,
+                             std::to_string(Signal && Compact &&
+                                            (InstalledImage || !Frameless))}),
+                0);
       ++Executions;
     }
   }
   auto Unchanged = Reader->load(Input);
   ASSERT_TRUE(bool(Unchanged)) << llvm::toString(Unchanged.takeError());
   EXPECT_EQ(Unchanged->Raw, Snapshot);
-  testing::Test::RecordProperty(
-      kOriginalHash, llvm::toHex(llvm::SHA256::hash(Snapshot), true));
-  testing::Test::RecordProperty(
-      kPublishedHash, llvm::toHex(llvm::SHA256::hash(Published->Raw), true));
+  if (SigningOffset)
+    testing::Test::RecordProperty(
+        kUnsignedFixtureHash, llvm::toHex(llvm::SHA256::hash(Snapshot), true));
   testing::Test::RecordProperty(kNativeImages, Executions);
   if (Frameless && Signal)
     testing::Test::RecordProperty(kSystemSteps,
                                   Executions / 2 * Functions * kSignalRounds);
   if (SigningOffset)
     testing::Test::RecordProperty(kPAuthLRImages, 2);
+  if (Compact && !Frameless && Signal)
+    testing::Test::RecordProperty(SigningOffset ? kPAuthLRSystemSteps
+                                                : kSavedFrameSystemSteps,
+                                  Executions * Functions * kSignalRounds);
   testing::Test::RecordProperty(Signal ? kResumptions : kObservedCalls,
                                 Executions * Functions *
                                     (Signal ? kSignalRounds : kNormalRounds));
@@ -617,12 +671,32 @@ TEST(AArch64CompactRegisters, SystemUnwindsEachFramelessPair) {
       kSystemSteps, Executions / 2 * kCompactPairCases.size() * kSignalRounds);
 }
 
+TEST(AArch64CompactRegisters, PublishesFramelessLanguageFrame) {
+  verifySavedRegisters(false, false, 0, false, false, true, std::nullopt, true);
+}
+TEST(AArch64CompactRegisters, PublishesFramelessLanguageSavedPairs) {
+  verifySavedRegisters(false, false, kCompactAllPairs, false, false, true,
+                       std::nullopt, true);
+}
+TEST(AArch64CompactRegisters, SystemUnwindsFramelessLanguageSavedPairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true, false, true,
+                       std::nullopt, true);
+}
+
 TEST(AArch64CompactRegisters, PublishesPAuthLRAllPairs) {
   verifySavedRegisters(false, false, kCompactAllPairs, false, false, false, 0);
 }
 
 TEST(AArch64CompactRegisters, PublishesPAuthLROffsetAndSparsePairs) {
   verifySavedRegisters(false, false, kCompactSparsePairs, true, false, false,
+                       kPAuthLRNonzeroOffset);
+}
+TEST(AArch64CompactRegisters, SystemUnwindsPAuthLRAllPairs) {
+  verifySavedRegisters(false, true, kCompactAllPairs, false, false, false, 0);
+}
+
+TEST(AArch64CompactRegisters, SystemUnwindsPAuthLROffsetAndSparsePairs) {
+  verifySavedRegisters(false, true, kCompactSparsePairs, true, false, false,
                        kPAuthLRNonzeroOffset);
 }
 } // namespace

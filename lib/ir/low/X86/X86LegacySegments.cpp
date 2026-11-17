@@ -39,9 +39,9 @@ llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
     return llvm::Error::success();
   }
   const bool Code = C.Attributes & 8, ReadWrite = C.Attributes & 2;
-  if ((C.Attributes & 0x90) != 0x90 || (C.Attributes & 0x2f00) ||
-      (CS && !Code) || (SS && (Code || !ReadWrite)) ||
-      (!CS && Code && !ReadWrite) ||
+  if ((C.Attributes & 0x90) != 0x90 || (C.Attributes & 0x0f00) ||
+      (CS && (C.Attributes & 0x2000)) || (CS && !Code) ||
+      (SS && (Code || !ReadWrite)) || (!CS && Code && !ReadWrite) ||
       ((C.Attributes & 0x8000) ? (C.Limit & 0xfff) != 0xfff
                                : C.Limit > 0xfffff))
     return llvm::createStringError(

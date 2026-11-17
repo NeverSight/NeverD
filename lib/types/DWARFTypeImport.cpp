@@ -6,6 +6,7 @@
 
 #include "neverd/types/DWARFTypeImport.h"
 
+#include "neverd/types/DWARFCallingConvention.h"
 #include "neverd/types/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -192,6 +193,8 @@ std::string qualifiedName(const llvm::DWARFDie &Die) {
 /// Why an import leaves a type out.
 struct Refusal {
   std::string Reason;
+  /// A by-value definition that may still arrive in a later unit.
+  std::string Dependency;
 };
 
 class Importer {
@@ -208,6 +211,11 @@ public:
   }
 
   void finish() {
+    // Only a newly published dependency wakes a blocked type. Anything
+    // still blocked now is genuinely missing or in a by-value cycle.
+    for (const std::string &Name : DeferredOrder)
+      if (auto Found = Deferred.find(Name); Found != Deferred.end())
+        Stats.Skipped.push_back(Name + ": " + Found->second.Reason);
     // A record or enumeration a typedef of its name names, which C may then
     // name by that alone.
     for (const auto &Entry : NamedByTypedef)
@@ -252,25 +260,53 @@ private:
   }
 
   void drain() {
-    while (!Pending.empty()) {
-      const llvm::DWARFDie Die = Pending.front();
-      Pending.pop_front();
-      named(Die);
+    while (!Pending.empty() || !Ready.empty()) {
+      if (!Ready.empty()) {
+        std::string Name = std::move(Ready.front());
+        Ready.pop_front();
+        auto Found = Deferred.find(Name);
+        if (Found == Deferred.end())
+          continue;
+        const llvm::DWARFDie Die = Found->second.Die;
+        Deferred.erase(Found);
+        if (Die.getTag() == dw::DW_TAG_typedef)
+          typedefOf(Die);
+        else
+          // An anonymous record may have received this name from a typedef.
+          define(Name, kindOf(Die.getTag()), Die);
+      } else {
+        const llvm::DWARFDie Die = Pending.front();
+        Pending.pop_front();
+        named(Die);
+      }
     }
+  }
+
+  void published(llvm::StringRef Name) {
+    auto Found = Waiting.find(Name);
+    if (Found == Waiting.end())
+      return;
+    for (std::string &Dependent : Found->second)
+      Ready.push_back(std::move(Dependent));
+    Waiting.erase(Found);
   }
 
   /// Defines the named type \p Die, once: a record, an enumeration or a
   /// typedef.  An anonymous one is defined where a typedef or a member
   /// names it.
   void named(const llvm::DWARFDie &Die) {
+    // A type is often queued both by its scope and by many references.
+    // Reject an already-read DIE before rebuilding its qualified template
+    // name; the separate name index still checks definitions in other units.
+    if (!Visited.insert(Die.getDebugInfoEntry()).second)
+      return;
     const dw::Tag Tag = Die.getTag();
     if (Tag == dw::DW_TAG_typedef) {
-      if (Visited.insert(Die.getDebugInfoEntry()).second)
-        typedefOf(Die);
+      typedefOf(Die);
       return;
     }
     const std::string Name = qualifiedName(Die);
-    if (Name.empty() || !Visited.insert(Die.getDebugInfoEntry()).second)
+    if (Name.empty())
       return;
     const TypeKind Kind = kindOf(Tag);
     if (dw::toUnsigned(Die.find(dw::DW_AT_declaration), 0)) {
@@ -309,7 +345,7 @@ private:
   /// gave it, or another one, which stays.
   void define(const std::string &Name, TypeKind Kind,
               const llvm::DWARFDie &Die) {
-    if (Defined.count(Name) || Refused.count(Name))
+    if (Defined.count(Name) || Refused.count(Name) || Deferred.count(Name))
       return;
     if (const LocalType *Existing = Library.find(Name);
         Existing && Existing->Origin != TypeOrigin::DWARF) {
@@ -326,7 +362,7 @@ private:
     if (Kind == TypeKind::Enum) {
       std::shared_ptr<const EnumDef> Enum = enumeration(Die, Why);
       if (!Enum) {
-        refuse(Name, Why);
+        refuse(Name, Die, Why);
         return;
       }
       Local.Enum = std::move(Enum);
@@ -334,7 +370,7 @@ private:
     } else {
       std::shared_ptr<const RecordDef> Record = record(Die, Why, 0);
       if (!Record) {
-        refuse(Name, Why);
+        refuse(Name, Die, Why);
         return;
       }
       Local.Record = std::move(Record);
@@ -344,10 +380,19 @@ private:
       ++(Kind == TypeKind::Union ? Stats.Unions : Stats.Structs);
     }
     Library.define(std::move(Local));
+    published(Name);
   }
 
-  void refuse(const std::string &Name, const std::optional<Refusal> &Why) {
+  void refuse(const std::string &Name, const llvm::DWARFDie &Die,
+              const std::optional<Refusal> &Why) {
     Defined.erase(Name);
+    if (Why && !Why->Dependency.empty()) {
+      Deferred.try_emplace(Name, DeferredType{Die, Why->Reason});
+      if (EverDeferred.insert(Name).second)
+        DeferredOrder.push_back(Name);
+      Waiting[Why->Dependency].push_back(Name);
+      return;
+    }
     Refused.insert(Name);
     Stats.Skipped.push_back(Name + ": " +
                             (Why ? Why->Reason : std::string("unreadable")));
@@ -358,7 +403,8 @@ private:
   /// its own name, `typedef struct X X`, is that type.
   void typedefOf(const llvm::DWARFDie &Die) {
     const std::string Name = qualifiedName(Die);
-    if (Name.empty() || Defined.count(Name) || Refused.count(Name))
+    if (Name.empty() || Defined.count(Name) || Refused.count(Name) ||
+        Deferred.count(Name))
       return;
     // A typedef of a typedef of its own name, as units repeat one, names
     // what that one names: a typedef of itself would be a cycle.
@@ -400,15 +446,22 @@ private:
     TypeExprRef Type = Target.isValid() ? expr(Target, Why, 0, /*ByValue=*/true)
                                         : makeBuiltin(Builtin::Void);
     if (!Type) {
-      refuse(Name, Why);
+      refuse(Name, Die, Why);
       return;
     }
     LocalType Local;
     Local.Name = Name;
     Local.Kind = TypeKind::Typedef;
     Local.Origin = TypeOrigin::DWARF;
-    Local.Target = std::move(Type);
+    if (Type->Kind == TypeExprKind::Record && Type->Record->MemberPointer) {
+      Local.Kind = TypeKind::Struct;
+      Local.Record = Type->Record;
+      Local.TypedefNamed = true;
+    } else {
+      Local.Target = std::move(Type);
+    }
     Library.define(std::move(Local));
+    published(Name);
     ++Stats.Typedefs;
   }
 
@@ -433,6 +486,14 @@ private:
         named(Named);
       else
         Pending.push_back(Named);
+    };
+    const auto reference = [&](const std::string &Name,
+                               TypeKind Kind) -> TypeExprRef {
+      if (ByValue && Defined.count(Name) && !Library.find(Name)) {
+        Why = Refusal{"a by-value recursive type definition"};
+        return nullptr;
+      }
+      return makeNamed(Name, Kind);
     };
     switch (Tag) {
     case dw::DW_TAG_base_type:
@@ -487,13 +548,13 @@ private:
       else
         later(Die);
       if (Tagged && TargetName == Name)
-        return makeNamed(Name, kindOf(Target.getTag()));
+        return reference(Name, kindOf(Target.getTag()));
       // What the name became, in this unit or the one that defined it.
       if (Tagged && TargetName.empty())
         if (const LocalType *Named = Library.find(Name);
             Named && Named->Kind != TypeKind::Typedef)
-          return makeNamed(Name, Named->Kind);
-      return makeNamed(Name, TypeKind::Typedef);
+          return reference(Name, Named->Kind);
+      return reference(Name, TypeKind::Typedef);
     }
     case dw::DW_TAG_structure_type:
     case dw::DW_TAG_class_type:
@@ -503,12 +564,12 @@ private:
       std::string Name = qualifiedName(Die);
       if (!Name.empty()) {
         later(Die);
-        return makeNamed(Name, Kind);
+        return reference(Name, Kind);
       }
       // An anonymous type a typedef names, by that name.
       if (const auto Typedef = AnonymousNames.find(Die.getDebugInfoEntry());
           Typedef != AnonymousNames.end())
-        return makeNamed(Typedef->second, Kind);
+        return reference(Typedef->second, Kind);
       // An anonymous type, defined where it is used.
       if (Kind == TypeKind::Enum) {
         std::shared_ptr<const EnumDef> Enum = enumeration(Die, Why);
@@ -541,12 +602,64 @@ private:
                          unsigned(*Bytes));
     }
     case dw::DW_TAG_ptr_to_member_type:
-      Why = Refusal{"a pointer to a member"};
-      return nullptr;
+      return memberPointer(Die, Why, Depth);
     default:
       Why = Refusal{"a type DWARF tags " + dw::TagString(Tag).str()};
       return nullptr;
     }
+  }
+
+  TypeExprRef memberPointer(const llvm::DWARFDie &Die,
+                            std::optional<Refusal> &Why, unsigned Depth) {
+    // Microsoft's representation depends on its inheritance model. It
+    // cannot be inferred from the data model or from an ordinary pointer.
+    if (Library.recordABI() == RecordABI::Microsoft) {
+      Why = Refusal{"a member pointer with an unspecified Microsoft layout"};
+      return nullptr;
+    }
+    const llvm::DWARFUnit *Unit = Die.getDwarfUnit();
+    const unsigned Word = Unit ? Unit->getAddressByteSize() : 0;
+    const llvm::DWARFDie Owner =
+        Die.getAttributeValueAsReferencedDie(dw::DW_AT_containing_type);
+    const llvm::DWARFDie Target =
+        Die.getAttributeValueAsReferencedDie(dw::DW_AT_type);
+    const llvm::DWARFDie Held = heldType(Target);
+    const llvm::DWARFDie OwnerRecord = heldType(Owner);
+    if ((Word != 4 && Word != 8) || Word != pointerBytes(Library.dataModel()) ||
+        !OwnerRecord.isValid() || !isRecordTag(OwnerRecord.getTag()) ||
+        !Held.isValid()) {
+      Why = Refusal{"a member pointer with no valid owner, target or width"};
+      return nullptr;
+    }
+    const bool Function = Held.getTag() == dw::DW_TAG_subroutine_type;
+    const uint64_t Bytes = Word * (Function ? 2 : 1);
+    if (const auto Stated = unsignedOf(Die, dw::DW_AT_byte_size);
+        Stated && *Stated != Bytes) {
+      Why = Refusal{"a member pointer whose size disagrees with its ABI"};
+      return nullptr;
+    }
+    auto Identity = std::make_shared<MemberPointerDef>();
+    Identity->Owner = expr(Owner, Why, Depth + 1, /*ByValue=*/false);
+    Identity->Target = expr(Target, Why, Depth + 1, /*ByValue=*/false);
+    Identity->Function = Function;
+    if (!Identity->Owner || !Identity->Target)
+      return nullptr;
+
+    // Itanium-family data member pointers hold a ptrdiff_t offset; member
+    // function pointers hold two words. ARM's alternative encoding has the
+    // same extent. Keep both words as bits: neither encoding makes the first
+    // word an unconditionally callable function pointer.
+    auto Storage = std::make_shared<RecordDef>();
+    Storage->Size = Bytes;
+    Storage->Alignment = Word;
+    Storage->MemberPointer = std::move(Identity);
+    const TypeExprRef SignedWord =
+        makeBuiltin(Word == 8 ? Builtin::LongLong : Builtin::Int);
+    Storage->Members.push_back(
+        {Function ? "representation" : "offset", SignedWord, 0});
+    if (Function)
+      Storage->Members.push_back({"adjustment", SignedWord, Word * 8u});
+    return makeRecord(std::move(Storage));
   }
 
   unsigned pointerBytesOf(const llvm::DWARFDie &Die) const {
@@ -650,6 +763,10 @@ private:
 
   TypeExprRef array(const llvm::DWARFDie &Die, std::optional<Refusal> &Why,
                     unsigned Depth, bool ByValue) {
+    if (unsignedOf(Die, dw::DW_AT_GNU_vector).value_or(0)) {
+      Why = Refusal{"a compiler vector is not a local array type"};
+      return nullptr;
+    }
     const llvm::DWARFDie ElementDie =
         Die.getAttributeValueAsReferencedDie(dw::DW_AT_type);
     TypeExprRef Element = ElementDie.isValid()
@@ -707,6 +824,15 @@ private:
   TypeExprRef function(const llvm::DWARFDie &Die, std::optional<Refusal> &Why,
                        unsigned Depth) {
     auto Function = std::make_shared<FunctionDef>();
+    if (const auto Attribute = Die.find(dw::DW_AT_calling_convention)) {
+      const auto Convention = dwarfCallingConvention(
+          Attribute->getAsUnsignedConstant().value_or(0));
+      if (!Convention) {
+        Why = Refusal{"a function with an unsupported calling convention"};
+        return nullptr;
+      }
+      Function->Convention = *Convention;
+    }
     const llvm::DWARFDie Return =
         Die.getAttributeValueAsReferencedDie(dw::DW_AT_type);
     Function->Return = Return.isValid()
@@ -911,6 +1037,10 @@ private:
     auto Record = std::make_shared<RecordDef>();
     Record->Union = Die.getTag() == dw::DW_TAG_union_type;
     Record->Size = unsignedOf(Die, dw::DW_AT_byte_size).value_or(0);
+    if (Record->Size > std::numeric_limits<uint64_t>::max() / 8) {
+      Why = Refusal{"a record too large to describe its bit offsets"};
+      return nullptr;
+    }
     Record->Alignment =
         uint32_t(unsignedOf(Die, dw::DW_AT_alignment).value_or(0));
     // Where a Rust record's members begin, and its last, which rustc's DWARF
@@ -1006,8 +1136,9 @@ private:
           return nullptr;
         }
         Field.BitWidth = uint32_t(*BitSize);
-        if (!bitStorage(Field)) {
-          Why = Refusal{"a bit-field that crosses its storage unit"};
+        if (!bitStorage(Field, Why)) {
+          if (!Why)
+            Why = Refusal{"a bit-field that crosses its storage unit"};
           return nullptr;
         }
       } else if (Field.BitOffset % 8) {
@@ -1039,12 +1170,102 @@ private:
                          return A.BitOffset < B.BitOffset;
                        });
     inferPacking(*Record);
-    if (std::string Problem = layoutProblem(Library, *Record);
-        !Problem.empty()) {
-      Why = Refusal{Problem};
+    std::string Problem = layoutProblem(Library, *Record);
+    if (!Problem.empty() && !Record->Union && paddingOverlays(*Record, Why))
+      Problem = layoutProblem(Library, *Record);
+    if (!Problem.empty()) {
+      if (!Why)
+        Why = Refusal{Problem};
       return nullptr;
     }
     return Record;
+  }
+
+  /// C++ bases and [[no_unique_address]] members may share padding with
+  /// another subobject. Keep the complete base type as an overlay, but only
+  /// when every value bit remains disjoint. Ordinary overlapping fields and
+  /// out-of-range storage are still rejected by the importer.
+  bool paddingOverlays(RecordDef &Record, std::optional<Refusal> &Why) const {
+    using Range = std::pair<uint64_t, uint64_t>;
+    std::vector<Range> Values;
+    std::vector<FlatMember> Flat;
+    for (const Member &Field : Record.Members) {
+      std::vector<Range> Occupied;
+      if (Field.isBitfield())
+        Occupied.emplace_back(Field.BitOffset,
+                              Field.BitOffset + Field.BitWidth);
+      else if (!valueBits(*Field.Type, Field.BitOffset, Occupied, 0, Why))
+        return false;
+      const auto Bytes = Library.sizeOf(*Field.Type);
+      if (!Bytes || *Bytes > std::numeric_limits<uint64_t>::max() / 8)
+        return false;
+      const uint64_t Bits = Field.isBitfield() ? Field.BitWidth : *Bytes * 8;
+      if (Field.BitOffset > Record.Size * 8 ||
+          Bits > Record.Size * 8 - Field.BitOffset)
+        return false;
+      // Alternatives inside one union describe the same subobject. Merge
+      // those ranges before checking it against its siblings.
+      llvm::sort(Occupied);
+      std::vector<Range> Merged;
+      for (const Range &Part : Occupied) {
+        if (!Merged.empty() && Part.first <= Merged.back().second)
+          Merged.back().second = std::max(Merged.back().second, Part.second);
+        else
+          Merged.push_back(Part);
+      }
+      Values.insert(Values.end(), Merged.begin(), Merged.end());
+      Flat.push_back(
+          {Field.Name, Field.Type, Field.BitOffset, Field.BitWidth,
+           Field.isBitfield() ? Field.StorageBitOffset : Field.BitOffset,
+           *Bytes * 8, Library.alignOf(*Field.Type)});
+    }
+    llvm::sort(Values);
+    for (size_t I = 1; I < Values.size(); ++I)
+      if (Values[I].first < Values[I - 1].second)
+        return false;
+    Record.Members = nestFlatMembers(Flat, /*Union=*/false, Record.Pack);
+    return true;
+  }
+
+  bool valueBits(const TypeExpr &Type, uint64_t Base,
+                 std::vector<std::pair<uint64_t, uint64_t>> &Out,
+                 unsigned Depth, std::optional<Refusal> &Why) const {
+    if (Depth > ::neverd::limits::types::kDWARFTypeImportMaxDepth)
+      return false;
+    const RecordDef *Record = Type.Record.get();
+    if (Type.Kind == TypeExprKind::Named) {
+      const LocalType *Named = Library.find(Type.Name);
+      if (!Named) {
+        Why = Refusal{"padding layout needs the definition of " + Type.Name,
+                      Type.Name};
+        return false;
+      }
+      if (Named->Target)
+        return valueBits(*Named->Target, Base, Out, Depth + 1, Why);
+      Record = Named->Record.get();
+    }
+    if (Record && Record->Defined) {
+      for (const Member &Field : Record->Members) {
+        if (Field.isBitfield())
+          Out.emplace_back(Base + Field.BitOffset,
+                           Base + Field.BitOffset + Field.BitWidth);
+        else if (!valueBits(*Field.Type, Base + Field.BitOffset, Out, Depth + 1,
+                            Why))
+          return false;
+      }
+      return true;
+    }
+    const auto Bytes = Library.sizeOf(Type);
+    if (!Bytes && Type.Kind == TypeExprKind::Array && Type.Element) {
+      std::vector<std::pair<uint64_t, uint64_t>> Element;
+      valueBits(*Type.Element, 0, Element, Depth + 1, Why);
+      return false;
+    }
+    if (!Bytes || *Bytes > (std::numeric_limits<uint64_t>::max() - Base) / 8)
+      return false;
+    if (*Bytes)
+      Out.emplace_back(Base, Base + *Bytes * 8);
+    return true;
   }
 
   /// \p Field, a member of a Rust record of \p RecordBytes whose members
@@ -1105,11 +1326,17 @@ private:
   /// layout of a record its source declares does (layOutRecord): the unit
   /// of its type's size, at its type's alignment, that holds it, else, in
   /// a packed record that lets it cross such units, the bytes from the one
-  /// that holds its first bit.  False where neither holds it.
-  bool bitStorage(Member &Field) const {
-    const std::optional<Builtin> Own = integerOf(*Field.Type);
-    if (!Own)
+  /// that holds its first bit. Packed fields can span the following byte;
+  /// their declared value width is still bounded by the integer type.
+  bool bitStorage(Member &Field, std::optional<Refusal> &Why) const {
+    std::string Missing;
+    const std::optional<Builtin> Own = integerOf(*Field.Type, Missing);
+    if (!Own) {
+      if (!Missing.empty())
+        Why = Refusal{"bit-field layout needs the definition of " + Missing,
+                      Missing};
       return false;
+    }
     const uint64_t Bits = Library.builtinBytes(*Own) * 8;
     if (!Bits || Field.BitWidth > Bits)
       return false;
@@ -1118,11 +1345,12 @@ private:
     if (Field.BitOffset + Field.BitWidth <= Field.StorageBitOffset + Bits)
       return true;
     Field.StorageBitOffset = Field.BitOffset / 8 * 8;
-    return Field.BitOffset + Field.BitWidth <= Field.StorageBitOffset + Bits;
+    return true;
   }
 
   /// The integer builtin \p Type is, through typedefs and enumerations.
-  std::optional<Builtin> integerOf(const TypeExpr &Type) const {
+  std::optional<Builtin> integerOf(const TypeExpr &Type,
+                                   std::string &Missing) const {
     const TypeExpr *At = &Type;
     for (unsigned Hop = 0;
          At && Hop < ::neverd::limits::types::kDWARFTypeImportMaxDepth; ++Hop) {
@@ -1139,8 +1367,10 @@ private:
                         : std::nullopt;
       case TypeExprKind::Named: {
         const LocalType *Named = Library.find(At->Name);
-        if (!Named)
+        if (!Named) {
+          Missing = At->Name;
           return std::nullopt;
+        }
         if (Named->Kind == TypeKind::Enum)
           return Named->Enum ? std::optional<Builtin>(Named->Enum->Underlying)
                              : std::nullopt;
@@ -1168,11 +1398,16 @@ private:
     };
     uint32_t Natural = 1;
     uint32_t Pack = 0;
+    bool CrossesUnit = false;
     uint64_t End = 0;
     for (const Member &Field : Record.Members) {
       const uint32_t Alignment =
           std::max<uint32_t>(1, Library.alignOf(*Field.Type));
       Natural = std::max(Natural, Alignment);
+      if (Field.isBitfield()) {
+        const uint64_t Bits = Library.sizeOf(*Field.Type).value_or(0) * 8;
+        CrossesUnit |= Bits && Field.BitOffset % Bits + Field.BitWidth > Bits;
+      }
       const uint64_t Byte =
           (Field.isBitfield() ? Field.StorageBitOffset : Field.BitOffset) / 8;
       End = std::max(End, Field.isBitfield()
@@ -1191,6 +1426,10 @@ private:
         Pack = Allowed;
       Aligned = std::min(Natural, Pack);
     }
+    // An explicit pack can let a narrow bitfield straddle its type's unit.
+    // Keep the largest pack consistent with the other observed offsets.
+    if (!Pack && CrossesUnit)
+      Pack = Natural;
     Record.Pack = Pack;
     if (!Record.Alignment && Record.Size > alignUp(End, Aligned))
       for (uint64_t Candidate = uint64_t(Aligned) * 2;
@@ -1205,6 +1444,15 @@ private:
   TypeLibrary &Library;
   DWARFTypeImportStats &Stats;
   std::deque<llvm::DWARFDie> Pending;
+  struct DeferredType {
+    llvm::DWARFDie Die;
+    std::string Reason;
+  };
+  llvm::StringMap<DeferredType> Deferred;
+  llvm::StringMap<std::vector<std::string>> Waiting;
+  llvm::StringSet<> EverDeferred;
+  std::vector<std::string> DeferredOrder;
+  std::deque<std::string> Ready;
   llvm::DenseSet<const llvm::DWARFDebugInfoEntry *> Visited;
   llvm::StringSet<> Defined, Refused, Conflicting;
   /// The records and enumerations a typedef of their name names.

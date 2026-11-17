@@ -27,6 +27,7 @@
 #include "neverd/types/CallingConvention.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -203,7 +204,16 @@ struct Member {
   }
 };
 
-/// A union or structure.
+/// A C++ member pointer's source identity, retained alongside its ABI
+/// storage. Its words are an encoded representation, not ordinary pointers;
+/// applying it requires the target's member-pointer calling convention.
+struct MemberPointerDef {
+  TypeExprRef Owner;
+  TypeExprRef Target;
+  bool Function = false;
+};
+
+/// A union or structure, including explicitly identified ABI storage.
 struct RecordDef {
   bool Union = false;
   /// In bytes.
@@ -215,6 +225,8 @@ struct RecordDef {
   /// False for a type only declared, whose members are unknown.
   bool Defined = true;
   std::vector<Member> Members;
+  /// Present only for the storage of a C++ pointer-to-member value.
+  std::shared_ptr<const MemberPointerDef> MemberPointer;
 };
 
 /// A value of an enumeration.
@@ -333,6 +345,10 @@ public:
   bool remove(llvm::StringRef Name);
 
   const LocalType *find(llvm::StringRef Name) const;
+  /// A qualified/template spelling of an existing type. Whitespace and a
+  /// leading :: do not change its identity; ambiguous spellings return null.
+  /// No template is instantiated and no layout is inferred by this lookup.
+  const LocalType *findCxxType(llvm::StringRef Name) const;
   const LocalType *byOrdinal(uint32_t Ordinal) const;
   /// The named type \p Name names, through any typedefs.
   const LocalType *resolve(llvm::StringRef Name) const;
@@ -370,6 +386,8 @@ private:
   /// By ordinal - 1; null where a type was removed.
   std::vector<std::shared_ptr<const LocalType>> ByOrdinal;
   llvm::StringMap<uint32_t> ByName;
+  llvm::StringMap<llvm::SmallVector<uint32_t, 1>> ByCxxSpelling;
+  void indexCxxSpelling(llvm::StringRef Name, uint32_t Ordinal, bool Add);
   Trial *Tried = nullptr;
 };
 

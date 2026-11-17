@@ -206,13 +206,15 @@ bool isX64VaStartWord(uint64_t V) {
 // Count distinct live-in (SSA version 0) parameter registers from \p Regs that
 // the function spills to the stack — the variadic prologue's register save
 // area.
-int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs) {
+int countParamRegSpills(const MedFunc &Func, llvm::ArrayRef<uint64_t> Regs,
+                        uint16_t Bytes) {
   std::set<uint64_t> Seen;
   for (const auto &Blk : Func.Blocks)
     for (const auto &Op : Blk.Ops)
       if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
           Op.MemoryAddressSpace == NdMemoryAddressSpace::Default &&
-          Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0)
+          Op.Inputs[1].Kind == MedVar::Reg && Op.Inputs[1].SSAVer == 0 &&
+          (!Bytes || Op.Inputs[1].Size == Bytes))
         for (uint64_t R : Regs)
           if (Op.Inputs[1].RegOff == R) {
             Seen.insert(R);

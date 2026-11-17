@@ -38,8 +38,9 @@ class X64ContinuationSegmentMoves : private X64ContinuationSegments<Writer> {
   using typename Base::V6;
 
 public:
-  X64ContinuationSegmentMoves(Writer &Output, unsigned Bits)
-      : Base(Output, Bits) {}
+  X64ContinuationSegmentMoves(Writer &Output, unsigned Bits,
+                              X86DescriptorCanonicalityProfile Canonicality)
+      : Base(Output, Bits, Canonicality) {}
 
   void execute(const X64SegmentMove &F, uint64_t NextPC,
                std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {

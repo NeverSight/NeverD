@@ -22,6 +22,22 @@ QJsonObject region(QString id, qint64 begin, qint64 end) {
 class LibraryCodeViewTests final : public QObject {
   Q_OBJECT
 private slots:
+  void pageOffsetsBeyondWholeDocumentBudgetKeepUtf8Spans() {
+    const QString source = QString::fromUtf8("// 中文\nreturn end - begin;\n");
+    const qint64 offset = 512 * 1024 * 1024;
+    const auto begin = source.left(source.indexOf("end")).toUtf8().size();
+    const auto end = source.left(source.indexOf(';')).toUtf8().size();
+    auto item = region("late", 0, 1);
+    item["spans"] = QJsonArray{QJsonObject{{"begin_byte", offset + begin},
+                                           {"end_byte", offset + end}}};
+    LibraryCodeView view;
+    view.reset(source, {}, {item}, offset);
+    QCOMPARE(view.foldableCount(), 1);
+    view.setFolded(true);
+    QVERIFY(!view.text().contains("end - begin"));
+    QCOMPARE(view.originalSelection(0, view.text().size()), source);
+  }
+
   void generatedDetailsPreserveCopyNavigationAndVisibleBehavior() {
     for (const QString &alignment : {QString("_Alignas"), QString("alignas")}) {
       const QString source =
@@ -71,8 +87,8 @@ private slots:
     // answers every place and every run of a text as that does: of ASCII, of
     // characters of two, three and four bytes, with a mark of byte order at
     // the beginning, which QString::fromUtf8 passes over, and inside, and
-    // with half a pair of surrogates, which QString::toUtf8 writes as a
-    // question mark.
+    // with unpaired surrogates, including text whose UTF-8 byte count
+    // equals its UTF-16 length despite containing non-ASCII characters.
     const QString smile = QString::fromUcs4(U"\U0001F600");
     const QStringList texts{
         QString(),
@@ -85,12 +101,12 @@ private slots:
         QStringLiteral("a") + QChar(0xfeff) + QStringLiteral("bé"),
         QStringLiteral("a") + QChar(0xd800) + QStringLiteral("b"),
         QStringLiteral("é") + QChar(0xdc00) + QStringLiteral("中"),
+        QStringLiteral("é") + QChar(0xd800),
+        QChar(0xdc00) + QStringLiteral("é"),
     };
-    int nonAscii = 0;
     for (qsizetype which = 0; which < texts.size(); ++which) {
       const QString &text = texts[which];
       const QByteArray bytes = text.toUtf8();
-      nonAscii += bytes.size() != text.size();
       const neverd::gui::PageBytes page(text);
       QCOMPARE(page.size(), bytes.size());
       for (qsizetype byte = 0; byte <= bytes.size(); ++byte) {
@@ -110,8 +126,6 @@ private slots:
                    where(end).constData());
       }
     }
-    // The text that is ASCII but for half a pair has a byte to a unit too.
-    QCOMPARE(nonAscii, 7);
   }
 
   void aHoldProjectsTheSourceAndItsFoldsOnce() {

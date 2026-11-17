@@ -31,6 +31,7 @@ struct PluginInstallation {
   QString Id, Name, Version, Path, Diagnostic;
   bool Enabled = true;
   bool Installed = true;
+  bool Bundled = false;
 };
 
 class PluginServices final : public QObject {
@@ -39,13 +40,14 @@ public:
   explicit PluginServices(Session &Session);
   ~PluginServices() override;
   PluginJobs &jobs() { return Jobs; }
-  void restorePlugins();
+  void restorePlugins(const QString &BundledAgentManifest = {});
   QList<PluginInstallation> pluginInstallations() const;
   bool installPlugin(const QString &Path, QString &Error);
   bool setPluginEnabled(const QString &Id, bool Enabled, QString &Error);
   void uninstallPlugin(const QString &Id);
   /// The workbench's focused selection; the session selection when unset.
   void setSelectionProvider(std::function<QJsonObject()> Provider);
+  QJsonObject currentContext() const;
   /// The only publisher of the plugin context. Every refresh builds it from the
   /// same selection source, so host events see only real changes.
   void refreshContext();

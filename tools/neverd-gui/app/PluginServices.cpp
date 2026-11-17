@@ -29,6 +29,17 @@
 namespace neverd::gui {
 namespace {
 constexpr auto InstalledPluginsKey = "guiPlugins/installed";
+constexpr auto EnabledPluginsKey = "guiPlugins/enabled";
+constexpr auto AgentPluginId = "neverd.agent-ui";
+
+QString pluginKey(const char *Group, const QString &Id) {
+  return QLatin1String(Group) + QLatin1Char('/') + Id;
+}
+
+std::filesystem::path manifestPath(const QString &Path) {
+  const auto Utf8 = Path.toUtf8();
+  return std::filesystem::u8path(Utf8.constBegin(), Utf8.constEnd());
+}
 } // namespace
 
 PluginServices::PluginServices(Session &Session)
@@ -88,6 +99,7 @@ QList<PluginInstallation> PluginServices::pluginInstallations() const {
         reinterpret_cast<const char *>(Path.data()), Path.size()));
     Item.Enabled = State.Record.Enabled;
     Item.Installed = State.Installed;
+    Item.Bundled = State.Bundled;
     Item.Name = State.Declaration
                     ? QString::fromStdString(State.Declaration->Name)
                     : Item.Id;
@@ -115,17 +127,20 @@ QList<PluginInstallation> PluginServices::pluginInstallations() const {
 void PluginServices::savePlugin(const QString &Id) {
   QSettings Settings;
   const auto State = Jobs.catalog().snapshot(Id.toStdString());
-  if (!State || !State->Installed) {
-    Settings.remove(QStringLiteral("guiPlugins/installed/") + Id);
-    Settings.remove(QStringLiteral("guiPlugins/enabled/") + Id);
+  const auto InstalledKey = pluginKey(InstalledPluginsKey, Id);
+  const auto EnabledKey = pluginKey(EnabledPluginsKey, Id);
+  if (State && State->Bundled) {
+    Settings.setValue(EnabledKey, State->Record.Enabled);
+  } else if (!State || !State->Installed) {
+    Settings.remove(InstalledKey);
+    Settings.remove(EnabledKey);
   } else {
     const auto Path = State->Record.Path.u8string();
     Settings.setValue(
-        QStringLiteral("guiPlugins/installed/") + Id,
+        InstalledKey,
         QDir::fromNativeSeparators(QString::fromUtf8(
             reinterpret_cast<const char *>(Path.data()), Path.size())));
-    Settings.setValue(QStringLiteral("guiPlugins/enabled/") + Id,
-                      State->Record.Enabled);
+    Settings.setValue(EnabledKey, State->Record.Enabled);
   }
   Settings.sync();
   if (Settings.status() != QSettings::NoError)
@@ -134,26 +149,32 @@ void PluginServices::savePlugin(const QString &Id) {
                  2);
 }
 
-void PluginServices::restorePlugins() {
+void PluginServices::restorePlugins(const QString &BundledAgentManifest) {
   if (PluginsRestored)
     return;
   QSettings Settings;
   Settings.beginGroup(QLatin1String(InstalledPluginsKey));
   const auto Ids = Settings.childKeys();
   Settings.endGroup();
-  std::vector<neverd::plugin::InstallationRecord> Records;
-  for (const auto &Id : Ids)
+  std::vector<neverd::plugin::InstallationRecord> Records, Bundled;
+  const auto AgentId = QString::fromLatin1(AgentPluginId);
+  const auto enabled = [&](const QString &Id) {
+    return Settings.value(pluginKey(EnabledPluginsKey, Id), true).toBool();
+  };
+  if (!BundledAgentManifest.isEmpty())
+    Bundled.push_back(
+        {AgentPluginId, manifestPath(BundledAgentManifest), enabled(AgentId)});
+  for (const auto &Id : Ids) {
+    if (!BundledAgentManifest.isEmpty() && Id == AgentId)
+      continue;
     Records.push_back(
         {Id.toStdString(),
-         std::filesystem::u8path(
-             Settings.value(QStringLiteral("guiPlugins/installed/") + Id)
-                 .toString()
-                 .toUtf8()
-                 .toStdString()),
-         Settings.value(QStringLiteral("guiPlugins/enabled/") + Id, true)
-             .toBool()});
+         manifestPath(
+             Settings.value(pluginKey(InstalledPluginsKey, Id)).toString()),
+         enabled(Id)});
+  }
   neverd::plugin::Diagnostic Error;
-  const bool Restored = Jobs.catalog().restore(Records, Error);
+  const bool Restored = Jobs.catalog().restore(Records, Error, Bundled);
   PluginsRestored = true;
   QStringList Warnings;
   if (!Restored)
@@ -257,7 +278,7 @@ void PluginServices::setSelectionProvider(
   refreshContext();
 }
 
-void PluginServices::refreshContext() {
+QJsonObject PluginServices::currentContext() const {
   auto Context = Selection ? Selection() : Project.selection();
   Context.insert("loaded", Project.loaded());
   Context.insert("epoch", QString::number(Project.epoch()));
@@ -267,7 +288,11 @@ void PluginServices::refreshContext() {
   Context.insert("project_path", Project.projectPath());
   Context.insert("architecture", Project.architecture());
   Context.insert("format", Project.format());
-  Jobs.setContext(Context);
+  return Context;
+}
+
+void PluginServices::refreshContext() {
+  Jobs.setContext(currentContext());
   emit contextChanged();
 }
 

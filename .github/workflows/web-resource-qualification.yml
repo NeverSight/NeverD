@@ -3,25 +3,6 @@ name: Web resource qualification
 on:
   workflow_dispatch:
   workflow_call:
-  push:
-    branches: [dev]
-    paths:
-      - 'include/neverd/web/DataPack.h'
-      - 'lib/web/desktop/DataPack.cpp'
-      - 'lib/web/SessionDataPack*.cpp'
-      - 'lib/web/compression/Gzip.*'
-      - 'unittests/web/DataPack*'
-      - 'scripts/build_web_icu.sh'
-      - '.github/workflows/web-resource-qualification.yml'
-  pull_request:
-    paths:
-      - 'include/neverd/web/DataPack.h'
-      - 'lib/web/desktop/DataPack.cpp'
-      - 'lib/web/SessionDataPack*.cpp'
-      - 'lib/web/compression/Gzip.*'
-      - 'unittests/web/DataPack*'
-      - 'scripts/build_web_icu.sh'
-      - '.github/workflows/web-resource-qualification.yml'
 
 permissions:
   contents: read

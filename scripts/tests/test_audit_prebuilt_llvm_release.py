@@ -217,14 +217,14 @@ class PrebuiltLlvmReleaseAuditTests(unittest.TestCase):
         self.assertEqual(delays, [1, 2])
         self.assertEqual(response.limit, 5)
 
-    def test_event_workflow_runs_tests_and_live_audit(self):
+    def test_manual_workflow_runs_tests_and_live_audit(self):
         source = WORKFLOW.read_text(encoding="utf-8")
+
+        triggers = source.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+        self.assertEqual(triggers.strip(), "workflow_dispatch:")
 
         for expected in (
             "name: Prebuilt LLVM Audit",
-            "  push:",
-            "    branches:\n      - dev",
-            "  pull_request:",
             "  workflow_dispatch:",
             "  contents: read",
             "runs-on: ubuntu-24.04",

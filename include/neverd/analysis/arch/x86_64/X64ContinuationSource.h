@@ -12,6 +12,7 @@
 
 #include "neverd/analysis/Limits.h"
 #include "neverd/ir/SourceTypeHint.h"
+#include "neverd/ir/X86/X86SegmentBasePolicy.h"
 #include "neverd/ir/X86/X86SvmContext.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowUndefinedEffects.h"
@@ -414,7 +415,7 @@ enum class X64ContinuationProfile : uint8_t {
 /// default is inferred: AMD behavior also depends on processor capabilities.
 /// The selector becomes unusable; its ignored limit/attribute bytes are kept.
 /// FS/GS base remains architectural and follows this declared policy.
-enum class X64NullSegmentBasePolicy : uint8_t { Clear, Preserve };
+using X64NullSegmentBasePolicy = X86NullSegmentBasePolicy;
 
 struct X64ContinuationSourceOptions {
   X64ContinuationProfile Profile = X64ContinuationProfile::Unspecified;

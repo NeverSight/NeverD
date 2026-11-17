@@ -109,7 +109,7 @@ endif()
 
 if(NEVERD_BUILD_SHARED)
   add_library(neverd-bytecode-plugin-fixture SHARED
-    ${CMAKE_SOURCE_DIR}/plugins/bytecode/bytecode_plugin.c)
+    ${CMAKE_SOURCE_DIR}/plugins/example/bytecode/bytecode_plugin.c)
   target_link_libraries(neverd-bytecode-plugin-fixture PRIVATE neverd_shared)
   set_target_properties(neverd-bytecode-plugin-fixture PROPERTIES
     PREFIX "" C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)

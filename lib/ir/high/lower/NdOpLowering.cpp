@@ -19,6 +19,7 @@
 
 #include "AnalysisCall.h"
 
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -123,7 +124,8 @@ void MedToHighConverter::lowerStore(HighFunc &Func, const MedOp &CurOp) {
   S.MemoryOrdering = CurOp.MemoryOrdering;
   S.MemoryAddressSpace = CurOp.MemoryAddressSpace;
   if (CurOp.NumInputs >= 2) {
-    S.StoreAddr = memoryAddressExpr(CurOp.Inputs[0]);
+    S.StoreAddr =
+        sourcePointerOperand(CurOp, memoryAddressExpr(CurOp.Inputs[0]));
 
     const auto ValKey = varKey(CurOp.Inputs[1]);
     if (CallOutputs.count(ValKey))
@@ -199,12 +201,16 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
   auto CallExpr = HighExpr::makeCall(Callee, Target, std::move(Args));
   CallExpr->CallSiteAddr = CurOp.Addr;
   CallExpr->SourceCallHint = CurOp.SourceCallHint;
+  if (CurMed)
+    if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx))
+      CallExpr->SourceCalleeType = Info->SourceCalleeType;
   if (auto Signature = boundFloatingCallArguments(
           CurOp, TargetArch,
           Image ? Image->abiFormat() : BinaryFormat::Unknown))
     CallExpr->FloatingCallSignature =
         std::make_shared<FloatingCallArguments>(std::move(*Signature));
-  else if (CurOp.CalleeFloatReturnBytes && CurMed)
+  else if ((CurOp.CalleeFloatReturnBytes || CurOp.RegisterReturnFields) &&
+           CurMed)
     if (const auto *Info = CurMed->findCall(CurBlock.Id, CallIdx))
       if (auto Signature = recoveredFloatingCallArguments(
               CurOp, *Info, TargetArch,
@@ -217,7 +223,12 @@ void MedToHighConverter::lowerCall(HighFunc &Func, const MedBlock &CurBlock,
       getTargetRegInfo(TargetArch).isX87StackReg(CurOp.Output.RegOff);
   if (CurOp.Output.Size || CurOp.SourceCallHint || X87Result ||
       CurOp.CalleeFloatReturnBytes || CallExpr->FloatingCallSignature)
-    CallExpr->Type = sourceCallResultType(CurOp);
+    CallExpr->Type =
+        CallExpr->SourceCalleeType &&
+                !(CurOp.SourceCallHint &&
+                  sourceCallRetainsResultStorage(*CurOp.SourceCallHint))
+            ? CallExpr->SourceCalleeType->RetType
+            : sourceCallResultType(CurOp);
   if (ExpressionObserver && CurOp.Addr != InvalidVA && CurOp.OriginSeq >= 0)
     ExpressionObserver(CurOp, CallExpr);
 

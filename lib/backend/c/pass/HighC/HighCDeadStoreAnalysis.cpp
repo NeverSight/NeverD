@@ -77,10 +77,6 @@ void walkExprNodes(const HighExpr &Root, Visitor &&Visit) {
   }
 }
 
-bool sameMedVar(const MedVar &A, const MedVar &B) {
-  return medVarIdentity(A) == medVarIdentity(B);
-}
-
 std::optional<int64_t> addOffset(int64_t A, int64_t B) {
   if ((B > 0 && A > std::numeric_limits<int64_t>::max() - B) ||
       (B < 0 && A < std::numeric_limits<int64_t>::min() - B))
@@ -143,10 +139,6 @@ std::optional<ReducedAddr> reduceAddr(const HighExpr &Expr,
                    : std::nullopt;
 }
 
-bool sameReducedAddr(const ReducedAddr &A, const ReducedAddr &B) {
-  return sameMedVar(A.Base, B.Base) && A.Offset == B.Offset;
-}
-
 std::string reducedAddrKey(const ReducedAddr &Addr) {
   return "reduced:" + std::to_string(static_cast<unsigned>(Addr.Base.Kind)) +
          ":" + std::to_string(Addr.Base.Id) + ":" +
@@ -157,15 +149,17 @@ std::string reducedAddrKey(const ReducedAddr &Addr) {
          std::to_string(Addr.Offset);
 }
 
+/// A reduced address by its base value's identity and its offset.
+using ReducedAddrKey = std::pair<decltype(medVarIdentity(MedVar{})), int64_t>;
+
+ReducedAddrKey keyOf(const ReducedAddr &Addr) {
+  return {medVarIdentity(Addr.Base), Addr.Offset};
+}
+
 bool matchesReducedAddr(const HighExpr &Expr, const ExprDefinitions &Defs,
-                        const std::vector<ReducedAddr> &Candidates) {
+                        const std::set<ReducedAddrKey> &Candidates) {
   auto Reduced = reduceAddr(Expr, Defs);
-  if (!Reduced)
-    return false;
-  return std::any_of(Candidates.begin(), Candidates.end(),
-                     [&](const ReducedAddr &Candidate) {
-                       return sameReducedAddr(*Reduced, Candidate);
-                     });
+  return Reduced && Candidates.count(keyOf(*Reduced));
 }
 
 void collectExprVars(const HighExpr &E, std::set<std::string> &Out,
@@ -387,7 +381,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
     });
   });
 
-  std::vector<ReducedAddr> ReducedLoads;
+  std::set<ReducedAddrKey> ReducedLoads;
   walkStmts(Func.Body, [&](const HighStmt &S) {
     forEachExprAndFilter(S, [&](const ExprPtr &E) {
       if (!E)
@@ -395,7 +389,7 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
       walkExprNodes(*E, [&](const HighExpr &Expr) {
         if (Expr.Kind == ExprKind::Load && !Expr.Operands.empty())
           if (auto Addr = reduceAddr(*Expr.Operands[0], Defs))
-            ReducedLoads.push_back(*Addr);
+            ReducedLoads.insert(keyOf(*Addr));
       });
     });
   });
@@ -456,62 +450,90 @@ void analyzeDeadStores(HighCAnalysisState &State, const HighFunc &Func,
       State.DeadStmts.insert(&S);
   });
 
-  bool Changed = true;
-  while (Changed) {
-    Changed = false;
-    std::set<std::string> AliveVars;
-    for (auto &P : Func.Params)
-      AliveVars.insert(P.Name);
-
-    walkStmts(Func.Body, [&](const HighStmt &S) {
-      if (State.DeadStmts.count(&S))
-        return;
-      forEachRhsExprAndFilter(S, [&](const ExprPtr &E) {
-        if (E)
-          collectExprVars(*E, AliveVars, VarFn);
-      });
+  // A plain assignment none of whose values a live statement reads is dead,
+  // and what it reads is read once less. Removing one only lowers the counts,
+  // so every order removes the same assignments.
+  std::map<std::string, unsigned> NameIds;
+  const auto IdOf = [&](const std::string &Name) {
+    return NameIds.try_emplace(Name, unsigned(NameIds.size())).first->second;
+  };
+  std::set<unsigned> ParamIds;
+  for (auto &P : Func.Params)
+    ParamIds.insert(IdOf(P.Name));
+  std::vector<size_t> Uses;
+  std::map<const HighStmt *, std::vector<unsigned>> Reads;
+  std::vector<const HighStmt *> Live;
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    if (State.DeadStmts.count(&S))
+      return;
+    Live.push_back(&S);
+    std::set<std::string> Names;
+    forEachRhsExprAndFilter(S, [&](const ExprPtr &E) {
+      if (E)
+        collectExprVars(*E, Names, VarFn);
     });
-
-    walkStmts(Func.Body, [&](const HighStmt &S) {
-      if (State.DeadStmts.count(&S))
-        return;
-      const auto *Call = S.Kind == StmtKind::Call     ? S.CallExpr.get()
-                         : S.Kind == StmtKind::Assign ? S.Val.get()
-                                                      : nullptr;
-      if (Call && Call->Kind == ExprKind::Call &&
-          Call->IntrinsicId != Intrinsic::None)
-        for (const auto &Output : Call->IntrinsicOutputs)
-          if (!AliveVars.count(VarFn(Output)))
-            Changed |= State.DeadVars.insert(VarFn(Output)).second;
-      if (S.Kind == StmtKind::Assign && S.Dst && S.Dst->Kind == ExprKind::Var) {
-        if (S.Val && S.Val->Kind == ExprKind::Call &&
-            S.Val->IntrinsicId != Intrinsic::None) {
-          std::string DstName = VarFn(S.Dst->Var);
-          if (!AliveVars.count(DstName)) {
-            if (State.DeadVars.insert(DstName).second)
-              Changed = true;
-          }
-          return;
-        }
-        if (S.Val &&
-            (S.Val->Kind == ExprKind::Call || S.Val->hasOrderedMemoryAccess()))
-          return;
-        std::string Name = VarFn(S.Dst->Var);
-        bool AnyAlive = AliveVars.count(Name);
-        if (!AnyAlive && S.Val && !S.Val->IntrinsicOutputs.empty()) {
-          for (auto &CO : S.Val->IntrinsicOutputs)
-            if (AliveVars.count(VarFn(CO))) {
-              AnyAlive = true;
-              break;
-            }
-        }
-        if (!AnyAlive) {
-          State.DeadStmts.insert(&S);
-          State.DeadVars.insert(Name);
-          Changed = true;
-        }
-      }
-    });
+    std::vector<unsigned> &Read = Reads[&S];
+    for (const std::string &Name : Names) {
+      const unsigned Id = IdOf(Name);
+      if (Id >= Uses.size())
+        Uses.resize(Id + 1);
+      ++Uses[Id];
+      Read.push_back(Id);
+    }
+  });
+  const auto Alive = [&](unsigned Id) {
+    return ParamIds.count(Id) || (Id < Uses.size() && Uses[Id]);
+  };
+  // The values each removable assignment defines, by the statement.
+  std::map<const HighStmt *, std::vector<unsigned>> Defines;
+  std::map<unsigned, std::vector<const HighStmt *>> DefinedBy;
+  for (const HighStmt *S : Live) {
+    if (S->Kind != StmtKind::Assign || !S->Dst || S->Dst->Kind != ExprKind::Var)
+      continue;
+    if (S->Val &&
+        (S->Val->Kind == ExprKind::Call || S->Val->hasOrderedMemoryAccess()))
+      continue;
+    std::vector<unsigned> &Defined = Defines[S];
+    Defined.push_back(IdOf(VarFn(S->Dst->Var)));
+    if (S->Val)
+      for (const auto &Output : S->Val->IntrinsicOutputs)
+        Defined.push_back(IdOf(VarFn(Output)));
+    for (const unsigned Id : Defined)
+      DefinedBy[Id].push_back(S);
+  }
+  std::vector<const HighStmt *> Work;
+  for (const auto &[S, Defined] : Defines)
+    Work.push_back(S);
+  while (!Work.empty()) {
+    const HighStmt *S = Work.back();
+    Work.pop_back();
+    const std::vector<unsigned> &Defined = Defines.at(S);
+    if (State.DeadStmts.count(S) ||
+        std::any_of(Defined.begin(), Defined.end(), Alive))
+      continue;
+    State.DeadStmts.insert(S);
+    State.DeadVars.insert(VarFn(S->Dst->Var));
+    for (const unsigned Id : Reads.at(S))
+      if (--Uses[Id] == 0 && !ParamIds.count(Id))
+        if (const auto It = DefinedBy.find(Id); It != DefinedBy.end())
+          Work.insert(Work.end(), It->second.begin(), It->second.end());
+  }
+  // An intrinsic's statement stays; a value of it nothing reads is dead.
+  for (const HighStmt *S : Live) {
+    if (State.DeadStmts.count(S))
+      continue;
+    const auto *Call = S->Kind == StmtKind::Call     ? S->CallExpr.get()
+                       : S->Kind == StmtKind::Assign ? S->Val.get()
+                                                     : nullptr;
+    if (!Call || Call->Kind != ExprKind::Call ||
+        Call->IntrinsicId == Intrinsic::None)
+      continue;
+    for (const auto &Output : Call->IntrinsicOutputs)
+      if (std::string Name = VarFn(Output); !Alive(IdOf(Name)))
+        State.DeadVars.insert(std::move(Name));
+    if (S->Kind == StmtKind::Assign && S->Dst && S->Dst->Kind == ExprKind::Var)
+      if (std::string Name = VarFn(S->Dst->Var); !Alive(IdOf(Name)))
+        State.DeadVars.insert(std::move(Name));
   }
 
   std::set<std::string> AssignedVars;

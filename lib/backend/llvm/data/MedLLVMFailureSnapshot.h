@@ -196,6 +196,7 @@ struct SnapshotWriter {
     n("signed", T->IsSigned);
     n("function_convention",
       T->FunctionConvention ? static_cast<int>(*T->FunctionConvention) : -1);
+    n("function_variadic", T->FunctionVariadic);
     u("array_count", T->ArrayCount);
     key("pointee");
     type(T->Pointee, Depth + 1);

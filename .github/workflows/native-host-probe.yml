@@ -2,25 +2,6 @@ name: Native host setup
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - '.github/workflows/native-host-probe.yml'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/prepare_kvm_ci.py'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_probe_native_host.py'
-      - 'lib/emulation/backends/kvm/KvmProtocol.def'
-      - 'lib/emulation/backends/whp/WhpProtocol.def'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/native-host-probe.yml'
-      - 'scripts/probe_native_host.*'
-      - 'scripts/prepare_kvm_ci.py'
-      - 'scripts/NativeHostProbe.def'
-      - 'scripts/tests/test_probe_native_host.py'
-      - 'lib/emulation/backends/kvm/KvmProtocol.def'
-      - 'lib/emulation/backends/whp/WhpProtocol.def'
 
 permissions:
   contents: read

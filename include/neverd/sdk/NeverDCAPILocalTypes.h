@@ -67,6 +67,16 @@ extern "C" {
 /// "renamed":[[name,spelling],...], the names that language cannot spell as
 /// they are.  NULL with neverd_last_error() when no binary is loaded, the
 /// options are malformed or the debug information's types cannot be read.
+/// Optional "offset" (nonnegative), "limit" (1–512), or "locate" (exact
+/// name) selects a page, adding "total", "offset", "next_offset" and an
+/// "index" when locate finds a type. Locate selects that type's page.
+/// "sort" is ordinal (default), name, kind, size or members; "descending"
+/// reverses it. Filtering and sorting precede paging; ordinal breaks ties.
+/// A page may end early at the byte limit: continue at next_offset.
+/// Paged diagnostics use "diagnostics_offset" (default 0) and the same
+/// limit, with per-category total/offset/next_offset in "diagnostics".
+/// Without paging, the full legacy inventory and diagnostics are returned.
+/// With paging, "renamed" includes only names on the returned type page.
 NEVERD_API const char *neverd_local_types_json(neverd_session_t Sess,
                                                const char *OptionsJson);
 

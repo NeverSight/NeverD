@@ -152,7 +152,8 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
           bool SawArithmetic = false;
           auto C = traceTableBaseConst(Def->Inputs[I], 0, &SawLoad, nullptr,
                                        &SawArithmetic);
-          if (C && (SawLoad || !SawArithmetic) && constInRodata(*C))
+          if (C && (SawLoad || !SawArithmetic) && constInRodata(*C) &&
+              !valueIsStableAddressOffset(Def->Inputs[I]))
             SawInvalidTableBlend = true;
         }
       } else if (Def->Opcode == NdOp::INT_OR) {
@@ -181,7 +182,11 @@ MedLLVMEmitter::tryResolveInductionGlobalPtr(const MedVar &AddrVar,
                 bool SawArithmetic = false;
                 auto C = traceTableBaseConst(And->Inputs[I], 0, &SawLoad,
                                              nullptr, &SawArithmetic);
-                if (C && (SawLoad || !SawArithmetic) && constInRodata(*C))
+                // Scalar masks can numerically overlap a read-only object.
+                // Reuse the scalar owner, including forwarded definitions;
+                // only an unproved/address-valued arm can taint this blend.
+                if (C && (SawLoad || !SawArithmetic) && constInRodata(*C) &&
+                    !valueIsStableAddressOffset(And->Inputs[I]))
                   SawInvalidTableBlend = true;
               }
           }

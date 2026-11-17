@@ -84,26 +84,26 @@ class Client:
             self.process.stdin.flush()
         return request_id
 
-    def response(self, request_id):
+    def response(self, request_id, timeout=8):
         return self.next(lambda message: message.get("type") == "response"
                          and message.get("request_id") == request_id
-                         and message.get("status") != "progress")
+                         and message.get("status") != "progress", timeout)
 
-    def call(self, operation, payload=None, **kwargs):
+    def call(self, operation, payload=None, *, timeout=8, **kwargs):
         request_id = self.send(operation, payload, **kwargs)
         try:
-            return self.response(request_id)
+            return self.response(request_id, timeout)
         except TimeoutError as error:
             raise TimeoutError(
                 f"worker response timeout: operation={operation!r}, "
                 f"request_id={request_id!r}, worker_returncode={self.process.poll()!r}"
             ) from error
 
-    def close(self):
+    def close(self, timeout=8):
         if self.process.poll() is None:
-            self.call("shutdown")
+            self.call("shutdown", timeout=timeout)
             self.process.stdin.close()
-            self.process.wait(timeout=8)
+            self.process.wait(timeout=timeout)
         self.stderr.join(timeout=2)
 
     def __enter__(self):

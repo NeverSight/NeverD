@@ -1,6 +1,6 @@
 **語言**: [English](../../README.md) | [简体中文](../zh-CN/project.md) | [繁體中文](project.md) | [日本語](../ja/project.md) | [한국어](../ko/project.md) | [Français](../fr/project.md) | [Deutsch](../de/project.md) | [Español](../es/project.md) | [Italiano](../it/project.md) | [Русский](../ru/project.md) | [العربية](../ar/project.md)
 
-<!-- i18n-source: edadf84089252d2d8a80ae25926c8013d54fb4a3fea7fc631f3731016652375c -->
+<!-- i18n-source: 95fe83b667a666030f97d08f0560a217df220426b80c7a4c36c9e24c60750765 -->
 
 <div align="center">
 
@@ -293,6 +293,7 @@ neverd <command> [options] <binary>
 |------|------|------|
 | `lift` | `.ll` | 提升到 LLVM IR |
 | `decompile` | `.c` / `.sol` / `.rs` | 透過 `--language` 選擇 C、EVM Solidity 或 SBF Rust |
+| `decompile --check-all` | 統計 | 對每個已載入函式產生預設 C；檢查後即釋放該函式本體 |
 | `decompile -llvm` | `.c` | 經 LLVM IR + 最佳化器 |
 | `decompile --devirtualize` | `.c` + 選用 JSON | 實驗性 x64 直譯器還原；需要 `--func`；[契約與範例](interpreter-recovery.md) |
 | `mobile` | `.java` / `.c` / `.m` / `.swift` + JSON | 實驗性: [Android](android.md), [iOS](ios.md) |

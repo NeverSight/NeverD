@@ -15,12 +15,16 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/MedReturnArguments.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/pipeline/Limits.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include <algorithm>
 #include <map>
@@ -49,15 +53,47 @@ bool returnsStructFields(const MedFunc &Function,
   std::map<int, const MedBlock *> Blocks;
   std::set<Key> Definitions, Unknown;
   std::map<Key, std::vector<Key>> Users;
+  llvm::SmallPtrSet<const MedOp *, 32> LowViews;
   for (const MedBlock &Block : Function.Blocks) {
     Blocks.emplace(Block.Id, &Block);
     for (const PhiNode &Phi : Block.Phis)
       Definitions.insert(Identity(Phi.Output));
+    llvm::DenseMap<uint64_t, const MedOp *> LastRegisterWrites;
     for (const MedOp &Op : Block.Ops) {
       if (Op.Output.Size)
         Definitions.insert(Identity(Op.Output));
       for (const MedVar &Output : Op.IntrinsicOutputs)
         Definitions.insert(Identity(Output));
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+        LastRegisterWrites.clear();
+      const MedVar &Out = Op.Output;
+      if (Out.Kind != MedVar::Reg || !Out.Size)
+        continue;
+      bool View = false;
+      if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+          Op.Inputs[1].isConst()) {
+        const MedVar &Input = Op.Inputs[0];
+        if (Input.Kind == MedVar::Reg)
+          View = isSameRegisterLowSlice(Out.RegOff, Out.Size, Input.RegOff,
+                                        Input.Size, Op.Inputs[1].ConstVal);
+        if (!View)
+          if (const auto It = LastRegisterWrites.find(Out.RegOff);
+              It != LastRegisterWrites.end()) {
+            const MedOp &Whole = *It->second;
+            // Copy propagation can replace the wide register operand with
+            // the temporary that supplied it. The low slice still observes
+            // that same complete write, including across unrelated writes.
+            View = Whole.Opcode == NdOp::COPY && Whole.NumInputs == 1 &&
+                   Whole.Inputs[0] == Input &&
+                   isSameRegisterLowSlice(
+                       Out.RegOff, Out.Size, Whole.Output.RegOff,
+                       Whole.Output.Size, Op.Inputs[1].ConstVal);
+          }
+      }
+      if (View)
+        LowViews.insert(&Op);
+      else
+        LastRegisterWrites[Out.RegOff] = &Op;
     }
   }
   for (const auto &Clobber : Function.CallClobbers)
@@ -72,11 +108,23 @@ bool returnsStructFields(const MedFunc &Function,
       Users[In].push_back(Out);
   };
   for (const MedBlock &Block : Function.Blocks) {
+    const llvm::SmallDenseSet<int, 8> Predecessors(Block.Preds.begin(),
+                                                   Block.Preds.end());
     for (const PhiNode &Phi : Block.Phis) {
-      if (Phi.Args.empty())
-        Unknown.insert(Identity(Phi.Output));
-      for (const auto &[Pred, Input] : Phi.Args)
+      // A PHI can be the only remaining definition after constant/copy
+      // propagation. It supplies a field only when every incoming path
+      // supplies all of its bytes; absent inputs are not implicit constants.
+      bool Complete = !Phi.Args.empty() && Block.ExceptionalPreds.empty() &&
+                      Phi.Args.size() == Predecessors.size();
+      llvm::SmallDenseSet<int, 8> Incoming;
+      for (const auto &[Pred, Input] : Phi.Args) {
+        Complete &= Predecessors.contains(Pred) &&
+                    Incoming.insert(Pred).second &&
+                    Input.Size >= Phi.Output.Size;
         Depend(Phi.Output, Input);
+      }
+      if (!Complete)
+        Unknown.insert(Identity(Phi.Output));
       if (Phi.ExceptionalEntry)
         Depend(Phi.Output, *Phi.ExceptionalEntry);
     }
@@ -134,18 +182,19 @@ bool returnsStructFields(const MedFunc &Function,
       bool Written = false;
       for (size_t I = Before; I-- > 0;) {
         const MedOp &Op = Block->Ops[I];
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
-          return false;
         const MedVar &Out = Op.Output;
         if (Out.Kind != MedVar::Reg || !Out.Size ||
             Out.RegOff >= Field.RegOff + Field.Size ||
-            Field.RegOff >= Out.RegOff + Out.Size)
+            Field.RegOff >= Out.RegOff + Out.Size) {
+          // A call cuts off older register writes, but its explicit result
+          // is a new definition. Check that output with the same definedness
+          // rule as a copy of it; do not confuse it with a call clobber.
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+            return false;
           continue;
+        }
         // A synthetic low-byte view doesn't overwrite the full register.
-        if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
-            isSameRegisterLowSlice(Out.RegOff, Out.Size, Op.Inputs[0].RegOff,
-                                   Op.Inputs[0].Size, Op.Inputs[1].ConstVal) &&
-            Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[1].isConst())
+        if (LowViews.contains(&Op))
           continue;
         const bool SelfCopy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
                               Op.Inputs[0].Kind == MedVar::Reg &&
@@ -161,6 +210,12 @@ bool returnsStructFields(const MedFunc &Function,
       }
       if (Written)
         continue;
+      if (const PhiNode *Whole = aggregateReturnPhi(*Block, Field.RegOff)) {
+        if (Whole->Output.Size < Field.Size ||
+            Unknown.count(Identity(Whole->Output)))
+          return false;
+        continue;
+      }
       if (Block->Preds.empty() || !Block->ExceptionalPreds.empty())
         return false;
       for (int Pred : Block->Preds) {
@@ -803,7 +858,7 @@ void recoverStructReturnFromBody(const BinaryImage &Img, PipelineResult &Result,
         if (!Complete)
           continue;
         const va_t Target = Call->Inputs[0].ConstVal;
-        if (!Candidate.SecondWordOnly)
+        if (!Candidate.HasUnobservedFields)
           FirstWordObserved.insert(Target);
         auto [It, Inserted] = CallerHFAShapes.emplace(Target, Shape);
         if (!Inserted &&

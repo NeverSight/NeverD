@@ -45,6 +45,54 @@ NdType::~NdType() {
   abandonSmashedVector(&FieldDisplayNames, sizeof(FieldDisplayNames));
   abandonSmashedVector(&FieldDisplayOffsets, sizeof(FieldDisplayOffsets));
   abandonSmashedVector(&FieldDisplayTypes, sizeof(FieldDisplayTypes));
+  abandonSmashedVector(&FieldDisplayBits, sizeof(FieldDisplayBits));
+}
+
+std::optional<std::string>
+NdType::displayBitFieldPathAt(uint64_t BitOffset, uint32_t BitWidth) const {
+  const auto Bytes = FieldDisplaySize ? FieldDisplaySize : Size;
+  if (Kind != NdTypeKind::Struct || IsEnum || !BitWidth ||
+      BitOffset >= uint64_t(Bytes) * 8 ||
+      BitWidth > uint64_t(Bytes) * 8 - BitOffset)
+    return std::nullopt;
+  std::optional<std::string> Found;
+  bool Ambiguous = false;
+  const auto Add = [&](std::string Name) {
+    if (Found && *Found != Name)
+      Ambiguous = true;
+    else
+      Found = std::move(Name);
+  };
+  for (const auto &Field : FieldDisplayBits)
+    if (!Field.IsSigned && Field.BitOffset == BitOffset &&
+        Field.BitWidth == BitWidth && !Field.Name.empty())
+      Add(Field.Name);
+  for (size_t I = 0;
+       I < FieldDisplayNames.size() && I < FieldDisplayOffsets.size() &&
+       I < FieldDisplayTypes.size();
+       ++I) {
+    const auto &Type = FieldDisplayTypes[I];
+    const uint64_t Base = uint64_t(FieldDisplayOffsets[I]) * 8;
+    if (!Type || FieldDisplayNames[I].empty() || BitOffset < Base ||
+        BitOffset - Base >= uint64_t(Type->FieldDisplaySize
+                                         ? Type->FieldDisplaySize
+                                         : Type->Size) *
+                                8)
+      continue;
+    uint64_t Rel = BitOffset - Base;
+    TypeRef Element = Type;
+    std::string Path = FieldDisplayNames[I];
+    while (Element->Kind == NdTypeKind::Array && Element->ElemType &&
+           Element->ElemType->Size) {
+      const uint64_t ElementBits = uint64_t(Element->ElemType->Size) * 8;
+      Path += "[" + std::to_string(Rel / ElementBits) + "]";
+      Rel %= ElementBits;
+      Element = Element->ElemType;
+    }
+    if (auto Inner = Element->displayBitFieldPathAt(Rel, BitWidth))
+      Add(Path + "." + *Inner);
+  }
+  return Ambiguous ? std::nullopt : Found;
 }
 
 namespace {
@@ -149,6 +197,13 @@ std::string NdType::str() const {
     return Size == 4 ? "float" : "double";
   case NdTypeKind::Ptr:
     return Pointee ? Pointee->str() + "*" : "void*";
+  case NdTypeKind::Vector:
+    return "vector<" + std::to_string(ArrayCount) + " x " +
+           (ElemType && (ElemType->Kind == NdTypeKind::Int ||
+                         ElemType->Kind == NdTypeKind::Float)
+                ? ElemType->str()
+                : "unknown") +
+           ">";
   case NdTypeKind::Struct: {
     // Validate before recursive printing, including cycles and stale offsets.
     unsigned Budget = ::neverd::limits::ir::kNdTypesNdTypeStrBudget;

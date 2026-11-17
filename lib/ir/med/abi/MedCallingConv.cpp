@@ -29,6 +29,7 @@
 #include "neverd/ir/med/MedCallReturnReads.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/support/Diagnostic.h"
@@ -567,6 +568,100 @@ bool incomingBytesReachUse(const MedFunc &Func, uint64_t RegOff) {
 /// Find the set of self-copy parameter registers in the entry block.
 /// In the LowIR->MedIR translation, self-copies (COPY reg, reg) at the
 /// entry denote live-in registers from the caller.
+/// The argument registers after the first, and the indirect result register,
+/// that \p Func, an AArch64 routine, saves into the context its first argument
+/// points at, among the registers it saves there whole and in order through
+/// X15, with no other use of their incoming values: a capture of its caller's
+/// registers (`__unw_getcontext`, `stp x0, x1, [x0]; stp x2, x3, [x0, #16];
+/// ...`), which reads no argument but the context.  A function storing its
+/// arguments into a record stores no X8 there.
+std::vector<uint64_t> capturedContextRegisters(const MedFunc &Func) {
+  constexpr unsigned LastPassed = 8, CapturedThrough = 15;
+  if (Func.Blocks.empty())
+    return {};
+  using Key = std::tuple<int, int, int>;
+  const auto KeyOf = [](const MedVar &V) {
+    return Key{static_cast<int>(V.Kind), V.Id, V.SSAVer};
+  };
+  const MedBlock &Entry = Func.Blocks.front();
+  // The register whose incoming value a variable holds: its first version,
+  // or an entry copy of it.
+  std::map<Key, unsigned> Copies;
+  for (const MedOp &Op : Entry.Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    for (unsigned N = 0; N <= CapturedThrough; ++N)
+      if (isEntryLiveInCopy(Op, a64reg::X0 + 8 * N) && Op.Output.Size == 8)
+        Copies[KeyOf(Op.Output)] = N;
+  }
+  const auto IncomingOf = [&](const MedVar &V) -> std::optional<unsigned> {
+    if (V.Kind != MedVar::Reg || V.Size != 8)
+      return std::nullopt;
+    if (const auto It = Copies.find(KeyOf(V)); It != Copies.end())
+      return It->second;
+    if (V.SSAVer == 0 && V.RegOff % 8 == 0 &&
+        V.RegOff <= a64reg::X0 + 8 * CapturedThrough)
+      return static_cast<unsigned>(V.RegOff / 8);
+    return std::nullopt;
+  };
+  // Addresses the incoming context pointer plus a constant forms.
+  std::map<Key, int64_t> ContextOffsets;
+  const auto ContextOffset = [&](const MedVar &V) -> std::optional<int64_t> {
+    if (IncomingOf(V) == 0u)
+      return 0;
+    if (const auto It = ContextOffsets.find(KeyOf(V));
+        It != ContextOffsets.end())
+      return It->second;
+    return std::nullopt;
+  };
+  std::map<unsigned, std::pair<const MedOp *, int64_t>> Saved;
+  for (const MedOp &Op : Entry.Ops) {
+    if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+      break;
+    if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1 && Op.Output.Size == 8 &&
+        !Op.Output.isConst())
+      if (const auto Offset = ContextOffset(Op.Inputs[0]))
+        ContextOffsets[KeyOf(Op.Output)] = *Offset;
+    if (Op.Opcode == NdOp::INT_ADD && Op.NumInputs == 2 &&
+        Op.Inputs[1].isConst() && Op.Output.Size == 8)
+      if (const auto Offset = ContextOffset(Op.Inputs[0]))
+        ContextOffsets[KeyOf(Op.Output)] =
+            *Offset + static_cast<int64_t>(Op.Inputs[1].ConstVal);
+    if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
+      if (const auto Offset = ContextOffset(Op.Inputs[0]))
+        if (const auto N = IncomingOf(Op.Inputs[1]);
+            N && *N && !Saved.count(*N))
+          Saved[*N] = {&Op, *Offset};
+  }
+  if (Saved.size() != CapturedThrough)
+    return {};
+  const int64_t Base = Saved.at(1).second - 8;
+  for (const auto &[N, Store] : Saved)
+    if (Store.second != Base + 8 * static_cast<int64_t>(N))
+      return {};
+  // The argument registers' incoming values go nowhere else.
+  const auto Captured = [&](const MedVar &V) {
+    const auto N = IncomingOf(V);
+    return N && *N && *N <= LastPassed;
+  };
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Incoming] : Phi.Args)
+        if (Captured(Incoming))
+          return {};
+    for (const MedOp &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (Captured(Op.Inputs[I]) &&
+            !isEntryLiveInCopy(Op, Op.Inputs[I].RegOff) &&
+            !(I == 1 && Saved.at(*IncomingOf(Op.Inputs[I])).first == &Op))
+          return {};
+  }
+  std::vector<uint64_t> Registers;
+  for (unsigned N = 1; N <= LastPassed; ++N)
+    Registers.push_back(a64reg::X0 + 8 * N);
+  return Registers;
+}
+
 std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
                                        llvm::ArrayRef<uint64_t> ParamRegs) {
   std::set<uint64_t> Used;
@@ -590,6 +685,21 @@ std::set<uint64_t> findLiveInParamRegs(const MedBlock &Entry,
 //===----------------------------------------------------------------------===//
 // Architecture-generic register-passed parameter detection
 //===----------------------------------------------------------------------===//
+
+/// A phi input SSA left at -1 because this edge never defined \p Register.
+/// On AArch64 that register is X0, which is both the return register and the
+/// first argument, so the value the edge returns is the incoming argument
+/// even when the body has no other read of it.
+static bool phiHoldsUnwrittenRegister(const MedFunc &Func, uint64_t Register) {
+  for (const MedBlock &Block : Func.Blocks)
+    for (const PhiNode &Phi : Block.Phis)
+      for (const auto &[Pred, Arg] : Phi.Args) {
+        (void)Pred;
+        if (Arg.Kind == MedVar::Reg && Arg.SSAVer < 0 && Arg.RegOff == Register)
+          return true;
+      }
+  return false;
+}
 
 void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> ParamRegs,
@@ -641,6 +751,18 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
     for (auto It = UsedParamRegs.begin(); It != UsedParamRegs.end();)
       It = incomingBytesReachUse(Func, *It) ? std::next(It)
                                             : UsedParamRegs.erase(It);
+  }
+  // AArch64 returns X0, which is also argument 0. An edge that never writes
+  // it still holds the value the function was entered with. That edge is a
+  // parameter even when no other instruction reads X0, so the argument list
+  // is not left empty and the return has nothing to name.
+  uint64_t IncomingReturnReg = 0;
+  const bool IncomingReturn = !ProtoArgs && TargetArch == Arch::AArch64 &&
+                              !ParamRegs.empty() &&
+                              phiHoldsUnwrittenRegister(Func, ParamRegs[0]);
+  if (IncomingReturn) {
+    IncomingReturnReg = ParamRegs[0];
+    UsedParamRegs.insert(IncomingReturnReg);
   }
   // No parameter register is live-in: the function takes no register arguments
   // (a leaf with stack-only or no arguments).  Returning keeps Func.Params
@@ -726,7 +848,10 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
     }
     if (!Marker) {
       // A declared parameter the body never reads still holds its position.
-      if (ProtoArgs || FromSummary) {
+      // The unwritten X0 edge has no entry copy either: the return is the
+      // only use, and that use is the phi input recorded above.
+      if (ProtoArgs || FromSummary ||
+          (IncomingReturn && PR == IncomingReturnReg)) {
         MedVar Placeholder;
         Placeholder.Kind = MedVar::Param;
         Placeholder.Id = -1;
@@ -1134,6 +1259,7 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     }
   }
 
+  const int StackParamBegin = static_cast<int>(Func.Params.size());
   int MaxIdx = MaxRegArgs - 1;
   for (int64_t Off : Offsets)
     MaxIdx = std::max(MaxIdx, offToIdx(Off));
@@ -1200,7 +1326,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   for (int64_t SlotBase : MutableSlots) {
     int Idx = offToIdx(SlotBase);
     if (Idx >= MaxRegArgs && Idx <= MaxIdx)
-      Func.MutableStackParamHomes.push_back({Idx, SlotBase});
+      // Homes name positions in Params, whose register prefix includes FP
+      // parameters. Stack value ids retain the integer ABI slot numbering.
+      Func.MutableStackParamHomes.emplace_back(
+          StackParamBegin + Idx - MaxRegArgs, SlotBase);
   }
 
   // The compositions to insert before an op, by its block and index.
@@ -1484,6 +1613,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
+    if (TargetArch == Arch::AArch64)
+      for (const uint64_t Register : capturedContextRegisters(Func))
+        UsedRegs.erase(Register);
     const GPRReadWidths *Summary = nullptr;
     if (CallEntryReadGPRs && Convention &&
         Convention->ParametersFromIncomingReads)
@@ -1615,8 +1747,12 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   }
 
   // AArch64: recover the hidden indirect-result (sret) pointer in x8 for a
-  // by-value aggregate return (no-op on targets without a dedicated x8).
-  if (!Func.Blocks.empty())
+  // by-value aggregate return (no-op on targets without a dedicated x8).  A
+  // captured register context holds x8 as one more of its caller's registers.
+  if (!Func.Blocks.empty() &&
+      !(TheArch == Arch::AArch64 &&
+        llvm::is_contained(capturedContextRegisters(Func),
+                           TRI.indirectResultReg())))
     detectIndirectResultParam(Func, Func.Blocks[0], TRI, TheArch);
 
   // --- Common: collect stack locals and compute frame size ---

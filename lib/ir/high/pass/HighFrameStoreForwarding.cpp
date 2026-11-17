@@ -658,8 +658,9 @@ static void forwardLinearPrivateFrameLoads(
     const FrameAliases &KnownAliases, bool Validated) {
   if (Architecture == Arch::Unknown)
     return;
-  const uint16_t PointerBytes = getTargetRegInfo(Architecture).PointerSize;
-  if ((PointerBytes != 4 && PointerBytes != 8) ||
+  const uint16_t AddressBytes =
+      getTargetRegInfo(Architecture).addressRegisterBytes();
+  if ((AddressBytes != 4 && AddressBytes != 8) ||
       (!Validated &&
        !isStraightLinePrivateFrameFunction(Body, Func, Architecture, Budget)))
     return;
@@ -769,8 +770,8 @@ static void forwardLinearPrivateFrameLoads(
         recordFrameStore(Stmt.Val->Operands[0], Stmt.Dst, Stmt.Val->Type,
                          Stores, Func, Architecture, Budget, Aliases);
       if (Stmt.Dst->Var.Kind != MedVar::Stack && Stmt.Dst->Type &&
-          Stmt.Dst->Type->Size == PointerBytes &&
-          Stmt.Dst->Var.Size == PointerBytes &&
+          Stmt.Dst->Type->Size == AddressBytes &&
+          Stmt.Dst->Var.Size == AddressBytes &&
           DefinitionCounts[highSourceLocalIdentity(Stmt.Dst->Var)] == 1 &&
           high_detail::frameAddressOffset(Stmt.Val, Func, Architecture, Budget,
                                           0, Alias))
@@ -827,7 +828,8 @@ class FrameWritebacks {
         return nullptr;
       auto [Cached, Fresh] = OffsetExpressions.try_emplace(It->second);
       if (Fresh) {
-        const auto Bytes = getTargetRegInfo(Architecture).PointerSize;
+        const auto Bytes =
+            getTargetRegInfo(Architecture).addressRegisterBytes();
         const uint64_t Bits =
             Bytes == 4 ? uint64_t(uint32_t(It->second)) : uint64_t(It->second);
         Cached->second = HighExpr::makeBinop(NdOp::INT_ADD, EntryStack,
@@ -978,7 +980,8 @@ class FrameWritebacks {
           T->Dst->Var.Size == Captured.Bytes)
         S.Locals[K] = Captured;
       if (Offset && T->Dst->Type &&
-          T->Dst->Type->Size == getTargetRegInfo(Architecture).PointerSize &&
+          T->Dst->Type->Size ==
+              getTargetRegInfo(Architecture).addressRegisterBytes() &&
           T->Dst->Var.Size == T->Dst->Type->Size)
         S.Addresses[K] = *Offset;
     } else if (T->Kind == StmtKind::Store) {
@@ -1458,7 +1461,8 @@ bool forwardPrivateFrameLoads(HighFunc &Func, Arch Architecture,
   const auto LearnAlias = [&](const HighStmt &S, FrameAliases &Aliases) {
     if (S.Kind != StmtKind::Assign || !S.Dst || !S.Val ||
         S.Dst->Kind != ExprKind::Var || !replayableIntegerNode(*S.Dst) ||
-        S.Dst->Type->Size != getTargetRegInfo(Architecture).PointerSize ||
+        S.Dst->Type->Size !=
+            getTargetRegInfo(Architecture).addressRegisterBytes() ||
         S.Dst->Var.Size != S.Dst->Type->Size ||
         AddressTaken.count(highSourceLocalIdentity(S.Dst->Var)) ||
         Definitions[highSourceLocalIdentity(S.Dst->Var)] != 1)

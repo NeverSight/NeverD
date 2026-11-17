@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>插件管理器(M)...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>计算字符串</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>查找函数在特定条件下计算出的字符串</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>已修改字节</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>计算字符串</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>数据地址</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>证据</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>观测位置（执行后）</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>文本 / 诊断</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>刷新表格期间选择变更次数过多。</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>搜索已取消</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1953,6 +1985,154 @@
         <translation>
             <numerusform>%n 项</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 秒</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · 发现失败： </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · %2/%3 个函数 · %4 行 · %5 个问题</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>分析已更改；请重新扫描</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>正在分析函数 %1…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>假设基本块入口处具有所列的内存和寄存器值，并且成功执行至观测位置。初始化器提供候选值；尚未证明可达性。</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>基本块入口</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>计算字符串的条件</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>指令在特定条件下计算出的文本</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>条件…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>继续</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>数据地址</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>编码</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>初始化器</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>正在加载…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>无结果</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>观测位置（执行后）</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>请先打开二进制文件</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>暂停</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>已暂停</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>将在当前函数完成后暂停…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>寄存器偏移 %1，%2 字节 = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>所需的入口寄存器值</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>所需的输入字节</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>重试或浏览列表以继续加载。</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>扫描所有函数</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>扫描已取消</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>扫描已完成</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>正在扫描</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>搜索已取消</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>搜索进度</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>正在搜索…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>正在排序…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>正在等待搜索…</translation>
     </message>
 </context>
 <context>
@@ -2081,6 +2261,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>恢复已停止：%1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>分析在后台继续</translation>
     </message>
 </context>
 <context>
@@ -2908,7 +3092,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>请将光标放在函数内以设置其类型</translation>
+        <translation type="vanished">请将光标放在函数内以设置其类型</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3432,6 +3616,10 @@ After:
         <source>Plugin tasks</source>
         <translation>插件任务</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>将光标放在全局对象上或函数内以设置其类型</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3822,6 +4010,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>项目更改已保存</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>无法准备源码视图：%1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>正在准备反编译器</translation>
     </message>
 </context>
 <context>
@@ -5035,7 +5231,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>类型：%1</translation>
+        <translation type="vanished">类型：%1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5122,6 +5318,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>没有本地类型：此程序没有包含类型的 PDB 或 DWARF。</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · %1 个类型未导入</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>下一个</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>没有匹配 %1 的类型。</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>页码 </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>上一个</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>类型：%1 · 显示 %2–%3</translation>
     </message>
 </context>
 <context>
@@ -5434,6 +5654,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>移除此源代码类型断言并使用分析得到的类型</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>位于 %3 的 %1 是一个 %2 字节的全局对象。请输入本地类型中的标量或指针类型。</translation>
     </message>
 </context>
 <context>
@@ -10260,6 +10484,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>正在加载</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>正在准备反编译器</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10379,14 +10607,6 @@ Your previous graph is still available.</source>
         <translation>将代码导入映像</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>导入进程插件</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>导入进程插件…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>%1 的日志</translation>
     </message>
@@ -10447,10 +10667,6 @@ Your previous graph is still available.</source>
         <translation>位置</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>已导入进程插件：%1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>进度</translation>
     </message>
@@ -10493,6 +10709,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>此动作的注册项已不再活动。</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>导入插件</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>导入插件…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>已导入插件：%1</translation>
     </message>
 </context>
 <context>
@@ -10558,16 +10786,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>导入进程插件清单以添加命令。仅运行命令时才会启动提供程序。</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>导入插件…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>导入进程插件</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10580,10 +10800,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>已移除安装记录，正在停止运行中的任务。</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>已安装的进程插件</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10650,10 +10866,6 @@ Your previous graph is still available.</source>
         <translation>正在停止</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>类型：外部进程</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -10676,6 +10888,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>是</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>导入插件</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>外部进程</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>导入插件清单以添加工作台命令或视图。</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>已安装插件</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>原生 GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>来源：随 NeverD 提供</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>此插件随 NeverD 提供。可使用“禁用”将其关闭。</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>类型：%1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>未知</translation>
     </message>
 </context>
 <context>
@@ -10854,6 +11102,55 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>关闭标签页</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>GUI 模块在激活过程中失败。</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>GUI 模块激活失败。</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>GUI 模块缺失或位于插件包之外：%1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>该模块未提供所需的 GUI 接口。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>插件菜单动作无效、重复或不可用：%1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>插件视图无效、重复或不可用：%1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>分析会话已更改。</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>菜单动作工厂必须使用提供的父对象。</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>视图工厂必须创建工作台的子控件。</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>正在加载 %1…</translation>
     </message>
 </context>
 </TS>

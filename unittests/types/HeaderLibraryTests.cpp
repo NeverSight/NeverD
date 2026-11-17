@@ -575,6 +575,10 @@ TEST(HeaderLibrary, TheAndroidLibrariesLayRecordsOutAsBionicDoes) {
     EXPECT_TRUE(Print->Variadic);
     ASSERT_NE(Types->findPrototype("__android_log_assert"), nullptr);
     EXPECT_TRUE(Types->findPrototype("__android_log_assert")->NoReturn);
+    const FunctionDef *Property = Types->findPrototype("__system_property_get");
+    ASSERT_NE(Property, nullptr);
+    EXPECT_EQ(Property->Params.size(), 2u);
+    EXPECT_FALSE(Property->Variadic);
   }
 }
 

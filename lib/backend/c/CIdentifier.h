@@ -16,6 +16,7 @@
 #define NEVERD_LIB_BACKEND_C_CIDENTIFIER_H
 
 #include "neverd/backend/c/MsvcCallee.h"
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/MinGWHeaderFunctions.h"
 #include "neverd/loader/SymbolDecoration.h"
@@ -611,6 +612,8 @@ inline std::string symbolComment(llvm::StringRef Name,
 /// (`CStringT`). Nested members after a template (`ATL::CAtlMap<...>::CNode`)
 /// keep `CNode`; stripping at the first `<` used to leave `CAtlMap`.
 inline std::string cNamedTypeSpelling(llvm::StringRef Raw) {
+  if (std::string Name = mappedCRecordName(Raw); !Name.empty())
+    return Name;
   std::string Buf;
   Buf.reserve(Raw.size());
   unsigned Depth = 0;

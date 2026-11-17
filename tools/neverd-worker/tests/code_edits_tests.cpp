@@ -149,6 +149,31 @@ void manySourceNames() {
   }
 }
 
+void virtualTargetNames() {
+  const std::string annotation = "/* virtual callee [slot +0x20] */";
+  auto view = page("int target(void) {\n  (" + annotation +
+                   " slot)();\n"
+                   "  // callee\n  const char *note = \"" +
+                   annotation + "\";\n  /* callee */\n}\n");
+  view["identifier_symbols"] = Json::array({{{"identifier", "callee"},
+                                             {"symbol", "_callee"},
+                                             {"address", "0x1100"}}});
+  CodeEdits::spellIdentifierSymbols(view);
+  check(view.at("source_names").size() == 1,
+        "Virtual target was lost or ordinary comment/string gained a target");
+  const auto &name = view.at("source_names").front();
+  check(name.at("address") == "0x1100" &&
+            name.at("begin_byte") ==
+                view.at("text").get<std::string>().find("callee"),
+        "Virtual annotation did not retain the exact address and source span");
+  decorate(view);
+  bool linked = false;
+  for (const auto &n : view.at("code_names"))
+    linked |= n.value("original", "") == "callee" &&
+              n.value("address", "") == "0x1100";
+  check(linked, "Virtual target was lost during edit decoration");
+}
+
 std::vector<std::string> spellings(std::string_view line,
                                    neverd::LiteralSyntax syntax) {
   bool inComment = false;
@@ -827,6 +852,7 @@ void saidChanges() {
 
 int main() {
   sourceSpanBoundaries();
+  virtualTargetNames();
   manySourceNames();
   integerLiterals();
   numberFormats();

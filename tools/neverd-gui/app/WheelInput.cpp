@@ -9,16 +9,25 @@
 
 #include "WheelInput.h"
 
-#include "../Config.h"
 #include "Theme.h"
 
+#include <QApplication>
 #include <QWheelEvent>
+#include <algorithm>
 
 namespace neverd::gui {
 namespace {
 // QWheelEvent angles are eighths of a degree; a wheel notch is 15 degrees.
 constexpr int AngleUnitsPerNotch = 120;
 } // namespace
+
+bool WheelInput::measuresPixels(const QWheelEvent &event) {
+  if (event.pixelDelta().isNull())
+    return false;
+  return event.phase() != Qt::NoScrollPhase ||
+         event.source() == Qt::MouseEventSynthesizedBySystem ||
+         event.angleDelta().isNull();
+}
 
 void WheelInput::resetScroll() {
   pixels_ = {};
@@ -31,7 +40,7 @@ QPoint WheelInput::scroll(const QWheelEvent &event, int lineHeight) {
   if (event.phase() == Qt::ScrollBegin)
     resetScroll();
   QPoint delta;
-  if (!event.pixelDelta().isNull()) {
+  if (measuresPixels(event)) {
     angles_ = {};
     pixels_ += event.pixelDelta();
     delta = {pixels_.x(), pixels_.y() / lineHeight};
@@ -39,8 +48,9 @@ QPoint WheelInput::scroll(const QWheelEvent &event, int lineHeight) {
     pixels_.ry() %= lineHeight;
   } else if (!event.angleDelta().isNull()) {
     pixels_ = {};
-    constexpr int lines =
-        ::neverd::limits::gui_config::kTextViewWheelLinesPerNotch;
+    // As many lines for a notch as Qt's own lists scroll rows: the desktop's
+    // setting, three where it has none.
+    const int lines = std::max(1, QApplication::wheelScrollLines());
     angles_ += {event.angleDelta().x() * lines * lineHeight,
                 event.angleDelta().y() * lines};
     delta = {angles_.x() / AngleUnitsPerNotch,

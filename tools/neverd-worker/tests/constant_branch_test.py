@@ -105,8 +105,45 @@ def verify_saved_code_navigation(executable, directory, image, entry, fragments)
                 assert json.loads((project / "functions.json").read_text()) == functions
 
 
+def verify_materialized_references(executable, directory):
+    # An independent ADRP/ADD pair has a function-level offset fact even
+    # when the ADD is the first requested listing row. Recovered disassembly
+    # must not erase that fact from either direction of the reference index.
+    base, entry, target = 0x400000, 0x4000b0, 0x401021
+    words = (0xb0000009, 0x9100852a, 0xf9400140, 0xd65f03c0)
+    header = struct.pack("<16sHHIQQQIHHHHHH", b"\x7fELF\x02\x01\x01" + bytes(9),
+                         2, 183, 1, entry, 64, 0, 0, 64, 56, 2, 64, 0, 0)
+    text_segment = struct.pack("<IIQQQQQQ", 1, 5, 0, base, base, 0xc0, 0xc0, 4096)
+    data_segment = struct.pack("<IIQQQQQQ", 1, 6, 0x1000, base + 0x1000,
+                               base + 0x1000, 0x40, 0x40, 4096)
+    image = bytearray(header + text_segment + data_segment + struct.pack("<IIII", *words))
+    image += bytes(target - base - len(image)) + b"independent address text\0"
+    image += bytes(0x1040 - len(image))
+    for index_first in (False, True):
+        binary = Path(directory) / f"materialized-{index_first}.elf"
+        binary.write_bytes(image)
+        with Client(executable) as client:
+            ok(client, "open", {"path": str(binary), "analysis": False, "warm": False})
+            def incoming():
+                refs = ok(client, "xrefs", {"address": hex(target)})
+                actual = {(int(row["from"], 16), row["kind"]) for row in refs["items"]}
+                assert {(entry + 4, "offset"), (entry + 8, "read")} <= actual, refs
+            if index_first:
+                incoming()
+            for address, kind in ((entry + 4, "offset"), (entry + 8, "read")):
+                page = ok(client, "listing", {"address": hex(address), "before": 0, "after": 2})
+                assert any(row["address"] == hex(address) for row in page["lines"]), page
+                outgoing = ok(client, "xrefs", {"address": hex(address), "direction": "from"})
+                assert any(int(row["to"], 16) == target and row["kind"] == kind
+                           for row in outgoing["items"]), outgoing
+                incoming()
+            table = ok(client, "string_references", {"filter": "independent address text"})
+            assert {entry + 4, entry + 8} <= {int(row["address"], 16) for row in table["items"]}, table
+
+
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-constant-branch-") as directory:
+        verify_materialized_references(executable, directory)
         binary = Path(directory) / "branches.elf"
         base, entry = 0x400000, 0x400078
         code = bytes.fromhex("b87800400083c00bffe0e9c390909090")

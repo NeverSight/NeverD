@@ -116,7 +116,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
         MedOp *Call = findCallSite(Caller, Candidate.CallSiteId);
         // A second word read alone is no complete field evidence.
         if (!Call || Call->Opcode != NdOp::CALL || Call->NumInputs < 1 ||
-            !Call->Inputs[0].isConst() || Candidate.SecondWordOnly)
+            !Call->Inputs[0].isConst() || Candidate.HasUnobservedFields)
           continue;
         auto It = ByEntry.find(Call->Inputs[0].ConstVal);
         if (It == ByEntry.end() || !It->second->MultiReturn.empty() ||
@@ -135,9 +135,9 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
       MRByEntry[MF.Entry] = MF.MultiReturn;
     }
     // A selection omits callee definitions, not their return-register
-    // effects. Read only caller-observed integer pairs through the same
-    // bounded body reader used for their argument signatures. Floating records
-    // need an omitted HFA declaration as well as their packed field values.
+    // effects. Confirm caller-observed register aggregates through the same
+    // body reader used for their argument signatures. The call retains the
+    // complete field contract even when its unused extracts disappear.
     std::map<va_t, std::vector<MedReturnReg>> OmittedShapes;
     std::set<va_t> ConflictingShapes, OmittedFirstWordObserved;
     for (auto &Caller : Result.MedFuncs)
@@ -150,7 +150,13 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             ByEntry.count(Call->Inputs[0].ConstVal))
           continue;
         auto Shape = candidateShape(Candidate);
-        if (!isCompleteShape(Shape) || Shape.front().IsFP)
+        if (!isCompleteShape(Shape))
+          continue;
+        if (Shape.front().IsFP &&
+            !std::all_of(Shape.begin(), Shape.end(), [&](const auto &Field) {
+              return (Field.Size == 4 || Field.Size == 8) &&
+                     Field.Size == Shape.front().Size;
+            }))
           continue;
         // Integer aggregate fields occupy whole ABI words even when one
         // consumer observes only their low bytes, like selected definitions.
@@ -158,7 +164,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
           if (!Field.IsFP)
             Field.Size = TRI.PointerSize;
         const va_t Target = Call->Inputs[0].ConstVal;
-        if (!Candidate.SecondWordOnly)
+        if (!Candidate.HasUnobservedFields)
           OmittedFirstWordObserved.insert(Target);
         auto [It, Inserted] = OmittedShapes.emplace(Target, Shape);
         if (!Inserted &&
@@ -182,7 +188,7 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             !Call->Inputs[0].isConst())
           continue;
         const Import *Imp = Img.findImportAt(Call->Inputs[0].ConstVal);
-        if (!Imp || Candidate.SecondWordOnly)
+        if (!Imp || Candidate.HasUnobservedFields)
           continue;
         std::vector<MedReturnReg> Shape = candidateShape(Candidate);
         if (!isCompleteShape(Shape))
@@ -266,6 +272,8 @@ void materializeKnownStructReturnCallSites(const BinaryImage &Img,
             Tv.SSAVer = 0;
             Tv.Size = Total;
             Op.Output = Tv;
+            Op.RegisterReturnFields =
+                std::make_shared<const std::vector<MedReturnReg>>(Fields);
             std::vector<MedOp> Extracts;
             const MedStructReturnCandidate *Candidate = nullptr;
             for (const MedStructReturnCandidate &C : MF.StructReturnCandidates)
@@ -509,6 +517,8 @@ void remodelStructReturnForwarderCalls(const BinaryImage &Img,
             Tv.SSAVer = 0;
             Tv.Size = Total;
             Op.Output = Tv;
+            Op.RegisterReturnFields =
+                std::make_shared<const std::vector<MedReturnReg>>(Fields);
 
             std::vector<MedOp> Extracts;
             uint16_t Cum = 0;

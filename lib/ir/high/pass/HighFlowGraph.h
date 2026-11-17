@@ -132,16 +132,17 @@ private:
       Succ = {Entry, Next};
       break;
     case StmtKind::Switch: {
-      size_t Following = Next;
+      const size_t Default = S.DefaultBody.empty()
+                                 ? Next
+                                 : buildList(S.DefaultBody, Next, Next, Cnt);
+      size_t Following = Default;
       for (size_t I = S.Cases.size(); I-- > 0;) {
         const SwitchCase &C = S.Cases[I];
         Following =
             buildList(C.Body, C.FallsThrough ? Following : Next, Next, Cnt);
         Succ.push_back(Following);
       }
-      Succ.push_back(S.DefaultBody.empty()
-                         ? Next
-                         : buildList(S.DefaultBody, Next, Next, Cnt));
+      Succ.push_back(Default);
       break;
     }
     default:

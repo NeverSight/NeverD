@@ -14,11 +14,16 @@
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/high/HighIR.h"
+#include "neverd/loader/DataSymbolBinding.h"
+#include "neverd/loader/ItaniumVTable.h"
 
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <map>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -61,6 +66,7 @@ struct HighCImageNameIndex {
   std::unordered_map<va_t, const Symbol *> FirstSymbols;
   std::unordered_map<va_t, std::vector<const Symbol *>> ImportSlotSymbols;
   std::unordered_map<std::string_view, const Symbol *> ImportSlotNamed;
+  ItaniumVTableIndex VirtualTables;
 
   /// \p Image.getFunctionNameAt(\p Addr), \p Image the image the index was
   /// read from.
@@ -82,6 +88,7 @@ collectImageFunctionLinkNames(const BinaryImage &Image, BinaryFormat Format,
                               Arch Target);
 
 class PreparedPortableX87Function;
+class RelocationProvenanceIndex;
 
 class HighCEmitter {
   const HighFunc *PortableBody = nullptr;
@@ -91,11 +98,15 @@ class HighCEmitter {
   HighCImageDataObjects PreparedDataObjects;
   HighCImageFunctionSymbols PreparedFunctionSymbols;
   HighCImageNameIndex PreparedNameIndex;
-  /// The image's function link names in the ABI format and architecture it
-  /// was prepared with; an emission in another reads them itself.
-  std::unordered_set<std::string_view> PreparedFunctionLinkNames;
-  BinaryFormat PreparedLinkFormat = BinaryFormat::Unknown;
-  Arch PreparedLinkArch = Arch::Unknown;
+  std::shared_ptr<const RelocationProvenanceIndex> PreparedRelocations;
+  /// C names of the image's function symbols. An emission asks whether a
+  /// data object's linker spelling is one of them; the image holds more
+  /// symbols than one function's objects.
+  llvm::StringSet<> PreparedImageFunctionLinkNames;
+  /// Loader bindings of the image's data-pointer slots. An emission asks
+  /// which slots are bound; the image holds more slots than one function.
+  std::shared_ptr<const std::map<va_t, DataSymbolBinding>>
+      PreparedDataSymbolBindings;
 
 public:
   /// Reuse the image's defined-function index and data objects across a

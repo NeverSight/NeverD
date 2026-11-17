@@ -71,6 +71,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
 #include "neverd/loader/MachO/DarwinRuntimeCalls.h"
+#include "neverd/loader/RelocationProvenance.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/loader/X86/X64DispatchFrame.h"
@@ -80,6 +81,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
@@ -639,6 +641,7 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   FloatToIntegerHelpers.clear();
   LeadingZeroHelpers.clear();
   SaturatingLaneHelpers.clear();
+  AArch64MemoryHelpers.clear();
   ScalarLSEBuiltins.clear();
   PartialIntegerBytes.clear();
   SegmentedMemoryTypes.clear();
@@ -696,6 +699,18 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     CollectWideType(E.CastTo);
     if (const auto Helper = x87HelperFor(E))
       X87Helpers.insert(*Helper);
+    if (E.Kind == ExprKind::Call &&
+        isAArch64AddressMemoryIntrinsic(E.IntrinsicId) &&
+        aarch64AddressMemoryHighShapeIsValid(E) &&
+        !imageReconstructedStackMemory(E)) {
+      const auto Instruction = *aarch64AddressMemoryInstruction(
+          E.Operands[kAddressMemoryWordOperand]->ConstVal);
+      auto [It, Inserted] =
+          AArch64MemoryHelpers.try_emplace(Instruction.scratchWord());
+      if (Inserted)
+        It->second = GlobalIdentifierAllocator.allocate(
+            aarch64AddressMemoryCHelperName(Instruction), "nd_memory");
+    }
     if (E.Kind == ExprKind::Call && isX86FPStateIntrinsic(E.IntrinsicId)) {
       const auto Shape = x86FPStateHighShape(E, Opts.TheArch);
       if (!x86FPStateShapeIsValid(E.IntrinsicId, Shape))
@@ -825,11 +840,17 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
     E.forEachChildExpr([&](const ExprPtr &Child) { Visit(*Child); });
   };
 
+  auto Aliases = std::make_shared<
+      std::unordered_map<const HighFunc *, std::map<std::string, int64_t>>>();
   for (const HighFunc &Func : Funcs) {
     CurrentFunc = &Func;
     // Shared expressions can have different memory spellings in each body.
     Seen.clear();
     collectNamedFrameSlots(Func);
+    // What this definition's analysis passes read before it collects its
+    // slots again (writeFunctionProjection).
+    if (!FrameAliases.empty())
+      Aliases->emplace(&Func, FrameAliases);
     CollectWideType(Func.ReturnType);
     for (const HighParam &Param : Func.Params)
       CollectWideType(Param.Type);
@@ -885,11 +906,16 @@ void HighCWriter::collectMemoryTypes(const std::vector<HighFunc> &Funcs) {
   }
   CurrentFunc = nullptr;
   FrameSlots.clear();
+  FrameSlotOffsetsByName.emplace();
+  DeclaredFrameAliases = std::move(Aliases);
 
   MemoryTypes = std::move(Names);
 }
 
 void HighCWriter::writeMemoryHelpers() {
+  for (const auto &[Word, Name] : AArch64MemoryHelpers)
+    writeAArch64AddressMemoryCHelper(OS, *aarch64AddressMemoryInstruction(Word),
+                                     Name);
   if (!StackAllocationSizeHelper.empty()) {
     const uint64_t Area = dynamicStackCallArea(Opts.TheArch, Opts.Format);
     OS << "static inline uint64_t " << StackAllocationSizeHelper
@@ -2111,7 +2137,10 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
   // own type's, or all of it.  A function whose address the code only takes
   // reads none.
   std::map<std::string, uint16_t> ResultBytes;
+  std::map<std::string, TypeRef> SourceCalleeTypes;
   std::map<std::string, TypeRef> FloatingResults;
+  std::map<std::string, TypeRef> RegisterRecordResults;
+  std::map<std::string, FloatingCallArguments> RegisterRecordSignatures;
   std::set<std::string> PairIntegerResults;
   std::map<std::string, std::vector<uint16_t>> FloatingParameters;
   std::set<std::string> ConflictingFloatingParameters;
@@ -2136,7 +2165,31 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                 throw std::invalid_argument(
                     "HighC callees disagree on MIPS instruction mode");
             }
+          if (E.SourceCalleeType) {
+            const auto [It, New] = SourceCalleeTypes.emplace(
+                callIdentifier(E), E.SourceCalleeType);
+            if (!New && !equalSourceTypes(It->second, E.SourceCalleeType))
+              throw std::runtime_error(
+                  "HighC external calls disagree on scalar projection: " +
+                  callIdentifier(E));
+          }
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
+          if (E.Type && E.Type->RegisterReturnRecord) {
+            const auto [It, Inserted] =
+                RegisterRecordResults.emplace(callIdentifier(E), E.Type);
+            if (!Inserted && typeToC(It->second) != typeToC(E.Type))
+              throw std::runtime_error(
+                  "HighC external calls disagree on register return fields");
+            if (E.FloatingCallSignature &&
+                E.FloatingCallSignature->ReturnElements) {
+              const auto [Signature, New] = RegisterRecordSignatures.emplace(
+                  callIdentifier(E), *E.FloatingCallSignature);
+              if (!New && Signature->second != *E.FloatingCallSignature)
+                throw std::runtime_error(
+                    "HighC external calls disagree on floating record ABI: " +
+                    callIdentifier(E));
+            }
+          }
           // A recovered register-pair result is wider than one machine word.
           // Its call type supplies the width; a wider destination alone only
           // extends a scalar result and cannot establish a second register.
@@ -2648,6 +2701,13 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         OS << " __attribute__((noreturn))";
       OS << ";" << LinkComment << "\n";
     } else if (!ConflictingSourceNativeSignatures.count(Name) &&
+               SourceCalleeTypes.count(Name)) {
+      OS << "extern " << declaredAs(SourceCalleeTypes.at(Name), Declared)
+         << LinkLabel;
+      if (NoReturn)
+        OS << " __attribute__((noreturn))";
+      OS << ";" << LinkComment << "\n";
+    } else if (!ConflictingSourceNativeSignatures.count(Name) &&
                msvcCallee(Identifier, Opts.Format)) {
       DeclareSyntheticThis(Identifier);
       OS << debugExternPrototype(FunctionSym{}, Identifier) << ";\n";
@@ -2684,6 +2744,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         const bool WholeRegister =
             Read != ResultBytes.end() && Read->second > sizeof(int32_t);
         const auto Floating = FloatingResults.find(Name);
+        const auto Record = RegisterRecordResults.find(Name);
         // A compiler runtime routine that returns a double word returns it
         // in the register pair (CompilerRuntimeDoubleWord.def): `__udivti3`'s
         // calls read RDX as its high half.
@@ -2693,7 +2754,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                 cNameOfSymbol(Symbol, Opts.Format, Opts.TheArch),
                 pointerBytes(Opts.TheArch));
         const std::string Return =
-            Floating != FloatingResults.end() ? typeToC(Floating->second)
+            Record != RegisterRecordResults.end() ? typeToC(Record->second)
+            : Floating != FloatingResults.end()   ? typeToC(Floating->second)
             : DoubleWord
                 ? (pointerBytes(Opts.TheArch) == 8 ? "unsigned __int128"
                                                    : "uint64_t")
@@ -2710,9 +2772,22 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                                           pointerBytes(Opts.TheArch);
         OS << "extern " << (Stdcall ? "__attribute__((stdcall)) " : "")
            << Return << " " << Declared << "(";
-        if (Floating != FloatingResults.end() &&
-            FloatingParameters.count(Name) &&
-            !ConflictingFloatingParameters.count(Name)) {
+        if (const auto Signature = RegisterRecordSignatures.find(Name);
+            Signature != RegisterRecordSignatures.end()) {
+          const auto Types =
+              floatingCallTypes(Opts.TheArch, Opts.Format, Signature->second);
+          if (!Types)
+            throw std::runtime_error("A floating record call lost its ABI");
+          if (Types->Parameters.empty())
+            OS << "void";
+          for (size_t I = 0; I < Types->Parameters.size(); ++I) {
+            if (I)
+              OS << ", ";
+            OS << typeToC(Types->Parameters[I]);
+          }
+        } else if (Floating != FloatingResults.end() &&
+                   FloatingParameters.count(Name) &&
+                   !ConflictingFloatingParameters.count(Name)) {
           const auto &Parameters = FloatingParameters.at(Name);
           if (Parameters.empty())
             OS << "void";
@@ -2799,8 +2874,15 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   ImageBaseIdentifier.clear();
   OriginalMemoryBases.clear();
   OriginalMemoryObjects.clear();
-  DataSymbolBindings = Opts.Image ? collectDataSymbolBindings(*Opts.Image)
+  // The emitter's bindings are this image's. Another image builds its own.
+  if (SharedDataSymbolBindings) {
+    DataSymbolBindings = SharedDataSymbolBindings;
+  } else {
+    OwnedDataSymbolBindings = Opts.Image
+                                  ? collectDataSymbolBindings(*Opts.Image)
                                   : std::map<va_t, DataSymbolBinding>{};
+    DataSymbolBindings = &OwnedDataSymbolBindings;
+  }
   UsedDataBindings.clear();
   ExternalDataNames.clear();
   ImportDataSlotReads.clear();
@@ -3381,7 +3463,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
     return std::nullopt;
   };
   auto TextExtent = [&](va_t Target) -> std::optional<uint64_t> {
-    if (const auto Text = imageCString(Opts.Image, Target))
+    if (const auto Text = imageCString(Opts.Image, Target, SharedRelocations))
       return Text->Bytes;
     return std::nullopt;
   };
@@ -3846,8 +3928,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         E.Type->Size == Opts.Image->getPointerSize() && !E.Operands.empty() &&
         E.Operands[0])
       if (const auto Slot = constAddress(*E.Operands[0]))
-        if (const auto It = DataSymbolBindings.find(*Slot);
-            It != DataSymbolBindings.end() && It->second.Immutable) {
+        if (const auto It = DataSymbolBindings->find(*Slot);
+            It != DataSymbolBindings->end() && It->second.Immutable) {
           UsedDataBindings.insert(*Slot);
           if (It->second.Definition) {
             NoteWhole(*It->second.Definition, nullptr, false);
@@ -4272,7 +4354,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
   // Those slots and the ones a data symbol binds, in address order.  The
   // image's sets are read where they are: it relocates tens of thousands.
   std::set<va_t> BoundSlots;
-  for (const auto &[Slot, Binding] : DataSymbolBindings) {
+  for (const auto &[Slot, Binding] : *DataSymbolBindings) {
     (void)Binding;
     BoundSlots.insert(Slot);
   }
@@ -4316,8 +4398,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
         if (!NotedSlots.insert(*Slot).second)
           continue;
         Changed = true;
-        if (const auto Binding = DataSymbolBindings.find(*Slot);
-            Binding != DataSymbolBindings.end()) {
+        if (const auto Binding = DataSymbolBindings->find(*Slot);
+            Binding != DataSymbolBindings->end()) {
           UsedDataBindings.insert(*Slot);
           Obj.HoldsPointers = true;
           if (Binding->second.Definition) {
@@ -4366,7 +4448,7 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       return String && (String->UnitBytes == 1 || Opts.EmitIncludes);
     };
     if (Obj.MemoryWidths.empty()) {
-      auto String = imageCString(Opts.Image, Addr);
+      auto String = imageCString(Opts.Image, Addr, SharedRelocations);
       if (!Declarable(String))
         continue;
       // The object's own extent holds the string; bytes after it are zero,
@@ -4397,7 +4479,8 @@ void HighCWriter::collectImageObjects(const std::vector<HighFunc> &Funcs) {
       const Segment *Seg = Opts.Image->getSegmentFor(Target);
       if (!Seg || Seg->isWritable())
         continue;
-      if (auto String = imageCString(Opts.Image, Target); Declarable(String))
+      if (auto String = imageCString(Opts.Image, Target, SharedRelocations);
+          Declarable(String))
         Obj.PointsTo = std::move(String);
     }
   }
@@ -4593,14 +4676,16 @@ std::string HighCWriter::functionAddressIdentifier(
 }
 
 bool HighCWriter::imageFunctionOwnsLinkIdentifier(llvm::StringRef Name) {
-  const std::unordered_set<std::string_view> *Names = SharedFunctionLinkNames;
-  if (!Names) {
-    if (!ImageFunctionLinkNames)
-      ImageFunctionLinkNames.emplace(collectImageFunctionLinkNames(
-          *Opts.Image, Opts.Format, Opts.TheArch));
-    Names = &*ImageFunctionLinkNames;
+  if (SharedFunctionLinkNames)
+    return SharedFunctionLinkNames->contains(Name);
+  if (!ImageFunctionLinkNames) {
+    ImageFunctionLinkNames.emplace();
+    for (const Symbol &Symbol : Opts.Image->Symbols)
+      if (Symbol.IsFunc && !Symbol.Name.empty())
+        ImageFunctionLinkNames->insert(
+            cNameOfSymbol(Symbol.Name, Opts.Format, Opts.TheArch).str());
   }
-  return Names->count({Name.data(), Name.size()}) != 0;
+  return ImageFunctionLinkNames->contains(Name);
 }
 
 void HighCWriter::writeImageObjects() {
@@ -4625,7 +4710,7 @@ void HighCWriter::writeImageObjects() {
                         Storage.Pad + Storage.Bytes.size(), Initializer);
   }
   for (va_t Slot : UsedDataBindings) {
-    const auto &Binding = DataSymbolBindings.at(Slot);
+    const auto &Binding = DataSymbolBindings->at(Slot);
     if (Binding.Definition || ExternalDataNames.count(Binding.Name))
       continue;
     const auto Identifier = GlobalIdentifierAllocator.allocate(
@@ -4672,9 +4757,9 @@ void HighCWriter::writeImageObjects() {
         Opts.Image->CodePtrRelocSlots.count(Addr) ||
         Opts.Image->DataPtrRelocSlots.count(Addr) ||
         (Obj.CallSlot && !(Widths && Widths->at(Addr).has_value()));
-    const auto Binding = DataSymbolBindings.find(Addr);
+    const auto Binding = DataSymbolBindings->find(Addr);
     Obj.Name = GlobalIdentifierAllocator.allocate(
-        Binding != DataSymbolBindings.end()
+        Binding != DataSymbolBindings->end()
             ? "got_" + Binding->second.Name
             : makeDataName(Addr, PointerSlot, dataNameWidth(Addr, Obj)),
         "g");
@@ -4929,13 +5014,14 @@ void HighCWriter::writePointerBackings(const std::vector<va_t> &Deferred) {
 std::optional<std::string> HighCWriter::stringLiteral(va_t Addr) const {
   auto [Known, Added] = StringLiterals.try_emplace(Addr);
   if (Added)
-    Known->second = stringLiteralAt(Opts.Image, Dbg, Addr);
+    Known->second =
+        stringLiteralAt(Opts.Image, Dbg, Addr, false, SharedRelocations);
   return Known->second;
 }
 
 std::optional<std::string> HighCWriter::dataSymbolAddress(va_t Slot) const {
-  const auto It = DataSymbolBindings.find(Slot);
-  if (It == DataSymbolBindings.end())
+  const auto It = DataSymbolBindings->find(Slot);
+  if (It == DataSymbolBindings->end())
     return std::nullopt;
   const auto &Binding = It->second;
   std::string Address;
@@ -4969,8 +5055,8 @@ HighCWriter::immutableSlotAddress(const HighExpr &Load) const {
   const auto Slot = constAddress(*Load.Operands[0]);
   if (!Slot)
     return std::nullopt;
-  const auto It = DataSymbolBindings.find(*Slot);
-  if (It == DataSymbolBindings.end() || !It->second.Immutable)
+  const auto It = DataSymbolBindings->find(*Slot);
+  if (It == DataSymbolBindings->end() || !It->second.Immutable)
     return std::nullopt;
   return dataSymbolAddress(*Slot);
 }
@@ -5042,7 +5128,7 @@ HighCWriter::relocatedSlotInitializer(va_t Addr, const ImageObject &Obj) const {
       (Type->Kind != NdTypeKind::Int && Type->Kind != NdTypeKind::Ptr) ||
       (!Opts.Image->CodePtrRelocSlots.count(Addr) &&
        !Opts.Image->DataPtrRelocSlots.count(Addr) &&
-       !DataSymbolBindings.count(Addr)))
+       !DataSymbolBindings->count(Addr)))
     return std::nullopt;
   auto Target = relocatedSlotTarget(Addr);
   if (!Target || Type->Kind == NdTypeKind::Int)
@@ -5225,6 +5311,10 @@ void HighCWriter::writeX64WindowsSyscallHelper() {
 }
 
 void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
+  const auto TypeName = [this](llvm::StringRef Name) {
+    return Opts.RecordTypeName ? Opts.RecordTypeName(Name) : std::string();
+  };
+  CRecordNameSpelling Names(TypeName);
   c_memory::applyMIPSVectorAlignment(Opts, Opts.Image);
   // The unit spells the records it declares no typedef of, as a function or
   // an object has the name, by their tags.
@@ -5232,6 +5322,7 @@ void HighCWriter::writeAll(const std::vector<HighFunc> &Funcs) {
     return recordTagKeyword(Name);
   };
   CRecordTagSpelling Tags(TagKeyword);
+  collectVirtualCallees(Funcs);
   prepareRecordDefinitions(Funcs);
   prepareFunctionIdentifiers(Funcs);
   collectImageObjects(Funcs);
@@ -5381,6 +5472,10 @@ bool HighCWriter::writeFunctionsInParallel(const std::vector<HighFunc> &Funcs) {
       return Worker->recordTagKeyword(Name);
     };
     CRecordTagSpelling Tags(TagKeyword);
+    const auto TypeName = [this](llvm::StringRef Name) {
+      return Opts.RecordTypeName ? Opts.RecordTypeName(Name) : std::string();
+    };
+    CRecordNameSpelling Names(TypeName);
     for (size_t I = Claim(); I < Total; I = Claim()) {
       if (Funcs[I].Name.empty())
         continue;
@@ -5495,6 +5590,7 @@ HighCImageNameIndex collectImageNameIndex(const BinaryImage &Image) {
   SlotPrefixes.push_back(Prefix);
 #include "neverd/loader/SymbolDecorations.def"
   for (const Symbol &Sym : Image.Symbols) {
+    Index.VirtualTables.add(Image, Sym);
     // As findSymbolAt finds: the first that is not a section's own.
     if (!Sym.IsSection)
       Index.FirstSymbols.try_emplace(Sym.Addr, &Sym);
@@ -5543,14 +5639,21 @@ collectImageFunctionLinkNames(const BinaryImage &Image, BinaryFormat Format,
 
 void HighCEmitter::prepareImageFunctionNames(const BinaryImage &Image) {
   PreparedImage = nullptr;
+  PreparedRelocations =
+      std::make_shared<const RelocationProvenanceIndex>(Image);
   PreparedImageFunctionNames = collectImageFunctionNameViews(Image);
   PreparedDataObjects = collectImageDataObjects(Image);
   PreparedFunctionSymbols = collectImageFunctionSymbols(Image);
   PreparedNameIndex = collectImageNameIndex(Image);
-  PreparedLinkFormat = Image.abiFormat();
-  PreparedLinkArch = Image.Arch;
-  PreparedFunctionLinkNames = collectImageFunctionLinkNames(
-      Image, PreparedLinkFormat, PreparedLinkArch);
+  PreparedImageFunctionLinkNames.clear();
+  PreparedDataSymbolBindings.reset();
+  for (const Symbol &Symbol : Image.Symbols)
+    if (Symbol.IsFunc && !Symbol.Name.empty())
+      PreparedImageFunctionLinkNames.insert(
+          cNameOfSymbol(Symbol.Name, Image.Format, Image.Arch));
+  PreparedDataSymbolBindings =
+      std::make_shared<const std::map<va_t, DataSymbolBinding>>(
+          collectDataSymbolBindings(Image));
   PreparedImage = &Image;
 }
 
@@ -5577,7 +5680,11 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
       const auto Instruction = *aarch64AddressMemoryInstruction(
           Expr->Operands[kAddressMemoryWordOperand]->ConstVal);
       const auto &Base = Expr->Operands[kAddressMemoryBaseOperand];
-      if (Opts.Image && !Instruction.hasRegisterIndex() &&
+      // An image frame is not a raw SP. A stack-origin access fails closed
+      // at its address later; refusing it here would drop the recovered
+      // body. A non-stack immediate still needs a proved image span.
+      if (Opts.Image && !Instruction.stackBase() &&
+          !Instruction.hasRegisterIndex() &&
           !MemoryBases->supports(*Opts.Image, Instruction, *Base,
                                  RequirementStatement))
         throw std::invalid_argument(kAddressMemoryImmediateImageUnsupported);
@@ -5585,7 +5692,8 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
               Opts.Image != nullptr,
               Instruction.stackBase() && !Opts.Image &&
                   MemoryBases->supportsRawSP(*Base, RequirementStatement)))
-        throw std::invalid_argument(Reason);
+        if (!Opts.Image || Reason != kAddressMemorySPUnsupported)
+          throw std::invalid_argument(Reason);
     }
     if (isAArch64WritebackMemoryIntrinsic(Expr->IntrinsicId)) {
       if (Opts.TheArch != Arch::AArch64 ||
@@ -5598,8 +5706,9 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
               Opts.Image != nullptr,
               Instruction.stackBase() && !Opts.Image &&
                   MemoryBases->supportsRawSP(*Base, RequirementStatement)))
-        throw std::invalid_argument(Reason);
-      if (Opts.Image &&
+        if (!Opts.Image || Reason != kAddressMemorySPUnsupported)
+          throw std::invalid_argument(Reason);
+      if (Opts.Image && !Instruction.stackBase() &&
           !MemoryBases->supports(*Opts.Image, Instruction,
                                  *Expr->Operands[kWritebackBaseOperand],
                                  RequirementStatement))
@@ -5724,15 +5833,21 @@ bool HighCEmitter::emit(const std::vector<HighFunc> &Funcs,
       }
     }
     const bool Prepared = Opts.Image && Opts.Image == PreparedImage;
-    const bool PreparedLinks = Prepared && Opts.Format == PreparedLinkFormat &&
-                               Opts.TheArch == PreparedLinkArch;
+    // The prepared names use the image's own format and architecture, which
+    // is what cNameOfSymbol reads. Another format on the same image builds
+    // its names for that emission.
+    const bool SharedLinkNames = Prepared &&
+                                 Opts.Format == PreparedImage->Format &&
+                                 Opts.TheArch == PreparedImage->Arch;
     HighCWriter W(OS, Opts, Dbg, true,
                   Prepared ? &PreparedImageFunctionNames : nullptr, Recorder,
                   Prepared ? &PreparedDataObjects : nullptr,
                   Prepared ? &PreparedFunctionSymbols : nullptr,
+                  SharedLinkNames ? &PreparedImageFunctionLinkNames : nullptr,
+                  Prepared ? PreparedDataSymbolBindings.get() : nullptr,
                   Portable ? PortableInterface : nullptr,
-                  PreparedLinks ? &PreparedFunctionLinkNames : nullptr,
-                  Prepared ? &PreparedNameIndex : nullptr);
+                  Prepared ? &PreparedNameIndex : nullptr,
+                  Prepared ? PreparedRelocations.get() : nullptr);
     W.ExtraRecords = Extra;
     W.WantedRecords = Wanted;
     W.prepareFunctionReturns(Working);

@@ -274,6 +274,38 @@ def probe_cpta(output):
         save(output / POLICY["report_name"], report)
 
 
+def qualify_x1(output):
+    policy = POLICY["x1_qualification"]
+    report = {**provenance(), "status": POLICY["failed"],
+              policy["qualified_key"]: False, "probes": {}, "missing": []}
+    try:
+        statuses = set()
+        for mode, run in ((POLICY["probe_mode"], probe),
+                          (POLICY["cursor_probe"]["mode"], probe_signal_cursor),
+                          (POLICY["cpta_probe"]["mode"], probe_cpta)):
+            directory = output / mode
+            directory.mkdir()
+            result = run(directory)
+            path = directory / POLICY["report_name"]
+            report["probes"][mode] = {"status": result["status"],
+                                      "report": path.relative_to(output).as_posix(),
+                                      "sha256": digest(path)}
+            statuses.add(result["status"])
+            report["missing"].extend(
+                {"probe": mode, "feature": feature}
+                for feature in policy["requirements"][mode] if not result[feature])
+        if POLICY["failed"] in statuses:
+            return report
+        if statuses == {POLICY["passed"]} and not report["missing"]:
+            report[policy["qualified_key"]] = True
+            report["status"] = POLICY["passed"]
+        else:
+            report["status"] = POLICY["unavailable"]
+        return report
+    finally:
+        save(output / POLICY["report_name"], report)
+
+
 def legacy_cases(contract):
     return [{"optimization": optimization, "dwarf": dwarf,
              "name": optimization + contract[
@@ -615,6 +647,8 @@ def main():
             report = probe_cpta(output)
         elif args.mode == POLICY["cursor_probe"]["mode"]:
             report = probe_signal_cursor(output)
+        elif args.mode == POLICY["x1_qualification"]["mode"]:
+            report = qualify_x1(output)
         elif args.mode == POLICY["startup_mode"]:
             report = probe(output, startup=True, userspace_fixups=userspace)
         elif args.mode == POLICY["legacy_mode"]:

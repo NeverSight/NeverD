@@ -268,6 +268,15 @@ add_neverd_unittest(NeverDLocalTypesDebugContextTests
 target_include_directories(NeverDLocalTypesDebugContextTests PRIVATE
   "${CMAKE_SOURCE_DIR}/lib/sdk/capi")
 
+if(TARGET neverd AND Python3_EXECUTABLE)
+  add_test(NAME NeverDFunctionListingCLI
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/scripts/tests/test_function_listing_cli.py"
+      --neverd $<TARGET_FILE:neverd>)
+  set_tests_properties(NeverDFunctionListingCLI PROPERTIES
+    TIMEOUT 120 LABELS "NeverDFunctionListingCLI")
+endif()
+
 if(TARGET neverd_shared)
   if(Python3_EXECUTABLE)
     set(_neverd_project_input_worker_args)
@@ -408,6 +417,12 @@ if(TARGET neverd_shared)
     TypeConversionCAPITests.cpp
     LINK_LIBS neverd_shared
   )
+  add_neverd_unittest(NeverDSessionEmbeddedObjectTests
+    SessionEmbeddedObjectTests.cpp
+    LINK_LIBS neverd_shared
+  )
+  target_include_directories(NeverDSessionEmbeddedObjectTests PRIVATE
+    "${CMAKE_SOURCE_DIR}/include" ${LLVM_INCLUDE_DIRS})
   # As for shared-backed tools, macOS must resolve LLVM from the SDK alone.
   # The Types archive brings a second LLVM transitively; dyld can then coalesce
   # pass-manager methods without their AnalysisKeys and crash SDK optimization.

@@ -1269,6 +1269,267 @@ bool CFGBuilder::tryTwoTableSelect(const BinaryImage &Img,
 // tryConstBaseAbsoluteTable — constant-base absolute table, decoupled load
 //===----------------------------------------------------------------------===//
 
+// A full-width AArch64 index denotes its low lane when every reaching
+// definition clears the upper bits. Share this proof between address decoding
+// and guard identity, including a producer above the comparison block.
+bool CFGBuilder::aarch64IndexIsZeroExtendedAtUse(
+    const NdVar &Index, va_t UseAddr, int UseSeq,
+    size_t *AggregateEvidenceBudget, bool &AnalysisComplete) const {
+  if (!CurrentImg || CurrentImg->Arch != Arch::AArch64 ||
+      !JumpTableProofContextComplete || !Index.isReg() ||
+      Index.Size != kAddressMemoryPointerBytes || BlockStarts.empty())
+    return false;
+  auto blockOf = [&](va_t Addr) -> std::optional<va_t> {
+    auto It = BlockStarts.upper_bound(Addr);
+    if (It == BlockStarts.begin())
+      return std::nullopt;
+    --It;
+    return *It;
+  };
+  const auto LoadBlock = blockOf(UseAddr);
+  if (!LoadBlock)
+    return false;
+  auto charge = [&] {
+    if (!AggregateEvidenceBudget)
+      return true;
+    if (!*AggregateEvidenceBudget) {
+      AnalysisComplete = false;
+      return false;
+    }
+    --*AggregateEvidenceBudget;
+    return true;
+  };
+  struct Producer {
+    bool Present = false;
+    bool Guarded = false;
+    bool CallAfter = false;
+    bool EntryBefore = false;
+    const LowOp *Op = nullptr;
+  };
+  auto lastWrite = [&](va_t Block, bool StopAtLoad) -> std::optional<Producer> {
+    Producer Found;
+    for (auto It = Insns.lower_bound(Block); It != Insns.end(); ++It) {
+      if (!charge())
+        return std::nullopt;
+      const auto BlockAt = blockOf(It->first);
+      if (!BlockAt || *BlockAt != Block)
+        break;
+      // A predecessor may sit below the load. Stop at the load only when
+      // this walk is the load's own block.
+      if (StopAtLoad && It->first > UseAddr)
+        break;
+      const auto &Roots = ActiveJumpTableProofRoots ? *ActiveJumpTableProofRoots
+                                                    : PersistentCFGRoots;
+      if (Roots.count(It->first) || DiscoveredCodeRefSources.count(It->first)) {
+        Found = {};
+        Found.EntryBefore = true;
+      }
+      if (It->second.IsCall && (!StopAtLoad || It->first != UseAddr))
+        Found.CallAfter = true;
+      for (const LowOp &Op : It->second.Ops) {
+        if (!charge())
+          return std::nullopt;
+        if (StopAtLoad && Op.Addr == UseAddr && Op.Seq >= UseSeq)
+          break;
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)
+          Found.CallAfter = true;
+        if (!Op.Output.isReg() || Op.Output.Offset != Index.Offset ||
+            Op.Output.Size == 0)
+          continue;
+        Found.Present = true;
+        Found.Guarded = It->second.IsInstructionGuard;
+        Found.CallAfter = false;
+        Found.Op = &Op;
+      }
+    }
+    return Found;
+  };
+  auto producerAddr = [&](const Producer &P) -> std::optional<va_t> {
+    if (!P.Present || P.Guarded || P.CallAfter || !P.Op ||
+        P.Op->Output.Size != Index.Size)
+      return std::nullopt;
+    const LowOp &Op = *P.Op;
+    if (Op.Opcode == NdOp::INT_ZEXT && Op.NumInputs >= 1 &&
+        Op.Inputs[0].isReg() && Op.Inputs[0].Offset == Index.Offset &&
+        Op.Inputs[0].Size == kAddressMemoryNarrowIndexBytes)
+      return Op.Addr;
+    if (Op.Opcode != NdOp::INT_AND || Op.NumInputs != 2)
+      return std::nullopt;
+    const bool LeftConstant = Op.Inputs[0].isConst();
+    const bool RightConstant = Op.Inputs[1].isConst();
+    if (LeftConstant == RightConstant)
+      return std::nullopt;
+    const NdVar &Mask = Op.Inputs[LeftConstant ? 0 : 1];
+    if (Mask.Size == 0 || Mask.Size > 8 || Mask.AddressOwnerVA != InvalidVA ||
+        (Mask.Provenance != ConstantAddressProvenance::Unknown &&
+         Mask.Provenance != ConstantAddressProvenance::Scalar))
+      return std::nullopt;
+    uint64_t Bits = Mask.Offset;
+    if (Mask.Size < 8)
+      Bits &= (uint64_t{1} << (Mask.Size * 8)) - 1;
+    // Any mask contained in the 32-bit lane clears the bits a full-width
+    // index would add. A tighter mask does not choose the case domain.
+    if (Bits == 0 || (Bits & ~kAddressMemoryNarrowMask) != 0)
+      return std::nullopt;
+    return Op.Addr;
+  };
+  const std::optional<Producer> Local = lastWrite(*LoadBlock, true);
+  if (!Local)
+    return false;
+  if (Local->Present)
+    return producerAddr(*Local).has_value();
+  if (Local->CallAfter || Local->EntryBefore)
+    return false;
+  // The defining extend may sit above a join. Every predecessor must reach
+  // that same write, with no call and no other write on the way. A backedge
+  // into a block already on this walk is not another write. A block that
+  // never reaches a write, or that reaches two writes, keeps the value
+  // query. Jump-table edges count.
+  std::map<va_t, std::set<va_t>> PredsOf;
+  {
+    const InsnRecord *Pending = nullptr;
+    va_t PendingBlock = 0;
+    bool PredScanFailed = false;
+    auto note = [&](va_t Target, va_t From) {
+      if (PredScanFailed || Target == InvalidVA)
+        return;
+      if (!charge()) {
+        PredScanFailed = true;
+        return;
+      }
+      PredsOf[Target].insert(From);
+    };
+    auto consider = [&](const InsnRecord &Term, va_t Block) {
+      if (PredScanFailed)
+        return;
+      const bool Sized = Term.Size != 0 && Term.Addr <= InvalidVA - Term.Size;
+      const va_t Fall = Sized ? Term.Addr + Term.Size : InvalidVA;
+      if (Term.IsRet && Term.IsCond && Term.IsBranch) {
+        note(Term.BranchTarget, Block);
+      } else if (Term.IsRet) {
+        return;
+      } else if (Term.IsBranch && Term.IsIndirect) {
+        if (Term.IsCond && Sized)
+          note(Fall, Block);
+        for (va_t Target : Term.JumpTableTargets)
+          note(Target, Block);
+      } else if (Term.IsBranch && !Term.IsIndirect && !Term.IsCall) {
+        if (Term.IsCond && Sized)
+          note(Fall, Block);
+        note(Term.BranchTarget, Block);
+      } else if ((!Term.IsBranch || Term.IsCall) &&
+                 (!Term.IsNoReturnCall || Term.IsCond)) {
+        if (Sized)
+          note(Fall, Block);
+      }
+    };
+    for (const auto &[Addr, Insn] : Insns) {
+      if (!charge())
+        return false;
+      const auto Block = blockOf(Addr);
+      if (!Block)
+        return false;
+      if (Pending && *Block != PendingBlock)
+        consider(*Pending, PendingBlock);
+      Pending = &Insn;
+      PendingBlock = *Block;
+    }
+    if (PredScanFailed)
+      return false;
+    if (Pending)
+      consider(*Pending, PendingBlock);
+    if (PredScanFailed)
+      return false;
+  }
+  enum class ReachKind : uint8_t { Visiting, Failed, Found };
+  struct Reach {
+    ReachKind Kind = ReachKind::Failed;
+    va_t Addr = 0;
+  };
+  std::map<va_t, Reach> Memo;
+  Memo[*LoadBlock] = {ReachKind::Visiting, 0};
+  enum class ReachAnswer : uint8_t { Cycle, Failed, Found };
+  struct ReachOut {
+    ReachAnswer Kind = ReachAnswer::Failed;
+    va_t Addr = 0;
+  };
+  std::function<ReachOut(va_t)> reach;
+  reach = [&](va_t Block) -> ReachOut {
+    const auto Seen = Memo.find(Block);
+    if (Seen != Memo.end()) {
+      if (Seen->second.Kind == ReachKind::Visiting)
+        return {ReachAnswer::Cycle, 0};
+      if (Seen->second.Kind == ReachKind::Found)
+        return {ReachAnswer::Found, Seen->second.Addr};
+      return {ReachAnswer::Failed, 0};
+    }
+    Memo[Block] = {ReachKind::Visiting, 0};
+    const std::optional<Producer> Here = lastWrite(Block, false);
+    if (!Here) {
+      Memo[Block] = {ReachKind::Failed, 0};
+      return {ReachAnswer::Failed, 0};
+    }
+    if (Here->Present || Here->CallAfter || Here->EntryBefore) {
+      const std::optional<va_t> Addr = producerAddr(*Here);
+      Memo[Block] =
+          Addr ? Reach{ReachKind::Found, *Addr} : Reach{ReachKind::Failed, 0};
+      return Addr ? ReachOut{ReachAnswer::Found, *Addr}
+                  : ReachOut{ReachAnswer::Failed, 0};
+    }
+    const auto Preds = PredsOf.find(Block);
+    if (Preds == PredsOf.end() || Preds->second.empty()) {
+      Memo[Block] = {ReachKind::Failed, 0};
+      return {ReachAnswer::Failed, 0};
+    }
+    std::optional<va_t> Common;
+    bool SawCycle = false;
+    for (va_t Pred : Preds->second) {
+      if (!charge()) {
+        Memo[Block] = {ReachKind::Failed, 0};
+        return {ReachAnswer::Failed, 0};
+      }
+      const ReachOut PredReach = reach(Pred);
+      if (PredReach.Kind == ReachAnswer::Cycle) {
+        SawCycle = true;
+        continue;
+      }
+      if (PredReach.Kind != ReachAnswer::Found ||
+          (Common && *Common != PredReach.Addr)) {
+        Memo[Block] = {ReachKind::Failed, 0};
+        return {ReachAnswer::Failed, 0};
+      }
+      Common = PredReach.Addr;
+    }
+    // A backedge has no definition of its own. Leave it uncached so a
+    // later query sees the header's write once that header is finished.
+    if (!Common) {
+      Memo.erase(Block);
+      if (!SawCycle)
+        Memo[Block] = {ReachKind::Failed, 0};
+      return SawCycle ? ReachOut{ReachAnswer::Cycle, 0}
+                      : ReachOut{ReachAnswer::Failed, 0};
+    }
+    Memo[Block] = {ReachKind::Found, *Common};
+    return {ReachAnswer::Found, *Common};
+  };
+  const auto LoadPreds = PredsOf.find(*LoadBlock);
+  if (LoadPreds == PredsOf.end() || LoadPreds->second.empty())
+    return false;
+  std::optional<va_t> Common;
+  for (va_t Pred : LoadPreds->second) {
+    const ReachOut PredReach = reach(Pred);
+    if (!AnalysisComplete)
+      return false;
+    if (PredReach.Kind == ReachAnswer::Cycle)
+      continue;
+    if (PredReach.Kind != ReachAnswer::Found ||
+        (Common && *Common != PredReach.Addr))
+      return false;
+    Common = PredReach.Addr;
+  }
+  return Common.has_value();
+}
+
 bool CFGBuilder::aarch64OriginalTableLoadMatches(
     const LowOp &Load, const JumpTableLoadRole &Role, uint32_t Capacity,
     size_t *AggregateEvidenceBudget, bool &AnalysisComplete,
@@ -1388,6 +1649,11 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
       EveryBaseCoversIndices(limits::kMaxJumpTableEntries - 1)
           ? limits::kMaxJumpTableEntries
           : Capacity;
+  // A private frame cell remains the index across calls. The guard, not
+  // this address envelope, owns the selector domain.
+  for (auto &Query : IdentityQueries)
+    Query.AllowPrivateFrameMemoryAcrossCalls = true;
+  IndexQuery.AllowPrivateFrameMemoryAcrossCalls = true;
   const auto Match = [&](llvm::ArrayRef<JumpTableValueQuery> Queries) {
     return tableValuesMatchAtUses(
         Queries, &AnalysisComplete, nullptr, InvalidVA, nullptr,
@@ -1400,6 +1666,7 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
   IdentityQuery.UseAddr = Load.Addr;
   IdentityQuery.UseSeq = Load.Seq;
   IdentityQuery.AllowZeroExtension = Role.AllowZeroExtension;
+  IdentityQuery.AllowPrivateFrameMemoryAcrossCalls = true;
   if (AggregateEvidenceBudget) {
     // Prepay the additional retained occurrence copy before allocating it.
     if (Role.Indices.size() > *AggregateEvidenceBudget / 3) {
@@ -1410,18 +1677,607 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
     *AggregateEvidenceBudget -= Role.Indices.size() * 3;
   }
   IdentityQuery.Alternatives = Role.Indices;
-  IdentityQueries.push_back(std::move(IdentityQuery));
-  const auto Identities = Match(IdentityQueries);
-  if (!AnalysisComplete || Identities.size() != IdentityQueries.size() ||
-      std::find(Identities.begin(), Identities.end(), false) !=
-          Identities.end())
+  // The lifter's unguarded Wn→Xn zero-extend in this load block is the
+  // full-width index when no call intervenes. The low half's origin is the
+  // guard's job. One scan serves the identity shortcut and the check below.
+  bool LoadBlockZextChecked = false;
+  std::optional<va_t> LoadBlockZextAddr;
+  auto loadBlockZeroExtendsIndex = [&](const NdVar &Index) {
+    if (LoadBlockZextChecked)
+      return LoadBlockZextAddr.has_value();
+    if (!Index.isReg() || Index.Size != kAddressMemoryPointerBytes ||
+        BlockStarts.empty()) {
+      LoadBlockZextChecked = true;
+      return false;
+    }
+    auto NextBlock = BlockStarts.upper_bound(Load.Addr);
+    if (NextBlock == BlockStarts.begin()) {
+      LoadBlockZextChecked = true;
+      return false;
+    }
+    --NextBlock;
+    bool SawDef = false;
+    bool DefGuarded = false;
+    bool CallAfterDef = false;
+    NdOp DefOpcode = NdOp::NOP;
+    NdVar DefInput;
+    uint16_t DefOutputSize = 0;
+    va_t DefAddr = InvalidVA;
+    for (auto It = Insns.lower_bound(*NextBlock);
+         It != Insns.end() && It->first <= Load.Addr; ++It) {
+      if (AggregateEvidenceBudget) {
+        if (!*AggregateEvidenceBudget) {
+          AnalysisComplete = false;
+          return false;
+        }
+        --*AggregateEvidenceBudget;
+      }
+      const InsnRecord &Insn = It->second;
+      if (SawDef && Insn.Addr != DefAddr && Insn.IsCall)
+        CallAfterDef = true;
+      for (const LowOp &Op : Insn.Ops) {
+        if (Op.Addr == Load.Addr && Op.Seq >= Load.Seq)
+          break;
+        if (!Op.Output.isReg() || Op.Output.Offset != Index.Offset ||
+            Op.Output.Size == 0)
+          continue;
+        SawDef = true;
+        DefGuarded = Insn.IsInstructionGuard;
+        CallAfterDef = false;
+        DefOpcode = Op.Opcode;
+        DefOutputSize = Op.Output.Size;
+        DefInput = Op.NumInputs >= 1 ? Op.Inputs[0] : NdVar{};
+        DefAddr = Insn.Addr;
+      }
+    }
+    if (!AnalysisComplete)
+      return false;
+    LoadBlockZextChecked = true;
+    const bool Matches = SawDef && !DefGuarded && !CallAfterDef &&
+                         DefOpcode == NdOp::INT_ZEXT &&
+                         DefOutputSize == Index.Size && DefInput.isReg() &&
+                         DefInput.Offset == Index.Offset &&
+                         DefInput.Size == kAddressMemoryNarrowIndexBytes;
+    if (Matches)
+      LoadBlockZextAddr = DefAddr;
+    return Matches;
+  };
+  // The compact role names the load's own index operand. That identity is the
+  // occurrence, not the value's origin. Resolving it walks every predecessor
+  // definition, including a caller-saved register saved across a call and an
+  // unrelated chain longer than the resolver depth, and then fails closed on
+  // a proved address. A full-width index whose last write in this block is
+  // the lifter's zero-extend of the recorded narrow register is that
+  // occurrence. A different register, a later write, or a call keeps the
+  // value query.
+  const bool SyntacticIndexIdentity = std::all_of(
+      Role.Indices.begin(), Role.Indices.end(),
+      [&](const JumpTableValueOccurrence &Occurrence) {
+        return !Occurrence.DefinedAtPoint && Occurrence.Addr == Load.Addr &&
+               Occurrence.Seq == Load.Seq &&
+               Occurrence.Value.Space == IndexQuery.Candidate.Space &&
+               Occurrence.Value.Offset == IndexQuery.Candidate.Offset &&
+               Occurrence.Value.Size == IndexQuery.Candidate.Size &&
+               Occurrence.Value.Provenance == IndexQuery.Candidate.Provenance &&
+               Occurrence.Value.AddressOwnerVA ==
+                   IndexQuery.Candidate.AddressOwnerVA;
+      });
+  bool SameBlockZextIdentity = false;
+  if (!SyntacticIndexIdentity && Role.AllowZeroExtension &&
+      Instruction->usesFullWidthIndex() &&
+      loadBlockZeroExtendsIndex(IndexQuery.Candidate)) {
+    SameBlockZextIdentity = std::all_of(
+        Role.Indices.begin(), Role.Indices.end(),
+        [&](const JumpTableValueOccurrence &Occurrence) {
+          return !Occurrence.DefinedAtPoint &&
+                 Occurrence.Addr == *LoadBlockZextAddr &&
+                 Occurrence.Value.Space == IndexQuery.Candidate.Space &&
+                 Occurrence.Value.Offset == IndexQuery.Candidate.Offset &&
+                 Occurrence.Value.Size == kAddressMemoryNarrowIndexBytes &&
+                 Occurrence.Value.Provenance ==
+                     IndexQuery.Candidate.Provenance &&
+                 Occurrence.Value.AddressOwnerVA ==
+                     IndexQuery.Candidate.AddressOwnerVA;
+        });
+  }
+  if (!AnalysisComplete)
     return false;
-  // A zero-extended W index has a complete, branch-independent input domain.
-  // Proving AddressAdd agrees throughout it breaks no runtime-domain tie:
-  // the common selector/storage fixed point still owns every table slot.
+  // The base is often formed by ADRP/ADD in this very block. Prove that
+  // closed expression without reconstructing unrelated predecessor state.
+  bool LocalBase = false;
+  if (!GuardedGroupProofContext &&
+      (!CertifiedEdgeOverrides || CertifiedEdgeOverrides->empty())) {
+    if (auto Local = localTableLoadProof(Load.Addr, Role.Load,
+                                         AggregateEvidenceBudget)) {
+      bool Complete = false;
+      const auto Result = Local->tableValuesMatchAtUses(
+          IdentityQueries, &Complete, nullptr, InvalidVA, nullptr,
+          AggregateEvidenceBudget, limits::kMaxJumpTableRoleMatchEvidenceWork);
+      LocalBase = Complete && Result.size() == IdentityQueries.size() &&
+                  llvm::all_of(Result, [](bool Matched) { return Matched; });
+    }
+    if (AggregateEvidenceBudget && *AggregateEvidenceBudget == 0) {
+      AnalysisComplete = false;
+      return false;
+    }
+  }
+  if (LocalBase)
+    IdentityQueries.clear();
+  if (!SyntacticIndexIdentity && !SameBlockZextIdentity)
+    IdentityQueries.push_back(std::move(IdentityQuery));
+  if (!IdentityQueries.empty()) {
+    const auto Identities = Match(IdentityQueries);
+    if (!AnalysisComplete || Identities.size() != IdentityQueries.size() ||
+        llvm::any_of(Identities, [](bool Matched) { return !Matched; }))
+      return false;
+  }
+  // The index operand is a reload in this block. The lifter writes the loaded
+  // value to a temporary and copies it into the index. Its high half is not
+  // an address fact. A value query would walk every call back to the spill
+  // and spend the shared stage account. The formula already gives one address
+  // for every 32-bit index. The guard owns whether that reload is the compared
+  // lane. Returning true does not set MaxEntries. A call or store that
+  // receives the reloaded cell still belongs to the value query.
+  //
+  // Offsets are entry-SP displacements. A pointer and the cell overlap only
+  // when those displacements name the same bytes. A PAC or AUT modifier is
+  // not that pointer. An unknown frame displacement does not take the
+  // shortcut. Only the function entry anchors incoming SP. A block entered
+  // solely by an unproved indirect edge is not another entry: restarting SP
+  // at zero there merges with the prologue and the frame becomes unknown.
+  // That block is checked with the preserved frame at the reload, so a case
+  // that passes the cell and branches back still refuses the shortcut.
+  auto reloadedCellStaysPrivate = [&](const LowOp &Memory) {
+    const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
+    const uint16_t PointerSize = TRI.PointerSize;
+    if (PointerSize == 0 || Memory.Opcode != NdOp::LOAD ||
+        Memory.Output.Size == 0 || BlockStarts.empty())
+      return false;
+    auto charge = [&]() {
+      if (!AggregateEvidenceBudget)
+        return true;
+      if (!*AggregateEvidenceBudget) {
+        AnalysisComplete = false;
+        return false;
+      }
+      --*AggregateEvidenceBudget;
+      return true;
+    };
+    std::vector<va_t> Blocks(BlockStarts.begin(), BlockStarts.end());
+    const auto BlockAt = [&](va_t Addr) -> int {
+      const auto It = std::lower_bound(Blocks.begin(), Blocks.end(), Addr);
+      if (It == Blocks.end() || *It != Addr)
+        return -1;
+      return static_cast<int>(It - Blocks.begin());
+    };
+    const int LoadBlock = [&]() {
+      auto It = std::upper_bound(Blocks.begin(), Blocks.end(), Memory.Addr);
+      if (It == Blocks.begin())
+        return -1;
+      return static_cast<int>(std::prev(It) - Blocks.begin());
+    }();
+    if (LoadBlock < 0)
+      return false;
+    const int RegCount = 32;
+    const auto RegIndex = [&](uint64_t Offset) -> int {
+      if (Offset == TRI.StackPointer)
+        return RegCount - 1;
+      if (Offset % PointerSize == 0 &&
+          Offset / PointerSize < static_cast<uint64_t>(RegCount - 1))
+        return static_cast<int>(Offset / PointerSize);
+      return -1;
+    };
+    std::array<bool, 32> Preserved{};
+    Preserved[RegCount - 1] = true;
+    for (uint64_t Reg : TRI.CalleeSaveRegs) {
+      const int Index = RegIndex(Reg);
+      if (Index >= 0)
+        Preserved[Index] = true;
+    }
+    std::vector<std::vector<int>> Succs(Blocks.size());
+    for (int Block = 0; Block < static_cast<int>(Blocks.size()); ++Block) {
+      if (!charge())
+        return false;
+      const va_t End = Block + 1 < static_cast<int>(Blocks.size())
+                           ? Blocks[Block + 1]
+                           : InvalidVA;
+      const InsnRecord *Last = nullptr;
+      for (auto It = Insns.lower_bound(Blocks[Block]);
+           It != Insns.end() && (End == InvalidVA || It->first < End); ++It)
+        Last = &It->second;
+      if (!Last)
+        continue;
+      const InsnRecord &Rec = *Last;
+      auto Add = [&](va_t Target) {
+        const int Succ = BlockAt(Target);
+        if (Succ >= 0)
+          Succs[Block].push_back(Succ);
+      };
+      if (Rec.IsRet && Rec.IsCond && Rec.IsBranch) {
+        Add(Rec.BranchTarget);
+      } else if (Rec.IsRet) {
+        continue;
+      } else if (Rec.IsBranch && Rec.IsIndirect) {
+        if (Rec.IsCond)
+          Add(Rec.Addr + Rec.Size);
+        for (va_t Target : Rec.JumpTableTargets)
+          Add(Target);
+      } else if (Rec.IsBranch && !Rec.IsIndirect && !Rec.IsCall) {
+        if (Rec.IsCond)
+          Add(Rec.Addr + Rec.Size);
+        Add(Rec.BranchTarget);
+      } else if (!Rec.IsBranch || Rec.IsCall) {
+        if (!Rec.IsNoReturnCall || Rec.IsCond)
+          Add(Rec.Addr + Rec.Size);
+      }
+    }
+    std::vector<bool> Reaches(Blocks.size(), false);
+    std::vector<int> Walk{LoadBlock};
+    Reaches[LoadBlock] = true;
+    for (size_t At = 0; At < Walk.size(); ++At) {
+      if (!charge())
+        return false;
+      for (int Pred = 0; Pred < static_cast<int>(Blocks.size()); ++Pred) {
+        if (Reaches[Pred])
+          continue;
+        if (std::find(Succs[Pred].begin(), Succs[Pred].end(), Walk[At]) ==
+            Succs[Pred].end())
+          continue;
+        Reaches[Pred] = true;
+        Walk.push_back(Pred);
+      }
+    }
+    struct Aff {
+      uint8_t Kind = 0;
+      int64_t Off = 0;
+      static Aff Empty() { return Aff{1, 0}; }
+      static Aff Addr(int64_t Offset) { return Aff{2, Offset}; }
+      static Aff Top() { return Aff{3, 0}; }
+      bool operator==(const Aff &Other) const {
+        return Kind == Other.Kind && Off == Other.Off;
+      }
+    };
+    const auto Meet = [](Aff Left, Aff Right) {
+      if (Left.Kind == 0)
+        return Right;
+      if (Right.Kind == 0)
+        return Left;
+      if (Left.Kind == 3 || Right.Kind == 3)
+        return Aff::Top();
+      if (Left.Kind == 1 && Right.Kind == 1)
+        return Aff::Empty();
+      if (Left.Kind == 2 && Right.Kind == 2 && Left.Off == Right.Off)
+        return Left;
+      if (Left.Kind == 2 && Right.Kind == 1)
+        return Left;
+      if (Left.Kind == 1 && Right.Kind == 2)
+        return Right;
+      return Aff::Top();
+    };
+    std::vector<std::array<Aff, 32>> Entry(Blocks.size());
+    std::vector<int> Queue;
+    std::vector<bool> Queued(Blocks.size(), false);
+    auto Enqueue = [&](int Block) {
+      if (!Queued[Block]) {
+        Queued[Block] = true;
+        Queue.push_back(Block);
+      }
+    };
+    const int FuncBlock = BlockAt(CurrentFuncEntry);
+    if (FuncBlock >= 0 && Reaches[FuncBlock]) {
+      for (Aff &Value : Entry[FuncBlock])
+        Value = Aff::Empty();
+      Entry[FuncBlock][RegCount - 1] = Aff::Addr(0);
+      Enqueue(FuncBlock);
+    }
+    const auto Apply = [&](int Block, std::array<Aff, 32> &State,
+                           const Aff *Slot, int64_t SlotOff, uint16_t SlotSize,
+                           bool &Escaped, bool UntilMemory) {
+      const va_t End = Block + 1 < static_cast<int>(Blocks.size())
+                           ? Blocks[Block + 1]
+                           : InvalidVA;
+      for (auto It = Insns.lower_bound(Blocks[Block]);
+           It != Insns.end() && (End == InvalidVA || It->first < End); ++It) {
+        if (!charge())
+          return false;
+        const InsnRecord &Insn = It->second;
+        bool Stopped = false;
+        std::vector<std::pair<uint64_t, Aff>> Temps;
+        const auto Eval = [&](const NdVar &Value) {
+          if (!Value.isReg() && !Value.isTemp())
+            return Aff::Empty();
+          if (Value.isTemp()) {
+            for (auto Temp = Temps.rbegin(); Temp != Temps.rend(); ++Temp)
+              if (Temp->first == Value.Offset)
+                return Temp->second;
+            return Aff::Empty();
+          }
+          if (Value.Size != PointerSize)
+            return Aff::Empty();
+          const int Index = RegIndex(Value.Offset);
+          if (Index < 0)
+            return Aff::Empty();
+          return State[Index];
+        };
+        const auto ResultOf = [&](const LowOp &Op) {
+          if (Op.Opcode == NdOp::COPY && Op.NumInputs >= 1)
+            return Eval(Op.Inputs[0]);
+          if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_SUB) &&
+              Op.NumInputs >= 2) {
+            const bool Sub = Op.Opcode == NdOp::INT_SUB;
+            const int ConstSide =
+                Sub ? (Op.Inputs[1].isConst() ? 1 : -1)
+                    : (Op.Inputs[1].isConst() == Op.Inputs[0].isConst()
+                           ? -1
+                           : (Op.Inputs[1].isConst() ? 1 : 0));
+            if (ConstSide < 0) {
+              const Aff Left = Eval(Op.Inputs[0]);
+              const Aff Right = Eval(Op.Inputs[1]);
+              return Left.Kind == 1 && Right.Kind == 1 ? Aff::Empty()
+                                                       : Aff::Top();
+            }
+            const std::optional<int64_t> Delta = stackSignedDelta(
+                Op.Inputs[ConstSide],
+                Op.Output.Size != 0 ? Op.Output.Size : PointerSize);
+            const Aff Base = Eval(Op.Inputs[1 - ConstSide]);
+            if (!Delta || Base.Kind == 3)
+              return Base.Kind == 1 ? Aff::Empty() : Aff::Top();
+            if (Base.Kind != 2)
+              return Aff::Empty();
+            const std::optional<int64_t> Next =
+                stackCheckedOffset(Base.Off, *Delta, Sub);
+            return Next ? Aff::Addr(*Next) : Aff::Top();
+          }
+          if (Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::CALL ||
+              Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INT_ZEXT ||
+              Op.Opcode == NdOp::INT_SEXT)
+            return Aff::Empty();
+          for (int Input = 0; Input < Op.NumInputs; ++Input) {
+            const Aff Value = Eval(Op.Inputs[Input]);
+            if (Value.Kind == 2 || Value.Kind == 3)
+              return Aff::Top();
+          }
+          return Aff::Empty();
+        };
+        const auto Publish = [&](const NdVar &Value) {
+          if (!Slot)
+            return;
+          const Aff Found = Eval(Value);
+          // Only an exact entry-SP displacement can name this cell. An
+          // unknown use of a frame register is not that displacement.
+          if (Found.Kind != 2)
+            return;
+          const auto PointerEnd =
+              stackCheckedOffset(Found.Off, PointerSize, false);
+          const auto CellEnd = stackCheckedOffset(SlotOff, SlotSize, false);
+          if (!PointerEnd || !CellEnd ||
+              (Found.Off < *CellEnd && SlotOff < *PointerEnd))
+            Escaped = true;
+        };
+        for (const LowOp &Op : Insn.Ops) {
+          if (UntilMemory && Op.Addr == Memory.Addr && Op.Seq >= Memory.Seq) {
+            Stopped = true;
+            break;
+          }
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+            for (uint64_t Reg : TRI.IntParamRegs)
+              Publish(NdVar::reg(Reg, PointerSize));
+            for (int Input = 0; Input < Op.NumInputs; ++Input)
+              Publish(Op.Inputs[Input]);
+          } else if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2) {
+            Publish(Op.NumInputs >= 3 ? Op.Inputs[2] : Op.Inputs[1]);
+          } else if (Op.Opcode == NdOp::RETURN) {
+            for (int Input = 0; Input < Op.NumInputs; ++Input)
+              Publish(Op.Inputs[Input]);
+          } else if (Op.Opcode == NdOp::INTRINSIC &&
+                     !lowAArch64AddressLoadShapeIsValid(Op)) {
+            if (lowAArch64PAuthShapeIsValid(Op)) {
+              if (Op.NumInputs > 1)
+                Publish(Op.Inputs[1]);
+            } else {
+              for (int Input = 0; Input < Op.NumInputs; ++Input)
+                Publish(Op.Inputs[Input]);
+            }
+          }
+          if (!Op.Output.isReg() && !Op.Output.isTemp())
+            continue;
+          const Aff Produced = ResultOf(Op);
+          if (Op.Output.isTemp()) {
+            Temps.emplace_back(Op.Output.Offset, Produced);
+            continue;
+          }
+          const int Index = RegIndex(Op.Output.Offset);
+          if (Index < 0)
+            continue;
+          Aff Next = Produced;
+          if (Op.Output.Size != PointerSize)
+            Next = TRI.writeZeroExtends(Op.Output.Offset, Op.Output.Size)
+                       ? Aff::Empty()
+                       : Aff::Top();
+          State[Index] =
+              Insn.IsInstructionGuard ? Meet(State[Index], Next) : Next;
+        }
+        if (Stopped)
+          break;
+        if (Insn.IsCall) {
+          for (int Index = 0; Index < RegCount; ++Index) {
+            if (!Preserved[Index])
+              State[Index] =
+                  Insn.IsCond ? Meet(State[Index], Aff::Empty()) : Aff::Empty();
+          }
+        }
+      }
+      return true;
+    };
+    const size_t StepLimit =
+        Blocks.size() * static_cast<size_t>(RegCount) * 3 + 1;
+    for (size_t Steps = 0; !Queue.empty(); ++Steps) {
+      if (Steps > StepLimit)
+        return false;
+      const int Block = Queue.back();
+      Queue.pop_back();
+      Queued[Block] = false;
+      std::array<Aff, 32> State = Entry[Block];
+      bool Ignored = false;
+      if (!Apply(Block, State, nullptr, 0, 0, Ignored, false))
+        return false;
+      for (int Succ : Succs[Block]) {
+        if (!Reaches[Succ])
+          continue;
+        bool Changed = false;
+        for (int Index = 0; Index < RegCount; ++Index) {
+          const Aff Merged = Meet(Entry[Succ][Index], State[Index]);
+          if (!(Merged == Entry[Succ][Index])) {
+            Entry[Succ][Index] = Merged;
+            Changed = true;
+          }
+        }
+        if (Changed)
+          Enqueue(Succ);
+      }
+    }
+    std::array<Aff, 32> AtLoad = Entry[LoadBlock];
+    bool Ignored = false;
+    if (!Apply(LoadBlock, AtLoad, nullptr, 0, 0, Ignored, true))
+      return false;
+    std::vector<LowOp> Prefix;
+    for (auto It = Insns.lower_bound(Blocks[LoadBlock]);
+         It != Insns.end() && It->first <= Memory.Addr; ++It) {
+      if (!charge())
+        return false;
+      for (const LowOp &Op : It->second.Ops) {
+        if (Op.Addr > Memory.Addr ||
+            (Op.Addr == Memory.Addr && Op.Seq >= Memory.Seq))
+          break;
+        Prefix.push_back(Op);
+      }
+    }
+    if (Prefix.empty() || Memory.NumInputs < 1)
+      return false;
+    const NdVar &Address =
+        Memory.NumInputs >= 2 ? Memory.Inputs[1] : Memory.Inputs[0];
+    uint64_t BaseReg = InvalidVA;
+    int64_t Displacement = 0;
+    if (!frameSlotKey(Prefix, static_cast<int>(Prefix.size()) - 1, Address, TRI,
+                      BaseReg, Displacement))
+      return false;
+    const int BaseIndex = RegIndex(BaseReg);
+    if (BaseIndex < 0 || AtLoad[BaseIndex].Kind != 2)
+      return false;
+    const std::optional<int64_t> SlotOff =
+        stackCheckedOffset(AtLoad[BaseIndex].Off, Displacement, false);
+    if (!SlotOff)
+      return false;
+    bool Escaped = false;
+    for (int Block = 0; Block < static_cast<int>(Blocks.size()); ++Block) {
+      if (!Reaches[Block] || Escaped)
+        continue;
+      std::array<Aff, 32> State = Entry[Block];
+      if (State[RegCount - 1].Kind == 0) {
+        for (int Index = 0; Index < RegCount; ++Index)
+          if (Preserved[Index])
+            State[Index] = AtLoad[Index];
+      }
+      if (!Apply(Block, State, &AtLoad[BaseIndex], *SlotOff, Memory.Output.Size,
+                 Escaped, false))
+        return false;
+    }
+    return AnalysisComplete && !Escaped;
+  };
+  auto loadBlockReloadsIndex = [&](const NdVar &Index) {
+    if (!Index.isReg() || Index.Size != kAddressMemoryPointerBytes ||
+        BlockStarts.empty())
+      return false;
+    auto NextBlock = BlockStarts.upper_bound(Load.Addr);
+    if (NextBlock == BlockStarts.begin())
+      return false;
+    --NextBlock;
+    const va_t Block = *NextBlock;
+    const LowOp *Def = nullptr;
+    bool DefGuarded = false;
+    bool CallAfterDef = false;
+    for (auto It = Insns.lower_bound(Block);
+         It != Insns.end() && It->first <= Load.Addr; ++It) {
+      if (AggregateEvidenceBudget) {
+        if (!*AggregateEvidenceBudget) {
+          AnalysisComplete = false;
+          return false;
+        }
+        --*AggregateEvidenceBudget;
+      }
+      const InsnRecord &Insn = It->second;
+      if (Def && Insn.Addr != Def->Addr && Insn.IsCall)
+        CallAfterDef = true;
+      for (const LowOp &Op : Insn.Ops) {
+        if (Op.Addr == Load.Addr && Op.Seq >= Load.Seq)
+          break;
+        if (!Op.Output.isReg() || Op.Output.Offset != Index.Offset ||
+            Op.Output.Size == 0)
+          continue;
+        Def = &Op;
+        DefGuarded = Insn.IsInstructionGuard;
+        CallAfterDef = false;
+      }
+    }
+    if (!AnalysisComplete || !Def || DefGuarded || CallAfterDef ||
+        Def->Addr == Load.Addr || Def->Output.Size != Index.Size)
+      return false;
+    if (Def->Opcode == NdOp::LOAD)
+      return reloadedCellStaysPrivate(*Def);
+    if (Def->Opcode != NdOp::COPY || Def->NumInputs < 1 ||
+        Def->NumInputs > std::size(Def->Inputs))
+      return false;
+    const NdVar &Copied = Def->Inputs[0];
+    if ((!Copied.isTemp() && !Copied.isReg()) || Copied.Size != Index.Size)
+      return false;
+    const LowOp *Source = nullptr;
+    bool SourceGuarded = false;
+    for (auto It = Insns.lower_bound(Block); It != Insns.end(); ++It) {
+      if (AggregateEvidenceBudget) {
+        if (!*AggregateEvidenceBudget) {
+          AnalysisComplete = false;
+          return false;
+        }
+        --*AggregateEvidenceBudget;
+      }
+      if (It->first > Def->Addr)
+        break;
+      const auto Here = BlockStarts.upper_bound(It->first);
+      if (Here == BlockStarts.begin() || *std::prev(Here) != Block)
+        break;
+      for (const LowOp &Op : It->second.Ops) {
+        if (Op.Addr > Def->Addr || (Op.Addr == Def->Addr && Op.Seq >= Def->Seq))
+          break;
+        if (Op.Output.Space != Copied.Space ||
+            Op.Output.Offset != Copied.Offset || Op.Output.Size != Copied.Size)
+          continue;
+        Source = &Op;
+        SourceGuarded = It->second.IsInstructionGuard;
+      }
+    }
+    if (!AnalysisComplete || !Source || SourceGuarded ||
+        Source->Opcode != NdOp::LOAD || Source->Addr == Load.Addr ||
+        Source->Output.Size != Copied.Size)
+      return false;
+    return reloadedCellStaysPrivate(*Source);
+  };
   if (EveryBaseCoversIndices(kAddressMemoryNarrowMask)) {
     if (!Instruction->usesFullWidthIndex())
       return true;
+    if (loadBlockZeroExtendsIndex(IndexQuery.Candidate))
+      return true;
+    if (!AnalysisComplete)
+      return false;
+    if (aarch64IndexIsZeroExtendedAtUse(IndexQuery.Candidate, Load.Addr,
+                                        Load.Seq, AggregateEvidenceBudget,
+                                        AnalysisComplete))
+      return true;
+    if (!AnalysisComplete)
+      return false;
+    if (loadBlockReloadsIndex(IndexQuery.Candidate))
+      return true;
+    if (!AnalysisComplete)
+      return false;
     JumpTableValueQuery NarrowIdentity;
     NarrowIdentity.Candidate = IndexQuery.Candidate;
     NarrowIdentity.UseAddr = Load.Addr;
@@ -1430,6 +2286,7 @@ bool CFGBuilder::aarch64OriginalTableLoadMatches(
     Narrow.Size = kAddressMemoryNarrowIndexBytes;
     NarrowIdentity.Alternatives = {{Narrow, Load.Addr, Load.Seq, false}};
     NarrowIdentity.AllowZeroExtension = true;
+    NarrowIdentity.AllowPrivateFrameMemoryAcrossCalls = true;
     const auto NarrowResult = Match({NarrowIdentity});
     if (!AnalysisComplete)
       return false;

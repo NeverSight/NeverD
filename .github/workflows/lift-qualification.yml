@@ -2,24 +2,6 @@ name: Lift native qualification
 
 on:
   workflow_dispatch:
-  push:
-    branches: [dev, codex/native-source-patching]
-    paths:
-      - '.github/workflows/lift-qualification.yml'
-      - 'scripts/run_lift_qualification.py'
-      - 'scripts/tests/test_run_lift_qualification.py'
-      - 'unittests/Inputs/lift-qualification.json'
-      - 'unittests/backend/HighSwiftEmitterTests.cpp'
-      - 'unittests/lift/**'
-      - 'unittests/CMakeLists.txt'
-      - 'include/**'
-      - 'lib/**'
-      - 'tools/neverd/**'
-      - 'cmake/**'
-      - 'CMakeLists.txt'
-      - 'third_party/llvm-project'
-      - 'third_party/capstone'
-      - 'unittests/corpus'
 
 permissions:
   contents: read

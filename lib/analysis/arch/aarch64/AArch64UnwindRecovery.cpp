@@ -1113,6 +1113,48 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
         !Function.Itanium || !Function.Itanium->IsCallSiteAddressForm ||
         !hasDarwinCallSitePersonality(Function.Personality))
       return std::nullopt;
+    bool RetainsCaller = Plan->Frame.SavedLR;
+    if (!RetainsCaller && Function.Dwarf) {
+      // The bridge restores a live LR as a separate DWARF register. Admit it
+      // only when the system's actual row uses that LR and the same CFA.
+      // An inferred interrupt row alone cannot repair synchronous metadata.
+      const auto &FDE = *Function.Dwarf;
+      const auto *CIE = Image.ExceptionMetadata.findCIE(FDE.CIESectionOffset);
+      if (!CIE || !CIE->UsesArm64eReturnAddressABI ||
+          CIE->ReturnAddressRegister != kLR || CIE->IsSignalFrame)
+        return std::nullopt;
+      auto Declared = frameRows(*CIE, FDE, kMaxInstructions, true);
+      if (!Declared) {
+        llvm::consumeError(Declared.takeError());
+        return std::nullopt;
+      }
+      for (auto Offset : {PC - Range.Begin, PC - Range.Begin + Width}) {
+        const auto &System = std::prev(Declared->upper_bound(Offset))->second;
+        RetainsCaller =
+            System.CFARegister == Row.CFARegister &&
+            System.CFAOffset == Row.CFAOffset &&
+            System.Registers[kLR].Location == AArch64UnwindRegister::SameValue;
+        if (!RetainsCaller)
+          break;
+      }
+    } else if (!RetainsCaller && Function.Compact) {
+      // Darwin's frameless consumer retains LR and adds the encoded size to
+      // SP when no register pairs are present. Pair encodings instead restore
+      // from different slots and adjust SP by the pair bytes; publication
+      // uses indexed DWARF for those bodies. Do not infer that system recipe
+      // from the normalized compact slots or an interrupted prologue.
+      const auto &Compact = *Function.Compact;
+      RetainsCaller =
+          Compact.Kind == CompactUnwindKind::FramelessImmediate &&
+          Compact.HasStackSize &&
+          !(Compact.NativeEncoding & macho_unwind::kARM64RegisterPairsMask) &&
+          Row.CFARegister == kSP && Row.CFAOffset == Compact.StackSize;
+      for (unsigned R = NDArm64eFirstPreservedGPR;
+           RetainsCaller && R < kFirstHighSlot; ++R)
+        if (R != kSP)
+          RetainsCaller =
+              Row.Registers[R].Location == AArch64UnwindRegister::SameValue;
+    }
     const auto &Sites = Function.Itanium->CallSites;
     const auto Lookup = [&](va_t At) {
       return llvm::find_if(
@@ -1131,7 +1173,7 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
       if (Site != Sites.end() && !Range.contains(Site->GuardedRange))
         return std::nullopt;
       if (Site != Sites.end() && Site->LandingPadVA) {
-        if (!Plan->Frame.SavedLR || !Range.contains(Site->LandingPadVA) ||
+        if (!RetainsCaller || !Range.contains(Site->LandingPadVA) ||
             (Protected != Sites.end() && Protected != Site))
           return std::nullopt;
         Protected = Site;
@@ -1182,7 +1224,7 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
     // edge: the throw thunk replaces the instruction without executing it.
     // In particular, do not skip a stack adjustment, spill or signing change.
     if (!AtCall && PreservesLiveFrame && Initial != Sites.end() &&
-        Initial->LandingPadVA && Plan->Frame.SavedLR &&
+        Initial->LandingPadVA && RetainsCaller &&
         Initial->GuardedRange.End - PC >= Width && End - PC > Width) {
       AtCall = true;
       Begin = PC;

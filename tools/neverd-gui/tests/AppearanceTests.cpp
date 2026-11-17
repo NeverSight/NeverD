@@ -8,6 +8,7 @@
 /// conflicting desktop theme or a retired native-caption preference.
 //===----------------------------------------------------------------------===//
 
+#include "../Config.h"
 #include "ActionRegistry.h"
 #include "DevicePixels.h"
 #include "DialogReturnKey.h"
@@ -56,6 +57,7 @@
 #include <QScreen>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStandardItemModel>
 #include <QStyle>
@@ -214,6 +216,37 @@ private slots:
     }
     QTest::mouseClick(close, Qt::LeftButton);
     QTRY_VERIFY(!dialog->isVisible());
+  }
+
+  // The same on Wayland, where no test can read the desktop back: the
+  // shadow composites only if the dialog's surface has an alpha channel, and
+  // QtWayland settles that as the native window is made, which Qt does
+  // before the dialog is polished and its frame comes.
+  void framedDialogSurfaceHasAnAlphaChannel_data() {
+    QTest::addColumn<QString>("kind");
+    for (const char *kind :
+         {"dialog", "early-native", "quick-start", "early-native-quick-start"})
+      QTest::newRow(kind) << QString::fromLatin1(kind);
+  }
+
+  void framedDialogSurfaceHasAnAlphaChannel() {
+    if (!QGuiApplication::platformName().startsWith(QLatin1String("wayland")))
+      QSKIP("Checks the format QtWayland settles when a surface is made.");
+    QFETCH(QString, kind);
+    std::unique_ptr<QDialog> dialog;
+    if (kind.endsWith(QLatin1String("quick-start")))
+      dialog = std::make_unique<QuickStartDialog>(
+          [](QWidget *) { return QString(); }, nullptr);
+    else {
+      dialog = std::make_unique<QDialog>();
+      dialog->resize(320, 240);
+    }
+    if (kind.startsWith(QLatin1String("early-native")))
+      dialog->winId();
+    dialog->show();
+    QVERIFY(QTest::qWaitForWindowExposed(dialog.get()));
+    QVERIFY(dialog->windowFlags() & Qt::FramelessWindowHint);
+    QVERIFY(dialog->windowHandle()->format().hasAlpha());
   }
 
   void windowShadowCompositesWithDesktop_data() {
@@ -1725,12 +1758,179 @@ private slots:
     // A correctly sized glyph must also have room before the tab's outer edge.
     // Tab text padding alone does not inset Qt's separate close-button widget.
     QVERIFY(rightInset >= 8);
+    // The button stands the style's inset in from the separator that ends the
+    // tab.  Qt's common style kept that room until Qt 6.11; the workbench
+    // style keeps it since.
+    QCOMPARE(tabs->tabRect(0).right() - 1 - button->geometry().right(),
+             ::neverd::limits::gui_config::kWorkbenchStyleTabButtonInset);
     if (docked) {
       // Preserve the docking library's workaround for closing a moving tab.
       QCOMPARE(tabs->style()->styleHint(QStyle::SH_Widget_Animation_Duration,
                                         nullptr, tabs),
                0);
     }
+  }
+
+  void tabButtonsKeepTheirInset_data() {
+    QTest::addColumn<QTabBar::Shape>("shape");
+    QTest::addColumn<Qt::LayoutDirection>("direction");
+    QTest::addColumn<QRect>("tab");
+    QTest::addColumn<QRect>("leading");
+    QTest::addColumn<QRect>("trailing");
+    const int inset =
+        ::neverd::limits::gui_config::kWorkbenchStyleTabButtonInset;
+    // A tab away from its bar's origin, with a button 20 pixels square on
+    // each side.  Along a horizontal tab the last column is its separator.
+    const QRect across(100, 10, 120, 30), along(10, 100, 30, 120);
+    const QRect nearStart(100 + inset, 15, 20, 20),
+        nearEnd(219 - 20 - inset, 15, 20, 20);
+    for (const auto shape : {QTabBar::RoundedNorth, QTabBar::RoundedSouth,
+                             QTabBar::TriangularNorth}) {
+      const QByteArray name = shape == QTabBar::RoundedSouth ? "south"
+                              : shape == QTabBar::RoundedNorth
+                                  ? "north"
+                                  : "triangular-north";
+      QTest::newRow(name.constData())
+          << shape << Qt::LeftToRight << across << nearStart << nearEnd;
+      // Right to left the tab is the same one seen in a mirror.
+      QTest::newRow((name + "-right-to-left").constData())
+          << shape << Qt::RightToLeft << across
+          << QRect(220 - 20 - inset, 15, 20, 20)
+          << QRect(101 + inset, 15, 20, 20);
+    }
+    // A west tab reads upwards, so its leading button is the lower one; an
+    // east tab reads downwards.
+    const QRect upper(15, 100 + inset, 20, 20),
+        lower(15, 220 - 20 - inset, 20, 20);
+    QTest::newRow("west") << QTabBar::RoundedWest << Qt::LeftToRight << along
+                          << lower << upper;
+    QTest::newRow("east") << QTabBar::RoundedEast << Qt::LeftToRight << along
+                          << upper << lower;
+  }
+
+  void tabButtonsKeepTheirInset() {
+    QFETCH(QTabBar::Shape, shape);
+    QFETCH(Qt::LayoutDirection, direction);
+    QFETCH(QRect, tab);
+    QFETCH(QRect, leading);
+    QFETCH(QRect, trailing);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    QTabBar bar;
+    QStyleOptionTab option;
+    option.initFrom(&bar);
+    option.shape = shape;
+    option.direction = direction;
+    option.rect = tab;
+    option.leftButtonSize = option.rightButtonSize = QSize(20, 20);
+    QCOMPARE(bar.style()->subElementRect(QStyle::SE_TabBarTabLeftButton,
+                                         &option, &bar),
+             leading);
+    QCOMPARE(bar.style()->subElementRect(QStyle::SE_TabBarTabRightButton,
+                                         &option, &bar),
+             trailing);
+  }
+
+  void spinBoxTextKeepsTheFieldInset_data() {
+    QTest::addColumn<Qt::LayoutDirection>("direction");
+    QTest::newRow("left-to-right") << Qt::LeftToRight;
+    QTest::newRow("right-to-left") << Qt::RightToLeft;
+  }
+
+  void spinBoxTextKeepsTheFieldInset() {
+    QFETCH(Qt::LayoutDirection, direction);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    const int inset =
+        ::neverd::limits::gui_config::kWorkbenchStyleFieldTextInset;
+    QWidget window;
+    window.setLayoutDirection(direction);
+    auto *box = new QSpinBox(&window);
+    box->setRange(0, 255);
+    box->setValue(255);
+    box->move(10, 10);
+    window.resize(300, 120);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    box->resize(box->sizeHint());
+    auto *editor = box->findChild<QLineEdit *>();
+    QVERIFY(editor);
+    const QRect field = editor->geometry();
+    const bool mirrored = direction == Qt::RightToLeft;
+    // On the side the buttons leave free the style sheet's box gives the
+    // editor the inset at most: its padding makes no second room for the
+    // buttons.  The editor's text margin makes up the rest, and keeps the
+    // text as far from the buttons.
+    const int room = mirrored ? box->width() - 1 - field.right() : field.left();
+    QVERIFY2(room <= inset, qPrintable(QStringLiteral("%1").arg(room)));
+    const QMargins margins = editor->textMargins();
+    QCOMPARE(room + (mirrored ? margins.right() : margins.left()), inset);
+    QCOMPARE(mirrored ? margins.left() : margins.right(), inset);
+    if (mirrored)
+      return;
+    // Seen: the number stands clear of the frame.  Its first column of ink
+    // is the editor's own two pixels further in, give or take how a
+    // platform draws the digit's edge.
+    const QImage image =
+        box->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    int ink = -1;
+    for (int x = 1; x < image.width() - 1 && ink < 0; ++x)
+      for (int y = 4; y < image.height() - 4 && ink < 0; ++y)
+        if (qGray(image.pixel(x, y)) > 150)
+          ink = x;
+    QVERIFY2(ink >= inset * image.devicePixelRatio(),
+             qPrintable(QStringLiteral("%1").arg(ink)));
+  }
+
+  void currentItemKeepsItsFocusFrame_data() {
+    QTest::addColumn<bool>("table");
+    QTest::addColumn<bool>("selected");
+    // A table's cell is framed selected or not; a tree's row at rest.  The
+    // style sheet paints a tree's selected row itself, fill and no frame.
+    QTest::newRow("table-cell") << true << false;
+    QTest::newRow("table-selected-cell") << true << true;
+    QTest::newRow("tree-row") << false << false;
+  }
+
+  void currentItemKeepsItsFocusFrame() {
+    QFETCH(bool, table);
+    QFETCH(bool, selected);
+    Theme::instance().setMode(Theme::Mode::Dark);
+    Theme::instance().apply();
+    std::unique_ptr<QAbstractItemView> view;
+    if (table)
+      view = std::make_unique<QTableView>();
+    else
+      view = std::make_unique<QTreeView>();
+    view->ensurePolished();
+    // The item as a delegate hands it to the view's style while the view has
+    // keyboard focus on it.
+    QStyleOptionViewItem item;
+    item.initFrom(view.get());
+    item.widget = view.get();
+    item.rect = QRect(4, 4, 120, 24);
+    item.text = QStringLiteral("cell");
+    item.features = QStyleOptionViewItem::HasDisplay;
+    item.state |=
+        QStyle::State_Enabled | QStyle::State_Active | QStyle::State_HasFocus;
+    if (selected)
+      item.state |= QStyle::State_Selected;
+    QImage image(128, 32, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Theme::instance().chrome(QStringLiteral("Base")));
+    {
+      QPainter painter(&image);
+      view->style()->drawControl(QStyle::CE_ItemViewItem, &item, &painter,
+                                 view.get());
+    }
+    const QColor focus = Theme::instance().chrome(QStringLiteral("Focus"));
+    int framed = 0;
+    for (int y = 0; y < image.height(); ++y)
+      for (int x = 0; x < image.width(); ++x)
+        if (image.pixelColor(x, y) == focus)
+          ++framed;
+    // The straight runs of the four sides, short of the rounded corners.
+    QVERIFY2(framed >= 2 * (item.rect.width() + item.rect.height()) - 24,
+             qPrintable(QString::number(framed)));
   }
 
   void bundledFontsCoverInterfaceLanguages() {

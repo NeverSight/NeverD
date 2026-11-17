@@ -110,7 +110,8 @@ private:
   /// Whether no path from \p Target that its direct branches name reaches a
   /// return, within limits::kMaxNoReturnScreenBytes of decoded instructions.
   /// A path ends at an architectural trap that never resumes, at a call
-  /// stated or known by name never to return. An indirect jump, or a byte that
+  /// stated or known by name never to return, and at a call the start of
+  /// another function directly follows.  An indirect jump, or a byte that
   /// does not decode or lift, may lead to a return.
   bool entryFlowNeverResumes(va_t Target) const;
   /// The instructions of the screened range of the function at \p Target;

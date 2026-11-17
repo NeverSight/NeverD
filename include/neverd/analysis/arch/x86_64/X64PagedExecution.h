@@ -58,11 +58,12 @@ struct X64PagedExecutionOptions {
   /// Required when CPL3 alignment checking is active. Absence refuses the
   /// entry before fetch or RAM effects instead of inferring a host CPU policy.
   std::optional<X64PagedAlignmentPriority> AlignmentPriority;
-  /// Required before executing IRET's return-frame accesses. Authentication
-  /// and fetch still precede this instruction-specific runtime binding.
+  /// Required before executing IRET's return-frame accesses. Includes its
+  /// descriptor-tail fault code. Authentication and fetch still precede this
+  /// instruction-specific runtime binding.
   std::optional<X64PagedIretAccessOrder> IretAccessOrder;
   /// Required before RETF accesses its frame. Includes the target processor's
-  /// order of compatibility-IP truncation and canonical-address validation.
+  /// compatibility-IP order and descriptor-tail canonical-address fault code.
   std::optional<X64PagedFarReturnProfile> FarReturnProfile;
   /// Required before LSS/LFS/LGS reads either pointer field or descriptor.
   std::optional<X64PagedFarPointerProfile> FarPointerProfile;
@@ -87,6 +88,9 @@ struct X64PagedExecutionOptions {
       X86InstructionDebugProfile::InstructionStep;
   std::optional<X86GeneralDetectFrame> GeneralDetectFrame;
   translate::X86EventDeliveryOptions EventDelivery;
+  /// Retained across instruction/event stops and their secondary faults.
+  X86DescriptorCanonicalityProfile EventDescriptorCanonicality =
+      kX64PagedEventDescriptorCanonicality;
 };
 
 /// A committed near CALL/RET, captured before its post-instruction event.
@@ -128,6 +132,8 @@ struct X64PagedExecutionResult {
 /// also retains NMI unblocking on failure. LSS/LFS/LGS stage both destinations
 /// until their pointer reads, descriptor checks and accessed writes succeed.
 /// Selector MOV/PUSH/POP share those checks and stage stack updates too.
+/// Backing stops retain completed accesses and authenticated source bindings;
+/// read-only prefixes remain unpaid until completion or an architectural fault.
 /// Memory string repeats commit one element and its restart state per step.
 /// Unfinished comparisons retain entry flags. Port transfers use a separate
 /// synchronous device binding; gather/XSAVE still need progress bindings.
@@ -139,7 +145,7 @@ public:
   explicit X64PagedExecution(translate::X86PagedMemory &Memory,
                              const X64PagedExecutionOptions &Options = {},
                              X64PagedInstructionContinuation Continuation = {})
-      : Memory(Memory), Options(Options), PendingReturn(Continuation) {}
+      : Memory(Memory), Options(Options), PendingInstruction(Continuation) {}
 
   /// Shared admission before producer polling or instruction fetch. Neither
   /// the generated validator nor this check touches guest RAM.
@@ -167,7 +173,9 @@ public:
           std::optional<bool> DebugSSBlocked = std::nullopt,
           bool BranchDebug = false);
 
-  X64PagedInstructionContinuation continuation() const { return PendingReturn; }
+  X64PagedInstructionContinuation continuation() const {
+    return PendingInstruction;
+  }
   /// Pending/attempt-consumed bits, independent of lastResult and admission
   /// refusals. Only a consumed pending attempt may bypass a zero budget.
   uint64_t pendingProgress() const;
@@ -182,8 +190,8 @@ public:
 
 private:
   llvm::Expected<X64PagedExecutionResult>
-  executeReturn(X64ContinuationStateV6 &State,
-                const detail::X64PagedInstructionContinuation &Binding);
+  executeTransition(X64ContinuationStateV6 &State,
+                    const detail::X64PagedInstructionContinuation &Binding);
   llvm::Error
   deliverEvent(X64ContinuationStateV6 &State,
                const X64ContinuationEventV1 &Event, uint32_t MXCSRMask,
@@ -193,7 +201,7 @@ private:
                            bool InstructionFault = false, bool Icebp = false);
   translate::X86PagedMemory &Memory;
   X64PagedExecutionOptions Options;
-  X64PagedInstructionContinuation PendingReturn;
+  X64PagedInstructionContinuation PendingInstruction;
   X64PagedExecutionResult Last;
   std::string Error;
 };

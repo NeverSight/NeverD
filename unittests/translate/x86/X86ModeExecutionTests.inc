@@ -111,7 +111,7 @@ protected:
   }
 
   void compileLong(bool LLVM, const std::string &Optimization,
-                   const std::string &Compiler) {
+                   const std::string &Compiler, bool Debug = false) {
     llvm::json::Array PCs;
     std::vector<uint8_t> Code;
     for (const auto &I : Program)
@@ -122,7 +122,8 @@ protected:
     llvm::json::Object Settings{
         {"profile", "kernel-events-v6"}, {"mxcsr_mask", "0xffff"},
         {"paging_address_bits", 48},     {"paged_memory", true},
-        {"scheduled_events", true},      {"instructions", std::move(PCs)}};
+        {"scheduled_events", true},      {"instructions", std::move(PCs)},
+        {"paged_debug", Debug}};
     std::string Request;
     llvm::raw_string_ostream OS(Request);
     OS << llvm::formatv("{0}", llvm::json::Value(std::move(Settings)));

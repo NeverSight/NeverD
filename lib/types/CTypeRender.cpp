@@ -343,10 +343,15 @@ std::string CWriter::declare(const TypeExpr &Type,
       else if (Kind == TypeKind::Enum)
         Base += "enum ";
     }
-    return spaced(Base + names().type(Type.Name));
+    return spaced(Base + (DeclarationsOnly && Options.SourceTypeNames
+                              ? Type.Name
+                              : names().type(Type.Name)));
   }
   case TypeExprKind::Pointer: {
-    std::string Inner = Type.Reference ? "&" : "*";
+    // The type editor and C++ keep source references; emitted C uses the
+    // pointer carrier, including references nested inside callback types.
+    std::string Inner =
+        Type.Reference && (Cpp || Options.SourceTypeNames) ? "&" : "*";
     if (Type.PointerBytes != pointerBytes(Library.dataModel()))
       Inner += " __ptr" + std::to_string(Type.PointerBytes * 8) + " ";
     if (Type.Const)
@@ -409,6 +414,13 @@ std::string CWriter::declare(const TypeExpr &Type,
     return declare(*Function.Return, Inner);
   }
   case TypeExprKind::Record:
+    if (Type.Record && Type.Record->MemberPointer) {
+      std::string Storage =
+          Qualifiers + "struct /* C++ member pointer ABI storage */ { ";
+      for (const Member &Field : Type.Record->Members)
+        Storage += declare(*Field.Type, Field.Name) + "; ";
+      return spaced(Storage + "}");
+    }
     return spaced(Qualifiers +
                   (Type.Record && Type.Record->Union ? "union" : "struct") +
                   " /* anonymous */");
@@ -653,6 +665,9 @@ void CWriter::enumerators(const EnumDef &Enum, unsigned Indent,
 
 void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
                    uint64_t Base, bool Outer, std::string &Out) {
+  if (Record.MemberPointer)
+    Out += std::string(Indent, ' ') + "// C++ member pointer ABI storage; "
+                                      "encoded words, not ordinary pointers.\n";
   SequentialLayout Layout(Pack);
   // The bitfield run being written: its storage unit, its size in bits and
   // the bit after its last field.
@@ -1173,8 +1188,9 @@ std::string CSpeller::declare(const TypeExpr &Type,
 }
 
 std::string renderC(const TypeLibrary &Library, const LocalType &Type,
-                    const RenderOptions &Options) {
-  CWriter Writer(Library, Options);
+                    const RenderOptions &Options, const NameSpelling *Shared) {
+  CWriter Writer(Library, Options, /*Embedded=*/false, /*Prelude=*/false,
+                 Shared);
   std::string Out;
   Writer.definition(Type, Out);
   return Out;
@@ -1582,7 +1598,8 @@ std::string systemProbe(const HeaderSystem &System) {
 
 std::string renderCHeader(const TypeLibrary &Library,
                           llvm::ArrayRef<const LocalType *> Roots,
-                          const RenderOptions &Options) {
+                          const RenderOptions &Options,
+                          const NameSpelling *Shared) {
   // What the roots hold by value is defined; what they only point to is
   // declared, except enumerations and typedefs, which C cannot declare.
   const std::vector<const LocalType *> All =
@@ -1595,7 +1612,8 @@ std::string renderCHeader(const TypeLibrary &Library,
     Defined = definedFor(Library, Roots);
   }
 
-  CWriter Writer(Library, Options, /*Embedded=*/false, /*Prelude=*/true);
+  CWriter Writer(Library, Options, /*Embedded=*/false, /*Prelude=*/true,
+                 Shared);
   Writer.declaredAhead();
   // The system's own types, which its headers declare: those of a name its
   // library has, the program's own definitions of them too, come from its

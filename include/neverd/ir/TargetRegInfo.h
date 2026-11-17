@@ -277,6 +277,11 @@ struct TargetRegInfo {
   bool isLinkRegister(uint64_t RegOff) const {
     return LinkRegister != 0 && RegOff == LinkRegister;
   }
+  // 融合：两个重载并存。1 参版供 fork 演进出的调用点使用（不区分
+  // 文件格式）；2 参版是上游的 ABI 语义（仅 MachO/COFF 保留 x18）。
+  bool isPlatformRegister(uint64_t RegOff) const {
+    return PlatformRegister != 0 && RegOff == PlatformRegister;
+  }
   bool isPlatformRegister(uint64_t RegOff, BinaryFormat Format) const {
     return PlatformRegister != 0 && RegOff == PlatformRegister &&
            (Format == BinaryFormat::MachO || Format == BinaryFormat::COFF);

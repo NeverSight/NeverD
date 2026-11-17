@@ -23,6 +23,8 @@ class Value;
 } // namespace llvm
 
 namespace neverd {
+
+class LLVMSourceMap;
 struct HighStmt;
 
 /// Records emission events, never a search for printed expressions. Private

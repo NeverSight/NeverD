@@ -53,9 +53,8 @@ inline std::string variadicImportOfStub(const BinaryImage &Image, va_t Entry) {
   // is variadic in their programs only.
   if (const libc::LibCVariadicForward *Forward =
           libc::libcVariadicForward(Name);
-      Forward && Forward->Format != BinaryFormat::Unknown)
-    return libc::variadicIn(*Forward, libc::libcVariantOf(Image)) &&
-                   libc::isKnownFunction(Name)
+      Forward)
+    return libc::variadicIn(*Forward, libc::libcVariantOf(Image))
                ? Name
                : std::string();
   return libc::isKnownFunction(Name) &&

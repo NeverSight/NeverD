@@ -621,6 +621,122 @@ TEST(AArch64ImplicitUnwind, ProtectedNonCallNeedsAnUnchangedCompleteRow) {
   }
 }
 
+TEST(AArch64ImplicitUnwind, ProtectedNonCallRetainsTheLiveCallerReturn) {
+  for (bool Compact : {false, true})
+    for (auto Sign : {Nop, SignA, SignB, ExplicitSignA, ExplicitSignB}) {
+      SCOPED_TRACE(Compact);
+      SCOPED_TRACE(Sign);
+      Frame F{Sign, Allocate,       LoadInFrame, Skip,
+              Nop,  StoreLRAboveSP, Call,        CompilerTrap};
+      F.addHandler(LiveProtectedBegin, LiveProtectedEnd, LiveLandingPad);
+      F.Function.Dwarf->Instructions = {
+          {.Kind = CFIOpKind::AdvanceLoc,
+           .Offset = LiveProtectedBegin * sizeof(uint32_t)},
+          {.Kind = CFIOpKind::DefCFAOffset,
+           .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+           .Offset = LiveFrameWords * kRegisterBytes},
+          {.Kind = CFIOpKind::AdvanceLoc,
+           .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+           .Offset = (LiveLRSpilled - LiveProtectedBegin) * sizeof(uint32_t)},
+          {.Kind = CFIOpKind::Offset,
+           .CodeOffset = LiveLRSpilled * sizeof(uint32_t),
+           .Register = kLR,
+           .Offset = -kRegisterBytes}};
+      if (Compact) {
+        F.useCompact(LiveCompactStack);
+        F.Function.Compact->HasLSDA = true;
+        F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+      }
+      auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+      ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+      const auto PC = LiveProtectedBegin * sizeof(uint32_t);
+      const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+      ASSERT_EQ(Row.Registers[kLR].Location, AArch64UnwindRegister::SameValue);
+      auto Site =
+          prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0);
+      ASSERT_TRUE(Site);
+      EXPECT_TRUE(Site->AtProtectedCall);
+      EXPECT_EQ(Site->Begin, PC);
+      EXPECT_EQ(Site->End, PC + sizeof(uint32_t));
+    }
+}
+
+TEST(AArch64ImplicitUnwind, CompactLiveReturnNeedsTheActualSystemRecipe) {
+  for (auto Encoding :
+       {LiveCompactStack,
+        LiveCompactStack | macho_unwind::kARM64FrameX19X20Pair,
+        macho_unwind::kARM64ModeFrameless, macho_unwind::kARM64ModeFrame}) {
+    SCOPED_TRACE(Encoding);
+    Frame F{SignB, Allocate,       LoadInFrame, Skip,
+            Nop,   StoreLRAboveSP, Call,        CompilerTrap};
+    F.addHandler(LiveProtectedBegin, LiveProtectedEnd, LiveLandingPad);
+    F.useCompact(Encoding);
+    F.Function.Compact->HasLSDA = true;
+    F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+    auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+    ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+    const auto PC = LiveProtectedBegin * sizeof(uint32_t);
+    EXPECT_EQ(bool(prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows,
+                                                    PC, 0)),
+              Encoding == LiveCompactStack);
+  }
+}
+
+TEST(AArch64ImplicitUnwind, LivePACMReturnRetainsBothSigningModifiers) {
+  for (bool Compact : {false, true})
+    for (auto Sign : {SignA, SignB}) {
+      Frame F{kAArch64PACMEncoding, Sign, Allocate,    LoadInFrame, Skip, Nop,
+              StoreLRAboveSP,       Call, CompilerTrap};
+      F.addHandler(LivePACMProtectedBegin, LivePACMProtectedEnd,
+                   LivePACMLandingPad);
+      const auto PC = LivePACMProtectedBegin * sizeof(uint32_t);
+      F.Function.Dwarf->Instructions = {
+          {.Kind = CFIOpKind::AdvanceLoc, .Offset = PC},
+          {.Kind = CFIOpKind::DefCFAOffset,
+           .CodeOffset = PC,
+           .Offset = LiveFrameWords * kRegisterBytes}};
+      if (Compact) {
+        F.useCompact(LiveCompactStack);
+        F.Function.Compact->HasLSDA = true;
+        F.Function.Compact->LSDAVA = F.Function.Itanium->LSDAVA;
+      }
+      auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+      ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+      ASSERT_TRUE(prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows,
+                                                   PC, CallDisplacement));
+      const auto Plan = prepareDarwinArm64eSystemCaller(
+          aarch64UnwindRowAt(*Rows, PC), F.Function.CodeRange,
+          CallDisplacement);
+      ASSERT_TRUE(Plan);
+      EXPECT_EQ(Plan->Frame.Signing, Sign == SignA
+                                         ? NDArm64eSignedIAWithCFAPACM
+                                         : NDArm64eSignedIBWithCFAPACM);
+      EXPECT_EQ(Plan->Frame.SigningPC, CallDisplacement + sizeof(uint32_t));
+    }
+}
+
+TEST(AArch64ImplicitUnwind, LiveReturnNeedsTheSystemCFARow) {
+  Frame F{SignB, Allocate,       LoadInFrame, Skip,
+          Nop,   StoreLRAboveSP, Call,        CompilerTrap};
+  F.addHandler(LiveProtectedBegin, LiveProtectedEnd, LiveLandingPad);
+  // The implicit proof can recover SP + 16 despite the declared SP + 32.
+  // The language personality still uses that declared row, so delivery fails.
+  F.Function.Dwarf->Instructions = {
+      {.Kind = CFIOpKind::AdvanceLoc,
+       .Offset = LiveProtectedBegin * sizeof(uint32_t)},
+      {.Kind = CFIOpKind::DefCFAOffset,
+       .CodeOffset = LiveProtectedBegin * sizeof(uint32_t),
+       .Offset = MismatchedLiveFrameWords * kRegisterBytes}};
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto PC = LiveProtectedBegin * sizeof(uint32_t);
+  const auto &Row = aarch64UnwindRowAt(*Rows, PC);
+  ASSERT_EQ(Row.CFAOffset, LiveFrameWords * kRegisterBytes);
+  ASSERT_EQ(Row.Registers[kLR].Location, AArch64UnwindRegister::SameValue);
+  EXPECT_FALSE(
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, PC, 0));
+}
+
 TEST(AArch64ImplicitUnwind, CompactProtectedNonCallUsesTheProvenFrameRecord) {
   for (auto Operation : {Nop, ClobberLR, ByteInsideLR, PopFP}) {
     SCOPED_TRACE(Operation);

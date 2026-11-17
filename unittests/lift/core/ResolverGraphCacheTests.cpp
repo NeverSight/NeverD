@@ -10,6 +10,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/support/BinaryEncoding.h"
 
@@ -1662,6 +1663,92 @@ struct ResolverGraphCacheTestAccess {
     Exit.Ops.front().Opcode = NdOp::RETURN;
   }
 
+  static Answer narrowIndex(CFGBuilder &B, const Query &Use, size_t Budget) {
+    Answer A;
+    A.Complete = true;
+    A.Remaining = Budget;
+    A.Values = {B.aarch64IndexIsZeroExtendedAtUse(
+        Use.Candidate, Use.UseAddr, Use.UseSeq, &A.Remaining, A.Complete)};
+    return A;
+  }
+
+  static void narrowProducer(CFGBuilder &B, unsigned Variant) {
+    auto &Producer = B.Insns.at(0x100);
+    Producer.Ops.front().Opcode = NdOp::INT_ZEXT;
+    Producer.Ops.front().Inputs[0] = NdVar::reg(0, 4);
+    if (Variant == 1)
+      B.PersistentCFGRoots.insert(0x102);
+    if (Variant == 2) {
+      auto &Call = B.Insns.at(0x102);
+      Call.IsBranch = false;
+      Call.IsCall = true;
+      Call.Ops.front().Opcode = NdOp::CALL;
+    }
+    if (Variant == 3) {
+      auto Write = Producer.Ops.front();
+      Write.Addr = 0x102;
+      Write.Opcode = NdOp::COPY;
+      Write.Inputs[0] = NdVar::reg(8, 8);
+      B.Insns.at(0x102).Ops.insert(B.Insns.at(0x102).Ops.begin(), Write);
+    }
+    if (Variant == 4)
+      Producer.IsInstructionGuard = true;
+  }
+
+  static Answer guardAfterUnrelatedBranches(CFGBuilder &B,
+                                            const BinaryImage &Image,
+                                            unsigned Count, size_t Budget) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    const va_t Guard = 0x101 + Count, Load = Guard + 1, Exit = Load + 1;
+    auto Emit = [&](va_t Addr, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &R = B.Insns[Addr];
+      R.Addr = Addr;
+      R.Size = 1;
+      B.BlockStarts.insert(Addr);
+      LowOp Op;
+      Op.Addr = Addr;
+      Op.Seq = static_cast<int>(R.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      R.Ops.push_back(Op);
+    };
+    const NdVar Index = NdVar::reg(0, 8), Lane = NdVar::reg(0, 4);
+    Emit(0x100, NdOp::INT_ZEXT, Index, {Lane});
+    for (va_t Addr = 0x101; Addr < Guard; ++Addr) {
+      Emit(Addr, NdOp::COND_BR, {},
+           {NdVar::cst(Addr + 1, 8), NdVar::reg(16, 1)});
+      auto &R = B.Insns.at(Addr);
+      R.IsCond = R.IsBranch = true;
+      R.BranchTarget = Addr + 1;
+    }
+    const NdVar Condition = NdVar::tmp(0x8000, 1);
+    Emit(Guard, NdOp::INT_LESS, Condition, {NdVar::scalar(25, 4), Lane});
+    Emit(Guard, NdOp::COND_BR, {}, {NdVar::cst(Exit, 8), Condition});
+    B.Insns.at(Guard).IsCond = B.Insns.at(Guard).IsBranch = true;
+    B.Insns.at(Guard).BranchTarget = Exit;
+    Emit(Load, NdOp::INDIR_BR, {}, {Index});
+    B.Insns.at(Load).IsBranch = B.Insns.at(Load).IsIndirect = true;
+    Emit(Exit, NdOp::RETURN, {}, {});
+    B.Insns.at(Exit).IsRet = true;
+    CFGBuilder::JumpTableInfo Info;
+    Info.IndexValueAtUse = Index;
+    Info.IndexUseAddr = Info.TableLoadAddr = Load;
+    Info.IndexUseSeq = Info.TableLoadSeq = 0;
+    Answer A;
+    A.Remaining = Budget;
+    A.Values = {
+        B.inferBoundsFromPreciseGuards(B.Insns.at(Load), Info, &A.Remaining)};
+    A.Masks = {Info.MaxEntries};
+    A.Complete = !Info.IncompleteGuardDomain;
+    return A;
+  }
+
   static ConditionAnswer conditions(
       CFGBuilder &B, size_t Budget = 1000000, va_t Load = 0x102,
       std::vector<va_t> Branches = {0x100},
@@ -1773,6 +1860,115 @@ struct ResolverGraphCacheTestAccess {
     Result.Values = {Address, Target};
     Result.QueryComplete = {AddressComplete, TargetComplete};
     Result.Complete = AddressComplete && TargetComplete;
+    return Result;
+  }
+
+  enum class LocalTargetCase {
+    Valid,
+    WrongExtension,
+    Clobbered,
+    BypassLoad,
+    Call
+  };
+  static RoleInfo seedLocalTarget(CFGBuilder &B, const BinaryImage &Image,
+                                  LocalTargetCase Kind, bool LargePrefix) {
+    B.CurrentImg = &Image;
+    B.CurrentFuncEntry = 0x100;
+    B.JumpTableProofContextComplete = true;
+    B.PersistentCFGRoots = {0x100};
+    B.BlockStarts = {0x100, 0x1000};
+    auto Emit = [&](va_t Addr, NdOp Code, NdVar Output,
+                    std::initializer_list<NdVar> Inputs) {
+      auto &Rec = B.Insns[Addr];
+      Rec.Addr = Addr;
+      Rec.Size = 1;
+      LowOp Op;
+      Op.Addr = Addr;
+      Op.Seq = static_cast<int>(Rec.Ops.size());
+      Op.Opcode = Code;
+      Op.Output = Output;
+      for (const auto &Input : Inputs)
+        Op.addInput(Input);
+      Rec.Ops.push_back(Op);
+    };
+    const unsigned Count = LargePrefix ? 1024 : 1;
+    for (unsigned I = 0; I < Count; ++I)
+      Emit(0x100 + I, NdOp::COPY, NdVar::reg(0x60, 8), {NdVar::scalar(I, 8)});
+    Emit(0x100 + Count, NdOp::BRANCH, {}, {NdVar::address(0x1000, 8)});
+    B.Insns.at(0x100 + Count).IsBranch = true;
+    B.Insns.at(0x100 + Count).BranchTarget = 0x1000;
+    const auto Base = NdVar::reg(0x40, 8);
+    const auto Offset = NdVar::reg(0x48, 4);
+    const auto Extended = NdVar::reg(0x48, 8);
+    const auto Target = NdVar::reg(0x50, 8);
+    Emit(0x1000, NdOp::COPY, Base, {NdVar::address(0x4000, 8)});
+    Emit(0x1001, NdOp::LOAD, Offset, {Base});
+    Emit(0x1002,
+         Kind == LocalTargetCase::WrongExtension ? NdOp::INT_ZEXT
+                                                 : NdOp::INT_SEXT,
+         Extended, {Offset});
+    Emit(0x1003, NdOp::INT_ADD, Target, {Extended, NdVar::address(0x1000, 8)});
+    if (Kind == LocalTargetCase::Clobbered)
+      Emit(0x1003, NdOp::COPY, Target, {NdVar::reg(0x58, 8)});
+    if (Kind == LocalTargetCase::Call) {
+      Emit(0x1003, NdOp::CALL, {}, {NdVar::address(0x5000, 8)});
+      B.Insns.at(0x1003).IsCall = true;
+    }
+    Emit(0x1004, NdOp::INDIR_BR, {}, {Target});
+    B.Insns.at(0x1004).IsBranch = B.Insns.at(0x1004).IsIndirect = true;
+    if (Kind == LocalTargetCase::BypassLoad) {
+      B.BlockStarts.insert(0x1002);
+      B.PersistentCFGRoots.insert(0x1002);
+    }
+    RoleInfo Info;
+    Info.setBaseAddr(0x4000);
+    Info.EntrySize = 4;
+    Info.IsRelative = Info.IsSigned = Info.HasTargetBase = true;
+    Info.TargetBase = 0x1000;
+    Info.TargetLoads = {{Offset, 0x1001, 0, true}};
+    return Info;
+  }
+  static Answer localOriginalAddress(CFGBuilder &B, bool UnknownBase,
+                                     size_t Budget) {
+    auto &BaseOp = B.Insns.at(0x1000).Ops.front();
+    if (UnknownBase)
+      BaseOp.Inputs[0] = NdVar::reg(0x68, 8);
+    LowOp Extend;
+    Extend.Opcode = NdOp::INT_ZEXT;
+    Extend.Addr = 0x1000;
+    Extend.Seq = 1;
+    Extend.Output = NdVar::reg(0x70, 8);
+    Extend.addInput(NdVar::reg(0x70, 4));
+    B.Insns.at(0x1000).Ops.push_back(Extend);
+    auto &Load = B.Insns.at(0x1001).Ops.front();
+    Load.Opcode = NdOp::INTRINSIC;
+    Load.NumInputs = 0;
+    Load.addInput(
+        NdVar::scalar(static_cast<uint64_t>(Intrinsic::A64_LoadRegisterOffset),
+                      kAddressMemoryIdentifierBytes));
+    Load.addInput(NdVar::reg(0x40, 8));
+    Load.addInput(Extend.Output);
+    // LDRSW X10, [X11, X8, LSL #2]: keep the original address operation.
+    Load.addInput(NdVar::scalar(0xb8a8796a, kAddressMemoryWordBytes));
+    CFGBuilder::JumpTableLoadRole Role;
+    Role.Load = {Load.Output, Load.Addr, Load.Seq, true};
+    Role.LoadWidth = 4;
+    Role.AddressScale = 4;
+    Role.AllowedBases = {0x4000};
+    Role.Indices = {{Extend.Output, Load.Addr, Load.Seq, false}};
+    Answer Result;
+    Result.Remaining = Budget;
+    Result.Values = {B.aarch64OriginalTableLoadMatches(
+        Load, Role, 26, &Result.Remaining, Result.Complete)};
+    return Result;
+  }
+
+  static Answer localTarget(CFGBuilder &B, const RoleInfo &Info,
+                            size_t Budget) {
+    Answer Result;
+    Result.Remaining = Budget;
+    Result.Values = {B.branchTargetDependsOnTableLoad(
+        B.Insns.at(0x1004), Info, &Result.Remaining, &Result.Complete)};
     return Result;
   }
 
@@ -4196,6 +4392,38 @@ TEST(ResolverLocalAddress, EveryBudgetBoundaryKeepsPublicationTransactional) {
   }
 }
 
+TEST(ResolverGuardPredicates, NarrowIndexRequiresAnUninterruptedProducer) {
+  auto Image = image();
+  Image.Arch = Arch::AArch64;
+  for (unsigned Variant = 0; Variant != 5; ++Variant) {
+    SCOPED_TRACE(Variant);
+    CFGBuilder B;
+    const auto Use = Access::seedPredecessorLane(B, Image, 4);
+    Access::narrowProducer(B, Variant);
+    const auto Result = Access::narrowIndex(B, Use, 100000);
+    ASSERT_TRUE(Result.Complete);
+    EXPECT_EQ(Result.Values, (std::vector<bool>{Variant == 0}));
+    EXPECT_EQ(Access::narrowIndex(B, Use, 100000), Result);
+    const auto Exhausted = Access::narrowIndex(B, Use, 1);
+    EXPECT_FALSE(Exhausted.Complete);
+    EXPECT_EQ(Exhausted.Values, (std::vector<bool>{false}));
+  }
+}
+
+TEST(ResolverGuardPredicates, UnrelatedBranchesDoNotConsumeGuardSyntaxBudget) {
+  auto Image = image();
+  Image.Arch = Arch::AArch64;
+  for (unsigned Count : {2u, 5000u}) {
+    SCOPED_TRACE(Count);
+    CFGBuilder B;
+    const auto Result =
+        Access::guardAfterUnrelatedBranches(B, Image, Count, 20000000);
+    EXPECT_TRUE(Result.Complete);
+    EXPECT_EQ(Result.Values, (std::vector<bool>{true}));
+    EXPECT_EQ(Result.Masks, (std::vector<uint64_t>{26}));
+  }
+}
+
 TEST(ResolverConditionQueryCache, ReusesGraphAndPaysEveryColdBudgetBoundary) {
   const auto Image = image();
   CFGBuilder Warm;
@@ -4372,6 +4600,35 @@ TEST(ResolverConditionQueryCache,
           Access::conditions(B, 1000000, Access::nodeAddress(Load), Branches),
           Answer);
     }
+  }
+}
+
+TEST(ResolverConditionQueryCache, ManyControllingBranchesShareGraphAnalysis) {
+  const auto Image = image();
+  constexpr int Count = 2048;
+  std::vector<std::array<int, 2>> Edges(Count);
+  std::vector<va_t> Branches;
+  for (int I = 0; I < Count; ++I) {
+    Edges[I] = {Count, I + 1};
+    Branches.push_back(Access::nodeAddress(I));
+  }
+  for (const std::vector<int> Roots :
+       {std::vector<int>{0}, std::vector<int>{0, Count / 2}}) {
+    CFGBuilder B;
+    Access::seedControlGraph(B, Image, Edges, Roots);
+    const auto Result = Access::conditions(
+        B, 10000000, Access::nodeAddress(Count - 1), Branches);
+    ASSERT_TRUE(Result.Complete);
+    ASSERT_EQ(Result.Values.size(), Count);
+    for (int I = 0; I < Count; ++I) {
+      const std::optional<bool> Expected = I >= Roots.back() && I + 1 < Count
+                                               ? std::optional<bool>{false}
+                                               : std::nullopt;
+      EXPECT_EQ(Result.Values[I], Expected) << I;
+    }
+    EXPECT_EQ(Access::conditions(B, 10000000, Access::nodeAddress(Count - 1),
+                                 Branches),
+              Result);
   }
 }
 
@@ -5608,6 +5865,55 @@ TEST(ResolverValueQueryCache, FiniteJointReuseRequiresCurrentSourceAndRoles) {
       EXPECT_FALSE(Incomplete);
     }
   }
+}
+
+TEST(ResolverLoadRoles, LocalTargetDoesNotRebuildUnrelatedFunctionState) {
+  for (Arch Target : {Arch::X64, Arch::AArch64}) {
+    auto Image = image();
+    Image.Arch = Target;
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    const auto Info =
+        Access::seedLocalTarget(B, Image, Access::LocalTargetCase::Valid, true);
+    const auto Cold = Access::localTarget(B, Info, 10000);
+    ASSERT_TRUE(Cold.Complete);
+    EXPECT_EQ(Cold.Values, std::vector<bool>({true}));
+    EXPECT_EQ(Access::localTarget(B, Info, 10000), Cold);
+    const auto Exhausted = Access::localTarget(B, Info, 1);
+    EXPECT_FALSE(Exhausted.Complete);
+    EXPECT_EQ(Exhausted.Values, std::vector<bool>({false}));
+  }
+}
+
+TEST(ResolverLoadRoles, OriginalAddressUsesAClosedLocalBase) {
+  for (bool UnknownBase : {false, true}) {
+    auto Image = image();
+    Image.Arch = Arch::AArch64;
+    Image.Bits = Bitness::Bits64;
+    CFGBuilder B;
+    Access::seedLocalTarget(B, Image, Access::LocalTargetCase::Valid, true);
+    const auto Result = Access::localOriginalAddress(B, UnknownBase, 10000);
+    if (!UnknownBase)
+      EXPECT_TRUE(Result.Complete);
+    EXPECT_EQ(Result.Values, std::vector<bool>({!UnknownBase}));
+  }
+}
+
+TEST(ResolverLoadRoles, LocalTargetStillRequiresEveryPathAndExactTransform) {
+  for (Arch Target : {Arch::X64, Arch::AArch64})
+    for (auto Kind :
+         {Access::LocalTargetCase::WrongExtension,
+          Access::LocalTargetCase::Clobbered,
+          Access::LocalTargetCase::BypassLoad, Access::LocalTargetCase::Call}) {
+      SCOPED_TRACE(static_cast<int>(Kind));
+      auto Image = image();
+      Image.Arch = Target;
+      Image.Bits = Bitness::Bits64;
+      CFGBuilder B;
+      const auto Info = Access::seedLocalTarget(B, Image, Kind, false);
+      const auto Result = Access::localTarget(B, Info, 1000000);
+      EXPECT_EQ(Result.Values, std::vector<bool>({false}));
+    }
 }
 
 TEST(ResolverLoadRoles, RestrictedReplayDoesNotBorrowTheGroupHypothesis) {

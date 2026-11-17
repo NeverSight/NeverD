@@ -581,6 +581,10 @@ NEVERD_ACTION(ViewFunctions, QT_TRANSLATE_NOOP("Actions", "&Functions"),
 NEVERD_ACTION(ViewStrings, QT_TRANSLATE_NOOP("Actions", "&Strings"),
               "Shift+F12", "strings",
               QT_TRANSLATE_NOOP("Actions", "Show the strings window"))
+NEVERD_ACTION(ViewComputedStrings,
+              QT_TRANSLATE_NOOP("Actions", "Computed strings"), "", "strings",
+              QT_TRANSLATE_NOOP(
+                  "Actions", "Find conditional strings computed by functions"))
 NEVERD_ACTION(ViewLocalTypes, QT_TRANSLATE_NOOP("Actions", "Local t&ypes"),
               "Shift+F1", "local_types",
               QT_TRANSLATE_NOOP("Actions",

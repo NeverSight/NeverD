@@ -28,6 +28,7 @@
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
@@ -501,13 +502,21 @@ TEST(I386CallContract, HeaderFloatingImportsDefineTheNormalizedX87Result) {
           EXPECT_EQ(Source.find("long double"), std::string::npos) << Source;
         }
         const std::string Type = Bytes == 4 ? "float" : "double";
+        llvm::SmallVector<llvm::StringRef, 2> TargetFlags;
+#if defined(__APPLE__) && defined(__aarch64__)
+        // The store/reload path preserves x87 rounding with 80-bit values.
+        // Compile and execute that representation as x86-64 through Rosetta.
+        if (StoreResult)
+          TargetFlags = {"-arch", "x86_64"};
+#endif
         source_call_execution_test::compileAndRun(
             Source + "\n" + Type + " fixture_scalar_fp(" + Type + " left, " +
-            Type +
-            " right) {\n"
-            "  if (left != 2.5 || right != -6.5) __builtin_trap();\n"
-            "  return 42.25;\n}\n"
-            "int main(void) { return wrap() != 42.25; }\n");
+                Type +
+                " right) {\n"
+                "  if (left != 2.5 || right != -6.5) __builtin_trap();\n"
+                "  return 42.25;\n}\n"
+                "int main(void) { return wrap() != 42.25; }\n",
+            TargetFlags);
 #if defined(__linux__) && (defined(__i386__) || defined(__x86_64__))
         std::string Oracle;
         llvm::raw_string_ostream Native(Oracle);

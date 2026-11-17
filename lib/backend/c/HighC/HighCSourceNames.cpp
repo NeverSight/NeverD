@@ -110,6 +110,8 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
       };
   std::function<void(const HighExpr &)> VisitExpr = [&](const HighExpr &E) {
     Visit(E.Type);
+    Visit(E.SourcePointerType);
+    Visit(globalPointerType(E));
     if (E.Kind == ExprKind::Call && E.IntrinsicId == Intrinsic::None &&
         !E.IsIndirectCall && !E.SourceCallHint) {
       const std::string Symbol = resolvedCallTarget(E);
@@ -143,14 +145,17 @@ void HighCWriter::prepareRecordDefinitions(const std::vector<HighFunc> &Funcs) {
             Callee->PrototypeLibrary == UserPrototypeLibrary ||
             Name != Callee->Name || isOwnFunctionName(Callee->Name, Funcs) ||
             calleeHeaders(Callee->Name).empty();
-        VisitImportType(Callee->ReturnType, NeedsDeclaration);
+        // A library return also types locals assigned from this call, even
+        // when the header supplies the callee declaration. Retain its tag
+        // without requesting the layout of an opaque pointee.
+        VisitImportType(Callee->ReturnType, true);
         for (const auto &[Name, Type] : Callee->Params)
           VisitImportType(Type, NeedsDeclaration);
         // Definitions are collected before headers are written. Known
         // library headers supply their own value records, but cannot supply
         // a user declaration's records merely because its name matches.
-        if (const auto Floating =
-                libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format);
+        if (const auto Floating = libc::floatingCallArguments(
+                *Callee, Opts.TheArch, Opts.Format, Dbg);
             Floating &&
             (Callee->PrototypeLibrary == UserPrototypeLibrary ||
              !libc::headerFor(Callee->Name)) &&
@@ -248,6 +253,18 @@ void HighCWriter::writeSourceRecordDeclarations(
       return;
     if (Type->Kind == NdTypeKind::Ptr) {
       const TypeRef &Record = Type->Pointee;
+      if (Record && Record->Kind == NdTypeKind::Struct && Record->IsEnum &&
+          !Record->SourceName.empty()) {
+        const std::string Name = cNamedTypeSpelling(Record->SourceName);
+        // GNU C permits an opaque enumeration behind a pointer. A callback
+        // declaration needs its name even when no enumerator definition was
+        // supplied; this makes no claim about the pointed-to integer layout.
+        if (!llvm::is_contained(RecordDefinitions.Types, Record->SourceName) &&
+            !llvm::is_contained(RecordDefinitions.HeaderTypes,
+                                Record->SourceName) &&
+            Declared.insert(Name).second)
+          OS << "typedef enum " << Name << " " << Name << ";\n";
+      }
       if (Record && Record->Kind == NdTypeKind::Struct && !Record->IsEnum &&
           !Record->SourceName.empty()) {
         const std::string Name = cNamedTypeSpelling(Record->SourceName);
@@ -300,6 +317,10 @@ void HighCWriter::writeSourceRecordDeclarations(
       for (const auto &Parameter : E->SourceCallHint->Signature.Parameters)
         Visit(Parameter.Type);
     }
+    // Captured callbacks have no external function declaration to visit.
+    // Their checked prototype still owns every type named by the local.
+    if (E->Kind == ExprKind::Call)
+      Visit(indirectCallFunctionType(*E));
     E->forEachChildExpr(VisitCalls);
   };
   if (Opts.VariableTypes) {
@@ -372,6 +393,16 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   if (!Opts.SourceMap && !Opts.SourceNames)
     return;
   std::map<std::string, CSourceName> ByIdentifier;
+  std::set<std::string> AmbiguousAddresses;
+  const auto AddAddress = [&](CSourceName &Name, std::optional<va_t> Address) {
+    if (!Address || AmbiguousAddresses.count(Name.Identifier))
+      return;
+    if (Name.Address && Name.Address != Address) {
+      Name.Address.reset();
+      AmbiguousAddresses.insert(Name.Identifier);
+    } else
+      Name.Address = Address;
+  };
   auto Add = [&](CSourceName::Kind Kind, const std::string &Identifier,
                  llvm::StringRef Symbol, std::optional<va_t> Address) {
     if (Identifier.empty())
@@ -389,8 +420,7 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
     // share between overloads, names none of them.
     if (Name.Symbol != Symbol)
       Name.Symbol.clear();
-    if (Address && Name.Address != Address)
-      Name.Address.reset();
+    AddAddress(Name, Address);
   };
   for (const HighFunc &Func : Funcs)
     if (auto It = FunctionIdentifiers.find(&Func);
@@ -410,6 +440,28 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
     if (const auto Alias = FunctionAddressAliases.find(Target.Symbol);
         !Target.Definition && Alias != FunctionAddressAliases.end())
       Add(CSourceName::Kind::Function, Alias->second, Target.Symbol, Address);
+  if (Opts.EmitComments)
+    for (const auto &[Call, Callee] : VirtualCallees)
+      Add(CSourceName::Kind::Function, functionIdentifier(Callee.Symbol),
+          Callee.Symbol, Callee.Function.Addr);
+  // A call's printed identifier need not exist in the image's symbol table.
+  // Keep the direct target alongside the spelling, including calls whose
+  // debug name hides a linker veneer. Reuse the calls resolved for emission;
+  // no image-wide name search is needed. Ordinal import cleanup thunks can
+  // carry their call-site address instead of an import slot.
+  for (const auto &[Address, Targets] : ResolvedCallTargets) {
+    if (!Address)
+      continue;
+    for (const auto &Target : Targets) {
+      if (Target.Indirect ||
+          llvm::StringRef(Target.Target).starts_with(kOrdinalPrefix))
+        continue;
+      const auto Found = ByIdentifier.find(functionIdentifier(Target.Name));
+      if (Found != ByIdentifier.end() &&
+          Found->second.TheKind == CSourceName::Kind::Function)
+        AddAddress(Found->second, Address);
+    }
+  }
   for (const auto &[Address, Object] : ImageObjects) {
     Add(CSourceName::Kind::Object, Object.Name, Object.Symbol, Address);
     if (Opts.SourceMap && Object.Type)
@@ -460,12 +512,35 @@ void HighCWriter::recordSourceNames(const std::vector<HighFunc> &Funcs) {
   }
   for (const auto &[Identifier, Function] : DebugExternSigs)
     AddSignature(Function);
+  for (const auto &[Address, Object] : ImageObjects)
+    AddType(Object.Type);
+  if (Opts.VariableTypes) {
+    for (const auto &[Key, Type] : Opts.VariableTypes->Locals)
+      AddType(Type);
+    for (const auto &[Address, Type] : Opts.VariableTypes->Globals)
+      AddType(Type);
+  }
   std::vector<CSourceName> Names;
   Names.reserve(ByIdentifier.size());
   for (auto &[Identifier, Name] : ByIdentifier)
     Names.push_back(std::move(Name));
   if (Opts.SourceNames)
     *Opts.SourceNames = Names;
-  if (Opts.SourceMap)
+  if (Opts.SourceMap) {
     Opts.SourceMap->Names = std::move(Names);
+    auto &Calls = Opts.SourceMap->VirtualCalls;
+    Calls.clear();
+    for (const auto &[Call, Callee] : VirtualCallees)
+      if (Call->CallSiteAddr && Call->CallSiteAddr != InvalidVA)
+        Calls.push_back({Callee.Caller, Call->CallSiteAddr, Callee.Table,
+                         Callee.Slot, Callee.SlotOffset, Callee.Function.Addr,
+                         Callee.Symbol, Callee.ReceiverType});
+    llvm::sort(Calls, [](const auto &A, const auto &B) {
+      return std::tie(A.Function, A.CallSite, A.Slot, A.Target, A.Table,
+                      A.SlotOffset, A.ReceiverType, A.Symbol) <
+             std::tie(B.Function, B.CallSite, B.Slot, B.Target, B.Table,
+                      B.SlotOffset, B.ReceiverType, B.Symbol);
+    });
+    Calls.erase(std::unique(Calls.begin(), Calls.end()), Calls.end());
+  }
 }

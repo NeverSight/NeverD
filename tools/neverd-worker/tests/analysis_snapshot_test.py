@@ -47,6 +47,12 @@ def run(executable):
         assert replica.call("rename", {"address": BASE, "name": "forbidden"})["error"]["code"] == "read_only"
         assert replica.call("code_edit", {"address": BASE})["error"]["code"] == "read_only"
         assert ok(replica, "analysis_snapshot")["state"]["code_edits"] == snapshot["state"]["code_edits"]
+        prepared = clients.enter_context(Client(executable))
+        assert ok(prepared, "analysis_restore", dict(snapshot, prepare_views=True))["read_only"]
+        # Eager image preparation changes neither source nor the owner
+        # snapshot used to validate later display-name-only updates.
+        source = {"address": BASE, "representation": "c"}
+        assert ok(prepared, "decompile", source) == ok(replica, "decompile", source)
         after = durable_files(directory)
         assert before == after, "Restoring analysis changed owner files"
         assert ok(owner, "metadata")["dirty"]
@@ -54,6 +60,7 @@ def run(executable):
 
         # A racing committed edit cannot be presented under the old snapshot.
         ok(owner, "save")
+        assert ok(prepared, "analysis_update_names", snapshot) == {"updated": True}
         ok(owner, "rename", {"address": BASE, "name": "new_project_name"})
         stale = clients.enter_context(Client(executable))
         assert stale.call("analysis_restore", snapshot)["error"]["code"] == "stale_snapshot"

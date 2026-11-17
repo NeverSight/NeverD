@@ -13,9 +13,8 @@
 #ifndef NEVERD_LIBC_LIBCFLOATINGARGUMENTS_H
 #define NEVERD_LIBC_LIBCFLOATINGARGUMENTS_H
 
-#include "neverd/debug/DebugContext.h"
-#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/libc/LibCCallDeclaration.h"
 
 #include <optional>
 #include <vector>
@@ -24,13 +23,9 @@ namespace neverd::libc {
 
 inline std::optional<FloatingCallArguments>
 floatingCallArguments(const FunctionSym &Function, Arch A, BinaryFormat F,
+                      const DebugContext *NativeDebug = nullptr,
                       InstructionMode EntryMode = InstructionMode::Default) {
-  if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
-       Function.PrototypeLibrary != UserPrototypeLibrary) ||
-      !Function.PlatformConvention || Function.IsVariadic ||
-      !Function.ParamEntryLocations.empty() ||
-      Function.CallConv == DebugCallConv::Fastcall ||
-      Function.CallConv == DebugCallConv::Thiscall)
+  if (!hasFixedPlatformCallDeclaration(Function, NativeDebug))
     return std::nullopt;
   std::vector<TypeRef> Parameters;
   for (const auto &[Name, Type] : Function.Params)
