@@ -1980,6 +1980,16 @@ states, malformed LEBs, architecture admission and bounded queries. Reserved
 CIE/FDE states must remain partial through Darwin normalization and fail the
 plain-source unwind predicate.
 
+`NeverDMachOSignaturePolicyTests` admits exact codesign ad-hoc output as a
+new input, including mixed linker/codesign universal slices with one identity.
+Malformed special hashes, nonempty or unknown slots, strong signing flags and
+unsafe executable-segment flags remain rejected. `NeverDMachOSignerTests`
+checks real codesign page granularity. The arm64e publication suite exercises
+one signed lifted publication followed by two signed native-object replacements,
+plus nonempty designated-requirement refusal without mutation. The sanitizer
+C API exercises both guarded publication strategies with a codesign ad-hoc
+input through the same signature policy.
+
 `NeverDNativeExceptionRewriteContractTests` checks compact PAuth_LR linker
 records, exact range preservation, adjacent distinct signing PCs and
 transactional installation/refusal. Its DWARF cases preserve the `N`

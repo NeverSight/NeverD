@@ -545,6 +545,38 @@ parseContainer(llvm::ArrayRef<uint8_t> Binary) {
   return Parsed;
 }
 
+bool isIdentitylessAdHocProfile(const Profile &Value,
+                                bool RequireCanonicalOutput) {
+  if (Value.Slices.empty())
+    return false;
+  std::optional<std::string> Identifier;
+  std::set<std::pair<uint32_t, uint32_t>> Architectures;
+  for (const SliceProfile &Slice : Value.Slices) {
+    const bool Canonical =
+        Slice.HasCanonicalCodesignOutputShape &&
+        Slice.CodeDirectorySpecialSlots == llvm::MachO::CSSLOT_REQUIREMENTS;
+    const bool Simple =
+        !Slice.HasUnsupportedSlots && Slice.CodeDirectorySpecialSlots == 0;
+    if (RequireCanonicalOutput ? !Canonical : !Canonical && !Simple)
+      return false;
+    if (Slice.SignatureKind != Kind::IdentitylessAdHoc ||
+        Slice.HasUnsupportedFlags ||
+        Slice.CodeDirectoryVersion > llvm::MachO::CS_SUPPORTSEXECSEG ||
+        Slice.CodeDirectoryHashType != llvm::MachO::CS_HASHTYPE_SHA256 ||
+        Slice.CodeDirectoryHashSize != llvm::MachO::CS_SHA256_LEN ||
+        Slice.CodeDirectoryPageSize == 0 ||
+        (Slice.ExecSegmentFlags &
+         ~uint64_t(llvm::MachO::CS_EXECSEG_MAIN_BINARY)) != 0 ||
+        Slice.Identifier.empty() ||
+        !Architectures.emplace(Slice.CPUType, Slice.CPUSubtype).second)
+      return false;
+    if (Identifier && *Identifier != Slice.Identifier)
+      return false;
+    Identifier = Slice.Identifier;
+  }
+  return true;
+}
+
 } // namespace
 
 llvm::Expected<Profile> inspect(llvm::ArrayRef<uint8_t> Binary) {
@@ -587,53 +619,11 @@ llvm::Expected<Profile> inspect(llvm::ArrayRef<uint8_t> Binary) {
 }
 
 bool canTransactionallyAdHocResign(const Profile &Value) {
-  if (Value.Slices.empty())
-    return false;
-  std::optional<std::string> Identifier;
-  std::set<std::pair<uint32_t, uint32_t>> Architectures;
-  for (const SliceProfile &Slice : Value.Slices) {
-    if (Slice.SignatureKind != Kind::IdentitylessAdHoc ||
-        Slice.HasUnsupportedFlags || Slice.HasUnsupportedSlots ||
-        Slice.CodeDirectoryVersion > llvm::MachO::CS_SUPPORTSEXECSEG ||
-        Slice.CodeDirectoryHashType != llvm::MachO::CS_HASHTYPE_SHA256 ||
-        Slice.CodeDirectoryHashSize != llvm::MachO::CS_SHA256_LEN ||
-        Slice.CodeDirectoryPageSize == 0 ||
-        Slice.CodeDirectorySpecialSlots != 0 ||
-        (Slice.ExecSegmentFlags &
-         ~uint64_t(llvm::MachO::CS_EXECSEG_MAIN_BINARY)) != 0 ||
-        Slice.Identifier.empty() ||
-        !Architectures.emplace(Slice.CPUType, Slice.CPUSubtype).second)
-      return false;
-    if (Identifier && *Identifier != Slice.Identifier)
-      return false;
-    Identifier = Slice.Identifier;
-  }
-  return true;
+  return isIdentitylessAdHocProfile(Value, false);
 }
 
 bool isCanonicalCodesignAdHocOutput(const Profile &Value) {
-  if (Value.Slices.empty())
-    return false;
-  std::optional<std::string> Identifier;
-  std::set<std::pair<uint32_t, uint32_t>> Architectures;
-  for (const SliceProfile &Slice : Value.Slices) {
-    if (Slice.SignatureKind != Kind::IdentitylessAdHoc ||
-        !Slice.HasCanonicalCodesignOutputShape || Slice.HasUnsupportedFlags ||
-        Slice.CodeDirectoryVersion > llvm::MachO::CS_SUPPORTSEXECSEG ||
-        Slice.CodeDirectoryHashType != llvm::MachO::CS_HASHTYPE_SHA256 ||
-        Slice.CodeDirectoryHashSize != llvm::MachO::CS_SHA256_LEN ||
-        Slice.CodeDirectoryPageSize == 0 ||
-        Slice.CodeDirectorySpecialSlots != 2 ||
-        (Slice.ExecSegmentFlags &
-         ~uint64_t(llvm::MachO::CS_EXECSEG_MAIN_BINARY)) != 0 ||
-        Slice.Identifier.empty() ||
-        !Architectures.emplace(Slice.CPUType, Slice.CPUSubtype).second)
-      return false;
-    if (Identifier && *Identifier != Slice.Identifier)
-      return false;
-    Identifier = Slice.Identifier;
-  }
-  return true;
+  return isIdentitylessAdHocProfile(Value, true);
 }
 
 llvm::Error validateTransactionallyAdHocResigned(const Profile &Before,

@@ -2120,3 +2120,31 @@ do not qualify. The Xcode 27 x1 slice is signed and verified but cannot start
 (`EBADARCH`, errno 86). The
 [source-bound record](evidence/arm64e-x1-qualification-2026-11-17.json)
 binds the reports, execution-copy hashes and exact test package to this result.
+
+
+### Ad-hoc inputs and repeated native publication
+
+The shared Mach-O signature policy accepts both a linker's bare ad-hoc
+CodeDirectory and codesign's exact empty requirements/CMS shape. The latter
+must have exactly the known slots, contiguous blobs, a zero first special
+hash and a SHA-256 second special hash matching the empty requirements blob.
+All identity, architecture, flags, version, page-size and executable-segment
+checks still apply. Nonempty requirements, entitlements, developer identities
+and unknown metadata require an explicit signing workflow.
+
+`CodesignSignedLiftedOutputAllowsRepeatedNativePublication` signs a compiler
+arm64e input with a fixed identifier, publishes its lifted module, then performs
+two native-object replacements on the signed output. It checks all four images
+with strict codesign verification, preserves each previous input and compares
+the signature policy at each generation. Native-enabled execution uses an
+independent authenticated caller against the original and all three outputs.
+`AdHocRequirementsRefusePublicationWithoutMutation` uses a valid codesign
+signature with a nonempty designated requirement; publication must refuse it
+without writing the destination or changing the input.
+
+This sequence qualifies one automatic lifted publication followed by native
+object publication. Automatically relifting the appended executable regions
+is still unsupported: the leaf installer requires one original instruction
+section, and a diagnostic relift exposes a compact-unwind gap promoted to a
+function plus an omitted first appended definition. Those failure diagnostics
+are retained separately; they are not successful arbitrary-image coverage.
