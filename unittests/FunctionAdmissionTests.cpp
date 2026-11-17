@@ -397,15 +397,16 @@ TEST(FunctionAdmission, SelectedLiftReportsUnsupportedInstructionSemantics) {
 }
 
 TEST(FunctionAdmission, SourceUnitOmissionsDoNotRelaxMachineAdmission) {
-  constexpr va_t Entry = 0x401000;
-  // Unsupported incoming x87 state, followed by an independent integer leaf.
-  auto Image =
-      makeCodeFixture(Entry, {0xd9, 0xe0, 0xc3, 0x90, 0xb8, 5, 0, 0, 0, 0xc3});
-  Image.Arch = Arch::X86;
-  Image.Bits = Bitness::Bits32;
-  Image.Base = 0x400000;
-  Image.Symbols.push_back(Symbol::makeFunc(Entry, 3));
-  Image.Symbols.push_back(Symbol::makeFunc(Entry + 4, 6));
+  constexpr va_t Leaf = 0x140001000, Entry = Leaf + 0x10;
+  // An independent integer leaf and a body with a truncated instruction.
+  // Unlike opaque instruction semantics, an undecoded byte cannot be retained
+  // as an intrinsic by source projection.
+  std::vector<uint8_t> Code = {0xb8, 5, 0, 0, 0, 0xc3};
+  Code.resize(0x10, 0xcc);
+  Code.insert(Code.end(), {0x53, 0x0f});
+  auto Image = makeCodeFixture(Leaf, std::move(Code));
+  Image.Symbols.push_back(Symbol::makeFunc(Leaf, 6));
+  Image.Symbols.push_back(Symbol::makeFunc(Entry, 2));
   for (bool Source : {false, true})
     for (bool IncludeLeaf : {false, true}) {
       SCOPED_TRACE(Source);
@@ -419,7 +420,7 @@ TEST(FunctionAdmission, SourceUnitOmissionsDoNotRelaxMachineAdmission) {
       Options.OmitRefusedFunctions = true;
       Options.OnlyFunctionEntries = {Entry};
       if (IncludeLeaf)
-        Options.OnlyFunctionEntries.insert(Entry + 4);
+        Options.OnlyFunctionEntries.insert(Leaf);
       auto Result = Pipeline().run(Image, Context, Options);
       const bool Admitted = Source && IncludeLeaf;
       EXPECT_EQ(Result.Success, Admitted) << Result.Error;
@@ -429,7 +430,9 @@ TEST(FunctionAdmission, SourceUnitOmissionsDoNotRelaxMachineAdmission) {
             return Audit.Entry == Entry;
           });
       ASSERT_NE(Rejected, Result.FunctionAudits.end());
-      EXPECT_EQ(Rejected->UnsupportedInstructions, std::vector<va_t>{Entry});
+      EXPECT_EQ(Rejected->DecodeFailures, std::vector<va_t>{Entry + 1});
+      EXPECT_EQ(Rejected->Disposition,
+                PipelineFunctionDisposition::RejectedIncomplete);
       EXPECT_FALSE(Rejected->HasMedIR);
     }
 }
