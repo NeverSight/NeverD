@@ -2216,7 +2216,8 @@ fixture.
 This extends repeated publication within the verified native instruction and
 frame contracts. Arbitrary additional instruction sections, unsupported source
 operations, data-in-code and unrepresented entries still require explicit
-support. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
+support. Interruptions at redirected original entry instructions are not
+exercised. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
 
 Local Release validation passes all 240 publication cases, 30 signature-policy
 cases, 7 signer cases, 323 language-EH cases, 161 image-boundary cases and 68
@@ -2224,3 +2225,21 @@ relocated-entry cases. Two unrelated checks remain unavailable locally: the
 optional real-binary unwind sample and
 the native i386 reference. Formatting, whitespace and documentation checks
 pass. No LLVM fork changes or prebuilt revision changes are needed.
+
+After integrating dev `371c66be9d562081a53425f2e568379cb4799905`, Release
+validation also passes all 8 call-argument and 4 indirect-call source cases,
+and repeats all 240 publication cases. At
+`6ec2c81bc85b9c7015ba9de8566eddf1782880e6`, the
+[integrated native replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861)
+passes 240 cases on each of macos-26 and xcode-27, with zero failures or GoogleTest
+skips, plus the Windows frontend checks. Each Mac executes 20 images across the
+five new scenarios and records 48 saved-LR public system-unwinder steps in the
+retained frame suite. Both report Apple M1 (Virtual). The strict x1 gate remains
+`unavailable`: baseline PAC, compiler call/unwind and cursor checks pass, but
+explicit PAuth_LR, PACM-PC, scalar CPTA and checked writeback do not qualify.
+The [source-bound record](evidence/arm64e-automatic-relifting-2026-11-17.json)
+binds the source, build receipts, test package, report and per-generation image
+hashes, including the preceding signature failure and its successful replay.
+Temporary releases, assets, tags and replay files were retired. Unused test
+executables, object files and packages were removed; diagnostic logs remain in
+a compressed archive with verified decompressed hashes and a recovery index.
