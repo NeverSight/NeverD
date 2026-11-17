@@ -494,8 +494,17 @@ TEST(SourceParameterPlacement, MIPS16BodyAndClassicStubHaveDistinctCarriers) {
         A, ELF, intType(4), Types, std::nullopt, InstructionMode::MIPS16);
     ASSERT_TRUE(Bound);
     EXPECT_TRUE(Bound->MIPS16Parameters);
-    EXPECT_FALSE(floatingCallArguments(A, ELF, floatType(4), Types,
-                                       std::nullopt, InstructionMode::MIPS16));
+    for (unsigned Bytes : {4u, 8u}) {
+      const auto Floating =
+          floatingCallArguments(A, ELF, floatType(Bytes), Types, std::nullopt,
+                                InstructionMode::MIPS16);
+      ASSERT_TRUE(Floating);
+      EXPECT_TRUE(Floating->MIPS16Parameters);
+      EXPECT_EQ(Floating->ReturnKind, NdTypeKind::Float);
+      EXPECT_EQ(Floating->ReturnBytes, Bytes);
+      EXPECT_EQ(Floating->Scalars, Bound->Scalars);
+      EXPECT_TRUE(floatingCallTypes(A, ELF, *Floating));
+    }
     EXPECT_EQ(Bound->Scalars[1].Bytes, 8u);
     EXPECT_EQ(Bound->Scalars[1].Register, mipsreg::r(6));
     EXPECT_TRUE(floatingCallTypes(A, ELF, *Bound));
