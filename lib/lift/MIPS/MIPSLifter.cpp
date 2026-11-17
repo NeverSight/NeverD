@@ -15,6 +15,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSHistoricalISA.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSHistoricalTiming.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
@@ -55,12 +56,14 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
 
 namespace {
 // Keep the historical catalog out of the inlined modern/compressed path.
-LLVM_ATTRIBUTE_NOINLINE bool historicalEncodingAvailable(Arch Target,
-                                                         unsigned Revision,
-                                                         unsigned Level,
-                                                         uint32_t Word) {
-  return Level >= 4 && Level <= 5 && !Revision && isMIPS64(Target) &&
-         mips::historicalInstructionAvailable(Word, Level);
+LLVM_ATTRIBUTE_NOINLINE bool
+historicalEncodingAvailable(Arch Target, unsigned Revision, unsigned Level,
+                            uint32_t Word, bool PairedFPRs) {
+  return Level >= 1 && Level <= 5 && !Revision &&
+         isMIPS64(Target) == (Level >= 3) &&
+         (Level <= 3
+              ? bool(mips::historicalInstructionTiming(Word, Level, PairedFPRs))
+              : mips::historicalInstructionAvailable(Word, Level));
 }
 } // namespace
 
@@ -77,7 +80,8 @@ MIPSLifter::encoding(const cs_insn &Instruction) const {
     if (EncodingProfile == 6)
       return release6Encoding(Word);
     if (HistoricalISA &&
-        !historicalEncodingAvailable(Target, ISARevision, HistoricalISA, Word))
+        !historicalEncodingAvailable(Target, ISARevision, HistoricalISA, Word,
+                                     FP32Registers))
       return std::nullopt;
   }
   // A JALR with a hardwired zero link register has JR semantics on r2/r5.
@@ -596,6 +600,10 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
     return;
   }
   State S(Instruction.address, Ops, RegisterBytes, Instruction.size);
+  const bool Timed = HistoricalISA && HistoricalISA <= 3;
+  if (Timed)
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
+                    {NdVar::cst(Word, 4), NdVar::cst(FP32Registers, 1)});
   if (Code->R6 && isR6Compact(Word)) {
     if (Mode != InstructionMode::MicroMIPS && !ForbiddenFollower.has_value() &&
         isR6ConditionalCompact(Word))
@@ -603,8 +611,11 @@ void MIPSLifter::lift(const cs_insn &Instruction, std::vector<LowOp> &Ops,
                                 "missing Release 6 forbidden-slot instruction");
     if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
       return;
-  } else if (liftNonControl(S, *Code, Instruction.address))
+  } else if (liftNonControl(S, *Code, Instruction.address)) {
+    if (Timed)
+      S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
     return;
+  }
   Ops.resize(Begin);
   throw UnliftedInstruction(Instruction.address, Instruction.mnemonic,
                             Instruction.op_str);
@@ -644,6 +655,10 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const unsigned Function = Word & 63;
   const size_t Begin = Ops.size();
   State S(Head.address, Ops, RegisterBytes, Head.size);
+  const bool Timed = HistoricalISA && HistoricalISA <= 3;
+  if (Timed)
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
+                    {NdVar::cst(Word, 4), NdVar::cst(FP32Registers, 1)});
   const auto Address = [&](uint64_t Value) {
     return S.Width == 4 ? uint64_t(uint32_t(Value)) : Value;
   };
@@ -758,6 +773,8 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   if (Link)
     S.write(Link,
             NdVar::cst(Resume | (isMIPSCompressedMode(Mode) ? 1 : 0), S.Width));
+  if (Timed)
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
   const auto GuardFalsePath = [&] {
     NdVar Inverted = S.makeTemp(1);
     S.emit(NdOp::BOOL_NOT, Inverted, {Condition});
@@ -775,11 +792,17 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     S.Addr = Slot->address;
     S.InsnSize = Slot->size;
     S.Seq = 0;
+    if (Timed)
+      S.emitIntrinsic(
+          Intrinsic::MIPSHistoricalBegin, {},
+          {NdVar::cst(SlotCode->Word, 4), NdVar::cst(FP32Registers, 1)});
     const bool Lifted = liftNonControl(S, *SlotCode, Head.address);
     if (!Lifted) {
       Ops.resize(Begin);
       throw UnliftedInstruction(Slot->address, Slot->mnemonic, Slot->op_str);
     }
+    if (Timed)
+      S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
   }
   Member.OpCount = static_cast<uint32_t>(Ops.size() - Begin - Member.FirstOp);
   S.Addr = Head.address;

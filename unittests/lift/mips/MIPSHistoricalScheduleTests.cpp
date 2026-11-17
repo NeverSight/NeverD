@@ -9,8 +9,12 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/decode/Decoder.h"
 #include "neverd/ir/low/MIPS/MIPSHistoricalSchedule.h"
 #include "neverd/ir/low/NdOpEmulator.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
+
+#include <vector>
 
 namespace neverd::mips {
 namespace {
@@ -131,20 +135,18 @@ TEST(MIPSHistoricalScheduling,
   EXPECT_FALSE(S.retire(0x1000));
   EXPECT_FALSE(S.begin(0x1002, 0, 0, 0));
   EXPECT_FALSE(S.begin(0x1000, 0, 1, 0));
-  EXPECT_FALSE(S.begin(0x1000, 0, 0, 0x100));
+  EXPECT_FALSE(S.begin(0x1000, 0x78000000));
   EXPECT_EQ(S.snapshot(), HistoricalSchedulingState{});
   EXPECT_FALSE(S.hasActiveInstruction());
 }
 
-LowOp begin(uint64_t PC, uint64_t Reads = 0, uint64_t Delayed = 0,
-            uint16_t Access = 0) {
+LowOp begin(uint64_t PC, uint32_t Word = 0, bool Paired = false) {
   LowOp Op;
   Op.Addr = PC;
   Op.Opcode = NdOp::INTRINSIC;
   Op.addInput(NdVar::cst(unsigned(Intrinsic::MIPSHistoricalBegin), 4));
-  Op.addInput(NdVar::cst(Reads, 8));
-  Op.addInput(NdVar::cst(Delayed, 8));
-  Op.addInput(NdVar::cst(Access, 2));
+  Op.addInput(NdVar::cst(Word, 4));
+  Op.addInput(NdVar::cst(Paired, 1));
   return Op;
 }
 
@@ -184,14 +186,14 @@ TEST(MIPSHistoricalScheduling,
       Context.Historical = HistoricalSchedule::fromSnapshot(Level, {});
       // The transfer in a call's executed slot is pending at a different
       // function/consumer. No instruction entry or new emulator clears it.
-      ASSERT_TRUE(First.stepMIPSSystem(begin(0x1004, 0, 1u << 2), Context));
+      ASSERT_TRUE(First.stepMIPSSystem(begin(0x1004, 0x44022000), Context));
       EXPECT_EQ(Context.Historical->snapshot().UnreadyRegisters, 0u);
       ASSERT_TRUE(First.stepMIPSSystem(retire(0x1004), Context));
-      EXPECT_FALSE(Callee.stepMIPSSystem(begin(0x8000, 1u << 2), Context));
-      ASSERT_TRUE(Callee.stepMIPSSystem(begin(0x8000, 1u << 4), Context));
+      EXPECT_FALSE(Callee.stepMIPSSystem(begin(0x8000, 0x00401821), Context));
+      ASSERT_TRUE(Callee.stepMIPSSystem(begin(0x8000, 0x00801821), Context));
       EXPECT_FALSE(Callee.stepMIPSSystem(retire(0x8004), Context));
       ASSERT_TRUE(Callee.stepMIPSSystem(retire(0x8000), Context));
-      EXPECT_TRUE(Callee.stepMIPSSystem(begin(0x8004, 1u << 2), Context));
+      EXPECT_TRUE(Callee.stepMIPSSystem(begin(0x8004, 0x00401821), Context));
       EXPECT_TRUE(Callee.stepMIPSSystem(retire(0x8004), Context));
     }
 }
@@ -205,16 +207,16 @@ TEST(MIPSHistoricalScheduling, UnknownAndMalformedTransitionsPreserveState) {
     Context.Historical = HistoricalSchedule::fromSnapshot(1, {0, 0, 0, 2, 0});
     const auto Before = Context.Historical->snapshot();
     auto Unknown = begin(0x1000);
-    Unknown.Inputs[1] = NdVar::tmp(7, 8);
+    Unknown.Inputs[1] = NdVar::tmp(7, 4);
     EXPECT_FALSE(E.stepMIPSSystem(Unknown, Context));
-    for (unsigned Field = 0; Field != 4; ++Field) {
+    for (unsigned Field = 0; Field != 3; ++Field) {
       auto Malformed = begin(0x1000);
       Malformed.Inputs[Field].Size = 3;
       EXPECT_FALSE(E.stepMIPSSystem(Malformed, Context));
     }
-    EXPECT_FALSE(E.stepMIPSSystem(begin(0x1000, 0, 1), Context));
+    EXPECT_FALSE(E.stepMIPSSystem(begin(0x1000, 0, true), Context));
     EXPECT_FALSE(E.stepMIPSSystem(begin(0x1002), Context));
-    EXPECT_FALSE(E.stepMIPSSystem(begin(0x1000, 0, 0, 0x100), Context));
+    EXPECT_FALSE(E.stepMIPSSystem(begin(0x1000, 0x78000000), Context));
     EXPECT_FALSE(E.stepMIPSSystem(retire(0x1000), Context));
     EXPECT_EQ(Context.Historical->snapshot(), Before);
     EXPECT_FALSE(Context.Historical->hasActiveInstruction());
@@ -253,6 +255,202 @@ TEST(MIPSHistoricalScheduling, ImageAndBoundProcessorMustNameTheSameProfile) {
         Img.MIPS.value().*Feature = false;
       }
       EXPECT_EQ(Context.Historical->snapshot(), HistoricalSchedulingState{});
+    }
+}
+
+std::vector<LowOp> lift(const BinaryImage &Img, uint64_t PC,
+                        std::initializer_list<uint32_t> Words) {
+  std::vector<uint8_t> Bytes;
+  for (const auto Word : Words)
+    for (unsigned I = 0; I != 4; ++I)
+      Bytes.push_back(Word >> (8 * (archLittleEndian(Img.Arch) ? I : 3 - I)));
+  Decoder D;
+  EXPECT_TRUE(D.init(Img));
+  DecodedExecutionUnit Unit;
+  EXPECT_EQ(D.decodeUnitForLift(Bytes.data(), Bytes.size(), PC, Unit),
+            Bytes.size());
+  std::vector<LowOp> Ops;
+  D.liftUnitToLow(Unit, Ops);
+  return Ops;
+}
+
+bool execute(const std::vector<LowOp> &Ops, NdOpEmulator &E,
+             MIPSSystemContext &Context) {
+  for (const auto &Op : Ops) {
+    if (Op.Opcode == NdOp::COND_BR) {
+      const auto Taken = Op.Inputs[1].isConst()
+                             ? std::optional<uint64_t>(Op.Inputs[1].Offset)
+                             : E.getRegister(Op.Inputs[1].Offset);
+      if (!Taken)
+        return false;
+      if (*Taken)
+        return true;
+      continue;
+    }
+    if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::CALL ||
+        Op.Opcode == NdOp::INDIR_CALL || Op.Opcode == NdOp::INDIR_BR ||
+        Op.Opcode == NdOp::RETURN)
+      return true;
+    if (Op.Opcode == NdOp::INTRINSIC) {
+      const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
+      if (isStatefulScalar(Id) || isScalarFPControl(Id) ||
+          isScalarFPArithmetic(Id)) {
+        if (!E.stepMIPSSystem(Op, Context))
+          return false;
+        continue;
+      }
+    }
+    if (!E.step(Op))
+      return false;
+  }
+  return true;
+}
+
+void data(BinaryImage &Img) {
+  Segment S;
+  S.VA = 0x2000;
+  S.Data = archLittleEndian(Img.Arch)
+               ? std::vector<uint8_t>{0x78, 0x56, 0x34, 0x12, 1, 2, 3, 4}
+               : std::vector<uint8_t>{0x12, 0x34, 0x56, 0x78, 1, 2, 3, 4};
+  S.Size = S.FileSz = S.Data.size();
+  S.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+  Img.Segments.push_back(std::move(S));
+}
+
+TEST(MIPSHistoricalScheduling,
+     PhysicalLoadsDistinguishIFromInterlockedIIAndIII) {
+  for (bool Little : {false, true})
+    for (unsigned Level : {1u, 2u, 3u}) {
+      auto Img = image(Level == 3 ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                                  : (Little ? Arch::MIPS32EL : Arch::MIPS32),
+                       Level);
+      data(Img);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, 0x2000);
+      E.setRegister(mipsreg::V1, 99);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(Level, {});
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x8c820000}), E, C)); // LW.
+      EXPECT_EQ(execute(lift(Img, 0x8000, {0x00401821}), E, C), Level != 1);
+      if (Level == 1) {
+        EXPECT_EQ(E.getRegister(mipsreg::V1), 99u);
+        // The branch head is a real separating instruction. The consumer is
+        // its slot, not an operand of one indivisible branch/slot operation.
+        ASSERT_TRUE(execute(lift(Img, 0x8000, {0x10000002, 0x00401821}), E, C));
+      }
+      EXPECT_EQ(E.getRegister(mipsreg::V1), 0x12345678u);
+      EXPECT_FALSE(C.Historical->hasActiveInstruction());
+    }
+}
+
+TEST(MIPSHistoricalScheduling, ACallSlotLoadRemainsPendingAtTheCalleeEntry) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    data(Img);
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, 0x2000);
+    E.setRegister(mipsreg::V1, 99);
+    MIPSSystemContext C;
+    C.Historical = HistoricalSchedule::fromSnapshot(1, {});
+    const auto Ops = lift(Img, 0x1000, {0x0c002000, 0x8c820000});
+    ASSERT_TRUE(execute(Ops, E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::RA), 0x1008u);
+    EXPECT_EQ(C.Historical->snapshot().UnreadyRegisters, 1u << 2);
+    EXPECT_FALSE(execute(lift(Img, 0x8000, {0x00401821}), E, C));
+    ASSERT_TRUE(execute(lift(Img, 0x8000, {0}), E, C));
+    ASSERT_TRUE(execute(lift(Img, 0x8004, {0x00401821}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 0x12345678u);
+  }
+}
+
+TEST(MIPSHistoricalScheduling, AnAnnulledPhysicalSlotDoesNotSeparateHILOUse) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool Taken : {false, true}) {
+      const unsigned Level = isMIPS64(A) ? 3 : 2;
+      auto Img = image(A, Level);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::LO, 7);
+      E.setRegister(mipsreg::A0, 17);
+      E.setRegister(mipsreg::A1, Taken ? 17 : 19);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(Level, {});
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x00001012}), E, C));    // MFLO.
+      ASSERT_TRUE(execute(lift(Img, 0x1004, {0x50850003, 0}), E, C)); // BEQL.
+      EXPECT_EQ(C.Historical->snapshot().LOReadDelay, Taken ? 0 : 1);
+      EXPECT_EQ(execute(lift(Img, 0x9000, {0x00800013}), E, C), Taken); // MTLO.
+      EXPECT_EQ(E.getRegister(mipsreg::LO), Taken ? 17u : 7u);
+    }
+}
+
+TEST(MIPSHistoricalScheduling, MergeForwardingDoesNotHideAnAliasingBaseRead) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool BaseAliases : {false, true}) {
+      auto Img = image(A, 1);
+      data(Img);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, 0x2000);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(1, {});
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x8c820000}), E, C));
+      EXPECT_EQ(
+          execute(lift(Img, 0x1004, {BaseAliases ? 0x88420001u : 0x88820001u}),
+                  E, C),
+          !BaseAliases);
+      if (!BaseAliases) {
+        EXPECT_EQ(C.Historical->snapshot().UnreadyRegisters, 1u << 2);
+        EXPECT_FALSE(execute(lift(Img, 0x1008, {0x00401821}), E, C));
+        ASSERT_TRUE(execute(lift(Img, 0x1008, {0x98820002}), E, C)); // LWR.
+      }
+    }
+}
+
+TEST(MIPSHistoricalScheduling, FR0PairsIncludeTheOddWordButWordMovesDoNot) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool Double : {false, true}) {
+      auto Img = image(A, 1);
+      Img.MIPS->FPABI = 1;
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, 42);
+      E.setRegister(mipsreg::w(4), 17);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(1, {});
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x44842800}), E, C)); // MTC1 f5.
+      const auto Move = Double ? 0x46202186u : 0x46002186u; // MOV.D/S f6,f4.
+      EXPECT_EQ(execute(lift(Img, 0x1004, {Move}), E, C), !Double);
+      if (Double) {
+        ASSERT_TRUE(execute(lift(Img, 0x1004, {0}), E, C));
+        ASSERT_TRUE(execute(lift(Img, 0x1008, {Move}), E, C));
+        EXPECT_EQ(E.getRegister(mipsreg::w(7)), 42u);
+      }
+      EXPECT_EQ(E.getRegister(mipsreg::w(6)), 17u);
+      EXPECT_THROW(lift(Img, 0x2000, {0x46002986}), UnliftedInstruction);
+    }
+}
+
+TEST(MIPSHistoricalScheduling, AFirstHILOWriteInvalidatesTheCompanionProduct) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool HI : {false, true}) {
+      const unsigned Level = isMIPS64(A) ? 3 : 1;
+      auto Img = image(A, Level);
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::A0, 3);
+      E.setRegister(mipsreg::A1, 7);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(Level, {});
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x00850018}), E, C)); // MULT.
+      ASSERT_TRUE(
+          execute(lift(Img, 0x1004, {HI ? 0x00800011u : 0x00800013u}), E, C));
+      EXPECT_FALSE(
+          execute(lift(Img, 0x8000, {HI ? 0x00001012u : 0x00001010u}), E, C));
+      ASSERT_TRUE(
+          execute(lift(Img, 0x8000, {HI ? 0x00001010u : 0x00001012u}), E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 3u);
     }
 }
 

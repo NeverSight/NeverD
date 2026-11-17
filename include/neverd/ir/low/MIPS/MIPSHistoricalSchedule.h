@@ -11,21 +11,12 @@
 #ifndef NEVERD_IR_LOW_MIPS_MIPSHISTORICALSCHEDULE_H
 #define NEVERD_IR_LOW_MIPS_MIPSHISTORICALSCHEDULE_H
 
+#include "neverd/ir/intrinsics/MIPS/MIPSHistoricalTiming.h"
+
 #include <cstdint>
 #include <optional>
 
 namespace neverd::mips {
-
-enum HistoricalTimingAccess : uint16_t {
-  ReadFCSR = 1u << 0,
-  ReadFCC = 1u << 1,
-  ReadHI = 1u << 2,
-  ReadLO = 1u << 3,
-  WriteHI = 1u << 4,
-  WriteLO = 1u << 5,
-  WriteFCSR = 1u << 6,
-  WriteFCC = 1u << 7,
-};
 
 /// The low and high halves name GPR and FPR dependencies, respectively.
 /// FPR bits describe architectural word registers in FR=0 and full registers
@@ -36,6 +27,10 @@ struct HistoricalSchedulingState {
   uint8_t FCCDelay = 0;
   uint8_t HIReadDelay = 0;
   uint8_t LOReadDelay = 0;
+  uint32_t ForwardableLoad = 0;
+  bool PendingProduct = false;
+  bool UnknownHI = false;
+  bool UnknownLO = false;
 
   bool operator==(const HistoricalSchedulingState &) const = default;
 };
@@ -48,7 +43,9 @@ public:
   fromSnapshot(unsigned HistoricalISA, HistoricalSchedulingState State) {
     if (HistoricalISA < 1 || HistoricalISA > 3 ||
         (State.UnreadyRegisters & 1) || State.FCSRDelay > 1 ||
-        State.FCCDelay > 2 || State.HIReadDelay > 2 || State.LOReadDelay > 2)
+        State.FCCDelay > 2 || State.HIReadDelay > 2 || State.LOReadDelay > 2 ||
+        (State.ForwardableLoad & ~State.UnreadyRegisters) ||
+        (State.PendingProduct && (State.UnknownHI || State.UnknownLO)))
       return std::nullopt;
     return HistoricalSchedule(HistoricalISA, State);
   }
@@ -60,11 +57,18 @@ public:
   /// Check this instruction before its first architectural effect. The
   /// register masks and access flags describe the physical instruction, not
   /// synthetic CALL operands or one entire branch/slot lowering unit.
-  bool begin(uint64_t PC, uint64_t Reads, uint64_t Delayed, uint16_t Access) {
+  bool begin(uint64_t PC, uint64_t Reads, uint64_t Delayed, uint16_t Access,
+             uint32_t MergeSource = 0, uint32_t ForwardableLoad = 0) {
     constexpr uint16_t Known = ReadFCSR | ReadFCC | ReadHI | ReadLO | WriteHI |
                                WriteLO | WriteFCSR | WriteFCC;
+    // LWL/LWR forward the preceding memory-load destination into their merge
+    // operand. The base is an ordinary read, even when it aliases rt. Do not
+    // infer that a coprocessor move has the same bypass.
+    Reads |= MergeSource & ~Current.ForwardableLoad;
     if (Active || PC % 4 || (Delayed & 1) || (Access & ~Known) ||
-        (Current.UnreadyRegisters & Reads) ||
+        (ForwardableLoad & ~Delayed) || (Current.UnreadyRegisters & Reads) ||
+        (Current.UnknownHI && (Access & ReadHI)) ||
+        (Current.UnknownLO && (Access & ReadLO)) ||
         (Current.FCSRDelay && (Access & (ReadFCSR | ReadFCC))) ||
         (Current.FCCDelay && (Access & ReadFCC)) ||
         (Current.HIReadDelay && (Access & WriteHI)) ||
@@ -76,12 +80,29 @@ public:
     };
     auto Next = Current;
     Next.UnreadyRegisters = Delayed;
+    Next.ForwardableLoad = ForwardableLoad;
     Next.FCSRDelay = Access & WriteFCSR ? 1 : Age(Next.FCSRDelay);
     Next.FCCDelay = Access & WriteFCSR  ? 2
                     : Access & WriteFCC ? 1
                                         : Age(Next.FCCDelay);
     Next.HIReadDelay = Access & ReadHI ? 2 : Age(Next.HIReadDelay);
     Next.LOReadDelay = Access & ReadLO ? 2 : Age(Next.LOReadDelay);
+    const auto Writes = Access & (WriteHI | WriteLO);
+    if (Writes == (WriteHI | WriteLO)) {
+      Next.PendingProduct = true;
+      Next.UnknownHI = Next.UnknownLO = false;
+    } else if (Writes) {
+      if (Current.PendingProduct) {
+        Next.UnknownHI = Writes == WriteLO;
+        Next.UnknownLO = Writes == WriteHI;
+      }
+      if (Writes & WriteHI)
+        Next.UnknownHI = false;
+      if (Writes & WriteLO)
+        Next.UnknownLO = false;
+      Next.PendingProduct = false;
+    } else if (Access & (ReadHI | ReadLO))
+      Next.PendingProduct = false;
     Active = Instruction{PC, Next};
     return true;
   }

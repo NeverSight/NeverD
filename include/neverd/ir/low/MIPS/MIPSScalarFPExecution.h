@@ -21,6 +21,14 @@ class MIPSScalarFPExecutor {
 public:
   virtual ~MIPSScalarFPExecutor() = default;
   virtual bool supportsRevision(unsigned Revision) const = 0;
+  /// Early implementations differ in exception, NaN and denormal behavior.
+  /// A modern Release 2 evaluator is not evidence for a historical FPU.
+  virtual bool supportsHistoricalISA(unsigned) const { return false; }
+  bool supportsProfile(unsigned Revision, unsigned HistoricalISA) const {
+    return HistoricalISA && HistoricalISA <= 3
+               ? supportsHistoricalISA(HistoricalISA)
+               : supportsRevision(HistoricalISA ? 2 : Revision);
+  }
   /// A trap updates FCSR before suppressing the destination. An unavailable
   /// observation leaves both unchanged.
   virtual std::optional<MIPSScalarFPResult>

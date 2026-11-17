@@ -63,18 +63,22 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
       return false;
     if (Id == Intrinsic::MIPSHistoricalRetire)
       return Context.Historical->retire(Op.Addr);
-    for (unsigned I = 1; I != 4; ++I)
-      if (!knownOperandBytes(Op.Inputs[I], 0, Op.Inputs[I].Size))
-        return false;
-    return Context.Historical->begin(Op.Addr, readOperand(Op.Inputs[1]),
-                                     readOperand(Op.Inputs[2]),
-                                     readOperand(Op.Inputs[3]));
+    if (!knownOperandBytes(Op.Inputs[2], 0, 1) ||
+        readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Wide))
+      return false;
+    const auto Timing = mips::historicalInstructionTiming(
+        Op.Inputs[1].Offset, Img.MIPS->HistoricalISA,
+        Img.MIPS->hasScalarFP32ABI(Wide));
+    return Timing &&
+           Context.Historical->begin(Op.Addr, Timing->Reads, Timing->Delayed,
+                                     Timing->Access, Timing->MergeSource,
+                                     Timing->ForwardableLoad);
   }
   if (mips::isScalarFPControl(Id)) {
     if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
         !Context.ScalarFPU ||
-        !Context.ScalarFPU->supportsRevision(
-            Img.MIPS->HistoricalISA ? 2 : Img.MIPS->ISARevision) ||
+        !Context.ScalarFPU->supportsProfile(Img.MIPS->ISARevision,
+                                            Img.MIPS->HistoricalISA) ||
         !Context.FCSR || Context.FloatingPointException)
       return false;
     const bool Write = Id == Intrinsic::MIPSWriteFPControl;
@@ -102,8 +106,8 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
                                  Img.MIPS->hasScalarFP32ABI(Wide),
                                  Img.MIPS->HistoricalISA) ||
         !Context.ScalarFPU ||
-        !Context.ScalarFPU->supportsRevision(
-            Img.MIPS->HistoricalISA ? 2 : Img.MIPS->ISARevision) ||
+        !Context.ScalarFPU->supportsProfile(Img.MIPS->ISARevision,
+                                            Img.MIPS->HistoricalISA) ||
         !Context.FCSR || Context.FloatingPointException)
       return false;
     std::array<uint64_t, 3> Inputs;

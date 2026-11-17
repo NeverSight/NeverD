@@ -335,8 +335,8 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   }
   if (isStatefulScalar(Id)) {
     if (Id == Intrinsic::MIPSHistoricalBegin)
-      return S.Inputs == 4 && !S.OutputBytes && S.FirstBytes == 8 &&
-             S.SecondBytes == 8 && S.ThirdBytes == 2;
+      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 4 &&
+             S.FirstConstant && S.SecondBytes == 1;
     if (Id == Intrinsic::MIPSHistoricalRetire)
       return S.Inputs == 1 && !S.OutputBytes;
     if (isCacheIntrinsic(Id))

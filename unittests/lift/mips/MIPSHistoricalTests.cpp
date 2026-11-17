@@ -125,7 +125,7 @@ TEST(MIPSHistorical, DecoderReuseAndDirectLiftEnforceTheSameProfile) {
 }
 TEST(MIPSHistorical, TimingAndCompressedProfilesCannotBypassAdmission) {
   const auto I = instruction(0x00851021, Arch::MIPS64);
-  for (unsigned Level : {1u, 2u, 3u, 6u}) {
+  for (unsigned Level : {1u, 2u, 6u}) {
     auto Image = historicalImage(Arch::MIPS64, Level);
     Decoder D;
     EXPECT_FALSE(D.init(Image));
