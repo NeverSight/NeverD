@@ -712,7 +712,7 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
 TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
-    for (unsigned Variant = 0; Variant != 9; ++Variant) {
+    for (unsigned Variant = 0; Variant != 11; ++Variant) {
       SCOPED_TRACE(getArchName(Target));
       SCOPED_TRACE(Variant);
       const bool Wide = isMIPS64(Target);
@@ -726,22 +726,30 @@ TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
       // 1 also spills its current SP privately; 2 saves FP in callee-owned
       // storage; 3 writes above the new frame; 4 publishes SP externally;
       // 5 passes SP to the call; 6 loses call SP; 7 exposes the FP slot to a
-      // second call's frame; 8 has two calls with the same private area.
+      // second call's frame; 8 has two calls with the same private area;
+      // 9 reloads a private SP spill into a call argument; 10 publishes that
+      // reloaded value through an external store.
       std::vector<uint32_t> Words{Wide ? 0x67bdffc0u : 0x27bdffe0u,
                                   (Wide ? 0xffbf0000u : 0xafbf0000u) | Link,
                                   (Wide ? 0xffbe0000u : 0xafbe0000u) | SavedFP,
                                   Wide ? 0x03a0f02du
                                        : 0x03a0f021u}; // daddu/addu fp,sp,zero
-      if (Variant == 1)
+      if (Variant == 1 || Variant >= 9) {
         Words.push_back((Wide ? 0xffbd0000u : 0xafbd0000u) | Frame / 2);
-      else if (Variant == 4)
+        if (Variant == 9)
+          Words.push_back((Wide ? 0xdfa40000u : 0x8fa40000u) | Frame / 2);
+        else if (Variant == 10) {
+          Words.push_back((Wide ? 0xdfa80000u : 0x8fa80000u) | Frame / 2);
+          Words.push_back(Wide ? 0xfc880000u : 0xac880000u); // sd/sw t0,0(a0)
+        }
+      } else if (Variant == 4)
         Words.push_back(Wide ? 0xfc9d0000u : 0xac9d0000u); // sd/sw sp,0(a0)
       else if (Variant == 5)
         Words.push_back(Wide ? 0x03a0202du : 0x03a02021u); // a0 = sp
       else if (Variant == 6)
         Words.push_back(Wide ? 0x03a5e82fu : 0x03a5e823u); // sp -= a1
       Words.insert(Words.end(), {0x0c004080, 0});          // jal 0x10200; nop
-      if (Variant >= 7) {
+      if (Variant == 7 || Variant == 8) {
         if (Variant == 7)
           Words.push_back(Wide ? 0x67bd0030u : 0x27bd0008u);
         Words.insert(Words.end(), {0x0c004080, 0});
