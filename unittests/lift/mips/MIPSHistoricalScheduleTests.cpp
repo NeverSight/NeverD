@@ -195,7 +195,13 @@ TEST(MIPSHistoricalScheduling,
       Callee.setStrictMode(true);
       MIPSSystemContext Context;
       EXPECT_FALSE(First.stepMIPSSystem(begin(0x1000, 0, Paired), Context));
-      EXPECT_FALSE(First.step(begin(0x1000, 0, Paired)));
+      // Constant recovery cannot approximate away a physical retirement
+      // boundary, even when it permits unrelated opaque operations.
+      for (bool Strict : {false, true}) {
+        First.setStrictMode(Strict);
+        EXPECT_FALSE(First.step(begin(0x1000, 0, Paired)));
+        EXPECT_FALSE(First.step(retire(0x1000)));
+      }
       Context.Historical = HistoricalSchedule::fromSnapshot(Level, {});
       // The transfer in a call's executed slot is pending at a different
       // function/consumer. No instruction entry or new emulator clears it.

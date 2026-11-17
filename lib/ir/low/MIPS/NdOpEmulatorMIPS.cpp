@@ -441,7 +441,9 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
   const auto Id = static_cast<Intrinsic>(Op.Inputs[0].Offset);
   if (mips::isSystemIntrinsic(Id) || mips::isCacheIntrinsic(Id) ||
       mips::isMSAControl(Id) || mips::isMSAFloat(Id) ||
-      mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id))
+      mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id) ||
+      Id == Intrinsic::MIPSHistoricalBegin ||
+      Id == Intrinsic::MIPSHistoricalRetire)
     return false; // Explicit, single-step context required in either mode.
   if (mips::isMSADivision(Id)) {
     const auto &A = Op.Inputs[1], &B = Op.Inputs[2];
