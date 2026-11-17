@@ -1694,6 +1694,15 @@ void recoverCallAbi(
       const bool UseExternalArity =
           !SEHStackCall && ExternalArity.has_value() &&
           (IsDirectImport || IsRelocExtern || CalleeRegArgs < 0);
+      // A function-pointer variable borrows its initial routine's argument
+      // contract, including whether its total-arity summary is only an open
+      // recovery bound. It still retains its runtime target.
+      const va_t VariadicEntry = CI.IsIndirect ? VariableEntry : CI.TargetAddr;
+      bool OpenVariadicArity = false;
+      if (VariadicEntry != InvalidVA && !UseExternalArity && CalleeIsVariadic)
+        if (const auto VIt = CalleeIsVariadic->find(VariadicEntry);
+            VIt != CalleeIsVariadic->end())
+          OpenVariadicArity = VIt->second;
       // A variadic import's summary describes the fixed register prefix,
       // not a complete list. An explicit local declaration overrides the
       // library tables, as it did when choosing ExternalArity above.
@@ -1781,19 +1790,18 @@ void recoverCallAbi(
       const bool VariadicOnStack =
           Convention && Convention->VariadicArgumentsOnStack;
       int DarwinVarArgBase = -1;
-      if (VariadicOnStack && !CI.IsIndirect && !PatchedCallee) {
-        llvm::StringRef Bare = stripLeadingUnderscores(CI.TargetName);
-        if (unsigned NF = libc::varArgFixedCount(Bare, LibC); NF > 0)
-          DarwinVarArgBase = static_cast<int>(NF);
+      if (VariadicOnStack && !PatchedCallee) {
+        if (!CI.IsIndirect) {
+          llvm::StringRef Bare = stripLeadingUnderscores(CI.TargetName);
+          if (unsigned NF = libc::varArgFixedCount(Bare, LibC); NF > 0)
+            DarwinVarArgBase = static_cast<int>(NF);
+        }
         // A user-defined intra-module variadic callee (detected by
         // detectVariadicForwarders) follows the same Darwin convention: its
         // fixed prefix is the register-argument count, after which every
         // variadic argument is stack-passed.
-        if (DarwinVarArgBase < 0 && CalleeRegArgs >= 0 && CalleeIsVariadic) {
-          auto VIt = CalleeIsVariadic->find(CI.TargetAddr);
-          if (VIt != CalleeIsVariadic->end() && VIt->second)
-            DarwinVarArgBase = CalleeRegArgs;
-        }
+        if (DarwinVarArgBase < 0 && CalleeRegArgs >= 0 && OpenVariadicArity)
+          DarwinVarArgBase = CalleeRegArgs;
       }
       // Indirect call through a function pointer that provably holds a known
       // variadic intra-module function (`double (*fp)(int,...) = dsum;
@@ -2088,11 +2096,6 @@ void recoverCallAbi(
       // scratch register's undefined incoming value, as the alignment
       // `push rax` of `long f(void) { return logv("y") + 1; }` does
       // (holdsUndefinedIncomingScratch).
-      bool OpenVariadicArity = false;
-      if (!CI.IsIndirect && !UseExternalArity && CalleeIsVariadic)
-        if (const auto VIt = CalleeIsVariadic->find(CI.TargetAddr);
-            VIt != CalleeIsVariadic->end())
-          OpenVariadicArity = VIt->second;
       const bool UndefinedScratchSlots =
           OpenVariadicArity && Convention &&
           Convention->UndefinedIncomingScratchRegisters;
@@ -3210,7 +3213,7 @@ void recoverCallAbi(
           P.Kind = MedVar::Param;
           P.Id = Incoming;
           P.RegOff = kNoParamReg;
-          P.Size = static_cast<uint16_t>(TRI.PointerSize);
+          P.Size = CallLayout.SlotBytes;
           P.TheArch = TheArch;
           Found[K] = P;
           FoundMask[K] = true;
@@ -3787,9 +3790,8 @@ void recoverCallAbi(
         MedVar A =
             !Gap ? Found[K]
             : RequiredStackPosition && (!FillGaps || StackSetupIncomplete)
-                ? MedVar::makeUnspecified(
-                      static_cast<uint16_t>(TRI.PointerSize), TheArch)
-                : MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize));
+                ? MedVar::makeUnspecified(CallLayout.SlotBytes, TheArch)
+                : MedVar::makeConst(0, CallLayout.SlotBytes);
         // A slot found by the stack scan is a stack argument even when its
         // index falls in the integer-register range (i386 FP-register callee
         // with no integer register argument); assemble it after the FP
@@ -3806,16 +3808,18 @@ void recoverCallAbi(
                                      IntegerLayout.SlotBytes);
         }
         // A wide stack argument (an 8-byte double passed whole) covers several
-        // pointer slots.  For an INDIRECT call the callee arity is unknown, so
+        // argument slots. For an INDIRECT call the callee arity is unknown, so
         // SplitWide above leaves the wide store unsplit and its high slot a gap
         // that would otherwise truncate the rest of the argument list -- skip
         // the slots it occupies.  Restricted to indirect calls: a direct call
         // splits its wide stores into per-slot lanes (SplitWide), so a "wide"
         // found arg there is followed by genuine separate-argument slots that
         // must NOT be skipped.
-        if (!Gap && CI.IsIndirect && Found[K].Size > TRI.PointerSize &&
-            TRI.PointerSize > 0) {
-          int Span = Found[K].Size / TRI.PointerSize;
+        // Register values occupy one register position. n32's pointers are
+        // four bytes, but its integer registers and stack slots are eight.
+        if (!Gap && CI.IsIndirect && FromStackScan[K] &&
+            Found[K].Size > CallLayout.SlotBytes && CallLayout.SlotBytes > 0) {
+          int Span = Found[K].Size / CallLayout.SlotBytes;
           if (Span > 1)
             K += Span - 1;
         }
@@ -4167,17 +4171,17 @@ void recoverCallAbi(
         CI.VarArgFixedCount = Op.CalleeVariadicFrom;
       else if (SummarizedVariadicVectors)
         CI.VarArgFixedCount = Op.CalleeVariadicRegisterFrom;
-      else if (!CI.IsIndirect && DarwinVarArgBase >= 0)
+      else if (DarwinVarArgBase >= 0)
         CI.VarArgFixedCount = DarwinVarArgBase;
       // A variadic routine of the image whose save area says how many named
       // register parameters it has takes the rest variadically, which a
       // declaration of it where it is not emitted keeps: one made from a
       // call's own arguments would cut another call's.  Every register of a
       // routine that takes its vector ones (System V) is a parameter.
-      else if (!CI.IsIndirect && OpenVariadicArity && CalleeRegArgs > 0 &&
+      else if (OpenVariadicArity && CalleeRegArgs > 0 &&
                CalleeRegArgs < NumIntParamRegs &&
                !(VectorArgumentCallees &&
-                 VectorArgumentCallees->count(CI.TargetAddr)))
+                 VectorArgumentCallees->count(VariadicEntry)))
         CI.VarArgFixedCount = CalleeRegArgs;
       // The named prefix is a call contract on every platform, even where
       // unnamed values continue in independent register banks. Retain it for
@@ -4283,7 +4287,7 @@ void recoverCallAbi(
       P.Kind = MedVar::Param;
       P.Id = K;
       P.RegOff = kNoParamReg;
-      P.Size = static_cast<uint16_t>(TRI.PointerSize);
+      P.Size = DefaultIntegerLayout.SlotBytes;
       P.TheArch = TheArch;
       Func.Params.insert(ordinaryParameterEnd(), P);
     }

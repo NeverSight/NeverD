@@ -1,5 +1,6 @@
 """Reject false native qualification from skipped or mismatched evidence."""
 
+from contextlib import ExitStack
 import json
 import plistlib
 from pathlib import Path
@@ -27,6 +28,61 @@ def runtime_xml(executable=False, generated=False):
 
 
 class Arm64eNativeQualificationTests(unittest.TestCase):
+    def test_x1_requires_every_feature_from_successful_native_probes(self):
+        requirements = native.POLICY["x1_qualification"]["requirements"]
+        failures = [(mode, feature) for mode, features in requirements.items()
+                    for feature in features]
+        for missing in (None, *failures):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as temporary, \
+                    ExitStack() as patches:
+                output = Path(temporary)
+                for mode, function in CASES["x1_components"].items():
+                    def run(directory, mode=mode):
+                        report = {"status": native.POLICY["passed"],
+                                  **{feature: (mode, feature) != missing
+                                     for feature in requirements[mode]}}
+                        native.save(directory / native.POLICY["report_name"], report)
+                        return report
+                    patches.enter_context(mock.patch.object(native, function, side_effect=run))
+                report = native.qualify_x1(output)
+                self.assertEqual(report[CASES["x1_claim"]], missing is None)
+                self.assertEqual(report["status"], native.POLICY[
+                    "passed" if missing is None else "unavailable"])
+                self.assertEqual(report["missing"], [] if missing is None else [
+                    {"probe": missing[0], "feature": missing[1]}])
+                for row in report["probes"].values():
+                    self.assertEqual(row["sha256"], native.digest(output / row["report"]))
+                self.assertEqual(json.loads((output / native.POLICY["report_name"]).read_text()),
+                                 report)
+
+    def test_x1_does_not_hide_a_failed_or_unavailable_probe(self):
+        requirements = native.POLICY["x1_qualification"]["requirements"]
+        for status in (native.POLICY["failed"], native.POLICY["unavailable"]):
+            for changed in requirements:
+                with self.subTest(status=status, probe=changed), \
+                        tempfile.TemporaryDirectory() as temporary, ExitStack() as patches:
+                    for mode, function in CASES["x1_components"].items():
+                        def run(directory, mode=mode):
+                            report = {"status": status if mode == changed else native.POLICY["passed"],
+                                      **dict.fromkeys(requirements[mode], True)}
+                            native.save(directory / native.POLICY["report_name"], report)
+                            return report
+                        patches.enter_context(mock.patch.object(native, function, side_effect=run))
+                    report = native.qualify_x1(Path(temporary))
+                    self.assertFalse(report[CASES["x1_claim"]])
+                    self.assertEqual(report["status"], status)
+                    self.assertEqual(report["probes"][changed]["status"], status)
+
+    def test_x1_records_failure_when_a_probe_tool_raises(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+                native, "probe", side_effect=RuntimeError(CASES["x1_failed_tool"])):
+            output = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, CASES["x1_failed_tool"]):
+                native.qualify_x1(output)
+            report = json.loads((output / native.POLICY["report_name"]).read_text())
+            self.assertFalse(report[CASES["x1_claim"]])
+            self.assertEqual(report["status"], native.POLICY["failed"])
+
     def test_cursor_requires_pc_sensitivity_for_explicit_instructions(self):
         observation = dict(CASES["cursor_observation"])
         def result():

@@ -194,6 +194,16 @@
       "/usr/sbin/sysctl",
       "-n",
       "hw.optional.arm.FEAT_CPA2"
+    ],
+    "feat-pauth-lr": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "hw.optional.arm.FEAT_PAuth_LR"
+    ],
+    "feat-pacimp": [
+      "/usr/sbin/sysctl",
+      "-n",
+      "hw.optional.arm.FEAT_PACIMP"
     ]
   },
   "source_names": {
@@ -313,7 +323,8 @@
     "run-default-executable",
     "run-generated",
     "run-generated-executable",
-    "probe-cursor"
+    "probe-cursor",
+    "qualify-x1"
   ],
   "cpta_probe": {
     "source": "scripts/arm64e_native_cpta.def",
@@ -502,7 +513,9 @@
       "include/neverd/runtime/DarwinArm64eSignalCursor.h",
       "include/neverd/runtime/DarwinArm64eSignatures.def",
       "include/neverd/ir/intrinsics/AArch64/AArch64PAuthLR.def",
-      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+      "include/neverd/ir/intrinsics/AArch64/AArch64PAuthM.def",
+      "include/neverd/runtime/DarwinArm64eUnwindRow.h",
+      "include/neverd/runtime/DarwinArm64eSystemUnwind.def"
     ],
     "compile": [
       "/usr/bin/clang",
@@ -555,5 +568,24 @@
     "binary_label": "cursor-{optimization}",
     "invalid_report": "native cursor did not produce a complete, successful observation",
     "include": "include"
+  },
+  "x1_qualification": {
+    "mode": "qualify-x1",
+    "qualified_key": "native_arm64e_x1_environment_qualified",
+    "requirements": {
+      "probe": [
+        "native_pac_qualified",
+        "compiler_original_call_unwind_qualified"
+      ],
+      "probe-cursor": [
+        "native_cursor_qualified",
+        "explicit_pauth_lr_qualified",
+        "pacm_pc_qualified"
+      ],
+      "probe-cpta": [
+        "x1_el0_cpta_qualified",
+        "x1_el0_checked_writeback_qualified"
+      ]
+    }
   }
 }
