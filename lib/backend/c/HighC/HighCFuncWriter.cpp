@@ -4989,8 +4989,17 @@ TypeRef HighCWriter::integerCallResultCarrier(const HighExpr &Call,
 
 TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
   if (Call.SourceCallHint &&
-      Call.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst)
-    return Call.SourceCallHint->Signature.ReturnType;
+      Call.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
+    const auto &Declared = Call.SourceCallHint->Signature.ReturnType;
+    // renderSourceCallExpr preserves pointer/void results directly and
+    // converts every other result to the expression's physical value type.
+    // Locals must receive that converted value, including a complex result's
+    // two-field register record, rather than redeclaring the callee's type.
+    return Declared && (Declared->Kind == NdTypeKind::Void ||
+                        Declared->Kind == NdTypeKind::Ptr)
+               ? Declared
+               : Call.Type;
+  }
   TypeRef ReturnType;
   // An external prototype rejected by noteDebugExtern cannot supply the
   // printed result type: the fallback declaration returns its ABI carrier.

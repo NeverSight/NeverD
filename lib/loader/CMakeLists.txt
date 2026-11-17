@@ -121,6 +121,7 @@ add_neverd_component_library(NeverDLoader
   MachO/DarwinSourceDeclarations.cpp
   MachO/CFunctionParameterCalls.cpp
   MachO/ImmutableNativeCalls.cpp
+  MachO/FunctionBody.cpp
   MachO/ImmutableNativeFrame.cpp
   MachO/RuntimeFunctionAddress.cpp
   MachO/MachOArm64eFixups.cpp

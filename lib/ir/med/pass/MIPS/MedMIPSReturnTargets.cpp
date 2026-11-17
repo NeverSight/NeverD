@@ -402,12 +402,18 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   // A saved frame pointer does not publish its value when every call leaves
   // the complete spill slot private. Use the same outgoing-area boundary as
-  // the saved-link proof; any missing call SP prevents this intersection.
+  // the saved-link proof, but require a complete argument extent before
+  // admitting pointer spills. An unknown or open variadic call can read more
+  // stack arguments than the ABI's minimum outgoing area.
   std::optional<int64_t> SharedPrivateStart;
   if (CallSP.size() == CallCount)
     for (const auto &Entry : CallSP) {
-      const auto Start = CallPrivateStart(*Entry.first);
-      if (!Start) {
+      const auto &Call = *Entry.first;
+      const auto Start = CallPrivateStart(Call);
+      if (!Start ||
+          (!Calls.contains(&Call) &&
+           (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
+            Call.CalleeVariadicRegisterFrom >= 0))) {
         SharedPrivateStart.reset();
         break;
       }
@@ -527,8 +533,13 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
               [&](const MedVar &V) {
                 return HasCalls ? !IsNonFrame(V) : !V.isConst();
               },
-              [](const MedVar &) { return true; }, true, HasCalls,
-              PreservesCall);
+              // The complete function proof already distinguishes private
+              // pointer spills from escapes. Do not invalidate the same
+              // slot merely because one of those private stores contains FP
+              // or SP. Exact writes, overlaps and each call's outgoing area
+              // are still checked by this walk and PreservesCall.
+              [](const MedVar &) { return true; }, true,
+              HasCalls && !UnexposedFrame, PreservesCall);
           // Exact stores and complete calls must preserve this private slot.
           // Escaped frame addresses, overlap and unresolved writes reject it.
           Valid = Reaching.Complete && Reaching.Reachable &&

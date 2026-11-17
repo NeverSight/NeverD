@@ -62,7 +62,7 @@ word probe(word value) { return target(value, 37) + 1; }
         arch = ("mips" if bits == 32 else "mips64") + ("el" if little else "")
         environment = {"32": "gnu", "n32": "gnuabin32", "64": "gnuabi64"}[abi]
         flags = [f"--target={arch}-unknown-linux-{environment}", f"-mabi={abi}",
-                 f"-march=mips{bits}r2", "-G0", "-mno-abicalls", "-fno-pic",
+                 f"-march=mips{bits}r2", "-mno-abicalls", "-fno-pic",
                  "-ffreestanding", "-fno-strict-aliasing", "-nostdinc",
                  "-isystem", resource + "/include"]
         obj, original = work / (profile + ".o"), work / (profile + ".elf")
@@ -72,17 +72,31 @@ word probe(word value) { return target(value, 37) + 1; }
         original_symbols = symbols(original)
         original_uc, original_entry = emulator(original, bits, little, "probe")
         slot = original_symbols["target"]["st_value"]
+        gp = original_symbols["_gp"]["st_value"]
+        byte_order = "little" if little else "big"
+        code = original_uc.mem_read(original_entry, original_symbols["probe"]["st_size"])
+        # Require an actual lw/ld from the GP-relative callback slot in the executable.
+        load_opcode = 0x37 if abi == "64" else 0x23
+        for offset in range(0, len(code), 4):
+            word = int.from_bytes(code[offset:offset + 4], byte_order)
+            displacement = word & 0xffff
+            if displacement & 0x8000:
+                displacement -= 0x10000
+            if (word >> 26 == load_opcode and (word >> 21) & 31 == 28
+                    and gp + displacement == slot):
+                break
+        else:
+            raise AssertionError(f"{profile} has no GP-relative load of target")
         callbacks = [original_symbols[name]["st_value"]
                      for name in ("first_callback", "second_callback")]
         mask = (1 << bits) - 1
         saved = {r: (0x123456789abc0000 + r) & mask
-                 for r in (*range(16, 24), 28, 30)}
+                 for r in (*range(16, 24), 30)}
 
-        def observe(uc, entry, slots, variant, value):
+        def observe(uc, entry, entry_gp, callback_slot, variant, value):
+            initial = {**saved, 28: entry_gp}
             pointer = callbacks[variant]
-            for location in set(slots):
-                uc.mem_write(location, pointer.to_bytes(8 if abi == "64" else 4,
-                                                       "little" if little else "big"))
+            uc.mem_write(callback_slot, pointer.to_bytes(8 if abi == "64" else 4, byte_order))
             visits = []
             hook = uc.hook_add(UC_HOOK_CODE, lambda uc, pc, size, _: visits.append(pc),
                                begin=pointer, end=pointer)
@@ -91,7 +105,7 @@ word probe(word value) { return target(value, 37) + 1; }
                         if bits == 64 and value_bits == 32 and value & 0x80000000
                         else value)
             try:
-                returned, _ = invoke(uc, entry, bits, little, [argument], initial_registers=saved)
+                returned, _ = invoke(uc, entry, bits, little, [argument], initial_registers=initial)
             except UcError as error:
                 raise AssertionError(
                     f"{profile} entry {entry:#x}, callback {variant}, input {value:#x}: "
@@ -105,17 +119,17 @@ word probe(word value) { return target(value, 37) + 1; }
                     uc.reg_read(mips.UC_MIPS_REG_SP) != STACK or
                     uc.reg_read(mips.UC_MIPS_REG_RA) != STOP or
                     any(uc.reg_read(getattr(mips, f"UC_MIPS_REG_{r}")) != v
-                        for r, v in saved.items())):
+                        for r, v in initial.items())):
                 state = {"returned": returned, "expected": expected, "visits": visits,
                          "sp": uc.reg_read(mips.UC_MIPS_REG_SP),
                          "ra": uc.reg_read(mips.UC_MIPS_REG_RA),
                          "saved": {r: uc.reg_read(getattr(mips, f"UC_MIPS_REG_{r}"))
-                                   for r, v in saved.items()
+                                   for r, v in initial.items()
                                    if uc.reg_read(getattr(mips, f"UC_MIPS_REG_{r}")) != v}}
                 raise AssertionError(f"callback state mismatch: {profile}, {variant}, {value:#x}: {state}")
 
         for variant, value in product(range(2), values):
-            observe(original_uc, original_entry, [slot], variant, value)
+            observe(original_uc, original_entry, gp, slot, variant, value)
         for backend in ("highc", "llvmc"):
             source = work / f"{profile}-{backend}.c"
             command([args.neverd, "decompile", "--func=probe",
@@ -138,15 +152,15 @@ word probe(word value) { return target(value, 37) + 1; }
                     else:
                         raise AssertionError(f"unbound source dependency: {symbol}")
                     bindings.append(f"--defsym={symbol}={address}")
-                command([args.ld, "-e", "probe", "-Ttext=0x100000", *bindings,
+                # Keep external small-data bindings within signed GP displacement range.
+                command([args.ld, "-e", "probe", "-Ttext=0x18000", *bindings,
                          obj, "-o", rebuilt], name + "-link")
                 uc, entry = emulator(rebuilt, bits, little, "probe", original=original)
                 rebuilt_symbols = symbols(rebuilt)
-                slots = [slot]
-                if "target" in rebuilt_symbols:
-                    slots.append(rebuilt_symbols["target"]["st_value"])
+                rebuilt_gp = rebuilt_symbols["_gp"]["st_value"]
+                rebuilt_slot = rebuilt_symbols.get("target", original_symbols["target"])["st_value"]
                 for variant, value in product(range(2), values):
-                    observe(uc, entry, slots, variant, value)
+                    observe(uc, entry, rebuilt_gp, rebuilt_slot, variant, value)
                 results.append({"profile": profile, "backend": backend,
                                 "optimization": optimization, "cases": 2 * len(values),
                                 "original_sha256": hashlib.sha256(original.read_bytes()).hexdigest(),

@@ -14,6 +14,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionFunction.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseSet.h"
@@ -695,10 +696,67 @@ landingPads(const ExceptionFunction &Function, ExceptionAddressRange Range,
   return Pads;
 }
 
-llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
-recoverImplicitFrame(const BinaryImage &Image,
-                     const ExceptionFunction &Function,
-                     const AArch64UnwindRecoveryLimits &Limits) {
+llvm::SmallVector<va_t> frameEntries(const BinaryImage &Image,
+                                     ExceptionAddressRange Range) {
+  llvm::SmallVector<va_t> Entries{Range.Begin};
+  for (va_t Next = Image.nextKnownFunctionEntryAfter(Range.Begin);
+       Next < Range.End; Next = Image.nextKnownFunctionEntryAfter(Next))
+    Entries.push_back(Next);
+  // LC_FUNCTION_STARTS also supplies typed symbols independently of unwind.
+  const auto Guesses = Image.boundaryGuessFunctionStarts();
+  const auto Add = [&](va_t VA) {
+    if (VA > Range.Begin && VA < Range.End && !Guesses.count(VA) &&
+        Image.isFunctionEntryCandidateAt(VA))
+      Entries.push_back(VA);
+  };
+  for (const auto &Symbol : Image.Symbols)
+    if (Symbol.IsFunc)
+      Add(Symbol.Addr);
+  for (const auto &Export : Image.Exports)
+    if (Range.contains(Export.Addr) &&
+        Image.hasAuthenticatedFunctionEntryAt(Export.Addr))
+      Add(Export.Addr);
+  for (const auto VA : Image.VerifiedFunctionEntries)
+    Add(VA);
+  if (Image.Entry)
+    Add(Image.Entry);
+  llvm::sort(Entries);
+  Entries.erase(std::unique(Entries.begin(), Entries.end()), Entries.end());
+  return Entries;
+}
+
+// At an ordinary callable entry a direct tail branch has the incoming SP and
+// a live unsigned LR. The displaced prologue and its language scope haven't
+// executed. Limit that rule to the instruction whose bytes prove it.
+bool isForwardingEntry(const BinaryImage &Image,
+                       const ExceptionFunction &Function, va_t PC) {
+  constexpr auto Width = neverd::aarch64::kInsnSize;
+  const auto Range = Function.CodeRange;
+  if (!Range.contains(PC) || Range.End - PC < Width || Image.isImportStubAt(PC))
+    return false;
+  if (Function.Dwarf) {
+    const auto *CIE =
+        Image.ExceptionMetadata.findCIE(Function.Dwarf->CIESectionOffset);
+    if (!CIE || CIE->IsSignalFrame || CIE->ReturnAddressRegister != kLR)
+      return false;
+  }
+  auto Source = machOLiftedSource(Image, PC, PC + Width);
+  return Source && Source->ForwardTarget;
+}
+
+AArch64RecoveredUnwindRow forwardingRow(uint64_t Offset) {
+  AArch64RecoveredUnwindRow Row;
+  Row.CodeOffset = Offset;
+  Row.CFARegister = kSP;
+  Row.StackOffset = 0;
+  Row.Signing = {AArch64RAQueryStatus::Known, AArch64ReturnAddressState{}};
+  Row.IsForwardingEntry = true;
+  return Row;
+}
+
+llvm::Expected<std::vector<AArch64RecoveredUnwindRow>> recoverImplicitFrame(
+    const BinaryImage &Image, const ExceptionFunction &Function,
+    llvm::ArrayRef<va_t> Roots, const AArch64UnwindRecoveryLimits &Limits) {
   const auto Start = Function.CodeRange.Begin;
   const uint64_t Size = Function.Dwarf ? Function.Dwarf->AddressRange
                                        : Function.Compact->CodeRange.size();
@@ -738,24 +796,14 @@ recoverImplicitFrame(const BinaryImage &Image,
   // Keep their entry states and control-flow domains separate while retaining
   // offsets relative to the original metadata range. DWARF, language tables
   // and explicit signing-PC offsets still belong to one function.
-  llvm::SmallVector<size_t> Entries{0};
-  for (va_t Next = Image.nextKnownFunctionEntryAfter(Start);
-       Next < Start + Size; Next = Image.nextKnownFunctionEntryAfter(Next)) {
-    if ((Next - Start) % neverd::aarch64::kInsnSize)
+  llvm::SmallVector<size_t> Entries;
+  for (va_t VA : Roots) {
+    if (VA - Start >= Size)
+      break;
+    if ((VA - Start) % neverd::aarch64::kInsnSize)
       return fail(kCode);
-    Entries.push_back((Next - Start) / neverd::aarch64::kInsnSize);
+    Entries.push_back((VA - Start) / neverd::aarch64::kInsnSize);
   }
-  // Mach-O LC_FUNCTION_STARTS is represented by typed function symbols, not
-  // RuntimeFunctionAddrs (which identifies loader/CRT entry conventions).
-  // Collect those roots once, excluding discovery guesses and continuations.
-  const auto Guesses = Image.boundaryGuessFunctionStarts();
-  for (const auto &Symbol : Image.Symbols)
-    if (Symbol.IsFunc && Symbol.Addr > Start && Symbol.Addr < Start + Size &&
-        !Guesses.count(Symbol.Addr) &&
-        Image.isFunctionEntryCandidateAt(Symbol.Addr))
-      Entries.push_back((Symbol.Addr - Start) / neverd::aarch64::kInsnSize);
-  llvm::sort(Entries);
-  Entries.erase(std::unique(Entries.begin(), Entries.end()), Entries.end());
   if (Entries.size() > 1 &&
       (Function.Dwarf || !Function.describesUnwindOnly() ||
        Function.Compact->ReturnAddressSigningOffset))
@@ -996,11 +1044,54 @@ llvm::Expected<std::vector<AArch64RecoveredUnwindRow>>
 recoverDarwinAArch64Unwind(const BinaryImage &Image,
                            const ExceptionFunction &Function,
                            const AArch64UnwindRecoveryLimits &Limits) {
-  const auto Query =
-      queryAArch64UnwindSigning(Image, Function, Function.CodeRange.Begin);
-  if (!implicitProfile(Image, Function, Query))
+  const auto Range = Function.CodeRange;
+  if (!Image.isArm64e() || Range.End <= Range.Begin)
     return fail(kProfile);
-  return recoverImplicitFrame(Image, Function, Limits);
+  const auto Roots = frameEntries(Image, Range);
+  if (Roots.size() > Limits.MaxInstructions)
+    return fail(kBudget, AArch64RAQueryStatus::ResourceLimit);
+  llvm::SmallVector<va_t> Forwarders;
+  for (va_t VA : Roots)
+    if (isForwardingEntry(Image, Function, VA))
+      Forwarders.push_back(VA);
+  std::vector<AArch64RecoveredUnwindRow> Base;
+  if (Forwarders.size() != Roots.size()) {
+    const auto Query = queryAArch64UnwindSigning(Image, Function, Range.Begin);
+    if (implicitProfile(Image, Function, Query)) {
+      auto Rows = recoverImplicitFrame(Image, Function, Roots, Limits);
+      if (!Rows || Forwarders.empty())
+        return Rows;
+      Base = std::move(*Rows);
+    } else if (Forwarders.empty()) {
+      return fail(kProfile);
+    } else {
+      Base.emplace_back(); // Other entries have no instruction-derived row.
+    }
+  }
+  std::vector<AArch64RecoveredUnwindRow> Rows;
+  for (size_t I = 0; I < Roots.size(); ++I) {
+    const auto Begin = Roots[I] - Range.Begin;
+    const auto End =
+        I + 1 < Roots.size() ? Roots[I + 1] - Range.Begin : Range.size();
+    if (llvm::binary_search(Forwarders, Roots[I])) {
+      Rows.push_back(forwardingRow(Begin));
+      const auto After = Begin + neverd::aarch64::kInsnSize;
+      if (After < End)
+        Rows.push_back({.CodeOffset = After});
+      continue;
+    }
+    // Compact records can coalesce a forwarding entry with an untouched
+    // function. Keep that function's original interrupt rows and CFA.
+    auto Rule = std::prev(
+        llvm::upper_bound(Base, Begin, [](auto Offset, const auto &R) {
+          return Offset < R.CodeOffset;
+        }));
+    for (; Rule != Base.end() && Rule->CodeOffset < End; ++Rule) {
+      Rows.push_back(*Rule);
+      Rows.back().CodeOffset = std::max(Begin, Rule->CodeOffset);
+    }
+  }
+  return Rows;
 }
 
 const AArch64RecoveredUnwindRow &
@@ -1103,6 +1194,12 @@ prepareDarwinArm64eExceptionSite(const BinaryImage &Image,
   auto Plan = prepareDarwinArm64eSystemCaller(Row, Range, LoadedFrameStart);
   if (!Plan)
     return std::nullopt;
+  if (Row.IsForwardingEntry) {
+    if (Row.CodeOffset != PC - Range.Begin || Range.End - PC < Width)
+      return std::nullopt;
+    const va_t Begin = LoadedFrameStart + Row.CodeOffset;
+    return NDDarwinArm64eExceptionSite{Begin, Begin + Width, false, 0};
+  }
   const auto *Next = &Row + 1;
   auto Begin = Range.Begin + Row.CodeOffset;
   auto End = Next == Rows.end() ? Range.End : Range.Begin + Next->CodeOffset;
@@ -1252,6 +1349,11 @@ analyzeAArch64UnwindSigning(const BinaryImage &Image,
                             const AArch64UnwindRecoveryLimits &Limits) {
   AArch64AnalyzedUnwindSigning Result{
       queryAArch64UnwindSigning(Image, Function, PC), {}};
+  if (isForwardingEntry(Image, Function, PC)) {
+    Result.InstructionStateAtPC =
+        forwardingRow(PC - Function.CodeRange.Begin).Signing;
+    return Result;
+  }
   if (!implicitProfile(Image, Function, Result.Metadata))
     return Result;
   using Status = dwarf_eh::AArch64RAQueryStatus;
@@ -1259,7 +1361,7 @@ analyzeAArch64UnwindSigning(const BinaryImage &Image,
     Result.InstructionStateAtPC = {Status::Unsupported, {}, kUnaligned};
     return Result;
   }
-  auto Rows = recoverImplicitFrame(Image, Function, Limits);
+  auto Rows = recoverDarwinAArch64Unwind(Image, Function, Limits);
   if (Rows) {
     Result.InstructionStateAtPC =
         aarch64UnwindRowAt(*Rows, PC - Function.CodeRange.Begin).Signing;

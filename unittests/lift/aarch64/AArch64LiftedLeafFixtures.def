@@ -487,6 +487,28 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 
+A64_LEAF_TEXT(kSourceCodeSections, "source_regular_instruction_sections")
+A64_LEAF_TEXT(kSeparatedCodeSections, "discontiguous_instruction_sections")
+A64_LEAF_TEXT(kDistinctCodeSegments, "separate_executable_segments")
+A64_LEAF_TEXT(kMarkerSymbol, "_split_marker")
+A64_LEAF_TEXT(kMarkerBytes, "\x31\x72\xa5")
+A64_LEAF_TEXT(kSplitData, "#define NEVERD_TEST_SPLIT_DATA 1\n")
+A64_LEAF_TEXT(kSplitSegments, "#define NEVERD_TEST_SPLIT_DATA 1\n"
+                              "#define NEVERD_TEST_SPLIT_SEGMENTS 1\n")
+A64_LEAF_TEXT(kSplitLeaves, R"c(
+__attribute__((section("__TEXT,__marker,regular")))
+const unsigned char split_marker[] = {0x31, 0x72, 0xa5};
+__attribute__((section("__TEXT,__warm,regular,pure_instructions"), aligned(64)))
+unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
+#ifdef NEVERD_TEST_SPLIT_SEGMENTS
+#define COOL_SECTION "__TEXT_EXEC,__cool,regular,pure_instructions"
+#else
+#define COOL_SECTION "__TEXT,__cool,regular,pure_instructions"
+#endif
+__attribute__((section(COOL_SECTION), aligned(64)))
+unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
+)c")
+
 A64_LEAF_TEXT(kLeaves, R"c(
 unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
 unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
@@ -494,14 +516,22 @@ unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; 
 A64_LEAF_TEXT(kCaller, R"c(
 #include <dlfcn.h>
 #include <stdint.h>
+#include <stdio.h>
 typedef unsigned long (*operation)(unsigned long, unsigned long);
 
 int main(int argc, char **argv) {
   if (argc != 2)
     return 1;
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-  if (!image)
+  if (!image) {
+    fputs(dlerror(), stderr);
     return 2;
+  }
+#ifdef NEVERD_TEST_SPLIT_DATA
+  const unsigned char *marker = dlsym(image, "split_marker");
+  if (!marker || marker[0] != 0x31 || marker[1] != 0x72 || marker[2] != 0xa5)
+    return 5;
+#endif
   operation sum = (operation)dlsym(image, "leaf_sum");
   operation difference = (operation)dlsym(image, "leaf_difference");
   if (!sum || !difference)

@@ -18132,11 +18132,14 @@ inside o32's outgoing register home area.
 pyelftools and the repository-pinned Unicorn to execute originals and both
 regenerated C routes on all six MIPS profiles at O0/O2. Changing targets, word
 boundary values and full-width n32/n64 integers check argument forwarding,
-return values, SP, RA and callee-saved registers. The owned fixture has no debug
-declaration or retained relocation and uses `-G0` to avoid a separate GP entry
-binding requirement. Pass `--neverd`, `--clang`, `--ld` and an owned `--output`
-directory; generated binaries are discarded after source/hash receipts are
-recorded by `MIPSValidationArtifacts`.
+return values, SP, RA and callee-saved registers. The fixture uses the compiler's
+default small-data threshold and carries no debug declaration or retained
+relocation. The harness checks that the linked `lw` or `ld` reads the callback
+slot through GP, and initializes the original and rebuilt programs with their
+respective linker GP values. Pass `--neverd`, `--clang`, `--ld` and an owned
+`--output` directory. `MIPSValidationArtifacts` keeps source and hash receipts.
+`MIPSEntryGP` checks explicit GP writes and the sign extension of upper-half
+n32 data addresses in both byte orders.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
@@ -25749,8 +25752,43 @@ requested subranges, frame-derived values and saved-link overlaps.
 `FloatingResultSpillsDoNotPoisonArgumentProofs` checks scalar and complex
 result spills whose provenance depends on an active argument proof, alongside
 unknown calls and invalid frame access. Complex parameters,
-variadic complex calls, n32/n64 complex results, variadic entry reconstruction
+variadic complex calls, variadic entry reconstruction
 and general indirect runtime adapters remain unqualified.
+
+`MIPSFloatingResult.ComplexResultsKeepTheirClassAndBothRegisters` and
+`SourceParameterPlacement.MIPSWideComplexResultsKeepScalarPositions` check
+n32/n64 complex float/double results, their f0/f2 components and scalar
+parameter positions in both byte orders. The descriptor rejects ordinary
+two-field records, complex parameters, variadic complex results and MIPS16
+wide targets. `SourceABI.ParameterOnlyBindingKeepsPhysicalComplexResults`
+also checks the physical-return adapter for all six MIPS profiles.
+`MIPSFloatingResult.DeclaredComplexCallsRequireCompleteFloatingCarriers`
+checks HighC's explicit call-site result conversion in all six profiles,
+including wrong widths, integer fields and ordinary-record negative controls.
+`unittests/lift/mips/n32-n64-complex-roundtrip.py` separately compiles GCC and
+Clang originals at O0/O2. With `--neverd`, it regenerates the callee and the
+direct/indirect callers through HighC and LLVMC, replacing one object at a
+time while retaining the other original objects. Each execution checks both
+result bit patterns, exactly one callee entry, preserved GPR/FPR values, SP,
+RA, PC and FCSR. Indirect calls bind an explicit occurrence and snapshot through
+the same C API used by the scalar/variadic ABI tests; a callback parameter's
+declaration alone is not evidence for every indirect machine call. The
+freestanding C memory runtime is compiled for the guest
+pointer/size_t widths; guest copies are never replaced by emulator hooks.
+Pass `--clang`, `--gcc`, `--assembler`, `--ld` and an owned `--output` path;
+omitting `--neverd` runs only the independent original-program oracle.
+Optional ABI, byte-order, component-size and original-compiler filters narrow
+a diagnostic run. This driver covers classic MIPS64r2 n32/n64, not compressed
+code, complex parameters or variadic complex calls.
+
+`MIPSSourceReturnTargets.LogicalZeroMovesRetainExactFrameIdentity` checks
+OR/XOR zero on both operand sides, both widths and byte orders, with an
+unknown-register negative control. `PrivateFrameSpillsDoNotPublishTheFrame`
+checks 144 o32/n32/n64 cases across both byte orders and declared/native
+callees: private FP/SP spills, callee-owned and external storage, direct and
+reloaded frame-address escape, unknown call SP, two-call intersections and
+reused caller-clobbered arguments.
+Every saved-link byte still needs an exact reaching-store proof.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

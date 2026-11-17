@@ -46,6 +46,10 @@ ASYNC_FRAME_TEXT(kObject, "frame.o")
 ASYNC_FRAME_TEXT(kOriginal, "frame.dylib")
 ASYNC_FRAME_TEXT(kPublished, "installed.dylib")
 ASYNC_FRAME_TEXT(kOriginalSamples, "original.samples")
+ASYNC_FRAME_TEXT(kEntryRules, "entry.rules")
+ASYNC_FRAME_TEXT(kEntrySamples, "entry.samples")
+ASYNC_FRAME_TEXT(kEntryMode, "entry")
+ASYNC_FRAME_TEXT(kEntrySteps, "native_old_entry_system_steps")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
 ASYNC_FRAME_TEXT(kPublishedRules, "installed.rules")
 ASYNC_FRAME_TEXT(kParents, "native_authenticated_parent_frames")
@@ -350,6 +354,7 @@ _stages:
   cmp w4, w2
   b.ne 1b
 .endm
+  cbz x0, Lstages_return
   stage 1
   pacibsp
 #ifdef NEVERD_TEST_EXPLICIT_RA
@@ -374,6 +379,7 @@ _stages:
 .cfi_negate_ra_state
 #endif
   stage 5
+Lstages_return:
   ret
 .cfi_endproc
 .subsections_via_symbols
@@ -506,6 +512,7 @@ ASYNC_FRAME_TEXT(kObserver, R"c(
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ucontext.h>
@@ -530,6 +537,7 @@ _Atomic uintptr_t stage_entry_sp, incoming_x19;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
+static int entry_only;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
   uintptr_t offset, depth;
@@ -578,14 +586,17 @@ static int at_signal_trampoline(unw_cursor_t *cursor) {
 }
 
 static void observe(int signal, siginfo_t *info, void *context) {
-  const int stage = atomic_load(&state.ready);
-  if (stage < 1 || stage > stages_count || signal != SIGUSR1)
-    _exit(10);
   const ucontext_t *uc = context;
   const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
+  const uintptr_t pc = arm_thread_state64_get_pc(*regs);
+  if (entry_only && (pc != owner || atomic_load(&state.done)))
+    return;
+  const int stage = entry_only ? 1 : atomic_load(&state.ready);
+  if (stage < 1 || stage > stages_count || signal != SIGUSR1)
+    _exit(10);
   const uintptr_t sp = arm_thread_state64_get_sp(*regs);
   struct sample *s = &samples[stage - 1];
-  s->pc = arm_thread_state64_get_pc(*regs);
+  s->pc = pc;
   if (s->pc < owner)
     _exit(8);
   const uintptr_t offset = s->pc - owner;
@@ -696,6 +707,14 @@ static void observe(int signal, siginfo_t *info, void *context) {
 }
 
 static void *interrupt_worker(void *arg) {
+  if (entry_only) {
+    while (!atomic_load(&state.done)) {
+      if (pthread_kill(worker, SIGUSR1))
+        _exit(13);
+      usleep(100);
+    }
+    return NULL;
+  }
   for (int stage = 1; stage <= stages_count; ++stage) {
     while (atomic_load(&state.ready) != stage)
       sched_yield();
@@ -706,7 +725,8 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 6 || !read_rules(argv[5]))
+  entry_only = argc == 7 && !strcmp(argv[6], "entry");
+  if ((!entry_only && argc != 6) || !read_rules(argv[5]))
     return 1;
   alarm(20);
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -734,13 +754,18 @@ int main(int argc, char **argv) {
   pthread_t monitor;
   if (pthread_create(&monitor, NULL, interrupt_worker, NULL))
     return 5;
-  call_outer(run, &state);
+  if (entry_only) {
+    while (!atomic_load(&state.done))
+      call_outer(run, NULL);
+  } else {
+    call_outer(run, &state);
+  }
   if (pthread_join(monitor, NULL))
     return 6;
   FILE *out = fopen(argv[4], "w");
   if (!out)
     return 7;
-  for (int i = 0; i < stages_count; ++i) {
+  for (int i = 0; i < (entry_only ? 1 : stages_count); ++i) {
     if (samples[i].pc < owner)
       return 8;
     fprintf(out, "%" PRIuPTR " %d %" PRIuPTR " %d\n",

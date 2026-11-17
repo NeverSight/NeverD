@@ -1,6 +1,7 @@
 #include "../../../loader/Swift/SwiftBooleanSourceBinding.h"
 #include "../../../loader/Swift/SwiftErrorRuntime.h"
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
+#include "../CRecordCall.h"
 #include "HighCWriter.h"
 
 #include "neverd/Limits.h"
@@ -78,6 +79,21 @@ std::optional<std::string> HighCWriter::sourceValue(llvm::StringRef Text,
   if (Carrier && Source && Carrier->Kind == NdTypeKind::Struct &&
       Source->Kind == NdTypeKind::Struct && equalSourceTypes(Carrier, Source))
     return Text.str();
+  if (const auto Bytes = sourceComplexComponentBytes(Carrier);
+      Bytes && Source && Source->RegisterReturnRecord &&
+      Source->Size == 2 * Bytes && Source->Alignment == Bytes) {
+    const auto Members = sourceAggregateMembers(Source);
+    if (Members.size() == 2 && Members[0].ByteOffset == 0 &&
+        Members[1].ByteOffset == Bytes &&
+        llvm::all_of(Members, [&](const auto &Member) {
+          return Member.Type->Kind == NdTypeKind::Float &&
+                 Member.Type->Size == Bytes;
+        }))
+      // The call is evaluated once, preserving real/imaginary bits in the
+      // same complete floating register record used by direct calls.
+      return c_detail::sourceComplexToRecord(typeToC(Carrier), typeToC(Source),
+                                             Text);
+  }
   if (Carrier->Kind == NdTypeKind::Int && Source->Kind == NdTypeKind::Int &&
       Carrier->Size == Source->Size &&
       (isSourceAArch64VectorType(Carrier) || isSourceAArch64VectorType(Source)))
