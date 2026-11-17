@@ -25,7 +25,7 @@ MACHO_LEAF_TEXT(kLeafModule,
                 "arm64e lifted image has no complete native leaf contract")
 MACHO_LEAF_TEXT(
     kLeafCoverage,
-    "arm64e lifted entries do not cover the original instruction section")
+    "arm64e lifted entries do not cover the original authenticated functions")
 MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
                            "original position-independent leaf")
 MACHO_LEAF_TEXT(kLeafFrame, "arm64e lifted leaf requires a matching native "
@@ -34,7 +34,7 @@ MACHO_LEAF_TEXT(kBodyExtent,
                 "arm64e entry {0} has {1} source bytes and {2} emitted bytes")
 MACHO_LEAF_TEXT(kGeneratedCoverage,
                 "arm64e object has {0} unwind ranges for {1} entries and {2} "
-                "code bytes for {3} original bytes")
+                "code bytes")
 MACHO_LEAF_TEXT(kGeneratedSymbol,
                 "arm64e object has no emitted address for {0}")
 MACHO_LEAF_TEXT(
@@ -44,8 +44,8 @@ MACHO_LEAF_TEXT(
     kSourceSection,
     "arm64e lifted image has unsupported instruction section {0},{1}")
 MACHO_LEAF_TEXT(kSourceText,
-                "arm64e lifted image requires file-backed TEXT with function "
-                "starts and a single executable segment")
+                "arm64e lifted image requires bounded file-backed code with "
+                "authenticated function entries")
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
 MACHO_LEAF_TEXT(kDirectTarget,

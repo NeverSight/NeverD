@@ -2143,11 +2143,11 @@ signature with a nonempty designated requirement; publication must refuse it
 without writing the destination or changing the input.
 
 This sequence qualifies one automatic lifted publication followed by native
-object publication. Automatically relifting the appended executable regions
-is still unsupported: the leaf installer requires one original instruction
-section, and a diagnostic relift exposes a compact-unwind gap promoted to a
-function plus an omitted first appended definition. Those failure diagnostics
-are retained separately; they are not successful arbitrary-image coverage.
+object publication. At that revision, automatically relifting the appended executable regions
+was unsupported: the installer required one original instruction section, and
+a diagnostic relift exposed a compact-unwind gap promoted to a function plus an
+omitted first appended definition. Those failure diagnostics are retained
+separately; they were not successful arbitrary-image coverage.
 
 At `1f1bd9eec18406c0567efab3fa743de986ff08d0`, the local Release suites pass
 235 publication, 28 signature-policy, 7 signer and 42 sanitizer C API tests,
@@ -2162,3 +2162,49 @@ records the exact package, report and per-generation image hashes. The temporary
 release, asset, tag and replay files were retired after verification, and unused
 local packages and compiled probe copies were removed. The active source build
 and archived diagnostics remain available; r6 and all fork pins are unchanged.
+
+### Automatic relifting of installed code
+
+The Mach-O reader retains encoding-zero compact lookup intervals in its raw
+unwind view without turning them into primary functions or code ranges. An
+independent FDE retains its own exact extent. Symbols and other format entry
+evidence remain independent of an empty lookup recipe. This matches the
+[upstream unwinder's encoding-zero handling](https://github.com/llvm/llvm-project/blob/main/libunwind/src/UnwindCursor.hpp).
+
+Function detection excludes the linked Mach header, rather than every segment
+base. An authenticated function at the start of an appended RX segment is
+therefore available to the ordinary patch pipeline. The register producer and
+final-byte publisher share one source-extent query: original instruction
+sections bound their code; sectionless installed functions require a complete
+file-backed span bounded by their compact range and the next mapped entry.
+Data sections cannot be consumed as part of such a span.
+
+An entry-level unconditional branch to another authenticated function is a
+four-byte forwarding body. Its relocated branch must preserve the exact
+installed callee, with no register, SP or LR changes, and its generated unwind
+record must describe a zero-stack frameless body. Unreachable instructions
+following an old entry trampoline are not emitted as its new body. The native
+register producer and final-machine verifier both check this contract.
+
+The tight-layout publisher may reclaim `LC_FUNCTION_STARTS` command space.
+Republishing uses the independently authenticated symbol/unwind inventory and
+checks that every original callable entry has a definition; it does not require
+a function-start command which the previous publication legitimately removed.
+The signed-leaf, vector-memory, SIMD-register, indexed-frame and global/import
+fixtures each
+exercise three automatic publication generations. They check the complete
+4-entry and 8-entry relift inventories, reject redirected forwarding operands
+and missing definitions, verify each signature and preserve every prior input.
+Native-enabled runs execute the original and all three outputs through an
+independent authenticated caller.
+
+This extends repeated publication within the verified native instruction and
+frame contracts. Arbitrary additional instruction sections, unsupported source
+operations, data-in-code and unrepresented entries still require explicit
+support. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
+
+Local Release validation passes all 240 publication cases, 323 language-EH
+cases, 161 image-boundary cases and 68 relocated-entry cases. Two unrelated
+checks remain unavailable locally: the optional real-binary unwind sample and
+the native i386 reference. Formatting, whitespace and documentation checks
+pass. No LLVM fork changes or prebuilt revision changes are needed.

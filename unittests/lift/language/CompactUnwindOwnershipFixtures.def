@@ -1,0 +1,28 @@
+//===- CompactUnwindOwnershipFixtures.def - Lookup gap oracles -*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// NEVERD_COMPACT_OWNER_VALUE(Type, Name, Value) defines image offsets.
+/// NEVERD_COMPACT_OWNER_TEXT(Name, Text) defines fixture strings.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_COMPACT_OWNER_VALUE
+#define NEVERD_COMPACT_OWNER_VALUE(Type, Name, Value)
+#endif
+#ifndef NEVERD_COMPACT_OWNER_TEXT
+#define NEVERD_COMPACT_OWNER_TEXT(Name, Text)
+#endif
+
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerFirstRVA, 0x100)
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerGapRVA, 0x2000)
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerFrameRVA, 0x2800)
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerLastRVA, 0x3000)
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerEndRVA, 0x3100)
+NEVERD_COMPACT_OWNER_VALUE(uint32_t, kOwnerFunctionSize, 0x80)
+NEVERD_COMPACT_OWNER_TEXT(kOwnerSymbol, "_no_unwind_function")
+NEVERD_COMPACT_OWNER_TEXT(kOwnerAugmentation, "zR")
+
+#undef NEVERD_COMPACT_OWNER_VALUE
+#undef NEVERD_COMPACT_OWNER_TEXT
