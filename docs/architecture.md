@@ -1256,9 +1256,34 @@ first clause, the block form's included. SEH this view cannot structure prints
 no `__try`: a catch-all around the whole body would claim the function
 swallows exceptions its scopes let pass, so the function says it is not
 lowered instead. The note follows the scope table in the function's exception
-metadata, not the name of its language handler: a table whose handler checks
-a stack cookie first (`__GSHandlerCheck_SEH`) runs the same scopes, so a
-function this view leaves unlowered behind that check says so too.
+metadata, not the name of its language handler.
+A termination handler that never returns, a `__finally` that leaves by
+`longjmp` or ends the program, is a clause this view prints: the call, and
+once that the path ends there. Native output, whose clauses the code generator
+writes again from what the optimizer leaves, does not take one, and no view
+takes a filter that never returns.
+On x64 this view also takes a table behind `__GSHandlerCheck_SEH`. That
+wrapper checks the frame's stack cookie and then calls `__C_specific_handler`
+for an exception only when its record's EHANDLER bit is set and for an unwind
+only when its UHANDLER bit is, and otherwise continues the search
+(`cookieCheckPassesEveryScope`): a table whose every `__except` row has the
+first and every `__finally` row the second runs as the same table alone, and
+any other keeps the note, since a row the record holds back never runs. The
+identity of such a table covers the record, so it is never the identity of
+the same rows under `__C_specific_handler`, and native output, which would
+have to write the record again, leaves the function as metadata.
+One function whose lowering is missing keeps its whole unit from being
+optimized (`validateExceptionRewriteContracts`), so the classification says
+which refusals are a known shape that stays metadata
+(`isIntentionalMetadataOnlyNativeIR`) and which mean something is missing. A
+C++ table of unwind actions and no try block, a function with destructors, is
+a known shape: it is refused as `UnsupportedCxxUnwindAction` on every route,
+where a table with no action either is empty (`EmptyCxxTryMap`) and stays
+missing, and the destructor chain IR lowering takes is one beside a try
+block. Behind a cookie check the writer does not know (`__GSHandlerCheck_EH4`
+with a record that passes unwinds only, as a function with no catch has it)
+such a table is refused for the same reason: the check refuses only a table
+that would otherwise be lowered.
 This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because
@@ -1273,8 +1298,13 @@ that guard the call: the lowering ends scope k and every scope inside it
 before the call and keeps the call in the scopes around k, and the last
 handler of an unwind that leaves every scope is a plain call. The calls at an
 exit's address must be its handlers, in its order, with no other call after
-them in the block; anything else leaves the function unlowered. Native output
-keeps a lone handler call in its block's innermost scope.
+them in the block; anything else leaves the function unlowered. Native IR
+places these calls the same way and marks each with a provenance role of its
+own (`LocalUnwindHandlerCall`: the runtime call's address and the row the
+handler ends). The output gate refuses that role by name: its rule for a
+protected call is the innermost source scope at the call's address, which is
+the scope such a call has just left, and no execution has yet shown that the
+rewritten table gives the call the scopes the runtime gave it.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call
@@ -14269,7 +14299,12 @@ chain.
 LLVMC normalizes ordinary vector memory accesses and lane operations on a
 private module clone. Packed vector casts use the source data layout both
 before and after scalarization, since scalarization can introduce new casts
-when lane widths change. Volatile vector memory, unsupported vector operations,
+when lane widths change. LLVM's scalarizer writes a value's lanes right after
+the instruction that defines it, which for an invoke is past the end of its
+block: while the pass runs, the users of a vector an invoke returns read a
+stand-in call at the start of the invoke's normal destination, in a block of
+its own when that destination has other entries or merges the value in a PHI,
+and the invoke stays the call the function makes. Volatile vector memory, unsupported vector operations,
 vector global/local storage, and floating-vector function interfaces remain
 rejected. Selected-function emission also rejects referenced vector storage,
 including storage reached through opaque pointers; unrelated globals do not

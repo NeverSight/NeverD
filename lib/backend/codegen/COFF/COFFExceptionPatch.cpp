@@ -635,6 +635,16 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
         return patchError("malformed native WinEH provenance in function " +
                           F.getName());
 
+      // The runtime calls a local unwind's handler with its scan already
+      // past the scope the handler ends, so the lowering places the call
+      // outside that scope.  Nothing has yet shown by execution that the
+      // rewritten table gives such a call the scopes the runtime gave it:
+      // output refuses it, whatever else the function holds.
+      if (Provenance->Role ==
+          windows_eh_md::NativeProvenanceRole::LocalUnwindHandlerCall)
+        return patchError("a local unwind's handler call has no certified "
+                          "output form in function " +
+                          F.getName());
       if (Provenance->Role ==
           windows_eh_md::NativeProvenanceRole::ProtectedInvoke) {
         if (Anchor->getNumOperandBundles() != 1 || Provenance->Clause != 0 ||
