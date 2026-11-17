@@ -8,6 +8,8 @@ both against the same runtime. Observe all result bits, the return mode,
 FCSR, stack/link and preserved GPR/FPR state in an independent emulator.
 Without --neverd, qualify compiler interworking using the owned original C.
 With --floating-input, also traverse the classic hard-float entry stub.
+Complex results use two scalar floating-point arguments, preserving separate
+real and imaginary payloads without requiring a complex-parameter ABI.
 With --whole-unit, rebuild the complete HighC call closure or LLVMC image as
 one translation unit, retaining the original runtime helper at link time.
 Rebuilt images also link a guest byte-copy routine for compiler-emitted C
@@ -115,13 +117,22 @@ def run(args, artifacts):
                     0x71395217) for j in range(len(patterns))]
         samples += [([rng.getrandbits(32) for _ in range(count)], rng.getrandbits(32))
                     for _ in range(23)]
-        parameter = f'{ctype} value' if args.floating_input else 'const u32 *input'
+        complex_input = args.floating_input and kind in ('sc', 'dc')
+        scalar_type = 'float' if kind == 'sc' else 'double'
+        parameter = (f'{scalar_type} real, {scalar_type} imaginary' if complex_input
+                     else f'{ctype} value' if args.floating_input
+                     else 'const u32 *input')
         prelude = ('typedef unsigned int u32;\n'
                    '#define M16 __attribute__((mips16,noinline))\n'
                    f'union payload {{ {ctype} value; u32 words[{count}]; }};\n'
                    f'M16 {ctype} fp_callee({parameter});\n')
         callee_text = prelude + f'M16 {ctype} fp_callee({parameter}) {{\n'
-        if args.floating_input:
+        if complex_input:
+            callee_text += ('union payload p;\n'
+                            '__real__ p.value = real;\n'
+                            '__imag__ p.value = imaginary;\n'
+                            'return p.value;\n}\n')
+        elif args.floating_input:
             callee_text += 'return value;\n}\n'
         else:
             callee_text += 'union payload p;\n' + ''.join(
@@ -132,7 +143,8 @@ def run(args, artifacts):
         if args.floating_input:
             caller_text += ''.join(f'p.words[{i}] = input[{i}];\n'
                                    for i in range(count))
-            caller_text += 'p.value = fp_callee(p.value);\n'
+            caller_text += ('p.value = fp_callee(__real__ p.value, __imag__ p.value);\n'
+                            if complex_input else 'p.value = fp_callee(p.value);\n')
         else:
             caller_text += 'p.value = fp_callee(input);\n'
         caller_text += 'u32 out = mask;\n'
@@ -292,8 +304,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.whole_unit and not args.neverd:
         parser.error('--whole-unit requires --neverd')
-    if args.floating_input and any(k not in ('sf', 'df') for k in args.kind or ()):
-        parser.error('--floating-input currently requires scalar sf/df results')
     with MIPSValidationArtifacts(args.output, 'mips16-floating-return-roundtrip',
                                  (args.gcc, args.clang, args.assembler, args.ld,
                                   args.runtime_source, MEMORY_RUNTIME,
