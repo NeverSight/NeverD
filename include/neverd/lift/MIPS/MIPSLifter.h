@@ -160,7 +160,6 @@ private:
   bool LittleEndian;
   uint8_t RegisterBytes;
   uint16_t EncodingProfile;
-  bool TimedInstructions;
   bool HasDSP = false;
   bool HasDSPR2 = false;
   bool HasMSA = false;
@@ -168,7 +167,10 @@ private:
   bool FP32Registers = false;
   bool HasMIPS16 = false;
   bool HasMIPS16E2 = false;
-  bool HasMT = false;
+  // Share the final capability byte so historical timing does not grow the
+  // common lifter or move the existing DSP/MSA/floating capability fields.
+  bool HasMT : 1 = false;
+  bool TimedInstructions : 1;
 };
 
 } // namespace neverd
