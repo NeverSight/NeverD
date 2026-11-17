@@ -341,9 +341,9 @@ inspectSlice(const llvm::object::MachOObjectFile &Object) {
   if (!SuperLength || *SuperLength < sizeof(CS_SuperBlob) ||
       *SuperLength > RawSignature.size())
     return malformed("SuperBlob length is invalid");
-  if (!std::all_of(RawSignature.begin() + *SuperLength, RawSignature.end(),
-                   [](uint8_t Byte) { return Byte == 0; }))
-    return malformed("SuperBlob padding is not zero");
+  // LC_CODE_SIGNATURE may reserve more storage than the embedded SuperBlob.
+  // Only its declared length owns signature contents; codesign can leave
+  // nonzero bytes in the remaining reservation when replacing a signature.
   const llvm::ArrayRef<uint8_t> Signature =
       RawSignature.take_front(*SuperLength);
   if (!SlotCount || *SlotCount == 0)

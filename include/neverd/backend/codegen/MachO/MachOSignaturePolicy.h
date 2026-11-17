@@ -64,6 +64,8 @@ struct Profile {
 /// Malformed containers, load commands, SuperBlobs, CodeDirectories, or
 /// conflicting identities return Error.  Unknown slots remain visible in a
 /// valid profile and therefore fail automatic re-sign eligibility.
+/// LC_CODE_SIGNATURE may reserve bytes beyond the SuperBlob's declared length;
+/// these are not signature contents and cannot be claimed by an indexed slot.
 llvm::Expected<Profile> inspect(llvm::ArrayRef<uint8_t> Binary);
 
 /// True only for a profile that can be re-signed with an identityless ad-hoc

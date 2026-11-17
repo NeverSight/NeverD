@@ -1,0 +1,1639 @@
+{
+  "neverd_revision": "6ec2c81bc85b9c7015ba9de8566eddf1782880e6",
+  "forks": {
+    "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "capstone": "106380545da022533aa28bb9af6ba4df9f6e9970",
+    "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+  },
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861",
+  "ci_revision": "aa8f5c9737e210b1644ac11400f8be350ad89c74",
+  "package": {
+    "source_revision": "6ec2c81bc85b9c7015ba9de8566eddf1782880e6",
+    "host_sha256": "3469296e28c7c5e280bc2447008200a3807f3b7e73d48519ff48a9b1379bd02c",
+    "profile": "Release, integrated NeverSight LLVM; r6 unchanged",
+    "forks": {
+      "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+      "capstone": "106380545da022533aa28bb9af6ba4df9f6e9970",
+      "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+    },
+    "archive_sha256": "f0367a3812acf43af3176179947c6313d079972c3ce6a731961a489433d92300",
+    "archive_bytes": 42378516,
+    "tag": "neverd-relift-ranges-6ec2c81bc85b",
+    "asset": "relift-ranges.tgz"
+  },
+  "local_release": {
+    "publication-final": {
+      "tests": 240,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "df303f688cc0bd9ac0482c7dff472e49b0fddf8357377bcb35e0657e83119d50"
+    },
+    "language-full": {
+      "tests": 324,
+      "failures": 0,
+      "skipped": [
+        "Scratch.DumpRealBinary"
+      ],
+      "sha256": "e3cbf66476881d18af4728b6c192a85665e4c04226851287c861b1931abdc405"
+    },
+    "image-boundaries": {
+      "tests": 161,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "72196f13796559e0b2446f9372cd1fa2254e5f3539cfda575042cecea222ce2c"
+    },
+    "function-entries": {
+      "tests": 69,
+      "failures": 0,
+      "skipped": [
+        "COFFMinGWStyleTables.NativeI386ResultsMatchOriginalInstructions"
+      ],
+      "sha256": "81c44337698393bd02b9734fab83ae24e450130c0668b7f91b31a0c0f1ba4294"
+    },
+    "publication-signature-final": {
+      "tests": 240,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "117cf77054605a062ecb8d5b1d134942da84914226b8dcc23173a9b01afe7bd5"
+    },
+    "signature-policy-green": {
+      "tests": 30,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "e542e5090f634b88ee1cf9e5dc56b1b01db112130669dc2a34d4f44f36e50597"
+    },
+    "signer-green": {
+      "tests": 7,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "f2fe1b66cfa1c8211f0a87b6e59d9d76cc28f35c60814ef0bccfb1818307745d"
+    },
+    "forward-extent-green": {
+      "tests": 5,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "b06f3e6f697620a073302a89ebfefa8c1975e7b61a885ba86b5fe1d5d5cd5b38"
+    },
+    "publication-extent-final": {
+      "tests": 240,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "30156c50c24ac205da41898e31189a20c791f4861917d52f4d0c49cf39910c03"
+    },
+    "forward-extent-header": {
+      "tests": 5,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "273a0cd8ecde650cff9db0a753ebc3bc574fef5090bd912a53add27bca9f42d3"
+    },
+    "integration-publication": {
+      "tests": 240,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "6ce39281f0e9815358e99928012687fb592cb61d33e8bf0f82e8b2ec5d5366e8"
+    },
+    "integration-call-arguments": {
+      "tests": 8,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "55d6bd5bf78c80dadf3e3ed31987b89e708ba1db7b1720768ba3be1e13a41404"
+    },
+    "integration-indirect-calls": {
+      "tests": 4,
+      "failures": 0,
+      "skipped": [],
+      "sha256": "66541a9e1d330179dccb1362466ec3bdf3c1c6c0b1aef9aaabf02314f403a721"
+    }
+  },
+  "superseded_failed_replay": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44065131163",
+    "ci_revision": "7526b93882809d0ea4c6dc169e88df51929fff83",
+    "source_revision": "6f172bf55fdad35bd88ad0ba1977a80fef07cb51",
+    "package": {
+      "source_revision": "6f172bf55fdad35bd88ad0ba1977a80fef07cb51",
+      "host_sha256": "ec01e10eb17b37ac1d7090143dcc2ab25f7c10520a4d6dfbe7a2c6e7aeb23589",
+      "profile": "Release, integrated NeverSight LLVM; r6 unchanged",
+      "forks": {
+        "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+        "capstone": "106380545da022533aa28bb9af6ba4df9f6e9970",
+        "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+      },
+      "archive_sha256": "65332523ea8f540c2ae36fe627b759f3d59f6c6ba937a62837e5658bc08f2d60",
+      "archive_bytes": 42473590,
+      "tag": "neverd-relift-ranges-6f172bf55fda",
+      "asset": "relift-ranges.tgz"
+    },
+    "release_id": 448463889,
+    "asset_ids": [
+      758600070
+    ],
+    "failure": "Nonzero reserved LC_CODE_SIGNATURE storage rejected outside SuperBlob.length after codesign strict verification",
+    "hosts": {
+      "xcode-27": {
+        "total": 240,
+        "passed": 239,
+        "failed": [
+          "AArch64LiftedImage.AppendedGlobalAndImportSurviveRepeatedAutomaticLifting"
+        ],
+        "files_sha256": {
+          "native-image/results.xml": "0815b5e4b750b2228a0053850604f14199cee0576dfd08f2cbac27afeff01706",
+          "native-image/runtime.log": "e411a14155b8bd1c0aeb00cece59b1697a11753c81ede58962c39849068549b1",
+          "x1/report.json": "c344e9d3052154ac41c90ea91c7ffffa7b4dca1502ac4d75f250750a6bb259c6"
+        }
+      },
+      "macos-26": {
+        "total": 240,
+        "passed": 239,
+        "failed": [
+          "AArch64LiftedImage.AppendedGlobalAndImportSurviveRepeatedAutomaticLifting"
+        ],
+        "files_sha256": {
+          "native-image/results.xml": "b6fc1e90b61a001cff20e956172e7414983520a610bfd94d711e40c2a862e0ce",
+          "native-image/runtime.log": "0827024fe9acd263291b667070993def031fbf25a4cf1ef3148967f348845f45",
+          "x1/report.json": "6c8e692ec0fc22917fdbda38c21f95426768b9b7d49df7233a34f93a7e65b106"
+        }
+      }
+    },
+    "cleanup": {
+      "remote": {
+        "release": "HTTP 404",
+        "asset": "HTTP 404",
+        "tag": "HTTP 404"
+      },
+      "removed_local_package_bytes": 42473590,
+      "failure_logs_retained": true,
+      "unused_native_objects": [
+        {
+          "path": "failed-ci/cursor-xcode-27/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "failed-ci/cursor-xcode-27/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263"
+        },
+        {
+          "path": "failed-ci/cursor-macos-26/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "failed-ci/cursor-macos-26/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3"
+        }
+      ]
+    },
+    "full_record_sha256": "38d8b32e46fb9e0dd752f8d0122b3c732e7ab0a9f2e268b1af2a72894f2aa617"
+  },
+  "signature_fix_replay": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44068305059",
+    "ci_revision": "6227be84ed85f3f9c6ad151067d87ab9fb2df2c9",
+    "source_revision": "8d3853260f69909f422f9d9c5799e913a4d8406a",
+    "package": {
+      "source_revision": "8d3853260f69909f422f9d9c5799e913a4d8406a",
+      "host_sha256": "17729d33499974e54796295ca0bfb2a9b95409c7b9e3ccb1ef0ec603e19ebfc5",
+      "profile": "Release, integrated NeverSight LLVM; r6 unchanged",
+      "forks": {
+        "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+        "capstone": "106380545da022533aa28bb9af6ba4df9f6e9970",
+        "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+      },
+      "archive_sha256": "e43d5ae3a53b0751c7316b94c067168034235884a1dbb8b733f6dd37466e6d41",
+      "archive_bytes": 42373099,
+      "tag": "neverd-relift-ranges-8d3853260f69",
+      "asset": "relift-ranges.tgz"
+    },
+    "hosts": {
+      "macos-26": {
+        "passed": 240,
+        "failed": 0,
+        "skipped": 0,
+        "cases": {
+          "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "90a86720148eeecf8031849a76eb5e302dbe9e4bca5e4c236d492449bcabe290",
+            "published_sha256": "a18951226b8248058d6e2d1b42d90f3594b4f211bec9ac54d0c32d594a5fcb51",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_334": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_400C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "b551ebda91fe7746b90b1053b7d3419bdf48cba352b2810d5c1048ffc48e3434",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_334": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_400C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "3d7508cfeb726ee5fbcb109041f63680aee3aa58786071efae4e4963e02a13d5",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+            "original_sha256": "96e8ba5384312be860e46c2bb8962a8c9170f0ee25a45f9790b6e53164dfe048",
+            "published_sha256": "81564a720dd571c54698fe85265a8da2b6d929da67fb930ab3c28e45cecd4189",
+            "caller_authenticated_call_sites": "6",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_344": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_401C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "ef04a0429f7fe1a630b3bfda051b164a124bbd47a301e296f5eea8f77cfcf33a",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_344": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_401C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8024": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "6b09d9829f8615bf484df9a59905a63e0e12aaeaad40dc1375dc1c207e1e3761",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "dcb51a72a60071a59122ab8c25a2f48634c2406a2ae344031b72a51f6f8f35c4",
+            "published_sha256": "d498e7b95bbc59d52ff65d94e055150a00a2f533402471900bfc1ddf783988c2",
+            "caller_authenticated_call_sites": "2",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_330": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4008": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "74eb44276069b3f7626a2837a37b0f69803b35e62e2690f198075afdf562c7e9",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_330": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4008": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8010": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "59cbbfe70fdefe4c3d9d81018d45844a8b5126c21ea819198598e1c4135a075a",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "36c32ba0f26ee6fb24da5359fb7c1ce4a8955d7e5de06524552066443115616f",
+            "published_sha256": "ec78892cf8711f26aaedf3a740f29db92605199aa862aa7be08726f443c1a38b",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_378": "accepted",
+            "relift_stage_0_388": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4010": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "a2e6e176dabb3ea167f5c6d1577c6818133f92bd50900d0919d948e1e5e7bd3f",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_378": "accepted",
+            "relift_stage_1_388": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4010": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8018": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "b36a729028f6cf08eb5a57065738cee6e0dd05a420b94ff5963cbdcb98a2a44b",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "2d5f346ab28155bee4358774da95df22079d7271224a4e0d6cea10a5eecfda5f",
+            "published_sha256": "509c73b46d1ccd1622e6b1a71c7d1624cee349b33bfa1a1075150d5c140713d7",
+            "caller_authenticated_call_sites": "9",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_4A8": "accepted",
+            "relift_stage_0_4B4": "accepted",
+            "relift_stage_0_4B8": "skipped-import-stub",
+            "relift_stage_0_C000": "accepted",
+            "relift_stage_0_C00C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "c9bb9babf724677aab5546ff82756f95c1a15ced59e85e8ba02452698e145974",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_4A8": "accepted",
+            "relift_stage_1_4B4": "accepted",
+            "relift_stage_1_4B8": "skipped-import-stub",
+            "relift_stage_1_C000": "accepted",
+            "relift_stage_1_C00C": "accepted",
+            "relift_stage_1_10000": "accepted",
+            "relift_stage_1_10004": "accepted",
+            "relift_stage_1_10008": "accepted",
+            "relift_stage_1_10014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "0f3a478b48c87c5eb530592d967d610c1d07b7bb21da9feb5482e56375999403",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          }
+        },
+        "hardware": {
+          "exit": 0,
+          "text": "Apple M1 (Virtual)"
+        },
+        "files_sha256": {
+          "native-image/qualification.json": "9286ecc834abd97d8aa8cc308c77d3cc6eb6d6ee9b6463b5764f9c4b66ac5524",
+          "native-image/results.xml": "308cc342ebf712151de7423cfc96a9693e19cb26b2280704e3e0587d0111d0e1",
+          "native-image/runtime.log": "9b5c45ddefc40f91684fb680d8644f6cd1356e733a7a84ec9726a0fb15c28924",
+          "x1/report.json": "08b79868a4914d913131ad54217a3b8e47e7b795d5abac73952fcd3d8492ec7a"
+        }
+      },
+      "xcode-27": {
+        "passed": 240,
+        "failed": 0,
+        "skipped": 0,
+        "cases": {
+          "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "c0dc27ad703b786ee557a5efc0ea1e46b739fb0c60cb7f4fb348b49e71860456",
+            "published_sha256": "20efc45af199b12ee23e0d60d506f7900844dd6549c34c635b6f42139136dfde",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_334": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_400C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "5ad08908a4f9780e5063d6c59b9023b085281e5861869a9306081673d7b97d40",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_334": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_400C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "b78acf1b818b5d8ee8dbb5cee609537d9ad9ed42137cb6f13e14540d7a54e606",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+            "original_sha256": "6f22a3ca2eb446cb91baa01361929468f7261da49ab34d3a9474b435ee5df0ea",
+            "published_sha256": "34f11e8b3be5a99f783dbb2613be613426db9ecd5100d1d736b6e76c5dc9bf99",
+            "caller_authenticated_call_sites": "6",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_344": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_401C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "a4c702e6c56e92dabdf6471fe85d3cf59b995fab7eec114bad030060bca81307",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_344": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_401C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8024": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "d92cc141cb27650c33fcd27f9b094719d45c7106e3a3c633ea83eec68e0dbd34",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "68f241008528dccc7eb1cb8ee3f5d5c823fa815241ef27366efa5b5e7ae85d5b",
+            "published_sha256": "e4c004cb4c6fdb4b1e409c6b89b87e4d01e9e2958644a567727f54eb61e91ae6",
+            "caller_authenticated_call_sites": "2",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_330": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4008": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "294b8c86130c054958a0f454c8cd2c9040def8da4d4467af7ef012ebf2da89a3",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_330": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4008": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8010": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "468ca062c5095a8fe8707403a301740118f8eb0a9fa92765df6c4b70f1ec70f9",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "6d2959d7bdb348a40fd5975a7d3b7778528a66366cf7070954feb2700c93fea0",
+            "published_sha256": "b4014637f7a0a18f538a04f67ed9bc555092c76891fa6e1213bc053dad902434",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_378": "accepted",
+            "relift_stage_0_388": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4010": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "02c40a597a0670ce603c9c1796e0733819f08a409ba43130dcf2a0a2ab2311ef",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_378": "accepted",
+            "relift_stage_1_388": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4010": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8018": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "e838b9fcd4eb0de4cff7885d999e7514124ce80198ce2101b2eef61e3fd8732b",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "7682fbaaeb707f47bdf7adb29b27474456d6b4140cff8af4eefa9d6f6fe3efb5",
+            "published_sha256": "5d8ea23863708a722b993ddfb32b6aab131e94041988e032a7669ba12e9c8570",
+            "caller_authenticated_call_sites": "9",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_4A8": "accepted",
+            "relift_stage_0_4B4": "accepted",
+            "relift_stage_0_4B8": "skipped-import-stub",
+            "relift_stage_0_C000": "accepted",
+            "relift_stage_0_C00C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "887d6e36c2abdbb9eb452c926cfb2fce7812e40686bb6e571a9c559105027736",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_4A8": "accepted",
+            "relift_stage_1_4B4": "accepted",
+            "relift_stage_1_4B8": "skipped-import-stub",
+            "relift_stage_1_C000": "accepted",
+            "relift_stage_1_C00C": "accepted",
+            "relift_stage_1_10000": "accepted",
+            "relift_stage_1_10004": "accepted",
+            "relift_stage_1_10008": "accepted",
+            "relift_stage_1_10014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "a1d573cc778fe7e3c9b889a25191e6bc70734ecc656f6c2888ea5557f58891e6",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          }
+        },
+        "hardware": {
+          "exit": 0,
+          "text": "Apple M1 (Virtual)"
+        },
+        "files_sha256": {
+          "native-image/qualification.json": "f45795806759770ef33260d2ebe7f87183aad29d9d6b9ab5f4dd376451852e9c",
+          "native-image/results.xml": "0620ed64f894ba33f9e0e9fbe95ed7ff8ed91bb42dafe0775c098fcd0bbe6c3a",
+          "native-image/runtime.log": "a88db992797140ce8fe5b15b25a4a713520e59861de4e42907164283b5e88e1a",
+          "x1/report.json": "88339cd82a5d5f03a418d3be8068e9471695ec4d521641a0011def561341e614"
+        }
+      }
+    },
+    "cleanup": {
+      "remote": {
+        "release": "HTTP 404",
+        "asset": "HTTP 404",
+        "tag": "HTTP 404"
+      },
+      "removed_local_package_bytes": 42373099,
+      "unused_native_objects": [
+        {
+          "path": "signature-artifacts/cursor-macos-26/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "signature-artifacts/cursor-macos-26/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3"
+        },
+        {
+          "path": "signature-artifacts/cursor-xcode-27/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "signature-artifacts/cursor-xcode-27/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263"
+        }
+      ]
+    },
+    "full_record_sha256": "70b9e75a6dbc22212620f765e95d40bad2dd14e29aa9b12ab36e2b0087e51903"
+  },
+  "extent_fix_replay": {
+    "neverd_revision": "aba5b3d4a210f20355c500ff00b008a294b57044",
+    "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44070678848",
+    "ci_revision": "1368c01a10df24a62c1b236a05e02b5d4e7e88bc",
+    "package": {
+      "source_revision": "aba5b3d4a210f20355c500ff00b008a294b57044",
+      "host_sha256": "e241d2c0e4f6a280d45bf89e652dc18cbaf932d73ef2e9b3c2bf9a4d8177763d",
+      "profile": "Release, integrated NeverSight LLVM; r6 unchanged",
+      "forks": {
+        "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+        "capstone": "106380545da022533aa28bb9af6ba4df9f6e9970",
+        "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+      },
+      "archive_sha256": "c4bc42f0cb72706cacbf852de79ef3211b56497d7dc7d23b061256e3f53a02e2",
+      "archive_bytes": 42374239,
+      "tag": "neverd-relift-ranges-aba5b3d4a210",
+      "asset": "relift-ranges.tgz"
+    },
+    "hosts": {
+      "macos-26": {
+        "hardware": {
+          "exit": 0,
+          "text": "Apple M1 (Virtual)"
+        },
+        "os": {
+          "exit": 0,
+          "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+        },
+        "compiler": {
+          "exit": 0,
+          "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+        },
+        "tests_passed": 240,
+        "tests_failed": 0,
+        "tests_skipped": 0,
+        "cases": {
+          "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "eed50066da7749a743be617a453ce70e8058aae36e728eb7f28d7ca2b18ff688",
+            "published_sha256": "4f785807ce2199da5f7926b617910ea38fe1f6dbb8bb4a7d93d230024dc01fa9",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_334": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_400C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "fec32d0e7c6d28b6bef660c6894ddbbe92fae0c6077a3d0d9b2fb1a6c950d32f",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_334": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_400C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "c831e8e8908419ec0d4c80ea51e3caf53e4997c8744c70436118f9c107600cd2",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+            "original_sha256": "f7a714f58426742acacd146cdf9b138d073283c13dc49f6b38b3fffab3e50788",
+            "published_sha256": "2bf2dd8699deea09a8e79235e10ecb92abc73bbd8cdf2bfb8ac8e18ca822f6d6",
+            "caller_authenticated_call_sites": "6",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_344": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_401C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "c6fd059bcff2103d62aa6d384f8b70b2e25c0fab6d3f5d88ee5399a46b64f99e",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_344": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_401C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8024": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "88b03e288fa26441ade0534638050e7e0db9532ea97da097ec1fb29c10c0747e",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "549259032d22cea7acabb1a057b1c3198abd1881fa540cb6854fae1e19d4eead",
+            "published_sha256": "db0f7af24b744dd7454c36222b2afe776629cd87e03cd13743cc24c0f388c351",
+            "caller_authenticated_call_sites": "2",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_330": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4008": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "b5d6d1095f376b2652bd31b40471ac10bd4174c5754f83226acdc9ef6e207acd",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_330": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4008": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8010": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "4fb76ce313b5f02f1d161bd83bb0019c2113707686189648eb8f68afa97ef837",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "3ba5c5ea7d366be081cf4a78475fbae3ee232f910fdd5933436f74952417802e",
+            "published_sha256": "1e8f60b6900f672e85f3b9c7613eabc1c43ba7705d7895eb4fa5dff7aab0f46e",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_378": "accepted",
+            "relift_stage_0_388": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4010": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "a6f6c05d96bfb58c31169281c6e661b31e9e078a6d28c0c857d8fb77f3dd625d",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_378": "accepted",
+            "relift_stage_1_388": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4010": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8018": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "1f0c2e6b824bb1236beced2a9e140f2dbd813be4e08375c69bc9a9c07e157b41",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "8ca896390121f1b23697cdf3400016f6158f623015f23677200e0a7761417e7b",
+            "published_sha256": "74cd390b147af98208139ccacc1e367147f06327ec7b1cf996830d6e90d4668c",
+            "caller_authenticated_call_sites": "9",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_4A8": "accepted",
+            "relift_stage_0_4B4": "accepted",
+            "relift_stage_0_4B8": "skipped-import-stub",
+            "relift_stage_0_C000": "accepted",
+            "relift_stage_0_C00C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "346ed3cddfb98c43a4b4aa1adf1d19e594111d9c4de72e85827db020d024ab36",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_4A8": "accepted",
+            "relift_stage_1_4B4": "accepted",
+            "relift_stage_1_4B8": "skipped-import-stub",
+            "relift_stage_1_C000": "accepted",
+            "relift_stage_1_C00C": "accepted",
+            "relift_stage_1_10000": "accepted",
+            "relift_stage_1_10004": "accepted",
+            "relift_stage_1_10008": "accepted",
+            "relift_stage_1_10014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "baff0e49f5bbb65f85041b8cd38064f106dce00bb06ea55da4d97ddbff1960f6",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          }
+        },
+        "new_case_native_images": 20,
+        "native_system_saved_frame_steps": 48,
+        "x1_environment": {
+          "source_revision": "aba5b3d4a210f20355c500ff00b008a294b57044",
+          "source_sha256": {
+            "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+            "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+            "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+            "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+            "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+          },
+          "status": "unavailable",
+          "native_arm64e_x1_environment_qualified": false,
+          "probes": {
+            "probe": {
+              "status": "passed",
+              "report": "probe/report.json",
+              "sha256": "48ecc2e1f8f0e3355b534cbe7e10acc9864874d7ae115e1bf4c01fa32ecfecd2"
+            },
+            "probe-cursor": {
+              "status": "passed",
+              "report": "probe-cursor/report.json",
+              "sha256": "63a177a4eecc33d6485ae67181413b29d67366a3ac279f4d1f83a9a4377b7ca0"
+            },
+            "probe-cpta": {
+              "status": "unavailable",
+              "report": "probe-cpta/report.json",
+              "sha256": "9096cd6e45e52ca6a3d830841fb81ef20cb57f78bc2b3060fafc99fc0c348189"
+            }
+          },
+          "missing": [
+            {
+              "probe": "probe-cursor",
+              "feature": "explicit_pauth_lr_qualified"
+            },
+            {
+              "probe": "probe-cursor",
+              "feature": "pacm_pc_qualified"
+            },
+            {
+              "probe": "probe-cpta",
+              "feature": "x1_el0_cpta_qualified"
+            },
+            {
+              "probe": "probe-cpta",
+              "feature": "x1_el0_checked_writeback_qualified"
+            }
+          ]
+        },
+        "native_capabilities": {
+          "probe": {
+            "native_pac_qualified": true,
+            "compiler_original_call_unwind_qualified": true,
+            "compiler_original_startup_qualified": false,
+            "native_apple_cpta_qualified": false,
+            "whole_image_publication_qualified": false
+          },
+          "probe-cursor": {
+            "native_cursor_qualified": true,
+            "explicit_pauth_lr_qualified": false,
+            "pacm_pc_qualified": false
+          },
+          "probe-cpta": {
+            "x1_el0_cpta_qualified": false,
+            "x1_el0_checked_writeback_qualified": false
+          }
+        },
+        "report_sha256": {
+          "native-image/qualification.json": "70290258c4be243188378df2e4fcb60b619e76e002da7b4d495c57c388ad3387",
+          "native-image/results.xml": "bf6168778ca5f98c9ba3ea94632073a16794ed322fd39a1f68cce07a52eddb16",
+          "x1/report.json": "36ddd8804f7e846bbd7fb7015604bda1c016aad310e539210b9fe77d83a3c211"
+        }
+      },
+      "xcode-27": {
+        "hardware": {
+          "exit": 0,
+          "text": "Apple M1 (Virtual)"
+        },
+        "os": {
+          "exit": 0,
+          "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+        },
+        "compiler": {
+          "exit": 0,
+          "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+        },
+        "tests_passed": 240,
+        "tests_failed": 0,
+        "tests_skipped": 0,
+        "cases": {
+          "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "fc343f396ae6c74c488f2ab54ee260e077b76ed87e449fea625b6649c22d30a1",
+            "published_sha256": "c40164c48a651bdd0ccc6ece7ad58d2fa9501b528e8f07c2b6d7e48f0de334a4",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_334": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_400C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "c88b5dfa5aad99cc7a9b449b8f444f272ff10f2a5df79649c7156fffc2a9afff",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_334": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_400C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "33fe78a37640501decc232b133938310b1c3f2e8dcf31ecafa5bb70f22039408",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+            "original_sha256": "e3be8ad84f4d9257f90e377579b023b9eeb163d38bca63a078eae842f4a92247",
+            "published_sha256": "c9d466be120e43ab778ac438ef44d8e0da015c3f717fd6fafc736494a9f97814",
+            "caller_authenticated_call_sites": "6",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_344": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_401C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "db198c3765217d17240c2947a5b79f3e5341dee9652b7b9d6b17a0b3130ba982",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_344": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_401C": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8024": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "c82f2ecbc6584918c9b626331d6201f7820b1c36ecafa839e2354fd44e9ff0a5",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "523ffe5e78d67065cb799cb1a1db72716266962b0b6bc9978be1bc63d29d30c4",
+            "published_sha256": "b309a7619a2d9afe68a8ff117e81e79f623e624e80621504361643fa92d0a037",
+            "caller_authenticated_call_sites": "2",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_328": "accepted",
+            "relift_stage_0_330": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4008": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "09aa967423ec1918897eb6f5c53d8333da5c11bdfc3ef480e7c6f1badbfd8b5b",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_328": "accepted",
+            "relift_stage_1_330": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4008": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8010": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "c58247a55fd7cb01a17719d4aba291cec012444024596162b779f6989ced720f",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "d52952d9f60b4a7f60ee4e2bb4571855ba19cda60b4630a5f9bb1680fef167d7",
+            "published_sha256": "d51c21ec3fc8cf259a510c6f561ed9deda77c2034fe35b3716950c3864ec6ab7",
+            "caller_authenticated_call_sites": "10",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_378": "accepted",
+            "relift_stage_0_388": "accepted",
+            "relift_stage_0_4000": "accepted",
+            "relift_stage_0_4010": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "6da7b24917daba6492f6cfdbbc2b5026e05f518104e47359a130c91e87ee0c8c",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_378": "accepted",
+            "relift_stage_1_388": "accepted",
+            "relift_stage_1_4000": "accepted",
+            "relift_stage_1_4010": "accepted",
+            "relift_stage_1_8000": "accepted",
+            "relift_stage_1_8004": "accepted",
+            "relift_stage_1_8008": "accepted",
+            "relift_stage_1_8018": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "08d4c19a7a950fe382617b9ca4bddf3cb07951b968df6df90ac6f83cec016aa7",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          },
+          "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+            "original_sha256": "ac714f78e1966c090a2369adc268867e0cb7107758ec9753f31e39378552aa0a",
+            "published_sha256": "1a585f1932e51d140fe4ed55be6de096c756cb3b3b5b5b4d29f1a1298af8d6fd",
+            "caller_authenticated_call_sites": "9",
+            "relift_function_starts_0": "0",
+            "relift_stage_0_4A8": "accepted",
+            "relift_stage_0_4B4": "accepted",
+            "relift_stage_0_4B8": "skipped-import-stub",
+            "relift_stage_0_C000": "accepted",
+            "relift_stage_0_C00C": "accepted",
+            "relift_defined_functions_0": "4",
+            "republished_sha256_0": "25845a0568c803923d236790e5634943391ad41205bcd7f7f1c1ebe07f973121",
+            "relift_function_starts_1": "0",
+            "relift_stage_1_4A8": "accepted",
+            "relift_stage_1_4B4": "accepted",
+            "relift_stage_1_4B8": "skipped-import-stub",
+            "relift_stage_1_C000": "accepted",
+            "relift_stage_1_C00C": "accepted",
+            "relift_stage_1_10000": "accepted",
+            "relift_stage_1_10004": "accepted",
+            "relift_stage_1_10008": "accepted",
+            "relift_stage_1_10014": "accepted",
+            "relift_defined_functions_1": "8",
+            "republished_sha256_1": "7c46539161d375ea4e074ee1179aad9634bd9784cf90e27549be6a0c7628dbb5",
+            "resigned_publication_generations": "3",
+            "executed_native_images": "4"
+          }
+        },
+        "new_case_native_images": 20,
+        "native_system_saved_frame_steps": 48,
+        "x1_environment": {
+          "source_revision": "aba5b3d4a210f20355c500ff00b008a294b57044",
+          "source_sha256": {
+            "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+            "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+            "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+            "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+            "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+          },
+          "status": "unavailable",
+          "native_arm64e_x1_environment_qualified": false,
+          "probes": {
+            "probe": {
+              "status": "passed",
+              "report": "probe/report.json",
+              "sha256": "3435ec4cdff6988f232f5c20d72bc64c9e8b2a1509b1e1c330ebbdb5e03ee44b"
+            },
+            "probe-cursor": {
+              "status": "passed",
+              "report": "probe-cursor/report.json",
+              "sha256": "741951fb3ab880a48e407fa7f3967fa540a206bc0637bb2dd262a7259f14b128"
+            },
+            "probe-cpta": {
+              "status": "unavailable",
+              "report": "probe-cpta/report.json",
+              "sha256": "391108b26c51bfbe6cbdd878112ef2331c40e89001df577e3bacf79350aa242e"
+            }
+          },
+          "missing": [
+            {
+              "probe": "probe-cursor",
+              "feature": "explicit_pauth_lr_qualified"
+            },
+            {
+              "probe": "probe-cursor",
+              "feature": "pacm_pc_qualified"
+            },
+            {
+              "probe": "probe-cpta",
+              "feature": "x1_el0_cpta_qualified"
+            },
+            {
+              "probe": "probe-cpta",
+              "feature": "x1_el0_checked_writeback_qualified"
+            }
+          ]
+        },
+        "native_capabilities": {
+          "probe": {
+            "native_pac_qualified": true,
+            "compiler_original_call_unwind_qualified": true,
+            "compiler_original_startup_qualified": false,
+            "native_apple_cpta_qualified": false,
+            "whole_image_publication_qualified": false
+          },
+          "probe-cursor": {
+            "native_cursor_qualified": true,
+            "explicit_pauth_lr_qualified": false,
+            "pacm_pc_qualified": false
+          },
+          "probe-cpta": {
+            "x1_el0_cpta_qualified": false,
+            "x1_el0_checked_writeback_qualified": false
+          }
+        },
+        "report_sha256": {
+          "native-image/qualification.json": "52bfcf9e69c357495305200c3e4a667683d548406285301aa1118ac5a05eaffb",
+          "native-image/results.xml": "9ad1e73c614ddad49ca1842d628f52db85ed39d801a2470005699e8341f72d43",
+          "x1/report.json": "fa5fb60b8d4801de66171e388b89e9848ff5ab1c83e710d332c5bef9250a21e1"
+        }
+      }
+    },
+    "jobs": [
+      {
+        "name": "native (xcode-27)",
+        "databaseId": 133995808630,
+        "conclusion": "success",
+        "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44070678848/job/133995808630"
+      },
+      {
+        "name": "windows-frontend",
+        "databaseId": 133995809148,
+        "conclusion": "success",
+        "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44070678848/job/133995809148"
+      },
+      {
+        "name": "native (macos-26)",
+        "databaseId": 133995809205,
+        "conclusion": "success",
+        "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44070678848/job/133995809205"
+      }
+    ],
+    "cleanup": {
+      "remote": {
+        "release": "HTTP 404",
+        "asset": "HTTP 404",
+        "tag": "HTTP 404"
+      },
+      "release_id": 448508687,
+      "asset_id": 758707587,
+      "tag": "neverd-relift-ranges-aba5b3d4a210",
+      "removed_local_package_bytes": 42374239,
+      "unused_native_objects": [
+        {
+          "path": "artifacts/cursor-macos-26/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "artifacts/cursor-macos-26/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3"
+        },
+        {
+          "path": "artifacts/cursor-xcode-27/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "artifacts/cursor-xcode-27/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263"
+        }
+      ],
+      "ci_retirement": {
+        "revision": "911769cd9e52f312f6c2d6d1e77ba82c09e85cf5",
+        "baseline": "1df849cf9c2a4eac433302bd8992be9f871f677d",
+        "tree_matches_baseline": true
+      }
+    }
+  },
+  "integrated_dev_revision": "371c66be9d562081a53425f2e568379cb4799905",
+  "build_receipts_sha256": {
+    "integration-neverd-build-receipt.json": "84548590ee23e4167eeae7a8bc64be2ecd65725bf40623dd763772a463f7b0b2",
+    "integration-neverd-dependency-inputs.json": "0a2047e110412d0ca2908fa8847878fc1e1b25d5238139c4ba78f8a6b2030dde"
+  },
+  "hosts": {
+    "macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "tests_passed": 240,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "cases": {
+        "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "0cf46396acffe74d588959c8feb2074f6d8ecbfda9aa7e1a84b98921b35dc916",
+          "published_sha256": "fe1ca9648d9cdbfdee007b49574355c46a737cad59f9c1ae824b5f5d75b8c2db",
+          "caller_authenticated_call_sites": "10",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_334": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_400C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "a3f5657890bbf6751c55d7096a961020de90e926b36a087ff927bfcd58972c50",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_334": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_400C": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8014": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "51841ed6ba26ca5a6a0f1133a3a8960f49ba0e3a7bf44fb1f187154d4c1fa087",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+          "original_sha256": "2521dee290e049f1dbd553cab3bd10e9d1acad052f1b1b0ee5c94afb67535f65",
+          "published_sha256": "6d224f985af055b95575a7299f5d1fb7fd4513b8c7843ffaa3f9088e77f5197c",
+          "caller_authenticated_call_sites": "6",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_344": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_401C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "e8bd0e57a5d75d44a921c10aea3509f195fefd35906029f28fa4eb9e0ad26ab4",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_344": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_401C": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8024": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "c50535c67d3621b83ee125d99912f69b529c104f22ea36abc44110327d81cabb",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "9db2cdafb9ed3aa96d98803970b8a138a40b96355cf6251c734e825310e9b2f8",
+          "published_sha256": "36bdb849f93ac5b943fbbaf52fb398e66db7ee27505f980c6f9f3f0d03f8cbb6",
+          "caller_authenticated_call_sites": "2",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_330": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_4008": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "02906fb86458d298c847235d5fbca8756a285573e8e9d24ff3930485eb6e7817",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_330": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_4008": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8010": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "dada8a407db4255ee83619f7d2838371fd8fe22a0bd7d59fcbd01d8e8f91e703",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "fb0cc74ea629853b78ca4cbf69cff32152fa3252ef5cccfff206465e2e929fe6",
+          "published_sha256": "dec55759b937582cf1ccf5619d86bf4ca8860303dc52974565a81788f73a619c",
+          "caller_authenticated_call_sites": "10",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_378": "accepted",
+          "relift_stage_0_388": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_4010": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "5239e10e201d348493d8d5aafc58b01d6d77183068712646215f595be8484d9e",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_378": "accepted",
+          "relift_stage_1_388": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_4010": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8018": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "2af86d7453b25431e8c30522e8ece1e682160ce9fad4f6e6448d57d95d6365dc",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "4b733680b6de469d99819be035ebb0925c2a01fffb9003fac0afc33ba1aa8f0c",
+          "published_sha256": "18e5d2486296ea5836f351dfa017da0098ac63e2ebb6e4270e08fda8c857d6e1",
+          "caller_authenticated_call_sites": "9",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_4A8": "accepted",
+          "relift_stage_0_4B4": "accepted",
+          "relift_stage_0_4B8": "skipped-import-stub",
+          "relift_stage_0_C000": "accepted",
+          "relift_stage_0_C00C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "cda907a0dc0ae349afe27dc84c6acd747cca35acd079bc8f6b1663b46af82038",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_4A8": "accepted",
+          "relift_stage_1_4B4": "accepted",
+          "relift_stage_1_4B8": "skipped-import-stub",
+          "relift_stage_1_C000": "accepted",
+          "relift_stage_1_C00C": "accepted",
+          "relift_stage_1_10000": "accepted",
+          "relift_stage_1_10004": "accepted",
+          "relift_stage_1_10008": "accepted",
+          "relift_stage_1_10014": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "0c0d85465234f4c047f9f3b2e5949644dad22d3e905c880413b6d9321bd0d045",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        }
+      },
+      "new_case_native_images": 20,
+      "native_system_saved_frame_steps": 48,
+      "x1_environment": {
+        "source_revision": "6ec2c81bc85b9c7015ba9de8566eddf1782880e6",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "0367bcfb4276b36c17ff7af85d2f86f7f4a0f35850abc55593e18bcc4a1bd520"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "40935845b24527681e908b73a2d3a2eb1843641479d2bc10b12dd4dc6fa054a4"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "db2b4f5c61305931974d20eba4e612922f9aba195530e6cee8ba4c4168dc56de"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_capabilities": {
+        "probe": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "native_apple_cpta_qualified": false,
+          "whole_image_publication_qualified": false
+        },
+        "probe-cursor": {
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false
+        },
+        "probe-cpta": {
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "2234ab843c716c771ab40354f65aef32d948c62ecda4c7dffb694268ba1c6b5b",
+        "native-image/results.xml": "ccf3335dd37ca4412340497e1691e9e90bef6fa4cce5c99d8cf3386a2c33a3f1",
+        "x1/report.json": "8ff31ed381c4f593c165d06dec663fbc2f182e1cdbea32f2ac4d411581712774"
+      }
+    },
+    "xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "tests_passed": 240,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "cases": {
+        "AppendedFunctionsSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "8688c066c29571275c736249935b045fa304eac3610af5d11c91777e762a2cd3",
+          "published_sha256": "d2a0a06ba05c7f0e107378c7fc5a513f3e044a556fb6849f7d035cc21fbe44fb",
+          "caller_authenticated_call_sites": "10",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_334": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_400C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "a4371357ccd3f841f59406d50c77654c67a9f38cdc6383e6cf9f3864366237cd",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_334": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_400C": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8014": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "9dc3617d9cdd3577802be49468697a9663117b41397392923927280b0341f6d1",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedMemorySurvivesRepeatedAutomaticLifting": {
+          "original_sha256": "84fe043b77c204e24d74d65a77bd8ebb96b24a6b6ea171573b26c3add0d64d72",
+          "published_sha256": "1ccca9482f80530b510457ad27f9fc7e95936c0e08b085b5ca5ba1f1d215e322",
+          "caller_authenticated_call_sites": "6",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_344": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_401C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "e665b4bdf196fd84e044629f37c578c8acb71261867ec2c770e56ce34523c060",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_344": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_401C": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8024": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "f11b9ecbbcc91c7138ceee7f164583096920f006e792f620a81214503b7e29a0",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedSIMDRegistersSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "7eb39de66d1fdcc5bbd8104c1b56dedb4e4729d1e131d271c951346bc4191e46",
+          "published_sha256": "dbc3fd8e9c33ed99d4ee0049f708f1980f2e2772c97c5337b71146404cce11a2",
+          "caller_authenticated_call_sites": "2",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_328": "accepted",
+          "relift_stage_0_330": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_4008": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "8d564f54e81a370809b85841ec07d1eceb089931cc628596357bb5756b1edf94",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_328": "accepted",
+          "relift_stage_1_330": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_4008": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8010": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "0bee9daa3aa8441235d0d8e3532c92a6073eb15d2d517e3250bde6c980250039",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedIndexedFramesSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "879b69d8bdf4a6154fff91dce636bc12914666a4e9f8414bb7d076f886348747",
+          "published_sha256": "56fd3b338173a3af0501e391f2f9b7020eee4b06865b9595a351334630a9dcd1",
+          "caller_authenticated_call_sites": "10",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_378": "accepted",
+          "relift_stage_0_388": "accepted",
+          "relift_stage_0_4000": "accepted",
+          "relift_stage_0_4010": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "987e28ce3864315e693d77556be2e8e98bc1e39fef7d6df21fe19c4624b8a896",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_378": "accepted",
+          "relift_stage_1_388": "accepted",
+          "relift_stage_1_4000": "accepted",
+          "relift_stage_1_4010": "accepted",
+          "relift_stage_1_8000": "accepted",
+          "relift_stage_1_8004": "accepted",
+          "relift_stage_1_8008": "accepted",
+          "relift_stage_1_8018": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "c187841150fdafb550090fd3dfd23a36d33a24880f4f3cfaaf39607680dc3da0",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AppendedGlobalAndImportSurviveRepeatedAutomaticLifting": {
+          "original_sha256": "f8c2b0a789c64ddc8e96ea71c37620d381af3071e1677fa78a85a24b41939d33",
+          "published_sha256": "c2dc99563e3ea3cdd74964b7db7d2fbec0eeca6a6493239654273241033d397a",
+          "caller_authenticated_call_sites": "9",
+          "relift_function_starts_0": "0",
+          "relift_stage_0_4A8": "accepted",
+          "relift_stage_0_4B4": "accepted",
+          "relift_stage_0_4B8": "skipped-import-stub",
+          "relift_stage_0_C000": "accepted",
+          "relift_stage_0_C00C": "accepted",
+          "relift_defined_functions_0": "4",
+          "republished_sha256_0": "faa21dd2be8a6b02180e5e6030e0a272ea2ce3a8035618ae2331dfa7d331603a",
+          "relift_function_starts_1": "0",
+          "relift_stage_1_4A8": "accepted",
+          "relift_stage_1_4B4": "accepted",
+          "relift_stage_1_4B8": "skipped-import-stub",
+          "relift_stage_1_C000": "accepted",
+          "relift_stage_1_C00C": "accepted",
+          "relift_stage_1_10000": "accepted",
+          "relift_stage_1_10004": "accepted",
+          "relift_stage_1_10008": "accepted",
+          "relift_stage_1_10014": "accepted",
+          "relift_defined_functions_1": "8",
+          "republished_sha256_1": "3d68d70caded8f090238caea34b8242adbd5504f090c5b77d61711af0f84c34d",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        }
+      },
+      "new_case_native_images": 20,
+      "native_system_saved_frame_steps": 48,
+      "x1_environment": {
+        "source_revision": "6ec2c81bc85b9c7015ba9de8566eddf1782880e6",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "a91e1ba05739ca9a316e68ee3b66af97ef0e37bc8c24328ee32b8b12f0ef4032"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "b3caf41002f5a9cf01fb100e62ae681504940e3817328b71b03878baf7192128"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "40d55433c8ffbd541d5390eb35b9777e78abfda8a272a7bb46e7973d58e1d3f1"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_capabilities": {
+        "probe": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "native_apple_cpta_qualified": false,
+          "whole_image_publication_qualified": false
+        },
+        "probe-cursor": {
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false
+        },
+        "probe-cpta": {
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "2eb699d3e1c132efe9f39737ede57b477973bdcc2d66a76348ee5f442c3f5ea2",
+        "native-image/results.xml": "5ac0563abb79a5e034ef644657f1a4eaf78988bb0d04d2ce842b0a26c3238d91",
+        "x1/report.json": "3a916441d5f2594d12ed9b958c5549d2c756765b313b6eaf0a76127583950848"
+      }
+    }
+  },
+  "jobs": [
+    {
+      "name": "windows-frontend",
+      "databaseId": 134007280325,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861/job/134007280325"
+    },
+    {
+      "name": "native (macos-26)",
+      "databaseId": 134007280876,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861/job/134007280876"
+    },
+    {
+      "name": "native (xcode-27)",
+      "databaseId": 134007280922,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861/job/134007280922"
+    }
+  ],
+  "unqualified_scope": [
+    "arbitrary additional instruction sections and unsupported source operations",
+    "complete asynchronous language-exception coverage",
+    "asynchronous unwinding at redirected original entry instructions is not asserted by this replay",
+    "native PAuth_LR, PACM-PC and CPTA-on when runner qualification is unavailable"
+  ],
+  "cleanup": {
+    "unused_test_outputs": [
+      {
+        "path": "build-arm64e-source/bin/NeverDImageAnalysisBoundaryTests",
+        "bytes": 44203040,
+        "sha256": "22fbabf729cd5c45de63edefaefc2dfef131f665624e769eb51c18506341e5bd"
+      },
+      {
+        "path": "build-arm64e-source/unittests/lift/CMakeFiles/NeverDImageAnalysisBoundaryTests.dir",
+        "bytes": 1694664,
+        "kind": "reproducible test objects"
+      },
+      {
+        "path": "build-arm64e-source/bin/NeverDRelocatedFunctionEntryTests",
+        "bytes": 88061856,
+        "sha256": "dfd34e9fe62e663ed6d4e17433ea60db920edb3831e38e59c27018183942c35b"
+      },
+      {
+        "path": "build-arm64e-source/unittests/lift/CMakeFiles/NeverDRelocatedFunctionEntryTests.dir",
+        "bytes": 1570752,
+        "kind": "reproducible test objects"
+      }
+    ],
+    "signature_test_outputs": {
+      "files": [
+        {
+          "path": "bin/NeverDMachOSignaturePolicyTests",
+          "bytes": 10586848,
+          "sha256": "8f6ed04ef9d525aa42da450b6ae0a24859e9ff31df9f0c7cccae8734ed7a9231"
+        },
+        {
+          "path": "unittests/lift/CMakeFiles/NeverDMachOSignaturePolicyTests.dir/format/MachOSignaturePolicyTests.cpp.o",
+          "bytes": 308008,
+          "sha256": "4edb02b25ebfae4b6eb79f70224082980053f8866f48c7d365ec5a297aa27552"
+        },
+        {
+          "path": "bin/NeverDMachOSignerTests",
+          "bytes": 10466872,
+          "sha256": "dba89512fc73e8d21e0fa9c3677aa3353dd06c2841e67626078e94db8c8472e3"
+        },
+        {
+          "path": "unittests/lift/CMakeFiles/NeverDMachOSignerTests.dir/format/MachOSignerTests.cpp.o",
+          "bytes": 128816,
+          "sha256": "43d0f0c582d15f41ae0e4474ecad8d30c5a219583bf536c49f846c7d5433e17a"
+        }
+      ],
+      "removed_bytes": 21490544,
+      "preserved": "test XML, logs, source build libraries and active publication host"
+    },
+    "integration_test_outputs": {
+      "files": [
+        {
+          "path": "bin/NeverDCallArgumentRecoveryTests",
+          "bytes": 41971952,
+          "sha256": "a3a68328b60ed4e79013acf19dd666591149b61dda15ea8c08e18c4458f792cf"
+        },
+        {
+          "path": "unittests/lift/CMakeFiles/NeverDCallArgumentRecoveryTests.dir/core/CallArgumentRecoveryTests.cpp.o",
+          "bytes": 160800,
+          "sha256": "da3d39971d2ae34e109bd5f4a80bbfe3ca9e766dcbf93395bd70f7bcbec50145"
+        },
+        {
+          "path": "bin/NeverDIndirectCallValueSourceTests",
+          "bytes": 91740752,
+          "sha256": "e3ad56d8561035ad7f799eae2214d986cdd7166216dae0e7439942a6ca71733f"
+        },
+        {
+          "path": "unittests/lift/CMakeFiles/NeverDIndirectCallValueSourceTests.dir/core/IndirectCallValueSourceTests.cpp.o",
+          "bytes": 164280,
+          "sha256": "662ef20bd3e4ff45907a75ec2c97cb6049dbe1379a7a1d43dcc5a3de854225dd"
+        }
+      ],
+      "removed_bytes": 134037784,
+      "preserved": "source libraries, active publication host, test XML and logs"
+    },
+    "final_replay": {
+      "remote": {
+        "release": "HTTP 404",
+        "asset": "HTTP 404",
+        "tag": "HTTP 404"
+      },
+      "release_id": 448531766,
+      "asset_id": 758772382,
+      "tag": "neverd-relift-ranges-6ec2c81bc85b",
+      "removed_local_package_bytes": 42378516,
+      "unused_native_objects": [
+        {
+          "path": "artifacts/cursor-macos-26/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "artifacts/cursor-macos-26/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3"
+        },
+        {
+          "path": "artifacts/cursor-xcode-27/compact-input/compact.o",
+          "bytes": 712,
+          "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+        },
+        {
+          "path": "artifacts/cursor-xcode-27/compact-input/compact.dylib",
+          "bytes": 16816,
+          "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263"
+        }
+      ],
+      "ci_retirement": {
+        "revision": "007ffb5be5ebc49e6bb969f003e3eaeaca1efa27",
+        "baseline": "1df849cf9c2a4eac433302bd8992be9f871f677d",
+        "tree_matches_baseline": true
+      }
+    },
+    "diagnostics_archive": {
+      "archive": "arm64e-automatic-relifting-20261117-evidence.tar.gz",
+      "sha256": "383486b7f7a92a0c1d76b21386f6c5715bff7f775a177229c0db3dbdcdf85bbf",
+      "archive_bytes": 1049711,
+      "files": 906,
+      "original_bytes": 9135116,
+      "decompressed_hashes_verified": true,
+      "recovery_index": "arm64e-automatic-relifting-20261117-recovery-index.json",
+      "recovery_index_sha256": "406c7b30d93e99c8e2d2cd89e518034a7ffbda4b1cc653f44694267752e50f00"
+    }
+  }
+}

@@ -2143,11 +2143,11 @@ signature with a nonempty designated requirement; publication must refuse it
 without writing the destination or changing the input.
 
 This sequence qualifies one automatic lifted publication followed by native
-object publication. Automatically relifting the appended executable regions
-is still unsupported: the leaf installer requires one original instruction
-section, and a diagnostic relift exposes a compact-unwind gap promoted to a
-function plus an omitted first appended definition. Those failure diagnostics
-are retained separately; they are not successful arbitrary-image coverage.
+object publication. At that revision, automatically relifting the appended executable regions
+was unsupported: the installer required one original instruction section, and
+a diagnostic relift exposed a compact-unwind gap promoted to a function plus an
+omitted first appended definition. Those failure diagnostics are retained
+separately; they were not successful arbitrary-image coverage.
 
 At `1f1bd9eec18406c0567efab3fa743de986ff08d0`, the local Release suites pass
 235 publication, 28 signature-policy, 7 signer and 42 sanitizer C API tests,
@@ -2162,3 +2162,84 @@ records the exact package, report and per-generation image hashes. The temporary
 release, asset, tag and replay files were retired after verification, and unused
 local packages and compiled probe copies were removed. The active source build
 and archived diagnostics remain available; r6 and all fork pins are unchanged.
+
+### Automatic relifting of installed code
+
+The Mach-O reader retains encoding-zero compact lookup intervals in its raw
+unwind view without turning them into primary functions or code ranges. An
+independent FDE retains its own exact extent. Symbols and other format entry
+evidence remain independent of an empty lookup recipe. This matches the
+[upstream unwinder's encoding-zero handling](https://github.com/llvm/llvm-project/blob/main/libunwind/src/UnwindCursor.hpp).
+
+Function detection excludes the linked Mach header, rather than every segment
+base. An authenticated function at the start of an appended RX segment is
+therefore available to the ordinary patch pipeline. The register producer and
+final-byte publisher share one source-extent query: original instruction
+sections bound their code; sectionless installed functions require a complete
+file-backed span bounded by their compact range and the next mapped entry.
+Data sections cannot be consumed as part of such a span.
+
+An entry-level unconditional branch to another authenticated function is a
+four-byte forwarding body. Its relocated branch must preserve the exact
+installed callee, with no register, SP or LR changes, and its generated unwind
+record must describe a zero-stack frameless body. Unreachable instructions
+following an old entry trampoline are not emitted as its new body. The native
+register producer and final-machine verifier both check this contract.
+Sectionless forwarding bodies share the data-overlap check with ordinary
+bodies: an adjacent data range is outside the four-byte branch, while a range
+covering even its last byte refuses the source extent. The repeated-publication
+fixtures exercise both boundaries on installed forwarding entries.
+
+The tight-layout publisher may reclaim `LC_FUNCTION_STARTS` command space.
+Republishing uses the independently authenticated symbol/unwind inventory and
+checks that every original callable entry has a definition; it does not require
+a function-start command which the previous publication legitimately removed.
+The signed-leaf, vector-memory, SIMD-register, indexed-frame and global/import
+fixtures each exercise three automatic publication generations. They check the
+complete 4-entry and 8-entry relift inventories, reject redirected forwarding
+operands and missing definitions, verify each signature and preserve every prior input.
+Native-enabled runs execute the original and all three outputs through an
+independent authenticated caller.
+
+The first native replay exposed a signature boundary error on both macOS
+hosts: codesign's strictly verified global/import input had nonzero reserved
+bytes after its SuperBlob. `LC_CODE_SIGNATURE.datasize` bounds the reservation;
+the embedded length bounds signature contents, as in Apple's
+[Mach-O signature reader](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/machorep.cpp)
+and [blob reader](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_utilities/lib/blob.cpp).
+The shared policy now ignores unused reserved bytes without admitting indexed
+slots outside the embedded length. Internal gaps, unknown metadata and strong
+signing policy retain their existing checks. Synthetic linker/codesign profiles
+and out-of-range slot controls pin this distinction independently of the native
+fixture.
+
+This extends repeated publication within the verified native instruction and
+frame contracts. Arbitrary additional instruction sections, unsupported source
+operations, data-in-code and unrepresented entries still require explicit
+support. Interruptions at redirected original entry instructions are not
+exercised. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
+
+Local Release validation passes all 240 publication cases, 30 signature-policy
+cases, 7 signer cases, 323 language-EH cases, 161 image-boundary cases and 68
+relocated-entry cases. Two unrelated checks remain unavailable locally: the
+optional real-binary unwind sample and
+the native i386 reference. Formatting, whitespace and documentation checks
+pass. No LLVM fork changes or prebuilt revision changes are needed.
+
+After integrating dev `371c66be9d562081a53425f2e568379cb4799905`, Release
+validation also passes all 8 call-argument and 4 indirect-call source cases,
+and repeats all 240 publication cases. At
+`6ec2c81bc85b9c7015ba9de8566eddf1782880e6`, the
+[integrated native replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44074026861)
+passes 240 cases on each of macos-26 and xcode-27, with zero failures or GoogleTest
+skips, plus the Windows frontend checks. Each Mac executes 20 images across the
+five new scenarios and records 48 saved-LR public system-unwinder steps in the
+retained frame suite. Both report Apple M1 (Virtual). The strict x1 gate remains
+`unavailable`: baseline PAC, compiler call/unwind and cursor checks pass, but
+explicit PAuth_LR, PACM-PC, scalar CPTA and checked writeback do not qualify.
+The [source-bound record](evidence/arm64e-automatic-relifting-2026-11-17.json)
+binds the source, build receipts, test package, report and per-generation image
+hashes, including the preceding signature failure and its successful replay.
+Temporary releases, assets, tags and replay files were retired. Unused test
+executables, object files and packages were removed; diagnostic logs remain in
+a compressed archive with verified decompressed hashes and a recovery index.

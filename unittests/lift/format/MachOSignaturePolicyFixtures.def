@@ -1,0 +1,17 @@
+//===- MachOSignaturePolicyFixtures.def - Storage fixtures --------------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+///
+/// \file
+/// Inputs distinguishing reserved LC_CODE_SIGNATURE storage from SuperBlob
+/// contents. Include once inside the signature policy test namespace.
+///
+//===----------------------------------------------------------------------===//
+
+constexpr char kStorageIdentifier[] = "com.example.reserved-storage";
+constexpr uint8_t kReservedSignatureBytes[] = {0x5a, 0x00, 0xa5, 0xff,
+                                               0x13, 0x37, 0x00, 0x42};
+constexpr char kReservedIndexError[] = "SuperBlob index range";
+constexpr char kReservedLengthError[] = "signature slot length";
