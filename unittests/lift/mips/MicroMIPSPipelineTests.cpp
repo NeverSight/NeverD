@@ -272,8 +272,13 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       Emit.Image = &Image;
       std::string Text;
       llvm::raw_string_ostream Output(Text);
-      if (Provenance == P::CodeAddress ||
-          (Provenance == P::Address && Value == 0x1101)) {
+      if (Provenance == P::CodeAddress && Value == 0x1100) {
+        // An exact callable occurrence must already carry the compressed
+        // mode bit. Its untagged code-byte address is not interchangeable.
+        EXPECT_THROW(HighCEmitter().emit({Function}, Output, Emit),
+                     std::invalid_argument);
+      } else if (Provenance == P::CodeAddress ||
+                 (Provenance == P::Address && Value == 0x1101)) {
         ASSERT_TRUE(HighCEmitter().emit({Function}, Output, Emit));
         EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
         EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
@@ -313,10 +318,25 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     MedOp Return;
     Return.Opcode = NdOp::RETURN;
     Block.Ops.push_back(Return);
+    // A symbol in executable bytes alone supplies no reconstructed LLVM
+    // function identity. Supply the lifted target that the numeric value
+    // actually names, as the production selection does.
+    MedFunc TargetFunction = Function;
+    TargetFunction.Entry = 0x1100;
+    TargetFunction.Name = "micro_target";
+    TargetFunction.Blocks.front().StartAddr = 0x1100;
+    TargetFunction.Blocks.front().Ops.front().Inputs[0] =
+        MedVar::makeConst(42, 4);
     llvm::LLVMContext Context;
     MedLLVMEmitter Emitter;
-    auto Module = Emitter.emit({Function}, Context, "micro_pointer", GetParam(),
-                               {}, &Image, BinaryFormat::ELF);
+    if (Provenance == P::CodeAddress) {
+      EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
+                                         GetParam(), {}, &Image,
+                                         BinaryFormat::ELF));
+    }
+    auto Module =
+        Emitter.emit({Function, TargetFunction}, Context, "micro_pointer",
+                     GetParam(), {}, &Image, BinaryFormat::ELF);
     ASSERT_TRUE(Module);
     EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto *Target = Module->getFunction("micro_target");
