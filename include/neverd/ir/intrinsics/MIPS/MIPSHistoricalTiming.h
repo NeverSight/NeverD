@@ -44,6 +44,9 @@ historicalInstructionTiming(uint32_t Word, unsigned Level, bool PairedFPRs) {
   HistoricalInstructionTiming T;
   const unsigned Op = Word >> 26, RS = Word >> 21 & 31, RT = Word >> 16 & 31,
                  RD = Word >> 11 & 31, SA = Word >> 6 & 31, Fn = Word & 63;
+  if (Level < 3 && !PairedFPRs &&
+      (Op == 17 || Op == 49 || Op == 53 || Op == 57 || Op == 61))
+    return std::nullopt;
   const auto GPR = [](unsigned R) { return R ? uint64_t{1} << R : 0; };
   const auto FPR = [PairedFPRs](unsigned R, unsigned Bytes) {
     return (uint64_t{1} << (32 + R)) |

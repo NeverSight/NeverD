@@ -252,6 +252,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
          Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
       return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
                           "n32/n64 hard double");
+    if (Historical && Historical < 3 && Bytes[5] > 1)
+      return profileError("MIPS I/II requires 32-bit floating registers");
     if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
       return profileError("FP64 hard-float ABI requires matching CPR1 width");
     if (!Wide && Bytes[7] == 1 &&
@@ -285,7 +287,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.FPABI = Bytes[7];
   }
   if (Historical && Historical < 3 &&
-      ((Flags & EF_MIPS_FP64) || Profile.FPABI == 6))
+      ((Flags & EF_MIPS_FP64) || Profile.FPABI == 4 || Profile.FPABI == 6 ||
+       Profile.FPABI == 7))
     return profileError("MIPS I/II requires 32-bit floating registers");
   // A disjoint, sorted index keeps occurrence lookups logarithmic. Exact
   // entries also participate: a zero-sized classic symbol cannot hide inside

@@ -153,7 +153,8 @@ LowOp begin(uint64_t PC, uint32_t Word = 0, bool Paired = false) {
   LowOp Op;
   Op.Addr = PC;
   Op.Opcode = NdOp::INTRINSIC;
-  Op.addInput(NdVar::cst(unsigned(Intrinsic::MIPSHistoricalBegin), 4));
+  Op.addInput(
+      NdVar::cst(unsigned(Intrinsic::MIPSHistoricalBegin), sizeof(Intrinsic)));
   Op.addInput(NdVar::cst(Word, 4));
   Op.addInput(NdVar::cst(Paired, 1));
   return Op;
@@ -163,7 +164,8 @@ LowOp retire(uint64_t PC) {
   LowOp Op;
   Op.Addr = PC;
   Op.Opcode = NdOp::INTRINSIC;
-  Op.addInput(NdVar::cst(unsigned(Intrinsic::MIPSHistoricalRetire), 4));
+  Op.addInput(
+      NdVar::cst(unsigned(Intrinsic::MIPSHistoricalRetire), sizeof(Intrinsic)));
   return Op;
 }
 
@@ -186,23 +188,29 @@ TEST(MIPSHistoricalScheduling,
       if (isMIPS64(Target) != (Level == 3))
         continue;
       auto Img = image(Target, Level);
+      Img.MIPS->FPABI = 1;
+      const bool Paired = Level < 3;
       NdOpEmulator First(Img), Callee(Img);
       First.setStrictMode(true);
       Callee.setStrictMode(true);
       MIPSSystemContext Context;
-      EXPECT_FALSE(First.stepMIPSSystem(begin(0x1000), Context));
-      EXPECT_FALSE(First.step(begin(0x1000)));
+      EXPECT_FALSE(First.stepMIPSSystem(begin(0x1000, 0, Paired), Context));
+      EXPECT_FALSE(First.step(begin(0x1000, 0, Paired)));
       Context.Historical = HistoricalSchedule::fromSnapshot(Level, {});
       // The transfer in a call's executed slot is pending at a different
       // function/consumer. No instruction entry or new emulator clears it.
-      ASSERT_TRUE(First.stepMIPSSystem(begin(0x1004, 0x44022000), Context));
+      ASSERT_TRUE(
+          First.stepMIPSSystem(begin(0x1004, 0x44022000, Paired), Context));
       EXPECT_EQ(Context.Historical->snapshot().UnreadyRegisters, 0u);
       ASSERT_TRUE(First.stepMIPSSystem(retire(0x1004), Context));
-      EXPECT_FALSE(Callee.stepMIPSSystem(begin(0x8000, 0x00401821), Context));
-      ASSERT_TRUE(Callee.stepMIPSSystem(begin(0x8000, 0x00801821), Context));
+      EXPECT_FALSE(
+          Callee.stepMIPSSystem(begin(0x8000, 0x00401821, Paired), Context));
+      ASSERT_TRUE(
+          Callee.stepMIPSSystem(begin(0x8000, 0x00801821, Paired), Context));
       EXPECT_FALSE(Callee.stepMIPSSystem(retire(0x8004), Context));
       ASSERT_TRUE(Callee.stepMIPSSystem(retire(0x8000), Context));
-      EXPECT_TRUE(Callee.stepMIPSSystem(begin(0x8004, 0x00401821), Context));
+      EXPECT_TRUE(
+          Callee.stepMIPSSystem(begin(0x8004, 0x00401821, Paired), Context));
       EXPECT_TRUE(Callee.stepMIPSSystem(retire(0x8004), Context));
     }
 }

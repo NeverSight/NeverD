@@ -154,6 +154,47 @@ TEST(MIPSHistorical, TimingAndCompressedProfilesCannotBypassAdmission) {
     }
 }
 
+TEST(MIPSHistorical, EarlyDecoderReuseRetainsTimingAndN32Width) {
+  Decoder D;
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Level : {1u, 2u, 3u}) {
+      if (isMIPS64(Target) != (Level == 3))
+        continue;
+      auto Image = historicalImage(Target, Level);
+      if (!isMIPS64(Target)) {
+        Image.Bits = Bitness::Bits32;
+        Image.MIPS->ABI = MIPSABI::O32;
+      }
+      ASSERT_TRUE(D.init(Image));
+      const auto I =
+          instruction(isMIPS64(Target) ? 0x0085102d : 0x00851021, Target);
+      DecodedInsn Insn;
+      ASSERT_EQ(D.decodeOneForLift(I.bytes, 4, I.address, Insn), 4);
+      std::vector<LowOp> Ops;
+      D.liftToLow(Insn, Ops);
+      ASSERT_GE(Ops.size(), 3u);
+      ASSERT_EQ(Ops.front().Opcode, NdOp::INTRINSIC);
+      EXPECT_EQ(Ops.front().Inputs[0].Offset,
+                unsigned(Intrinsic::MIPSHistoricalBegin));
+      ASSERT_EQ(Ops.back().Opcode, NdOp::INTRINSIC);
+      EXPECT_EQ(Ops.back().Inputs[0].Offset,
+                unsigned(Intrinsic::MIPSHistoricalRetire));
+      ASSERT_TRUE(D.init(Target));
+      ASSERT_EQ(D.decodeOneForLift(I.bytes, 4, I.address, Insn), 4);
+      Ops.clear();
+      D.liftToLow(Insn, Ops);
+      for (const auto &Op : Ops)
+        if (Op.Opcode == NdOp::INTRINSIC) {
+          EXPECT_NE(Op.Inputs[0].Offset,
+                    unsigned(Intrinsic::MIPSHistoricalBegin));
+          EXPECT_NE(Op.Inputs[0].Offset,
+                    unsigned(Intrinsic::MIPSHistoricalRetire));
+        }
+    }
+  }
+}
+
 TEST(MIPSHistorical, PhysicalPreprocessingDoesNotLeakAcrossArchitectures) {
   Decoder D;
   for (unsigned Level : {4, 5}) {
