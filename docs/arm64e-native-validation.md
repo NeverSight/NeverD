@@ -2105,3 +2105,18 @@ four cases because its MC producer lacks mode-5 support.
 The aggregate probe qualifies only the checked environment controls. It does
 not establish complete arm64e instruction, arbitrary-image publication or
 asynchronous language-exception coverage.
+
+At `a2e577a8791bc0c8e7d6ab8cebae1ce7317574fb`, local Release verification passes
+all 233 publication cases and 83 script regressions. The
+[hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44003787806)
+passes all 233 cases on both macos-26 and xcode-27, with 48 saved-LR public
+system-unwinder steps per host and successful Windows frontend checks.
+Each Mac contributes eight signed structural PAuth_LR images, while its
+PAuth_LR execution, call, resumption and system-step counters remain zero.
+Both machines report Apple M1 (Virtual). The strict aggregate reports
+`unavailable`: baseline PAC, compiler language unwinding and the cursor pass,
+but explicit PAuth_LR, PACM PC dependence, x1 scalar CPTA and checked writeback
+do not qualify. The Xcode 27 x1 slice is signed and verified but cannot start
+(`EBADARCH`, errno 86). The
+[source-bound record](evidence/arm64e-x1-qualification-2026-11-17.json)
+binds the reports, execution-copy hashes and exact test package to this result.
