@@ -3433,6 +3433,14 @@ consistent and relaxed atomic stores through a pointer, and a release store
 into a local whose address escapes. The LLVM C writes each with
 `__atomic_store` of its order and runs at O0 and O2.
 
+`PatchCOFF_X64.InplaceBindsFunctionsByTheirSourceIdentity` lifts the entry of
+`test_patch_coff.exe` alone, so it calls each function `sub_<address>`, and
+patches it in place into the image under the names a PDB gives its functions.
+Named as the image names it, as it was lifted, or as a static of another file
+the image lists after it, the replacement is installed and its relocated code
+calls the original functions; named as another function of the image, it is
+refused.
+
 `LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
 optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,
@@ -25268,6 +25276,14 @@ rounded/non-rounded shifts, packing, expansion, replication, BITREV/RADDU,
 destination/input aliases and discarded
 results. Shift tests enumerate immediate and variable count boundaries against
 independent expectations, including pure operations with absent DSPControl.
+`MIPSDSP64.PhysicalDecodeTracksProfileChangesAndOutputModes` exercises public,
+lift and light decode in both byte orders, with text/detail independently on
+and off. Truncated packed words refuse; switching the same decoder between
+DSP-enabled and ordinary profiles must update admission without changing
+ordinary integer decoding.
+The signed seven-bit `dshilo` immediate is checked with full operands; with
+text disabled its detail must stay identical to the unmodified operand
+template, so an empty operand array cannot overwrite common detail fields.
 The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
