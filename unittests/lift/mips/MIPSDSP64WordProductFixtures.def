@@ -1,0 +1,12 @@
+//===- MIPSDSP64WordProductFixtures.def - Independent word-dot encodings --===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// GNU as $ac0,$4,$5 encodings, independent of the production form table.
+// Columns: mnemonic, physical word, signed lanes, subtract from accumulator.
+NEVERD_TEST_DSP64_WORD_PRODUCT("dmadd", 0x7c850674, true, false)
+NEVERD_TEST_DSP64_WORD_PRODUCT("dmsub", 0x7c8506f4, true, true)
+NEVERD_TEST_DSP64_WORD_PRODUCT("dmaddu", 0x7c850774, false, false)
+NEVERD_TEST_DSP64_WORD_PRODUCT("dmsubu", 0x7c8507f4, false, true)
+#undef NEVERD_TEST_DSP64_WORD_PRODUCT

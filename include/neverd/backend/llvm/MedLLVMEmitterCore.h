@@ -2523,6 +2523,10 @@ private:
   // declarations.
   std::map<std::pair<va_t, int>, llvm::BasicBlock *> PreparedFuncBlocks;
   std::map<va_t, llvm::BasicBlock *> LiftedCodeBlocks;
+  /// The blocks, by address, that a termination handler's local unwind
+  /// resumes its parent at (MedFunc::SEHHandlerUnwindTargets of every
+  /// function of the unit).
+  std::set<va_t> SEHHandlerUnwindTargets;
   /// The code of each declared MedFunc by its entry, in address order: its
   /// body and the parts that lie apart from it, so an interior continuation
   /// IP (MSVC catch `lea rip, parent+k`) can GEP from that function before or

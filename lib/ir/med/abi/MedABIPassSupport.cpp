@@ -69,7 +69,7 @@ static bool callKeepsArgumentRegister(const AbiCallContext &C, const MedOp &Op,
     return true;
   const uint64_t Reg = C.Layout.Registers[static_cast<size_t>(ArgIndex)];
   return callPreservesRegisterBytes(C.TheArch, Op.CallPreservedGPRs, Reg,
-                                    static_cast<uint16_t>(C.TRI.PointerSize));
+                                    C.Layout.SlotBytes);
 }
 
 bool incomingArgumentReachesCall(const AbiCallContext &C, int ArgIndex) {
@@ -1813,7 +1813,7 @@ const PhiNode *argPhiReachingCall(const MedFunc &Func, const MedBlock &Block,
   if (ArgIdx < 0 || ArgIdx >= static_cast<int>(Layout.Registers.size()))
     return nullptr;
   const uint64_t ArgReg = Layout.Registers[ArgIdx];
-  const auto ArgBytes = static_cast<uint16_t>(TRI.PointerSize);
+  const auto ArgBytes = Layout.SlotBytes;
   auto writesArgument = [&](const MedVar &V) {
     return V.Kind == MedVar::Reg && V.Size > 0 &&
            Layout.registerIndex(V.RegOff) == ArgIdx;
@@ -1856,7 +1856,7 @@ findReachingArgReg(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
       ArgIdx >= 0 && ArgIdx < static_cast<int>(Layout.Registers.size())
           ? Layout.Registers[ArgIdx]
           : 0;
-  const auto ArgBytes = static_cast<uint16_t>(TRI.PointerSize);
+  const auto ArgBytes = Layout.SlotBytes;
   // The nearest write to the register before \p UpTo, or what the nearest
   // call that may change the register left there (\p Left).  In the call's
   // own block another barrier to call-setup recovery (an intrinsic not
@@ -1984,7 +1984,7 @@ findReachingArgReg(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
         V.Id = -1;
         V.RegOff = Reg;
         V.SSAVer = 0;
-        V.Size = P.Size > 0 ? P.Size : static_cast<uint16_t>(TRI.PointerSize);
+        V.Size = P.Size > 0 ? P.Size : Layout.SlotBytes;
         V.TheArch = TheArch;
         return V;
       }
@@ -1993,7 +1993,7 @@ findReachingArgReg(const MedFunc &Func, const TargetRegInfo &TRI, Arch TheArch,
       V.Kind = MedVar::Reg;
       V.RegOff = Reg;
       V.SSAVer = 0;
-      V.Size = static_cast<uint16_t>(TRI.PointerSize);
+      V.Size = Layout.SlotBytes;
       V.TheArch = TheArch;
       if (FromLiveIn)
         *FromLiveIn = true;

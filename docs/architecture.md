@@ -1227,8 +1227,19 @@ empty, runs nothing a scope could guard: it prints no `__try`, and a jump to
 it goes where it goes, so it prints no text. The first block, blocks that
 only jump to one another in a ring, and the deepest block of a scope none of
 whose blocks prints a statement keep theirs, the last with its nest so that
-every clause still shows. Closed lexical ranges retain
-their compact rendering. C also runs a `__finally` when its try falls through,
+every clause still shows. Blocks that follow one another under the same
+clauses share one `__try` for each clause they have in common, so a scope
+whose blocks are laid out together prints one try around them, with its
+clause once. C forbids a jump into a `__try`: a block's label stands before
+the tries that open at the block, and a jump that would land inside a try it
+is not in takes the sharing away there, so that block opens tries of its own.
+Taking one away can leave another jump outside its label's try, and the
+layout repeats until every jump lands. An `__except` clause stands inside the
+tries around its own, and its handler is entered from there. The normal-exit
+flag a block-form `__finally` reads is set by the jumps and returns that leave
+the try of a `__finally`, and cleared at a block under one unless every jump
+to it comes from under a `__finally` it stays under. Closed lexical ranges
+retain their compact rendering. C also runs a `__finally` when its try falls through,
 where the source already holds the normal copy, so a compact finally runs the
 cleanup under `if (AbnormalTermination())`. C counts a return or a jump out of
 the try as abnormal too: a closed finally range that can leave before its end
@@ -1262,13 +1273,17 @@ A termination handler that never returns, a `__finally` that leaves by
 once that the path ends there. Native output, whose clauses the code generator
 writes again from what the optimizer leaves, does not take one, and no view
 takes a filter that never returns.
-On x64 this view also takes a table behind `__GSHandlerCheck_SEH`. That
-wrapper checks the frame's stack cookie and then calls `__C_specific_handler`
-for an exception only when its record's EHANDLER bit is set and for an unwind
-only when its UHANDLER bit is, and otherwise continues the search
-(`cookieCheckPassesEveryScope`): a table whose every `__except` row has the
-first and every `__finally` row the second runs as the same table alone, and
-any other keeps the note, since a row the record holds back never runs. The
+This view also takes a table behind `__GSHandlerCheck_SEH`. On x64 and
+AArch64 that wrapper checks the frame's stack cookie and then calls
+`__C_specific_handler` for an exception only when its record's EHANDLER bit
+is set and for an unwind only when its UHANDLER bit is, and otherwise
+continues the search (`cookieCheckPassesEveryScope`): a table whose every
+`__except` row has the first and every `__finally` row the second runs as the
+same table alone, and any other keeps the note, since a row the record holds
+back never runs. The ARM wrapper, whose record has room for neither bit,
+calls the handler always. A wrapped table is then lowered or left by the
+rules of its architecture's bare tables, the callbacks that read their
+parent's registers among them. The
 identity of such a table covers the record, so it is never the identity of
 the same rows under `__C_specific_handler`, and native output, which would
 have to write the record again, leaves the function as metadata.
@@ -1305,6 +1320,16 @@ handler ends). The output gate refuses that role by name: its rule for a
 protected call is the innermost source scope at the call's address, which is
 the scope such a call has just left, and no execution has yet shown that the
 rewritten table gives the call the scopes the runtime gave it.
+A termination handler that leaves its `__finally` by a jump is the other
+side of a local unwind: it calls the runtime with a block of its parent to
+resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block
+address, which C can name only inside the block's own function, and which the
+optimizer turns into the constant one when nothing in the parent reaches the
+block. For printed C the emitter spells such a target as the parent's address
+plus the offset (`resolveLiftedFunctionInterior`), so the handler prints in a
+whole unit as it does alone. Native IR keeps the block address, and so does
+every other code address inside another function, such as the continuation a
+catch funclet returns.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call
@@ -1706,7 +1731,10 @@ entry with a single relative branch. The new function owns its signing prologue;
 the branch does not change LR. Explicit pointer providers are admitted by the
 existing dependency owner. The shared signing transaction passes the input
 CodeDirectory page size explicitly to codesign and retains exact page-size
-validation after reloading. After signing, recipe replay verifies every pointer
+validation after reloading. Its shared signature-policy owner admits both
+bare linker ad-hoc signatures and codesign's authenticated exact empty
+requirements/CMS shape as inputs. Strong or unknown metadata is not discarded;
+the canonical output remains eligible for a later native-object publication. After signing, recipe replay verifies every pointer
 slot and its RELRO contract, while the remaining section bytes must match the
 relocated object exactly. Both staging and publication use the same final
 unwind validator, including exact personality slot and LSDA identities.
@@ -11534,8 +11562,16 @@ point (`RegisterStep::ArgumentsFrom`), LowToMed publishes the reads as CALL
 inputs, and `recoverCallAbi` takes the routine's arity for conventions whose
 calls take their arguments from the caller's setup. A caller's pass-through
 registers and incoming stack slots then become its parameters. Without such
-evidence an indirect call passes only the arguments its caller sets. It never
-passes a prologue save of a callee-saved or link register, a scratch register's
+evidence an indirect call uses its setup prefix. A later integer argument
+can establish untouched incoming slots before it, provided every path to the
+call preserves those inputs. The target's own register establishes no prefix;
+prior calls, exceptional roots and independent entries cannot invent one.
+Both C routes consume this shared Med ABI recovery, including System V x64.
+Physical integer slot width owns promoted carriers (eight bytes on n32),
+independently of pointer width. LLVM call argument symbolization only converts
+pointer-width integer carriers through a pointer, so n32's eight-byte integers
+retain their high word. Recovery never passes a prologue save of a callee-saved
+or link register, a scratch register's
 undefined incoming value (an alignment `push rax`), a slot past a gap in its
 stack arguments, or the register that holds its own target, unless the routine
 takes that register (`cb(ctx, x, y, cb)` may pass and call through one).
@@ -12072,10 +12108,10 @@ definition collects its frame slots, and a copy of a frame address into a name
 that is an alias of it is hidden: they read the aliases the declaration pass
 found in that definition (`DeclaredFrameAliases`), never those the writer's
 previous definition left behind, which made an `__except` exit print or omit a
-label by the order the threads claimed the definitions in. A label those
-passes ask for stays when the later pass, which sees every hidden statement,
-finds that nothing jumps to it: the unit prints it unreferenced, as a unit of
-that definition alone does. A unit of fewer than `kMinParallelCFunctionDefinitions`
+label by the order the threads claimed the definitions in. The later pass,
+which sees every hidden statement, decides the labels again from nothing
+(`collectLabelTargets`): a label that only a jump the first pass kept asked
+for goes with that jump instead of standing in the text unreferenced. A unit of fewer than `kMinParallelCFunctionDefinitions`
 definitions, or one rendered with a source map, recorded positions or source
 names, which follow the text as one pass prints it, is written on one thread.
 
@@ -17330,7 +17366,14 @@ The microMIPS32/o32 subset adds local instruction modes to the existing image
 and decoder owners. `MIPSCodeMode` validates serialized targets and complete
 unit spans; `MicroMIPSInteger.def` maps admitted scalar encodings without using
 Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
-against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
+against captured entry RA. An ordinary native ABI call can preserve an exact
+saved link in the caller's allocated private frame without a fixed callee
+signature. Its SP must be aligned and known, the slot must exclude callee-owned
+storage, and no store or possible argument definition may expose the frame.
+Fixed scalar descriptors retain their outgoing-area bounds. External pointer
+loads gain no callee identity; partial link writes, unknown effects and escapes
+before the save still reject return qualification. `MIPSInstructionModeSource`
+owns mode attributes
 and the numeric code-pointer source qualification boundary. Actual two/four-byte
 head and slot lengths remain in the shared LowIR instruction records.
 The MIPS16e32 subset shares these owners with an explicit MIPS16 family and

@@ -69,12 +69,14 @@ llvm::Expected<Profile> inspect(llvm::ArrayRef<uint8_t> Binary);
 /// True only for a profile that can be re-signed with an identityless ad-hoc
 /// signature without discarding entitlements, hardened-runtime policy,
 /// developer identity, requirements, tickets, or unknown future metadata.
+/// Accepts linker signatures and the canonical codesign output shape below.
 bool canTransactionallyAdHocResign(const Profile &Value);
 
 /// True only for the canonical identityless signature emitted by Apple's
 /// codesign tool: one primary CodeDirectory, an exact empty requirements
 /// vector, and an exact empty CMS wrapper with the requirements hash bound in
-/// special slot two.  This is intentionally distinct from input eligibility.
+/// special slot two. Input eligibility also admits linker signatures without
+/// these empty slots, so a validated published artifact can be published again.
 bool isCanonicalCodesignAdHocOutput(const Profile &Value);
 
 /// Verify that a temporary artifact was re-signed without changing slice

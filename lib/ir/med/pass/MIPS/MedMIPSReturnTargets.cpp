@@ -95,6 +95,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
   bool HasCalls = false;
+  bool NeedsNativeArguments = false;
   std::map<const MedOp *, FloatingCallArguments> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
   for (size_t I = 0; I < Function.Blocks.size(); ++I) {
@@ -122,12 +123,12 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         HasCalls = true;
         const auto Signature = boundFloatingCallArguments(Op, Target, Format);
-        if (!Signature)
-          QualifiedMemory = false;
-        else {
+        if (Signature) {
           Calls.emplace(&Op, *Signature);
           if (Op.IsTailCall)
             QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
+        } else {
+          NeedsNativeArguments = true;
         }
       }
       if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
@@ -244,8 +245,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       });
     } else if (!D.Ambiguous && D.Op) {
       const auto &Op = *D.Op;
-      // Only explicit value producers and reads before a possible frame
-      // escape can exclude frame-derived bits. Unknown state stays unknown.
+      // External memory cannot contain a pointer into this newly allocated
+      // frame unless it escaped. PreservesCall separately requires that no
+      // store or call operand exposes it, including before the RA save.
       switch (Op.Opcode) {
       case NdOp::COPY:
       case NdOp::CAST:
@@ -271,8 +273,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         break;
       case NdOp::LOAD:
         if (Op.NumInputs == 1 && QualifiedMemory) {
-          if (const auto At = Offset(Op.Inputs[0]);
-              At && *At < 0 && *At + Op.Output.Size <= 0) {
+          if (HasCalls && IsNonFrame(Op.Inputs[0]))
+            Safe = true;
+          else if (const auto At = Offset(Op.Inputs[0]);
+                   At && *At < 0 && *At + Op.Output.Size <= 0) {
             // Fixed stack arguments are loaded into explicit call operands.
             // Trace their exact reaching stores; a frame address stored there
             // is still an escape, and an intervening unknown call invalidates
@@ -366,33 +370,94 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       ProvenNonFrame.insert(K);
     return Safe;
   };
+  // Native calls preserve the caller's allocated private frame under the
+  // platform ABI even when the callee has no fixed declaration. Check every
+  // possible argument definition once: an unmodified incoming register has
+  // no address into this frame; a modified one must retain that provenance.
+  // The whole-function check is deliberately conservative about private
+  // pointer spills, and prevents an escape before the RA save from being
+  // forgotten when reachingStackValues sees the later exact store.
+  bool UnexposedFrame = QualifiedMemory;
+  bool NativeArgumentsNonFrame = true;
+  const auto IntegerLayout = TRI.integerArgumentLayout(Format);
+  const auto FPArguments = TRI.floatingParamRegs(Format);
+  const auto CheckNativeArgument = [&](const MedVar &Value) {
+    if (Value.Kind != MedVar::Reg || !Value.Size)
+      return true;
+    const auto Overlaps = [&](uint64_t Register, uint16_t Bytes) {
+      return Value.RegOff < Register + Bytes &&
+             Register < Value.RegOff + Value.Size;
+    };
+    const bool Argument =
+        llvm::any_of(IntegerLayout.Registers,
+                     [&](uint64_t Register) {
+                       return Overlaps(Register, TRI.FullRegWidth);
+                     }) ||
+        llvm::any_of(FPArguments, [&](uint64_t Register) {
+          return Overlaps(Register, TRI.FPABIRegWidth);
+        });
+    return !Argument || IsNonFrame(Value);
+  };
+  if (HasCalls && QualifiedMemory)
+    for (const auto &Block : Function.Blocks) {
+      for (const auto &Phi : Block.Phis)
+        if (NeedsNativeArguments)
+          NativeArgumentsNonFrame &= CheckNativeArgument(Phi.Output);
+      for (const auto &Op : Block.Ops) {
+        if (NeedsNativeArguments) {
+          NativeArgumentsNonFrame &= CheckNativeArgument(Op.Output);
+          for (const auto &Value : Op.IntrinsicOutputs)
+            NativeArgumentsNonFrame &= CheckNativeArgument(Value);
+        }
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
+          UnexposedFrame &= IsNonFrame(Op.Inputs[1]);
+        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+          if (!Op.NumInputs) {
+            UnexposedFrame = false;
+          } else {
+            UnexposedFrame &= IsNonFrame(Op.Inputs[0]);
+            const auto Signature = Calls.find(&Op);
+            for (unsigned I = 1; I < Op.NumInputs; ++I)
+              UnexposedFrame &=
+                  NonFrameBytes(Op.Inputs[I], 0,
+                                Signature == Calls.end()
+                                    ? Op.Inputs[I].Size
+                                    : Signature->second.Scalars[I - 1].Bytes);
+          }
+        }
+      }
+    }
+  UnexposedFrame &= !NeedsNativeArguments || NativeArgumentsNonFrame;
   const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
     const auto S = Calls.find(&Call);
     const auto P = CallSP.find(&Call);
-    if (S == Calls.end() || P == CallSP.end())
+    if (!UnexposedFrame || P == CallSP.end() ||
+        (S == Calls.end() && !NativeArgumentsNonFrame))
       return false;
     const auto SP = Offset(P->second);
     if (!SP || *SP % (isMIPS64(Target) ? 16 : 8))
       return false;
     const int64_t SlotBytes = isMIPS64(Target) ? 8 : 4;
     int64_t Extent = isMIPS64(Target) ? 0 : 16;
-    for (const auto &A : S->second.Scalars)
-      if (A.Kind == SourceABICarrierKind::Stack) {
-        const auto End = A.StackOffset + A.Bytes;
-        // A big-endian n64 float occupies the first word, but the callee
-        // still owns its complete eight-byte argument slot.
-        Extent =
-            std::max(Extent, (End + SlotBytes - 1) / SlotBytes * SlotBytes);
-      }
+    if (S != Calls.end()) {
+      for (const auto &A : S->second.Scalars)
+        if (A.Kind == SourceABICarrierKind::Stack) {
+          const auto End = A.StackOffset + A.Bytes;
+          // A big-endian n64 float occupies the first word, but the callee
+          // still owns its complete eight-byte argument slot.
+          Extent =
+              std::max(Extent, (End + SlotBytes - 1) / SlotBytes * SlotBytes);
+        }
+    } else if (Call.CalleeStackArgs > int(IntegerLayout.Registers.size())) {
+      Extent = std::max<int64_t>(
+          Extent, IntegerLayout.CallStackBase +
+                      (Call.CalleeStackArgs - IntegerLayout.Registers.size()) *
+                          SlotBytes);
+    }
     // The callee owns everything below SP and its complete outgoing area.
     if (*SP < -limits::ir::kSourceFrameAnalysisMaxFrame || At < *SP + Extent ||
         At + Size > 0)
       return false;
-    if (!IsNonFrame(Call.Inputs[0]))
-      return false;
-    for (size_t I = 0; I != S->second.Scalars.size(); ++I)
-      if (!NonFrameBytes(Call.Inputs[I + 1], 0, S->second.Scalars[I].Bytes))
-        return false;
     return true;
   };
   const uint16_t LinkBytes = isMIPS64(Target) ? 8 : 4;
