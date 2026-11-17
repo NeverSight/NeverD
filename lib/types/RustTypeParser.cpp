@@ -1133,6 +1133,8 @@ private:
     const BuiltinInfo &First = builtinInfo(A), &Second = builtinInfo(B);
     return Library.builtinBytes(A) == Library.builtinBytes(B) &&
            First.Signed == Second.Signed &&
+           (First.Class == BuiltinClass::Complex) ==
+               (Second.Class == BuiltinClass::Complex) &&
            (First.Class == BuiltinClass::Float) ==
                (Second.Class == BuiltinClass::Float);
   }

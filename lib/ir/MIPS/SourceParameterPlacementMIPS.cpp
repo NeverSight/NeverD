@@ -12,6 +12,7 @@
 #include "../SourceParameterPlacementDetail.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
 #include <algorithm>
@@ -23,8 +24,10 @@ std::optional<SourceParameterPlacement> source_placement::placeMIPS(
     const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
     llvm::ArrayRef<TypeRef> ParamTypes, std::optional<unsigned> FixedCount,
     InstructionMode EntryMode) {
+  const bool ComplexResult = !isMIPS64(TRI.TheArch) && !FixedCount &&
+                             sourceComplexComponentBytes(ReturnType);
   if (F != BinaryFormat::ELF || !ReturnType ||
-      (ReturnType->Kind != NdTypeKind::Void &&
+      (!ComplexResult && ReturnType->Kind != NdTypeKind::Void &&
        ((!isIntegerScalar(ReturnType) && !isFloatingScalar(ReturnType)) ||
         ReturnType->Size >
             (ReturnType->Kind == NdTypeKind::Int ? 2 * TRI.FullRegWidth : 8))))

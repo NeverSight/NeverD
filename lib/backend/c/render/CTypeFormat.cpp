@@ -26,6 +26,7 @@
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/StringScan.h"
+#include "neverd/types/LocalTypes.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -946,6 +947,14 @@ std::string typeToC(const TypeRef &Ty, bool SourceNames) {
       return "void*";
     return typeToC(Ty->Pointee, SourceNames) + "*";
   case NdTypeKind::Struct: {
+    if (Ty->Passing == NdRecordPassing::Complex) {
+      const unsigned Bytes = sourceComplexComponentBytes(Ty);
+      if (!Bytes)
+        throw std::invalid_argument("C complex value has no supported layout");
+      return types::builtinInfo(Bytes == 4 ? types::Builtin::ComplexFloat
+                                           : types::Builtin::ComplexDouble)
+          .Keywords;
+    }
     if (!Ty->SourceName.empty()) {
       if (SourceNames)
         return Ty->SourceName;

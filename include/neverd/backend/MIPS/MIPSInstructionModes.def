@@ -13,6 +13,9 @@ MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "nomips16",
 #undef MIPS_SOURCE_MODE
 
 #ifdef MIPS_SOURCE_TEXT
+// The compiler regenerates these local entry symbols for compressed bodies.
+MIPS_SOURCE_TEXT(CompilerEntryStubPrefix, "__fn_stub_")
+MIPS_SOURCE_TEXT(ReconstructedEntryStubPrefix, "neverd_mips16_entry_")
 // GCC rejects mips16 together with nomicromips. Its positive attribute already
 // selects that encoding; Clang also needs the alternative disabled explicitly.
 MIPS_SOURCE_TEXT(MIPS16ModeCPrelude,

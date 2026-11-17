@@ -79,10 +79,26 @@ TEST(SourceCallABI, MIPS16BodyCarriersRemainPartOfTheCheckedContract) {
     WrongMode->MIPS16Parameters = false;
     Changed.MIPSScalars = std::move(WrongMode);
     EXPECT_FALSE(validateSourceABI(Changed, Error));
-    H.Signature.ReturnType = NdType::makeFloat(4);
-    EXPECT_FALSE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error,
-                                      InstructionMode::MIPS16));
-    EXPECT_NE(Error.find("integer, pointer or void result"), std::string::npos);
+    for (unsigned Bytes : {4u, 8u}) {
+      H.Signature.ReturnType = NdType::makeFloat(Bytes);
+      ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error,
+                                       InstructionMode::MIPS16))
+          << Error;
+      ASSERT_TRUE(H.Signature.MIPSScalars);
+      EXPECT_TRUE(H.Signature.MIPSScalars->MIPS16Parameters);
+      EXPECT_EQ(H.Signature.MIPSScalars->ReturnKind, NdTypeKind::Float);
+      EXPECT_EQ(H.Signature.MIPSScalars->ReturnBytes, Bytes);
+      EXPECT_EQ(H.Signature.ReturnLocation.Kind,
+                SourceABICarrierKind::FloatingRegister);
+      EXPECT_EQ(H.Signature.ReturnLocation.RegisterOffset,
+                getTargetRegInfo(A).FPReturnReg);
+      EXPECT_EQ(H.Signature.ReturnLocation.ValueBytes, Bytes);
+      EXPECT_TRUE(validateSourceABI(H.Signature, Error)) << Error;
+      auto WrongResult = H.Signature;
+      WrongResult.ReturnLocation.RegisterOffset =
+          getTargetRegInfo(A).IntReturnReg;
+      EXPECT_FALSE(validateSourceABI(WrongResult, Error));
+    }
   }
 }
 
