@@ -18132,11 +18132,14 @@ inside o32's outgoing register home area.
 pyelftools and the repository-pinned Unicorn to execute originals and both
 regenerated C routes on all six MIPS profiles at O0/O2. Changing targets, word
 boundary values and full-width n32/n64 integers check argument forwarding,
-return values, SP, RA and callee-saved registers. The owned fixture has no debug
-declaration or retained relocation and uses `-G0` to avoid a separate GP entry
-binding requirement. Pass `--neverd`, `--clang`, `--ld` and an owned `--output`
-directory; generated binaries are discarded after source/hash receipts are
-recorded by `MIPSValidationArtifacts`.
+return values, SP, RA and callee-saved registers. The fixture uses the compiler's
+default small-data threshold and carries no debug declaration or retained
+relocation. The harness checks that the linked `lw` or `ld` reads the callback
+slot through GP, and initializes the original and rebuilt programs with their
+respective linker GP values. Pass `--neverd`, `--clang`, `--ld` and an owned
+`--output` directory. `MIPSValidationArtifacts` keeps source and hash receipts.
+`MIPSEntryGP` checks explicit GP writes and the sign extension of upper-half
+n32 data addresses in both byte orders.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must

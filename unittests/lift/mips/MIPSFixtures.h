@@ -85,6 +85,22 @@ struct ELFBytes {
     Bytes[0xe7] = 3; // soft-float
   }
 
+  void globalPointer(uint64_t GP) {
+    const size_t P = Is64 ? 120 : 84, Width = Is64 ? 8 : 4;
+    put(Is64 ? 56 : 44, 2, 2);
+    put(P, Is64 ? 0x70000002 : 0x70000000, 4); // PT_MIPS_OPTIONS / REGINFO
+    put(P + (Is64 ? 8 : 4), 0xb8, Width);
+    put(P + (Is64 ? 16 : 8), 0x100b8, Width);
+    put(P + (Is64 ? 32 : 16), Is64 ? 48 : 24, Width);
+    put(P + (Is64 ? 40 : 20), Is64 ? 48 : 24, Width);
+    if (Is64) {
+      Bytes[0xb9] = 8; // ODK_NULL before ODK_REGINFO.
+      Bytes[0xc0] = 1;
+      Bytes[0xc1] = 40;
+    }
+    put(Is64 ? 0xe0 : 0xcc, GP, Width);
+  }
+
   void dynamicSymbols(uint8_t Mode) {
     Bytes.resize(0x240);
     const size_t Load = Is64 ? 64 : 52;

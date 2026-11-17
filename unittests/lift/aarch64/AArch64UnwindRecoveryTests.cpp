@@ -92,6 +92,91 @@ struct Frame {
   }
 };
 
+TEST(AArch64ImplicitUnwind, ForwardingEntryDisplacesSignedLanguageRow) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{Skip, Ret, Ret};
+  F.Function.CodeRange.End = F.Function.Dwarf->AddressRange = 2 * Word;
+  F.Image.Symbols.push_back(Symbol::makeFunc(0));
+  F.Image.Symbols.push_back(Symbol::makeFunc(2 * Word));
+  F.addHandler(0, 1, 1);
+  F.Function.Dwarf->Instructions.push_back({.Kind = CFIOpKind::NegateRAState});
+  const auto Query = analyzeAArch64UnwindSigning(F.Image, F.Function, 0);
+  ASSERT_TRUE(Query.Metadata.DwarfStateAtPC &&
+              Query.Metadata.DwarfStateAtPC->State);
+  EXPECT_EQ(Query.Metadata.DwarfStateAtPC->State->Kind, Kind::SP);
+  ASSERT_TRUE(Query.InstructionStateAtPC && Query.InstructionStateAtPC->State);
+  EXPECT_EQ(Query.InstructionStateAtPC->State->Kind, Kind::Unsigned);
+  const auto GetRows = [&] {
+    return recoverDarwinAArch64Unwind(F.Image, F.Function);
+  };
+  auto Rows = GetRows();
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  const auto Base = F.Function.CodeRange.End;
+  auto Site =
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, 0, Base);
+  ASSERT_TRUE(Site);
+  EXPECT_EQ(Site->Begin, Base);
+  EXPECT_EQ(Site->End, Base + Word);
+  EXPECT_FALSE(Site->AtProtectedCall);
+  EXPECT_EQ(Site->ProtectedReturn, 0u);
+  EXPECT_FALSE(
+      prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, Word, Base));
+  EXPECT_FALSE(aarch64UnwindRowAt(*Rows, Word).Signing.State);
+  const auto ExpectUnsupported = [&] {
+    auto Other = GetRows();
+    EXPECT_FALSE(bool(Other));
+    if (!Other)
+      llvm::consumeError(Other.takeError());
+  };
+  F.Image.ExceptionMetadata.CIEs.front().IsSignalFrame = true;
+  ExpectUnsupported();
+  F.Image.ExceptionMetadata.CIEs.front().IsSignalFrame = false;
+  F.Image.DataInCode.insert(Word - 1);
+  ExpectUnsupported();
+  F.Image.DataInCode.clear();
+  F.Image.Symbols.pop_back();
+  ExpectUnsupported();
+}
+
+TEST(AArch64ImplicitUnwind, AdjacentForwardingEntriesKeepSeparateSignalSites) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{Skip, Skip, Ret, Ret};
+  F.Function.CodeRange.End = 2 * Word;
+  F.useCompact();
+  for (va_t VA = 0; VA < F.Image.Segments.front().FileSz; VA += Word)
+    F.Image.Symbols.push_back(Symbol::makeFunc(VA));
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  ASSERT_EQ(Rows->size(), 2u);
+  for (va_t VA : {size_t(0), Word}) {
+    auto Site =
+        prepareDarwinArm64eExceptionSite(F.Image, F.Function, *Rows, VA, 0);
+    ASSERT_TRUE(Site);
+    EXPECT_EQ(Site->Begin, VA);
+    EXPECT_EQ(Site->End, VA + Word);
+  }
+}
+
+TEST(AArch64ImplicitUnwind, SharedCompactRowKeepsTheUntouchedSignedFunction) {
+  constexpr auto Word = sizeof(uint32_t);
+  Frame F{Skip, Ret, SignB, AuthB, Ret};
+  F.useCompact();
+  F.Image.Symbols.push_back(Symbol::makeFunc(0));
+  F.Image.Symbols.push_back(Symbol::makeFunc(2 * Word));
+  auto Rows = recoverDarwinAArch64Unwind(F.Image, F.Function);
+  ASSERT_TRUE(bool(Rows)) << llvm::toString(Rows.takeError());
+  EXPECT_TRUE(Rows->front().IsForwardingEntry);
+  EXPECT_FALSE(aarch64UnwindRowAt(*Rows, Word).Signing.State);
+  const auto &Entry = aarch64UnwindRowAt(*Rows, 2 * Word);
+  ASSERT_TRUE(Entry.Signing.State);
+  EXPECT_FALSE(Entry.IsForwardingEntry);
+  EXPECT_EQ(Entry.Signing.State->Kind, Kind::Unsigned);
+  const auto &Signed = aarch64UnwindRowAt(*Rows, 3 * Word).Signing;
+  ASSERT_TRUE(Signed.State);
+  EXPECT_EQ(Signed.State->Kind, Kind::SP);
+  EXPECT_EQ(Signed.State->Key, AArch64RAKey::B);
+}
+
 TEST(AArch64ImplicitUnwind, VectorSavesFollowLaneWidthAndPartialOverwrites) {
   for (bool Quad : {false, true}) {
     Frame F{SignB,
