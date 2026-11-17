@@ -18081,6 +18081,21 @@ running their labels. An older aggregate `NeverDLiftTests` executable may still
 register duplicate cases with those labels; use `-LE '^NeverDLiftTests$'` when
 validating only freshly rebuilt dedicated lift targets.
 
+`NeverDCallArgumentRecoveryTests` checks indirect calls, tail forwarding and
+variadic pointer summaries at the shared Med ABI boundary on x86, x64,
+AArch64 and all six MIPS profiles. It covers n32's eight-byte carriers despite
+four-byte pointers, wide stack stores followed by another argument, fixed
+contracts with unwritten inputs, and Darwin AArch64's named-register/variadic-
+stack boundary. Run this target together with the architecture call-contract
+and MIPS pipeline suites when changing these recovery rules.
+`HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
+`NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
+The generated C runs on the host at O0/O2 under UBSan: a variadic member must
+receive both unnamed values, while a fixed member retains only its declared
+prefix. A conflicting display return type must also retain a complete
+64-bit result. This checks source behavior, not native execution on each guest
+ISA.
+
 `SessionCAPITest.ReferencePagesReuseImageFactsAndObserveChangedRoots` checks
 reference reuse, newly independent function entries, relocated code roots and
 reload invalidation. Run the computed-string/reference, function-disassembly

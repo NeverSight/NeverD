@@ -1859,6 +1859,13 @@ target_include_directories(NeverDNativeCallSignatureTests PRIVATE
 target_compile_definitions(NeverDNativeCallSignatureTests PRIVATE
   NEVERD_TEST_CLANG="${NEVERD_TEST_CLANG_EXECUTABLE}")
 
+add_neverd_unittest(NeverDCallArgumentRecoveryTests
+  core/CallArgumentRecoveryTests.cpp
+  LINK_COMPONENTS IR
+)
+target_include_directories(NeverDCallArgumentRecoveryTests PRIVATE
+  ${CMAKE_SOURCE_DIR}/include ${LLVM_INCLUDE_DIRS})
+
 add_neverd_unittest(NeverDMedParameterEntryTests
   core/MedParameterEntryTests.cpp
   LINK_COMPONENTS IR

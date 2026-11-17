@@ -4830,7 +4830,8 @@ size_t HighCWriter::debugCallArgLimit(const HighExpr &E) const {
   if (E.IsIndirectCall && E.IndirectTarget)
     if (const TypeRef Function = typedSlotFunction(*E.IndirectTarget);
         Function && !Function->ParamTypes.empty())
-      return Clamp(Function->ParamTypes.size());
+      return Function->FunctionVariadic ? Have
+                                        : Clamp(Function->ParamTypes.size());
   const std::string Name = callIdentifier(E);
   const MsvcCallee *Msvc = msvcCallee(Name, Opts.Format);
   auto UnknownAt = [&](size_t I) {
@@ -6763,7 +6764,7 @@ TypeRef HighCWriter::typedMemberType(const HighExpr &Addr, uint16_t AccessSize,
 }
 
 TypeRef HighCWriter::typedSlotFunction(const HighExpr &Callee) const {
-  const unsigned PtrSize = Opts.TheArch == Arch::X86 ? 4u : 8u;
+  const unsigned PtrSize = getTargetRegInfo(Opts.TheArch).PointerSize;
   const HighExpr *Slot = peelIntegerViewOps(&Callee);
   if (!Slot || Slot->Kind != ExprKind::Load || Slot->Operands.empty() ||
       !Slot->Operands[0])
@@ -7015,8 +7016,25 @@ TypeRef HighCWriter::indirectCallFunctionType(const HighExpr &Call) const {
       Call.IntrinsicId != Intrinsic::None)
     return nullptr;
   const auto Callee = debugCallee(Call);
-  if (!Callee)
+  if (!Callee) {
+    // A member's declared function type already owns its named arguments.
+    // Keep its ellipsis in the callee cast as well: an unprototyped call can
+    // place the unnamed values differently, as on Darwin AArch64.
+    const TypeRef Function = typedSlotFunction(*Call.IndirectTarget);
+    if (Function && Function->FunctionVariadic) {
+      // The member's display return type does not replace the call's
+      // recovered result carrier. Use the same result as the untyped cast.
+      const TypeRef Result = callResultType(Call);
+      const auto Prototype = NdType::makeFunc(
+          Result      ? Result
+          : Call.Type ? Call.Type
+                      : NdType::makeVoid(),
+          Function->ParamTypes, Function->FunctionConvention, true);
+      if (hasCSpelling(NdType::makePtr(Prototype)))
+        return Prototype;
+    }
     return nullptr;
+  }
   return checkedCalleeFunctionType(Call, *Callee);
 }
 
@@ -7160,7 +7178,7 @@ std::string HighCWriter::indirectCalleeStr(const HighExpr &E,
   auto UntypedCallee = [&](const std::string &Code) {
     return "(" + CalleeType + Code + ")";
   };
-  const unsigned PtrSize = Opts.TheArch == Arch::X86 ? 4u : 8u;
+  const unsigned PtrSize = getTargetRegInfo(Opts.TheArch).PointerSize;
   const HighExpr *Cur = peelIntegerViewOps(&E);
   unsigned Depth = 0;
   const HighExpr *Base = Cur;

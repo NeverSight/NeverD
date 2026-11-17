@@ -5001,6 +5001,27 @@ effects, exceptional entries, joins and cycles; entry live-in self-copies do
 not establish extra arguments. Existing PHI and known-prototype rules still
 own joins and arguments forwarded without setup.
 
+Indirect argument recovery counts physical argument slots using the target's
+integer argument layout. A wide stack store covers its occupied stack slots;
+a register value still occupies one register position. In particular, MIPS n32
+has four-byte pointers but eight-byte argument registers and stack slots.
+Tail-forwarded stack operands and the caller parameters they introduce retain
+that slot width.
+
+A writable function-pointer variable may borrow its initializer's known call
+contract while keeping its runtime target. Its variadic summary is an open
+scan bound, not a fixed argument count: it cannot manufacture unwritten inputs
+or incoming tail-forwarded parameters. The same summary retains the named
+prefix, including Darwin AArch64's transition from named registers to unnamed
+stack arguments. Fixed pointer contracts still require every declared input.
+
+HighC retains the complete operand list and the ellipsis of a typed variadic
+callback member. The member's named parameters do not bound its unnamed tail,
+and an unprototyped cast must not change how C passes that tail. The cast keeps
+the recovered result carrier; the member's display return type cannot narrow
+it. Member-slot lookup and indirect-target rendering both use the target's
+pointer width, including four-byte MIPS o32/n32 pointers.
+
 Header-declared integer record arguments use `SourceParameterPlacement` through
 `integerCallArguments`, both when recovering the call and when printing it.
 The type-library adapter preserves the record's alignment and complete scalar
