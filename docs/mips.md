@@ -1343,6 +1343,44 @@ containers/mapping are tracked separately by [#1727](https://github.com/NeverSig
 the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
 
+### Historical MIPS I–III scheduling
+
+Linked classic MIPS I/II o32 and MIPS III n32/n64 ELF profiles are admitted
+in both byte orders. The shared physical-word catalog rejects instructions
+introduced in later ISAs, release-only aliases and conflicting ABI evidence.
+MIPS I/II floating profiles require paired 32-bit FPRs. MIPS III o32 with
+64-bit GPRs remains unsupported.
+
+Each admitted I–III instruction carries ordered begin/retire operations in
+LowIR and MedIR. A branch and its executed delay slot retire separately; a
+branch-likely annulled slot does not age the schedule. Physical register reads
+survive lowering even when their computed result is discarded. Call-site
+argument inference does not introduce physical dependencies.
+
+Execution requires a caller-bound `MIPSSystemContext::Historical` snapshot.
+The same state can continue across basic blocks, calls and distinct emulator
+instances; a function entry does not imply an empty pipeline. The schedule
+checks MIPS I load delays, I–III coprocessor move and condition dependencies,
+FR=0 register pairs, and the two-instruction HI/LO read-to-write restriction.
+LWL/LWR may forward the preceding memory-load destination into their merge
+operand, while the base register remains an ordinary read. The first MTHI or
+MTLO after an unread product makes the companion accumulator unavailable.
+Failed attempts do not retire or consume a delay period.
+
+Unbound execution, including lenient constant recovery, refuses these ordered
+operations. HighC and LLVM source reconstruction also refuse to erase the
+scheduling contract. Floating arithmetic additionally requires an executor
+that explicitly declares the historical ISA; the modern pre-R6 FPU does not
+claim R3000/R4000 exception, NaN or subnormal behavior. CP0 propagation,
+exception/interrupt entry and reset are not supplied by this scheduling owner.
+Those boundaries still require implementation and independent qualification.
+
+The timing rules are based on the
+[R3000 family manual](https://cgi.cse.unsw.edu.au/~cs3231/doc/R3000.pdf)
+and [R4000 manual](https://www.cs.columbia.edu/~youngjin/download/MIPSR4000.pdf).
+Independent instruction replay qualifies valid integer values, not the timing
+behavior of a historical physical processor.
+
 ### Historical MIPS IV and V
 
 Linked classic n32/n64 ELF files can select MIPS IV or MIPS V in either byte
@@ -1353,7 +1391,8 @@ The shared availability catalog gates physical words before decoder fallbacks
 and at direct lift entry, including after decoder reuse. It does not imply that
 every architecturally available instruction has a semantic implementation.
 Trapping arithmetic, privileged operations and reservations retain the limits
-listed above. Historical o32 and the I–III scheduling contracts remain unqualified.
+listed above. Historical III–V o32 remains unqualified; I–III scheduling has
+the explicit execution and reconstruction boundaries described above.
 
 IV admits the implemented integer and scalar COP1/COP1X slice; V additionally
 admits paired-single and LUXC1/SUXC1. ROTR, EXT, MFHC1 and other release-only

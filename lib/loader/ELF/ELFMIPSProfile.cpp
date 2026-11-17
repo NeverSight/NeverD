@@ -58,9 +58,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
   const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
   if (Historical &&
-      (Historical < 4 || !Wide ||
+      (Wide != (Historical >= 3) ||
        (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
-    return profileError("historical ISA requires classic MIPS IV/V n32/n64");
+    return profileError(
+        "historical ISA requires classic MIPS I/II o32 or III-V n32/n64");
   if (!Historical && !R6 &&
       ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
@@ -251,6 +252,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
          Bytes[5] != 3 || Bytes[7] != (Wide ? 1 : 6)))
       return profileError("MSA requires r5 with 128-bit CPR1 and o32 FP64 or "
                           "n32/n64 hard double");
+    if (Historical && Historical < 3 && Bytes[5] > 1)
+      return profileError("MIPS I/II requires 32-bit floating registers");
     if (Bytes[7] == (Wide ? 1 : 6) && Bytes[5] != (Profile.HasMSA ? 3 : 2))
       return profileError("FP64 hard-float ABI requires matching CPR1 width");
     if (!Wide && Bytes[7] == 1 &&
@@ -283,6 +286,10 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     Profile.HasABIFlags = true;
     Profile.FPABI = Bytes[7];
   }
+  if (Historical && Historical < 3 &&
+      ((Flags & EF_MIPS_FP64) || Profile.FPABI == 4 || Profile.FPABI == 6 ||
+       Profile.FPABI == 7))
+    return profileError("MIPS I/II requires 32-bit floating registers");
   // A disjoint, sorted index keeps occurrence lookups logarithmic. Exact
   // entries also participate: a zero-sized classic symbol cannot hide inside
   // a sized microMIPS symbol (or conversely).
