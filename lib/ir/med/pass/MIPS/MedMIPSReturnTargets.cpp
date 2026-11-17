@@ -527,8 +527,13 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
               [&](const MedVar &V) {
                 return HasCalls ? !IsNonFrame(V) : !V.isConst();
               },
-              [](const MedVar &) { return true; }, true, HasCalls,
-              PreservesCall);
+              // The complete function proof already distinguishes private
+              // pointer spills from escapes. Do not invalidate the same
+              // slot merely because one of those private stores contains FP
+              // or SP. Exact writes, overlaps and each call's outgoing area
+              // are still checked by this walk and PreservesCall.
+              [](const MedVar &) { return true; }, true,
+              HasCalls && !UnexposedFrame, PreservesCall);
           // Exact stores and complete calls must preserve this private slot.
           // Escaped frame addresses, overlap and unresolved writes reject it.
           Valid = Reaching.Complete && Reaching.Reachable &&
