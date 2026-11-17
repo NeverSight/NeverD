@@ -1135,13 +1135,8 @@ private:
       note(Result.Types, unescaped(Struct.Name));
       Laid[Struct.Name] = nullptr;
     }
-    for (const GStruct &Struct : Structs) {
-      if (Failed)
-        return;
-      if (Nested.contains(Struct.Name) || Laid.count(Struct.Name))
-        continue;
-      layOut(Struct);
-    }
+    // Record sizes depend on named scalar aliases. Define the alias graph
+    // before layout; its named record targets remain resolved by the library.
     for (const auto &[Name, Type, Alias, Line, Column] : Aliases) {
       if (Failed || !AliasNames.contains(Name))
         continue;
@@ -1162,6 +1157,13 @@ private:
       }
       Library.define(std::move(Local));
       note(Result.Types, Local.Name);
+    }
+    for (const GStruct &Struct : Structs) {
+      if (Failed)
+        return;
+      if (Nested.contains(Struct.Name) || Laid.count(Struct.Name))
+        continue;
+      layOut(Struct);
     }
     for (const auto &[Offset, Type, Field, Value, Line, Column] : Checks) {
       const LocalType *Checked = Library.find(unescaped(Type));

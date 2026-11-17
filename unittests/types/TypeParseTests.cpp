@@ -108,6 +108,7 @@ TEST(TypeParse, ComplexDeclarationsKeepTheirScalarIdentityAndLayout) {
           "typedef float _Complex _Complex Unsupported;",
           "struct Invalid { CF field : 2; };", "enum Invalid : CD { item };",
           "typedef int Invalid[(CF)4];",
+          "CD transform(CF input, const CD *other); "
           "double transform(CF input, const CD *other);"}) {
       SCOPED_TRACE(Invalid);
       EXPECT_FALSE(parseCTypes(Invalid, Library).ok());

@@ -165,6 +165,9 @@ TEST(TypeRender, ComplexStorageDoesNotInventAForeignCallbackABI) {
   EXPECT_TRUE(contains(Go, "complex128")) << Go;
   TypeLibrary Back(DataModel::LP64);
   const auto Read = parseTypes(Go, Back, {.Lang = Language::Go});
+  for (const auto &Problem : Read.Problems)
+    ADD_FAILURE() << Problem.Line << ':' << Problem.Column << ' '
+                  << Problem.Message;
   ASSERT_TRUE(Read.ok()) << Go;
   ASSERT_TRUE(Back.find("CF") && Back.find("CD"));
   EXPECT_EQ(Back.find("CF")->Target->TheBuiltin, Builtin::ComplexFloat);
