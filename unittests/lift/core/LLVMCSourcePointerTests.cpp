@@ -48,81 +48,85 @@ public:
 };
 
 TEST(LLVMCSourcePointers, ComplexResultIdentitySurvivesCallsAndSerialization) {
-  for (const unsigned Bytes : {4, 8}) {
-    SCOPED_TRACE(Bytes);
-    llvm::LLVMContext Context;
-    llvm::Module Module("complex-result", Context);
-    Module.setDataLayout("e-p:64:64");
-    llvm::IRBuilder<> Builder(Context);
-    auto *Scalar = Bytes == 4 ? Builder.getFloatTy() : Builder.getDoubleTy();
-    auto *Integer = Builder.getIntNTy(Bytes * 8);
-    auto *Pair = llvm::StructType::get(Context, {Scalar, Scalar});
-    auto *Make = llvm::Function::Create(
-        llvm::FunctionType::get(Pair, {Integer, Integer}, false),
-        llvm::GlobalValue::ExternalLinkage, "make_complex", Module);
-    Make->addFnAttr(LLVMSourceComplexResult);
-    ASSERT_TRUE(readLLVMSourceComplexResult(Pair, Make->getAttributes()));
-    EXPECT_THROW(readLLVMSourceComplexResult(Integer, Make->getAttributes()),
-                 std::invalid_argument);
-    EXPECT_THROW(readLLVMSourceComplexResult(
-                     llvm::StructType::get(Context, {Scalar, Scalar}, true),
-                     Make->getAttributes()),
-                 std::invalid_argument);
-    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Make));
-    auto *NoteCall = llvm::Function::Create(
-        llvm::FunctionType::get(Builder.getVoidTy(), false),
-        llvm::GlobalValue::ExternalLinkage, "note_complex_call", Module);
-    Builder.CreateCall(NoteCall);
-    llvm::Value *Value = llvm::PoisonValue::get(Pair);
-    Value = Builder.CreateInsertValue(
-        Value, Builder.CreateBitCast(Make->getArg(0), Scalar), {0});
-    Value = Builder.CreateInsertValue(
-        Value, Builder.CreateBitCast(Make->getArg(1), Scalar), {1});
-    Builder.CreateRet(Value);
-    auto *Forward = llvm::Function::Create(
-        llvm::FunctionType::get(Integer, {Integer, Integer}, false),
-        llvm::GlobalValue::ExternalLinkage, "imaginary_bits", Module);
-    Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Forward));
-    auto *Call =
-        Builder.CreateCall(Make, {Forward->getArg(0), Forward->getArg(1)});
-    Builder.CreateRet(
-        Builder.CreateBitCast(Builder.CreateExtractValue(Call, {1}), Integer));
-    ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
-    std::string IR;
-    llvm::raw_string_ostream IRStream(IR);
-    Module.print(IRStream, nullptr);
-    llvm::SMDiagnostic Diagnostic;
-    auto Reparsed = llvm::parseAssemblyString(IR, Diagnostic, Context);
-    ASSERT_TRUE(Reparsed);
-    std::string Source;
-    llvm::raw_string_ostream OS(Source);
-    CEmitterOptions Options;
-    Options.TheArch = Arch::X64;
-    Options.Format = BinaryFormat::ELF;
-    ASSERT_TRUE(LLVMCEmitter().emit(*Reparsed, OS, Options));
-    const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
-    const std::string ScalarName = Bytes == 4 ? "float" : "double";
-    EXPECT_NE(Source.find(ScalarName + " _Complex make_complex"),
-              std::string::npos);
-    Source += "\nstatic unsigned complex_calls;\n"
-              "void note_complex_call(void) { ++complex_calls; }\n"
-              "int main(void) { const " +
-              Word + " values[] = {0, " +
-              (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
-                          : "0x8000000000000000ull, 0x7ff8000000001234ull, "
-                            "0xfff0000000000000ull") +
-              "}; for(unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { "
-              "complex_calls=0; " +
-              ScalarName + " _Complex z=make_complex(values[i],values[j]); " +
-              ScalarName + " r=__real__ z, m=__imag__ z; " + Word +
-              " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
-              "__builtin_memcpy(&b,&m,sizeof(b)); "
-              "if(a!=values[i] || b!=values[j] || "
-              "imaginary_bits(values[i],values[j])!=values[j] || "
-              "complex_calls!=2) return 1; "
-              "} return 0; }\n";
-    for (const auto Optimization : {"-O0", "-O2"})
-      source_call_execution_test::compileAndRun(Source, {Optimization});
+  for (const Arch Architecture : {Arch::X64, Arch::MIPS32}) {
+    SCOPED_TRACE(static_cast<int>(Architecture));
+    for (const unsigned Bytes : {4, 8}) {
+      SCOPED_TRACE(Bytes);
+      llvm::LLVMContext Context;
+      llvm::Module Module("complex-result", Context);
+      Module.setDataLayout("e-p:64:64");
+      llvm::IRBuilder<> Builder(Context);
+      auto *Scalar = Bytes == 4 ? Builder.getFloatTy() : Builder.getDoubleTy();
+      auto *Integer = Builder.getIntNTy(Bytes * 8);
+      auto *Pair = llvm::StructType::get(Context, {Scalar, Scalar});
+      auto *Make = llvm::Function::Create(
+          llvm::FunctionType::get(Pair, {Integer, Integer}, false),
+          llvm::GlobalValue::ExternalLinkage, "make_complex", Module);
+      Make->addFnAttr(LLVMSourceComplexResult);
+      ASSERT_TRUE(readLLVMSourceComplexResult(Pair, Make->getAttributes()));
+      EXPECT_THROW(readLLVMSourceComplexResult(Integer, Make->getAttributes()),
+                   std::invalid_argument);
+      EXPECT_THROW(readLLVMSourceComplexResult(
+                       llvm::StructType::get(Context, {Scalar, Scalar}, true),
+                       Make->getAttributes()),
+                   std::invalid_argument);
+      Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Make));
+      auto *NoteCall = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getVoidTy(), false),
+          llvm::GlobalValue::ExternalLinkage, "note_complex_call", Module);
+      Builder.CreateCall(NoteCall);
+      llvm::Value *Value = llvm::PoisonValue::get(Pair);
+      Value = Builder.CreateInsertValue(
+          Value, Builder.CreateBitCast(Make->getArg(0), Scalar), {0});
+      Value = Builder.CreateInsertValue(
+          Value, Builder.CreateBitCast(Make->getArg(1), Scalar), {1});
+      Builder.CreateRet(Value);
+      auto *Forward = llvm::Function::Create(
+          llvm::FunctionType::get(Integer, {Integer, Integer}, false),
+          llvm::GlobalValue::ExternalLinkage, "imaginary_bits", Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Forward));
+      auto *Call =
+          Builder.CreateCall(Make, {Forward->getArg(0), Forward->getArg(1)});
+      Builder.CreateRet(Builder.CreateBitCast(
+          Builder.CreateExtractValue(Call, {1}), Integer));
+      ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+      std::string IR;
+      llvm::raw_string_ostream IRStream(IR);
+      Module.print(IRStream, nullptr);
+      llvm::SMDiagnostic Diagnostic;
+      auto Reparsed = llvm::parseAssemblyString(IR, Diagnostic, Context);
+      ASSERT_TRUE(Reparsed);
+      std::string Source;
+      llvm::raw_string_ostream OS(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = BinaryFormat::ELF;
+      ASSERT_TRUE(LLVMCEmitter().emit(*Reparsed, OS, Options));
+      const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+      const std::string ScalarName = Bytes == 4 ? "float" : "double";
+      EXPECT_NE(Source.find(ScalarName + " _Complex make_complex"),
+                std::string::npos);
+      Source += "\nstatic unsigned complex_calls;\n"
+                "void note_complex_call(void) { ++complex_calls; }\n"
+                "int main(void) { const " +
+                Word + " values[] = {0, " +
+                (Bytes == 4 ? "0x80000000u, 0x7fc01234u, 0xff800000u"
+                            : "0x8000000000000000ull, 0x7ff8000000001234ull, "
+                              "0xfff0000000000000ull") +
+                "}; for(unsigned i=0;i<4;++i) for(unsigned j=0;j<4;++j) { "
+                "complex_calls=0; " +
+                ScalarName + " _Complex z=make_complex(values[i],values[j]); " +
+                ScalarName + " r=__real__ z, m=__imag__ z; " + Word +
+                " a,b; __builtin_memcpy(&a,&r,sizeof(a)); "
+                "__builtin_memcpy(&b,&m,sizeof(b)); "
+                "if(a!=values[i] || b!=values[j] || "
+                "imaginary_bits(values[i],values[j])!=values[j] || "
+                "complex_calls!=2) return 1; "
+                "} return 0; }\n";
+      for (const auto Optimization : {"-O0", "-O2"})
+        source_call_execution_test::compileAndRun(Source, {Optimization});
+    }
   }
 }
 
