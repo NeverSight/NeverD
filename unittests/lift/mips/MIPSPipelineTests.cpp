@@ -105,17 +105,23 @@ TEST_P(MIPSPipeline, HistoricalTimingCannotDisappearIntoUnboundSource) {
 }
 
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
-  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     for (const uint16_t Bytes : {4, 8}) {
       for (const auto Mode :
-           {InstructionMode::MIPSClassic, InstructionMode::MIPS16}) {
+           {InstructionMode::MIPSClassic, InstructionMode::MIPS16,
+            InstructionMode::MicroMIPS}) {
         SCOPED_TRACE(testing::Message() << getArchName(Target) << ':' << Bytes
                                         << ':' << static_cast<unsigned>(Mode));
         auto Pointer = NdType::makePtr();
-        Pointer->Size = 4;
+        Pointer->Size = getTargetRegInfo(Target).PointerSize;
         const auto Result = NdType::makeComplex(Bytes);
         const auto Signature = floatingCallArguments(
             Target, BinaryFormat::ELF, Result, {Pointer}, std::nullopt, Mode);
+        if (isMIPS64(Target) && Mode == InstructionMode::MIPS16) {
+          EXPECT_FALSE(Signature);
+          continue;
+        }
         ASSERT_TRUE(Signature);
         EXPECT_TRUE(Signature->ReturnComplex);
         EXPECT_EQ(Signature->ReturnElements, 2u);
@@ -153,13 +159,11 @@ TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
                                            {Pointer}));
         EXPECT_FALSE(
             floatingCallArguments(Target, BinaryFormat::ELF, Result, {Result}));
+        EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF, Result,
+                                           {NdType::makeFloat(8)}, 1, Mode));
       }
     }
   }
-  for (const auto Target :
-       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
-    EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF,
-                                       NdType::makeComplex(8), {}));
 }
 
 TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
