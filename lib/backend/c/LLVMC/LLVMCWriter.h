@@ -1020,6 +1020,7 @@ public:
   llvm::DenseMap<const llvm::BasicBlock *, size_t> BlockLayout;
   bool HasCIntrinsics = false;
   bool UsesMicroMIPSAttribute = false;
+  bool UsesMIPS16Attribute = false;
   /// A simple load or store has a type with an aligned(1), may_alias alias,
   /// so the aliases are declared when UseUnalignedPointers is set.
   bool NeedsUnalignedTypes = false;

@@ -2028,18 +2028,27 @@ masks, additional stack allocation and coalescing. They validate NeverD's
 instruction-derived caller resumption; they do not independently qualify the
 system unwinder's frameless saved-pair implementation.
 
-Two PAuth_LR cases independently encode final mode-5 image records and check
+Four PAuth_LR cases independently encode final mode-5 image records and check
 complete publication with zero/nonzero signing-PC offsets, full/sparse saves
 and both PC-relative epilogues. The fixtures write their one validated encoding
-slot in an unsigned structural input after Apple linking: Xcode 27
-canonicalizes the raw nonzero object record to ordinary FP mode. The linker
-word is recorded before fixture construction.
+slot after Apple linking: Xcode 27 canonicalizes the raw nonzero object record to ordinary FP mode. The linker
+word is recorded before fixture construction. Publication leaves that unsigned
+input unchanged. Separate original/published execution copies are ad-hoc signed
+and strictly verified, then reloaded to bind recovered rows and hashes to the
+actual executable files.
 A contradictory ordinary-FP input and removal of the signing CFI must both
 refuse publication.
-They report `structural_pauth_lr_images` and zero native executions: these
-cases do not run PAuth_LR instructions on older CPUs. The updated LLVM fork's
-MC producer is required; the unchanged r6 prebuilt explicitly skips these
-two cases. LLVM MC tests separately check offset limits, fixed fragment
+They report `structural_pauth_lr_images` independently from native execution.
+With `NEVERD_ARM64E_LIFTED_NATIVE=1`, a separate process first probes the
+explicit signing instruction. Supported hosts run original and published
+normal calls, signal-driven caller resumption and public system-unwinder steps;
+unsupported hosts retain zero native counts. Signal plans preserve the signing
+recipe and relocate its PC to the actual loaded owner. System-step comparisons
+read the saved LR when the body has clobbered its live LR. The six classic
+compact signal cases execute this same path without requiring PAuth_LR and
+report `native_system_saved_frame_steps`.
+The updated LLVM fork's MC producer is required; the unchanged r6 prebuilt
+explicitly skips these four cases. LLVM MC tests separately check offset limits, fixed fragment
 boundaries, ordinary-arm64 rejection and DWARF fallback for unrepresentable
 rules. Ordinary relocatable objects retain DWARF for a nonzero signing offset;
 only the provenance-bound final-image writer and explicit native object
@@ -2053,6 +2062,13 @@ PAuth_LR profiles; an unavailable explicit instruction is not counted.
 modifier changes signatures, rather than treating old-CPU PACM hint fallback
 as full PC-signing qualification. See the
 [native qualification record](arm64e-native-validation.md#instruction-address-signal-recipes-and-remembered-frames).
+`verify_arm64e_native.py qualify-x1` combines the original PAC/language,
+signal-cursor and CPTA probes. It succeeds only when every probe passes and
+all seven required native claims hold, including explicit PAuth_LR, PACM PC
+sensitivity and checked scalar/writeback arithmetic. The aggregate report
+records each component report's path and SHA-256. Exit 2 means unavailable;
+exit 1 means a failed check. Neither outcome qualifies hardware. See the
+[x1 runner setup](arm64e-native-validation.md#native-x1-runner-qualification).
 The same test host separately exercises signed language unwinding. With
 `NEVERD_ARM64E_ASYNC_NATIVE=1`, the signal cleanup cases compare the original
 and published code at O0 and O2, on the ordinary and alternate stacks. They
@@ -18065,6 +18081,21 @@ running their labels. An older aggregate `NeverDLiftTests` executable may still
 register duplicate cases with those labels; use `-LE '^NeverDLiftTests$'` when
 validating only freshly rebuilt dedicated lift targets.
 
+`NeverDCallArgumentRecoveryTests` checks indirect calls, tail forwarding and
+variadic pointer summaries at the shared Med ABI boundary on x86, x64,
+AArch64 and all six MIPS profiles. It covers n32's eight-byte carriers despite
+four-byte pointers, wide stack stores followed by another argument, fixed
+contracts with unwritten inputs, and Darwin AArch64's named-register/variadic-
+stack boundary. Run this target together with the architecture call-contract
+and MIPS pipeline suites when changing these recovery rules.
+`HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
+`NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
+The generated C runs on the host at O0/O2 under UBSan: a variadic member must
+receive both unnamed values, while a fixed member retains only its declared
+prefix. A conflicting display return type must also retain a complete
+64-bit result. This checks source behavior, not native execution on each guest
+ISA.
+
 `SessionCAPITest.ReferencePagesReuseImageFactsAndObserveChangedRoots` checks
 reference reuse, newly independent function entries, relocated code roots and
 reload invalidation. Run the computed-string/reference, function-disassembly
@@ -25512,6 +25543,34 @@ count at every width with APInt expectations, aliases and reserved prefixes;
 source fixtures execute zero/mid/full immediate counts on both byte orders.
 
 ### MIPS scalar floating-point and ABI roundtrips
+
+`gpr-float-roundtrip.py` compiles an owned `uint32_t kernel(uint32_t, float)`
+and binds its declaration before emitting source. o32 carries the second
+parameter in a GPR; an integer use must reinterpret its bits, including NaN
+payloads and negative zero. The runner covers classic, microMIPS and MIPS16,
+FR=0/1 and both byte orders, rebuilding HighC and LLVMC at O0/O2. It checks
+the integer result, FCSR, preserved GPRs/FPRs, SP and return to classic code.
+
+```sh
+PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
+  python3 unittests/lift/mips/gpr-float-roundtrip.py \
+  --neverd build-mips/bin/neverd --clang /path/to/clang \
+  --assembler /path/to/mips-as --ld /path/to/mips-ld \
+  --gcc /path/to/mips64-linux-gnuabi64-gcc \
+  --output build-mips/gpr-float-roundtrip
+```
+
+Omit `--gcc` to run only Clang. Each attempt cleans its generated binaries;
+commands, source hashes and failed-source evidence remain in the output.
+`HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
+separately executes direct, forwarded and logical-shift reads through signed
+and unsigned 32/64-bit machine carriers at O0/O2 with undefined-behavior
+checks. `MIPS16Pipeline.DeclaredGPRFloatKeepsItsIntegerBitUse` covers loader
+and source binding in both byte orders. MIPS16 source mode spelling uses a
+compiler-specific `.def` prelude because GCC rejects the Clang attribute
+pair; the selected LLVMC caller must retain its callee's prelude too.
+These checks do not qualify leading MIPS16 floating arguments, floating
+return helpers or linker/runtime floating-call stubs.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
