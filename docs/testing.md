@@ -25806,6 +25806,13 @@ containing-function matches, non-platform or variadic declarations, custom
 parameter locations and incomplete types must still fail. A declaration also
 cannot admit an overlapping write to the saved link.
 
+`MIPSSourceReturnTargets.PrivateFrameSpillsDoNotPublishTheFrame` checks saved
+frame pointers and private SP spills across declared and untyped calls for
+o32, n32 and n64 in both byte orders. Callee-owned or external slots, published
+frame pointers, unknown call SP and a later call exposing an earlier private
+slot still reject the return proof. The compressed code-pointer roundtrip
+also exercises compiler-generated O0 frames around indirect calls.
+
 `DWARFSourceTypes.MissingFunctionParameterTypesRemainUnknown` checks absent and
 malformed parameter types through the real shared DWARF reader, including
 inherited declarations. A complete void return does not supply the missing

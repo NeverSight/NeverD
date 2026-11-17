@@ -12,6 +12,7 @@ import io
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
+from unicorn import UC_HOOK_CODE
 
 import roundtrip
 from mips_validation_artifacts import MIPSValidationArtifacts, digest
@@ -20,6 +21,7 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 FUNCTIONS = ("pointer_bits", "pointer_tag", "pointer_mask", "pointer_code",
              "pointer_offset", "pointer_equal", "call_pointer")
 VALUES = (0, 1, -7, 0x10203040)
+PRESERVED = {reg: 0x6a000000 + reg * 0x10101 for reg in (*range(16, 24), 30)}
 
 
 def callable_address(path):
@@ -45,9 +47,23 @@ def observe(path, function, little, compressed):
     results = []
     for arguments, expected in cases:
         cpu, entry = roundtrip.emulator(path, 32, little, function)
-        result = roundtrip.invoke(cpu, entry, 32, little, arguments)[0]
+        calls = []
+        if function == "call_pointer":
+            cpu.hook_add(UC_HOOK_CODE,
+                         lambda uc, address, size, data: calls.append(address),
+                         begin=pointer & ~1, end=pointer & ~1)
+        result, memory = roundtrip.invoke(
+            cpu, entry, 32, little, arguments, initial_registers=PRESERVED)
         assert result == expected, (path, function, arguments, result, expected)
-        results.append(dict(arguments=arguments, result=result, expected=expected))
+        assert len(calls) == int(function == "call_pointer"), (path, calls)
+        preserved = {reg: cpu.reg_read(getattr(roundtrip.mips, f"UC_MIPS_REG_{reg}"))
+                     for reg in PRESERVED}
+        assert preserved == PRESERVED, (path, function, preserved)
+        assert cpu.reg_read(roundtrip.mips.UC_MIPS_REG_SP) == roundtrip.STACK
+        assert cpu.reg_read(roundtrip.mips.UC_MIPS_REG_RA) == roundtrip.STOP
+        results.append(dict(arguments=arguments, result=result, expected=expected,
+                            callee_entries=len(calls), preserved=preserved,
+                            memory=memory))
     return dict(pointer=pointer, observations=results)
 
 
@@ -126,6 +142,8 @@ def main():
                                     "-e", function, obj, target_object, "-o", rebuilt], log)
                                 after = observe(rebuilt, function, little, mode != "nomips16")
                                 assert before["pointer"] != after["pointer"]
+                                assert [row["memory"] for row in before["observations"]] == [
+                                    row["memory"] for row in after["observations"]]
                                 rows.append(dict(mode=mode, little=little,
                                     original_optimization=original_opt, function=function,
                                     backend=backend, optimization=optimization,

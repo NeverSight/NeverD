@@ -1517,6 +1517,11 @@ additional evidence. The register assignments follow the
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
+Saving the incoming frame pointer or another frame address does not expose
+the frame when every byte of that spill remains private at every call.
+The shared call-stack proof computes that intersection using complete outgoing
+argument slots. An unknown call SP, an external store or a frame-derived call
+argument cannot obtain this exception.
 Byte provenance ignores unread upper FPR bytes; stack arguments require their
 own reaching-store proof. A validated alignment guard preserves computed stack
 addresses and reaching stores; malformed guards and opaque effects invalidate
@@ -1524,7 +1529,8 @@ that evidence. This also qualifies the aligned pre-R6 floating stores used for
 outgoing overflow and variadic arguments.
 In n32, an eight-byte saved link can survive a declared call beside a four-byte
 pointer spill, including word-sized or doubleword-sized stack adjustments.
-Unknown callees and writes overlapping that link slot still fail qualification.
+Unknown call-stack state and writes overlapping that link slot still fail
+qualification.
 Function-scoped instruction mode is preserved, including physical microMIPS FP
 assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.
