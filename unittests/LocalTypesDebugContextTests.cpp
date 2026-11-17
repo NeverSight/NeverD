@@ -7,6 +7,7 @@
 #include "LocalTypesDebugContext.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/libc/LibCFloatingArguments.h"
