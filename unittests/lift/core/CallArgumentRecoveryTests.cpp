@@ -282,4 +282,71 @@ TEST(CallArgumentRecovery, DarwinVariadicPointersUseTheNamedRegisterPrefix) {
     EXPECT_TRUE(Function.Params.empty());
   }
 }
+TEST(CallArgumentRecovery, DynamicSetupKeepsUntouchedLeadingInputs) {
+  for (Arch A : Architectures) {
+    if (A == Arch::X86)
+      continue; // i386 forwards values through explicit outgoing stores.
+    for (bool Tail : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(Tail);
+      auto Image = image(A);
+      auto Function = callWithSetup(A, 0, true, Tail);
+      auto &Ops = Function.Blocks.front().Ops;
+      const auto Layout =
+          getTargetRegInfo(A).integerArgumentLayout(Image.Format);
+      // Only arg1 is set. Arg0 is forwarded unchanged; later registers have
+      // neither a callee declaration nor call setup establishing an input.
+      std::erase_if(Ops, [&](const MedOp &Op) {
+        return Op.Opcode == NdOp::COPY &&
+               Layout.registerIndex(Op.Output.RegOff) != 1;
+      });
+      recoverCallAbi(Function, A, {}, &Image);
+      ASSERT_EQ(Function.CallInfos.size(), 1u);
+      ASSERT_EQ(Function.CallInfos.front().Args.size(), 2u);
+      EXPECT_EQ(Function.CallInfos.front().Args.front().Kind, MedVar::Param);
+      EXPECT_EQ(Function.CallInfos.front().Args.front().RegOff,
+                Layout.Registers[0]);
+      EXPECT_EQ(Function.CallInfos.front().Args.back().ConstVal, 42u);
+      ASSERT_EQ(Function.Params.size(), 1u);
+      EXPECT_EQ(Function.Params.front().RegOff, Layout.Registers[0]);
+      EXPECT_EQ(Function.Params.front().Size, Layout.SlotBytes);
+    }
+  }
+}
+
+TEST(CallArgumentRecovery, DynamicTargetsAndClobbersCannotInventForwarding) {
+  for (Arch A : Architectures) {
+    if (A == Arch::X86)
+      continue;
+    for (bool TargetOnly : {false, true}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(TargetOnly);
+      auto Image = image(A);
+      auto Function = callWithSetup(A, 0, true, false);
+      const auto Layout =
+          getTargetRegInfo(A).integerArgumentLayout(Image.Format);
+      auto &Ops = Function.Blocks.front().Ops;
+      std::erase_if(Ops, [&](const MedOp &Op) {
+        return Op.Opcode == NdOp::COPY &&
+               Layout.registerIndex(Op.Output.RegOff) != 1;
+      });
+      if (TargetOnly) {
+        Ops.back().Inputs[0] = Ops.front().Output;
+      } else {
+        Ops.insert(Ops.begin(),
+                   operation(NdOp::CALL, {},
+                             {MedVar::makeConst(
+                                 Callee, getTargetRegInfo(A).PointerSize)}));
+      }
+      recoverCallAbi(Function, A, {}, &Image);
+      ASSERT_FALSE(Function.CallInfos.empty());
+      if (TargetOnly)
+        EXPECT_TRUE(Function.CallInfos.back().Args.empty());
+      for (const auto &Argument : Function.CallInfos.back().Args)
+        EXPECT_NE(Argument.Kind, MedVar::Param);
+      EXPECT_TRUE(Function.Params.empty());
+    }
+  }
+}
+
 } // namespace

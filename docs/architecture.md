@@ -11562,8 +11562,16 @@ point (`RegisterStep::ArgumentsFrom`), LowToMed publishes the reads as CALL
 inputs, and `recoverCallAbi` takes the routine's arity for conventions whose
 calls take their arguments from the caller's setup. A caller's pass-through
 registers and incoming stack slots then become its parameters. Without such
-evidence an indirect call passes only the arguments its caller sets. It never
-passes a prologue save of a callee-saved or link register, a scratch register's
+evidence an indirect call uses its setup prefix. A later integer argument
+can establish untouched incoming slots before it, provided every path to the
+call preserves those inputs. The target's own register establishes no prefix;
+prior calls, exceptional roots and independent entries cannot invent one.
+Both C routes consume this shared Med ABI recovery, including System V x64.
+Physical integer slot width owns promoted carriers (eight bytes on n32),
+independently of pointer width. LLVM call argument symbolization only converts
+pointer-width integer carriers through a pointer, so n32's eight-byte integers
+retain their high word. Recovery never passes a prologue save of a callee-saved
+or link register, a scratch register's
 undefined incoming value (an alignment `push rax`), a slot past a gap in its
 stack arguments, or the register that holds its own target, unless the routine
 takes that register (`cb(ctx, x, y, cb)` may pass and call through one).
@@ -17358,7 +17366,14 @@ The microMIPS32/o32 subset adds local instruction modes to the existing image
 and decoder owners. `MIPSCodeMode` validates serialized targets and complete
 unit spans; `MicroMIPSInteger.def` maps admitted scalar encodings without using
 Capstone aliases as semantics. `MedMIPSReturnTargets` proves source returns
-against captured entry RA, and `MIPSInstructionModeSource` owns mode attributes
+against captured entry RA. An ordinary native ABI call can preserve an exact
+saved link in the caller's allocated private frame without a fixed callee
+signature. Its SP must be aligned and known, the slot must exclude callee-owned
+storage, and no store or possible argument definition may expose the frame.
+Fixed scalar descriptors retain their outgoing-area bounds. External pointer
+loads gain no callee identity; partial link writes, unknown effects and escapes
+before the save still reject return qualification. `MIPSInstructionModeSource`
+owns mode attributes
 and the numeric code-pointer source qualification boundary. Actual two/four-byte
 head and slot lengths remain in the shared LowIR instruction records.
 The MIPS16e32 subset shares these owners with an explicit MIPS16 family and

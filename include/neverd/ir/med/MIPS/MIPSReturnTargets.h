@@ -18,9 +18,11 @@ struct MedFunc;
 
 /// Every original return must use the exact incoming RA, including its mode
 /// tag. Qualify the captured operand, not the register after the delay slot.
-/// Accept scalar identity transports and exact private frame spills. Complete
-/// fixed FP calls preserve a spill only when its slot is outside the outgoing
-/// arguments and no argument can expose the frame. Opaque effects fail closed.
+/// Accept scalar identity transports and exact private frame spills. Ordinary
+/// native ABI calls preserve allocated private spills outside their outgoing
+/// area. Fixed descriptors own that extent; unbound calls check every possible
+/// argument definition. Frame escapes (even before the save), partial links,
+/// unknown SP and opaque effects fail closed.
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                 Arch Target, BinaryFormat Format);
 

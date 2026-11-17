@@ -395,7 +395,10 @@ TEST_P(MIPS16Flow, CallsRequireAnAuthenticatedPreservedEntryReturn) {
       {0x677f, 0x1800, 0x0800, 0x6500, 0x65fb, 0xe8a0}, // v1 is caller-saved
       {0x671f, 0x1800, 0x0800, 0x6801, 0x65f8, 0xe8a0}, // slot overwrites s0
       {0x671f, 0x6801, 0x1800, 0x0800, 0x6500, 0x65f8, 0xe8a0},
+      // Private saved RA above the o32 outgoing register home area.
       {0x63fd, 0x6204, 0x1800, 0x0800, 0x6500, 0x9004, 0x65f8, 0x6303, 0xe8a0},
+      // The callee owns this saved slot inside its outgoing home area.
+      {0x63fd, 0x6203, 0x1800, 0x0800, 0x6500, 0x9003, 0x65f8, 0x6303, 0xe8a0},
   };
   for (unsigned I = 0; I != Programs.size(); ++I) {
     SCOPED_TRACE(I);
@@ -409,7 +412,7 @@ TEST_P(MIPS16Flow, CallsRequireAnAuthenticatedPreservedEntryReturn) {
     ASSERT_TRUE(Low.hasCompleteLiftCoverage());
     LowToMedConverter Convert;
     Convert.setBinaryImage(&Image);
-    if (I == 0) {
+    if (I == 0 || I == 4) {
       EXPECT_NO_THROW(Convert.convert(Low, GetParam(), BinaryFormat::ELF));
       LowToMedConverter WithoutImage;
       try {
