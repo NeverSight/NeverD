@@ -62,7 +62,7 @@ struct FixedIntegerCallArguments {
   bool operator==(const FixedIntegerCallArguments &) const = default;
 };
 
-/// Fixed scalar x64/AArch64 calls whose complete operands bind before SSA.
+/// Fixed scalar calls whose complete operands bind before SSA.
 /// Stack values need explicit loads; register-only calls must not acquire
 /// incidental frame stores. Records, floating values, hidden results and other
 /// conventions retain separate adapters. The caller authenticates the

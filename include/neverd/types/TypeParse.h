@@ -28,6 +28,7 @@
 #include "neverd/types/TypeLayout.h"
 #include "neverd/types/TypeRender.h"
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <string>
@@ -52,6 +53,9 @@ struct ParseOptions {
   /// does.  A problem the lexer finds, such as a #pragma pack it cannot
   /// read, still changes nothing: the layouts after it are not known.
   bool KeepGoing = false;
+  /// Identifier projections recorded by the emitter for this declaration.
+  /// Only type positions use these aliases; arbitrary identifiers do not.
+  const llvm::StringMap<std::string> *TypeNames = nullptr;
 };
 
 struct ParseResult {

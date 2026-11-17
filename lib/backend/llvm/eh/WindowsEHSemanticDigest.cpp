@@ -25,6 +25,7 @@ namespace {
 constexpr llvm::StringLiteral GraphDomain("windows-eh.semantic-graph");
 constexpr llvm::StringLiteral TokenDomain("windows-eh.semantic-token");
 constexpr llvm::StringLiteral GSFH4Domain("windows-eh.gs-fh4");
+constexpr llvm::StringLiteral GSSEHDomain("windows-eh.gs-seh");
 constexpr uint8_t SEHGraphKind = 1;
 constexpr uint8_t FH3GraphKind = 2;
 constexpr uint8_t FH4GraphKind = 3;
@@ -153,11 +154,38 @@ bool appendGraphHeader(CanonicalBytes &Bytes, uint8_t GraphKind,
   return true;
 }
 
+/// The stack-cookie record a wrapping language handler reads, under the
+/// domain of the tables it wraps.
+bool appendGSCookie(CanonicalBytes &Bytes, llvm::StringRef Domain,
+                    const GSCookieInfo &Cookie) {
+  Bytes.appendString(Domain);
+  Bytes.appendI32(Cookie.CookieOffset);
+  Bytes.appendU8(Cookie.HasExceptionHandler ? 1 : 0);
+  Bytes.appendU8(Cookie.HasUnwindHandler ? 1 : 0);
+  Bytes.appendU8(Cookie.HasAlignment ? 1 : 0);
+  Bytes.appendI32(Cookie.AlignmentBaseOffset);
+  Bytes.appendU32(Cookie.Alignment);
+  if (!appendCount(Bytes, Cookie.Payload.size()))
+    return false;
+  for (uint8_t Byte : Cookie.Payload)
+    Bytes.appendU8(Byte);
+  return true;
+}
+
 std::optional<std::array<uint8_t, 32>>
-getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
-  if (!EH.SEH || EH.Cxx || EH.GSCookie ||
-      EH.Personality != ExceptionPersonality::CSpecificHandler ||
-      EH.ParseStatus != ExceptionParseStatus::Complete ||
+getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch,
+                  bool AllowRepeatedRanges, bool AllowCookieCheck) {
+  // `__GSHandlerCheck_SEH` checks the frame's stack cookie and hands the
+  // same table to `__C_specific_handler`.
+  const bool CookieChecked =
+      EH.Personality == ExceptionPersonality::GSHandlerCheckSEH;
+  if (CookieChecked
+          ? !AllowCookieCheck || !EH.GSCookie ||
+                EH.GSCookie->ParseStatus != ExceptionParseStatus::Complete
+          : EH.GSCookie ||
+                EH.Personality != ExceptionPersonality::CSpecificHandler)
+    return std::nullopt;
+  if (!EH.SEH || EH.Cxx || EH.ParseStatus != ExceptionParseStatus::Complete ||
       EH.model() != ExceptionModel::WindowsTable ||
       EH.SEH->Scopes.size() >
           static_cast<size_t>(std::numeric_limits<int32_t>::max()))
@@ -190,16 +218,29 @@ getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
       const ExceptionAddressRange &B = SemanticRanges[J];
       if (!A.overlaps(B))
         continue;
-      if ((A.Begin == B.Begin && A.End == B.End) ||
+      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
+      if ((Repeated && !AllowRepeatedRanges) ||
           (!A.contains(B) && !B.contains(A)))
         return std::nullopt;
     }
 
+  auto SameRange = [&](size_t A, size_t B) {
+    return SemanticRanges[A].Begin == SemanticRanges[B].Begin &&
+           SemanticRanges[A].End == SemanticRanges[B].End;
+  };
   for (size_t I = 0; I != EH.SEH->Scopes.size(); ++I) {
+    // Rows over one range nest by their order, the earlier inside the later:
+    // a row's parent is the next row over its range, or else the first row
+    // over the smallest range that holds it.
     int32_t Parent = -1;
+    for (size_t J = I + 1; J != SemanticRanges.size() && Parent < 0; ++J)
+      if (SameRange(I, J))
+        Parent = static_cast<int32_t>(J);
+    const bool ParentRepeatsRange = Parent >= 0;
     uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
-    for (size_t J = 0; J != SemanticRanges.size(); ++J) {
-      if (I == J || !SemanticRanges[J].contains(SemanticRanges[I]) ||
+    for (size_t J = 0; !ParentRepeatsRange && J != SemanticRanges.size(); ++J) {
+      if (I == J || SameRange(I, J) ||
+          !SemanticRanges[J].contains(SemanticRanges[I]) ||
           SemanticRanges[J].size() >= ParentSize)
         continue;
       Parent = static_cast<int32_t>(J);
@@ -222,6 +263,10 @@ getSEHGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
     Bytes.appendU8(1); // Complete parse status in schema v1.
     Bytes.appendI32(Parent);
   }
+  // What the check lets through is part of what the frame does: a table
+  // behind it is not the table of the same rows without it.
+  if (CookieChecked && !appendGSCookie(Bytes, GSSEHDomain, *EH.GSCookie))
+    return std::nullopt;
   return llvm::SHA256::hash(Bytes.bytes());
 }
 
@@ -401,20 +446,8 @@ getCxxGraphDigest(const ExceptionFunction &EH, Arch TargetArch) {
     Bytes.appendU64(State.IP);
     Bytes.appendI32(State.State);
   }
-  if (IsGSFH4) {
-    const GSCookieInfo &Cookie = *EH.GSCookie;
-    Bytes.appendString(GSFH4Domain);
-    Bytes.appendI32(Cookie.CookieOffset);
-    Bytes.appendU8(Cookie.HasExceptionHandler ? 1 : 0);
-    Bytes.appendU8(Cookie.HasUnwindHandler ? 1 : 0);
-    Bytes.appendU8(Cookie.HasAlignment ? 1 : 0);
-    Bytes.appendI32(Cookie.AlignmentBaseOffset);
-    Bytes.appendU32(Cookie.Alignment);
-    if (!appendCount(Bytes, Cookie.Payload.size()))
-      return std::nullopt;
-    for (uint8_t Byte : Cookie.Payload)
-      Bytes.appendU8(Byte);
-  }
+  if (IsGSFH4 && !appendGSCookie(Bytes, GSFH4Domain, *EH.GSCookie))
+    return std::nullopt;
   return llvm::SHA256::hash(Bytes.bytes());
 }
 
@@ -446,14 +479,16 @@ makeToken(const std::array<uint8_t, 32> &GraphDigest,
 
 std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken>
 getSEHScopeSemanticToken(const ExceptionFunction &EH, Arch TargetArch,
-                         uint32_t ScopeIndex) {
+                         uint32_t ScopeIndex, bool AllowRepeatedRanges,
+                         bool AllowCookieCheck) {
   const bool Registration = TargetArch == Arch::X86 && EH.Registration;
   if (Registration ? ScopeIndex >= EH.Registration->Scopes.size()
                    : (!EH.SEH || ScopeIndex >= EH.SEH->Scopes.size()))
     return std::nullopt;
   const std::optional<std::array<uint8_t, 32>> GraphDigest =
       Registration ? getRegistrationSEHGraphDigest(EH)
-                   : getSEHGraphDigest(EH, TargetArch);
+                   : getSEHGraphDigest(EH, TargetArch, AllowRepeatedRanges,
+                                       AllowCookieCheck);
   if (!GraphDigest)
     return std::nullopt;
   return makeToken(*GraphDigest,

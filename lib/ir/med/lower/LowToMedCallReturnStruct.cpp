@@ -18,6 +18,10 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
+
 #include <algorithm>
 #include <map>
 #include <optional>
@@ -75,13 +79,6 @@ bool keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops, size_t At) {
 
 void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
   const auto &TRI = getTargetRegInfo(TargetArch);
-  auto isCallClobber = [&](const MedVar &V, uint32_t CallSiteId) {
-    return std::any_of(Func.CallClobbers.begin(), Func.CallClobbers.end(),
-                       [&](const MedCallClobber &Clobber) {
-                         return Clobber.CallSiteId == CallSiteId &&
-                                Clobber.Value == V;
-                       });
-  };
   // 64-bit targets only: x86-64 SysV and AArch64 return a small struct by value
   // in registers.  32-bit targets return such aggregates through the sret
   // pointer or the wide-int register pair (handled by modelCallWideIntReturn).
@@ -97,6 +94,13 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
     return;
   if (TRI.IntReturnRegs.empty() && TRI.FPReturnRegs.empty())
     return;
+  llvm::DenseSet<std::tuple<uint32_t, unsigned, int, int>> ClobberIdentities;
+  for (const auto &Clobber : Func.CallClobbers)
+    ClobberIdentities.insert({Clobber.CallSiteId, Clobber.Value.Kind,
+                              Clobber.Value.Id, Clobber.Value.SSAVer});
+  const auto isCallClobber = [&](const MedVar &V, uint32_t CallSiteId) {
+    return ClobberIdentities.contains({CallSiteId, V.Kind, V.Id, V.SSAVer});
+  };
 
   // Candidate return registers in canonical aggregate-field order: the integer
   // pair first (RAX/RDX, X0/X1), then the FP/vector registers (XMM0/XMM1,
@@ -130,20 +134,44 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
   // Exception ranges can end the call's block before its result is read.
   // SSA identifies that result across such splits without guessing from a
   // same-numbered register in a later block. Index genuine input reads once;
-  // these only propose a direct integer-pair return, still subject to the
+  // these only propose a direct register return, still subject to the
   // complete callee-body proof in the pipeline.
   const auto Identity = [](const MedVar &V) {
     return std::tuple{V.Kind, V.Id, V.SSAVer};
   };
-  std::map<decltype(Identity(MedVar{})), uint16_t> ReadWidths;
-  std::map<uint32_t, std::vector<MedVar>> PairClobbers;
-  if (TargetArch == Arch::AArch64 && TRI.IntReturnRegs.size() == 2) {
+  using ValueKey = decltype(Identity(MedVar{}));
+  llvm::DenseMap<ValueKey, uint16_t> ReadWidths;
+  std::map<uint32_t, std::vector<MedVar>> ResultClobbers;
+  if (TargetArch == Arch::AArch64) {
+    const auto ResultRegister = [&](uint64_t Offset) {
+      return (TRI.IntReturnRegs.size() == 2 &&
+              Offset == TRI.IntReturnRegs[1]) ||
+             std::find(TRI.FPReturnRegs.begin(), TRI.FPReturnRegs.end(),
+                       Offset) != TRI.FPReturnRegs.end();
+    };
     for (const auto &Clobber : Func.CallClobbers)
       if (Clobber.Value.Kind == MedVar::Reg &&
-          Clobber.Value.RegOff == TRI.IntReturnRegs[1])
-        PairClobbers[Clobber.CallSiteId].push_back(Clobber.Value);
-    if (!PairClobbers.empty())
-      for (const MedBlock &Block : Func.Blocks)
+          ResultRegister(Clobber.Value.RegOff))
+        ResultClobbers[Clobber.CallSiteId].push_back(Clobber.Value);
+    if (!ResultClobbers.empty()) {
+      llvm::DenseMap<ValueKey, const PhiNode *> PhiDefinitions;
+      llvm::SmallVector<ValueKey, 16> Work;
+      const auto Observe = [&](const MedVar &Value, uint16_t Bytes) {
+        if (Value.Kind != MedVar::Reg || !ResultRegister(Value.RegOff))
+          return;
+        const ValueKey Key = Identity(Value);
+        Bytes = std::min(Bytes, Value.Size);
+        auto &Width = ReadWidths[Key];
+        if (Bytes > Width) {
+          Width = Bytes;
+          Work.push_back(Key);
+        }
+      };
+      for (const MedBlock &Block : Func.Blocks) {
+        for (const PhiNode &Phi : Block.Phis)
+          if (Phi.Output.Kind == MedVar::Reg &&
+              ResultRegister(Phi.Output.RegOff))
+            PhiDefinitions.try_emplace(Identity(Phi.Output), &Phi);
         for (size_t I = 0; I < Block.Ops.size(); ++I) {
           const MedOp &Read = Block.Ops[I];
           if (isSelfView(Read) || keepsUpperBytesOfWrite(Block.Ops, I) ||
@@ -151,15 +179,24 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
                Read.NumInputs == 2 &&
                sameValue(Read.Inputs[0], Read.Inputs[1])))
             continue;
-          for (uint8_t J = 0; J < Read.NumInputs; ++J) {
-            const MedVar &Value = Read.Inputs[J];
-            if (Value.Kind == MedVar::Reg &&
-                Value.RegOff == TRI.IntReturnRegs[1]) {
-              auto &Width = ReadWidths[Identity(Value)];
-              Width = std::max(Width, Value.Size);
-            }
-          }
+          for (uint8_t J = 0; J < Read.NumInputs; ++J)
+            Observe(Read.Inputs[J], Read.Inputs[J].Size);
         }
+      }
+      // A PHI transports an observation to its incoming SSA values; an unread
+      // PHI is not itself a read. Propagate growing widths through the indexed
+      // graph, including chains and loops, without rescanning per call site.
+      while (!Work.empty()) {
+        const ValueKey Key = Work.pop_back_val();
+        const auto Found = PhiDefinitions.find(Key);
+        if (Found == PhiDefinitions.end())
+          continue;
+        const PhiNode &Phi = *Found->second;
+        const uint16_t Width = std::min(ReadWidths[Key], Phi.Output.Size);
+        for (const auto &[Pred, Input] : Phi.Args)
+          Observe(Input, Width);
+      }
+    }
   }
 
   int MaxVer = 0, MaxId = 0;
@@ -355,26 +392,63 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
             Known->Size = std::max<uint16_t>(Known->Size, TRI.PointerSize);
         }
       if (Op.Opcode == NdOp::CALL)
-        if (const auto Clobbers = PairClobbers.find(Op.CallSiteId);
-            Clobbers != PairClobbers.end())
+        if (const auto Clobbers = ResultClobbers.find(Op.CallSiteId);
+            Clobbers != ResultClobbers.end())
           for (const MedVar &Value : Clobbers->second)
             if (const auto Read = ReadWidths.find(Identity(Value));
                 Read != ReadWidths.end() &&
                 std::none_of(Fields.begin(), Fields.end(), [&](const auto &F) {
                   return F.RegOff == Value.RegOff;
                 }))
-              Fields.push_back({Value.RegOff, false, Read->second, Value});
+              Fields.push_back({Value.RegOff, TRI.isVectorReg(Value.RegOff),
+                                Read->second, Value});
       // Reading just the second word still proposes an integer pair. Keep
       // this as a candidate: only the direct callee's complete return proof
       // can establish the otherwise unobserved first word.
-      bool SecondWordOnly = false;
+      bool HasUnobservedFields = false;
       if (TargetArch == Arch::AArch64 && Op.Opcode == NdOp::CALL &&
           TRI.IntReturnRegs.size() == 2 && Fields.size() == 1 &&
           !Fields.front().IsFP &&
           Fields.front().RegOff == TRI.IntReturnRegs[1] &&
           isCallClobber(Fields.front().Value, Op.CallSiteId)) {
         Fields.push_back({TRI.IntReturnReg, false, TRI.PointerSize, Op.Output});
-        SecondWordOnly = true;
+        HasUnobservedFields = true;
+      }
+      // A read of S1/D1 (or a later HFA field) can cross an exception block
+      // boundary and need not read the first result. Propose the contiguous
+      // homogeneous prefix only for a direct call. The pipeline must prove
+      // every proposed field against the complete callee before binding it.
+      if (TargetArch == Arch::AArch64 && Op.Opcode == NdOp::CALL &&
+          !Fields.empty() &&
+          std::all_of(Fields.begin(), Fields.end(), [&](const auto &F) {
+            return F.IsFP && (F.Size == 4 || F.Size == 8) &&
+                   F.Size == Fields.front().Size &&
+                   isCallClobber(F.Value, Op.CallSiteId);
+          })) {
+        size_t Last = 0;
+        for (const auto &Field : Fields)
+          Last = std::max(Last,
+                          static_cast<size_t>(
+                              std::find(TRI.FPReturnRegs.begin(),
+                                        TRI.FPReturnRegs.end(), Field.RegOff) -
+                              TRI.FPReturnRegs.begin()));
+        if (Last > 0 && Last < TRI.FPReturnRegs.size())
+          for (size_t I = 0; I <= Last; ++I) {
+            const uint64_t Register = TRI.FPReturnRegs[I];
+            if (std::any_of(Fields.begin(), Fields.end(), [&](const auto &F) {
+                  return F.RegOff == Register;
+                }))
+              continue;
+            MedVar Proposed;
+            Proposed.Kind = MedVar::Reg;
+            Proposed.TheArch = TargetArch;
+            Proposed.RegOff = Register;
+            Proposed.Size = Fields.front().Size;
+            Proposed.Id = NextId++;
+            Proposed.SSAVer = NextVer++;
+            Fields.push_back({Register, true, Proposed.Size, Proposed});
+            HasUnobservedFields = true;
+          }
       }
       if (Fields.size() < 2)
         continue;
@@ -429,7 +503,7 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
           HasImplicitField) {
         MedStructReturnCandidate Candidate;
         Candidate.CallSiteId = Op.CallSiteId;
-        Candidate.SecondWordOnly = SecondWordOnly;
+        Candidate.HasUnobservedFields = HasUnobservedFields;
         for (const FieldRead &F : Fields) {
           MedVar Field = F.Value;
           Field.Size = F.Size;
@@ -449,6 +523,10 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
       Tv.SSAVer = 0;
       Tv.Size = Total;
       Op.Output = Tv;
+      auto ReturnFields = std::make_shared<std::vector<MedReturnReg>>();
+      for (const auto &Field : Fields)
+        ReturnFields->push_back({Field.RegOff, Field.Size, Field.IsFP});
+      Op.RegisterReturnFields = std::move(ReturnFields);
 
       std::vector<MedOp> Extracts;
       std::vector<std::pair<uint64_t, std::pair<int, int>>> NewVers;

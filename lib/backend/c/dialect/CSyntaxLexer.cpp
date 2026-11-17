@@ -57,12 +57,13 @@ size_t literalPrefixLength(llvm::StringRef Text, size_t I) {
 
 } // namespace
 
-llvm::Expected<std::vector<Token>> csyntax::lex(llvm::StringRef Source) {
-  std::vector<Token> Tokens;
+llvm::Error
+csyntax::forEachToken(llvm::StringRef Source,
+                      llvm::function_ref<void(const Token &)> Visit) {
   bool LineStart = true;
   size_t I = 0;
   auto Push = [&](TokenKind Kind, size_t Start, size_t Length) {
-    Tokens.push_back({Kind, Source.substr(Start, Length), Start, LineStart});
+    Visit({Kind, Source.substr(Start, Length), Start, LineStart});
     LineStart = false;
   };
   while (I < Source.size()) {
@@ -155,7 +156,15 @@ llvm::Expected<std::vector<Token>> csyntax::lex(llvm::StringRef Source) {
     Push(TokenKind::Punctuator, I, Length);
     I += Length;
   }
-  Tokens.push_back(
+  Visit(
       {TokenKind::End, Source.substr(Source.size()), Source.size(), LineStart});
+  return llvm::Error::success();
+}
+
+llvm::Expected<std::vector<Token>> csyntax::lex(llvm::StringRef Source) {
+  std::vector<Token> Tokens;
+  if (auto Error = forEachToken(
+          Source, [&](const Token &Value) { Tokens.push_back(Value); }))
+    return std::move(Error);
   return Tokens;
 }

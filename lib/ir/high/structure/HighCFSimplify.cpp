@@ -413,6 +413,10 @@ void cleanupGuardBeforeSwitch(HighFunc &Func) {
 //===----------------------------------------------------------------------===//
 
 void MedToHighConverter::inlineGotoReturns(HighFunc &Func, const MedFunc &Med) {
+  // This shortcut reconstructs one integer carrier. Aggregate return lowering
+  // owns all carriers and their packing; keep its complete return statement.
+  if (!Med.MultiReturn.empty())
+    return;
   std::map<va_t, ExprPtr> ReturnBlocks;
   for (auto &MedBlock : Med.Blocks) {
     if (MedBlock.Ops.size() < 2 || MedBlock.Ops.size() > 4)

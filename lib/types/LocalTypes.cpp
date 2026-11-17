@@ -6,6 +6,8 @@
 
 #include "neverd/types/LocalTypes.h"
 
+#include "CTypeName.h"
+
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/bit.h"
@@ -237,6 +239,10 @@ TypeLibrary::Trial::~Trial() {
     Library.Prototypes = std::move(*PrototypesBefore);
   for (auto Change = Changed.rbegin(); Change != Changed.rend(); ++Change) {
     auto &Held = Library.ByOrdinal[Change->first - 1];
+    if (Held)
+      Library.indexCxxSpelling(Held->Name, Change->first, false);
+    if (Change->second)
+      Library.indexCxxSpelling(Change->second->Name, Change->first, true);
     if (!Change->second) {
       Library.ByName.erase(Held->Name);
       Library.ByOrdinal.pop_back();
@@ -275,6 +281,7 @@ uint32_t TypeLibrary::define(LocalType Type) {
   if (Tried)
     Tried->Changed.emplace_back(Ordinal, nullptr);
   ByName[Type.Name] = Ordinal;
+  indexCxxSpelling(Type.Name, Ordinal, true);
   ByOrdinal.push_back(std::make_shared<const LocalType>(std::move(Type)));
   return Ordinal;
 }
@@ -286,6 +293,7 @@ bool TypeLibrary::remove(llvm::StringRef Name) {
   auto &Held = ByOrdinal[Found->second - 1];
   if (Tried)
     Tried->Changed.emplace_back(Found->second, Held);
+  indexCxxSpelling(Name, Found->second, false);
   Held.reset();
   ByName.erase(Found);
   return true;
@@ -294,6 +302,34 @@ bool TypeLibrary::remove(llvm::StringRef Name) {
 const LocalType *TypeLibrary::find(llvm::StringRef Name) const {
   auto Found = ByName.find(Name);
   return Found == ByName.end() ? nullptr : ByOrdinal[Found->second - 1].get();
+}
+
+void TypeLibrary::indexCxxSpelling(llvm::StringRef Name, uint32_t Ordinal,
+                                   bool Add) {
+  if (!Name.contains("::") && !Name.contains('<'))
+    return;
+  const std::string Key = cTypeNameKey(Name);
+  if (Key.empty())
+    return;
+  if (Add) {
+    ByCxxSpelling[Key].push_back(Ordinal);
+  } else if (auto It = ByCxxSpelling.find(Key); It != ByCxxSpelling.end()) {
+    llvm::erase(It->second, Ordinal);
+    if (It->second.empty())
+      ByCxxSpelling.erase(It);
+  }
+}
+
+const LocalType *TypeLibrary::findCxxType(llvm::StringRef Name) const {
+  if (!Name.contains("::") && !Name.contains('<'))
+    return find(Name);
+  auto It = ByCxxSpelling.find(cTypeNameKey(Name));
+  if (It != ByCxxSpelling.end())
+    return It->second.size() == 1 ? byOrdinal(It->second.front()) : nullptr;
+  // ::Simple names the ordinary global type, which needs no extra index.
+  if (Name.consume_front("::"))
+    return find(Name.trim());
+  return nullptr;
 }
 
 const LocalType *TypeLibrary::byOrdinal(uint32_t Ordinal) const {

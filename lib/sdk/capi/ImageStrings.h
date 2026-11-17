@@ -22,6 +22,10 @@
 #include <string>
 #include <vector>
 
+namespace neverd {
+struct BinaryImage;
+}
+
 namespace neverd::sdk {
 
 struct Session;
@@ -59,6 +63,19 @@ imageStrings(Session &S, const strings::ScanOptions &Options);
 /// The string of \p Strings holding \p Address, if one does.
 const ImageString *stringHolding(const std::vector<ImageString> &Strings,
                                  va_t Address);
+
+struct ReferredImageText {
+  const ImageString *String = nullptr;
+  uint64_t TextOffset = 0;
+};
+
+/// Match a referenced byte to displayed text. A nonempty sequence of non-NUL
+/// ASCII control bytes immediately preceding the text is retained as a prefix;
+/// callers must keep the original target, rather than rewriting it to the text.
+std::optional<ReferredImageText>
+referredImageText(const BinaryImage &Img,
+                  const std::vector<ImageString> &Strings, unsigned MinLength,
+                  va_t Address);
 
 } // namespace neverd::sdk
 

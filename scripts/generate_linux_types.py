@@ -14,8 +14,9 @@ declare as the C NeverD reads back:
    installed for it (--sysroot), against musl's as a checkout of it
    installs them (--musl), or against a checkout of bionic (--bionic) for
    Android API level 35, with the NDK's <jni.h> (--libnativehelper) and
-   <android/log.h> (--liblog), which native code for Android most often
-   includes beside the C library's.  glibc 2.38 and later give some routines the
+   <android/log.h> (--liblog) and <sys/system_properties.h>, which native code
+   for Android most often includes beside the C library's.  glibc 2.38 and
+   later give some routines the
    name a program built so imports (`__isoc23_strtol` for strtol); the
    reader declares each under both.
 2. The lines of the compiler's own headers (<stddef.h>, <stdarg.h>) are
@@ -82,8 +83,8 @@ UNIT_HEADERS = (
     "wordexp", "shadow")
 
 # What an Android program includes beside the C library's: the JNI and the
-# log.
-NDK_HEADERS = ("jni", "android/log")
+# log and system properties.
+NDK_HEADERS = ("jni", "android/log", "sys/system_properties")
 
 # The headers of UNIT_HEADERS a C library does not have.
 MISSING = {
@@ -343,8 +344,9 @@ def generate(arguments, name, target):
                         "HEAD"]).strip()
         text = (
             f"The Android types and prototypes for {target.describes}, as a "
-            "program declares them with bionic's headers, <jni.h> and "
-            "<android/log.h> and _GNU_SOURCE, for API level 35.  Generated "
+            "program declares them with bionic's headers, <jni.h>, "
+            "<android/log.h>, <sys/system_properties.h> and _GNU_SOURCE, for "
+            "API level 35.  Generated "
             f"on {generation_date()} by "
             f"scripts/generate_linux_types.py --target {name} from the "
             f"headers of bionic at commit {commit(arguments.bionic)}, "

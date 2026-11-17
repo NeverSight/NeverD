@@ -5,11 +5,13 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// The kinds of the C API's direct references (neverd_code_refs_json,
-/// neverd_string_refs_json): the name, the classic one-letter cross
+/// Kinds shared by native C API reference feeds and the workbench: the name,
+/// the classic one-letter cross
 /// reference type and whether the reference transfers control.  IndirectCall
 /// and IndirectJump transfer through a relocated pointer slot to the pointer
-/// it holds as loaded.
+/// it holds as loaded. VirtualCall/VirtualSlot are additional source-analysis
+/// evidence, qualified by the receiver's static type and kept separate from
+/// those native scan edges.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -25,4 +27,10 @@ NEVERD_REFERENCE_KIND(Write, "write", 'w', false)
 NEVERD_REFERENCE_KIND(Offset, "offset", 'o', false)
 NEVERD_REFERENCE_KIND(IndirectCall, "icall", 'p', true)
 NEVERD_REFERENCE_KIND(IndirectJump, "ijump", 'j', true)
+// File-contained object evidence, not an outer-image control-flow edge.
+NEVERD_REFERENCE_KIND(EmbeddedOffset, "embedded_offset", 'e', false)
+// Typed virtual-call evidence: an overridable declaration and its table slot.
+// These must not be used as proven direct control-flow edges.
+NEVERD_REFERENCE_KIND(VirtualCall, "vcall", 'v', true)
+NEVERD_REFERENCE_KIND(VirtualSlot, "vslot", 'o', false)
 #undef NEVERD_REFERENCE_KIND

@@ -728,6 +728,17 @@ inline bool endsCallArgumentSetup(const MedOp &Op, bool RegistersOnly = false) {
            (RegistersOnly || Id != Intrinsic::X86F16CStoreState));
 }
 
+/// Whether \p Op ends the setup of a later call's outgoing stack arguments.
+/// A system instruction keeps the argument registers (keepsGeneralRegisters)
+/// but not the stack setup: a compiler stores a call's stack arguments after
+/// the statements before the call, and what an exception entry saves on its
+/// stack before its system register updates is no argument of its handler.
+inline bool endsCallStackSetup(const MedOp &Op) {
+  return endsCallArgumentSetup(Op) ||
+         (Op.Opcode == NdOp::INTRINSIC && hasValidMedIntrinsicId(Op) &&
+          keepsGeneralRegisters(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)));
+}
+
 inline ApxAtomicIntrinsicShape
 apxAtomicMedShape(const MedOp &Op, Arch TargetArch = Arch::Unknown) {
   bool SameArch = true;

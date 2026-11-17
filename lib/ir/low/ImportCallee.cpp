@@ -44,7 +44,7 @@ frameSignature(Arch A, BinaryFormat F, const FloatingCallArguments &Signature) {
       Hint.ReturnComponents.push_back({SourceABICarrierKind::FloatingRegister,
                                        TRI.FPReturnRegs[I], 0,
                                        uint16_t(Bytes)});
-  } else {
+  } else if (Signature.ReturnBytes) {
     Hint.ReturnLocation = {SourceABICarrierKind::FloatingRegister,
                            TRI.FPReturnReg, 0, Signature.ReturnBytes};
   }

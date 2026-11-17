@@ -18,7 +18,9 @@
 #include <gtest/gtest.h>
 #include <map>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 using namespace neverd::types;
 using neverd::types::test::shapeOf;
@@ -64,6 +66,59 @@ std::string leaves(const RecordDef &Record, uint64_t Base = 0) {
 }
 
 } // namespace
+
+TEST(TypeParse, TokenSpansKeepWhitespaceNumbersAndErrorPositions) {
+  const std::vector<std::string> Spaces = {
+      " ", "\t", "\r", "\v", "\f", " \t\r\v\f", std::string(4096, ' ')};
+  for (DataModel Model :
+       {DataModel::ILP32, DataModel::LP64, DataModel::LLP64}) {
+    for (const std::string &Space : Spaces) {
+      SCOPED_TRACE(int(Model));
+      SCOPED_TRACE(Space.size());
+      auto Library = parsed(
+          Space + "#define WORD unsigned\r\n" + Space +
+              "#pragma pack(push, 1)\n" + Space + "struct SPAN {" + Space +
+              "char first;" + Space + "WORD values[0x2UL]; };\n" + Space +
+              "#pragma pack(pop)\n" + Space + "int call(WORD value, ...);\n" +
+              Space +
+              "_Static_assert((1UL << 3) >= 8 && (0x20u >> 2) == 8 && "
+              "0b10 == 2, \"number spans\");" +
+              Space,
+          {}, Model);
+      const auto &Record = recordOf(Library, "SPAN");
+      ASSERT_EQ(Record.Members.size(), 2u);
+      EXPECT_EQ(Record.Members[1].BitOffset, 8u);
+      EXPECT_EQ(Record.Size, 9u);
+      const auto *Call = Library.findPrototype("call");
+      ASSERT_NE(Call, nullptr);
+      EXPECT_TRUE(Call->Variadic);
+      const auto Before = renderTypes(Library, {}, {});
+      for (llvm::StringRef Number : {"0x", "18446744073709551616ULL"}) {
+        const std::string Text =
+            "\r\n" + Space + "int bad[" + Number.str() + "];";
+        const auto Read = parseCTypes(Text, Library);
+        ASSERT_EQ(Read.Problems.size(), 1u);
+        EXPECT_EQ(Read.Problems[0].Line, 2u);
+        EXPECT_EQ(Read.Problems[0].Column, Space.size() + 9u);
+        EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      }
+      const auto End =
+          parseCTypes("\n" + Space + "int missing" + Space, Library);
+      ASSERT_EQ(End.Problems.size(), 1u);
+      EXPECT_EQ(End.Problems[0].Line, 2u);
+      EXPECT_EQ(End.Problems[0].Column, Space.size() * 2 + 12u);
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      const auto Macro = parseCTypes(
+          "#define BAD MissingType\n" + Space + "BAD value;", Library);
+      ASSERT_EQ(Macro.Problems.size(), 1u);
+      EXPECT_EQ(Macro.Problems[0].Line, 2u);
+      EXPECT_EQ(Macro.Problems[0].Column, Space.size() + 1u);
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+      EXPECT_TRUE(parseCTypes(Space, Library).ok());
+      EXPECT_EQ(renderTypes(Library, {}, {}), Before);
+    }
+  }
+}
 
 TEST(TypeParse, IdentifierRunsKeepBoundariesAndSourcePositions) {
   for (DataModel Model :
@@ -511,6 +566,103 @@ TEST(TypeParse, ReadsOneFunctionsDeclarationAgainstTheLibrary) {
   EXPECT_NE(problem("typedef int T").find("declares no function"),
             std::string::npos);
   EXPECT_NE(problem("int f(int a").find("expected ')'"), std::string::npos);
+}
+
+TEST(TypeParse, QualifiedTemplateReferencesKeepTheCatalogIdentity) {
+  auto Library = parsed("struct Layout { unsigned long long value; };");
+  const std::vector<std::string> Names = {
+      "sample::Box<sample::Pair<unsigned long, const char *>, 3>",
+      "sample::Box<sample::Pair<unsigned long, const char *>, 3>::Node",
+      "sample::Callback<void (*)(int, sample::Node *), sample::Mode::Fast>",
+      "sample::Grid<sample::Box<int>, -2, true>",
+      "sample::Box<sample::Box<int> >",
+      "sample::Words<' ', '>'>"};
+  for (const auto &Name : Names) {
+    LocalType Type = *Library.find("Layout");
+    Type.Name = Name;
+    Library.define(std::move(Type));
+  }
+  const std::vector<std::string> Inputs = {
+      "::sample :: Box < sample::Pair<unsigned long,const char*>,3 >",
+      "sample::Box<sample::Pair<unsigned long, const char*>, 3>::Node",
+      "sample::Callback<void(*)(int,sample::Node*),sample::Mode::Fast>",
+      "sample::Grid<sample::Box<int>,-2,true>",
+      "sample::Box<sample::Box<int>>",
+      "sample::Words< ' ', '>' >"};
+  for (size_t I = 0; I < Inputs.size(); ++I) {
+    for (const std::string Prefix : {"", "struct "}) {
+      const auto Read = parseFunctionDeclaration(
+          "void inspect(" + Prefix + Inputs[I] + " const *object)", Library);
+      ASSERT_TRUE(Read.ok())
+          << Inputs[I] << ": " << Read.Problems.front().Message;
+      ASSERT_EQ(Read.Function->Params.size(), 1u);
+      const auto &Type = Read.Function->Params[0].Type;
+      ASSERT_EQ(Type->Kind, TypeExprKind::Pointer);
+      EXPECT_EQ(Type->Element->Name, Names[I]);
+      EXPECT_TRUE(Type->Element->Const);
+    }
+  }
+  for (llvm::StringRef Bad :
+       {"sample::Missing<int> *", "sample::Grid<sample::Box<int>,-2,false> *",
+        "sample::Grid<sample::Box<int>,-2,true>> *",
+        "sample::Grid<sample::Box<int>,-2,true *", "sample: :Grid<int> *",
+        "sample::Words<'','>'> *"}) {
+    EXPECT_FALSE(
+        parseFunctionDeclaration("void inspect(" + Bad.str() + ")", Library)
+            .ok())
+        << Bad.str();
+  }
+  EXPECT_EQ(Library.size(), Names.size() + 1);
+}
+
+TEST(TypeParse, TemplateIndexObservesReplacementRemovalTrialsAndCopies) {
+  auto Library = parsed("struct Layout { unsigned long long value; };");
+  LocalType Type = *Library.find("Layout");
+  Type.Name = "sample::Box<int, 3>";
+  Library.define(Type);
+  const auto Read = [](const TypeLibrary &Library) {
+    return parseFunctionDeclaration("void inspect(sample :: Box<int,3> *)",
+                                    Library)
+        .ok();
+  };
+  ASSERT_TRUE(Read(Library));
+  auto Copy = Library;
+  {
+    TypeLibrary::Trial Trial(Library);
+    EXPECT_TRUE(Library.remove(Type.Name));
+    EXPECT_FALSE(Read(Library));
+  }
+  ASSERT_TRUE(Read(Library));
+  {
+    TypeLibrary::Trial Trial(Library);
+    Type.Name = "sample :: Box<int,3>";
+    Library.define(Type);
+    EXPECT_FALSE(Read(Library))
+        << "a spelling shared by two declarations is ambiguous";
+  }
+  EXPECT_TRUE(Read(Library));
+  EXPECT_TRUE(Read(Copy));
+  Library.remove("sample::Box<int, 3>");
+  EXPECT_FALSE(Read(Library));
+  EXPECT_TRUE(Read(Copy));
+  Type.Name = "sample::Box<int, 3>";
+  Library.define(Type);
+  Library.define(Type);
+  EXPECT_TRUE(Read(Library));
+  llvm::StringMap<std::string> Aliases{{"Projected", Type.Name}};
+  ParseOptions Options;
+  Options.TypeNames = &Aliases;
+  const auto Aliased = parseFunctionDeclaration(
+      "void inspect(Projected *Projected)", Library, Options);
+  ASSERT_TRUE(Aliased.ok());
+  EXPECT_EQ(Aliased.Function->Params[0].Type->Element->Name, Type.Name);
+  EXPECT_EQ(Aliased.Function->Params[0].Name, "Projected");
+  RenderOptions Spelling;
+  Spelling.SourceTypeNames = true;
+  const auto Text =
+      spellType(Library, *makeFunction(Aliased.Function), "inspect", Spelling);
+  EXPECT_NE(Text.find(Type.Name), std::string::npos);
+  EXPECT_TRUE(parseFunctionDeclaration(Text, Library).ok()) << Text;
 }
 
 TEST(TypeParse, PunctuationKeepsOperatorsDeclaratorsAndErrorPositions) {

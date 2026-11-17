@@ -305,8 +305,38 @@ TEST_F(AArch64_VariadicSaveArea, AnUnrolledFloatingWalkKeepsTheVectorHalf) {
   EXPECT_EQ(spills(Body, "Q[0-7]"), 8u) << Body;
   const auto High = decompileToHighC(Object);
   ASSERT_EQ(High.exitCode, 0) << High.err;
-  EXPECT_NE(readText(tmpFile("decompiled_high.c")).find("unknown register"),
-            std::string::npos);
+  const auto Source = readText(tmpFile("decompiled_high.c"));
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("__builtin_trap()"), std::string::npos) << Source;
+}
+
+TEST_F(AArch64_VariadicSaveArea,
+       NamedScalarAndAggregateSpillsRemainParameters) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "cross-target compilation requires Clang";
+  const std::string Kernel = R"C(
+struct Triple { float x, y, z; };
+__attribute__((noinline)) int fixed(int a, long b, int c, long d,
+    struct Triple p, struct Triple q, struct Triple r, float s, float t) {
+  return a + (int)b * 3 + c * 5 + (int)d * 7 +
+      (int)(p.x + p.y * 2 + p.z * 4 + q.x * 8 + q.y * 16 + q.z * 32 +
+            r.x * 64 + r.y * 128 + r.z * 256 + s * 512 + t * 1024);
+}
+int fixed_e(int x) {
+  struct Triple p = {x, x + 1, x + 2}, q = {x + 3, x + 4, x + 5};
+  struct Triple r = {x + 6, x + 7, x + 8};
+  return fixed(x, x + 1, x + 2, x + 3, p, q, r, x + 9, x + 10);
+}
+)C";
+  const auto Object = compile("aarch64-linux-gnu", Kernel, "fixed", {"-O0"});
+  const auto High = decompileToHighC(Object);
+  ASSERT_EQ(High.exitCode, 0) << High.err;
+  const auto C = readText(tmpFile("decompiled_high.c"));
+  ASSERT_EQ(C.find("__builtin_trap"), std::string::npos) << C;
+  expectRunsLikeKernel(C, Kernel, "fixed_e", {"fixed_e", "fixed"},
+                       {0, 1, -1, 7, -19, 127});
 }
 
 // With no vector half, the integer save area and the va_list that addresses
@@ -355,8 +385,11 @@ TEST_F(AArch64_VariadicSaveArea, AFloatingWalkKeepsTheVectorHalf) {
   }
   const auto High = decompileToHighC(Object);
   ASSERT_EQ(High.exitCode, 0) << High.err;
-  EXPECT_NE(readText(tmpFile("decompiled_high.c")).find("unknown register"),
-            std::string::npos);
+  const std::string HighC = readText(tmpFile("decompiled_high.c"));
+  EXPECT_NE(HighC.find("incoming register has no definition"),
+            std::string::npos)
+      << HighC;
+  EXPECT_EQ(HighC.find("unknown register"), std::string::npos) << HighC;
 }
 
 // Windows ARM64 passes floating varargs in integer registers and Apple

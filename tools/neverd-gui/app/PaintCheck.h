@@ -33,8 +33,8 @@ public:
   class Picture {
     friend class PaintCheck;
     QImage image_;
-    /// Every pixel of it has been painted.
-    bool whole_ = false;
+    /// Unobscured pixels whose exposure has reached a paint event.
+    QRegion known_;
   };
   /// How a view paints the part of itself a region covers: as it has just
   /// painted it for its window, or \p afresh, from nothing but what it holds.
@@ -44,8 +44,9 @@ public:
   /// widget, rather than a picture someone grabs of it, \p paint paints the
   /// same region into \p picture, as the window's store took it.  A view that
   /// is \p settled, which knows of no change it has yet to paint, is then
-  /// painted afresh, all of it, and the two are compared.  A difference is a
-  /// row the view left as an earlier state of it was painted: it counts as a
+  /// painted afresh over its visible region, and the two are compared. Pixels
+  /// covered by opaque children are checked when exposed again. A difference is
+  /// a row the view left as an earlier state of it was painted: it counts as a
   /// stale paint and is said as a critical message.
   ///
   /// Both pictures are painted the way an image is, so the window's own

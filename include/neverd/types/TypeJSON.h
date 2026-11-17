@@ -43,6 +43,10 @@ std::optional<RecordABI> recordABINamed(llvm::StringRef Name);
 /// members, anonymous ones' included.
 llvm::json::Array typeListJSON(const TypeLibrary &Library);
 
+/// One row of typeListJSON, without materializing the rest of the library.
+llvm::json::Object typeBriefJSON(const TypeLibrary &Library,
+                                 const LocalType &Type);
+
 /// \p Type in full.  Every type has `ordinal`, `name`, `kind` and `origin`.
 /// A record adds `size`, `alignment`, `pack`, `declaredAlignment`,
 /// `defined` and `members`.  Each member has `kind` ("field", "bitfield",
@@ -54,9 +58,13 @@ llvm::json::Array typeListJSON(const TypeLibrary &Library);
 /// record in place's `members`.  An enumeration adds `size`, `underlying`,
 /// `flags` and `values` (`name`, `value` as a signed or unsigned integer);
 /// a typedef `target`; a function type `declaration`.
-llvm::json::Object
-typeJSON(const TypeLibrary &Library, const LocalType &Type,
-         BuiltinSpelling Spelling = BuiltinSpelling::Windows);
+/// C++ member-pointer records and members add `memberPointer` with `owner`,
+/// `target` and `function`; their fields describe encoded ABI storage.
+/// Shared, when supplied, must spell the same unchanged Library and Spelling;
+/// it reuses the name map across layout requests.
+llvm::json::Object typeJSON(const TypeLibrary &Library, const LocalType &Type,
+                            BuiltinSpelling Spelling = BuiltinSpelling::Windows,
+                            const TypeSpeller *Shared = nullptr);
 
 /// How an access lands as JSON names it: exact, start, inside, padding or
 /// outside.

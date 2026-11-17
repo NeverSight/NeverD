@@ -127,6 +127,7 @@ std::string declarationText(const types::TypeLibrary &Library,
                             const types::FunctionDef &Function,
                             llvm::StringRef Name) {
   types::RenderOptions Options;
+  Options.SourceTypeNames = true;
   std::string Text = Function.NoReturn ? "_Noreturn " : "";
   return Text +
          types::spellType(Library,
@@ -161,7 +162,9 @@ llvm::json::Object declarationReply(Session &S,
     return Reply;
   }
   const types::FunctionDef &Function = *Read.Function;
-  const types::TypeSpeller Speller(Library, types::RenderOptions());
+  types::RenderOptions Spelling;
+  Spelling.SourceTypeNames = true;
+  const types::TypeSpeller Speller(Library, Spelling);
   Reply["name"] = jsonSafeText(Read.Name);
   Reply["return"] = jsonSafeText(
       Function.Return ? Speller.spell(*Function.Return) : std::string("void"));
@@ -195,18 +198,30 @@ std::optional<CurrentDeclaration>
 currentDeclaration(neverd_session_t Sess, Session &S, va_t Entry,
                    const types::TypeLibrary &Library) {
   CurrentDeclaration Current;
+  llvm::StringMap<std::string> TypeNames;
   if (const auto Stated = S.FunctionAttributeEdits.find(Entry);
       Stated != S.FunctionAttributeEdits.end() && Stated->second.Type) {
     Current.Text = *Stated->second.Type;
     Current.Stated = true;
   } else {
     // The signature the user sees: the decompiler's own.
-    const char *Source = neverd_decompile(Sess, Entry);
-    const std::string Decompiled = Source ? Source : "";
-    neverd_free_string(Source);
-    if (Decompiled.empty())
+    // Read the declaration together with the emitter's exact type identities.
+    // A C tag alone loses namespaces and template arguments; resolving that
+    // projection against the whole type catalog can select another record.
+    const char *Page = neverd_ir_view_json(Sess, Entry, "c", 0, 1);
+    if (!Page)
       return std::nullopt;
-    std::optional<std::string> Printed = printedSignature(Decompiled, Entry);
+    neverd_free_string(Page);
+    const auto *Source =
+        S.findFunctionSource(Entry, Session::SourceRoute::PlainC);
+    if (!Source || !Source->Map) {
+      S.setError("the decompiler supplied no source type identities");
+      return std::nullopt;
+    }
+    for (const auto &Name : Source->Map->Names)
+      if (Name.TheKind == CSourceName::Kind::Type && !Name.Symbol.empty())
+        TypeNames[Name.Identifier] = Name.Symbol;
+    std::optional<std::string> Printed = printedSignature(Source->Text, Entry);
     if (!Printed) {
       S.setError("the decompiler printed no signature for the function at " +
                  vaHex(Entry));
@@ -214,7 +229,13 @@ currentDeclaration(neverd_session_t Sess, Session &S, va_t Entry,
     }
     Current.Text = std::move(*Printed);
   }
-  Current.Read = types::parseFunctionDeclaration(Current.Text, Library);
+  types::ParseOptions Options;
+  Options.TypeNames = &TypeNames;
+  Current.Read =
+      types::parseFunctionDeclaration(Current.Text, Library, Options);
+  if (!Current.Stated && Current.Read.ok())
+    Current.Text =
+        declarationText(Library, *Current.Read.Function, Current.Read.Name);
   return Current;
 }
 

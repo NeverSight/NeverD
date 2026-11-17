@@ -21,6 +21,7 @@
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
+#include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -37,10 +38,15 @@
 #include "neverd/ir/med/X86/X86RegistrationSEHJump.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHLocalUnwind.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/loader/ELF/ELFOperatingSystem.h"
+#include "neverd/loader/Limits.h"
 #include "neverd/loader/ObjC/ObjCCallHints.h"
+#include "neverd/loader/ObjC/ObjCFormattedCalls.h"
 #include "neverd/object/SectionNames.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -59,6 +65,117 @@ namespace neverd {
 
 namespace {
 using EntrySpKey = std::tuple<uint8_t, int, int, uint64_t, uint16_t>;
+
+/// The integer arguments the printf format at \p Address names, when the
+/// image holds it as text the program cannot change; nullopt for any other
+/// format, or one naming a floating argument, which the vector registers
+/// carry.  A kernel log level (KERN_SOH and its level) may lead the text.
+/// A raw image maps its text and data alike in one executable section;
+/// there the format is ASCII text alone.
+std::optional<size_t> formatIntegerArguments(const BinaryImage &Img,
+                                             va_t Address) {
+  const Segment *Seg = Img.getSegmentFor(Address);
+  const Section *Sec = Img.getSectionFor(Address);
+  const bool Raw = Img.Format == BinaryFormat::Raw;
+  if (!Address || !Seg || !Seg->isReadable() || Seg->isWritable() ||
+      (Sec && Sec->isWritable()) || (!Raw && Img.isCodeAddress(Address)))
+    return std::nullopt;
+  std::vector<uint16_t> Units;
+  for (;;) {
+    if (Units.size() >=
+            static_cast<size_t>(
+                limits::loader::
+                    kObjCFormattedCallsObjcFormatArgumentTypesFormatSizeLimit) ||
+        Address > InvalidVA - Units.size())
+      return std::nullopt;
+    const uint8_t *Byte = Img.readVA(Address + Units.size(), 1);
+    if (!Byte)
+      return std::nullopt;
+    if (!*Byte)
+      break;
+    const bool Text = *Byte >= 0x20
+                          ? *Byte != 0x7F && (!Raw || *Byte < 0x80)
+                          : *Byte == '\t' || *Byte == '\n' || *Byte == '\r' ||
+                                (Units.empty() && *Byte == 1);
+    if (!Text)
+      return std::nullopt;
+    Units.push_back(*Byte);
+  }
+  if (Units.empty())
+    return std::nullopt;
+  const auto Types =
+      objcFormatArgumentTypes(Units, SourceCallTypeHint::FormatSyntax::Printf);
+  if (!Types || llvm::any_of(*Types, [](const TypeRef &Type) {
+        return !Type || Type->Kind == NdTypeKind::Float;
+      }))
+    return std::nullopt;
+  return Types->size();
+}
+
+/// The constants \p V may hold, through the copies, constant offsets and
+/// joins that define it: a few at most, or nullopt where a path gives
+/// anything else.
+std::optional<std::set<uint64_t>>
+constantsHeld(const MedVar &V, MedDefSiteIndex &Defs, int Depth = 0) {
+  constexpr size_t MaxConstants = 4;
+  if (V.Size == 0 || V.Size > sizeof(uint64_t))
+    return std::nullopt;
+  const uint64_t Mask = V.Size == sizeof(uint64_t)
+                            ? ~uint64_t(0)
+                            : (uint64_t(1) << (8 * V.Size)) - 1;
+  if (V.isConst())
+    return std::set<uint64_t>{V.ConstVal & Mask};
+  if (Depth > 8 || (V.Kind != MedVar::Reg && V.Kind != MedVar::Temp))
+    return std::nullopt;
+  const MedDefSite Site = Defs.find(V);
+  if (Site.Ambiguous)
+    return std::nullopt;
+  if (Site.Phi) {
+    std::set<uint64_t> Joined;
+    for (const auto &Arg : Site.Phi->Args) {
+      const auto Each = constantsHeld(Arg.second, Defs, Depth + 1);
+      if (!Each)
+        return std::nullopt;
+      for (uint64_t Value : *Each)
+        Joined.insert(Value & Mask);
+      if (Joined.size() > MaxConstants)
+        return std::nullopt;
+    }
+    return Joined;
+  }
+  const MedOp *Op = Site.Op;
+  if (!Op || Op->NumInputs < 1)
+    return std::nullopt;
+  switch (Op->Opcode) {
+  case NdOp::COPY:
+  case NdOp::INT_ZEXT: {
+    const auto Source = constantsHeld(Op->Inputs[0], Defs, Depth + 1);
+    if (!Source)
+      return std::nullopt;
+    std::set<uint64_t> Values;
+    for (uint64_t Value : *Source)
+      Values.insert(Value & Mask);
+    return Values;
+  }
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB: {
+    if (Op->NumInputs != 2 || !Op->Inputs[1].isConst())
+      return std::nullopt;
+    const auto Base = constantsHeld(Op->Inputs[0], Defs, Depth + 1);
+    if (!Base)
+      return std::nullopt;
+    std::set<uint64_t> Moved;
+    for (const uint64_t Value : *Base)
+      Moved.insert((Op->Opcode == NdOp::INT_ADD
+                        ? Value + Op->Inputs[1].ConstVal
+                        : Value - Op->Inputs[1].ConstVal) &
+                   Mask);
+    return Moved;
+  }
+  default:
+    return std::nullopt;
+  }
+}
 
 // Clang's AUT/poison check splits an authenticated tail's argument setup:
 // its other successor traps, while the only continuing edge retains the
@@ -627,18 +744,24 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
       Op.NumInputs != Op.ScalarCallSignature->Scalars.size() + 1)
     return std::nullopt;
   const auto &Signature = *Op.ScalarCallSignature;
-  if (Signature.ReturnElements) {
+  if (!Signature.ReturnBytes) {
+    if (Signature.ReturnElements || Op.CalleeFloatReturnBytes ||
+        Op.Output.Id >= 0 || Op.Output.Size)
+      return std::nullopt;
+  } else if (Signature.ReturnElements) {
     if (A != Arch::AArch64 || Op.CalleeFloatReturnBytes ||
         Op.Output.Kind != MedVar::Temp ||
         Op.Output.Size != Signature.ReturnBytes ||
         Signature.ReturnElements > Registers.FPReturnRegs.size())
       return std::nullopt;
   } else if (Signature.ReturnKind != NdTypeKind::Float) {
-    if (!isMIPS(A) || Op.CalleeFloatReturnBytes ||
+    if ((!isMIPS(A) && A != Arch::AArch64 && A != Arch::X64 &&
+         A != Arch::X86) ||
+        Op.CalleeFloatReturnBytes ||
         (Signature.ReturnKind == NdTypeKind::Void
              ? Op.Output.Size != 0
              : Op.Output.Size != Signature.ReturnBytes ||
-                   (Signature.ReturnBytes != Registers.FullRegWidth
+                   (isMIPS(A) && Signature.ReturnBytes != Registers.FullRegWidth
                         ? Op.Output.Kind != MedVar::Temp
                         : Op.Output.Kind != MedVar::Reg ||
                               Op.Output.RegOff != Registers.IntReturnReg)))
@@ -659,6 +782,46 @@ boundFloatingCallArguments(const MedOp &Op, Arch A, BinaryFormat F) {
                                             : std::nullopt;
 }
 
+bool recoveredVariadicVectorArgument(const MedCallInfo &Call, size_t Index,
+                                     Arch A, BinaryFormat F) {
+  const bool SeparateBanks =
+      (A == Arch::AArch64 && F == BinaryFormat::ELF) ||
+      (A == Arch::X64 && (F == BinaryFormat::ELF || F == BinaryFormat::MachO));
+  if (!SeparateBanks || Call.VarArgFixedCount < 0 ||
+      Index < static_cast<size_t>(Call.VarArgFixedCount) ||
+      Call.IntegerRegisterArgCount < 0 || Call.FloatingRegisterArgCount <= 0 ||
+      Index >= Call.Args.size() || Call.Args[Index].Size != 16 ||
+      (Index < Call.ArgReadBytes.size() && Call.ArgReadBytes[Index] &&
+       Call.ArgReadBytes[Index] != 16))
+    return false;
+  const size_t Integers = Call.IntegerRegisterArgCount;
+  const size_t Floating = Call.FloatingRegisterArgCount;
+  const auto &Registers = getTargetRegInfo(A);
+  return Integers <= Registers.integerParamRegs(F).size() &&
+         Floating <= Registers.floatingParamRegs(F).size() &&
+         Integers <= Call.Args.size() &&
+         Floating <= Call.Args.size() - Integers && Index >= Integers &&
+         Index - Integers < Floating;
+}
+
+bool recoveredVariadicVectorArgument(const MedOp &Call, unsigned Input, Arch A,
+                                     BinaryFormat F) {
+  // This pre-SSA binding belongs to System V's independent register-bank
+  // summaries. Other conventions recover their operands in MedCallInfo.
+  const int Fixed = Call.CalleeVariadicFrom >= 0
+                        ? Call.CalleeVariadicFrom
+                        : Call.CalleeVariadicRegisterFrom;
+  if (A != Arch::X64 || (F != BinaryFormat::ELF && F != BinaryFormat::MachO) ||
+      Fixed < 0 || Call.CalleeRegisterArgs < 0 || Call.CalleeVectorArgs <= 0 ||
+      !Input || Input >= Call.NumInputs ||
+      Input <= static_cast<unsigned>(Fixed) ||
+      Input <= static_cast<unsigned>(Call.CalleeRegisterArgs) ||
+      Input > unsigned(Call.CalleeRegisterArgs + Call.CalleeVectorArgs) ||
+      Call.Inputs[Input].Size != 16)
+    return false;
+  return Call.vectorArgumentWidth(Input) == 16;
+}
+
 std::optional<FloatingCallArguments>
 recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
                                BinaryFormat F) {
@@ -677,6 +840,42 @@ recoveredFloatingCallArguments(const MedOp &Op, const MedCallInfo &Call, Arch A,
     return Bound;
   }
   const auto &Registers = getTargetRegInfo(A);
+  if (A == Arch::AArch64 && Op.RegisterReturnFields && !Op.SourceCallHint &&
+      !Call.IsIndirect && Call.VarArgFixedCount < 0 &&
+      Call.IntegerRegisterArgCount >= 0 && Call.FloatingRegisterArgCount >= 0 &&
+      static_cast<size_t>(Call.IntegerRegisterArgCount +
+                          Call.FloatingRegisterArgCount) == Call.Args.size() &&
+      Call.ArgReadBytes.size() == Call.Args.size()) {
+    // The callee proof owns the result fields, and call-ABI recovery owns
+    // the parameter banks and low scalar widths. Keep both when the caller
+    // is exported without the callee: an unprototyped float becomes double.
+    const auto &Fields = *Op.RegisterReturnFields;
+    if (Fields.empty() || Fields.size() > Registers.FPReturnRegs.size())
+      return std::nullopt;
+    std::vector<TypeRef> Members;
+    for (size_t I = 0; I < Fields.size(); ++I) {
+      const auto &Field = Fields[I];
+      if (!Field.IsFP || (Field.Size != 4 && Field.Size != 8) ||
+          Field.Size != Fields.front().Size ||
+          Field.RegOff != Registers.FPReturnRegs[I])
+        return std::nullopt;
+      Members.push_back(NdType::makeFloat(Field.Size));
+    }
+    auto Result = NdType::makeStruct(std::move(Members));
+    Result->Passing = NdRecordPassing::ByValue;
+    std::vector<TypeRef> Parameters;
+    for (size_t I = 0; I < Call.Args.size(); ++I) {
+      const bool Floating =
+          I >= static_cast<size_t>(Call.IntegerRegisterArgCount);
+      const uint16_t Bytes =
+          Floating ? Call.ArgReadBytes[I] : Call.Args[I].Size;
+      if (Call.Args[I].Size < Bytes)
+        return std::nullopt;
+      Parameters.push_back(Floating ? NdType::makeFloat(Bytes)
+                                    : NdType::makeInt(Bytes, false));
+    }
+    return floatingCallArguments(A, F, Result, Parameters);
+  }
   if (!Op.CalleeFloatReturnBytes || Op.SourceCallHint ||
       Call.VarArgFixedCount >= 0 || Call.IntegerRegisterArgCount != 0 ||
       Call.FloatingRegisterArgCount != static_cast<int>(Call.Args.size()) ||
@@ -836,6 +1035,29 @@ IntegerArgumentLayout integerArgumentLayoutOf(const MedFunc &Func,
   if (!Func.IntegerArgumentRegisters.empty())
     Layout.Registers = Func.IntegerArgumentRegisters;
   return Layout;
+}
+
+std::optional<size_t>
+boundedLibcArgumentCount(const BinaryImage *Image, llvm::StringRef Name,
+                         std::optional<uint64_t> FirstArgument) {
+  const auto LibC = Image ? libc::libcVariantOf(*Image)
+                          : libc::libcVariantOf(BinaryFormat::Unknown);
+  const auto *Forward = libc::libcVariadicForward(Name);
+  if (!Forward ||
+      Forward->TheKind != libc::LibCVariadicForward::Kind::Bounded ||
+      !libc::variadicIn(*Forward, LibC) ||
+      libc::isFloatingType(Forward->Type) ||
+      llvm::any_of(
+          llvm::ArrayRef(Forward->Fixed).take_front(Forward->FixedCount),
+          libc::isFloatingType))
+    return std::nullopt;
+  // The libc wrapper moves machine words into the kernel argument bank.
+  // Only the selected kernel handler establishes which of them are read.
+  if (Image && runsUnderLinux(*Image) && FirstArgument &&
+      libc::routineOfSymbol(Name, LibC) == "syscall")
+    if (auto Count = linuxSyscallArgumentCount(Image->Arch, *FirstArgument))
+      return Forward->FixedCount + *Count;
+  return Forward->FixedCount + Forward->Count;
 }
 
 void recoverCallAbi(
@@ -1102,6 +1324,7 @@ void recoverCallAbi(
   MedDefSiteIndex &DefSites = StackDeltas.definitions();
   // The loop adds no blocks, so one index serves every call's walks.
   const MedBlockIdIndex BlockIds(Func);
+  size_t VirtualReceiverWork = limits::ir::kMedABIVirtualReceiverWorkBudget;
   auto lookupDefinition = [&](const MedVar &V) { return Definitions.find(V); };
   // A value in an FP/vector register, or its low scalar: `movsd [rsp], xmm9`
   // stores a slice of the register where AArch64's `str d9, [sp]` names it.
@@ -1371,6 +1594,7 @@ void recoverCallAbi(
             Op.CalleeStackArgs >= 0)) &&
           Op.CalleeVectorSlots == 0 && Op.CalleeVectorArgs <= 0;
       const bool HeaderVariadic = Op.CalleeVariadicFrom >= 0;
+      const bool SummarizedVariadicVectors = Op.CalleeVariadicRegisterFrom >= 0;
       // An import whose prototype the user declares takes what that prototype
       // declares, as its summary counts it, not what the tables give a
       // routine of its name: through its stub, its slot, or a variable that
@@ -1398,7 +1622,9 @@ void recoverCallAbi(
       // `_NlsValidateLocale@8`).
       if (!HeaderVariadic && !ExternalArity &&
           (IsIndirectImport || IsDirectImport || PrototypeArguments) &&
-          IntegerSummary) {
+          IntegerSummary &&
+          (PatchedCallee || PrototypeArguments ||
+           !boundedLibcArgumentCount(Img, CI.TargetName))) {
         libc::LibCArity Declared;
         Declared.IntArgs =
             std::max<int>(Op.CalleeRegisterArgs, Op.CalleeStackArgs);
@@ -1697,6 +1923,7 @@ void recoverCallAbi(
           if (IsCall)
             break;
         }
+      const std::vector<bool> SetInBlock = FoundMask;
       // The nearest in-block register write executes after the block PHIs and
       // reaches this call even when its source is a constant.  Only slots with
       // no such write may fall back to an entry PHI below.
@@ -1786,7 +2013,6 @@ void recoverCallAbi(
       // dedicated result register. Find one reaching setup and reuse it for
       // both the variadic decision and the final hidden argument. A join
       // needs its SSA PHI; choosing one predecessor would change the buffer.
-      std::vector<const MedBlock *> ResultSetupPredecessors;
       const auto [ResultPointer,
                   FrameResult] = [&]() -> std::pair<MedVar, bool> {
         const uint64_t IRR = TRI.indirectResultReg();
@@ -1808,11 +2034,14 @@ void recoverCallAbi(
                   *Setup, static_cast<int>(J) - 1, TRI, IntegerLayout);
               if (Pointer.Size != TRI.PointerSize)
                 return {};
-              return {Pointer, derivesFromFrameReg(*Setup, TRI, Pointer) ||
-                                   entryStackOffset(Func, Pointer, TheArch,
-                                                    Img ? Img->abiFormat()
-                                                        : BinaryFormat::Unknown)
-                                       .has_value()};
+              return {Pointer,
+                      derivesFromFrameReg(*Setup, TRI, Pointer) ||
+                          DefSites
+                              .entryStackOffset(Pointer, TheArch,
+                                                Img ? Img->abiFormat()
+                                                    : BinaryFormat::Unknown,
+                                                StackEntryKind::Call)
+                              .has_value()};
             }
           }
           if (!Setup->ExceptionalPreds.empty())
@@ -1820,16 +2049,18 @@ void recoverCallAbi(
           for (const PhiNode &Phi : Setup->Phis)
             if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == IRR &&
                 Phi.Output.Size == TRI.PointerSize)
-              return {Phi.Output, entryStackOffset(Func, Phi.Output, TheArch,
-                                                   Img ? Img->abiFormat()
-                                                       : BinaryFormat::Unknown)
-                                      .has_value()};
+              return {Phi.Output,
+                      DefSites
+                          .entryStackOffset(Phi.Output, TheArch,
+                                            Img ? Img->abiFormat()
+                                                : BinaryFormat::Unknown,
+                                            StackEntryKind::Call)
+                          .has_value()};
           if (Setup->Preds.size() != 1)
             return {};
           Setup = BlockIds.first(Setup->Preds.front());
           if (Setup) {
             End = Setup->Ops.size();
-            ResultSetupPredecessors.push_back(Setup);
           }
         }
         return {};
@@ -1869,6 +2100,15 @@ void recoverCallAbi(
         return UndefinedScratchSlots &&
                holdsUndefinedIncomingScratch(Func, TheArch, Fmt, Stored);
       };
+      // An AArch64 routine of the image that takes no more arguments than
+      // the registers hold reads no stack argument: what is stored below its
+      // call fills this function's frame, as an exception entry saves the
+      // interrupted registers there before it calls a handler.
+      const bool NoStackParameters =
+          TheArch == Arch::AArch64 && !CI.IsIndirect && !IsRelocExtern &&
+          !IsDirectImport && !UseExternalArity && !HeaderVariadic &&
+          !OpenVariadicArity && CalleeRegArgs >= 0 && CalleeArgs >= 0 &&
+          CalleeArgs <= static_cast<int>(IntParamRegs.size());
 
       // A value spilled to the call frame before the call (an outgoing `push` /
       // `str [sp,#k]` landing at or above the call SP) means the ABI has run
@@ -1878,9 +2118,10 @@ void recoverCallAbi(
       // its slot even though it sits "below" an already-found stack argument.
       bool HasStackArg = false;
       bool HasStackArgAtCallSP = false;
-      for (int J = static_cast<int>(OI) - 1; J >= StoreScanStart; --J) {
+      for (int J = static_cast<int>(OI) - 1;
+           !NoStackParameters && J >= StoreScanStart; --J) {
         auto &Prev = Blk.Ops[J];
-        if (isAbiRecoveryBarrier(Prev))
+        if (endsCallStackSetup(Prev))
           break;
         if (Prev.Opcode == NdOp::STORE && Prev.NumInputs >= 2 &&
             Prev.MemoryAddressSpace == NdMemoryAddressSpace::Default)
@@ -1936,7 +2177,7 @@ void recoverCallAbi(
             StackJoins.Slots.count(CallLayout.CallStackBase) != 0;
       }
       for (const auto &[Offset, Value] : ReachingStackStores) {
-        if (UndefinedScratchSlot(Value))
+        if (NoStackParameters || UndefinedScratchSlot(Value))
           continue;
         HasStackArg = true;
         if (Offset == CallLayout.CallStackBase &&
@@ -2011,6 +2252,13 @@ void recoverCallAbi(
             break;  // indirect arguments are consecutive from arg0
           continue; // direct: leave the gap for the stack scan to try
         }
+        // A compiler sets each argument of a call on every way to it: a join
+        // that brings what an earlier call left on one way passes nothing to
+        // a callee whose arguments only the setup shows.
+        if (CI.IsIndirect && llvm::any_of(Best->Args, [&](const auto &Arg) {
+              return callLeftovers().contains(Arg.second);
+            }))
+          break;
         Found[K] = Best->Output;
         FoundMask[K] = true;
       }
@@ -2035,9 +2283,13 @@ void recoverCallAbi(
           for (int J = static_cast<int>(Setup.Ops.size()) - 1; J >= 0; --J) {
             const auto &Prev = Setup.Ops[J];
             const bool Barrier =
-                isAbiRecoveryBarrier(Prev, /*RegistersOnly=*/true);
+                endsCallArgumentSetup(Prev, /*RegistersOnly=*/true);
             if (Barrier && !ForwardCallResult)
-              break;
+              return false;
+            if (!ForwardCallResult &&
+                med_calling_conv_detail::isEntryLiveInCopy(Prev,
+                                                           Prev.Output.RegOff))
+              continue;
             if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size) {
               const int K = regToIntArgIdx(Prev.Output.RegOff);
               if (K >= 0 && K < MaxArgs && !FoundMask[K]) {
@@ -2047,19 +2299,33 @@ void recoverCallAbi(
               }
             }
             if (Barrier)
-              break;
+              return false;
           }
+          return true;
         };
         // The authenticated tail proof also preserves a prior call result
         // forwarded to the authenticated target (return fp(target(x))).
         if (const auto *Setup = authenticatedTailSetup(Blk, Op, BlockIds))
           CollectSetup(*Setup, true);
-        // The result-buffer setup proves the call's setup continues across
-        // these unambiguous splits. Keep the accompanying ordinary arguments
-        // too; otherwise the recovered result pointer would become arg0.
-        if (CI.IsIndirect && FrameResult)
-          for (const MedBlock *Setup : ResultSetupPredecessors)
-            CollectSetup(*Setup, false);
+        // A dispatch branch or an EH range boundary can split ordinary
+        // argument setup from an indirect call as well as result-buffer
+        // setup. A unique normal predecessor keeps that setup intact. Stop
+        // at calls, unknown effects, exceptional roots, joins and cycles;
+        // none of those supplies a single continuing register definition.
+        if (CI.IsIndirect && BlockIds.unique() &&
+            llvm::none_of(
+                llvm::ArrayRef(Blk.Ops).take_front(OI), [](const MedOp &Prev) {
+                  return endsCallArgumentSetup(Prev, /*RegistersOnly=*/true);
+                })) {
+          const MedBlock *Setup = &Blk;
+          std::set<int> Seen{Blk.Id};
+          while (Setup->ExceptionalPreds.empty() && Setup->Preds.size() == 1) {
+            Setup = BlockIds.first(Setup->Preds.front());
+            if (!Setup || !Seen.insert(Setup->Id).second ||
+                !CollectSetup(*Setup, false))
+              break;
+          }
+        }
       }
       if ((!CI.IsIndirect || UseExternalArity || UseVariableArity ||
            HeaderVariadic) &&
@@ -2075,10 +2341,15 @@ void recoverCallAbi(
           // reaching definition) only for a proven slot: the callee's known
           // arity, or a hole below a found argN (`lea rdx` without `mov rcx`
           // still has live-in rcx as arg0 on Win64). Do not invent trailing
-          // registers the callee never takes.
-          const bool AllowLiveIn = ((CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
-                                    (MaxRegArg >= 0 && K <= MaxRegArg)) &&
-                                   takesIncomingRegister(IntParamRegs[K]);
+          // registers the callee never takes: past the arguments a callee
+          // takes, a register the block sets is scratch, and a hole below it
+          // passes nothing.
+          const bool PastArity =
+              CalleeRegArgs >= 0 && K >= CalleeRegArgs && !OpenVariadicArity;
+          const bool AllowLiveIn =
+              ((CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
+               (MaxRegArg >= 0 && K <= MaxRegArg && !PastArity)) &&
+              takesIncomingRegister(IntParamRegs[K]);
           bool FromLiveIn = false;
           bool FoundDefinition = false;
           auto V =
@@ -2230,10 +2501,6 @@ void recoverCallAbi(
         }
       }
 
-      if (CI.IsIndirect && !HasStackArg && Policy &&
-          Policy->TakeIndirectCallRegisters)
-        Policy->TakeIndirectCallRegisters(Ctx);
-
       // The value an indirect call jumps to is its target, not an argument: a
       // register that only holds it (`ldr r1, [pc, r1]; blx r1`) ends the
       // register arguments unless an argument above it was set, or the
@@ -2280,8 +2547,9 @@ void recoverCallAbi(
         // already reaching the call (including a literal such as f(8)), and
         // a first argument register that holds the target holds no object.
         if (!FoundMask[0] && CI.TargetRegisterArgIdx != 0)
-          if (auto Obj =
-                  vtableCallObject(Blk, static_cast<int>(OI), Op.Inputs[0])) {
+          if (auto Obj = vtableCallObject(Func, Blk, static_cast<int>(OI),
+                                          Op.Inputs[0], TRI, IntegerLayout, Fmt,
+                                          BlockIds, VirtualReceiverWork)) {
             Found[0] = *Obj;
             FoundMask[0] = true;
           }
@@ -2415,7 +2683,7 @@ void recoverCallAbi(
 
       for (int J = static_cast<int>(OI) - 1; J >= StoreScanStart; --J) {
         auto &Prev = Blk.Ops[J];
-        if (isAbiRecoveryBarrier(Prev))
+        if (endsCallStackSetup(Prev))
           break;
         if (Prev.Opcode != NdOp::STORE || Prev.NumInputs < 2 ||
             Prev.MemoryAddressSpace != NdMemoryAddressSpace::Default)
@@ -2786,7 +3054,7 @@ void recoverCallAbi(
                                      : static_cast<int>(Block->Ops.size());
             for (int J = Boundary - 1; J >= 0; --J) {
               const MedOp &Candidate = Block->Ops[J];
-              if (isAbiRecoveryBarrier(Candidate)) {
+              if (endsCallStackSetup(Candidate)) {
                 Active.erase(BlockId);
                 return std::nullopt;
               }
@@ -2970,6 +3238,21 @@ void recoverCallAbi(
       // the real variadic arguments so the callee reads the wrong slots
       // (printf("p[%d]=%.3f", i, v) then prints "p[0]=0.000").
       std::vector<MedVar> FoundFP;
+      std::vector<uint64_t> FPRegs;
+      // System V's variadic vector operands were bound before SSA using
+      // the call's AL upper bound. Copies may no longer have a register
+      // identity; retain the exact operands and complete carrier bytes.
+      if ((HeaderVariadic || SummarizedVariadicVectors) && Convention &&
+          Convention->VectorArgumentsFromCalleeSummary &&
+          Op.CalleeRegisterArgs >= 0 && Op.CalleeVectorArgs > 0 &&
+          Op.CalleeVectorArgs <= static_cast<int>(FPParamRegs.size()) &&
+          unsigned(1 + Op.CalleeRegisterArgs + Op.CalleeVectorArgs) <=
+              Op.NumInputs) {
+        for (int K = 0; K < Op.CalleeVectorArgs; ++K)
+          FoundFP.push_back(Op.Inputs[1 + Op.CalleeRegisterArgs + K]);
+        FPRegs.assign(FPParamRegs.begin(),
+                      FPParamRegs.begin() + Op.CalleeVectorArgs);
+      }
       // Win64's integer and floating registers share argument positions.
       const bool PositionalFP =
           PositionalSlots && !CI.ArgumentsInCalleeRegisterOrder;
@@ -2980,14 +3263,15 @@ void recoverCallAbi(
       const bool NoVectorArguments =
           SummarizedIntegerOperands && Op.CalleeVectorArgs == 0;
       if (RegArgsApply && !FPParamRegs.empty() && DarwinVarArgBase < 0 &&
-          !CoreRegisterFloats && !HeaderVariadic && !NoVectorArguments) {
+          !CoreRegisterFloats && !HeaderVariadic &&
+          !SummarizedVariadicVectors && !NoVectorArguments) {
         // The FP-argument registers to probe, in ABI order.  Default to the
         // architecture's FP parameter registers (XMM0-7 / V0-7 / ARM D0-7); for
         // a direct call whose callee's exact FP layout is known, use it instead
         // so an ARM `float`-argument callee is recovered at s0,s1,.. (not
         // d0,d1) — the high-half S registers (s1=0x104) alias no D-register
         // slot.
-        std::vector<uint64_t> FPRegs(FPParamRegs.begin(), FPParamRegs.end());
+        FPRegs.assign(FPParamRegs.begin(), FPParamRegs.end());
         if (!CI.IsIndirect && !IsRelocExtern && CalleeFPRegs) {
           auto RIt = CalleeFPRegs->find(CI.TargetAddr);
           if (RIt != CalleeFPRegs->end() && !RIt->second.empty())
@@ -3040,43 +3324,69 @@ void recoverCallAbi(
         };
         const uint16_t FPViewBytes =
             TRI.FPABIRegWidth ? TRI.FPABIRegWidth : FwdFPArgSize;
-        // For a direct call to a known FP callee, clang may hoist an FP
-        // argument's setup (e.g. `cvtsi2sd`/`ucvtf` into XMM0) above a branch
-        // into the dominating predecessor — `acc += cond ? h(x) : x*0.5` puts
-        // the call in one arm but computes x in the shared predecessor.  The
-        // value reaching the FP-arg register is then the predecessor's last
-        // write; walk up the single-predecessor chain to find it.
+        const auto fpPhiValue = [&](const MedBlock &Block,
+                                    uint64_t Reg) -> std::optional<MedVar> {
+          std::optional<MedVar> Value;
+          for (const auto &Phi : Block.Phis)
+            if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg &&
+                (!Value || (KnownFPCallee && Phi.Output.Size > Value->Size)))
+              Value = Phi.Output;
+          // Scalar writes update the complete architectural register. Narrow
+          // read views are materialized on demand and can still carry an
+          // older value at this join. PHI storage order is not write order.
+          // Only a fixed contract supplies the consumed scalar lane. Unknown
+          // argument discovery must not widen that lane into undefined bits.
+          return Value;
+        };
+        // FP setup can dominate several branches that rejoin before the
+        // call. With no local PHI, every predecessor must reach the same SSA
+        // definition. A different write, clobber or uninitialized entry keeps
+        // the argument unknown; finding one path's definition is not enough.
         auto reachingFPArgCrossBlock =
             [&](uint64_t Reg) -> std::optional<MedVar> {
-          if (!KnownFPCallee || Blk.Preds.size() != 1)
+          if (!KnownFPCallee || !Blk.ExceptionalPreds.empty() ||
+              Func.ModuleAnalysisRoots.contains(Blk.StartAddr))
             return std::nullopt;
-          std::set<int> Seen{Blk.Id};
-          int CurId = Blk.Preds[0];
-          while (Seen.insert(CurId).second) {
-            MedBlock *B = nullptr;
-            for (auto &Cand : Func.Blocks)
-              if (Cand.Id == CurId) {
-                B = &Cand;
-                break;
-              }
+          llvm::DenseSet<int> Seen;
+          llvm::SmallVector<int, 8> Work(Blk.Preds.begin(), Blk.Preds.end());
+          std::optional<MedVar> Common;
+          while (!Work.empty()) {
+            const int Id = Work.pop_back_val();
+            if (!Seen.insert(Id).second)
+              continue;
+            const MedBlock *B = BlockIds.last(Id);
             if (!B)
               return std::nullopt;
+            std::optional<MedVar> Value;
             for (int J = static_cast<int>(B->Ops.size()) - 1; J >= 0; --J) {
-              auto &Prev = B->Ops[J];
+              const auto &Prev = B->Ops[J];
               if (Prev.Output.Kind == MedVar::Reg && Prev.Output.Size > 0 &&
-                  Prev.Output.RegOff == Reg)
-                return Prev.Output;
-              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt))
-                return fpValueLeftByCall(Prev, Reg);
+                  Prev.Output.RegOff == Reg) {
+                Value = Prev.Output;
+                break;
+              }
+              if (callClobbersRegister(Prev, Reg, FPViewBytes, TRI, Fmt)) {
+                Value = fpValueLeftByCall(Prev, Reg);
+                if (!Value)
+                  return std::nullopt;
+                break;
+              }
             }
-            for (const auto &Phi : B->Phis)
-              if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg)
-                return Phi.Output;
-            if (B->Preds.size() != 1)
+            if (!Value)
+              Value = fpPhiValue(*B, Reg);
+            if (Value) {
+              if (Common && (*Common != *Value || Common->Size != Value->Size))
+                return std::nullopt;
+              Common = *Value;
+              continue;
+            }
+            if (B->Preds.empty() || !B->ExceptionalPreds.empty() ||
+                B == &Func.Blocks.front() ||
+                Func.ModuleAnalysisRoots.contains(B->StartAddr))
               return std::nullopt;
-            CurId = B->Preds[0];
+            Work.append(B->Preds.begin(), B->Preds.end());
           }
-          return std::nullopt;
+          return Common;
         };
         for (int K = 0; K < FPLimit; ++K) {
           uint64_t Reg = FPRegs[K];
@@ -3140,20 +3450,14 @@ void recoverCallAbi(
           }
           if (!V && Clobber && KnownFPCallee)
             V = fpValueLeftByCall(*Clobber, Reg);
-          if (!V && !Clobber)
-            for (const auto &Phi : Blk.Phis)
-              if (Phi.Output.Kind == MedVar::Reg && Phi.Output.RegOff == Reg) {
-                // A join of caller-saved clobbers supplies no argument setup.
-                // Integer recovery already excludes these same leftovers.
-                // A known FP contract still observes the unavailable value;
-                // mixed joins and partially preserved lanes remain inputs.
-                if (!KnownFPCallee) {
-                  if (callLeftovers().contains(Phi.Output))
-                    break;
-                }
-                V = Phi.Output;
-                break;
-              }
+          if (!V && !Clobber) {
+            V = fpPhiValue(Blk, Reg);
+            // A join of caller-saved clobbers supplies no argument setup.
+            // A known FP contract still observes the unavailable value;
+            // mixed joins and partially preserved lanes remain inputs.
+            if (V && !KnownFPCallee && callLeftovers().contains(*V))
+              V.reset();
+          }
           if (!V && !Clobber)
             V = reachingFPArgCrossBlock(Reg);
           if (!V && !Clobber && KnownFPCallee &&
@@ -3184,6 +3488,14 @@ void recoverCallAbi(
               Width = std::max(Width, ScalarBytes);
             }
           }
+          // A fixed callee consumes every parameter in its proven prefix.
+          // An unproved reaching value does not shorten that signature or
+          // turn a later FP register into an earlier argument. Keep it
+          // explicitly unavailable, as integer argument recovery does.
+          if (!V && KnownFPCallee && !PositionalFP && !OpenVariadicArity &&
+              !(VectorArgumentCallees &&
+                VectorArgumentCallees->count(CI.TargetAddr)))
+            V = MedVar::makeUnspecified(FPViewBytes, TheArch);
           if (!V) {
             if (PositionalFP)
               continue;
@@ -3488,7 +3800,7 @@ void recoverCallAbi(
             IntPart.push_back(A);
             IntPartSlots.push_back(K);
           }
-        } else {
+        } else if (!NoStackParameters) {
           StackPart.push_back(A);
           StackPartOffsets.push_back(static_cast<int64_t>(K - StackArgBase) *
                                      IntegerLayout.SlotBytes);
@@ -3590,6 +3902,67 @@ void recoverCallAbi(
       if (!CI.IsIndirect && !PositionalSlots && !HeaderVariadic &&
           !OpenVariadicArity && !StackPart.empty() && CalleeArgs > StackArgBase)
         ZeroedRegArgs = std::max(ZeroedRegArgs, StackArgBase);
+      // A variadic routine of the image reads, past its named parameters, as
+      // many arguments as its format names where the last of them is a
+      // constant printf format: `printk("...\n")` passes the format alone,
+      // whatever else the argument registers hold.  With no such format, a
+      // register some path brings only what an earlier call left there was
+      // set for no argument, as a compiler sets each on every way to the
+      // call.  What the call's own block sets stays an argument either way:
+      // a routine whose last named parameter only looks like a format reads
+      // what its caller passes.
+      if (IntRegArgsApply && OpenVariadicArity && Img && CalleeRegArgs > 0 &&
+          static_cast<size_t>(CalleeRegArgs) < IntPart.size() &&
+          StackPart.empty() && FoundFP.empty() &&
+          IntPartSlots[CalleeRegArgs - 1] == CalleeRegArgs - 1) {
+        std::optional<size_t> Keep;
+        if (const auto Formats =
+                constantsHeld(IntPart[CalleeRegArgs - 1], DefSites)) {
+          for (const uint64_t Format : *Formats) {
+            const auto Named = formatIntegerArguments(*Img, Format);
+            if (!Named) {
+              Keep.reset();
+              break;
+            }
+            Keep = std::max(Keep.value_or(0), CalleeRegArgs + *Named);
+          }
+        }
+        const auto MayHoldLeftover = [&](const MedVar &V) {
+          std::vector<MedVar> Work{V};
+          std::set<std::tuple<int, int, int, uint64_t>> Seen;
+          while (!Work.empty() && Seen.size() < 64) {
+            const MedVar Each = Work.back();
+            Work.pop_back();
+            if (!Seen.emplace(Each.Kind, Each.Id, Each.SSAVer, Each.RegOff)
+                     .second)
+              continue;
+            if (callLeftovers().contains(Each))
+              return true;
+            if (const MedDefSite Site = DefSites.find(Each); Site.Phi)
+              for (const auto &Arg : Site.Phi->Args)
+                Work.push_back(Arg.second);
+          }
+          return false;
+        };
+        if (!Keep)
+          for (size_t I = CalleeRegArgs; I < IntPart.size(); ++I)
+            if (!SetInBlock[IntPartSlots[I]] && MayHoldLeftover(IntPart[I])) {
+              Keep = I;
+              break;
+            }
+        if (Keep)
+          for (size_t I = *Keep; I < IntPart.size(); ++I)
+            if (SetInBlock[IntPartSlots[I]])
+              Keep = I + 1;
+        if (Keep && *Keep < IntPart.size()) {
+          for (size_t J = *Keep; J < IntPart.size(); ++J)
+            if (IntPart[J].Kind == MedVar::Param &&
+                !PromotedBefore.count(IntPart[J].RegOff))
+              PromoteParams.erase(IntPart[J].RegOff);
+          IntPart.resize(*Keep);
+          IntPartSlots.resize(*Keep);
+        }
+      }
       while (static_cast<int>(IntPart.size()) < ZeroedRegArgs)
         IntPart.push_back(
             MedVar::makeConst(0, static_cast<uint16_t>(TRI.PointerSize)));
@@ -3609,6 +3982,67 @@ void recoverCallAbi(
                               : static_cast<uint16_t>(TRI.VecRegStride);
         while (static_cast<int>(FoundFP.size()) < Vectors)
           FoundFP.push_back(MedVar::makeConst(0, VectorBytes));
+      }
+      // Bounded libc varargs consume no register beyond their published
+      // maximum, even when the caller left a scratch value there. Reuse the
+      // forwarding contract rather than treating a variadic declaration as
+      // permission to observe every volatile register. Explicit prototypes
+      // and patched callees retain their own argument contract.
+      if (!PatchedCallee && !PrototypeArguments &&
+          (IsDirectImport || IsIndirectImport)) {
+        if (auto Maximum = boundedLibcArgumentCount(Img, CI.TargetName)) {
+          // syscall's first argument selects the kernel contract, whose
+          // arity is shared with direct supervisor-call lowering. The libc
+          // wrapper forwards machine words to that handler.
+          // Unknown numbers or a non-Linux image retain the published bound.
+          if (Img && runsUnderLinux(*Img) &&
+              libc::routineOfSymbol(CI.TargetName, LibC) == "syscall" &&
+              (!IntPart.empty() || !StackPart.empty())) {
+            const auto Numbers = constantsHeld(
+                IntPart.empty() ? StackPart.front() : IntPart.front(),
+                DefSites);
+            if (Numbers && !Numbers->empty()) {
+              size_t Read = 0;
+              for (uint64_t Number : *Numbers) {
+                Read = std::max(Read, *boundedLibcArgumentCount(
+                                          Img, CI.TargetName, Number));
+              }
+              Maximum = Read;
+            }
+          }
+          const auto Trim = [&](auto &Part, size_t Keep) {
+            for (size_t I = Keep; I < Part.size(); ++I)
+              if (Part[I].Kind == MedVar::Param &&
+                  !PromotedBefore.count(Part[I].RegOff))
+                PromoteParams.erase(Part[I].RegOff);
+            Part.resize(std::min(Keep, Part.size()));
+          };
+          Trim(IntPart, *Maximum);
+          IntPartSlots.resize(std::min(IntPartSlots.size(), IntPart.size()));
+          Trim(FoundFP, 0);
+          Trim(StackPart, *Maximum - IntPart.size());
+          StackPartOffsets.resize(
+              std::min(StackPartOffsets.size(), StackPart.size()));
+        }
+      }
+      bool DirectSret = false;
+      if (!CI.IsIndirect && !IsRelocExtern && CalleeHasSret) {
+        auto SIt = CalleeHasSret->find(CI.TargetAddr);
+        DirectSret = SIt != CalleeHasSret->end() && SIt->second;
+      }
+      const bool HasResultPointer =
+          TRI.indirectResultReg() &&
+          (DirectSret || (IndirectSretSetup && !HeaderVariadic));
+      // This bound counts integer registers and stack arguments, not the
+      // independent FP bank. Apply it before combining the banks, so an FP
+      // input cannot be removed and replaced by the hidden result pointer.
+      if (HasResultPointer && CalleeArgs >= 0) {
+        IntPart.resize(std::min(IntPart.size(), size_t(CalleeArgs)));
+        IntPartSlots.resize(std::min(IntPartSlots.size(), IntPart.size()));
+        StackPart.resize(
+            std::min(StackPart.size(), size_t(CalleeArgs) - IntPart.size()));
+        StackPartOffsets.resize(
+            std::min(StackPartOffsets.size(), StackPart.size()));
       }
       if (!PositionalSlots) {
         CI.IntegerRegisterArgCount = static_cast<int>(IntPart.size());
@@ -3720,17 +4154,7 @@ void recoverCallAbi(
       // The dedicated indirect-result buffer is the callee's last parameter
       // (detectIndirectResultParam). Direct callees state the contract;
       // unknown indirect calls require frame-derived storage in that register.
-      bool DirectSret = false;
-      if (!CI.IsIndirect && !IsRelocExtern && CalleeHasSret) {
-        auto SIt = CalleeHasSret->find(CI.TargetAddr);
-        DirectSret = SIt != CalleeHasSret->end() && SIt->second;
-      }
-      if (TRI.indirectResultReg() &&
-          (DirectSret || (IndirectSretSetup && !HeaderVariadic))) {
-        // Surplus ordinary-register guesses cannot push the result pointer
-        // past the callee's declared arity and make emission drop it.
-        if (CalleeArgs >= 0 && static_cast<int>(CI.Args.size()) > CalleeArgs)
-          CI.Args.resize(CalleeArgs);
+      if (HasResultPointer) {
         // A declared result contract still consumes this position when the
         // machine value is unavailable. Omitting it would hide the missing
         // output storage and shift the recovered signature.
@@ -3741,6 +4165,8 @@ void recoverCallAbi(
 
       if (HeaderVariadic)
         CI.VarArgFixedCount = Op.CalleeVariadicFrom;
+      else if (SummarizedVariadicVectors)
+        CI.VarArgFixedCount = Op.CalleeVariadicRegisterFrom;
       else if (!CI.IsIndirect && DarwinVarArgBase >= 0)
         CI.VarArgFixedCount = DarwinVarArgBase;
       // A variadic routine of the image whose save area says how many named
@@ -3753,18 +4179,38 @@ void recoverCallAbi(
                !(VectorArgumentCallees &&
                  VectorArgumentCallees->count(CI.TargetAddr)))
         CI.VarArgFixedCount = CalleeRegArgs;
+      // The named prefix is a call contract on every platform, even where
+      // unnamed values continue in independent register banks. Retain it for
+      // the source emitters; it does not determine the tail's types or arity.
+      if (CI.VarArgFixedCount < 0 && !PatchedCallee && !PrototypeArguments &&
+          (IsDirectImport || IsIndirectImport))
+        if (const unsigned Fixed = libc::varArgFixedCount(CI.TargetName, LibC))
+          CI.VarArgFixedCount = static_cast<int>(Fixed);
       if (Op.X87ArgumentInput && Op.X87ArgumentInput < Op.NumInputs)
         CI.Args.push_back(Op.Inputs[Op.X87ArgumentInput]);
       if (!CI.IsIndirect && !IsRelocExtern && CalleeFPScalarBytes)
         if (auto It = CalleeFPScalarBytes->find(CI.TargetAddr);
             It != CalleeFPScalarBytes->end()) {
           CI.ArgReadBytes.assign(CI.Args.size(), 0);
-          for (size_t I = 0; I < CI.Args.size(); ++I)
-            if (const auto &Arg = CI.Args[I];
-                Arg.Kind == MedVar::Reg || Arg.Kind == MedVar::Param)
-              if (auto Lane = It->second.find(Arg.RegOff);
+          for (size_t I = 0; I < CI.Args.size(); ++I) {
+            const auto &Arg = CI.Args[I];
+            std::optional<uint64_t> Register;
+            if (Arg.Kind == MedVar::Reg || Arg.Kind == MedVar::Param)
+              Register = Arg.RegOff;
+            // The scalar width belongs to the callee's carrier position,
+            // including when the value is a temporary or is unavailable.
+            if (CI.IntegerRegisterArgCount >= 0 &&
+                I >= static_cast<size_t>(CI.IntegerRegisterArgCount)) {
+              const size_t FP = I - CI.IntegerRegisterArgCount;
+              if (FP < static_cast<size_t>(CI.FloatingRegisterArgCount) &&
+                  FP < FPRegs.size())
+                Register = FPRegs[FP];
+            }
+            if (Register)
+              if (auto Lane = It->second.find(*Register);
                   Lane != It->second.end() && Lane->second <= Arg.Size)
                 CI.ArgReadBytes[I] = Lane->second;
+          }
         }
       // A formatted call's inputs are every argument it passes, in the
       // source's order (MedOp::ExactArguments), a floating one as the scalar

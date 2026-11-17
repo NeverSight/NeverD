@@ -802,6 +802,15 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   auto inferAggregateReturnType = [&]() -> llvm::Type * {
     if (Op.Output.Kind != MedVar::Temp || Op.Output.Size == 0 || !CurMedFunc)
       return nullptr;
+    if (Op.RegisterReturnFields) {
+      std::vector<llvm::Type *> Types;
+      for (const auto &Field : *Op.RegisterReturnFields)
+        Types.push_back(Field.IsFP
+                            ? (Field.Size == 4 ? llvm::Type::getFloatTy(*Ctx)
+                                               : llvm::Type::getDoubleTy(*Ctx))
+                            : llvm::Type::getIntNTy(*Ctx, Field.Size * 8));
+      return llvm::StructType::get(*Ctx, Types);
+    }
     const auto &TRI = getTargetRegInfo(TargetArch);
     std::map<unsigned, llvm::Type *> FieldsByOffset;
     for (const auto &Blk2 : CurMedFunc->Blocks) {
@@ -1730,7 +1739,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       // variadic: a declaration from this call's would cut a longer call's.
       auto undescribedCalleeType = [&](bool VarArg) {
         std::vector<llvm::Type *> Fixed = ArgTypes;
-        if (!VarArg && AggregateRetTy == nullptr && CI && !CI->IsIndirect)
+        if (!VarArg && !Op.IntegerCallSignature && AggregateRetTy == nullptr &&
+            CI && !CI->IsIndirect)
           if (const auto It = DirectCallArgumentCounts.find(CI->TargetAddr);
               It != DirectCallArgumentCounts.end() &&
               It->second.first != It->second.second) {
@@ -1740,7 +1750,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         return llvm::FunctionType::get(DefaultRetTy, Fixed, VarArg);
       };
       if (!Callee && !CalleeName.empty()) {
-        bool UseVarArg = getTargetRegInfo(TargetArch).UnknownExternIsVarArg &&
+        bool UseVarArg = !Op.IntegerCallSignature &&
+                         getTargetRegInfo(TargetArch).UnknownExternIsVarArg &&
                          AggregateRetTy == nullptr;
         auto *FT = undescribedCalleeType(UseVarArg);
         Callee = llvm::Function::Create(FT, llvm::GlobalValue::ExternalLinkage,
@@ -2058,6 +2069,14 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         // integer register, where the routine reads no floating argument.
         AV = Builder.CreateBitCast(AV, llvm::Type::getDoubleTy(*Ctx),
                                    "formatted_double");
+      } else if (CalleeTy->isVarArg() && CI && ArgumentIndices[AI] >= 0 &&
+                 recoveredVariadicVectorArgument(*CI, ArgumentIndices[AI],
+                                                 TargetArch, TargetFormat) &&
+                 AV->getType()->isIntegerTy(128)) {
+        // A runtime format gives no scalar consumption proof. Keep the
+        // complete recorded SIMD carrier in its own register bank.
+        AV = Builder.CreateBitCast(AV, llvm::FixedVectorType::get(I64Ty, 2),
+                                   "variadic_vector");
       }
       CoercedArgs.push_back(AV);
     }
@@ -2157,7 +2176,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
                   ITRI.isFPArgReg(CI->Args[AI].RegOff);
       bool IsVariadicTail =
           IsVariadicCall && AI >= static_cast<size_t>(CI->VarArgFixedCount);
-      if (IsFP) {
+      if (CI &&
+          recoveredVariadicVectorArgument(*CI, AI, TargetArch, TargetFormat)) {
+        ParamTys.push_back(Vec2);
+        ++FPSeen;
+      } else if (IsFP) {
         if (FPSeen < NumFPRegs && !IsVariadicTail) {
           ParamTys.push_back(Vec2);
         } else {
@@ -2182,6 +2205,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       IRetTy = llvm::Type::getX86_FP80Ty(*Ctx);
     } else if (AggregateRetTy) {
       IRetTy = AggregateRetTy;
+    }
+    // A bound scalar occurrence already owns the complete source ABI,
+    // including stack-passed floats and integer results. Reuse that checked
+    // signature when the runtime target is unknown as well as for imports.
+    // Register class recovery alone cannot type a spilled floating operand.
+    auto *BoundFT = Op.ScalarCallSignature
+                        ? floatingCallType(*Ctx, *Op.ScalarCallSignature)
+                        : nullptr;
+    if (BoundFT) {
+      ParamTys.assign(BoundFT->param_begin(), BoundFT->param_end());
+      IRetTy = BoundFT->getReturnType();
     }
 
     // Coerce each argument to its reconstructed ABI parameter type.  An
@@ -2230,7 +2264,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       CoercedArgs.push_back(AV);
     }
 
-    auto *IndirectFT = llvm::FunctionType::get(IRetTy, ParamTys, false);
+    auto *IndirectFT =
+        BoundFT ? BoundFT : llvm::FunctionType::get(IRetTy, ParamTys, false);
     if (CI && CI->VarArgFixedCount >= 0 &&
         static_cast<size_t>(CI->VarArgFixedCount) <= ParamTys.size()) {
       std::vector<llvm::Type *> FixedTys(
@@ -2241,16 +2276,31 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Builder.CreateIntToPtr(Target, llvm::PointerType::get(*Ctx, 0));
     Result =
         Builder.CreateCall(IndirectFT, FPtr, CoercedArgs, AuthenticationBundles,
-                           CoercedArgs.empty() ? "icall" : "call");
+                           IRetTy->isVoidTy()    ? ""
+                           : CoercedArgs.empty() ? "icall"
+                                                 : "call");
   }
 
   // Itanium call-site ranges are tight around individual calls rather than
   // aligned to machine blocks, so the address this call came from has to
   // survive lowering for the LSDA to be able to name it.
   if (SourceMap && llvm::isa_and_nonnull<llvm::CallBase>(Result) &&
-      Op.Addr != InvalidVA && Op.OriginSeq >= 0)
-    SourceMap->Observations.push_back(
-        {CurMedFunc->Entry, {Op.Addr, Op.OriginSeq}, Result});
+      Op.Addr != InvalidVA) {
+    // A local unwind's handler calls stand where its runtime call stood
+    // (MedSEHLocalUnwindExit) and have no instruction of their own: the
+    // runtime call is where each of them came from.
+    int Sequence = Op.OriginSeq;
+    if (Sequence < 0 && Op.NumInputs && Op.Inputs[0].isConst())
+      for (const MedSEHLocalUnwindExit &Exit : CurMedFunc->SEHLocalUnwindExits)
+        if (Exit.CallAddr == Op.Addr &&
+            llvm::any_of(Exit.Handlers, [&](const auto &Handler) {
+              return Handler.Entry == Op.Inputs[0].ConstVal;
+            }))
+          Sequence = Exit.CallSeq;
+    if (Sequence >= 0)
+      SourceMap->Observations.push_back(
+          {CurMedFunc->Entry, {Op.Addr, Sequence}, Result});
+  }
   if (auto *Emitted = llvm::dyn_cast_or_null<llvm::CallBase>(Result)) {
     AttachSafetyCallsite(*Emitted);
     if (BoundArgumentBanks) {

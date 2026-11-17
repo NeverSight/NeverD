@@ -19,7 +19,7 @@ EXAMPLE_PLUGIN_CMAKE = ROOT / "plugins" / "example" / "CMakeLists.txt"
 EXAMPLE_PLUGIN_SOURCE = ROOT / "plugins" / "example" / "example_plugin.c"
 SDK_CMAKE = ROOT / "lib" / "sdk" / "CMakeLists.txt"
 SEMANTIC_CMAKE = ROOT / "unittests" / "semantic" / "CMakeLists.txt"
-SEMANTIC_PLUGIN_CMAKE = ROOT / "plugins" / "semantic" / "CMakeLists.txt"
+SEMANTIC_PLUGIN_CMAKE = ROOT / "plugins" / "example" / "semantic" / "CMakeLists.txt"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 STYLE_WORKFLOW = ROOT / ".github" / "workflows" / "llvm-style.yml"
 STYLE_EXPECTATIONS = ROOT / "scripts" / "tests" / "CIStyleExpectations.def"
@@ -31,6 +31,12 @@ CONFIGURE_ONLY_OPTIONS = tuple(
 
 
 class CiConfigurationTests(unittest.TestCase):
+    def assert_manually_dispatched(self, source, *, callable=False):
+        triggers = source.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^  ([a-z_]+):", triggers),
+                         ["workflow_dispatch", "workflow_call"] if callable
+                         else ["workflow_dispatch"])
+
     def test_web_release_gate_honors_cancellation_and_requires_complete_results(self):
         shell = "/bin/bash" if Path("/bin/bash").is_file() else shutil.which("bash")
         if shell is None:
@@ -111,13 +117,11 @@ find() { return 0; }
                             if path_type(name).match(selection.group(1))}
                 self.assertEqual(selected, audits)
 
-    def test_capstone_updates_run_native_and_product_contracts(self):
+    def test_dispatched_capstone_checks_keep_native_and_product_contracts(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text()
         product = WORKFLOW.with_name("web-windows-qualification.yml").read_text()
-        for source in (native, product):
-            push, pull_request = source.split("  pull_request:\n", 1)
-            self.assertIn("- 'third_party/capstone'", push.split("  push:\n", 1)[1])
-            self.assertIn("- 'third_party/capstone'", pull_request.split("\npermissions:", 1)[0])
+        self.assert_manually_dispatched(native)
+        self.assert_manually_dispatched(product, callable=True)
 
         owners = {"NeverDX86NativeStateAuditTests", "NeverDX86LegacyAlignedMoveTests",
                   "NeverDX86UndefinedEffectsTests"}
@@ -130,15 +134,12 @@ find() { return 0; }
         for owner in owners:
             self.assertIn("('" + owner + "',", audit)
 
-    def test_capstone_fork_suite_runs_on_pin_changes_for_every_compiler(self):
+    def test_dispatched_capstone_fork_suite_keeps_every_compiler(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
         contract = WORKFLOW.with_name("capstone-contract.yml").read_text(encoding="utf-8")
         self.assertNotIn("build-capstone-core", native)
         self.assertIn("build-capstone-core", contract)
-        push, pull_request = contract.split("  pull_request:\n", 1)
-        for trigger in (push.split("  push:\n", 1)[1], pull_request.split("\npermissions:", 1)[0]):
-            self.assertIn("- 'third_party/capstone'", trigger)
-            self.assertIn("- '.github/workflows/capstone-contract.yml'", trigger)
+        self.assert_manually_dispatched(contract)
         for source in (native, contract):
             matrix = source.split("        include:\n", 1)[1].split("\n    env:", 1)[0]
             matrix = matrix.split("\n    defaults:", 1)[0]
@@ -146,21 +147,9 @@ find() { return 0; }
                 "Linux x64", "macOS arm64", "Windows x64 MSVC", "Windows x64 clang-cl",
             ])
 
-    def test_native_pipeline_runs_on_dependency_and_threading_changes(self):
+    def test_native_pipeline_requires_manual_dispatch(self):
         native = WORKFLOW.with_name("native-pipeline.yml").read_text(encoding="utf-8")
-        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", native.split("\npermissions:", 1)[0])
-        self.assertEqual(len(paths), 2)
-        self.assertEqual(paths[0], paths[1])
-        for path in ("cmake/NeverDPerformance.cmake", "lib/support/**", "lib/sdk/capi/**",
-                     "third_party/oneTBB", "third_party/mimalloc",
-                     "include/neverd/support/Parallel.h",
-                     # CI does not build the worker, so these run only here.
-                     "tools/neverd-worker/tests/call_site_types_test.py",
-                     "tools/neverd-worker/tests/native_mapping_test.py"):
-            self.assertIn(f"      - '{path}'\n", paths[0])
-        # CI's native legs own these. Their changes must not start this workflow.
-        for path in ("lib/ir/high/**", "lib/libc/**", "lib/ir/med/abi/**"):
-            self.assertNotIn(f"      - '{path}'\n", paths[0])
+        self.assert_manually_dispatched(native)
 
     def test_msvc_test_targets_select_extended_coff_objects(self):
         for msvc_style in (False, True):
@@ -444,6 +433,7 @@ find() { return 0; }
 
     def test_llvm_style_workflow_pins_formatter_and_checks_event_diff(self):
         source = STYLE_WORKFLOW.read_text(encoding="utf-8")
+        self.assert_manually_dispatched(source)
 
         declarations = STYLE_EXPECTATIONS.read_text(encoding="utf-8")
         pattern = r'NEVERD_CI_STYLE_EXPECTATION\(\s*((?:"(?:[^"\\]|\\.)*"\s*)+)\)'
@@ -612,52 +602,23 @@ find() { return 0; }
         concurrency = source.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
         self.assertIn("cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}", concurrency)
 
-    def test_commits_outside_the_compiled_engine_skip_the_native_workflows(self):
-        ignored = ("'**/*.md'", "'.agents/**'", "'tools/neverd-gui/**'")
+    def test_dispatched_engine_and_gui_keep_separate_owners(self):
         source = WORKFLOW.read_text(encoding="utf-8")
-        triggers = re.findall(r"paths-ignore:\n((?:      - .*\n)+)", source)
-        self.assertEqual(len(triggers), 2)
-        for trigger in triggers:
-            self.assertEqual(
-                tuple(line.strip().removeprefix("- ") for line in trigger.splitlines()),
-                ignored,
-            )
+        self.assert_manually_dispatched(source)
         # Ignoring the GUI is only correct while this build leaves it out.
         self.assertNotIn("NEVERD_BUILD_GUI=ON", source)
         # The GUI workflow owns the GUI's Python test and its checks.
         gui = WORKFLOW.with_name("gui.yml").read_text(encoding="utf-8")
-        self.assertIn("'tools/neverd-gui/**'", gui.split("\njobs:", 1)[0])
+        self.assert_manually_dispatched(gui)
         self.assertIn("-s tools/neverd-gui/benchmarks/tests -p test_startup_bench.py", gui)
         self.assertNotIn("test_startup_bench", WORKFLOW.read_text(encoding="utf-8"))
 
-    def assert_path_filtered_and_nightly(self, workflow, required):
-        triggers = WORKFLOW.with_name(workflow).read_text(encoding="utf-8").split(
-            "\npermissions:", 1
-        )[0]
-        self.assertRegex(triggers, r"(?m)^  schedule:\n    - cron: '\d+ \d+ \* \* \*'$")
-        self.assertIn("  workflow_dispatch:", triggers)
-        self.assertNotIn("paths-ignore", triggers)
-        paths = re.findall(r"    paths:\n((?:      - .*\n)+)", triggers)
-        self.assertEqual(len(paths), 2, workflow)
-        self.assertEqual(paths[0], paths[1], workflow)
-        for path in (f".github/workflows/{workflow}", *required):
-            self.assertIn(f"      - '{path}'\n", paths[0], workflow)
+    def test_mobile_requires_manual_dispatch(self):
+        self.assert_manually_dispatched(WORKFLOW.with_name("mobile.yml").read_text())
 
-    def test_mobile_runs_on_its_own_sources_and_every_night(self):
-        self.assert_path_filtered_and_nightly("mobile.yml", (
-            "tools/neverd/mobile/**", "tools/neverd/cmd/NeverDCmdMobile.cpp",
-            "lib/dalvik/**", "lib/loader/ObjC/**", "lib/loader/Swift/**",
-            "lib/backend/swift/**", "unittests/mobile/**", "scripts/*mobile*",
-            "scripts/tests/fixtures/mobile/**",
-        ))
-
-    def test_arm64_component_builds_follow_backend_sources_and_run_nightly(self):
-        self.assert_path_filtered_and_nightly("arm64-native-build.yml", (
-            "CMakeLists.txt", "cmake/**", "lib/emulation/**",
-            "include/neverd/emulation/**", "third_party/llvm-project",
-            "scripts/audit_native_backend_build.py",
-        ))
+    def test_dispatched_arm64_component_builds_keep_backend_owners(self):
         arm64 = WORKFLOW.with_name("arm64-native-build.yml").read_text(encoding="utf-8")
+        self.assert_manually_dispatched(arm64)
         for backend, runner in (("kvm", "ubuntu-24.04-arm"), ("whp", "windows-11-arm")):
             self.assertIn(f"- backend: {backend}\n            runner: {runner}\n", arm64)
         self.assertIn("--target NeverDEmulationNative", arm64)
@@ -1039,8 +1000,7 @@ find() { return 0; }
                     f"            arch: {arch}\n"
                     f"            runner: {runner}\n", host)
         self.assertIn("fail-fast: false", host)
-        self.assertIn("  pull_request:\n", host)
-        self.assertIn("    branches: [dev]\n", host)
+        self.assert_manually_dispatched(host)
         self.assertIn("--backend ${{ matrix.backend }} --arch ${{ matrix.arch }}", host)
         self.assertIn("name: native-host-${{ matrix.backend }}-${{ matrix.arch }}", host)
         self.assertIn("build-native-host-probe/summary.json", host)

@@ -63,10 +63,13 @@ AnalysisService::~AnalysisService() {
 }
 
 bool AnalysisService::handles(const QString &operation) {
-  return operation == QLatin1String("decompile") ||
+  return operation == QLatin1String("prepare_views") ||
+         operation == QLatin1String("decompile") ||
          operation == QLatin1String("cfg") ||
          operation == QLatin1String("cfg_summary") ||
-         operation == QLatin1String("cfg_viewport");
+         operation == QLatin1String("cfg_viewport") ||
+         operation == QLatin1String("computed_strings") ||
+         operation == QLatin1String("computed_strings_step");
 }
 
 void AnalysisService::stopWorker() {
@@ -91,6 +94,7 @@ void AnalysisService::reset() {
   const bool retain = (ready_ || refreshingNames_) && updatesNames_ &&
                       queries_.projectId() == owner_.projectId();
   active_.clear();
+  publishedVirtualCalls_.clear();
   tookSince_ = false;
   preparedRead_.reset();
   preparedDeclaration_.clear();
@@ -146,6 +150,11 @@ QString AnalysisService::send(const QString &operation,
   const QString id = QString::number(++next_);
   if (operation == QLatin1String("cancel")) {
     if (payload.value("request_id").toString() == active_) {
+      // Filtering/scrolling retires a cheap table read, not its accumulated
+      // catalogue. Its terminal reply still releases the dispatch barrier;
+      // QueryService already detached the old page's subscribers.
+      if (operation_ == QLatin1String("computed_strings") && ready_)
+        return id;
       const QString cancelled = std::exchange(active_, {});
       const QString op = operation_;
       abandonRunningRead();
@@ -497,13 +506,26 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
       restore["render_store"] = restore.contains(QStringLiteral("render_ahead"))
                                     ? QStringLiteral("write")
                                     : QStringLiteral("read");
+    if (prepareViews_ &&
+        message.value("capabilities")
+            .toArray()
+            .contains(QStringLiteral("prepare_analysis_views")))
+      restore["prepare_views"] = true;
     restore_ = client_.request(QStringLiteral("analysis_restore"), restore);
     return;
   }
-  if (message.value("type") != QLatin1String("response") ||
-      message.value("status") == QLatin1String("progress"))
+  if (message.value("type") != QLatin1String("response"))
     return;
   const auto id = message.value("request_id").toString();
+  if (message.value("status") == QLatin1String("progress")) {
+    if (id == restore_) {
+      const auto progress = message.value("payload").toObject();
+      emit loadProgress(progress);
+      if (progress.value("phase") == QLatin1String("prepare_views"))
+        emit diagnostic(progress.value("detail").toString());
+    }
+    return;
+  }
   if (!restore_.isEmpty() && id == restore_) {
     restore_.clear();
     startingReplica_ = false;
@@ -545,6 +567,10 @@ void AnalysisService::receive(const QJsonObject &message, qint64 bytes) {
 }
 
 void AnalysisService::dispatch() {
+  if (operation_ == QLatin1String("prepare_views")) {
+    finish({{"status", "ok"}});
+    return;
+  }
   if (active_.isEmpty())
     return;
   // A read that still runs can move the worker's revision before this reaches
@@ -556,6 +582,42 @@ void AnalysisService::dispatch() {
 void AnalysisService::finish(QJsonObject response, qint64 bytes) {
   if (active_.isEmpty())
     return;
+  const auto page = response.value("payload").toObject();
+  if (!wire_.isEmpty() && operation_ == QLatin1String("decompile") &&
+      response.value("status") == QLatin1String("ok") &&
+      page.value("virtual_calls").isArray()) {
+    const auto address = page.value("address").toString();
+    const auto calls = page.value("virtual_calls").toArray();
+    const auto previous = publishedVirtualCalls_.constFind(address);
+    if ((previous == publishedVirtualCalls_.cend() && !calls.isEmpty()) ||
+        (previous != publishedVirtualCalls_.cend() && *previous != calls)) {
+      // Xrefs/listing are read by the owner, while the source came from a
+      // replica. Publish before delivering the page. Exact revision policy
+      // prevents a delayed result being applied to a newer project state.
+      wire_.clear();
+      const auto serial = serial_;
+      const auto active = active_;
+      owner_.subscribe({QStringLiteral("analysis_virtual_calls"),
+                        {{"address", address}, {"virtual_calls", calls}},
+                        QueryService::QuerySpec::Exact,
+                        owner_.revision(),
+                        QueryService::QuerySpec::Visible},
+                       this,
+                       [this, serial, active, address, calls,
+                        response = std::move(response),
+                        bytes](const QJsonObject &published) mutable {
+                         if (serial != serial_ || active != active_)
+                           return;
+                         if (published.value("status") != QLatin1String("ok")) {
+                           finish(published);
+                           return;
+                         }
+                         publishedVirtualCalls_.insert(address, calls);
+                         finish(std::move(response), bytes);
+                       });
+      return;
+    }
+  }
   response = ofTheOwner(std::move(response));
   response["request_id"] = std::exchange(active_, {});
   response["operation"] = operation_;
@@ -596,6 +658,8 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
         QueryService::Limits{}.cacheBytes / (1024 * 1024 * lanes_.size()));
     connect(lane.service.get(), &AnalysisService::diagnostic, this,
             &AnalysisPool::diagnostic);
+    connect(lane.service.get(), &AnalysisService::loadProgress, this,
+            &AnalysisPool::loadProgress);
     connect(lane.service.get(), &AnalysisService::sourceRefined, this,
             &AnalysisPool::sourceRefined);
   }
@@ -608,6 +672,7 @@ AnalysisPool::AnalysisPool(QueryService &owner, const QString &workerPath,
       return;
     for (auto &lane : lanes_)
       lane.function.reset();
+    functionLanes_.clear();
     for (const auto &binding : std::as_const(bindings_))
       disconnect(binding.destroyed);
     bindings_.clear();
@@ -619,6 +684,7 @@ void AnalysisPool::prefetchSource(quint64 address) {
     return;
   auto &lane = lanes_.front();
   lane.function = address;
+  functionLanes_.insert(address, 0);
   preparing_ = true;
   const auto serial = ++preparationSerial_;
   const QJsonObject payload{
@@ -635,9 +701,21 @@ void AnalysisPool::prefetchSource(quint64 address) {
                                     });
 }
 
+void AnalysisPool::prepareViews(QObject *owner,
+                                QueryService::Completion complete) {
+  lanes_.front().service->queries().subscribe(
+      {QStringLiteral("prepare_views"), {}}, owner, std::move(complete));
+}
+
 void AnalysisPool::setSnapshotBlocked(bool blocked) {
   for (auto &lane : lanes_)
     lane.service->setSnapshotBlocked(blocked);
+}
+
+void AnalysisPool::setSingleReplica(bool single) {
+  singleReplica_ = single;
+  for (auto &lane : lanes_)
+    lane.service->setPrepareViews(single);
 }
 
 QueryService &AnalysisPool::queries(const QJsonObject &payload,
@@ -653,6 +731,7 @@ QueryService &AnalysisPool::queries(const QJsonObject &payload,
   const auto bind = [&](size_t index) -> QueryService & {
     auto &lane = lanes_[index];
     lane.function = function;
+    functionLanes_.insert(function, index);
     if (owner) {
       auto it = bindings_.find(owner);
       if (it != bindings_.end()) {
@@ -667,6 +746,11 @@ QueryService &AnalysisPool::queries(const QJsonObject &payload,
     }
     return lane.service->queries();
   };
+  if (singleReplica_)
+    return bind(0);
+  if (const auto known = functionLanes_.constFind(function);
+      known != functionLanes_.cend())
+    return bind(*known);
   for (size_t i = 0; i < lanes_.size(); ++i)
     if (lanes_[i].function == function)
       return bind(i);
@@ -699,13 +783,14 @@ QSet<QObject *> AnalysisPool::snapshotOwners() const {
   return owners;
 }
 
-void AnalysisPool::unsubscribeOwner(QObject *owner) {
+void AnalysisPool::unsubscribeOwner(QObject *owner,
+                                    QueryService::DetachPolicy policy) {
   if (const auto binding = bindings_.find(owner); binding != bindings_.end()) {
     disconnect(binding->destroyed);
     bindings_.erase(binding);
   }
   for (auto &lane : lanes_)
-    lane.service->queries().unsubscribeOwner(owner);
+    lane.service->queries().unsubscribeOwner(owner, policy);
 }
 
 void AnalysisPool::cancelReads(const QSet<QObject *> &keep) {

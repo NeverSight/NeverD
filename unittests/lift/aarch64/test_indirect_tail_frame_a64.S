@@ -359,6 +359,129 @@ BEGIN tail_link_from_sysreg
   br x0
 END tail_link_from_sysreg
 
+// Indexed accesses retain their original address instruction in LowIR. They
+// change memory/the load destination, not the incoming frame or link.
+BEGIN tail_indexed_leaf
+  ldr x3,[x1,x2,lsl #3]
+  br x0
+END tail_indexed_leaf
+
+BEGIN tail_indexed_signed
+  ldr x3,[x1,w2,sxtw #3]
+  br x0
+END tail_indexed_signed
+
+BEGIN tail_indexed_virtual
+  ldr x9,[x0,#8]
+  ldr x0,[x9,x1,lsl #3]
+  ldr x10,[x0]
+  ldr x16,[x10,#40]
+  br x16
+END tail_indexed_virtual
+
+BEGIN tail_indexed_virtual_zero
+  ldr x9,[x0,#8]
+  ldr x0,[x9,x1,lsl #3]
+  cbz x0,.Lindexed_virtual_null
+  ldr x10,[x0]
+  ldr x16,[x10]
+  br x16
+.Lindexed_virtual_null:
+  ret
+END tail_indexed_virtual_zero
+
+// A direct load becomes a propagated temporary in MedIR; X0 still carries
+// that same receiver when the guarded tail call reaches slot zero.
+BEGIN tail_direct_virtual_zero
+  ldr x0,[x0,#8]
+  cbz x0,.Ldirect_virtual_null
+  ldr x10,[x0]
+  ldr x16,[x10]
+  br x16
+.Ldirect_virtual_null:
+  ret
+END tail_direct_virtual_zero
+
+BEGIN tail_indexed_foreign_store
+  stp x29,x30,[sp,#-16]!
+  str x3,[x1,x2]
+  ldp x29,x30,[sp],#16
+  br x0
+END tail_indexed_foreign_store
+
+BEGIN tail_indexed_vector
+  ldr q0,[x1,x2]
+  str q0,[x1,x2]
+  br x0
+END tail_indexed_vector
+
+BEGIN tail_indexed_after_call
+  stp x29,x30,[sp,#-16]!
+  strb w3,[x1,x2]
+  bl tail_helper
+  ldp x29,x30,[sp],#16
+  br x0
+END tail_indexed_after_call
+
+// Either address operand may carry a frame alias. An indexed store cannot
+// preserve the saved link when its address may name that slot.
+BEGIN tail_indexed_link_slot
+  stp x29,x30,[sp,#-16]!
+  mov x8,sp
+  mov x9,#8
+  str x2,[x8,x9]
+  ldp x29,x30,[sp],#16
+  br x0
+END tail_indexed_link_slot
+
+BEGIN tail_indexed_frame_index
+  stp x29,x30,[sp,#-16]!
+  add x9,sp,#8
+  mov x8,#0
+  str x2,[x8,x9]
+  ldp x29,x30,[sp],#16
+  br x0
+END tail_indexed_frame_index
+
+BEGIN tail_indexed_frame_escape
+  stp x29,x30,[sp,#-16]!
+  mov x3,sp
+  str x3,[x1,x2]
+  bl tail_helper
+  ldp x29,x30,[sp],#16
+  br x0
+END tail_indexed_frame_escape
+
+BEGIN tail_indexed_link_load
+  ldr x30,[x1,x2]
+  br x0
+END tail_indexed_link_load
+
+BEGIN tail_indexed_stack_target
+  stp x29,x30,[sp,#-32]!
+  add x9,sp,#8
+  str x9,[sp,#16]
+  mov x8,sp
+  mov x9,#16
+  ldr x0,[x8,x9]
+  ldp x29,x30,[sp],#32
+  br x0
+END tail_indexed_stack_target
+
+BEGIN tail_indexed_local_target
+  stp x29,x30,[sp,#-32]!
+  adr x9,.Lindexed_local
+  str x9,[sp,#16]
+  mov x8,sp
+  mov x9,#16
+  ldr x0,[x8,x9]
+  ldp x29,x30,[sp],#32
+  br x0
+.Lindexed_local:
+  mov x0,#17
+  ret
+END tail_indexed_local_target
+
 BEGIN tail_helper
   ret
 END tail_helper

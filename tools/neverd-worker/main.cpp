@@ -231,7 +231,9 @@ Json hello() {
                 "analysis_section_remove",
                 "analysis_snapshot",
                 "analysis_restore",
+                "prepare_analysis_views",
                 "analysis_update_names",
+                "analysis_virtual_calls",
                 "prepare_call_summaries",
                 "render_ahead",
                 "render_store",
@@ -402,6 +404,9 @@ Json hello() {
     result["capabilities"].push_back(unwind_query::kOperation);
   if (Engine::reportsX87Capabilities())
     result["capabilities"].push_back("x87_capabilities");
+  if (Engine::reportsComputedStrings())
+    for (const char *operation : {"computed_strings", "computed_strings_step"})
+      result["capabilities"].push_back(operation);
   if (Engine::recoversInterpreterSource())
     result["capabilities"].push_back("interpreter_recovery");
   result["web"] = WebEngine::capabilities();
@@ -793,12 +798,15 @@ int main(int argc, char **argv) {
                                      : "pending"},
                  {"requires_restart",
                   accepted && !stopped &&
-                      (!state.active || (!ComparisonService::cancellable(
-                                             state.active->value["operation"]
-                                                 .get<std::string>()) &&
-                                         !LineageService::cancellable(
-                                             state.active->value["operation"]
-                                                 .get<std::string>())))}}));
+                      (!state.active ||
+                       (!ComparisonService::cancellable(
+                            state.active->value["operation"]
+                                .get<std::string>()) &&
+                        !LineageService::cancellable(
+                            state.active->value["operation"]
+                                .get<std::string>()) &&
+                        state.active->value["operation"] != "functions" &&
+                        state.active->value["operation"] != "names"))}}));
           } else if (op == "shutdown") {
             state.stopping = true;
             cancelQueued(state, transport);

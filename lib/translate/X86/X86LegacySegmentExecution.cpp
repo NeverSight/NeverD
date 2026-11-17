@@ -9,7 +9,9 @@
 
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
 
+#include "X86LegacyExecutionInternal.h"
 #include "X86LegacySegmentEncoding.h"
+#include "X86LegacyTransferJournal.h"
 
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
 
@@ -33,8 +35,10 @@ public:
   using Rules = neverd::detail::X86SegmentDescriptorRules<SegmentExecution>;
 
   SegmentExecution(X86LegacySegmentState &State, X86PagedMemory &Memory,
-                   const X86LegacySegmentExecutionOptions &Options)
-      : S(State), M(Memory), O(Options) {}
+                   const X86LegacySegmentExecutionOptions &Options,
+                   detail::X86LegacyTransferJournal *Journal = nullptr,
+                   const X86Non64ModeBinding *Mode = nullptr)
+      : S(State), M(Memory), O(Options), Journal(Journal), Mode(Mode) {}
 
   static Value k(uint64_t V) { return V; }
   static Value masked(Value V, uint64_t Mask) { return V & Mask; }
@@ -98,6 +102,14 @@ public:
     if (!loadSegment(F.Segment, uint16_t(Selector), NextCache))
       return;
     cache(F.Segment) = NextCache;
+    const bool BaseRegister = F.Segment == X86SegmentRegister::FS ||
+                              F.Segment == X86SegmentRegister::GS;
+    R.SegmentWritten = X86LegacySegmentWrite{F.Segment, std::nullopt};
+    if (NextCache.Unusable)
+      R.SegmentWritten->NullBase =
+          BaseRegister
+              ? O.NullBasePolicy.value_or(X86NullSegmentBasePolicy::Preserve)
+              : X86NullSegmentBasePolicy::Preserve;
     if (F.Far)
       writeRegister(*F.Register, F.Bytes, Pointer);
     if (F.Pop)
@@ -115,6 +127,8 @@ private:
   X86LegacySegmentState &S;
   X86PagedMemory &M;
   const X86LegacySegmentExecutionOptions &O;
+  detail::X86LegacyTransferJournal *Journal;
+  const X86Non64ModeBinding *Mode;
   X86LegacySegmentExecutionResult R;
   std::optional<llvm::Error> Failure;
 
@@ -141,6 +155,16 @@ private:
 
   bool memory(const X86LinearAccess &Access, unsigned Bytes, Value &V,
               bool Misaligned = false) {
+    const bool Write = Access.Kind == MemoryAccessKind::Write;
+    if (Journal) {
+      auto Replayed = Journal->replay(Access.Address, Bytes, Write, V);
+      if (!Replayed) {
+        Failure = Replayed.takeError();
+        return false;
+      }
+      if (*Replayed)
+        return true;
+    }
     std::array<uint8_t, 8> Buffer{};
     auto Span = llvm::MutableArrayRef(Buffer).take_front(Bytes);
     if (Misaligned &&
@@ -163,6 +187,8 @@ private:
       for (unsigned I = 0; I != Bytes; ++I)
         Buffer[I] = V >> (I * 8);
       M.commitStore(*Store, Span);
+      if (Journal)
+        Journal->record(Access.Address, Bytes, true, V);
       return true;
     }
     if (!result(M.load(Access, Span)))
@@ -174,6 +200,8 @@ private:
     V = 0;
     for (unsigned I = 0; I != Bytes; ++I)
       V |= Value(Buffer[I]) << (I * 8);
+    if (Journal)
+      Journal->record(Access.Address, Bytes, false, V);
     return true;
   }
 
@@ -215,6 +243,10 @@ private:
       }
       Next.Selector = Selector;
       Next.Unusable = true;
+      if ((Segment == X86SegmentRegister::FS ||
+           Segment == X86SegmentRegister::GS) &&
+          O.NullBasePolicy == X86NullSegmentBasePolicy::Clear)
+        Next.Base = 0;
       return true;
     }
     const bool Local = Selector & 4;
@@ -224,10 +256,34 @@ private:
       faultIf(true, 13, Selector & 0xfffc);
       return false;
     }
-    const uint32_t Address = (Local ? S.LDTR.Base : S.GDTRBase) + Index;
+    const bool Wide = Mode && (M.controls().EFER & 0x400);
+    const uint64_t Base = Wide ? (Local ? Mode->LDTRBase : Mode->GDTRBase)
+                               : (Local ? S.LDTR.Base : S.GDTRBase);
+    const uint64_t Address = Wide ? Base + Index : uint32_t(Base + Index);
+    const X86LinearAccess Access{
+        Address, MemoryAccessKind::Read, S.CPL, true, false, !Wide};
+    if (Wide) {
+      // The starting address always carries the selector error. Processors
+      // differ only when a canonical start has noncanonical trailing bytes.
+      const unsigned Bytes =
+          O.DescriptorCanonicality ==
+                  X86DescriptorCanonicalityProfile::SelectorForRange
+              ? 8
+              : 1;
+      auto Check = checkX86LinearAccess(M.controls(), Access, Bytes);
+      if (!Check) {
+        Failure = Check.takeError();
+        return false;
+      }
+      if (*Check) {
+        faultIf(true, 13, Selector & 0xfffc);
+        return false;
+      }
+      // memory() still checks all eight bytes before a walk. Under the start
+      // profile, a noncanonical tail therefore keeps the ordinary #GP(0).
+    }
     Value Descriptor = 0;
-    if (!memory({Address, MemoryAccessKind::Read, S.CPL, true, false, true}, 8,
-                Descriptor))
+    if (!memory(Access, 8, Descriptor))
       return false;
     Rules::checkData(*this, Stack, Selector, Descriptor, S.CPL);
     if (R.Status != X86PageWalkStatus::Completed)
@@ -241,7 +297,7 @@ private:
     }
     if (!(Descriptor & (uint64_t{1} << 40))) {
       Descriptor |= uint64_t{1} << 40;
-      if (!memory({Address, MemoryAccessKind::Write, S.CPL, true, false, true},
+      if (!memory({Address, MemoryAccessKind::Write, S.CPL, true, false, !Wide},
                   8, Descriptor))
         return false;
     }
@@ -283,7 +339,15 @@ executeX86LegacySegmentInstruction(
   const auto &Controls = Memory.controls();
   if (auto Error = validateX86LegacySegmentState(State, Controls))
     return std::move(Error);
-  if (Options.Profile != X86LegacySegmentProfile::WordStackOffsetFirst ||
+  if ((Options.DescriptorCanonicality &&
+       *Options.DescriptorCanonicality !=
+           X86DescriptorCanonicalityProfile::SelectorForStart &&
+       *Options.DescriptorCanonicality !=
+           X86DescriptorCanonicalityProfile::SelectorForRange) ||
+      (Options.NullBasePolicy &&
+       *Options.NullBasePolicy != X86NullSegmentBasePolicy::Clear &&
+       *Options.NullBasePolicy != X86NullSegmentBasePolicy::Preserve) ||
+      Options.Profile != X86LegacySegmentProfile::WordStackOffsetFirst ||
       (Options.AlignmentPriority &&
        *Options.AlignmentPriority != X86AlignmentPriority::BeforePaging &&
        *Options.AlignmentPriority != X86AlignmentPriority::AfterPaging) ||
@@ -302,6 +366,23 @@ executeX86LegacySegmentInstruction(
   SegmentExecution Execution(State, Memory, Options);
   Execution.execute(*F);
   return Execution.finish();
+}
+
+llvm::Expected<X86LegacySegmentExecutionResult>
+detail::executeLegacySegmentTransfer(X86LegacyExecutionState &State,
+                                     X86LegacySegmentState &Next,
+                                     X86PagedMemory &Memory,
+                                     const X86LegacySegmentInstruction &Form,
+                                     llvm::ArrayRef<uint8_t> Instruction,
+                                     const X86LegacyExecutionOptions &Options) {
+  X86LegacyTransferJournal Journal(State, Memory, Options, Instruction,
+                                   X86LegacyTransferKind::Segment);
+  SegmentExecution Execution(Next, Memory, Options.Segments, &Journal,
+                             Options.Non64Mode ? &*Options.Non64Mode : nullptr);
+  Execution.execute(Form);
+  auto Got = Execution.finish();
+  Journal.finish(Got ? Got->Status : X86PageWalkStatus::Completed);
+  return Got;
 }
 
 } // namespace neverd::translate

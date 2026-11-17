@@ -58,12 +58,45 @@ bool MedLLVMEmitter::usesOriginalImageStorage() const {
   return OriginalImageStorageForSource && Img && !Img->IsRelocatable;
 }
 
+bool MedLLVMEmitter::isOriginalImagePageAddress(const MedVar &Value) const {
+  // ADRP computes a complete architectural page address. It is incomplete
+  // only for independently relocated globals: the page does not identify
+  // which of those globals owns a later offset. A linked original-image span
+  // instead preserves those offsets, including cursor arithmetic through PHIs.
+  return Value.isConst() && Value.Size == 8 &&
+         Value.Provenance == ConstantAddressProvenance::AddressFragment &&
+         isOriginalImagePageBase(Value.ConstVal);
+}
+
+bool MedLLVMEmitter::isOriginalImagePageBase(uint64_t Page) const {
+  if (!usesOriginalImageStorage() || TargetArch != Arch::AArch64 ||
+      (Page & 0xfff) != 0)
+    return false;
+  uint64_t Begin = InvalidVA;
+  bool ContainsReadableBytes = false;
+  for (const Segment &Seg : Img->Segments) {
+    const uint64_t Size = Seg.Size ? Seg.Size : Seg.Data.size();
+    if (!Size)
+      continue;
+    Begin = std::min(Begin, Seg.VA);
+    // A segment may start partway through the architectural page. ADRP
+    // names that page before ADD reaches the segment's first byte; taking
+    // this address does not read or invent bytes before the segment.
+    ContainsReadableBytes |=
+        Seg.isReadable() &&
+        (Page <= Seg.VA ? Seg.VA - Page < 0x1000 : Page - Seg.VA < Size);
+  }
+  // The provider must preserve the page bits too, not just distances. This
+  // representation can express that contract when its base is page aligned.
+  return ContainsReadableBytes && Begin <= Page && (Begin & 0xfff) == 0;
+}
+
 std::pair<llvm::GlobalVariable *, uint64_t>
 MedLLVMEmitter::originalImageStorage(uint64_t OwnerVA) {
   if (!OriginalImageStorageForSource || !Img || Img->IsRelocatable)
     return {nullptr, 0};
   const Segment *Owner = Img->getSegmentFor(OwnerVA);
-  if (!Owner || !Owner->isReadable())
+  if ((!Owner || !Owner->isReadable()) && !isOriginalImagePageBase(OwnerVA))
     return {nullptr, 0};
   // A linked image preserves the distances between its mapped regions too.
   // A single external span keeps direct, indexed and one-past addresses in
@@ -87,6 +120,8 @@ MedLLVMEmitter::originalImageStorage(uint64_t OwnerVA) {
     auto *Type = llvm::ArrayType::get(llvm::Type::getInt8Ty(*Ctx), End - Begin);
     Global = new llvm::GlobalVariable(
         *Mod, Type, false, llvm::GlobalValue::ExternalLinkage, nullptr, Name);
+    if (TargetArch == Arch::AArch64 && (Begin & 0xfff) == 0)
+      Global->setAlignment(llvm::Align(4096));
     llvm_original_image::mark(*Global);
   }
   return {Global, Begin};
@@ -763,13 +798,12 @@ MedLLVMEmitter::embedWritableRun(uint64_t SegVA) {
     std::memcpy(Buf.data() + Off, Sec.Data.data(), N);
     FilledFromSections = true;
   }
-  // Fallback ONLY for images without section metadata: a PROGBITS segment whose
-  // own data is trustworthy (file-backed, zero-extended to memsz by the
-  // loader). When sections exist, never copy the segment bytes: a relocatable
-  // .o's .bss (SHT_NOBITS) segment carries garbage (file bytes read at its
-  // placeholder offset), and the absent .bss section correctly leaves the run
-  // zero-filled.
-  if (!FilledFromSections && Img->Sections.empty() && !Seg->Data.empty()) {
+  // A relocatable object's NOBITS segment can hold unrelated file bytes, so
+  // an empty .bss section is what leaves that run zero-filled. A linked
+  // image keeps one writable copy in the segment; its sections name the
+  // ranges and do not repeat those bytes.
+  if (!FilledFromSections && !Seg->Data.empty() &&
+      (Img->Sections.empty() || !Img->IsRelocatable)) {
     size_t N = std::min(Seg->Data.size(), RunLen);
     std::memcpy(Buf.data(), Seg->Data.data(), N);
   }

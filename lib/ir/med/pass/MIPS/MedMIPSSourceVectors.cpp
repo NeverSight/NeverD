@@ -79,7 +79,18 @@ void requireMIPSSourceVectors(
   bool HasVectors = false;
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops) {
-      HasVectors |= IsVector(Op.Output) || SignatureOf(Op);
+      if (const auto *Signature = SignatureOf(Op)) {
+        if (!floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
+          throw LowToMedConversionError(
+              "MIPS floating call ABI is not qualified");
+        // This descriptor also owns integer/pointer/void calls. Only actual
+        // floating values or FPR accesses require a floating-point profile.
+        HasVectors |= Signature->ReturnKind == NdTypeKind::Float ||
+                      !Signature->ParameterBytes.empty();
+        for (const auto &Parameter : Signature->Scalars)
+          HasVectors |= Parameter.Floating;
+      }
+      HasVectors |= IsVector(Op.Output);
       for (unsigned I = 0; I != Op.NumInputs; ++I)
         HasVectors |= IsVector(Op.Inputs[I]);
     }
@@ -128,8 +139,7 @@ void requireMIPSSourceVectors(
     for (const auto &Op : Block.Ops) {
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         const FloatingCallArguments *Signature = SignatureOf(Op);
-        if (!Scalar || !Signature ||
-            !floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
+        if (!Scalar || !Signature)
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
         for (const auto &P : Signature->Scalars) {

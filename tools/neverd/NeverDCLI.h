@@ -535,6 +535,7 @@ extern llvm::cl::opt<ExportFormat> ExportFmt;
 extern llvm::cl::opt<std::string> ExportOutput;
 extern llvm::cl::opt<std::string> ExportFunc;
 extern llvm::cl::opt<bool> DecompileCallees;
+extern llvm::cl::opt<bool> DecompileCheckAll;
 extern llvm::cl::opt<std::string> PathsFrom;
 extern llvm::cl::opt<std::string> PathsTo;
 extern llvm::cl::list<std::string> PathsVia;

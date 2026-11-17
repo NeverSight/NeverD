@@ -46,6 +46,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
+#include "neverd/backend/LLVMControlFlowFailure.h"
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/MIPS/MIPSBarrierSource.h"
 #include "neverd/backend/MIPS/MIPSDSPSource.h"
@@ -157,7 +158,8 @@ constexpr uint32_t kCxxCatchAll = 0x40u;
 bool freezeHasDefinedCProjection(const llvm::Value *Root,
                                  const llvm::DataLayout &Layout,
                                  const llvm::Instruction *Context,
-                                 const llvm::DominatorTree &Dominators) {
+                                 const llvm::DominatorTree &Dominators,
+                                 Arch Architecture) {
   std::vector<const llvm::Value *> Work{Root}, Anchors;
   std::set<const llvm::Value *> Seen, Defined;
   std::map<const llvm::Value *, std::vector<const llvm::Value *>> Users;
@@ -190,14 +192,27 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
       int64_t Offset = 0;
       const auto *Base =
           llvm::GetPointerBaseWithConstantOffset(GEP, Offset, Layout);
-      llvm::Type *Object = nullptr;
+      std::optional<llvm::TypeSize> Size;
       if (const auto *Global = llvm::dyn_cast<llvm::GlobalVariable>(Base))
-        Object = Global->getValueType();
-      else if (const auto *Local = llvm::dyn_cast<llvm::AllocaInst>(Base);
-               Local && !Local->isArrayAllocation())
-        Object = Local->getAllocatedType();
-      if (!Object || !Object->isSized() || Offset < 0 ||
-          uint64_t(Offset) > Layout.getTypeAllocSize(Object))
+        Size = Layout.getTypeAllocSize(Global->getValueType());
+      else if (const auto *Local = llvm::dyn_cast<llvm::AllocaInst>(Base))
+        Size = Local->getAllocationSize(Layout);
+      else if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(Base))
+        if (const auto Allocation = llvmc::cStackAllocation(*Call))
+          if (const auto *Count =
+                  llvm::dyn_cast<llvm::ConstantInt>(Call->getArgOperand(0))) {
+            // Counted allocations have already become the emitter's private
+            // allocation call. Keep its exact layout, without assuming a
+            // dynamic count or wrapping the allocation's size.
+            bool Overflow = false;
+            const auto Bytes = Count->getValue().umul_ov(
+                llvm::APInt(Allocation->CountBits, Allocation->Stride),
+                Overflow);
+            if (!Overflow)
+              Size = llvm::TypeSize::getFixed(Bytes.getZExtValue());
+          }
+      if (!Size || Size->isScalable() || Offset < 0 ||
+          uint64_t(Offset) > Size->getFixedValue())
         return false;
       Anchors.push_back(Value);
       continue;
@@ -223,6 +238,12 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
       const auto *Callee = Call->getCalledFunction();
       if (Call->hasOperandBundles() ||
           Call->getCallingConv() != llvm::CallingConv::C)
+        return false;
+      // The exact supervisor-call lowering has a scalar C helper that
+      // captures the returned register once. Other assembly has no such
+      // contract and cannot acquire a defined result through this proof.
+      const bool Supervisor = modeledSyscallInlineAsm(Architecture, *Call);
+      if (llvm::isa<llvm::InlineAsm>(Call->getCalledOperand()) && !Supervisor)
         return false;
       if (Callee && Callee->isIntrinsic()) {
         // These integer intrinsics have total scalar C projections. Their
@@ -265,7 +286,7 @@ bool freezeHasDefinedCProjection(const llvm::Value *Root,
       }
       // A called pointer is an operand like any other; assembly text is not
       // a value.
-      if (!Callee && !Call->isInlineAsm()) {
+      if (!Callee && !Supervisor && !Call->isInlineAsm()) {
         Users[Call->getCalledOperand()].push_back(Value);
         Work.push_back(Call->getCalledOperand());
       }
@@ -1688,6 +1709,8 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
   // A block laid out inside another's region prints no label of its own; one
   // whose address is taken keeps the place its code starts at.
   noteLabelPlace(Inst.getParent());
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &Inst);
   auto Event =
       SourceRecorder ? SourceRecorder->instruction(Inst) : std::nullopt;
   if (Event)
@@ -1710,12 +1733,16 @@ void LLVMCWriter::writeInstruction(llvm::Instruction &Inst, int Indent) {
 
 bool LLVMCWriter::writeDeferredUnknownCopy(llvm::Instruction &Inst,
                                            int Indent) {
+  const auto Assignment = deferredInstructionAssignment(Inst);
+  if (!Assignment)
+    return false;
   const auto Flag = DeferredUnknownFlags.find(&Inst);
-  if (Flag == DeferredUnknownFlags.end() || llvm::isa<llvm::PHINode>(&Inst))
-    return false;
+  if (Assignment->Availability == c_availability::FlagWrite::Unknown) {
+    emitIndent(Indent);
+    OS << Flag->second << " = 0;\n";
+    return true;
+  }
   const auto Source = DeferredUnknownFlags.find(Inst.getOperand(0));
-  if (Source == DeferredUnknownFlags.end())
-    return false;
   std::string Payload;
   {
     llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
@@ -1789,7 +1816,7 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
           llvm::isGuaranteedNotToBeUndefOrPoison(Value, nullptr, Freeze,
                                                  &Dominators) ||
           freezeHasDefinedCProjection(Value, CurMod->getDataLayout(), Freeze,
-                                      Dominators)) {
+                                      Dominators, Opts.TheArch)) {
         emitIndent(Indent);
         OS << Name << " = " << (ChooseZero ? "0" : valueStr(Value)) << ";\n";
         return;
@@ -2669,7 +2696,10 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
   }
 
   if (Inst.isCast()) {
-    auto Src = valueStr(Inst.getOperand(0));
+    const auto *Operand = Inst.getOperand(0);
+    auto Src = Operand->getType()->isIntegerTy()
+                   ? integerPointerOperandStr(Operand)
+                   : valueStr(Operand);
     if (isFloatingPointBitcast(Inst)) {
       const auto *Cast = llvm::cast<llvm::BitCastInst>(&Inst);
       const unsigned Bytes = Cast->getSrcTy()->getPrimitiveSizeInBits() / 8;
@@ -3943,20 +3973,7 @@ void LLVMCWriter::writeInstructionImpl(llvm::Instruction &Inst, int Indent) {
 
   if (auto *Sel = llvm::dyn_cast<llvm::SelectInst>(&Inst)) {
     emitIndent(Indent);
-    // An arm C spells as a pointer, such as a frame address, converts to the
-    // integer the select yields: C's conditional takes no pointer beside an
-    // integer.
-    if (auto Condition = foldImmediate(Sel->getCondition());
-        Condition && (*Condition == "0" || *Condition == "1")) {
-      OS << Name << " = "
-         << integerPointerOperandStr(*Condition == "1" ? Sel->getTrueValue()
-                                                       : Sel->getFalseValue())
-         << ";\n";
-      return;
-    }
-    OS << Name << " = " << valueStr(Sel->getCondition()) << " ? "
-       << integerPointerOperandStr(Sel->getTrueValue()) << " : "
-       << integerPointerOperandStr(Sel->getFalseValue()) << ";\n";
+    OS << Name << " = " << selectExpr(*Sel) << ";\n";
     return;
   }
 
@@ -4883,8 +4900,17 @@ bool LLVMCWriter::writeIntrinsicCall(llvm::CallBase &Call, int Indent) {
     if (AfterCxxThrow)
       return true;
     emitIndent(Indent);
-    // The instruction a trap was lifted from, with its code (`brk #0x3E8`).
-    OS << "__builtin_trap();" << instructionComment(Call) << "\n";
+    OS << "__builtin_trap();";
+    if (const auto Site = llvm_control_flow_failure::get(Call))
+      OS << " /* "
+         << (Site->Why == llvm_control_flow_failure::Reason::IndirectTargets
+                 ? "indirect targets not proved"
+                 : "jump-table default outside proved cases")
+         << " at 0x" << llvm::utohexstr(Site->Address) << " */";
+    else
+      // The instruction a trap was lifted from, with its code (`brk #0x3E8`).
+      OS << instructionComment(Call);
+    OS << "\n";
     AfterCxxThrow = false;
     return true;
   }
@@ -5112,7 +5138,8 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
       llvm::report_fatal_error("uncollected supervisor call C helper");
     std::string Expression = Helper->second + "(";
     for (unsigned I = 0; I < Call.arg_size(); ++I)
-      Expression += (I ? ", " : "") + valueStr(Call.getArgOperand(I));
+      Expression +=
+          (I ? ", " : "") + integerPointerOperandStr(Call.getArgOperand(I));
     Expression += ")";
     emitIndent(Indent);
     if (!Call.use_empty())
@@ -5946,8 +5973,9 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
   for (unsigned I = 0; I < Call.arg_size(); ++I)
     ArgStrs.push_back(valueStr(Call.getArgOperand(I)));
 
-  if (auto Memory = renderAArch64AddressMemoryCall(Opts.TheArch, Call, Name,
-                                                   ResultLive, ArgStrs)) {
+  if (auto Memory = renderAArch64AddressMemoryCall(
+          Opts.TheArch, Call, Name, ResultLive, ArgStrs,
+          [&](uint32_t Word) { return AArch64MemoryHelpers.at(Word); })) {
     emitIndent(Indent);
     OS << Memory->Code;
     return true;
@@ -6173,6 +6201,8 @@ bool LLVMCWriter::writeFlatStringRoutine(const llvm::CallInst &Call, bool Movs,
 
 void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
                                 int Indent) {
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &Call);
   if (writeAnalysisDispatchCall(Call, Indent))
     return;
   if (const auto Allocation = llvmc::cStackAllocation(Call)) {
@@ -6283,6 +6313,13 @@ void LLVMCWriter::writeCallLike(llvm::CallBase &Call, const std::string &Name,
   if (ResultLive)
     OS << Name << " = ";
   OS << callExpr(Call, /*Statement=*/!ResultLive) << ";\n";
+  if (NoReturn) {
+    // The LLVM contract may belong only to this call site, or to a lifted
+    // callee whose ordinary C prototype carries no noreturn annotation.
+    // Keep the terminated path explicit before suppressing its terminator.
+    emitIndent(Indent);
+    OS << "__builtin_unreachable();\n";
+  }
   AfterCxxThrow = NoReturn;
 }
 
@@ -6437,15 +6474,14 @@ LLVMCWriter::preservedIndirectCalleeStr(const llvm::CallBase &Call) {
       if (I)
         Params += ", ";
       Params += declarationToC(
-          cDisplayType(sourceCallParameterType(Hint->Signature.Parameters[I])),
-          "");
+          (sourceCallParameterType(Hint->Signature.Parameters[I])), "");
     }
     if (Hint->AnalystFixedCount >= 0)
       Params += ", ...";
     const std::string Convention =
         Call.getCallingConv() == llvm::CallingConv::Win64 ? Win64CallABI + " "
                                                           : "";
-    Type = declarationToC(cDisplayType(Hint->Signature.ReturnType),
+    Type = declarationToC(Hint->Signature.ReturnType,
                           "(" + Convention + "*)(" + Params + ")");
   }
   if (const auto Authentication =
@@ -6463,6 +6499,8 @@ LLVMCWriter::preservedIndirectCalleeStr(const llvm::CallBase &Call) {
 }
 
 std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
+  llvm::SaveAndRestore<const llvm::Instruction *> Context(EmittingInstruction,
+                                                          &Call);
   if (llvmc::cStackAllocation(Call))
     throw std::runtime_error(
         "private C stack allocation cannot be an expression");
@@ -6478,9 +6516,9 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       if (I)
         Expression += ", ";
       const auto Type =
-          Hint ? declarationToC(cDisplayType(sourceCallParameterType(
-                                    Hint->Signature.Parameters[I])),
-                                "")
+          Hint ? declarationToC(
+                     (sourceCallParameterType(Hint->Signature.Parameters[I])),
+                     "")
                : sourceScalarType(Call.getArgOperand(I)->getType(),
                                   Call.getAttributes().hasParamAttr(
                                       I, LLVMSourceSignedParameter));
@@ -6505,7 +6543,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     if (Hint && Hint->Signature.ReturnType->Kind == NdTypeKind::Struct)
       Expression = c_detail::sourceRecordValue(
           Hint->Signature.ReturnType,
-          declarationToC(cDisplayType(Hint->Signature.ReturnType), ""),
+          declarationToC(Hint->Signature.ReturnType, ""),
           typeToCLLVM(Call.getType()), Expression);
     RenderingCalls.pop_back();
     return Expression;
@@ -6690,6 +6728,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       Library && !Library.Prototype
           ? libc::vaListParameter(Library.Name, libcVariant())
           : std::nullopt;
+  const auto *BoundedVarargs =
+      Library ? libc::libcVariadicForward(Library.Name) : nullptr;
+  if (BoundedVarargs &&
+      (BoundedVarargs->TheKind != libc::LibCVariadicForward::Kind::Bounded ||
+       !libc::variadicIn(*BoundedVarargs, libcVariant())))
+    BoundedVarargs = nullptr;
   // Import-slot calls already have a checked source declaration even when
   // debug lookup cannot name their loaded LLVM operand. Use that same
   // declaration for record arguments and results, as for scalar conversions.
@@ -6775,8 +6819,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     if (VaListParameter && ArgIdx == *VaListParameter &&
         (Integer || Operand->getType()->isPointerTy())) {
       Expr += imagePointerArgument(
-          Operand,
-          c_detail::vaListArgument(Opts.TheArch, Opts.Format, Argument));
+          Operand, c_detail::vaListArgument(Opts.TheArch, Opts.Format, Argument,
+                                            freshVar("va_argument")));
       continue;
     }
     if (SourceImport && ArgIdx < SourceImport->Params.size()) {
@@ -6788,13 +6832,40 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       const llvm::StringRef Spelled =
           c_library::portableScalarParameterType(*SourceImport, ArgIdx);
       std::string Projected =
-          "(" +
-          (Spelled.empty() ? declarationToC(cDisplayType(Type), "")
-                           : Spelled.str()) +
+          "(" + (Spelled.empty() ? declarationToC(Type, "") : Spelled.str()) +
           ")" + Bridge + "(" + Argument + ")";
       Expr += Type->Kind == NdTypeKind::Ptr
                   ? imagePointerArgument(Operand, std::move(Projected))
                   : std::move(Projected);
+      continue;
+    }
+    if (BoundedVarargs && ArgIdx >= BoundedVarargs->FixedCount &&
+        (Integer || Operand->getType()->isPointerTy())) {
+      const bool PointerTail = libc::isPointerType(BoundedVarargs->Type);
+      if (PointerTail && Integer && !PointerSpelling) {
+        // fcntl/ioctl select an integer or pointer tail by command. Their
+        // generic forwarding carrier does not establish a pointer parameter.
+        // Preserve the recovered scalar, including a literal's LLVM width.
+        Expr +=
+            llvm::isa<llvm::ConstantInt>(Operand)
+                ? "(" + typeToCLLVM(Operand->getType()) + ")(" + Argument + ")"
+                : Argument;
+        continue;
+      }
+      // A variadic argument has no parameter conversion. In particular, a
+      // small literal is an int even when the import reads a machine word.
+      // Use the same tail type as its forwarding contract, including the
+      // target's long width and signedness. LLVM integers are signless, and
+      // a pointer carrier also needs the exact C type read by va_arg.
+      const std::string Type = c_library::typeSpelling(
+          BoundedVarargs->Type, Opts.TheArch, Opts.Format);
+      const std::string Bridge =
+          Integer || PointerSpelling || Operand->getType()->isPointerTy()
+              ? "(uintptr_t)"
+              : "";
+      std::string Projected = "(" + Type + ")" + Bridge + "(" + Argument + ")";
+      Expr += PointerTail ? imagePointerArgument(Operand, std::move(Projected))
+                          : std::move(Projected);
       continue;
     }
     if (const auto *Callee = Call.getCalledFunction();
@@ -8456,12 +8527,12 @@ void LLVMCWriter::writePhiCopies(const llvm::BasicBlock *From,
           Flag != DeferredUnknownFlags.end()) {
         std::string Available = "1";
         std::string RHS;
-        if (isDeferredUnknownInput(Incoming)) {
+        const auto Assignment = deferredPhiAssignment(*Phi, Incoming);
+        if (Assignment.Availability == c_availability::FlagWrite::Unknown) {
           Available = "0";
           RHS = "0";
-        } else if (auto Source = DeferredUnknownFlags.find(Incoming);
-                   Source != DeferredUnknownFlags.end()) {
-          Available = Source->second;
+        } else if (Assignment.Availability == c_availability::FlagWrite::Copy) {
+          Available = DeferredUnknownFlags.at(Incoming);
           llvm::SaveAndRestore<bool> Transport(ReadingDeferredPayload, true);
           RHS =
               Available + " ? (" + integerPointerOperandStr(Incoming) + ") : 0";
@@ -8729,6 +8800,17 @@ bool LLVMCWriter::callDoesNotReturn(const llvm::CallBase &Call) const {
 void LLVMCWriter::writeCall(llvm::CallInst &Call, const std::string &Name,
                             int Indent) {
   writeCallLike(Call, Name, Indent);
+}
+
+void LLVMCWriter::writeInvokedCall(llvm::InvokeInst &Invoke, int Indent) {
+  const auto Event =
+      SourceRecorder ? SourceRecorder->instruction(Invoke) : std::nullopt;
+  if (Event)
+    OS << SourceRecorder->begin(*Event);
+  writeCallLike(Invoke, Invoke.getType()->isVoidTy() ? "" : getName(&Invoke),
+                Indent);
+  if (Event)
+    OS << SourceRecorder->end(*Event);
 }
 
 void LLVMCWriter::writeInvoke(llvm::InvokeInst &Invoke, const std::string &Name,

@@ -352,6 +352,14 @@ public:
     SymbolicSimplification = Enabled;
   }
 
+  /// The caller proves the original full-width register occurrence and the
+  /// debug location's scope. Attach its declaration only to a surviving use
+  /// of that same MedIR operand, not to the variable's other occurrences.
+  void setSourcePointerResolver(
+      std::function<TypeRef(const MedOp &, const MedVar &)> Resolver) {
+    SourcePointerResolver = std::move(Resolver);
+  }
+
   /// Observe expression creation without adding metadata to either IR. The
   /// observer must keep weak references: later transformations can replace an
   /// expression, and an expired reference must not map a recycled address.
@@ -438,6 +446,7 @@ private:
 
   ExprPtr medOpToExpr(const MedOp &Op);
   ExprPtr medOpToExprImpl(const MedOp &Op);
+  ExprPtr sourcePointerOperand(const MedOp &Op, ExprPtr Value) const;
   /// \p Op as stack the function allocates at run time (MedDynamicStack.h):
   /// `sp - size` that becomes the stack pointer is storage the C allocates,
   /// and a later `old_sp - size` the variable holding it; null otherwise.
@@ -489,6 +498,8 @@ private:
   const PhiNode *uniqueMedPhi(const MedVar &V);
   ExprPtr sourceBitSlice(const ExprPtr &Value, uint64_t ByteOffset,
                          uint16_t Bytes, unsigned Depth = 0);
+  void collectSourcePhiSlices(const MedFunc &Med);
+  VarKeyMap<std::map<std::pair<uint64_t, uint16_t>, MedVar>> SourcePhiSlices;
   ExprPtr sourceFloatValue(const MedVar &Value, uint16_t Bytes);
   ExprPtr sourceScalarValue(const MedVar &Value, const TypeRef &Type);
   ExprPtr inlineableDefinition(VarKey Key) const;
@@ -672,6 +683,7 @@ private:
   std::shared_ptr<detail::HighEntryStackOffsets> EntryStackOffsets;
   const MedFunc *EntryOffsetDefsFor = nullptr;
   const BinaryImage *Image = nullptr;
+  std::function<TypeRef(const MedOp &, const MedVar &)> SourcePointerResolver;
   std::function<void(const MedOp &, const ExprPtr &)> ExpressionObserver;
   std::function<void(const ExprPtr &, const ExprPtr &)> ExpressionCloneObserver;
   std::function<void(const MedOp &, const HighStmt &)> StatementObserver;

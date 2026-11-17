@@ -1402,6 +1402,44 @@ private slots:
     QCOMPARE(third["payload"].toObject()["etag"].toString(), "tag-9-0-3");
   }
 
+  void queryProgressBelongsOnlyToLiveSubscribers() {
+    Harness h;
+    establish(h);
+    QSignalSpy progress(&h.service, &QueryService::queryProgress);
+    QSignalSpy load(&h.service, &QueryService::loadProgress);
+    const Spec spec{"functions", {{"filter", "needle"}}};
+    const auto a = h.service.subscribe(spec, &h.owner, {});
+    QObject other;
+    const auto b = h.service.subscribe(spec, &other, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.reply(0, {{"done", 10}, {"total", 100}}, "1", "project-one", "progress");
+    QCOMPARE(progress.size(), 2);
+    QCOMPARE(progress[0][0].toULongLong(), a);
+    QCOMPARE(progress[1][0].toULongLong(), b);
+    QCOMPARE(load.size(), 0);
+    h.service.unsubscribe(a);
+    progress.clear();
+    h.reply(0, {{"done", 20}, {"total", 100}}, "1", "project-one", "progress");
+    QCOMPARE(progress.size(), 1);
+    QCOMPARE(progress[0][0].toULongLong(), b);
+    h.reply(0);
+    QTRY_VERIFY(!h.service.hasPending());
+    progress.clear();
+    h.reply(0, {}, "1", "project-one", "progress");
+    QCOMPARE(progress.size(), 0);
+  }
+
+  void progressCallbackCanDestroyTheService() {
+    auto h = std::make_unique<Harness>();
+    establish(*h);
+    h->service.subscribe({"functions", {}}, &h->owner, {});
+    QTRY_COMPARE(h->sent.size(), 1);
+    connect(&h->service, &QueryService::queryProgress, this,
+            [&](quint64, const QJsonObject &) { h.reset(); });
+    h->reply(0, {}, "1", "project-one", "progress");
+    QVERIFY(!h);
+  }
+
   void sectionEditsInvalidateCachedCodeAndAnalysis() {
     Harness h;
     establish(h);
@@ -1972,6 +2010,70 @@ private slots:
     QCOMPARE(h.sent[2].expectedRevision, "2");
     h.reply(2, {{"saved", true}}, "2");
     QTRY_VERIFY(!h.service.hasPending());
+  }
+
+  void detachedReadCanRejoinAndFinishWithoutItsOldView() {
+    Harness h;
+    establish(h);
+    int departed = 0, returned = 0;
+    h.service.subscribe(text(), &h.owner, [&](const auto &) { ++departed; });
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.service.unsubscribeOwner(&h.owner, QueryService::FinishRunning);
+    QCOMPARE(h.sent.size(), 1);
+    QCOMPARE(h.service.pendingReadCount(), 1);
+    h.service.subscribe(text(), &h.owner, [&](const auto &) { ++returned; });
+    QCOMPARE(h.sent.size(), 1);
+    h.reply(0, {{"text", "retained source"}});
+    QTRY_COMPARE(returned, 1);
+    QCOMPARE(departed, 0);
+    QCOMPARE(h.service.pendingReadCount(), 0);
+    h.service.subscribe(text(), &h.owner, [&](const auto &) { ++returned; });
+    QTRY_COMPARE(returned, 2);
+    QCOMPARE(h.sent.size(), 1);
+
+    const auto other = text("0xffff000000000020");
+    h.service.subscribe(other, &h.owner, [&](const auto &) { ++departed; });
+    QTRY_COMPARE(h.sent.size(), 2);
+    h.service.unsubscribeOwner(&h.owner, QueryService::FinishRunning);
+    h.reply(1, {{"text", "finished while hidden"}});
+    QTRY_VERIFY(!h.service.hasPending());
+    h.service.subscribe(other, &h.owner, [&](const auto &) { ++returned; });
+    QTRY_COMPARE(returned, 3);
+    QCOMPARE(departed, 0);
+    QCOMPARE(h.sent.size(), 2);
+  }
+
+  void explicitCancellationStopsDetachedReads() {
+    Harness h;
+    establish(h);
+    h.service.subscribe(text(), &h.owner, {});
+    QTRY_COMPARE(h.sent.size(), 1);
+    h.service.unsubscribeOwner(&h.owner, QueryService::FinishRunning);
+    h.service.cancelReads();
+    QCOMPARE(h.sent.size(), 2);
+    QCOMPARE(h.sent.back().operation, QString("cancel"));
+    QCOMPARE(h.service.pendingReadCount(), 0);
+    h.reply(0, {}, "1", "project-one", "cancelled");
+    QTRY_VERIFY(!h.service.hasPending());
+  }
+
+  void explicitRefreshNeverUsesAResponseCache() {
+    Harness h;
+    establish(h);
+    auto request = text();
+    request.payload["refresh"] = true;
+    for (int i = 0; i < 2; ++i) {
+      h.service.subscribe(request, &h.owner, {});
+      QTRY_COMPARE(h.sent.size(), i + 1);
+      h.reply(i);
+      QTRY_VERIFY(!h.service.hasPending());
+    }
+    // Its fresh answer is still the page ordinary navigation keeps.
+    int delivered = 0;
+    h.service.subscribe(text(), &h.owner,
+                        [&](const QJsonObject &) { ++delivered; });
+    QTRY_COMPARE(delivered, 1);
+    QCOMPARE(h.sent.size(), 2);
   }
 
   void cancellingQueuedReadsSendsNoCancellationAndReclaimsCapacity() {

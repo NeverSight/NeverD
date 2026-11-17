@@ -148,6 +148,13 @@ void scanSegmentCallsAArch64(const BinaryImage &Img, const Segment *Seg,
                              va_t Start, va_t End, std::set<va_t> &Out,
                              AArch64EntryScan &Entries,
                              const Cancellation *Control = nullptr);
+/// Whether the AArch64 entry marker (paciasp, bti c, the frame push) at \p
+/// Addr begins a function: it follows the end of the function before it, a
+/// block end or a call, right before it or before the words an ALTERNATIVE
+/// places after that function, and no conditional branch from just before
+/// reaches it or those words, as one reaches the prologue shrink-wrapping
+/// moved past a frame-free early return.
+bool aarch64MarkedEntryAfterFunctionEnd(const BinaryImage &Img, va_t Addr);
 
 inline void scanSegmentCalls(const BinaryImage &Img, Decoder &Dec,
                              const Segment *Seg, va_t Start, va_t End,

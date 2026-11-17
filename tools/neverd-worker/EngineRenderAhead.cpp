@@ -671,7 +671,7 @@ void Engine::renderFunctionAhead(std::uint64_t address) {
       const Json following = page.value("next_offset", Json());
       if (!following.is_number_unsigned() ||
           following.get<std::size_t>() <= next ||
-          textBytes > limits::kEngineMaxNamedViewBytes) {
+          textBytes > limits::kRenderAheadMaxSourceBytes) {
         failed();
         return;
       }

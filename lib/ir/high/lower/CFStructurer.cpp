@@ -44,12 +44,17 @@ MedToHighConverter::phiCopiesForEdge(int From, int To, va_t At,
     return Copies;
   }
   VarKeySet Destinations;
-  for (const auto &[Output, Argument] : It->second)
-    Destinations.insert(varKey(Output));
-  std::vector<HighStmt> Writes;
   for (const auto &[Output, Argument] : It->second) {
-    if (Output == Argument)
-      continue;
+    Destinations.insert(varKey(Output));
+    if (const auto Slices = SourcePhiSlices.find(varKey(Output));
+        Slices != SourcePhiSlices.end())
+      for (const auto &[Range, Value] : Slices->second) {
+        (void)Range;
+        Destinations.insert(varKey(Value));
+      }
+  }
+  std::vector<HighStmt> Writes;
+  const auto AddCopy = [&](const MedVar &Output, ExprPtr Value) {
     HighStmt Copy;
     Copy.Kind = StmtKind::Assign;
     Copy.Addr = At;
@@ -59,7 +64,7 @@ MedToHighConverter::phiCopiesForEdge(int From, int To, va_t At,
     // definition only the PHI uses is inlined, and a value read more than
     // once stays the variable its assignment names.  Inlining that one too
     // would repeat a shared expression once per read.
-    Copy.Val = medvarToExpr(Argument);
+    Copy.Val = std::move(Value);
     bool ReadsDestination = false;
     std::set<const HighExpr *> Seen;
     std::function<void(const ExprPtr &)> Visit =
@@ -87,6 +92,16 @@ MedToHighConverter::phiCopiesForEdge(int From, int To, va_t At,
       Copy.Val = Capture.Dst;
     }
     Writes.push_back(std::move(Copy));
+  };
+  for (const auto &[Output, Argument] : It->second) {
+    if (Output == Argument)
+      continue;
+    AddCopy(Output, medvarToExpr(Argument));
+    if (const auto Slices = SourcePhiSlices.find(varKey(Output));
+        Slices != SourcePhiSlices.end())
+      for (const auto &[Range, Value] : Slices->second)
+        AddCopy(Value, sourceBitSlice(medvarToExpr(Argument), Range.first,
+                                      Range.second));
   }
   Copies.insert(Copies.end(), Writes.begin(), Writes.end());
   if (Selector != DispatchSelectorCopies.end())

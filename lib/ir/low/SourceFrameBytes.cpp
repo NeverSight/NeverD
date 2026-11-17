@@ -72,7 +72,7 @@ immutableDefinition(const LowFunc &Function, const BinaryImage &Image,
     if (*Address >= Segment.VA + Segment.Size || End <= Segment.VA)
       continue;
     if (Owner || *Address < Segment.VA || End > Segment.VA + Segment.Size ||
-        !Segment.isReadable() || Segment.isWritable() || Segment.isExecutable())
+        !Segment.isReadable() || Segment.isWritable())
       return std::nullopt;
     Owner = &Segment;
   }

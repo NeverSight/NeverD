@@ -1435,7 +1435,11 @@ TEST(COFFExceptionIR, LLVMCProjectsCanonicalWindowsEHAsCommentsOnly) {
   EXPECT_NE(Source.find("cxx.ip_state[2]: ip=0x140003080, state=2"),
             std::string::npos)
       << Source;
-  EXPECT_EQ(Source.find("__try"), std::string::npos) << Source;
+  // No statement of either language stands for the tables, and the function
+  // whose table holds SEH scopes says that this C runs none of them.
+  EXPECT_NE(Source.find("neverd.seh: not lowered"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("__try {"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("__except"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("try {"), std::string::npos) << Source;
   EXPECT_EQ(Source.find("catch ("), std::string::npos) << Source;

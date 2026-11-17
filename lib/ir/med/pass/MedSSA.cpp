@@ -202,6 +202,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // Variables some root other than the entry reads on arrival.
   std::vector<std::set<int>> PhiLiveIn(N);
   std::set<int> NonEntryRootLiveIns;
+  // How many leading ops of the function entry are its live-in copies.
+  size_t EntrySeedPrefix = 0;
   std::vector<bool> IsRoot(N, false);
   auto AddRoot = [&](int Root) {
     if (Root < 0 || Root >= N || IsRoot[Root])
@@ -913,6 +915,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
                                 << " (id=" << Id << ")\n");
       }
       auto &RootOps = Func.Blocks[Root].Ops;
+      // The function entry's live-in copies are this prefix. Rename records
+      // each identity copy's version from it; a later copy is a real write.
+      if (Root == 0)
+        EntrySeedPrefix = InitOps.size();
       RootOps.insert(RootOps.begin(), InitOps.begin(), InitOps.end());
     }
     PhiLiveIn = std::move(LiveIn);
@@ -1048,6 +1054,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // Step 5: SSA renaming (assign version numbers)
   llvm::DenseMap<int, int> VarCounter;
   llvm::DenseMap<int, std::vector<int>> VarStack;
+  // Output version of the function entry's identity copy of this id. A root
+  // other than the entry can make that version nonzero. An id with no entry
+  // here has no seed: its first write, even version 0, belongs to one path.
+  llvm::DenseMap<int, int> EntrySeedVersion;
   // Version 0 is the value a variable holds when a root is entered.  A root
   // other than the entry reads it after the entry's subtree has been
   // renamed, so its definitions start at 1 instead of taking version 0 and
@@ -1225,7 +1235,15 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       for (int Id : SEHFuncletTrackedIds)
         SEHFuncletEntryVersions[F.B][Id] =
             VarStack[Id].empty() ? -1 : VarStack[Id].back();
-    for (auto &Op : Blk.Ops) {
+    for (size_t OpIndex = 0; OpIndex < Blk.Ops.size(); ++OpIndex) {
+      auto &Op = Blk.Ops[OpIndex];
+      // The entry prefix is only the live-in copies inserted above. An
+      // identity copy later in the block forwards some other value.
+      const bool EntryIdentity =
+          F.B == 0 && OpIndex < EntrySeedPrefix && Op.Opcode == NdOp::COPY &&
+          Op.NumInputs == 1 && Op.Output.Kind == MedVar::Reg &&
+          Op.Inputs[0].Kind == MedVar::Reg && Op.Inputs[0].Id == Op.Output.Id &&
+          Op.Inputs[0].RegOff == Op.Output.RegOff;
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           CxxThrowingCalls.count({F.B, Op.Addr}))
         for (int Id : SEHTrackedIds)
@@ -1239,6 +1257,8 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
       }
       if (Op.Output.Id >= 0 && Op.Output.Size > 0) {
         Op.Output.SSAVer = NewVersion(Op.Output.Id);
+        if (EntryIdentity)
+          EntrySeedVersion[Op.Output.Id] = Op.Output.SSAVer;
         F.Pushed.push_back(Op.Output.Id);
         if (Func.HasUnresolvedSEHFrame && Op.Addr == InvalidVA &&
             SEHProtectedBlocks.count(F.B) && SEHTrackedIds.count(Op.Output.Id))
@@ -1290,10 +1310,32 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         // A PHI can be placed for a register that no instruction reads on
         // this edge. With no reaching definition, version zero may name a
         // sibling's first write; publishing it would let propagation borrow
-        // that sibling's constant for this path.
-        if (VarStack[Arg.Id].empty())
-          Arg = MedVar::makeUnspecified(Arg.Size, TargetArch);
-        else
+        // that sibling's constant for this path. The same rejection applies
+        // when another width at this register already has a dominating write.
+        // Otherwise the edge still holds the bits the function was entered
+        // with. SSA version -1 names that fact and is not version 0.
+        if (VarStack[Arg.Id].empty()) {
+          auto HoldsEntry = [&](int Id) {
+            if (VarStack[Id].empty())
+              return true;
+            const auto Seed = EntrySeedVersion.find(Id);
+            return Seed != EntrySeedVersion.end() &&
+                   VarStack[Id].back() == Seed->second;
+          };
+          bool AliasWritten = Arg.Kind != MedVar::Reg;
+          if (!AliasWritten)
+            if (const auto Ids = RegOffToIds.find(Arg.RegOff);
+                Ids != RegOffToIds.end())
+              for (int Id : Ids->second)
+                if (!HoldsEntry(Id)) {
+                  AliasWritten = true;
+                  break;
+                }
+          if (AliasWritten)
+            Arg = MedVar::makeUnspecified(Arg.Size, TargetArch);
+          else
+            Arg.SSAVer = -1;
+        } else
           Arg.SSAVer = GetVersion(Arg.Id);
       }
     }

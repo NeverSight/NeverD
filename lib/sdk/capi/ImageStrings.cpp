@@ -209,13 +209,18 @@ imageStrings(Session &S, const strings::ScanOptions &Options) {
   };
   // Data segments whole, and the data sections of code segments.
   for (const auto &Seg : S.Img.Segments) {
+    if (!Seg.isReadable())
+      continue;
     if (!Seg.isExecutable()) {
       ScanRange(Seg.VA, Seg.Data.data(), Seg.Data.size());
       continue;
     }
     for (const auto &Sec : S.Img.Sections) {
-      if (Sec.isExecutable() || !Sec.FileSz || !Seg.contains(Sec.VA) ||
-          Sec.VA - Seg.VA >= Seg.Data.size())
+      // Non-allocated ELF debug/symbol sections commonly have VA zero.
+      // That can fall inside a real code segment; it does not map their
+      // bytes there, and scanning the segment again invents duplicate text.
+      if (!Sec.isReadable() || Sec.isExecutable() || !Sec.FileSz ||
+          !Seg.contains(Sec.VA) || Sec.VA - Seg.VA >= Seg.Data.size())
         continue;
       const uint64_t Offset = Sec.VA - Seg.VA;
       const uint64_t Size =
@@ -255,6 +260,39 @@ const ImageString *stringHolding(const std::vector<ImageString> &Strings,
     return nullptr;
   --It;
   return Address - It->Address < It->Bytes ? &*It : nullptr;
+}
+
+std::optional<ReferredImageText>
+referredImageText(const BinaryImage &Img,
+                  const std::vector<ImageString> &Strings, unsigned MinLength,
+                  va_t Address) {
+  const ImageString *String = stringHolding(Strings, Address);
+  if (!String) {
+    const auto Next = std::lower_bound(
+        Strings.begin(), Strings.end(), Address,
+        [](const ImageString &Text, va_t At) { return Text.Address < At; });
+    if (Next == Strings.end() || Next->Address <= Address)
+      return std::nullopt;
+    const uint64_t PrefixSize = Next->Address - Address;
+    const uint8_t *Prefix = Img.readVA(Address, PrefixSize);
+    if (!Prefix ||
+        !llvm::all_of(llvm::ArrayRef(Prefix, PrefixSize), [](uint8_t Byte) {
+          return Byte != 0 && (Byte < 0x20 || Byte == 0x7f);
+        }))
+      return std::nullopt;
+    return ReferredImageText{&*Next, 0};
+  }
+  if (Address == String->Address)
+    return ReferredImageText{String, 0};
+  const uint8_t *Bytes = Img.readVA(String->Address, String->Bytes);
+  if (!Bytes)
+    return std::nullopt;
+  const auto Start =
+      strings::textFrom(llvm::ArrayRef<uint8_t>(Bytes, String->Bytes),
+                        String->Kind, Address - String->Address);
+  if (!Start || Start->Columns < MinLength)
+    return std::nullopt;
+  return ReferredImageText{String, Start->UTF8};
 }
 
 } // namespace neverd::sdk

@@ -1,5 +1,6 @@
 #include "../../../lib/ir/high/lower/CompareTreeSwitch.h"
 #include "../../../lib/ir/high/lower/VariadicStackArguments.h"
+#include "../../../lib/ir/high/structure/HighCFSimplifyDetail.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -27,7 +28,6 @@
 #include <tuple>
 
 namespace neverd {
-void structureIfElse(HighFunc &, int, const MedFunc * = nullptr);
 bool sinkJoinDefaultsLate(HighFunc &Func);
 void detectAndConvertLoops(HighFunc &, const std::unordered_map<va_t, int> &,
                            const MedFunc &, bool);
@@ -1839,6 +1839,26 @@ TEST(HighControlFlowSemantics, AMergedCallKeepsAnInstructionOnlyIfItHadOne) {
   // A value without calls is left as it is.
   const ExprPtr Plain = local(1);
   EXPECT_EQ(withMergedCallSites(Plain, local(1)), Plain);
+}
+
+TEST(HighControlFlowSemantics,
+     OptionalCallTypesKeepAbsentAndConflictingDistinct) {
+  const auto Left = HighExpr::makeCall("callee", 0x4000, {local(0)});
+  const auto Right = HighExpr::makeCall("callee", 0x4000, {local(0)});
+  EXPECT_TRUE(Left->structuralEq(*Right));
+  Left->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeInt(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
+  EXPECT_FALSE(Right->structuralEq(*Left));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeInt(8)});
+  EXPECT_TRUE(Left->structuralEq(*Right));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeFloat(8), {NdType::makeInt(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
+  Right->SourceCalleeType =
+      NdType::makeFunc(NdType::makeInt(8), {NdType::makeFloat(8)});
+  EXPECT_FALSE(Left->structuralEq(*Right));
 }
 
 TEST(HighControlFlowSemantics, AShiftByZeroIsItsOperand) {
@@ -12910,4 +12930,40 @@ TEST(HighControlFlowSemantics,
           [](const HighStmt &S) { return S.Kind == StmtKind::Store; }));
     EXPECT_EQ(countKind(F, StmtKind::Store), 8u);
   }
+}
+
+TEST(HighControlFlowSemantics, SyntheticHighAddressReturnsKeepBothPaths) {
+  // Continuation bridges use the last valid addresses for their entry and
+  // return blocks. These are real labels, even in a hash table with sentinels.
+  for (const va_t Base :
+       {va_t(1), va_t(0x1000), InvalidVA - 0x100, InvalidVA - 3})
+    for (const bool Reverse : {false, true}) {
+      SCOPED_TRACE(Base);
+      SCOPED_TRACE(Reverse);
+      const auto Taken = Base + (Reverse ? 1 : 2);
+      const auto Fallthrough = Base + (Reverse ? 2 : 1);
+      HighFunc F;
+      F.Entry = Base;
+      F.Body = {conditional(Base, Taken),
+                result(Fallthrough, HighExpr::makeConst(7, 8)),
+                result(Taken, HighExpr::makeConst(42, 8))};
+      // The branch's synthetic goto has no separate machine instruction.
+      F.Body.front().Body.front().Addr = 0;
+      for (const uint64_t Choice : {0, 1})
+        ASSERT_EQ(execute(F, Choice, true), Choice ? 42u : 7u);
+      structureIfElse(F, 10);
+      for (const uint64_t Choice : {0, 1})
+        EXPECT_EQ(execute(F, Choice, true), Choice ? 42u : 7u);
+    }
+}
+
+TEST(HighControlFlowSemantics, StatementIndexRetainsSyntheticReturnLabels) {
+  AddrMap Index;
+  Index.rebuild({conditional(InvalidVA - 3, InvalidVA - 1),
+                 result(InvalidVA - 2, HighExpr::makeConst(7, 8)),
+                 result(InvalidVA - 1, HighExpr::makeConst(42, 8))});
+  Index.ensureSorted();
+  const std::vector<std::pair<va_t, size_t>> Labels{
+      {InvalidVA - 3, 0}, {InvalidVA - 2, 1}, {InvalidVA - 1, 2}};
+  EXPECT_EQ(Index.Sorted, Labels);
 }

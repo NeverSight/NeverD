@@ -79,6 +79,9 @@ struct RenderOptions {
   /// Portable C prototypes retain integer keyword identity when the host has
   /// the target width; otherwise they select the target's exact-width type.
   bool PrototypeIntegerIdentity = false;
+  /// Type editors reference existing catalog entries by their original C++
+  /// names. This affects declaration spelling only, not emitted definitions.
+  bool SourceTypeNames = false;
   /// A comment with each member's offset.
   bool Offsets = true;
   /// Offsets in hexadecimal rather than decimal.
@@ -220,6 +223,23 @@ private:
   std::unique_ptr<render::CSpeller> Speller;
 };
 
+/// Reuses the library's name mapping across C/C++ view requests. Each
+/// rendering still owns its declarations and dependency traversal. Library
+/// must outlive the renderer and remain unchanged. Options must use language().
+class CTypeRenderer {
+public:
+  CTypeRenderer(const TypeLibrary &Library, Language Lang);
+  ~CTypeRenderer();
+  Language language() const { return Lang; }
+  std::string render(llvm::ArrayRef<const LocalType *> Roots,
+                     const RenderOptions &Options, bool Dependencies) const;
+
+private:
+  const TypeLibrary &Library;
+  Language Lang;
+  std::unique_ptr<render::NameSpelling> Names;
+};
+
 /// Renders records as renderEmbeddedC does, the library's names spelled once
 /// for every call: each unit a session decompiles embeds a few types of a
 /// library that can hold tens of thousands.  It reads \p Library, which must
@@ -229,6 +249,9 @@ public:
   EmbeddedCRenderer(const TypeLibrary &Library, const RenderOptions &Options);
   ~EmbeddedCRenderer();
   EmbeddedC render(llvm::ArrayRef<const LocalType *> Roots) const;
+  std::string typeName(llvm::StringRef SourceName) const;
+  std::string sourceTypeName(llvm::StringRef Identifier) const;
+  const std::vector<std::pair<std::string, std::string>> &renamed() const;
 
 private:
   const TypeLibrary &Library;

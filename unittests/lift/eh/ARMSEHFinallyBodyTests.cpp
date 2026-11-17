@@ -527,7 +527,13 @@ TEST(ARMSEHFinallyBody, AFrameTheParentCannotNameIsAnUnknownCallArgument) {
   ASSERT_NE(Guard, std::string::npos) << P;
   const size_t Call = P.find("sub_140001050(", Guard);
   ASSERT_NE(Call, std::string::npos) << P;
-  EXPECT_NE(P.find("unknown value", Call), std::string::npos) << P;
+  // The real argument survives; reading the unknown frame must trap before
+  // the callee can receive a fabricated zero.
+  EXPECT_EQ(P.find("sub_140001050(1, (__builtin_trap(), 0 "
+                   "/* no recovered semantics at 0x140001080 */));",
+                   Call),
+            Call)
+      << P;
 }
 
 constexpr va_t ThumbEntry = 0x401000;

@@ -544,7 +544,7 @@ Both Python recovery functions accept `with_context=True`; their result records
 the selected ABI. They do not accept or retain the future runtime context. An
 older engine can still serve the default unary ABI, but must explicitly confirm
 the context option before the wrapper returns a result requesting that ABI.
-See the runnable [C plugin](../plugins/bytecode/bytecode_plugin.c) and
+See the runnable [C plugin](../plugins/example/bytecode/bytecode_plugin.c) and
 [Python plugin](../pluginsdk/python/examples/external_bytecode.py).
 
 ### Per-instruction decoder callbacks

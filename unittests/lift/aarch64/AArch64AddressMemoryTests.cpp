@@ -533,6 +533,31 @@ TEST(AArch64AddressMemory, VectorIdentitiesAppendAfterPublishedInstructions) {
             Intrinsic::A64_VectorStoreRegisterOffset);
 }
 
+TEST(AArch64AddressMemory, CFunctionBodiesUseCompactTypedMemoryHelpers) {
+  for (uint32_t Word : {0xB8687928U, 0xF8687933U}) {
+    const auto Function = memoryFunction(Word);
+    llvm::LLVMContext Context;
+    auto Module =
+        MedLLVMEmitter().emit({Function}, Context, kName, Arch::AArch64);
+    ASSERT_TRUE(Module);
+    for (bool LLVMRoute : {false, true}) {
+      SCOPED_TRACE(LLVMRoute);
+      const auto Source = memorySource(Function, *Module, LLVMRoute);
+      const size_t Entry = Source.find(std::string(kName) + "(");
+      ASSERT_NE(Entry, std::string::npos) << Source;
+      const std::string Body = Source.substr(Entry);
+      EXPECT_EQ(Body.find("__asm__ volatile"), std::string::npos) << Body;
+      EXPECT_NE(Body.find(Word == 0xB8687928U
+                              ? "neverd_aarch64_load_u32_lsl2("
+                              : "neverd_aarch64_load_u64_lsl3("),
+                std::string::npos)
+          << Body;
+      // The original instruction remains in the shared helper definition.
+      EXPECT_NE(Source.find(".inst %c3"), std::string::npos);
+    }
+  }
+}
+
 TEST(AArch64AddressMemory, RawWordsPreserveIndexScaleAndAliases) {
   for (const auto &Case : Cases)
     for (bool Fast : {false, true})
@@ -778,6 +803,47 @@ TEST(AArch64AddressMemory,
                    std::runtime_error);
     }
   }
+}
+
+TEST(AArch64AddressMemory, ImageReconstructedStackFailsClosedAtTheAccess) {
+  auto Function = memoryFunction(kStackBase);
+  Function.Blocks.front().Ops.front().Addr = kEntry;
+  auto &Base = Function.Blocks.front().Ops.front().Inputs[1];
+  Base.Kind = MedVar::Reg;
+  Base.RegOff = a64reg::SP;
+  ASSERT_TRUE(
+      aarch64AddressMemoryMedShapeIsValid(Function.Blocks.front().Ops.front()));
+  const auto High = MedToHighConverter().convert(Function, Arch::AArch64);
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::ELF;
+  Options.Image = &Image;
+  std::string Source;
+  llvm::raw_string_ostream Out(Source);
+  ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options)) << Source;
+  EXPECT_FALSE(Source.empty());
+  EXPECT_NE(Source.find(kAddressMemorySPUnsupported), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("at 0x" + llvm::utohexstr(kEntry)), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find(kStackSelectSP), std::string::npos) << Source;
+  EXPECT_EQ(Source.find(kStackSaveSP), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unknown return value"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("unresolved indirect branch"), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("0 /* unknown */"), std::string::npos) << Source;
+  Options.Image = nullptr;
+  std::string Refused;
+  llvm::raw_string_ostream RefusedOut(Refused);
+  EXPECT_THROW(HighCEmitter().emit({High}, RefusedOut, Options),
+               std::invalid_argument);
+  EXPECT_TRUE(Refused.empty());
 }
 
 TEST(AArch64AddressMemory,
@@ -1529,6 +1595,70 @@ TEST(AArch64AddressMemory, NarrowStoresRequireExactlyTheirKnownDataSlice) {
       EXPECT_EQ(Emulator.getRegister(a64reg::X0), Case.Expected);
     }
   }
+}
+
+TEST(AArch64AddressMemory, ConstantStoreDataCannotBecomeAnImageStringAddress) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  struct StoreCase {
+    uint32_t Word;
+    uint64_t Value;
+    const char *Assembly;
+  };
+  for (const auto &Case : {
+           StoreCase{0x38226820, 0x80, "strb"},
+           StoreCase{0x78226820, 0x4567, "strh"},
+           StoreCase{0xb8226820, 0x12345678, "str"},
+       }) {
+    for (bool WideString : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Case.Assembly << ':' << WideString);
+      BinaryImage Image;
+      Image.Arch = Arch::AArch64;
+      Image.Bits = Bitness::Bits64;
+      Image.Format = BinaryFormat::MachO;
+      Segment Text;
+      Text.VA = Case.Value;
+      Text.Flags = SegmentFlags::Readable;
+      Text.Data = WideString ? std::vector<uint8_t>{'h', 0, 'i', 0, 0, 0}
+                             : std::vector<uint8_t>{'h', 'i', 0};
+      Text.Size = Text.FileSz = Text.Data.size();
+      Image.Segments.push_back(std::move(Text));
+      auto Function = memoryFunction(Case.Word);
+      auto &Data =
+          Function.Blocks.front().Ops.front().Inputs[kAddressMemoryDataOperand +
+                                                     1];
+      Data = MedVar::makeConst(Case.Value, Data.Size);
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({Function}, Context, kName, Arch::AArch64);
+      ASSERT_TRUE(Module);
+      for (bool LLVMRoute : {false, true}) {
+        SCOPED_TRACE(LLVMRoute);
+        std::string Source = memorySource(Function, *Module, LLVMRoute, &Image);
+        llvm::raw_string_ostream Out(Source);
+        Out << "\nstatic void reference(uint8_t *base, uint64_t index, "
+               "uint32_t data) { __asm__ volatile(\""
+            << Case.Assembly
+            << " %w[data], [%[base], %[index]]\" : : "
+               "[base]\"r\"(base), [index]\"r\"(index), "
+               "[data]\"r\"(data) : \"memory\"); }\n"
+               "int main(void) { for (int n = -3; n <= 3; ++n) { "
+               "uint8_t actual[64], expected[64]; "
+               "for (unsigned j = 0; j < 64; ++j) "
+               "actual[j] = expected[j] = (uint8_t)(j * 37 + 129); "
+               "uint64_t index = (uint64_t)(int64_t)(n * 4); "
+               "reference(expected + 24, index, "
+            << Case.Value << "U); " << kName
+            << "((uint64_t)(uintptr_t)(actual + 24), index, 0); "
+               "for (unsigned j = 0; j < 64; ++j) "
+               "if (actual[j] != expected[j]) return 1; } return 0; }\n";
+        Out.flush();
+        compileMemoryC(Source, true);
+      }
+    }
+  }
+#else
+  GTEST_SKIP() << kMissingNative;
+#endif
 }
 
 TEST(AArch64AddressMemory, UnobservedStorageCannotCaptureAnObservedRead) {
@@ -3861,9 +3991,28 @@ TEST(AArch64StackAddressMemory,
               Options.Image = WithImage ? &Image : nullptr;
               std::string Source;
               llvm::raw_string_ostream Out(Source);
-              EXPECT_THROW(HighCEmitter().emit({High}, Out, Options),
-                           std::invalid_argument);
-              EXPECT_TRUE(Source.empty());
+              // No image: the access still needs an explicit raw SP.
+              // An image frame fails the access closed at its address.
+              if (!WithImage) {
+                EXPECT_THROW(HighCEmitter().emit({High}, Out, Options),
+                             std::invalid_argument);
+                EXPECT_TRUE(Source.empty());
+                continue;
+              }
+              ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options)) << Source;
+              EXPECT_FALSE(Source.empty());
+              EXPECT_NE(Source.find(kAddressMemorySPUnsupported),
+                        std::string::npos)
+                  << Source;
+              EXPECT_EQ(Source.find(kStackSelectSP), std::string::npos)
+                  << Source;
+              EXPECT_EQ(Source.find("unknown value"), std::string::npos)
+                  << Source;
+              EXPECT_EQ(Source.find("unknown register"), std::string::npos)
+                  << Source;
+              EXPECT_EQ(Source.find("unresolved indirect branch"),
+                        std::string::npos)
+                  << Source;
             }
           }
       }
@@ -8047,9 +8196,22 @@ TEST(AArch64StackWritebackMemory, SourceAdmissionAndInverseAssemblyKeepRawSP) {
         Options.Image = WithImage ? &Image : nullptr;
         std::string Source;
         llvm::raw_string_ostream Out(Source);
-        EXPECT_THROW(HighCEmitter().emit({High}, Out, Options),
-                     std::invalid_argument);
-        EXPECT_TRUE(Source.empty());
+        if (!WithImage) {
+          EXPECT_THROW(HighCEmitter().emit({High}, Out, Options),
+                       std::invalid_argument);
+          EXPECT_TRUE(Source.empty());
+          continue;
+        }
+        ASSERT_TRUE(HighCEmitter().emit({High}, Out, Options)) << Source;
+        EXPECT_FALSE(Source.empty());
+        EXPECT_NE(Source.find(kAddressMemorySPUnsupported), std::string::npos)
+            << Source;
+        EXPECT_EQ(Source.find(kStackSelectSP), std::string::npos) << Source;
+        EXPECT_EQ(Source.find(kStackCaptureSP), std::string::npos) << Source;
+        EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
+        EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
+        EXPECT_EQ(Source.find("unresolved indirect branch"), std::string::npos)
+            << Source;
       }
   }
 }

@@ -160,13 +160,27 @@ class MIPSValidationArtifacts:
     def _group_alive(group):
         try:
             os.killpg(group, 0)
-            return True
         except ProcessLookupError:
             return False
         except PermissionError:
             # Darwin can report EPERM while an orphaned group is retiring.
             # It does not prove that all file readers have exited.
             return True
+        if sys.platform.startswith("linux"):
+            # An orphaned zombie keeps its process group until init reaps it,
+            # but has already closed its files and cannot read the scratch.
+            try:
+                result = subprocess.run(["ps", "-eo", "pgid=,stat="],
+                                        capture_output=True, text=True, check=True,
+                                        timeout=5)
+                states = [state for pgid, state in
+                          (line.split() for line in result.stdout.splitlines())
+                          if int(pgid) == group]
+                if states and all(state.startswith("Z") for state in states):
+                    return False
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass  # Unknown process state must retain the scratch.
+        return True
 
     def cancel(self):
         with self.guard:

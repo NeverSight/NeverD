@@ -24,6 +24,8 @@ TEST_F(X64PagedExecutionTest, PagedFarReturnsMatchOriginalCPU) {
   const auto ReturnProfile =
       CPU.ReturnCoreType == 0x20
           ? X64PagedFarReturnProfile::SelectorFirstTruncatedIP
+      : CPU.ReturnCoreType == 0x40
+          ? X64PagedFarReturnProfile::SelectorFirstTailGPZero
           : X64PagedFarReturnProfile::SelectorFirst;
   Features.PhysicalAddressBits = CPU.PhysicalBits;
   struct Form {

@@ -433,6 +433,47 @@ TEST(SourceParameterPlacement,
   }
 }
 
+TEST(SourceParameterPlacement, MIPSScalarOnlyCallsKeepCompleteSignatures) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(getArchName(A));
+    const auto &TRI = getTargetRegInfo(A);
+    const auto Pointer = NdType::makePtr();
+    Pointer->Size = TRI.PointerSize;
+    for (const auto &Return :
+         {NdType::makeVoid(), intType(1), NdType::makeInt(4, false),
+          intType(2 * TRI.FullRegWidth), Pointer}) {
+      for (const auto &Parameters :
+           {std::vector<TypeRef>{},
+            std::vector<TypeRef>{intType(1), intType(8), Pointer}}) {
+        const auto Bound = floatingCallArguments(A, ELF, Return, Parameters);
+        ASSERT_TRUE(Bound);
+        EXPECT_EQ(Bound->ReturnKind, Return->Kind);
+        EXPECT_EQ(Bound->ReturnBytes, Return->Size);
+        EXPECT_EQ(Bound->SignedResult,
+                  Return->Kind == NdTypeKind::Int && Return->IsSigned);
+        ASSERT_EQ(Bound->Scalars.size(), Parameters.size());
+        const auto Restored = floatingCallTypes(A, ELF, *Bound);
+        ASSERT_TRUE(Restored);
+        ASSERT_EQ(Restored->Parameters.size(), Parameters.size());
+        for (size_t I = 0; I < Parameters.size(); ++I) {
+          EXPECT_EQ(Restored->Parameters[I]->Kind, Parameters[I]->Kind);
+          EXPECT_EQ(Restored->Parameters[I]->Size, Parameters[I]->Size);
+          EXPECT_EQ(Restored->Parameters[I]->IsSigned, Parameters[I]->IsSigned);
+        }
+      }
+    }
+    const auto WrongPointer = NdType::makePtr();
+    WrongPointer->Size = TRI.PointerSize == 4 ? 8 : 4;
+    for (const auto &Unsupported :
+         {TypeRef(), NdType::makeVoid(), intType(3), WrongPointer})
+      EXPECT_FALSE(floatingCallArguments(A, ELF, intType(4), {Unsupported}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, WrongPointer, {}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, TypeRef(), {}));
+    EXPECT_FALSE(floatingCallArguments(A, ELF, intType(3), {}));
+  }
+}
+
 TEST(SourceParameterPlacement,
      MIPSVariadicFloatingCallsKeepTheirNamedBoundary) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,

@@ -5,6 +5,7 @@
 #include "Protocol.h"
 #include "RenderStore.h"
 #include "ResourceLimits.h"
+#include "ViewStorage.h"
 
 #include "neverd/sdk/NeverDCAPISession.h"
 #include "neverd/support/ProjectFiles.h"
@@ -21,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -96,6 +98,7 @@ public:
   /// Whether the engine exposes its static x87 support matrix, independently
   /// of binary loading, host probing or execution.
   static bool reportsX87Capabilities();
+  static bool reportsComputedStrings();
   /// Whether versioned machine-source recovery is available for source views.
   static bool recoversInterpreterSource();
   /// Whether the engine can query unwind metadata at an exact address.
@@ -176,6 +179,25 @@ private:
   std::unique_ptr<Listing> listing_;
   // The function whose restricted pipeline the session currently holds.
   std::optional<std::uint64_t> preparedFunction_;
+  /// Display evidence belongs to this input/revision. One requested step
+  /// prepares one function in an analysis replica; table reads never prepare
+  /// functions, and completed failures remain visible alongside observations.
+  struct ComputedStrings {
+    std::string generation;
+    std::vector<std::uint64_t> pending;
+    std::unordered_set<std::uint64_t> scheduled;
+    std::size_t next = 0, failures = 0;
+    bool discovered = false, complete = false;
+    std::string discoveryError;
+    Json rows = Json::array();
+    std::vector<std::size_t> order;
+    std::string orderKey;
+    bool ordered = false;
+  };
+  std::optional<ComputedStrings> computedStrings_;
+  Json computedStringsStep();
+  Json computedStringsStatus() const;
+  Json computedStringsPage(const Json &payload);
   std::uint64_t revision_ = 0;
   std::string projectId_;
   Json openOptions_, signatureInputs_ = Json::array();
@@ -201,6 +223,7 @@ private:
   Json browseCacheIdentity(Json identity,
                            const std::vector<project_files::File> &unread);
   Json restoreAnalysis(const Json &snapshot);
+  void prepareViews();
   Json updateAnalysisNames(const Json &snapshot);
   /// Whether the project's files hold \p snapshot's user state.
   bool projectHolds(const std::string &path, const Json &snapshot);
@@ -622,10 +645,21 @@ private:
     // row tree can exceed the cache budget before the displayed one does.
     // An engine document keeps the pages the engine wrote and the
     // representation they were asked in, from which namedView builds it
-    // again as it did; a recovered one keeps its whole text.
+    // again as it did. Only the first page keeps whole-function metadata;
+    // later ones keep the fields merged into it. A recovered document keeps
+    // its whole text.
     std::string original;
     std::vector<std::string> enginePages;
     std::string engineRepresentation;
+    std::shared_ptr<ViewStorage> storage;
+    ViewStorage::Record storedOriginal;
+    ViewStorage::Record storedText;
+    std::vector<ViewStorage::Record> storedEnginePages;
+    struct ItemChunk {
+      std::size_t begin, end;
+      ViewStorage::Record record;
+    };
+    std::unordered_map<std::string, std::vector<ItemChunk>> storedItems;
     Json value;
     std::vector<std::size_t> lines;
     /// Every address an edit of which reaches this document, sorted, where they
@@ -672,6 +706,10 @@ private:
     std::vector<std::pair<std::size_t, std::size_t>> rowBounds, referenceBounds,
         sourceNameBounds, codeNameBounds;
     std::size_t bytes = 0;
+    void spill();
+    Json itemsOnPage(const std::string &field, std::size_t begin,
+                     std::size_t end) const;
+    Json editView(const Json &request) const;
     // Pages share this document's exact identity and invalidation lifetime.
     // Their byte allowance is part of the document cache's existing limit.
     struct EncodedPage {
@@ -686,7 +724,12 @@ private:
   /// them go has answered.
   DeferredRelease releases_;
   /// Newest first, bounded by retained bytes as well as document count.
+  /// Evicted original documents remain in temporary storage for this context.
   std::list<std::shared_ptr<const NamedView>> namedViews_;
+  std::shared_ptr<ViewStorage> archivedViewStorage_;
+  std::unordered_map<std::string, std::shared_ptr<const NamedView>>
+      archivedViewsBySource_;
+  void archiveNamedView(const std::shared_ptr<const NamedView> &document);
   /// Where namedViews_ holds the document of each key, and of each source
   /// key, which no two of them share.  A document's key is read after its
   /// function's preparation, its source key before; preparing a whole
@@ -810,6 +853,8 @@ private:
   /// Something no edit a document notes changed what decoration reads: each
   /// document decorates again from its pages.
   void decorateNamedViewsAgain();
+  /// Publish the virtual-call evidence of an accepted source document.
+  void keepVirtualCalls(const Json &view);
   /// Measures and indexes \p full as \p document's value and keeps it under
   /// \p key and \p sourceKey, as far as the documents' budget allows, where
   /// \p reusable: the listing it read is still the one views read.

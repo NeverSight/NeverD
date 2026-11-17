@@ -1840,6 +1840,10 @@ void MedLLVMEmitter::ensureFeasibleEdgeCache() const {
     }
   }
 
+  if (!FeasibleEdgeBuildSawReentrantQuery)
+    refineFiniteControlEdges(Blocks, Roots, NextFeasibleEdges,
+                             NextFeasibleBlocks);
+
   FeasibleEdges = std::move(NextFeasibleEdges);
   FeasibleBlocks = std::move(NextFeasibleBlocks);
   FeasibleEdgeState = FeasibleEdgeCacheState::Ready;
@@ -4320,7 +4324,7 @@ bool MedLLVMEmitter::valueIsStableAddressOffsetImpl(const MedVar &V,
   return Result;
 }
 
-std::optional<MedLLVMEmitter::PureReadOnlyBaseIdentity>
+std::optional<MedLLVMEmitter::DataBaseIdentity>
 MedLLVMEmitter::pureReadOnlyBaseIdentity(
     const MedVar &V, bool DirectPhiConstantBypassesGetVar) const {
   if (!CurMedFunc || !Img)
@@ -4347,7 +4351,7 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
   // getVar would symbolize is also invalid because ptrtoint-to-narrow followed
   // by zext cannot preserve the re-linked pointer's high bits.
   auto zeroExtendedNarrowConstantIdentity =
-      [&](const MedOp &WideningDef) -> std::optional<PureReadOnlyBaseIdentity> {
+      [&](const MedOp &WideningDef) -> std::optional<DataBaseIdentity> {
     if ((WideningDef.Opcode != NdOp::COPY &&
          WideningDef.Opcode != NdOp::INT_ZEXT) ||
         WideningDef.NumInputs < 1 || WideningDef.Output.Size != PointerSize)
@@ -4374,8 +4378,8 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
             !isMaterializableReadOnlyDataAddress(Leaf.ConstVal) ||
             getVarMayRelocateConstant(Leaf.ConstVal, Leaf.Size))
           return std::nullopt;
-        return PureReadOnlyBaseIdentity{Leaf.ConstVal, PointerSize,
-                                        /*Symbolized=*/false};
+        return DataBaseIdentity{Leaf.ConstVal, PointerSize,
+                                /*Symbolized=*/false};
       }
       const auto Key =
           std::make_tuple(static_cast<int>(Leaf.Kind), Leaf.Id, Leaf.SSAVer);
@@ -4433,8 +4437,7 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
       } else {
         OwnerVA = InvalidVA;
       }
-      return PureReadOnlyBaseIdentity{Address, PointerSize, Symbolized,
-                                      OwnerVA};
+      return DataBaseIdentity{Address, PointerSize, Symbolized, OwnerVA};
     }
 
     const auto Key =
@@ -4454,9 +4457,9 @@ MedLLVMEmitter::pureReadOnlyBaseIdentity(
       if (auto Slot = traceValueVA(Def->Inputs[0]))
         if (auto Target = readImmutableImagePointer(*Img, *Slot);
             Target && isMaterializableReadOnlyDataAddress(*Target))
-          return PureReadOnlyBaseIdentity{*Target, PointerSize,
-                                          /*Symbolized=*/true,
-                                          Img->getSectionFor(*Target)->VA};
+          return DataBaseIdentity{*Target, PointerSize,
+                                  /*Symbolized=*/true,
+                                  Img->getSectionFor(*Target)->VA};
       return std::nullopt;
     }
     if (auto Identity = zeroExtendedNarrowConstantIdentity(*Def))
@@ -4575,8 +4578,9 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     bool PreservesPointer = false;
     bool ReachesExactTarget = false;
   };
-  auto sameIdentity = [](const PureReadOnlyBaseIdentity &A,
-                         const PureReadOnlyBaseIdentity &B) { return A == B; };
+  auto sameIdentity = [](const DataBaseIdentity &A, const DataBaseIdentity &B) {
+    return A == B;
+  };
 
   // Prove value recurrence, not generic data/control dependence. COPY-like
   // forwarders and the pointer side of ADD/SUB transport a pointer; SELECT and
@@ -4593,6 +4597,12 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
   // Each outer query has one fixed target/base; reset the memo at depth zero.
   using RecurrenceKey = std::tuple<AddressProvenanceVarKey, int, bool>;
   std::map<RecurrenceKey, RecurrencePathProof> RecurrenceMemo;
+  using PointerNode = std::pair<AddressProvenanceVarKey, bool>;
+  auto pointerNode = [](const MedVar &V, bool Direct) {
+    return PointerNode{addressProvenanceVarKey(V), Direct && V.isConst()};
+  };
+  std::map<PointerNode, std::vector<PointerNode>> PointerInputs;
+  std::set<PointerNode> PointerAnchors;
   uint64_t CycleVisits = 0;
   // Backtrack one active path. Copying a tree of all ancestors for every
   // recursive edge makes a bounded proof spend most of its time allocating
@@ -4603,15 +4613,18 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     Key Node;
     ~LeavePath() { Active.erase(Node); }
   };
-  std::function<RecurrencePathProof(
-      const MedVar &, const MedVar &,
-      const std::optional<PureReadOnlyBaseIdentity> &, int, bool)>
-      proveRecurrence =
-          [&](const MedVar &Start, const MedVar &Target,
-              const std::optional<PureReadOnlyBaseIdentity> &ExpectedBase,
-              int Depth, bool DirectPhiConstant) -> RecurrencePathProof {
-    if (Depth == 0)
+  std::function<RecurrencePathProof(const MedVar &, const MedVar &,
+                                    const std::optional<DataBaseIdentity> &,
+                                    int, bool)>
+      proveRecurrence = [&](const MedVar &Start, const MedVar &Target,
+                            const std::optional<DataBaseIdentity> &ExpectedBase,
+                            int Depth,
+                            bool DirectPhiConstant) -> RecurrencePathProof {
+    if (Depth == 0) {
       RecurrenceMemo.clear();
+      PointerInputs.clear();
+      PointerAnchors.clear();
+    }
     if (!consume() ||
         Depth >
             ::neverd::limits::backend::
@@ -4622,28 +4635,35 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
     if (auto It = RecurrenceMemo.find(MemoKey); It != RecurrenceMemo.end())
       return It->second;
     const uint64_t CyclesBefore = CycleVisits;
+    const PointerNode Node = pointerNode(Start, DirectPhiConstant);
+    auto linkInput = [&](const MedVar &Input, bool Direct = false) {
+      PointerInputs[Node].push_back(pointerNode(Input, Direct));
+    };
     auto evaluate = [&]() -> RecurrencePathProof {
-      if (!Start.isConst() && sameVar(Start, Target))
+      if (!Start.isConst() && sameVar(Start, Target)) {
+        PointerAnchors.insert(Node);
         return {true, true};
+      }
       if (ExpectedBase)
         if (auto Identity = pureReadOnlyBaseIdentity(Start, DirectPhiConstant);
-            Identity && sameIdentity(*Identity, *ExpectedBase))
+            Identity && sameIdentity(*Identity, *ExpectedBase)) {
+          PointerAnchors.insert(Node);
           return {true, false};
+        }
       if (Start.isConst())
         return {};
       // Pointer transport is a coinductive property inside a recurrence SCC.
       // Re-entering a node through COPY/PHI/pointer-side arithmetic preserves
       // the candidate value, but does not by itself prove connection to the
-      // outer target.  The caller still requires ReachesExactTarget from
-      // another feasible arm, and every selectable arm must preserve the
-      // pointer.  This admits nested identity PHIs such as outer <- inner <-
-      // outer while still rejecting an unanchored cycle or a scalar/reset arm.
-      const Key Node = keyOf(Start);
-      if (!Active.insert(Node).second) {
+      // outer target. Every component must independently reach the target or
+      // an audited base; the completed graph check below rejects an orphan
+      // cycle even when a sibling arm reaches the target.
+      const Key ActiveNode = keyOf(Start);
+      if (!Active.insert(ActiveNode).second) {
         ++CycleVisits;
         return {true, false};
       }
-      const LeavePath Leave{Active, Node};
+      const LeavePath Leave{Active, ActiveNode};
 
       if (const PhiNode *Nested = lookupPhi(Start)) {
         bool SawFeasible = false;
@@ -4659,6 +4679,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
             continue;
           }
           SawFeasible = true;
+          linkInput(NestedArg, NestedArg.isConst());
           RecurrencePathProof Arm =
               proveRecurrence(NestedArg, Target, ExpectedBase, Depth + 1,
                               /*DirectPhiConstant=*/NestedArg.isConst());
@@ -4671,9 +4692,11 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
       const MedOp *Def = lookupDef(Start);
       if (!Def)
         return {};
-      if (auto Forwarded = pointerPreservingInput(*Def))
+      if (auto Forwarded = pointerPreservingInput(*Def)) {
+        linkInput(*Forwarded);
         return proveRecurrence(*Forwarded, Target, ExpectedBase, Depth + 1,
                                /*DirectPhiConstant=*/false);
+      }
       if (Def->Opcode == NdOp::LOAD) {
         std::vector<MedVar> Sources;
         if (!collectFrameReloadSources(*Def, Sources) || Sources.empty())
@@ -4681,6 +4704,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         bool AllPreserve = true;
         bool ReachesTarget = false;
         for (const MedVar &Source : Sources) {
+          linkInput(Source);
           RecurrencePathProof SourceProof =
               proveRecurrence(Source, Target, ExpectedBase, Depth + 1,
                               /*DirectPhiConstant=*/false);
@@ -4713,6 +4737,8 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         const bool Stable = Offset.isConst()
                                 ? constantIsStableAddressOffset(Offset)
                                 : valueIsStableAddressOffset(Offset, &Target);
+        if (Stable)
+          linkInput(Def->Inputs[Left.PreservesPointer ? 0 : 1]);
         return {Stable, ReachesTarget};
       }
       if (Def->Opcode == NdOp::INT_SUB && Def->NumInputs >= 2) {
@@ -4733,9 +4759,13 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
                 : valueIsStableAddressOffset(Def->Inputs[1], &Target);
         const bool Preserves =
             Left.PreservesPointer && !Right.PreservesPointer && StableOffset;
+        if (Preserves)
+          linkInput(Def->Inputs[0]);
         return {Preserves, ReachesTarget};
       }
       if (selectPreservesPointerValues(*Def)) {
+        linkInput(Def->Inputs[1]);
+        linkInput(Def->Inputs[2]);
         RecurrencePathProof TrueArm =
             proveRecurrence(Def->Inputs[1], Target, ExpectedBase, Depth + 1,
                             /*DirectPhiConstant=*/false);
@@ -4749,6 +4779,8 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
         MedVar Cond, ArmT, ArmF;
         if (!isMaskedSelectOr(*Def, Cond, ArmT, ArmF))
           return {};
+        linkInput(ArmT);
+        linkInput(ArmF);
         RecurrencePathProof TrueArm =
             proveRecurrence(ArmT, Target, ExpectedBase, Depth + 1,
                             /*DirectPhiConstant=*/false);
@@ -4761,12 +4793,48 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
       return {};
     };
     RecurrencePathProof Result = evaluate();
+    if (Depth == 0 && Result.PreservesPointer && Result.ReachesExactTarget &&
+        CyclesBefore != CycleVisits) {
+      // ReachesExactTarget is existential. Check the stronger all-components
+      // condition before a caller may omit this incoming arm from its base
+      // proof. Only pointer-carrying inputs are linked: a scalar offset or a
+      // SELECT predicate cannot anchor an otherwise uninitialized pointer.
+      std::map<PointerNode, std::vector<PointerNode>> Users;
+      std::set<PointerNode> Visited, Anchored;
+      std::vector<PointerNode> Work{Node}, Anchors;
+      while (!Work.empty()) {
+        PointerNode Current = Work.back();
+        Work.pop_back();
+        if (!consume())
+          return {};
+        if (!Visited.insert(Current).second)
+          continue;
+        if (PointerAnchors.count(Current))
+          Anchors.push_back(Current);
+        if (auto It = PointerInputs.find(Current); It != PointerInputs.end())
+          for (const auto &Input : It->second) {
+            Users[Input].push_back(Current);
+            Work.push_back(Input);
+          }
+      }
+      while (!Anchors.empty()) {
+        PointerNode Current = Anchors.back();
+        Anchors.pop_back();
+        if (!consume())
+          return {};
+        if (Anchored.insert(Current).second)
+          if (auto It = Users.find(Current); It != Users.end())
+            Anchors.insert(Anchors.end(), It->second.begin(), It->second.end());
+      }
+      if (Anchored.size() != Visited.size())
+        Result = {};
+    }
     if (CyclesBefore == CycleVisits && !Exhausted)
       RecurrenceMemo.emplace(MemoKey, Result);
     return Result;
   };
 
-  const std::optional<PureReadOnlyBaseIdentity> NoExpectedBase;
+  const std::optional<DataBaseIdentity> NoExpectedBase;
   auto reachesExact = [&](const MedVar &Start, const MedVar &Target) {
     RecurrencePathProof Proof =
         proveRecurrence(Start, Target, NoExpectedBase, /*Depth=*/0,
@@ -4788,7 +4856,7 @@ bool MedLLVMEmitter::phiIncomingIsRecurrentImpl(const PhiNode &Phi, int PredId,
   // raw/symbolized model disables re-materialization equivalence and leaves the
   // complete table audit fail-closed.
   if (ExactProof.ReachesExactTarget) {
-    std::optional<PureReadOnlyBaseIdentity> ExpectedBase;
+    std::optional<DataBaseIdentity> ExpectedBase;
     bool InitializersValid = true;
     for (const auto &[InitPred, InitArg] : Phi.Args) {
       PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(Phi, InitPred);
@@ -7255,8 +7323,18 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
               kMedLLVMAddrResolveMedLLVMEmitterCollectIndexedGlobalBaseImplDepthLimit)
     return false;
 
+  // Image membership describes the bytes, not this operand's role. Reuse the
+  // occurrence model that emission already follows before nominating a
+  // numeric constant as a base, including copied and spilled displacements.
+  auto isScalarOccurrence = [&](const MedVar &Occurrence) {
+    if (Occurrence.isConst())
+      return Occurrence.Provenance == ConstantAddressProvenance::Scalar;
+    return summarizeConstantProvenance(Occurrence).Model ==
+           ConstantProvenanceSummary::ValueModel::Scalar;
+  };
+
   if (V.isConst()) {
-    if (!Img)
+    if (!Img || isScalarOccurrence(V))
       return false;
     bool OwnerConflict = false;
     std::optional<uint64_t> Owner =
@@ -7338,6 +7416,12 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
       if (!phiIncomingEdgeFeasible(*Phi, PredId))
         continue;
       SawFeasible = true;
+      if (isScalarOccurrence(Arg)) {
+        // An all-scalar merge is not a table at all. A merge containing a
+        // genuine address as well must still reject the unproved arm.
+        SawUnproved = true;
+        continue;
+      }
       if (Phi->Output.Size == 0 || Arg.Size == 0 ||
           Phi->Output.Size < Arg.Size) {
         auto Value = traceValueVA(Arg);
@@ -7440,7 +7524,8 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
       std::optional<uint64_t> Owner =
           Candidate ? uniqueDataAddressOwner(Source, *Candidate, OwnerConflict)
                     : std::nullopt;
-      if (!Candidate || OwnerConflict || (*Candidate == 0 && !Owner))
+      if (!Candidate || isScalarOccurrence(Source) || OwnerConflict ||
+          (*Candidate == 0 && !Owner))
         return false;
       const Segment *Seg = Img->getSegmentFor(Owner.value_or(*Candidate));
       bool HasOwnedRange = false;
@@ -7501,7 +7586,7 @@ bool MedLLVMEmitter::collectIndexedGlobalBaseUncached(
   // index addend instead.
   auto isBaseConst = [&](const MedVar &Occurrence,
                          const std::optional<uint64_t> &C) {
-    if (!C)
+    if (!C || isScalarOccurrence(Occurrence))
       return false;
     bool OwnerConflict = false;
     std::optional<uint64_t> Owner =

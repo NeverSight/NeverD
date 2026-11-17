@@ -80,6 +80,12 @@ bool isSourceFrameScalarTransfer(NdOp Opcode);
 /// Separately authenticated ARM64 exceptional calls may end a successorless
 /// block after the same transfer checks. At least one reachable normal return
 /// is required, and every normal return still restores all incoming state.
+/// ARM64 code-key signing of the entry link with entry SP carries an opaque
+/// identity through exact copies and live private spills. Matching
+/// authentication proves the link only at an immediate normal RETURN; a
+/// poisoned result or fault is not an ordinary restored register value.
+/// Original authentication operations stay intact. This permission is absent
+/// from private-frame rewriting, display, by-value and prefix-load queries.
 /// UsedEntryRegisters reports complete observed general-register entry words,
 /// including volatile inputs forwarded through a call's physical ABI. Calls
 /// invalidate volatile identities; exact private spills can preserve them.

@@ -402,7 +402,7 @@ private slots:
     for (bool ready : {true, false})
       for (auto key : {Qt::Key_J, Qt::Key_A, Qt::Key_B})
         QTest::newRow(
-            qPrintable(QString(QChar(key)) + (ready ? "-ready" : "-fast")))
+            qPrintable(QString(QChar(int(key))) + (ready ? "-ready" : "-fast")))
             << int(key) << ready;
   }
 
@@ -903,8 +903,8 @@ private slots:
     view.show();
     session.open(path);
     QTRY_VERIFY_WITH_TIMEOUT(session.loaded(), OpenTimeoutMs);
+    // Opening must populate existing chooser views without a manual reload.
     auto &model = view.model();
-    model.reload();
     QTRY_VERIFY(model.total() > 0 && !model.loading());
     if (sorted) {
       model.setFilter("function_");

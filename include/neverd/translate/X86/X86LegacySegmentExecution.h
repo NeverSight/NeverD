@@ -10,6 +10,8 @@
 #ifndef NEVERD_TRANSLATE_X86_X86LEGACYSEGMENTEXECUTION_H
 #define NEVERD_TRANSLATE_X86_X86LEGACYSEGMENTEXECUTION_H
 
+#include "neverd/ir/X86/X86SegmentBasePolicy.h"
+#include "neverd/ir/X86/X86SegmentDescriptorProfile.h"
 #include "neverd/translate/X86/X86PagedMemory.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -43,12 +45,27 @@ struct X86LegacySegmentExecutionOptions {
   std::optional<X86AlignmentPriority> AlignmentPriority;
   /// Only used by a particular explicit operand crossing a full 4-GiB limit.
   std::optional<X86FullSegmentLimitChoice> FullLimitChoice;
+  /// Mixed-mode FS/GS loads require this before an instruction attempt.
+  /// Standalone null caches remain opaque when no choice is supplied.
+  std::optional<X86NullSegmentBasePolicy> NullBasePolicy;
+  /// Required before compatibility selector loads; retained across backing.
+  std::optional<X86DescriptorCanonicalityProfile> DescriptorCanonicality;
+};
+
+/// A successful selector load, independent of equality with the old cache.
+/// A nonnull load replaces the complete cache and zero-extends its base.
+/// A null load defines selector/unusable only, plus this explicit base action;
+/// Preserve must keep the full owner's base, never the truncated low view.
+struct X86LegacySegmentWrite {
+  X86SegmentRegister Register;
+  std::optional<X86NullSegmentBasePolicy> NullBase;
 };
 
 struct X86LegacySegmentExecutionResult : X86MemoryAccessResult {
   /// Successful MOV/POP SS starts a scheduler-owned inhibition window,
   /// subject to the scheduler's incoming MOV-SS shadow rule. LSS does not.
   bool LoadsSSWithInhibition = false;
+  std::optional<X86LegacySegmentWrite> SegmentWritten;
 };
 
 /// Shared external-state admission; performs no RAM accesses or mutations.

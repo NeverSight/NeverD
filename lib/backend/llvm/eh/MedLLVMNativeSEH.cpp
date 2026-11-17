@@ -94,9 +94,14 @@ bool hasSupportedSEHCallbackABI(const llvm::Function &Callback,
          (Callback.hasLocalLinkage() && !Callback.isDeclaration());
 }
 
-bool canPreserveSEHCallbackAcrossOptimization(const llvm::Function &Callback) {
+/// \p MayNotReturn admits a callback that never returns: a `__finally` that
+/// leaves by `longjmp` or ends the program.  The printed C calls it and says
+/// the path ends there; native output, whose clauses are written again from
+/// what the optimizer leaves, does not take one.
+bool canPreserveSEHCallbackAcrossOptimization(const llvm::Function &Callback,
+                                              bool MayNotReturn = false) {
   if (Callback.hasFnAttribute(llvm::Attribute::AlwaysInline) ||
-      Callback.hasFnAttribute(llvm::Attribute::NoReturn) ||
+      (!MayNotReturn && Callback.hasFnAttribute(llvm::Attribute::NoReturn)) ||
       Callback.hasFnAttribute(llvm::Attribute::ReturnsTwice) ||
       Callback.hasFnAttribute(llvm::Attribute::Speculatable))
     return false;
@@ -319,7 +324,8 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.SemanticRange = *SemanticRange;
     R.SourceIndex = static_cast<uint32_t>(ScopeIndex);
     const auto SemanticToken = windows_eh_semantics::getSEHScopeSemanticToken(
-        EH, TargetArch, R.SourceIndex);
+        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/SourceView,
+        /*AllowCookieCheck=*/SourceView);
     if (!SemanticToken)
       return false;
     R.SemanticToken = *SemanticToken;
@@ -328,7 +334,8 @@ bool MedLLVMEmitter::emitNativeSEH(
       if (!R.Callback || R.Callback == &LLVMFunc ||
           !hasSupportedSEHCallbackABI(*R.Callback, FinallyCallbackTy,
                                       TargetArch, SourceView) ||
-          !canPreserveSEHCallbackAcrossOptimization(*R.Callback) ||
+          !canPreserveSEHCallbackAcrossOptimization(
+              *R.Callback, /*MayNotReturn=*/SourceView) ||
           (SourceView && RestoresRegisters &&
            !sehCallbackReadsOnlyArguments(Scope.FilterOrFinallyVA)))
         return false;
@@ -377,17 +384,20 @@ bool MedLLVMEmitter::emitNativeSEH(
     Regions.push_back(std::move(R));
   }
 
-  // Native WinEH can express nested or disjoint intervals.  Crossing and
-  // duplicate intervals have no unambiguous unwind-parent relation, so leave
-  // those functions in lossless-metadata-only form.
+  // Native WinEH can express nested or disjoint intervals.  Crossing
+  // intervals have no unwind-parent relation.  Rows over one interval nest by
+  // their order, the earlier inside the later, because __C_specific_handler
+  // scans the table from its first row.  Printed C takes that order; native
+  // output, where the code generator writes the table again, leaves such a
+  // function in lossless-metadata-only form.
   for (size_t I = 0; I < Regions.size(); ++I) {
     for (size_t J = I + 1; J < Regions.size(); ++J) {
       const ExceptionAddressRange &A = Regions[I].SemanticRange;
       const ExceptionAddressRange &B = Regions[J].SemanticRange;
       if (!A.overlaps(B))
         continue;
-      if ((A.Begin == B.Begin && A.End == B.End) ||
-          (!A.contains(B) && !B.contains(A)))
+      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
+      if ((Repeated && !SourceView) || (!A.contains(B) && !B.contains(A)))
         return false;
     }
   }
@@ -395,14 +405,19 @@ bool MedLLVMEmitter::emitNativeSEH(
                    [](const Region &A, const Region &B) {
                      if (A.SemanticRange.size() != B.SemanticRange.size())
                        return A.SemanticRange.size() > B.SemanticRange.size();
-                     return A.SemanticRange.Begin < B.SemanticRange.Begin;
+                     if (A.SemanticRange.Begin != B.SemanticRange.Begin)
+                       return A.SemanticRange.Begin < B.SemanticRange.Begin;
+                     // Rows over one range: the later row is the outer scope.
+                     return A.SourceIndex > B.SourceIndex;
                    });
   for (size_t I = 0; I < Regions.size(); ++I) {
     uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
     for (size_t J = 0; J < I; ++J) {
       if (!Regions[J].SemanticRange.contains(Regions[I].SemanticRange))
         continue;
-      if (Regions[J].SemanticRange.size() < ParentSize) {
+      // The nearest holder is the smallest, and of rows over one range the
+      // one placed last.
+      if (Regions[J].SemanticRange.size() <= ParentSize) {
         Regions[I].Parent = static_cast<int>(J);
         ParentSize = Regions[J].SemanticRange.size();
       }
@@ -418,9 +433,39 @@ bool MedLLVMEmitter::emitNativeSEH(
   };
   struct CallPlan {
     llvm::CallInst *Call = nullptr;
-    size_t RegionIndex = 0;
+    /// The region whose pad the call unwinds to; -1 for a termination handler
+    /// call that no scope of this frame protects.
+    int Region = -1;
     va_t SourceAddress = 0;
+    /// The region a local unwind's termination handler call ends, which the
+    /// call has left; -1 for any other call.
+    int Ended = -1;
   };
+  auto IsProperAncestor = [&](int Ancestor, int Of) {
+    for (int At = Regions[static_cast<size_t>(Of)].Parent; At >= 0;
+         At = Regions[static_cast<size_t>(At)].Parent)
+      if (At == Ancestor)
+        return true;
+    return false;
+  };
+  // MedIR spells a local unwind as a call of each termination handler it
+  // runs, at the runtime call's address (MedSEHLocalUnwindExit).  The runtime
+  // calls the handler of row k with its scan already past k, so what the
+  // handler raises meets only the later rows that guard the call: the call
+  // stands outside scope k and inside those.  Both routes place it there;
+  // native IR also marks each such call (LocalUnwindHandlerCall), which the
+  // output gate refuses until the placement is certified by execution.
+  std::map<va_t, const MedSEHLocalUnwindExit *> LocalUnwinds;
+  for (const MedSEHLocalUnwindExit &Exit : Func.SEHLocalUnwindExits)
+    if (!Exit.Handlers.empty() &&
+        !LocalUnwinds.emplace(Exit.CallAddr, &Exit).second)
+      return false;
+  struct LocalUnwindProgress {
+    size_t Next = 0;
+    const llvm::BasicBlock *Block = nullptr;
+    const llvm::CallInst *Last = nullptr;
+  };
+  std::map<const MedSEHLocalUnwindExit *, LocalUnwindProgress> LocalUnwindCalls;
 
   std::set<const llvm::CallInst *> ProtectedCalls;
   for (const Region &R : Regions)
@@ -448,7 +493,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
     for (size_t I = 0; I < Regions.size(); ++I) {
       if (!Regions[I].Blocks.count(InitialBB) ||
-          Regions[I].SemanticRange.size() >= InnermostSize)
+          Regions[I].SemanticRange.size() > InnermostSize)
         continue;
       Innermost = static_cast<int>(I);
       InnermostSize = Regions[I].SemanticRange.size();
@@ -456,24 +501,92 @@ bool MedLLVMEmitter::emitNativeSEH(
     if (Innermost < 0)
       continue;
 
+    // The local unwind whose handler calls this block has reached, and the
+    // last call met: an exit's calls follow one another to the block's end.
+    const MedSEHLocalUnwindExit *Leaving = nullptr;
+    const llvm::CallInst *Previous = nullptr;
     for (llvm::Instruction &Inst : *InitialBB) {
       auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
       if (!Call || !IsMayUnwindCall(*Call))
         continue;
+      const llvm::CallInst *Before = std::exchange(Previous, Call);
       auto AddressIt = CallSiteAddrs.find(Call);
       if (Call->getParent() != InitialBB || !Call->getNextNode() ||
           AddressIt == CallSiteAddrs.end() ||
           !EH.CodeRange.contains(AddressIt->second) ||
-          !PlannedCalls.insert(Call).second ||
-          !PlannedAddresses.insert(AddressIt->second).second)
+          !PlannedCalls.insert(Call).second)
         return false;
-      CallPlans.push_back(
-          {Call, static_cast<size_t>(Innermost), AddressIt->second});
+      const va_t Address = AddressIt->second;
+      const auto Unwind = LocalUnwinds.find(Address);
+      if (Unwind == LocalUnwinds.end()) {
+        if (Leaving || !PlannedAddresses.insert(Address).second)
+          return false;
+        CallPlans.push_back({Call, Innermost, Address, /*Ended=*/-1});
+        continue;
+      }
+      const MedSEHLocalUnwindExit &Exit = *Unwind->second;
+      LocalUnwindProgress &Progress = LocalUnwindCalls[&Exit];
+      if ((Leaving && Leaving != &Exit) || PlannedAddresses.count(Address) ||
+          Progress.Next >= Exit.Handlers.size() ||
+          (Progress.Block && Progress.Block != InitialBB) ||
+          (Progress.Last && Progress.Last != Before))
+        return false;
+      Leaving = &Exit;
+      const MedSEHLocalUnwindExit::Handler &Handler =
+          Exit.Handlers[Progress.Next];
+      int Ended = -1;
+      for (size_t I = 0; I < Regions.size(); ++I)
+        if (Regions[I].SourceIndex == Handler.ScopeIndex)
+          Ended = static_cast<int>(I);
+      if (Ended < 0)
+        return false;
+      const Region &Scope = Regions[static_cast<size_t>(Ended)];
+      if (Scope.Scope->Kind != SEHScopeKind::Finally ||
+          Scope.Scope->FilterOrFinallyVA != Handler.Entry ||
+          Call->getCalledFunction() != Scope.Callback ||
+          !Scope.Blocks.count(InitialBB))
+        return false;
+      // The rows the scan has yet to meet are the scopes around the one this
+      // handler ends, and no others.
+      for (size_t I = 0; I < Regions.size(); ++I)
+        if ((Regions[I].SourceIndex > Handler.ScopeIndex &&
+             Regions[I].SemanticRange.contains(Exit.CallAddr)) !=
+            IsProperAncestor(static_cast<int>(I), Ended))
+          return false;
+      Progress.Next += 1;
+      Progress.Block = InitialBB;
+      Progress.Last = Call;
+      CallPlans.push_back({Call, Scope.Parent, Address, Ended});
     }
+  }
+  // Every call at a local unwind's address is one of its handler calls,
+  // placed above, and an exit that was placed was placed whole.
+  std::map<const MedSEHLocalUnwindExit *, size_t> LocalUnwindCallCounts;
+  if (!LocalUnwinds.empty())
+    for (const llvm::BasicBlock &Block : LLVMFunc)
+      for (const llvm::Instruction &Inst : Block) {
+        const auto *Call = llvm::dyn_cast<llvm::CallInst>(&Inst);
+        if (!Call || !IsMayUnwindCall(*Call))
+          continue;
+        const auto AddressIt = CallSiteAddrs.find(Call);
+        if (AddressIt == CallSiteAddrs.end())
+          continue;
+        if (const auto Unwind = LocalUnwinds.find(AddressIt->second);
+            Unwind != LocalUnwinds.end())
+          ++LocalUnwindCallCounts[Unwind->second];
+      }
+  for (const auto &[Address, Exit] : LocalUnwinds) {
+    const auto Progress = LocalUnwindCalls.find(Exit);
+    const size_t Placed =
+        Progress == LocalUnwindCalls.end() ? 0 : Progress->second.Next;
+    if (LocalUnwindCallCounts[Exit] != Placed ||
+        (Placed != 0 && Placed != Exit->Handlers.size()))
+      return false;
   }
   if (PlannedCalls != ProtectedCalls)
     return false;
-  const uint64_t ProtectedCallCount = static_cast<uint64_t>(CallPlans.size());
+  const uint64_t ProtectedCallCount = static_cast<uint64_t>(llvm::count_if(
+      CallPlans, [](const CallPlan &Plan) { return Plan.Region >= 0; }));
 
   // The asynchronous marker pass walks every protected terminator and its
   // successors. Unterminated emitter intermediates are rejected atomically.
@@ -615,6 +728,30 @@ bool MedLLVMEmitter::emitNativeSEH(
   // Non-call hardware faults are covered by the asynchronous markers below.
   for (const CallPlan &Plan : CallPlans) {
     llvm::CallInst *Call = Plan.Call;
+    if (Plan.Ended >= 0) {
+      // The handler call and what follows leave the scope the handler ends
+      // and every scope inside it.
+      llvm::BasicBlock *Before = Call->getParent();
+      llvm::BasicBlock *After = Before->splitBasicBlock(
+          Call->getIterator(), Before->getName() + ".seh.unwind");
+      for (size_t I = 0; I < Regions.size(); ++I)
+        if (Regions[I].Blocks.count(Before) &&
+            IsProperAncestor(static_cast<int>(I), Plan.Ended))
+          Regions[I].Blocks.insert(After);
+      // Native IR says which calls these are and which scope each ends, for
+      // the output gate, which takes none of them yet.
+      if (!SourceView) {
+        llvm::IRBuilder<> MarkBuilder(Call);
+        med_llvm_eh::emitWindowsEHProvenanceAnchor(
+            MarkBuilder, windows_eh_md::NativeProvenanceModel::SEH,
+            windows_eh_md::NativeProvenanceRole::LocalUnwindHandlerCall,
+            EH.CodeRange.Begin, Plan.SourceAddress,
+            Regions[static_cast<size_t>(Plan.Ended)].SourceIndex,
+            /*Clause=*/0);
+      }
+      if (Plan.Region < 0)
+        continue;
+    }
     llvm::BasicBlock *CallBB = Call->getParent();
     llvm::Instruction *Next = Call->getNextNode();
     assert(CallBB && Next && "preflighted SEH call changed before commit");
@@ -629,14 +766,14 @@ bool MedLLVMEmitter::emitNativeSEH(
     Call->getOperandBundlesAsDefs(Bundles);
     auto *Invoke = llvm::InvokeInst::Create(
         Call->getFunctionType(), Call->getCalledOperand(), Cont,
-        Regions[Plan.RegionIndex].UnwindDest, Args, Bundles, Call->getName(),
-        OldBranch->getIterator());
+        Regions[static_cast<size_t>(Plan.Region)].UnwindDest, Args, Bundles,
+        Call->getName(), OldBranch->getIterator());
     llvm::IRBuilder<> ProvenanceBuilder(Invoke);
     med_llvm_eh::emitWindowsEHProvenanceAnchor(
         ProvenanceBuilder, windows_eh_md::NativeProvenanceModel::SEH,
         windows_eh_md::NativeProvenanceRole::ProtectedInvoke,
         EH.CodeRange.Begin, Plan.SourceAddress,
-        Regions[Plan.RegionIndex].SourceIndex, /*Clause=*/0);
+        Regions[static_cast<size_t>(Plan.Region)].SourceIndex, /*Clause=*/0);
     Invoke->setCallingConv(Call->getCallingConv());
     Invoke->setAttributes(Call->getAttributes());
     Invoke->setDebugLoc(Call->getDebugLoc());

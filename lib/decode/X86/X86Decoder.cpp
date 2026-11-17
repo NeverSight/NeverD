@@ -10,15 +10,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "../DecoderDetail.h"
+#include "X86ScanAdapter.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/decode/Limits.h"
 #include "neverd/ir/X86/X87Context.h"
 #include "neverd/lift/X86/X86Lifter.h"
+#include "neverd/support/ISAEncoding.h"
 
-#include "X86ScanAdapter.h"
 #include "capstone/capstone.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -143,10 +145,11 @@ bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
   if (!X86 || !Bytes || !InsnBuf)
     return false;
 
+  const size_t PrefixLimit = std::min(Len, x86::kMaxInstructionLen);
   size_t PrefixCount = 0;
-  while (PrefixCount < Len && Bytes[PrefixCount] == 0x66)
+  while (PrefixCount < PrefixLimit && Bytes[PrefixCount] == 0x66)
     ++PrefixCount;
-  if (PrefixCount == 0 || PrefixCount >= Len || PrefixCount >= 15)
+  if (PrefixCount == 0 || PrefixCount == PrefixLimit)
     return false;
 
   const uint8_t *Code = Bytes + PrefixCount;
@@ -160,7 +163,7 @@ bool Decoder::decodePrefixedX86Fence(const uint8_t *Bytes, size_t Len,
 
   const size_t InnerSize = InsnBuf->size;
   const size_t TotalSize = PrefixCount + InnerSize;
-  if (TotalSize > 15)
+  if (TotalSize > x86::kMaxInstructionLen)
     return false;
 
   std::memmove(InsnBuf->bytes + PrefixCount, InsnBuf->bytes, InnerSize);

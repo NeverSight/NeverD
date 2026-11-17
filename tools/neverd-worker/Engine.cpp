@@ -625,13 +625,7 @@ void sortItems(Json &items, const Json &payload) {
       return {static_cast<std::uint64_t>(it->get<std::int64_t>()), {}};
     if (it->is_string()) {
       const auto &text = it->get_ref<const std::string &>();
-      if (text.size() > 2 && text[0] == '0' &&
-          (text[1] == 'x' || text[1] == 'X'))
-        try {
-          return {parseAddress(text), {}};
-        } catch (const Error &) {
-        }
-      return {0, folded(text)};
+      return tableTextSortKey(text);
     }
     return {0, {}};
   };
@@ -755,6 +749,107 @@ void atomicWrite(const fs::path &path, const std::string &body) {
   atomicWriteControlled(path, body, {});
 }
 } // namespace
+
+void Engine::NamedView::spill() {
+  storage = std::make_shared<ViewStorage>();
+  auto &text = value.at("text").get_ref<std::string &>();
+  storedText = storage->append(text);
+  std::string().swap(text);
+  if (!original.empty()) {
+    storedOriginal = storage->append(original);
+    std::string().swap(original);
+  }
+  for (const auto &page : enginePages)
+    storedEnginePages.push_back(storage->append(page));
+  std::vector<std::string>().swap(enginePages);
+  for (const char *field :
+       {"rows", "references", "source_names", "code_names"}) {
+    auto array = value.find(field);
+    if (array == value.end() || !array->is_array() || array->empty())
+      continue;
+    const bool points = std::string_view(field) == "rows" ||
+                        std::string_view(field) == "references";
+    auto &chunks = storedItems[field];
+    for (std::size_t start = 0; start < array->size();) {
+      const auto end =
+          start +
+          std::min(array->size() - start,
+                   ::neverd::limits::worker::kEngineStoredViewChunkItems);
+      Json items = Json::array();
+      std::size_t begin = std::numeric_limits<std::size_t>::max(), last = 0;
+      for (; start < end; ++start) {
+        auto &item = (*array)[start];
+        begin = std::min(
+            begin, item.value(points ? "line" : "begin_byte", std::size_t{0}));
+        last = std::max(
+            last, item.value(points ? "line" : "end_byte", std::size_t{0}));
+        items.push_back(std::move(item));
+      }
+      chunks.push_back({begin, last, storage->append(items.dump())});
+    }
+    *array = Json::array();
+  }
+  for (auto *bounds :
+       {&rowBounds, &referenceBounds, &sourceNameBounds, &codeNameBounds})
+    ViewBounds().swap(*bounds);
+}
+
+Json Engine::NamedView::itemsOnPage(const std::string &field, std::size_t begin,
+                                    std::size_t end) const {
+  const bool points = field == "rows" || field == "references";
+  const bool ordered = field == "rows"           ? orderedRows
+                       : field == "references"   ? orderedReferences
+                       : field == "source_names" ? orderedSourceNames
+                                                 : orderedCodeNames;
+  const auto select = [&](const Json &items,
+                          const ViewBounds *bounds = nullptr) {
+    Json selected = Json::array();
+    for (const Json *item : viewItemsOnPage(
+             items, ordered, points ? "line" : "begin_byte",
+             points ? "line" : "end_byte", points, begin, end, bounds))
+      selected.push_back(*item);
+    return selected;
+  };
+  if (const auto found = storedItems.find(field); found != storedItems.end()) {
+    const auto &chunks = found->second;
+    auto first = chunks.begin();
+    if (ordered)
+      first = std::partition_point(first, chunks.end(), [&](const auto &chunk) {
+        return points ? chunk.end < begin : chunk.end <= begin;
+      });
+    Json result = Json::array();
+    for (auto it = first; it != chunks.end(); ++it) {
+      if (ordered && it->begin >= end)
+        break;
+      if (it->begin >= end || (points ? it->end < begin : it->end <= begin))
+        continue;
+      auto selected = select(Json::parse(storage->read(it->record)));
+      for (auto &item : selected)
+        result.push_back(std::move(item));
+    }
+    return result;
+  }
+  const auto *bounds = field == "rows"           ? &rowBounds
+                       : field == "references"   ? &referenceBounds
+                       : field == "source_names" ? &sourceNameBounds
+                                                 : &codeNameBounds;
+  return select(value.at(field), bounds);
+}
+
+Json Engine::NamedView::editView(const Json &request) const {
+  Json result = value;
+  if (storage)
+    result["text"] = storage->read(storedText);
+  const auto kind = request.value("kind", std::string());
+  if (kind == "name" && storedItems.contains("code_names"))
+    result["code_names"] =
+        itemsOnPage("code_names", 0, std::numeric_limits<std::size_t>::max());
+  if ((kind == "comment" || kind == "number") && storedItems.contains("rows")) {
+    const auto line = request.value("line", std::size_t{0});
+    result["rows"] = itemsOnPage("rows", line, line + (line != SIZE_MAX));
+  }
+  return result;
+}
 
 class ProjectLock {
 public:
@@ -1192,6 +1287,7 @@ void Engine::declarationsChanged(bool viewsReadIt) {
     listing_->declarationsChanged(viewsReadIt);
 }
 void Engine::invalidate() {
+  computedStrings_.reset();
   forgetNamedViews();
   graphs_.clear();
   if (listing_) {
@@ -1228,6 +1324,8 @@ void Engine::forgetNamedViews() {
   namedViews_.clear();
   namedViewsByKey_.clear();
   namedViewsBySource_.clear();
+  archivedViewsBySource_.clear();
+  archivedViewStorage_.reset();
   namedViewBytes_ = 0;
   encodedPageBytes_ = 0;
   ++namedViewsEpoch_;
@@ -1281,10 +1379,12 @@ void spellIdentifiers(std::string_view text, std::size_t begin, std::size_t end,
 
 void Engine::readViewEdits(const std::string &sourceKey) {
   const auto found = namedViewsBySource_.find(sourceKey);
-  if (found == namedViewsBySource_.end())
+  const auto archived = archivedViewsBySource_.find(sourceKey);
+  const bool cold = found == namedViewsBySource_.end();
+  if (cold && archived == archivedViewsBySource_.end())
     return;
-  const auto position = found->second;
-  const auto &document = **position;
+  const auto held = cold ? archived->second : *found->second;
+  const auto &document = *held;
   const auto unread = viewEditCount_ - document.viewEditsRead;
   if (!unread)
     return;
@@ -1300,7 +1400,7 @@ void Engine::readViewEdits(const std::string &sourceKey) {
     return static_cast<std::uint64_t>(std::hash<std::string_view>{}(token));
   };
   const auto reaches = [&](const ViewEdit &edit) {
-    if (!document.readsKnown ||
+    if (!document.readsKnown || document.storage ||
         std::binary_search(reads.begin(), reads.end(), edit.address) ||
         text == document.value.end() || !text->is_string())
       return true;
@@ -1362,7 +1462,10 @@ void Engine::readViewEdits(const std::string &sourceKey) {
         document.othersReached = true;
     }
   if (stale) {
-    dropNamedView(position);
+    if (cold)
+      archivedViewsBySource_.erase(archived);
+    else
+      dropNamedView(found->second);
     return;
   }
   if (decorated)
@@ -1373,6 +1476,7 @@ void Engine::readViewEdits(const std::string &sourceKey) {
 }
 
 void Engine::dropNamedView(NamedViewPosition position) {
+  archivedViewsBySource_.erase((*position)->sourceKey);
   unindexNamedView(position);
   namedViewBytes_ -= (*position)->bytes;
   encodedPageBytes_ -= (*position)->pageBytes;
@@ -1399,7 +1503,41 @@ void Engine::namedViewsTakeRevision(bool storesStand) {
   restartRenderAhead();
 }
 
+void Engine::archiveNamedView(
+    const std::shared_ptr<const NamedView> &document) {
+  if (archivedViewsBySource_.contains(document->sourceKey))
+    return;
+  if (!archivedViewStorage_)
+    archivedViewStorage_ = std::make_shared<ViewStorage>();
+  // Keep the engine's undecorated pages, not its mutable pipeline or a second
+  // parsed document. All cold views share one temporary file/descriptor.
+  auto archived = std::make_shared<NamedView>();
+  archived->sourceKey = document->sourceKey;
+  archived->viewEditsRead = document->viewEditsRead;
+  archived->engineRepresentation = document->engineRepresentation;
+  archived->reads = document->reads;
+  archived->readsKnown = document->readsKnown;
+  archived->renderReads = document->renderReads;
+  archived->storage = archivedViewStorage_;
+  if (!document->original.empty())
+    archived->storedOriginal = archived->storage->append(document->original);
+  else if (document->storedOriginal.size)
+    archived->storedOriginal = archived->storage->append(
+        document->storage->read(document->storedOriginal));
+  if (document->storage) {
+    for (const auto &record : document->storedEnginePages)
+      archived->storedEnginePages.push_back(
+          archived->storage->append(document->storage->read(record)));
+  } else {
+    for (const auto &page : document->enginePages)
+      archived->storedEnginePages.push_back(archived->storage->append(page));
+  }
+  archivedViewsBySource_.emplace(archived->sourceKey, std::move(archived));
+}
+
 void Engine::localNamesChanged() {
+  if (computedStrings_)
+    computedStrings_->ordered = false;
   // Local display names do not change instructions, functions or the prepared
   // pipeline. Keep original documents for checked, lazy redecoration; encoded
   // pages and already decorated documents still belong to their old revision.
@@ -1626,18 +1764,27 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   if (const auto cached = namedViewsByKey_.find(lookupKey);
       cached != namedViewsByKey_.end()) {
     namedViews_.splice(namedViews_.begin(), namedViews_, cached->second);
+    // An unrelated declaration may clear the reference index while this
+    // document's reads still hold. Restore it once, not on each source page.
+    if (!listing().hasVirtualCalls(address))
+      keepVirtualCalls(namedViews_.front()->value);
     return namedViews_.front();
   }
   std::shared_ptr<const NamedView> reused;
   const auto bySource = namedViewsBySource_.find(sourceKey);
   if (bySource != namedViewsBySource_.end() &&
       (!(*bySource->second)->original.empty() ||
-       !(*bySource->second)->enginePages.empty()))
+       !(*bySource->second)->enginePages.empty() ||
+       (*bySource->second)->storage))
     reused = *bySource->second;
+  else if (const auto archived = archivedViewsBySource_.find(sourceKey);
+           archived != archivedViewsBySource_.end())
+    reused = archived->second;
   // Comments and names alone reached it since decoration: they are written
   // into a copy of it as decoration writes them, data's names first, as the
   // engine text decoration reads spells them.
-  if (reused && sourceView && !recovery && !reused->othersReached &&
+  if (reused && !reused->storage && sourceView && !recovery &&
+      !reused->othersReached &&
       (reused->commentsReached || !reused->renamedFunctions.empty() ||
        !reused->renamedData.empty())) {
     const bool named = !reused->renamedFunctions.empty();
@@ -1792,13 +1939,16 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   }
   // Its pages spell a data's name it has not taken: it builds again from what
   // is kept, which respells it, or from the engine.
-  if (reused && (reused->pagesRenamed || !reused->renamedData.empty())) {
+  if (reused && bySource != namedViewsBySource_.end() &&
+      (reused->pagesRenamed || !reused->renamedData.empty())) {
     dropNamedView(bySource->second);
     reused = nullptr;
   }
   Json original;
   if (reused && !reused->original.empty())
     original = Json::parse(reused->original);
+  else if (reused && reused->storedOriginal.size)
+    original = Json::parse(reused->storage->read(reused->storedOriginal));
   keptRenamed_ = nullptr;
   keptReads_.clear();
   // A first visit to a function rendered ahead reads those pages.
@@ -1875,9 +2025,15 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
          full.is_null() || !full.value("complete", false);) {
       std::string text;
       if (replay) {
-        if (enginePages.size() >= replay->size())
+        const bool stored =
+            reused && reused->storage && replay == &reused->enginePages;
+        const auto count =
+            stored ? reused->storedEnginePages.size() : replay->size();
+        if (enginePages.size() >= count)
           return nullptr;
-        text = (*replay)[enginePages.size()];
+        text = stored ? reused->storage->read(
+                            reused->storedEnginePages[enginePages.size()])
+                      : (*replay)[enginePages.size()];
       } else
         text = engineViewPage(address, backendRepresentation, next, sourceView,
                               engineOptions, optionText);
@@ -1911,13 +2067,30 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
                         true);
         page = parsedBackendText(text);
       }
-      if (sourceView)
-        enginePages.push_back(std::move(text));
       if (!page.is_object() || !page.contains("text") ||
           !page["text"].is_string() || !page.contains("rows") ||
           !page["rows"].is_array() ||
           page.value("offset", std::size_t{0}) != next)
         return nullptr;
+      if (sourceView) {
+        if (full.is_null())
+          enginePages.push_back(std::move(text));
+        else {
+          // Only the first page contributes whole-function metadata below.
+          // Retaining its repeated copies on every page can evict a document
+          // that otherwise fits, rebuilding the whole source on each scroll.
+          // Keep exactly the fields the merge and its replay read.
+          for (auto item = page.begin(); item != page.end();)
+            if (item.key() == "text" || item.key() == "rows" ||
+                item.key() == "source_names" || item.key() == "references" ||
+                item.key() == "offset" || item.key() == "complete" ||
+                item.key() == "next_offset")
+              ++item;
+            else
+              item = page.erase(item);
+          enginePages.push_back(page.dump());
+        }
+      }
       const bool complete = page.value("complete", false);
       const Json following = page.value("next_offset", Json());
       if (full.is_null()) {
@@ -1939,9 +2112,7 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
       if (complete)
         break;
       if (!following.is_number_unsigned() ||
-          following.get<std::size_t>() <= next ||
-          full["text"].get_ref<const std::string &>().size() >
-              ::neverd::limits::worker::kEngineMaxNamedViewBytes)
+          following.get<std::size_t>() <= next)
         return nullptr;
       next = following.get<std::size_t>();
     }
@@ -2085,10 +2256,26 @@ Engine::namedView(std::uint64_t address, const std::string &representation,
   return document;
 }
 
+void Engine::keepVirtualCalls(const Json &full) {
+  if (full.contains("virtual_calls")) {
+    const auto representation = full.value("representation", "");
+    if (representation == "c" || representation == "source" ||
+        representation == "cpp" || representation == "rust" ||
+        representation == "go")
+      listing().setVirtualCalls(
+          parseAddress(full.at("address").get<std::string>()),
+          full.at("virtual_calls"));
+  }
+}
+
 std::shared_ptr<const Engine::NamedView>
 Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
                       const std::string &key, const std::string &sourceKey,
                       bool reusable) {
+  // A replay from the render store carries the same evidence as a fresh
+  // render. Preview declarations are not the session's committed facts.
+  if (reusable)
+    keepVirtualCalls(full);
   {
     const auto &text = full["text"].get_ref<const std::string &>();
     document->lines.push_back(0);
@@ -2119,12 +2306,30 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
     document->sourceKey = sourceKey;
     if (!reusable)
       return document;
-    const auto jsonBytes = namedViewJsonBytes(document->value);
+    auto jsonBytes = namedViewJsonBytes(document->value);
+    std::size_t originalBytes = document->original.capacity();
+    for (const auto &page : document->enginePages)
+      originalBytes += page.capacity();
+    if (jsonBytes > ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes ||
+        originalBytes >
+            ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
+                jsonBytes) {
+      document->spill();
+      jsonBytes = namedViewJsonBytes(document->value);
+    }
     auto overhead =
         sizeof(NamedView) + 8 * sizeof(void *) + document->key.capacity() + 1 +
         document->sourceKey.capacity() + 1 + document->original.capacity() + 1 +
         document->engineRepresentation.capacity() + 1 +
         document->enginePages.capacity() * sizeof(std::string);
+    overhead +=
+        document->storedEnginePages.capacity() * sizeof(ViewStorage::Record);
+    if (document->storage)
+      overhead += sizeof(ViewStorage) + 2 * sizeof(void *);
+    for (const auto &[field, chunks] : document->storedItems)
+      overhead += sizeof(decltype(document->storedItems)::value_type) +
+                  4 * sizeof(void *) + field.capacity() + 1 +
+                  chunks.capacity() * sizeof(NamedView::ItemChunk);
     for (const auto &page : document->enginePages)
       overhead += page.capacity() + 1;
     if (const auto &engine = document->engineText) {
@@ -2158,8 +2363,10 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
           bounds->capacity() >
               (::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
                overhead) /
-                  sizeof(ViewBounds::value_type))
+                  sizeof(ViewBounds::value_type)) {
+        archiveNamedView(document);
         return document;
+      }
       overhead += bounds->capacity() * sizeof(ViewBounds::value_type);
     }
     if (jsonBytes <= ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes &&
@@ -2186,6 +2393,7 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
               document->bytes >
                   ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
                       namedViewBytes_)) {
+        archiveNamedView(namedViews_.back());
         unindexNamedView(std::prev(namedViews_.end()));
         namedViewBytes_ -= namedViews_.back()->bytes;
         encodedPageBytes_ -= namedViews_.back()->pageBytes;
@@ -2202,10 +2410,38 @@ Engine::keepNamedView(std::shared_ptr<NamedView> document, Json full,
       namedViewsByKey_[document->key] = namedViews_.begin();
       namedViewsBySource_[sourceKey] = namedViews_.begin();
       namedViewBytes_ += document->bytes;
-    }
+    } else
+      archiveNamedView(document);
   }
   return document;
 }
+
+namespace {
+/// A code page the 8 MiB frame can carry, with the response envelope left
+/// beside it. Metadata that does not fit is omitted; the text stays.
+bool codePageFitsFrame(const EncodedJson &encoded) {
+  return encoded.text().size() <
+         MaxFrameBytes - ::neverd::limits::worker::kEngineCodePageFrameEnvelope;
+}
+void dropUnpaintedCodeMetadata(Json &page) {
+  for (const char *field : {"source_variables", "library_regions",
+                            "source_calls", "identifier_symbols"})
+    if (page.contains(field))
+      page[field] = Json::array();
+}
+void keepFirstRowAddress(Json &page) {
+  if (!page.contains("rows") || !page["rows"].is_array())
+    return;
+  for (auto &row : page["rows"]) {
+    if (!row.contains("addresses") || !row["addresses"].is_array() ||
+        row["addresses"].size() <= 1)
+      continue;
+    Json kept = Json::array();
+    kept.push_back(row["addresses"].front());
+    row["addresses"] = std::move(kept);
+  }
+}
+} // namespace
 
 void Engine::keepPreviousView(std::shared_ptr<const NamedView> document) {
   if (!document)
@@ -2291,7 +2527,8 @@ Engine::keptClientPage(const std::string &etag) const {
     return std::nullopt;
   const auto &found = *page->document;
   const auto &text = found.value.at("text").get_ref<const std::string &>();
-  const std::size_t total = text.empty() ? 0 : found.lines.size();
+  const auto size = found.storage ? found.storedText.size : text.size();
+  const std::size_t total = size ? found.lines.size() : 0;
   if (page->start > page->end || page->end > total)
     return std::nullopt;
   return namedViewLines(found, page->start, page->end, page->start == 0);
@@ -2302,12 +2539,14 @@ PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
   const auto &namedView_ = document.value;
   const auto &namedViewLines_ = document.lines;
   const auto &text = namedView_.at("text").get_ref<const std::string &>();
-  const std::size_t total = text.empty() ? 0 : namedViewLines_.size();
-  const auto startByte = start < namedViewLines_.size() && !text.empty()
+  const auto textSize =
+      document.storage ? document.storedText.size : text.size();
+  const std::size_t total = textSize ? namedViewLines_.size() : 0;
+  const auto startByte = start < namedViewLines_.size() && textSize != 0
                              ? namedViewLines_[start]
-                             : text.size();
+                             : textSize;
   const auto endByte =
-      end < namedViewLines_.size() ? namedViewLines_[end] : text.size();
+      end < namedViewLines_.size() ? namedViewLines_[end] : textSize;
   PageSource page;
   for (const auto &[field, value] : namedView_.items())
     if (field != "text" && field != "rows" &&
@@ -2316,22 +2555,37 @@ PageSource Engine::namedViewLines(const NamedView &document, std::size_t start,
            field == "references") &&
           value.is_array()))
       page.value(field, value);
-  page.text("text",
-            std::string_view(text).substr(startByte, endByte - startByte));
-  page.items("rows", viewItemsOnPage(namedView_.at("rows"),
-                                     document.orderedRows, "line", "line", true,
-                                     start, end, &document.rowBounds));
-  if (const auto references = namedView_.find("references");
-      references != namedView_.end() && references->is_array()) {
-    page.items("references",
-               viewItemsOnPage(*references, document.orderedReferences, "line",
-                               "line", true, start, end,
-                               &document.referenceBounds));
+  if (document.storage) {
+    page.own("text",
+             document.storage->read({document.storedText.offset + startByte,
+                                     endByte - startByte}));
+    page.own("rows", document.itemsOnPage("rows", start, end));
+    if (namedView_.contains("references") &&
+        namedView_.at("references").is_array())
+      page.own("references", document.itemsOnPage("references", start, end));
+  } else {
+    page.text("text",
+              std::string_view(text).substr(startByte, endByte - startByte));
+    page.items("rows", viewItemsOnPage(namedView_.at("rows"),
+                                       document.orderedRows, "line", "line",
+                                       true, start, end, &document.rowBounds));
+    if (const auto references = namedView_.find("references");
+        references != namedView_.end() && references->is_array()) {
+      page.items("references",
+                 viewItemsOnPage(*references, document.orderedReferences,
+                                 "line", "line", true, start, end,
+                                 &document.referenceBounds));
+    }
   }
   const std::size_t base = namedView_.value("byte_offset", std::size_t{0});
   for (const char *field : {"source_names", "code_names"}) {
     if (!namedView_.contains(field) || !namedView_.at(field).is_array())
       continue;
+    if (document.storage) {
+      page.own(field,
+               document.itemsOnPage(field, base + startByte, base + endByte));
+      continue;
+    }
     const bool ordered = std::string_view(field) == "source_names"
                              ? document.orderedSourceNames
                              : document.orderedCodeNames;
@@ -2375,11 +2629,13 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
   const auto &namedView_ = document->value;
   const auto &namedViewLines_ = document->lines;
   const auto &text = namedView_["text"].get_ref<const std::string &>();
-  const std::size_t total = text.empty() ? 0 : namedViewLines_.size();
+  const std::size_t textSize =
+      document->storage ? document->storedText.size : text.size();
+  const std::size_t total = textSize == 0 ? 0 : namedViewLines_.size();
   const auto start = std::min(offset, total);
   auto end = start + std::min(limit, total - start);
   const auto byteAt = [&](std::size_t line) {
-    return line < namedViewLines_.size() ? namedViewLines_[line] : text.size();
+    return line < namedViewLines_.size() ? namedViewLines_[line] : textSize;
   };
   while (end > start && byteAt(end) - byteAt(start) >
                             ::neverd::limits::worker::kEngineMaxCodePageBytes)
@@ -2463,13 +2719,26 @@ std::optional<Json> Engine::namedViewPage(std::uint64_t address,
   page["revision"] = revision();
   if (ifNoneMatch)
     page["etag"] = etag;
+  // One encode on the path that already fits. A page rejected by the frame
+  // keeps its text: first without the unpainted metadata, then with one
+  // address on each row.
+  auto encodedPage = std::make_shared<EncodedJson>(page);
+  if (!codePageFitsFrame(*encodedPage)) {
+    dropUnpaintedCodeMetadata(page);
+    encodedPage = std::make_shared<EncodedJson>(page);
+  }
+  if (!codePageFitsFrame(*encodedPage)) {
+    keepFirstRowAddress(page);
+    encodedPage = std::make_shared<EncodedJson>(page);
+  }
   if (encoded) {
     // A page owns only already-serialized payload data. The response envelope
     // still supplies the current request id, project and cancellation state.
-    *encoded = std::make_shared<EncodedJson>(page);
+    *encoded = std::move(encodedPage);
     const auto bytes = (*encoded)->storageBytes() +
                        sizeof(NamedView::EncodedPage) + 6 * sizeof(void *);
-    if (!namedViews_.empty() && namedViews_.front() == document &&
+    if (codePageFitsFrame(**encoded) && !namedViews_.empty() &&
+        namedViews_.front() == document &&
         bytes <= ::neverd::limits::worker::kEngineMaxEncodedBytes &&
         bytes <= ::neverd::limits::worker::kEngineMaxNamedViewCacheBytes -
                      namedViewBytes_) {
@@ -2869,6 +3138,9 @@ Json Engine::prepareCallSummaries() {
   return result;
 }
 void Engine::forgetDecompiledViews() {
+  // The image's settled call-body facts can refine the observations' entry
+  // register proposals too; a catalogue belongs to the same analysis facts.
+  computedStrings_.reset();
   forgetNamedViews();
   graphs_.clear();
   textKey_.clear();
@@ -3420,6 +3692,8 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
     awaitOwnerWrite(options.at("path").get<std::string>(), snapshot);
   options["read_only"] = true;
   options["analysis"] = false;
+  // Restored edits and chosen debug inputs must precede eager preparation.
+  options["prepare_views"] = false;
   // The owner left the PDB it declined unloaded; so does its replica.
   const auto pdb = snapshot.value("pdb", Json());
   const bool pdbDeclined =
@@ -3528,13 +3802,33 @@ Json Engine::restoreAnalysis(const Json &snapshot) {
   restoredSnapshot_.erase("call_summaries");
   restoredSnapshot_.erase("render_ahead");
   restoredSnapshot_.erase("render_store");
+  restoredSnapshot_.erase("prepare_views");
   summaryJob_ = snapshot.value("call_summaries", false);
   renderAheadRequested_ = snapshot.value("render_ahead", false);
   renderStoreMode_ = snapshot.value("render_store", std::string());
   openRenderStore(renderStoreMode_);
   restartSummaries();
   restartRenderAhead();
+  if (snapshot.value("prepare_views", false))
+    prepareViews();
   return metadata();
+}
+
+void Engine::prepareViews() {
+  using WarmFunction = const char *(*)(neverd_session_t, neverd_va_t, int);
+  const auto warm = engineSymbol<WarmFunction>("neverd_warm_functions_json");
+  if (!warm)
+    throw Error("unsupported", "This engine cannot prepare source views");
+  if (loadProgress_)
+    loadProgress_("prepare_views", 0, 0, "Preparing shared view indexes");
+  // One page also prepares the image-wide widths, types and symbol names.
+  // Later selections reuse those exact facts; no full-program C is emitted.
+  (void)backendJson(
+      warm(session_, 0,
+           ::neverd::limits::worker::kInitialViewPreparationFunctions),
+      true);
+  if (loadProgress_)
+    loadProgress_("prepare_views", 1, 1, "Shared view indexes ready");
 }
 
 bool Engine::comparesBinaries() { return ComparisonService::supported(); }
@@ -4012,7 +4306,7 @@ Json Engine::prepareUnderDeclaration(std::uint64_t entry,
       const Json following = page.value("next_offset", Json());
       if (!following.is_number_unsigned() ||
           following.get<std::size_t>() <= next ||
-          textBytes > limits::kEngineMaxNamedViewBytes) {
+          textBytes > limits::kRenderAheadMaxSourceBytes) {
         pages.clear();
         break;
       }
@@ -4551,7 +4845,8 @@ namespace {
 /// patches, which the workbench reads after each edit, are the session's too.
 /// Anything else may read the project's files, and sees them written.
 bool readsNoProjectFile(std::string_view operation) {
-  static constexpr std::string_view Operations[] = {"annotation_set",
+  static constexpr std::string_view Operations[] = {"analysis_virtual_calls",
+                                                    "annotation_set",
                                                     "cfg_summary",
                                                     "cfg_viewport",
                                                     "code_edit",
@@ -4636,10 +4931,29 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       snapshot["written"] = false;
     return snapshot;
   }
+  if (operation == "computed_strings_step") {
+    requireLoaded();
+    if (!p.is_object() || !p.empty())
+      throw Error("invalid_request",
+                  "computed_strings_step accepts no parameters");
+    return computedStringsStep();
+  }
+  if (operation == "computed_strings") {
+    requireLoaded();
+    return computedStringsPage(p);
+  }
   if (operation == "analysis_restore")
     return restoreAnalysis(p);
   if (operation == "analysis_update_names")
     return updateAnalysisNames(p);
+  if (operation == "analysis_virtual_calls") {
+    requireLoaded();
+    // Derived evidence from a source view accepted at this project revision.
+    // The transport checks project_id/expected_revision before reaching here.
+    const auto address = parseAddress(p.at("address").get<std::string>());
+    listing().setVirtualCalls(address, p.at("virtual_calls"));
+    return {{"updated", true}};
+  }
   if (operation == "identify") {
     // How each loader would read a file, before it is opened.
     const auto identify = identifyFunction();
@@ -5129,6 +5443,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         warnings.push_back(std::string(failed) + failure.what());
       }
     }
+    if (p.value("prepare_views", false))
+      prepareViews();
     auto result = metadata();
     for (const auto &diagnostic : result.at("loader_diagnostics"))
       warnings.push_back(diagnostic.value("message", std::string()));
@@ -5785,10 +6101,58 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       throw Error("invalid_request",
                   "Function navigation requires address order");
     auto &listingView = listing();
+    const auto publish = [&](const Json &row) {
+      const auto address = parseAddress(row["address"].get<std::string>());
+      // The engine's identity (linkage and demangled names) under the
+      // workbench's display name.
+      auto item = backendJson(neverd_resolve_addr(session_, address), false);
+      if (!item.is_object())
+        item = Json::object();
+      const bool renamed = row.contains("engine_name");
+      for (const auto &[field, value] : row.items())
+        if (field != "demangled_name")
+          item[field] = value;
+      // A name the workbench gave reads demangled, as the engine's do.
+      if (renamed || !item.contains("display_name"))
+        item["display_name"] = row.value("demangled_name", row["name"]);
+      return item;
+    };
+    Listing::FunctionWindowRequest request;
+    request.filter = filter;
+    request.sort = sort;
+    request.descending = descending;
+    request.hasFrom = p.contains("from");
+    if (request.hasFrom)
+      request.from = parseAddress(stringField(p, "from"));
+    request.hasSeek = p.contains("seek_address");
+    if (request.hasSeek)
+      request.seek = parseAddress(stringField(p, "seek_address"));
+    request.offset =
+        sizeField(p, "offset", 0, std::numeric_limits<std::size_t>::max());
+    request.limit = limit;
+    Listing::FunctionWindow window;
+    const auto windowStatus = listingView.functionWindow(
+        request, window, {loadProgress_, cancelled_});
+    if (windowStatus == Listing::FunctionWindowStatus::Served) {
+      Json items = Json::array();
+      for (const auto &row : window.rows)
+        items.push_back(publish(row));
+      const auto offset = window.offset;
+      const auto total = window.total;
+      const bool complete = offset >= total || items.size() >= total - offset;
+      const auto nextOffset = offset + items.size();
+      Json result{{"items", std::move(items)},
+                  {"offset", offset},
+                  {"total", total},
+                  {"complete", complete},
+                  {"next_offset", complete ? Json(nullptr) : Json(nextOffset)}};
+      if (window.selectedIndex) {
+        result["selected_index"] = *window.selectedIndex;
+        result["selected_address"] = hexAddress(*window.selectedAddress);
+      }
+      return result;
+    }
     const auto &rows = listingView.functionRows();
-    if (rows.size() > ::neverd::limits::worker::kEngineMaxFunctionRows)
-      throw Error("budget_exceeded",
-                  "The function index exceeds one million entries");
     std::string key = filter;
     key += '\0';
     key += sort;
@@ -5850,21 +6214,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     Json items = Json::array();
     for (auto i = std::min(offset, total); i < total && items.size() < limit;
          ++i) {
-      const auto &row = rows[functionOrder_[start + i]];
-      const auto address = parseAddress(row["address"].get<std::string>());
-      // The engine's identity (linkage and demangled names) under the
-      // workbench's display name.
-      auto item = backendJson(neverd_resolve_addr(session_, address), false);
-      if (!item.is_object())
-        item = Json::object();
-      const bool renamed = row.contains("engine_name");
-      for (const auto &[field, value] : row.items())
-        if (field != "demangled_name")
-          item[field] = value;
-      // A name the workbench gave reads demangled, as the engine's do.
-      if (renamed || !item.contains("display_name"))
-        item["display_name"] = row.value("demangled_name", row["name"]);
-      items.push_back(std::move(item));
+      items.push_back(publish(rows[functionOrder_[start + i]]));
     }
     const bool complete = offset >= total || items.size() >= total - offset;
     Json result{{"items", items},
@@ -6227,18 +6577,29 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     };
     // The options the C API reads, as the request states them.
     Json options = Json::object();
-    for (const char *key : {"filter", "language", "spelling", "origin"})
+    for (const char *key :
+         {"filter", "language", "spelling", "origin", "sort", "locate"})
       if (p.contains(key))
         options[key] = stringField(
             p, key, {},
-            ::neverd::limits::worker::
-                kEngineExecuteImplLocalTypesSourceLocalTypesOptionsKeyKeyStringFieldMax);
-    for (const char *key :
-         {"offsets", "hexOffsets", "asserts", "dependencies", "prototypes"})
+            (std::string_view(key) == "locate" ||
+             std::string_view(key) == "filter")
+                ? ::neverd::limits::worker::kEngineMaxLocalTypeNameBytes
+                : ::neverd::limits::worker::
+                      kEngineExecuteImplLocalTypesSourceLocalTypesOptionsKeyKeyStringFieldMax);
+    for (const char *key : {"offsets", "hexOffsets", "asserts", "dependencies",
+                            "prototypes", "descending"})
       if (p.contains(key)) {
         if (!p.at(key).is_boolean())
           throw Error("invalid_request",
                       std::string(key) + " must be true or false");
+        options[key] = p.at(key);
+      }
+    for (const char *key : {"offset", "limit", "diagnostics_offset"})
+      if (p.contains(key)) {
+        if (!p.at(key).is_number_integer())
+          throw Error("invalid_request",
+                      std::string(key) + " must be an integer");
         options[key] = p.at(key);
       }
     if (p.contains("types")) {
@@ -6258,10 +6619,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (operation == "local_type") {
       const auto one =
           engineSymbol<LocalTypeFunction>("neverd_local_type_json");
-      const auto name = stringField(
-          p, "name", {},
-          ::neverd::limits::worker::
-              kEngineExecuteImplLocalTypesSourceLocalTypesLocalTypeNameNameStringFieldMax);
+      const auto name =
+          stringField(p, "name", {},
+                      ::neverd::limits::worker::kEngineMaxLocalTypeNameBytes);
       return localTypesJson(
           ownedString(one(session_, name.c_str(), text.c_str())));
     }
@@ -6302,6 +6662,42 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
   if (operation == "overview")
     return listing().overview(p);
   if (operation == "names") {
+    const auto limit = sizeField(
+        p, "limit", ::neverd::limits::worker::kEnginePageLimitSizeFieldDefault,
+        ::neverd::limits::worker::kEnginePageLimitSizeFieldMax);
+    if (!limit)
+      throw Error("invalid_request", "limit must be at least 1");
+    const auto filter = folded(stringField(p, "filter"));
+    const auto sort = stringField(
+        p, "sort", {},
+        ::neverd::limits::worker::kEngineSortItemsFieldSortStringFieldMax);
+    const bool hasSeek = p.contains("seek_address");
+    const auto seek = hasSeek ? parseAddress(stringField(p, "seek_address"))
+                              : std::uint64_t{0};
+    const auto offset =
+        sizeField(p, "offset", 0, std::numeric_limits<std::size_t>::max());
+    Listing::NameWindow window;
+    switch (listing().nameWindow(filter, sort, p.value("descending", false),
+                                 hasSeek, seek, offset, limit, window,
+                                 {loadProgress_, cancelled_})) {
+    case Listing::NameWindowStatus::Served: {
+      const bool complete = window.offset >= window.total ||
+                            window.items.size() >= window.total - window.offset;
+      Json result{{"items", std::move(window.items)},
+                  {"total", window.total},
+                  {"offset", window.offset},
+                  {"next_offset",
+                   complete ? Json(nullptr) : Json(window.offset + limit)},
+                  {"complete", complete}};
+      if (window.selectedIndex) {
+        result["selected_index"] = *window.selectedIndex;
+        result["selected_address"] = hexAddress(*window.selectedAddress);
+      }
+      return result;
+    }
+    case Listing::NameWindowStatus::FitsIndex:
+      break;
+    }
     auto items = listing().names();
     sortItems(items, p);
     return page(items, p, {"name"});
@@ -6489,23 +6885,43 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     return result;
   }
   if (operation == "source_type") {
+    requireLoaded();
     const auto address = parseAddress(stringField(p, "address"));
-    const auto representation = stringField(p, "representation");
-    const auto document = namedView(address, representation,
-                                    p.value("source_options", Json::object()));
-    if (!document)
-      throw Error("unsupported", "The engine does not expose source variables");
-    Json request = p;
-    request["kind"] = "type";
-    CodeEdits::validateChange(document->value, request);
-    const auto id =
-        stringField(p, "variable_id", {},
-                    ::neverd::limits::worker::
-                        kEngineExecuteImplSourceTypeIdVariableIdStringFieldMax);
     Json variable;
-    for (const auto &item : document->value.at("source_variables"))
-      if (item.at("id") == id)
-        variable = item;
+    std::string representation, id;
+    if (p.contains("object_address")) {
+      const auto object = parseAddress(stringField(p, "object_address"));
+      if (address != object)
+        throw Error("invalid_request",
+                    "The type request must name the global object's address");
+      using Inspect = const char *(*)(neverd_session_t, const char *);
+      const auto inspect = engineSymbol<Inspect>("neverd_source_type_json");
+      if (!inspect)
+        throw Error("unsupported",
+                    "The engine cannot inspect global object types");
+      const Json query{{"object_address", hexAddress(object)}};
+      const auto *reply = inspect(session_, query.dump().c_str());
+      if (!reply)
+        throw Error("invalid_type", error());
+      variable = backendJson(reply);
+    } else {
+      representation = stringField(p, "representation");
+      const auto document = namedView(
+          address, representation, p.value("source_options", Json::object()));
+      if (!document)
+        throw Error("unsupported",
+                    "The engine does not expose source variables");
+      Json request = p;
+      request["kind"] = "type";
+      CodeEdits::validateChange(document->editView(request), request);
+      id = stringField(
+          p, "variable_id", {},
+          ::neverd::limits::worker::
+              kEngineExecuteImplSourceTypeIdVariableIdStringFieldMax);
+      for (const auto &item : document->value.at("source_variables"))
+        if (item.at("id") == id)
+          variable = item;
+    }
     const auto row = codeEditRow(
         variable.contains("address")
             ? parseAddress(variable.at("address").get<std::string>())
@@ -6559,7 +6975,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (!document)
       throw Error("unsupported",
                   "The engine does not expose editable source targets");
-    CodeEdits::validateChange(document->value, p);
+    CodeEdits::validateChange(document->editView(p), p);
     return {{"ready", true}};
   }
   if (operation == "code_edit") {
@@ -6571,12 +6987,14 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     Json before = codeEditRow(address);
     const bool frameEdit = p.value("kind", std::string()) == "stack_frame";
     const bool callEdit = p.value("kind", std::string()) == "call_type";
+    const bool objectTypeEdit = p.value("kind", std::string()) == "type" &&
+                                p.contains("object_address");
     const auto document =
-        frameEdit || callEdit
+        frameEdit || callEdit || objectTypeEdit
             ? decltype(namedView(address, std::string(), Json::object()))()
             : namedView(address, stringField(p, "representation"),
                         p.value("source_options", Json::object()));
-    if (!frameEdit && !callEdit && !document)
+    if (!frameEdit && !callEdit && !objectTypeEdit && !document)
       throw Error("unsupported",
                   "The engine does not expose editable source targets");
     const bool associations = p.value("kind", std::string()) == "variables";
@@ -6588,8 +7006,8 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                     "Call-site declarations require Pseudocode or LLVM C");
       if (p.value("action", std::string()) != "clear")
         CodeEdits::validateChange(originalCallSites(address), p);
-    } else if (!associations && !frameEdit)
-      CodeEdits::validateChange(document->value, p);
+    } else if (!associations && !frameEdit && !objectTypeEdit)
+      CodeEdits::validateChange(document->editView(p), p);
     // The names keep while the code keeps its locals (code_shape).
     Json request = p;
     std::uint64_t owner = address;
@@ -6781,6 +7199,7 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
         before = codeEditRow(owner);
         request["address"] = hexAddress(owner);
         request["kind"] = "global_type";
+        request["representation"] = "c";
       }
       if (request.value("representation", std::string()) == "source")
         request["representation"] = "c";
@@ -6802,8 +7221,6 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
                               }),
                rows.end());
     rows.push_back(after);
-    // The session's edits from here on, as this edit leaves them.
-    auto edits = rows;
     try {
       store.stage({{"kind", "code"},
                    {"address", hexAddress(owner)},
@@ -6814,7 +7231,9 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
       store = checkpoint;
       throw;
     }
-    codeEdits_ = std::move(edits);
+    // The history owner canonicalizes address order. Keep that same table in
+    // memory so replicas and reopened projects compare identical revisions.
+    codeEdits_ = store.committedTable("code_edits");
     const bool localName = p.value("kind", std::string()) == "name";
     if (localName)
       localNamesChanged();
@@ -7902,6 +8321,39 @@ Json Engine::executeImpl(const std::string &operation, const Json &p,
     if (!limit)
       throw Error("invalid_request", "limit must be at least 1");
     const auto entry = functionEntry(address);
+    if (p.contains("refresh") && !p.at("refresh").is_boolean())
+      throw Error("invalid_request", "refresh must be true or false");
+    if (p.value("refresh", false)) {
+      if (offset)
+        throw Error("invalid_request",
+                    "refresh requires the first source page");
+      using ForgetFunction = int (*)(neverd_session_t, neverd_va_t);
+      static const auto forget =
+          engineSymbol<ForgetFunction>("neverd_forget_function_analysis");
+      if (!forget)
+        throw Error("unsupported",
+                    "This engine cannot refresh function analysis");
+      if (!forget(session_, entry))
+        throw Error("analysis_failed", error());
+      preparedFunction_.reset();
+      analyzed_ = false;
+      textKey_.clear();
+      const auto prefix = hexAddress(entry) + ":";
+      std::erase_if(archivedViewsBySource_, [&](const auto &item) {
+        return item.first.starts_with(prefix);
+      });
+      for (auto it = namedViews_.begin(); it != namedViews_.end();) {
+        if (!(*it)->sourceKey.starts_with(prefix)) {
+          ++it;
+          continue;
+        }
+        unindexNamedView(it);
+        namedViewBytes_ -= (*it)->bytes;
+        encodedPageBytes_ -= (*it)->pageBytes;
+        releases_.retire(std::move(*it));
+        it = namedViews_.erase(it);
+      }
+    }
     std::string mappingStatus = "unsupported_representation";
     // Why the engine offers no page, such as Rust asked of a C program.
     std::string reason;

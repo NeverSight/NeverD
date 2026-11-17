@@ -156,25 +156,24 @@ bool readsAsText(llvm::ArrayRef<uint32_t> Codes, Source From) {
   // The current word: whether it holds ASCII letters and letters beyond,
   // and the cases of its letters so far.
   bool WordASCII = false, WordBeyond = false, CaseValid = true;
+  // Whether every letter beyond ASCII in the word is East Asian, which UTF-8
+  // text runs ASCII letters into.
+  bool WordEastAsian = true;
   unsigned WordLetters = 0;
   int FirstCase = 0, RestCase = 0;
   for (size_t I = 0; I <= Codes.size(); ++I) {
-    // A word that holds ASCII letters and letters beyond outside the Latin
-    // script fails where it ends.  Should the script become Latin first,
-    // its letters beyond were Han, which Latin text fails after the loop.
-    if (WordASCII && WordBeyond && Script != Family::Latin)
-      return false;
     const uint32_t C = I < Codes.size() ? Codes[I] : 0;
     const Family Kind = C >= 0x80 ? familyOf(C) : Family::None;
     const bool ASCIILetter = isASCIILetter(C);
     if (!ASCIILetter && Kind == Family::None) {
       // A word ends.
-      if (WordASCII && WordBeyond && Script != Family::Latin)
+      const bool Joined = From == Source::UTF8 && WordEastAsian;
+      if (WordASCII && WordBeyond && Script != Family::Latin && !Joined)
         return false;
-      if (WordBeyond && !CaseValid)
+      if (WordBeyond && !CaseValid && !Joined)
         return false;
       WordASCII = WordBeyond = false;
-      CaseValid = true;
+      WordEastAsian = CaseValid = true;
       WordLetters = 0;
       FirstCase = RestCase = 0;
     } else if (const int Case = letterCase(C)) {
@@ -205,6 +204,7 @@ bool readsAsText(llvm::ArrayRef<uint32_t> Codes, Source From) {
     if (Kind == Family::None)
       continue;
     WordBeyond = true;
+    WordEastAsian &= isEastAsian(Kind);
     ++Letters;
     EastAsian += isEastAsian(Kind);
     const auto isLetter = [&](size_t At) {
@@ -253,8 +253,9 @@ bool readsAsText(llvm::ArrayRef<uint32_t> Codes, Source From) {
         longestRun(Codes) * 5 >= Codes.size() * 2)
       return false;
   }
-  if (Ideographs <= ShortIdeographicText ? Common < Ideographs
-                                         : Common * 10 < Ideographs * 9)
+  if (From == Source::UTF8                 ? Common * 2 < Ideographs
+      : Ideographs <= ShortIdeographicText ? Common < Ideographs
+                                           : Common * 10 < Ideographs * 9)
     return false;
   if (EastAsian || From == Source::DoubleByte)
     return EastAsian >= 2;

@@ -453,21 +453,16 @@ constexpr int kMaxVerifyInsns = 64;
 /// with an already-detected function.
 constexpr uint64_t kMaxOverlapDistance = 0x10000;
 
-/// Callee register-effect summaries lift callees that the pipeline did not
-/// already lift (a single-function decompile lifts only its own body).  A
-/// callee deeper than this many calls, or past this many extra lifts, keeps
-/// the ABI clobber set.
-constexpr int kMaxCallEffectCalleeDepth = 4;
-constexpr size_t kMaxCallEffectExtraLifts = 256;
-/// The functions Pipeline::prepareCallSummaries reads for an image's
-/// call-register summaries: its symbol starts and the callees they reach.
-/// An image with more keeps each run's own callee summaries.
-constexpr size_t kMaxImageCallSummaryFunctions = 262144;
 /// On-demand CFG register proofs admit only small, metadata-bounded callees.
-/// The query may not recursively start another CFG register proof. Building a
-/// larger callee, with its jump tables, can cost more than a second per caller.
+/// The query may not recursively start another CFG register proof.
+/// These local CFG queries are distinct from the pipeline's complete call
+/// dependency closure; failure here grants no call-preservation fact.
+constexpr int kMaxCFGCallRegisterProofDepth = 4;
 constexpr size_t kMaxCFGCallRegisterProofFunctions = 32;
 constexpr uint64_t kMaxCFGCallRegisterProofBytes = 1024;
+/// Omitted struct-return confirmation also converts callee bodies into SSA.
+/// This source-signature query is not the call-register dependency traversal.
+constexpr size_t kMaxStructReturnCalleeLifts = 256;
 /// Scalar exit facts inspect only bounded, complete, call-free callee bodies.
 constexpr size_t kMaxCallExitConstantOps = 4096;
 /// All-path predecessor stack-store evidence for one call argument setup.
@@ -534,10 +529,16 @@ constexpr size_t kMaxStructurableMedBlocks = 1024;
 constexpr size_t kMaxStructurableMedOps =
     static_cast<size_t>(kMaxSSANodes) * 2u;
 
-/// Build SSA and run the MedIR optimizations for functions up to this many
-/// operations.  HighIR structuring keeps its own, smaller limit; a larger
-/// SSA function is still lowered to statements, block by block.
+/// The operations of one ordinary function, as work over a function's
+/// operations takes them for its bound: the bodies a run reads for its
+/// callees' signatures, a dispatcher walk, a module's address inputs.
 constexpr size_t kMaxSSAFunctionOps = 400000;
+
+/// Build SSA and run the MedIR optimizations for functions up to this many
+/// operations: a megafunction too.  HighIR structuring keeps its own, smaller
+/// limit; a larger SSA function is still lowered to statements, block by
+/// block.  Past this a function lowers to mutable statements only.
+constexpr size_t kMaxSSABuildOps = 4000000;
 
 /// Maximum estimated stack frame size.
 constexpr int64_t kMaxFrameSize = 16 * 1024 * 1024; // 16 MiB

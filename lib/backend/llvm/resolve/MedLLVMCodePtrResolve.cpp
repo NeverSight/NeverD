@@ -2130,13 +2130,13 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
     // external leaves must agree, and every node must reach an initializer.
     // The last check excludes a disconnected uninitialized cycle hidden in
     // one arm of an otherwise anchored PHI.
-    auto proveReadOnlyRecurrence = [&](const MedVar &Root) -> AddressProof {
+    auto proveTableRecurrence = [&](const MedVar &Root) -> AddressProof {
       using Key = std::pair<AddressProvenanceVarKey, bool>;
       std::map<Key, std::vector<Key>> Users;
       std::set<Key> Visited, Anchored;
       std::vector<std::pair<MedVar, bool>> Work{{Root, false}};
       std::vector<Key> Anchors;
-      std::optional<PureReadOnlyBaseIdentity> Base;
+      std::optional<DataBaseIdentity> Base;
       size_t Budget = limits::kMaxPointerRecurrenceEvidenceWork;
       while (!Work.empty()) {
         auto [Value, Direct] = Work.back();
@@ -2146,7 +2146,29 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
         const Key K{addressProvenanceVarKey(Value), Direct && Value.isConst()};
         if (!Visited.insert(K).second)
           continue;
-        if (auto Identity = pureReadOnlyBaseIdentity(Value, Direct)) {
+        auto Identity = pureReadOnlyBaseIdentity(Value, Direct);
+        // The address of a complete mutable mirror is stable even when its
+        // cells change. Only an exact constant occurrence already materialized
+        // through that mirror can anchor this case. A load from mutable bytes
+        // cannot establish an initializer, and the immutable-data proofs keep
+        // their separate storage requirement.
+        if (!Identity && Value.isConst() &&
+            Value.Size == Img->getPointerSize() &&
+            dataOccurrenceSymbolizes(Value, Direct)) {
+          uint64_t Address = 0, Owner = InvalidVA;
+          if (resolveMaterializableDataAddress(Value, Address, &Owner)) {
+            const uint64_t OwnerAddress = Owner == InvalidVA ? Address : Owner;
+            if (completePointerMirrorRun(OwnerAddress)) {
+              if (const auto *Sec = Img->getSectionFor(OwnerAddress))
+                Owner = Sec->VA;
+              else
+                Owner = Img->getSegmentFor(OwnerAddress)->VA;
+              Identity = DataBaseIdentity{Address, Value.Size,
+                                          /*Symbolized=*/true, Owner};
+            }
+          }
+        }
+        if (Identity) {
           if (Base && *Base != *Identity)
             return invalidProof();
           Base = Identity;
@@ -2252,7 +2274,7 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
         return invalidProof();
 
       if (const PhiNode *Phi = lookupPhi(Value)) {
-        if (auto Recurrence = proveReadOnlyRecurrence(Value);
+        if (auto Recurrence = proveTableRecurrence(Value);
             Recurrence.Role == AddressRole::PointerTable)
           return Recurrence;
         std::optional<AddressProof> Merged;
@@ -2538,19 +2560,29 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
       bool SawRuntime = false;
       unsigned MergeBudget =
           ::neverd::limits::backend::kMedLLVMCodePtrResolveMergeBudget;
-      std::set<std::tuple<int, int, int>> MergeSeen;
-      enum class MergeOccurrence { Input, PhiConstant, StoredConstant };
-      std::function<bool(const MedVar &, MergeOccurrence)> isRuntimeOrMirrored =
-          [&](const MedVar &V, MergeOccurrence Occurrence) -> bool {
+      enum class MergeRole { Pointer, RuntimePointer, Scalar };
+      std::set<std::tuple<int, int, int, MergeRole>> MergeSeen;
+      enum class MergeOccurrence { Input, PhiConstant, OperationConstant };
+      std::function<bool(const MedVar &, MergeOccurrence, MergeRole)>
+          isRuntimeOrMirrored = [&](const MedVar &V, MergeOccurrence Occurrence,
+                                    MergeRole Role) -> bool {
         if (!MergeBudget--)
           return false;
         if (V.isConst()) {
+          // Numeric strides and null pointer arms keep their bits even in an
+          // image mapped at zero. An exact address occurrence at VA zero is
+          // still an address, not null; the shared scalar proof distinguishes
+          // them without relying on the segment range.
+          if ((Role == MergeRole::Scalar || V.ConstVal == 0) &&
+              constantIsStableAddressOffset(V))
+            return true;
           // A table base buried in arithmetic (a narrowing slice, a masked
           // coincidence) is not the mirror's pointer; only a constant the
-          // code chose directly as an arm is. A stored constant passed through
-          // getVar at its STORE; a direct PHI constant has its own occurrence
-          // policy. Do not replace either with the other's address model.
-          if (Occurrence != MergeOccurrence::Input) {
+          // code chose directly as an arm is. A stored or forwarded constant
+          // passes through getVar at its operation; a direct PHI constant has
+          // its own occurrence policy. Keep those address models distinct.
+          if (Role == MergeRole::Pointer &&
+              Occurrence != MergeOccurrence::Input) {
             const AddressProof Static = proveAddressRole(
                 V, 1, {}, Occurrence == MergeOccurrence::PhiConstant);
             if (Static.Role == AddressRole::PointerTable) {
@@ -2570,15 +2602,17 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
                  !Img->getSegmentFor(V.ConstVal);
         }
         if (!MergeSeen
-                 .insert(
-                     std::make_tuple(static_cast<int>(V.Kind), V.Id, V.SSAVer))
+                 .insert(std::make_tuple(static_cast<int>(V.Kind), V.Id,
+                                         V.SSAVer, Role))
                  .second)
           return true;
         if (const PhiNode *Phi = lookupPhi(V)) {
           for (const auto &[Pred, Arg] : Phi->Args)
-            if (!isRuntimeOrMirrored(Arg, Arg.isConst()
-                                              ? MergeOccurrence::PhiConstant
-                                              : MergeOccurrence::Input))
+            if (!isRuntimeOrMirrored(Arg,
+                                     Arg.isConst()
+                                         ? MergeOccurrence::PhiConstant
+                                         : MergeOccurrence::Input,
+                                     Role))
               return false;
           return true;
         }
@@ -2592,9 +2626,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
             // values. Treating it as an opaque runtime leaf loses the static
             // arm that the address-role proof above already discovered.
             for (const MedVar &Source : Sources)
-              if (!isRuntimeOrMirrored(
-                      Source, Source.isConst() ? MergeOccurrence::StoredConstant
-                                               : MergeOccurrence::Input))
+              if (!isRuntimeOrMirrored(Source,
+                                       Source.isConst()
+                                           ? MergeOccurrence::OperationConstant
+                                           : MergeOccurrence::Input,
+                                       Role))
                 return false;
             return true;
           }
@@ -2615,18 +2651,80 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
           // A register with no definition in this function (a live-in or an
           // argument), a loaded word and a call result are the program's own
           // runtime values.
-          SawRuntime = true;
+          // A runtime index or selection predicate is not a runtime pointer
+          // arm. It cannot turn an otherwise static recurrence into a mixed
+          // address model and bypass that recurrence's own proof.
+          SawRuntime |= Role != MergeRole::Scalar;
           return true;
         }
-        for (uint8_t I = 0; I < Def->NumInputs; ++I)
-          if (!isRuntimeOrMirrored(Def->Inputs[I], MergeOccurrence::Input))
+        if (auto Forwarded = pointerPreservingInput(*Def))
+          return isRuntimeOrMirrored(*Forwarded,
+                                     Forwarded->isConst()
+                                         ? MergeOccurrence::OperationConstant
+                                         : MergeOccurrence::Input,
+                                     Role);
+        // A forwarding COPY does not license a later mask, narrowing, or
+        // combination of two addresses. Only pointer-valued operands of a
+        // preserving operation may carry a mirrored static through this walk.
+        // Include that context in MergeSeen: a shared value can also appear
+        // as a destructive operand, which must be audited independently.
+        MedVar Predicate, TrueArm, FalseArm;
+        if (Role != MergeRole::Scalar &&
+            (selectPreservesPointerValues(*Def) ||
+             isMaskedSelectOr(*Def, Predicate, TrueArm, FalseArm))) {
+          if (Def->Opcode == NdOp::SELECT) {
+            Predicate = Def->Inputs[0];
+            TrueArm = Def->Inputs[1];
+            FalseArm = Def->Inputs[2];
+          }
+          // Comparisons can inspect relocated pointers while still producing
+          // a scalar predicate. Reuse the scalar-result proof; its operands
+          // are not selected pointer arms and supply neither merge anchor.
+          return valueIsStableAddressOffset(Predicate) &&
+                 isRuntimeOrMirrored(
+                     TrueArm, MergeOccurrence::OperationConstant, Role) &&
+                 isRuntimeOrMirrored(FalseArm,
+                                     MergeOccurrence::OperationConstant, Role);
+        }
+        auto scalarOffset = [&](const MedVar &Offset) {
+          return valueIsStableAddressOffset(Offset) ||
+                 valueIsOpaqueRuntimeOffset(
+                     Offset, pointerRunHasOriginalStorage(SelSeg));
+        };
+        const bool PointerArithmetic =
+            Role != MergeRole::Scalar && Def->NumInputs == 2 &&
+            Def->Output.Size >= Img->getPointerSize() &&
+            (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB);
+        const bool LeftPointer = PointerArithmetic &&
+                                 Def->Inputs[0].Size >= Img->getPointerSize() &&
+                                 scalarOffset(Def->Inputs[1]);
+        const bool RightPointer =
+            PointerArithmetic && Def->Opcode == NdOp::INT_ADD &&
+            Def->Inputs[1].Size >= Img->getPointerSize() &&
+            scalarOffset(Def->Inputs[0]);
+        for (uint8_t I = 0; I < Def->NumInputs; ++I) {
+          // Destructive arithmetic on an entirely runtime pointer (for
+          // example, aligning the incoming SP) keeps its actual bits. It
+          // remains a runtime pointer arm, but cannot carry a static mirror.
+          MergeRole InputRole = Role == MergeRole::Scalar
+                                    ? MergeRole::Scalar
+                                    : MergeRole::RuntimePointer;
+          if (LeftPointer || RightPointer)
+            InputRole = (I == 0 ? LeftPointer : RightPointer)
+                            ? Role
+                            : MergeRole::Scalar;
+          if (!isRuntimeOrMirrored(Def->Inputs[I],
+                                   MergeOccurrence::OperationConstant,
+                                   InputRole))
             return false;
+        }
         return true;
       };
       // Only a genuine mix applies: every arm a static image needs no mirror
       // (every arm the existing proof already decides), and the existing proof
       // refuses a recurrence whose arms rematerialize different tables.
-      if (isRuntimeOrMirrored(AddrVar, MergeOccurrence::Input) &&
+      if (isRuntimeOrMirrored(AddrVar, MergeOccurrence::Input,
+                              MergeRole::Pointer) &&
           SawMirroredStatic && SawRuntime)
         if (llvm::Value *A = getVar(AddrVar, Builder))
           return A->getType()->isPointerTy()
@@ -2634,10 +2732,14 @@ llvm::Value *MedLLVMEmitter::tryResolveCodePtrTablePtr(
                      : Builder.CreateIntToPtr(
                            A, llvm::PointerType::getUnqual(*Ctx),
                            "cptsel.merge");
-      if (!FatalDataPointerResolution)
+      if (!FatalDataPointerResolution) {
+        detail::failure_snapshot::capture(
+            Img, CurMedFunc, "ambiguous-pointer-table-merge", AddrVar,
+            FatalCodePointerResolution, nullptr, {{"selected_run", SelSeg}});
         syncError() << "med_llvm_emitter: ambiguous pointer-table address "
                     << AddrVar.display() << " in " << CurMedFunc->Name
                     << "; refusing stale-address fallback\n";
+      }
       FatalDataPointerResolution = true;
       return nullptr;
     }

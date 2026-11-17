@@ -191,6 +191,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
                              const PipelineOptions &Opts, DebugContext *Dbg) {
   PipelineResult Result;
   Result.SourceImage = &Img;
+  Result.KnownFunctionEntries = Opts.KnownFunctionEntries;
   if (Opts.MedAnalysisOnly &&
       (Opts.PatchMode || Opts.LiftMode || Opts.DeferHighIR || Opts.DeferMedIR ||
        Opts.DumpHigh || Opts.DumpLlvm || Opts.SourceProjection ||
@@ -425,6 +426,8 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
             JTTargets.insert(T);
 
       if (!JTTargets.empty()) {
+        // Summaries must see the same pre-cleanup bodies as an eager run.
+        completeCallEffects(Opts, Result);
         for (const auto &LF : Result.LowFuncs) {
           if (!JTTargets.count(LF.Entry) || !LF.JumpTables.empty())
             continue;
@@ -482,6 +485,7 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
       // Only an actual CFG owner can absorb a guessed entry. Instruction
       // completeness and exception-rewrite admission remain separate checks.
       if (!Absorbed.empty()) {
+        completeCallEffects(Opts, Result);
         for (auto &Audit : Result.FunctionAudits) {
           if (Absorbed.count(Audit.Entry)) {
             Audit.Disposition =
@@ -509,9 +513,6 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
             PipelineFunctionDisposition::Accepted;
   }
 
-  if (Opts.DumpLow && Opts.EmitDumpOutput)
-    dumpLowIR(Result.LowFuncs);
-
   // A native view of the control-flow graphs alone reads nothing after
   // LowIR.  A deeper view of the same run takes the stages below then
   // (resumeMedIR), which keep this order.
@@ -523,9 +524,13 @@ PipelineResult Pipeline::run(const BinaryImage &Img, llvm::LLVMContext &Ctx,
     return Result;
   }
 
+  completeCallEffects(Opts, Result);
+  if (Opts.DumpLow && Opts.EmitDumpOutput)
+    dumpLowIR(Result.LowFuncs);
+
   // Phase 2: LowIR -> MedIR (parallel).
   Trace.start(NativePipelineTrace::Stage::MedIR);
-  buildMedIR(Img, Opts, Result);
+  buildMedIR(Img, Opts, Result, Dbg);
   if (!Result.Error.empty()) {
     Result.Success = false;
     Trace.finish(false);
@@ -638,8 +643,10 @@ bool Pipeline::resumeMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   Result.Success = false;
   // The stages run() takes after LowIR for a native source or analysis view.
   NativePipelineTrace Trace;
+  Trace.start(NativePipelineTrace::Stage::LowIR);
+  completeCallEffects(Opts, Result);
   Trace.start(NativePipelineTrace::Stage::MedIR);
-  buildMedIR(Img, Opts, Result);
+  buildMedIR(Img, Opts, Result, Dbg);
   if (!Result.Error.empty()) {
     Trace.finish(false);
     return false;

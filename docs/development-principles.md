@@ -46,3 +46,38 @@ synchronization for "just in case" robustness.
 Routine boundary validation and fixes for demonstrated failures within the
 requested work do not require separate approval. Existing necessary checks stay
 in place; removing one requires identifying the guarantee that makes it redundant.
+A local check that already proves a jump-table domain is that domain. Do not
+replay the same fact through a second walk of the operand's origin, and do not
+discard the local result when that walk cannot finish. A reload of the index
+in the load block is not an address fact when the address formula already
+names one address for every 32-bit index. The guard owns that lane. That
+shortcut does not cover a call or store that receives the reloaded cell.
+An unproved indirect edge does not restart the incoming stack pointer; a
+block it alone enters is still checked against the preserved frame at the
+reload. Two reloads of one frame slot are that lane when the reaching store
+zero-extends a W write into the stored X. A plain X store is a different
+value. An unfinished scan for predicated aliases is not a fact about that
+compare. An unfinished
+materialization of an unrelated guard is not a fact about a structural index
+compare. Neither one withdraws the compare. A definition that already limits
+the index to a dense prefix is part of the compare's domain. An equality exit
+at the top of that prefix is the bound. An unfinished or inapplicable
+definition walk does not invent a larger domain. A candidate that spends the
+production personal evidence cap without publishing fails closed for that
+branch alone, and the stage keeps siblings whose proofs already completed. A
+smaller initial grant means the shared stage account ran out, and that stage
+still rolls back. A direct copy of the compared register into the index,
+taken before the compare, is that lane, and a later write of the compared
+register does not replace it. The load block's zero-extend of the recorded
+narrow index is that address identity when it is the last write of the
+register before the load and no call sits between them. An earlier
+zero-extend is that same identity when every predecessor of the load reaches
+it, no block on the way calls or writes the register, and a backedge is not
+a second write. An AND that clears every bit above the 32-bit lane is inside
+that lane even when the mask is tighter. An unfinished value query does not
+withdraw it. An unfinished mask search does not turn a guard that already
+rejected the selector into an incomplete proof, and it does not withdraw a
+sibling that published in the same stage. A guard that is itself unfinished
+still fails closed. A bounded jump-table slot that names an
+instruction this function already decoded is that edge, and a slot that only
+names the next function stays unresolved.

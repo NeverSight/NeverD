@@ -254,7 +254,32 @@ TEST(MedSSAMultiRoot, UnwrittenPhiEdgeCannotBorrowASiblingDefinition) {
       // block's constant is not.
       if (Incoming.Kind == MedVar::Reg) {
         EXPECT_EQ(Incoming.RegOff, TRI.IntReturnReg2);
-        EXPECT_EQ(Incoming.SSAVer, 0);
+        if (Incoming.SSAVer >= 0) {
+          // A numbered value needs an actual entry identity copy and a
+          // parameter bound to that register. Version zero alone may instead
+          // name the sibling's first definition.
+          const auto EntryCopy = std::find_if(
+              Med.Blocks[0].Ops.begin(), Med.Blocks[0].Ops.end(),
+              [&](const MedOp &Op) {
+                return Op.Output == Incoming && Op.Opcode == NdOp::COPY &&
+                       Op.NumInputs == 1 && Op.Inputs[0].Kind == MedVar::Reg;
+              });
+          ASSERT_NE(EntryCopy, Med.Blocks[0].Ops.end());
+          EXPECT_EQ(Incoming.SSAVer, 0);
+          EXPECT_EQ(EntryCopy->Inputs[0].Id, Incoming.Id);
+          EXPECT_EQ(EntryCopy->Inputs[0].SSAVer, 0);
+          EXPECT_EQ(EntryCopy->Inputs[0].RegOff, TRI.IntReturnReg2);
+          EXPECT_EQ(EntryCopy->Inputs[0].Size, Width);
+          EXPECT_NE(std::find_if(Med.Params.begin(), Med.Params.end(),
+                                 [&](const MedVar &P) {
+                                   return P.Kind == MedVar::Param &&
+                                          P.Id >= 0 && P.Size == Width &&
+                                          P.RegOff == TRI.IntReturnReg2;
+                                 }),
+                    Med.Params.end());
+        } else {
+          EXPECT_EQ(Incoming.SSAVer, -1); // Unchanged, unbound entry bits.
+        }
       } else {
         EXPECT_EQ(Incoming.Kind, MedVar::Unspecified);
       }
@@ -879,9 +904,12 @@ TEST(MedSEHEstablisherFrame, SourceIndependentEntriesKeepUnknownStackValues) {
     CEmitterOptions Options;
     Options.TheArch = Arch::X64;
     EXPECT_TRUE(HighCEmitter().emit({High}, Stream, Options));
-    EXPECT_NE(Source.find("unresolved runtime stack"), std::string::npos)
+    EXPECT_NE(Source.find("runtime stack has no recovered frame"),
+              std::string::npos)
         << Source;
-    EXPECT_NE(Source.find("unknown value"), std::string::npos) << Source;
+    EXPECT_NE(Source.find("no recovered semantics"), std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("unknown value"), std::string::npos) << Source;
     if (SharedHandler) {
       // The handler's entry copies stay on the runtime's entry into it.
       const std::string Handler = llvm::utohexstr(Img.Entry + 0x20);
@@ -925,9 +953,10 @@ TEST(MedSEHEstablisherFrame, SourceIndependentEntriesKeepUnknownStackValues) {
     std::string LLVMSource;
     llvm::raw_string_ostream LLVMStream(LLVMSource);
     EXPECT_TRUE(LLVMCEmitter().emit(*Module, LLVMStream, Options));
-    EXPECT_NE(LLVMSource.find("unresolved runtime stack"), std::string::npos)
+    EXPECT_NE(LLVMSource.find("runtime stack has no recovered frame"),
+              std::string::npos)
         << LLVMSource;
-    EXPECT_NE(LLVMSource.find("unknown machine state"), std::string::npos)
+    EXPECT_NE(LLVMSource.find("no recovered machine state"), std::string::npos)
         << LLVMSource;
     // Reusing an emitter for native output never inherits source admission.
     SourceEmitter.setPreserveUnknownSourceValues(false);

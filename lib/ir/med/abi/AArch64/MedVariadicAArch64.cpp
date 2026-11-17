@@ -709,8 +709,13 @@ bool hasAAPCS64VariadicPrologue(VariadicScan &S) {
   // skips detectXMMParams and silently drops every FP argument, so
   // detectVariadic uses this test only where variadic arguments travel in
   // registers; Darwin variadics use the home-slot test (MedVariadicDarwin.cpp).
-  return countParamRegSpills(Func, TRI.IntParamRegs) >= kMinSaveAreaRegs &&
-         countParamRegSpills(Func, TRI.FPParamRegs) >= kMinSaveAreaRegs;
+  // va_start saves complete X/Q carriers. Named scalar floats and HFAs also
+  // spill many S/D argument registers, but are ordinary fixed parameters;
+  // treating those narrow stores as a va_list drops their incoming values.
+  return countParamRegSpills(Func, TRI.IntParamRegs, TRI.PointerSize) >=
+             kMinSaveAreaRegs &&
+         countParamRegSpills(Func, TRI.FPParamRegs, kVectorSaveSlotBytes) >=
+             kMinSaveAreaRegs;
 }
 
 /// The integer argument register the AAPCS64 register save area starts at:

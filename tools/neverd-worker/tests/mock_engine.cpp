@@ -156,8 +156,10 @@ struct MockSession {
   std::uint64_t preparedEntry = 0;
   unsigned sourcePrepares = 0, sourcePages = 0, sourceRenders = 0;
   unsigned RecoveryCalls = 0;
+  unsigned computedStringQueries = 0;
   /// The functions the current neverd_warm_functions_json pass prepared.
   int warmed = 0;
+  std::chrono::steady_clock::time_point warmDeadline;
   /// neverd_prepare_call_summaries_json calls this session answered.
   int summarySolves = 0;
   std::string preparedView;
@@ -171,7 +173,11 @@ struct MockSession {
     return path.ends_with("source-export.bin") ||
            path.ends_with("source-export-fail.bin") ||
            path.ends_with("source-cache.bin") ||
+           path.ends_with("source-cache-navigation.bin") ||
+           path.ends_with("source-cache-virtual.bin") ||
            path.ends_with("source-cache-budget.bin") ||
+           path.ends_with("source-cache-spilled.bin") ||
+           path.ends_with("source-cache-metadata.bin") ||
            path.ends_with("source-cache-refresh-budget.bin") ||
            path.ends_with("source-cache-prepare-fail.bin") ||
            path.ends_with("source-cache-ordered.bin") ||
@@ -196,6 +202,8 @@ std::uint64_t codeSize(neverd_session_t s) {
   if (session(s)->path.find("render-sizes") != std::string::npos ||
       session(s)->path.find("render-late") != std::string::npos)
     return CodeSize + 1024 * 1024;
+  if (session(s)->path.ends_with("large-unsized.bin"))
+    return 65536 + 129;
   return session(s)->path.ends_with("make-code.bin")
              ? CodeBase + sizeof(CodeBytes) - Base
              : CodeSize;
@@ -456,7 +464,10 @@ int neverd_session_load(neverd_session_t s, const char *path) {
     session(s)->loadedWith = {{"loader", "auto"}};
   // A large table for GUI paging tests; its functions are never executed.
   session(s)->imageFunctions =
-      session(s)->path.ends_with("many-functions.bin") ? 20000 : ImageFunctions;
+      session(s)->path.find("prepare-views") != std::string::npos ? 65537
+      : session(s)->path.ends_with("many-functions.bin")          ? 20000
+      : session(s)->path.ends_with("large-unsized.bin")           ? 1
+                                                        : ImageFunctions;
   session(s)->absentFunctions =
       chunkedFixture(s)   ? std::set<std::uint64_t>{ChunkBegin}
       : literalFixture(s) ? std::set<std::uint64_t>{CodeLiteral}
@@ -617,6 +628,7 @@ const char *neverd_headers_json(neverd_session_t s) {
       session(s)->path.ends_with("pseudocode-rust.bin") ? "rust"
       : session(s)->path.ends_with("pseudocode-go.bin") ? "go"
       : (session(s)->path.ends_with("pseudocode-cpp.bin") ||
+         session(s)->path.ends_with("virtual-target-names.bin") ||
          session(s)->path.ends_with("code-edits-cpp.bin") ||
          session(s)->path.ends_with("code-folding-cpp.bin") ||
          session(s)->path.ends_with("local-references-cpp.bin"))
@@ -806,6 +818,8 @@ neverd_va_t neverd_func_entry(neverd_session_t s, int index) {
 }
 // Up to the next function, at most the 16 bytes of an image function.
 int neverd_func_size(neverd_session_t s, int index) {
+  if (session(s)->path.ends_with("large-unsized.bin"))
+    return 0;
   const auto &functions = session(s)->functions;
   if (index < 0 || index >= static_cast<int>(functions.size()))
     return 16;
@@ -1054,6 +1068,21 @@ const char *neverd_disasm_json(neverd_session_t s, neverd_va_t address,
 const char *neverd_disasm_json_ex(neverd_session_t s, neverd_va_t address,
                                   int count, unsigned options) {
   session(s)->error.clear();
+  if (session(s)->path.ends_with("large-unsized.bin")) {
+    Json rows = Json::array();
+    for (int i = 0;
+         i < count && address >= Base && address < Base + codeSize(s);
+         ++i, ++address) {
+      const bool end = address + 1 == Base + codeSize(s);
+      rows.push_back({{"addr", hexAddress(address)},
+                      {"size", 1},
+                      {"mnemonic", end ? "ret" : "nop"},
+                      {"op_str", ""},
+                      {"bytes", end ? "c3" : "90"},
+                      {"flow", end ? "ret" : "none"}});
+    }
+    return copy(rows.dump());
+  }
   return copy(fixtureInstructions(address, count, options & NEVERD_DISASM_FLOW,
                                   options & NEVERD_DISASM_STACK,
                                   session(s)->path.ends_with("local-types.bin"))
@@ -1065,6 +1094,20 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   auto &state = *session(s);
   state.error.clear();
   maxFunctions = std::clamp(maxFunctions, 1, 4096);
+  if (state.path.find("prepare-views") != std::string::npos) {
+    std::puts("fixture view preparation started");
+    std::fflush(stdout);
+    if (state.path.ends_with("prepare-views-fail.bin")) {
+      state.error = "fixture view preparation failed";
+      return nullptr;
+    }
+    if (std::filesystem::exists(
+            std::filesystem::u8path(state.path + ".pause-preparation")) &&
+        !discovery_fixture::waitFor(state.path + ".finish-preparation")) {
+      state.error = "fixture view preparation gate timed out";
+      return nullptr;
+    }
+  }
   if (state.path.find("warm-unavailable") != std::string::npos)
     return copy(Json{
         {"available", false},
@@ -1087,8 +1130,14 @@ const char *neverd_warm_functions_json(neverd_session_t s,
   // warm-slow.bin takes long enough per step for heartbeats to show a pass;
   // so does summaries-ready.bin, for its call-summary job.
   if (state.path.find("warm-slow") != std::string::npos ||
-      state.path.find("summaries-ready") != std::string::npos)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      state.path.find("summaries-ready") != std::string::npos) {
+    // Keep the pass observable without accumulating late timer wakeups at
+    // every chunk. The real worker's scheduling and batch sizes stay intact.
+    if (state.warmed == 0)
+      state.warmDeadline = std::chrono::steady_clock::now();
+    state.warmDeadline += std::chrono::milliseconds(20);
+    std::this_thread::sleep_until(state.warmDeadline);
+  }
   auto next = std::lower_bound(state.functions.begin(), state.functions.end(),
                                firstEntry);
   int prepared = 0;
@@ -1455,7 +1504,8 @@ namespace {
 /// local-types.bin has three local types: _LIST_ENTRY, _DEVICE, which holds
 /// one, and the enumeration _POOL_KIND.  Every other input has none.
 bool localTypesFixture(neverd_session_t s) {
-  return session(s)->path.ends_with("local-types.bin");
+  return session(s)->path.ends_with("local-types.bin") ||
+         session(s)->path.ends_with("local-types-pages.bin");
 }
 
 /// A type the user declared: eight bytes holding one pointer.
@@ -1745,18 +1795,73 @@ const char *neverd_local_types_json(neverd_session_t s, const char *options) {
                      {"size", 8},
                      {"members", 1},
                      {"origin", "user"}});
-  (void)parsed;
-  return copy(Json{
-      {"source", localTypesFixture(s) ? "pdb" : "none"},
-      {"dataModel", "LLP64"},
-      {"stats",
-       {{"structs", 2},
-        {"unions", 0},
-        {"enums", 1},
-        {"declaredOnly", 0},
-        {"nestingMismatches", Json::array()}}},
-      {"types",
-       types}}.dump());
+  Json origins = Json::object();
+  for (const auto &row : types) {
+    const std::string from = row["origin"];
+    origins[from] = origins.value(from, 0) + 1;
+  }
+  if (session(s)->path.find("local-types-pages") != std::string::npos)
+    for (int i = 0; i < 600; ++i)
+      types.push_back({{"name", "PageType" + std::to_string(i)},
+                       {"ordinal", 100 + i},
+                       {"kind", "struct"},
+                       {"origin", "pdb"},
+                       {"size", 8}});
+  const std::string filter = parsed.value("filter", "");
+  const std::string origin = parsed.value("origin", "");
+  const auto lower = [](std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return text;
+  };
+  types.erase(
+      std::remove_if(
+          types.begin(), types.end(),
+          [&](const Json &row) {
+            return (!origin.empty() && row["origin"] != origin) ||
+                   lower(row["name"].get<std::string>()).find(lower(filter)) ==
+                       std::string::npos;
+          }),
+      types.end());
+  const std::string sort = parsed.value("sort", "ordinal");
+  std::stable_sort(
+      types.begin(), types.end(), [&](const Json &a, const Json &b) {
+        const Json av = a.value(sort, Json()), bv = b.value(sort, Json());
+        return av == bv ? a["ordinal"] < b["ordinal"] : av < bv;
+      });
+  if (parsed.value("descending", false))
+    std::reverse(types.begin(), types.end());
+  const int total = int(types.size());
+  int offset = parsed.value("offset", 0), limit = parsed.value("limit", total);
+  std::optional<int> located;
+  if (parsed.contains("locate"))
+    for (int i = 0; i < total; ++i)
+      if (types[i]["name"] == parsed["locate"]) {
+        located = i;
+        offset = i / limit * limit;
+        break;
+      }
+  offset = std::min(offset, total);
+  const int next = offset + std::min(limit, total - offset);
+  types = Json::array_t(types.begin() + offset, types.begin() + next);
+  Json result{{"source", localTypesFixture(s) ? "pdb" : "none"},
+              {"dataModel", "LLP64"},
+              {"stats",
+               {{"structs", 2},
+                {"unions", 0},
+                {"enums", 1},
+                {"declaredOnly", 0},
+                {"nestingMismatches", Json::array()},
+                {"origins", origins}}},
+              {"types", types}};
+  if (parsed.contains("limit") || parsed.contains("offset")) {
+    result["total"] = total;
+    result["offset"] = offset;
+    result["next_offset"] = next;
+    if (located)
+      result["index"] = *located;
+  }
+  return copy(result.dump());
 }
 
 const char *neverd_local_type_json(neverd_session_t s, const char *name,
@@ -1769,6 +1874,10 @@ const char *neverd_local_type_json(neverd_session_t s, const char *name,
       localTypesFixture(s) && name && !session(s)->forgottenTypes.count(name)
           ? fixtureLocalType(name)
           : Json();
+  if (name && std::string_view(name).starts_with("PageType")) {
+    type = declaredLocalType(name, 100);
+    type["members"][0]["refers"] = "_DEVICE";
+  }
   if (found != declared.end())
     type = declaredLocalType(*found, 4 + int(found - declared.begin()));
   if (type.is_null()) {
@@ -2027,6 +2136,30 @@ const char *neverd_local_types_source(neverd_session_t s, const char *options) {
   return copy(text);
 }
 
+const char *neverd_embedded_objects_json(neverd_session_t s) {
+  const bool aliasCollision =
+      session(s)->path.ends_with("embedded-alias-collision.bin");
+  if ((!session(s)->path.ends_with("embedded-refs.bin") && !aliasCollision) ||
+      !session(s)->patches.empty())
+    return copy("[]");
+  Json refs = Json::array();
+  for (unsigned i = 0; i < 2; ++i)
+    refs.push_back(
+        {{"from", hexAddress(DataBase + 0x10 + (aliasCollision ? 0 : i * 4))},
+         {"to", hexAddress(RodataBase - (i == 0 ? 1 : 0))},
+         {"string_address", hexAddress(RodataBase)},
+         {"source_section", ".text"},
+         {"source_offset", hexAddress(0x80 + i * 4)},
+         {"target_section", ".rodata"},
+         {"target_offset", hexAddress(i == 0 ? 0 : 1)},
+         {"description",
+          "embedded ELF file+0x123 .text+" + hexAddress(0x80 + i * 4)}});
+  return copy(
+      Json::array(
+          {{{"file_offset", "0x123"}, {"diagnostic", ""}, {"refs", refs}}})
+          .dump());
+}
+
 const char *neverd_string_refs_json(neverd_session_t s, const char *options,
                                     neverd_va_t firstEntry, int maxFunctions) {
   session(s)->error.clear();
@@ -2047,6 +2180,13 @@ const char *neverd_string_refs_json(neverd_session_t s, const char *options,
   constexpr std::uint64_t Entry = Base + 16 * 7;
   const std::uint64_t slot = DataBase + (DataSlots - 1) * 8;
   Json refs = Json::array();
+  if (firstEntry == 0 && session(s)->path.ends_with("embedded-refs.bin") &&
+      session(s)->patches.empty())
+    for (unsigned i = 0; i < 2; ++i)
+      refs.push_back({hexAddress(DataBase + 0x10 + i * 4),
+                      hexAddress(RodataBase - (i == 0 ? 1 : 0)),
+                      hexAddress(RodataBase), 0, "embedded_offset", nullptr,
+                      "embedded ELF fixture"});
   if (firstEntry <= Entry && maxFunctions >= 1) {
     if (wanted("utf-8"))
       refs.push_back({hexAddress(Entry + 2), hexAddress(RodataBase),
@@ -2156,7 +2296,8 @@ static int prepareMockFunction(neverd_session_t s, neverd_va_t address) {
     }
     session(s)->preparedEntry = address;
   }
-  if (session(s)->path.ends_with("pseudocode-parallel.bin") &&
+  if ((session(s)->path.ends_with("pseudocode-parallel.bin") ||
+       session(s)->path.ends_with("source-cache-navigation.bin")) &&
       (address == Base || address == Base + 16)) {
     std::printf("fixture parallel decompile %s started\n",
                 hexAddress(address).c_str());
@@ -2174,10 +2315,59 @@ int neverd_prepare_function(neverd_session_t s, neverd_va_t address) {
   session(s)->preparedView = "legacy";
   return prepareMockFunction(s, address);
 }
+int neverd_forget_function_analysis(neverd_session_t s, neverd_va_t) {
+  session(s)->preparedEntry = 0;
+  return 1;
+}
 int neverd_prepare_function_view(neverd_session_t s, neverd_va_t address,
                                  const char *representation) {
   session(s)->preparedView = representation ? representation : "";
   return prepareMockFunction(s, address);
+}
+
+const char *neverd_computed_strings_json(neverd_session_t s,
+                                         neverd_va_t address) {
+  auto &state = *session(s);
+  state.error.clear();
+  Json rows = Json::array();
+  bool complete = true;
+  if (state.path.ends_with("computed-strings.bin")) {
+    ++state.computedStringQueries;
+    if (address == Base) {
+      // Analysis discovers an entry beyond the initial inventory; the scan
+      // must attempt it without rescanning already completed functions.
+      const auto extra = Base + 16 * ImageFunctions;
+      if (std::find(state.functions.begin(), state.functions.end(), extra) ==
+          state.functions.end())
+        state.functions.push_back(extra);
+    }
+    if (address == Base + 16) {
+      state.error = "fixture unsupported instruction";
+      return nullptr;
+    }
+    complete = address != Base + 32;
+    if (address == Base || address == Base + 16 * ImageFunctions)
+      rows.push_back({{"block", hexAddress(address)},
+                      {"instruction", hexAddress(address + 8)},
+                      {"address", hexAddress(DataBase)},
+                      {"encoding", "utf-8"},
+                      {"text", address == Base ? "MiX<牌>&" : "Tail decoded"},
+                      {"bytes", "4d69583ce7898c3e2600"},
+                      {"inputs",
+                       {{{"address", hexAddress(DataBase + 16)},
+                         {"initializer", hexAddress(Base + 4)},
+                         {"value", 127}}}},
+                      {"entry_registers",
+                       {{{"offset", "0xa0"},
+                         {"bytes", 8},
+                         {"value", hexAddress(DataBase)}}}},
+                      {"fixture_calls", state.computedStringQueries},
+                      {"fixture_prepared_view", state.preparedView}});
+  }
+  return copy(Json{{"function", hexAddress(address)},
+                   {"complete", complete},
+                   {"strings", std::move(rows)}}
+                  .dump());
 }
 extern "C++" {
 namespace {
@@ -2292,12 +2482,24 @@ std::string spelledPage(neverd_session_t s, neverd_va_t address,
                         std::size_t limit) {
   std::string language = representation;
   if (representation == "source")
-    language = session(s)->path.ends_with("pseudocode-rust.bin")  ? "rust"
-               : session(s)->path.ends_with("pseudocode-go.bin")  ? "go"
-               : session(s)->path.ends_with("pseudocode-cpp.bin") ? "cpp"
-                                                                  : "c";
+    language = session(s)->path.ends_with("pseudocode-rust.bin") ? "rust"
+               : session(s)->path.ends_with("pseudocode-go.bin") ? "go"
+               : (session(s)->path.ends_with("pseudocode-cpp.bin") ||
+                  session(s)->path.ends_with("virtual-target-names.bin"))
+                   ? "cpp"
+                   : "c";
+  const bool virtualTarget =
+      session(s)->path.ends_with("virtual-target-names.bin");
+  const std::string name =
+      virtualTarget ? (language == "cpp" ? "Device::tick" : "Device_tick")
+                    : "core::fmt::write";
   std::string full;
-  if (language == "c") {
+  if (virtualTarget) {
+    full = "void caller(void) {\n    (/* virtual " + name +
+           " [slot +0x20] */ dispatch)();\n    // " + name +
+           "\n    const char *text = \"/* virtual " + name +
+           " [slot +0x20] */\";\n}\n";
+  } else if (language == "c") {
     const char *c = neverd_decompile(s, address);
     full = c;
     std::free(const_cast<char *>(c));
@@ -2340,7 +2542,6 @@ std::string spelledPage(neverd_session_t s, neverd_va_t address,
          {"mapping_status", "unmapped"},
          {"addresses", Json::array()}});
   Json names = Json::array();
-  const std::string name = "core::fmt::write";
   for (auto at = full.find(name); at != std::string::npos;
        at = full.find(name, at + 1))
     if (at >= begin && at < stop)
@@ -2621,9 +2822,17 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
     const bool refreshBudget =
         state.path.ends_with("source-cache-refresh-budget.bin");
     const bool large = state.path.ends_with("source-cache-budget.bin");
-    const std::size_t total = refreshBudget ? 600 : large ? 9000 : 4;
+    const bool spilled = state.path.ends_with("source-cache-spilled.bin");
+    const bool repeatedMetadata =
+        state.path.ends_with("source-cache-metadata.bin");
+    const std::size_t total = spilled                             ? 120000
+                              : refreshBudget || repeatedMetadata ? 600
+                              : large                             ? 9000
+                                                                  : 4;
     const auto first = std::min(offset, total);
-    const auto end = first + std::min(limit, total - first);
+    const auto pageLimit =
+        repeatedMetadata ? std::min(limit, std::size_t{4}) : limit;
+    const auto end = first + std::min(pageLimit, total - first);
     std::string text;
     Json rows = Json::array();
     const auto line = [&](std::size_t index) {
@@ -2639,17 +2848,21 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
       return "// " + std::string(refreshBudget ? 4096 : 512, 'x') + "\n";
     };
     std::size_t begin = 0;
-    for (std::size_t i = 0; i < first; ++i)
+    for (std::size_t i = 0; i < std::min(first, std::size_t{4}); ++i)
       begin += line(i).size();
+    if (first > 4)
+      begin += (first - 4) * line(4).size();
     for (auto i = first; i < end; ++i) {
       text += line(i);
       rows.push_back(
           {{"line", i},
            {"object_id", "source:" + std::to_string(i)},
            {"kind", "source"},
-           {"mapping_status", i == 2 ? "instruction_anchor" : "unmapped"},
-           {"addresses",
-            i == 2 ? Json::array({hexAddress(address + 2)}) : Json::array()}});
+           {"mapping_status",
+            i == 2 || spilled ? "instruction_anchor" : "unmapped"},
+           {"addresses", spilled  ? Json::array({hexAddress(address + i * 4)})
+                         : i == 2 ? Json::array({hexAddress(address + 2)})
+                                  : Json::array()}});
     }
     Json names = Json::array(), references = Json::array();
     if (state.path.ends_with("source-cache-ordered.bin") ||
@@ -2696,6 +2909,15 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
               {"fixture_prepared_view", state.preparedView},
               {"fixture_pages", state.sourcePages},
               {"fixture_renders", state.sourceRenders}};
+    if (state.path.ends_with("source-cache-virtual.bin"))
+      view["virtual_calls"] = Json::array({{{"from", hexAddress(address + 2)},
+                                            {"to", hexAddress(Base + 48)},
+                                            {"table", hexAddress(Base + 512)},
+                                            {"slot", hexAddress(Base + 528)},
+                                            {"slot_offset", "0x0"},
+                                            {"symbol", "_ZN6Device5valueEv"},
+                                            {"receiver_type", "Device"},
+                                            {"resolution", "static_type"}}});
     // The fixtures that state a function's names, as a real page does.
     if (state.path.find("render-store") != std::string::npos) {
       const auto named = state.names.find(address);
@@ -2710,6 +2932,10 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
           {"name_origin", origin},
           {"display_origin", origin}};
     }
+    // Whole-function metadata is repeated by the real source API. Retaining
+    // every copy exceeds the cache even though this document itself fits.
+    if (repeatedMetadata)
+      view["fixture_metadata"] = std::string(2 * 1024 * 1024, 'm');
     return copy(view.dump());
   }
   if (session(s)->path.ends_with("code-edits.bin") ||
@@ -2952,7 +3178,8 @@ const char *neverd_ir_view_json(neverd_session_t s, neverd_va_t address,
         {"source_names", Json::array()}}
                     .dump());
   }
-  if (std::string(representation) == "source" ||
+  if (session(s)->path.ends_with("virtual-target-names.bin") ||
+      std::string(representation) == "source" ||
       std::string(representation) == "rust" ||
       std::string(representation) == "go") {
     // One function of the Rust fixture is refused.
@@ -3239,6 +3466,12 @@ const char *neverd_strings_json(neverd_session_t s, int) {
   return copy(items.dump());
 }
 const char *neverd_segments_json(neverd_session_t s) {
+  if (session(s)->path.ends_with("large-unsized.bin"))
+    return copy(Json::array({{{"name", ".text"},
+                              {"va", hexAddress(Base)},
+                              {"size", hexAddress(codeSize(s))},
+                              {"flags", "R-X"}}})
+                    .dump());
   return copy(Json::array({{{"name", ".text"},
                             {"va", hexAddress(Base)},
                             {"size", hexAddress(codeSize(s))},
@@ -3258,6 +3491,16 @@ const char *neverd_segments_json(neverd_session_t s) {
                   .dump());
 }
 const char *neverd_sections_json(neverd_session_t s) {
+  if (session(s)->path.ends_with("large-unsized.bin"))
+    return copy(Json::array({{{"name", ".text"},
+                              {"segment", ".text"},
+                              {"va", hexAddress(Base)},
+                              {"size", codeSize(s)},
+                              {"file_off", 0},
+                              {"file_sz", codeSize(s)},
+                              {"alignment", 1},
+                              {"flags", "R-X"}}})
+                    .dump());
   // Spelled like the engine: numeric sizes and R/W/X flags.
   return copy(Json::array({{{"name", ".text"},
                             {"segment", ".text"},

@@ -20,7 +20,7 @@ def ok(client, operation, payload=None):
 
 def run(executable):
     with tempfile.TemporaryDirectory(prefix="neverd-dwarf-prompt-") as directory, ExitStack() as clients:
-        root = Path(directory)
+        root = Path(directory).resolve()
         binary = root / "input"
         shutil.copyfile(FIXTURES / "safety_cases_elf_x64", binary)
 

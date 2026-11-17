@@ -1,4 +1,4 @@
-// Real workbench, worker and engine: Y on an ordinary local edits that value.
+// Real workbench, worker and engine: Y edits locals and global objects.
 #include "CodeView.h"
 #include "DisassemblyView.h"
 #include "Docking.h"
@@ -13,6 +13,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QCompleter>
 #include <QDataStream>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -38,8 +39,8 @@
 using namespace neverd::gui;
 
 namespace {
-QString fixture(const QTemporaryDir &Directory,
-                const QByteArray &Override = {}) {
+QString fixture(const QTemporaryDir &Directory, const QByteArray &Override = {},
+                quint32 Permissions = 5) {
   const QByteArray Code =
       Override.isEmpty()
           ? QByteArray::fromHex(
@@ -54,7 +55,7 @@ QString fixture(const QTemporaryDir &Directory,
   Out << quint16(2) << quint16(62) << quint32(1) << quint64(0x400078)
       << quint64(64) << quint64(0) << quint32(0) << quint16(64) << quint16(56)
       << quint16(1) << quint16(64) << quint16(0) << quint16(0);
-  Out << quint32(1) << quint32(5) << quint64(0) << quint64(0x400000)
+  Out << quint32(1) << Permissions << quint64(0) << quint64(0x400000)
       << quint64(0x400000) << quint64(120 + Code.size())
       << quint64(120 + Code.size()) << quint64(4096);
   Bytes += Code;
@@ -67,8 +68,9 @@ QString fixture(const QTemporaryDir &Directory,
 // Navigation and presentation cases need a stable user-owned entry before
 // the first view asks discovery for it. Function creation has separate tests.
 QString createdFunctionFixture(const QTemporaryDir &Directory,
-                               const QByteArray &Code) {
-  const QString Path = fixture(Directory, Code);
+                               const QByteArray &Code,
+                               quint32 Permissions = 5) {
+  const QString Path = fixture(Directory, Code, Permissions);
   if (Path.isEmpty() || !QDir().mkpath(Path + ".neverd"))
     return {};
   QFile Functions(Path + ".neverd/functions.json");
@@ -77,6 +79,48 @@ QString createdFunctionFixture(const QTemporaryDir &Directory,
                  Functions.write(State) == State.size()
              ? Path
              : QString();
+}
+// A symbol gives LLVM C the exact global object rather than an anonymous
+// byte range covering the entire load segment.
+bool nameGlobalObject(const QString &Path) {
+  QFile File(Path);
+  if (!File.open(QIODevice::ReadWrite))
+    return false;
+  QByteArray Bytes = File.readAll();
+  while (Bytes.size() % 8)
+    Bytes += '\0';
+  const quint64 Symbols = Bytes.size();
+  QByteArray Extra;
+  QDataStream Out(&Extra, QIODevice::WriteOnly);
+  Out.setByteOrder(QDataStream::LittleEndian);
+  Out << quint64(0) << quint64(0) << quint64(0);
+  Out << quint32(1) << quint8(0x11) << quint8(0) << quint16(1)
+      << quint64(0x4000B8) << quint64(8);
+  const quint64 Strings = Symbols + Extra.size();
+  const QByteArray Names("\0GlobalRoot\0", 12);
+  Out.writeRawData(Names.constData(), Names.size());
+  while ((Symbols + Extra.size()) % 8)
+    Out << quint8(0);
+  const quint64 Sections = Symbols + Extra.size();
+  const auto Section = [&](quint32 Type, quint64 Flags, quint64 Address,
+                           quint64 Offset, quint64 Size, quint32 Link,
+                           quint32 Info, quint64 Align, quint64 Entry) {
+    Out << quint32(0) << Type << Flags << Address << Offset << Size << Link
+        << Info << Align << Entry;
+  };
+  Section(0, 0, 0, 0, 0, 0, 0, 0, 0);
+  Section(1, 3, 0x4000B8, 0xB8, 8, 0, 0, 8, 0);
+  Section(1, 6, 0x400078, 0x78, 11, 0, 0, 1, 0);
+  Section(2, 0, 0, Symbols, 48, 4, 1, 8, 24);
+  Section(3, 0, 0, Strings, Names.size(), 0, 0, 1, 0);
+  Bytes += Extra;
+  QDataStream Header(&Bytes, QIODevice::ReadWrite);
+  Header.setByteOrder(QDataStream::LittleEndian);
+  Header.device()->seek(40);
+  Header << Sections;
+  Header.device()->seek(60);
+  Header << quint16(5);
+  return File.seek(0) && File.write(Bytes) == Bytes.size();
 }
 } // namespace
 
@@ -553,6 +597,143 @@ private slots:
     QVERIFY2(Empty, "An unknown SP must not offer zero as a correction");
     Session.closeFile();
     Window.close();
+  }
+  void globalType_data() {
+    QTest::addColumn<QString>("Location");
+    QTest::addColumn<bool>("Template");
+    QTest::newRow("data") << "data" << false;
+    QTest::newRow("pseudocode") << "source" << false;
+    QTest::newRow("llvm-c") << "llvmc" << false;
+    QTest::newRow("template-data") << "data" << true;
+    QTest::newRow("template-pseudocode") << "source" << true;
+    QTest::newRow("template-llvm-c") << "llvmc" << true;
+  }
+  void globalType() {
+    QFETCH(QString, Location);
+    QFETCH(bool, Template);
+    const QString TypeName =
+        Template ? "gui::Box<gui::Pair<int, unsigned int>, 3>" : "GUI_CONTEXT";
+    const bool DataListing = Location != "source";
+    const bool LLVMC = Location == "llvmc";
+    QTemporaryDir Directory;
+    const auto Path = createdFunctionFixture(
+        Directory,
+        QByteArray::fromHex("488b05390000008b4004c3") + QByteArray(96, '\0'),
+        7);
+    QVERIFY(!Path.isEmpty());
+    QVERIFY(nameGlobalObject(Path));
+    QFile Item(Path + ".neverd/items.json");
+    const QByteArray Definition =
+        R"json([{"addr":"0x4000b8","kind":"qword","size":8}])json";
+    QVERIFY(Item.open(QIODevice::WriteOnly));
+    QCOMPARE(Item.write(Definition), Definition.size());
+    Item.close();
+    Session Session(QString::fromLocal8Bit(TEST_REAL_WORKER));
+    McpConnectionManager Mcp;
+    GuiSessionBroker Broker;
+    MainWindow Window(Session, Mcp, Broker);
+    Window.setAsksForDebugInfo(false);
+    Window.setLayoutPath(Directory.filePath("layout.json"));
+    Window.resize(1400, 900);
+    Window.initializeLayout();
+    Window.show();
+    Session.open(Path);
+    QTRY_VERIFY_WITH_TIMEOUT(Session.loaded(), 30000);
+    bool Declared = false;
+    Session.declareTypes(
+        "c",
+        "struct " + TypeName + " { unsigned int State; unsigned int Length; };",
+        [&](const QJsonObject &Reply) {
+          Declared = Reply.value("problems").toArray().isEmpty();
+        });
+    QTRY_VERIFY_WITH_TIMEOUT(Declared, 30000);
+    const auto OpenCode = [&]() -> CodeText * {
+      for (auto *View : Window.findChildren<CodeView *>())
+        if (View->representation() == (LLVMC ? "llvmc" : "source"))
+          return View->text();
+      return nullptr;
+    };
+    Window.disassembly()->navigate(DataListing ? 0x4000B8 : 0x400078);
+    QTRY_COMPARE_WITH_TIMEOUT(
+        Window.disassembly()->currentItem(),
+        std::optional<Address>(DataListing ? 0x4000B8 : 0x400078), 30000);
+    if (DataListing) {
+      Window.disassembly()->listing()->setFocus();
+      QVERIFY(Window.disassembly()->onData());
+    } else {
+      Window.actions()
+          .action(LLVMC ? ActionId::ViewLLVMC : ActionId::ViewPseudocode)
+          ->trigger();
+      QTRY_VERIFY_WITH_TIMEOUT(OpenCode() && !OpenCode()->loading(), 30000);
+      QVERIFY2(OpenCode()->findText("GlobalRoot", true),
+               qPrintable(OpenCode()->allText()));
+      OpenCode()->setFocus();
+      QTRY_VERIFY(OpenCode()->renameTarget() &&
+                  OpenCode()->renameTarget()->value("object").toBool());
+    }
+    auto *Action = Window.actions().action(ActionId::EditSetType);
+    QTRY_VERIFY(Action->isEnabled());
+    QTimer Editor;
+    bool Edited = false, Inspected = false;
+    int Stage = 0;
+    QString Diagnostic;
+    connect(&Editor, &QTimer::timeout, this, [&] {
+      auto *Dialog =
+          qobject_cast<SetTypeDialog *>(QApplication::activeModalWidget());
+      if (!Dialog)
+        return;
+      auto *Field = Dialog->findChild<QLineEdit *>("setTypeField");
+      auto *Apply = Dialog->findChild<QPushButton *>("setTypeApply");
+      Diagnostic = Dialog->findChild<QLabel *>("setTypeSubject")->text();
+      if (!Field->isEnabled())
+        return;
+      if (!Stage) {
+        Inspected = Diagnostic.contains("global object") &&
+                    Diagnostic.contains("0x4000b8") && !Field->text().isEmpty();
+        if (Template) {
+          QTest::keyClicks(Field, "struct gui::Bo");
+          auto *Completion = Dialog->findChild<QCompleter *>();
+          QVERIFY(Completion);
+          QVERIFY(QMetaObject::invokeMethod(Completion, "activated",
+                                            Q_ARG(QString, TypeName)));
+          QCOMPARE(Field->text(), "struct " + TypeName);
+          QTest::keyClicks(Field, " *");
+        } else {
+          QTest::keyClicks(Field, "struct " + TypeName + " *");
+        }
+        ++Stage;
+      } else if (Apply->isEnabled()) {
+        Edited = true;
+        Editor.stop();
+        Apply->click();
+      }
+    });
+    QTimer::singleShot(30000, &Window, [] {
+      if (auto *Dialog =
+              qobject_cast<SetTypeDialog *>(QApplication::activeModalWidget()))
+        Dialog->reject();
+    });
+    Editor.start(10);
+    // Exercise the keyboard binding used by the workbench.
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Y);
+    QTRY_VERIFY_WITH_TIMEOUT(Edited, 30000);
+    QVERIFY2(Inspected, qPrintable(Diagnostic));
+    if (DataListing) {
+      Window.disassembly()->navigate(0x400078);
+      QTRY_COMPARE_WITH_TIMEOUT(Window.disassembly()->currentFunction(),
+                                std::optional<Address>(0x400078), 30000);
+      Window.actions()
+          .action(LLVMC ? ActionId::ViewLLVMC : ActionId::ViewPseudocode)
+          ->trigger();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(OpenCode() && !OpenCode()->loading() &&
+                                 OpenCode()->allText().contains("->Length"),
+                             30000);
+    Session.undo();
+    QTRY_VERIFY_WITH_TIMEOUT(!OpenCode()->allText().contains("->Length"),
+                             30000);
+    Session.redo();
+    QTRY_VERIFY_WITH_TIMEOUT(OpenCode()->allText().contains("->Length"), 30000);
   }
   void localType_data() {
     QTest::addColumn<QString>("Representation");

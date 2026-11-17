@@ -585,11 +585,7 @@ Json ComparisonService::execute(const std::string &Operation, const Json &P,
         Payload.value("refresh", false) ||
         (Operation == "comparison_cfg_summary" &&
          S.GraphMetricsKeys[Index] != MetricsKey)) {
-      Json Query{
-          {"side", Side},
-          {"address", Address},
-          {"node_limit", ::neverd::limits::worker::kGraphSnapshotMaxNodes},
-          {"edge_limit", ::neverd::limits::worker::kGraphSnapshotMaxEdges}};
+      Json Query{{"side", Side}, {"address", Address}};
       for (const auto *Key : {"timeout_ms", "refresh"})
         if (Payload.contains(Key))
           Query[Key] = Payload.at(Key);

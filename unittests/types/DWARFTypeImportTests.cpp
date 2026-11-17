@@ -7,9 +7,11 @@
 #include "TypeShape.h"
 
 #include "neverd/types/DWARFTypeImport.h"
+#include "neverd/types/TypeJSON.h"
 #include "neverd/types/TypeRender.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -27,6 +29,7 @@
 #include <gtest/gtest.h>
 #include <initializer_list>
 #include <limits>
+#include <tuple>
 
 using namespace neverd::types;
 using neverd::types::test::shapeOf;
@@ -36,7 +39,7 @@ namespace {
 // A signed subrange in raw DWARF exercises boundary values without asking a
 // compiler to create an object of that size.
 llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
-arrayBoundSections(int64_t Lower, int64_t Upper) {
+arrayBoundSections(int64_t Lower, int64_t Upper, bool Vector = false) {
   using namespace llvm::dwarf;
   llvm::SmallString<128> Abbrev, Info;
   llvm::raw_svector_ostream A(Abbrev), I(Info);
@@ -53,7 +56,11 @@ arrayBoundSections(int64_t Lower, int64_t Upper) {
   abbrev(2, DW_TAG_base_type, false,
          {DW_AT_name, DW_FORM_string, DW_AT_encoding, DW_FORM_data1,
           DW_AT_byte_size, DW_FORM_data1});
-  abbrev(3, DW_TAG_array_type, true, {DW_AT_type, DW_FORM_ref4});
+  if (Vector)
+    abbrev(3, DW_TAG_array_type, true,
+           {DW_AT_type, DW_FORM_ref4, DW_AT_GNU_vector, DW_FORM_flag_present});
+  else
+    abbrev(3, DW_TAG_array_type, true, {DW_AT_type, DW_FORM_ref4});
   abbrev(4, DW_TAG_subrange_type, false,
          {DW_AT_lower_bound, DW_FORM_sdata, DW_AT_upper_bound, DW_FORM_sdata});
   abbrev(5, DW_TAG_typedef, false,
@@ -653,6 +660,18 @@ TEST(DWARFTypeImportArray, CountsSignedBoundsWithoutOverflow) {
   }
 }
 
+TEST(DWARFTypeImportArray, DoesNotMisdeclareACompilerVectorAsAnArray) {
+  auto Sections = arrayBoundSections(0, 15, true);
+  auto Context = llvm::DWARFContext::create(Sections, 8, true);
+  DWARFTypeImportStats Stats;
+  auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+  ASSERT_TRUE(static_cast<bool>(Library))
+      << llvm::toString(Library.takeError());
+  EXPECT_EQ((*Library)->find("BoundedArray"), nullptr);
+  ASSERT_FALSE(Stats.Skipped.empty());
+  EXPECT_NE(Stats.Skipped.front().find("compiler vector"), std::string::npos);
+}
+
 TEST(DWARFTypeImportArray, RefusesAnUnrepresentableFullSignedRange) {
   auto Sections = arrayBoundSections(std::numeric_limits<int64_t>::min(),
                                      std::numeric_limits<int64_t>::max());
@@ -663,7 +682,339 @@ TEST(DWARFTypeImportArray, RefusesAnUnrepresentableFullSignedRange) {
       << llvm::toString(Library.takeError());
   EXPECT_EQ((*Library)->find("BoundedArray"), nullptr);
   ASSERT_FALSE(Stats.Skipped.empty());
-  EXPECT_NE(Stats.Skipped.front().find("array bound range that exceeds 64 bits"),
+  EXPECT_NE(
+      Stats.Skipped.front().find("array bound range that exceeds 64 bits"),
+      std::string::npos);
+}
+
+TEST(DWARFTypeImportCpp, MemberPointersAndReusedBasePaddingKeepTheirABI) {
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler)
+    GTEST_SKIP() << "clang is required to produce the C++ DWARF fixture";
+  llvm::SmallString<128> Dir;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory("neverd-cpp-dwarf", Dir));
+  const auto path = [&](llvm::StringRef Name) {
+    llvm::SmallString<128> File(Dir);
+    llvm::sys::path::append(File, Name);
+    return std::string(File);
+  };
+  const std::string Source = path("source.cpp");
+  {
+    std::error_code Error;
+    llvm::raw_fd_ostream Out(Source, Error);
+    ASSERT_FALSE(Error);
+    Out << R"cpp(
+struct Empty {};
+struct OtherEmpty {};
+struct Base { int Value; char Tag; Base(); };
+struct Derived : Base, Empty, OtherEmpty { char Extra; int call(int) const; };
+using DataMember = int Derived::*;
+using MethodMember = int (Derived::*)(int) const;
+template <class C> struct MemberOf { using Type = int (C::*)(int) const; };
+MemberOf<const Derived>::Type KeepConstMember;
+enum SmallFlags : unsigned char { NoFlags, FirstFlag };
+#pragma pack(push, 4)
+struct PackedFlags {
+  long long Head;
+  unsigned Mode : 7;
+  unsigned Fill : 3;
+  unsigned Cull : 3;
+  SmallFlags Flags : 7;
+  bool Active : 1;
+};
+#pragma pack(pop)
+PackedFlags KeepFlags;
+static_assert(sizeof(PackedFlags) == 12);
+struct Holder { DataMember Data; MethodMember Method; void *Plain; Derived Object; };
+struct NodeB;
+struct NodeA { NodeB *Next; MethodMember Callback; };
+struct NodeB { NodeA *Previous; };
+Holder KeepHolder;
+NodeA KeepNode;
+static_assert(sizeof(Derived) == 8);
+static_assert(__builtin_offsetof(Derived, Extra) == 5);
+static_assert(sizeof(DataMember) == 8 && sizeof(MethodMember) == 16);
+static_assert(sizeof(Holder) == 40 && __builtin_offsetof(Holder, Object) == 32);
+)cpp";
+  }
+  for (const char *Target :
+       {"aarch64-unknown-linux-gnu", "x86_64-unknown-linux-gnu"}) {
+    SCOPED_TRACE(Target);
+    const std::string ObjectPath = path(std::string(Target) + ".o");
+    const llvm::StringRef Args[] = {
+        *Compiler, "-target",   Target, "-std=c++20",
+        "-g",      "-gdwarf-4", "-O0",  "-fno-eliminate-unused-debug-types",
+        "-c",      Source,      "-o",   ObjectPath};
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(*Compiler, Args), 0);
+    auto Object = llvm::object::ObjectFile::createObjectFile(ObjectPath);
+    ASSERT_TRUE(static_cast<bool>(Object))
+        << llvm::toString(Object.takeError());
+    auto Context = llvm::DWARFContext::create(*Object->getBinary());
+    DWARFTypeImportStats Stats;
+    auto Read = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Read)) << llvm::toString(Read.takeError());
+    for (const auto &Skipped : Stats.Skipped)
+      ADD_FAILURE() << Skipped;
+    const TypeLibrary &Library = **Read;
+    const LocalType *Derived = Library.find("Derived");
+    ASSERT_TRUE(Derived && Derived->Record);
+    EXPECT_EQ(Derived->Record->Size, 8u);
+    EXPECT_TRUE(layoutProblem(Library, *Derived->Record).empty());
+    const auto Fields = flattenMembers(*Derived->Record);
+    auto Extra = llvm::find_if(
+        Fields, [](const FlatMember &Field) { return Field.Name == "Extra"; });
+    ASSERT_NE(Extra, Fields.end());
+    EXPECT_EQ(Extra->BitOffset, 40u);
+    for (const auto &[Name, Size, Function] :
+         {std::tuple{"DataMember", 8u, false},
+          std::tuple{"MethodMember", 16u, true}}) {
+      const LocalType *Type = Library.find(Name);
+      ASSERT_TRUE(Type && Type->Record && Type->Record->MemberPointer);
+      EXPECT_EQ(Type->Record->Size, Size);
+      EXPECT_EQ(Type->Record->MemberPointer->Function, Function);
+      EXPECT_EQ(Type->Record->MemberPointer->Owner->Name, "Derived");
+      auto JSON = typeJSON(Library, *Type);
+      ASSERT_NE(JSON.getObject("memberPointer"), nullptr);
+      EXPECT_EQ(JSON.getObject("memberPointer")->getBoolean("function"),
+                Function);
+    }
+    const LocalType *Holder = Library.find("Holder");
+    ASSERT_TRUE(Holder && Holder->Record);
+    EXPECT_EQ(Holder->Record->Size, 40u);
+    EXPECT_EQ(Holder->Record->Members[1].BitOffset, 64u);
+    EXPECT_EQ(Holder->Record->Members[2].BitOffset, 192u);
+    const LocalType *Packed = Library.find("PackedFlags");
+    ASSERT_TRUE(Packed && Packed->Record);
+    ASSERT_EQ(Packed->Record->Members.size(), 6u);
+    const Member &Flags = Packed->Record->Members[4];
+    EXPECT_EQ(Flags.BitOffset, 77u);
+    EXPECT_EQ(Flags.BitWidth, 7u);
+    auto PackedJSON = typeJSON(Library, *Packed);
+    bool SawFlags = false;
+    for (const auto &Row : *PackedJSON.getArray("members"))
+      if (const auto *Member = Row.getAsObject();
+          Member->getString("name") == "Flags") {
+        EXPECT_EQ(Member->getInteger("size"), 2);
+        SawFlags = true;
+      }
+    EXPECT_TRUE(SawFlags);
+    const LocalType *Roots[] = {Holder, Library.find("NodeA"), Packed};
+    ASSERT_NE(Roots[1], nullptr);
+    RenderOptions Options;
+    Options.Asserts = true;
+    const std::string Rendered = renderTypes(Library, Roots, Options);
+    EXPECT_NE(Rendered.find("C++ member pointer ABI storage"),
+              std::string::npos);
+    const std::string CSource = path(std::string(Target) + ".c");
+    {
+      std::error_code Error;
+      llvm::raw_fd_ostream Out(CSource, Error);
+      ASSERT_FALSE(Error);
+      Out << Rendered;
+    }
+    const llvm::StringRef Check[] = {
+        *Compiler,        "-target",       Target, "-std=c11",
+        "-ffreestanding", "-fsyntax-only", CSource};
+    EXPECT_EQ(llvm::sys::ExecuteAndWait(*Compiler, Check), 0) << Rendered;
+  }
+  EXPECT_FALSE(llvm::sys::fs::remove_directories(Dir));
+}
+
+namespace {
+
+llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>>
+cppLayoutSections(unsigned SecondOffset, unsigned MemberPointerBytes,
+                  bool RecursiveValue = false) {
+  using namespace llvm::dwarf;
+  llvm::SmallString<128> Abbrev, Info;
+  llvm::raw_svector_ostream A(Abbrev), I(Info);
+  const auto abbrev = [&](unsigned Code, unsigned Tag, bool Children,
+                          std::initializer_list<unsigned> Attributes) {
+    llvm::encodeULEB128(Code, A);
+    llvm::encodeULEB128(Tag, A);
+    A << char(Children);
+    for (unsigned Attribute : Attributes)
+      llvm::encodeULEB128(Attribute, A);
+    A << char(0) << char(0);
+  };
+  abbrev(1, DW_TAG_compile_unit, true, {});
+  abbrev(2, DW_TAG_base_type, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_encoding, DW_FORM_data1,
+          DW_AT_byte_size, DW_FORM_data1});
+  abbrev(3, DW_TAG_structure_type, true,
+         {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1});
+  abbrev(4, DW_TAG_member, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4,
+          DW_AT_data_member_location, DW_FORM_data1});
+  abbrev(5, DW_TAG_ptr_to_member_type, false,
+         {DW_AT_containing_type, DW_FORM_ref4, DW_AT_type, DW_FORM_ref4,
+          DW_AT_byte_size, DW_FORM_data1});
+  abbrev(6, DW_TAG_typedef, false,
+         {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4});
+  A << char(0);
+  const auto u32 = [&](uint32_t Value) {
+    char Bytes[4];
+    llvm::support::endian::write32le(Bytes, Value);
+    I.write(Bytes, sizeof(Bytes));
+  };
+  u32(0);
+  I << char(4) << char(0);
+  u32(0);
+  I << char(8) << char(1);
+  const uint32_t Integer = Info.size();
+  I << char(2) << "int" << char(0) << char(DW_ATE_signed) << char(4);
+  const uint32_t Record = Info.size();
+  I << char(3) << "Record" << char(0) << char(8);
+  for (const auto &[Name, Offset] :
+       {std::pair{"A", 0u}, std::pair{"B", SecondOffset}}) {
+    I << char(4) << Name << char(0);
+    u32(RecursiveValue && Offset == 0 ? Record : Integer);
+    I << char(Offset);
+  }
+  I << char(0);
+  const uint32_t Pointer = Info.size();
+  I << char(5);
+  u32(Record);
+  u32(Integer);
+  I << char(MemberPointerBytes) << char(6) << "DataMember" << char(0);
+  u32(Pointer);
+  I << char(0);
+  llvm::support::endian::write32le(Info.data(), Info.size() - 4);
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> Sections;
+  Sections["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(Abbrev);
+  Sections["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(Info);
+  return Sections;
+}
+
+} // namespace
+
+TEST(DWARFTypeImportCpp, OverlappingValuesAndUnknownMemberPointerLayoutsFail) {
+  for (const unsigned Offset : {2u, 4u, 7u}) {
+    auto Sections = cppLayoutSections(Offset, 8);
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    DWARFTypeImportStats Stats;
+    auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Library));
+    EXPECT_EQ((*Library)->find("Record") != nullptr, Offset == 4);
+    EXPECT_EQ(Stats.Skipped.empty(), Offset == 4);
+  }
+  for (const auto ABI : {RecordABI::Itanium, RecordABI::Microsoft}) {
+    auto Sections = cppLayoutSections(4, ABI == RecordABI::Itanium ? 16 : 8);
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    TypeLibrary Library(DataModel::LP64);
+    Library.setRecordABI(ABI);
+    auto Stats = importDWARFTypes(*Context, Library);
+    ASSERT_TRUE(static_cast<bool>(Stats));
+    EXPECT_EQ(Library.find("DataMember"), nullptr);
+    ASSERT_EQ(Stats->Skipped.size(), 1u);
+    EXPECT_NE(Stats->Skipped.front().find("member pointer"), std::string::npos);
+  }
+}
+
+TEST(DWARFTypeImportCpp, ByValueCyclesAreNotPointerCycles) {
+  auto Sections = cppLayoutSections(4, 8, /*RecursiveValue=*/true);
+  auto Context = llvm::DWARFContext::create(Sections, 8, true);
+  DWARFTypeImportStats Stats;
+  auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+  ASSERT_TRUE(static_cast<bool>(Library));
+  EXPECT_EQ((*Library)->find("Record"), nullptr);
+  ASSERT_FALSE(Stats.Skipped.empty());
+  EXPECT_NE(Stats.Skipped.front().find("by-value recursive"),
             std::string::npos);
 }
 
+TEST(DWARFTypeImportCpp, LaterEnumDefinitionsWakeOnlyTheirDependents) {
+  using namespace llvm::dwarf;
+  for (bool WithDefinition : {false, true}) {
+    SCOPED_TRACE(WithDefinition);
+    llvm::SmallString<128> Abbrev, Info;
+    llvm::raw_svector_ostream A(Abbrev), I(Info);
+    const auto abbrev = [&](unsigned Code, unsigned Tag, bool Children,
+                            std::initializer_list<unsigned> Attributes) {
+      llvm::encodeULEB128(Code, A);
+      llvm::encodeULEB128(Tag, A);
+      A << char(Children);
+      for (unsigned Attribute : Attributes)
+        llvm::encodeULEB128(Attribute, A);
+      A << char(0) << char(0);
+    };
+    abbrev(1, DW_TAG_compile_unit, true, {});
+    abbrev(2, DW_TAG_enumeration_type, false,
+           {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1,
+            DW_AT_declaration, DW_FORM_flag_present});
+    abbrev(3, DW_TAG_structure_type, true,
+           {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1});
+    abbrev(4, DW_TAG_member, false,
+           {DW_AT_name, DW_FORM_string, DW_AT_type, DW_FORM_ref4,
+            DW_AT_data_bit_offset, DW_FORM_data1, DW_AT_bit_size,
+            DW_FORM_data1});
+    abbrev(5, DW_TAG_enumeration_type, true,
+           {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1,
+            DW_AT_type, DW_FORM_ref4});
+    abbrev(6, DW_TAG_enumerator, false,
+           {DW_AT_name, DW_FORM_string, DW_AT_const_value, DW_FORM_udata});
+    abbrev(7, DW_TAG_base_type, false,
+           {DW_AT_name, DW_FORM_string, DW_AT_byte_size, DW_FORM_data1,
+            DW_AT_encoding, DW_FORM_data1});
+    abbrev(
+        8, DW_TAG_inheritance, false,
+        {DW_AT_type, DW_FORM_ref4, DW_AT_data_member_location, DW_FORM_data1});
+    A << char(0);
+    const auto u32 = [&](uint32_t Value) {
+      char Bytes[4];
+      llvm::support::endian::write32le(Bytes, Value);
+      I.write(Bytes, sizeof(Bytes));
+    };
+    const auto unit = [&] {
+      u32(0);
+      I << char(4) << char(0);
+      u32(0);
+      I << char(8) << char(1);
+    };
+    unit();
+    const uint32_t Enum = Info.size();
+    I << char(2) << "State" << char(0) << char(1);
+    const uint32_t Base = Info.size();
+    I << char(3) << "Base" << char(0) << char(1) << char(4) << "Bits"
+      << char(0);
+    u32(Enum);
+    I << char(0) << char(2) << char(0);
+    const uint32_t Empty = Info.size();
+    I << char(3) << "Empty" << char(0) << char(1) << char(0) << char(3)
+      << "Derived" << char(0) << char(1) << char(8);
+    u32(Empty);
+    I << char(0) << char(8);
+    u32(Base);
+    I << char(0) << char(0) << char(0);
+    llvm::support::endian::write32le(Info.data(), Info.size() - 4);
+    if (WithDefinition) {
+      const uint32_t Start = Info.size();
+      unit();
+      const uint32_t Byte = Info.size() - Start;
+      I << char(7) << "unsigned char" << char(0) << char(1)
+        << char(DW_ATE_unsigned_char) << char(5) << "State" << char(0)
+        << char(1);
+      u32(Byte);
+      I << char(6) << "Ready" << char(0) << char(1) << char(0) << char(0);
+      llvm::support::endian::write32le(Info.data() + Start,
+                                       Info.size() - Start - 4);
+    }
+    llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> Sections;
+    Sections["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(Abbrev);
+    Sections["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(Info);
+    auto Context = llvm::DWARFContext::create(Sections, 8, true);
+    DWARFTypeImportStats Stats;
+    auto Library = importDWARFTypes(*Context, DataModel::LP64, &Stats);
+    ASSERT_TRUE(static_cast<bool>(Library));
+    EXPECT_EQ(Stats.Skipped.size(), WithDefinition ? 0u : 2u);
+    for (const char *Name : {"Base", "Derived"}) {
+      const LocalType *Type = (*Library)->find(Name);
+      ASSERT_EQ(Type != nullptr, WithDefinition);
+      if (Type) {
+        ASSERT_TRUE(Type->Record);
+        EXPECT_EQ(Type->Record->Size, 1u);
+        EXPECT_TRUE(layoutProblem(**Library, *Type->Record).empty());
+      }
+    }
+  }
+}

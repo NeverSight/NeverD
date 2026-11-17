@@ -28,6 +28,8 @@ namespace neverd {
 
 /// Address-to-statement-index map used by multiple CF simplification passes.
 struct AddrMap {
+  // Generated continuation guards use the last valid addresses as labels.
+  // An in-band sentinel must not exclude those labels from the index.
   std::unordered_map<va_t, size_t> Idx;
   std::vector<std::pair<va_t, size_t>> Sorted;
   bool SortedValid = false;

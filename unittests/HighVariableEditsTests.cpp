@@ -100,6 +100,25 @@ TEST(HighVariableEdits, PreservesStatementAnchorsAcrossLocalAssociations) {
     EXPECT_EQ(R.Sources[I].StatementKind, Sources[I].StatementKind);
   }
 }
+
+TEST(HighVariableEdits, PairedStoreDestinationsFollowPrivateGraphCopies) {
+  auto F = function({assign(1, constant(7)), assign(2, value(1)), use(value(2)),
+                     use(value(2))});
+  F.Body[3].Addr = F.Body[2].Addr;
+  F.Body[3].StoreAddr = HighExpr::makeConst(0x5008, 8);
+  const HighSourceMap Sources = {
+      observeHighStatement(F.Entry, {F.Body[2].Addr, 3}, F.Body[2]),
+      observeHighStatement(F.Entry, {F.Body[3].Addr, 4}, F.Body[3])};
+  const auto R =
+      editHighVariable(F, Sources, {HighVariableEdit::Map, id(1), id(2)});
+  ASSERT_TRUE(R) << R.Refusal;
+  const HighStatementSourceIndex Index(R.Sources);
+  for (size_t I : {2u, 3u}) {
+    ASSERT_TRUE(Index.lookup(F.Entry, R.Function.Body[I]));
+    EXPECT_EQ(Index.lookup(F.Entry, R.Function.Body[I])->Sequence, I + 1);
+    EXPECT_NE(R.Function.Body[I].StoreAddr, F.Body[I].StoreAddr);
+  }
+}
 ExprPtr address(int Offset) {
   MedVar SP;
   SP.Kind = MedVar::Reg;

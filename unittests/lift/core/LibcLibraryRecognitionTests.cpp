@@ -116,8 +116,8 @@ TEST(LibcLibraryRecognition, StrippedPublishedFunctionsAndLookalikes) {
     CSourceMap SourceMap;
     SourceMap.Recognitions = &Result.LibraryRecognitions;
     SourceMap.HighSources = &Result.HighSources;
-    SourceMap.LLVMSources = Result.LLVMSources.get();
     CEmitterOptions EmitOptions;
+    EmitOptions.LLVMSources = Result.LLVMSources.get();
     EmitOptions.TheArch = Image.Arch;
     EmitOptions.Format = Image.Format;
     EmitOptions.Image = &Image;

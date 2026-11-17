@@ -1335,6 +1335,14 @@
         <source>Plugin &amp;manager...</source>
         <translation>Менеджер плагинов...</translation>
     </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>Вычисленные строки</translation>
+    </message>
+    <message>
+        <source>Find conditional strings computed by functions</source>
+        <translation>Найти условные строки, вычисляемые функциями</translation>
+    </message>
 </context>
 <context>
     <name>Choosers</name>
@@ -1481,6 +1489,26 @@
     <message>
         <source>Patched bytes</source>
         <translation>Изменённые байты</translation>
+    </message>
+    <message>
+        <source>Computed strings</source>
+        <translation>Вычисленные строки</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>Адрес данных</translation>
+    </message>
+    <message>
+        <source>Evidence</source>
+        <translation>Свидетельства</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>Наблюдение после</translation>
+    </message>
+    <message>
+        <source>Text / diagnostic</source>
+        <translation>Текст / диагностика</translation>
     </message>
 </context>
 <context>
@@ -1933,6 +1961,10 @@
         <source>Too many selection changes while refreshing the table.</source>
         <translation>Слишком много изменений выбора во время обновления таблицы.</translation>
     </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>Поиск отменён</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::ChooserView</name>
@@ -1955,6 +1987,154 @@
             <numerusform>%n элемента</numerusform>
             <numerusform>%n элементов</numerusform>
         </translation>
+    </message>
+    <message>
+        <source> %1 / %2</source>
+        <translation> %1 / %2</translation>
+    </message>
+    <message>
+        <source> · %1 s</source>
+        <translation> · %1 с</translation>
+    </message>
+    <message>
+        <source> · Discovery failed: </source>
+        <translation> · Сбой обнаружения: </translation>
+    </message>
+    <message>
+        <source>%1 · %2/%3 functions · %4 rows · %5 issues</source>
+        <translation>%1 · функций: %2/%3 · строк: %4 · проблем: %5</translation>
+    </message>
+    <message>
+        <source>Analysis changed; scan again</source>
+        <translation>Анализ изменился; повторите сканирование</translation>
+    </message>
+    <message>
+        <source>Analyzing function %1…</source>
+        <translation>Анализ функции %1…</translation>
+    </message>
+    <message>
+        <source>Assumes the listed memory and register values at block entry, and successful execution through the observation. Initializers propose values; reachability is not proved.</source>
+        <translation>Предполагаются указанные значения памяти и регистров на входе в блок и успешное выполнение до точки наблюдения. Инициализаторы предлагают значения; достижимость не доказана.</translation>
+    </message>
+    <message>
+        <source>Block entry</source>
+        <translation>Вход в блок</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>Отмена</translation>
+    </message>
+    <message>
+        <source>Computed string conditions</source>
+        <translation>Условия вычисленной строки</translation>
+    </message>
+    <message>
+        <source>Conditional text computed by instructions</source>
+        <translation>Условный текст, вычисляемый инструкциями</translation>
+    </message>
+    <message>
+        <source>Conditions…</source>
+        <translation>Условия…</translation>
+    </message>
+    <message>
+        <source>Continue</source>
+        <translation>Продолжить</translation>
+    </message>
+    <message>
+        <source>Data address</source>
+        <translation>Адрес данных</translation>
+    </message>
+    <message>
+        <source>Encoding</source>
+        <translation>Кодировка</translation>
+    </message>
+    <message>
+        <source>Initializer</source>
+        <translation>Инициализатор</translation>
+    </message>
+    <message>
+        <source>Loading…</source>
+        <translation>Загрузка…</translation>
+    </message>
+    <message>
+        <source>No results</source>
+        <translation>Нет результатов</translation>
+    </message>
+    <message>
+        <source>Observed after</source>
+        <translation>Наблюдение после</translation>
+    </message>
+    <message>
+        <source>Open a binary first</source>
+        <translation>Сначала откройте бинарный файл</translation>
+    </message>
+    <message>
+        <source>Pause</source>
+        <translation>Приостановить</translation>
+    </message>
+    <message>
+        <source>Paused</source>
+        <translation>Приостановлено</translation>
+    </message>
+    <message>
+        <source>Pausing after the current function…</source>
+        <translation>Приостановка после текущей функции…</translation>
+    </message>
+    <message>
+        <source>Register offset %1, %2 bytes = %3&lt;br&gt;</source>
+        <translation>Смещение регистра %1, %2 байт = %3&lt;br&gt;</translation>
+    </message>
+    <message>
+        <source>Required entry registers</source>
+        <translation>Необходимые регистры на входе</translation>
+    </message>
+    <message>
+        <source>Required input bytes</source>
+        <translation>Необходимые входные байты</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>Повторить</translation>
+    </message>
+    <message>
+        <source>Retry or navigate the list to continue loading.</source>
+        <translation>Повторите попытку или перейдите по списку, чтобы продолжить загрузку.</translation>
+    </message>
+    <message>
+        <source>Scan all functions</source>
+        <translation>Сканировать все функции</translation>
+    </message>
+    <message>
+        <source>Scan cancelled</source>
+        <translation>Сканирование отменено</translation>
+    </message>
+    <message>
+        <source>Scan finished</source>
+        <translation>Сканирование завершено</translation>
+    </message>
+    <message>
+        <source>Scanning</source>
+        <translation>Сканирование</translation>
+    </message>
+    <message>
+        <source>Search cancelled</source>
+        <translation>Поиск отменён</translation>
+    </message>
+    <message>
+        <source>Search progress</source>
+        <translation>Ход поиска</translation>
+    </message>
+    <message>
+        <source>Searching…</source>
+        <translation>Поиск…</translation>
+    </message>
+    <message>
+        <source>Sorting…</source>
+        <translation>Сортировка…</translation>
+    </message>
+    <message>
+        <source>Waiting to search…</source>
+        <translation>Ожидание поиска…</translation>
     </message>
 </context>
 <context>
@@ -2091,6 +2271,10 @@ Double-click to go to the declaration.</source>
     <message>
         <source>Recovery stopped: %1</source>
         <translation>Восстановление остановлено: %1</translation>
+    </message>
+    <message>
+        <source>Analysis continues in background</source>
+        <translation>Анализ продолжается в фоновом режиме</translation>
     </message>
 </context>
 <context>
@@ -2920,7 +3104,7 @@ Use this PDB for analysis? Its symbols, types, function signatures and address r
     </message>
     <message>
         <source>Put the cursor in a function to set its type</source>
-        <translation>Поставьте курсор в функцию, чтобы задать её тип</translation>
+        <translation type="vanished">Поставьте курсор в функцию, чтобы задать её тип</translation>
     </message>
     <message>
         <source>Put the cursor on a parameter of the function to convert it</source>
@@ -3444,6 +3628,10 @@ After:
         <source>Plugin tasks</source>
         <translation>Задачи плагинов</translation>
     </message>
+    <message>
+        <source>Put the cursor on a global object or in a function to set its type</source>
+        <translation>Поместите курсор на глобальный объект или внутрь функции, чтобы задать тип</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::OutputWindow</name>
@@ -3836,6 +4024,14 @@ After:
     <message>
         <source>Project changes saved</source>
         <translation>Изменения проекта сохранены</translation>
+    </message>
+    <message>
+        <source>Could not prepare source views: %1</source>
+        <translation>Не удалось подготовить представления исходного кода: %1</translation>
+    </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>Подготовка декомпилятора</translation>
     </message>
 </context>
 <context>
@@ -5061,7 +5257,7 @@ After:
     </message>
     <message>
         <source>Types: %1</source>
-        <translation>Типов: %1</translation>
+        <translation type="vanished">Типов: %1</translation>
     </message>
     <message numerus="yes">
         <source>%n from the PDB</source>
@@ -5158,6 +5354,30 @@ After:
     <message>
         <source>No local types: this program has no PDB or DWARF with types.</source>
         <translation>Нет локальных типов: у этой программы нет PDB или DWARF с типами.</translation>
+    </message>
+    <message>
+        <source> · %1 types not imported</source>
+        <translation> · не импортировано типов: %1</translation>
+    </message>
+    <message>
+        <source>Next</source>
+        <translation>Далее</translation>
+    </message>
+    <message>
+        <source>No types match %1.</source>
+        <translation>Нет типов, соответствующих %1.</translation>
+    </message>
+    <message>
+        <source>Page </source>
+        <translation>Страница </translation>
+    </message>
+    <message>
+        <source>Previous</source>
+        <translation>Назад</translation>
+    </message>
+    <message>
+        <source>Types: %1 · showing %2–%3</source>
+        <translation>Типов: %1 · показаны %2–%3</translation>
     </message>
 </context>
 <context>
@@ -5490,6 +5710,10 @@ After:
     <message>
         <source>Remove this source type assertion and use the analysis type</source>
         <translation>Удалить это утверждение о типе исходного кода и использовать тип, полученный при анализе</translation>
+    </message>
+    <message>
+        <source>%1 at %3 is a %2-byte global object. Enter a scalar or pointer type from the local types.</source>
+        <translation>%1 по адресу %3 — глобальный объект размером %2 байт. Введите скалярный или указательный тип из локальных типов.</translation>
     </message>
 </context>
 <context>
@@ -10332,6 +10556,10 @@ Your previous graph is still available.</source>
         <source>Loading</source>
         <translation>Загрузка</translation>
     </message>
+    <message>
+        <source>Preparing the decompiler</source>
+        <translation>Подготовка декомпилятора</translation>
+    </message>
 </context>
 <context>
     <name>neverd::gui::LoadProgressCard</name>
@@ -10451,14 +10679,6 @@ Your previous graph is still available.</source>
         <translation>Импорт кода в образ</translation>
     </message>
     <message>
-        <source>Import process plugin</source>
-        <translation>Импорт процессного плагина</translation>
-    </message>
-    <message>
-        <source>Import process plugin…</source>
-        <translation>Импорт процессного плагина…</translation>
-    </message>
-    <message>
         <source>Log for %1</source>
         <translation>Журнал %1</translation>
     </message>
@@ -10519,10 +10739,6 @@ Your previous graph is still available.</source>
         <translation>Положение</translation>
     </message>
     <message>
-        <source>Process plugin imported: %1</source>
-        <translation>Процессный плагин импортирован: %1</translation>
-    </message>
-    <message>
         <source>Progress</source>
         <translation>Ход выполнения</translation>
     </message>
@@ -10565,6 +10781,18 @@ Your previous graph is still available.</source>
     <message>
         <source>This action registration is no longer active.</source>
         <translation>Регистрация этого действия больше не активна.</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Импортировать плагин</translation>
+    </message>
+    <message>
+        <source>Import plugin…</source>
+        <translation>Импортировать плагин…</translation>
+    </message>
+    <message>
+        <source>Plugin imported: %1</source>
+        <translation>Плагин импортирован: %1</translation>
     </message>
 </context>
 <context>
@@ -10630,16 +10858,8 @@ Your previous graph is still available.</source>
         <translation>ID: %1</translation>
     </message>
     <message>
-        <source>Import a process-plugin manifest to add commands. Provider programs start only when a command runs.</source>
-        <translation>Импортируйте манифест процессного плагина для добавления команд. Провайдер запускается только при выполнении команды.</translation>
-    </message>
-    <message>
         <source>Import plugin…</source>
         <translation>Импорт плагина…</translation>
-    </message>
-    <message>
-        <source>Import process plugin</source>
-        <translation>Импорт процессного плагина</translation>
     </message>
     <message>
         <source>Inactive</source>
@@ -10652,10 +10872,6 @@ Your previous graph is still available.</source>
     <message>
         <source>Installation removed; active work is stopping.</source>
         <translation>Запись установки удалена; выполняемые задачи останавливаются.</translation>
-    </message>
-    <message>
-        <source>Installed process plugins</source>
-        <translation>Установленные процессные плагины</translation>
     </message>
     <message>
         <source>Manifest: %1</source>
@@ -10722,10 +10938,6 @@ Your previous graph is still available.</source>
         <translation>Остановка</translation>
     </message>
     <message>
-        <source>Type: External process</source>
-        <translation>Тип: внешний процесс</translation>
-    </message>
-    <message>
         <source>Unavailable</source>
         <translation>Недоступен</translation>
     </message>
@@ -10748,6 +10960,42 @@ Your previous graph is still available.</source>
     <message>
         <source>Yes</source>
         <translation>Да</translation>
+    </message>
+    <message>
+        <source>Import plugin</source>
+        <translation>Импортировать плагин</translation>
+    </message>
+    <message>
+        <source>External process</source>
+        <translation>Внешний процесс</translation>
+    </message>
+    <message>
+        <source>Import a plugin manifest to add workbench commands or views.</source>
+        <translation>Импортируйте манифест плагина, чтобы добавить команды или представления в рабочую область.</translation>
+    </message>
+    <message>
+        <source>Installed plugins</source>
+        <translation>Установленные плагины</translation>
+    </message>
+    <message>
+        <source>Native GUI</source>
+        <translation>Нативный GUI</translation>
+    </message>
+    <message>
+        <source>Source: Bundled with NeverD</source>
+        <translation>Источник: входит в состав NeverD</translation>
+    </message>
+    <message>
+        <source>This plugin ships with NeverD. Use Disable to turn it off.</source>
+        <translation>Этот плагин входит в состав NeverD. Нажмите «Отключить», чтобы выключить его.</translation>
+    </message>
+    <message>
+        <source>Type: %1</source>
+        <translation>Тип: %1</translation>
+    </message>
+    <message>
+        <source>Unknown</source>
+        <translation>Неизвестно</translation>
     </message>
 </context>
 <context>
@@ -10926,6 +11174,55 @@ Your previous graph is still available.</source>
     <message>
         <source>Close Tab</source>
         <translation>Закрыть вкладку</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost</name>
+    <message>
+        <source>The GUI module failed during activation.</source>
+        <translation>Ошибка модуля GUI во время активации.</translation>
+    </message>
+    <message>
+        <source>The GUI module failed to activate.</source>
+        <translation>Не удалось активировать модуль GUI.</translation>
+    </message>
+    <message>
+        <source>The GUI module is missing or outside the package: %1</source>
+        <translation>Модуль GUI отсутствует или находится вне пакета: %1</translation>
+    </message>
+    <message>
+        <source>The module does not provide the required GUI interface.</source>
+        <translation>Модуль не предоставляет требуемый интерфейс GUI.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::GuiPluginUiHost::Binding</name>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin menu action: %1</source>
+        <translation>Недопустимое, повторное или недоступное действие меню плагина: %1</translation>
+    </message>
+    <message>
+        <source>Invalid, duplicate or unavailable plugin view: %1</source>
+        <translation>Недопустимое, повторное или недоступное представление плагина: %1</translation>
+    </message>
+    <message>
+        <source>The analysis session has changed.</source>
+        <translation>Сеанс анализа изменился.</translation>
+    </message>
+    <message>
+        <source>The menu action factory must use the supplied parent.</source>
+        <translation>Фабрика действий меню должна использовать переданный родительский объект.</translation>
+    </message>
+    <message>
+        <source>The view factory must create a workbench child widget.</source>
+        <translation>Фабрика представлений должна создавать дочерний виджет рабочей области.</translation>
+    </message>
+</context>
+<context>
+    <name>neverd::gui::ListingView</name>
+    <message>
+        <source>Loading %1…</source>
+        <translation>Загрузка %1…</translation>
     </message>
 </context>
 </TS>

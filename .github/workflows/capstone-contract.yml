@@ -5,15 +5,6 @@ name: Capstone fork contract
 # every Capstone update.
 on:
   workflow_dispatch:
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/capstone-contract.yml'
-      - 'third_party/capstone'
-  pull_request:
-    paths:
-      - '.github/workflows/capstone-contract.yml'
-      - 'third_party/capstone'
 
 permissions:
   contents: read

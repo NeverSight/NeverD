@@ -240,6 +240,128 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
   }
 }
 
+TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("floating-min-max", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  const llvm::Intrinsic::ID Operations[] = {
+      llvm::Intrinsic::minnum, llvm::Intrinsic::maxnum,
+      llvm::Intrinsic::minimum, llvm::Intrinsic::maximum};
+  for (bool Single : {false, true})
+    for (unsigned I = 0; I < std::size(Operations); ++I) {
+      auto *Type = Single ? B.getFloatTy() : B.getDoubleTy();
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(Type, {Type, Type}, false),
+          llvm::GlobalValue::ExternalLinkage,
+          std::string(Single ? "single" : "wide") + std::to_string(I), Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+      B.CreateRet(B.CreateIntrinsic(Operations[I], {Type},
+                                    {Fn->getArg(0), Fn->getArg(1)}));
+    }
+  ASSERT_FALSE(llvm::verifyModule(Module));
+  std::string Source = "#include <math.h>\n" + emit(Module);
+  EXPECT_EQ(Source.find("llvm_minnum"), std::string::npos) << Source;
+  EXPECT_EQ(Source.find("llvm_maximum"), std::string::npos) << Source;
+  const auto Compiler = llvm::sys::findProgramByName("clang");
+  if (!Compiler || !neverd::test::compilerAccepts(
+                       *Compiler, "c",
+                       "double f(double a, double b) {\n"
+                       "  return __builtin_elementwise_minimum(a, b) +\n"
+                       "      __builtin_elementwise_maximum(a, b) +\n"
+                       "      __builtin_elementwise_minnum(a, b) +\n"
+                       "      __builtin_elementwise_maxnum(a, b);\n}\n",
+                       {}))
+    GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  Source += R"c(
+static int correct(double a, double b, double got, int kind) {
+  const int maximum = kind & 1;
+  if (isnan(a) || isnan(b)) {
+    if (kind >= 2 || (isnan(a) && isnan(b))) return isnan(got);
+    const double expected = isnan(a) ? b : a;
+    return got == expected && !!signbit(got) == !!signbit(expected);
+  }
+  if (a == 0 && b == 0) {
+    const int negative = maximum ? (signbit(a) && signbit(b))
+                                 : (signbit(a) || signbit(b));
+    return got == 0 && !!signbit(got) == negative;
+  }
+  return got == (maximum ? (a > b ? a : b) : (a < b ? a : b));
+}
+int main(void) {
+  double (*wide[])(double, double) = {wide0, wide1, wide2, wide3};
+  float (*single[])(float, float) = {single0, single1, single2, single3};
+  const double values[] = {0.0, -0.0, 1.0, -1.0, INFINITY, -INFINITY,
+                           NAN, 0x1p-126, 0x1p-149, -0x1p-149};
+  for (unsigned i = 0; i < sizeof(values)/sizeof(values[0]); ++i)
+    for (unsigned j = 0; j < sizeof(values)/sizeof(values[0]); ++j)
+      for (int k = 0; k < 4; ++k) {
+        const double a = values[i], b = values[j];
+        if (!correct(a, b, wide[k](a, b), k)) return 1;
+        if (!correct((float)a, (float)b, single[k](a, b), k)) return 2;
+      }
+  return 0;
+}
+)c";
+  for (llvm::StringRef Level : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Level);
+}
+
+TEST(LLVMCIntrinsicSemantics, FusedMultiplyAddKeepsSingleRounding) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("fused-multiply-add", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<> B(Context);
+  for (bool Single : {false, true}) {
+    auto *Type = Single ? B.getFloatTy() : B.getDoubleTy();
+    auto *Fn = llvm::Function::Create(
+        llvm::FunctionType::get(Type, {Type, Type, Type}, false),
+        llvm::GlobalValue::ExternalLinkage, Single ? "fused32" : "fused64",
+        Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+    B.CreateRet(
+        B.CreateIntrinsic(llvm::Intrinsic::fma, {Type},
+                          {Fn->getArg(0), Fn->getArg(1), Fn->getArg(2)}));
+  }
+  ASSERT_FALSE(llvm::verifyModule(Module));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, OS, Options));
+  EXPECT_NE(Source.find("__builtin_elementwise_fma("), std::string::npos)
+      << Source;
+  EXPECT_EQ(Source.find("llvm_fma"), std::string::npos) << Source;
+  // The independent oracle uses math.h; the emitted builtin does not.
+  Source += "\n#include <math.h>\n";
+  Source += R"(
+int main(void) {
+  if (fused64(0x1.0000002p0, 0x1.ffffffcp-1, -1.0) != -0x1p-54)
+    return 1;
+  if (fused32(0x1.0008p0f, 0x1.fffp-1f, -1.0f) != -0x1p-26f)
+    return 2;
+  if (fused64(0x1.fffffffffffffp1023, 2.0, -0x1.fffffffffffffp1023)
+      != 0x1.fffffffffffffp1023)
+    return 3;
+  if (fused32(0x1.fffffep127f, 2.0f, -0x1.fffffep127f) != 0x1.fffffep127f)
+    return 4;
+  if (!signbit(fused64(-0.0, 1.0, -0.0)) ||
+      !signbit(fused32(-0.0f, 1.0f, -0.0f)))
+    return 5;
+  if (!isnan(fused64(INFINITY, 0.0, 1.0)) ||
+      !isnan(fused32(INFINITY, 0.0f, 1.0f)))
+    return 6;
+  return 0;
+}
+)";
+  const bool Windows =
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization, false, {},
+                    Windows ? llvm::ArrayRef<llvm::StringRef>{}
+                            : llvm::ArrayRef<llvm::StringRef>{"-lm"});
+}
+
 TEST(LLVMCIntrinsicSemantics,
      IntegerAbsPreservesSignedMinimumWithoutCOverflow) {
   llvm::LLVMContext Context;
@@ -700,6 +822,84 @@ int main(void) {
   return 0;
 }
 )";
+  for (llvm::StringRef Optimization : {"-O0", "-O2"})
+    compileAndCheck(Source, false, {}, Optimization);
+}
+
+TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonKeepsWidthsSignsAndProducers) {
+  llvm::LLVMContext Context;
+  llvm::Module Module("three-way-comparison", Context);
+  Module.setDataLayout("e-p:64:64");
+  llvm::IRBuilder<llvm::NoFolder> B(Context);
+  auto *Wide = B.getInt128Ty();
+  auto Producer = Module.getOrInsertFunction("compare_producer", Wide, Wide);
+  std::string Table;
+  for (unsigned Bits : {1u, 7u, 8u, 16u, 32u, 64u, 128u})
+    for (unsigned ResultBits : {2u, 8u, 32u, 128u})
+      for (bool Signed : {false, true}) {
+        const std::string Name = "compare_" + std::to_string(Bits) + "_" +
+                                 std::to_string(ResultBits) + "_" +
+                                 std::to_string(Signed);
+        Table += Name + ",";
+        auto *Fn = llvm::Function::Create(
+            llvm::FunctionType::get(Wide, {Wide, Wide, B.getPtrTy()}, false),
+            llvm::GlobalValue::ExternalLinkage, Name, Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+        auto *Left = B.CreateCall(Producer, {Fn->getArg(0)});
+        auto *Right = B.CreateCall(Producer, {Fn->getArg(1)});
+        auto *Input = B.getIntNTy(Bits);
+        auto *Result = B.getIntNTy(ResultBits);
+        auto *Compare = llvm::Intrinsic::getOrInsertDeclaration(
+            &Module, Signed ? llvm::Intrinsic::scmp : llvm::Intrinsic::ucmp,
+            {Result, Input});
+        auto *Value =
+            B.CreateCall(Compare, {B.CreateTruncOrBitCast(Left, Input),
+                                   B.CreateTruncOrBitCast(Right, Input)});
+        // Two uses require an assigned value, while the extension may inline.
+        B.CreateStore(B.CreateZExtOrBitCast(Value, Wide), Fn->getArg(2));
+        B.CreateRet(B.CreateZExtOrBitCast(Value, Wide));
+      }
+  ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
+  const std::string Text = emit(Module);
+  EXPECT_NE(Text.find("neverd_llvm_ucmp_i2_i1("), std::string::npos);
+  EXPECT_NE(Text.find("neverd_llvm_scmp_i128_i128("), std::string::npos);
+  const std::string Source = "#include <stdint.h>\n" + Text + R"c(
+typedef unsigned __int128 U;
+static unsigned calls;
+static U observed[2];
+U compare_producer(U value) {
+  if (calls < 2) observed[calls] = value;
+  ++calls;
+  return value;
+}
+int main(void) {
+  U (*functions[])(U, U, void *) = {)c" +
+                             Table + R"c(};
+  const unsigned widths[] = {1, 7, 8, 16, 32, 64, 128};
+  const unsigned results[] = {2, 8, 32, 128};
+  for (unsigned w = 0; w < 7; ++w) {
+    U mask = ~(U)0 >> (128 - widths[w]);
+    U sign = (U)1 << (widths[w] - 1);
+    U values[] = {0, 1, sign - 1, sign, sign + 1, mask, ~(U)0};
+    for (unsigned r = 0; r < 4; ++r)
+      for (unsigned s = 0; s < 2; ++s)
+        for (unsigned a = 0; a < 7; ++a)
+          for (unsigned b = 0; b < 7; ++b) {
+            U left = values[a] & mask, right = values[b] & mask;
+            int less = s && !!(left & sign) != !!(right & sign)
+                           ? !!(left & sign) : left < right;
+            U expected = left == right ? 0 : less ? ~(U)0 : 1;
+            expected &= ~(U)0 >> (128 - results[r]);
+            U stored = 0;
+            calls = 0;
+            U actual = functions[w * 8 + r * 2 + s](values[a], values[b], &stored);
+            if (actual != expected || stored != expected) return 1;
+            if (calls != 2 || observed[0] != values[a] || observed[1] != values[b]) return 2;
+          }
+  }
+  return 0;
+}
+)c";
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
     compileAndCheck(Source, false, {}, Optimization);
 }
@@ -1536,13 +1736,13 @@ TEST(LLVMCIntrinsicSemantics, ThreeWayComparisonRejectsUncarriedWidths) {
   llvm::Module Module("odd-three-way", Context);
   llvm::IRBuilder<> Builder(Context);
   auto *Function = llvm::Function::Create(
-      llvm::FunctionType::get(Builder.getIntNTy(2),
+      llvm::FunctionType::get(Builder.getIntNTy(129),
                               {Builder.getInt32Ty(), Builder.getInt32Ty()},
                               false),
       llvm::GlobalValue::ExternalLinkage, "odd_order", Module);
   auto *Intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
       &Module, llvm::Intrinsic::scmp,
-      {Builder.getIntNTy(2), Builder.getInt32Ty()});
+      {Builder.getIntNTy(129), Builder.getInt32Ty()});
   Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Function));
   Builder.CreateRet(Builder.CreateCall(
       Intrinsic, {Function->getArg(0), Function->getArg(1)}));

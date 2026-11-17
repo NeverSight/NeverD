@@ -4492,3 +4492,126 @@ Other non64 state-owner integrations, real/unreal execution, software SMM/SGX
 and unbound event producers remain open. NeverC remains host x64 only. The
 production r6 pin and LLVM gitlink are unchanged; no final LLVM release is
 declared.
+
+## Continuous-mode selector transfers and retained faults (2026-11-11)
+
+The [full-width mode owner](x86-mode-execution.md#selector-loads-and-full-caches)
+now admits MOV/PUSH/POP segment registers and all five LxS forms in protected
+and compatibility code. Complete GDT/LDT addresses, full cache/base replacement,
+null FS/GS choices, accessed writes and coupled pointer publication use the
+existing segment owner. Its shared journal retains operands, watchpoints and
+paid attempts across backing repair; successful-load receipts survive immediate
+#DB entry, while a guest fault retires instruction progress before event resume.
+
+Original CPU streams found distinct descriptor-tail error codes on the local
+hybrid core types. Both reject a noncanonical eight-byte range before paging;
+explicit `SelectorForStart` and `SelectorForRange` bindings preserve the measured
+#GP(0)/#GP(selector) distinction without host inference. A high-address #PF
+retains full CR2. The same run checks non-CS L/D metadata and null FS/GS base
+observability after actual far jumps into code64.
+
+At implementation `ecc5c3c22b`, each SDK passes 1,342 primary cases across full
+paged source, paging, legacy source, instruction boundary and SDK suites, with
+2 LA57 hardware skips. Alternate-core replay adds 48 mode and 13 control passes
+per SDK, with 1 LA57 skip, counted separately. The
+[dated evidence](evidence/x86-mode-segments-2026-11-11.json) retains source,
+binary, report and artifact hashes, the failing pre-implementation cases,
+original fault probes and verified recovery archives. Generated sources use
+both emitters and host-x64 Clang/NeverC; NeverC gains no 32-bit target.
+
+This closes the selector-transfer integration unit. Other mode-aware state
+owners, real/unreal/VM86 composition, software SMM/SGX and unbound event producers
+remain open. Code64 descriptor-tail policy needs its own original-byte evidence.
+The production LLVM r6 pin and gitlink remain unchanged; no final LLVM release
+is declared.
+
+
+The [November 16 integration](x86-mode-execution.md#integration-with-current-dev-2026-11-16)
+rebuilds and replays 1,058 cases per SDK after merging current dev and repairing
+a shared HighIR synthetic-label collision. The upstream LLVM gitlink update is
+preserved; the production r6 pin and final-release boundary remain unchanged.
+
+
+The [code64 segment continuation qualification](x86-paged-execution.md#resuming-a-suspended-segment-transfer)
+adds retained MOV/PUSH/POP segment and LFS/LGS/LSS progress through generated C,
+direct runtime and full-mode dispatch. Both SDKs pass 524 cases with
+1 LA57 skip each; original CPU alias comparisons preserve complete RAM.
+This does not close the remaining full-machine qualification gaps or authorize
+a final LLVM release.
+
+
+The [code64 descriptor boundary qualification](x86-paged-execution.md#code64-descriptor-boundary-profiles)
+adds explicit target fault-code profiles for selector MOV/POP and LFS/LGS/LSS,
+retained through backing suspension and full-mode dispatch. Both SDKs pass
+529 tests with 1 LA57 skip each; the new matrix contains 936 original
+CPU/generated-state and complete-RAM comparisons per SDK. High-end wrapping and
+accessed-update protection checks are included. Return/event descriptor-tail
+profiles and remaining full-machine owners stay open; no final LLVM release
+or production pin update is claimed.
+
+The [code64 return descriptor qualification](x86-paged-execution.md#code64-return-descriptor-profiles)
+adds explicit target tail-fault profiles for IRET and RETF, including all operand
+widths, immediate cleanup and return CS/outer SS. Both SDKs pass 535 tests
+with 1 LA57 skip each; the new groups contain 2,496 original CPU/generated
+state and complete-RAM comparisons per SDK. Return, event and full-mode
+continuations preserve the accepted fault choice and charge the instruction
+once. Event descriptor-tail qualification and remaining mode/machine owners
+remain open. No final LLVM release or production pin update is included.
+
+The [code64 event descriptor qualification](x86-paged-execution.md#code64-event-descriptor-profiles)
+adds independent selector/EXT fault profiles for INT/INT3, IRQ and NMI.
+Both SDKs pass 543 tests with 1 LA57 skip each. The new groups include
+320 original/generated state and complete-RAM comparisons per SDK, plus
+retained event, instruction and full-mode bindings. At that checkpoint, the
+preserved A=0/read-only CR2 red cases and cross-line KVM internal errors remained
+separate unresolved accessed-update work. Remaining mode/machine owners, physical SGX and the final
+LLVM release/pin gate are still open. NeverC remains host/source x64.
+
+The [code64 event accessed-update qualification](x86-paged-execution.md#code64-event-accessed-updates)
+closes the aligned read-only CR2 and self-PTE cache-image differences. Per SDK,
+320 original/generated complete State/RAM comparisons and 32 original write-
+watchpoint comparisons agree; ordinary/full-mode/debug continuations retain
+completed updates. Both SDKs pass 551 tests with 1 LA57 skip each.
+Cross-line/split-lock, further mode/machine owners and physical SGX remain open;
+no final LLVM release, production pin or NeverC source-target expansion is included.
+
+## Continuous-mode debug-register transfers (2026-11-16)
+
+The [mode debug-register qualification](x86-mode-execution.md#debug-register-transfers-and-complete-addresses)
+closes MOV-DR integration for protected16/32 and compatibility16/32. Explicit
+addressed-write receipts clear exactly one full bank's high32 on a completed
+write, including unchanged low halves; immediate TF comparisons use the new
+bank, and event backing repair preserves the write without replaying it.
+Shared GD/DE/CPL/LOCK rules retain their original priority.
+
+At `f95dc84266`, each SDK passes 569 full regression tests with 1 LA57 skip.
+The new matrices include 256 raw observations, 256 direct-owner and 128 generated
+comparisons per SDK, plus TF, GD and privilege faults. The subsequent native
+fixture admission change passes all eight groups per SDK and has a separate
+source/binary record; production code is identical. NeverC remains host/source
+x64. Ports/strings/MPX, legacy returns, task/system and fast-system transitions,
+VM86 composition, software SMM/SGX and physical SGX remain outside this unit.
+No final LLVM release or production pin change is declared.
+
+## Continuous-mode machine status (2026-11-16)
+
+The [machine-status binding](x86-mode-execution.md#machine-status-and-paid-operand-progress)
+admits LMSW/CLTS through protected16/32 and compatibility16/32 using the existing
+CR0 owner. CR0 commits before debug delivery without reloading PDPTEs or
+changing other controls. Memory SMSW/LMSW now keep authenticated bytes and their
+paid attempt across operand backing stops; success and guest faults retire
+that marker before separate event entry.
+
+At `d314e78acf`, both SDKs pass 1398 regression tests each with 2 LA57
+skips each, including full paging and both generated-C suites. Each SDK's new
+coverage includes 768 raw execution cases, 768 direct-owner comparisons,
+96 original/generated cases, 24 original TF/SS cases and 16 fault-priority
+cases. Software repair matrices separately check repeated zero-budget progress,
+frozen bindings, complete banks and a single completion before suspended #DB.
+These KVM observations do not claim physical interception-free LMSW behavior.
+A separate test-only follow-up at `c86cda5c49` passes four compiled-source tests
+per SDK, totaling 32 generated-C software recovery cases per SDK. It verifies
+reconstructed RAM/context, changed bytes and zero-budget completion against an
+uninterrupted compiled baseline; production code is unchanged.
+NeverC remains host/source x64. Other mode/machine owners, software SMM/SGX,
+asynchronous producers and physical SGX remain open; production LLVM stays r6.

@@ -5,10 +5,10 @@ description: >-
 license: LicenseRef-Qt-Commercial OR BSD-3-Clause
 metadata:
   author: qt-ai-skills
-  version: "1.6"
+  version: "1.16"
   qt-version: "6.x"
   category: conceptual
-  changelog: "Added a one-page summary of NeverD's style to the desktop profile: color roles, type, sizes and the rules every window keeps"
+  changelog: "Section 1.9: an entry of a kept list can always leave it and a removal that only forgets says what stays; text the application did not write is shown in the plain format, because a label left to Qt's default lays out markup and Qt Quick fetches an image it names"
 ---
 # Qt UI Design
 
@@ -318,6 +318,39 @@ A polished main screen says little about the rest. Defects collect in the window
 - A check that expects no dialog to open must not hang where the dialog would be a native one; make the toolkit use its own for the length of the check.
 - A check that presses a key in a window waits until that window is the active one. A window is visible, and the modal one, before it is active; until then the key belongs to the window behind it and can run that window's shortcut instead. Such a check passes on a quiet machine and fails on a busy one.
 - Run the whole suite, not the one new test by name, before saying it passes, and get the other platforms' verdict from their own machines before the change reaches the shared branch.
+
+### 1.9 Floating panels and conversations (desktop/web)
+
+A panel that floats over a workbench (a chat, a quick input, a palette) is placed by the application the first time and by the person afterwards. Both places need a rule, and a conversation inside such a panel reads best in the shape people know from their editor's chat.
+
+**Open it at the golden section, on the side lines start from.**
+- Across, put the smaller golden part (0.382, that is 2 − φ) of the free room before the panel: left of the middle in a left-to-right language, right of it in a right-to-left one. The dead middle reads as stiff and the corner beside the panel's button as an afterthought; the golden section is where a reader's eye begins (Golden Ratio and Rule of Thirds, section 1). Take the share of the free room, not of the window, so a panel that nearly fills the window still fits and one that fills little still stands off the middle.
+- Down, check where the middle of the whole window falls. Toolbars along the top already put it above the middle of the panes below them, near the optical center; a golden section down the whole window would then press the panel against the toolbars.
+- Keep the person's place as a share of the room the panel moves in, so the panel holds its relative place while the window resizes. Snap it back to where it opens when it is let go a short distance away (20 pixels, as VS Code snaps its quick input to the horizontal center), and put it back there, at its first size, on a double click on its title.
+
+**Take floating views along wherever the person works.**
+- A focus mode, a full-screen view or a detached workspace that covers the main window takes the floating entry point and its panel with it, at the same corner and share, and its window takes their shortcuts. A button left under a covering window reads as a feature that switched itself off. They come back with the main window.
+- In Qt, move such views by reparenting. A new parent hides a widget, so record whether each was hidden and restore that. A view that places itself as a share of its parent places itself again on `QEvent::ParentChange`. A window shortcut belongs to the windows its action was added to: add the actions to the covering window while it holds the views and remove them after.
+- When something else may destroy the covering window, such as a docking library closing a floating window, take the views back from its `destroyed()` signal: `QWidget` emits it before it deletes its children. Return them explicitly before your own code tears the window down, and keep the signal as the safety net.
+
+**Lay out a conversation as an editor's chat view.** Visual Studio Code's chat view, measured from its sources, sets the layout; the last two rules come from reviewing a panel built on it.
+- An empty conversation says what the view does in the middle of the panel: the view's mark at about 40 pixels in the secondary text color, a heading a step larger than the panel's title, and a short message centered at a measure of about 40 average characters. A welcome anchored to the top left a dead band under it.
+- Offer first questions as compact chips as wide as their words, just above the composer, outlined at a tenth of white on a dark theme and of black on a light one (VS Code's `chat.requestBorder`), and in the theme's border color in high contrast. Full-width outlined rows read as a form.
+- Make the composer one box in the input fill, outlined in the focus color while the prompt has focus: the prompt, then what the question takes along, then the send button. Show that context once, as one chip whose cross leaves it out and which then turns dashed and italic with a plus that takes it back. A context line above the conversation and an "attach selection" check box below the prompt said the same thing twice.
+- When the view cannot send yet, say why in the context chip's place, beside a send button that waits. A placeholder alone leaves the waiting button unexplained once typing hides it.
+- Type prose in the interface font, as VS Code's chat input does, even where the application types its text fields in a code font. Grow the prompt with its lines, two to eight, then scroll; measure the laid-out lines, because a line mixing scripts (Chinese among Latin) is taller than the font's line.
+- Keep the window's one accent on the send button: the mark, the chips and the entry toggle stay gray.
+
+**Shape a window that holds a conversation as a conversation application, not as a tool window.** A title band, hairlines between panes, tight corners, one text size and a status bar suit a dense tool window and read as dated around a conversation. The proportions below were measured on the desktop stylesheet of OpenAI's Codex application; they hold with any palette, so take them and keep the product's own colors.
+- Build the window as two columns: a side list that runs the window's height, with the application's name on the strip that moves the window, and the conversation under a strip with its title, its commands and the window's controls. Part the columns by their fills, and draw a line only in a theme where the fills are one, such as high contrast. Leave out a status bar that has nothing to report: show what the application reports as a note that leaves again.
+- Make a side-list row about 30 pixels high, with a 16-pixel glyph, 8 pixels of padding and corners of 8 to 10. The whole row answers the pointer, and the open row carries a quiet neutral fill, not the selection color, so the accent stays on the main button. A row's own actions show while the pointer or keyboard is on it.
+- Step corners with the size of the thing: 8 to 10 for rows, buttons and fields, 12 to 16 for cards, menus and dialogs, about 20 for the composer and a message bubble, none for the window. Keep spacing on a grid of 4 pixels.
+- Use a type scale in steps of the platform's interface size, never fixed pixels: about 0.93 for notes, 1.15 for a dialog's title, 1.3 for a heading, and one line at about twice the size, in the regular weight, on a page with nothing else to show. Center that page's mark, line, sentence and buttons, a little above the middle.
+- Read a conversation in one centered column no wider than about 768 pixels. Show who spoke by position: the person's words in a bubble at the trailing edge, at most four fifths of the column wide, and an answer plain across it. Write a name only where it adds something, and show the time and a message's actions only while the pointer or keyboard is on it. A header in every bubble reads as a form.
+- Make the composer the window's main object: an elevated surface with the largest corners, growing with its lines, its pickers quiet until hovered, and the send button a disc in the accent.
+- Where the reference orders its surfaces differently from the product (its content lighter than its side list, the product's darker), keep the product's order. Do not add a color to copy the lift.
+- Every entry of a list the application keeps (projects, recent folders) can leave it from its own menu. When removing only forgets the entry, call it "remove", and let the confirmation say what stays on disk and how the entry comes back; keep "delete" for what destroys data. An entry whose target is gone stays as a quieter row with its reason in a tool tip, a click that tries it again and the same way off the list. An error dialog at every start with no way to drop the entry is a dead end. Where the same confirmation can also destroy data, offer that as a check box that starts clear every time, and let the sentence and the button's label change with it to say what is deleted, what is kept and that it cannot be undone.
+- Show text the application did not write (a name from a file, a symbol from a binary, a model's words) as plain text. A Qt Quick `Text` or `Label` left to its default, and a `QLabel` or tool tip in widgets, lays text out as markup when it looks like markup; Qt Quick then fetches an image the text names. State the plain format on every such label, check it in CI, and give a window that needs no network an engine without one.
 ---
 
 ## 2. Accessibility (WCAG 2.2)
@@ -453,6 +486,11 @@ Apply section 4 constraints first if the target is embedded.
 - [ ] High contrast: in the high contrast themes, does each state still read by its outline, is text at least 7:1 and every line at least 3:1, and does selected or highlighted text keep a colour of its own?
 - [ ] Localisation: do all user-visible strings use locale-aware formatting? Are containers able to expand 30–40% for translated text?
 - [ ] Languages: does every window fit its texts in every bundled language, does a live language switch reword every pane, and do layouts placed by hand mirror right to left?
+- [ ] Floating panels: does each open at the golden section on the side lines start from rather than in the dead middle or a corner, snap back to that place, and stay with the person, shortcuts included, in every mode that covers the main window?
+- [ ] Conversations: does an empty one say what it does in the middle, are first questions compact chips above one composer box, is the context said once, is prose in the interface font, and is the send button the only accent?
+- [ ] Conversation windows: is the window two columns parted by fill, without a title band or an idle status bar; do rows, cards and the composer step up in corner size; is there a type scale with one large line on an empty page; is the conversation one centered column that shows who spoke by position; and does the open row take a quiet fill so the accent stays on the main button?
+- [ ] Kept lists: can every project or recent entry be removed from its own menu; does the confirmation say what stays and how it comes back; and does an entry whose folder is gone stay listed with its reason, a retry and the same removal, instead of an error at every start?
+- [ ] Foreign text: is every label that shows a name, a path, a symbol or generated text in the plain format, is that checked in CI, and does a window that needs no network have an engine without one?
 - [ ] AI features: are latency patterns, uncertainty, and consent handled per section 3?
 ---
 

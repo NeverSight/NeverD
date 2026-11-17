@@ -127,10 +127,10 @@ bool validateAArch64AddressMemoryCall(Arch TheArch, const llvm::CallInst &Call);
 /// Validate the original GPR/SIMD writeback call before source filtering.
 bool validateAArch64WritebackMemoryCall(Arch TheArch,
                                         const llvm::CallInst &Call);
-std::optional<InlineAsmRender>
-renderAArch64AddressMemoryCall(Arch TheArch, const llvm::CallInst &Call,
-                               const std::string &ResultName, bool ResultLive,
-                               const std::vector<std::string> &Args);
+std::optional<InlineAsmRender> renderAArch64AddressMemoryCall(
+    Arch TheArch, const llvm::CallInst &Call, const std::string &ResultName,
+    bool ResultLive, const std::vector<std::string> &Args,
+    const std::function<std::string(uint32_t)> &HelperName = {});
 std::optional<InlineAsmRender>
 renderAArch64WritebackMemoryCall(Arch TheArch, const llvm::CallInst &Call,
                                  const std::string &ResultName, bool ResultLive,

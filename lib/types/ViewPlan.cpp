@@ -306,13 +306,12 @@ void ViewPlanner::bitfields(const Slot &Place, uint64_t At, State &Into) const {
     // C's unnamed bitfields pad; nothing reads them.
     if (Bit->Name.empty())
       continue;
-    const BitStorage Storage = bitStorage(Library, *Bit->Type);
     ViewAccessor Accessor;
     Accessor.TheKind = ViewAccessor::Kind::Bits;
     Accessor.Name = Into.unique(Names.member(Bit->Name));
     Accessor.Offset = Base + Bit->StorageBitOffset / 8;
     Accessor.Bits = bitAccess(Library, *Bit);
-    Accessor.UnitBytes = Storage.Bytes;
+    Accessor.UnitBytes = Accessor.Bits.UnitBits / 8;
     Accessor.Declared = Into.where(Options, At) +
                         bitText(Accessor.Bits.Shift, Accessor.Bits.Width) +
                         " of " + C.declare(*Bit->Type) + ": " + Bit->Name;
@@ -320,7 +319,7 @@ void ViewPlanner::bitfields(const Slot &Place, uint64_t At, State &Into) const {
       Accessor.Value = std::move(*Value);
     else
       Accessor.Value.TheForm = ViewValue::Form::Bytes;
-    const unsigned Bytes = Storage.Bytes;
+    const unsigned Bytes = Accessor.UnitBytes;
     if (Bytes != 1 && Bytes != 2 && Bytes != 4 && Bytes != 8)
       Accessor.TheKind = ViewAccessor::Kind::Unread;
     Into.Class.Accessors.push_back(std::move(Accessor));

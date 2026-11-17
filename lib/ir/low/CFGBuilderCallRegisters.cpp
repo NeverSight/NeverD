@@ -84,7 +84,7 @@ std::optional<uint32_t> CFGBuilder::provedCalleePreservedGPRs(
       if (Depths.count(Callee))
         continue;
       const unsigned Depth = Depths.at(Entry) + 1;
-      if (Depth > limits::kMaxCallEffectCalleeDepth ||
+      if (Depth > limits::kMaxCFGCallRegisterProofDepth ||
           Pending.size() >= limits::kMaxCFGCallRegisterProofFunctions)
         return std::nullopt;
       Depths.emplace(Callee, Depth);

@@ -1,30 +1,6 @@
 name: EVM Upstream Audit
 
 on:
-  push:
-    branches:
-      - dev
-    paths:
-      - '.github/workflows/evm-upstream-audit.yml'
-      - 'include/neverd/evm/**'
-      - 'lib/evm/**'
-      - 'scripts/audit_evm_opcode_metadata.py'
-      - 'scripts/evm_geth_opcode_probe.go'
-      - 'scripts/evm_geth_eip8024_overlay.go'
-      - 'scripts/tests/test_audit_evm_opcode_metadata.py'
-  pull_request:
-    # closed cancels this PR's run through its concurrency group; no job runs.
-    types: [opened, synchronize, reopened, closed]
-    paths:
-      - '.github/workflows/evm-upstream-audit.yml'
-      - 'include/neverd/evm/**'
-      - 'lib/evm/**'
-      - 'scripts/audit_evm_opcode_metadata.py'
-      - 'scripts/evm_geth_opcode_probe.go'
-      - 'scripts/evm_geth_eip8024_overlay.go'
-      - 'scripts/tests/test_audit_evm_opcode_metadata.py'
-  schedule:
-    - cron: '37 3 * * *'
   workflow_dispatch:
 
 permissions:

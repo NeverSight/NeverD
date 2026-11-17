@@ -60,6 +60,7 @@ private:
   QString credentialFile_;
   QString token_;
   QString sharedProject_;
+  QString requestPrefix_;
   QByteArray statusSource_;
   QString statusDetail_;
   quint64 serial_ = 0;

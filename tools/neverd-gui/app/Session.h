@@ -7,7 +7,6 @@
 #include "QueryService.h"
 #include "UnwindInfoWords.h"
 
-#include <QFileSystemWatcher>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -20,8 +19,11 @@
 #include <optional>
 #include <utility>
 
+class QThread;
+
 namespace neverd::gui {
 class PluginServices;
+class ProjectFileWatcher;
 
 /// How to load a binary, as the load dialog chooses it.
 struct LoadOptions {
@@ -108,8 +110,10 @@ public:
   QueryService &analysisQueries(const QJsonObject &payload, QObject *owner) {
     return analysis_.queries(payload, owner);
   }
-  void cancelAnalysisReads(QObject *owner) {
-    analysis_.unsubscribeOwner(owner);
+  void cancelAnalysisReads(QObject *owner, bool finishRunning = false) {
+    analysis_.unsubscribeOwner(owner, finishRunning
+                                          ? QueryService::FinishRunning
+                                          : QueryService::CancelRunning);
   }
 
   bool connected() const { return connected_; }
@@ -124,7 +128,7 @@ public:
   }
   /// The configured NeverD worker, also used by separate offline workbenches.
   QString workerPath() const { return workerPath_; }
-  bool loaded() const { return loaded_; }
+  bool loaded() const { return loaded_ && !opening_; }
   bool opening() const { return opening_; }
   /// Whether a worker is on its way, which connected() then reports.
   bool starting() const { return starting_; }
@@ -449,6 +453,7 @@ public:
   QJsonObject selection() const { return selection_; }
 
 signals:
+  void readsCancelled();
   void bytePatchesChanged();
   void stateChanged();
   void opened();
@@ -546,9 +551,10 @@ private:
   /// Whether the worker holds staged comments, or will once those sent are
   /// answered.
   bool commentsStaged() const { return dirty_ || pendingComments_ > 0; }
-  /// Watch the project's files beside the input for changes on disk.
-  void watchProject();
-  QFileSystemWatcher projectWatcher_;
+  void takeProjectFiles(const QHash<QString, QByteArray> &files);
+  ProjectFileWatcher *projectWatcher_;
+  QThread *projectWatcherThread_;
+  quint64 projectWatchGeneration_ = 0;
   QTimer projectSync_;
   /// Each project file's content when the workbench last looked at it.
   QHash<QString, QByteArray> projectFiles_;

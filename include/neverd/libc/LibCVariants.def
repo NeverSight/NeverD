@@ -69,6 +69,11 @@ NEVERD_LIBC_VARIANT_FORWARD_FIXED(Musl, "ptrace", "int")
 // bionic: BSD's setlinebuf, musl's ptrace and ioctl requests, and an
 // __assert whose message follows the line.
 NEVERD_LIBC_VARIANT_POINTERS(Bionic, "__assert", (1 << 0) | (1 << 2), -1, "")
+NEVERD_LIBC_VARIANT_POINTERS(Bionic, "__FD_CLR_chk", (1 << 1), -1, "")
+NEVERD_LIBC_VARIANT_POINTERS(Bionic, "__FD_ISSET_chk", (1 << 1), -1, "")
+NEVERD_LIBC_VARIANT_POINTERS(Bionic, "__FD_SET_chk", (1 << 1), -1, "")
+NEVERD_LIBC_VARIANT_RESULT(Bionic, "__FD_CLR_chk", Void)
+NEVERD_LIBC_VARIANT_RESULT(Bionic, "__FD_SET_chk", Void)
 NEVERD_LIBC_VARIANT_RESULT(Bionic, "setlinebuf", Value)
 NEVERD_LIBC_VARIANT_FORWARD_FIXED(Bionic, "ioctl", "int", "int")
 NEVERD_LIBC_VARIANT_FORWARD_FIXED(Bionic, "ptrace", "int")

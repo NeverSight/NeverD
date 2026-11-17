@@ -48,18 +48,21 @@ struct PluginCatalog::Impl : std::enable_shared_from_this<Impl> {
     std::vector<ProcessActionContribution> Overrides;
     Contributions Register;
     bool Installed = true;
+    bool Bundled = false;
   };
   PluginHost &Host;
   ProcessActions &Processes;
   Owner Project;
   Changed Notify;
   Bound Activated;
+  ActivateGui Gui;
   std::map<std::string, Entry> Entries;
 
   Impl(PluginHost &Host, ProcessActions &Processes, Owner Project,
-       Changed Notify, Bound Activated)
+       Changed Notify, Bound Activated, ActivateGui Gui)
       : Host(Host), Processes(Processes), Project(Project),
-        Notify(std::move(Notify)), Activated(std::move(Activated)) {}
+        Notify(std::move(Notify)), Activated(std::move(Activated)),
+        Gui(std::move(Gui)) {}
   void changed(CatalogChange Change = {}) {
     const auto Callback = Notify;
     if (Callback)
@@ -93,6 +96,10 @@ struct PluginCatalog::Impl : std::enable_shared_from_this<Impl> {
     }
     if (!E.Declaration || !E.DiscoveryError.Code.empty())
       return false;
+    if (!E.Declaration->GuiLibrary.empty() && !Gui) {
+      E.ActivationError = {"gui_unavailable", "This component requires ND GUI"};
+      return false;
+    }
     std::set<std::string> Overrides;
     for (const auto &Item : E.Overrides) {
       const auto &Id = Item.Definition.Id;
@@ -112,6 +119,12 @@ struct PluginCatalog::Impl : std::enable_shared_from_this<Impl> {
       return false;
     E.Component = *Scope;
     E.CleanupErrors.clear();
+    if (!E.Declaration->GuiLibrary.empty() &&
+        !Gui(*Scope, *E.Declaration, E.ActivationError)) {
+      Host.failActivation(*Scope, E.ActivationError.Message);
+      close(E);
+      return false;
+    }
     for (const auto &Item : E.Declaration->Actions) {
       ActionDefinition Definition;
       Definition.Id = Item.at("id");
@@ -176,14 +189,16 @@ struct PluginCatalog::Impl : std::enable_shared_from_this<Impl> {
             E.ActivationError,
             E.CleanupErrors,
             E.Component ? Host.snapshot(*E.Component) : std::nullopt,
-            E.Installed};
+            E.Installed,
+            E.Bundled};
   }
 };
 
 PluginCatalog::PluginCatalog(PluginHost &Host, ProcessActions &Processes,
-                             Owner Project, Changed Notify, Bound Activated)
+                             Owner Project, Changed Notify, Bound Activated,
+                             ActivateGui Gui)
     : State(std::make_shared<Impl>(Host, Processes, Project, std::move(Notify),
-                                   std::move(Activated))) {}
+                                   std::move(Activated), std::move(Gui))) {}
 PluginCatalog::~PluginCatalog() {
   State->Notify = {};
   State->Activated = {};
@@ -191,24 +206,28 @@ PluginCatalog::~PluginCatalog() {
     State->close(E);
 }
 bool PluginCatalog::restore(const std::vector<InstallationRecord> &Records,
-                            Diagnostic &Error) {
+                            Diagnostic &Error,
+                            const std::vector<InstallationRecord> &Bundled) {
   if (!State->Entries.empty() || Records.size() > size_t(limits::kMaxPlugins)) {
     Error = {"invalid_catalog",
              "Restore requires an empty catalog within the installation limit"};
     return false;
   }
   std::set<std::string> Ids;
-  for (const auto &Record : Records)
-    if (!validRecord(Record) || !Ids.insert(Record.Id).second) {
-      Error = {"invalid_catalog", "Invalid or repeated installation record"};
-      return false;
+  for (const auto *List : {&Bundled, &Records})
+    for (const auto &Record : *List)
+      if (!validRecord(Record) || !Ids.insert(Record.Id).second) {
+        Error = {"invalid_catalog", "Invalid or repeated installation record"};
+        return false;
+      }
+  for (const auto *List : {&Bundled, &Records})
+    for (const auto &Record : *List) {
+      auto &E = State->Entries[Record.Id];
+      E.Record = Record;
+      E.Bundled = List == &Bundled;
+      if (State->discover(E))
+        State->activate(E);
     }
-  for (const auto &Record : Records) {
-    auto &E = State->Entries[Record.Id];
-    E.Record = Record;
-    if (State->discover(E))
-      State->activate(E);
-  }
   Error = {};
   State->changed();
   return true;
@@ -230,8 +249,23 @@ bool PluginCatalog::install(const Manifest &Plugin, Diagnostic &Error,
                             Contributions Register) {
   const auto Id = Plugin.Id;
   const auto Found = State->Entries.find(Id);
+  if (Found != State->Entries.end() && Found->second.Bundled) {
+    std::error_code ErrorCode;
+    if (Actions.empty() && !Register &&
+        std::filesystem::equivalent(Found->second.Record.Path, Plugin.Path,
+                                    ErrorCode)) {
+      Error = {};
+      return true;
+    }
+    Error = {"bundled_plugin",
+             "This plugin is supplied by the NeverD installation"};
+    return false;
+  }
   if (Found == State->Entries.end() &&
-      records().size() >= size_t(limits::kMaxPlugins)) {
+      std::count_if(State->Entries.begin(), State->Entries.end(),
+                    [](const auto &Item) {
+                      return Item.second.Installed && !Item.second.Bundled;
+                    }) >= limits::kMaxPlugins) {
     Error = {"installation_limit", "Plugin installation limit reached"};
     return false;
   }
@@ -258,7 +292,8 @@ bool PluginCatalog::install(const Manifest &Plugin, Diagnostic &Error,
     return true;
   }
   auto &E = State->Entries[Id];
-  E.Record = {Id, Plugin.Path, true};
+  // Importing a package is discovery. Enable native GUI code explicitly.
+  E.Record = {Id, Plugin.Path, Plugin.GuiLibrary.empty()};
   E.Declaration = Plugin;
   E.Overrides = std::move(Actions);
   E.Register = std::move(Register);
@@ -298,7 +333,7 @@ bool PluginCatalog::setEnabled(const std::string &Id, bool Enabled,
 }
 void PluginCatalog::remove(const std::string &Id) {
   const auto I = State->Entries.find(Id);
-  if (I == State->Entries.end())
+  if (I == State->Entries.end() || I->second.Bundled)
     return;
   I->second.Installed = false;
   I->second.Record.Enabled = false;
@@ -323,7 +358,7 @@ void PluginCatalog::setProject(Owner Project) {
 std::vector<InstallationRecord> PluginCatalog::records() const {
   std::vector<InstallationRecord> Result;
   for (const auto &[Id, E] : State->Entries)
-    if (E.Installed)
+    if (E.Installed && !E.Bundled)
       Result.push_back(E.Record);
   return Result;
 }
@@ -405,12 +440,16 @@ Json describeInstallation(const InstallationSnapshot &S) {
               {"installed", S.Installed},
               {"discovery_error", diagnostic(S.DiscoveryError)},
               {"activation_error", diagnostic(S.ActivationError)}};
+  if (S.Bundled)
+    Result["bundled"] = true;
   Result["cleanup_errors"] = Json::array();
   for (const auto &Error : S.CleanupErrors)
     Result["cleanup_errors"].push_back(diagnostic(Error));
   if (S.Declaration) {
     Result["name"] = S.Declaration->Name;
     Result["version"] = S.Declaration->Version;
+    Result["kind"] =
+        S.Declaration->GuiLibrary.empty() ? "process" : "gui-native";
     Result["actions"] = S.Declaration->Actions;
     Result["queries"] = S.Declaration->Queries;
   }

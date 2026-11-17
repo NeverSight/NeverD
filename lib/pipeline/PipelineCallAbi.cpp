@@ -18,9 +18,11 @@
 
 #include "neverd/Limits.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationLeafPrefixMemo.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
@@ -72,6 +74,7 @@ void copyCallSignatureFacts(const PipelineResult &Source,
 #define COPY_SIGNATURE_FACT(Field) Destination.Field = Source.Field
   COPY_SIGNATURE_FACT(CallArgumentSources);
   COPY_SIGNATURE_FACT(CallMayWriteGPRs);
+  COPY_SIGNATURE_FACT(CallBodyMayWriteGPRs);
   COPY_SIGNATURE_FACT(CallExitConstants);
   COPY_SIGNATURE_FACT(CallEntryReadGPRs);
   COPY_SIGNATURE_FACT(CallUnreadGPRs);
@@ -90,17 +93,22 @@ void copyCallSignatureFacts(const PipelineResult &Source,
   COPY_SIGNATURE_FACT(OmittedCalleeStackSlots);
   COPY_SIGNATURE_FACT(CallPrototypeArguments);
   COPY_SIGNATURE_FACT(CallUserPrototypes);
+  COPY_SIGNATURE_FACT(KnownFunctionEntries);
 #undef COPY_SIGNATURE_FACT
 }
 
 namespace {
 /// The entries callee lifts know: the function symbols of \p Img that are
-/// not boundary guesses.
-std::set<va_t> calleeLiftEntries(const BinaryImage &Img) {
+/// not boundary guesses, and the entries \p Result was told of.
+std::set<va_t> calleeLiftEntries(const BinaryImage &Img,
+                                 const PipelineResult &Result) {
   std::set<va_t> Entries;
   for (const auto &Symbol : Img.Symbols)
     if (Symbol.IsFunc && !Symbol.IsBoundaryGuess)
       Entries.insert(Symbol.Addr);
+  if (Result.KnownFunctionEntries)
+    Entries.insert(Result.KnownFunctionEntries->begin(),
+                   Result.KnownFunctionEntries->end());
   return Entries;
 }
 
@@ -225,7 +233,10 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
                               const PipelineResult &Result) {
   if (Image == &Img && SymbolData == Img.Symbols.data() &&
       SymbolCount == Img.Symbols.size() &&
-      CallArgumentSources == Result.CallArgumentSources) {
+      // 融合双方条件：上游按 SharedValue 比较来源表（指针或内容相等），
+      // fork 追加已知入口集合的指针比较；全部一致时才可早退复用。
+      CallArgumentSources == Result.CallArgumentSources &&
+      KnownEntries == Result.KnownFunctionEntries) {
     // The same sources, perhaps another instance of them: share the run's,
     // so that the next run holding it compares one pointer, not every entry.
     CallArgumentSources = Result.CallArgumentSources;
@@ -235,7 +246,8 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
   SymbolData = Img.Symbols.data();
   SymbolCount = Img.Symbols.size();
   CallArgumentSources = Result.CallArgumentSources;
-  FunctionEntries = calleeLiftEntries(Img);
+  KnownEntries = Result.KnownFunctionEntries;
+  FunctionEntries = calleeLiftEntries(Img, Result);
   PointerCallees = collectPointerVariableCallees(Img);
   CodeOwners.reset();
   FunctionNames.reset();
@@ -243,11 +255,27 @@ void OmittedCalleeMemo::adopt(const BinaryImage &Img,
   NoReturnTargets.reset();
   RuntimeRoutineCalls.reset();
   CodePointerTargets.reset();
+  NoReturnCallees.reset();
+  NoReturnTargets.reset();
   Callees.clear();
   Bytes = 0;
   ++Adoptions;
   Globals.reset();
   Solve.reset();
+}
+
+const libc::NoReturnTargetIndex &OmittedCalleeMemo::noReturnTargets() {
+  if (!NoReturnTargets)
+    NoReturnTargets = std::make_shared<const libc::NoReturnTargetIndex>(*Image);
+  return *NoReturnTargets;
+}
+
+const NoReturnCalleeProver &OmittedCalleeMemo::noReturnCallees() {
+  if (!NoReturnCallees)
+    NoReturnCallees = std::make_shared<const InternalNoReturnIndex>(
+        *Image, &FunctionEntries, &noReturnTargets(),
+        &absoluteRelocationRoots(), &codeOwners());
+  return *NoReturnCallees;
 }
 
 const ExecutableCodeOwnerIndex &OmittedCalleeMemo::codeOwners() {
@@ -272,12 +300,6 @@ OmittedCalleeMemo::absoluteRelocationRoots() {
     AbsoluteRelocationRoots =
         std::make_shared<const detail::AbsoluteRelocationRootIndex>(*Image);
   return *AbsoluteRelocationRoots;
-}
-
-const libc::NoReturnTargetIndex &OmittedCalleeMemo::noReturnTargets() {
-  if (!NoReturnTargets)
-    NoReturnTargets = std::make_shared<const libc::NoReturnTargetIndex>(*Image);
-  return *NoReturnTargets;
 }
 
 const std::map<va_t, Intrinsic> &OmittedCalleeMemo::runtimeRoutineCalls() {
@@ -564,11 +586,11 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
                                            Op.Inputs[0].ConstVal)
                               .value_or(Op.Inputs[0].ConstVal));
       else if (Op.Opcode == NdOp::INDIR_CALL &&
-               !Result.CallArgumentSources.empty())
+               !Result.callArgumentSources().empty())
         if (const std::optional<va_t> Slot =
                 indirectCallSlot(F, Op, lookupDefinition))
-          if (const auto Source = Result.CallArgumentSources.find(*Slot);
-              Source != Result.CallArgumentSources.end() &&
+          if (const auto Source = Result.callArgumentSources().find(*Slot);
+              Source != Result.callArgumentSources().end() &&
               Source->second != *Slot)
             Callees.push_back(Source->second);
     }
@@ -689,7 +711,7 @@ public:
         ReadScope(Img), StackPops(Img), StackPopScope(StackPops),
         LeafPrefixes(Img), LeafPrefixScope(LeafPrefixes) {
     if (!Memo)
-      OwnEntries = calleeLiftEntries(Img);
+      OwnEntries = calleeLiftEntries(Img, Result);
     Entries = Memo ? &Memo->functionEntries() : &OwnEntries;
     Names = Memo ? &Memo->functionNames() : nullptr;
     Builder.setKnownFuncEntries(Entries);
@@ -903,10 +925,22 @@ private:
     Into.setAbsoluteRelocationRootIndex(Memo ? &Memo->absoluteRelocationRoots()
                                              : &*RelocationRoots);
     // Reuse the image's exact names across supplemental signature reads.
-    // A reader without a retained image memo keeps the live lookup: a
-    // whole symbol index per short-lived read costs more than it saves.
-    if (Memo)
+    // A callee's path ends at a call that never returns, as the run's own
+    // lifts end it: the code after one is another function. A reader
+    // without a retained memo builds one-off no-return indexes; emplace
+    // has to keep the first one, or a later worker rebuilds them.
+    if (Memo) {
       Into.setNoReturnTargetIndex(&Memo->noReturnTargets());
+      Into.setNoReturnCalleeProver(&Memo->noReturnCallees());
+    } else {
+      if (!OwnNoReturnTargets)
+        OwnNoReturnTargets.emplace(Img);
+      if (!OwnNoReturnCallees)
+        OwnNoReturnCallees.emplace(Img, Entries, &*OwnNoReturnTargets,
+                                   &*RelocationRoots, &*Owners);
+      Into.setNoReturnTargetIndex(&*OwnNoReturnTargets);
+      Into.setNoReturnCalleeProver(&*OwnNoReturnCallees);
+    }
   }
   /// Keeps \p Converted as \p Read's conversion used last: in the memo where
   /// \p Kept, else in \p Read alone.
@@ -954,9 +988,13 @@ private:
       size_t MedOperations = 0;
       for (const auto &Block : Med.Blocks)
         MedOperations += Block.Ops.size();
-      if (Med.Blocks.size() <= limits::kMaxStructurableMedBlocks &&
-          MedOperations <= static_cast<size_t>(limits::kMaxSSANodes)) {
-        inferMedTypes(Med, Img.Arch);
+      if (!Med.SkippedSSA && MedOperations <= limits::kMaxSSAFunctionOps) {
+        // A signature needs complete SSA, not a structured HighIR body. Keep
+        // the ordinary function-work bound while type inference retains its
+        // own smaller admission, exactly as for selected definitions.
+        if (Med.Blocks.size() <= limits::kMaxStructurableMedBlocks &&
+            MedOperations <= static_cast<size_t>(limits::kMaxSSANodes))
+          inferMedTypes(Med, Img.Arch);
         // The memo keeps the body: drop the spare capacity its vectors grew
         // by while it was built.
         if (Memo && Kept)
@@ -1074,6 +1112,8 @@ private:
   Decoder Dec;
   std::optional<ExecutableCodeOwnerIndex> Owners;
   std::optional<detail::AbsoluteRelocationRootIndex> RelocationRoots;
+  std::optional<libc::NoReturnTargetIndex> OwnNoReturnTargets;
+  std::optional<InternalNoReturnIndex> OwnNoReturnCallees;
   bool OwnersLent = false;
   std::optional<std::map<va_t, Intrinsic>> OwnRuntimeRoutineCalls;
   std::optional<std::vector<va_t>> OwnCodePointerTargets;
@@ -1168,13 +1208,16 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
     return Signatures;
   size_t Inspected = 0;
   size_t Operations = 0;
+  const size_t DirectReads = Pending.size();
   // Visit the selected functions' direct callees before their descendants.
   // A deep lower-address chain must not consume the bounded support budget
   // before another direct callee can supply its signature.  The callees next
   // in line are lifted and converted together first (readAhead); the loop
-  // still takes each in queue order under the same budgets.
-  constexpr size_t MaxReads =
-      limits::pipeline::kPipelineCallAbiMaxOmittedCalleeReads;
+  // still takes each in queue order. Every direct target belongs to this
+  // selection; the support budget bounds only transitive expansion. A large
+  // caller must not lose its later callees' argument bounds.
+  const size_t MaxReads =
+      DirectReads + limits::pipeline::kPipelineCallAbiMaxTransitiveCalleeReads;
   while (!Pending.empty() && Inspected < MaxReads) {
     const size_t Wave =
         std::min({Pending.size(), MaxReads - Inspected,
@@ -1196,11 +1239,12 @@ std::vector<std::shared_ptr<const MedFunc>> omittedDirectCalleeSignatures(
       Reader.readLift(Target, Read, Low, Ahead);
       if (!Read.BlockOps)
         continue;
-      for (const size_t BlockOps : *Read.BlockOps) {
-        if (BlockOps > limits::kMaxSSAFunctionOps - Operations)
-          return Signatures;
-        Operations += BlockOps;
-      }
+      if (Inspected > DirectReads)
+        for (const size_t BlockOps : *Read.BlockOps) {
+          if (BlockOps > limits::kMaxSSAFunctionOps - Operations)
+            return Signatures;
+          Operations += BlockOps;
+        }
       const OmittedCalleeMemo::Conversion &Conversion =
           Reader.conversion(Target, Read, &Read != &Local, Low, Ahead);
       if (!Conversion.Body)
@@ -1289,9 +1333,9 @@ void boundRecoveredArguments(MedCallInfo &Call, const MedFunc &Callee) {
     boundRecoveredArguments(Call, *Bound);
 }
 
-/// Keep the typed spelling of an unchanged, ordinary machine-word signature.
-/// This is not a native source ABI: pointer/integer views share the original
-/// carriers, and the declaration never compacts or introduces parameters.
+/// Keep the typed spelling of an unchanged scalar C projection. FP inputs
+/// require the callee's complete low-lane proof. This is not a native source
+/// ABI: the hidden result buffer stays an explicit trailing C parameter.
 std::optional<MedFunc> scalarCalleeDeclaration(const BinaryImage &Image,
                                                const MedFunc &Body,
                                                size_t ParameterCount) {
@@ -1302,20 +1346,47 @@ std::optional<MedFunc> scalarCalleeDeclaration(const BinaryImage &Image,
       !Body.IntegerArgumentRegisters.empty() || !Body.MultiReturn.empty() ||
       Body.ReturnsNoValue || Body.ReturnsVectorRegister ||
       Body.FPReturnViaX87 || Body.ConsumesX87Argument || Body.Name.empty() ||
-      Body.ExceptionMetadata || Body.RegistrationStates)
+      Body.RegistrationStates)
     return std::nullopt;
   const auto &Registers = getTargetRegInfo(Image.Arch);
   const auto Word = [&](const TypeRef &Type) {
     return Type && Type->Size == Registers.PointerSize &&
            (Type->Kind == NdTypeKind::Int || Type->Kind == NdTypeKind::Ptr);
   };
-  if (!Word(Body.ReturnType))
+  const bool FloatingResult =
+      Body.ReturnType && Body.ReturnType->Kind == NdTypeKind::Float &&
+      (Body.ReturnType->Size == 4 || Body.ReturnType->Size == 8);
+  if (!Word(Body.ReturnType) && !FloatingResult)
     return std::nullopt;
-  for (size_t I = 0; I < ParameterCount; ++I)
-    if (Body.Params[I].Size != Registers.PointerSize ||
-        Registers.isFPArgReg(Body.Params[I].RegOff, Image.abiFormat()) ||
-        !Word(Body.TypedParams[I].Type))
-      return std::nullopt;
+  const bool FloatingInterface =
+      FloatingResult || !Body.FPParamScalarBytes.empty();
+  bool HasFloating = false;
+  for (size_t I = 0; I < ParameterCount; ++I) {
+    const auto &Parameter = Body.Params[I];
+    const auto &Type = Body.TypedParams[I].Type;
+    if (Registers.isFPArgReg(Parameter.RegOff, Image.abiFormat())) {
+      const auto Lane = Body.FPParamScalarBytes.find(Parameter.RegOff);
+      if (!Type || Type->Kind != NdTypeKind::Float ||
+          (Type->Size != 4 && Type->Size != 8) ||
+          Lane == Body.FPParamScalarBytes.end() || Lane->second != Type->Size ||
+          Parameter.Size < Type->Size)
+        return std::nullopt;
+      HasFloating = true;
+    } else if (Parameter.Size != Registers.PointerSize || !Word(Type)) {
+      // Recovered C retains a scalar input's actual read width. Its machine
+      // carrier can be wider, but cannot supply fewer bytes than that type.
+      if (!FloatingInterface || !Type || Type->Kind != NdTypeKind::Int ||
+          (Type->Size != 1 && Type->Size != 2 && Type->Size != 4) ||
+          Parameter.Size < Type->Size || Parameter.Size > Registers.PointerSize)
+        return std::nullopt;
+    }
+  }
+  // AArch64's ordinary scalar parameter projection is unchanged by an unwind
+  // record. This declaration supplies neither the body nor its EH semantics.
+  // Other exception conventions retain their existing admission boundary.
+  if (Body.ExceptionMetadata &&
+      (!(HasFloating || FloatingResult) || Image.Arch != Arch::AArch64))
+    return std::nullopt;
   MedFunc Declaration;
   Declaration.Entry = Body.Entry;
   Declaration.Name = Body.Name;
@@ -1323,6 +1394,7 @@ std::optional<MedFunc> scalarCalleeDeclaration(const BinaryImage &Image,
   Declaration.Params = Body.Params;
   Declaration.TypedParams = Body.TypedParams;
   Declaration.ReturnType = Body.ReturnType;
+  Declaration.FPParamScalarBytes = Body.FPParamScalarBytes;
   return Declaration;
 }
 
@@ -1725,15 +1797,25 @@ bool raiseForwarderSummaries(
 }
 
 /// Whether the recovery of a kept body, leaving \p Body, left its
-/// declaration as \p KeptBody had it.
+/// declaration as \p KeptBody had it. Recovery can recreate equal types;
+/// allocation identity is not a declaration change. SSA identity alone does
+/// not compare a parameter carrier's width or physical register.
 bool preservesDeclaration(const MedFunc &Body, const MedFunc &KeptBody) {
   return Body.Params == KeptBody.Params && Body.CC == KeptBody.CC &&
          Body.IntegerArgumentRegisters == KeptBody.IntegerArgumentRegisters &&
-         Body.ReturnType == KeptBody.ReturnType &&
+         equalSourceTypes(Body.ReturnType, KeptBody.ReturnType) &&
+         llvm::all_of(llvm::zip(Body.Params, KeptBody.Params),
+                      [](const auto &Pair) {
+                        const auto &[Left, Right] = Pair;
+                        return Left.Size == Right.Size &&
+                               Left.RegOff == Right.RegOff &&
+                               Left.TheArch == Right.TheArch;
+                      }) &&
          Body.TypedParams.size() == KeptBody.TypedParams.size() &&
          llvm::all_of(llvm::zip(Body.TypedParams, KeptBody.TypedParams),
                       [](const auto &Pair) {
-                        return std::get<0>(Pair).Type == std::get<1>(Pair).Type;
+                        return equalSourceTypes(std::get<0>(Pair).Type,
+                                                std::get<1>(Pair).Type);
                       });
 }
 
@@ -2008,7 +2090,7 @@ void confirmOmittedStructReturns(
   size_t Inspected = 0, Operations = 0;
   for (auto It = Candidates.begin(); It != Candidates.end();) {
     bool Proven = false;
-    if (Inspected < limits::kMaxCallEffectExtraLifts &&
+    if (Inspected < limits::kMaxStructReturnCalleeLifts &&
         Reader.reads(It->first)) {
       ++Inspected;
       OmittedCalleeMemo::Callee Local;
@@ -2132,9 +2214,8 @@ AnalysisCacheWarmup warmOmittedCallees(const BinaryImage &Img,
   // Warming fills three quarters of the memo, and leaves the rest to the
   // callees selections read: bodies past it would only push those out.
   const size_t WarmedBytes = OmittedCalleeMemo::maxBytes() / 4 * 3;
-  // A body past the SSA node bound is no signature (conversion), so warming
-  // converts lifts up to that many operations; a selection converts a larger
-  // callee where it first calls it.
+  // Optional warming converts small bodies. A selected caller can demand a
+  // larger signature under the ordinary function-work bound (conversion).
   constexpr size_t MaxWarmedOperations =
       static_cast<size_t>(limits::kMaxSSANodes);
   for (const va_t Target : Functions) {
@@ -2852,14 +2933,23 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
   // forwarder promotion, so incidental live registers do not become extra
   // arguments merely because output was restricted to its caller.
   std::map<va_t, RecoveredArgumentBound> SignatureBounds;
+  std::map<va_t, TypeRef> SourceCalleeTypes;
   std::set<va_t> DirectTargets, DeclaredTargets;
   std::map<va_t, uint16_t> ReturnBytes;
+  std::set<va_t> NonFloatingResults;
   for (const MedFunc &Function : Result.MedFuncs)
     for (const MedBlock &Block : Function.Blocks)
       for (const MedOp &Op : Block.Ops)
         if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst()) {
           auto &Bytes = ReturnBytes[Op.Inputs[0].ConstVal];
-          Bytes = std::max(Bytes, Op.Output.Size);
+          // A scalar floating result can use a complete vector carrier. Its
+          // ABI owner has already established the returned low lane; that
+          // carrier is not an integer register pair.
+          Bytes = std::max(Bytes, Op.CalleeFloatReturnBytes
+                                      ? Op.CalleeFloatReturnBytes
+                                      : Op.Output.Size);
+          if (!Op.CalleeFloatReturnBytes)
+            NonFloatingResults.insert(Op.Inputs[0].ConstVal);
         }
   for (const MedFunc &Function : Result.MedFuncs)
     for (const MedCallInfo &Call : Function.CallInfos)
@@ -2873,17 +2963,32 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     // A memo hit retains the final arity. Only publish types when recovery
     // kept the original complete carrier list; inserted forwarder operands
     // or a changed order cannot borrow the conversion's old typed prefix.
-    if (SourceDeclarations && !Regparm && I < Recovered && Omitted[I].Bounds &&
-        Omitted[I].PreservesDeclaration && DirectTargets.count(F.Entry) &&
-        !DeclaredTargets.count(F.Entry) &&
+    if ((SourceDeclarations || SourceParameterReads) && !Regparm &&
+        I < Recovered && Omitted[I].Bounds && Omitted[I].PreservesDeclaration &&
+        DirectTargets.count(F.Entry) && !DeclaredTargets.count(F.Entry) &&
         !Result.CallPrototypeArguments.count(F.Entry) &&
         !Result.CallUserPrototypes.count(F.Entry))
       if (auto Declaration =
               scalarCalleeDeclaration(Img, F, Omitted[I].Parameters))
         // A cached scalar body cannot narrow a caller-proven register pair.
         // Leave the wider declaration to the ordinary call-result emitter.
-        if (ReturnBytes[F.Entry] <= Declaration->ReturnType->Size)
-          Result.OmittedCalleeDeclarations.push_back(std::move(*Declaration));
+        if (ReturnBytes[F.Entry] <= Declaration->ReturnType->Size &&
+            (Declaration->ReturnType->Kind != NdTypeKind::Float ||
+             !NonFloatingResults.contains(F.Entry))) {
+          // Both C routes use the same complete scalar types. Integer-only
+          // HighC declarations retain their established rendering policy.
+          if (!Declaration->FPParamScalarBytes.empty() ||
+              Declaration->ReturnType->Kind == NdTypeKind::Float) {
+            std::vector<TypeRef> Parameters;
+            for (const auto &Parameter : Declaration->TypedParams)
+              Parameters.push_back(Parameter.Type);
+            SourceCalleeTypes.emplace(F.Entry,
+                                      NdType::makeFunc(Declaration->ReturnType,
+                                                       std::move(Parameters)));
+          }
+          if (SourceDeclarations)
+            Result.OmittedCalleeDeclarations.push_back(std::move(*Declaration));
+        }
     if (I < Recovered) {
       const OmittedRecovery &Callee = Omitted[I];
       if (Callee.Body) {
@@ -2914,6 +3019,11 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                               : SignatureBounds.find(CI.TargetAddr);
       if (It != SignatureBounds.end())
         boundRecoveredArguments(CI, It->second);
+      if (auto Type = SourceCalleeTypes.find(CI.TargetAddr);
+          !CI.IsIndirect && !CI.SourceCallHint &&
+          Type != SourceCalleeTypes.end() &&
+          CI.Args.size() == Type->second->ParamTypes.size())
+        CI.SourceCalleeType = Type->second;
     }
   // Selected and omitted callees obey the same final argument boundary.
   // Leaving selected calls open until an emitter runs makes local frame

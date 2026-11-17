@@ -33,11 +33,28 @@ namespace neverd {
 
 struct BinaryImage;
 struct SourceFrameBytes;
+struct SourceImageByteObservations;
 class DebugContext;
+class RelocationProvenanceIndex;
 
 /// \p Ty as C.  Throws std::invalid_argument for a type C cannot spell, such
 /// as a record with neither a source name nor a supported layout.
-std::string typeToC(const TypeRef &Ty);
+std::string typeToC(const TypeRef &Ty, bool SourceNames = false);
+
+/// Use the local-type renderer's identifiers for this unit, including worker
+/// threads. An empty answer keeps the ordinary fallback projection.
+class CRecordNameSpelling {
+public:
+  explicit CRecordNameSpelling(
+      llvm::function_ref<std::string(llvm::StringRef)> Name);
+  ~CRecordNameSpelling();
+  CRecordNameSpelling(const CRecordNameSpelling &) = delete;
+  CRecordNameSpelling &operator=(const CRecordNameSpelling &) = delete;
+
+private:
+  llvm::function_ref<std::string(llvm::StringRef)> Outer;
+};
+std::string mappedCRecordName(llvm::StringRef SourceName);
 
 /// While one lives, typeToC spells a named record by its tag where
 /// \p Keyword gives the tag's keyword for the record's name (`struct stat`):
@@ -73,9 +90,10 @@ bool hasCValueLayout(const TypeRef &Ty);
 /// than zeros holds more than the text.  \p Narrow reads the bytes as a
 /// narrow string only: a narrow string parameter's "r", whose terminator and
 /// the zeros after it read as UTF-16 L"r" too.
-std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
-                                              bool AllowEmpty = false,
-                                              bool Narrow = false);
+std::optional<std::string>
+imageStringLiteral(const BinaryImage *Img, va_t Addr, bool AllowEmpty = false,
+                   bool Narrow = false,
+                   const RelocationProvenanceIndex *Relocations = nullptr);
 
 /// A string literal at \p Addr as C: the image's read-only printable text
 /// (imageStringLiteral), or the literal a symbol's name spells there (MSVC's
@@ -83,9 +101,10 @@ std::optional<std::string> imageStringLiteral(const BinaryImage *Img, va_t Addr,
 /// it: a kernel keeps its literals among its code.  The literal a symbol
 /// spells may be empty (`L""`), and is written whole: any character, escaped
 /// where it is not printable, and the zeros past its terminator.
-std::optional<std::string> stringLiteralAt(const BinaryImage *Img,
-                                           const DebugContext *Dbg, va_t Addr,
-                                           bool AllowEmpty = false);
+std::optional<std::string>
+stringLiteralAt(const BinaryImage *Img, const DebugContext *Dbg, va_t Addr,
+                bool AllowEmpty = false,
+                const RelocationProvenanceIndex *Relocations = nullptr);
 
 /// Whether \p Addr, in an executable section, begins data that the debug
 /// information names there and no code claims (BinaryImage::DataInCode): a
@@ -109,6 +128,11 @@ std::optional<std::string> imageStringComment(const BinaryImage *Img,
 std::optional<std::string>
 sourceFrameStringComment(const SourceFrameBytes &Value);
 
+/// Display complete bounded conditional text and all required entry bytes;
+/// never rewrite code or truncate it to the image-reference preview length.
+void writeSourceImageStringComments(llvm::raw_ostream &OS,
+                                    const SourceImageByteObservations &Values);
+
 /// A string the image holds, as a C literal of exactly its bytes.
 struct ImageCString {
   /// The element type: `char`, `char16_t` or `char32_t`, and its bytes.
@@ -128,7 +152,9 @@ struct ImageCString {
 /// as a C literal.  None when no string starts there, when a relocation
 /// touches its bytes, or when its code units are not in the target's
 /// (little-endian) byte order, which `u"..."` and `U"..."` hold.
-std::optional<ImageCString> imageCString(const BinaryImage *Img, va_t Addr);
+std::optional<ImageCString>
+imageCString(const BinaryImage *Img, va_t Addr,
+             const RelocationProvenanceIndex *Relocations = nullptr);
 
 /// Named class/struct returned by value.  MSVC x64 passes that object through
 /// a hidden pointer in RCX.  Enums stay in RAX.  Forward-ref classes may
@@ -186,7 +212,10 @@ inline bool isMsvcIndirectReturn(const TypeRef &Ty, Arch Architecture,
 
 /// Place a declarator inside a C type, including nested function pointers.
 /// An empty declarator produces the abstract type used by a cast.
-std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator);
+/// SourceNames retains qualified/template names for checked type editors;
+/// emitted C uses its identifier projection instead.
+std::string declarationToC(const TypeRef &Ty, llvm::StringRef Declarator,
+                           bool SourceNames = false);
 
 std::string typeToCLLVM(llvm::Type *Ty);
 /// Fixed, power-of-two integer vectors with native C lane widths.

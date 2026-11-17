@@ -42,6 +42,7 @@ bool callNeverReturns(const BinaryImage &Img, va_t Callee,
     return *Stated;
   return libc::isNoReturnTarget(Img, Callee, Names);
 }
+
 } // namespace
 
 InternalNoReturnIndex::InternalNoReturnIndex(
@@ -168,10 +169,11 @@ bool InternalNoReturnIndex::nothingReturns(va_t Target) const {
   // An x64, ARM or ARM64 image unwinds through a table entry for each
   // function but a leaf, so no metadata may give a leaf routine its range;
   // its paths can still all end where nothing resumes them. An x86 image has
-  // no such table, and no entry there marks a leaf.
+  // no such table, and no entry there marks a leaf. A binary file has no
+  // metadata at all, so its every routine is screened by its paths.
   if (screenedEnd(Target) == InvalidVA &&
-      (Img.Format == BinaryFormat::COFF || Img.Format == BinaryFormat::Raw) &&
-      Img.Arch != Arch::X86) {
+      (Img.Format == BinaryFormat::Raw ||
+       (Img.Format == BinaryFormat::COFF && Img.Arch != Arch::X86))) {
     const bool Ends = entryFlowNeverResumes(Target);
     std::lock_guard<std::mutex> Lock(Mutex);
     return Screens.emplace(Target, Ends).first->second;
@@ -252,8 +254,8 @@ bool InternalNoReturnIndex::entryFlowNeverResumes(va_t Target) const {
     if (Screened > limits::kMaxNoReturnScreenBytes)
       return false;
     const va_t Next = At + static_cast<va_t>(Size);
-    // Only a callee's stated or named contract ends a call's path here.
-    // Entry markers may also occur in a returning caller's continuation.
+    // Validate the instruction before trusting a stated or named no-return
+    // target. An adjacent function entry alone does not prove this call.
     const va_t Callee = Dec.directCallTarget(Insn);
     std::vector<LowOp> Ops;
     try {

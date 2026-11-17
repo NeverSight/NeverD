@@ -83,7 +83,7 @@ void HighCWriter::writeEmbeddedNativeCallbacks(const HighStmt &Stmt,
     emitIndent(Indent);
     OS << "L_" << Platform << "_callback_" << Address << "_" << Suffix
        << ": {\n";
-    writeStmts(Stmt.EHClauseBodies[I], Indent + 1);
+    writeStmtsUnproved(Stmt.EHClauseBodies[I], Indent + 1);
     emitIndent(Indent + 1);
     OS << "__builtin_unreachable(); /* callback has no ordinary fallthrough "
           "*/\n";

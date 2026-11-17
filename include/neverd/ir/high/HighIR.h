@@ -18,6 +18,7 @@
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/SourceFrameBytes.h"
+#include "neverd/ir/SourceImageBytes.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/AArch64/AArch64ReturnProtection.h"
@@ -113,6 +114,10 @@ struct HighExpr {
 
   /// For Var
   MedVar Var = {};
+  /// Source-only pointer declaration bound to this particular operand at its
+  /// native instruction. The lowering owner clones shared variables before
+  /// attaching it; neither other uses nor the machine carrier are retyped.
+  TypeRef SourcePointerType;
 
   /// For EntryRegister: the owning function and runtime entry. Var names the
   /// physical input, not a local variable or an ordinary function parameter.
@@ -142,6 +147,9 @@ struct HighExpr {
   /// Unresolved `INDIR_CALL` callee.  Not a printed argument.
   std::shared_ptr<HighExpr> IndirectTarget;
   std::shared_ptr<const SourceCallTypeHint> SourceCallHint;
+  /// Complete scalar C projection of an omitted callee, owned by module call
+  /// recovery. Its explicit result-buffer parameter is not a native ABI claim.
+  TypeRef SourceCalleeType;
   /// Complete fixed scalar FP signature proven by call-ABI recovery. Operand
   /// expression types alone cannot establish a nonvariadic declaration.
   std::shared_ptr<const FloatingCallArguments> FloatingCallSignature;
@@ -634,6 +642,7 @@ struct HighFunc {
   std::optional<AArch64ReturnProtection> ReturnProtection;
   /// Same original-machine byte observations carried by MedFunc.
   std::vector<SourceFrameBytes> FrameBytes;
+  SourceImageByteObservations ImageBytes;
   va_t Entry = 0;
   uint64_t OriginalSize = 0;
   /// Bytes reserved below and above the synthetic entry stack pointer.
@@ -641,6 +650,10 @@ struct HighFunc {
   int64_t FrameHeadroom = 0;
   std::string Name;
   std::string DebugName;
+  /// Source-only receiver declarations at exact native call instructions.
+  /// The pipeline binds live debug registers to the first recovered operand;
+  /// these facts neither retype other uses of that value nor change dispatch.
+  std::map<va_t, TypeRef> DebugCallReceiverTypes;
   std::string SourceFile;
   uint32_t SourceLine = 0;
   bool DoesNotReturn = false;

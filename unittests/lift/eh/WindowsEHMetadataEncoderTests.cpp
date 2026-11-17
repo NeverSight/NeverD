@@ -1302,6 +1302,92 @@ TEST(WindowsEHNativeSource, PE32CleanupOnlyNeedsAnExactDirectActionGraph) {
             WindowsEHNativeSourceReason::EmptyCxxTryMap);
 }
 
+// A table of unwind actions and no try block is a function with destructors:
+// complete, and of a kind no route lowers.  It is refused as that and not as
+// an empty table, so that printed C still optimizes the unit around it.
+// Behind a cookie check it is refused for the same reason: the check refuses
+// only a table that would otherwise be lowered.
+TEST(WindowsEHNativeSource, DestructorsAloneAreRefusedAsUnwindActions) {
+  const std::array<WindowsEHNativeCapability, 3> Capabilities = {
+      WindowsEHNativeCapability::IRLowering,
+      WindowsEHNativeCapability::SourceIRLowering,
+      WindowsEHNativeCapability::OutputPatch};
+  const auto Reason = [](const ExceptionFunction &EH,
+                         WindowsEHNativeCapability Capability) {
+    const WindowsEHNativeSourceClassification Source =
+        classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
+                                      Capability);
+    EXPECT_FALSE(Source.isEligible());
+    return Source.Reason;
+  };
+  const auto Destructor = [](CxxUnwindAction &Action) {
+    Action.ToState = -1;
+    Action.ActionVA = 0x140003000;
+    Action.Kind = CxxUnwindAction::ActionKind::DestructorWithObject;
+    Action.ObjectOffset = 36;
+  };
+  for (ExceptionFunction EH : {makeNativeFH3Source(), makeNativeFH4Source()}) {
+    SCOPED_TRACE(getExceptionPersonalityName(EH.Personality));
+    EH.Cxx->TryBlocks.clear();
+    for (const WindowsEHNativeCapability Capability : Capabilities)
+      EXPECT_EQ(Reason(EH, Capability),
+                WindowsEHNativeSourceReason::EmptyCxxTryMap);
+    Destructor(EH.Cxx->UnwindMap[0]);
+    for (const WindowsEHNativeCapability Capability : Capabilities)
+      EXPECT_EQ(Reason(EH, Capability),
+                WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+  }
+  EXPECT_FALSE(isIntentionalMetadataOnlyNativeIR(
+      WindowsEHNativeSourceReason::EmptyCxxTryMap));
+  EXPECT_TRUE(isIntentionalMetadataOnlyNativeIR(
+      WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction));
+
+  // The cookie record of a function with no catch passes unwinds only, which
+  // is not the record the writer knows.
+  const auto BehindACheck = [](ExceptionFunction EH) {
+    EH.Personality = ExceptionPersonality::GSHandlerCheckEH4;
+    GSCookieInfo Cookie;
+    Cookie.ParseStatus = ExceptionParseStatus::Complete;
+    Cookie.CookieOffset = 0x20;
+    Cookie.HasExceptionHandler = false;
+    Cookie.HasUnwindHandler = true;
+    Cookie.Payload = {0x22, 0, 0, 0};
+    EH.GSCookie = std::move(Cookie);
+    return EH;
+  };
+  // A table the writer takes, and one IR lowering takes for its destructor
+  // chain beside a try block: the check is what refuses them.
+  const ExceptionFunction Writable = makeNativeFH4Source();
+  ExceptionFunction Chained = makeNativeFH4Source();
+  Destructor(Chained.Cxx->UnwindMap[0]);
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(Writable, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering)
+          .canLowerNativeIR());
+  EXPECT_TRUE(
+      classifyWindowsEHNativeSource(Chained, Arch::X64, BinaryFormat::COFF,
+                                    WindowsEHNativeCapability::IRLowering)
+          .canLowerNativeIR());
+  EXPECT_EQ(
+      Reason(BehindACheck(Writable), WindowsEHNativeCapability::IRLowering),
+      WindowsEHNativeSourceReason::GSWrappedPersonality);
+  EXPECT_EQ(
+      Reason(BehindACheck(Writable), WindowsEHNativeCapability::OutputPatch),
+      WindowsEHNativeSourceReason::GSWrappedPersonality);
+  EXPECT_EQ(
+      Reason(BehindACheck(Chained), WindowsEHNativeCapability::IRLowering),
+      WindowsEHNativeSourceReason::GSWrappedPersonality);
+  EXPECT_FALSE(isIntentionalMetadataOnlyNativeIR(
+      WindowsEHNativeSourceReason::GSWrappedPersonality));
+  // Destructors alone: the table's own reason, behind the check as without.
+  ExceptionFunction Alone = makeNativeFH4Source();
+  Alone.Cxx->TryBlocks.clear();
+  Destructor(Alone.Cxx->UnwindMap[0]);
+  for (const WindowsEHNativeCapability Capability : Capabilities)
+    EXPECT_EQ(Reason(BehindACheck(Alone), Capability),
+              WindowsEHNativeSourceReason::UnsupportedCxxUnwindAction);
+}
+
 TEST(WindowsEHNativeSource, PE32CxxOutputNeedsCompleteCompilerReceipts) {
   auto EH = makeRegistrationCxxDigestSource();
   EH.Registration->HandlerVA = EH.PersonalityVA;

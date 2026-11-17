@@ -40,20 +40,17 @@ scalarIntegerThreeWay(const llvm::CallBase &Call) {
       Call.getCalledOperand()->stripPointerCasts());
   if (!Callee || !integerThreeWaySpelling(Callee->getIntrinsicID()))
     return std::nullopt;
-  auto Carried = [](unsigned Bits) {
-    return Bits == 8 || Bits == 16 || Bits == 32 || Bits == 64;
-  };
   const auto *Result = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
   const auto *Operand =
       Call.arg_size() == 2
           ? llvm::dyn_cast<llvm::IntegerType>(Call.getArgOperand(0)->getType())
           : nullptr;
   if (Call.getCalledFunction() != Callee || !llvm::isa<llvm::CallInst>(Call) ||
-      !Result || !Operand || !Carried(Result->getBitWidth()) ||
-      (!Carried(Operand->getBitWidth()) && Operand->getBitWidth() != 128) ||
+      !Result || !Operand || Result->getBitWidth() < 2 ||
+      Result->getBitWidth() > 128 || Operand->getBitWidth() > 128 ||
       Call.getArgOperand(1)->getType() != Operand ||
       Call.getFunctionType() != Callee->getFunctionType() ||
-      Call.getFunctionType()->isVarArg())
+      Call.getFunctionType()->isVarArg() || Call.hasOperandBundles())
     throw std::runtime_error("unsupported LLVM three-way comparison shape");
   return ScalarIntegerThreeWay{Result->getBitWidth(), Operand->getBitWidth(),
                                Callee->getIntrinsicID() ==

@@ -16,6 +16,8 @@
 
 namespace neverd {
 
+class LLVMSourceMap;
+
 /// The producer validates the occurrence against its current IR. The source
 /// backend checks surviving emission anchors, never searches rendered C for
 /// addresses or callee text. Evidence does not authenticate a native target,

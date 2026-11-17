@@ -1,5 +1,6 @@
 """Pure-file tests; importing the helper does not run packaging commands."""
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -138,6 +139,58 @@ class SqlDriverDeploymentTests(unittest.TestCase):
                     PACKAGE.validate_and_prune_sql_drivers(bundle)
                 self.assertTrue(marker.is_dir())
                 self.assertFalse((bundle / "Contents/PlugIns/sqldrivers").exists())
+
+
+class AgentBundleInputsTests(unittest.TestCase):
+    def test_build_option_selects_the_bundled_agent(self):
+        with tempfile.TemporaryDirectory() as root:
+            build = Path(root) / "build"
+            bundle = Path(root) / "NeverD.app"
+            cache = build / "CMakeCache.txt"
+            manifest = build / "agent-ui/plugin.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps({"components": [
+                {"entry": {"library": "libneverd-agent-ui.so"}}
+            ]}), encoding="utf-8")
+            cache.write_text("NEVERD_BUILD_AGENT:BOOL=OFF\n", encoding="utf-8")
+            self.assertEqual(PACKAGE.agent_inputs(build, bundle), [])
+            cache.write_text("NEVERD_BUILD_AGENT:STRING=AUTO\nNEVERD_AGENT_ENABLED:INTERNAL=OFF\n",
+                             encoding="utf-8")
+            self.assertEqual(PACKAGE.agent_inputs(build, bundle), [])
+            cache.write_text("NEVERD_BUILD_AGENT:STRING=AUTO\nNEVERD_AGENT_ENABLED:INTERNAL=ON\n",
+                             encoding="utf-8")
+            self.assertEqual(len(PACKAGE.agent_inputs(build, bundle)), 3)
+            cache.write_text("NEVERD_BUILD_AGENT:BOOL=ON\n", encoding="utf-8")
+            inputs = PACKAGE.agent_inputs(build, bundle)
+            self.assertEqual([path.relative_to(bundle).as_posix() for _, _, path in inputs], [
+                "Contents/MacOS/neverd-agent-cli",
+                "Contents/PlugIns/neverd-agent-ui/plugin.json",
+                "Contents/PlugIns/neverd-agent-ui/libneverd-agent-ui.so",
+            ])
+
+
+class FrameworkDeploymentTests(unittest.TestCase):
+    def test_version_only_framework_gets_relative_bundle_links(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root).resolve()
+            source = root / "source/Python.framework"
+            version = source / "Versions/3.14"
+            (version / "Resources").mkdir(parents=True)
+            (version / "Python").write_bytes(bytes.fromhex("cffaedfe"))
+            (version / "Resources/Info.plist").write_bytes(plistlib.dumps({
+                "CFBundleExecutable": "Python", "CFBundlePackageType": "FMWK"}))
+            frameworks = root / "Frameworks"
+            origins = set()
+            PACKAGE.copy_dependency(version / "Python",
+                                    Path("Python.framework/Versions/3.14/Python"),
+                                    frameworks, origins)
+            copied = frameworks / "Python.framework"
+            self.assertEqual((copied / "Versions/Current").readlink(), Path("3.14"))
+            self.assertEqual((copied / "Python").resolve(), copied / "Versions/3.14/Python")
+            self.assertEqual((copied / "Resources").resolve(), copied / "Versions/3.14/Resources")
+            self.assertFalse((source / "Versions/Current").exists())
+            self.assertFalse((source / "Python").exists())
+            self.assertEqual(origins, {(version / "Python").resolve()})
 
 
 class HypervisorSigningTests(unittest.TestCase):

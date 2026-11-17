@@ -75,14 +75,12 @@ inline constexpr size_t
 /// a whole conversion until its turn; the breadth-first levels of a selection
 /// rarely exceed this, so it bounds that memory without serializing them.
 inline constexpr size_t kPipelineCallAbiCalleeReadAhead = 64;
-/// The callees a restricted run reads at most for the signatures its calls
-/// pass (omittedDirectCalleeSignatures), its direct callees first; each read
-/// callee is converted, probed and recovered with the run.  Callees past the
-/// first few rarely bound a selection's calls: on the 300-function ntoskrnl
-/// 19041.6456 sample, reading 16 left all 600 decompiles as reading 256 did
-/// and 8 changed three, and 32 left the EH corpus, the switch corpus and the
-/// whole units as they were too.
-inline constexpr size_t kPipelineCallAbiMaxOmittedCalleeReads = 32;
+/// Optional descendants read after every direct target of a restricted
+/// selection. Each body is converted, probed and recovered with the run;
+/// bounding this expansion prevents a small selection walking a whole image.
+/// The selected functions' own direct targets are required work and do not
+/// consume this allowance or the aggregate descendant-operation allowance.
+inline constexpr size_t kPipelineCallAbiMaxTransitiveCalleeReads = 32;
 /// Whether a replica's callee prefill goes on to solve the signatures of the
 /// bodies it read image-wide (stepGlobalCalleeSignatures), which runs then
 /// install instead of probing and recovering those callees again around
@@ -131,6 +129,8 @@ inline constexpr size_t kPipelineFormattedCallsMaxFormatJoinRounds = 8;
 inline constexpr uint32_t kPipelineFormattedCallsMaxUnits = 65536;
 
 // lib/pipeline/PipelineHighIR.cpp
+/// Optional library expression matching, independent of statement navigation.
+inline constexpr size_t kPipelineHighIRMaxExpressionObservations = 100000;
 inline constexpr size_t kPipelineHighIRSourceWorkBudget = 250000;
 
 // lib/pipeline/PipelineIncomingStack.cpp
@@ -288,10 +288,6 @@ inline constexpr int
 // lib/pipeline/Pipeline.cpp
 inline constexpr int kPipelineRecordLineSizeLimit = 192;
 inline constexpr int kPipelineNativePipelineTraceCountLimit = 32;
-
-// lib/pipeline/PipelineHighIR.cpp
-inline constexpr int
-    kPipelineHighIRPipelineRebuildHighIRAppendSourcesFISizeLimit = 100000;
 
 // lib/pipeline/PipelineLibraryRecognition.cpp
 inline constexpr int

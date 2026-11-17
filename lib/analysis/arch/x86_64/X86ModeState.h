@@ -11,6 +11,8 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include "llvm/Support/ErrorHandling.h"
+
 #include <algorithm>
 #include <tuple>
 
@@ -103,7 +105,46 @@ inline void publishNon64(X86ModeState &S,
     Cache(1, V.Core.CS, 0);
   if (Result.SSWritten)
     Cache(2, V.Core.SS, 1);
+  if (Result.SegmentWritten) {
+    const auto &Write = *Result.SegmentWritten;
+    const auto &From = L.Core.Segments[unsigned(Write.Register)];
+    const auto Load = [&](auto &C, uint64_t &Base, unsigned Bit) {
+      C.Selector = From.Selector;
+      if (!Write.NullBase) {
+        C.Limit = From.Limit;
+        C.Attributes = From.Attributes;
+        Base = From.Base;
+      } else if (*Write.NullBase == X86NullSegmentBasePolicy::Clear) {
+        Base = 0;
+      }
+      V.Unusable =
+          (V.Unusable & ~(1u << Bit)) | (uint8_t(From.Unusable) << Bit);
+    };
+    switch (Write.Register) {
+    case X86SegmentRegister::ES:
+      Load(V.ES, V.ES.Base, 3);
+      break;
+    case X86SegmentRegister::SS:
+      Load(V.Core.SS, V.Core.SS.Base, 1);
+      break;
+    case X86SegmentRegister::DS:
+      Load(V.DS, V.DS.Base, 2);
+      break;
+    case X86SegmentRegister::FS:
+      Load(V.FS, R.FSBase, 4);
+      break;
+    case X86SegmentRegister::GS:
+      Load(V.GS, R.GSBase, 5);
+      break;
+    case X86SegmentRegister::CS:
+      llvm_unreachable("a segment load cannot write CS");
+    }
+  }
   if (S.Debug && L.Debug) {
+    if (Result.DebugAddressWritten) {
+      const auto Index = *Result.DebugAddressWritten;
+      S.Debug->DR[Index] = L.Debug->DR[Index];
+    }
     S.Debug->DR6 = L.Debug->DR6;
     S.Debug->DR7 = L.Debug->DR7;
     S.Debug->DebugCTL = L.Debug->DebugCTL;

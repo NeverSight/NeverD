@@ -140,11 +140,18 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     }
     return Result;
   }
+  const bool VoidReturn = ReturnType && ReturnType->Kind == NdTypeKind::Void;
   if (!Scalar(ReturnType)) {
     const bool IntegerPair =
-        ReturnType && ReturnType->Kind == NdTypeKind::Int &&
+        isMIPS(A) && ReturnType && ReturnType->Kind == NdTypeKind::Int &&
         ReturnType->Size == 2 * getTargetRegInfo(A).FullRegWidth;
-    if (!isMIPS(A) || !ReturnType || !llvm::any_of(Parameters, Scalar) ||
+    const bool ScalarIntegerResult =
+        (A == Arch::X64 || A == Arch::AArch64 ||
+         (A == Arch::X86 && ReturnType &&
+          ReturnType->Size <= getTargetRegInfo(A).FullRegWidth)) &&
+        ScalarParameter(ReturnType);
+    if ((!isMIPS(A) && !VoidReturn && !ScalarIntegerResult) || !ReturnType ||
+        (!isMIPS(A) && !llvm::any_of(Parameters, Scalar)) ||
         (ReturnType->Kind != NdTypeKind::Void && !IntegerPair &&
          !ScalarParameter(ReturnType)))
       return std::nullopt;
@@ -175,7 +182,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   Result.ReturnKind = ReturnType->IsEnum ? NdTypeKind::Int : ReturnType->Kind;
   Result.SignedResult = MIPSSignedInteger(ReturnType);
   Result.FixedCount = FixedCount;
-  if (A == Arch::X86 || !AllFloating || isMIPS(A)) {
+  if (A == Arch::X86 || !AllFloating || !Scalar(ReturnType) || isMIPS(A)) {
     for (size_t I = 0; I < Parameters.size(); ++I) {
       const auto &Pieces = Placement->Parameters[I];
       // o32 passes an eight-byte scalar outside the FP prefix as two

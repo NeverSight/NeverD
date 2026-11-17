@@ -7,25 +7,6 @@ on:
         description: 'Optional full NeverD commit SHA for a same-build native comparison'
         type: string
         default: ''
-  pull_request:
-    paths:
-      - '.github/workflows/digest.yml'
-      - 'cmake/NeverDGoogleTest.cmake'
-      - 'include/neverd/support/SHA256.h'
-      - 'include/neverd/support/LoadProgress.h'
-      - 'lib/support/SHA256*'
-      - 'unittests/digest/**'
-      - 'unittests/lift/format/InputDigestTests.cpp'
-  push:
-    branches: [dev]
-    paths:
-      - '.github/workflows/digest.yml'
-      - 'cmake/NeverDGoogleTest.cmake'
-      - 'include/neverd/support/SHA256.h'
-      - 'include/neverd/support/LoadProgress.h'
-      - 'lib/support/SHA256*'
-      - 'unittests/digest/**'
-      - 'unittests/lift/format/InputDigestTests.cpp'
 
 permissions:
   contents: read

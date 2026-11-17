@@ -70,7 +70,9 @@ void CSourceRecorder::prepareHighSources() {
           Source.Occurrence);
       continue;
     }
-    if (Source.Kind == HighSourceKind::StatementExpression)
+    if (Source.Kind == HighSourceKind::StatementExpression ||
+        Source.Kind == HighSourceKind::StoreValueExpression ||
+        Source.Kind == HighSourceKind::ComputationExpression)
       continue;
     if (auto Expr = Source.Expression.lock()) {
       Key K{Source.Function, Expr.get()};
@@ -343,9 +345,16 @@ CSourceRecorder::instruction(const llvm::Instruction &Value) {
 std::optional<size_t> CSourceRecorder::statement(va_t Function,
                                                  const HighStmt &Stmt) {
   const auto At = HighStores.find({Function, Stmt.Addr});
-  if (recordsInstructions() && HighStatements)
+  if (recordsInstructions() && HighStatements) {
+    std::vector<sigs::LibraryOccurrence> Origins;
     if (const auto Origin = HighStatements->lookup(Function, Stmt))
-      return event(std::nullopt, {*Origin}, Function);
+      Origins.push_back(*Origin);
+    if (const auto Origin = HighStatements->lookupComputation(Function, Stmt);
+        Origin && (Origins.empty() || Origins.front() != *Origin))
+      Origins.push_back(*Origin);
+    if (!Origins.empty())
+      return event(std::nullopt, std::move(Origins), Function);
+  }
   if (Stmt.Kind != StmtKind::Store)
     return std::nullopt;
   return At == HighStores.end()

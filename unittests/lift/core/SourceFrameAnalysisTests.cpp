@@ -3,6 +3,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
@@ -105,6 +106,160 @@ NativeSourceCalls callsAt(va_t Address, const SourceFunctionTypeHint &Signature,
   return {{*nativeSourceCallKey(Call), Contract}};
 }
 } // namespace
+
+TEST(SourceFrameAnalysis, SignedEntryLinkRestoresOnlyAtItsAuthenticatedReturn) {
+  for (auto Format :
+       {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+    for (bool BKey : {false, true})
+      for (bool NestedCall : {false, true}) {
+        SCOPED_TRACE(static_cast<int>(Format));
+        SCOPED_TRACE(BKey);
+        SCOPED_TRACE(NestedCall);
+        const auto LR = NdVar::reg(a64reg::X30, 8);
+        const auto Saved = NdVar::reg(a64reg::X20, 8);
+        const auto Address = NdVar::reg(a64reg::X9, 8);
+        LowFunc Function;
+        Function.Entry = 0x4000;
+        LowBlock Block;
+        Block.Id = 7;
+        Block.StartAddr = Function.Entry;
+        Block.Ops = {
+            op(NdOp::INTRINSIC, LR,
+               {NdVar::cst(uint64_t(BKey ? Intrinsic::Pacib : Intrinsic::Pacia),
+                           2),
+                LR, SP},
+               0x4000),
+            op(NdOp::INT_SUB, SP, {SP, NdVar::scalar(32, 8)}, 0x4004),
+            op(NdOp::STORE, {}, {SP, LR}, 0x4008),
+            op(NdOp::INT_ADD, Address, {SP, NdVar::scalar(8, 8)}, 0x400c),
+            op(NdOp::STORE, {}, {Address, Saved}, 0x4010),
+            op(NdOp::COPY, Saved, {NdVar::scalar(17, 8)}, 0x4014),
+            op(NdOp::LOAD, LR, {SP}, 0x4020),
+            op(NdOp::INT_ADD, Address, {SP, NdVar::scalar(8, 8)}, 0x4024),
+            op(NdOp::LOAD, Saved, {Address}, 0x4028),
+            op(NdOp::INT_ADD, SP, {SP, NdVar::scalar(32, 8)}, 0x402c),
+            op(NdOp::INTRINSIC, LR,
+               {NdVar::cst(uint64_t(BKey ? Intrinsic::Autib : Intrinsic::Autia),
+                           2),
+                LR, SP},
+               0x4030),
+            op(NdOp::RETURN, {}, {LR}, 0x4034)};
+        auto ABI = signature(0);
+        NativeSourceCalls Calls;
+        if (NestedCall) {
+          const auto Call = op(NdOp::CALL, X0, {NdVar::cst(0x8000, 8)}, 0x401c);
+          Block.Ops.insert(
+              Block.Ops.begin() + 6,
+              {op(NdOp::COPY, LR, {NdVar::scalar(0x4020, 8)}, 0x401c), Call});
+          Calls[*nativeSourceCallKey(Call)].Signature = &ABI;
+        }
+        Function.Blocks.push_back(std::move(Block));
+        std::set<uint64_t> Used;
+        EXPECT_TRUE(restoresNativeSourceState(Function, Arch::AArch64, Calls,
+                                              &Used, nullptr, Format));
+        EXPECT_FALSE(Used.count(a64reg::X30));
+        // Return restoration is not permission to rewrite a private frame or
+        // treat a signed pointer as ordinary initialized display bytes.
+        EXPECT_FALSE(certifiesPrivateSourceFrame(Function, Arch::AArch64, true,
+                                                 nullptr));
+        const auto Load =
+            std::find_if(Function.Blocks.front().Ops.begin(),
+                         Function.Blocks.front().Ops.end(),
+                         [](const auto &Op) { return Op.Addr == 0x4020; });
+        const auto LoadIndex =
+            size_t(Load - Function.Blocks.front().Ops.begin());
+        EXPECT_FALSE(sourceFrameLoadedDefinition(Function, Arch::AArch64, Calls,
+                                                 7, LoadIndex, Format));
+        const auto Reject = [&](const char *Reason, auto Mutate) {
+          SCOPED_TRACE(Reason);
+          auto Candidate = Function;
+          Mutate(Candidate.Blocks.front().Ops);
+          EXPECT_FALSE(restoresNativeSourceState(
+              Candidate, Arch::AArch64, Calls, nullptr, nullptr, Format));
+        };
+        Reject("authentication key differs", [&](auto &Ops) {
+          Ops[Ops.size() - 2].Inputs[0] = NdVar::cst(
+              uint64_t(BKey ? Intrinsic::Autia : Intrinsic::Autib), 2);
+        });
+        Reject("data-pointer key is not a return recipe", [&](auto &Ops) {
+          Ops.front().Inputs[0] = NdVar::cst(uint64_t(Intrinsic::Pacda), 2);
+        });
+        Reject("signing a different entry register",
+               [&](auto &Ops) { Ops.front().Inputs[1] = X0; });
+        Reject("signing with an unproved modifier",
+               [&](auto &Ops) { Ops.front().Inputs[2] = Address; });
+        Reject("authentication modifier is not entry SP", [&](auto &Ops) {
+          Ops[Ops.size() - 2].Inputs[2] = NdVar::scalar(0, 8);
+        });
+        Reject("authentication writes a different register",
+               [&](auto &Ops) { Ops[Ops.size() - 2].Output = X0; });
+        Reject("authentication does not read all signed bytes",
+               [&](auto &Ops) { Ops[Ops.size() - 2].Inputs[1].Size = 4; });
+        Reject("missing authentication",
+               [&](auto &Ops) { Ops.erase(Ops.end() - 2); });
+        Reject("authentication is not consumed by an immediate return",
+               [&](auto &Ops) {
+                 Ops.insert(Ops.end() - 1, op(NdOp::COPY, X0, {LR}, 0x4032));
+               });
+        Reject("return consumes a different register",
+               [&](auto &Ops) { Ops.back().Inputs[0] = X0; });
+        Reject("one saved link byte is overwritten", [&](auto &Ops) {
+          Ops.insert(Ops.begin() + LoadIndex,
+                     op(NdOp::STORE, {}, {SP, NdVar::scalar(0, 1)}, 0x401f));
+        });
+        Reject(
+            "a popped and reallocated slot loses its old identity",
+            [&](auto &Ops) {
+              Ops.insert(
+                  Ops.begin() + LoadIndex,
+                  {op(NdOp::INT_ADD, SP, {SP, NdVar::scalar(32, 8)}, 0x401d),
+                   op(NdOp::INT_SUB, SP, {SP, NdVar::scalar(32, 8)}, 0x401e)});
+            });
+        Reject("one preserved register byte is overwritten", [&](auto &Ops) {
+          Ops.insert(Ops.end() - 4, op(NdOp::STORE, {},
+                                       {Address, NdVar::scalar(0, 1)}, 0x4026));
+        });
+        if (NestedCall)
+          EXPECT_FALSE(restoresNativeSourceState(Function, Arch::AArch64, {},
+                                                 nullptr, nullptr, Format));
+
+        auto Diamond = Function;
+        const auto Original = Diamond.Blocks.front();
+        auto &Entry = Diamond.Blocks.front();
+        Entry.Ops.resize(LoadIndex);
+        Entry.Succs = {8, 9};
+        for (int Id : {8, 9}) {
+          LowBlock Arm;
+          Arm.Id = Id;
+          Arm.StartAddr = 0x5000 + unsigned(Id) * 0x10;
+          Arm.Preds = {7};
+          Arm.Succs = {10};
+          Arm.Ops = {op(NdOp::COPY, X0, {NdVar::scalar(0, 8)}, Arm.StartAddr)};
+          Diamond.Blocks.push_back(std::move(Arm));
+        }
+        LowBlock Join;
+        Join.Id = 10;
+        Join.StartAddr = 0x4020;
+        Join.Preds = {8, 9};
+        Join.Ops.assign(Original.Ops.begin() + LoadIndex, Original.Ops.end());
+        Diamond.Blocks.push_back(std::move(Join));
+        EXPECT_TRUE(restoresNativeSourceState(Diamond, Arch::AArch64, Calls,
+                                              nullptr, nullptr, Format));
+        auto Loop = Diamond;
+        Loop.Blocks[1].Preds.push_back(8);
+        Loop.Blocks[1].Succs = {8, 10};
+        EXPECT_TRUE(restoresNativeSourceState(Loop, Arch::AArch64, Calls,
+                                              nullptr, nullptr, Format));
+        Loop.Blocks[1].Ops.push_back(
+            op(NdOp::STORE, {}, {SP, NdVar::scalar(0, 1)}, 0x5084));
+        EXPECT_FALSE(restoresNativeSourceState(Loop, Arch::AArch64, Calls,
+                                               nullptr, nullptr, Format));
+        Diamond.Blocks[2].Ops.push_back(
+            op(NdOp::STORE, {}, {SP, NdVar::scalar(0, 1)}, 0x5094));
+        EXPECT_FALSE(restoresNativeSourceState(Diamond, Arch::AArch64, Calls,
+                                               nullptr, nullptr, Format));
+      }
+}
 
 TEST(SourceFrameAnalysis, CallStorageKeepsDefinitionsAndPaddingDistinct) {
   FrameFixture F;
@@ -483,12 +638,26 @@ TEST(SourceFrameAnalysis, DisplayBytesAuthenticateWholeImmutableLoads) {
       ReadOnly.Flags = SegmentFlags::Readable;
       Image.Sections = {ReadOnly};
       ASSERT_EQ(observeSourceFrameBytes(F.Function, Image).size(), 1U);
+      Image.Segments.front().Flags =
+          SegmentFlags::Readable | SegmentFlags::Executable;
+      const auto SharedMapping = observeSourceFrameBytes(F.Function, Image);
+      ASSERT_EQ(SharedMapping.size(), 1U);
+      EXPECT_EQ(SharedMapping[0].Bytes, Expected);
+      Image.Sections.front().Flags =
+          SegmentFlags::Readable | SegmentFlags::Executable;
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Sections.front() = ReadOnly;
+      Image.Sections.front().VA += Data.Size;
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Sections.front() = ReadOnly;
       Image.Sections.push_back(ReadOnly);
       EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
       Image.Sections.resize(1);
       Image.Sections[0].Size = Data.Size - 1;
       EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
       Image.Sections.clear();
+      EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
+      Image.Segments.front() = Data;
       Image.DataPtrRelocSlots.insert(0x8ffc);
       EXPECT_TRUE(observeSourceFrameBytes(F.Function, Image).empty());
       Image.DataPtrRelocSlots.clear();

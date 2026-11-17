@@ -571,6 +571,7 @@ void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
         LowToMedConverter Reconv;
         Reconv.setBinaryImage(&Img);
         Reconv.setCalleePopMap(&CalleePop);
+        // SharedValue 字段经 .get() 取内部容器地址传递。
         Reconv.setCallMayWriteGPRs(&Result.CallMayWriteGPRs.get());
         Reconv.setCallExitConstants(&Result.CallExitConstants.get());
         Reconv.setCallEntryReadGPRs(&Result.CallEntryReadGPRs.get());

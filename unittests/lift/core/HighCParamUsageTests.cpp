@@ -9,6 +9,8 @@
 #include "../../../lib/backend/c/HighC/HighCWriter.h"
 #include "gtest/gtest.h"
 
+#include "neverd/ir/TargetRegInfo.h"
+
 using namespace neverd;
 
 namespace {
@@ -65,6 +67,67 @@ public:
   bool hasInfo() const override { return true; }
 };
 } // namespace
+
+TEST(HighCParamUsage, UnreadFloatingSuffixKeepsItsDeclaredInterface) {
+  for (Arch Architecture : {Arch::AArch64, Arch::X64})
+    for (BinaryFormat Format :
+         {BinaryFormat::ELF, BinaryFormat::COFF, BinaryFormat::MachO})
+      for (bool HasReadParameter : {false, true}) {
+        SCOPED_TRACE(unsigned(Architecture));
+        SCOPED_TRACE(unsigned(Format));
+        SCOPED_TRACE(HasReadParameter);
+        HighFunc Function;
+        Function.Name = "tick";
+        Function.Entry = 0x401000;
+        Function.ReturnType = NdType::makeVoid();
+        RecordParametersDebug Debug;
+        Debug.Function.Addr = Function.Entry;
+        Debug.Function.Name = Function.Name;
+        Debug.Function.ReturnType = Function.ReturnType;
+        if (HasReadParameter) {
+          Function.Params.push_back({"context", NdType::makePtr(),
+                                     getTargetRegInfo(Architecture)
+                                         .integerArgumentLayout(Format)
+                                         .Registers.front(),
+                                     0});
+          Debug.Function.Params.push_back({"context", NdType::makePtr()});
+        }
+        Debug.Function.Params.push_back({"elapsed", NdType::makeFloat(4)});
+        Debug.Function.Params.push_back({"scale", NdType::makeFloat(8)});
+        Debug.Function.Params.push_back({"flags", NdType::makeInt(4, false)});
+        CEmitterOptions Options;
+        Options.TheArch = Architecture;
+        Options.Format = Format;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        HighCWriter Writer(Out, Options, &Debug);
+        const size_t First = HasReadParameter ? 1 : 0;
+        EXPECT_EQ(Writer.unreadDeclaredParams(Function),
+                  std::vector<size_t>({First, First + 1, First + 2}));
+        Writer.writeAll({Function});
+        EXPECT_NE(Text.find("float elapsed, double scale, uint32_t flags"),
+                  std::string::npos)
+            << Text;
+      }
+}
+
+TEST(HighCParamUsage, UnplacedSignatureDoesNotInventUnreadFloatingParameters) {
+  HighFunc Function;
+  Function.Name = "custom_tick";
+  Function.Entry = 0x401000;
+  Function.ReturnType = NdType::makeVoid();
+  RecordParametersDebug Debug;
+  Debug.Function.Addr = Function.Entry;
+  Debug.Function.PlatformConvention = false;
+  Debug.Function.Params = {{"elapsed", NdType::makeFloat(4)}};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::AArch64;
+  Options.Format = BinaryFormat::ELF;
+  std::string Text;
+  llvm::raw_string_ostream Out(Text);
+  HighCWriter Writer(Out, Options, &Debug);
+  EXPECT_TRUE(Writer.unreadDeclaredParams(Function).empty());
+}
 
 TEST(HighCParamUsage, RecordDeclarationsSurviveScalarFunctionSwitches) {
   HighFunc Scalar = makeFunction(0);

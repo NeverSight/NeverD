@@ -35,7 +35,9 @@ inline void emitX64PagedDriver(
  * Refused steps, changed code and scalar operand backing stops consume none.
  * An authenticated IRET that begins frame access consumes an attempt even if
  * backing fails: NMI unblocking and earlier descriptor writes are retained.
- * IRET/RETF backing stops retain an immutable continuation in the context.
+ * Return and selector-transfer backing stops retain immutable continuations.
+ * Completed segment operands survive later descriptor backing stops, including
+ * page-table aliases; reads alone leave the pending attempt uncharged.
  * Resume without refetch/replay; only an already charged attempt bypasses zero
  * budget. A reconstructed context needs the saved instruction continuation.
  * MOV SS requires the scheduled entry, whose shadow persists across calls. */

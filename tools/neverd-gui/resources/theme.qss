@@ -92,7 +92,10 @@ QComboBox { padding-right: 20px; combobox-popup: 0; }
 QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: center right; width: 20px; border: none; }
 QComboBox::down-arrow { image: url(:/neverd/icons/chevron_down-${Mode}.svg); width: 10px; height: 10px; }
 QComboBox QLineEdit { background: transparent; border: none; padding: 0; }
-QAbstractSpinBox { padding-right: 18px; }
+/* From Qt 6.12 the style sheet adds the buttons' width to a spin box's size
+   itself, so the rule keeps no padding for them; the workbench style gives
+   the text its inset on both sides (WorkbenchStyle.cpp, insetSpinBoxText). */
+QAbstractSpinBox { padding-right: 0; }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { subcontrol-origin: border; width: 18px; border: none; background: transparent; }
 QAbstractSpinBox::up-button { subcontrol-position: top right; }
 QAbstractSpinBox::down-button { subcontrol-position: bottom right; }

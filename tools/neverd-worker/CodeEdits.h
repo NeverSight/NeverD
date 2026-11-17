@@ -127,7 +127,8 @@ public:
   /// Give a complete source view a source name wherever its code spells an
   /// identifier its identifier_symbols list (`fini`, which C calls the
   /// function `_fini`), so the identifier finds the function and reads as its
-  /// symbol. Comments and literals spell none.
+  /// symbol. A virtual-target annotation may name its certified address;
+  /// ordinary comments and literals spell none.
   static void spellIdentifierSymbols(Json &view);
 };
 } // namespace neverd::worker

@@ -19,6 +19,10 @@
 
 #include "neverd/sdk/NeverDCAPITypes.h"
 
+// fork 新增的分页查询 API 使用 uint64_t 游标；C 头必须自行引入 stdint，
+// 不能假设翻译单元中已存在该定义。
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -144,11 +148,44 @@ NEVERD_API const char *neverd_string_encodings_json(void);
 /// it.  Functions decode as for
 /// neverd_code_refs_json(), and MaxFunctions is clamped to 1..4096.  NULL
 /// with neverd_last_error() for malformed options or an EVM or SBF image.
-/// This query never starts analysis.
+/// Computed references use the same settled register constants and independent
+/// entries as neverd_code_refs_json(). This query never starts decompilation.
+/// The first page (FirstEntry == 0) also contains mapped, validated embedded
+/// ELF relocation references, kind "embedded_offset". Their instruction field
+/// describes the object/section/relocation instead of outer machine code.
+/// Control-prefixed text keeps the original target in "to" and the printable
+/// text start in "string"; no instruction or address is rewritten.
 NEVERD_API const char *neverd_string_refs_json(neverd_session_t Sess,
                                                const char *OptionsJson,
                                                neverd_va_t FirstEntry,
                                                int MaxFunctions);
+/// Plaintext ELF objects contained in the loaded file: an array of records
+/// with file_offset, size, bits, big_endian, machine, elf_type, diagnostic,
+/// relocation counts and refs. File offsets and optional mapped from/to
+/// addresses are hexadecimal strings. References retain section coordinates,
+/// original relocation record, symbol and addend; string_address may follow a
+/// non-NUL control prefix while to remains the real target. Unmapped offsets
+/// have null addresses. Malformed candidates have no refs. Unsupported forms
+/// are counted, never guessed. No nested code is admitted to the outer image's
+/// function list, and this query neither decrypts nor executes payloads.
+NEVERD_API const char *neverd_embedded_objects_json(neverd_session_t Sess);
+/// Conditional strings computed by one x64 or AArch64 function. Prepares its
+/// source analysis, without emitting C, HighIR or a native LLVM module. Returns
+/// {"function","complete","strings":[{"block","instruction","address",
+/// "encoding","text","bytes","inputs":[{"address","initializer","value"}],
+/// "entry_registers":[{"offset","bytes","value"}]}]}.
+/// Addresses and register values are hexadecimal strings; "bytes" is the full
+/// observed byte sequence in hexadecimal, including its terminator. Input-byte
+/// values and register widths are integers. Each text is conditional on all
+/// listed memory/register inputs at its block entry and successful execution
+/// through the observation instruction (which can follow the last store).
+/// Initializers propose values, without
+/// proving that an entry path executes them. "complete" describes completion
+/// within the supported observation domain, not recovery of every string or
+/// whole-function equivalence. The query never changes the image's bytes or
+/// literal-string catalogue. NULL with neverd_last_error() on failure.
+NEVERD_API const char *neverd_computed_strings_json(neverd_session_t Sess,
+                                                    neverd_va_t FuncEntry);
 /// \p Text (UTF-8) with every character case-folded by Unicode simple case
 /// folding, so that a filter matches text regardless of case in any script.
 /// Bytes that are not UTF-8 stay as they are.  NULL for NULL.
@@ -188,6 +225,18 @@ NEVERD_API const char *neverd_sections_json(neverd_session_t Sess);
 NEVERD_API const char *neverd_symbols_json(neverd_session_t Sess);
 /// The symbols of neverd_symbols_json that are not functions.
 NEVERD_API const char *neverd_data_symbols_json(neverd_session_t Sess);
+/// One page of neverd_data_symbols_json(). \p First is the cursor the
+/// previous page returned in "next", or 0 to start. \p MaxRows is clamped
+/// to 1..kMaxDataSymbolRowsPerPage. Returns
+/// {"next":N|null,"symbols":[rows as neverd_data_symbols_json lists them]}.
+/// "next" is the cursor of the following page, or null when the list is
+/// exhausted. A page stays within kMaxDataSymbolPageBytes; a single symbol
+/// that cannot is an error (NULL and neverd_last_error()) rather than a
+/// truncated name. Reading every page yields the same rows, in the same
+/// order, as neverd_data_symbols_json().
+NEVERD_API const char *neverd_data_symbols_page_json(neverd_session_t Sess,
+                                                     uint64_t First,
+                                                     int MaxRows);
 NEVERD_API const char *neverd_relocs_json(neverd_session_t Sess);
 /// The image's headers.  "language" is the runtime that built the image as
 /// {"runtime","version"?,"secondary":[],"evidence":[],"pseudocode":[]}: "c",

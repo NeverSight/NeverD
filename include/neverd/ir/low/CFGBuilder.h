@@ -2606,9 +2606,25 @@ private:
       const BinaryImage &Img, const JumpTableValueOccurrence &Use,
       size_t *CandidateEvidenceBudget, bool &AnalysisComplete,
       ResolverQueryScope *ReadOnlyScope = nullptr) const;
+  /// Build an isolated block prefix whose incoming values are unconstrained.
+  std::unique_ptr<CFGBuilder>
+  localTableLoadProof(va_t LastAddr, const JumpTableValueOccurrence &Load,
+                      size_t *AggregateEvidenceBudget) const;
+  /// Prove that every reaching AArch64 index definition clears its upper lane.
+  bool aarch64IndexIsZeroExtendedAtUse(const NdVar &Index, va_t UseAddr,
+                                       int UseSeq,
+                                       size_t *AggregateEvidenceBudget,
+                                       bool &AnalysisComplete) const;
   /// Certify one original indexed load without guessing access-EL controls.
   /// Both operands are proved at its exact occurrence, and every possible
   /// accessed byte must have the same address for every CPA2 control choice.
+  /// A full-width index reloaded in the load block is not walked back through
+  /// calls. The address formula already names one address for every 32-bit
+  /// index, and the guard owns the lane. A call or store that receives the
+  /// reloaded cell keeps the value query. An unproved indirect edge does not
+  /// restart the incoming stack pointer; a block it alone enters is still
+  /// checked against the preserved frame at the reload. Returning true does
+  /// not set a selector bound.
   /// The base is the role's one table, or the role's SELECT between two
   /// tables: each input of that SELECT is then proved to be its own table,
   /// and Capacity counts the slots of one table.
@@ -2697,7 +2713,12 @@ private:
   std::optional<bool>
   tableLoadConditionValue(va_t BranchAddr, const JumpTableInfo &Info,
                           size_t *GraphWorkBudget = nullptr) const;
-  bool isValidTarget(const BinaryImage &Img, va_t Target, va_t FuncEntry) const;
+  /// \p AllowDecodedContinuation keeps an out-of-range target when this
+  /// function already decoded that instruction. Another function's entry
+  /// still fails. Publication of a bounded switch passes true; a slot that
+  /// only names the next function does not.
+  bool isValidTarget(const BinaryImage &Img, va_t Target, va_t FuncEntry,
+                     bool AllowDecodedContinuation = false) const;
   bool sanityCheckTargets(const BinaryImage &Img,
                           std::vector<va_t> &Targets) const;
 

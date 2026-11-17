@@ -38,7 +38,7 @@ public:
   HighEntryStackOffsets(const MedFunc &Function, Arch Architecture)
       : Architecture(Architecture),
         StackPointer(getTargetRegInfo(Architecture).StackPointer),
-        PointerSize(getTargetRegInfo(Architecture).PointerSize),
+        AddressBytes(getTargetRegInfo(Architecture).addressRegisterBytes()),
         Equations(Consume) {
     for (const MedBlock &Block : Function.Blocks) {
       for (const PhiNode &Phi : Block.Phis)
@@ -175,11 +175,11 @@ private:
   bool carrier(const MedVar &V) const {
     return !V.isConst() && V.Kind != MedVar::Unspecified &&
            (V.TheArch == Arch::Unknown || V.TheArch == Architecture) &&
-           (V.Size == PointerSize || (PointerSize == 4 && V.Size == 8));
+           (V.Size == AddressBytes || (AddressBytes == 4 && V.Size == 8));
   }
   bool entryStack(const MedVar &V) const {
     return V.Kind == MedVar::Reg && V.RegOff == StackPointer && V.SSAVer == 0 &&
-           V.Size == PointerSize;
+           V.Size == AddressBytes;
   }
   bool sameView(const MedVar &A, const MedVar &B) const {
     return carrier(A) && carrier(B) && view(A) == view(B);
@@ -209,7 +209,7 @@ private:
     std::vector<std::pair<int64_t, bool>> Steps;
     std::set<View> Seen;
     for (int Depth = 0; Depth <= limits::kCallArgStoreAddressDepth; ++Depth) {
-      if (!carrier(Value) || Value.Size != PointerSize ||
+      if (!carrier(Value) || Value.Size != AddressBytes ||
           !Seen.insert(view(Value)).second)
         return std::nullopt;
       const auto Phi = Phis.find(identity(Value));
@@ -234,7 +234,7 @@ private:
           Def->MemoryOrdering != NdMemoryOrdering::None ||
           Def->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           !Def->IntrinsicOutputs.empty() || Def->NumInputs == 0 ||
-          Def->Inputs[0].Size != PointerSize)
+          Def->Inputs[0].Size != AddressBytes)
         return std::nullopt;
       if (Def->Opcode == NdOp::COPY && Def->NumInputs == 1) {
         Value = Def->Inputs[0];
@@ -243,7 +243,7 @@ private:
       if ((Def->Opcode != NdOp::INT_ADD && Def->Opcode != NdOp::INT_SUB) ||
           Def->NumInputs != 2)
         return std::nullopt;
-      const auto Delta = delta(Def->Inputs[1], PointerSize);
+      const auto Delta = delta(Def->Inputs[1], AddressBytes);
       if (!Delta)
         return std::nullopt;
       Steps.emplace_back(*Delta, Def->Opcode == NdOp::INT_SUB);
@@ -316,7 +316,7 @@ private:
       const bool Extend =
           Def->Opcode == NdOp::INT_ZEXT && Def->NumInputs == 1 &&
           (Def->Inputs[0].Size == Value.Size ||
-           (PointerSize == 4 && Def->Inputs[0].Size == 4 && Value.Size == 8));
+           (AddressBytes == 4 && Def->Inputs[0].Size == 4 && Value.Size == 8));
       const bool Arithmetic =
           (Def->Opcode == NdOp::INT_ADD || Def->Opcode == NdOp::INT_SUB) &&
           Def->NumInputs == 2 && Def->Inputs[0].Size == Value.Size;
@@ -471,7 +471,8 @@ private:
 
   Arch Architecture;
   uint64_t StackPointer;
-  uint16_t PointerSize;
+  // n32 has four-byte C pointers but eight-byte SP/address registers.
+  uint16_t AddressBytes;
   std::map<Identity, const MedOp *> Definitions;
   std::map<Identity, const PhiNode *> Phis;
   // There is no evidence allowance in this source projection. Its work is

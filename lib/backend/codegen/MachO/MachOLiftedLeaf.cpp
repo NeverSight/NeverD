@@ -24,6 +24,7 @@
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/DwarfEH.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -608,7 +609,7 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
       (!Language && Old->Augmentation != kCompilerFrameAugmentation &&
        Old->Augmentation != kBKeyFrameAugmentation) ||
       Old->ParseStatus != ExceptionParseStatus::Complete ||
-      NewFrame->LSDAVA != (Language ? Frame.Dwarf->LSDAVA + Slide : 0) ||
+      (!Language && NewFrame->LSDAVA) ||
       NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
       NewFrame->ParseStatus != ExceptionParseStatus::Complete)
     return false;
@@ -634,12 +635,78 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
          sameSpillRules(Frame.Dwarf->Instructions, NewFrame->Instructions);
 }
 
-bool sameFramelessSpillFrame(const CompactUnwindEntry &Compact,
+bool sameLanguageTable(const ExceptionFunction &Before,
+                       const BinaryImage &Installed,
+                       const NativeMachOCompactRange &Range, va_t Slide) {
+  const auto *After = Installed.ExceptionMetadata.findFunction(Range.BeginVA);
+  if (!After || After->ParseStatus != ExceptionParseStatus::Complete ||
+      !After->Itanium || After->CodeRange.Begin != Range.BeginVA ||
+      After->CodeRange.End != Range.EndVA ||
+      After->Personality != Before.Personality)
+    return false;
+  const auto &Old = *Before.Itanium;
+  const auto &New = *After->Itanium;
+  if (Range.LSDAVA.value_or(0) != New.LSDAVA ||
+      Old.IsCallSiteAddressForm != New.IsCallSiteAddressForm ||
+      Old.TypeTableEntryKind != New.TypeTableEntryKind ||
+      Old.CallSites.size() != New.CallSites.size() ||
+      Old.Actions.size() != New.Actions.size() ||
+      Old.TypeTable.size() != New.TypeTable.size() ||
+      Old.ExceptionSpecs.size() != New.ExceptionSpecs.size())
+    return false;
+  if (Old.LandingPadBaseEncoding == dweh::Omit) {
+    if (New.LSDAVA != Old.LSDAVA + Slide)
+      return false;
+  }
+  // Explicit source bases may be canonicalized. Compare the normalized
+  // guard and handler coordinates below, including entry-point handlers.
+
+  for (size_t I = 0; I < Old.CallSites.size(); ++I) {
+    const auto &A = Old.CallSites[I];
+    const auto &B = New.CallSites[I];
+    if (A.GuardedRange.Begin - Before.CodeRange.Begin !=
+            B.GuardedRange.Begin - Range.BeginVA ||
+        A.GuardedRange.size() != B.GuardedRange.size() ||
+        A.FirstActionOffset != B.FirstActionOffset ||
+        (A.LandingPadVA ? A.LandingPadVA - Before.CodeRange.Begin !=
+                              B.LandingPadVA - Range.BeginVA
+                        : B.LandingPadVA != 0))
+      return false;
+  }
+  for (size_t I = 0; I < Old.Actions.size(); ++I) {
+    const auto &A = Old.Actions[I];
+    const auto &B = New.Actions[I];
+    if (std::tie(A.TableOffset, A.TypeFilter, A.NextActionOffset) !=
+        std::tie(B.TableOffset, B.TypeFilter, B.NextActionOffset))
+      return false;
+  }
+  for (size_t I = 0; I < Old.TypeTable.size(); ++I) {
+    const auto &A = Old.TypeTable[I];
+    const auto &B = New.TypeTable[I];
+    if (A.Index != B.Index || A.IsCatchAll != B.IsCatchAll ||
+        (A.TypeInfoSlotVA
+             ? B.TypeInfoSlotVA != A.TypeInfoSlotVA + Slide
+             : B.TypeInfoSlotVA ||
+                   B.TypeInfoVA != (A.TypeInfoVA ? A.TypeInfoVA + Slide : 0)))
+      return false;
+  }
+  for (size_t I = 0; I < Old.ExceptionSpecs.size(); ++I) {
+    const auto &A = Old.ExceptionSpecs[I];
+    const auto &B = New.ExceptionSpecs[I];
+    if (A.Index != B.Index || A.TypeIndices != B.TypeIndices)
+      return false;
+  }
+  return true;
+}
+
+bool sameFramelessSpillFrame(const ExceptionFunction &Original,
                              const dwarf_eh::ParseResult &Generated,
                              const DwarfFDE *Frame,
-                             const NativeMachOCompactRange &Range) {
+                             const NativeMachOCompactRange &Range, va_t Slide) {
+  const bool Language = Original.Itanium.has_value();
   if (!Frame || Frame->InitialLocation != Range.BeginVA ||
-      Frame->AddressRange != Range.EndVA - Range.BeginVA || Frame->LSDAVA ||
+      Frame->AddressRange != Range.EndVA - Range.BeginVA ||
+      (Language ? Frame->LSDAVA != Range.LSDAVA.value_or(0) : Frame->LSDAVA) ||
       Frame->ParseStatus != ExceptionParseStatus::Complete ||
       Generated.ParseStatus != ExceptionParseStatus::Complete)
     return false;
@@ -650,11 +717,21 @@ bool sameFramelessSpillFrame(const CompactUnwindEntry &Compact,
                                .Register = aarch64_unwind::kSP};
   return CIE != Generated.CIEs.end() &&
          CIE->ParseStatus == ExceptionParseStatus::Complete &&
-         CIE->Augmentation == kBKeyFrameAugmentation &&
+         (Language ? CIE->PersonalityEncoding ==
+                             (dweh::Indirect | dweh::PCRel | dweh::Sdata4) &&
+                         CIE->PersonalitySlotVA ==
+                             Original.Compact->PersonalitySlotVA + Slide &&
+                         CIE->PersonalitySlotVA ==
+                             Range.PersonalitySlotVA.value_or(0) &&
+                         CIE->LSDAPointerEncoding == dweh::PCRel &&
+                         !CIE->IsSignalFrame && !CIE->UsesNonHintPAuthLR &&
+                         !CIE->HasMTETaggedFrame
+                   : CIE->Augmentation == kBKeyFrameAugmentation) &&
          CIE->UsesArm64eReturnAddressABI && CIE->HasPointerAuth &&
          CIE->ReturnAddressRegister == aarch64_unwind::kLR &&
          sameSpillRules({Initial}, CIE->InitialInstructions) &&
-         sameSpillRules(machOFramelessSpillRows(Compact), Frame->Instructions);
+         sameSpillRules(machOFramelessSpillRows(*Original.Compact),
+                        Frame->Instructions);
 }
 
 llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
@@ -676,7 +753,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                                     Section.ExternalBytes.size(), Section.VA},
                                    {});
       if (Section.Name != section_names::macho::CompactUnwind &&
-          Section.Name != section_names::macho::EhFrame)
+          Section.Name != section_names::macho::EhFrame &&
+          Section.Name != section_names::macho::GccExceptTab)
         return refuse(kLeafCode);
       continue;
     }
@@ -733,8 +811,11 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     if (!Frame || !Frame->Compact ||
         (!Frame->describesUnwindOnly() &&
          !(RegisterEntries.contains(Start) &&
-           canReuseMachOLanguageFrame(Original, *Frame))) ||
+           canPublishMachOLanguageFrame(Original, *Frame))) ||
         Frame->CodeRange.End < End)
+      return refuse(kLeafFrame);
+    if (Frame->Itanium &&
+        !sameLanguageTable(*Frame, Layout, *Range.mapped(), Slide))
       return refuse(kLeafFrame);
     const auto Native = Range.mapped()->Encoding;
     const auto Source = llvm::ArrayRef(Original.Raw)
@@ -775,8 +856,9 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         !Frame->Compact->SavedRegisterSlots.empty();
     if (FramelessSpills) {
       if (!Indexed || Frame->Dwarf ||
-          !sameFramelessSpillFrame(*Frame->Compact, LinkedFrames,
-                                   FDEs.lookup(Owner->second), *Range.mapped()))
+          !sameFramelessSpillFrame(*Frame, LinkedFrames,
+                                   FDEs.lookup(Owner->second), *Range.mapped(),
+                                   Slide))
         return refuse(kLeafFrame);
     } else if (Indexed) {
       if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
@@ -791,8 +873,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       if ((SourceEncoding & ~macho_unwind::kPersonalityMask) != Native ||
           Range.mapped()->PersonalitySlotVA.value_or(0) !=
               (Language ? Frame->Compact->PersonalitySlotVA + Slide : 0) ||
-          Range.mapped()->LSDAVA.value_or(0) !=
-              (Language ? Frame->Itanium->LSDAVA + Slide : 0))
+          (!Language && Range.mapped()->LSDAVA))
         return refuse(kLeafFrame);
     }
 

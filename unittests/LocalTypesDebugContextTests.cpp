@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -643,6 +644,32 @@ TEST(LocalTypesDebugContext,
   }
 }
 
+TEST(LocalTypesDebugContext, VariadicCallbacksRetainTheirDeclaredSignature) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LP64);
+  ASSERT_TRUE(types::parseCTypes(R"c(
+    typedef int (*Logger)(const char *, ...);
+    Logger InstallLogger(Logger Callback);
+  )c",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  sdk::LocalTypesDebugContext Context(Names, Library);
+  const auto Signature = Context.resolvePrototype("InstallLogger");
+  ASSERT_TRUE(Signature);
+  ASSERT_EQ(Signature->Params.size(), 1u);
+  for (const auto &Type :
+       {Signature->ReturnType, Signature->Params.front().second}) {
+    ASSERT_TRUE(Type && Type->Pointee);
+    ASSERT_EQ(Type->Pointee->Kind, NdTypeKind::Func);
+    EXPECT_EQ(Type->Pointee->Size, 0);
+    EXPECT_TRUE(Type->Pointee->FunctionVariadic);
+    ASSERT_EQ(Type->Pointee->ParamTypes.size(), 1u);
+    EXPECT_EQ(Type->Pointee->ParamTypes.front()->Kind, NdTypeKind::Ptr);
+    EXPECT_FALSE(equalSourceTypes(Type, Type));
+  }
+}
+
 TEST(LocalTypesDebugContext,
      PortableDeclarationsRetainQualifiersAndConvention) {
   using namespace neverd;
@@ -990,6 +1017,35 @@ TEST(LocalTypesDebugContext, PointerDeclarationsDoNotRequireRecordLayouts) {
     EXPECT_EQ(Definitions.Records.size(), 2u);
     EXPECT_FALSE(Definitions.Records.at("Item"));
     EXPECT_TRUE(Definitions.Records.at("Choice"));
+  }
+}
+
+TEST(LocalTypesDebugContext, HeaderPointerTypedefsKeepTheirOriginalIdentity) {
+  using namespace neverd;
+  for (const auto Provider :
+       {types::HeaderLibrary::LinuxX64, types::HeaderLibrary::AndroidARM64,
+        types::HeaderLibrary::AndroidARM}) {
+    SCOPED_TRACE(static_cast<unsigned>(Provider));
+    const auto *Header = types::headerLibrary(Provider);
+    ASSERT_NE(Header, nullptr);
+    auto Library = std::make_shared<types::TypeLibrary>(*Header);
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext Context(Names, Library, {}, nullptr,
+                                        {Provider});
+    for (const char *Name : {"pthread_cond_t", "pthread_mutex_t", "fd_set"}) {
+      SCOPED_TRACE(Name);
+      const auto Pointer = NdType::makePtr(NdType::makeNamedRecord(Name));
+      const auto Definitions = Context.definitions({Pointer});
+      EXPECT_NE(std::find(Definitions.HeaderTypedefs.begin(),
+                          Definitions.HeaderTypedefs.end(), Name),
+                Definitions.HeaderTypedefs.end())
+          << Definitions.Text;
+      EXPECT_EQ(Definitions.Text.find(std::string("typedef struct ") + Name),
+                std::string::npos)
+          << Definitions.Text;
+      EXPECT_NE(Definitions.Text.find("#include <"), std::string::npos)
+          << Definitions.Text;
+    }
   }
 }
 
@@ -1354,6 +1410,94 @@ TEST(LocalTypesDebugContext, MatchingNamesStillCompleteTheMemberTypes) {
   // debug graph, just as it does when the library changes member names.
   Context.reset();
   EXPECT_EQ(Record->FieldDisplayTypes, Original);
+}
+
+TEST(LocalTypesDebugContext, TemplateLayoutsUseTheirDistinctCIdentifiers) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LP64);
+  ASSERT_TRUE(
+      types::parseCTypes("struct Layout { int state; int value; };", *Library)
+          .ok());
+  const std::vector<std::string> Names = {
+      "sample::Box<int>", "sample::Box<unsigned int>", "sample__Box_int_"};
+  for (const auto &Name : Names) {
+    types::LocalType Type = *Library->find("Layout");
+    Type.Name = Name;
+    Library->define(Type);
+  }
+  NamesOnlyDebugContext Debug;
+  sdk::LocalTypesDebugContext Context(Debug, Library);
+  std::vector<TypeRef> Records;
+  std::set<std::string> Identifiers;
+  for (const auto &Name : Names) {
+    const auto Record = NdType::makeNamedRecord(Name, 8);
+    Context.completeType(Record);
+    EXPECT_EQ(Record->displayFieldPathAt(4, 4),
+              std::optional<std::string>("value"));
+    Records.push_back(Record);
+    const auto Identifier = Context.cTypeName(Name);
+    EXPECT_TRUE(Identifiers.insert(Identifier).second);
+    EXPECT_EQ(Context.sourceTypeName(Identifier), Name);
+  }
+  const auto Definitions = Context.definitions(Records);
+  for (const auto &Name : Identifiers)
+    EXPECT_EQ(Definitions.Records.count(Name), 1u) << Name << Definitions.Text;
+  for (size_t I = 0; I < Records.size(); ++I)
+    EXPECT_EQ(Records[I]->SourceName, Names[I]);
+}
+
+TEST(LocalTypesDebugContext, QualifiedEnumeratorCollisionsStayConservative) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>();
+  ASSERT_TRUE(types::parseCTypes("enum Base { Shared = 1 };", *Library).ok());
+  for (const std::string Name : {"sample::Mode<int>", "sample::Mode<long>"}) {
+    auto Type = *Library->find("Base");
+    Type.Name = Name;
+    Library->define(std::move(Type));
+  }
+  NamesOnlyDebugContext Debug;
+  sdk::LocalTypesDebugContext Context(Debug, Library);
+  for (const std::string Name : {"sample::Mode<int>", "sample::Mode<long>"}) {
+    auto Enum = NdType::makeNamedRecord(Name, 4);
+    Enum->IsEnum = true;
+    Context.completeType(Enum);
+    // The renderer qualifies the colliding enumerators. Source expression
+    // rendering has no mapping for those values yet and must not reuse them.
+    EXPECT_TRUE(Context.definitions({Enum}).Text.empty());
+  }
+}
+
+TEST(LocalTypesDebugContext, BitfieldsKeepSeparateDisplayRanges) {
+  using namespace neverd;
+  auto Library = std::make_shared<types::TypeLibrary>();
+  ASSERT_TRUE(types::parseCTypes(R"(
+    struct Flags { unsigned short low:13; unsigned short active:1;
+                   unsigned short high:2; };
+    struct Holder { unsigned long long header; struct Flags items[2]; };
+  )",
+                                 *Library)
+                  .ok());
+  NamesOnlyDebugContext Names;
+  auto Context = std::make_unique<sdk::LocalTypesDebugContext>(Names, Library);
+  auto Flags = NdType::makeNamedRecord("Flags");
+  auto Holder = NdType::makeNamedRecord("Holder");
+  Context->completeType(Flags);
+  Context->completeType(Holder);
+  ASSERT_EQ(Flags->FieldDisplayBits.size(), 3u);
+  EXPECT_EQ(Flags->Size, 0u);
+  EXPECT_EQ(Holder->Size, 0u);
+  EXPECT_EQ(Flags->FieldDisplaySize, 2u);
+  EXPECT_EQ(Holder->FieldDisplaySize, 16u);
+  EXPECT_EQ(Flags->displayBitFieldPathAt(13, 1), "active");
+  EXPECT_EQ(Holder->displayBitFieldPathAt(8 * 8 + 13, 1), "items[0].active");
+  EXPECT_EQ(Holder->displayBitFieldPathAt(10 * 8 + 13, 1), "items[1].active");
+  EXPECT_FALSE(Flags->displayFieldPathAt(0, 2));
+  EXPECT_TRUE(Flags->ScalarLeaves.empty());
+  EXPECT_EQ(Context->definitions({Flags}).Records.count("Flags"), 1u);
+  Context.reset();
+  EXPECT_TRUE(Flags->FieldDisplayBits.empty());
+  EXPECT_EQ(Flags->FieldDisplaySize, 0u);
+  EXPECT_EQ(Holder->FieldDisplaySize, 0u);
 }
 
 TEST(LocalTypesDebugContext, FlexibleArrayMembersHoldTheirElements) {

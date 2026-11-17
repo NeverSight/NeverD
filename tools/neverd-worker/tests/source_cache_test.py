@@ -27,21 +27,23 @@ NAMED_VIEW_BYTES = 256 * 1024 * 1024
 BUDGET_DOCUMENTS = NAMED_VIEW_BYTES // (2 * 9000 * 516) + 2
 
 
-def ok(client, operation, payload=None):
-    reply = client.call(operation, payload)
+def ok(client, operation, payload=None, *, timeout=8):
+    reply = client.call(operation, payload, timeout=timeout)
     assert reply["status"] == "ok", reply
     return reply["payload"]
 
 
-def source(client, address=A, *, representation="source", offset=0, limit=4):
+def source(client, address=A, *, representation="source", offset=0, limit=4,
+           timeout=8):
     return ok(client, "decompile", {"address": address,
                                     "representation": representation,
-                                    "offset": offset, "limit": limit})
+                                    "offset": offset, "limit": limit},
+              timeout=timeout)
 
 
 def reused(actual, original):
-    assert actual["fixture_prepares"] == original["fixture_prepares"], actual
-    assert actual["fixture_pages"] == original["fixture_pages"], actual
+    for key in ("fixture_prepares", "fixture_pages"):
+        assert actual[key] == original[key], (key, actual[key], original[key])
     assert actual["text"] == original["text"], (actual, original)
 
 
@@ -83,6 +85,25 @@ def run(executable):
         assert late["fixture_prepares"] == 1 and late["fixture_pages"] == 1
         assert late["text"] == "  return value;\n}\n"
         assert late["rows"][0]["addresses"] == [hex(int(A, 16) + 2)]
+
+        # Explicit refresh is independent of navigation/cache hits, and it
+        # does not retire another function's completed document.
+        fresh_client = clients.enter_context(Client(executable))
+        ok(fresh_client, "open", {"path": str(binary), "analysis": False, "read_only": True})
+        old_a = source(fresh_client)
+        old_b = source(fresh_client, B)
+        for _ in range(2):
+            refreshed = ok(fresh_client, "decompile", {"address": A, "representation": "source", "refresh": True, "limit": 4})
+            assert refreshed["fixture_prepares"] > old_a["fixture_prepares"]
+            assert refreshed["fixture_pages"] > old_a["fixture_pages"]
+            assert refreshed["text"] == old_a["text"]
+            reused(source(fresh_client), refreshed)
+            reused(source(fresh_client, B), old_b)
+            old_a = refreshed
+        for bad in ({"refresh": "yes"}, {"refresh": True, "offset": 2}):
+            rejected = fresh_client.call("decompile", {"address": A, **bad})
+            assert rejected["status"] == "error" and rejected["error"]["code"] == "invalid_request", rejected
+        reused(source(fresh_client), old_a)
 
         # A source cache hit must not label the mutable B pipeline as A.
         # The mock refuses this graph call unless A is really prepared again.
@@ -190,17 +211,27 @@ def run(executable):
         assert "current source comment" not in clean["text"]
 
         # Count-bounded LRU: touch A after filling every slot, then introduce
-        # one more. A survives; the older B must be generated again.
+        # one more. A stays hot; B is read back from its original disk pages.
         entries = [hex(int(A, 16) + index * 16) for index in range(NAMED_VIEWS + 1)]
         previous_b = source(client, entries[1])
         for entry in entries[2:NAMED_VIEWS]:
-            source(client, entry)
+            page = source(client, entry)
+            if entry == C:
+                previous_c = page
         reused(source(client), clean)
         source(client, entries[NAMED_VIEWS])
         reused(source(client), clean)
         rebuilt_b = source(client, B)
-        assert rebuilt_b["fixture_prepares"] > previous_b["fixture_prepares"]
-        assert rebuilt_b["fixture_pages"] > previous_b["fixture_pages"]
+        reused(rebuilt_b, previous_b)
+        # C is now cold. An annotation changes decoration alone: replay its
+        # archived engine pages and apply the current annotation without
+        # preparing the function again.
+        ok(client, "annotation_set", {"address": hex(int(C, 16) + 2),
+                                       "text": "cold source changed"})
+        changed_c = source(client, C)
+        assert changed_c["fixture_prepares"] == previous_c["fixture_prepares"]
+        assert changed_c["fixture_pages"] == previous_c["fixture_pages"]
+        assert "cold source changed" in changed_c["text"], changed_c
 
         # Pages preserve navigation order, repeated references, and every
         # overlapping name. Nested ends or out-of-order producer data remain
@@ -258,9 +289,13 @@ def run(executable):
         for entry in entries[1:BUDGET_DOCUMENTS]:
             source(bounded, entry, limit=1)
         rebuilt = source(bounded, limit=1)
-        assert rebuilt["fixture_prepares"] > large["fixture_prepares"], rebuilt
-        assert rebuilt["fixture_pages"] > large["fixture_pages"], rebuilt
-        assert rebuilt["text"] == large["text"]
+        reused(rebuilt, large)
+        # A refresh also retires a cold original; later paging still uses the
+        # replacement. Another cold function remains reusable.
+        refreshed = ok(bounded, "decompile", {"address": B, "representation": "source", "refresh": True, "limit": 1})
+        assert refreshed["fixture_prepares"] > large["fixture_prepares"]
+        reused(source(bounded, B, limit=1), refreshed)
+        reused(source(bounded, limit=1), large)
 
         # A large document still fits the existing byte allowance when the
         # original is kept in wire form rather than a second parsed DOM.
@@ -276,6 +311,28 @@ def run(executable):
         assert tail["complete"] and "code line 19999" in tail["text"], tail
         assert tail["fixture_pages"] == head["fixture_pages"], (head, tail)
         assert source(huge, representation="llvmc") == head
+
+        # Repeated whole-function metadata must not multiply retained bytes
+        # by the backend page count. The first copy is still part of the view;
+        # its later pages and edits reuse the same original document.
+        metadata_file = root / "source-cache-metadata.bin"
+        metadata_file.write_bytes(b"repeated source metadata fixture")
+        metadata = clients.enter_context(Client(executable))
+        ok(metadata, "open", {"path": str(metadata_file), "analysis": False})
+        # The producer serializes 150 pages of 2 MiB metadata before the
+        # worker can deduplicate them. Budget that first 300 MiB traversal
+        # separately from the ordinary cached requests checked below.
+        metadata_head = source(metadata, timeout=30)
+        assert len(metadata_head["fixture_metadata"]) == 2 * 1024 * 1024
+        reused(source(metadata), metadata_head)
+        metadata_tail = source(metadata, offset=596, limit=4)
+        assert metadata_tail["complete"]
+        assert metadata_tail["fixture_pages"] == metadata_head["fixture_pages"]
+        ok(metadata, "annotation_set", {"address": hex(int(A, 16) + 2),
+                                       "text": "metadata cache annotation"})
+        metadata_edited = source(metadata, timeout=30)
+        assert "metadata cache annotation" in metadata_edited["text"]
+        reused(source(metadata), metadata_edited)
 
         # Switching pipelines can fail after discarding the preceding IR.
         # A graph request for A must really prepare A again; B then retries

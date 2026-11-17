@@ -537,15 +537,22 @@ HighVariableEditResult neverd::editHighVariable(const HighFunc &Function,
   });
   for (const auto &Observation : Sources) {
     if (Observation.Kind == HighSourceKind::Statement ||
-        Observation.Kind == HighSourceKind::Store) {
+        Observation.Kind == HighSourceKind::Store ||
+        Observation.Kind == HighSourceKind::StoreValueExpression) {
       // Keep statement observations at their original
       // instruction identity only while the projection retains the statement
       // kind; scalarizing a stack store must not inherit its old store anchor.
-      if (Observation.Function == Function.Entry && Observation.StatementKind &&
-          !ChangedStatements.contains(
+      if (Observation.Function != Function.Entry ||
+          !Observation.StatementKind ||
+          ChangedStatements.contains(
               {Observation.Occurrence.Address, *Observation.StatementKind}))
+        continue;
+      if (!Observation.ExpressionKind) {
         Result.Sources.push_back(Observation);
-      continue;
+        continue;
+      }
+      // Paired stores also carry destination identity. This projection clones
+      // the expressions, so retain that identity on the corresponding copies.
     }
     const auto Expression = Observation.Expression.lock();
     if (Expression)

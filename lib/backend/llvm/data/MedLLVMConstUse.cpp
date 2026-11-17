@@ -39,7 +39,7 @@ void MedLLVMEmitter::ensureConstClassCache() const {
   if (ConstClassCacheFor == CurMedFunc)
     return;
   ConstClassCacheFor = CurMedFunc;
-  ConstUsedAsPointerCache.clear();
+  ConstUsedAsPointerValues.reset();
   ConstValueUsedAsIntegerCache.clear();
 }
 
@@ -109,33 +109,149 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
   }
   if ((Cur.Provenance != ConstantAddressProvenance::DataAddress &&
        !Img->isPotentiallyRelocatableAddress(Cur.ConstVal)) ||
-      (!HasOwnedRoute && !canResolveGlobalDataConstant(Cur.ConstVal)) ||
-      (Cur.Provenance != ConstantAddressProvenance::DataAddress &&
-       !usesOriginalImageStorage() && addrInCodePtrMirrorRun(Cur.ConstVal)))
+      (!HasOwnedRoute && !canResolveGlobalDataConstant(Cur.ConstVal)))
     return false;
+  if (Cur.Provenance != ConstantAddressProvenance::DataAddress &&
+      !usesOriginalImageStorage() && addrInCodePtrMirrorRun(Cur.ConstVal)) {
+    // Immutable linked tables retain their original numeric coordinates until
+    // the complete memory access selects a mirror. A complete mutable mirror
+    // instead carries runtime pointers in its cells, including pointers a
+    // caller writes back. Its exact address producers must use that same
+    // identity in every consumer: PHIs, comparisons, stores, calls and returns.
+    // Decide this here so getVar and the occurrence-model proofs cannot choose
+    // different representations for the same architectural address.
+    const uint64_t Owner =
+        Cur.AddressOwnerVA != InvalidVA ? Cur.AddressOwnerVA : Cur.ConstVal;
+    if (Img->readOnlyAfterRelocations(Owner, 1) ||
+        !completePointerMirrorRun(Owner))
+      return false;
+  }
   Value = Cur.ConstVal;
   if (OwnerVA)
     *OwnerVA = Cur.AddressOwnerVA;
   return true;
 }
 
-bool MedLLVMEmitter::constUsedAsPointer(uint64_t Val) const {
-  ensureConstClassCache();
-  auto It = ConstUsedAsPointerCache.find(Val);
-  if (It != ConstUsedAsPointerCache.end())
+std::optional<uint64_t>
+MedLLVMEmitter::uniformAddressFragment(const MedVar &V) const {
+  if (!CurMedFunc || !Img || Img->IsRelocatable ||
+      TargetArch != Arch::AArch64 || V.Size != 8)
+    return std::nullopt;
+  if (UniformAddressFragmentCacheFor != CurMedFunc) {
+    UniformAddressFragmentCacheFor = CurMedFunc;
+    UniformAddressFragmentCache.clear();
+  }
+  const auto Root = addressProvenanceVarKey(V);
+  if (auto It = UniformAddressFragmentCache.find(Root);
+      It != UniformAddressFragmentCache.end())
     return It->second;
-  bool Result = constUsedAsPointerImpl(Val);
-  ConstUsedAsPointerCache.emplace(Val, Result);
-  return Result;
+
+  // All fragment leaves stay numeric during mirrored emission. Unlike a
+  // complete data address, their equal bits therefore imply equal values.
+  // Keep other address roles, width changes, arithmetic and loads outside
+  // this proof; they can change either the bits or the relocation model.
+  using Key = AddressProvenanceVarKey;
+  std::set<Key> Seen, Anchored;
+  std::map<Key, std::vector<Key>> Users;
+  std::vector<MedVar> Work{V};
+  std::vector<Key> AnchorWork;
+  std::optional<uint64_t> Page;
+  auto fail = [&]() -> std::optional<uint64_t> {
+    UniformAddressFragmentCache.emplace(Root, std::nullopt);
+    return std::nullopt;
+  };
+  auto anchor = [&](const Key &K, uint64_t Bits) {
+    if (Page && *Page != Bits)
+      return false;
+    Page = Bits;
+    if (Anchored.insert(K).second)
+      AnchorWork.push_back(K);
+    return true;
+  };
+  while (!Work.empty()) {
+    const MedVar Current = Work.back();
+    Work.pop_back();
+    const Key K = addressProvenanceVarKey(Current);
+    if (!Seen.insert(K).second)
+      continue;
+    if (Current.Size != 8)
+      return fail();
+    if (auto It = UniformAddressFragmentCache.find(K);
+        It != UniformAddressFragmentCache.end()) {
+      if (!It->second || !anchor(K, *It->second))
+        return fail();
+      continue;
+    }
+    if (Current.isConst()) {
+      if (Current.Provenance != ConstantAddressProvenance::AddressFragment ||
+          Current.AddressOwnerVA != InvalidVA ||
+          (Current.ConstVal & 0xfff) != 0 || !anchor(K, Current.ConstVal))
+        return fail();
+      continue;
+    }
+    if (lookupCallClobber(Current))
+      return fail();
+    auto enqueue = [&](const MedVar &Input) {
+      Users[addressProvenanceVarKey(Input)].push_back(K);
+      Work.push_back(Input);
+    };
+    if (const MedOp *Def = lookupDef(Current)) {
+      if (addressProvenanceVarKey(Def->Output) != K)
+        return fail();
+      if (auto Input = pointerPreservingInput(*Def)) {
+        enqueue(*Input);
+        continue;
+      }
+      return fail();
+    }
+    const PhiNode *Phi = lookupPhi(Current);
+    if (!Phi || Phi->Args.empty() || addressProvenanceVarKey(Phi->Output) != K)
+      return fail();
+    // Retain every incoming arm, including unknown/dead edges. This exact
+    // proof does not depend on provisional CFG feasibility or cache order.
+    for (const auto &[Pred, Input] : Phi->Args) {
+      (void)Pred;
+      enqueue(Input);
+    }
+  }
+  // Merely finding one constant in the walk is insufficient: a different
+  // selectable component may be a closed, uninitialized cycle. Every visited
+  // value must have a forwarding path to a proven page seed.
+  while (!AnchorWork.empty()) {
+    const Key K = AnchorWork.back();
+    AnchorWork.pop_back();
+    if (auto It = Users.find(K); It != Users.end())
+      for (const Key &User : It->second)
+        if (Anchored.insert(User).second)
+          AnchorWork.push_back(User);
+  }
+  if (!Page || Anchored.size() != Seen.size())
+    return fail();
+  for (const Key &K : Seen)
+    UniformAddressFragmentCache.emplace(K, Page);
+  return Page;
 }
 
-bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
-  if (!CurMedFunc)
-    return false;
+bool MedLLVMEmitter::constUsedAsPointer(uint64_t Val) const {
+  ensureConstClassCache();
+  if (!ConstUsedAsPointerValues)
+    buildConstUsedAsPointerIndex();
+  return ConstUsedAsPointerValues->count(Val) != 0;
+}
 
-  // Backward walk from every memory-access address through address arithmetic;
-  // return true when any visited operand satisfies \p Match.
-  auto reaches = [&](auto &&Match, bool FollowValueMergeArms) {
+void MedLLVMEmitter::buildConstUsedAsPointerIndex() const {
+  auto &Constants = ConstUsedAsPointerValues.emplace();
+  if (!CurMedFunc)
+    return;
+
+  using ValueKey = std::tuple<int, int, int>;
+  llvm::DenseSet<ValueKey> Variables;
+  // Collect the same operands the per-query walk could match. Each memory
+  // root retains its own traversal order, visited set and budget: sharing a
+  // worklist between roots would change which budget-limited paths count.
+  // Constant queries deliberately stop at PHI/SELECT; variable-identity
+  // queries follow their value arms. Build both sets once per function.
+  auto collect = [&](bool FollowValueMergeArms) {
     for (const auto &Blk : CurMedFunc->Blocks)
       for (const auto &Op : Blk.Ops) {
         const bool MergeLoad =
@@ -153,10 +269,13 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
         while (!Work.empty() && Budget-- > 0) {
           MedVar Cur = Work.back();
           Work.pop_back();
-          if (Match(Cur))
-            return true;
-          if (Cur.isConst())
+          if (Cur.isConst()) {
+            if (!FollowValueMergeArms)
+              Constants.insert(Cur.ConstVal);
             continue;
+          }
+          if (FollowValueMergeArms)
+            Variables.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer});
           if (!Seen.insert({(int)Cur.Kind, Cur.Id, Cur.SSAVer}).second)
             continue;
           if (FollowValueMergeArms)
@@ -218,24 +337,17 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
             }
         }
       }
-    return false;
   };
 
   // (1) The constant (or anything derived from it) is a memory-access address.
-  if (reaches([&](const MedVar &C) { return C.isConst() && C.ConstVal == Val; },
-              /*FollowValueMergeArms=*/false))
-    return true;
+  collect(/*FollowValueMergeArms=*/false);
+  collect(/*FollowValueMergeArms=*/true);
   // (2) The constant is compared / offset against a value that is itself a
   //     pointer (`p != end`, `end - begin`): the one-past-the-end idioms.
   auto varIsPointer = [&](const MedVar &Y) {
     if (Y.isConst())
       return false;
-    return reaches(
-        [&](const MedVar &C) {
-          return !C.isConst() && C.Kind == Y.Kind && C.Id == Y.Id &&
-                 C.SSAVer == Y.SSAVer;
-        },
-        /*FollowValueMergeArms=*/true);
+    return Variables.count({(int)Y.Kind, Y.Id, Y.SSAVer}) != 0;
   };
   for (const auto &Blk : CurMedFunc->Blocks)
     for (const auto &Op : Blk.Ops) {
@@ -255,11 +367,9 @@ bool MedLLVMEmitter::constUsedAsPointerImpl(uint64_t Val) const {
       if (Op.NumInputs < 2)
         continue;
       for (int I = 0; I < 2; ++I)
-        if (Op.Inputs[I].isConst() && Op.Inputs[I].ConstVal == Val &&
-            varIsPointer(Op.Inputs[1 - I]))
-          return true;
+        if (Op.Inputs[I].isConst() && varIsPointer(Op.Inputs[1 - I]))
+          Constants.insert(Op.Inputs[I].ConstVal);
     }
-  return false;
 }
 
 bool MedLLVMEmitter::constValueUsedAsInteger(uint64_t Val) const {

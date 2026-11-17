@@ -14,10 +14,6 @@
 
 namespace neverd::worker {
 namespace {
-constexpr std::size_t MaxNodes =
-                          ::neverd::limits::worker::kGraphSnapshotMaxNodes,
-                      MaxEdges =
-                          ::neverd::limits::worker::kGraphSnapshotMaxEdges;
 constexpr std::size_t NodePage =
                           ::neverd::limits::worker::kGraphSnapshotNodePage,
                       EdgePage =
@@ -278,8 +274,9 @@ GraphSnapshot::GraphSnapshot(Json graph, std::string address,
       !graph["nodes"].is_array() || !graph.contains("edges") ||
       !graph["edges"].is_array())
     throw Error("invalid_graph", "Engine graph is missing node or edge arrays");
-  if (graph["nodes"].size() > MaxNodes || graph["edges"].size() > MaxEdges)
-    throw Error("budget_exceeded", "Graph exceeds 20000 nodes / 100000 edges");
+  // The adapter already bounds the encoded graph. This snapshot and its AABB
+  // indexes retain O(nodes + edges) objects; layout bounds optional dummy
+  // vertices separately. A viewport's page limit does not limit the function.
   for (const auto &source : graph["nodes"]) {
     Impl::Node node;
     node.id = id(source.at("id"));
@@ -402,8 +399,8 @@ Json GraphSnapshot::viewport(const Json &request) const {
             number(request, "width", 0, 0.001, 1e9),
             number(request, "height", 0, 0.001, 1e9)};
   const double scale = number(request, "scale", 1, 0.000001, 1000);
-  const auto nodeOffset = sizeField(request, "node_offset", 0, MaxNodes);
-  const auto edgeOffset = sizeField(request, "edge_offset", 0, MaxEdges);
+  const auto nodeOffset = sizeField(request, "node_offset", 0, g.nodes.size());
+  const auto edgeOffset = sizeField(request, "edge_offset", 0, g.totalEdges);
   auto nodes = g.nodeIndex.query(rect), edges = g.edgeIndex.query(rect);
   std::erase_if(edges, [&](auto index) {
     const auto &points = g.edges[index].points;

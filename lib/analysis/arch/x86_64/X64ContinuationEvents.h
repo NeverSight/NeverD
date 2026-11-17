@@ -88,7 +88,10 @@ class X64ContinuationEvents : private X64ContinuationSegments<Writer> {
   }
 
 public:
-  X64ContinuationEvents(Writer &Output, unsigned Bits) : Base(Output, Bits) {}
+  X64ContinuationEvents(Writer &Output, unsigned Bits,
+                        X86DescriptorCanonicalityProfile Canonicality =
+                            X86DescriptorCanonicalityProfile::SelectorForRange)
+      : Base(Output, Bits, Canonicality) {}
 
   void farPointerLoad(const X64FarPointerLoad &F, uint64_t NextPC,
                       std::optional<X64NullSegmentBasePolicy> NullBasePolicy) {
@@ -393,8 +396,11 @@ public:
     faultIf(eq(masked(Access, 0x80), k(0)), 11, CodeError);
     const auto NewCPL = choose(ne(masked(Access, 4), k(0)), CPL, DPL);
     const auto Inner = less(NewCPL, CPL);
+    // Validation consumes the first image. The accessed transaction's later
+    // image includes aliased page-walk effects and supplies the hidden cache.
+    auto CacheImage = Code.Value;
     if constexpr (Writer::FaultableMemory)
-      accessed(Code);
+      CacheImage = W.updateEventDescriptorAccessed(Code.Address, Code.Value);
     else
       AccessedAddress = op(NdOp::INT_ADD, {Code.Address, k(5)});
     const auto IST = masked(shifted(Low, 32), 7);
@@ -454,7 +460,7 @@ public:
     }
     W.storeIf(ne(HasError, k(0)), SP, ErrorCode);
     segment(offsetof(V5, CS), op(NdOp::INT_OR, {masked(CS, 0xfffc), NewCPL}),
-            Code.Value);
+            CacheImage);
     // The inter-privilege path installs null SS:RPL. Same-privilege IST
     // retains SS (INT's INTRA-PRIVILEGE-LEVEL-INTERRUPT pseudocode).
     W.store(offsetof(V5, SS) + offsetof(Segment, Selector),

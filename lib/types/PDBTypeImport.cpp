@@ -7,6 +7,7 @@
 #include "neverd/types/PDBTypeImport.h"
 
 #include "neverd/types/CodeViewCallingConvention.h"
+#include "neverd/types/CodeViewFunctionParameters.h"
 #include "neverd/types/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -182,7 +183,8 @@ private:
   std::shared_ptr<const EnumDef> enumeration(cv::TypeIndex Definition);
   std::shared_ptr<const FunctionDef> function(cv::TypeIndex Return,
                                               cv::CallingConvention Convention,
-                                              cv::TypeIndex Arguments);
+                                              cv::TypeIndex Arguments,
+                                              unsigned ParameterCount);
   /// The members of the field list \p List, its continuations included.
   FieldCollector fields(cv::TypeIndex List);
 
@@ -483,8 +485,9 @@ TypeExprRef Importer::exprUncached(cv::TypeIndex Index) {
     auto Record = deserialize<cv::ProcedureRecord>(Type);
     if (!Record)
       break;
-    if (auto Function = function(Record->getReturnType(), Record->getCallConv(),
-                                 Record->getArgumentList()))
+    if (auto Function =
+            function(Record->getReturnType(), Record->getCallConv(),
+                     Record->getArgumentList(), Record->getParameterCount()))
       return makeFunction(std::move(Function));
     break;
   }
@@ -492,8 +495,9 @@ TypeExprRef Importer::exprUncached(cv::TypeIndex Index) {
     auto Record = deserialize<cv::MemberFunctionRecord>(Type);
     if (!Record)
       break;
-    if (auto Function = function(Record->getReturnType(), Record->getCallConv(),
-                                 Record->getArgumentList()))
+    if (auto Function =
+            function(Record->getReturnType(), Record->getCallConv(),
+                     Record->getArgumentList(), Record->getParameterCount()))
       return makeFunction(std::move(Function));
     break;
   }
@@ -620,7 +624,7 @@ std::shared_ptr<const EnumDef> Importer::enumeration(cv::TypeIndex Definition) {
 
 std::shared_ptr<const FunctionDef>
 Importer::function(cv::TypeIndex Return, cv::CallingConvention Convention,
-                   cv::TypeIndex Arguments) {
+                   cv::TypeIndex Arguments, unsigned ParameterCount) {
   const auto SourceConvention =
       codeViewCallingConvention(Convention, pointerBytes(Library.dataModel()));
   if (!SourceConvention) {
@@ -630,19 +634,21 @@ Importer::function(cv::TypeIndex Return, cv::CallingConvention Convention,
   auto Result = std::make_shared<FunctionDef>();
   Result->Convention = *SourceConvention;
   Result->Return = expr(Return);
-  if (Arguments.isSimple() || Arguments.isNoneType())
+  if (Arguments.isNoneType() && ParameterCount == 0)
     return Result;
+  if (Arguments.isSimple())
+    return nullptr;
   auto List = deserialize<cv::ArgListRecord>(Types.getType(Arguments));
   if (!List)
-    return Result;
-  for (cv::TypeIndex Argument : List->getIndices()) {
-    // CodeView ends a variadic list with an argument of no type.
-    if (Argument.isNoneType()) {
-      Result->Variadic = true;
-      continue;
-    }
-    Result->Params.push_back({std::string(), expr(Argument)});
-  }
+    return nullptr;
+  const auto Parameters = codeViewFunctionParameters(
+      ParameterCount, List->getIndices().size(),
+      [&](size_t I) { return List->getIndices()[I].isNoneType(); });
+  if (!Parameters)
+    return nullptr;
+  Result->Variadic = Parameters->Variadic;
+  for (size_t I = 0; I < Parameters->FixedCount; ++I)
+    Result->Params.push_back({std::string(), expr(List->getIndices()[I])});
   return Result;
 }
 

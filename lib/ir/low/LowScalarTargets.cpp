@@ -11,6 +11,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CallRegisterBody.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 
 #include <algorithm>
@@ -38,10 +39,13 @@ void canonicalize(Values &V) {
   V.erase(std::unique(V.begin(), V.end()), V.end());
 }
 
-Values readRegister(const State &S, const NdVar &V) {
+Values readRegister(const State &S, const NdVar &V,
+                    bool NumericFragments = false) {
   if (!V.Size || V.Size > sizeof(uint64_t))
     return {};
-  if (V.isConst() && V.Provenance != ConstantAddressProvenance::AddressFragment)
+  if (V.isConst() &&
+      (NumericFragments ||
+       V.Provenance != ConstantAddressProvenance::AddressFragment))
     return {V.Offset & widthMask(V.Size)};
   if (!V.isReg() || V.Offset > UINT64_MAX - V.Size)
     return {};
@@ -61,16 +65,27 @@ Values readRegister(const State &S, const NdVar &V) {
 } // namespace
 
 namespace {
-std::optional<LowScalarOperandValues>
-finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
-                    llvm::ArrayRef<uint8_t> Roots,
-                    const LowScalarOperandQueries &Queries, size_t &Remaining) {
+struct ScalarValues {
+  LowScalarOperandValues Operands;
+  LowScalarEntryValues Entries;
+};
+
+enum class CallTransfer { Exact, DisplayCandidate };
+
+std::optional<ScalarValues> finiteOperandValues(
+    llvm::ArrayRef<LowBlock> Blocks, llvm::ArrayRef<uint8_t> Roots,
+    const LowScalarOperandQueries &Queries, size_t *Remaining,
+    const LowScalarEntryQueries &EntryQueries = {},
+    bool NumericFragments = false, const LowScalarCallEffects *Calls = nullptr,
+    CallTransfer Transfer = CallTransfer::Exact) {
   const auto Spend = [&](size_t N) {
-    if (N > Remaining) {
-      Remaining = 0;
+    if (!Remaining)
+      return true;
+    if (N > *Remaining) {
+      *Remaining = 0;
       return false;
     }
-    Remaining -= N;
+    *Remaining -= N;
     return true;
   };
   const size_t MaxValues = limits::kMaxScalarValueSet;
@@ -95,7 +110,7 @@ finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
       Queue(B);
     }
   }
-  LowScalarOperandValues ValuesAt;
+  ScalarValues ValuesAt;
   while (!Work.empty()) {
     const size_t B = Work.front();
     Work.pop_front();
@@ -106,12 +121,21 @@ finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
     va_t Instruction = InvalidVA;
     const auto Read = [&](const NdVar &V) {
       if (!V.isTemp())
-        return readRegister(Registers, V);
+        return readRegister(Registers, V, NumericFragments);
       const auto I = Temps.find({V.Offset, V.Size});
       return I == Temps.end() ? Values{} : I->second;
     };
-    for (const LowOp &Op : Blocks[B].Ops) {
+    for (size_t Index = 0; Index < Blocks[B].Ops.size(); ++Index) {
+      const auto &Op = Blocks[B].Ops[Index];
       if (!Spend(1))
+        return {};
+      // An instruction-local guard does not execute its following effects
+      // on every path. This scalar domain has no guarded transfer: do not
+      // promote the selected arm's writes to unconditional register facts.
+      if ((Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::BRANCH ||
+           Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::RETURN) &&
+          Index + 1 < Blocks[B].Ops.size() &&
+          Blocks[B].Ops[Index + 1].Addr == Op.Addr)
         return {};
       if (Instruction != Op.Addr) {
         Temps.clear();
@@ -123,14 +147,38 @@ finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
             return {};
           auto Value = Read(Op.Inputs[Input]);
           if (Value.empty())
-            ValuesAt.erase({&Op, Input});
+            ValuesAt.Operands.erase({&Op, Input});
           else
-            ValuesAt[{&Op, Input}] = std::move(Value);
+            ValuesAt.Operands[{&Op, Input}] = std::move(Value);
         }
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
           Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::ATOMIC_XCHG ||
           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG) {
-        Registers.clear();
+        if (Transfer == CallTransfer::DisplayCandidate &&
+            (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL)) {
+          // These numbers are proposals for explicit block-entry conditions,
+          // not values the callee preserves. No memory or temporary identity
+          // crosses the call, and no exact scalar query uses this transfer.
+          Temps.clear();
+          continue;
+        }
+        uint32_t Preserved = 0;
+        if (Calls && Op.Opcode == NdOp::CALL && Op.NumInputs > 0 &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Provenance !=
+                ConstantAddressProvenance::AddressFragment)
+          if (const auto Found = Calls->BodyMayWrite.find(Op.Inputs[0].Offset);
+              Found != Calls->BodyMayWrite.end())
+            Preserved = ~Found->second;
+        if (Preserved) {
+          for (auto I = Registers.begin(); I != Registers.end();)
+            if (!callPreservesRegisterBytes(Calls->Architecture, Preserved,
+                                            I->first.first, I->first.second))
+              I = Registers.erase(I);
+            else
+              ++I;
+        } else
+          Registers.clear();
         Temps.clear();
         continue;
       }
@@ -241,9 +289,80 @@ finiteOperandValues(llvm::ArrayRef<LowBlock> Blocks,
       }
     }
   }
+  if (!EntryQueries.empty())
+    for (size_t B = 0; B < Blocks.size(); ++B) {
+      if (!Spend(1))
+        return {};
+      const auto Found = EntryQueries.find(&Blocks[B]);
+      if (Found == EntryQueries.end() || !Entries[B])
+        continue;
+      for (const auto &Register : Found->second) {
+        if (!Spend(1))
+          return {};
+        if (!Register.isReg())
+          continue;
+        auto Values = readRegister(*Entries[B], Register);
+        if (!Spend(Values.size()))
+          return {};
+        if (!Values.empty())
+          ValuesAt.Entries[&Blocks[B]].emplace_back(Register,
+                                                    std::move(Values));
+      }
+    }
   return ValuesAt;
 }
+
+std::optional<std::vector<uint8_t>> scalarFunctionRoots(const LowFunc &Function,
+                                                        size_t *Remaining) {
+  if (Remaining && Function.Blocks.size() > *Remaining) {
+    *Remaining = 0;
+    return {};
+  }
+  if (Remaining)
+    *Remaining -= Function.Blocks.size();
+  std::vector<uint8_t> Roots(Function.Blocks.size());
+  for (size_t B = 0; B < Function.Blocks.size(); ++B) {
+    const auto &Block = Function.Blocks[B];
+    Roots[B] = Block.StartAddr == Function.Entry || Block.Preds.empty() ||
+               !Block.ExceptionalPreds.empty() ||
+               Function.ModuleAnalysisRoots.count(Block.StartAddr) ||
+               Function.OrdinaryModuleAnalysisRoots.count(Block.StartAddr);
+  }
+  return Roots;
+}
 } // namespace
+
+std::optional<LowScalarEntryValues> finiteScalarBlockEntryValues(
+    const LowFunc &Function, const LowScalarEntryQueries &Queries,
+    size_t *Remaining, const LowScalarCallEffects *Calls) {
+  if (!Function.hasCompleteLiftCoverage() ||
+      !Function.UnsafeIndirectBranchAddresses.empty())
+    return {};
+  const auto Roots = scalarFunctionRoots(Function, Remaining);
+  if (!Roots)
+    return {};
+  // Entry observations request numeric bits, including page bases awaiting
+  // arithmetic completion. They grant no pointer or code identity. Branch
+  // and call-operand consumers retain their original provenance restriction.
+  auto Values = finiteOperandValues(Function.Blocks, *Roots, {}, Remaining,
+                                    Queries, true, Calls);
+  return Values ? std::optional(std::move(Values->Entries)) : std::nullopt;
+}
+
+std::optional<LowScalarEntryCandidates>
+conditionalScalarEntryCandidates(const LowFunc &Function,
+                                 const LowScalarEntryQueries &Queries) {
+  if (!Function.hasCompleteLiftCoverage() ||
+      !Function.UnsafeIndirectBranchAddresses.empty())
+    return {};
+  const auto Roots = scalarFunctionRoots(Function, nullptr);
+  auto Values =
+      finiteOperandValues(Function.Blocks, *Roots, {}, nullptr, Queries, true,
+                          nullptr, CallTransfer::DisplayCandidate);
+  return Values ? std::optional<LowScalarEntryCandidates>{{std::move(
+                      Values->Entries)}}
+                : std::nullopt;
+}
 
 std::optional<LowScalarOperandValues>
 finiteScalarOperandValues(CallRegisterBodyView Function,
@@ -256,23 +375,20 @@ finiteScalarOperandValues(CallRegisterBodyView Function,
   for (size_t B = 0; B != Function.Blocks.size(); ++B)
     Roots[B] = B == 0 || Function.Blocks[B].Preds.empty() ||
                !Function.Blocks[B].ExceptionalPreds.empty();
-  return finiteOperandValues(Function.Blocks, Roots, Queries, Remaining);
+  auto Values =
+      finiteOperandValues(Function.Blocks, Roots, Queries, &Remaining);
+  return Values ? std::optional(std::move(Values->Operands)) : std::nullopt;
 }
 
 std::optional<std::map<va_t, std::vector<va_t>>>
 finiteScalarBranchTargets(const LowFunc &Function, size_t &Remaining) {
-  std::vector<uint8_t> Roots(Function.Blocks.size());
+  const auto Roots = scalarFunctionRoots(Function, &Remaining);
+  if (!Roots)
+    return {};
   std::set<va_t> BranchOccurrences;
   LowScalarOperandQueries Queries;
   for (size_t B = 0; B != Function.Blocks.size(); ++B) {
     const auto &Block = Function.Blocks[B];
-    if (!Remaining)
-      return {};
-    --Remaining;
-    Roots[B] = Block.StartAddr == Function.Entry || Block.Preds.empty() ||
-               !Block.ExceptionalPreds.empty() ||
-               Function.ModuleAnalysisRoots.count(Block.StartAddr) ||
-               Function.OrdinaryModuleAnalysisRoots.count(Block.StartAddr);
     for (const LowOp &Op : Block.Ops) {
       if (!Remaining)
         return {};
@@ -288,11 +404,11 @@ finiteScalarBranchTargets(const LowFunc &Function, size_t &Remaining) {
     }
   }
   const auto Values =
-      finiteOperandValues(Function.Blocks, Roots, Queries, Remaining);
+      finiteOperandValues(Function.Blocks, *Roots, Queries, &Remaining);
   if (!Values)
     return {};
   std::map<va_t, std::vector<va_t>> Targets;
-  for (const auto &[Query, Cover] : *Values)
+  for (const auto &[Query, Cover] : Values->Operands)
     Targets.emplace(Query.first->Addr, Cover);
   return Targets;
 }

@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/ir/low/CFGBuilder.h"
@@ -407,6 +408,245 @@ TEST_P(MIPSPipeline, SinglePrecisionUpperWordCannotEscapeToMemory) {
   EXPECT_NE(Result.Error.find("architecturally unpredictable"),
             std::string::npos)
       << Result.Error;
+}
+
+TEST(MIPSScalarCalls, IntegerCallsDoNotRequireFloatingPointProfiles) {
+  for (const Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    const bool Wide = isMIPS64(Target);
+    const bool NarrowPointer =
+        Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+    mips_test::ELFBytes File(
+        NarrowPointer
+            ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+            : Target);
+    File.abiFlags();
+    if (NarrowPointer) {
+      File.put(36, 0x80000020, 4);
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe4] = 2;
+    }
+    const uint32_t Words[] = {
+        Wide ? 0x67bdffe0u : 0x27bdffe0u, // allocate 32 bytes
+        Wide ? 0xffbf0018u : 0xafbf001cu, // save the incoming link
+        0x0c004080u,
+        0,           // call 0x10200; nop
+        0x24020007u, // return a constant after the call
+        Wide ? 0xdfbf0018u : 0x8fbf001cu,
+        0x03e00008u,
+        Wide ? 0x67bd0020u : 0x27bd0020u};
+    for (unsigned I = 0; I < std::size(Words); ++I)
+      File.put(0x100 + I * 4, Words[I], 4);
+    auto Pointer = NdType::makePtr();
+    Pointer->Size = getTargetRegInfo(Target).PointerSize;
+    struct SignatureCase {
+      TypeRef Result;
+      std::vector<TypeRef> Parameters;
+      bool NeedsFloating;
+    };
+    const SignatureCase Signatures[] = {
+        {NdType::makeVoid(), {}, false},
+        {NdType::makeInt(4), {NdType::makeInt(4)}, false},
+        {Pointer, {Pointer}, false},
+        {NdType::makeVoid(), {NdType::makeFloat(4)}, true},
+        {NdType::makeFloat(8), {}, true}};
+    // Unspecified, soft-float and o32 FPXX do not establish the scalar FPR
+    // profile. None is needed by a complete integer/pointer/void call.
+    for (const uint8_t Profile : {0, 3, 5}) {
+      SCOPED_TRACE(Profile);
+      File.Bytes[0xe7] = Profile;
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "scalar_call");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      for (const auto &Case : Signatures) {
+        SCOPED_TRACE(Case.NeedsFloating);
+        SCOPED_TRACE(static_cast<int>(Case.Result->Kind));
+        const auto Signature = floatingCallArguments(
+            Target, BinaryFormat::ELF, Case.Result, Case.Parameters);
+        ASSERT_TRUE(Signature);
+        const std::map<va_t, FloatingCallArguments> Calls{
+            {0x10200, *Signature}};
+        Convert.setCallEntryFloatingArguments(&Calls);
+        if (Case.NeedsFloating)
+          EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                       LowToMedConversionError);
+        else {
+          EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          auto Invalid = Calls;
+          Invalid.begin()->second.ReturnBytes = 3;
+          EXPECT_THROW(
+              requireMIPSSourceVectors(Low, Target, &*Image, &Invalid, nullptr),
+              LowToMedConversionError);
+        }
+      }
+    }
+  }
+}
+
+TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
+  for (const bool Little : {false, true})
+    for (const bool WordAdjustment : {false, true}) {
+      const Arch Target = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
+      SCOPED_TRACE(getArchName(Target));
+      SCOPED_TRACE(WordAdjustment);
+      mips_test::ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+      File.abiFlags();
+      File.put(36, 0x80000020, 4); // MIPS64r2, ABI2, ELFCLASS32.
+      File.Bytes[0xe2] = 64;
+      File.Bytes[0xe4] = File.Bytes[0xe5] = 2;
+      File.Bytes[0xe7] = 1;
+      // Clang n32: save the eight-byte link and four-byte pointer, call a
+      // declared void callee, reload the pointer and return its second word.
+      const uint32_t Words[] = {WordAdjustment ? 0x27bdfff0u : 0x67bdfff0u,
+                                0xffbf0008u,
+                                0x0c004080u,
+                                0xafa40004u,
+                                0x8fa10004u,
+                                0x8c220004u,
+                                0xdfbf0008u,
+                                0x03e00008u,
+                                WordAdjustment ? 0x27bd0010u : 0x67bd0010u};
+      File.Bytes.resize(0x208);
+      File.put(52 + 16, File.Bytes.size(), 4);
+      File.put(52 + 20, File.Bytes.size(), 4);
+      for (unsigned I = 0; I < std::size(Words); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      File.put(0x200, 0x03e00008, 4);
+      File.put(0x204, 0, 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      auto Caller = Symbol::makeFunc(Image->Entry, sizeof(Words));
+      Caller.Name = "pointer_spill";
+      Image->Symbols.push_back(Caller);
+      Image->Symbols.push_back(Symbol::makeFunc(0x10200, 8));
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, Caller.Name);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      const auto Signature = floatingCallArguments(Target, BinaryFormat::ELF,
+                                                   NdType::makeVoid(), {});
+      ASSERT_TRUE(Signature);
+      const std::map<va_t, FloatingCallArguments> Calls{{0x10200, *Signature}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&*Image);
+      EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                   LowToMedConversionError);
+      Convert.setCallEntryFloatingArguments(&Calls);
+      EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+      // The declaration does not excuse an overlapping write to the saved
+      // link. Move the pointer spill and reload into the eight-byte RA slot.
+      File.put(0x10c, 0xafa40008, 4);
+      File.put(0x110, 0x8fa10008, 4);
+      auto Overwritten = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Overwritten)) << llvm::toString(Overwritten.takeError());
+      ASSERT_TRUE(Decode.init(*Overwritten));
+      const auto InvalidLow = CFGBuilder().build(
+          *Overwritten, Decode, Overwritten->Entry, Caller.Name);
+      ASSERT_TRUE(InvalidLow.hasCompleteLiftCoverage());
+      Convert.setBinaryImage(&*Overwritten);
+      try {
+        (void)Convert.convert(InvalidLow, Target, BinaryFormat::ELF);
+        FAIL() << "An overwritten link must not qualify as a source return";
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_NE(std::string(Error.what()).find("MIPS source return target"),
+                  std::string::npos)
+            << Error.what();
+      }
+      class NativeDebug final : public NullDebugContext {
+      public:
+        FunctionSym Function;
+        bool Authenticated = true;
+        AuthenticatedReturnValueState ReturnState{
+            AuthenticatedReturnKind::NoValue, 0};
+        NativeDebug() {
+          Function.Addr = 0x10200;
+          Function.Name = "touch";
+          Function.ReturnType = NdType::makeVoid();
+        }
+        std::optional<FunctionSym>
+        resolveFunction(va_t Address) const override {
+          return Address == 0x10200 ? std::optional(Function) : std::nullopt;
+        }
+        bool hasAuthenticatedFunctionSignatures() const override {
+          return Authenticated;
+        }
+        AuthenticatedReturnValueState
+        resolveAuthenticatedReturnValueState(va_t Address) const override {
+          return Address == Function.Addr ? ReturnState
+                                          : AuthenticatedReturnValueState{};
+        }
+      };
+      Export Callee;
+      Callee.Name = "touch";
+      Callee.Addr = 0x10200;
+      for (const bool Exported : {false, true}) {
+        SCOPED_TRACE(Exported);
+        Image->Exports.clear();
+        if (Exported)
+          Image->Exports.push_back(Callee);
+        for (unsigned Variant = 0; Variant < 10; ++Variant) {
+          SCOPED_TRACE(Variant);
+          NativeDebug Debug;
+          switch (Variant) {
+          case 1:
+            Debug.Authenticated = false;
+            break;
+          case 2:
+            Debug.ReturnState = {};
+            break;
+          case 3:
+            Debug.Function.Addr -= 4;
+            break;
+          case 4:
+            Debug.Function.IsVariadic = true;
+            break;
+          case 5:
+            Debug.Function.PlatformConvention = false;
+            break;
+          case 6:
+            Debug.Function.CallConv = DebugCallConv::Fastcall;
+            break;
+          case 7:
+            Debug.Function.ParamEntryLocations.emplace_back();
+            break;
+          case 8:
+            Debug.Function.Params = {{"unknown", TypeRef()}};
+            break;
+          case 9:
+            Debug.Function.ReturnType = {};
+            break;
+          }
+          for (bool LLVM : {false, true}) {
+            SCOPED_TRACE(LLVM);
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.OnlyFunctionEntries = {Image->Entry};
+            Options.LiftMode = LLVM;
+            Options.EmitDumpOutput = false;
+            auto Result = Pipeline().run(*Image, Context, Options, &Debug);
+            EXPECT_EQ(Result.Success, Variant == 0) << Result.Error;
+            if (Variant == 0 && LLVM && Result.Success) {
+              ASSERT_NE(Result.LlvmModule, nullptr);
+              EXPECT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            }
+            if (Variant != 0)
+              EXPECT_NE(Result.Error.find("MIPS source return target"),
+                        std::string::npos)
+                  << Result.Error;
+          }
+        }
+      }
+    }
 }
 
 TEST_P(MIPSPipeline, FloatingCallPreservesOnlyPrivateLinkSlots) {

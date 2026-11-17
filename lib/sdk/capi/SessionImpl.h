@@ -44,6 +44,7 @@
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/EmbeddedELF.h"
 #include "neverd/loader/FunctionNames.h"
 #include "neverd/loader/SymbolSpelling.h"
 #include "neverd/pass/Limits.h"
@@ -66,6 +67,7 @@
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -91,6 +93,8 @@ namespace sdk {
 void preserveAnalystStackObjects(llvm::Module &);
 
 struct LLVMFunctionView;
+struct IRFunctionView;
+struct SourceFunctionView;
 struct CallReferenceGraph;
 
 struct FuncInfo {
@@ -158,6 +162,21 @@ struct Session {
   /// The program's local types, read from its debug information when first
   /// asked for (NeverDCAPILocalTypes.cpp).  A new image or PDB drops them.
   std::unique_ptr<types::TypeLibrary> LocalTypes;
+  /// One filtered/sorted type index, reused across pages. Invalidated with
+  /// the library or a successful declaration/removal, before the next query.
+  struct LocalTypeListIndex {
+    std::string Filter, Origin, Sort;
+    bool Descending = false;
+    std::vector<const types::LocalType *> Rows;
+    llvm::StringMap<int64_t> Origins;
+  };
+  std::optional<LocalTypeListIndex> LocalTypeList;
+  /// Keep only the last C/C++ source language and layout spelling. They
+  /// avoid rebuilding million-name maps on every selected type. Both are
+  /// invalidated with library changes, like its paged list index.
+  std::unique_ptr<types::CTypeRenderer> LocalTypeRenderer;
+  std::unique_ptr<types::TypeSpeller> LocalTypeSpeller;
+  types::BuiltinSpelling LocalTypeSpelling = types::BuiltinSpelling::Windows;
   types::PDBTypeImportStats LocalTypeStats;
   /// The types DWARF describes that the import left out, each with why, and
   /// the names its units define otherwise (DWARFTypeImportStats).
@@ -218,8 +237,10 @@ struct Session {
   /// and kept through declarations that only add to them: those of a library
   /// that can hold tens of thousands.
   struct LocalTypeNameFacts {
-    const types::TypeLibrary *Library = nullptr;
-    size_t Types = 0, Declarations = 0;
+    LocalTypeNameFacts() : Library(nullptr), Types(0), Declarations(0) {}
+
+    const types::TypeLibrary *Library;
+    size_t Types, Declarations;
     types::SpelledNames Spelled;
     llvm::StringSet<> Mentioned, Prototyped;
   };
@@ -228,6 +249,9 @@ struct Session {
   void readLocalTypeNames(const types::TypeLibrary &Library);
   void dropLocalTypes() {
     LocalTypeNames.reset();
+    LocalTypeRenderer.reset();
+    LocalTypeSpeller.reset();
+    LocalTypeList.reset();
     LocalTypes.reset();
     LocalTypeStats = {};
     LocalTypeSkipped.clear();
@@ -389,10 +413,15 @@ struct Session {
     std::vector<std::string> Unread;
     std::vector<SourceDialectName> Names;
     SourceViewOptions Options;
+    /// Physical rows and serialized function metadata, shared by every page.
+    mutable std::shared_ptr<const SourceFunctionView> View;
   };
   /// The sources of the functions shown last, the newest first.
   std::list<FunctionSource> FunctionSources;
   static constexpr size_t MaxFunctionSources = kMaxFunctionSources;
+  /// The currently paged Low/Med/High view. Replaced when the stage or
+  /// function changes, and invalidated with the pipeline or display names.
+  std::shared_ptr<const IRFunctionView> IRView;
   /// The widths of the reads and writes the code of every function states
   /// at each address (dataAccessWidths), and the exact function extents they
   /// were read from. Navigation can keep these image facts, but no output IR.
@@ -410,6 +439,8 @@ struct Session {
   /// The image's strings under the options last searched with
   /// (ImageStrings.h); kept until the next load.
   std::optional<ImageStringScan> ImageStrings;
+  /// File-contained ELF metadata, read lazily and retired with image edits.
+  std::optional<std::vector<EmbeddedELFObject>> EmbeddedELFObjects;
   /// Function entries the detector found on request
   /// (neverd_session_discover_functions); kept until the next load.
   std::optional<std::vector<std::pair<va_t, std::string>>> DiscoveredFunctions;
@@ -502,8 +533,26 @@ struct Session {
     const FuncInfo *List;
     size_t Count;
     std::vector<const FuncInfo *> Ordered;
+    std::shared_ptr<const std::vector<va_t>> Entries;
   };
   mutable std::optional<FunctionPageIndex> FunctionPages;
+  mutable std::shared_ptr<const ReferenceImageIndex> ReferenceImage;
+  const ReferenceImageIndex &referenceImageIndex() const;
+  /// Function-level address facts for the current recovered disassembly.
+  /// Built once across its pages; only matching original boundaries/modes
+  /// consume them. Control-flow recovery still owns branches and coverage.
+  struct FunctionReferenceIndex {
+    struct Instruction {
+      va_t Address;
+      unsigned Size;
+      InstructionMode Mode;
+      llvm::SmallVector<InstructionRef, 2> Refs;
+    };
+    va_t Entry;
+    uint64_t Revision;
+    std::vector<Instruction> Instructions;
+  };
+  std::optional<FunctionReferenceIndex> FunctionReferences;
   /// What refreshFunctionNames last derived the names from.  From the same
   /// inputs it derives the names the list holds, so it keeps them: an image
   /// lists tens of thousands of functions.
@@ -734,7 +783,33 @@ struct Session {
     Opts.SBFIdl = SBFIdl ? &*SBFIdl : nullptr;
     Opts.OnlyFunctionEntries = OnlyFunctionEntries;
     Opts.FunctionEdits = FunctionEdits;
+    Opts.KnownFunctionEntries = knownFunctionEntries();
   }
+
+  /// The entries of the listed functions, for one revision of the list: what
+  /// a run reads the callees it omits at (PipelineOptions).
+  std::shared_ptr<const std::set<va_t>> knownFunctionEntries() const {
+    if (Functions.empty())
+      return nullptr;
+    if (KnownEntries && KnownEntriesRevision == FunctionListRevision)
+      return KnownEntries;
+    // A revision that only gave a listed function its extent keeps the
+    // entries, and with them what the runs' memo read at them.
+    std::vector<va_t> Entries;
+    Entries.reserve(Functions.size());
+    for (const FuncInfo &F : Functions)
+      Entries.push_back(F.Entry);
+    std::sort(Entries.begin(), Entries.end());
+    Entries.erase(std::unique(Entries.begin(), Entries.end()), Entries.end());
+    if (!KnownEntries || !std::equal(KnownEntries->begin(), KnownEntries->end(),
+                                     Entries.begin(), Entries.end()))
+      KnownEntries = std::make_shared<const std::set<va_t>>(Entries.begin(),
+                                                            Entries.end());
+    KnownEntriesRevision = FunctionListRevision;
+    return KnownEntries;
+  }
+  mutable std::shared_ptr<const std::set<va_t>> KnownEntries;
+  mutable uint64_t KnownEntriesRevision = 0;
 
   /// Snapshot the enabled cosmetic transforms without touching observable
   /// per-session result state.  Transactional callers may run the returned
@@ -1028,6 +1103,7 @@ struct Session {
   /// call this, or a view keeps showing what was emitted before it.
   void forgetEmittedSources() {
     FunctionSources.clear();
+    IRView.reset();
     for (FunctionLlvmModule &Kept : FunctionLlvmModules)
       Kept.View.reset();
   }
@@ -1065,12 +1141,12 @@ struct Session {
       Source->Options = SourceOptions;
     }
     Source->Text = std::move(Text);
+    Source->View.reset();
     if (!Map)
       return;
     Source->Map = *Map;
     // Only an emission reads these; a page reads regions and definitions.
     Source->Map->HighSources = nullptr;
-    Source->Map->LLVMSources = nullptr;
   }
 
   void clearPipelineResult() {
@@ -1078,6 +1154,8 @@ struct Session {
     // Every module lives in the context.
     FunctionLlvmModules.clear();
     FunctionSources.clear();
+    IRView.reset();
+    FunctionReferences.reset();
     EnhancedHighIR.reset();
     CallVariant.reset();
     CurrentCallResults.clear();
@@ -1099,6 +1177,7 @@ struct Session {
     dropLocalTypesDebug();
     ShownTypes.clear();
     AnalysisCache.reset();
+    ReferenceImage.reset();
     AccessWidths.reset();
     AccessWidthsFunctions.clear();
     AccessScan.clear();
@@ -1198,9 +1277,7 @@ struct Session {
       Pipeline().resumeMedIR(Img, runOptions(), PipeResult, decompileDebug());
     if (Depth == PipelineDepth::HighIR && PipeResult.Success &&
         PipeResult.HighIRDeferred) {
-      PipelineOptions Opts;
-      applyAnalysisOptions(Opts);
-      Pipeline().resumeHighIR(Img, Opts, PipeResult, decompileDebug());
+      Pipeline().resumeHighIR(Img, runOptions(), PipeResult, decompileDebug());
     }
     if (!PipeResult.Success)
       setError(PipeResult.Error.empty() ? "pipeline failed" : PipeResult.Error);
@@ -1340,11 +1417,13 @@ struct Session {
     if (Sources)
       Sources->preserveExpressionOrigins(PipeResult.LibraryRecognitions);
     if (!Candidate) {
-      // A refused body says why.
-      setError(Emitter.refusedBodies().empty()
-                   ? std::string("native LLVM emission failed")
-                   : "native LLVM emission failed: " +
-                         Emitter.refusedBodies().front().Reason);
+      std::string Failure = "native LLVM emission failed";
+      for (const auto &Refusal : Emitter.refusedBodies()) {
+        const auto &Function = (*NativeMedFuncs)[Refusal.Index];
+        Failure += "\n" + Function.Name + " at 0x" +
+                   llvm::utohexstr(Function.Entry) + ": " + Refusal.Reason;
+      }
+      setError(std::move(Failure));
       return nullptr;
     }
     // The native emitter can return a module after reporting verifier errors.

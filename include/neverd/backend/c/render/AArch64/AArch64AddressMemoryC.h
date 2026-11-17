@@ -16,9 +16,12 @@
 #include "neverd/ir/high/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Support/raw_ostream.h"
 
+#include <climits>
 #include <stdexcept>
 #include <string>
 
@@ -31,11 +34,20 @@ namespace neverd {
 inline std::string
 aarch64AddressMemoryC(const AArch64AddressMemoryInstruction &Instruction,
                       llvm::StringRef Base, llvm::StringRef Index,
-                      llvm::StringRef Data = {}) {
+                      llvm::StringRef Data = {}, llvm::StringRef Helper = {}) {
   if (!aarch64AddressMemoryInstruction(Instruction.Word))
     throw std::invalid_argument(kAddressMemoryMalformed);
   if (Instruction.isLoad() != Data.empty())
     throw std::invalid_argument(kAddressMemoryMalformed);
+  if (!Helper.empty()) {
+    std::string Call = Helper.str() + "((uint64_t)(" + Base.str() +
+                       "), (uint64_t)(" + Index.str() + ")";
+    if (!Data.empty())
+      Call += std::string(", (") +
+              (Instruction.isVector() ? "unsigned __int128" : "uint64_t") +
+              ")(" + Data.str() + ")";
+    return Call + ")";
+  }
   const auto *Asm = Instruction.isLoad()
                         ? (Instruction.stackBase() ? kAddressMemorySPLoadCAsm
                                                    : kAddressMemoryLoadCAsm)
@@ -82,6 +94,42 @@ aarch64AddressMemoryC(const AArch64AddressMemoryInstruction &Instruction,
                        Base, Index, Instruction.scratchWord(), BaseInput,
                        IndexInput, Asm, Clobbers)
       .str();
+}
+
+/// One helper per normalized instruction, rather than one assembly block at
+/// every use. The word still owns index extension, scaling and memory effects.
+inline std::string
+aarch64AddressMemoryCHelperName(const AArch64AddressMemoryInstruction &I) {
+  std::string Name =
+      I.isLoad() ? "neverd_aarch64_load_" : "neverd_aarch64_store_";
+  Name += I.operation().Signed ? "s" : "u";
+  Name += std::to_string(I.accessBytes() * CHAR_BIT);
+  if (I.hasRegisterIndex() && !I.stackBase()) {
+    Name += I.usesFullWidthIndex()                  ? "_lsl"
+            : I.Word & kAddressMemorySignedIndexBit ? "_sxtw"
+                                                    : "_uxtw";
+    Name += std::to_string(I.indexShift());
+  } else {
+    Name += "_" + llvm::utohexstr(I.scratchWord());
+  }
+  return Name;
+}
+
+inline void
+writeAArch64AddressMemoryCHelper(llvm::raw_ostream &OS,
+                                 const AArch64AddressMemoryInstruction &I,
+                                 llvm::StringRef Name) {
+  const char *ValueType = I.isVector() ? "unsigned __int128" : "uint64_t";
+  OS << "static inline __attribute__((always_inline, unused)) "
+     << (I.isLoad() ? ValueType : "void") << " " << Name
+     << "(uint64_t base, uint64_t index";
+  if (!I.isLoad())
+    OS << ", " << ValueType << " data";
+  OS << ") {\n    ";
+  if (I.isLoad())
+    OS << "return ";
+  OS << aarch64AddressMemoryC(I, "base", "index", I.isLoad() ? "" : "data")
+     << ";\n}\n\n";
 }
 
 } // namespace neverd
