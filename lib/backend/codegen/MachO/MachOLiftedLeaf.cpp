@@ -1052,7 +1052,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       !Module.getModuleInlineAsm().empty() || !Image.DataInCode.empty() ||
       llvm::verifyModule(Module))
     return refuse(kLeafModule);
-  const Section *Text = nullptr;
+  llvm::SmallVector<va_t> SectionEntries;
   for (const auto &S : Image.Sections) {
     if (!S.Size || !(S.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
                                llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)))
@@ -1060,15 +1060,20 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     if (S.SegmentName == section_names::macho::TextSeg &&
         (S.Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_SYMBOL_STUBS)
       continue;
-    if (Text || S.Name != section_names::macho::Text ||
-        S.SegmentName != section_names::macho::TextSeg ||
-        !(S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) || S.FileSz != S.Size)
+    const auto *Segment = Image.getSegmentFor(S.VA);
+    if ((S.Type & llvm::MachO::SECTION_TYPE) != llvm::MachO::S_REGULAR ||
+        !(S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) || !Segment ||
+        !Segment->isExecutable() || Segment->isWritable() ||
+        S.VA % aarch64::kInsnSize || S.Size % aarch64::kInsnSize ||
+        S.FileSz != S.Size || Image.vaToFileOffset(S.VA) != S.FileOff ||
+        !rangeInBounds(S.VA - Segment->VA, S.Size, Segment->FileSz) ||
+        !rangeInBounds(S.FileOff, S.Size, Image.Raw.size()))
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kSourceSection, S.SegmentName, S.Name).str());
-    Text = &S;
+    SectionEntries.push_back(S.VA);
   }
-  if (!Text || !rangeInBounds(Text->FileOff, Text->Size, Image.Raw.size()))
+  if (SectionEntries.empty())
     return refuse(kSourceText);
   auto RegisterEntries = validateMachORegisterResults(Module, Image);
   if (!RegisterEntries)
@@ -1104,23 +1109,27 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   llvm::sort(Mappings, [](const auto &L, const auto &R) {
     return L.OriginalVA < R.OriginalVA;
   });
-  if (Mappings.empty() || Mappings.front().OriginalVA != Text->VA ||
-      std::adjacent_find(Mappings.begin(), Mappings.end(),
-                         [](const auto &L, const auto &R) {
-                           return L.OriginalVA == R.OriginalVA;
-                         }) != Mappings.end())
+  if (Mappings.empty() || std::adjacent_find(Mappings.begin(), Mappings.end(),
+                                             [](const auto &L, const auto &R) {
+                                               return L.OriginalVA ==
+                                                      R.OriginalVA;
+                                             }) != Mappings.end())
     return refuse(kLeafCoverage);
 
-  const auto Missing = [&](va_t Address) {
-    if (!Image.isFunctionEntryCandidateAt(Address) ||
-        Image.isImportStubAt(Address))
-      return false;
+  const auto HasMapping = [&](va_t Address) {
     const auto It = std::lower_bound(
         Mappings.begin(), Mappings.end(), Address,
         [](const SourcePatchMapping &M, va_t VA) { return M.OriginalVA < VA; });
-    return It == Mappings.end() || It->OriginalVA != Address;
+    return It != Mappings.end() && It->OriginalVA == Address;
   };
-  if ((Image.Entry && Missing(Image.Entry)) ||
+  const auto Missing = [&](va_t Address) {
+    // A coalesced compact range can span a data export between code sections.
+    // Only a callable entry needs a corresponding LLVM definition.
+    return Image.hasAuthenticatedFunctionEntryAt(Address) &&
+           !Image.isImportStubAt(Address) && !HasMapping(Address);
+  };
+  if (!llvm::all_of(SectionEntries, HasMapping) ||
+      (Image.Entry && Missing(Image.Entry)) ||
       llvm::any_of(Image.Symbols,
                    [&](const auto &S) {
                      return S.IsFunc && !S.IsBoundaryGuess && Missing(S.Addr);
