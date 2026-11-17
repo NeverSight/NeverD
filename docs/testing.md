@@ -25272,6 +25272,9 @@ lift and light decode in both byte orders, with text/detail independently on
 and off. Truncated packed words refuse; switching the same decoder between
 DSP-enabled and ordinary profiles must update admission without changing
 ordinary integer decoding.
+The signed seven-bit `dshilo` immediate is checked with full operands; with
+text disabled its detail must stay identical to the unmodified operand
+template, so an empty operand array cannot overwrite common detail fields.
 The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection

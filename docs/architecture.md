@@ -17352,6 +17352,9 @@ selector before Capstone's ordinary decoder. These legacy forms have no native
 Capstone entry; the adapter decodes their operand template once. The profile
 guard is recomputed when reusing a decoder with DSP enabled or disabled.
 Other words still follow the ordinary physical decode and fallback path.
+MIPS operand adaptation requires both text and detail, matching Capstone's
+render-time operand construction. Classification-only signed shift decoding
+keeps its empty operand array and does not apply an immediate fixup to it.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;
