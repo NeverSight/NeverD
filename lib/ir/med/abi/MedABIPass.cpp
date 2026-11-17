@@ -2330,10 +2330,36 @@ void recoverCallAbi(
           }
         }
       }
-      if ((!CI.IsIndirect || UseExternalArity || UseVariableArity ||
-           HeaderVariadic) &&
-          IntRegArgsApply)
+      // An unresolved pointer still has a consecutive setup prefix. A later
+      // argument establishes the untouched incoming slots before it, just as
+      // for a direct forwarder. The target register alone establishes none.
+      const bool UnboundIndirect = CI.IsIndirect && !UseExternalArity &&
+                                   !UseVariableArity && !HeaderVariadic;
+      std::optional<MedVar> TargetSetupValue;
+      int TargetSetupSlot = -1;
+      if (UnboundIndirect && Op.NumInputs && Op.Inputs[0].Kind == MedVar::Reg) {
+        TargetSetupSlot = IntegerLayout.registerIndex(Op.Inputs[0].RegOff);
+        if (TargetSetupSlot >= 0)
+          if (const auto Site = DefSites.find(Op.Inputs[0]);
+              !Site.Ambiguous && Site.Op)
+            TargetSetupValue = argRegSourceValueInBlock(
+                *Site.Block, int(Site.Op - Site.Block->Ops.data()), TRI,
+                IntegerLayout);
+      }
+      int IndirectPrefix = -1;
+      if (UnboundIndirect)
+        for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K)
+          if (FoundMask[K] &&
+              (!IndirectTargetArgIdx || K != *IndirectTargetArgIdx) &&
+              !(K == TargetSetupSlot && TargetSetupValue &&
+                Found[K] == *TargetSetupValue) &&
+              !(Op.NumInputs && !Op.Inputs[0].isConst() &&
+                Found[K] == Op.Inputs[0]))
+            IndirectPrefix = K;
+      if (IntRegArgsApply)
         for (int K = 0; K < NumIntParamRegs && K < MaxArgs; ++K) {
+          if (UnboundIndirect && K > IndirectPrefix)
+            break;
           if ((UseExternalArity || UseVariableArity) && K >= CalleeRegArgs)
             break;
           if (FoundMask[K])
@@ -2351,7 +2377,8 @@ void recoverCallAbi(
               CalleeRegArgs >= 0 && K >= CalleeRegArgs && !OpenVariadicArity;
           const bool AllowLiveIn =
               ((CalleeRegArgs >= 0 && K < CalleeRegArgs) ||
-               (MaxRegArg >= 0 && K <= MaxRegArg && !PastArity)) &&
+               ((UnboundIndirect ? IndirectPrefix : MaxRegArg) >= K &&
+                !PastArity)) &&
               takesIncomingRegister(IntParamRegs[K]);
           bool FromLiveIn = false;
           bool FoundDefinition = false;
@@ -2364,12 +2391,11 @@ void recoverCallAbi(
           // What only earlier calls left in the register is an argument only
           // where the callee is known to read it, and an import reached
           // through its slot takes only proven incoming values.
-          if (!AllowLiveIn || IsIndirectImport || VariableCallee) {
+          if (!AllowLiveIn || CI.IsIndirect) {
             if (callLeftovers().contains(*V))
               break;
           }
-          if ((IsIndirectImport || VariableCallee) &&
-              (FromLiveIn || V->Kind == MedVar::Param) &&
+          if (CI.IsIndirect && (FromLiveIn || V->Kind == MedVar::Param) &&
               !incomingArgumentReachesCall(Ctx, K))
             break;
           // A direct callee's arity proves it reads a register, not that
