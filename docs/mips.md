@@ -26,6 +26,13 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   Known libc objects retain their external header declarations. HighC rejects
   partial/overlapping access or indexed byte backings for other COPY objects
   until those backings have an external-object contract.
+- For fixed-address non-PIC executables, a global register-info record in
+  `.reginfo` or `.MIPS.options` supplies the ordinary function-entry `$gp`.
+  The corresponding program headers also work in sectionless files. n32 sign
+  extends the ELF32 value into its 64-bit GPR. GP-relative accesses in the
+  upper half of the n32 address space retain their ELF32 storage identity
+  when generated code is relinked. Each later register write takes effect
+  normally. PIC, CPIC and images with scoped GP values require local evidence.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and

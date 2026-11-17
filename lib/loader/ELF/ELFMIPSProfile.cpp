@@ -17,6 +17,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MipsABIFlags.h"
 
 #include <cstring>
@@ -32,6 +33,54 @@ llvm::Error profileError(const llvm::Twine &Reason) {
   return llvm::make_error<llvm::StringError>("elf: MIPS " + Reason,
                                              llvm::inconvertibleErrorCode());
 }
+
+template <typename ELFT> struct GlobalPointerRecords {
+  std::optional<uint64_t> Value;
+  bool HasScopedGP = false;
+
+  llvm::Error readRegInfo(llvm::ArrayRef<uint8_t> Bytes, bool Global) {
+    llvm::object::Elf_Mips_RegInfo<ELFT> Record;
+    if (Bytes.size() != sizeof(Record))
+      return profileError("invalid register-info size");
+    if (!Global) {
+      HasScopedGP = true;
+      return llvm::Error::success();
+    }
+    std::memcpy(&Record, Bytes.data(), sizeof(Record));
+    const uint64_t GP = Record.ri_gp_value;
+    if (Value && *Value != GP)
+      return profileError("conflicting global pointer records");
+    Value = GP;
+    return llvm::Error::success();
+  }
+
+  llvm::Error read(const llvm::object::ELFFile<ELFT> &ELF, uint64_t Offset,
+                   uint64_t Size, bool Options) {
+    if (!rangeInBounds(Offset, Size, ELF.getBufSize()))
+      return profileError(
+          "register-info or options record exceeds file bounds");
+    llvm::ArrayRef<uint8_t> Bytes(ELF.base() + Offset, Size);
+    if (!Options)
+      return readRegInfo(Bytes, true);
+    while (!Bytes.empty()) {
+      llvm::object::Elf_Mips_Options<ELFT> Option;
+      if (Bytes.size() < sizeof(Option))
+        return profileError("truncated options header");
+      std::memcpy(&Option, Bytes.data(), sizeof(Option));
+      if (Option.size < sizeof(Option) || Option.size > Bytes.size())
+        return profileError("invalid options record size");
+      if (Option.kind == llvm::ELF::ODK_GP_GROUP)
+        HasScopedGP = true;
+      if (Option.kind == llvm::ELF::ODK_REGINFO)
+        if (auto Error = readRegInfo(
+                Bytes.take_front(Option.size).drop_front(sizeof(Option)),
+                Option.section == 0))
+          return Error;
+      Bytes = Bytes.drop_front(Option.size);
+    }
+    return llvm::Error::success();
+  }
+};
 
 template <typename ELFT>
 llvm::Expected<MIPSImageMetadata>
@@ -142,10 +191,16 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     return llvm::Error::success();
   };
 
+  GlobalPointerRecords<ELFT> GP;
   auto Sections = ELF.sections();
   if (!Sections)
     return Sections.takeError();
   for (const auto &Section : *Sections) {
+    if (Section.sh_type == SHT_MIPS_REGINFO ||
+        Section.sh_type == SHT_MIPS_OPTIONS)
+      if (auto Error = GP.read(ELF, Section.sh_offset, Section.sh_size,
+                               Section.sh_type == SHT_MIPS_OPTIONS))
+        return std::move(Error);
     if (Section.sh_type == SHT_MIPS_ABIFLAGS)
       if (auto Error = ReadABIFlags(Section.sh_offset, Section.sh_size))
         return std::move(Error);
@@ -161,10 +216,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
   auto Programs = ELF.program_headers();
   if (!Programs)
     return Programs.takeError();
-  for (const auto &Program : *Programs)
+  for (const auto &Program : *Programs) {
+    if (Program.p_type == PT_MIPS_REGINFO || Program.p_type == PT_MIPS_OPTIONS)
+      if (auto Error = GP.read(ELF, Program.p_offset, Program.p_filesz,
+                               Program.p_type == PT_MIPS_OPTIONS))
+        return std::move(Error);
     if (Program.p_type == PT_MIPS_ABIFLAGS)
       if (auto Error = ReadABIFlags(Program.p_offset, Program.p_filesz))
         return std::move(Error);
+  }
 
   // Sectionless firmware still carries symbol-level encoding flags. Read the
   // runtime symbol table through its declared size before admitting classic
@@ -184,6 +244,8 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
         SymbolSize = Entry.d_un.d_val;
       else if (Entry.d_tag == DT_MIPS_SYMTABNO)
         SymbolCount = Entry.d_un.d_val;
+      else if (Entry.d_tag == DT_MIPS_GP_VALUE)
+        GP.HasScopedGP = true; // Auxiliary GOT.
     }
     if (SymbolAddress) {
       if (!SymbolSize || *SymbolSize != sizeof(typename ELFT::Sym))
@@ -222,6 +284,11 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
       }
     }
   }
+
+  if (GP.Value && !GP.HasScopedGP && Header.e_type == ET_EXEC &&
+      !(Flags & (EF_MIPS_PIC | EF_MIPS_CPIC)))
+    Profile.EntryGP =
+        N32 ? uint64_t(llvm::SignExtend64<32>(*GP.Value)) : *GP.Value;
 
   if (ABIFlags) {
     const auto Bytes = *ABIFlags;

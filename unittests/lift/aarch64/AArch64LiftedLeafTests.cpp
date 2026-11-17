@@ -190,6 +190,33 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  if (Check == LeafCheck::Relifted) {
+    std::vector<ExceptionAddressRange> Sections;
+    for (const auto &S : Image->Sections)
+      if (S.Size && (S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) &&
+          (S.Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_REGULAR)
+        Sections.push_back({S.VA, S.VA + S.Size});
+    llvm::sort(Sections,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    testing::Test::RecordProperty(kSourceCodeSections, int(Sections.size()));
+    const bool Separate = std::adjacent_find(Sections.begin(), Sections.end(),
+                                             [](const auto &L, const auto &R) {
+                                               return L.End < R.Begin;
+                                             }) != Sections.end();
+    testing::Test::RecordProperty(kSeparatedCodeSections, int(Separate));
+    const auto Distinct = std::adjacent_find(
+        Sections.begin(), Sections.end(), [&](const auto &L, const auto &R) {
+          return Image->getSegmentFor(L.Begin) != Image->getSegmentFor(R.Begin);
+        });
+    testing::Test::RecordProperty(kDistinctCodeSegments,
+                                  int(Distinct != Sections.end()));
+  }
+  if (Preamble == kSplitData || Preamble == kSplitSegments) {
+    const auto *Marker = Image->findSymbol(kMarkerSymbol);
+    ASSERT_TRUE(Marker);
+    EXPECT_FALSE(Image->isCodeAddress(Marker->Addr));
+    EXPECT_FALSE(Image->hasAuthenticatedFunctionEntryAt(Marker->Addr));
+  }
   const auto Snapshot = Image->Raw;
   llvm::LLVMContext Context;
   PipelineOptions Options;
@@ -749,6 +776,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ExecutionPaths.push_back(NextPath);
     }
     for (const auto &Path : ExecutionPaths) {
+      if (Preamble == kSplitData || Preamble == kSplitSegments) {
+        auto Loaded = Reader->load(Path);
+        ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+        const auto *Marker = Loaded->findSymbol(kMarkerSymbol);
+        ASSERT_TRUE(Marker);
+        const auto *Data =
+            Loaded->readVA(Marker->Addr, sizeof(kMarkerBytes) - 1);
+        ASSERT_TRUE(Data);
+        EXPECT_EQ(llvm::StringRef(reinterpret_cast<const char *>(Data),
+                                  sizeof(kMarkerBytes) - 1),
+                  kMarkerBytes);
+      }
       auto Verified = macho_signing::verifyStrict(Path);
       ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
     }
@@ -756,8 +795,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                                   1 + kRepeatedPublications);
   }
   if (std::getenv(kExecute)) {
-    for (const auto &Path : ExecutionPaths)
+    for (const auto &Path : ExecutionPaths) {
+      SCOPED_TRACE(Path);
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Path}), 0);
+    }
     if (Check == LeafCheck::TailTarget) {
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
@@ -1225,6 +1266,16 @@ TEST(AArch64LiftedImage,
      CodesignSignedLiftedOutputAllowsRepeatedNativePublication) {
   verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
                         LeafCheck::Resigned);
+}
+
+TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {
+  verifyPublishedLeaves(kSplitLeaves, kCaller, kSource, kSplitData,
+                        LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, SeparateExecutableSegmentsSurviveAutomaticRelifting) {
+  verifyPublishedLeaves(kSplitLeaves, kCaller, kSource, kSplitSegments,
+                        LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, AppendedFunctionsSurviveRepeatedAutomaticLifting) {
