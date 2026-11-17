@@ -25515,6 +25515,34 @@ source fixtures execute zero/mid/full immediate counts on both byte orders.
 
 ### MIPS scalar floating-point and ABI roundtrips
 
+`gpr-float-roundtrip.py` compiles an owned `uint32_t kernel(uint32_t, float)`
+and binds its declaration before emitting source. o32 carries the second
+parameter in a GPR; an integer use must reinterpret its bits, including NaN
+payloads and negative zero. The runner covers classic, microMIPS and MIPS16,
+FR=0/1 and both byte orders, rebuilding HighC and LLVMC at O0/O2. It checks
+the integer result, FCSR, preserved GPRs/FPRs, SP and return to classic code.
+
+```sh
+PYTHONPATH=third_party/unicorn/bindings/python LIBUNICORN_PATH=/path/to/unicorn-build \
+  python3 unittests/lift/mips/gpr-float-roundtrip.py \
+  --neverd build-mips/bin/neverd --clang /path/to/clang \
+  --assembler /path/to/mips-as --ld /path/to/mips-ld \
+  --gcc /path/to/mips64-linux-gnuabi64-gcc \
+  --output build-mips/gpr-float-roundtrip
+```
+
+Omit `--gcc` to run only Clang. Each attempt cleans its generated binaries;
+commands, source hashes and failed-source evidence remain in the output.
+`HighCIntegerConversion.MachineIntegerReadsOfFloatingParametersKeepBits`
+separately executes direct, forwarded and logical-shift reads through signed
+and unsigned 32/64-bit machine carriers at O0/O2 with undefined-behavior
+checks. `MIPS16Pipeline.DeclaredGPRFloatKeepsItsIntegerBitUse` covers loader
+and source binding in both byte orders. MIPS16 source mode spelling uses a
+compiler-specific `.def` prelude because GCC rejects the Clang attribute
+pair; the selected LLVMC caller must retain its callee's prelude too.
+These checks do not qualify leading MIPS16 floating arguments, floating
+return helpers or linker/runtime floating-call stubs.
+
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 
 ```sh

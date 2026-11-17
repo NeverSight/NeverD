@@ -1056,6 +1056,71 @@ int main(void) {
 )");
 }
 
+TEST(HighCIntegerConversion, MachineIntegerReadsOfFloatingParametersKeepBits) {
+  // A source declaration can give a GPR-carried parameter its floating type
+  // while its uses still read the machine integer. This also applies after
+  // copy forwarding, whose printed name is the parameter's name.
+  for (uint16_t Bytes : {4, 8}) {
+    for (bool Signed : {false, true}) {
+      SCOPED_TRACE(Bytes);
+      SCOPED_TRACE(Signed);
+      const TypeRef U = integer(Bytes, false);
+      const TypeRef F = NdType::makeFloat(Bytes);
+      auto Parameter = [&] {
+        auto E = typed(input(), integer(Bytes, Signed));
+        E->Var.Size = Bytes;
+        return E;
+      };
+      std::vector<HighFunc> Functions;
+      Functions.push_back(function("direct_bits", U, {result(Parameter())}));
+      Functions.push_back(function(
+          "shifted_bits", U,
+          {result(op(NdOp::INT_RIGHT, Parameter(), constant(1, Bytes), U))}));
+      Functions.push_back(
+          function("copied_bits", U,
+                   {assign(local(1, U), Parameter()),
+                    result(op(NdOp::INT_XOR, local(1, U),
+                              constant(0x71395217, Bytes), U))}));
+      for (size_t I = 0; I < Functions.size(); ++I) {
+        Functions[I].Entry += 0x100 * I;
+        Functions[I].Params = {{"arg0", F}};
+      }
+      std::string Source;
+      llvm::raw_string_ostream Out(Source);
+      CEmitterOptions Options;
+      Options.TheArch = Arch::X64;
+      ASSERT_TRUE(HighCEmitter().emit(Functions, Out, Options));
+      Out.flush();
+      const std::string Float = Bytes == 4 ? "float" : "double";
+      const std::string UInt = "uint" + std::to_string(Bytes * 8) + "_t";
+      compileAndRun(
+          Source +
+          "\n#include <string.h>\nint main(void) {\n"
+          "  const uint64_t patterns[] = {0, 1, 0x80000000, 0x7F800000,\n"
+          "    0x7FA12345, 0xFFC54321, 0x3FC00000, 0xC0200000,\n"
+          "    0x8000000000000000ull, 0x7FF0000000000000ull,\n"
+          "    0x7FF123456789ABCDull, 0xFFF8FEDCBA987654ull,\n"
+          "    0x3FF8000000000000ull, 0xC004000000000000ull,\n"
+          "    0xFFFFFFFFFFFFFFFFull};\n"
+          "  for (unsigned i = 0; i < sizeof patterns / sizeof patterns[0]; "
+          "++i) "
+          "{\n"
+          "    const " +
+          UInt + " bits = (" + UInt +
+          ")patterns[i];\n"
+          "    " +
+          Float +
+          " value; memcpy(&value, &bits, sizeof value);\n"
+          "    if (direct_bits(value) != bits) return 1;\n"
+          "    if (copied_bits(value) != (bits ^ 0x71395217u)) return 2;\n"
+          "    if (shifted_bits(value) != (bits >> 1)) return 3;\n"
+          "  }\n"
+          "  return 0;\n"
+          "}\n");
+    }
+  }
+}
+
 TEST(HighCIntegerConversion, AnIntegerOperatorReadsAFloatingValuesBits) {
   // AArch64 `fmov x8, d0; cmp x8, x0; cset w0, lt` compares a double's bits
   // as a signed integer, and `udiv` divides them: HighIR holds each as an

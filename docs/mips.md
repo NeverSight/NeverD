@@ -85,9 +85,18 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   adapter still declines split o32 values, register-padding holes and narrow
   big-endian overflow slots; complete typed ABI reconstruction is not claimed.
 
+  HighC preserves integer bit reads of declared floating parameters, including
+  o32 floats following an integer in GPRs. Its emitted bit carrier retains
+  signedness so logical right shifts receive the required unsigned view.
   Typed source calls marshal the emitted integer view before consulting the
   parameter's floating declaration. This keeps forwarded values as bits in
   ordinary calls and the shared AArch64 authenticated-call packet path.
+  Classic, microMIPS and MIPS16 FR=0/1 leaves are checked in both byte orders
+  against original machine code, with Clang and GCC at O0/O2. MIPS16 source
+  attributes use compiler-specific spelling from `MIPSInstructionModes.def`;
+  LLVM still retains both the selected mode and excluded alternative.
+  Leading MIPS16 FP parameters, floating-return helpers and floating-call
+  linker/runtime stubs remain outside this qualification.
 
 LowIR execution retains the common known bits of the two permitted partial
 MIPS64 `LWR` upper words. Scalar COPY, SUBBYTES, CONCAT and integer extensions

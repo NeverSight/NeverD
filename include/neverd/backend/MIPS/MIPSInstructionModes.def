@@ -5,8 +5,7 @@
 //===----------------------------------------------------------------------===//
 // Mode, LLVM feature, excluded alternative, C spelling. Positive modes precede
 // classic mode when recognizing older LLVM IR carrying only one attribute.
-MIPS_SOURCE_MODE(MIPS16, "mips16", "nomicromips",
-                 "__attribute__((mips16,nomicromips)) ")
+MIPS_SOURCE_MODE(MIPS16, "mips16", "nomicromips", "NEVERD_MIPS16 ")
 MIPS_SOURCE_MODE(MicroMIPS, "micromips", "nomips16", "NEVERD_MICROMIPS ")
 MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "nomips16",
                  "__attribute__((nomicromips,nomips16)) ")
@@ -14,6 +13,14 @@ MIPS_SOURCE_MODE(MIPSClassic, "nomicromips", "nomips16",
 #undef MIPS_SOURCE_MODE
 
 #ifdef MIPS_SOURCE_TEXT
+// GCC rejects mips16 together with nomicromips. Its positive attribute already
+// selects that encoding; Clang also needs the alternative disabled explicitly.
+MIPS_SOURCE_TEXT(MIPS16ModeCPrelude,
+                 "#if defined(__clang__)\n"
+                 "#define NEVERD_MIPS16 __attribute__((mips16,nomicromips))\n"
+                 "#else\n"
+                 "#define NEVERD_MIPS16 __attribute__((mips16))\n"
+                 "#endif\n\n")
 // GCC selects the encoding with a single positive attribute. Clang needs to
 // disable MIPS16 explicitly when the translation unit defaults to that mode.
 MIPS_SOURCE_TEXT(
