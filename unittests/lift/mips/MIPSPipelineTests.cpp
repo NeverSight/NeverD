@@ -784,6 +784,69 @@ TEST(MIPSSourceReturnTargets, SplitFloatingSpillsKeepEveryReachingByte) {
         }
 }
 
+TEST(MIPSSourceReturnTargets, FloatingResultSpillsDoNotPoisonArgumentProofs) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool FP64 : {false, true})
+      for (unsigned ResultKind = 0; ResultKind != 3; ++ResultKind)
+        for (unsigned Variant = 0; Variant != 4; ++Variant) {
+          SCOPED_TRACE(getArchName(Target));
+          SCOPED_TRACE(FP64);
+          SCOPED_TRACE(ResultKind);
+          SCOPED_TRACE(Variant);
+          mips_test::ELFBytes File(Target);
+          File.abiFlags();
+          File.put(36, FP64 ? 0x70001200 : 0x70001000, 4);
+          File.Bytes[0xe5] = FP64 ? 2 : 1;
+          File.Bytes[0xe7] = FP64 ? 6 : 1;
+          // The incoming double is assembled from two word stores. Querying
+          // its reaching values also visits the later result spill, whose
+          // numerical provenance depends on this same argument proof.
+          // A failed recursive query must not become a permanent negative.
+          const uint32_t Words[] = {0x27bdffd8,
+                                    0xafbf0024,
+                                    Variant == 1 ? 0xafbd0010u : 0xafa40010u,
+                                    0xafa50014,
+                                    0xd7ac0010,
+                                    0x0c008000,
+                                    0,
+                                    Variant == 2 ? 0xf7a00020u : 0xf7a00018u,
+                                    0x8fbf0024,
+                                    0x24020007,
+                                    0x03e00008,
+                                    0x27bd0028};
+          File.Bytes.resize(0x100 + sizeof(Words));
+          File.put(52 + 16, File.Bytes.size(), 4);
+          File.put(52 + 20, File.Bytes.size(), 4);
+          for (unsigned I = 0; I != std::size(Words); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low = CFGBuilder().build(*Image, Decode, Image->Entry,
+                                              "fp_result_spill");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          const auto Result =
+              ResultKind == 0 ? NdType::makeFloat(8)
+                              : NdType::makeComplex(ResultKind == 1 ? 4 : 8);
+          const auto Signature = floatingCallArguments(
+              Target, BinaryFormat::ELF, Result, {NdType::makeFloat(8)});
+          ASSERT_TRUE(Signature);
+          const std::map<va_t, FloatingCallArguments> Calls{
+              {0x20000, *Signature}};
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          if (Variant != 3)
+            Convert.setCallEntryFloatingArguments(&Calls);
+          if (Variant == 0)
+            EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
+}
+
 TEST_P(MIPSPipeline, FloatingCallPreservesOnlyPrivateLinkSlots) {
   for (unsigned Variant = 0; Variant < 6; ++Variant) {
     mips_test::ELFBytes File(GetParam());
