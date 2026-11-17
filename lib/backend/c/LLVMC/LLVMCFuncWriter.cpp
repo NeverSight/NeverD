@@ -11402,18 +11402,21 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       size_t At = 0;
       size_t Length = 0;
       const llvm::BasicBlock *To = nullptr;
+      /// The line before the jump that tells a `__finally` the jump is no
+      /// exception, where one printed. The layout keeps it where the jump
+      /// leaves the try of a `__finally`.
+      size_t FlagAt = 0;
+      size_t FlagLength = 0;
     };
     struct PrintedBlock {
       const llvm::BasicBlock *BB = nullptr;
       const SEHBlockScopes::Scope *Scopes = nullptr;
       std::string Label;
       bool InCleanup = false;
-      /// The statements inside the innermost `__try`, and the clauses that
-      /// close the nest, each with the jumps it prints.
+      /// The statements inside the innermost `__try`, with the jumps they
+      /// print.
       std::string Body;
-      std::string Close;
       std::vector<JumpSite> BodyJumps;
-      std::vector<JumpSite> CloseJumps;
       /// Where the body jumps when it prints nothing else.
       const llvm::BasicBlock *OnlyJump = nullptr;
     };
@@ -11439,16 +11442,164 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                     int Indent) {
       writePhiCopies(From, To, Indent);
       KnownImmediates.clear();
+      JumpSite Site;
+      Site.To = To;
       if (InCleanup) {
+        Site.FlagAt = PartBase + static_cast<size_t>(OS.stream().tell());
         emitIndent(Indent);
         OS << NormalExit << " = 1;\n";
+        Site.FlagLength =
+            PartBase + static_cast<size_t>(OS.stream().tell()) - Site.FlagAt;
       }
       emitIndent(Indent);
       OS << "goto ";
       const std::string Label = blockLabel(To);
-      PartJumps->push_back({PartBase + static_cast<size_t>(OS.stream().tell()),
-                            Label.size(), To});
+      Site.At = PartBase + static_cast<size_t>(OS.stream().tell());
+      Site.Length = Label.size();
+      PartJumps->push_back(Site);
       OS << Label << ";\n";
+    };
+    // The clause that closes the `__try` at \p Level, the outermost being 1.
+    // An `__except` leaves for its handler at \p Landing, and \p Leaves says
+    // that jump leaves the try of a `__finally` around the clause.
+    auto WriteClause = [&](const llvm::BasicBlock *Entry, int Level,
+                           const llvm::BasicBlock *Landing, bool Leaves) {
+      const int Indent = Level;
+      const auto &Clause = BlockScopes->Clauses.at(Entry);
+      KnownImmediates.clear();
+      AllocaImmediates.clear();
+      AllocaLastValues.clear();
+      AfterCxxThrow = false;
+      emitIndent(Indent);
+      if (Clause.Cleanup) {
+        OS << "} __finally {\n";
+        emitIndent(Indent + 1);
+        OS << "if (!" << NormalExit << ") {\n";
+        if (!Clause.LinearCleanup) {
+          // C labels have function scope, even inside distinct finally
+          // clauses. Every copy needs its own names and explicit PHI edges.
+          std::map<const llvm::BasicBlock *, std::string> Labels;
+          for (const auto *Body : Clause.CleanupBody) {
+            Labels.emplace(Body, freshVar("seh_cleanup"));
+            EHMovedContinuationBlocks.insert(Body);
+            for (const auto &Inst : *Body)
+              if (llvm::isa<llvm::PHINode>(Inst))
+                Analysis.Inlinable.erase(&Inst);
+          }
+          const std::string Done = freshVar("seh_cleanup_done");
+          auto CleanupEdge = [&](const llvm::BasicBlock *From,
+                                 const llvm::BasicBlock *To, int Depth) {
+            writePhiCopies(From, To, Depth);
+            KnownImmediates.clear();
+            emitIndent(Depth);
+            OS << "goto " << Labels.at(To) << ";\n";
+          };
+          for (const auto *Body : Clause.CleanupBody) {
+            llvm::SaveAndRestore<const llvm::Instruction *> AtEnd(
+                EmittingInstruction, Body->getTerminator());
+            KnownImmediates.clear();
+            AllocaImmediates.clear();
+            AllocaLastValues.clear();
+            AfterCxxThrow = false;
+            OS << Labels.at(Body) << ":\n";
+            for (const auto &Inst : *Body)
+              if (!Inst.isTerminator() &&
+                  !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
+                writeInstruction(const_cast<llvm::Instruction &>(Inst),
+                                 Indent + 2);
+            const auto *Term = Body->getTerminator();
+            if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
+              writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
+                               Indent + 2);
+              if (!AfterCxxThrow)
+                CleanupEdge(Body, Invoke->getNormalDest(), Indent + 2);
+            } else if (const auto *Branch =
+                           llvm::dyn_cast<llvm::UncondBrInst>(Term)) {
+              CleanupEdge(Body, Branch->getSuccessor(0), Indent + 2);
+            } else if (const auto *Branch =
+                           llvm::dyn_cast<llvm::CondBrInst>(Term)) {
+              emitIndent(Indent + 2);
+              OS << "if (" << valueStr(Branch->getCondition()) << ") {\n";
+              CleanupEdge(Body, Branch->getSuccessor(0), Indent + 3);
+              emitIndent(Indent + 2);
+              OS << "} else {\n";
+              CleanupEdge(Body, Branch->getSuccessor(1), Indent + 3);
+              emitIndent(Indent + 2);
+              OS << "}\n";
+            } else if (const auto *Switch =
+                           llvm::dyn_cast<llvm::SwitchInst>(Term)) {
+              emitIndent(Indent + 2);
+              OS << "switch (" << valueStr(Switch->getCondition()) << ") {\n";
+              for (const auto &Case : Switch->cases()) {
+                emitIndent(Indent + 2);
+                OS << "case " << valueStr(Case.getCaseValue()) << ":\n";
+                CleanupEdge(Body, Case.getCaseSuccessor(), Indent + 3);
+              }
+              emitIndent(Indent + 2);
+              OS << "default:\n";
+              CleanupEdge(Body, Switch->getDefaultDest(), Indent + 3);
+              emitIndent(Indent + 2);
+              OS << "}\n";
+            } else if (llvm::isa<llvm::CleanupReturnInst>(Term)) {
+              emitIndent(Indent + 2);
+              OS << "goto " << Done << ";\n";
+            } else if (!AfterCxxThrow) {
+              // A call that does not return has said so itself.
+              emitIndent(Indent + 2);
+              OS << "__builtin_unreachable();\n";
+            }
+          }
+          OS << Done << ":;\n";
+        } else {
+          for (const auto *CleanupBB : Clause.CleanupBody) {
+            llvm::SaveAndRestore<const llvm::Instruction *> AtEnd(
+                EmittingInstruction, CleanupBB->getTerminator());
+            for (const auto &Inst : *CleanupBB)
+              if (!Inst.isTerminator() &&
+                  !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
+                writeInstruction(const_cast<llvm::Instruction &>(Inst),
+                                 Indent + 2);
+            const auto *CleanupTerm = CleanupBB->getTerminator();
+            const llvm::BasicBlock *Next = nullptr;
+            if (const auto *Invoke =
+                    llvm::dyn_cast<llvm::InvokeInst>(CleanupTerm)) {
+              writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
+                               Indent + 2);
+              Next = Invoke->getNormalDest();
+            } else if (const auto *Branch =
+                           llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
+              Next = Branch->getSuccessor(0);
+            // A call that does not return has said so itself.
+            if (llvm::isa<llvm::UnreachableInst>(CleanupTerm) &&
+                !AfterCxxThrow) {
+              emitIndent(Indent + 2);
+              OS << "__builtin_unreachable();\n";
+            }
+            if (Next && !AfterCxxThrow)
+              writePhiCopies(CleanupBB, Next, Indent + 2);
+          }
+        }
+        emitIndent(Indent + 1);
+        OS << "}\n";
+      } else {
+        OS << "} __except (" << windowsEHFilterExpr(*Clause.Dispatch)
+           << ") {\n";
+        for (const auto &Inst : *Clause.Pad->getParent())
+          if (!llvm::isa<llvm::CatchPadInst, llvm::CatchReturnInst>(Inst))
+            writeInstruction(const_cast<llvm::Instruction &>(Inst), Indent + 1);
+        llvm::SaveAndRestore<const llvm::Instruction *> AtPad(
+            EmittingInstruction, Clause.Pad->getParent()->getTerminator());
+        writePhiCopies(Clause.Pad->getParent(), Clause.Handler, Indent + 1);
+        KnownImmediates.clear();
+        if (Leaves) {
+          emitIndent(Indent + 1);
+          OS << NormalExit << " = 1;\n";
+        }
+        emitIndent(Indent + 1);
+        OS << "goto " << blockLabel(Landing) << ";\n";
+      }
+      emitIndent(Indent);
+      OS << "}\n";
     };
     for (auto &BB : Fn) {
       const auto Scope = BlockScopes->Protected.find(&BB);
@@ -11537,138 +11688,6 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                             : llvm::StringRef(Block.Body)) == Jump)
           Block.OnlyJump = To;
       }
-      PartJumps = &Block.CloseJumps;
-      PartBase = 0;
-      Block.Close = PrintApart([&] {
-        for (const auto *Entry : llvm::reverse(Scope->second)) {
-          --Indent;
-          const auto &Clause = BlockScopes->Clauses.at(Entry);
-          KnownImmediates.clear();
-          AllocaImmediates.clear();
-          AllocaLastValues.clear();
-          AfterCxxThrow = false;
-          emitIndent(Indent);
-          if (Clause.Cleanup) {
-            OS << "} __finally {\n";
-            emitIndent(Indent + 1);
-            OS << "if (!" << NormalExit << ") {\n";
-            if (!Clause.LinearCleanup) {
-              // C labels have function scope, even inside distinct finally
-              // clauses. Every copy needs its own names and explicit PHI edges.
-              std::map<const llvm::BasicBlock *, std::string> Labels;
-              for (const auto *Body : Clause.CleanupBody) {
-                Labels.emplace(Body, freshVar("seh_cleanup"));
-                EHMovedContinuationBlocks.insert(Body);
-                for (const auto &Inst : *Body)
-                  if (llvm::isa<llvm::PHINode>(Inst))
-                    Analysis.Inlinable.erase(&Inst);
-              }
-              const std::string Done = freshVar("seh_cleanup_done");
-              auto CleanupEdge = [&](const llvm::BasicBlock *From,
-                                     const llvm::BasicBlock *To, int Depth) {
-                writePhiCopies(From, To, Depth);
-                KnownImmediates.clear();
-                emitIndent(Depth);
-                OS << "goto " << Labels.at(To) << ";\n";
-              };
-              for (const auto *Body : Clause.CleanupBody) {
-                KnownImmediates.clear();
-                AllocaImmediates.clear();
-                AllocaLastValues.clear();
-                AfterCxxThrow = false;
-                OS << Labels.at(Body) << ":\n";
-                for (const auto &Inst : *Body)
-                  if (!Inst.isTerminator() &&
-                      !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
-                    writeInstruction(const_cast<llvm::Instruction &>(Inst),
-                                     Indent + 2);
-                const auto *Term = Body->getTerminator();
-                if (const auto *Invoke =
-                        llvm::dyn_cast<llvm::InvokeInst>(Term)) {
-                  writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
-                                   Indent + 2);
-                  if (!AfterCxxThrow)
-                    CleanupEdge(Body, Invoke->getNormalDest(), Indent + 2);
-                } else if (const auto *Branch =
-                               llvm::dyn_cast<llvm::UncondBrInst>(Term)) {
-                  CleanupEdge(Body, Branch->getSuccessor(0), Indent + 2);
-                } else if (const auto *Branch =
-                               llvm::dyn_cast<llvm::CondBrInst>(Term)) {
-                  emitIndent(Indent + 2);
-                  OS << "if (" << valueStr(Branch->getCondition()) << ") {\n";
-                  CleanupEdge(Body, Branch->getSuccessor(0), Indent + 3);
-                  emitIndent(Indent + 2);
-                  OS << "} else {\n";
-                  CleanupEdge(Body, Branch->getSuccessor(1), Indent + 3);
-                  emitIndent(Indent + 2);
-                  OS << "}\n";
-                } else if (const auto *Switch =
-                               llvm::dyn_cast<llvm::SwitchInst>(Term)) {
-                  emitIndent(Indent + 2);
-                  OS << "switch (" << valueStr(Switch->getCondition())
-                     << ") {\n";
-                  for (const auto &Case : Switch->cases()) {
-                    emitIndent(Indent + 2);
-                    OS << "case " << valueStr(Case.getCaseValue()) << ":\n";
-                    CleanupEdge(Body, Case.getCaseSuccessor(), Indent + 3);
-                  }
-                  emitIndent(Indent + 2);
-                  OS << "default:\n";
-                  CleanupEdge(Body, Switch->getDefaultDest(), Indent + 3);
-                  emitIndent(Indent + 2);
-                  OS << "}\n";
-                } else if (llvm::isa<llvm::CleanupReturnInst>(Term)) {
-                  emitIndent(Indent + 2);
-                  OS << "goto " << Done << ";\n";
-                } else if (!AfterCxxThrow) {
-                  // A call that does not return has said so itself.
-                  emitIndent(Indent + 2);
-                  OS << "__builtin_unreachable();\n";
-                }
-              }
-              OS << Done << ":;\n";
-            } else {
-              for (const auto *CleanupBB : Clause.CleanupBody) {
-                for (const auto &Inst : *CleanupBB)
-                  if (!Inst.isTerminator() &&
-                      !llvm::isa<llvm::CleanupPadInst, llvm::AllocaInst>(Inst))
-                    writeInstruction(const_cast<llvm::Instruction &>(Inst),
-                                     Indent + 2);
-                const auto *CleanupTerm = CleanupBB->getTerminator();
-                const llvm::BasicBlock *Next = nullptr;
-                if (const auto *Invoke =
-                        llvm::dyn_cast<llvm::InvokeInst>(CleanupTerm)) {
-                  writeInvokedCall(*const_cast<llvm::InvokeInst *>(Invoke),
-                                   Indent + 2);
-                  Next = Invoke->getNormalDest();
-                } else if (const auto *Branch =
-                               llvm::dyn_cast<llvm::UncondBrInst>(CleanupTerm))
-                  Next = Branch->getSuccessor(0);
-                // A call that does not return has said so itself.
-                if (llvm::isa<llvm::UnreachableInst>(CleanupTerm) &&
-                    !AfterCxxThrow) {
-                  emitIndent(Indent + 2);
-                  OS << "__builtin_unreachable();\n";
-                }
-                if (Next && !AfterCxxThrow)
-                  writePhiCopies(CleanupBB, Next, Indent + 2);
-              }
-            }
-            emitIndent(Indent + 1);
-            OS << "}\n";
-          } else {
-            OS << "} __except (" << windowsEHFilterExpr(*Clause.Dispatch)
-               << ") {\n";
-            for (const auto &Inst : *Clause.Pad->getParent())
-              if (!llvm::isa<llvm::CatchPadInst, llvm::CatchReturnInst>(Inst))
-                writeInstruction(const_cast<llvm::Instruction &>(Inst),
-                                 Indent + 1);
-            Edge(Clause.Pad->getParent(), Clause.Handler, Indent + 1);
-          }
-          emitIndent(Indent);
-          OS << "}\n";
-        }
-      });
       InCleanup = false;
     }
 
@@ -11727,34 +11746,155 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         To = At->second;
       return To;
     };
-    auto WithLandings = [&](std::string Text,
-                            const std::vector<JumpSite> &Sites) {
-      // From the last jump back, so that the places before it still hold.
-      for (const JumpSite &Site : llvm::reverse(Sites))
-        if (const llvm::BasicBlock *To = LandsAt(Site.To); To != Site.To)
-          Text.replace(Site.At, Site.Length, blockLabel(To));
-      return Text;
+    // Blocks that follow one another under the same clauses share their
+    // `__try`: for each block and the next, the layout keeps how many of
+    // their outermost tries are one and the same.  C forbids a jump into a
+    // `__try`, so a block's label stands before the tries that open at the
+    // block, and a jump lands there only from inside every try that is
+    // already open at the label.  A jump that is not takes the sharing away
+    // at its label, which another jump may then need, until all of them land.
+    std::vector<const PrintedBlock *> Layout;
+    for (const PrintedBlock &Block : Printed)
+      if (!Passed.count(Block.BB))
+        Layout.push_back(&Block);
+    const SEHBlockScopes::Scope NoScopes;
+    auto ChainOf =
+        [&](const PrintedBlock &Block) -> const SEHBlockScopes::Scope & {
+      return Block.OnlyJump ? NoScopes : *Block.Scopes;
     };
-    for (const PrintedBlock &Block : Printed) {
-      if (Passed.count(Block.BB))
+    std::map<const llvm::BasicBlock *, size_t> PlaceOf;
+    for (size_t Place = 0; Place < Layout.size(); ++Place)
+      PlaceOf.emplace(Layout[Place]->BB, Place);
+    struct LaidJump {
+      /// The block that prints the jump, and how many of its tries hold the
+      /// jump: all of them for its body, the outer ones for a clause.
+      size_t From = 0;
+      size_t Depth = 0;
+      size_t To = 0;
+    };
+    std::vector<LaidJump> Jumps;
+    bool EveryJumpLands = true;
+    auto AddJump = [&](size_t From, size_t Depth, const llvm::BasicBlock *To) {
+      if (const auto Place = PlaceOf.find(LandsAt(To)); Place != PlaceOf.end())
+        Jumps.push_back({From, Depth, Place->second});
+      else
+        EveryJumpLands = false;
+    };
+    for (size_t Place = 0; Place < Layout.size(); ++Place) {
+      const PrintedBlock &Block = *Layout[Place];
+      if (Block.OnlyJump) {
+        AddJump(Place, 0, Block.OnlyJump);
         continue;
+      }
+      const auto &Chain = *Block.Scopes;
+      for (const JumpSite &Site : Block.BodyJumps)
+        AddJump(Place, Chain.size(), Site.To);
+      for (size_t Level = 0; Level < Chain.size(); ++Level)
+        if (const auto &Clause = BlockScopes->Clauses.at(Chain[Level]);
+            Clause.Dispatch)
+          AddJump(Place, Level, Clause.Handler);
+    }
+    // Shared[Place]: the tries the block there and the next one share.
+    std::vector<size_t> Shared(Layout.size(), 0);
+    if (EveryJumpLands)
+      for (size_t Place = 0; Place + 1 < Layout.size(); ++Place) {
+        const auto &Chain = ChainOf(*Layout[Place]);
+        const auto &Next = ChainOf(*Layout[Place + 1]);
+        size_t &Same = Shared[Place];
+        while (Same < Chain.size() && Same < Next.size() &&
+               Chain[Same] == Next[Same])
+          ++Same;
+      }
+    // The tries open at a block's label.
+    auto OpenAt = [&](size_t Place) {
+      return Place ? Shared[Place - 1] : size_t(0);
+    };
+    for (bool Changed = true; Changed;) {
+      Changed = false;
+      for (const LaidJump &Jump : Jumps) {
+        const size_t Open = OpenAt(Jump.To);
+        if (!Open)
+          continue;
+        // The tries that hold the jump and are still open at the label.
+        size_t Held = Jump.Depth;
+        if (Jump.From != Jump.To)
+          for (size_t Place = std::min(Jump.From, Jump.To),
+                      End = std::max(Jump.From, Jump.To);
+               Place < End && Held; ++Place)
+            Held = std::min(Held, Shared[Place]);
+        if (Open > Held) {
+          Shared[Jump.To - 1] = Held;
+          Changed = true;
+        }
+      }
+    }
+    // A `__finally` runs its termination code unless the normal-exit flag is
+    // set: a jump sets it where it leaves the try of a `__finally`, and a
+    // block under one clears it unless every jump to the block comes from
+    // under a `__finally` it stays under, where the flag is clear already.
+    auto HasFinally = [&](const SEHBlockScopes::Scope &Chain, size_t Begin,
+                          size_t End) {
+      for (size_t Level = Begin; Level < End && Level < Chain.size(); ++Level)
+        if (BlockScopes->Clauses.at(Chain[Level]).Cleanup)
+          return true;
+      return false;
+    };
+    auto LeavesFinally = [&](size_t From, size_t Depth,
+                             const llvm::BasicBlock *To) {
+      const auto Place = PlaceOf.find(To);
+      return HasFinally(ChainOf(*Layout[From]),
+                        Place == PlaceOf.end() ? 0 : OpenAt(Place->second),
+                        Depth);
+    };
+    std::vector<char> Entered(Layout.size(), 0),
+        EnteredUnclear(Layout.size(), 0);
+    if (!Layout.empty())
+      EnteredUnclear.front() = 1;
+    for (const LaidJump &Jump : Jumps) {
+      const auto &Chain = ChainOf(*Layout[Jump.From]);
+      const size_t Open = OpenAt(Jump.To);
+      Entered[Jump.To] = 1;
+      if (!HasFinally(Chain, 0, Open) || HasFinally(Chain, Open, Jump.Depth))
+        EnteredUnclear[Jump.To] = 1;
+    }
+    for (size_t Place = 0; Place < Layout.size(); ++Place) {
+      const PrintedBlock &Block = *Layout[Place];
       OS << Block.Label << ":\n";
       if (Block.OnlyJump) {
         emitIndent(1);
         OS << "goto " << blockLabel(LandsAt(Block.OnlyJump)) << ";\n";
         continue;
       }
-      int Indent = 1;
-      if (Block.InCleanup) {
-        emitIndent(Indent);
+      const auto &Chain = *Block.Scopes;
+      const size_t Open = OpenAt(Place);
+      if (Block.InCleanup &&
+          (!EveryJumpLands || !Entered[Place] || EnteredUnclear[Place])) {
+        emitIndent(1 + static_cast<int>(Open));
         OS << NormalExit << " = 0;\n";
       }
-      for (size_t Clause = 0; Clause < Block.Scopes->size(); ++Clause) {
-        emitIndent(Indent++);
+      for (size_t Level = Open; Level < Chain.size(); ++Level) {
+        emitIndent(1 + static_cast<int>(Level));
         OS << "__try {\n";
       }
-      OS << WithLandings(Block.Body, Block.BodyJumps)
-         << WithLandings(Block.Close, Block.CloseJumps);
+      std::string Text = Block.Body;
+      // From the last jump back, so that the places before it still hold.
+      for (const JumpSite &Site : llvm::reverse(Block.BodyJumps)) {
+        const llvm::BasicBlock *To = LandsAt(Site.To);
+        if (To != Site.To)
+          Text.replace(Site.At, Site.Length, blockLabel(To));
+        if (Site.FlagLength && !LeavesFinally(Place, Chain.size(), To))
+          Text.erase(Site.FlagAt, Site.FlagLength);
+      }
+      OS << Text;
+      const size_t Stay = Place + 1 < Layout.size() ? Shared[Place] : 0;
+      for (size_t Level = Chain.size(); Level > Stay; --Level) {
+        const llvm::BasicBlock *Entry = Chain[Level - 1];
+        const auto &Clause = BlockScopes->Clauses.at(Entry);
+        const llvm::BasicBlock *Landing =
+            Clause.Dispatch ? LandsAt(Clause.Handler) : nullptr;
+        WriteClause(Entry, static_cast<int>(Level), Landing,
+                    Landing && LeavesFinally(Place, Level - 1, Landing));
+      }
     }
   } else if (WroteScalarRegions) {
     // The complete region plan owns all blocks and PHI edges.

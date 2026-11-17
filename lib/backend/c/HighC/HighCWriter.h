@@ -365,6 +365,7 @@ public:
   };
   PrintedReturn printedReturn(const HighFunc &Func) const;
   void runAnalysisPasses(const HighFunc &Func);
+  void collectLabelTargets(const HighFunc &Func);
   void writeExceptionAnnotation(const HighFunc &Func);
   void writeSEHScopeAnnotation(const HighFunc &Func, int Indent = 0);
   void writeCxxScopeAnnotation(const HighFunc &Func, int Indent = 0);

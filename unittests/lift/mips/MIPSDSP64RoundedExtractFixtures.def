@@ -1,0 +1,18 @@
+//===- MIPSDSP64RoundedExtractFixtures.def - Independent extract cases ----===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+// GNU as encodings for v0,ac0,0 (immediate) or v0,ac0,v0 (variable).
+// Mnemonic, instruction, result width, rounded, saturated, variable.
+NEVERD_TEST_DSP64_EXTRACT("dextr_r.w", 0x7c02013c, 32, true, false, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv_r.w", 0x7c42017c, 32, true, false, true)
+NEVERD_TEST_DSP64_EXTRACT("dextr_rs.w", 0x7c0201bc, 32, true, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv_rs.w", 0x7c4201fc, 32, true, true, true)
+NEVERD_TEST_DSP64_EXTRACT("dextr_s.h", 0x7c0203bc, 16, false, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv_s.h", 0x7c4203fc, 16, false, true, true)
+NEVERD_TEST_DSP64_EXTRACT("dextr_r.l", 0x7c02053c, 64, true, false, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv_r.l", 0x7c42057c, 64, true, false, true)
+NEVERD_TEST_DSP64_EXTRACT("dextr_rs.l", 0x7c0205bc, 64, true, true, false)
+NEVERD_TEST_DSP64_EXTRACT("dextrv_rs.l", 0x7c4205fc, 64, true, true, true)
+#undef NEVERD_TEST_DSP64_EXTRACT

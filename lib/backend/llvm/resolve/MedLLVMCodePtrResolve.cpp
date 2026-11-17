@@ -185,8 +185,20 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
   if (auto BlockIt = LiftedCodeBlocks.find(Address);
       BlockIt != LiftedCodeBlocks.end()) {
     llvm::BasicBlock *Block = BlockIt->second;
-    if (Block && Block->getParent())
+    if (Block && Block->getParent()) {
+      // A termination handler that leaves its `__finally` by a jump passes
+      // the runtime the block of its parent to resume at.  C names a label
+      // inside the label's function alone, and a block nothing in the parent
+      // reaches is removed, its address with it.  For printed C that target
+      // is the parent plus the offset, as code is in a function the module
+      // only declares.
+      if (AnalysisRecoveryForSource && CurFunc &&
+          Block->getParent() != CurFunc &&
+          SEHHandlerUnwindTargets.count(Address))
+        if (llvm::Constant *Interior = resolveLiftedFunctionInterior(Address))
+          return Interior;
       return llvm::BlockAddress::get(Block->getParent(), Block);
+    }
   }
   if (auto *Interior = resolveLiftedFunctionInterior(Address))
     return Interior;

@@ -325,8 +325,8 @@ protected:
     if (Compiled.ExitCode != 0)
       return Compiled;
 
-    // ld's identityless signature has no requirements or special-slot hashes,
-    // which is the strict sanitizer's sole automatic re-signing input class.
+    // Start with ld's identityless signature, without the canonical empty
+    // requirements and CMS slots that codesign adds during publication.
     // Keep this tiny runtime fixture out of compact unwind. The sanitizer
     // grows main deliberately, while a compact-unwind record has a fixed
     // authenticated range and the Mach-O patcher correctly refuses to invent

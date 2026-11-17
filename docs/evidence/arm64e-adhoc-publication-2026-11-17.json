@@ -1,0 +1,367 @@
+{
+  "neverd_revision": "1f1bd9eec18406c0567efab3fa743de986ff08d0",
+  "submodules": [
+    " ef1af4c1447bbb38a227335c51e8afc7631772f0 signatures (remotes/origin/HEAD)",
+    " 106380545da022533aa28bb9af6ba4df9f6e9970 third_party/capstone (6.0.0-Alpha7-410-g10638054)",
+    " 1693ca7926ed12c5520623564e465cff97d93374 third_party/highway (1.4.0-696-g1693ca79)",
+    " 09ff60dd1ddb17114892ee2bb32256182dedc76e third_party/llvm-project (heads/codex/aarch64-pauth-lr-object-boundary-1-g09ff60dd1ddb)",
+    " e8e7bc41ce904b4c83fe20e87d93f24d5286315a third_party/mimalloc (v3.5.3-3-ge8e7bc41)",
+    " d26e0502ca39f888c1266cbbf1e2c2226d31e41b third_party/oneTBB (v2021.11.0-src-rc1-781-gd26e0502)",
+    " edb7016c62efbe6155226896cdba5736307190e3 third_party/simdjson (v5.0.5-7-gedb7016c6)",
+    " 8d82299606e675b50de8dc16fd118aae4b65bfde third_party/simdutf (v9.3.2)",
+    " 7efa71088d7a4057e87a50dd443d786002f97fa6 third_party/unicorn (heads/master-40-g7efa710)",
+    "-071a867fc0ab620d6f01b1a4251807044f4d6cbd unittests/corpus"
+  ],
+  "prebuilt_release_unchanged": "r6",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44053487204",
+  "ci_revision": "aa64e6b22f7a93598257ff49c3ee8fe087ab43e1",
+  "package": {
+    "tag": "neverd-adhoc-publication-1f1bd9eec184",
+    "archive_sha256": "9595bd73a7b7c283a8d1a4d4b9ed8e66c009da62603579b6d84ae6a83fecab34",
+    "bytes": 42464081
+  },
+  "host_sha256": "bc54bea42b8eaa8e123967af5a6846f10544af3c82ca6d516716560d0f9d303e",
+  "local_release": {
+    "publication": {
+      "tests": "235",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "117.018",
+      "timestamp": "2026-11-17T17:04:26.167",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "policy": {
+      "tests": "28",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.001",
+      "timestamp": "2026-11-17T17:03:54.939",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "signer": {
+      "tests": "7",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "0.071",
+      "timestamp": "2026-11-17T16:52:15.770",
+      "name": "AllTests",
+      "skipped": 0
+    },
+    "safety-capi": {
+      "tests": "42",
+      "failures": "0",
+      "disabled": "0",
+      "errors": "0",
+      "time": "5.072",
+      "timestamp": "2026-11-17T17:03:58.263",
+      "name": "AllTests",
+      "skipped": 0
+    }
+  },
+  "hosts": {
+    "macos-26": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.1.1.101)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode_26.6.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "tests_passed": 235,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "cases": {
+        "CodesignSignedLiftedOutputAllowsRepeatedNativePublication": {
+          "original_sha256": "8b14ad6be1fc7566ca6df3d88006f18f8514dcdfb33302336653f6c7db84e291",
+          "published_sha256": "feaba07758acded781004ccd2ae1127ae3dfd1e07a32f6714af844c4eb73a815",
+          "caller_authenticated_call_sites": "10",
+          "republished_sha256_0": "18bc92c27c712baf29b334e3cf46819b89c0dea91c28c7c716dead4cc5976b97",
+          "republished_sha256_1": "736acf18b4877962cc6d62ddbefbb0eb30fb6124d931fb59d39faff5e376454d",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AdHocRequirementsRefusePublicationWithoutMutation": {
+          "nonempty_requirements_rejected": "1",
+          "executed_native_images": "0"
+        }
+      },
+      "native_system_saved_frame_steps": 48,
+      "x1_environment": {
+        "source_revision": "1f1bd9eec18406c0567efab3fa743de986ff08d0",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "f560a801200474a6f381035e4b92f0ecccf6b8831f7a10c7c89dbc0c46cd5f73"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "688a9a41d12dce98068d5798318283b4b914b8abbbcae13631effe56ed485431"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "750e465936622f4ffcfb9218cb147004e29c457148d6568a92ecbd3b5c2ccb2c"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_capabilities": {
+        "probe": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "native_apple_cpta_qualified": false,
+          "whole_image_publication_qualified": false
+        },
+        "probe-cursor": {
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false
+        },
+        "probe-cpta": {
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "report_sha256": {
+        "qualification.json": "b47a4581416ef665af5915bde6918ad15802d75d109213ae3d11864816a95ea8",
+        "results.xml": "51a24f44103973a4bf769a10fd2a396996fa00c136a2bb34126edd2504666a92",
+        "x1/report.json": "bb94eb8d8375490958b42cf7b12ea478a675f5abdabbefdcbbf58c0f96f9424a"
+      }
+    },
+    "xcode-27": {
+      "hardware": {
+        "exit": 0,
+        "text": "Apple M1 (Virtual)"
+      },
+      "os": {
+        "exit": 0,
+        "text": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434"
+      },
+      "compiler": {
+        "exit": 0,
+        "text": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+      },
+      "tests_passed": 235,
+      "tests_failed": 0,
+      "tests_skipped": 0,
+      "cases": {
+        "CodesignSignedLiftedOutputAllowsRepeatedNativePublication": {
+          "original_sha256": "e60853a7bb08d63e686911cb9dbde295f411ab73631c761e8a04ae754f8478ee",
+          "published_sha256": "141beddcb860c52b251d81b39e759f3256f55ab5a4fcf2e817d5d27ef8b0789b",
+          "caller_authenticated_call_sites": "10",
+          "republished_sha256_0": "e0c4c2a218eb3edf8361f0dbd2561f49619f0af1fa1965a4b555d2dad217a6d9",
+          "republished_sha256_1": "57b6cf9ec5a4fc56b61e994e922980826435f919d91150ad19b5fb560f0c66eb",
+          "resigned_publication_generations": "3",
+          "executed_native_images": "4"
+        },
+        "AdHocRequirementsRefusePublicationWithoutMutation": {
+          "nonempty_requirements_rejected": "1",
+          "executed_native_images": "0"
+        }
+      },
+      "native_system_saved_frame_steps": 48,
+      "x1_environment": {
+        "source_revision": "1f1bd9eec18406c0567efab3fa743de986ff08d0",
+        "source_sha256": {
+          "scripts/verify_arm64e_native.py": "6dcd592de329f8436eca4706628af81a8f38aced6a72fdbc263ced353103a3c7",
+          "scripts/verify_arm64e_native.def": "92d2714e5962cdc87911a3d499d3de351561915629dccdf4fd0550f1c3ddcd0b",
+          "scripts/arm64e_artifacts.py": "ad55c17899d8a75fa12392100d782555c5f177955caaddc98c51163af659aff0",
+          "scripts/arm64e_artifacts.def": "c7748b446d2d7e9677d73b7dc6fb365c2521cc03eb6c06e50c75e6f8479bbd66",
+          "unittests/lift/format/MachOAuthenticatedNativeFixtures.def": "41f173961b91c1c6a0dce174a86b59ff6fc3e121684009cfc70444f884719838"
+        },
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "probes": {
+          "probe": {
+            "status": "passed",
+            "report": "probe/report.json",
+            "sha256": "0ed2fce059d6570067d7f638ba51dd49284cdb02a7c376aecc94c38fc4ee3c1f"
+          },
+          "probe-cursor": {
+            "status": "passed",
+            "report": "probe-cursor/report.json",
+            "sha256": "3576caeb3fa2db4588aecbf61e1936345465f1fce253c8d7d11b88e3a399a6de"
+          },
+          "probe-cpta": {
+            "status": "unavailable",
+            "report": "probe-cpta/report.json",
+            "sha256": "70efc1c5c64f7f6ec30d89cc83ab1e426e2fa5f1547e86c1a640b6a3cdf7cdc7"
+          }
+        },
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "native_capabilities": {
+        "probe": {
+          "native_pac_qualified": true,
+          "compiler_original_call_unwind_qualified": true,
+          "compiler_original_startup_qualified": false,
+          "native_apple_cpta_qualified": false,
+          "whole_image_publication_qualified": false
+        },
+        "probe-cursor": {
+          "native_cursor_qualified": true,
+          "explicit_pauth_lr_qualified": false,
+          "pacm_pc_qualified": false
+        },
+        "probe-cpta": {
+          "x1_el0_cpta_qualified": false,
+          "x1_el0_checked_writeback_qualified": false
+        }
+      },
+      "report_sha256": {
+        "qualification.json": "c02c9050e4af235e333b6dd217716ea6c076e132f68a7c8b236b1f9f13fd013a",
+        "results.xml": "00e32d5f5d17d3da676a570c6a6d37417c7c55cb3e40b61c302c572214b4d52b",
+        "x1/report.json": "1385d53a6d16200d0b05e98e7089198e9cb28b506903ac86c40292fb563b5761"
+      }
+    }
+  },
+  "jobs": [
+    {
+      "name": "windows-frontend",
+      "databaseId": 133936822618,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44053487204/job/133936822618"
+    },
+    {
+      "name": "native (macos-26)",
+      "databaseId": 133936822913,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44053487204/job/133936822913"
+    },
+    {
+      "name": "native (xcode-27)",
+      "databaseId": 133936822988,
+      "conclusion": "success",
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44053487204/job/133936822988"
+    }
+  ],
+  "unqualified_scope": [
+    "automatic relifting of appended executable regions",
+    "arbitrary-image publication",
+    "complete asynchronous language-exception coverage"
+  ],
+  "automatic_relift_failure": {
+    "status": "unresolved, rejected before publication",
+    "reproducer": "automatic-relift-reproducer.cpp",
+    "log": "republication-layout.log",
+    "findings": [
+      "installLiftedLeaves requires one __TEXT instruction section and one executable segment",
+      "No-unwind lookup gap [0x340,0x4000) is promoted to a function at __unwind_info",
+      "Relift emits sub_4000 as a declaration and sub_400c as a definition"
+    ],
+    "not_qualified": "arbitrary automatic relifting of published multisegment images"
+  },
+  "cleanup": {
+    "remote_release": 448377462,
+    "remote_asset": 758360729,
+    "tag": "neverd-adhoc-publication-1f1bd9eec184",
+    "remote_removed": [
+      {
+        "endpoint": "releases/448377462",
+        "status": 404
+      },
+      {
+        "endpoint": "releases/assets/758360729",
+        "status": 404
+      },
+      {
+        "endpoint": "git/ref/tags/neverd-adhoc-publication-1f1bd9eec184",
+        "status": 404
+      }
+    ],
+    "local_products": [
+      {
+        "path": "adhoc-publication.tgz",
+        "bytes": 42464081,
+        "sha256": "9595bd73a7b7c283a8d1a4d4b9ed8e66c009da62603579b6d84ae6a83fecab34"
+      },
+      {
+        "path": "artifacts/cursor-xcode-27/compact-input/compact.o",
+        "bytes": 712,
+        "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+      },
+      {
+        "path": "artifacts/cursor-xcode-27/compact-input/compact.dylib",
+        "bytes": 16816,
+        "sha256": "60b6deada54739d4ce362d9aebb6a76a1a9114b93110c0f180732c14e416b263"
+      },
+      {
+        "path": "artifacts/cursor-macos-26/compact-input/compact.o",
+        "bytes": 712,
+        "sha256": "8491e729b882e6e6f71c8e7f31915092e4a7294bdf391e8bf387e7a7823bd6bb"
+      },
+      {
+        "path": "artifacts/cursor-macos-26/compact-input/compact.dylib",
+        "bytes": 16816,
+        "sha256": "fb1cd8cdaa1824d8da1202f322dbea0edb643ac60687653cbf88d4ebb1b73fe3"
+      }
+    ],
+    "local_removed_bytes": 42499137,
+    "retirement_commit": "1df849cf9c2a4eac433302bd8992be9f871f677d",
+    "retirement_matches_base": true
+  },
+  "diagnostics_archive": {
+    "archive": "arm64e-adhoc-publication-20261117-evidence.tar.gz",
+    "sha256": "144995f9da386531ee0d23c8f44b8edd10ccc75c64762fc5fe5a4b2b7a8646a9",
+    "archive_bytes": 286729,
+    "files": 237,
+    "original_bytes": 2343797,
+    "decompressed_hashes_verified": true
+  }
+}

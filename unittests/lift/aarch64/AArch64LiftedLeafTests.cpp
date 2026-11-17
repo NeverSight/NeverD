@@ -9,6 +9,8 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
+#include "neverd/backend/codegen/MachO/MachOSigner.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/decode/Decoder.h"
@@ -43,6 +45,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+#include <utility>
 
 namespace {
 using namespace neverd;
@@ -121,7 +124,9 @@ enum class LeafCheck {
   FramedImport,
   FramedError,
   IndexedError,
-  AsyncIndexedError
+  AsyncIndexedError,
+  Resigned,
+  SigningRequirements
 };
 
 void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
@@ -156,6 +161,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
+  if (Check == LeafCheck::Resigned || Check == LeafCheck::SigningRequirements) {
+    llvm::SmallVector<llvm::StringRef> Sign{kCodesign,       kForceSign,
+                                            kSign,           kAdHocIdentity,
+                                            kSignIdentifier, kRepeatIdentity};
+    if (Check == LeafCheck::SigningRequirements)
+      Sign.append({kSignRequirements, kNonemptyRequirements});
+    Sign.push_back(Input);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCodesign, Sign), 0);
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCodesign,
+                                        {kCodesign, kVerify, kStrict, Input}),
+              0);
+  }
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
@@ -183,6 +200,19 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
 
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
+  if (Check == LeafCheck::SigningRequirements) {
+    auto Signature = macho_signature::inspect(Image->Raw);
+    ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
+    EXPECT_FALSE(macho_signature::canTransactionallyAdHocResign(*Signature));
+    EXPECT_FALSE(Patcher.patch(Input, Output, Module, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Output));
+    auto Original = Reader->load(Input);
+    ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+    EXPECT_EQ(Original->Raw, Snapshot);
+    testing::Test::RecordProperty(kRejectedRequirements, 1);
+    testing::Test::RecordProperty(kNativeImages, 0);
+    return;
+  }
   auto Partial = llvm::CloneModule(Module);
   ASSERT_NE(Partial->getFunction(kDifference), nullptr);
   Partial->getFunction(kDifference)->deleteBody();
@@ -533,14 +563,74 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
                                     ? kSharedDispatchAuthenticatedSites
                                     : kCount);
   testing::Test::RecordProperty(kAuthenticatedSites, AuthenticatedCalls);
+  std::vector<std::string> ExecutionPaths{Input, Output};
+  if (Check == LeafCheck::Resigned) {
+    const auto Object = (Root / kRepublishObject).string();
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
+                                        {kCompiler, kTargetFlag, kTarget,
+                                         kCompileObject, Source, kOut, Object}),
+              0);
+    auto NativeObject = llvm::MemoryBuffer::getFile(Object);
+    ASSERT_TRUE(bool(NativeObject));
+    // The initial publication consumes the lifted module. Later generations
+    // exercise native replacement of that signed output; automatic relifting
+    // of appended executable segments has a separate ownership boundary.
+    for (unsigned I = 0; I < kRepeatedPublications; ++I) {
+      SCOPED_TRACE(I);
+      const auto PreviousPath = ExecutionPaths.back();
+      auto Previous = Reader->load(PreviousPath);
+      ASSERT_TRUE(bool(Previous)) << llvm::toString(Previous.takeError());
+      auto Before = macho_signature::inspect(Previous->Raw);
+      ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+      ASSERT_TRUE(macho_signature::isCanonicalCodesignAdHocOutput(*Before));
+      std::vector<SourcePatchMapping> Mappings;
+      for (const auto &[Name, Symbol] :
+           {std::pair{kSum, kSumSymbol},
+            std::pair{kDifference, kDifferenceSymbol}}) {
+        const auto *Entry = Previous->findSymbol(Symbol);
+        ASSERT_NE(Entry, nullptr);
+        Mappings.push_back({Name, Entry->Addr});
+      }
+      const auto NextPath =
+          (Root / (kRepeatedPrefix + std::to_string(I) + kOutput)).string();
+      auto Repeated = installMachOObjectPatch(
+          (*NativeObject)->getBuffer(), *Previous, Mappings, {}, NextPath, {});
+      ASSERT_TRUE(bool(Repeated)) << llvm::toString(Repeated.takeError());
+      ASSERT_TRUE(Repeated->Success);
+      ASSERT_EQ(Repeated->PatchedFunctions.size(), ExpectedEntries);
+      for (const auto &Entry : Repeated->PatchedFunctions)
+        EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
+      auto Reloaded = Reader->load(NextPath);
+      ASSERT_TRUE(bool(Reloaded)) << llvm::toString(Reloaded.takeError());
+      auto After = macho_signature::inspect(Reloaded->Raw);
+      ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+      auto Validation = macho_signature::validateTransactionallyAdHocResigned(
+          *Before, *After);
+      ASSERT_FALSE(bool(Validation)) << llvm::toString(std::move(Validation));
+      auto Untouched = Reader->load(PreviousPath);
+      ASSERT_TRUE(bool(Untouched)) << llvm::toString(Untouched.takeError());
+      EXPECT_EQ(Untouched->Raw, Previous->Raw);
+      EXPECT_NE(Reloaded->Raw, Previous->Raw);
+      testing::Test::RecordProperty(
+          kRepeatedHashPrefix + std::to_string(I),
+          llvm::toHex(llvm::SHA256::hash(Reloaded->Raw), true));
+      ExecutionPaths.push_back(NextPath);
+    }
+    for (const auto &Path : ExecutionPaths) {
+      auto Verified = macho_signing::verifyStrict(Path);
+      ASSERT_FALSE(bool(Verified)) << llvm::toString(std::move(Verified));
+    }
+    testing::Test::RecordProperty(kPublicationGenerations,
+                                  1 + kRepeatedPublications);
+  }
   if (std::getenv(kExecute)) {
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Input}), 0);
-    ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
+    for (const auto &Path : ExecutionPaths)
+      ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Path}), 0);
     if (Check == LeafCheck::TailTarget) {
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
-    testing::Test::RecordProperty(kNativeImages, kCount);
+    testing::Test::RecordProperty(kNativeImages, ExecutionPaths.size());
   }
 #else
   GTEST_SKIP() << kUnavailable;
@@ -997,6 +1087,17 @@ TEST(AArch64DarwinEntry, ScalarFPParametersAndResultsSurvivePublication) {
 
 TEST(AArch64DarwinEntry, SignedLeafUsesTheIncomingSPAtItsNewAddress) {
   verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName);
+}
+
+TEST(AArch64LiftedImage,
+     CodesignSignedLiftedOutputAllowsRepeatedNativePublication) {
+  verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
+                        LeafCheck::Resigned);
+}
+
+TEST(AArch64LiftedImage, AdHocRequirementsRefusePublicationWithoutMutation) {
+  verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
+                        LeafCheck::SigningRequirements);
 }
 
 TEST(AArch64LiftedMemory, BaseAndDisplacementRetainLoadAndStoreEffects) {

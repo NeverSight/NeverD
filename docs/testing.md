@@ -1980,6 +1980,16 @@ states, malformed LEBs, architecture admission and bounded queries. Reserved
 CIE/FDE states must remain partial through Darwin normalization and fail the
 plain-source unwind predicate.
 
+`NeverDMachOSignaturePolicyTests` admits exact codesign ad-hoc output as a
+new input, including mixed linker/codesign universal slices with one identity.
+Malformed special hashes, nonempty or unknown slots, strong signing flags and
+unsafe executable-segment flags remain rejected. `NeverDMachOSignerTests`
+checks real codesign page granularity. The arm64e publication suite exercises
+one signed lifted publication followed by two signed native-object replacements,
+plus nonempty designated-requirement refusal without mutation. The sanitizer
+C API exercises both guarded publication strategies with a codesign ad-hoc
+input through the same signature policy.
+
 `NeverDNativeExceptionRewriteContractTests` checks compact PAuth_LR linker
 records, exact range preservation, adjacent distinct signing PCs and
 transactional installation/refusal. Its DWARF cases preserve the `N`
@@ -20623,8 +20633,9 @@ one unwind give two invokes at one address which the exception contract counts
 apart, and that a call after the handler calls or handler calls in another
 order leave the function without pads. The `LLVMC*` cases print that IR as C:
 range markers and empty continuations get no `__try` and no text, so the
-body's call stands in three compounds, the inner handler's in two and the outer
-handler's in none; a scope whose blocks only jump keeps one nest with all its
+body's call stands in three compounds, the inner handler's in the outer two of
+them, which the two blocks share, and the outer handler's in none; a scope
+whose blocks only jump keeps one nest with all its
 clauses; an empty loop after the scopes keeps its label and jump while the
 blocks leading to it are passed; and the render that marks source positions
 agrees with the ordinary one, publishes its definitions and anchors every call
@@ -20639,12 +20650,18 @@ never returns: the parent keeps its pads, each clause that calls the handler
 says once that the path ends, and a local unwind still calls it outside the
 scope it ends. `ATableBehindACookieCheckIsLoweredForPrintedC` puts the table
 behind `__GSHandlerCheck_SEH` with a record that passes every row: printed C
-lowers it, native capabilities and other architectures refuse it, and its
-identity differs from the bare table's, which is unchanged, and from that of
-another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note for a
-record that holds back exceptions from an `__except` row or unwinds from a
-`__finally` row, and takes a table of termination handlers whose record
-passes unwinds only.
+lowers it, on AArch64 and ARM too, native capabilities and x86 refuse it, and
+its identity differs from the bare table's, which is unchanged, and from that
+of another cookie slot. `LLVMCSaysAWrappedTableIsNotLowered` keeps the note
+for a record that holds back exceptions from an `__except` row or unwinds
+from a `__finally` row, on x64 and AArch64, takes a table of termination
+handlers whose record passes unwinds only, and takes an ARM table whatever
+its record says.
+`AHandlerNamesItsUnwindTargetAsTheParentPlusAnOffset` lets a termination
+handler and its parent store the address of a block of the parent: for printed
+C the handler's value is the parent plus the offset when the block is one its
+local unwinds resume at, and it prints so; native IR, the parent itself and a
+block that is no such target keep the block address.
 `COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
 x64 IR for a local unwind out of the only scope, out of the inner of two and
 out of both: the handler's call is a plain one, an invoke to the outer row's
@@ -20657,6 +20674,25 @@ x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that
 passes unwinds only, a table the writer or IR lowering would take is refused
 for the check and a destructor-only one for its own reason.
+`SEHSharedTryLayoutTests.cpp` prints hand-written IR with fragmented SEH
+ranges as LLVM C and reads the text with `PrintedTries.h`, which tells which
+`__try` statements hold a line and whether any `goto` enters one:
+`SEHSharedTryLayout.*` checks that the blocks of a scope and of a scope inside
+it print one try each, that two scopes in sequence keep their own, that a
+block jumped to from outside its scope, from a block printed after it or from
+its own `__except` clause opens a try of its own, that a split leaves no other
+jump inside a try it is not in, and that the normal-exit flag is set only by
+the jumps and the return that leave a `__finally` try and cleared only where a
+block can be reached with it set. With `NEVERD_SEH_LAYOUT_OUTPUT` set to a
+directory the suite also writes each function as IR and as printed C, and
+`scripts/check_llvmc_seh_layout_runtime.py` builds both for Windows x64 beside
+`fixtures/seh_layout_runtime.c`, which raises from every subset of the calls
+for every argument, and requires the two programs to write the same traces at
+`-O0` and `-O2` (Wine runs them on other hosts; `--compiler`, `--linker` and
+`--dlltool` name clang, lld-link and llvm-dlltool).
+`WindowsEHModesCorpus.ALabelGoesWithTheJumpThatAskedForIt` prints xcpt4's
+x86 /Od function at 0x405AE0, whose `__except` arm resumes where its try
+falls through: the text holds no `goto` and no label.
 `SEHDefinitionOrderTests.cpp` prints hand-built HighIR definitions in several
 orders: an `__except` arm that jumps past a copy of its own frame alias, and
 one that jumps past a copy between two names another definition aliased to one
@@ -25408,6 +25444,20 @@ zero destination and no observed accumulator input. Their source returns
 the resulting DSPControl value. Native zero-result regressions additionally
 check DSP-disabled exceptions and an unchanged zero register. These checks
 do not qualify hardware execution.
+
+The `mips64rounded_*` selections cover all ten immediate/register rounded or
+saturated legacy DSP64 extraction forms. The source matrix uses counts
+0/1/31 and additionally 63 for variable forms, both byte orders, both C views
+and O0/O2. The original result and DSPControl must first agree with independent
+unbounded integer arithmetic. `mips64acc_dmadd_{hi,lo}` and
+`mips64acc_dmsub_{hi,lo}`, together with their unsigned counterparts, include
+products wider than 32 bits, signed extrema and full accumulator carry/borrow.
+The owning `MIPSDSP64` tests additionally cover every immediate count,
+variable count masking, all four banks, discarded/aliased destinations,
+sticky overflow and untouched state. Their APInt oracle is separate from the
+reference executor's sign/magnitude and bit-serial regressions. Use the pinned
+Unicorn: older helpers truncate signed products and mishandle several rounded
+and saturated extraction boundaries.
 
 Run `micro-dsp-simulator.py` with `--assembler`, `--linker`, `--bench` and
 `--simulator` to execute the physical microMIPS DSP and DSPR2 instructions.

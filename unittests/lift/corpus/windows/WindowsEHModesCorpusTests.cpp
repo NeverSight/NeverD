@@ -1250,4 +1250,31 @@ TEST(WindowsEHModesCorpus, Xcpt4FilterCallbacksAreTheirExceptExpressions) {
   }
 }
 
+// xcpt4's x86 /Od function at 0x405AE0 is two `__finally` scopes inside an
+// `__except` whose arm resumes where its try falls through.  The arm's jump
+// is one the first pass over the function still keeps and the pass that
+// knows the printed frame leaves out; the label that jump asked for goes
+// with it, so the function prints with neither.
+TEST(WindowsEHModesCorpus, ALabelGoesWithTheJumpThatAskedForIt) {
+  auto ExpectationsOrErr = loadExpectations();
+  ASSERT_TRUE(static_cast<bool>(ExpectationsOrErr))
+      << toString(ExpectationsOrErr.takeError());
+  auto ExpectationOrErr = selectUnique(
+      *ExpectationsOrErr, {"xcpt4", "msvc", "x86", "native", true, "o0"});
+  ASSERT_TRUE(static_cast<bool>(ExpectationOrErr))
+      << toString(ExpectationOrErr.takeError());
+  auto OutputOrErr =
+      decompileToSource(std::filesystem::path(NEVERD_BINARY_CORPUS_ROOT) /
+                            (*ExpectationOrErr)->Path,
+                        /*TimeoutSeconds=*/240);
+  ASSERT_TRUE(static_cast<bool>(OutputOrErr))
+      << toString(OutputOrErr.takeError());
+  const std::string Function = definitionOf(*OutputOrErr, "0x405AE0");
+  ASSERT_FALSE(Function.empty());
+  EXPECT_TRUE(StringRef(Function).contains("} __except (")) << Function;
+  EXPECT_EQ(occurrencesIn(Function, "} __finally {"), 2u) << Function;
+  EXPECT_FALSE(StringRef(Function).contains("goto ")) << Function;
+  EXPECT_FALSE(StringRef(Function).contains("\nL_")) << Function;
+}
+
 } // namespace
