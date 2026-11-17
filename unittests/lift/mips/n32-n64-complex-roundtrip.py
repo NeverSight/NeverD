@@ -9,8 +9,10 @@ parameters, variadic calls and compressed code are outside this fixture.
 """
 
 import argparse
+import importlib.util
 import io
 import json
+import os
 import random
 from pathlib import Path
 
@@ -24,6 +26,10 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 FUNCTIONS = ('complex_result', 'direct_result', 'indirect_result')
 MEMORY_RUNTIME = Path(__file__).with_name('mips-source-memory-runtime.c')
+CALL_VIEWS_SPEC = importlib.util.spec_from_file_location(
+    'mips_floating_abi', Path(__file__).with_name('floating-abi-roundtrip.py'))
+CALL_VIEWS = importlib.util.module_from_spec(CALL_VIEWS_SPEC)
+CALL_VIEWS_SPEC.loader.exec_module(CALL_VIEWS)
 
 
 def observe(image, little, n32, width, values, function):
@@ -84,6 +90,7 @@ def observe(image, little, n32, width, values, function):
 
 def run(args, artifacts):
     rows = []
+    views = CALL_VIEWS.CallSiteViews(args.sdk) if args.neverd else None
     rng = random.Random(0x4e333243)
     log = artifacts.work / 'command.log'
 
@@ -187,10 +194,25 @@ def run(args, artifacts):
                             for function in FUNCTIONS:
                                 for route in ('highc', 'llvmc'):
                                     source = folder / f'{function}-{route}.c'
-                                    command([args.neverd, 'decompile', original,
-                                             '--func', function,
-                                             *(['--llvm'] if route == 'llvmc' else []),
-                                             '-o', source])
+                                    if function == 'indirect_result':
+                                        # An entry's callback type does not by
+                                        # itself bind an occurrence after arbitrary
+                                        # machine-code transformations. Use the
+                                        # same explicit call-site contract as the
+                                        # scalar/variadic ABI runtime tests.
+                                        elf = ELFFile(
+                                            io.BytesIO(original.read_bytes()))
+                                        symbols = elf.get_section_by_name('.symtab')
+                                        entry = symbols.get_symbol_by_name(function)[0]['st_value']
+                                        source.write_text(views.source(
+                                            original, 'c' if route == 'highc' else route,
+                                            f'{result} complex_result({parameters});',
+                                            [], True, entry=entry))
+                                    else:
+                                        command([args.neverd, 'decompile', original,
+                                                 '--func', function,
+                                                 *(['--llvm'] if route == 'llvmc' else []),
+                                                 '-o', source])
                                     artifacts.keep_source(source)
                                     source_hash = digest(source)
                                     for name in compilers:
@@ -230,15 +252,20 @@ def main():
     for name in ('clang', 'gcc', 'assembler', 'ld', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--neverd', type=Path)
+    parser.add_argument('--sdk', type=Path,
+                        help='shared library built alongside the CLI')
     parser.add_argument('--abi', action='append', choices=('n32', '64'))
     parser.add_argument('--endian', action='append', choices=('be', 'le'))
     parser.add_argument('--component-bytes', type=int, action='append', choices=(4, 8))
     parser.add_argument('--original-compiler', action='append', choices=('clang', 'gcc'))
     args = parser.parse_args()
+    if args.neverd and not args.sdk:
+        args.sdk = args.neverd.resolve().with_name(
+            'libneverd.dylib' if os.uname().sysname == 'Darwin' else 'libneverd.so')
     with MIPSValidationArtifacts(
             args.output, 'n32-n64-complex-roundtrip',
             (args.clang, args.gcc, args.assembler, args.ld, MEMORY_RUNTIME,
-             *([args.neverd] if args.neverd else []))) as artifacts:
+             *([args.neverd, args.sdk] if args.neverd else []))) as artifacts:
         run(args, artifacts)
 
 

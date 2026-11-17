@@ -565,7 +565,9 @@ The n32/n64 complex-result checks have their own independent compiler
 fixtures in `unittests/lift/mips/n32-n64-complex-roundtrip.py`. They bind
 classic MIPS64r2 hard-float declarations with scalar parameters and compare
 both C routes with separately compiled GCC/Clang objects, including direct
-and indirect calls. n32 retains four-byte pointers and eight-byte argument
+and indirect calls with an explicit call-site ABI. A callback parameter's type
+alone does not establish the contract of an arbitrary indirect instruction.
+n32 retains four-byte pointers and eight-byte argument
 positions; the result's real and imaginary components occupy f0 and f2 in
 both byte orders. This does not qualify compressed n32/n64 complex runtime
 adapters, complex parameters, variadic complex calls or general record ABIs.

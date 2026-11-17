@@ -25747,12 +25747,18 @@ parameter positions in both byte orders. The descriptor rejects ordinary
 two-field records, complex parameters, variadic complex results and MIPS16
 wide targets. `SourceABI.ParameterOnlyBindingKeepsPhysicalComplexResults`
 also checks the physical-return adapter for all six MIPS profiles.
+`MIPSFloatingResult.DeclaredComplexCallsRequireCompleteFloatingCarriers`
+checks HighC's explicit call-site result conversion in all six profiles,
+including wrong widths, integer fields and ordinary-record negative controls.
 `unittests/lift/mips/n32-n64-complex-roundtrip.py` separately compiles GCC and
 Clang originals at O0/O2. With `--neverd`, it regenerates the callee and the
 direct/indirect callers through HighC and LLVMC, replacing one object at a
 time while retaining the other original objects. Each execution checks both
 result bit patterns, exactly one callee entry, preserved GPR/FPR values, SP,
-RA, PC and FCSR. The freestanding C memory runtime is compiled for the guest
+RA, PC and FCSR. Indirect calls bind an explicit occurrence and snapshot through
+the same C API used by the scalar/variadic ABI tests; a callback parameter's
+declaration alone is not evidence for every indirect machine call. The
+freestanding C memory runtime is compiled for the guest
 pointer/size_t widths; guest copies are never replaced by emulator hooks.
 Pass `--clang`, `--gcc`, `--assembler`, `--ld` and an owned `--output` path;
 omitting `--neverd` runs only the independent original-program oracle.
@@ -25763,9 +25769,10 @@ code, complex parameters or variadic complex calls.
 `MIPSSourceReturnTargets.LogicalZeroMovesRetainExactFrameIdentity` checks
 OR/XOR zero on both operand sides, both widths and byte orders, with an
 unknown-register negative control. `PrivateFrameSpillsDoNotPublishTheFrame`
-checks 132 o32/n32/n64 cases across both byte orders and declared/native
+checks 144 o32/n32/n64 cases across both byte orders and declared/native
 callees: private FP/SP spills, callee-owned and external storage, direct and
-reloaded frame-address escape, unknown call SP, and two-call intersections.
+reloaded frame-address escape, unknown call SP, two-call intersections and
+reused caller-clobbered arguments.
 Every saved-link byte still needs an exact reaching-store proof.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
