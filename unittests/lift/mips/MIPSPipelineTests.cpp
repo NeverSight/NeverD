@@ -802,18 +802,14 @@ TEST(MIPSSourceReturnTargets, FloatingResultSpillsDoNotPoisonArgumentProofs) {
           // its reaching values also visits the later result spill, whose
           // numerical provenance depends on this same argument proof.
           // A failed recursive query must not become a permanent negative.
-          const uint32_t Words[] = {0x27bdffd8,
-                                    0xafbf0024,
-                                    Variant == 1 ? 0xafbd0010u : 0xafa40010u,
-                                    0xafa50014,
-                                    0xd7ac0010,
-                                    0x0c008000,
-                                    0,
-                                    Variant == 2 ? 0xf7a00020u : 0xf7a00018u,
-                                    0x8fbf0024,
-                                    0x24020007,
-                                    0x03e00008,
-                                    0x27bd0028};
+          const uint32_t Spill =
+              ResultKind == 1 ? (Variant == 2 ? 0xe7a00024u : 0xe7a00018u)
+                              : (Variant == 2 ? 0xf7a00020u : 0xf7a00018u);
+          const uint32_t Words[] = {
+              0x27bdffd8, 0xafbf0024, Variant == 1 ? 0xafbd0010u : 0xafa40010u,
+              0xafa50014, 0xd7ac0010, 0x0c008000,
+              0,          Spill,      0x8fbf0024,
+              0x24020007, 0x03e00008, 0x27bd0028};
           File.Bytes.resize(0x100 + sizeof(Words));
           File.put(52 + 16, File.Bytes.size(), 4);
           File.put(52 + 20, File.Bytes.size(), 4);
