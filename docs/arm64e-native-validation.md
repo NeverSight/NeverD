@@ -2191,20 +2191,32 @@ Republishing uses the independently authenticated symbol/unwind inventory and
 checks that every original callable entry has a definition; it does not require
 a function-start command which the previous publication legitimately removed.
 The signed-leaf, vector-memory, SIMD-register, indexed-frame and global/import
-fixtures each
-exercise three automatic publication generations. They check the complete
-4-entry and 8-entry relift inventories, reject redirected forwarding operands
+fixtures each exercise three automatic publication generations. They check the
+complete 4-entry and 8-entry relift inventories, reject redirected forwarding operands
 and missing definitions, verify each signature and preserve every prior input.
 Native-enabled runs execute the original and all three outputs through an
 independent authenticated caller.
+
+The first native replay exposed a signature boundary error on both macOS
+hosts: codesign's strictly verified global/import input had nonzero reserved
+bytes after its SuperBlob. `LC_CODE_SIGNATURE.datasize` bounds the reservation;
+the embedded length bounds signature contents, as in Apple's
+[Mach-O signature reader](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/machorep.cpp)
+and [blob reader](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_utilities/lib/blob.cpp).
+The shared policy now ignores unused reserved bytes without admitting indexed
+slots outside the embedded length. Internal gaps, unknown metadata and strong
+signing policy retain their existing checks. Synthetic linker/codesign profiles
+and out-of-range slot controls pin this distinction independently of the native
+fixture.
 
 This extends repeated publication within the verified native instruction and
 frame contracts. Arbitrary additional instruction sections, unsupported source
 operations, data-in-code and unrepresented entries still require explicit
 support. It does not qualify native PAuth_LR, PACM-PC or CPTA-on execution.
 
-Local Release validation passes all 240 publication cases, 323 language-EH
-cases, 161 image-boundary cases and 68 relocated-entry cases. Two unrelated
+Local Release validation passes all 240 publication cases, 30 signature-policy
+cases, 7 signer cases, 323 language-EH cases, 161 image-boundary cases and 68
+relocated-entry cases. Two unrelated
 checks remain unavailable locally: the optional real-binary unwind sample and
 the native i386 reference. Formatting, whitespace and documentation checks
 pass. No LLVM fork changes or prebuilt revision changes are needed.
