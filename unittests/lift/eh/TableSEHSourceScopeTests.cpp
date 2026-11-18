@@ -23,6 +23,7 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/ir/med/MedIR.h"
@@ -33,6 +34,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Error.h"
@@ -747,6 +749,72 @@ TEST(TableSEHSourceScopes,
     EXPECT_NE(Source.find("(three_scopes_parent) + 0x50"), std::string::npos)
         << Source;
     EXPECT_EQ(Source.find("blockaddress"), std::string::npos) << Source;
+  }
+}
+
+// A block a handler's local unwind resumes its parent at, which no edge of
+// the parent reaches, leaves printed C with its code: nothing in the parent
+// leads there.  The parent says so, naming each such address.  A target its
+// own flow reaches, by a branch or through an exception's pad, gets no
+// mention, and native IR carries none.
+TEST(TableSEHSourceScopes, AParentNamesTheUnwindTargetsNoEdgeReaches) {
+  constexpr va_t ResumedVA = ParentVA + 0x60;
+  constexpr va_t AfterVA = ParentVA + 0x68;
+  enum class Case { OneOfThree, Both, NativeIR };
+  for (const Case Which : {Case::OneOfThree, Case::Both, Case::NativeIR}) {
+    SCOPED_TRACE(static_cast<int>(Which));
+    std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+    MedFunc &Parent = Unit.front();
+    // Code after the last block that the handler's unwind alone enters: a
+    // block no edge enters, and one only that block enters.
+    MedBlock Resumed = blockAt(5, ResumedVA, AfterVA);
+    Resumed.Ops.push_back(branchTo(ResumedVA + 4, AfterVA));
+    Resumed.Succs = {6};
+    MedBlock After = blockAt(6, AfterVA, ParentVA + 0x70);
+    After.Ops.push_back(returnAt(AfterVA + 4));
+    After.Preds = {5};
+    Parent.Blocks.push_back(std::move(Resumed));
+    Parent.Blocks.push_back(std::move(After));
+    Parent.ExceptionMetadata->CodeRange = {ParentVA, ParentVA + 0x70};
+    // The block a branch reaches, the `__except` block the pad of a call's
+    // exception reaches, and the one only an unreached block leads to.
+    Parent.SEHHandlerUnwindTargets = {TargetVA, ExceptVA, AfterVA};
+    if (Which != Case::OneOfThree)
+      Parent.SEHHandlerUnwindTargets.insert(ResumedVA);
+
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, Which != Case::NativeIR);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Function = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Function, nullptr);
+    const llvm::MDNode *Note =
+        Function->getMetadata(windows_eh_md::UnreachedUnwindTargets);
+    if (Which == Case::NativeIR) {
+      EXPECT_EQ(Note, nullptr) << printed(*Function);
+      continue;
+    }
+    ASSERT_NE(Note, nullptr) << printed(*Function);
+    std::vector<uint64_t> Named;
+    for (const llvm::MDOperand &Operand : Note->operands())
+      if (const auto *Address =
+              llvm::mdconst::dyn_extract<llvm::ConstantInt>(Operand))
+        Named.push_back(Address->getZExtValue());
+    const std::vector<uint64_t> Unreached =
+        Which == Case::Both ? std::vector<uint64_t>{ResumedVA, AfterVA}
+                            : std::vector<uint64_t>{AfterVA};
+    EXPECT_EQ(Named, Unreached) << printed(*Function);
+
+    const std::string Source = parentIn(printedC(*Module));
+    ASSERT_FALSE(Source.empty());
+    const char *Said =
+        Which == Case::Both
+            ? "/* neverd.seh: a handler's _local_unwind resumes this function "
+              "at 0x140001060 and 0x140001068; nothing printed here leads to "
+              "the code there. */"
+            : "/* neverd.seh: a handler's _local_unwind resumes this function "
+              "at 0x140001068; nothing printed here leads to the code there. "
+              "*/";
+    EXPECT_NE(Source.find(Said), std::string::npos) << Source;
   }
 }
 
