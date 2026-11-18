@@ -145,11 +145,15 @@ TEST(HighCParamUsage, MIPSWordExtensionDoesNotInventRegisterOrPointerBits) {
                             Arch::MIPS64EL, Arch::AArch64})
     for (BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF})
       for (bool Register : {false, true})
-        for (bool Pointer : {false, true}) {
+        for (unsigned Kind = 0; Kind != 3; ++Kind) {
+          const bool Pointer = Kind == 1;
+          const auto Type = Kind == 2 ? TypeRef()
+                            : Pointer ? NdType::makePtr()
+                                      : NdType::makeInt(4, false);
           HighFunc Function;
           Function.Entry = 0x1000;
           Function.Params.push_back(
-              {"value", Pointer ? NdType::makePtr() : NdType::makeInt(4, false),
+              {"value", Type,
                Register ? getTargetRegInfo(Architecture)
                               .integerArgumentLayout(BinaryFormat::ELF)
                               .Registers.front()
@@ -168,12 +172,12 @@ TEST(HighCParamUsage, MIPSWordExtensionDoesNotInventRegisterOrPointerBits) {
           Value.Size = 8;
           const auto Expression = HighExpr::makeVar(Value, NdType::makeInt(8));
           const std::string Read = Writer.exprStr(*Expression);
-          const bool Extended = Register && Format == BinaryFormat::ELF &&
-                                isMIPS64(Architecture) &&
-                                (!Pointer || isMIPSN32(Architecture));
+          const bool Extended =
+              Type && Register && Format == BinaryFormat::ELF &&
+              isMIPS64(Architecture) && (!Pointer || isMIPSN32(Architecture));
           EXPECT_EQ(Read.find("(int64_t)") != std::string::npos, Extended)
               << unsigned(Architecture) << " " << unsigned(Format) << " "
-              << Register << " " << Pointer << " " << Read;
+              << Register << " " << Kind << " " << Read;
         }
 }
 

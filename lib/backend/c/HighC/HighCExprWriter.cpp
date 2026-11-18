@@ -8297,7 +8297,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     // parameters. Keep narrow uses narrow so an explicit zero extension
     // still observes only the logical low word. Stack padding is not a GPR.
     const bool MIPSWordParameter =
-        MIPSFullGPR && DeclaredParameter &&
+        MIPSFullGPR && DeclaredType && DeclaredParameter &&
         llvm::is_contained(getTargetRegInfo(Opts.TheArch)
                                .integerArgumentLayout(Opts.Format)
                                .Registers,
