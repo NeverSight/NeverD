@@ -34,6 +34,7 @@ on:
           - worker-cadence
           - dsp64-reference
           - windows-source-boundaries
+          - windows-frame-proof
 
 permissions:
   contents: read
@@ -44,12 +45,13 @@ concurrency:
 
 jobs:
   windows_source_boundaries:
-    if: inputs.scope == 'windows-source-boundaries'
+    if: inputs.scope == 'windows-source-boundaries' || inputs.scope == 'windows-frame-proof'
     name: Windows exact-source boundary diagnosis
     runs-on: windows-latest
     timeout-minutes: 160
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      DIAGNOSTIC_SCOPE: ${{ inputs.scope }}
     defaults:
       run:
         shell: bash
@@ -113,9 +115,14 @@ jobs:
             ('NeverDMachOPointerRelocationBoundaryTests','LLVMFrameSlotProof.ExhaustedPrefixesAreNotIndependentProofs'),
             ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles'),
             ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.CRTHeaderRecordReuseChecksTheActualRuntimeLayout')]
+          if os.environ['DIAGNOSTIC_SCOPE']=='windows-frame-proof':
+              binary=root/'bin'/'NeverDMachOPointerRelocationBoundaryTests.exe'
+              listing=subprocess.check_output([binary,'--gtest_list_tests'],text=True)
+              assert 'DeepOffsetChainsUseTheNodeBudget' in listing
+              originals=[('NeverDMachOPointerRelocationBoundaryTests','LLVMFrameSlotProof.*')]
           source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert source==os.environ['EXPECTED_SOURCE_SHA']
-          manifest={'source':source,'workflow':os.environ['GITHUB_SHA'],'platform':platform.platform(),'configuration':'Release','llvm_mode':'published prebuilt LLVM','binaries':{},'scope':'Three exact failing source-boundary tests; diagnostic stack copy is not a product fix or passing qualification.'}
+          manifest={'source':source,'workflow':os.environ['GITHUB_SHA'],'platform':platform.platform(),'configuration':'Release','llvm_mode':'published prebuilt LLVM','binaries':{},'scope':os.environ['DIAGNOSTIC_SCOPE']+'; original default-stack outcomes are qualification evidence; expanded stack copy is diagnosis only.'}
           codes=[]
           for i,(owner,test) in enumerate(originals):
               binary=root/'bin'/(owner+'.exe');manifest['binaries'][owner]=digest(binary)
