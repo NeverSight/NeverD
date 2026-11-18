@@ -1597,7 +1597,17 @@ types cannot redefine the runtime headers' types. The corresponding
 `HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
 `NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
 program-defined callee. Whole-unit Windows syntax checks additionally use the
-real headers.
+real headers. `LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes`
+checks `_locale_t` and `_invalid_parameter_handler` against independent C
+prototypes and executes argument/return identity checks at O0/O2 with UBSan.
+The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
+`_UCRT` alone does not select the old MinGW runtime headers.
+`MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks
+complete PE32/PE32+ relocated data pointers and rejects writable, partial,
+ordered, ambiguous or wrong-owner evidence. The Win64
+`ImmutableImportReferencesKeepIncomingArguments` pipeline regression checks
+forwarded `exit`, `_exit` and `fputs` operands through `.refptr` and the IAT,
+with optimization enabled and disabled.
 `COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
 enum out of a runtime argument and prevents displayed header enumerators from
 requesting duplicate local definitions.
