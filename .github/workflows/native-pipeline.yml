@@ -372,7 +372,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDHighCParamUsageTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDHighCParamUsageTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests NeverDRecordCallContractTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -394,6 +394,7 @@ jobs:
                     'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests',
                     'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests',
                     'NeverDMedCachedCallTargetTests',
+                    'NeverDRecordCallContractTests',
                     'NeverDLLVMTargetInitializationTests',
                     'NeverDTranslationContractTests',
                     'NeverDHighSymSimplifyTests',
@@ -480,6 +481,12 @@ jobs:
           print(json.dumps(audit, indent=2))
           assert actual_names == expected_names, 'incomplete inventory execution'
           assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped and not local_type_skipped, audit
+          record_bridge_names = {
+              'RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
+              'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
+          }
+          assert record_bridge_names <= actual_names, 'record bridge regressions absent'
+          assert not any(case.get('name') in record_bridge_names and case.find('skipped') is not None for case in cases), 'record bridge regressions skipped'
           added_owners = ['NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests']
           # These tests execute Linux x86 ELF binaries. Their existing compile-time
           # host guards are unavailable coverage on Darwin/Windows, not MIPS skips.
