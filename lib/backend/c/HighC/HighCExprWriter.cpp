@@ -8217,16 +8217,28 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     // prevent C's element-scaled pointer arithmetic.  Consult the declaration
     // because a machine-width expression can retain its original integer type.
     auto DeclaredType = declaredParamType(E.Var);
+    const HighParam *DeclaredParameter =
+        DeclaredType ? &CurrentFunc->Params[E.Var.Id] : nullptr;
+    const bool MIPSFullGPR = isMIPS64(Opts.TheArch) &&
+                             Opts.Format == BinaryFormat::ELF &&
+                             E.Var.Size == 8;
     const std::string RawName = varName(E.Var);
     std::string Name = copyForwardName(RawName);
     // A copy forwarded to a parameter prints as that parameter, so it has
     // the parameter's declared type.
     if (!DeclaredType && CurrentFunc)
-      for (const HighParam &Param : CurrentFunc->Params)
-        if (Param.Name == Name) {
-          DeclaredType = Param.Type;
+      for (size_t I = 0; I < CurrentFunc->Params.size(); ++I) {
+        const HighParam &Param = CurrentFunc->Params[I];
+        MedVar Parameter;
+        Parameter.Kind = MedVar::Param;
+        Parameter.Id = static_cast<int>(I);
+        if (Param.Name == Name ||
+            (MIPSFullGPR && rawVarName(Parameter) == Name)) {
+          DeclaredType = emittedParamType(*CurrentFunc, I);
+          DeclaredParameter = &Param;
           break;
         }
+      }
     if (auto Reach = ReachingCatchFields.find(Name);
         Reach != ReachingCatchFields.end())
       return Reach->second;
@@ -8287,8 +8299,24 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
                      : "&" + *Slot;
       }
     }
-    if (pointerNeedsIntegerView(DeclaredType))
+    // The C declaration is a logical value; a full GPR use observes the
+    // ABI carrier. n32/n64 sign-extend even unsigned 32-bit integer
+    // parameters. Keep narrow uses narrow so an explicit zero extension
+    // still observes only the logical low word. Stack padding is not a GPR.
+    const bool MIPSWordParameter =
+        MIPSFullGPR && DeclaredType && DeclaredParameter &&
+        llvm::is_contained(getTargetRegInfo(Opts.TheArch)
+                               .integerArgumentLayout(Opts.Format)
+                               .Registers,
+                           DeclaredParameter->RegOff);
+    if (MIPSWordParameter && DeclaredType->Kind == NdTypeKind::Int &&
+        DeclaredType->Size == 4)
+      return typedText(E, "(int64_t)(int32_t)" + Name, 8, true);
+    if (pointerNeedsIntegerView(DeclaredType)) {
+      if (MIPSWordParameter && isMIPSN32(Opts.TheArch))
+        return typedText(E, "(int64_t)(intptr_t)" + Name, 8, true);
       return PointerInteger("(uintptr_t)" + Name);
+    }
     if (isSourceAArch64VectorType(DeclaredType))
       return "__builtin_bit_cast(" +
              typeToC(
