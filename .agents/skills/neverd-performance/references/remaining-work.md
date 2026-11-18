@@ -142,6 +142,23 @@ A/B with identical output.
    thread for a visible part of the short libstdc++ runs. Entry: a latency
    target for opening small images.
 
+## x87 call proofs (capstone LLVM C, 2026-11-18)
+
+About a quarter of a whole-unit `decompile --llvm` of capstone (x64 ELF,
+about 36 s) is `X87CallEffectIndex::graph` under `fixupFpuStack`: each
+callee is lifted again (SkipX87StackFixup, no-return depth + 1) to prove an
+x87 contract, though capstone has no x87 code. `796c513988` keeps proved
+contracts for the session with their no-return dependencies (-3.3%,
+identical output). A decode scan that skips callees whose call closure has no
+x87 instruction (Tarjan components over direct calls) was exact but gained
+0.8%: 189 of about 570 scanned functions met a register-indirect transfer
+(switch tables, function pointers) and 78 an indexed or non-import slot.
+Borrowing the primary build's jump tables is not exact: the graph build's
+no-return depth and jump-table settings differ, so it can reach code the
+primary build cut. Next: a cheaper graph build (the projection needs blocks,
+x87 steps, call steps and completeness), or table resolution in the scan by
+the CFG builder's own bounds rule.
+
 ## Default-off and unused code: verdicts
 
 | Code | Verdict |
