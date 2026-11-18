@@ -12612,6 +12612,10 @@ results with the
 explicit-budget walk; shared-budget replay and bound queries retain saturating
 work accounting. Feasible-edge publication clears the structural dependency
 index together with all semantic caches.
+`DeepOffsetChainsUseTheNodeBudget` accepts an 8,192-node mixed copy/offset
+proof and refuses it with one fewer node, including n32 in both byte orders.
+The iterative walk and the exhausted-prefix case must run on the native
+Windows default stack; increasing the executable stack is diagnostic only.
 `CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
 frame-address prefixes with known and unknown roots, with and without bound
 offsets, on all four architectures. Failed prefixes evaluate linear work while
