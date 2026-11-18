@@ -450,6 +450,13 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
     case 47: { // DSUBU
       if (SA || (Function >= 45 && !Wide))
         return false;
+      // OR/XOR with architectural zero is a full-width move, including on
+      // MIPS64. Retain that identity before source frame and return proofs;
+      // ADDU's word truncation/sign extension is a different operation.
+      if (RD && (Function == 37 || Function == 38) && (!RS || !RT)) {
+        S.write(RD, S.read(RS ? RS : RT));
+        return true;
+      }
       const bool WordOperation = Function == 33 || Function == 35;
       const uint16_t Bytes = WordOperation ? 4 : S.Width;
       if (WordOperation) {

@@ -132,7 +132,9 @@ TEST(SourceABI, ComplexConstructionAndProjectionPreserveComponentBits) {
 }
 
 TEST(SourceABI, ParameterOnlyBindingKeepsPhysicalComplexResults) {
-  for (const Arch Architecture : {Arch::MIPS32, Arch::MIPS32EL})
+  for (const Arch Architecture :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32, Arch::MIPS64N32EL,
+        Arch::MIPS64, Arch::MIPS64EL})
     for (const uint16_t Bytes : {4, 8}) {
       SCOPED_TRACE(getArchName(Architecture));
       SCOPED_TRACE(Bytes);

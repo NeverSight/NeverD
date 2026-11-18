@@ -233,17 +233,23 @@ TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
 }
 
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
-  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     for (const uint16_t Bytes : {4, 8}) {
       for (const auto Mode :
-           {InstructionMode::MIPSClassic, InstructionMode::MIPS16}) {
+           {InstructionMode::MIPSClassic, InstructionMode::MIPS16,
+            InstructionMode::MicroMIPS}) {
         SCOPED_TRACE(testing::Message() << getArchName(Target) << ':' << Bytes
                                         << ':' << static_cast<unsigned>(Mode));
         auto Pointer = NdType::makePtr();
-        Pointer->Size = 4;
+        Pointer->Size = getTargetRegInfo(Target).PointerSize;
         const auto Result = NdType::makeComplex(Bytes);
         const auto Signature = floatingCallArguments(
             Target, BinaryFormat::ELF, Result, {Pointer}, std::nullopt, Mode);
+        if (isMIPS64(Target) && Mode == InstructionMode::MIPS16) {
+          EXPECT_FALSE(Signature);
+          continue;
+        }
         ASSERT_TRUE(Signature);
         EXPECT_TRUE(Signature->ReturnComplex);
         EXPECT_EQ(Signature->ReturnElements, 2u);
@@ -281,13 +287,96 @@ TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
                                            {Pointer}));
         EXPECT_FALSE(
             floatingCallArguments(Target, BinaryFormat::ELF, Result, {Result}));
+        EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF, Result,
+                                           {NdType::makeFloat(8)}, 1, Mode));
       }
     }
   }
-  for (const auto Target :
-       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
-    EXPECT_FALSE(floatingCallArguments(Target, BinaryFormat::ELF,
-                                       NdType::makeComplex(8), {}));
+}
+
+TEST(MIPSFloatingResult, DeclaredComplexCallsRequireCompleteFloatingCarriers) {
+  for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                            Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (const uint16_t Bytes : {4, 8})
+      for (unsigned Variant = 0; Variant != 4; ++Variant) {
+        SCOPED_TRACE(getArchName(Target));
+        SCOPED_TRACE(Bytes);
+        SCOPED_TRACE(Variant);
+        auto Hint = std::make_shared<SourceCallTypeHint>();
+        Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
+        Hint->AnalystSite =
+            SourceCallOccurrenceKey{0x10010, 0, NdOp::INDIR_CALL, 0};
+        Hint->Signature.ReturnType = NdType::makeComplex(Bytes);
+        std::string Error;
+        ASSERT_TRUE(
+            assignAnalystCallABI(*Hint, Target, BinaryFormat::ELF, Error))
+            << Error;
+        const uint16_t CarrierBytes = Variant == 2 ? 12 - Bytes : Bytes;
+        auto Carrier = NdType::makeStruct(
+            {NdType::makeFloat(CarrierBytes),
+             Variant == 1 ? NdType::makeInt(CarrierBytes)
+                          : NdType::makeFloat(CarrierBytes)});
+        ASSERT_TRUE(Carrier);
+        Carrier->RegisterReturnRecord = Variant != 3;
+        auto Pointer =
+            NdType::makePtr(NdType::makeFunc(Hint->Signature.ReturnType, {}));
+        Pointer->Size = getTargetRegInfo(Target).PointerSize;
+        MedVar Parameter;
+        Parameter.Kind = MedVar::Param;
+        Parameter.Id = 0;
+        Parameter.Size = Pointer->Size;
+        Parameter.TheArch = Target;
+        auto Call = HighExpr::makeCall("indirect", 0, {});
+        Call->Type = Carrier;
+        Call->IsIndirectCall = true;
+        Call->IndirectTarget = HighExpr::makeVar(Parameter, Pointer);
+        Call->CallSiteAddr = 0x10010;
+        Call->SourceCallHint = Hint;
+        HighFunc Function;
+        Function.Name = "complex_callback";
+        Function.Entry = 0x10000;
+        Function.ReturnType = Carrier;
+        Function.Params.push_back({"callback", Pointer});
+        HighStmt Return;
+        Return.Kind = StmtKind::Return;
+        Return.RetVal = Call;
+        if (Variant == 0) {
+          // Keep two field reads of the same call result. Its local must
+          // retain the emitted register record, not the callee's complex type.
+          MedVar Temporary;
+          Temporary.Kind = MedVar::Temp;
+          Temporary.Id = 33;
+          Temporary.Size = Carrier->Size;
+          Temporary.TheArch = Target;
+          auto Value = HighExpr::makeVar(Temporary, Carrier);
+          HighStmt Assign;
+          Assign.Kind = StmtKind::Assign;
+          Assign.Dst = Value;
+          Assign.Val = Call;
+          Function.Body.push_back(std::move(Assign));
+          Return.RetVal = HighExpr::makeBinop(
+              NdOp::FLOAT_ADD, HighExpr::makeRecordField(Value, 0, Bytes),
+              HighExpr::makeRecordField(Value, Bytes, Bytes));
+          Function.ReturnType = NdType::makeFloat(Bytes);
+        }
+        Function.Body.push_back(std::move(Return));
+        CEmitterOptions Options;
+        Options.TheArch = Target;
+        Options.Format = BinaryFormat::ELF;
+        std::string Text;
+        llvm::raw_string_ostream Out(Text);
+        if (Variant == 0) {
+          ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+          EXPECT_NE(Text.find("__real__"), std::string::npos) << Text;
+          EXPECT_NE(Text.find("__imag__"), std::string::npos) << Text;
+          EXPECT_NE(Text.find("struct nd_record_r2_"), std::string::npos)
+              << Text;
+          EXPECT_EQ(Text.find("_Complex t33"), std::string::npos) << Text;
+        } else {
+          EXPECT_THROW(HighCEmitter().emit({Function}, Out, Options),
+                       std::invalid_argument);
+        }
+      }
 }
 
 TEST(MIPSFloatingResult, IntegerExtensionRequiresAnEntryDeclarationAndFP64) {
@@ -893,6 +982,182 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
         }
       }
     }
+}
+
+TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Variant = 0; Variant != 12; ++Variant) {
+      SCOPED_TRACE(getArchName(Target));
+      SCOPED_TRACE(Variant);
+      const bool Wide = isMIPS64(Target);
+      const bool N32 = Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+      const unsigned Frame = Wide ? 64 : 32, Link = Wide ? 56 : 28;
+      const uint16_t SavedFP = Variant == 2   ? (Wide ? uint16_t(-8) : 8)
+                               : Variant == 3 ? Frame
+                               : Variant == 7 ? Frame / 2
+                                              : (Wide ? 48 : 24);
+      // The normal prologue saves the incoming FP in its private frame.
+      // 1 also spills its current SP privately; 2 saves FP in callee-owned
+      // storage; 3 writes above the new frame; 4 publishes SP externally;
+      // 5 passes SP to the call; 6 loses call SP; 7 exposes the FP slot to a
+      // second call's frame; 8 has two calls with the same private area;
+      // 9 reloads a private SP spill into a call argument; 10 publishes that
+      // reloaded value through an external store; 11 reuses a caller-clobbered
+      // argument without defining it for the second declared call.
+      std::vector<uint32_t> Words{Wide ? 0x67bdffc0u : 0x27bdffe0u,
+                                  (Wide ? 0xffbf0000u : 0xafbf0000u) | Link,
+                                  (Wide ? 0xffbe0000u : 0xafbe0000u) | SavedFP,
+                                  Wide ? 0x03a0f02du
+                                       : 0x03a0f021u}; // daddu/addu fp,sp,zero
+      if (Variant == 1 || Variant == 9 || Variant == 10) {
+        Words.push_back((Wide ? 0xffbd0000u : 0xafbd0000u) | Frame / 2);
+        if (Variant == 9)
+          Words.push_back((Wide ? 0xdfa40000u : 0x8fa40000u) | Frame / 2);
+        else if (Variant == 10) {
+          Words.push_back((Wide ? 0xdfa80000u : 0x8fa80000u) | Frame / 2);
+          Words.push_back(Wide ? 0xfc880000u : 0xac880000u); // sd/sw t0,0(a0)
+        }
+      } else if (Variant == 4)
+        Words.push_back(Wide ? 0xfc9d0000u : 0xac9d0000u); // sd/sw sp,0(a0)
+      else if (Variant == 5)
+        Words.push_back(Wide ? 0x03a0202du : 0x03a02021u); // a0 = sp
+      else if (Variant == 6)
+        Words.push_back(Wide ? 0x03a5e82fu : 0x03a5e823u); // sp -= a1
+      Words.insert(Words.end(), {0x0c004080, 0});          // jal 0x10200; nop
+      if (Variant == 7 || Variant == 8 || Variant == 11) {
+        if (Variant == 7)
+          Words.push_back(Wide ? 0x67bd0030u : 0x27bd0008u);
+        if (Variant != 11)
+          Words.push_back(0x00002025u); // or a0,zero,zero
+        Words.insert(Words.end(), {0x0c004080, 0});
+      }
+      Words.insert(Words.end(),
+                   {Wide ? 0x03c0e82du : 0x03c0e821u, // sp = fp
+                    (Wide ? 0xdfbe0000u : 0x8fbe0000u) | SavedFP,
+                    (Wide ? 0xdfbf0000u : 0x8fbf0000u) | Link,
+                    Wide ? 0x67bd0040u : 0x27bd0020u, 0x03e00008, 0});
+      mips_test::ELFBytes File(
+          N32 ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+              : Target);
+      File.abiFlags();
+      if (N32) {
+        File.put(36, 0x80000020, 4);
+        File.Bytes[0xe2] = 64;
+        File.Bytes[0xe4] = 2;
+      }
+      File.Bytes[0xe5] = Wide ? 2 : 1;
+      File.Bytes[0xe7] = 1;
+      File.Bytes.resize(0x208);
+      const size_t Program = File.Is64 ? 64 : 52;
+      File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
+               File.Is64 ? 8 : 4);
+      File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
+               File.Is64 ? 8 : 4);
+      for (unsigned I = 0; I != Words.size(); ++I)
+        File.put(0x100 + I * 4, Words[I], 4);
+      File.put(0x200, 0x03e00008, 4);
+      File.put(0x204, 0, 4);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      Image->Symbols.push_back(
+          Symbol::makeFunc(Image->Entry, Words.size() * 4));
+      Image->Symbols.push_back(Symbol::makeFunc(0x10200, 8));
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "saved_frame");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      auto Pointer = NdType::makePtr();
+      Pointer->Size = getTargetRegInfo(Target).PointerSize;
+      const auto Signature = floatingCallArguments(
+          Target, BinaryFormat::ELF, NdType::makeVoid(), {Pointer});
+      ASSERT_TRUE(Signature);
+      const std::map<va_t, FloatingCallArguments> Calls{{0x10200, *Signature}};
+      // The converter consumes complete summaries; merely supplying the
+      // image does not derive the empty callee's argument extent. Exercise
+      // an unbounded native call, its known zero-argument contract, and a
+      // complete pointer declaration separately.
+      const std::map<va_t, int> Counts{{0x10200, 0}};
+      for (unsigned Contract = 0; Contract != 3; ++Contract) {
+        SCOPED_TRACE(Contract);
+        LowToMedConverter Convert;
+        Convert.setBinaryImage(&*Image);
+        if (Contract == 1)
+          Convert.setCallEntryArgumentCounts(&Counts);
+        else if (Contract == 2)
+          Convert.setCallEntryFloatingArguments(&Calls);
+        if (Contract && (Variant == 0 || Variant == 1 || Variant == 8 ||
+                         (Variant == 11 && Contract == 1)))
+          EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+        else
+          EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                       LowToMedConversionError);
+      }
+    }
+}
+
+TEST(MIPSSourceReturnTargets, LogicalZeroMovesRetainExactFrameIdentity) {
+  for (Arch Target :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Function : {37u, 38u})
+      for (bool ZeroFirst : {false, true})
+        for (bool UnknownRegister : {false, true}) {
+          SCOPED_TRACE(getArchName(Target));
+          SCOPED_TRACE(Function);
+          SCOPED_TRACE(ZeroFirst);
+          SCOPED_TRACE(UnknownRegister);
+          const bool Wide = isMIPS64(Target);
+          const auto Move = [&](unsigned To, unsigned From) {
+            const unsigned Other = UnknownRegister ? 8 : 0;
+            return ((ZeroFirst ? Other : From) << 21) |
+                   ((ZeroFirst ? From : Other) << 16) | (To << 11) | Function;
+          };
+          mips_test::ELFBytes File(Target);
+          const uint32_t Words[] = {Wide ? 0x67bdfff0u : 0x27bdfff8u,
+                                    Wide ? 0xffbf0008u : 0xafbf0004u,
+                                    Wide ? 0xffbe0000u : 0xafbe0000u,
+                                    Move(30, 29),
+                                    0x24020007,
+                                    Move(29, 30),
+                                    Wide ? 0xdfbe0000u : 0x8fbe0000u,
+                                    Wide ? 0xdfbf0008u : 0x8fbf0004u,
+                                    Wide ? 0x67bd0010u : 0x27bd0008u,
+                                    0x03e00008,
+                                    0};
+          File.Bytes.resize(0x100 + sizeof(Words));
+          const size_t Program = Wide ? 64 : 52;
+          File.put(Program + (Wide ? 32 : 16), File.Bytes.size(), Wide ? 8 : 4);
+          File.put(Program + (Wide ? 40 : 20), File.Bytes.size(), Wide ? 8 : 4);
+          for (size_t I = 0; I != std::size(Words); ++I)
+            File.put(0x100 + I * 4, Words[I], 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Image->MIPS->FPABI = 1;
+          auto Symbol = Symbol::makeFunc(Image->Entry, 44);
+          Symbol.Name = "logical_frame";
+          Image->Symbols.push_back(std::move(Symbol));
+          for (bool LLVM : {false, true}) {
+            llvm::LLVMContext Context;
+            PipelineOptions Options;
+            Options.OnlyFunctionEntries = {Image->Entry};
+            Options.LiftMode = LLVM;
+            Options.EmitDumpOutput = false;
+            auto Result = Pipeline().run(*Image, Context, Options);
+            EXPECT_EQ(Result.Success, !UnknownRegister) << Result.Error;
+            if (!UnknownRegister && LLVM && Result.Success) {
+              ASSERT_TRUE(Result.LlvmModule);
+              EXPECT_FALSE(
+                  llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+            }
+            if (UnknownRegister)
+              EXPECT_NE(Result.Error.find("MIPS source return target"),
+                        std::string::npos)
+                  << Result.Error;
+          }
+        }
 }
 
 TEST(MIPSSourceReturnTargets, SplitFloatingSpillsKeepEveryReachingByte) {

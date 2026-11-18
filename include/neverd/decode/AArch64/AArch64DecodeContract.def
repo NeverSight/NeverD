@@ -15,5 +15,7 @@ NEVERD_AARCH64_DECODE_DIAGNOSTIC(kMissingDetail,
                                  "AArch64 operand detail unavailable")
 NEVERD_AARCH64_DECODE_DIAGNOSTIC(
     kInvalidOccurrence, "AArch64 decode occurrence is stale or incomplete")
+NEVERD_AARCH64_DECODE_DIAGNOSTIC(kRegisterAccessUnavailable,
+                                 "AArch64 register-access metadata unavailable")
 
 #undef NEVERD_AARCH64_DECODE_DIAGNOSTIC

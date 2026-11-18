@@ -17,6 +17,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -471,6 +472,41 @@ TEST(SourceParameterPlacement, MIPSScalarOnlyCallsKeepCompleteSignatures) {
     EXPECT_FALSE(floatingCallArguments(A, ELF, WrongPointer, {}));
     EXPECT_FALSE(floatingCallArguments(A, ELF, TypeRef(), {}));
     EXPECT_FALSE(floatingCallArguments(A, ELF, intType(3), {}));
+  }
+}
+
+TEST(SourceParameterPlacement, MIPSWideComplexResultsKeepScalarPositions) {
+  for (const Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (const uint16_t Bytes : {4, 8}) {
+      SCOPED_TRACE(getArchName(A));
+      SCOPED_TRACE(Bytes);
+      const auto Result = NdType::makeComplex(Bytes);
+      std::vector<TypeRef> Parameters(9, floatType(Bytes));
+      const auto Placement = place(A, ELF, Result, Parameters);
+      EXPECT_FALSE(Placement.ResultPointer);
+      ASSERT_EQ(Placement.Parameters.size(), Parameters.size());
+      for (unsigned I = 0; I != 8; ++I) {
+        ASSERT_EQ(Placement.Parameters[I].size(), 1u);
+        expectRegister(Placement.Parameters[I][0], FloatingReg,
+                       mipsreg::w(12 + I), 0, Bytes);
+      }
+      ASSERT_EQ(Placement.Parameters.back().size(), 1u);
+      expectStack(Placement.Parameters.back()[0], 0, Bytes);
+      const auto Bound = floatingCallArguments(A, ELF, Result, Parameters);
+      ASSERT_TRUE(Bound);
+      EXPECT_TRUE(Bound->ReturnComplex);
+      EXPECT_EQ(Bound->ReturnBytes, 2 * Bytes);
+      EXPECT_EQ(Bound->ReturnElements, 2u);
+      const auto Restored = floatingCallTypes(A, ELF, *Bound);
+      ASSERT_TRUE(Restored);
+      EXPECT_TRUE(equalSourceTypes(Restored->Result, Result));
+      ASSERT_EQ(Restored->Parameters.size(), Parameters.size());
+      for (const auto &Parameter : Restored->Parameters) {
+        EXPECT_EQ(Parameter->Kind, NdTypeKind::Float);
+        EXPECT_EQ(Parameter->Size, Bytes);
+      }
+    }
   }
 }
 

@@ -6297,10 +6297,20 @@ classification never publishes stale operands. Tests cover failed attempts,
 reset/reinitialization, reconstructed decoder objects, altered records, direct
 missing-detail calls and copied MOVPRFX records with a changed follower.
 Deep snapshots remain usable across decoder replacement; shallow copies expire.
+Switching a reused output from AArch64 to either byte order of MIPS32 or MIPS64
+clears its occurrence evidence on both successful and truncated decodes. The
+native-fast entry retains the same invalidation and fallback contract when
+its architecture-specific work is dispatched directly.
 Refused attempts clear prior undefined-output and preserved-state evidence,
 including real x64 certificates retained across an architecture change.
 Operand queries reject a mismatched requested architecture for both owned
 snapshots and expired borrowed records before reading their detail.
+`NativeRegisterQueriesDoNotReadStaleAccessCounts` compares native and owned
+snapshots against a fresh full decode after an implicit LR write. Poisoned
+implicit register counts must remain unread: the native lift detail carries
+operand values but does not supply Capstone register-access metadata. Register
+queries obtain that metadata separately without invalidating the original
+occurrence; immediate-only queries do not need it.
 Raw classifiers and BL targets still work without detail, while operand queries
 and expired records remain conservative. These are decode/lift lifecycle checks,
 not qualification of native PAC/CPA execution or additional ISA families.
@@ -25285,6 +25295,14 @@ rounded/non-rounded shifts, packing, expansion, replication, BITREV/RADDU,
 destination/input aliases and discarded
 results. Shift tests enumerate immediate and variable count boundaries against
 independent expectations, including pure operations with absent DSPControl.
+`MIPSDSP64.PhysicalDecodeTracksProfileChangesAndOutputModes` exercises public,
+lift and light decode in both byte orders, with text/detail independently on
+and off. Truncated packed words refuse; switching the same decoder between
+DSP-enabled and ordinary profiles must update admission without changing
+ordinary integer decoding.
+The signed seven-bit `dshilo` immediate is checked with full operands; with
+text disabled its detail must stay identical to the unmodified operand
+template, so an empty operand array cannot overwrite common detail fields.
 The pipeline target checks that DSPControl
 effects survive both source routes without invented source arguments. Return
 identity, standalone conversion, source shards and generated helper protection
@@ -25762,8 +25780,43 @@ requested subranges, frame-derived values and saved-link overlaps.
 `FloatingResultSpillsDoNotPoisonArgumentProofs` checks scalar and complex
 result spills whose provenance depends on an active argument proof, alongside
 unknown calls and invalid frame access. Complex parameters,
-variadic complex calls, n32/n64 complex results, variadic entry reconstruction
+variadic complex calls, variadic entry reconstruction
 and general indirect runtime adapters remain unqualified.
+
+`MIPSFloatingResult.ComplexResultsKeepTheirClassAndBothRegisters` and
+`SourceParameterPlacement.MIPSWideComplexResultsKeepScalarPositions` check
+n32/n64 complex float/double results, their f0/f2 components and scalar
+parameter positions in both byte orders. The descriptor rejects ordinary
+two-field records, complex parameters, variadic complex results and MIPS16
+wide targets. `SourceABI.ParameterOnlyBindingKeepsPhysicalComplexResults`
+also checks the physical-return adapter for all six MIPS profiles.
+`MIPSFloatingResult.DeclaredComplexCallsRequireCompleteFloatingCarriers`
+checks HighC's explicit call-site result conversion in all six profiles,
+including wrong widths, integer fields and ordinary-record negative controls.
+`unittests/lift/mips/n32-n64-complex-roundtrip.py` separately compiles GCC and
+Clang originals at O0/O2. With `--neverd`, it regenerates the callee and the
+direct/indirect callers through HighC and LLVMC, replacing one object at a
+time while retaining the other original objects. Each execution checks both
+result bit patterns, exactly one callee entry, preserved GPR/FPR values, SP,
+RA, PC and FCSR. Indirect calls bind an explicit occurrence and snapshot through
+the same C API used by the scalar/variadic ABI tests; a callback parameter's
+declaration alone is not evidence for every indirect machine call. The
+freestanding C memory runtime is compiled for the guest
+pointer/size_t widths; guest copies are never replaced by emulator hooks.
+Pass `--clang`, `--gcc`, `--assembler`, `--ld` and an owned `--output` path;
+omitting `--neverd` runs only the independent original-program oracle.
+Optional ABI, byte-order, component-size and original-compiler filters narrow
+a diagnostic run. This driver covers classic MIPS64r2 n32/n64, not compressed
+code, complex parameters or variadic complex calls.
+
+`MIPSSourceReturnTargets.LogicalZeroMovesRetainExactFrameIdentity` checks
+OR/XOR zero on both operand sides, both widths and byte orders, with an
+unknown-register negative control. `PrivateFrameSpillsDoNotPublishTheFrame`
+checks 144 o32/n32/n64 cases across both byte orders and declared/native
+callees: private FP/SP spills, callee-owned and external storage, direct and
+reloaded frame-address escape, unknown call SP, two-call intersections and
+reused caller-clobbered arguments.
+Every saved-link byte still needs an exact reaching-store proof.
 
 The hard-float call tests assemble original callers and callees and bind explicit declarations.
 

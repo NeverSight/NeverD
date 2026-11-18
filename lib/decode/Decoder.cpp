@@ -232,6 +232,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
                              Img.MIPS->HasMIPS16E2);
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
                         Img.MIPS && Img.MIPS->HasDSPR2);
+    MIPSNeedsDecodeGuard =
+        MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64();
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
     MIPS->setScalarFPEnabled(
         Img.MIPS && Img.MIPS->hasScalarFPABI(isMIPS64(Img.Arch)),
@@ -348,6 +350,12 @@ Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
       if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
                                        MIPSHistoricalISA))
         return false;
+    } else if (MIPSISARevision != 6) {
+      // Only the admitted classic DSP64 profile reaches this branch. Its
+      // legacy packed forms otherwise pay for a failed physical decode
+      // before decoding their equivalent operand template.
+      if (const auto Decoded = decodeMIPSDSP64(Bytes, Len, Addr))
+        return *Decoded;
     } else {
       if (CurrentMode == InstructionMode::MicroMIPS)
         return decodeMicroMIPSRelease6(Bytes, Len, Addr);
@@ -401,7 +409,7 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
-    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   // The lift path and CFG classification read the mnemonic (when they need it
   // at all, e.g. x86 push/pop/VCMP width, ARM push/pop, NEON lane) directly
   // from Out.Raw->mnemonic, which capstone already filled.  Copying it into a
@@ -412,13 +420,8 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
 
 int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                               DecodedInsn &Out) {
-  if (AArch64) {
-    if (!beginDecode(Out))
-      return 0;
-    if (const int Size = decodeAArch64ForLift(Bytes, Len, Addr, Out))
-      return Size;
-  }
-  return decodeOne(Bytes, Len, Addr, Out);
+  return AArch64 ? decodeAArch64ForLift(Bytes, Len, Addr, Out)
+                 : decodeOne(Bytes, Len, Addr, Out);
 }
 
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
@@ -440,7 +443,7 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
     Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
         {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
-    recordAArch64Decode(Bytes, Len, Out, Detail && Text);
+    recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   return Out.Size;
 }
 
