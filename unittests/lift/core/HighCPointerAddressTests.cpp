@@ -43210,7 +43210,7 @@ std::optional<CapturedImageStore>
 capturedVolatileImageStore(const std::string &Source, const std::string &Base,
                            unsigned Offset) {
   const std::regex Store(
-      R"(\{ uint32_t (\w+) = (\w+);\s*)"
+      R"(\{ uint32_t (\w+) = ([\w.]+);\s*)"
       R"(for \(unsigned (\w+) = 0; \3 < 4; \+\+\3\)\s*)"
       R"(\(\(volatile uint8_t\*\)\()" +
       Base + " \\+ " + std::to_string(Offset) +
@@ -43242,9 +43242,15 @@ bool insidePrintedTry(const std::string &Source, size_t Position) {
 // printed order of try ranges. The Windows compile check below separately
 // rejects illegal jumps into protected scopes; this provider checks values,
 // filter arguments, side effects and joins at both optimization levels.
+/// \p EmulatedHome, when given, is where the filter finds the parent's
+/// homed first argument through the frame it is passed: native IR passes a
+/// filter that reads its frame the parent's emulated EstablisherFrame.
+/// Otherwise the filter is passed the parent's frame as `llvm.localaddress`
+/// names it.
 void checkCorpusSehPaths(std::string Source, const std::string &Entry,
                          const std::string &Filter, const std::string &Storage,
-                         unsigned SinkOffset) {
+                         unsigned SinkOffset,
+                         std::optional<unsigned> EmulatedHome = std::nullopt) {
   const std::string Include = "#include <excpt.h>\n";
   if (auto At = Source.find(Include); At != std::string::npos)
     Source.erase(At, Include.size());
@@ -43268,12 +43274,18 @@ void RaiseException(uint32_t code, uint32_t flags, uint32_t count,
   if (raising) longjmp(destination, 1);
 }
 )";
-  std::string Provider =
-      "\nuint32_t " + Filter +
-      "(void *info, void *frame) {\n"
-      "  if (info != &destination || frame != &parent_frame) "
-      "__builtin_trap();\n"
-      "  ++filters; return 1;\n}\n";
+  // The filter runs only for an input of 7.
+  const std::string FrameCheck =
+      EmulatedHome ? "*(const uint32_t *)((const char *)frame + " +
+                         std::to_string(*EmulatedHome) + ") != 7"
+                   : std::string("frame != &parent_frame");
+  std::string Provider = "\nuint32_t " + Filter +
+                         "(void *info, void *frame) {\n"
+                         "  if (info != &destination || " +
+                         FrameCheck +
+                         ") "
+                         "__builtin_trap();\n"
+                         "  ++filters; return 1;\n}\n";
   if (Source.find("extern uint8_t " + Storage + "[") != std::string::npos) {
     const auto At = Source.find("extern uint8_t " + Storage + "[");
     const auto End = Source.find(';', At);
@@ -43370,7 +43382,10 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   const auto Sink = capturedVolatileImageStore(Join, "unk_140005000", 224);
   ASSERT_TRUE(Sink.has_value()) << Source;
   const std::string &SinkValue = Sink->Value;
-  if (SinkValue != NormalSlot)
+  // The filter reads the parent's frame, which keeps the slot there: it
+  // prints as a member of the frame.
+  if (SinkValue != NormalSlot &&
+      !llvm::StringRef(SinkValue).ends_with("." + NormalSlot))
     EXPECT_NE(Join.find(SinkValue + " = " + NormalSlot + ";"),
               std::string::npos)
         << Source;
@@ -43428,6 +43443,9 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   llvm::SMDiagnostic Diagnostic;
   auto Recompiled = llvm::parseIRFile(IRPath, Diagnostic, Context);
   ASSERT_NE(Recompiled, nullptr) << Diagnostic.getMessage().str();
+  // The filter reads its frame, so it is passed the parent's emulated frame:
+  // the outlined filter computes it from the parent's recovered frame object
+  // instead of loading a captured `llvm.localaddress`.
   unsigned ParentFrameCaptures = 0, FilterCalls = 0;
   for (const auto &Function : *Recompiled)
     for (const auto &Block : Function)
@@ -43436,25 +43454,31 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
         const auto *Callee = Call ? Call->getCalledFunction() : nullptr;
         if (!Callee)
           continue;
-        if (Callee->getIntrinsicID() == llvm::Intrinsic::localaddress) {
+        if (Callee->getIntrinsicID() == llvm::Intrinsic::localaddress)
           ++ParentFrameCaptures;
-          EXPECT_EQ(Function.getName(), "sub_140001050");
-        }
         if (Callee->getName() == "sub_1400024E0") {
           ++FilterCalls;
           ASSERT_EQ(Call->arg_size(), 2u);
-          EXPECT_TRUE(llvm::isa<llvm::LoadInst>(Call->getArgOperand(1)))
-              << "the outlined filter must recover the parent's captured frame";
+          const auto *Frame = llvm::dyn_cast<llvm::GetElementPtrInst>(
+              Call->getArgOperand(1)->stripPointerCasts());
+          const auto *Recovered =
+              Frame ? llvm::dyn_cast<llvm::CallBase>(
+                          Frame->getPointerOperand()->stripPointerCasts())
+                    : nullptr;
+          EXPECT_TRUE(Recovered && Recovered->getCalledFunction() &&
+                      Recovered->getCalledFunction()->getIntrinsicID() ==
+                          llvm::Intrinsic::localrecover)
+              << "the outlined filter must pass the parent's emulated frame";
         }
       }
-  EXPECT_EQ(ParentFrameCaptures, 1u);
+  EXPECT_EQ(ParentFrameCaptures, 0u);
   unsigned ExceptClauses = 0;
   for (size_t At = Source.find("} __except ("); At != std::string::npos;
        At = Source.find("} __except (", At + 1))
     ++ExceptClauses;
   EXPECT_EQ(FilterCalls, ExceptClauses);
   checkCorpusSehPaths(Source, "sub_140001050", "sub_1400024E0", "unk_140005000",
-                      224);
+                      224, /*EmulatedHome=*/0x40);
 
   auto OptImg = loadBinary(Path, FuncOpts);
   ASSERT_TRUE(static_cast<bool>(OptImg)) << llvm::toString(OptImg.takeError());
@@ -43465,7 +43489,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   EXPECT_EQ(OptSource.find("= 0xE0421001"), std::string::npos) << OptSource;
   EXPECT_EQ(OptSource.find("5368722016"), std::string::npos) << OptSource;
   checkCorpusSehPaths(OptSource, "sub_140001050", "sub_1400024E0",
-                      "unk_140005000", 224);
+                      "unk_140005000", 224, /*EmulatedHome=*/0x40);
 }
 
 TEST(LLVMCPointerAddresses, CorpusOptimizedSehResultIsAssignedOnBothPaths) {
@@ -43657,7 +43681,10 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
     EXPECT_NE(Source.find("#define NEVERD_X86_REP(native, ...)"),
               std::string::npos)
         << Source;
-    EXPECT_NE(Source.find("__asm__(\"llvm.localaddress\")"), std::string::npos)
+    // Its filter reads its frame: C calls it with the parent's emulated
+    // frame, which native output's adapter passes it.
+    EXPECT_NE(Source.find("GetExceptionInformation(), (void *)((char *)&frame"),
+              std::string::npos)
         << Source;
     // Function selection retains the emitter's exact dependency declarations.
     // Supply only the source-level compiler builtin declaration.

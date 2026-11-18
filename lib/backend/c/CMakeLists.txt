@@ -94,6 +94,7 @@ add_neverd_component_library(NeverDBackendC
   PassIR
   Support
   Types
+  WindowsEHMetadata
 )
 
 # Pure integer display folding uses LLVM's width and poison semantics.

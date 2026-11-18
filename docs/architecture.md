@@ -1349,17 +1349,24 @@ stack pointer. Native IR passes a termination handler that reads its frame
 (MedIR: a value derived from its second argument register reaches memory, a
 call, a branch or the return) the address there of the frame the runtime gave
 the original: the certified bytes below the entry stack pointer
-(`SEHTerminationFrameBytes`), for an x64 parent without a frame register. It
+(`SEHTerminationFrameBytes`); with a frame register, the bytes allocated
+before `UWOP_SET_FPREG`, where RtlVirtualUnwind puts the EstablisherFrame. It
 marks the alloca with its owner and entry byte
 (`neverd.windows.seh.frame`), and makes every load, store, atomic and memory
 intrinsic in protected code volatile, except a register home's, as clang's
 `-EHa` does for a `__try`: the callback sees at a fault every store made
 before it, and LLVM takes no plain load or store for one that can raise. A
-local unwind's handler calls in the body pass the same address. Any other
-callback keeps `llvm.localaddress()`, and the gate refuses one that uses the
-EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The runtime
-passes a filter the frame of the function the code generator wrote, so a
-filter that reads its frame is still refused. A helper a compiler outlined
+load of a global the image maps cannot fault and stays as it was. A
+local unwind's handler calls in the body pass the same address. The runtime
+calls a filter with the frame of the function the code generator wrote, so a
+filter that reads its frame runs behind an adapter native IR writes
+(`sehFilterAdapterName`, internal, with no source address): it recovers the
+frame the parent escapes with `llvm.localescape` (`llvm.eh.recoverfp`, then
+`llvm.localrecover`) and returns what the source filter returns for the
+exception pointers and the emulated frame. Any other callback keeps
+`llvm.localaddress()`, and the gate refuses one that uses the
+EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). A helper a
+compiler outlined
 reads its parent's locals through `llvm.localrecover`, after
 `llvm.eh.recoverfp` in a filter, which that frame is for, and stays accepted.
 Keeping the argument in a home (an alloca only loads and stores name, as a
@@ -1370,7 +1377,16 @@ The gate takes the emulated frame only as it rebuilds it
 (`checkSEHEmulatedFrameArgument`). It finds the marked alloca and reads the
 source's unwind codes again (`decodeX64UnwindFrame`, which the lift's frame
 proof shares), and the argument must be that alloca at the entry byte less
-the EstablisherFrame's bytes. The callback must reach the frame only by loads
+the EstablisherFrame's bytes. A filter's adapter must be exactly that
+recovery, of the alloca the parent's one `llvm.localescape` names, the
+address computed from it and the call of the source filter
+(`sehFilterAdapterSource`). The adapter has no source address and may stay
+private, so the filter row is bound to the address the compiler's receipt
+gives its definition (`CompiledImage::SourceFunctionOwners`), and in-place
+mode, which places only functions with a source address, hands such a module
+to the section patch. Native IR printed as LLVM C spells an adapter as the
+call of the filter it adapts with the parent's frame object at the emulated
+frame's offset, and prints no function for the adapter itself. The callback must reach the frame only by loads
 and stores at fixed offsets (`collectSEHCallbackFrameAccesses`), and only
 bytes the lifted parent keeps as the original did: its fixed frame and the
 argument homes above the return address, not a pushed or saved register,
@@ -1378,14 +1394,23 @@ which emission leaves out, the return address or the caller's stack
 arguments, all inside the alloca. Neither the frame nor anything the callback
 reads through it may reach a call: the runtime compares an EstablisherFrame,
 or a frame the parent saved there for `_local_unwind`, with real frames, and
-the emulated one is none. In the parent, every memory access in protected
+the emulated one is none. A read of a slot the callback wrote earlier in its
+block, with nothing between that could write the frame, reads its own value
+back and may: an `/Od` filter keeps its exception pointers in its parent's
+frame and passes them on. In the parent, every memory access in protected
 code must be volatile, except a store inside a private slot and a load inside
-an alloca at a fixed offset (`findSEHUnorderedAccess`); protected code is
+an alloca or a mapped global at a fixed offset (`findSEHUnorderedAccess`); protected code is
 every block the range markers leave a scope open at, from the entry and from
 each block a catchret resumes. Rewritten alone, `sub_140001150` and
 `sub_140001180` of `xcpt4-msvc-x86_64-fh4-gs-o2.exe`, which printed
 `count = -1` before the gate refused them, print the original's transcript
-under wine, and an argument eight bytes off prints `count = -1` again.
+under wine, and an argument eight bytes off prints `count = -1` again. No
+filter of the 16 MSVC x64 xcpt4 builds that reads its frame reaches output:
+each such function stops at another gate. A clang build for MinGW
+(`-O1`, `-O2`) of a `__try` whose filter reads a local the protected code
+set, with its frame on RBP, runs as the original under wine behind the
+adapter, lifted and patched with and without optimization in both modes; an
+adapter eight bytes off leaves the fault unhandled.
 A termination handler that leaves its `__finally` by a jump is the other
 side of a local unwind: it calls the runtime with a block of its parent to
 resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block

@@ -16,6 +16,7 @@
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/ExceptionInfo.h"
 
@@ -716,15 +717,16 @@ bool MedLLVMEmitter::emitNativeSEH(
   // keeps that frame: FrameAlloca, whose byte FrameEntrySPOffset stands for
   // the entry stack pointer.  Native output passes a callback that reads its
   // frame the address there of the frame the runtime gave the original, the
-  // certified bytes below the entry stack pointer.  Any other callback keeps
-  // llvm.localaddress(), which the output gate refuses for one that uses it.
+  // certified bytes below the entry stack pointer; with a frame register,
+  // those allocated before UWOP_SET_FPREG, where the runtime puts it.  Any
+  // other callback keeps llvm.localaddress(), which the output gate refuses
+  // for one that uses it.
   const uint64_t FrameArgumentRegister =
       TargetArch == Arch::X64
           ? getTargetRegInfo(TargetArch).integerParamRegs(TargetFormat)[1]
           : 0;
   auto EmulatedFrameOffset = [&](va_t Entry) -> std::optional<uint64_t> {
     if (SourceView || TargetArch != Arch::X64 || !FrameAlloca ||
-        EH.FrameRegister != 0 ||
         FrameAlloca->getParent() != &LLVMFunc.getEntryBlock() ||
         !FrameAlloca->isStaticAlloca())
       return std::nullopt;
@@ -739,6 +741,41 @@ bool MedLLVMEmitter::emitNativeSEH(
     return FrameEntrySPOffset - Bytes->second;
   };
   bool UsesEmulatedFrame = false;
+  // The runtime calls a filter with the rewritten parent's frame, so a filter
+  // that reads its frame is reached through an adapter: it recovers the
+  // emulated frame the parent escapes and calls the filter with it.
+  llvm::CallInst *FrameEscape = nullptr;
+  auto FilterAdapter = [&](const Region &R, uint64_t Offset) {
+    if (!FrameEscape) {
+      llvm::IRBuilder<> EB(FrameAlloca->getParent()->getTerminator());
+      FrameEscape = EB.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                                      Mod, llvm::Intrinsic::localescape),
+                                  {FrameAlloca});
+    }
+    auto *Adapter = llvm::Function::Create(
+        FilterCallbackTy, llvm::GlobalValue::InternalLinkage,
+        sehFilterAdapterName(EH.CodeRange.Begin, R.SourceIndex), Mod);
+    Adapter->addFnAttr(llvm::Attribute::NoInline);
+    Adapter->addFnAttr(llvm::Attribute::OptimizeNone);
+    Adapter->setUWTableKind(LLVMFunc.getUWTableKind());
+    for (const llvm::StringRef Feature : {"target-cpu", "target-features"})
+      if (LLVMFunc.hasFnAttribute(Feature))
+        Adapter->addFnAttr(LLVMFunc.getFnAttribute(Feature));
+    llvm::IRBuilder<> AB(llvm::BasicBlock::Create(*Ctx, "entry", Adapter));
+    llvm::Value *ParentFrame =
+        AB.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                          Mod, llvm::Intrinsic::eh_recoverfp),
+                      {&LLVMFunc, Adapter->getArg(1)});
+    llvm::Value *Escaped =
+        AB.CreateCall(llvm::Intrinsic::getOrInsertDeclaration(
+                          Mod, llvm::Intrinsic::localrecover),
+                      {&LLVMFunc, ParentFrame, AB.getInt32(0)});
+    llvm::Value *Frame = AB.CreateInBoundsGEP(
+        AB.getInt8Ty(), Escaped, AB.getInt64(Offset), "seh.establisher.frame");
+    AB.CreateRet(AB.CreateCall(FilterCallbackTy, R.Callback,
+                               {Adapter->getArg(0), Frame}));
+    return Adapter;
+  };
 
   auto *TokenNone = llvm::ConstantTokenNone::get(*Ctx);
   for (size_t I = 0; I < Regions.size(); ++I) {
@@ -844,6 +881,11 @@ bool MedLLVMEmitter::emitNativeSEH(
             ? static_cast<llvm::Value *>(llvm::ConstantPointerNull::get(
                   llvm::cast<llvm::PointerType>(PtrTy)))
             : static_cast<llvm::Value *>(R.Callback);
+    if (R.Scope->Kind == SEHScopeKind::Filter)
+      if (const auto Offset = EmulatedFrameOffset(R.Scope->FilterOrFinallyVA)) {
+        Filter = FilterAdapter(R, *Offset);
+        UsesEmulatedFrame = true;
+      }
     auto *Pad = PB.CreateCatchPad(Switch, {Filter}, "seh.catch.pad.token");
     // The handler reads the exception code the pad receives.
     llvm::Value *Code = nullptr;
@@ -1154,7 +1196,8 @@ bool MedLLVMEmitter::emitNativeSEH(
   // made before it in protected code, and LLVM takes no plain load or store
   // for one that can raise: each such access becomes volatile, as clang's
   // -EHa makes those of a __try, except a register home's, which no callback
-  // can name.  The output gate finds the frame by its mark.
+  // can name, and a load of a global the image maps, which cannot fault.
+  // The output gate finds the frame by its mark.
   if (UsesEmulatedFrame) {
     FrameAlloca->setMetadata(
         windows_eh_md::SEHEmulatedFrameAttachment,
@@ -1171,7 +1214,9 @@ bool MedLLVMEmitter::emitNativeSEH(
     for (llvm::BasicBlock *Block : Protected)
       for (llvm::Instruction &Instruction : *Block) {
         if (auto *Load = llvm::dyn_cast<llvm::LoadInst>(&Instruction)) {
-          if (!IsHome(Load->getPointerOperand()))
+          if (!IsHome(Load->getPointerOperand()) &&
+              !llvm::isa<llvm::GlobalVariable>(
+                  Load->getPointerOperand()->stripPointerCasts()))
             Load->setVolatile(true);
         } else if (auto *Store =
                        llvm::dyn_cast<llvm::StoreInst>(&Instruction)) {

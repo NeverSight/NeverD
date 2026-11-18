@@ -32,6 +32,7 @@ Update this file when an item closes or a new gap is proven.
 | `796c513988` | x87 call contracts are proved once per session (kept with their no-return dependencies); capstone LLVM C -3.3% |
 | `e3743938d5` | Native output takes nested scope tables (generated rows tied to the source scope chain) and source tables that repeat a range, and places a local unwind's handler calls by the row each ends and by the range markers; the MSVC local unwind fixture (/O1, /O2) runs as the original in all 64 wine runs |
 | `8f1b084dd2` | LLVM C prints the parent code a handler's `_local_unwind` always resumes, with a `goto` at the end of the `__finally` (36 xcpt4 corpus builds, 1 to 13 each) |
+| `043e6fdb22` | Native output passes a termination handler that reads its frame the parent's emulated frame; the gate rebuilds it from the unwind codes, bounds what the callback reaches and orders protected memory with faults |
 
 ## Open
 
@@ -41,17 +42,13 @@ Update this file when an item closes or a new gap is proven.
   with nested or repeated rows, and every one stops at another gate; the two
   functions per o2 build that patch run as the original in all eight runs
   and were accepted before the change too.
-- The emulated frame (user decision 2026-11-18, both halves): termination
-  handlers that read their frame are passed it (see architecture.md for the
-  rules). Filters still refuse: the runtime passes a filter the rewritten
-  parent's frame, so a filter needs an adapter (`llvm.eh.recoverfp` and
-  `llvm.localrecover` of the frame the parent escapes, then the source filter
-  with the emulated frame). Output then has to take the adapter's address in
-  the filter row, which binding now compares with the source filter's
-  (`prepareCOFFExceptionDirectory`): give the adapter a name output can find
-  in `CompiledImage::SymbolAddrs`. In-place mode places no function without
-  a source address, so it hands such a module to the section patcher, as
-  the x86 registration path does.
+- The emulated frame (user decision 2026-11-18, both halves, landed in
+  `043e6fdb22` and the commit after it): termination handlers that read their
+  frame are passed it, and filters run behind an adapter; see architecture.md
+  for the rules. Parents with a frame register take it too. No MSVC xcpt4
+  filter that reads its frame reaches output yet (each such function stops
+  at another gate), so the adapter's only execution evidence is the MinGW
+  fixture below.
 - With the `__finally` half, per function on the four vs2019 x64 xcpt4
   builds: the 15 functions per build the original-frame gate stopped now
   give 4 (5 at o0) that patch and run as the original in every run, 2 per
@@ -60,6 +57,13 @@ Update this file when an item closes or a new gap is proven.
   the frame it reads from its parent (a handler that resumes its parent,
   which native output has no form for); 4 that stop at the catchret check;
   and at o2 one at the filter frame gate.
+- MinGW fixture for the emulated frame (`seh/emu/fx/filt2.c`, local): build
+  with `clang --target=x86_64-w64-mingw32
+  --sysroot=/usr/x86_64-w64-mingw32 -fms-extensions -O1 -fuse-ld=lld
+  -L/usr/lib/gcc/x86_64-w64-mingw32/13-posix`. Clang's SEH there covers
+  calls only, so each fault happens in a callee. `filter_reads_local`
+  (0x140001470 at -O1 and -O2) is the adapter case; the other two stop at the
+  detached region-dispatch check.
 - The other native gates those functions meet: incomplete native lowering
   (8, 9 at o0: a local unwind handler that does not return, or scope bounds
   that are not block bounds, refused in `MedLLVMNativeSEH.cpp`), a region

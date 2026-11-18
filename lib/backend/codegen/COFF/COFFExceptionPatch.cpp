@@ -842,20 +842,16 @@ bool sehCallbackUsesOriginalFrame(const llvm::Function &Callback,
   return false;
 }
 
-/// Whether \p Argument, what native IR passes \p Callback as its
-/// EstablisherFrame, is \p Parent's emulated frame at the bytes below the
-/// entry stack pointer that the source's unwind codes put the
-/// EstablisherFrame at, and whether \p Callback reaches through it only bytes
-/// the lifted parent keeps as the original did.  Those are its fixed frame
-/// and the argument homes above its return address, but not a pushed or
-/// saved register, which emission leaves out, the return address or the
-/// caller's stack arguments, and all of them inside the alloca.  The address
-/// must not leave the callback: RtlUnwind, `_local_unwind` and longjmp
-/// compare an EstablisherFrame with real frames.
-llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
-                                          const llvm::Function &Callback,
-                                          const llvm::Function &Parent,
-                                          const ExceptionFunction &EH) {
+/// \p Parent's emulated frame and the fixed frame the source's unwind codes
+/// record, which together say where the EstablisherFrame lies in it.
+struct SEHEmulatedFrameContext {
+  SEHEmulatedFrame Frame;
+  X64UnwindFrame Unwind;
+};
+
+llvm::Expected<SEHEmulatedFrameContext>
+sehEmulatedFrameContext(const llvm::Function &Parent,
+                        const ExceptionFunction &EH) {
   auto Frame = findSEHEmulatedFrame(Parent, EH.CodeRange.Begin);
   if (!Frame)
     return patchError(llvm::toString(Frame.takeError()));
@@ -863,17 +859,35 @@ llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
     return patchError("native SEH callback is passed a frame that names no "
                       "emulated frame in function " +
                       Parent.getName());
-  auto Unwind = decodeX64UnwindFrame(EH, /*AllowFrameRegister=*/false);
+  // RtlVirtualUnwind puts the EstablisherFrame at the frame register less
+  // its scaled offset, which is where the stack pointer stood when the
+  // prologue set the register.
+  auto Unwind = decodeX64UnwindFrame(EH, /*AllowFrameRegister=*/true);
   if (!Unwind)
     return patchError(
         "native SEH emulated frame of function " + Parent.getName() +
         " has no fixed source frame: " + llvm::toString(Unwind.takeError()));
-  const int64_t Establisher = static_cast<int64_t>(Unwind->EstablisherBytes);
-  const int64_t Entry = static_cast<int64_t>((*Frame)->EntryOffset);
-  const auto Address =
-      sehConstantAddress(Argument, Parent.getParent()->getDataLayout());
-  if (!Address || Address->first->stripPointerCasts() != (*Frame)->Slot ||
-      Address->second != Entry - Establisher)
+  return SEHEmulatedFrameContext{**Frame, *Unwind};
+}
+
+/// Whether \p Callback, passed the byte \p SlotOffset of \p Parent's
+/// emulated frame as its EstablisherFrame, is passed the frame the source's
+/// unwind codes give it: the entry byte less the EstablisherFrame's bytes.
+/// And whether it reaches through it only bytes the lifted parent keeps as
+/// the original did.  Those are its fixed frame and the argument homes above
+/// its return address, but not a pushed or saved register, which emission
+/// leaves out, the return address or the caller's stack arguments, and all
+/// of them inside the alloca.  Neither the frame nor anything the callback
+/// reads through it may reach a call: RtlUnwind, `_local_unwind` and longjmp
+/// compare an EstablisherFrame, or a frame the parent saved there, with real
+/// frames.
+llvm::Error checkSEHEmulatedFrameCallback(
+    const SEHEmulatedFrameContext &Context, int64_t SlotOffset,
+    const llvm::Function &Callback, const llvm::Function &Parent) {
+  const int64_t Establisher =
+      static_cast<int64_t>(Context.Unwind.EstablisherBytes);
+  const int64_t Entry = static_cast<int64_t>(Context.Frame.EntryOffset);
+  if (SlotOffset != Entry - Establisher)
     return patchError("native SEH callback is not passed its parent's "
                       "original EstablisherFrame in function " +
                       Parent.getName());
@@ -893,20 +907,93 @@ llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
     const int64_t Begin = Access.Offset - Establisher;
     const int64_t End = Begin + static_cast<int64_t>(Access.Size);
     const bool Fixed =
-        Begin >= -static_cast<int64_t>(Unwind->AllocatedBytes) && End <= 0;
+        Begin >= -static_cast<int64_t>(Context.Unwind.AllocatedBytes) &&
+        End <= 0;
     const bool Home = Begin >= ReturnAddressBytes && End <= HomesEnd;
-    const bool Saved = llvm::any_of(Unwind->SavedRegisterSlots,
-                                    [&](const std::pair<int64_t, int64_t> &S) {
-                                      return Begin < S.second && S.first < End;
-                                    });
+    const bool Saved =
+        llvm::any_of(Context.Unwind.SavedRegisterSlots,
+                     [&](const std::pair<int64_t, int64_t> &Slot) {
+                       return Begin < Slot.second && Slot.first < End;
+                     });
     const bool Inside = Entry + Begin >= 0 &&
-                        Entry + End <= static_cast<int64_t>((*Frame)->Size);
+                        Entry + End <= static_cast<int64_t>(Context.Frame.Size);
     if (!Access.Size || !(Fixed || Home) || Saved || !Inside)
       return patchError("native SEH callback reaches bytes of its parent's "
                         "frame that output does not keep in function " +
                         Parent.getName());
   }
   return llvm::Error::success();
+}
+
+/// Whether \p Argument, what native IR passes \p Callback as its
+/// EstablisherFrame, is \p Parent's emulated frame where the source's unwind
+/// codes put the EstablisherFrame, and \p Callback uses it as
+/// checkSEHEmulatedFrameCallback allows.
+llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
+                                          const llvm::Function &Callback,
+                                          const llvm::Function &Parent,
+                                          const ExceptionFunction &EH) {
+  auto Context = sehEmulatedFrameContext(Parent, EH);
+  if (!Context)
+    return Context.takeError();
+  const auto Address =
+      sehConstantAddress(Argument, Parent.getParent()->getDataLayout());
+  if (!Address || Address->first->stripPointerCasts() != Context->Frame.Slot)
+    return patchError("native SEH callback is not passed its parent's "
+                      "original EstablisherFrame in function " +
+                      Parent.getName());
+  return checkSEHEmulatedFrameCallback(*Context, Address->second, Callback,
+                                       Parent);
+}
+
+/// The source filter that \p Operand, the filter a catchpad of \p Parent
+/// names for source row \p Region, runs behind an adapter native IR wrote
+/// (sehFilterAdapterName); null when \p Operand is no adapter.  The adapter
+/// has no source address and does nothing but recover the parent's escaped
+/// emulated frame from the frame the runtime passes it (`llvm.eh.recoverfp`,
+/// `llvm.localrecover` of the frame the parent's one `llvm.localescape`
+/// names) and return what the source filter returns for the exception
+/// pointers and the emulated frame, which checkSEHEmulatedFrameCallback must
+/// take.
+llvm::Expected<const llvm::Function *>
+sehFilterAdapterSource(const llvm::Value &Operand, const llvm::Function &Parent,
+                       const ExceptionFunction &EH, uint32_t Region,
+                       const llvm::FunctionType &FilterType) {
+  const auto *Adapter =
+      llvm::dyn_cast<llvm::Function>(Operand.stripPointerCasts());
+  if (!Adapter ||
+      Adapter->getName() != sehFilterAdapterName(EH.CodeRange.Begin, Region))
+    return nullptr;
+  const auto Altered = [&]() {
+    return patchError("native SEH filter adapter was altered in function " +
+                      Parent.getName());
+  };
+  auto Identity = rewrite_source::getOriginalVA(*Adapter);
+  if (!Identity) {
+    llvm::consumeError(Identity.takeError());
+    return Altered();
+  }
+  if (*Identity || !Adapter->hasLocalLinkage() ||
+      Adapter->getFunctionType() != &FilterType ||
+      Adapter->getCallingConv() != llvm::CallingConv::C)
+    return Altered();
+  const auto Adapted = matchSEHFilterAdapter(*Adapter, Parent);
+  if (!Adapted || Adapted->Call->getFunctionType() != &FilterType ||
+      Adapted->Call->getCallingConv() != llvm::CallingConv::C ||
+      !hasExactSourceFunctionIdentity(
+          *Adapter, *Adapted->Call->getCalledOperand(),
+          EH.SEH->Scopes[Region].FilterOrFinallyVA, FilterType))
+    return Altered();
+  auto Context = sehEmulatedFrameContext(Parent, EH);
+  if (!Context)
+    return Context.takeError();
+  // The parent escapes its emulated frame, and the adapter recovers that.
+  if (Adapted->Frame != Context->Frame.Slot)
+    return Altered();
+  if (auto Error = checkSEHEmulatedFrameCallback(*Context, Adapted->Offset,
+                                                 *Adapted->Filter, Parent))
+    return std::move(Error);
+  return Adapted->Filter;
 }
 
 /// With its emulated frame passed to a callback, a store \p F makes in
@@ -1457,7 +1544,16 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
           return patchError("native SEH catch funclet ABI was altered in "
                             "function " +
                             F.getName());
-        if (Scope.Kind == SEHScopeKind::CatchAll) {
+        auto Adapted =
+            Scope.Kind == SEHScopeKind::Filter
+                ? sehFilterAdapterSource(*Pad.getArgOperand(0), F, EH,
+                                         static_cast<uint32_t>(I), *FilterType)
+                : llvm::Expected<const llvm::Function *>(nullptr);
+        if (!Adapted)
+          return Adapted.takeError();
+        if (*Adapted) {
+          UsesEmulatedFrame = true;
+        } else if (Scope.Kind == SEHScopeKind::CatchAll) {
           if (!llvm::isa<llvm::ConstantPointerNull>(Pad.getArgOperand(0)))
             return patchError("native SEH catch-all filter was altered in "
                               "function " +
@@ -3865,8 +3961,35 @@ llvm::Expected<COFFExceptionDirectoryUpdate> prepareCOFFExceptionDirectory(
       else if (Scope.Kind == SEHScopeKind::CatchAll)
         ExpectedAction = 1;
       else {
-        const std::optional<uint32_t> FilterRVA =
-            ToRVA(Scope.FilterOrFinallyVA);
+        // A filter that reads its frame runs behind the adapter native IR
+        // wrote for its row, which the plan's gate took
+        // (sehFilterAdapterSource): the row names that adapter.
+        // The adapter has no source address and may stay private, so the
+        // compiler's receipt for its IR definition gives its address.
+        std::optional<uint32_t> FilterRVA = ToRVA(Scope.FilterOrFinallyVA);
+        const std::string AdapterName =
+            sehFilterAdapterName(SourceOriginal->second, Record.Token.Region);
+        if (const auto Adapter = llvm::find_if(
+                Compiled.SourceFunctionOwners,
+                [&](const llvm::mc_rewrite::RewriteSourceFunctionOwner &Owner) {
+                  return Owner.SourceFunction == AdapterName &&
+                         Owner.Kind ==
+                             llvm::mc_rewrite::RewriteSourceFunctionOwnerKind::
+                                 FunctionEntry;
+                });
+            Adapter != Compiled.SourceFunctionOwners.end()) {
+          FilterRVA = ToRVA(Adapter->OwnerVA);
+          auto AdapterOwner =
+              FilterRVA ? FindGeneratedSection(*FilterRVA, /*Size=*/1,
+                                               /*RequireXData=*/false,
+                                               "SEH filter adapter")
+                        : llvm::Expected<const CompiledSection *>(nullptr);
+          if (!AdapterOwner)
+            return AdapterOwner.takeError();
+          if (!*AdapterOwner || (*AdapterOwner)->Kind !=
+                                    llvm::mc_rewrite::RewriteSectionKind::Code)
+            return patchError("SEH filter adapter is not generated code");
+        }
         if (!FilterRVA)
           return patchError("source SEH filter exceeds PE RVA limits");
         ExpectedAction = encodeSEHCodeRVA(*FilterRVA);

@@ -52,7 +52,9 @@ architecture.
   (`sehCallbackUsesOriginalFrame`). Native output passes a termination
   handler that reads its frame the lifted parent's emulated frame, `frame`
   at `rsp_init - frame bytes`, and the gate takes it only as it rebuilds it
-  from the unwind codes.
+  from the unwind codes. The runtime calls a filter itself, with the
+  rewritten parent's frame, so a filter runs behind an adapter that recovers
+  the emulated frame from it (`llvm.eh.recoverfp`, `llvm.localrecover`).
 - The emulated frame is good for bytes, not as a frame identity: RtlUnwind,
   `_local_unwind` and longjmp compare an EstablisherFrame with real frames.
   A stack address the lifted parent saved in its frame is an emulated one

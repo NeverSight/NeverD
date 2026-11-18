@@ -120,6 +120,24 @@ Each entry happened. The fix is the habit after the colon.
   offset moved and run it: only a changed transcript proves the pad ran. The
   real gate refuses the moved offset, so patch the probe with an engine whose
   gate takes any offset (`seh/emu/mutprobe.sh` with the spike library).
+- Native IR is also printed as LLVM C (`llvmcOnlyFunction` in the
+  `LLVMCPointerAddresses` corpus tests, which compile and run the C): a new
+  native form needs a C spelling there, and tests that encode the old
+  contract (a filter passed `llvm.localaddress`) change with it. A function
+  LLVM C calls needs its component linked by the LLVM C library, or every
+  LLVM C test program fails to link.
+- An emitter that marks protected loads volatile must leave loads of mapped
+  globals alone: a volatile import-pointer load made LLVM C declare the
+  import slot as data.
+- A function the compiler adds with no source address (a filter adapter)
+  stays private: it is not in `CompiledImage::SymbolAddrs`. Find it among the
+  compiler's receipts for the definitions it compiled
+  (`CompiledImage::SourceFunctionOwners`, by IR name).
+- `0x140002fa0` of the fh3 no-gs /O2 xcpt4 build fails the sizing compile
+  ("invalid Windows EH semantic provenance") with or without the filter
+  adapter: its outer row covers only a `jmp` past the inner one. Bisect
+  with IR variants (adapter removed, escape removed) before blaming a new
+  output form.
 - An emulated-frame sweep with a gate that only checked offsets and bounds
   accepted `0x140001360`, whose inner `__finally` passes `_local_unwind` the
   RSP its parent saved in the frame; it ran as the original only because no

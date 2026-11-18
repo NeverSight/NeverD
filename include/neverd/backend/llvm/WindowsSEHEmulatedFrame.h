@@ -21,6 +21,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -72,13 +73,48 @@ struct SEHFrameAccess {
 std::optional<std::vector<SEHFrameAccess>>
 collectSEHCallbackFrameAccesses(const llvm::Function &Callback);
 
+/// The adapter native IR writes for the filter of row \p Region of the
+/// function at \p FunctionVA when the filter reads its frame: the runtime
+/// calls it with the rewritten parent's frame, and it recovers the emulated
+/// frame from there (`llvm.eh.recoverfp`, `llvm.localrecover`) and calls the
+/// source filter with it.  Output finds the adapter's address by this name
+/// among the compiler's receipts for the definitions it compiled.
+std::string sehFilterAdapterName(va_t FunctionVA, uint32_t Region);
+
+/// Whether \p Function is named as a filter adapter (sehFilterAdapterName).
+bool isSEHFilterAdapter(const llvm::Function &Function);
+
+/// Whether \p Module holds a filter adapter (sehFilterAdapterName): a
+/// function with no source address that only the section patch can place.
+bool hasSEHFilterAdapter(const llvm::Module &Module);
+
+/// What a filter adapter of \p Parent does: the function it calls with the
+/// exception pointers, and the byte of the alloca \p Parent escapes that it
+/// passes as the EstablisherFrame.
+struct SEHFilterAdapterCall {
+  const llvm::CallInst *Call = nullptr;
+  const llvm::Function *Filter = nullptr;
+  const llvm::AllocaInst *Frame = nullptr;
+  int64_t Offset = 0;
+};
+
+/// \p Adapter read as a filter adapter of \p Parent: one block that
+/// recovers \p Parent's frame from its second argument (`llvm.eh.recoverfp`),
+/// recovers an alloca \p Parent's one `llvm.localescape` in its entry block
+/// names (`llvm.localrecover`), computes an address at a fixed offset from it
+/// and returns what a direct call of a function with its first argument and
+/// that address returns, and does nothing else.  None for anything else.
+std::optional<SEHFilterAdapterCall>
+matchSEHFilterAdapter(const llvm::Function &Adapter,
+                      const llvm::Function &Parent);
+
 /// The first memory access in \p Protected, blocks of \p Frame's function
 /// that a scope guards, that could reach memory out of order with a fault
 /// there, which no plain load or store can raise to LLVM: one that is not
 /// volatile and is neither a store at a fixed offset inside a private slot of
 /// the function (an alloca only its own loads and stores name, which no
-/// callback can reach) nor a load at a fixed offset inside an alloca, which
-/// cannot fault.  Null when there is none.
+/// callback can reach) nor a load at a fixed offset inside an alloca or a
+/// global the image maps, which cannot fault.  Null when there is none.
 const llvm::Instruction *
 findSEHUnorderedAccess(const SEHEmulatedFrame &Frame,
                        llvm::ArrayRef<const llvm::BasicBlock *> Protected);

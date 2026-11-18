@@ -55,7 +55,8 @@ unoptimized.
 | --- | --- |
 | Source-side authentication of each replaced function's table | `lib/backend/codegen/COFF/COFFExceptionPatch.cpp` |
 | Output gate: generated tables, exact frame (`HasExactFrame`), callbacks reading the original frame (`sehCallbackUsesOriginalFrame`), refused provenance roles (`LocalUnwindHandlerCall`) | `COFFExceptionPatch.cpp`, `COFFNativeEHProvenance.h` |
-| Emulated frame: emission (`EmulatedFrameOffset`, `sehCallbackReadsFrame`, the frame mark and volatile protected code) | `lib/backend/llvm/eh/MedLLVMNativeSEH.cpp` |
+| Emulated frame: emission (`EmulatedFrameOffset`, `sehCallbackReadsFrame`, the frame mark, volatile protected code, the filter adapter `FilterAdapter`) | `lib/backend/llvm/eh/MedLLVMNativeSEH.cpp` |
+| Filter adapter: gate (`sehFilterAdapterSource`), row binding (receipt lookup in `prepareCOFFExceptionDirectory`), in-place hand-off (`hasSEHFilterAdapter`) | `COFFExceptionPatch.cpp`, `lib/backend/codegen/rewrite/InplaceRewriter.cpp` |
 | Emulated frame: gate (`checkSEHEmulatedFrameArgument`, `checkSEHEmulatedFrameOrdering`), shared walks (`findSEHEmulatedFrame`, `sehConstantAddress`, `collectSEHCallbackFrameAccesses`, `findSEHUnorderedAccess`) | `COFFExceptionPatch.cpp`, `lib/backend/llvm/eh/WindowsSEHEmulatedFrame.cpp` |
 | x64 fixed frame from unwind codes, shared by the lift's frame proof and the gate | `decodeX64UnwindFrame` in `lib/loader/COFF/eh/X64UnwindFrame.cpp` |
 | CFG and EH continuation tables; guard slot symbols (`findCOFFGuardRuntimeSlotVA`) | `prepareCOFFGuardTables` in `COFFExceptionPatch.cpp`; resolvers in `COFFPatch.cpp` (section mode) and `lib/backend/codegen/rewrite/InplaceRewriter.cpp` (in place) |

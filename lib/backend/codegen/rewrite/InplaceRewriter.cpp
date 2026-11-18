@@ -15,6 +15,7 @@
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
 #include "neverd/backend/codegen/COFF/COFFPatch.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -136,7 +137,10 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     }
     RequireGeneratedEHContinuations =
         !EHPlanOrErr->LanguageExceptionFunctionEntries.empty();
-    if (TargetArch == Arch::X86 && RequireGeneratedEHContinuations) {
+    // An x64 filter that reads its frame runs behind an adapter, which has no
+    // source address to replace; the section patch places it.
+    if ((TargetArch == Arch::X86 && RequireGeneratedEHContinuations) ||
+        hasSEHFilterAdapter(Mod)) {
       // Registration callbacks and their localrecover frame are one module
       // contract. Use its authenticated source VAs before name-only matching
       // or per-function probes can discard that identity or its helpers.

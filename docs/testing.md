@@ -20797,9 +20797,26 @@ the scope is volatile. With the callback reading a local, writing one or
 reading an argument home, `planCOFFExceptionPatch` takes the module before
 and after optimization; reading the return address, a pushed register, a
 caller's argument or below the frame, passing the frame to a call, passing a
-call what it reads there, and adding a variable to the frame are refused, as
+call what it reads there, and adding a variable to the frame are refused,
+while passing a call what the callback wrote there and reads back is taken, as
 are the pad's argument eight bytes off, the frame unmarked and the store
-made plain.
+made plain. With a frame register set after the first allocation and more
+allocated after it, the callback may read below the EstablisherFrame into
+that allocation but not below it.
+`COFFExceptionIR.NativeFrameReadingFilterRunsBehindAnAdapter` gives the same
+parent a filter that reads its frame: the catchpad names the adapter
+(`sehFilterAdapterName`), the parent escapes its marked frame, and
+`planCOFFExceptionPatch` takes the module before and after optimization. The
+adapter's frame eight bytes off, a call of another function, one more
+instruction, another escaped alloca and a filter that reads the return
+address are refused.
+`LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmcExceptContainsHandler`
+prints the native IR of the `/Od` `seh_probe` parent as LLVM C. Its filter
+reads its frame, so the `__except` calls the filter with the parent's frame
+object at the emulated frame's offset; clang's outlined filter recovers that
+object instead of a captured `llvm.localaddress`, and run under a `setjmp`
+model the filter finds the parent's homed argument through the frame it is
+passed.
 `WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
 x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that

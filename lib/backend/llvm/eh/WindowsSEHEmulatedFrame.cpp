@@ -9,6 +9,9 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
@@ -234,6 +237,94 @@ private:
 
 } // namespace
 
+namespace {
+constexpr llvm::StringLiteral kFilterAdapterPrefix = "neverd.seh.filter.";
+} // namespace
+
+std::string sehFilterAdapterName(va_t FunctionVA, uint32_t Region) {
+  return (kFilterAdapterPrefix + llvm::utohexstr(FunctionVA) + "." +
+          llvm::Twine(Region))
+      .str();
+}
+
+bool isSEHFilterAdapter(const llvm::Function &Function) {
+  return Function.getName().starts_with(kFilterAdapterPrefix);
+}
+
+bool hasSEHFilterAdapter(const llvm::Module &Module) {
+  return llvm::any_of(Module.functions(), [](const llvm::Function &Function) {
+    return isSEHFilterAdapter(Function);
+  });
+}
+
+std::optional<SEHFilterAdapterCall>
+matchSEHFilterAdapter(const llvm::Function &Adapter,
+                      const llvm::Function &Parent) {
+  if (Adapter.isDeclaration() || Adapter.size() != 1 || Adapter.arg_size() != 2)
+    return std::nullopt;
+  const auto IsIntrinsic = [](const llvm::Instruction *Instruction,
+                              llvm::Intrinsic::ID ID) {
+    const auto *Call = llvm::dyn_cast_or_null<llvm::CallInst>(Instruction);
+    const llvm::Function *Callee = Call ? Call->getCalledFunction() : nullptr;
+    return Callee && Callee->getIntrinsicID() == ID &&
+           !Call->getNumOperandBundles();
+  };
+  const llvm::BasicBlock &Body = Adapter.getEntryBlock();
+  const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(Body.getTerminator());
+  const auto *Call =
+      Return ? llvm::dyn_cast_or_null<llvm::CallInst>(Return->getReturnValue())
+             : nullptr;
+  const auto *Filter = Call ? llvm::dyn_cast<llvm::Function>(
+                                  Call->getCalledOperand()->stripPointerCasts())
+                            : nullptr;
+  if (!Filter || Call->getParent() != &Body || Call->arg_size() != 2 ||
+      Call->getNumOperandBundles() ||
+      Call->getArgOperand(0) != Adapter.getArg(0))
+    return std::nullopt;
+  const auto Address = sehConstantAddress(*Call->getArgOperand(1),
+                                          Parent.getParent()->getDataLayout());
+  const auto *Recovered =
+      Address ? llvm::dyn_cast<llvm::CallInst>(Address->first) : nullptr;
+  if (!IsIntrinsic(Recovered, llvm::Intrinsic::localrecover) ||
+      Recovered->getParent() != &Body ||
+      Recovered->getArgOperand(0)->stripPointerCasts() != &Parent)
+    return std::nullopt;
+  const auto *ParentFrame =
+      llvm::dyn_cast<llvm::CallInst>(Recovered->getArgOperand(1));
+  const auto *Index =
+      llvm::dyn_cast<llvm::ConstantInt>(Recovered->getArgOperand(2));
+  if (!IsIntrinsic(ParentFrame, llvm::Intrinsic::eh_recoverfp) ||
+      ParentFrame->getParent() != &Body || !Index ||
+      ParentFrame->getArgOperand(0)->stripPointerCasts() != &Parent ||
+      ParentFrame->getArgOperand(1) != Adapter.getArg(1))
+    return std::nullopt;
+  // Nothing else: the recovery, the address computed from it, the call and
+  // the return.
+  for (const llvm::Instruction &Instruction : Body)
+    if (&Instruction != ParentFrame && &Instruction != Recovered &&
+        &Instruction != Call && &Instruction != Return &&
+        !(llvm::isa<llvm::GetElementPtrInst, llvm::BitCastInst>(Instruction) &&
+          Instruction.hasOneUse()))
+      return std::nullopt;
+  const llvm::CallInst *Escape = nullptr;
+  for (const llvm::BasicBlock &Block : Parent)
+    for (const llvm::Instruction &Instruction : Block)
+      if (IsIntrinsic(&Instruction, llvm::Intrinsic::localescape)) {
+        if (Escape)
+          return std::nullopt;
+        Escape = llvm::cast<llvm::CallInst>(&Instruction);
+      }
+  if (!Escape || Escape->getParent() != &Parent.getEntryBlock() ||
+      Index->getZExtValue() >= Escape->arg_size())
+    return std::nullopt;
+  const auto *Frame = llvm::dyn_cast<llvm::AllocaInst>(
+      Escape->getArgOperand(static_cast<unsigned>(Index->getZExtValue()))
+          ->stripPointerCasts());
+  if (!Frame)
+    return std::nullopt;
+  return SEHFilterAdapterCall{Call, Filter, Frame, Address->second};
+}
+
 llvm::Expected<std::optional<SEHEmulatedFrame>>
 findSEHEmulatedFrame(const llvm::Function &Parent, va_t FunctionVA) {
   const auto Reject = [&]() {
@@ -427,6 +518,56 @@ collectSEHCallbackFrameAccesses(const llvm::Function &Callback) {
   // longjmp's buffer), so nothing derived from it reaches a call.  It may
   // reach memory, branches, the return and intrinsics that touch no memory.
   {
+    // A read of a slot the callback itself wrote earlier in its block, with
+    // nothing between that could write the frame, reads what it wrote back,
+    // not what the parent kept there: an /Od filter keeps its exception
+    // pointers in its parent's frame and passes them on.
+    std::map<const llvm::Instruction *, const AddressWalk::Access *> AccessOf;
+    for (const AddressWalk::Access &Access : Walk.Accesses)
+      AccessOf.emplace(Access.Instruction, &Access);
+    std::map<const llvm::Value *, std::vector<const llvm::Instruction *>>
+        ForwardedBy;
+    std::set<const llvm::Instruction *> Forwarded;
+    for (const AddressWalk::Access &Read : Walk.Accesses) {
+      if (Read.Write)
+        continue;
+      const llvm::Instruction *Load = Read.Instruction;
+      for (auto Prior = std::next(Load->getReverseIterator());
+           Prior != Load->getParent()->rend(); ++Prior) {
+        if (const auto It = AccessOf.find(&*Prior); It != AccessOf.end()) {
+          const AddressWalk::Access &Earlier = *It->second;
+          const int64_t End = Read.Offset + static_cast<int64_t>(Read.Size);
+          const int64_t EarlierEnd =
+              Earlier.Offset + static_cast<int64_t>(Earlier.Size);
+          if (!Earlier.Write || Earlier.Offset >= End ||
+              Read.Offset >= EarlierEnd)
+            continue;
+          if (Earlier.Offset == Read.Offset && Earlier.Size == Read.Size) {
+            Forwarded.insert(Load);
+            ForwardedBy[llvm::cast<llvm::StoreInst>(Earlier.Instruction)
+                            ->getValueOperand()]
+                .push_back(Load);
+          }
+          break;
+        }
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&*Prior)) {
+          const auto Address =
+              sehConstantAddress(*Store->getPointerOperand(), Layout);
+          const auto *Slot =
+              Address ? llvm::dyn_cast<llvm::AllocaInst>(Address->first)
+                      : nullptr;
+          if (Slot && Slot->getFunction() == &Callback)
+            continue;
+          break;
+        }
+        if (const auto *Intrinsic =
+                llvm::dyn_cast<llvm::IntrinsicInst>(&*Prior);
+            Intrinsic && Intrinsic->doesNotAccessMemory())
+          continue;
+        if (Prior->mayWriteToMemory())
+          break;
+      }
+    }
     std::set<const llvm::Value *> Read;
     std::vector<const llvm::Value *> Pending;
     std::set<const llvm::AllocaInst *> Spread;
@@ -435,11 +576,14 @@ collectSEHCallbackFrameAccesses(const llvm::Function &Callback) {
         Pending.push_back(Value);
     };
     for (const AddressWalk::Access &Access : Walk.Accesses)
-      if (!Access.Write)
+      if (!Access.Write && !Forwarded.count(Access.Instruction))
         Note(Access.Instruction);
     while (!Pending.empty()) {
       const llvm::Value *Value = Pending.back();
       Pending.pop_back();
+      if (const auto It = ForwardedBy.find(Value); It != ForwardedBy.end())
+        for (const llvm::Instruction *Load : It->second)
+          Note(Load);
       for (const llvm::Use &Use : Value->uses()) {
         if (!Remaining)
           return std::nullopt;
@@ -498,18 +642,28 @@ findSEHUnorderedAccess(const SEHEmulatedFrame &Frame,
   if (!Frame.Slot)
     return nullptr;
   const llvm::DataLayout &Layout = Frame.Slot->getModule()->getDataLayout();
-  // Bytes [Offset, Offset + Size) inside one alloca; with \p Private, an
-  // alloca no callback can reach.
+  // Bytes [Offset, Offset + Size) inside one alloca, or for a load inside
+  // a global the image maps; with \p Private, an alloca no callback can
+  // reach.
   const auto Inside = [&](const llvm::Value *Pointer, uint64_t Size,
                           bool Private) {
     const auto Address = sehConstantAddress(*Pointer, Layout);
-    const auto *Slot =
-        Address ? llvm::dyn_cast<llvm::AllocaInst>(Address->first) : nullptr;
-    if (!Slot || (Private && (Slot == Frame.Slot || !isHome(*Slot))))
+    if (!Address)
       return false;
-    const auto Extent = Slot->getAllocationSize(Layout);
-    return Extent && !Extent->isScalable() && Address->second >= 0 &&
-           uint64_t(Address->second) + Size <= Extent->getFixedValue();
+    std::optional<uint64_t> Extent;
+    if (const auto *Slot = llvm::dyn_cast<llvm::AllocaInst>(Address->first)) {
+      if (Private && (Slot == Frame.Slot || !isHome(*Slot)))
+        return false;
+      const auto Bytes = Slot->getAllocationSize(Layout);
+      if (Bytes && !Bytes->isScalable())
+        Extent = Bytes->getFixedValue();
+    } else if (const auto *Global =
+                   llvm::dyn_cast<llvm::GlobalVariable>(Address->first);
+               Global && !Private && Global->getValueType()->isSized()) {
+      Extent = Layout.getTypeAllocSize(Global->getValueType()).getFixedValue();
+    }
+    return Extent && Address->second >= 0 &&
+           uint64_t(Address->second) + Size <= *Extent;
   };
   for (const llvm::BasicBlock *Block : Protected)
     for (const llvm::Instruction &Instruction : *Block) {

@@ -42,6 +42,7 @@
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/libc/LibCNames.h"
@@ -10923,8 +10924,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                              ? llvm::dyn_cast<llvm::Function>(
                                    Pad->getArgOperand(0)->stripPointerCasts())
                              : nullptr;
+    // A filter adapter passes the parent's emulated frame instead.
     return Filter && !Filter->hasFnAttribute(LLVMSourceSEHFilter) &&
-           Filter->arg_size() == 2;
+           !isSEHFilterAdapter(*Filter) && Filter->arg_size() == 2;
   };
   if (SEHParentFrameName.empty() && (!EHWraps.empty() || BlockScopes))
     for (const llvm::BasicBlock &BB : Fn)
