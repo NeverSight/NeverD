@@ -765,8 +765,9 @@ TEST(LibCPrototype, WindowsCRTHandlerAndLocaleKeepPointerContracts) {
   EXPECT_EQ(libcResult(Handler->Name, LibCVariant::Windows),
             LibCResult::Pointer);
   EXPECT_TRUE(isPointerType(Handler->Params[0]));
-  EXPECT_EQ(libcArityForSymbol(Handler->Name, LibCVariant::Windows)->IntArgs,
-            1);
+  // The format-qualified prototype owns this callback contract. It must
+  // not enter the portable registry after stripping its leading underscore.
+  EXPECT_FALSE(libcArityForSymbol(Handler->Name, LibCVariant::GNU));
   EXPECT_EQ(libcPrototype(Handler->Name, BinaryFormat::ELF), nullptr);
   EXPECT_EQ(libcPrototype(Handler->Name, BinaryFormat::MachO), nullptr);
   const auto *Print =

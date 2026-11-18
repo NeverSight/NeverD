@@ -4723,8 +4723,12 @@ int main(void) {
 }
 )c";
     for (llvm::StringRef Level : {"-O0", "-O2"})
-      compileAndRun(withRuntimeMocks(Prelude + Source + Harness), Level, {},
-                    true);
+      // Execute the actual emitted C. Its scalar widths fit the host even
+      // when the general wide-integer fixture's 129-bit probe does not.
+      source_call_execution_test::compileAndRun(
+          withRuntimeMocks(Prelude + Source + Harness),
+          {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
+           "-Werror=uninitialized"});
   }
 }
 
