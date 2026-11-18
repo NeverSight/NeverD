@@ -25,6 +25,7 @@
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -898,10 +899,12 @@ TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
           Convert.setBinaryImage(&*Image);
           Convert.setCallSiteFloatingArguments(&Calls);
           auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+          recoverCallAbi(Med, Target, {{0x10200, "callee"}}, &*Image);
           inferMedTypes(Med, Target);
           llvm::LLVMContext Context;
           MedLLVMEmitter Emitter;
-          const auto Module = Emitter.emit({Med}, Context, "tail", Target);
+          const auto Module =
+              Emitter.emit({Med}, Context, "tail", Target, {}, &*Image);
           ASSERT_NE(Module, nullptr);
           ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
           Pipeline::optimizeModule(*Module);
