@@ -979,7 +979,12 @@ void checkFloatingRecordResult(bool IntegerCarrier) {
           Assign.Dst = Local;
           Assign.Val = Call;
           Function.Body.push_back(Assign);
-          Return.RetVal = Local;
+          // Read every field so forwarding cannot erase the local carrier.
+          std::vector<ExprPtr> Fields;
+          for (unsigned I = 0; I != Count; ++I)
+            Fields.push_back(
+                HighExpr::makeRecordField(Local, I * Bytes, Bytes));
+          Return.RetVal = HighExpr::makeRecord(Call->Type, std::move(Fields));
         }
         Function.Body.push_back(Return);
         CEmitterOptions Options;
