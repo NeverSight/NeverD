@@ -12,7 +12,7 @@
 
 namespace neverd::mips {
 
-/// The descriptor's logical result occupies f0, v0 or v0/v1. Components
+/// The descriptor's logical result occupies f0, f0/f2, v0 or v0/v1. Components
 /// follow object byte order. The first word in memory is v0 in either byte
 /// order. TargetRegInfo supplies its significance when building IR.
 inline void placeScalarResult(const TargetRegInfo &Registers,

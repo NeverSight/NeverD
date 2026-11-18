@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -95,6 +96,84 @@ constexpr PureCase PureCases[] = {
 #include "MIPSDSPExpandFixtures.def"
 };
 class MIPSDSPRegisterWidth : public ::testing::TestWithParam<Arch> {};
+TEST(MIPSDSP64, PhysicalDecodeTracksProfileChangesAndOutputModes) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Enabled = dspImage(Target);
+    auto Disabled = Enabled;
+    Disabled.MIPS->HasDSP = false;
+    const auto Packed = encodeDSP({0x7c8510f4}, Target); // dpau.h.obl ac2,a0,a1
+    const auto Ordinary = encodeDSP({0x24020011}, Target); // addiu v0,zero,17
+    const auto Shift = encodeDSP({0x7e0016bc}, Target);    // dshilo ac2,-64
+    const auto ShiftTemplate = encodeDSP({0x7c0016b8}, Target); // shilo ac2,0
+    Decoder D;
+    ASSERT_TRUE(D.init(Enabled));
+    for (bool Detail : {false, true})
+      for (bool Text : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(Target) << ':' << Detail << ':' << Text);
+        D.setDetail(Detail);
+        D.setText(Text);
+        for (unsigned Route = 0; Route != 3; ++Route) {
+          SCOPED_TRACE(Route);
+          const auto Decode = [&](llvm::ArrayRef<uint8_t> Code,
+                                  DecodedInsn &Insn) {
+            if (Route == 0)
+              return D.decodeOne(Code.data(), Code.size(), 0x10000, Insn);
+            if (Route == 1)
+              return D.decodeOneForLift(Code.data(), Code.size(), 0x10000,
+                                        Insn);
+            return D.decodeOneLight(Code.data(), Code.size(), 0x10000, Insn);
+          };
+          ASSERT_TRUE(D.selectMode(Enabled, 0x10000));
+          DecodedInsn Insn;
+          for (size_t Size = 0; Size < Packed.size(); ++Size)
+            EXPECT_EQ(Decode(llvm::ArrayRef(Packed).take_front(Size), Insn), 0);
+          ASSERT_EQ(Decode(Packed, Insn), 4);
+          EXPECT_EQ(Insn.Id, MIPS_INS_ENDING + 32 + 0xf4);
+          ASSERT_TRUE(Insn.Raw);
+          EXPECT_TRUE(
+              std::equal(Packed.begin(), Packed.end(), Insn.Raw->bytes));
+          if (Text)
+            EXPECT_STREQ(Insn.Raw->mnemonic, "dpau.h.obl");
+          if (Detail && Text) {
+            ASSERT_EQ(Insn.Raw->detail->mips.op_count, 3);
+            EXPECT_EQ(Insn.Raw->detail->mips.operands[0].reg, MIPS_REG_AC2);
+            EXPECT_EQ(Insn.Raw->detail->mips.operands[1].reg, MIPS_REG_A0);
+            EXPECT_EQ(Insn.Raw->detail->mips.operands[2].reg, MIPS_REG_A1);
+          }
+          ASSERT_EQ(Decode(ShiftTemplate, Insn), 4);
+          // The signed seven-bit extension only changes an operand when the
+          // decoder actually produced operands. With text disabled, it must
+          // not write before the empty operand array into common detail.
+          std::optional<cs_detail> TemplateDetail;
+          if (Detail && !Text)
+            TemplateDetail = *Insn.Raw->detail;
+          ASSERT_EQ(Decode(Shift, Insn), 4);
+          EXPECT_EQ(Insn.Id, MIPS_INS_ENDING + 32 + 0x6bc);
+          if (Text)
+            EXPECT_STREQ(Insn.Raw->mnemonic, "dshilo");
+          if (Detail && Text) {
+            ASSERT_EQ(Insn.Raw->detail->mips.op_count, 2);
+            EXPECT_EQ(Insn.Raw->detail->mips.operands[0].reg, MIPS_REG_AC2);
+            EXPECT_EQ(Insn.Raw->detail->mips.operands[1].imm, -64);
+          }
+          if (TemplateDetail)
+            EXPECT_EQ(std::memcmp(&*TemplateDetail, Insn.Raw->detail,
+                                  sizeof(cs_detail)),
+                      0);
+          ASSERT_EQ(Decode(Ordinary, Insn), 4);
+          EXPECT_EQ(Insn.Id, MIPS_INS_ADDIU);
+          ASSERT_TRUE(D.selectMode(Disabled, 0x10000));
+          EXPECT_EQ(Decode(Packed, Insn), 0);
+          ASSERT_EQ(Decode(Ordinary, Insn), 4);
+          ASSERT_TRUE(D.selectMode(Enabled, 0x10000));
+          ASSERT_EQ(Decode(Packed, Insn), 4);
+          EXPECT_EQ(Insn.Id, MIPS_INS_ENDING + 32 + 0xf4);
+        }
+      }
+  }
+}
+
 TEST(MIPSDSP64, PackedGPRsMatchOriginalInstructionsAndFullControl) {
   struct Case {
     const char *Mnemonic;

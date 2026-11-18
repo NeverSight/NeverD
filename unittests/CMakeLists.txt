@@ -63,6 +63,11 @@ add_neverd_unittest(NeverDTestProcessTests
   TestProcessTests.cpp
 )
 
+add_neverd_unittest(NeverDLLVMTargetInitializationTests
+  LLVMTargetInitializationTests.cpp
+  LINK_COMPONENTS Support
+)
+
 if(TARGET NeverDProjectDatabase)
   add_neverd_unittest(NeverDProjectDatabaseTests
     ProjectDatabaseTests.cpp

@@ -552,8 +552,8 @@ compressed floating results remain unqualified.
 Type declarations now retain `float _Complex` and `double _Complex` through
 C parsing/rendering, DWARF import and source prototype conversion. They keep
 their complex passing class rather than becoming a same-sized integer or
-ordinary two-field record. Fixed o32 calls with scalar parameters can return
-these two-component complex values. The source ABI uses f0/f2 and preserves
+ordinary two-field record. Fixed o32, n32 and n64 calls with scalar parameters
+can return these two-component complex values. The source ABI uses f0/f2 and preserves
 the MIPS16 v0/v1 and a0/a1 word aliases in target byte order. A component that
 already occupies its full ABI register is not zero-extended into the same
 width. HighC and LLVMC construct and extract components as raw floating values,
@@ -574,9 +574,30 @@ FR=0/1 and classic/MIPS16 callers. The original uses the unmodified GNU
 runtime; rebuilt freestanding programs also link the tested guest `memcpy`
 required by compiler-generated aggregate copies. No emulator-side memory
 hook replaces that code. This qualifies complex results with scalar parameters,
-not complex parameters, variadic complex calls, n32/n64 complex ABI or general
+not complex parameters, variadic complex calls or general
 indirect runtime adapters. Extended complex types remain opaque when DWARF
 describes them and are refused as source declarations.
+
+The n32/n64 complex-result checks have their own independent compiler
+fixtures in `unittests/lift/mips/n32-n64-complex-roundtrip.py`. They bind
+classic MIPS64r2 hard-float declarations with scalar parameters and compare
+both C routes with separately compiled GCC/Clang objects, including direct
+and indirect calls with an explicit call-site ABI. A callback parameter's type
+alone does not establish the contract of an arbitrary indirect instruction.
+n32 retains four-byte pointers and eight-byte argument
+positions; the result's real and imaginary components occupy f0 and f2 in
+both byte orders. This does not qualify compressed n32/n64 complex runtime
+adapters, complex parameters, variadic complex calls or general record ABIs.
+
+The return-link proof permits saved FP/SP values only in stack storage that
+remains private at every call. The boundary includes each callee's entire
+outgoing argument area, including unused bytes of a partial argument slot.
+Pointer spills need a bounded argument extent; an unknown or open variadic
+call's minimum ABI area does not establish that bound. External stores,
+passed or reloaded frame addresses, an unknown call SP, and a second call
+that exposes an earlier spill remain unproved. Logical OR/XOR
+with architectural zero retains its full-width copy identity before this
+proof; word ADDU still has its distinct truncation and extension semantics.
 
 Two additional complete-unit matrices rebuild the HighC call closure and LLVMC
 image, linking only the resulting translation unit and the original runtime.
@@ -584,14 +605,18 @@ Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
 orders, FR modes, compilers and observations. The unit and isolated-function
 receipts identify their different tested commits explicitly.
 
-Numeric microMIPS code-pointer reconstruction is explicitly refused. The tested
-Clang 22 compiler folds a microMIPS function pointer's low bit to zero in some
-integer expressions and static initializers; a function mode attribute does not
-establish that contract. HighC and LLVM share this qualification boundary when
-materializing a code identity. Unknown-mode import values, including whole or
-partial GOT reads, are also unqualified. Direct control identities, serialized
-callables and code-byte/data addresses are separate roles. These limits require
-a subsequent toolchain/source-contract increment, not merely another opcode.
+Numeric microMIPS and MIPS16 code identities are admitted for defined r2/o32
+targets with explicit ELF mode evidence. Both source backends share the same
+boundary; unknown-mode imports, including whole or partial GOT reads, and
+n32/n64 compressed numerical projections remain refused. Direct control
+identities, serialized callables and code-byte/data addresses retain distinct
+roles. The LLVM r7 SDK uses the fork's `Fi8` data layout, so stronger function
+code alignment cannot clear the callable ISA tag during LLVM optimization.
+Recompiling numeric observations requires NeverSight Clang with the qualified
+[MIPS function-pointer layout fix](https://github.com/NeverSight/llvm-project/commit/df115daf54a117501223f3a6a88bfcd9bf4fa5a8):
+ordinary Clang 22 can fold the low bit to zero despite a mode attribute.
+The runtime matrix relocates rebuilt callees, then checks symbol-relative
+integer values, masks, offsets, equality and actual indirect calls.
 
 The microMIPS operation and slot rules were checked against
 [microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
@@ -716,7 +741,8 @@ the captured-entry-RA proof shared with microMIPS. A call may preserve the entry
 link in a callee-saved GPR and restore it before return; a caller-saved register,
 an overwritten save or an unproved stack restore across a call is refused.
 Direct calls also require image evidence for the destination mode. Numeric
-compressed-code pointers remain unqualified. Source tests use Clang assembly
+r2/o32 code identities use the toolchain contract described above. Source tests
+use Clang assembly
 output plus GNU MIPS as/ld, with adverse `-mmicromips` compiler defaults, and
 verify ELF flags, symbol tags, memory, saved registers and actual callee entry.
 The GNU assembler's [`.insn` directive](https://sourceware.org/binutils/docs-2.29/as/MIPS-insn.html)
@@ -1568,6 +1594,11 @@ additional evidence. The register assignments follow the
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
+Saving the incoming frame pointer or another frame address does not expose
+the frame when every byte of that spill remains private at every call.
+The shared call-stack proof computes that intersection using complete outgoing
+argument slots. An unknown call SP, an external store or a frame-derived call
+argument cannot obtain this exception.
 Byte provenance ignores unread upper FPR bytes; stack arguments require their
 own reaching-store proof. A validated alignment guard preserves computed stack
 addresses and reaching stores; malformed guards and opaque effects invalidate
@@ -1575,7 +1606,8 @@ that evidence. This also qualifies the aligned pre-R6 floating stores used for
 outgoing overflow and variadic arguments.
 In n32, an eight-byte saved link can survive a declared call beside a four-byte
 pointer spill, including word-sized or doubleword-sized stack adjustments.
-Unknown callees and writes overlapping that link slot still fail qualification.
+Unknown call-stack state and writes overlapping that link slot still fail
+qualification.
 Function-scoped instruction mode is preserved, including physical microMIPS FP
 assembly. LLVMC copies floating views of integer storage as object bytes;
 ordinary C assignment would change these bit patterns numerically.

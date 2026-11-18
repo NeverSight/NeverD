@@ -24,8 +24,8 @@ std::optional<SourceParameterPlacement> source_placement::placeMIPS(
     const TargetRegInfo &TRI, BinaryFormat F, const TypeRef &ReturnType,
     llvm::ArrayRef<TypeRef> ParamTypes, std::optional<unsigned> FixedCount,
     InstructionMode EntryMode) {
-  const bool ComplexResult = !isMIPS64(TRI.TheArch) && !FixedCount &&
-                             sourceComplexComponentBytes(ReturnType);
+  const bool ComplexResult =
+      !FixedCount && sourceComplexComponentBytes(ReturnType);
   if (F != BinaryFormat::ELF || !ReturnType ||
       (!ComplexResult && ReturnType->Kind != NdTypeKind::Void &&
        ((!isIntegerScalar(ReturnType) && !isFloatingScalar(ReturnType)) ||

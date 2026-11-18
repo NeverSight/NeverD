@@ -28,6 +28,7 @@ set(HAVE_ZLIB 1)
 #                            and use it via find_package (no local LLVM compile).
 #                            Switch to this once the fork is stable.
 option(NEVERD_LLVM_PREBUILT "Use the CI/CD prebuilt NeverD LLVM release instead of building the fork locally" OFF)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMTargets.cmake)
 
 if(NEVERD_LLVM_PREBUILT)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/NeverDLLVMPrebuilt.cmake)
@@ -37,9 +38,7 @@ if(NEVERD_LLVM_PREBUILT)
     llvm_map_components_to_libnames(LLVM_LIBS
         core support demangle irreader bitwriter bitreader linker
         analysis passes target
-        x86codegen x86asmparser x86desc x86info
-        armcodegen armasmparser armdesc arminfo
-        aarch64codegen aarch64asmparser aarch64desc aarch64info
+        ${NEVERD_LLVM_TARGET_COMPONENTS}
         debuginfodwarf debuginfopdb debuginfocodeview object
     )
     separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
@@ -47,7 +46,7 @@ if(NEVERD_LLVM_PREBUILT)
 else()
     message(STATUS "Building LLVM fork locally from third_party/llvm-project (integrated build)")
     # X86 = i386 + x86_64; ARM = 32-bit ARM (separate from AArch64 arm64)
-    set(LLVM_TARGETS_TO_BUILD "X86;ARM;AArch64" CACHE STRING "" FORCE)
+    set(LLVM_TARGETS_TO_BUILD "${NEVERD_LLVM_CODEGEN_TARGETS}" CACHE STRING "" FORCE)
     set(LLVM_ENABLE_PROJECTS  ""            CACHE STRING "" FORCE)
     set(LLVM_BUILD_TOOLS       OFF CACHE BOOL "" FORCE)
     set(LLVM_BUILD_UTILS       OFF CACHE BOOL "" FORCE)
@@ -77,9 +76,7 @@ else()
         LLVMCore LLVMSupport LLVMDemangle LLVMIRReader LLVMBitWriter
         LLVMBitReader LLVMLinker
         LLVMAnalysis LLVMPasses LLVMTarget
-        LLVMX86CodeGen LLVMX86AsmParser LLVMX86Desc LLVMX86Info
-        LLVMARMCodeGen LLVMARMAsmParser LLVMARMDesc LLVMARMInfo
-        LLVMAArch64CodeGen LLVMAArch64AsmParser LLVMAArch64Desc LLVMAArch64Info
+        ${NEVERD_LLVM_TARGET_LIBRARIES}
         LLVMDebugInfoDWARF LLVMDebugInfoPDB LLVMDebugInfoCodeView LLVMObject
     )
     set(LLVM_INCLUDE_DIRS

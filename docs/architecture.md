@@ -1576,12 +1576,20 @@ reconstruction; x1 cannot bypass authenticated-ABI requirements. All use
 the AArch64 decoder.
 
 `AArch64DecodeContract` separates raw occurrence identity from operand detail.
+The AArch64 lift-decode entry owns native attempt setup and its full-decode
+fallback; the shared lift-decode entry dispatches other architectures directly
+to their ordinary decoder.
 The decoder records the original word, producer identity and buffer generation;
 classification-only results cannot reuse old operands. Native fast decoding
 can supply complete detail with text disabled, while the Capstone fallback
 cannot. Every decode attempt, reset and successful reinitialization expires
 borrowed records, including copies at the same PC and word. An owned snapshot
 must copy both the instruction and its detail and retain the occurrence fields.
+Register-access metadata has separate availability: the native lift path fills
+operand values but leaves Capstone's implicit register counts and access flags
+unpopulated. `describeNativeOperands` obtains a full decode only when those
+register facts are requested. That query uses an independent decoder and keeps
+the original borrowed or owned occurrence intact.
 Lifting and operand queries share that admission contract. Operand queries
 reject a different requested architecture before accessing the record. Raw
 classification remains available without detail; direct BL targets use the shared encoding
@@ -14498,6 +14506,13 @@ records its occurrences there.
 
 ## Cross-architecture translation contract
 
+`support/LLVMCodegenTargets.def` owns the LLVM backends NeverD links for
+code generation. CMake derives both integrated-build components and prebuilt
+SDK libraries from this table. `initializeLLVMCodegenTargets()` registers
+exactly those backends once for `Codegen` and `TranslationTargetMachine`.
+An SDK may include additional targets; its inventory neither expands NeverD's
+supported host architectures nor introduces references to unlinked backends.
+
 `include/neverd/translate` defines a contract layer, not an
 execution backend. `GuestState` models architecture-neutral, machine-visible
 state for `x86_32`, `x86_64`, `AArch64`, and `ARM32`. Its canonical version-1
@@ -17359,6 +17374,15 @@ and shifts; `MIPSLiftDSPAdditional` shares INSV/DINSV field semantics. Invalid
 fields produce fresh unknown values in LowIR. LLVM and C retain a source-domain
 guard when those values are observed. HighC helper identity includes the result
 width, so a function can use both extraction widths without truncating either.
+
+Classic DSP64 physical decoding uses the same validated `MIPSDSP64Forms.def`
+selector before Capstone's ordinary decoder. These legacy forms have no native
+Capstone entry; the adapter decodes their operand template once. The profile
+guard is recomputed when reusing a decoder with DSP enabled or disabled.
+Other words still follow the ordinary physical decode and fallback path.
+MIPS operand adaptation requires both text and detail, matching Capstone's
+render-time operand construction. Classification-only signed shift decoding
+keeps its empty operand array and does not apply an immediate fixup to it.
 
 The qualified MIPS16e2 system/atomic slice shares scalar shape admission but
 retains separate effectful IDs. `MIPSSystemContext` authenticates a system step;

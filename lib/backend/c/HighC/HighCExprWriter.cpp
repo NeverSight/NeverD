@@ -4357,6 +4357,9 @@ void HighCWriter::collectCtorSourceNames(const HighFunc &Func) {
 TypeRef HighCWriter::knownCallReturnType(const HighExpr &E) const {
   if (E.Kind != ExprKind::Call || E.IntrinsicId != Intrinsic::None)
     return {};
+  if (E.SourceCallHint &&
+      E.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst)
+    return callResultType(E);
   const std::string Name = callIdentifier(E);
   if (const MsvcCallee *Msvc = msvcCallee(Name, Opts.Format))
     return msvcSyntheticReturn(Msvc->ReturnKind);

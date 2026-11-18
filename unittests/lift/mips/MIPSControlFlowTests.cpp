@@ -200,7 +200,7 @@ TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
     const bool Wide = isMIPS64(Target);
-    for (unsigned Variant = 0; Variant != 9; ++Variant) {
+    for (unsigned Variant = 0; Variant != 10; ++Variant) {
       SCOPED_TRACE(static_cast<unsigned>(Target));
       SCOPED_TRACE(Variant);
       // Load a changing external pointer. There is no fixed callee signature.
@@ -235,6 +235,9 @@ TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
                      Wide ? 0xffbd0000u : 0xafbd0000u); // Escaping stack arg.
       if (Variant == 8)
         Words[3] = 0x03a0c825; // The dynamic target itself exposes SP.
+      if (Variant == 9)
+        // Beyond the ABI minimum still may be an unknown callee's argument.
+        Words.insert(Words.begin() + 4, Wide ? 0xffbd0010u : 0xafbd0010u);
       auto Image = image(Words, Target);
       Image.MIPS.emplace();
       Image.MIPS->HasDSP = true;
@@ -342,6 +345,8 @@ TEST_P(MIPSControl, PhysicalDecodeAndOwnedExecutionUnitsRemainDistinct) {
   DecodedInsn Other;
   ASSERT_EQ(Decode.decodeOneForLift(Bytes.data() + 8, 4, 0x1008, Other), 4);
   std::vector<LowOp> Ops;
+  EXPECT_THROW(Decode.liftToLow(Unit.Head, Ops), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
   auto Member = Decode.liftUnitToLow(Unit, Ops);
   ASSERT_TRUE(Member);
   BinaryImage Image;

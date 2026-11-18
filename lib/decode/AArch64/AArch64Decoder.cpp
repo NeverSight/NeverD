@@ -41,8 +41,8 @@ bool Decoder::advanceAArch64DecodeGeneration() {
 }
 
 void Decoder::recordAArch64Decode(const uint8_t *Bytes, size_t Len,
-                                  DecodedInsn &Out,
-                                  bool HasOperandDetail) const {
+                                  DecodedInsn &Out, bool HasOperandDetail,
+                                  bool HasRegisterAccess) const {
   using namespace aarch64_sve;
   Out.AArch64Prefix.reset();
   Out.AArch64Occurrence.reset();
@@ -50,13 +50,14 @@ void Decoder::recordAArch64Decode(const uint8_t *Bytes, size_t Len,
   // Native decoding, however, supplies complete operands even without text.
   if (!Out.Raw || Out.Size != sizeof(uint32_t) || Len < sizeof(uint32_t))
     return;
-  Out.AArch64Occurrence =
-      AArch64DecodeOccurrence{Out.Raw,
-                              Out.Raw->detail,
-                              AArch64DecodeIdentity,
-                              AArch64DecodeGeneration,
-                              readLE<uint32_t>(Bytes),
-                              HasOperandDetail && Out.Raw->detail};
+  Out.AArch64Occurrence = AArch64DecodeOccurrence{
+      Out.Raw,
+      Out.Raw->detail,
+      AArch64DecodeIdentity,
+      AArch64DecodeGeneration,
+      readLE<uint32_t>(Bytes),
+      HasOperandDetail && Out.Raw->detail,
+      HasOperandDetail && Out.Raw->detail && HasRegisterAccess};
   if (Out.AArch64Occurrence->HasOperandDetail &&
       Out.Id == AARCH64_INS_MOVPRFX && Len >= kPrefixPairBytes)
     Out.AArch64Prefix =
@@ -99,15 +100,17 @@ bool Decoder::hasAArch64OperandDetail(const DecodedInsn &Insn) const {
 
 int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                                   DecodedInsn &Out) {
+  if (!beginDecode(Out))
+    return 0;
   // AArch64 is fixed 4-byte width and 4-byte aligned; the common instruction
   // classes decode with a few mask+shift extractions straight into InsnBuf,
   // bypassing Capstone's DFA (the front-end throughput ceiling).  The native
   // decoder is a strict subset of Capstone's accept set and lifts identically
   // (locked by AArch64_NativeDecodeParityTests); anything it declines falls
-  // back to the caller's full Capstone decode.  Detail must be on — the native
+  // back to the full Capstone decode. Detail must be on — the native
   // path fills operand detail the lifter reads — and InsnBuf->detail is
   // allocated whenever detail is on (see init()).
-  if (AArch64 && Detail && Len >= 4 && InsnBuf && InsnBuf->detail) {
+  if (Detail && Len >= 4 && InsnBuf && InsnBuf->detail) {
     uint32_t Word = static_cast<uint32_t>(Bytes[0]) |
                     (static_cast<uint32_t>(Bytes[1]) << 8) |
                     (static_cast<uint32_t>(Bytes[2]) << 16) |
@@ -117,11 +120,11 @@ int Decoder::decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
       Out.Size = static_cast<uint16_t>(InsnBuf->size);
       Out.Id = InsnBuf->id;
       Out.Raw = InsnBuf;
-      recordAArch64Decode(Bytes, Len, Out, true);
+      recordAArch64Decode(Bytes, Len, Out, true, false);
       return Out.Size;
     }
   }
-  return 0;
+  return decodeOne(Bytes, Len, Addr, Out);
 }
 
 void Decoder::liftAArch64ToLow(

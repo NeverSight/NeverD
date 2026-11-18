@@ -38,18 +38,28 @@ inline std::string entryStubDefinitionStem(const BinaryImage *Image,
 }
 
 /// Called only when a source value acquires a resolved code identity. Direct
-/// control transfers do not use this boundary. Current Clang MIPS data layouts
-/// can fold a microMIPS function pointer's low bit to zero, including in static
-/// initializers; a mode attribute alone does not qualify numeric observations.
+/// control transfers do not use this boundary. The qualified o32 compiler must
+/// preserve the callable tag independently of the function's code alignment
+/// (Fi8 in the NeverSight LLVM fork). Unknown import modes and unqualified
+/// 64-bit compressed source ABIs still have no numerical projection.
 inline void requireNumericCodePointerSource(const BinaryImage *Image,
                                             va_t CanonicalAddress) {
   if (!Image || !hasCompressedMIPSCode(Image->Mode))
     return;
-  if (Image->isImportStubAt(CanonicalAddress) ||
-      Image->instructionModeAt(CanonicalAddress) !=
-          InstructionMode::MIPSClassic)
-    throw std::invalid_argument("compressed MIPS numeric code-pointer source "
-                                "projection is not qualified");
+  const auto Mode = Image->instructionModeAt(CanonicalAddress);
+  if (CanonicalAddress != InvalidVA &&
+      !Image->isImportStubAt(CanonicalAddress)) {
+    if (Mode == InstructionMode::MIPSClassic)
+      return;
+    if ((Image->Arch == Arch::MIPS32 || Image->Arch == Arch::MIPS32EL) &&
+        Image->MIPS && Image->MIPS->ABI == MIPSABI::O32 &&
+        Image->MIPS->ISARevision == 2 && !Image->MIPS->HistoricalISA &&
+        ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16) ||
+         (Mode == InstructionMode::MicroMIPS && Image->MIPS->HasMicroMIPS)))
+      return;
+  }
+  throw std::invalid_argument("compressed MIPS numeric code-pointer source "
+                              "projection is not qualified");
 }
 
 inline const char *instructionModeCAttribute(InstructionMode Mode) {

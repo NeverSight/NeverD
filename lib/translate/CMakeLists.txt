@@ -50,6 +50,7 @@ add_neverd_component_library(NeverDTranslate
   LINK_COMPONENTS
   Decode
   PassIR
+  Support
 
   LINK_LIBS
   ${NEVERD_LLVM_LINKGRAPH_LIBS}

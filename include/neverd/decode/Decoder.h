@@ -363,16 +363,20 @@ private:
   bool decodeMIPSReservation(const uint8_t *Bytes, uint32_t Word, va_t Addr);
   bool decodeMIPSPairedSingle(const uint8_t *Bytes, uint32_t Physical,
                               va_t Addr);
+  /// Classic DSP64 forms have no native Capstone entry. Absent means the
+  /// word belongs to the ordinary decoder; false means its adapter failed.
+  std::optional<bool> decodeMIPSDSP64(const uint8_t *Bytes, size_t Len,
+                                      va_t Addr);
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
   bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
-  /// Use the AArch64 native decoder, returning zero when it declines.
+  /// Decode AArch64 with its native path and full Capstone fallback.
   int decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                            DecodedInsn &Out);
 
   /// Publish complete operand detail and any available MOVPRFX follower.
   void recordAArch64Decode(const uint8_t *Bytes, size_t Len, DecodedInsn &Out,
-                           bool HasOperandDetail) const;
+                           bool HasOperandDetail, bool HasRegisterAccess) const;
 
   /// Check raw identity without requiring operand detail for classification.
   bool hasAArch64DecodeOccurrence(const DecodedInsn &Insn) const;

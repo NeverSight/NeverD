@@ -82,7 +82,7 @@ class CallSiteViews:
         finally:
             self.release(raw)
 
-    def source(self, image, view, declaration, actual, indirect):
+    def source(self, image, view, declaration, actual, indirect, entry=0x10000):
         session = self.create()
         try:
             assert self.load(session, os.fsencode(image))
@@ -94,10 +94,10 @@ class CallSiteViews:
 
             if indirect:
                 # An interactive client may have opened the untyped view first.
-                raw = self.view(session, 0x10000, view.encode(), 0, 1)
+                raw = self.view(session, entry, view.encode(), 0, 1)
                 if raw:
                     self.release(raw)
-            original = read(self.view(session, 0x10000, b"call_sites", 0, 1))
+            original = read(self.view(session, entry, b"call_sites", 0, 1))
             (call,) = original["source_calls"]
             assert call["indirect"] == indirect
             edit = {
@@ -108,7 +108,7 @@ class CallSiteViews:
             }
             options = json.dumps({"call_types": [edit]}).encode()
             result = read(
-                self.edited(session, 0x10000, view.encode(), 0, 1024, options)
+                self.edited(session, entry, view.encode(), 0, 1024, options)
             )
             assert result["call_type_results"] == [
                 {"id": call["id"], "applied": True, "refusal": ""}
