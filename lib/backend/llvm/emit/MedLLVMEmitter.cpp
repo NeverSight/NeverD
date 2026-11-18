@@ -41,6 +41,7 @@
 #include "neverd/backend/llvm/PEImportShadow.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/SourceImageBytes.h"
+#include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/X86/X86RegistrationEntry.h"
 #include "neverd/ir/SourceABI.h"
@@ -70,8 +71,10 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/BinaryFormat/COFF.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/InlineAsm.h"
@@ -111,6 +114,48 @@ bool hasObjectFunctionNameAt(const BinaryImage *Img, BinaryFormat Format,
     if (Exp.Addr == Address && Exp.Name == Name)
       return true;
   return false;
+}
+
+/// Records on \p Func's function the blocks a termination handler's local
+/// unwind resumes it at (MedFunc::SEHHandlerUnwindTargets) that no edge of the
+/// function reaches from its entry, over its branches and into its pads.
+/// Printed C removes such a block with its code, while the handler names its
+/// address as the parent plus an offset (resolveLiftedCodeAddress).
+void noteUnreachedSEHUnwindTargets(
+    const MedFunc &Func,
+    const std::map<std::pair<va_t, int>, llvm::BasicBlock *> &Blocks) {
+  if (Func.SEHHandlerUnwindTargets.empty())
+    return;
+  std::vector<std::pair<va_t, const llvm::BasicBlock *>> Targets;
+  llvm::Function *Parent = nullptr;
+  for (const MedBlock &Block : Func.Blocks) {
+    const auto Found = Blocks.find({Func.Entry, Block.Id});
+    if (Found == Blocks.end() || !Found->second->getParent() ||
+        !Func.SEHHandlerUnwindTargets.count(Block.StartAddr))
+      continue;
+    Parent = Found->second->getParent();
+    Targets.emplace_back(Block.StartAddr, Found->second);
+  }
+  if (!Parent || Parent->empty())
+    return;
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 32> Reached;
+  llvm::SmallVector<const llvm::BasicBlock *, 32> Work{
+      &Parent->getEntryBlock()};
+  while (!Work.empty()) {
+    const llvm::BasicBlock *Block = Work.pop_back_val();
+    if (Reached.insert(Block).second)
+      llvm::append_range(Work, llvm::successors(Block));
+  }
+  llvm::sort(Targets, llvm::less_first());
+  llvm::LLVMContext &Context = Parent->getContext();
+  llvm::SmallVector<llvm::Metadata *, 4> Unreached;
+  for (const auto &[Address, Block] : Targets)
+    if (Block->getParent() == Parent && !Reached.contains(Block))
+      Unreached.push_back(llvm::ConstantAsMetadata::get(
+          llvm::ConstantInt::get(llvm::Type::getInt64Ty(Context), Address)));
+  if (!Unreached.empty())
+    Parent->setMetadata(windows_eh_md::UnreachedUnwindTargets,
+                        llvm::MDTuple::get(Context, Unreached));
 }
 
 } // namespace
@@ -1672,6 +1717,12 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   ActiveCxxContinuationPlan.reset();
   finalizeCxxContinuationPlans();
   SEHCallbackBodies.clear();
+  // Printed C says which code a handler's local unwind resumes its parent at
+  // that nothing printed in the parent leads to.
+  if (AnalysisRecoveryForSource)
+    for (size_t I = 0; I < Funcs.size(); ++I)
+      if (!BodyMask || (*BodyMask)[I])
+        noteUnreachedSEHUnwindTargets(Funcs[I], PreparedFuncBlocks);
 
   // Personality bodies are renamed before body emission so an eligible native
   // lowering can reserve the canonical ABI declaration. Eligibility is only

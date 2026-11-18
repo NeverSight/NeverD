@@ -189,6 +189,50 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
   }
 }
 
+TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (bool LowFirst : {false, true})
+        for (unsigned Case = 0; Case != 3; ++Case) {
+          SCOPED_TRACE(testing::Message() << N32 << Little << LowFirst << Case);
+          mips_test::ELFBytes File(
+              N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                  : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+          File.put(N32 ? 36 : 48, N32 ? 0x80000024 : 0x80000004, 4);
+          File.globalPointer(0x18100 + (Case == 1 ? 4 : 0));
+          File.put(0x100, Case == 2 ? 0x0080c825 : 0, 4); // move t9,a0
+          File.put(0x104, 0x3c080001, 4);                 // lui t0,1
+          const uint32_t AddEntry = N32 ? 0x01194021 : 0x0119402d;
+          const uint32_t AddLow = LowFirst || N32 ? 0x25088000 : 0x65088000;
+          File.put(0x108, LowFirst ? AddLow : AddEntry, 4);
+          File.put(0x10c, LowFirst ? AddEntry : AddLow, 4);
+          File.put(0x110, 0x6502801c, 4); // daddiu v0,t0,-0x7fe4
+          File.put(0x114, 0x03e00008, 4); // jr ra
+          File.put(0x118, 0, 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 28));
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low =
+              CFGBuilder().build(*Image, Decode, Image->Entry, "pic_address");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+          bool Bound = false;
+          for (const auto &Block : Med.Blocks)
+            for (const auto &Op : Block.Ops)
+              for (unsigned I = 0; I < Op.NumInputs; ++I) {
+                const auto &V = Op.Inputs[I];
+                Bound |= V.isConst() && V.ConstVal == 0x1011c &&
+                         isExactAddressProvenance(V.Provenance);
+              }
+          EXPECT_EQ(Bound, Case == 0);
+        }
+}
+
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                             Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {

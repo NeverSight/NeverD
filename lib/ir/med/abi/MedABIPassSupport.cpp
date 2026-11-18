@@ -656,10 +656,9 @@ completedAddressProvenance(const MedVar &Base) {
              : Base.Provenance;
 }
 
-std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
-                                                  size_t Before,
-                                                  const MedVar &Value,
-                                                  size_t *WorkRemaining) {
+std::optional<MedCallTarget>
+resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
+                     size_t *WorkRemaining, Arch Architecture) {
   if (Before > Block.Ops.size() || !Value.Size || Value.Size > 8)
     return std::nullopt;
   MedVar Current = Value;
@@ -692,6 +691,21 @@ std::optional<MedCallTarget> resolveMedCallTarget(const MedBlock &Block,
         return std::nullopt;
       Current = Def.Inputs[0];
       continue;
+    }
+    // n32 LW carries an entire ELF32 function pointer sign-extended in a
+    // 64-bit GPR. Preserve the original load occurrence and its memory proof.
+    if (isMIPSN32(Architecture) && Def.Opcode == NdOp::INT_SEXT &&
+        Def.NumInputs == 1 && Value.Size == 8 && Def.Inputs[0].Size == 4 &&
+        Def.MemoryOrdering == NdMemoryOrdering::None &&
+        Def.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
+      auto Slot = resolveMedCallTarget(Block, Before, Def.Inputs[0],
+                                       WorkRemaining, Architecture);
+      if (Slot && Slot->ThroughSlot) {
+        if (llvm::isInt<32>(int64_t(Slot->Address)))
+          Slot->Address = uint32_t(Slot->Address);
+        return Slot;
+      }
+      return std::nullopt;
     }
     // LEA/ADR arithmetic is a callable value, not pointer storage. Prove its
     // finite-width value before summaries and SSA decide which entry inputs
@@ -807,7 +821,7 @@ PreSSAMedCallTargets::resolve(const MedBlock &Block, const MedVar &Value,
       return std::nullopt;
     }
   return resolveMedCallTarget(Proof, Proof.Ops.size(), read(Value),
-                              WorkRemaining);
+                              WorkRemaining, Architecture);
 }
 
 std::optional<MedCallTarget> resolvePreSSAMedCallTarget(const MedBlock &Block,

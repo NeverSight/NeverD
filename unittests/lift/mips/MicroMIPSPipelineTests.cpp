@@ -341,8 +341,8 @@ void checkNumericHighCIdentities(Arch Architecture) {
       } else if (Provenance == P::CodeAddress ||
                  (Provenance == P::Address && Value == 0x1101)) {
         ASSERT_TRUE(HighCEmitter().emit({Function}, Output, Emit));
-        // Numeric addresses retain the linked ELF symbol through an opaque
-        // assembler name, without inventing a C call signature for its body.
+        // An image symbol alone supplies no C prototype. Its numeric identity
+        // uses the linker alias without inventing a callable declaration.
         EXPECT_NE(Text.find("extern unsigned char neverd_code_micro_target[] "
                             "__asm__(\"micro_target\");"),
                   std::string::npos)
@@ -350,6 +350,33 @@ void checkNumericHighCIdentities(Arch Architecture) {
         EXPECT_NE(Text.find("(uintptr_t)neverd_code_micro_target"),
                   std::string::npos)
             << Text;
+        EXPECT_EQ(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+
+        // With an actual definition, both the mode and the typed callable
+        // identity must survive. Keep this separate from the symbol-only case.
+        HighFunc Target;
+        Target.Entry = 0x1100;
+        Target.Name = "micro_target";
+        Target.ReturnType = NdType::makeInt(4, false);
+        HighStmt TargetReturn;
+        TargetReturn.Kind = StmtKind::Return;
+        TargetReturn.RetVal = HighExpr::makeConst(42, 4);
+        Target.Body.push_back(std::move(TargetReturn));
+        std::string DefinedText;
+        llvm::raw_string_ostream DefinedOutput(DefinedText);
+        ASSERT_TRUE(
+            HighCEmitter().emit({Function, Target}, DefinedOutput, Emit));
+        EXPECT_NE(DefinedText.find("NEVERD_MICROMIPS uint32_t micro_target("),
+                  std::string::npos)
+            << DefinedText;
+        EXPECT_NE(DefinedText.find("return (uint" +
+                                   std::to_string(PointerBytes * 8) +
+                                   "_t)(uintptr_t)micro_target;"),
+                  std::string::npos)
+            << DefinedText;
+        EXPECT_EQ(DefinedText.find("neverd_code_micro_target"),
+                  std::string::npos)
+            << DefinedText;
       } else {
         EXPECT_TRUE(HighCEmitter().emit({Function}, Output, Emit)) << Text;
         EXPECT_EQ(Text.find("micro_target"), std::string::npos) << Text;

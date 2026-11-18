@@ -8,6 +8,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/codegen/MachO/MachOSignaturePolicy.h"
@@ -19,6 +20,8 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -170,10 +173,39 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Async = Check == LeafCheck::AsyncIndexedError;
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
+  if (Preamble == kMixedOracle)
+    Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
+  if (Preamble == kMixedOracle) {
+    // The integrated assembler emits both instruction flags for __text.
+    // Exercise the ABI's SOME-only spelling with the same linked DICE records.
+    auto File = llvm::MemoryBuffer::getFile(Input);
+    ASSERT_TRUE(bool(File));
+    auto Buffer = (*File)->getBuffer();
+    std::vector<uint8_t> Bytes(Buffer.bytes_begin(), Buffer.bytes_end());
+    bool Found = false;
+    forEachMachOLoadCommand(
+        Bytes.data(), Bytes.size(),
+        [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+          if (ID != llvm::MachO::LC_SEGMENT_64)
+            return;
+          const auto Segment = readMachOSegment(P, true);
+          auto *S = reinterpret_cast<llvm::MachO::section_64 *>(
+              Bytes.data() + (P - Bytes.data()) +
+              sizeof(llvm::MachO::segment_command_64));
+          for (unsigned I = 0; I < Segment.NSects; ++I)
+            if (readMachOName(S[I].sectname) == section_names::macho::Text) {
+              S[I].flags &= ~llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+              Found = true;
+            }
+        });
+    ASSERT_TRUE(Found);
+    std::ofstream(Input, std::ios::binary)
+        .write(reinterpret_cast<const char *>(Bytes.data()), Bytes.size());
+  }
   if (Check == LeafCheck::Resigned || Check == LeafCheck::Relifted ||
       Check == LeafCheck::SigningRequirements) {
     llvm::SmallVector<llvm::StringRef> Sign{kCodesign,       kForceSign,
@@ -217,6 +249,90 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_FALSE(Image->isCodeAddress(Marker->Addr));
     EXPECT_FALSE(Image->hasAuthenticatedFunctionEntryAt(Marker->Addr));
   }
+  if (Preamble == kMixedOracle) {
+    const uint16_t Kinds[] = {llvm::MachO::DICE_KIND_DATA,
+                              llvm::MachO::DICE_KIND_JUMP_TABLE8,
+                              llvm::MachO::DICE_KIND_JUMP_TABLE16,
+                              llvm::MachO::DICE_KIND_JUMP_TABLE32};
+    ASSERT_EQ(Image->MachODataInCode.size(), std::size(Kinds));
+    for (const auto &[I, R] : llvm::enumerate(Image->MachODataInCode)) {
+      EXPECT_EQ(R.Kind, Kinds[I]);
+      for (va_t VA = R.Begin; VA < R.End; ++VA) {
+        EXPECT_FALSE(Image->isCodeAddress(VA));
+        EXPECT_FALSE(Image->hasExecutableCodeOwnerAt(VA));
+        EXPECT_FALSE(Image->hasAuthenticatedFunctionEntryAt(VA));
+      }
+    }
+    const auto PIE = (Root / kPrefixControl).string();
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                  kCompiler, {kCompiler, kTargetFlag, kTarget, kDataLinker,
+                              kMixedEntry, Source, kOut, PIE}),
+              0);
+    auto Before = Reader->load(PIE);
+    ASSERT_TRUE(bool(Before)) << llvm::toString(Before.takeError());
+    ASSERT_EQ(Before->MachODataInCode.size(), std::size(Kinds));
+    auto Prefix = Before->Raw;
+    auto Grew = reserveMachOHeaderStorage(
+        Prefix, Arch::AArch64, macho_loader::arm64e::kLargePageBytes);
+    ASSERT_TRUE(bool(Grew)) << llvm::toString(Grew.takeError());
+    ASSERT_TRUE(*Grew);
+    auto After = Reader->loadBuffer(llvm::MemoryBufferRef(
+        llvm::StringRef(reinterpret_cast<const char *>(Prefix.data()),
+                        Prefix.size()),
+        PIE));
+    ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
+    ASSERT_EQ(Before->MachODataInCode, After->MachODataInCode);
+    EXPECT_LT(After->fileOffsetToVA(0), Before->fileOffsetToVA(0));
+    EXPECT_EQ(Before->Entry, After->Entry);
+    for (const auto &R : Before->MachODataInCode) {
+      const auto Size = R.End - R.Begin;
+      EXPECT_GT(After->vaToFileOffset(R.Begin),
+                Before->vaToFileOffset(R.Begin));
+      EXPECT_EQ(llvm::ArrayRef(Before->readVA(R.Begin, Size), Size),
+                llvm::ArrayRef(After->readVA(R.Begin, Size), Size));
+    }
+    testing::Test::RecordProperty(kPrefixRecords,
+                                  int(After->MachODataInCode.size()));
+    const uint8_t *Command = nullptr;
+    forEachMachOLoadCommand(Image->Raw.data(), Image->Raw.size(),
+                            [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+                              if (ID == llvm::MachO::LC_DATA_IN_CODE)
+                                Command = P;
+                            });
+    ASSERT_TRUE(Command);
+    const auto &Table =
+        *reinterpret_cast<const llvm::MachO::linkedit_data_command *>(Command);
+    using Record = llvm::MachO::data_in_code_entry;
+    const auto InvalidTable = [&](auto Modify) {
+      auto Bytes = Image->Raw;
+      auto &D = *reinterpret_cast<llvm::MachO::linkedit_data_command *>(
+          Bytes.data() + (Command - Image->Raw.data()));
+      auto *R = reinterpret_cast<Record *>(Bytes.data() + Table.dataoff);
+      Modify(D, R);
+      auto Invalid = Reader->loadBuffer(llvm::MemoryBufferRef(
+          llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                          Bytes.size()),
+          Input));
+      EXPECT_FALSE(bool(Invalid));
+      if (!Invalid)
+        llvm::consumeError(Invalid.takeError());
+    };
+    InvalidTable([](auto &D, Record *) { --D.datasize; });
+    InvalidTable([](auto &, Record *R) { R->length = 0; });
+    InvalidTable([](auto &, Record *R) { R[1].offset = R[0].offset; });
+    InvalidTable([](auto &, Record *R) { R->offset = UINT32_MAX; });
+    auto Island = Image->MachODataInCode.front();
+    EXPECT_FALSE(
+        Image->isCodeRange(Island.Begin - aarch64::kInsnSize,
+                           Island.End - Island.Begin + aarch64::kInsnSize));
+    EXPECT_FALSE(Image->hasExecutableCodeOwnerRange(
+        Island.Begin - aarch64::kInsnSize,
+        Island.End - Island.Begin + aarch64::kInsnSize));
+    const auto *Section = Image->getSectionFor(Island.Begin);
+    ASSERT_TRUE(Section);
+    EXPECT_TRUE(Section->Type & llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
+    EXPECT_FALSE(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS);
+  }
   const auto Snapshot = Image->Raw;
   llvm::LLVMContext Context;
   PipelineOptions Options;
@@ -229,6 +345,14 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   symbolizeImageAbsolutePointers(Module, *Image);
   ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
 
+  if (Preamble == kMixedOracle) {
+    auto *F = Module.getFunction(kSum);
+    ASSERT_TRUE(F && F->hasFnAttribute(llvm::Attribute::Naked));
+    const auto *Call = llvm::dyn_cast<llvm::CallInst>(&F->front().front());
+    ASSERT_TRUE(Call && Call->isInlineAsm());
+    const auto *Asm = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
+    EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
+  }
   if (Check == LeafCheck::KilledScratchResult) {
     for (const auto *Name : {kSum, kDifference}) {
       auto *Entry = Module.getFunction(Name);
@@ -775,6 +899,30 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           llvm::toHex(llvm::SHA256::hash(Reloaded->Raw), true));
       ExecutionPaths.push_back(NextPath);
     }
+    if (Preamble == kMixedOracle) {
+      for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
+        auto Loaded = Reader->load(Path);
+        ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+        const auto &Records = Loaded->MachODataInCode;
+        ASSERT_EQ(Records.size(),
+                  Image->MachODataInCode.size() * (Generation + 1));
+        for (const auto &[I, R] : llvm::enumerate(Records)) {
+          const auto &Source =
+              Image->MachODataInCode[I % Image->MachODataInCode.size()];
+          ASSERT_EQ(R.End - R.Begin, Source.End - Source.Begin);
+          EXPECT_EQ(R.Kind, Source.Kind);
+          const auto *Old =
+              Image->readVA(Source.Begin, Source.End - Source.Begin);
+          const auto *New = Loaded->readVA(R.Begin, R.End - R.Begin);
+          ASSERT_TRUE(Old && New);
+          EXPECT_EQ(llvm::ArrayRef(Old, Source.End - Source.Begin),
+                    llvm::ArrayRef(New, R.End - R.Begin));
+          EXPECT_FALSE(Loaded->hasExecutableCodeOwnerAt(R.Begin));
+        }
+        if (Generation + 1 == ExecutionPaths.size())
+          testing::Test::RecordProperty(kMixedRecords, int(Records.size()));
+      }
+    }
     for (const auto &Path : ExecutionPaths) {
       if (Preamble == kSplitData || Preamble == kSplitSegments) {
         auto Loaded = Reader->load(Path);
@@ -1266,6 +1414,12 @@ TEST(AArch64LiftedImage,
      CodesignSignedLiftedOutputAllowsRepeatedNativePublication) {
   verifyPublishedLeaves(kSignedLeaves, kCaller, kAssemblyName, {},
                         LeafCheck::Resigned);
+}
+
+TEST(AArch64LiftedImage,
+     EmbeddedLiteralAndJumpTablesSurviveAutomaticRelifting) {
+  verifyPublishedLeaves(kMixedLeaves, kCaller, kAssemblyName, kMixedOracle,
+                        LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {

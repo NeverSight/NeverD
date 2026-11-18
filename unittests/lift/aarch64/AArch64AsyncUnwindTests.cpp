@@ -459,6 +459,38 @@ TEST(AArch64AsyncUnwind,
     EXPECT_EQ(Saved, 0);
     EXPECT_TRUE((Sample >> std::ws).eof());
     RecordProperty(kEntrySteps, 1);
+    const auto Fields = [](const CFIInstruction &I) {
+      return std::tie(I.Kind, I.CodeOffset, I.Register, I.Register2, I.Offset,
+                      I.Expression, I.OperandBytes, I.RAState);
+    };
+    ASSERT_TRUE(llvm::equal(
+        OldFrame->Dwarf->Instructions, Trampoline->Dwarf->Instructions,
+        [&](const auto &A, const auto &B) { return Fields(A) == Fields(B); }));
+    for (const auto &Path : {Input, Output}) {
+      SCOPED_TRACE(Path);
+      ASSERT_EQ(
+          llvm::sys::ExecuteAndWait(
+              Driver, {Driver, Path, std::to_string(0),
+                       std::to_string(Path == Input ? kOldValue : kNewValue),
+                       EntrySamples, kRawEntryMode, kRawEntryMode}),
+          0);
+      std::ifstream Raw(EntrySamples);
+      int Visited, Exact, MatchedSP;
+      unsigned Lookup;
+      ASSERT_TRUE(Raw >> Visited >> Exact >> MatchedSP >> Lookup);
+      EXPECT_TRUE((Raw >> std::ws).eof());
+      EXPECT_TRUE(Visited == 0 || Visited == 1);
+      EXPECT_EQ(Exact, 1);
+      EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
+      EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
+      if (Path == Output) {
+        RecordProperty(kRawEntryWalk, 1);
+        RecordProperty(kRawEntryVisit, Visited);
+        RecordProperty(kExactEntryStep, Exact);
+        RecordProperty(kRawEntrySP, MatchedSP);
+        RecordProperty(kEntryLookupOffset, Lookup);
+      }
+    }
     for (auto [Path, Property] :
          {std::pair(OriginalSamples, kOriginalRows),
           std::pair(InstalledSamples, kPublishedRows)}) {

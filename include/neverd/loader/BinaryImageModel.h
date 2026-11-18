@@ -27,6 +27,7 @@
 #include "neverd/loader/ELF/MIPSImageMetadata.h"
 #include "neverd/loader/ExceptionTable.h"
 #include "neverd/loader/Limits.h"
+#include "neverd/loader/MachO/DataInCode.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/ObjC/ObjCMethods.h"
 #include "neverd/object/SectionNames.h"
@@ -380,6 +381,8 @@ struct BinaryImage {
   /// be loaded away from address zero, so unrelocated absolute instruction
   /// immediates cannot denote its own link-time image addresses.
   bool MachOIsDylib = false;
+  /// Byte-exact embedded data, including pools that have no symbol.
+  std::vector<MachODataInCodeRange> MachODataInCode;
   uint32_t MachOCPUSubtype = 0;
   bool isArm64e() const {
     return isMachO() && Arch == Arch::AArch64 &&
@@ -1263,6 +1266,8 @@ struct BinaryImage {
   /// when section metadata exists; section-less images retain the historical
   /// segment fallback.
   bool isCodeAddress(va_t Addr) const {
+    if (!machODataInCodeRanges(MachODataInCode, Addr, 1).empty())
+      return false;
     const Segment *Seg = getSegmentFor(Addr);
     if (!Seg)
       return false;
@@ -1286,6 +1291,8 @@ struct BinaryImage {
   /// True when one complete half-open byte range has a single code owner.
   bool isCodeRange(va_t Addr, uint64_t Size) const {
     if (Size == 0 || Size - 1 > InvalidVA - Addr)
+      return false;
+    if (!machODataInCodeRanges(MachODataInCode, Addr, Size).empty())
       return false;
     const va_t Last = Addr + Size - 1;
     const Segment *FirstSeg = getSegmentFor(Addr);
@@ -2123,6 +2130,8 @@ struct BinaryImage {
       return false;
     const va_t Start = normalizeCodeAddress(Addr, Arch, Mode);
     if (Size - 1 > InvalidVA - Start)
+      return false;
+    if (!machODataInCodeRanges(MachODataInCode, Start, Size).empty())
       return false;
     const va_t Last = Start + Size - 1;
     const Segment *Seg = getSegmentFor(Start);

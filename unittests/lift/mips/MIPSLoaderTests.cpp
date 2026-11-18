@@ -101,7 +101,9 @@ TEST_P(MIPSLoader, GlobalPointerUsesLinkedRegisterInfoAndPhysicalGPRWidth) {
     File.globalPointer(GP);
     auto Image = Loader.loadBuffer(File.buffer());
     ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-    EXPECT_EQ(Image->MIPS->EntryGP, N32 ? 0xfffffffffedc8000ull : GP);
+    const uint64_t WideGP = N32 ? 0xfffffffffedc8000ull : GP;
+    EXPECT_EQ(Image->MIPS->EntryGP, WideGP);
+    EXPECT_FALSE(Image->MIPS->PICGP);
 
     const uint32_t Flags = File.Is64 ? 0x80000000
                            : N32     ? 0x80000020
@@ -114,6 +116,10 @@ TEST_P(MIPSLoader, GlobalPointerUsesLinkedRegisterInfoAndPhysicalGPRWidth) {
       ASSERT_TRUE(bool(PositionIndependent))
           << llvm::toString(PositionIndependent.takeError());
       EXPECT_FALSE(PositionIndependent->MIPS->EntryGP);
+      if (Extra)
+        EXPECT_EQ(PositionIndependent->MIPS->PICGP, WideGP);
+      else
+        EXPECT_FALSE(PositionIndependent->MIPS->PICGP);
     }
   }
 }
@@ -161,9 +167,13 @@ TEST_P(MIPSLoader, GlobalPointerRecordsRequireBoundedPayloadsAndImageScope) {
         Scoped.Bytes[0xb8] = 9; // ODK_GP_GROUP
       else
         Scoped.put(0xc2, 1, 2); // Section-specific ODK_REGINFO.
-      auto Image = Loader.loadBuffer(Scoped.buffer());
-      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-      EXPECT_FALSE(Image->MIPS->EntryGP);
+      for (unsigned Flags : {0x80000000u, 0x80000006u}) {
+        Scoped.put(48, Flags, 4);
+        auto Image = Loader.loadBuffer(Scoped.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        EXPECT_FALSE(Image->MIPS->EntryGP);
+        EXPECT_FALSE(Image->MIPS->PICGP);
+      }
     }
   }
   for (unsigned Size : {0u, 7u, 23u, 41u, 255u}) {

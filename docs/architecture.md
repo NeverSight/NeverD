@@ -1345,7 +1345,12 @@ block. For printed C the emitter spells such a target as the parent's address
 plus the offset (`resolveLiftedFunctionInterior`), so the handler prints in a
 whole unit as it does alone. Native IR keeps the block address, and so does
 every other code address inside another function, such as the continuation a
-catch funclet returns.
+catch funclet returns. A target that no edge of the parent reaches from its
+entry, over its branches and into its pads, leaves printed C with its code; the
+emitter lists such targets on the parent
+(`windows_eh_md::UnreachedUnwindTargets`, printed C only), and the parent's C
+says that a handler's `_local_unwind` resumes it there and that nothing printed
+in it leads to the code there.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call

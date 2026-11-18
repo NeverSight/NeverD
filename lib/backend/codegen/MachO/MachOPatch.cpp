@@ -1610,6 +1610,11 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
         break;
       for (const auto &Command : Cmds)
         if (Command.Cmd == ToolOnly) {
+          if (ToolOnly == LC_DATA_IN_CODE &&
+              reinterpret_cast<const linkedit_data_command *>(Binary.data() +
+                                                              Command.Off)
+                  ->datasize)
+            continue;
           Freed += Command.Size;
           DroppedCommands.insert(Command.Off);
         }

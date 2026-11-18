@@ -127,7 +127,19 @@ def run_command(artifacts, args, log):
         raise RuntimeError(f"{args[0]} exited {process.returncode}: {log.read_text()[-8192:]}")
 
 
-def emulator(path, bits, little, function, original=None, cpu_model=None):
+def map_image(uc, image, pages, bias=0):
+    for segment in image.iter_segments():
+        if segment["p_type"] != "PT_LOAD":
+            continue
+        begin, size = bias + segment["p_vaddr"], segment["p_memsz"]
+        for page in range(begin & ~4095, (begin + size + 4095) & ~4095, 4096):
+            if page not in pages:
+                uc.mem_map(page, 4096)
+                pages.add(page)
+        uc.mem_write(begin, segment.data())
+
+
+def emulator(path, bits, little, function, original=None, cpu_model=None, *, load_bias=0):
     elf = ELFFile(io.BytesIO(path.read_bytes()))
     uc = Uc(UC_ARCH_MIPS, (UC_MODE_MIPS64 if bits == 64 else UC_MODE_MIPS32)
             | (0 if little else UC_MODE_BIG_ENDIAN))
@@ -137,29 +149,21 @@ def emulator(path, bits, little, function, original=None, cpu_model=None):
                         mips.UC_CPU_MIPS32_M14KC if micro else
                         mips.UC_CPU_MIPS32_24KC)
     pages = set()
-    images = [ELFFile(io.BytesIO(original.read_bytes())), elf] if original else [elf]
-    for image in images:
-        for segment in image.iter_segments():
-            if segment["p_type"] != "PT_LOAD":
-                continue
-            begin, size = segment["p_vaddr"], segment["p_memsz"]
-            for page in range(begin & ~4095, (begin + size + 4095) & ~4095, 4096):
-                if page not in pages:
-                    uc.mem_map(page, 4096)
-                    pages.add(page)
-            uc.mem_write(begin, segment.data())
+    if original:
+        map_image(uc, ELFFile(io.BytesIO(original.read_bytes())), pages)
+    map_image(uc, elf, pages, load_bias)
     uc.mem_map(DATA, 4096)
     uc.mem_map(STACK - 8192, 16384)
     uc.mem_map(STOP, 4096)
     if isinstance(function, int):  # Explicit entry in a sectionless ELF.
-        return uc, function
+        return uc, load_bias + function
     symbols = elf.get_section_by_name(".symtab").get_symbol_by_name(function)
     if not symbols:
         raise RuntimeError(f"missing {function} in {path}")
     # pyelftools represents st_other bits 7:5 as `local`; bit 7 is the
     # microMIPS symbol mode even when st_value itself is an even instruction VA.
     entry = symbols[0]["st_value"] | bool(symbols[0]["st_other"]["local"] & 4)
-    return uc, entry
+    return uc, load_bias + entry
 
 
 def invoke(uc, entry, bits, little, arguments, old_destination=0, initial_registers=None):

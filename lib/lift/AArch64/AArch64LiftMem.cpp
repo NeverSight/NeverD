@@ -16,6 +16,7 @@
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/lift/AArch64/AArch64Lifter.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/Support/Debug.h"
@@ -354,31 +355,17 @@ bool AArch64Lifter::liftMem(LiftState &S, const cs_insn *Insn,
         S.emit(NdOp::COPY, Dst, {Val});
     };
 
-    // Load-register-literal encodes a signed imm19 relative to this
-    // instruction's PC.  Capstone models its target as a memory displacement,
-    // whose public AArch64 detail field is only int32_t; Mach-O virtual
-    // addresses such as 0x100000468 are therefore truncated to 0x468 even
-    // though the rendered disassembly retains the full address.  Recover the
-    // architectural address from the instruction word instead of consuming
-    // that lossy detail field.  This mask covers integer and FP/SIMD literal
-    // loads; PRFM shares the encoding class but never reaches this LDR switch.
-    const uint32_t Word = static_cast<uint32_t>(Insn->bytes[0]) |
-                          (static_cast<uint32_t>(Insn->bytes[1]) << 8) |
-                          (static_cast<uint32_t>(Insn->bytes[2]) << 16) |
-                          (static_cast<uint32_t>(Insn->bytes[3]) << 24);
-    const bool IsLiteralLoad =
-        Insn->size == 4 && (Word & 0x3B000000u) == 0x18000000u;
-    if (IsLiteralLoad) {
-      int64_t Imm19 = static_cast<int64_t>((Word >> 5) & 0x7FFFFu);
-      if ((Imm19 & 0x40000) != 0)
-        Imm19 -= 0x80000;
-      const va_t LiteralVA = Insn->address + static_cast<uint64_t>(Imm19 * 4);
-      NdVar EA = S.makeTemp(8);
-      S.emit(NdOp::COPY, EA, {NdVar::dataAddress(LiteralVA, 8)});
-      EmitLoad(EA);
-      break;
+    if (Insn->size == branch::A64InstructionBytes) {
+      if (auto Literal = aarch64::decodeLiteralLoad(
+              readLE<uint32_t>(Insn->bytes), Insn->address)) {
+        NdVar EA = S.makeTemp(kAddressMemoryPointerBytes);
+        S.emit(
+            NdOp::COPY, EA,
+            {NdVar::dataAddress(Literal->Address, kAddressMemoryPointerBytes)});
+        EmitLoad(EA);
+        break;
+      }
     }
-
     // Build EA and emit LOAD with correct size
     if (ARM64.operands[1].type == AARCH64_OP_MEM) {
       auto &M = ARM64.operands[1];

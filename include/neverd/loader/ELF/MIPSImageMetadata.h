@@ -63,6 +63,9 @@ struct MIPSImageMetadata {
   /// Linker-supplied GP on ordinary entry to fixed-address non-PIC code.
   /// Stored at GPR width, including sign extension for n32.
   std::optional<uint64_t> EntryGP;
+  /// Linked GP used to authenticate a function-local PIC address calculation.
+  /// This value does not describe the caller's incoming GP.
+  std::optional<uint64_t> PICGP;
 
   /// Retained linked instruction relocations, sorted by instruction VA. They
   /// authenticate individual fields, never unrelated equal-valued literals.

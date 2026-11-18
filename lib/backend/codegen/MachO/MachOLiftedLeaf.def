@@ -120,6 +120,13 @@ MACHO_LEAF_LOCAL_JUMP(AARCH64_INS_CBNZ)
 MACHO_LEAF_LOCAL_JUMP(AARCH64_INS_TBZ)
 MACHO_LEAF_LOCAL_JUMP(AARCH64_INS_TBNZ)
 
+MACHO_LEAF_TEXT(kSourceExtent,
+                "arm64e entry {0} at {1:x} lacks a bounded source extent")
+MACHO_LEAF_TEXT(kEmbeddedCount, "arm64e entry {0} has {1} source data-in-code "
+                                "records and {2} installed records")
+MACHO_LEAF_TEXT(
+    kEmbeddedIdentity,
+    "arm64e embedded data lost its range, kind or verified native body")
 #undef MACHO_LEAF_SEQUENCE
 #undef MACHO_LEAF_LOCAL_JUMP
 #undef MACHO_LEAF_INSTRUCTION

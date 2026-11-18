@@ -106,6 +106,27 @@ TEST(MedCachedCallTarget, ProvesMovingStackWithoutChangingRuntimeOperands) {
   }
 }
 
+TEST(MedCachedCallTarget, N32RecoversOnlyACompleteSignExtendedPointerLoad) {
+  const auto Slot = MedVar::makeConst(0xffffffff80001000ULL, 8,
+                                      ConstantAddressProvenance::Address);
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (uint16_t Width : {2, 4}) {
+      MedBlock B;
+      B.Ops = {op(NdOp::LOAD, value(1, Width), {Slot}),
+               op(NdOp::INT_SEXT, value(2), {value(1, Width)})};
+      auto Recovered = resolveMedCallTarget(B, 2, value(2), nullptr, A);
+      if (isMIPSN32(A) && Width == 4) {
+        ASSERT_TRUE(Recovered);
+        EXPECT_TRUE(Recovered->ThroughSlot);
+        EXPECT_EQ(Recovered->LoadIndex, 0u);
+        EXPECT_EQ(Recovered->Address, 0x80001000u);
+      } else {
+        EXPECT_FALSE(Recovered);
+      }
+    }
+}
+
 TEST(MedCachedCallTarget, RejectsInterveningCallsAndMayAliasWrites) {
   for (bool Call : {false, true}) {
     auto B = cached();

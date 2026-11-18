@@ -22,6 +22,11 @@ inline constexpr llvm::StringLiteral FunctionAttachment("neverd.windows.eh");
 /// This is not a native frame reconstruction certificate.
 inline constexpr llvm::StringLiteral
     UnresolvedSourceFrame("neverd.source.unresolved-seh-frame");
+/// Source-only: the addresses, ascending, of the blocks a termination
+/// handler's local unwind resumes this function at that no edge of the
+/// function reaches from its entry.  Printed C runs none of their code.
+inline constexpr llvm::StringLiteral
+    UnreachedUnwindTargets("neverd.source.unreached-unwind-targets");
 inline constexpr llvm::StringLiteral
     NativeAttachment("neverd.windows.eh.native");
 inline constexpr llvm::StringLiteral

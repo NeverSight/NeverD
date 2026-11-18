@@ -788,6 +788,14 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
   if (Covered != Code->Size)
     return refuse(kLeafCoverage);
 
+  for (const auto &R : Original.MachODataInCode) {
+    const auto Installed = machODataInCodeRanges(
+        Layout.MachODataInCode, R.Begin + Slide, R.End - R.Begin);
+    if (Installed.size() != 1 || Installed.front().Begin != R.Begin + Slide ||
+        Installed.front().End != R.End + Slide ||
+        Installed.front().Kind != R.Kind)
+      return refuse(kEmbeddedIdentity);
+  }
   Decoder Decode;
   if (!Decode.init(Original))
     return refuse(kLeafCode);
@@ -798,7 +806,9 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         Original, Start,
         I + 1 == Mappings.size() ? InvalidVA : Mappings[I + 1].OriginalVA);
     if (!SourceBody)
-      return refuse(kSourceText);
+      return llvm::createStringError(
+          llvm::errc::not_supported,
+          llvm::formatv(kSourceExtent, Mapping.Symbol, Start).str());
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
@@ -816,6 +826,20 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     const auto Emitted = llvm::ArrayRef(Generated.Bytes)
                              .slice(Code->Offset + (Owner->second - Code->VA),
                                     Range.mapped()->EndVA - Owner->second);
+    const auto PublishedData = machODataInCodeRanges(
+        Layout.MachODataInCode, Owner->second, Emitted.size());
+    if (PublishedData.size() != SourceBody->Embedded.size())
+      return llvm::createStringError(
+          llvm::errc::not_supported,
+          llvm::formatv(kEmbeddedCount, Mapping.Symbol,
+                        SourceBody->Embedded.size(), PublishedData.size())
+              .str());
+    for (auto [Old, New] : llvm::zip_equal(SourceBody->Embedded, PublishedData))
+      if (New.Begin - Owner->second != Old.Begin - Start ||
+          New.End - Owner->second != Old.End - Start || New.Kind != Old.Kind)
+        return refuse(kEmbeddedIdentity);
+    if (!SourceBody->Embedded.empty() && !RegisterEntries.contains(Start))
+      return refuse(kEmbeddedIdentity);
     if (SourceBody->ForwardTarget) {
       // The entry branch has no register, stack or LR side effects. Its old
       // trailing body and unwind recipe do not describe this forwarding path.
@@ -903,6 +927,14 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
            Offset += aarch64::kInsnSize) {
         auto Before = Source.drop_front(Offset);
         auto After = Emitted.drop_front(Offset);
+        if (!machODataInCodeRanges(SourceBody->Embedded, Start + Offset,
+                                   aarch64::kInsnSize)
+                 .empty()) {
+          if (Before.take_front(aarch64::kInsnSize) !=
+              After.take_front(aarch64::kInsnSize))
+            return refuse(kLeafCode);
+          continue;
+        }
         const auto Transfer = decodeDirectBranch(
             Original.Arch, InstructionMode::Default, Before.data(),
             Before.size(), Start + Offset, {.Jumps = true, .Calls = true});
@@ -1061,9 +1093,12 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
         (S.Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_SYMBOL_STUBS)
       continue;
     const auto *Segment = Image.getSegmentFor(S.VA);
+    const auto Embedded =
+        machODataInCodeRanges(Image.MachODataInCode, S.VA, S.Size);
     if ((S.Type & llvm::MachO::SECTION_TYPE) != llvm::MachO::S_REGULAR ||
-        !(S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) || !Segment ||
-        !Segment->isExecutable() || Segment->isWritable() ||
+        (!(S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) &&
+         Embedded.empty()) ||
+        !Segment || !Segment->isExecutable() || Segment->isWritable() ||
         S.VA % aarch64::kInsnSize || S.Size % aarch64::kInsnSize ||
         S.FileSz != S.Size || Image.vaToFileOffset(S.VA) != S.FileOff ||
         !rangeInBounds(S.VA - Segment->VA, S.Size, Segment->FileSz) ||
@@ -1071,7 +1106,14 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kSourceSection, S.SegmentName, S.Name).str());
-    SectionEntries.push_back(S.VA);
+    va_t First = S.VA;
+    for (const auto &R : Embedded) {
+      if (R.Begin != First)
+        break;
+      First = R.End;
+    }
+    if (First - S.VA < S.Size)
+      SectionEntries.push_back(First);
   }
   if (SectionEntries.empty())
     return refuse(kSourceText);

@@ -285,10 +285,15 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     }
   }
 
-  if (GP.Value && !GP.HasScopedGP && Header.e_type == ET_EXEC &&
-      !(Flags & (EF_MIPS_PIC | EF_MIPS_CPIC)))
-    Profile.EntryGP =
+  if (GP.Value && !GP.HasScopedGP &&
+      (Header.e_type == ET_EXEC || Header.e_type == ET_DYN)) {
+    const uint64_t Value =
         N32 ? uint64_t(llvm::SignExtend64<32>(*GP.Value)) : *GP.Value;
+    if (Flags & (EF_MIPS_PIC | EF_MIPS_CPIC))
+      Profile.PICGP = Value;
+    else if (Header.e_type == ET_EXEC)
+      Profile.EntryGP = Value;
+  }
 
   if (ABIFlags) {
     const auto Bytes = *ABIFlags;

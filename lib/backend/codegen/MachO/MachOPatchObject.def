@@ -144,4 +144,7 @@ MACHO_OBJECT_TEXT(kMainRelroExtent,
                   "native read-only data extent exceeds placement limits")
 
 #undef MACHO_OBJECT_VALUE
+MACHO_OBJECT_TEXT(
+    kEmbeddedObject,
+    "native data-in-code range has no matching instruction section")
 #undef MACHO_OBJECT_TEXT
