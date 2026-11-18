@@ -27,6 +27,13 @@ inline constexpr llvm::StringLiteral
 /// function reaches from its entry.  Printed C runs none of their code.
 inline constexpr llvm::StringLiteral
     UnreachedUnwindTargets("neverd.source.unreached-unwind-targets");
+/// Source-only, on a catchswitch: the address of the block of this function a
+/// `__finally`'s termination handler resumes at by its local unwind, on every
+/// way out. The switch's catch-all pad returns there, which keeps that code;
+/// it is no `__except`. LLVM C prints a `goto` to the block at the end of the
+/// `__finally` whose pad unwinds to the switch.
+inline constexpr llvm::StringLiteral
+    HandlerResume("neverd.source.handler-resume");
 inline constexpr llvm::StringLiteral
     NativeAttachment("neverd.windows.eh.native");
 inline constexpr llvm::StringLiteral

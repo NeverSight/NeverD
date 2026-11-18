@@ -9025,6 +9025,9 @@ void LLVMCWriter::writeCleanupRet(llvm::CleanupReturnInst &CR, int Indent) {
   emitIndent(Indent);
   if (!Dest)
     OS << "return; /* __finally */\n";
+  else if (const llvm::BasicBlock *Resume = llvmcHandlerResumeTarget(Dest))
+    OS << "goto " << blockLabel(Resume) << "; " << LLVMCHandlerResumeNote
+       << "\n";
   else if (llvm::isa<llvm::CatchSwitchInst>(Dest->getTerminator()))
     OS << "/* __finally */\n";
   else

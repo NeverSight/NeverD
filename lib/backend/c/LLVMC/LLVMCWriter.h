@@ -77,6 +77,15 @@ public:
   }
 };
 
+/// The block \p Dest resumes the function at when it is the catch a printed-C
+/// `__finally` pad unwinds to for its handler's local unwind
+/// (windows_eh_md::HandlerResume), or null.
+const llvm::BasicBlock *llvmcHandlerResumeTarget(const llvm::BasicBlock *Dest);
+
+/// What LLVM C prints after the `goto` that ends such a `__finally`.
+inline constexpr llvm::StringLiteral LLVMCHandlerResumeNote =
+    "/* neverd.seh: the handler's _local_unwind resumes here */";
+
 /// Internal writer that converts LLVM IR modules to goto-style C source.
 /// Split across LLVMCEmitter.cpp (module-level orchestration),
 /// LLVMCFuncWriter.cpp (function rendering), LLVMCStmtWriter.cpp (instruction

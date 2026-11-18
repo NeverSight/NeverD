@@ -6697,16 +6697,18 @@ TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
     Image.Base = 0x140000000;
     Image.ExceptionMetadata.Functions.push_back(EH);
     Image.ExceptionMetadata.rebuildIndex();
+    // What the output gate says of a module: nothing when it plans it.
     const auto Refusal = [&](llvm::Module &Candidate) {
       expectVerifierClean(Candidate);
       auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
-      EXPECT_FALSE(static_cast<bool>(Plan));
       return Plan ? std::string() : llvm::toString(Plan.takeError());
     };
-    EXPECT_NE(Refusal(*Module).find(
-                  "local unwind's handler call has no certified output form"),
-              std::string::npos);
-    // The optimizer keeps the marks.
+    // The gate places each handler call by the scope it ends: outside that
+    // scope's range markers, inside those of the scopes that hold it, and
+    // protected by the one that holds it immediately.  Running the lu3
+    // fixture's rewrites under Windows certified that placement.
+    EXPECT_EQ(Refusal(*Module), "");
+    // The optimizer keeps the marks and the placement.
     std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Module);
     Pipeline::OptimizationOptions Options;
     Options.Strength = Pipeline::OptStrength::Deep;
@@ -6715,10 +6717,50 @@ TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
         Pipeline::optimizeModule(*Optimized, Options);
     EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
     EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
-    EXPECT_NE(Refusal(*Optimized)
-                  .find("local unwind's handler call has no certified output "
-                        "form"),
-              std::string::npos);
+    EXPECT_EQ(Refusal(*Optimized), "");
+    EXPECT_EQ(Marks(*Optimized->getFunction(Parent.Name)).size(),
+              Marked.size());
+
+    // A mark that names another row is no handler call the runtime makes.
+    {
+      std::unique_ptr<llvm::Module> Other = llvm::CloneModule(*Module);
+      llvm::CallInst *Mark = Marks(*Other->getFunction(Parent.Name)).front();
+      auto Bundle = *Mark->getOperandBundle(windows_eh_md::ProvenanceBundle);
+      std::vector<llvm::Value *> Inputs(Bundle.Inputs.begin(),
+                                        Bundle.Inputs.end());
+      Inputs[windows_eh_md::ProvenanceRegion] = llvm::ConstantInt::get(
+          Inputs[windows_eh_md::ProvenanceRegion]->getType(), TwoRows ? 1 : 5);
+      llvm::OperandBundleDef Renamed(windows_eh_md::ProvenanceBundle.str(),
+                                     Inputs);
+      llvm::CallInst *Replacement = llvm::CallInst::Create(
+          Mark->getFunctionType(), Mark->getCalledOperand(), {}, {Renamed}, "",
+          Mark->getIterator());
+      Mark->eraseFromParent();
+      (void)Replacement;
+      EXPECT_NE(Refusal(*Other), "");
+    }
+    // A handler call moved back before its scope's range exit stands in the
+    // scope it ends, whatever unwind edge it keeps.
+    if (How == Shape::OnlyScope) {
+      std::unique_ptr<llvm::Module> Inside = llvm::CloneModule(*Module);
+      llvm::CallInst *Mark = Marks(*Inside->getFunction(Parent.Name)).front();
+      auto *HandlerCall = llvm::dyn_cast<llvm::CallInst>(Mark->getNextNode());
+      ASSERT_NE(HandlerCall, nullptr) << printModuleIR(*Inside);
+      llvm::BasicBlock *Before = Mark->getParent()->getSinglePredecessor();
+      ASSERT_NE(Before, nullptr) << printModuleIR(*Inside);
+      const auto *Exit =
+          llvm::dyn_cast<llvm::InvokeInst>(Before->getTerminator());
+      ASSERT_TRUE(Exit && Exit->getCalledFunction() &&
+                  Exit->getCalledFunction()->getIntrinsicID() ==
+                      llvm::Intrinsic::seh_try_end)
+          << printModuleIR(*Inside);
+      // Ahead of the range exit's own mark, which its marker must follow.
+      Mark->moveBefore(Before->getFirstNonPHIIt());
+      HandlerCall->moveAfter(Mark);
+      EXPECT_NE(Refusal(*Inside).find("outside the range markers"),
+                std::string::npos)
+          << Refusal(*Inside);
+    }
     // Without the marks the gate's other rules still refuse a handler that
     // was invoked: its scope is not the innermost one at its address.  They
     // have nothing to say about a handler called outside every scope.
