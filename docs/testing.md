@@ -20787,7 +20787,19 @@ that frame's address go to a call, reads or writes through the argument,
 passes it on, recovers a local of its parent or of another function with
 `llvm.localrecover`, or has no body in the module: `planCOFFExceptionPatch`
 takes the module where the callback only keeps the argument or recovers its
-parent's local and refuses the others by name.
+parent's local and refuses the others by name. Its parent has no frame, so
+native IR passes the callback `llvm.localaddress()`.
+`COFFExceptionIR.NativeFrameReadingCallbackIsPassedTheEmulatedFrame` gives a
+parent with a fixed frame (`push rbx; sub rsp, 0x20`) a `__finally` whose
+lifted body reads its frame: native IR marks the parent's frame alloca and
+passes the callback the alloca at the entry byte less 0x28, and the store in
+the scope is volatile. With the callback reading a local, writing one or
+reading an argument home, `planCOFFExceptionPatch` takes the module before
+and after optimization; reading the return address, a pushed register, a
+caller's argument or below the frame, passing the frame to a call, passing a
+call what it reads there, and adding a variable to the frame are refused, as
+are the pad's argument eight bytes off, the frame unmarked and the store
+made plain.
 `WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
 x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that

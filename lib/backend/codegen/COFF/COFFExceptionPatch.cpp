@@ -18,10 +18,13 @@
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/X64UnwindFrame.h"
 #include "neverd/object/PELayout.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
@@ -839,6 +842,153 @@ bool sehCallbackUsesOriginalFrame(const llvm::Function &Callback,
   return false;
 }
 
+/// Whether \p Argument, what native IR passes \p Callback as its
+/// EstablisherFrame, is \p Parent's emulated frame at the bytes below the
+/// entry stack pointer that the source's unwind codes put the
+/// EstablisherFrame at, and whether \p Callback reaches through it only bytes
+/// the lifted parent keeps as the original did.  Those are its fixed frame
+/// and the argument homes above its return address, but not a pushed or
+/// saved register, which emission leaves out, the return address or the
+/// caller's stack arguments, and all of them inside the alloca.  The address
+/// must not leave the callback: RtlUnwind, `_local_unwind` and longjmp
+/// compare an EstablisherFrame with real frames.
+llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
+                                          const llvm::Function &Callback,
+                                          const llvm::Function &Parent,
+                                          const ExceptionFunction &EH) {
+  auto Frame = findSEHEmulatedFrame(Parent, EH.CodeRange.Begin);
+  if (!Frame)
+    return patchError(llvm::toString(Frame.takeError()));
+  if (!*Frame)
+    return patchError("native SEH callback is passed a frame that names no "
+                      "emulated frame in function " +
+                      Parent.getName());
+  auto Unwind = decodeX64UnwindFrame(EH, /*AllowFrameRegister=*/false);
+  if (!Unwind)
+    return patchError(
+        "native SEH emulated frame of function " + Parent.getName() +
+        " has no fixed source frame: " + llvm::toString(Unwind.takeError()));
+  const int64_t Establisher = static_cast<int64_t>(Unwind->EstablisherBytes);
+  const int64_t Entry = static_cast<int64_t>((*Frame)->EntryOffset);
+  const auto Address =
+      sehConstantAddress(Argument, Parent.getParent()->getDataLayout());
+  if (!Address || Address->first->stripPointerCasts() != (*Frame)->Slot ||
+      Address->second != Entry - Establisher)
+    return patchError("native SEH callback is not passed its parent's "
+                      "original EstablisherFrame in function " +
+                      Parent.getName());
+  const auto Accesses = collectSEHCallbackFrameAccesses(Callback);
+  if (!Accesses)
+    return patchError("native SEH callback reaches its parent's emulated "
+                      "frame other than by loads and stores at fixed "
+                      "offsets, or passes a call what it reads there, in "
+                      "function " +
+                      Parent.getName());
+  const int64_t HomesEnd = getTargetRegInfo(Arch::X64)
+                               .integerArgumentLayout(BinaryFormat::COFF)
+                               .EntryStackBase;
+  constexpr int64_t ReturnAddressBytes = 8;
+  for (const SEHFrameAccess &Access : *Accesses) {
+    // Relative to the entry stack pointer.
+    const int64_t Begin = Access.Offset - Establisher;
+    const int64_t End = Begin + static_cast<int64_t>(Access.Size);
+    const bool Fixed =
+        Begin >= -static_cast<int64_t>(Unwind->AllocatedBytes) && End <= 0;
+    const bool Home = Begin >= ReturnAddressBytes && End <= HomesEnd;
+    const bool Saved = llvm::any_of(Unwind->SavedRegisterSlots,
+                                    [&](const std::pair<int64_t, int64_t> &S) {
+                                      return Begin < S.second && S.first < End;
+                                    });
+    const bool Inside = Entry + Begin >= 0 &&
+                        Entry + End <= static_cast<int64_t>((*Frame)->Size);
+    if (!Access.Size || !(Fixed || Home) || Saved || !Inside)
+      return patchError("native SEH callback reaches bytes of its parent's "
+                        "frame that output does not keep in function " +
+                        Parent.getName());
+  }
+  return llvm::Error::success();
+}
+
+/// With its emulated frame passed to a callback, a store \p F makes in
+/// protected code is one the callback may read at the next fault there, and
+/// no plain load or store can raise to LLVM; so each memory access in such
+/// code keeps its order with faults (findSEHUnorderedAccess).  Protected code
+/// is every block the range markers leave a scope open at, from the entry
+/// and from each block a catchret resumes, over normal edges, and every
+/// block two paths enter with different scopes open.
+llvm::Error checkSEHEmulatedFrameOrdering(
+    const llvm::Function &F, const ExceptionFunction &EH,
+    const std::map<std::pair<uint32_t, uint32_t>, NativeEHRangeMarker>
+        &RangeEnters,
+    const std::map<std::pair<uint32_t, uint32_t>, NativeEHRangeMarker>
+        &RangeExits) {
+  std::map<const llvm::InvokeInst *, std::pair<uint32_t, bool>> Markers;
+  for (const auto &[Key, Marker] : RangeEnters)
+    Markers.emplace(Marker.Invoke, std::pair(Key.first, true));
+  for (const auto &[Key, Marker] : RangeExits)
+    Markers.emplace(Marker.Invoke, std::pair(Key.first, false));
+  std::map<const llvm::BasicBlock *, std::optional<std::set<uint32_t>>> Open;
+  llvm::SmallVector<const llvm::BasicBlock *, 16> Work;
+  const auto Seed = [&](const llvm::BasicBlock *Block) {
+    if (Open.emplace(Block, std::set<uint32_t>()).second)
+      Work.push_back(Block);
+  };
+  Seed(&F.getEntryBlock());
+  for (const llvm::BasicBlock &Block : F)
+    if (const auto *Return = llvm::dyn_cast_or_null<llvm::CatchReturnInst>(
+            Block.getTerminator()))
+      Seed(Return->getSuccessor());
+  while (!Work.empty()) {
+    const llvm::BasicBlock *Block = Work.pop_back_val();
+    std::optional<std::set<uint32_t>> Out = Open[Block];
+    const llvm::Instruction *Terminator = Block->getTerminator();
+    if (!Terminator)
+      return patchError("native SEH function has an unterminated block in "
+                        "function " +
+                        F.getName());
+    llvm::SmallVector<const llvm::BasicBlock *, 4> Next;
+    if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Terminator)) {
+      if (const auto Marker = Markers.find(Invoke);
+          Marker != Markers.end() && Out) {
+        if (Marker->second.second)
+          Out->insert(Marker->second.first);
+        else
+          Out->erase(Marker->second.first);
+      }
+      Next.push_back(Invoke->getNormalDest());
+    } else if (!llvm::isa<llvm::CatchSwitchInst, llvm::CatchReturnInst,
+                          llvm::CleanupReturnInst, llvm::ResumeInst>(
+                   Terminator)) {
+      llvm::append_range(Next, llvm::successors(Block));
+    }
+    for (const llvm::BasicBlock *Successor : Next) {
+      const auto [Known, Fresh] = Open.try_emplace(Successor, Out);
+      if (Fresh) {
+        Work.push_back(Successor);
+      } else if (Known->second && Known->second != Out) {
+        Known->second = std::nullopt;
+        Work.push_back(Successor);
+      }
+    }
+  }
+  std::vector<const llvm::BasicBlock *> Protected;
+  for (const auto &[Block, Scopes] : Open)
+    if (!Scopes || !Scopes->empty())
+      Protected.push_back(Block);
+  auto Frame = findSEHEmulatedFrame(F, EH.CodeRange.Begin);
+  if (!Frame)
+    return patchError(llvm::toString(Frame.takeError()));
+  if (!*Frame)
+    return patchError("native SEH emulated frame is missing in function " +
+                      F.getName());
+  if (findSEHUnorderedAccess(**Frame, Protected))
+    return patchError("native SEH function passes a callback its emulated "
+                      "frame but keeps a memory access in protected code out "
+                      "of order with faults in function " +
+                      F.getName());
+  return llvm::Error::success();
+}
+
 llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                                           const ExceptionFunction &EH,
                                           Arch TargetArch) {
@@ -876,6 +1026,9 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
   std::map<RangeKey, NativeEHRangeTarget> RangeEnterTargets;
   std::map<RangeKey, NativeEHRangeTarget> RangeExitTargets;
   std::set<const llvm::InvokeInst *> AnchoredRangeMarkers;
+  // Whether a callback is passed the parent's emulated frame, whose stores in
+  // protected code must then keep their order with a fault.
+  bool UsesEmulatedFrame = false;
 
   for (const llvm::BasicBlock &Block : F) {
     for (const llvm::Instruction &Instruction : Block) {
@@ -1437,13 +1590,23 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                                  CallbackCall->getArgOperand(1) == LocalAddress;
       const bool HasDiscardedFrame =
           LocalAddressCount == 0 && IsProvablyDiscardedArgument(1);
+      // Without llvm.localaddress() in the pad, the argument must be the
+      // parent's emulated frame (checkSEHEmulatedFrameArgument).
+      const bool HasEmulatedFrame =
+          LocalAddressCount == 0 && !HasDiscardedFrame;
       if (!Funclet || Funclet->Inputs.size() != 1 ||
           Funclet->Inputs.front().get() != &Pad ||
           (!HasExactAbnormalTermination && !IsProvablyDiscardedArgument(0)) ||
-          (!HasExactFrame && !HasDiscardedFrame))
+          (!HasExactFrame && !HasDiscardedFrame && !HasEmulatedFrame))
         return patchError("native SEH finally callback ABI was altered in "
                           "function " +
                           F.getName());
+      if (HasEmulatedFrame) {
+        if (auto Error = checkSEHEmulatedFrameArgument(
+                *CallbackCall->getArgOperand(1), *CallbackFunction, F, EH))
+          return Error;
+        UsesEmulatedFrame = true;
+      }
       if (HasExactFrame && sehCallbackUsesOriginalFrame(*CallbackFunction, F))
         return patchError("native SEH finally callback uses its parent's "
                           "original frame, which output does not rebuild, in "
@@ -1544,6 +1707,16 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
           return patchError("local-unwind handler call does not run its "
                             "scope's termination handler in function " +
                             F.getName());
+        // A handler that reads its frame is passed the emulated one, as its
+        // pad passes it.
+        const auto &Handler = *llvm::cast<llvm::Function>(
+            Unwind.Call->getCalledOperand()->stripPointerCasts());
+        if (sehCallbackUsesOriginalFrame(Handler, F)) {
+          if (auto Error = checkSEHEmulatedFrameArgument(
+                  *Unwind.Call->getArgOperand(1), Handler, F, EH))
+            return Error;
+          UsesEmulatedFrame = true;
+        }
         // A call no scope holds stays a call; one a scope holds is that
         // scope's protected invoke.
         const std::optional<uint32_t> Holder = sehParentScope(EH, Unwind.Ended);
@@ -1566,6 +1739,10 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                             F.getName());
       }
     }
+    if (UsesEmulatedFrame)
+      if (auto Error =
+              checkSEHEmulatedFrameOrdering(F, EH, RangeEnters, RangeExits))
+        return Error;
     return ValidateUnwindDestinations();
   }
 

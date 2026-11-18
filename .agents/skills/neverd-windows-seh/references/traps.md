@@ -115,6 +115,16 @@ Each entry happened. The fix is the habit after the colon.
 - A rewritten parent passed its own frame to a termination handler that read
   the original frame layout, and the image printed `count = -1`: execute
   every newly accepted shape before relying on the gate.
+- A transcript equal to the original's proves nothing about a pad the test
+  never reaches. Patch each accepted rewrite again with the pad's frame
+  offset moved and run it: only a changed transcript proves the pad ran. The
+  real gate refuses the moved offset, so patch the probe with an engine whose
+  gate takes any offset (`seh/emu/mutprobe.sh` with the spike library).
+- An emulated-frame sweep with a gate that only checked offsets and bounds
+  accepted `0x140001360`, whose inner `__finally` passes `_local_unwind` the
+  RSP its parent saved in the frame; it ran as the original only because no
+  test faults in that range. Look for a callback's calls before trusting a
+  run.
 - In-place patching bound replacements and callees by name; IR lifted
   without the PDB had its direct calls written to the wrong place while the
   patch exited 0 with a warning: bind by source identity first, and treat a

@@ -15,6 +15,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -7048,6 +7049,393 @@ TEST(COFFExceptionIR, OutputRefusesACallbackThatUsesItsOriginalFrame) {
             << Error << '\n'
             << printModuleIR(*Module);
     }
+}
+
+// A termination handler lifted from the image reads its parent's locals at
+// EstablisherFrame + k.  The lifted parent keeps its original frame in an
+// alloca, so native IR passes a callback that reads its frame the address
+// there of the frame the runtime gave the original: the bytes below the
+// entry stack pointer that the unwind codes put the EstablisherFrame at.  It
+// marks that alloca (neverd.windows.seh.frame) and makes the parent's memory
+// accesses in protected code volatile.  The output gate recomputes the frame
+// from the unwind codes and takes the callback only when it reaches the
+// parent's fixed frame or argument homes, at fixed offsets.
+TEST(COFFExceptionIR, NativeFrameReadingCallbackIsPassedTheEmulatedFrame) {
+  constexpr va_t ParentVA = 0x140201000;
+  constexpr va_t BodyVA = ParentVA + 0x10;
+  constexpr va_t AfterVA = ParentVA + 0x20;
+  constexpr va_t EndVA = ParentVA + 0x40;
+  constexpr va_t CallbackVA = 0x140202000;
+  constexpr va_t MayThrowVA = 0x140203000;
+  constexpr va_t PersonalityVA = 0x140204000;
+  // push rbx; sub rsp, 0x20
+  constexpr uint64_t FrameBytes = 0x28;
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+
+  const auto Block = [](int Id, va_t Begin, va_t End) {
+    MedBlock B;
+    B.Id = Id;
+    B.StartAddr = Begin;
+    B.EndAddr = End;
+    return B;
+  };
+  const auto Branch = [](va_t At, va_t To) {
+    MedOp Op;
+    Op.Opcode = NdOp::BRANCH;
+    Op.Addr = At;
+    Op.addInput(MedVar::makeConst(To, 8));
+    return Op;
+  };
+  MedVar SP;
+  SP.Kind = MedVar::Reg;
+  SP.Id = 1;
+  SP.RegOff = TRI.StackPointer;
+  SP.Size = 8;
+  SP.TheArch = Arch::X64;
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 2;
+  Local.Size = 8;
+  Local.TheArch = Arch::X64;
+
+  MedFunc Parent;
+  Parent.Entry = ParentVA;
+  Parent.Name = "emulated_frame_parent";
+  Parent.ReturnType = NdType::makeVoid();
+  Parent.FrameSize = static_cast<int32_t>(FrameBytes);
+  Parent.FrameHeadroom = 0x28;
+  Parent.SEHTerminationFrameBytes[CallbackVA] = FrameBytes;
+  MedBlock Entry = Block(0, ParentVA, BodyVA);
+  Entry.Ops.push_back(Branch(ParentVA + 4, BodyVA));
+  Entry.Succs = {1};
+  // In the scope: a store to a local, then a call that may raise.
+  MedBlock Body = Block(1, BodyVA, AfterVA);
+  MedOp Address;
+  Address.Opcode = NdOp::INT_SUB;
+  Address.Addr = BodyVA;
+  Address.Output = Local;
+  Address.addInput(SP);
+  Address.addInput(
+      MedVar::makeConst(0x18, 8, ConstantAddressProvenance::Scalar));
+  Body.Ops.push_back(std::move(Address));
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.Addr = BodyVA + 2;
+  Store.addInput(Local);
+  Store.addInput(MedVar::makeConst(7, 8));
+  Body.Ops.push_back(std::move(Store));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = BodyVA + 4;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  Body.Ops.push_back(std::move(Call));
+  Body.Ops.push_back(Branch(BodyVA + 8, AfterVA));
+  Body.Preds = {0};
+  Body.Succs = {2};
+  MedBlock After = Block(2, AfterVA, EndVA);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = AfterVA + 4;
+  After.Ops.push_back(std::move(Return));
+  After.Preds = {1};
+  Parent.Blocks = {Entry, Body, After};
+
+  ExceptionFunction EH;
+  EH.CodeRange = {ParentVA, EndVA};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.UnwindVersion = 1;
+  EH.UnwindFlags = 2;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = PersonalityVA;
+  EH.PrologueSize = 6;
+  UnwindOperation Allocate;
+  Allocate.Kind = UnwindOperationKind::AllocateSmall;
+  Allocate.CodeOffset = 6;
+  Allocate.StackOffset = 0x20;
+  UnwindOperation Push;
+  Push.Kind = UnwindOperationKind::PushNonVolatile;
+  Push.CodeOffset = 2;
+  Push.Register = 3;
+  EH.UnwindOperations = {Allocate, Push};
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {BodyVA, AfterVA};
+  Scope.Kind = SEHScopeKind::Finally;
+  Scope.FilterOrFinallyVA = CallbackVA;
+  Scope.HandlerVA = CallbackVA;
+  EH.SEH->Scopes.push_back(Scope);
+  Parent.ExceptionMetadata = EH;
+
+  // The callback reads through the frame it is passed.
+  MedFunc Callback;
+  Callback.Entry = CallbackVA;
+  Callback.Name = "frame_reading_finally";
+  Callback.ReturnType = NdType::makeVoid();
+  for (unsigned I = 0; I < 2; ++I) {
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.TheArch = Arch::X64;
+    Param.Id = static_cast<int>(I);
+    Param.Size = I == 0 ? 1 : 8;
+    Param.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Callback.Params.push_back(Param);
+    Callback.TypedParams.push_back(
+        {I == 0 ? "abnormal_termination" : "establisher_frame",
+         I == 0 ? NdType::makeInt(1, /*Signed=*/false) : NdType::makePtr()});
+  }
+  MedBlock CallbackBody = Block(0, CallbackVA, CallbackVA + 8);
+  MedVar Read;
+  Read.Kind = MedVar::Temp;
+  Read.TheArch = Arch::X64;
+  Read.Id = 40;
+  Read.SSAVer = 1;
+  Read.Size = 8;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = CallbackVA;
+  Load.addInput(Callback.Params.back());
+  Load.Output = Read;
+  CallbackBody.Ops.push_back(std::move(Load));
+  MedOp CallbackReturn;
+  CallbackReturn.Opcode = NdOp::RETURN;
+  CallbackReturn.Addr = CallbackVA + 4;
+  CallbackBody.Ops.push_back(std::move(CallbackReturn));
+  Callback.Blocks.push_back(std::move(CallbackBody));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Parent, Callback,
+       makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler")},
+      Context, "emulated_frame", Arch::X64, {{MayThrowVA, "may_throw"}},
+      nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectVerifierClean(*Module);
+  llvm::Function *Owner = Module->getFunction(Parent.Name);
+  llvm::Function *Lifted = Module->getFunction(Callback.Name);
+  ASSERT_NE(Owner, nullptr);
+  ASSERT_NE(Lifted, nullptr);
+  ASSERT_TRUE(Owner->hasPersonalityFn()) << printModuleIR(*Module);
+
+  // The marked frame, and the pad's argument at the EstablisherFrame's bytes
+  // below the entry byte.
+  const llvm::AllocaInst *Frame = nullptr;
+  uint64_t EntryOffset = 0;
+  for (const llvm::Instruction &Instruction : Owner->getEntryBlock())
+    if (const llvm::MDNode *Mark = Instruction.getMetadata(
+            windows_eh_md::SEHEmulatedFrameAttachment)) {
+      Frame = llvm::dyn_cast<llvm::AllocaInst>(&Instruction);
+      ASSERT_EQ(Mark->getNumOperands(), 2u);
+      EXPECT_EQ(llvm::mdconst::extract<llvm::ConstantInt>(Mark->getOperand(0))
+                    ->getZExtValue(),
+                ParentVA);
+      EntryOffset =
+          llvm::mdconst::extract<llvm::ConstantInt>(Mark->getOperand(1))
+              ->getZExtValue();
+    }
+  ASSERT_NE(Frame, nullptr) << printModuleIR(*Module);
+  ASSERT_GE(EntryOffset, FrameBytes);
+  const llvm::CallBase *PadCall = nullptr;
+  for (const llvm::BasicBlock &BB : *Owner)
+    for (const llvm::Instruction &Instruction : BB)
+      if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          Site && Site->getCalledFunction() == Lifted)
+        PadCall = Site;
+  ASSERT_NE(PadCall, nullptr) << printModuleIR(*Module);
+  const auto *Argument =
+      llvm::dyn_cast<llvm::GetElementPtrInst>(PadCall->getArgOperand(1));
+  ASSERT_NE(Argument, nullptr) << printModuleIR(*Module);
+  EXPECT_EQ(Argument->getPointerOperand(), Frame);
+  llvm::APInt Offset(64, 0);
+  ASSERT_TRUE(
+      Argument->accumulateConstantOffset(Module->getDataLayout(), Offset));
+  EXPECT_EQ(Offset.getZExtValue(), EntryOffset - FrameBytes);
+  // The store in the scope keeps its order with a fault.
+  bool StoreInScope = false;
+  for (const llvm::BasicBlock &BB : *Owner)
+    for (const llvm::Instruction &Instruction : BB)
+      if (const auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+        if (const auto *Value =
+                llvm::dyn_cast<llvm::ConstantInt>(Kept->getValueOperand());
+            Value && Value->getZExtValue() == 7) {
+          StoreInScope = true;
+          EXPECT_TRUE(Kept->isVolatile()) << printModuleIR(*Module);
+        }
+  EXPECT_TRUE(StoreInScope) << printModuleIR(*Module);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  Image.ExceptionMetadata.Functions.push_back(EH);
+  Image.ExceptionMetadata.rebuildIndex();
+  const auto Refusal = [&](llvm::Module &Candidate) {
+    expectVerifierClean(Candidate);
+    auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
+    return Plan ? std::string() : llvm::toString(Plan.takeError());
+  };
+
+  // What the callback does through its frame, written as lifted code does:
+  // the frame from a home, plus a constant, through inttoptr.
+  enum class Use {
+    ReadsALocal,
+    WritesALocal,
+    ReadsAHome,
+    ReadsTheReturnAddress,
+    ReadsAPushedRegister,
+    ReadsACallerArgument,
+    ReadsBelowTheFrame,
+    PassesIt,
+    PassesWhatItReads,
+    AddsAVariable,
+  };
+  struct Case {
+    Use How;
+    const char *Refused;
+  };
+  constexpr const char *Unkept = "reaches bytes of its parent's frame that "
+                                 "output does not keep";
+  constexpr const char *Unfixed = "other than by loads and stores at fixed "
+                                  "offsets";
+  const int64_t EntrySP = static_cast<int64_t>(FrameBytes);
+  const Case Cases[] = {
+      {Use::ReadsALocal, nullptr},         {Use::WritesALocal, nullptr},
+      {Use::ReadsAHome, nullptr},          {Use::ReadsTheReturnAddress, Unkept},
+      {Use::ReadsAPushedRegister, Unkept}, {Use::ReadsACallerArgument, Unkept},
+      {Use::ReadsBelowTheFrame, Unkept},   {Use::PassesIt, Unfixed},
+      {Use::PassesWhatItReads, Unfixed},   {Use::AddsAVariable, Unfixed},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(static_cast<int>(C.How));
+    std::unique_ptr<llvm::Module> Candidate = llvm::CloneModule(*Module);
+    llvm::Function *Body = Candidate->getFunction(Callback.Name);
+    for (llvm::BasicBlock &BB : *Body)
+      BB.dropAllReferences();
+    while (!Body->empty())
+      Body->begin()->eraseFromParent();
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Body));
+    auto *I64 = B.getInt64Ty();
+    llvm::AllocaInst *Home = B.CreateAlloca(I64);
+    B.CreateStore(B.CreatePtrToInt(Body->getArg(1), I64), Home);
+    llvm::Value *Base = B.CreateLoad(I64, Home);
+    const auto At = [&](int64_t Displacement) {
+      return B.CreateIntToPtr(
+          B.CreateAdd(Base, B.getInt64(static_cast<uint64_t>(Displacement))),
+          B.getPtrTy());
+    };
+    switch (C.How) {
+    case Use::ReadsALocal:
+      B.CreateLoad(I64, At(0x10));
+      break;
+    case Use::WritesALocal:
+      B.CreateStore(B.getInt32(1), At(0x18));
+      break;
+    case Use::ReadsAHome:
+      B.CreateLoad(I64, At(EntrySP + 0x18));
+      break;
+    case Use::ReadsTheReturnAddress:
+      B.CreateLoad(I64, At(EntrySP));
+      break;
+    case Use::ReadsAPushedRegister:
+      B.CreateLoad(I64, At(EntrySP - 8));
+      break;
+    case Use::ReadsACallerArgument:
+      B.CreateLoad(I64, At(EntrySP + 0x28));
+      break;
+    case Use::ReadsBelowTheFrame:
+      B.CreateLoad(I64, At(-8));
+      break;
+    case Use::PassesIt:
+      B.CreateCall(
+          Candidate->getOrInsertFunction(
+              "takes_a_pointer",
+              llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false)),
+          {At(0x10)});
+      break;
+    case Use::PassesWhatItReads:
+      // A frame the lifted parent saved there is an address in the emulated
+      // frame, which `_local_unwind` would take for a real one.
+      B.CreateCall(Candidate->getOrInsertFunction(
+                       "_local_unwind", llvm::FunctionType::get(
+                                            B.getVoidTy(), {I64, I64}, false)),
+                   {B.CreateLoad(I64, At(0x10)), B.getInt64(0)});
+      break;
+    case Use::AddsAVariable:
+      B.CreateLoad(I64,
+                   B.CreateIntToPtr(
+                       B.CreateAdd(Base, B.CreateZExt(Body->getArg(0), I64)),
+                       B.getPtrTy()));
+      break;
+    }
+    B.CreateRetVoid();
+    const std::string Error = Refusal(*Candidate);
+    if (!C.Refused) {
+      EXPECT_EQ(Error, "") << printModuleIR(*Candidate);
+      // The optimizer keeps the frame, its mark and the order.
+      std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Candidate);
+      Pipeline::OptimizationOptions Options;
+      Options.Strength = Pipeline::OptStrength::Deep;
+      Options.LLVMLevel = llvm::OptimizationLevel::O3;
+      const OptimizationResult Optimization =
+          Pipeline::optimizeModule(*Optimized, Options);
+      EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+      EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+      EXPECT_EQ(Refusal(*Optimized), "") << printModuleIR(*Optimized);
+    } else {
+      EXPECT_NE(Error.find(C.Refused), std::string::npos)
+          << Error << '\n'
+          << printModuleIR(*Candidate);
+    }
+  }
+
+  // The pad's argument eight bytes off, the frame unmarked, and a plain
+  // store in the scope are each refused.
+  const auto PadArgument = [&](llvm::Module &Candidate) {
+    llvm::Function *Function = Candidate.getFunction(Parent.Name);
+    llvm::Function *Handler = Candidate.getFunction(Callback.Name);
+    for (llvm::BasicBlock &BB : *Function)
+      for (llvm::Instruction &Instruction : BB)
+        if (auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+            Site && Site->getCalledFunction() == Handler)
+          return llvm::cast<llvm::GetElementPtrInst>(Site->getArgOperand(1));
+    return static_cast<llvm::GetElementPtrInst *>(nullptr);
+  };
+  {
+    std::unique_ptr<llvm::Module> Moved = llvm::CloneModule(*Module);
+    llvm::GetElementPtrInst *Pad = PadArgument(*Moved);
+    ASSERT_NE(Pad, nullptr);
+    Pad->setOperand(1, llvm::ConstantInt::get(Pad->getOperand(1)->getType(),
+                                              EntryOffset - FrameBytes + 8));
+    EXPECT_NE(Refusal(*Moved).find("not passed its parent's original "
+                                   "EstablisherFrame"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Unmarked = llvm::CloneModule(*Module);
+    llvm::GetElementPtrInst *Pad = PadArgument(*Unmarked);
+    ASSERT_NE(Pad, nullptr);
+    llvm::cast<llvm::Instruction>(Pad->getPointerOperand())
+        ->setMetadata(windows_eh_md::SEHEmulatedFrameAttachment, nullptr);
+    EXPECT_NE(Refusal(*Unmarked).find("names no emulated frame"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Plain = llvm::CloneModule(*Module);
+    bool Cleared = false;
+    for (llvm::BasicBlock &BB : *Plain->getFunction(Parent.Name))
+      for (llvm::Instruction &Instruction : BB)
+        if (auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+            Kept && Kept->isVolatile()) {
+          Kept->setVolatile(false);
+          Cleared = true;
+        }
+    ASSERT_TRUE(Cleared);
+    EXPECT_NE(Refusal(*Plain).find("out of order with faults"),
+              std::string::npos)
+        << printModuleIR(*Plain);
+  }
 }
 
 } // namespace

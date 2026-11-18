@@ -14,6 +14,12 @@ add_custom_command(
   COMMENT "Embedding the binary-file ISA model"
   VERBATIM)
 
+# The fixed frame Windows x64 unwind codes record, which the lift's frame
+# proof and the output gate both read; it needs nothing of the loader.
+add_neverd_component_library(NeverDX64UnwindFrame
+  COFF/eh/X64UnwindFrame.cpp
+)
+
 add_neverd_component_library(NeverDLoader
   ItaniumVTable.cpp
   COFF/COFFLoader.cpp
@@ -202,6 +208,7 @@ add_neverd_component_library(NeverDLoader
   EVM
   IR
   SBF
+  X64UnwindFrame
 
   LINK_LIBS
   LLVMSwiftDemangle

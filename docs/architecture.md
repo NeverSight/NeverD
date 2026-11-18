@@ -1342,22 +1342,50 @@ order the next row over each row's range, or over a range holding it, stands
 for the parent of that row's scope (`sehParentScope`), and no later row holds
 the range of a scope without one, so the rows a scan meets at any address are
 the source's scope chain there, inner first.
-The gate also refuses a function whose termination handler or filter uses
-the EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The pad
-passes a termination handler `llvm.localaddress()` and the runtime passes a
-filter the frame of the function the code generator wrote; a callback lifted
-from the image reads its parent's locals at the offsets the original frame
-gave them, where that frame holds something else, and such a rewrite ran and
-read the wrong bytes. A helper a compiler outlined reads them through
-`llvm.localrecover`, after `llvm.eh.recoverfp` in a filter, which that frame
-is for, and stays accepted. Keeping the argument in a home (an alloca only
-loads and stores name, as a lifted register is) or in the callback's own
-frame is no use of it until a load reads it back into one, or the frame's
-address leaves the callback; a callback whose body the module does not hold
-may do anything. The lifted parent does keep its original frame (the `frame`
-alloca and `rsp_init`), and a local unwind's handler calls in its body already
-pass the frame's address there; an output form that passes a pad's callback
-that address as well does not exist yet.
+A callback lifted from the image reads its parent's locals at the offsets
+the original frame gave them, `EstablisherFrame + k`. The lifted parent keeps
+that frame: the `frame` alloca, whose byte at `rsp_init` stands for the entry
+stack pointer. Native IR passes a termination handler that reads its frame
+(MedIR: a value derived from its second argument register reaches memory, a
+call, a branch or the return) the address there of the frame the runtime gave
+the original: the certified bytes below the entry stack pointer
+(`SEHTerminationFrameBytes`), for an x64 parent without a frame register. It
+marks the alloca with its owner and entry byte
+(`neverd.windows.seh.frame`), and makes every load, store, atomic and memory
+intrinsic in protected code volatile, except a register home's, as clang's
+`-EHa` does for a `__try`: the callback sees at a fault every store made
+before it, and LLVM takes no plain load or store for one that can raise. A
+local unwind's handler calls in the body pass the same address. Any other
+callback keeps `llvm.localaddress()`, and the gate refuses one that uses the
+EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The runtime
+passes a filter the frame of the function the code generator wrote, so a
+filter that reads its frame is still refused. A helper a compiler outlined
+reads its parent's locals through `llvm.localrecover`, after
+`llvm.eh.recoverfp` in a filter, which that frame is for, and stays accepted.
+Keeping the argument in a home (an alloca only loads and stores name, as a
+lifted register is) or in the callback's own frame is no use of it until a
+load reads it back into one, or the frame's address leaves the callback; a
+callback whose body the module does not hold may do anything.
+The gate takes the emulated frame only as it rebuilds it
+(`checkSEHEmulatedFrameArgument`). It finds the marked alloca and reads the
+source's unwind codes again (`decodeX64UnwindFrame`, which the lift's frame
+proof shares), and the argument must be that alloca at the entry byte less
+the EstablisherFrame's bytes. The callback must reach the frame only by loads
+and stores at fixed offsets (`collectSEHCallbackFrameAccesses`), and only
+bytes the lifted parent keeps as the original did: its fixed frame and the
+argument homes above the return address, not a pushed or saved register,
+which emission leaves out, the return address or the caller's stack
+arguments, all inside the alloca. Neither the frame nor anything the callback
+reads through it may reach a call: the runtime compares an EstablisherFrame,
+or a frame the parent saved there for `_local_unwind`, with real frames, and
+the emulated one is none. In the parent, every memory access in protected
+code must be volatile, except a store inside a private slot and a load inside
+an alloca at a fixed offset (`findSEHUnorderedAccess`); protected code is
+every block the range markers leave a scope open at, from the entry and from
+each block a catchret resumes. Rewritten alone, `sub_140001150` and
+`sub_140001180` of `xcpt4-msvc-x86_64-fh4-gs-o2.exe`, which printed
+`count = -1` before the gate refused them, print the original's transcript
+under wine, and an argument eight bytes off prints `count = -1` again.
 A termination handler that leaves its `__finally` by a jump is the other
 side of a local unwind: it calls the runtime with a block of its parent to
 resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block

@@ -49,9 +49,21 @@ architecture.
 - So the parent's frame layout is part of the handler's contract. A rewritten
   parent that passes its own `llvm.localaddress()` breaks handlers that read
   the original layout; the gate refuses those
-  (`sehCallbackUsesOriginalFrame`). Passing `rsp_init - frame bytes` made
-  such a handler run identically in an experiment; that output form is not
-  built.
+  (`sehCallbackUsesOriginalFrame`). Native output passes a termination
+  handler that reads its frame the lifted parent's emulated frame, `frame`
+  at `rsp_init - frame bytes`, and the gate takes it only as it rebuilds it
+  from the unwind codes.
+- The emulated frame is good for bytes, not as a frame identity: RtlUnwind,
+  `_local_unwind` and longjmp compare an EstablisherFrame with real frames.
+  A stack address the lifted parent saved in its frame is an emulated one
+  too, so neither the frame nor anything a callback reads through it may
+  reach a call. MSVC saves RSP (`mov [rsp+20h], rsp`) for exactly the
+  handlers that call `_local_unwind`.
+- A callback reads the parent's frame at a fault, and LLVM takes no plain
+  load or store for one that can raise; `llvm.seh.try.begin`/`end` only keep
+  faults inside their range. Clang's `-EHa` makes the accesses of a `__try`
+  volatile for that reason, and native output does the same where a callback
+  is passed the emulated frame.
 - On AArch64, MSVC filter and finally callbacks may read the parent's
   callee-saved registers directly (`ldr w0, [x27]`). LLVM C prints each
   callback alone, so it cannot give such a register one declaration on every

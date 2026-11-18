@@ -41,11 +41,25 @@ Update this file when an item closes or a new gap is proven.
   with nested or repeated rows, and every one stops at another gate; the two
   functions per o2 build that patch run as the original in all eight runs
   and were accepted before the change too.
-- Callbacks that read the parent's original frame need an emulated-frame
-  output form (pass `rsp_init - frame bytes`, a gate form recomputed from the
-  unwind codes, a bound on what the callback reads). This gate stops 11 of
-  those 24 functions (10 at o0). A new native output shape: the user
-  decides.
+- The emulated frame (user decision 2026-11-18, both halves): termination
+  handlers that read their frame are passed it (see architecture.md for the
+  rules). Filters still refuse: the runtime passes a filter the rewritten
+  parent's frame, so a filter needs an adapter (`llvm.eh.recoverfp` and
+  `llvm.localrecover` of the frame the parent escapes, then the source filter
+  with the emulated frame). Output then has to take the adapter's address in
+  the filter row, which binding now compares with the source filter's
+  (`prepareCOFFExceptionDirectory`): give the adapter a name output can find
+  in `CompiledImage::SymbolAddrs`. In-place mode places no function without
+  a source address, so it hands such a module to the section patcher, as
+  the x86 registration path does.
+- With the `__finally` half, per function on the four vs2019 x64 xcpt4
+  builds: the 15 functions per build the original-frame gate stopped now
+  give 4 (5 at o0) that patch and run as the original in every run, 2 per
+  build with a pad a planted offset proves ran (the rest are CRT functions
+  whose pads the test never reaches); 6 whose handler passes `_local_unwind`
+  the frame it reads from its parent (a handler that resumes its parent,
+  which native output has no form for); 4 that stop at the catchret check;
+  and at o2 one at the filter frame gate.
 - The other native gates those functions meet: incomplete native lowering
   (8, 9 at o0: a local unwind handler that does not return, or scope bounds
   that are not block bounds, refused in `MedLLVMNativeSEH.cpp`), a region

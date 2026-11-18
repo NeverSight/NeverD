@@ -67,7 +67,7 @@ enum class NativeProvenanceRole : unsigned {
   /// A termination handler a local unwind calls, standing where the runtime
   /// call stood: outside the scope it ends (Region, by source row) and inside
   /// the ones around it.  Marks the call, protected or not.  The output gate
-  /// has no certified form for it and refuses it by this role.
+  /// places the call by the row it ends.
   LocalUnwindHandlerCall = 11,
 };
 
@@ -93,6 +93,11 @@ inline constexpr llvm::StringLiteral
     RegistrationJumpAttachment("neverd.windows.registration.jump");
 inline constexpr llvm::StringLiteral
     RegistrationParentExitAttachment("neverd.windows.registration.parent-exit");
+/// The alloca a lifted Windows x64 SEH parent keeps its original frame in,
+/// whose bytes the callbacks it passes that frame read as their parent's:
+/// owner VA, then the byte that stands for the entry stack pointer.
+inline constexpr llvm::StringLiteral
+    SEHEmulatedFrameAttachment("neverd.windows.seh.frame");
 /// Private data-register exchange: owner VA, role, callback VA, source site,
 /// register offset. Roles 0/1/2/3 are call input/callback input/callback
 /// output/ call output; role 4 identifies the unique parent-owned i32 slot.
