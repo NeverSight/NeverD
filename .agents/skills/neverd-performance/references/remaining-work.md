@@ -96,9 +96,13 @@ A/B with identical output.
      `limits::kMaxJumpTableEvidenceWork` (4096) at its physical-envelope
      step, so all 325 code-pointer relocation slots become protected and all
      689 functions are lifted again (logged 2026-11-18; the unsafe set stays
-     empty). A budget that lets capstone's arbitration finish would remove
-     the second lift and the second graph of every callee, but it changes
-     which slots are protected, so it is a budget policy decision. Builds that end in `MissingTerminator` (an
+     empty). Raising that budget alone is not enough: with it at 1,048,576
+     (a private build), the module address-use inventory stops at its own
+     cap (`scan-cap`: all lifted operations of the module must fit
+     `limits::kMaxSSAFunctionOps`). Letting capstone's arbitration finish
+     would remove the second lift and the second graph of every callee, but
+     it needs both limits raised and changes which slots are protected, so
+     it is a policy decision whose output effect is not measured yet. Builds that end in `MissingTerminator` (an
      indirect branch the resolver could not settle) hold 56% of the time,
      and only a complete CFG shows that rejection.
    - On x64 the raw-stack flag of a graph build does not change its CFG

@@ -35,6 +35,7 @@ Update this file when an item closes or a new gap is proven.
 | `043e6fdb22` | Native output passes a termination handler that reads its frame the parent's emulated frame; the gate rebuilds it from the unwind codes, bounds what the callback reaches and orders protected memory with faults |
 | `4ccfcc23b6` | A filter that reads its frame runs behind an adapter (`llvm.eh.recoverfp`, `llvm.localrecover`); rows bind to the adapter by the compiler's receipt; in-place hands such modules to the section patch; frame-register parents take the emulated frame; LLVM C of native IR calls the filter with the emulated frame |
 | `ab7b687fa2` | Default LLVM C passes the emulated frame too; a Win64 home spill counts as an argument read where an SEH callback gets the frame (`sehCallbacksReceiveFrame`); filter adapters no longer turn off interprocedural passes (`registerOptNoneInterproceduralGuard`) |
+| `9165082406` | Default LLVM C makes protected accesses volatile where a callback reads the frame, as native IR does |
 
 ## Open
 
@@ -63,8 +64,8 @@ Update this file when an item closes or a new gap is proven.
   `pass_through_2_dll` had lost `Disposition`, which only its filter reads
   from its home slot. The rule over-approximates: every spill counts, also
   one that no callback reads. The source view makes protected accesses
-  volatile as native IR does (without it, the optimizer dropped 925 frame
-  stores in the 98 changed corpus files). Open: a filter that reads its
+  volatile as native IR does (925 more frame store statements print in the
+  98 changed corpus files; some are only stores volatile keeps apart). Open: a filter that reads its
   parent's stack arguments (above the home area) still leaves them out of
   the signature; C++ catch and unwind funclets, which also get the frame,
   are not covered by the rule; HighC still calls a filter that reads its
