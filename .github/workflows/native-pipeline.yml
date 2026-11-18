@@ -379,6 +379,53 @@ jobs:
                   allowed_boundary_skips['NativePointerRelocationBoundary.' + suffix] = reason
           if platform.system() != 'Linux' or platform.machine().lower() not in ('x86_64', 'amd64', 'i386', 'i686'):
               allowed_boundary_skips['COFFMinGWStyleTables.NativeI386ResultsMatchOriginalInstructions'] = 'native i386 execution requires a Linux x86 host'
+          # These exact cases execute or link native AArch64 code. Their
+          # source guards skip on other host architectures; an AArch64 skip
+          # or a different diagnostic remains a qualification failure.
+          if platform.machine().lower() not in ('arm64', 'aarch64'):
+              allowed_boundary_skips.update({
+                  'NativeTranslationSession.ExecutesAuditedReturnBlockAndCommitsStateTransactionally': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.DispatchesDirectBranchIntoASecondAuditedBlock': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.DispatchesBothSelectedSuccessorsOfAZeroFlagBranch': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ExecutesCompareAndTestBeforeDispatchingBothBranchSuccessors': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ExecutesNegativeImmediateCompareAndTestThroughTheNativeDispatcher': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.DispatchesBothSelectedSuccessorsOfSingleFlagBranches': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.DispatchesBothSelectedSuccessorsOfEveryMultiFlagBranch': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.StopsAtTheDirectBranchTargetAtTheExactBlockBudget': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.StopsAtTheDirectBranchTargetAtTheExactInstructionBudget': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.StopsASelfLoopAtTheThirdBlockBoundary': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.StopsBeforeTheNextBlockWhenGeneratedCodeReachesItsExactBudget': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.PassesTheRemainingInstructionBudgetToTheSecondBlock': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.TerminalSecondBlockWinsAtExactInstructionAndBlockBudgets': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.TerminalSecondBlockWinsAtTheExactGeneratedCodeBudget': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.AggregatesASecondBlockGeneratedCodeOverrunAgainstTheRunBudget': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsGuestStackFaultAndCommitsCompletedPriorInstructions': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsUnmappedInstructionFetchAsAnExactGuestMemoryFault': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.KeepsTheCommittedPCWhenFetchFailsAfterAnUnexecutedPrefix': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsInstructionExecutePermissionAsAnExactGuestMemoryFault': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsTheSecondUndecodableInstructionAsAnExactUnsupportedTrap': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsAnUnsupportedLoweringSliceAtTheGuestBlockEntry': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.DoesNotClaimThatAnUnexecutedSupportedPrefixIsRestartableAtTheFailure': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockUnsupportedStop': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockLoweringSliceStop': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.CommitsTheFirstBlockBeforeASecondBlockInstructionFetchFault': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.StopsAtTheInstructionTranslationBudgetWithoutPublishingCode': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.TerminalReturnWinsAtExactInstructionAndBlockBudgets': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.ReportsTheObservedGeneratedCodeBudgetWithoutPublishingCode': 'native AArch64 execution is unavailable',
+                  'NativeTranslationSession.RejectsInvalidRestoreWithoutChangingState': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.RepeatedLinkAndUnloadOwnsEveryAllocation': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.UncredentialedLinkCannotInvokeAndUnloadIsIdempotent': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.RejectsAddressSubstitutedRuntimeRegistry': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.ReauditsCompilerArtifactBytesBeforeAllocation': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.RejectsCredentialEntryPCDifferentFromTrustedDescriptor': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.RejectsCorruptedTrustedDescriptorBeforeLinking': 'native AArch64 linking is unavailable',
+                  'TranslationJITLinker.RejectsRuntimeStateAtWrongEntryPCWithoutMutatingInvocationInputs': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.InvokesAuditedX86ReturnThroughFinalizedAArch64Code': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.InvokesAuditedDirectBranchWithoutInventingRuntimeReferences': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.InvokesAuditedZeroFlagBranchesWithoutRuntimeReferences': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.InvokesAuditedSingleFlagBranchesWithoutRuntimeReferences': 'native AArch64 execution is unavailable',
+                  'TranslationJITLinker.InvokesEveryMultiFlagBranchTruthTableWithoutRuntimeReferences': 'native AArch64 execution is unavailable',
+              })
           # Existing optional MinGW whole-program coverage requires that external
           # compiler. Record its actual availability; missing cross-target Clang is
           # not admitted because the workflow deliberately provisions it.
