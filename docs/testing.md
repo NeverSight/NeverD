@@ -3515,6 +3515,15 @@ HighIR retains checked HFA results as records of their returned registers;
 field reads do not require unsupported 192/256-bit C integers on AArch64.
 `RecordCallContract.HFAResultRecordsRequireTheExactDeclaredLayout` rejects
 changed member classes, offsets, alignment, size and an unproved carrier.
+`FloatingRecordResultsKeepPhysicalLocals` and
+`FloatingRecordResultsKeepIntegerExpressionCarriers` compile and execute HighC
+on every host with the configured Clang, using AArch64 COFF/ELF/Mach-O call
+contracts and both header and local declarations. They check the converted
+result's local type and nested expression type, exact NaN/signed-zero bytes,
+and one provider invocation at O0/O2 with undefined-behavior checks. The
+three-float legacy integer case also checks the twelve declared bytes when
+the host C integer has padding. These are C projection checks, not native
+execution of the three target platforms.
 `RecordCallContract.WindowsHFAProjectionsExecuteOnAArch64` and
 `RecordCallContract.WindowsHFAImportSlotProjectionsExecuteOnAArch64` execute
 those C matrices as freestanding Linux AArch64 programs, directly on that
