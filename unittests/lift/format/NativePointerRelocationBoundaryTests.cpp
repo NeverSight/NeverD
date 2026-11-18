@@ -2780,12 +2780,16 @@ TEST_F(NativePointerRelocationBoundary,
       Out << "#include <stdio.h>\n"
           << Rendered.Text << "\nstruct _iobuf object;\n";
     }
+    // A UCRT-configured MinGW installation redefines _UCRT from its default
+    // __MSVCRT_VERSION__. Select both parts of the header contract explicitly.
     for (const bool HeaderUCRT : {false, true}) {
       SCOPED_TRACE(HeaderUCRT);
-      const auto Syntax =
-          exec(NEVERD_TEST_CLANG,
-               {"--target=x86_64-w64-mingw32", "-fsyntax-only",
-                HeaderUCRT ? "-D_UCRT" : "-U_UCRT", Source.string()});
+      const auto Syntax = exec(NEVERD_TEST_CLANG,
+                               {"--target=x86_64-w64-mingw32", "-fsyntax-only",
+                                HeaderUCRT ? "-D_UCRT" : "-U_UCRT",
+                                HeaderUCRT ? "-D__MSVCRT_VERSION__=0xE00"
+                                           : "-D__MSVCRT_VERSION__=0x700",
+                                Source.string()});
       if (HeaderUCRT == UCRT && Variant != 2)
         EXPECT_TRUE(Syntax.ok()) << Syntax.err;
       else {
