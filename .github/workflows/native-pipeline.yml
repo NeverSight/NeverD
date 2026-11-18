@@ -377,6 +377,8 @@ jobs:
                   'RelroWithoutACompleteProtectedPageRetainsNativeWrites': 'executes a public x86-64 Linux loader fixture',
               }.items():
                   allowed_boundary_skips['NativePointerRelocationBoundary.' + suffix] = reason
+          if platform.system() != 'Linux' or platform.machine().lower() not in ('x86_64', 'amd64', 'i386', 'i686'):
+              allowed_boundary_skips['COFFMinGWStyleTables.NativeI386ResultsMatchOriginalInstructions'] = 'native i386 execution requires a Linux x86 host'
           # Existing optional MinGW whole-program coverage requires that external
           # compiler. Record its actual availability; missing cross-target Clang is
           # not admitted because the workflow deliberately provisions it.
