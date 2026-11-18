@@ -2333,3 +2333,20 @@ The first instruction's second byte returned the registered FDE for that same
 function. The Xcode 27 runner resolved the FDE at the entry itself. The cursor
 reports the lookup offset so consumers can retain the exact interrupted PC.
 [Compiler-original native controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44217430465)
+
+The full Release replay passed all 243 cases on each of macos-26 and xcode-27
+with zero skips. Windows passed its frontend checks. Each Mac executed the
+original mixed image and three signed publications. The fourth image contained
+16 data-in-code records. A separate forced header expansion preserved all four
+input records and the bytes they designate. Both systems reproduced the indexed
+old-entry result in the published image. The FDE lookup offset within the first
+instruction was one byte on macos-26 and zero on xcode-27. Both reported Apple
+M1 (Virtual). Explicit PAuth_LR, PACM-PC, scalar CPTA-on and checked writeback
+still lack a qualifying native execution. [Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/44220600796).
+
+The local six-suite Release run passed 1,080 of 1,132 cases and skipped 52.
+Supplying the system arm64e shared cache and the text section of `/usr/bin/wc`
+exercised six of those skips. All six passed. The cache checks covered 3,257
+image projections and 7,981,837 authenticated slide recipes. The classifier
+matched the independent decoder on all 653 system text instructions.
+[Source, image hashes and test results](evidence/arm64e-mixed-data-system-unwind-2026-11-18.json).
