@@ -1406,7 +1406,12 @@ each block a catchret resumes. Rewritten alone, `sub_140001150` and
 `count = -1` before the gate refused them, print the original's transcript
 under wine, and an argument eight bytes off prints `count = -1` again. No
 filter of the 16 MSVC x64 xcpt4 builds that reads its frame reaches output:
-each such function stops at another gate. A clang build for MinGW
+each such function stops at another gate. In the 12 MSVC `/Od` builds of
+`nested_collided`, the function whose two `__except` filters keep their
+exception pointers in their parent's frame and pass them on patches and runs
+as the original behind two adapters, lifted and patched with and without
+optimization in both modes; moved off the stack, the adapters' frame makes
+the test fail. A clang build for MinGW
 (`-O1`, `-O2`) of a `__try` whose filter reads a local the protected code
 set, with its frame on RBP, runs as the original under wine behind the
 adapter, lifted and patched with and without optimization in both modes; an

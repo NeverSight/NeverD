@@ -115,6 +115,9 @@ Each entry happened. The fix is the habit after the colon.
 - A rewritten parent passed its own frame to a termination handler that read
   the original frame layout, and the image printed `count = -1`: execute
   every newly accepted shape before relying on the gate.
+- A filter that only keeps a value in its parent's frame and reads it back
+  behaves the same when its frame moves by a few bytes: such a probe proves
+  nothing. Move the frame off the stack instead.
 - A transcript equal to the original's proves nothing about a pad the test
   never reaches. Patch each accepted rewrite again with the pad's frame
   offset moved and run it: only a changed transcript proves the pad ran. The

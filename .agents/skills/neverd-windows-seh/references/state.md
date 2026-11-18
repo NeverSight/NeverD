@@ -33,6 +33,7 @@ Update this file when an item closes or a new gap is proven.
 | `e3743938d5` | Native output takes nested scope tables (generated rows tied to the source scope chain) and source tables that repeat a range, and places a local unwind's handler calls by the row each ends and by the range markers; the MSVC local unwind fixture (/O1, /O2) runs as the original in all 64 wine runs |
 | `8f1b084dd2` | LLVM C prints the parent code a handler's `_local_unwind` always resumes, with a `goto` at the end of the `__finally` (36 xcpt4 corpus builds, 1 to 13 each) |
 | `043e6fdb22` | Native output passes a termination handler that reads its frame the parent's emulated frame; the gate rebuilds it from the unwind codes, bounds what the callback reaches and orders protected memory with faults |
+| `4ccfcc23b6` | A filter that reads its frame runs behind an adapter (`llvm.eh.recoverfp`, `llvm.localrecover`); rows bind to the adapter by the compiler's receipt; in-place hands such modules to the section patch; frame-register parents take the emulated frame; LLVM C of native IR calls the filter with the emulated frame |
 
 ## Open
 
@@ -43,12 +44,16 @@ Update this file when an item closes or a new gap is proven.
   functions per o2 build that patch run as the original in all eight runs
   and were accepted before the change too.
 - The emulated frame (user decision 2026-11-18, both halves, landed in
-  `043e6fdb22` and the commit after it): termination handlers that read their
+  `043e6fdb22` and `4ccfcc23b6`): termination handlers that read their
   frame are passed it, and filters run behind an adapter; see architecture.md
   for the rules. Parents with a frame register take it too. No MSVC xcpt4
   filter that reads its frame reaches output yet (each such function stops
-  at another gate), so the adapter's only execution evidence is the MinGW
-  fixture below.
+  at another gate). The MSVC `/Od` `nested_collided` builds' `0x140001160`
+  (vs2019) and `0x140001170` (vs2026, unversioned) run behind two adapters
+  as the original in all 12 builds; their filters write their exception
+  pointers into the parent's frame and read them back, so an offset moved by
+  8 changes nothing and only a frame moved off the stack proves the adapters
+  ran. The MinGW fixture below is the frame-register case.
 - With the `__finally` half, per function on the four vs2019 x64 xcpt4
   builds: the 15 functions per build the original-frame gate stopped now
   give 4 (5 at o0) that patch and run as the original in every run, 2 per

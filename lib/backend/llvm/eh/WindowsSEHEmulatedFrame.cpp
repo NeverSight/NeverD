@@ -17,6 +17,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <functional>
 #include <limits>
@@ -31,7 +32,7 @@ constexpr unsigned kOffsetBits = 48;
 
 std::optional<int64_t> addOffset(int64_t Base, int64_t Delta) {
   int64_t Sum = 0;
-  if (__builtin_add_overflow(Base, Delta, &Sum) ||
+  if (llvm::AddOverflow(Base, Delta, Sum) ||
       llvm::APInt(64, static_cast<uint64_t>(Sum), /*isSigned=*/true)
               .getSignificantBits() > kOffsetBits)
     return std::nullopt;
