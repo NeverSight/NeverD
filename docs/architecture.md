@@ -14501,6 +14501,13 @@ records its occurrences there.
 
 ## Cross-architecture translation contract
 
+`support/LLVMCodegenTargets.def` owns the LLVM backends NeverD links for
+code generation. CMake derives both integrated-build components and prebuilt
+SDK libraries from this table. `initializeLLVMCodegenTargets()` registers
+exactly those backends once for `Codegen` and `TranslationTargetMachine`.
+An SDK may include additional targets; its inventory neither expands NeverD's
+supported host architectures nor introduces references to unlinked backends.
+
 `include/neverd/translate` defines a contract layer, not an
 execution backend. `GuestState` models architecture-neutral, machine-visible
 state for `x86_32`, `x86_64`, `AArch64`, and `ARM32`. Its canonical version-1

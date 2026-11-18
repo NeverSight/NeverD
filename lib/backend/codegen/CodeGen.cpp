@@ -22,6 +22,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/MachO/DyldCacheLoad.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -42,7 +43,6 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -373,38 +373,12 @@ static void expandNarrowFunnelShifts(llvm::Module &Mod) {
   }
 }
 
-static void ensureTargets() {
-  // LLVM's target registries are process-global and their registration is not
-  // thread-safe.  Every current caller (the patch/rewrite backends and the C
-  // API) is serial, so a plain flag would do today; a function-local static
-  // costs the same and keeps the guarantee if codegen is ever sharded the way
-  // the LLVM emission phase already is.
-  [[maybe_unused]] static const bool Initialized = [] {
-    LLVMInitializeAArch64TargetInfo();
-    LLVMInitializeAArch64Target();
-    LLVMInitializeAArch64TargetMC();
-    LLVMInitializeAArch64AsmPrinter();
-    LLVMInitializeAArch64AsmParser();
-    LLVMInitializeARMTargetInfo();
-    LLVMInitializeARMTarget();
-    LLVMInitializeARMTargetMC();
-    LLVMInitializeARMAsmPrinter();
-    LLVMInitializeARMAsmParser();
-    LLVMInitializeX86TargetInfo();
-    LLVMInitializeX86Target();
-    LLVMInitializeX86TargetMC();
-    LLVMInitializeX86AsmPrinter();
-    LLVMInitializeX86AsmParser();
-    return true;
-  }();
-}
-
 CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
                                BinaryFormat ObjectFormat,
                                llvm::StringRef TargetTriple,
                                ObjectConsumer Consumer) {
   CodegenResult Result;
-  ensureTargets();
+  initializeLLVMCodegenTargets();
   if (!supportsX86NativeExtensions(Mod) ||
       !supportsPointerAuthenticationGlobals(Mod))
     return Result;
@@ -644,7 +618,7 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
     const llvm::mc_rewrite::RewriteOptions &Opts, BinaryFormat ObjectFormat,
     llvm::StringRef TargetTriple, RewriteInputKind InputKind) {
   llvm::mc_rewrite::RewriteResult Result;
-  ensureTargets();
+  initializeLLVMCodegenTargets();
   if (!supportsX86NativeExtensions(Mod) ||
       !supportsPointerAuthenticationGlobals(Mod, TargetArch == Arch::AArch64)) {
     Result.ImageValid = false;

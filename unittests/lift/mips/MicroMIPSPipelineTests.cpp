@@ -4,13 +4,13 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Exercise ELF-to-source mode retention and reject numeric code identities
-/// until the target compiler preserves the architectural callable tag.
+/// Exercise ELF-to-source mode retention and the architectural callable tag.
 //===----------------------------------------------------------------------===//
 
 #include "MIPSFixtures.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/MIPS/MIPSInstructionModeSource.h"
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
@@ -20,8 +20,10 @@
 
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <stdexcept>
@@ -270,10 +272,16 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       Emit.Image = &Image;
       std::string Text;
       llvm::raw_string_ostream Output(Text);
-      if (Provenance == P::CodeAddress ||
-          (Provenance == P::Address && Value == 0x1101)) {
+      if (Provenance == P::CodeAddress && Value == 0x1100) {
+        // An exact callable occurrence must already carry the compressed
+        // mode bit. Its untagged code-byte address is not interchangeable.
         EXPECT_THROW(HighCEmitter().emit({Function}, Output, Emit),
                      std::invalid_argument);
+      } else if (Provenance == P::CodeAddress ||
+                 (Provenance == P::Address && Value == 0x1101)) {
+        ASSERT_TRUE(HighCEmitter().emit({Function}, Output, Emit));
+        EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
+        EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
       } else {
         EXPECT_TRUE(HighCEmitter().emit({Function}, Output, Emit)) << Text;
         EXPECT_EQ(Text.find("micro_target"), std::string::npos) << Text;
@@ -283,7 +291,7 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
     }
 }
 
-TEST_P(MicroMIPSPipeline, LLVMRejectsNumericMicroIdentitiesBeforeOptimization) {
+TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
   auto Image = mixedImage(GetParam());
   using P = ConstantAddressProvenance;
   for (P Provenance : {P::CodeAddress, P::Address}) {
@@ -310,17 +318,68 @@ TEST_P(MicroMIPSPipeline, LLVMRejectsNumericMicroIdentitiesBeforeOptimization) {
     MedOp Return;
     Return.Opcode = NdOp::RETURN;
     Block.Ops.push_back(Return);
+    // A symbol in executable bytes alone supplies no reconstructed LLVM
+    // function identity. Supply the lifted target that the numeric value
+    // actually names, as the production selection does.
+    MedFunc TargetFunction = Function;
+    TargetFunction.Entry = 0x1100;
+    TargetFunction.Name = "micro_target";
+    TargetFunction.Blocks.front().StartAddr = 0x1100;
+    TargetFunction.Blocks.front().Ops.front().Inputs[0] =
+        MedVar::makeConst(42, 4);
     llvm::LLVMContext Context;
     MedLLVMEmitter Emitter;
-    bool Emitted = false;
-    try {
-      Emitted = bool(Emitter.emit({Function}, Context, "micro_pointer",
-                                  GetParam(), {}, &Image, BinaryFormat::ELF));
-    } catch (const std::invalid_argument &Error) {
-      EXPECT_NE(std::string(Error.what()).find("code-pointer"),
-                std::string::npos);
+    if (Provenance == P::CodeAddress) {
+      EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
+                                         GetParam(), {}, &Image,
+                                         BinaryFormat::ELF));
     }
-    EXPECT_FALSE(Emitted);
+    auto Module =
+        Emitter.emit({Function, TargetFunction}, Context, "micro_pointer",
+                     GetParam(), {}, &Image, BinaryFormat::ELF);
+    ASSERT_TRUE(Module);
+    EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    auto *Target = Module->getFunction("micro_target");
+    ASSERT_NE(Target, nullptr);
+    EXPECT_EQ(mips::instructionModeFromLLVM(*Target),
+              InstructionMode::MicroMIPS);
+    // Code alignment must not turn the callable tag into a known zero, even
+    // before native code generation or when the pointer is a constant.
+    Target->setAlignment(llvm::Align(4));
+    auto *Address = llvm::ConstantExpr::getPtrToInt(
+        Target, llvm::Type::getInt32Ty(Context));
+    EXPECT_FALSE(
+        llvm::computeKnownBits(Address, Module->getDataLayout()).Zero[0]);
+    CEmitterOptions Options;
+    Options.TheArch = GetParam();
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    std::string Text;
+    llvm::raw_string_ostream Output(Text);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+    EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+  }
+}
+
+TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndWideProfiles) {
+  auto Image = mixedImage(GetParam());
+  EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
+  EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
+               std::invalid_argument);
+  Image.Mode = InstructionMode::MicroMIPS;
+  EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
+  EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
+               std::invalid_argument);
+  Image.MIPS->HasMicroMIPS = false;
+  EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+               std::invalid_argument);
+  Image.MIPS->HasMicroMIPS = true;
+  for (Arch Wide :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    Image.Arch = Wide;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
   }
 }
 

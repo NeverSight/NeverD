@@ -10,6 +10,7 @@ add_neverd_component_library(NeverDSupport
   AtomicOutput.cpp
   BinaryLoading.cpp
   HostMemory.cpp
+  LLVMTargetInitialization.cpp
   StringScan.cpp
   TextCodec.cpp
   TextEncoding.cpp
