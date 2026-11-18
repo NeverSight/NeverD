@@ -8,6 +8,7 @@ Clang must include the NeverSight MIPS Fi8 function-pointer layout fix.
 """
 
 import argparse
+import importlib.util
 import io
 from pathlib import Path
 
@@ -22,9 +23,13 @@ FUNCTIONS = ("pointer_bits", "pointer_tag", "pointer_mask", "pointer_code",
              "pointer_offset", "pointer_equal", "call_pointer")
 PRESERVED = {reg: 0x61395217f0e0d000 + reg
              for reg in (*range(16, 24), 28, 30)}
+CALL_VIEWS_SPEC = importlib.util.spec_from_file_location(
+    "mips_floating_abi", Path(__file__).with_name("floating-abi-roundtrip.py"))
+CALL_VIEWS = importlib.util.module_from_spec(CALL_VIEWS_SPEC)
+CALL_VIEWS_SPEC.loader.exec_module(CALL_VIEWS)
 
 
-def observe(path, function, abi, little, compressed):
+def observe(path, function, abi, little, compressed, literal_pointer=None):
     elf = ELFFile(io.BytesIO(path.read_bytes()))
     symbol = elf.get_section_by_name(".symtab").get_symbol_by_name("target")[0]
     # GNU emits either a tagged value or the compressed st_other mode bit.
@@ -33,15 +38,16 @@ def observe(path, function, abi, little, compressed):
     mask = (1 << 64) - 1
     if abi == "n32" and pointer & 0x80000000:
         pointer |= 0xffffffff00000000
+    expected_pointer = pointer if literal_pointer is None else literal_pointer
     if function == "call_pointer":
         cases = [([pointer, value], (value + 7) & mask)
                  for value in (0, 1, -17, 0x10203040)]
     elif function == "pointer_equal":
         cases = [([pointer], 1), ([pointer ^ 1], 0), ([pointer + 16], 0)]
     else:
-        expected = dict(pointer_bits=pointer, pointer_tag=pointer & 1,
-                        pointer_mask=pointer & 15, pointer_code=pointer & ~1,
-                        pointer_offset=pointer + 4)[function]
+        expected = dict(pointer_bits=expected_pointer, pointer_tag=expected_pointer & 1,
+                        pointer_mask=expected_pointer & 15, pointer_code=expected_pointer & ~1,
+                        pointer_offset=expected_pointer + 4)[function]
         cases = [([], expected)]
     observations = []
     model = (roundtrip.mips.UC_CPU_MIPS64_MICROMIPS64R2_GENERIC if compressed
@@ -88,15 +94,21 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("neverd", "clang", "gcc", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--sdk", type=Path)
     parser.add_argument("--abi", action="append", choices=("n32", "n64"))
     parser.add_argument("--function", action="append", choices=FUNCTIONS)
     parser.add_argument("--producer", action="append", choices=("gcc", "clang"))
     parser.add_argument("--original-only", action="store_true")
     args = parser.parse_args()
+    if not args.original_only and not args.sdk:
+        parser.error("--sdk is required for reconstructed call-site contracts")
     with MIPSValidationArtifacts(args.output, "wide-compressed-code-pointers",
                                  (args.neverd, args.clang, args.gcc,
-                                  args.assembler, args.ld)) as artifacts:
+                                  args.assembler, args.ld,
+                                  *([args.sdk] if args.sdk else []))) as artifacts:
         work, rows, originals = artifacts.work, [], []
+        controls = []
+        views = CALL_VIEWS.CallSiteViews(args.sdk) if not args.original_only else None
         log = work / "command.log"
         (work / "string.h").write_text(
             "#include <stddef.h>\nvoid *memcpy(void *, const void *, size_t);\n")
@@ -156,7 +168,7 @@ def main():
                             for original_opt in ("-O0", "-O2"):
                                 original_object, original = work / "original.o", work / "original.elf"
                                 compile_source(caller_source, original_object, producer, original_opt)
-                                command([*link, "-Ttext", hex(original_address), "-e", "pointer_bits",
+                                command([*link, "--emit-relocs", "-Ttext", hex(original_address), "-e", "pointer_bits",
                                          original_object, target_object, "-o", original])
                                 for function in args.function or FUNCTIONS:
                                     before = observe(original, function, abi, little, compressed)
@@ -170,9 +182,17 @@ def main():
                                         continue
                                     for backend in ("highc", "llvmc"):
                                         source = work / "reconstructed.c"
-                                        command([args.neverd, "decompile", "--func", function,
-                                                 *(["--llvm"] if backend == "llvmc" else []),
-                                                 original, "-o", source])
+                                        if function == "call_pointer":
+                                            elf = ELFFile(io.BytesIO(original.read_bytes()))
+                                            entry = elf.get_section_by_name(".symtab").get_symbol_by_name(
+                                                function)[0]["st_value"]
+                                            source.write_text(views.source(
+                                                original, "c" if backend == "highc" else backend,
+                                                "int callee(int value);", [], True, entry))
+                                        else:
+                                            command([args.neverd, "decompile", "--func", function,
+                                                     *(["--llvm"] if backend == "llvmc" else []),
+                                                     original, "-o", source])
                                         artifacts.keep_source(source)
                                         for compiler in ("gcc", "clang"):
                                             for optimization in ("-O0", "-O2"):
@@ -186,11 +206,43 @@ def main():
                                                     r["memory"] for r in after["observations"]]
                                                 rows.append(dict(**context, backend=backend, compiler=compiler,
                                                                  optimization=optimization,
+                                                                 explicit_call_type=function == "call_pointer",
                                                                  source_sha256=digest(source),
                                                                  rebuilt_sha256=digest(rebuilt), rebuilt=after))
                                                 artifacts.write("results.json", rows)
                                                 artifacts.discard(obj, rebuilt, log)
                                         artifacts.discard(source, log)
+                                if not args.original_only:
+                                    literal = work / "literal.elf"
+                                    command([*link, "-Ttext", hex(original_address), "-e", "pointer_bits",
+                                             original_object, target_object, "-o", literal])
+                                    before = observe(literal, "pointer_bits", abi, little, compressed)
+                                    for backend in ("highc", "llvmc"):
+                                        source = work / "literal.c"
+                                        command([args.neverd, "decompile", "--func", "pointer_bits",
+                                                 *(["--llvm"] if backend == "llvmc" else []),
+                                                 literal, "-o", source])
+                                        artifacts.keep_source(source)
+                                        for compiler in ("gcc", "clang"):
+                                            for optimization in ("-O0", "-O2"):
+                                                obj, rebuilt = work / "literal.o", work / "literal-rebuilt.elf"
+                                                compile_source(source, obj, compiler, optimization)
+                                                command([*link, "-Ttext", hex(rebuilt_address), "-e", "pointer_bits",
+                                                         obj, target_object, "-o", rebuilt])
+                                                after = observe(rebuilt, "pointer_bits", abi, little,
+                                                                compressed, before["pointer"])
+                                                assert before["pointer"] != after["pointer"]
+                                                controls.append(dict(abi=abi, little=little, mode=mode,
+                                                    producer=producer, original_optimization=original_opt,
+                                                    original_address=original_address, backend=backend,
+                                                    compiler=compiler, optimization=optimization,
+                                                    source_sha256=digest(source), original=before,
+                                                    rebuilt=after, original_sha256=digest(literal),
+                                                    rebuilt_sha256=digest(rebuilt)))
+                                                artifacts.write("literal-controls.json", controls)
+                                                artifacts.discard(obj, rebuilt, log)
+                                        artifacts.discard(source, log)
+                                    artifacts.discard(literal)
                                 artifacts.discard(original_object, original, log)
                     artifacts.discard(target_object, target_source, caller_source)
         artifacts.write("summary.json", dict(
@@ -199,6 +251,9 @@ def main():
             original_executions=sum(len(r["original"]["observations"]) for r in originals),
             rebuilt_images=len(rows),
             rebuilt_executions=sum(len(r["rebuilt"]["observations"]) for r in rows),
+            literal_control_builds=len(controls),
+            neverd_sha256=digest(args.neverd),
+            sdk_sha256=digest(args.sdk) if args.sdk else None,
             memory_model="Unicorn virtual TLB, not hardware MMU qualification"))
     return 0
 
