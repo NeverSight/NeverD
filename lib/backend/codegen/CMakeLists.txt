@@ -108,6 +108,7 @@ add_neverd_component_library(NeverDCodeGen
   LLVMMemoryAnalysis
   IR
   Loader
+  Support
   WindowsEHMetadata
   WindowsRegistrationFrame
 )
