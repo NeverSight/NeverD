@@ -1011,7 +1011,14 @@ TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
             }
             const auto *Call = llvm::dyn_cast<llvm::CallInst>(Value);
             ASSERT_NE(Call, nullptr);
-            EXPECT_EQ(Call->getCalledFunction() == nullptr, Indirect);
+            // An analyst prototype may call a generic external declaration
+            // through its own function type; getCalledFunction() also checks
+            // type identity, not just whether the target is a named function.
+            const auto *Callee = llvm::dyn_cast<llvm::Function>(
+                Call->getCalledOperand()->stripPointerCasts());
+            EXPECT_EQ(Callee == nullptr, Indirect);
+            if (Callee)
+              EXPECT_EQ(Callee->getName(), "callee");
             EXPECT_TRUE(Call->getType()->isIntegerTy(Bytes * 8));
           }
         }
