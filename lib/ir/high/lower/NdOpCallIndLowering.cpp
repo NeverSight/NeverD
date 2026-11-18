@@ -260,8 +260,8 @@ MedToHighConverter::CallIndTarget MedToHighConverter::resolveCallIndTarget(
   };
   if (CurOp.NumInputs && !CurOp.Inputs[0].isConst() &&
       CallIdx < CurBlock.Ops.size()) {
-    if (const auto Cached =
-            resolveMedCallTarget(CurBlock, CallIdx, CurOp.Inputs[0])) {
+    if (const auto Cached = resolveMedCallTarget(
+            CurBlock, CallIdx, CurOp.Inputs[0], nullptr, TargetArch)) {
       if (Cached->ThroughSlot &&
           tryResolveLoadedSlot(Cached->Address, FuncNames, Image, Result)) {
         // Naming a captured import has the same memory premise as

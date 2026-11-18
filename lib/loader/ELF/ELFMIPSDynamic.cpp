@@ -20,6 +20,37 @@
 
 namespace neverd::elf_loader::detail {
 
+// Static GNU GOTs omit DT_MIPS_LOCAL_GOTNO. The primary table starts with
+// two reserved cells. A table with TLS can also contain integer offsets.
+template <typename ELFT>
+static void
+collectStaticGOTPointers(const BinaryImage &Img,
+                         std::vector<AbsolutePointerRelocation> &Pointers) {
+  using namespace llvm::ELF;
+  if (!Img.ELFMetadata || Img.ELFMetadata->Type != ET_EXEC ||
+      llvm::any_of(Img.ELFMetadata->ProgramHeaders, [](const auto &Header) {
+        return Header.Type == PT_DYNAMIC || Header.Type == PT_TLS;
+      }))
+    return;
+  constexpr size_t Width = sizeof(typename ELFT::Addr);
+  const Section *Got = Img.getSectionByName(section_names::elf::Got);
+  if (!Got || Got->Type != SHT_PROGBITS || !Got->isReadable() ||
+      Got->isExecutable() || Got->Size < 2 * Width || Got->Size % Width ||
+      Got->FileSz != Got->Size)
+    return;
+  const uint8_t *Bytes = Img.readVA(Got->VA, Got->Size);
+  const bool Little = archLittleEndian(Img.Arch);
+  if (!Bytes || readPtr(Bytes, ELFT::Is64Bits, Little) ||
+      readPtr(Bytes + Width, ELFT::Is64Bits, Little) !=
+          (uint64_t{1} << (Width * 8 - 1)))
+    return;
+  for (size_t Offset = 2 * Width; Offset < Got->Size; Offset += Width) {
+    const uint64_t Target = readPtr(Bytes + Offset, ELFT::Is64Bits, Little);
+    if (Target)
+      Pointers.push_back({Got->VA + Offset, Target});
+  }
+}
+
 template <typename ELFT>
 llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
                                   llvm::ArrayRef<typename ELFT::Shdr> Sections,
@@ -112,10 +143,12 @@ llvm::Error collectMIPSDynamicGOT(const llvm::object::ELFFile<ELFT> &ELF,
     } else if (auto Error = Check(ELF.relas(Section)))
       return Error;
   }
-  recordAbsolutePointerRelocations(Img, LinkedPointers);
   auto Dynamic = readELFProgramDynamicTable(Img);
   if (!Dynamic)
     return Dynamic.takeError();
+  if (Dynamic->empty() && Img.MIPS && Img.MIPS->PICGP && isMIPS64(Img.Arch))
+    collectStaticGOTPointers<ELFT>(Img, LinkedPointers);
+  recordAbsolutePointerRelocations(Img, LinkedPointers);
   std::map<int64_t, uint64_t> Tags;
   for (const auto &Entry : *Dynamic)
     Tags[Entry.Tag] = Entry.Value;

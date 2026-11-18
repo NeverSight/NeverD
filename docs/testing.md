@@ -18146,8 +18146,17 @@ relocation. The harness checks that the linked `lw` or `ld` reads the callback
 slot through GP, and initializes the original and rebuilt programs with their
 respective linker GP values. Pass `--neverd`, `--clang`, `--ld` and an owned
 `--output` directory. `MIPSValidationArtifacts` keeps source and hash receipts.
-`MIPSEntryGP` checks explicit GP writes and the sign extension of upper-half
-n32 data addresses in both byte orders.
+With `--linkage pic` or `--linkage cpic`, the same harness checks the actual
+ELF flags for n32 and n64 in both byte orders. The compiled entry derives its
+GOT base from `$t9` with an unrelated incoming GP. The rebuilt code uses
+independently placed callback storage. The test calls its initializer before
+replacing it, and exercises n64 callback addresses above 4 GiB. A second
+shared-object fixture uses
+`.cpsetup` and a CALL16 import. The harness loads it at a nonzero bias, binds
+the import to each of two callees, and checks the arguments, result and
+restored GP, SP and RA. Both C backends run at O0 and O2.
+`MIPSEntryGP` checks explicit GP writes, upper-half n32 addresses, both GP
+instruction orders, conflicting linker values and an overwritten entry `$t9`.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must

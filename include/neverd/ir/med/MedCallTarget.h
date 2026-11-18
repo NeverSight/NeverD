@@ -46,7 +46,8 @@ struct MedCallTarget {
 /// and ordered memory prevent a stored value from reaching a later reload.
 std::optional<MedCallTarget>
 resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
-                     size_t *WorkRemaining = nullptr);
+                     size_t *WorkRemaining = nullptr,
+                     Arch Architecture = Arch::Unknown);
 
 /// Give a pre-SSA block prefix private value versions before using the same
 /// proof. Overlapping register writes and intervening calls kill old carriers.

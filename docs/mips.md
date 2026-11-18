@@ -32,7 +32,17 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   extends the ELF32 value into its 64-bit GPR. GP-relative accesses in the
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
-  normally. PIC, CPIC and images with scoped GP values require local evidence.
+  normally.
+- In linked classic n32/n64 PIC and CPIC code, an ordinary entry block can
+  establish GP from its incoming `$t9` and a linker displacement. Source
+  conversion binds the completed register write when it matches the image-wide
+  register-info GP. This covers the assembler's `.cpsetup` and Clang's
+  equivalent calculation in a temporary GPR. The caller's incoming GP and
+  later register writes keep their own values. Scoped GP records cannot supply
+  this proof. A full-width GOT import load retains its symbol through n32's
+  sign extension. A static GNU GOT with a single GP and no TLS can supply the
+  initial address of a writable callback object. The call reads the object's
+  current pointer.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
