@@ -646,7 +646,10 @@ shifts, rotates, bit fields, byte shuffles, HI/LO division, LD/SD, LWU,
 LDL/LDR and SDL/SDR.
 The micro doubleword merge transfers use a signed 12-bit displacement.
 For micro functions, HighC and LLVMC select GCC's `micromips` attribute or
-Clang's `micromips,nomips16` pair. GCC requires `-minterlink-compressed` for
+Clang's `micromips,nomips16` pair. A call-site prototype also retains the
+original direct target's known instruction mode on its external declaration;
+omitting that body does not turn a compressed callee into a classic one.
+GCC requires `-minterlink-compressed` for
 calls between compressed functions and classic helpers in the same output.
 The MIPS source prelude supplies a single-evaluation, size-checked raw bit copy
 for GCC C, whose frontend lacks Clang's `__builtin_bit_cast`. This preserves

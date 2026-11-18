@@ -25317,6 +25317,13 @@ registers. `--original-only` validates the fixtures without claiming NeverD
 reconstruction. High-address execution uses Unicorn's virtual TLB and does not
 qualify a hardware MMU.
 
+`MicroMIPSPipelineSource.TypedCallsRetainExternalInstructionModes` checks
+ordinary and explicitly typed direct calls on all six MIPS ABI/byte-order
+profiles. LLVM declarations and regenerated C must retain classic, microMIPS
+and supported MIPS16 target modes even when the callee body is omitted. The
+wide runtime driver's GCC O2 cases additionally catch an unannotated declaration
+becoming a tail jump that cannot switch instruction modes.
+
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
 addends, relocation-table ordering, split registers, all four field carries,
