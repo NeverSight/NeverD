@@ -20763,6 +20763,11 @@ only a handler's unwind enters, one of them entered from the other: the
 parent's printed C names exactly the targets no edge reaches, not one a branch
 reaches or the `__except` block an exception's pad reaches, and native IR
 carries no such list.
+`AFinallyThatResumesItsParentEndsWithAGoto` gives the inner `__finally` a
+handler that resumes the parent at a block only its unwind enters: printed C
+ends the `__finally` with a `goto` to that block, prints the block's store
+under the label it names, prints no second `__except` and no note, and native
+IR keeps the plain pad.
 `COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
 x64 IR for a local unwind out of the only scope, out of the inner of two and
 out of both: the handler's call is a plain one, an invoke to the outer row's

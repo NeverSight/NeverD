@@ -804,13 +804,12 @@ bool passesArgument(const UseEvent &Use, size_t Index,
 /// Check one out-of-line handler of the function against the saved-frame
 /// slot, which it sees at \p SlotFromFrame bytes above its EstablisherFrame
 /// and which holds the TargetFrame, \p TargetFromFrame bytes above it.
-llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
-                         const BinaryImage &Img, llvm::StringRef Routine,
-                         int64_t SlotFromFrame, int64_t TargetFromFrame,
-                         size_t &Work,
-                         const std::map<va_t, GPRFamilyMask> *Unread,
-                         const State *ParentRegisters,
-                         std::map<va_t, unsigned> &UnwindTargets) {
+llvm::Error checkHandler(
+    const LowFunc &Handler, const TargetRegInfo &TRI, const BinaryImage &Img,
+    llvm::StringRef Routine, int64_t SlotFromFrame, int64_t TargetFromFrame,
+    size_t &Work, const std::map<va_t, GPRFamilyMask> *Unread,
+    const State *ParentRegisters, std::map<va_t, unsigned> &UnwindTargets,
+    std::map<va_t, std::set<std::pair<va_t, int>>> *UnwindCalls = nullptr) {
   const std::string Name = hex(Handler.Entry);
   if (Handler.Blocks.empty() || !Handler.hasCompleteLiftCoverage())
     return refuse("handler " + Name + " is not completely decoded");
@@ -881,8 +880,12 @@ llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
     // The handler's own unwind of this frame to an exact address.
     if (Use.Runtime && Use.Args.size() >= 2 &&
         Use.Args[0] == Val::at(Base::Parent, TargetFromFrame) &&
-        Use.Args[1].K == Val::Const)
+        Use.Args[1].K == Val::Const) {
       ++UnwindTargets[static_cast<va_t>(Use.Args[1].C)];
+      if (UnwindCalls)
+        (*UnwindCalls)[static_cast<va_t>(Use.Args[1].C)].emplace(Use.At,
+                                                                 Use.Seq);
+    }
     if (Use.TakesFrame)
       continue;
     for (size_t K = 0; K < Use.Args.size(); ++K)
@@ -894,6 +897,48 @@ llvm::Error checkHandler(const LowFunc &Handler, const TargetRegInfo &TRI,
                       hex(Use.At));
   }
   return llvm::Error::success();
+}
+
+/// Whether every way \p Handler can return runs one of \p Calls first: the
+/// handler always leaves by that local unwind, which does not return.  A
+/// transfer the walk cannot follow counts as a way back.
+bool alwaysUnwinds(const LowFunc &Handler,
+                   const std::set<std::pair<va_t, int>> &Calls, size_t &Work) {
+  std::map<int, size_t> At;
+  for (size_t I = 0; I < Handler.Blocks.size(); ++I)
+    At.emplace(Handler.Blocks[I].Id, I);
+  std::vector<int> Pending;
+  for (const LowBlock &Block : Handler.Blocks)
+    if (Block.StartAddr == Handler.Entry)
+      Pending.push_back(Block.Id);
+  if (Pending.empty())
+    return false;
+  std::set<int> Seen;
+  while (!Pending.empty()) {
+    const int Id = Pending.back();
+    Pending.pop_back();
+    const auto Index = At.find(Id);
+    if (Index == At.end())
+      return false;
+    if (!Seen.insert(Id).second)
+      continue;
+    const LowBlock &Block = Handler.Blocks[Index->second];
+    if (!charge(Work, Block.Ops.size() + 1))
+      return false;
+    bool Unwound = false;
+    for (const LowOp &Op : Block.Ops) {
+      if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
+          Calls.count({Op.Addr, Op.Seq})) {
+        Unwound = true;
+        break;
+      }
+      if (Op.Opcode == NdOp::RETURN || Op.Opcode == NdOp::INDIR_BR)
+        return false;
+    }
+    if (!Unwound)
+      Pending.insert(Pending.end(), Block.Succs.begin(), Block.Succs.end());
+  }
+  return true;
 }
 
 /// Whether something may read \p Reg where control resumes at \p Target
@@ -1122,7 +1167,7 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     const std::map<va_t, const LowFunc *> &Bodies, size_t &WorkRemaining,
     const std::map<va_t, GPRFamilyMask> *Unread,
     std::vector<LowSEHLocalUnwindRefusal> *Refused,
-    std::set<va_t> *HandlerTargets) {
+    std::set<va_t> *HandlerTargets, std::map<va_t, va_t> *HandlerResumes) {
   if (!Function.ExceptionMetadata || !Function.ExceptionMetadata->SEH ||
       Function.Blocks.empty() || !Function.hasCompleteLiftCoverage())
     return refuse("no complete SEH body");
@@ -1210,8 +1255,10 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     Slot->Off = *Slots.begin();
     Slot->Holds = Val::at(Base::Own, Convention->TargetFrame);
   }
-  // What each out-of-line handler's own local unwinds of this frame name.
+  // What each out-of-line handler's own local unwinds of this frame name, and
+  // which of those handlers leave by such an unwind on every way out.
   std::map<va_t, std::map<va_t, unsigned>> HandlerUnwinds;
+  std::map<va_t, va_t> AlwaysResumes;
   Interpreter Interp(Function, TRI, Image, Convention->Routine, Slot, Cookie,
                      BodyStart, Protected, WorkRemaining);
   if (auto Error = Interp.run(Entry, Root))
@@ -1338,15 +1385,27 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       if (Body == Bodies.end() || !Body->second)
         return refuse("handler " + hex(Handler) + " is not available");
       std::map<va_t, unsigned> Targets;
+      std::map<va_t, std::set<std::pair<va_t, int>>> Calls;
       if (auto Error = checkHandler(
               *Body->second, TRI, Image, Convention->Routine,
               S - Convention->HandlerFrame,
               Convention->TargetFrame - Convention->HandlerFrame, WorkRemaining,
-              Unread, HandlerRegisters ? &*HandlerRegisters : nullptr, Targets))
+              Unread, HandlerRegisters ? &*HandlerRegisters : nullptr, Targets,
+              &Calls))
         return std::move(Error);
-      for (const auto &[Target, Calls] : Targets)
+      for (const auto &[Target, Count] : Targets)
         if (EH.ownsCode(Target) && Starts.count(Target))
-          HandlerUnwinds[Handler][Target] += Calls;
+          HandlerUnwinds[Handler][Target] += Count;
+      // A target no row guards resumes the parent outside every scope, where
+      // printed C places the code it jumps to.
+      const va_t Resume = Targets.size() == 1 ? Targets.begin()->first : 0;
+      if (Resume && EH.ownsCode(Resume) && Starts.count(Resume) &&
+          llvm::none_of(EH.SEH->Scopes,
+                        [&](const SEHScopeRecord &Scope) {
+                          return Scope.GuardedRange.contains(Resume);
+                        }) &&
+          alwaysUnwinds(*Body->second, Calls.begin()->second, WorkRemaining))
+        AlwaysResumes.emplace(Handler, Resume);
     }
   }
 
@@ -1607,6 +1666,10 @@ llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
       for (const auto &[Target, Calls] : Targets)
         if (Alone[Target])
           HandlerTargets->insert(Target);
+  if (HandlerResumes)
+    for (const auto &[Handler, Target] : AlwaysResumes)
+      if (Alone[Target])
+        HandlerResumes->emplace(Handler, Target);
   return Sites;
 }
 

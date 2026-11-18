@@ -652,16 +652,49 @@ bool MedLLVMEmitter::emitNativeSEH(
       }
       llvm::SmallVector<llvm::Value *, 1> BundleInputs{Pad};
       llvm::OperandBundleDef Funclet("funclet", BundleInputs);
+      // Printed C: a handler that leaves by a local unwind into this function
+      // on every way out resumes it at one block. The pad unwinds to a catch
+      // whose pad returns there, which keeps that block's code; LLVM C prints
+      // a `goto` to it at the end of the `__finally` (HandlerResume).
+      llvm::BasicBlock *Unwind = ParentDest;
+      if (SourceView)
+        if (const auto Resume =
+                Func.SEHHandlerResumes.find(R.Scope->FilterOrFinallyVA);
+            Resume != Func.SEHHandlerResumes.end())
+          if (llvm::BasicBlock *ResumeAt = BlockAt(Resume->second)) {
+            auto *ResumeBB = llvm::BasicBlock::Create(
+                *Ctx, "seh.resume.dispatch." + Suffix, &LLVMFunc);
+            llvm::IRBuilder<> RB(ResumeBB);
+            auto *Resumes = RB.CreateCatchSwitch(TokenNone, ParentDest, 1,
+                                                 "seh.resume.switch");
+            Resumes->setMetadata(
+                windows_eh_md::HandlerResume,
+                llvm::MDTuple::get(
+                    *Ctx, {llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                              llvm::Type::getInt64Ty(*Ctx), Resume->second))}));
+            auto *ResumePadBB = llvm::BasicBlock::Create(
+                *Ctx, "seh.resume.pad." + Suffix, &LLVMFunc);
+            Resumes->addHandler(ResumePadBB);
+            llvm::IRBuilder<> RPB(ResumePadBB);
+            auto *ResumePad =
+                RPB.CreateCatchPad(Resumes,
+                                   {llvm::ConstantPointerNull::get(
+                                       llvm::cast<llvm::PointerType>(PtrTy))},
+                                   "seh.resume.token");
+            RPB.CreateCatchRet(ResumePad, ResumeAt);
+            Unwind = ResumeBB;
+          }
       if (ParentDest) {
+        // Every unwind edge out of the pad goes where its cleanupret does.
         auto *ContinueBB = llvm::BasicBlock::Create(
             *Ctx, "seh.finally.continue." + Suffix, &LLVMFunc);
-        B.CreateInvoke(CallbackTy, R.Callback, ContinueBB, ParentDest, Args,
+        B.CreateInvoke(CallbackTy, R.Callback, ContinueBB, Unwind, Args,
                        {Funclet});
         llvm::IRBuilder<> ContinueBuilder(ContinueBB);
-        ContinueBuilder.CreateCleanupRet(Pad, ParentDest);
+        ContinueBuilder.CreateCleanupRet(Pad, Unwind);
       } else {
         B.CreateCall(CallbackTy, R.Callback, Args, {Funclet});
-        B.CreateCleanupRet(Pad, nullptr);
+        B.CreateCleanupRet(Pad, Unwind);
       }
       R.UnwindDest = PadBB;
       continue;

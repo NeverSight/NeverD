@@ -836,6 +836,82 @@ TEST(TableSEHSourceScopes, AParentNamesTheUnwindTargetsNoEdgeReaches) {
   }
 }
 
+// A termination handler that leaves by a local unwind into its parent on
+// every way out resumes the parent at one block, which only that unwind
+// enters. Printed C keeps that block's code and ends the `__finally` that
+// runs the handler with a `goto` to it, as the source's `goto` out of the
+// `__finally` does; the parent names no unreached target, and native IR
+// keeps the plain pad.
+TEST(TableSEHSourceScopes, AFinallyThatResumesItsParentEndsWithAGoto) {
+  constexpr va_t ResumedVA = ParentVA + 0x60;
+  constexpr va_t AfterVA = ParentVA + 0x68;
+  for (const bool ForPrintedC : {true, false}) {
+    SCOPED_TRACE(ForPrintedC ? "printed C" : "native IR");
+    std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
+    MedFunc &Parent = Unit.front();
+    // The block the inner handler's unwind resumes, which stores a counter
+    // value no other code stores, and the return after it.
+    MedBlock Resumed = blockAt(5, ResumedVA, AfterVA);
+    MedOp Store;
+    Store.Opcode = NdOp::STORE;
+    Store.Addr = ResumedVA;
+    Store.addInput(MedVar::makeConst(CounterVA, 8));
+    Store.addInput(MedVar::makeConst(0x77, 4));
+    Resumed.Ops.push_back(std::move(Store));
+    Resumed.Ops.push_back(branchTo(ResumedVA + 4, AfterVA));
+    Resumed.Succs = {6};
+    MedBlock After = blockAt(6, AfterVA, ParentVA + 0x70);
+    After.Ops.push_back(returnAt(AfterVA + 4));
+    After.Preds = {5};
+    Parent.Blocks.push_back(std::move(Resumed));
+    Parent.Blocks.push_back(std::move(After));
+    Parent.ExceptionMetadata->CodeRange = {ParentVA, ParentVA + 0x70};
+    Parent.SEHHandlerUnwindTargets = {ResumedVA};
+    Parent.SEHHandlerResumes = {{InnerFinallyVA, ResumedVA}};
+
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(Unit, Context, ForPrintedC);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Function = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_EQ(Function->getMetadata(windows_eh_md::UnreachedUnwindTargets),
+              nullptr)
+        << printed(*Function);
+    unsigned Resumes = 0;
+    for (const llvm::BasicBlock &Block : *Function)
+      if (const auto *Switch =
+              llvm::dyn_cast<llvm::CatchSwitchInst>(Block.getTerminator()))
+        Resumes += Switch->getMetadata(windows_eh_md::HandlerResume) != nullptr;
+    if (!ForPrintedC) {
+      EXPECT_EQ(Resumes, 0u) << printed(*Function);
+      continue;
+    }
+    EXPECT_EQ(Resumes, 1u) << printed(*Function);
+
+    const std::string Source = parentIn(printedC(*Module));
+    ASSERT_FALSE(Source.empty());
+    // The `__finally` that calls the inner handler leaves for the resumed
+    // code, whose store is printed under the label the jump names.
+    const size_t Call = Source.find("inner_finally(");
+    ASSERT_NE(Call, std::string::npos) << Source;
+    const size_t Goto = Source.find("goto ", Call);
+    ASSERT_NE(Goto, std::string::npos) << Source;
+    const size_t LabelEnd = Source.find(';', Goto);
+    const std::string Label = Source.substr(Goto + 5, LabelEnd - Goto - 5);
+    EXPECT_NE(Source.find("the handler's _local_unwind resumes here", Goto),
+              std::string::npos)
+        << Source;
+    const size_t Defined = Source.find("\n" + Label + ":");
+    ASSERT_NE(Defined, std::string::npos) << Label << "\n" << Source;
+    EXPECT_TRUE(Source.find("119", Defined) != std::string::npos ||
+                Source.find("0x77", Defined) != std::string::npos)
+        << Source;
+    EXPECT_EQ(Source.find("__except"), Source.rfind("__except")) << Source;
+    EXPECT_EQ(Source.find("nothing printed here leads"), std::string::npos)
+        << Source;
+  }
+}
+
 // The range markers and the blocks a call's continuation or a split leaves
 // empty print only a jump.  They get no `__try`, and no text where a jump
 // can pass them: what is left is the statements, each in its scopes, and the

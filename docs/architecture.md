@@ -1372,7 +1372,15 @@ entry, over its branches and into its pads, leaves printed C with its code; the
 emitter lists such targets on the parent
 (`windows_eh_md::UnreachedUnwindTargets`, printed C only), and the parent's C
 says that a handler's `_local_unwind` resumes it there and that nothing printed
-in it leads to the code there.
+in it leads to the code there. A handler that leaves by its local unwind on
+every way out and names one target, which no row guards and no other entry
+names, is certified so by the lift (`certifyLowSEHLocalUnwinds`,
+`MedFunc::SEHHandlerResumes`), and printed C resumes its parent there as the
+source's jump out of the `__finally` does: the emitter gives the clause's pad
+a catch that returns to the target (`windows_eh_md::HandlerResume`), which
+keeps the target's code, and LLVM C prints a `goto` to the target's label at
+the end of the `__finally` and no `__except` for that catch. Native IR keeps
+the plain pad.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call

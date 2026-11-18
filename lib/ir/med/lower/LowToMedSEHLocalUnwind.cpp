@@ -205,9 +205,10 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
     return;
   size_t Work = limits::kMaxSEHEstablisherFrameWork;
   std::set<va_t> HandlerTargets;
-  auto Sites =
-      certifyLowSEHLocalUnwinds(Low, *Image, TRI, Bodies, Work, CallUnreadGPRs,
-                                /*Refused=*/nullptr, &HandlerTargets);
+  std::map<va_t, va_t> HandlerResumes;
+  auto Sites = certifyLowSEHLocalUnwinds(Low, *Image, TRI, Bodies, Work,
+                                         CallUnreadGPRs, /*Refused=*/nullptr,
+                                         &HandlerTargets, &HandlerResumes);
   if (!Sites) {
     // An uncertified call keeps its runtime form.
     llvm::consumeError(Sites.takeError());
@@ -224,6 +225,9 @@ void LowToMedConverter::modelSEHLocalUnwindExits(MedFunc &Func,
   for (va_t Target : HandlerTargets)
     if (BlockAt.count(Target))
       Func.SEHHandlerUnwindTargets.insert(Target);
+  for (const auto &[Handler, Target] : HandlerResumes)
+    if (Func.SEHHandlerUnwindTargets.count(Target))
+      Func.SEHHandlerResumes.emplace(Handler, Target);
   if (!Func.SEHHandlerUnwindTargets.empty())
     Func.SEHTerminationFrameBytes = collectLowSEHTerminationFrames(
         Low, TargetArch, Func.SEHHandlerUnwindTargets);
