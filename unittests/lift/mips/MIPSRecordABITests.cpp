@@ -143,6 +143,28 @@ TEST(MIPSRecordABI, DirectFloatingFieldsKeepTheirArgumentAndResultClasses) {
               SourceABICarrierKind::FloatingRegister);
     EXPECT_EQ(Single->Result[0].RegisterBitOffset, 0);
 
+    // The object is only eight bytes, but its two direct float fields return
+    // independently in f0/f2. Flattening it into one integer chunk or treating
+    // the second field as an eight-byte object offset changes the ABI.
+    const auto TwoFloats = record({F, F});
+    const auto Pair =
+        mips::placeRecordCall(A, BinaryFormat::ELF, TwoFloats, {TwoFloats});
+    ASSERT_TRUE(Pair);
+    ASSERT_EQ(Pair->Arguments.Parameters[0].size(), 1u);
+    EXPECT_EQ(Pair->Arguments.Parameters[0][0].Location.Kind,
+              SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(Pair->Arguments.Parameters[0][0].Location.ValueBytes, 8);
+    ASSERT_EQ(Pair->Result.size(), 2u);
+    for (unsigned I = 0; I < 2; ++I) {
+      EXPECT_EQ(Pair->Result[I].Location.Kind,
+                SourceABICarrierKind::FloatingRegister);
+      EXPECT_EQ(Pair->Result[I].Location.RegisterOffset, mipsreg::w(2 * I));
+      EXPECT_EQ(Pair->Result[I].Location.ValueBytes, 4);
+      EXPECT_EQ(Pair->Result[I].Offset, I * 4);
+      EXPECT_EQ(Pair->Result[I].CarrierBytes, 8);
+      EXPECT_EQ(Pair->Result[I].RegisterBitOffset, 0);
+    }
+
     const auto Nested = record({record({D}), record({D})});
     const auto Array = record({NdType::makeArray(D, 2, 16)});
     for (const auto &Type : {Nested, Array, record({F, F, F})}) {

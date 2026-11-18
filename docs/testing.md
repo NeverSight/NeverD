@@ -26159,6 +26159,13 @@ direct versus nested/array floating fields, target-width pointers, and hidden
 result storage without a v0 result. Invalid layouts and unqualified conventions
 must fail as complete contracts rather than publish a partial parameter prefix.
 The cases distinguish object offsets from register significance offsets.
+The two-float result case keeps the second object's four-byte offset separate
+from its f2 register, even though its argument occupies one integer carrier.
+`unittests/lift/mips/record-abi-roundtrip.py` checks typed entry contracts and
+cross-object direct/indirect calls against GCC and Clang at O0/O2. For hidden
+results it also poisons v0 after the callee's return delay slot, before the
+caller consumes the result. The caller must use its original result buffer;
+a callee that happens to return that address in v0 is not an ABI guarantee.
 
 `DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
 `DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in

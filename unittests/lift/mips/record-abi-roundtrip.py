@@ -137,14 +137,30 @@ def observe(image, little, n32, case, function, prefix):
     values += [bytes(rng.getrandbits(8) for _ in range(size)) for _ in range(6)]
     rows, calls = [], []
     mix = argument_mix(prefix)
+    returned = []
+    return_pc = None
+    poison_v0 = False
 
     def visit(uc, pc, instruction_size, user):
+        nonlocal return_pc
         if pc == callee:
             calls.append(pc)
+            return_pc = uc.reg_read(mips.UC_MIPS_REG_RA)
+        elif pc == return_pc:
+            # n32/n64 hidden-result functions need not return their buffer
+            # pointer in v0. Change it after the callee's delay slot and before
+            # the caller observes it; both compiler and reconstructed callers
+            # must keep using the originally supplied output storage.
+            returned.append(pc)
+            return_pc = None
+            if poison_v0:
+                uc.reg_write(mips.UC_MIPS_REG_V0, 0x5a71395362481a53)
 
-    hook = cpu.hook_add(UC_HOOK_CODE, visit, begin=callee, end=callee)
+    hook = cpu.hook_add(UC_HOOK_CODE, visit)
     try:
-        for value in values:
+        attempts = [(value, poison) for value in values
+                    for poison in ((False, True) if size > 16 else (False,))]
+        for value, poison_v0 in attempts:
             for r in range(1, 32):
                 cpu.reg_write(getattr(mips, f'UC_MIPS_REG_{r}'),
                               gprs.get(r, 0x5a00000000000000 + r))
@@ -161,10 +177,13 @@ def observe(image, little, n32, case, function, prefix):
             cpu.reg_write(mips.UC_MIPS_REG_6, callee)
             cpu.reg_write(mips.UC_MIPS_REG_FCSR, 0)
             calls.clear()
+            returned.clear()
+            return_pc = None
             cpu.emu_start(entry, roundtrip.STOP, count=20000)
             output = bytes(cpu.mem_read(DATA + 256, 128))
-            context = (str(image), function, value.hex())
+            context = (str(image), function, value.hex(), poison_v0)
             assert calls == [callee], (context, calls)
+            assert len(returned) == 1, (context, returned)
             expected = bytes(byte ^ ((mix >> ((i & 7) * 8)) & 0xff)
                              for i, byte in enumerate(value))
             assert all(output[i] == expected[i] for i in defined), (context, output.hex())
@@ -179,7 +198,8 @@ def observe(image, little, n32, case, function, prefix):
                 assert cpu.reg_read(getattr(mips, f'UC_MIPS_REG_{r}')) == expected, (context, r)
             for r, expected in fprs.items():
                 assert cpu.reg_read(getattr(mips, f'UC_MIPS_REG_F{r}')) == expected, (context, r)
-            rows.append(dict(input=value.hex(), defined_output=bytes(output[i] for i in defined).hex()))
+            rows.append(dict(input=value.hex(), poisoned_v0=poison_v0,
+                             defined_output=bytes(output[i] for i in defined).hex()))
     finally:
         cpu.hook_del(hook)
     return rows
