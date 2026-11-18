@@ -35,6 +35,7 @@ on:
           - dsp64-reference
           - windows-source-boundaries
           - windows-frame-proof
+          - windows-crt-proof
 
 permissions:
   contents: read
@@ -45,7 +46,7 @@ concurrency:
 
 jobs:
   windows_source_boundaries:
-    if: inputs.scope == 'windows-source-boundaries' || inputs.scope == 'windows-frame-proof'
+    if: inputs.scope == 'windows-source-boundaries' || inputs.scope == 'windows-frame-proof' || inputs.scope == 'windows-crt-proof'
     name: Windows exact-source boundary diagnosis
     runs-on: windows-latest
     timeout-minutes: 160
@@ -90,15 +91,20 @@ jobs:
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
             -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
             "-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")"
-      - name: Build the two failing owners
+      - name: Build boundary test targets
         run: |
-          python scripts/build.py build-mips-ci --config Release --parallel 4 --target \
-            neverd NeverDMachOPointerRelocationBoundaryTests NeverDNativePointerRelocationBoundaryTests
+          python - <<'PYTHON'
+          import os,subprocess
+          targets=['NeverDMachOPointerRelocationBoundaryTests','NeverDNativePointerRelocationBoundaryTests']
+          if os.environ['DIAGNOSTIC_SCOPE']=='windows-crt-proof':
+              targets=['NeverDLibCTests','NeverDMedCachedCallTargetTests','NeverDWin64CallContractTests','NeverDLLVMCValueTests','NeverDNativePointerRelocationBoundaryTests']
+          subprocess.run(['python','scripts/build.py','build-mips-ci','--config','Release','--parallel','4','--target','neverd',*targets],check=True)
+          PYTHON
       - name: Capture exact failures and a stack-size diagnostic
         run: |
           python - <<'PYTHON'
           from pathlib import Path
-          import hashlib,json,os,platform,shutil,struct,subprocess,tarfile
+          import hashlib,json,os,platform,shutil,struct,subprocess,tarfile,xml.etree.ElementTree as ET
           root=Path('build-mips-ci');out=root/'evidence';out.mkdir()
           temporary=(out/'temporary').resolve();temporary.mkdir()
           environment=dict(os.environ,TMP=str(temporary),TEMP=str(temporary))
@@ -120,6 +126,15 @@ jobs:
               listing=subprocess.check_output([binary,'--gtest_list_tests'],text=True)
               assert 'DeepOffsetChainsUseTheNodeBudget' in listing
               originals=[('NeverDMachOPointerRelocationBoundaryTests','LLVMFrameSlotProof.*')]
+          if os.environ['DIAGNOSTIC_SCOPE']=='windows-crt-proof':
+              originals=[
+                ('NeverDLibCTests','LibCPrototype.WindowsCRTHandlerAndLocaleKeepPointerContracts'),
+                ('NeverDMedCachedCallTargetTests','MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad'),
+                ('NeverDWin64CallContractTests','Win64CallContract.ImmutableImportReferencesKeepIncomingArguments'),
+                ('NeverDLLVMCValueTests','LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes'),
+                ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders'),
+                ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles'),
+                ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.CRTHeaderRecordReuseChecksTheActualRuntimeLayout')]
           source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
           assert source==os.environ['EXPECTED_SOURCE_SHA']
           manifest={'source':source,'workflow':os.environ['GITHUB_SHA'],'platform':platform.platform(),'configuration':'Release','llvm_mode':'published prebuilt LLVM','binaries':{},'scope':os.environ['DIAGNOSTIC_SCOPE']+'; original default-stack outcomes are qualification evidence; expanded stack copy is diagnosis only.'}
@@ -127,19 +142,26 @@ jobs:
           for i,(owner,test) in enumerate(originals):
               binary=root/'bin'/(owner+'.exe');manifest['binaries'][owner]=digest(binary)
               codes.append(run([binary,'--gtest_filter='+test,'--gtest_output=xml:'+str((out/('original-'+str(i)+'.xml')).resolve())],'original-'+str(i)))
-          # Change only the copied executable's stack reservation. Keep the
-          # default failure and both header values; never qualify this copy.
-          binary=root/'bin'/(originals[0][0]+'.exe');copy=binary.with_name('frame-stack-diagnostic.exe');shutil.copy2(binary,copy)
-          def pe_stack(path):
-              data=path.read_bytes();pe=struct.unpack_from('<I',data,0x3c)[0];optional=pe+24
-              assert struct.unpack_from('<H',data,optional)[0]==0x20b
-              return struct.unpack_from('<Q',data,optional+72)[0]
-          before=pe_stack(copy)
-          assert run(['editbin','/STACK:8388608',copy],'edit-stack')==0
-          after=pe_stack(copy);assert after==8388608
-          diagnostic=run([copy,'--gtest_filter='+originals[0][1]],'stack-diagnostic')
-          manifest['stack_diagnostic']={'default_reserve':before,'diagnostic_reserve':after,'sha256':digest(copy),'exit':diagnostic}
-          copy.unlink()
+          if os.environ['DIAGNOSTIC_SCOPE']=='windows-crt-proof':
+              for i,(_,test) in enumerate(originals):
+                  cases=list(ET.parse(out/('original-'+str(i)+'.xml')).getroot().iter('testcase'))
+                  assert len(cases)==1 and cases[0].get('classname')+'.'+cases[0].get('name')==test
+                  assert cases[0].find('skipped') is None,'A skipped boundary is not validation'
+          manifest['stack_diagnostic']=None
+          if os.environ['DIAGNOSTIC_SCOPE']!='windows-crt-proof':
+              # Change only the copied executable's stack reservation. Keep the
+              # default failure and both header values; never qualify this copy.
+              binary=root/'bin'/(originals[0][0]+'.exe');copy=binary.with_name('frame-stack-diagnostic.exe');shutil.copy2(binary,copy)
+              def pe_stack(path):
+                  data=path.read_bytes();pe=struct.unpack_from('<I',data,0x3c)[0];optional=pe+24
+                  assert struct.unpack_from('<H',data,optional)[0]==0x20b
+                  return struct.unpack_from('<Q',data,optional+72)[0]
+              before=pe_stack(copy)
+              assert run(['editbin','/STACK:8388608',copy],'edit-stack')==0
+              after=pe_stack(copy);assert after==8388608
+              diagnostic=run([copy,'--gtest_filter='+originals[0][1]],'stack-diagnostic')
+              manifest['stack_diagnostic']={'default_reserve':before,'diagnostic_reserve':after,'sha256':digest(copy),'exit':diagnostic}
+              copy.unlink()
           for name in ['cl','clang','x86_64-w64-mingw32-gcc']:
               tool=shutil.which(name)
               if tool:run([tool,*([] if name=='cl' else ['--version'])],name+'-version')
