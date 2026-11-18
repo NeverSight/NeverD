@@ -47679,6 +47679,61 @@ TEST(HighCPointerAddresses, ForwarderToTheGuardDispatchPointerIsADispatcher) {
       << HighC;
 }
 
+TEST(HighCPointerAddresses, TransfersThroughTheGuardDispatchSlotGoToRax) {
+  // x64 Control Flow Guard: `mov rax, [rcx]; mov rcx, [rcx+8]` and then
+  // `call [__guard_dispatch_icall_fptr]`, or `jmp [...]` for a tail call.
+  // Whichever dispatcher the runtime installs in the load configuration's
+  // slot jumps to RAX with the caller's registers, so the transfer is to the
+  // function loaded into RAX, not to the dispatcher the slot holds.
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Tail = 0x140001020;
+  constexpr va_t Slot = 0x140002000;
+  const auto Through = [&](uint8_t ModRM, va_t Next) {
+    const uint32_t Disp = static_cast<uint32_t>(Slot - Next);
+    return std::vector<uint8_t>{0xff,
+                                ModRM,
+                                uint8_t(Disp),
+                                uint8_t(Disp >> 8),
+                                uint8_t(Disp >> 16),
+                                uint8_t(Disp >> 24)};
+  };
+  std::vector<uint8_t> Code = {0x48, 0x83, 0xec, 0x28,  // sub rsp, 28h
+                               0x48, 0x8b, 0x01,        // mov rax, [rcx]
+                               0x48, 0x8b, 0x49, 0x08}; // mov rcx, [rcx+8]
+  const auto Call = Through(0x15, Entry + Code.size() + 6);
+  Code.insert(Code.end(), Call.begin(), Call.end()); // call [slot]
+  Code.insert(Code.end(), {0x48, 0x83, 0xc4, 0x28,   // add rsp, 28h
+                           0xc3});                   // ret
+  Code.resize(Tail - Entry, 0xcc);
+  Code.insert(Code.end(), {0x48, 0x8b, 0x01,         // mov rax, [rcx]
+                           0x48, 0x8b, 0x49, 0x08}); // mov rcx, [rcx+8]
+  const auto Jump = Through(0x25, Entry + Code.size() + 6);
+  Code.insert(Code.end(), Jump.begin(), Jump.end()); // jmp [slot]
+  const auto Image = [&] {
+    BinaryImage Img = makeCodeFixture(Entry, Code);
+    Segment Data;
+    Data.Name = ".rdata";
+    Data.VA = Slot;
+    Data.Size = 8;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.assign(8, 0);
+    Img.Segments.push_back(std::move(Data));
+    EXPECT_TRUE(Img.recordRuntimeCallablePointerSlot(
+        Slot, RuntimeCallablePointerSlotKind::GuardCFDispatch));
+    return Img;
+  };
+  for (const va_t Function : {Entry, Tail}) {
+    SCOPED_TRACE(llvm::utohexstr(Function));
+    const std::string HighC = highcOnlyFunction(Image(), Function);
+    EXPECT_EQ(HighC.find("140002000"), std::string::npos) << HighC;
+    EXPECT_EQ(HighC.find("unknown"), std::string::npos) << HighC;
+    EXPECT_EQ(HighC.find("arg1"), std::string::npos) << HighC;
+    EXPECT_TRUE(std::regex_search(
+        HighC, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\([^,;]+\);)")))
+        << HighC;
+  }
+}
+
 TEST(HighCPointerAddresses, GuardDispatchTargetChosenOnTwoPathsStaysAssigned) {
   // IovpCancelRoutine: RAX is a loaded callback, or the caller's third
   // argument when there is none.  The dispatch call reads the value that

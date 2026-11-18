@@ -1433,6 +1433,15 @@ executable section nor a decodable prefix alone establishes a callable entry.
 Continuation ownership excludes both proof paths. A validated CFG entry needs
 no pointer relocation elsewhere in the image.
 
+An x64 call or tail jump through the load configuration's Control Flow Guard
+dispatch slot (`call [__guard_dispatch_icall_fptr]`, and the XFG slot) is a
+transfer through RAX: the dispatcher the loader installs checks RAX and jumps to
+it with the caller's registers, stack and return address, and a CF-instrumented
+image linked without `/guard:cf` keeps a plain `jmp rax` there. CFG
+construction lifts it so (`CFGBuilderX86GuardDispatch.cpp`); a function that is
+only that jump keeps it, and its callers call the function in RAX
+(`forwardsToGuardDispatch`).
+
 `BinaryImage::isFunctionEntryCandidateAt` owns the shared structural gate for
 independent entries: executable ownership, instruction alignment, data-object
 exclusion and normalized continuation identity. Discovery, CFG tail calls,
@@ -10073,6 +10082,13 @@ Frame-address reachability retains witnessed paths to frame roots. Only a
 completed top-level failure can mark all visited dependencies as rootless;
 a nested cycle cutoff is never published as a negative fact. Feasible-edge
 publication and function changes retire these answers with their owner.
+
+A loop that walks a table by comparing the address itself with the table's
+end, `for (p = begin; p < end; p++)` as the CRT's initializer walks
+(`_initterm`, `_RTC_Initialize`) do, bounds the slots the role proof reads to
+[begin, end) (`guardedIterationCount`). A walk of an empty table never runs its
+load (`PointerTableLoadRoleSummary::NeverLoaded`), so a call of the loaded value
+there needs no slot role.
 
 The LLVM pointer-table role proof treats a frame slot as a PHI over the
 values stored to it (`collectFrameReloadSources`). As a PHI's recurrent arm

@@ -3441,6 +3441,11 @@ the image lists after it, the replacement is installed and its relocated code
 calls the original functions; named as another function of the image, it is
 refused.
 
+`HighCPointerAddresses.TransfersThroughTheGuardDispatchSlotGoToRax` prints a
+call and a tail jump through an x64 image's Control Flow Guard dispatch slot as
+calls of the function loaded into RAX, with the argument the caller set and no
+reference to the slot.
+
 `LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
 optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,
