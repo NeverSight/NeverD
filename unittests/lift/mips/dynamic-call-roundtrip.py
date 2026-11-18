@@ -26,6 +26,28 @@ def symbols(path):
             if s.name}
 
 
+def rebuilt_storage(source, rebuilt_symbols, address, width, fallback):
+    # GNU linkers may alias a user's object with a section-boundary symbol.
+    # Use the C emitter's original-image storage annotations, not a preferred
+    # spelling of that symbol, to mutate the corresponding rebuilt object.
+    owners = set()
+    for match in re.finditer(
+            r"/\* neverd\.image: 0x([0-9a-fA-F]+)(?: \.\. 0x([0-9a-fA-F]+))?[^\n]*\*/\n([^\n]+)",
+            source):
+        base = int(match[1], 16)
+        declaration = match[3].split("=", 1)[0]
+        for name in re.findall(r"[A-Za-z_][A-Za-z_0-9]*", declaration):
+            symbol = rebuilt_symbols.get(name)
+            if symbol is None or symbol["st_shndx"] in ("SHN_UNDEF", "SHN_ABS"):
+                continue
+            extent = int(match[2], 16) - base if match[2] else symbol["st_size"]
+            if base <= address and address + width <= base + min(extent, symbol["st_size"]):
+                owners.add(symbol["st_value"] + address - base)
+    if len(owners) > 1:
+        raise AssertionError(f"ambiguous rebuilt storage for {address:#x}: {owners}")
+    return next(iter(owners)) if owners else fallback
+
+
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                  provider, companions, callbacks, little, values, results, linker):
     work = artifacts.work
@@ -317,8 +339,10 @@ word probe(word value) { return target(value, 37) + 1; }
                 map_callback_aliases(uc)
                 rebuilt_symbols = symbols(rebuilt)
                 rebuilt_gp = rebuilt_symbols["_gp"]["st_value"]
-                rebuilt_slot = (rebuilt_symbols["target"]["st_value"]
-                                if "target" in rebuilt_symbols else slot + data_bias)
+                rebuilt_slot = rebuilt_storage(
+                    source.read_text(), rebuilt_symbols, slot, width,
+                    rebuilt_symbols["target"]["st_value"]
+                    if "target" in rebuilt_symbols else slot + data_bias)
                 if pic:
                     map_image(uc, elf, set(), data_bias)
                     uc.mem_write(source_slot + data_bias, (slot + data_bias).to_bytes(width, byte_order))
