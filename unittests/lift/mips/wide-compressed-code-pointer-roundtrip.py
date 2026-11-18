@@ -20,7 +20,14 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 
 FUNCTIONS = ("pointer_bits", "pointer_tag", "pointer_mask", "pointer_code",
-             "pointer_offset", "pointer_equal", "call_pointer", "direct_call")
+             "pointer_offset", "pointer_equal", "call_pointer", "direct_call",
+             "wide_call_pointer", "wide_direct_call")
+CALLS = {
+    "call_pointer": ("target", "int callee(int value);", True),
+    "direct_call": ("target", "int callee(int value);", False),
+    "wide_call_pointer": ("wide_target", "unsigned long long callee(unsigned long long value);", True),
+    "wide_direct_call": ("wide_target", "unsigned long long callee(unsigned long long value);", False),
+}
 PRESERVED = {reg: 0x61395217f0e0d000 + reg
              for reg in (*range(16, 24), 28, 30)}
 CALL_VIEWS_SPEC = importlib.util.spec_from_file_location(
@@ -31,7 +38,8 @@ CALL_VIEWS_SPEC.loader.exec_module(CALL_VIEWS)
 
 def observe(path, function, abi, little, compressed, literal_pointer=None):
     elf = ELFFile(io.BytesIO(path.read_bytes()))
-    symbol = elf.get_section_by_name(".symtab").get_symbol_by_name("target")[0]
+    target_name = CALLS[function][0] if function in CALLS else "target"
+    symbol = elf.get_section_by_name(".symtab").get_symbol_by_name(target_name)[0]
     # GNU emits either a tagged value or the compressed st_other mode bit.
     pointer = symbol["st_value"] | bool(symbol["st_other"]["local"] & 4)
     assert pointer & 1 == int(compressed), (path, pointer)
@@ -39,10 +47,14 @@ def observe(path, function, abi, little, compressed, literal_pointer=None):
     if abi == "n32" and pointer & 0x80000000:
         pointer |= 0xffffffff00000000
     expected_pointer = pointer if literal_pointer is None else literal_pointer
-    if function in ("call_pointer", "direct_call"):
-        cases = [(([pointer, value] if function == "call_pointer" else [value]),
-                  (value + 7) & mask)
-                 for value in (0, 1, -17, 0x10203040)]
+    if function in CALLS:
+        wide = target_name == "wide_target"
+        values = ((0, 1, 0x100000002, 0xfedcba9876543210,
+                   0x8000000000000000, 0xffffffffffffffff) if wide
+                  else (0, 1, -17, 0x10203040))
+        cases = [(([pointer, value] if CALLS[function][2] else [value]),
+                  (value ^ 0x81927364a5b6c7d8 if wide else value + 7) & mask)
+                 for value in values]
     elif function == "pointer_equal":
         cases = [([pointer], 1), ([pointer ^ 1], 0), ([pointer + 16], 0)]
     else:
@@ -80,7 +92,7 @@ def observe(path, function, abi, little, compressed, literal_pointer=None):
         result, memory = roundtrip.invoke(
             cpu, entry, 64, little, arguments, initial_registers=PRESERVED)
         assert result == expected, (path, abi, function, arguments, result, expected)
-        assert len(calls) == int(function in ("call_pointer", "direct_call")), (path, calls)
+        assert len(calls) == int(function in CALLS), (path, calls)
         registers = {reg: cpu.reg_read(getattr(roundtrip.mips, f"UC_MIPS_REG_{reg}"))
                      for reg in PRESERVED}
         assert registers == PRESERVED, (path, function, registers)
@@ -144,10 +156,13 @@ def main():
                     attribute = f"__attribute__(({mode},noinline,aligned(16)))"
                     target_source, caller_source = work / "target.c", work / "original.c"
                     target_source.write_text(
-                        f"{attribute} int target(int x) {{ return x + 7; }}\n")
+                        f"{attribute} int target(int x) {{ return x + 7; }}\n" +
+                        f"{attribute} unsigned long long wide_target(unsigned long long x) " +
+                        "{ return x ^ 0x81927364a5b6c7d8ULL; }\n")
                     caller_source.write_text(
                         "typedef __UINTPTR_TYPE__ uptr;\n" +
                         f"{attribute} int target(int);\n" +
+                        f"{attribute} unsigned long long wide_target(unsigned long long);\n" +
                         "uptr pointer_bits(void) { return (uptr)&target; }\n"
                         "uptr pointer_tag(void) { return (uptr)&target & 1; }\n"
                         "uptr pointer_mask(void) { return (uptr)&target & 15; }\n"
@@ -155,7 +170,10 @@ def main():
                         "uptr pointer_offset(void) { return (uptr)&target + 4; }\n"
                         "int pointer_equal(uptr p) { return p == (uptr)&target; }\n"
                         "int call_pointer(int (*callee)(int), int x) { return callee(x); }\n"
-                        "int direct_call(int x) { return target(x); }\n")
+                        "int direct_call(int x) { return target(x); }\n"
+                        "unsigned long long wide_call_pointer(unsigned long long (*callee)(unsigned long long), "
+                        "unsigned long long x) { return callee(x); }\n"
+                        "unsigned long long wide_direct_call(unsigned long long x) { return wide_target(x); }\n")
                     artifacts.keep_source(target_source)
                     artifacts.keep_source(caller_source)
                     target_object = work / "target.o"
@@ -184,14 +202,14 @@ def main():
                                         continue
                                     for backend in ("highc", "llvmc"):
                                         source = work / "reconstructed.c"
-                                        if function in ("call_pointer", "direct_call"):
+                                        if function in CALLS:
                                             elf = ELFFile(io.BytesIO(original.read_bytes()))
                                             entry = elf.get_section_by_name(".symtab").get_symbol_by_name(
                                                 function)[0]["st_value"]
                                             source.write_text(views.source(
                                                 original, "c" if backend == "highc" else backend,
-                                                "int callee(int value);", [],
-                                                function == "call_pointer", entry))
+                                                CALLS[function][1], [],
+                                                CALLS[function][2], entry))
                                         else:
                                             command([args.neverd, "decompile", "--func", function,
                                                      *(["--llvm"] if backend == "llvmc" else []),
@@ -209,7 +227,7 @@ def main():
                                                     r["memory"] for r in after["observations"]]
                                                 rows.append(dict(**context, backend=backend, compiler=compiler,
                                                                  optimization=optimization,
-                                                                 explicit_call_type=function in ("call_pointer", "direct_call"),
+                                                                 explicit_call_type=function in CALLS,
                                                                  source_sha256=digest(source),
                                                                  rebuilt_sha256=digest(rebuilt), rebuilt=after))
                                                 artifacts.write("results.json", rows)
