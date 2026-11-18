@@ -25287,9 +25287,10 @@ The ordinary four-profile run remains the default. Only the micro fixture's
 functions may be selected with `--function` in that mode. The instruction-level
 `MicroMIPSInteger` tests separately check independent literal memory encodings,
 signed/unsigned loads, exact store bytes, failed writes and original-target
-execution. Numeric r2/o32 defined code identities require the LLVM r7 SDK and
-the matching NeverSight Clang; unknown-mode imports and wide compressed
-profiles remain refused. The pipeline suite checks the boundary and ensures
+execution. Numeric r2 microMIPS identities in o32/n32/n64 and MIPS16 identities
+in o32 require the LLVM r7 SDK and the matching NeverSight Clang; unknown-mode
+imports and other compressed profiles remain refused. The pipeline suite checks
+the boundary and ensures
 LLVM does not infer a zero callable tag from a function's code alignment.
 
 `unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
@@ -25305,6 +25306,16 @@ The indirect call supplies its fixed original declaration through the public
 call-site edit interface. This establishes the outgoing argument extent needed
 to prove saved FP/link storage private; an unknown call does not inherit that
 contract merely from its observed arguments.
+
+`unittests/lift/mips/wide-compressed-code-pointer-roundtrip.py` adds n32 and n64
+with explicit `--gcc` and the same tool paths. Independent GCC/Clang O0/O2
+callers observe separately compiled classic and microMIPS targets in either
+byte order. It checks relocated numeric identities, literal controls, direct
+and indirect calls, and full-width results with nonzero high words. Each call
+must execute the intended callee once and preserve SP, RA and callee-saved
+registers. `--original-only` validates the fixtures without claiming NeverD
+reconstruction. High-address execution uses Unicorn's virtual TLB and does not
+qualify a hardware MMU.
 
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
