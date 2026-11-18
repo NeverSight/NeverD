@@ -2184,6 +2184,7 @@ add_neverd_unittest(NeverDWindowsRegistrationFrameTests
   eh/RegistrationCallbackStackFlowTests.cpp
 
   LINK_COMPONENTS
+  Support
   WindowsRegistrationFrame
 )
 
