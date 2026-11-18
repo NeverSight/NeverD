@@ -539,7 +539,7 @@ jobs:
               'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
           }
           if 'NeverDRecordCallContractTests' in owners:
-              assert record_bridge_names <= actual_names, 'record bridge regressions absent'
+              assert record_bridge_names <= set(actual_names), 'record bridge regressions absent'
               assert not any(case.get('name') in record_bridge_names and case.find('skipped') is not None for case in cases), 'record bridge regressions skipped'
           added_owners = ['NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests']
           # These tests execute Linux x86 ELF binaries. Their existing compile-time
