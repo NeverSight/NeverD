@@ -1440,7 +1440,12 @@ it with the caller's registers, stack and return address, and a CF-instrumented
 image linked without `/guard:cf` keeps a plain `jmp rax` there. CFG
 construction lifts it so (`CFGBuilderX86GuardDispatch.cpp`); a function that is
 only that jump keeps it, and its callers call the function in RAX
-(`forwardsToGuardDispatch`).
+(`forwardsToGuardDispatch`). A lifted module of such an image carries
+`cfguard`, so LLVM instruments its indirect calls again; both COFF patch routes
+bind `__guard_dispatch_icall_fptr` and `__guard_check_icall_fptr` to the slots
+the load configuration names (`findCOFFGuardRuntimeSlotVA`), and
+`checkCOFFResolvedSymbols` refuses generated code with any reference neither
+route binds instead of writing the relocation's bare addend.
 
 `BinaryImage::isFunctionEntryCandidateAt` owns the shared structural gate for
 independent entries: executable ownership, instruction alignment, data-object

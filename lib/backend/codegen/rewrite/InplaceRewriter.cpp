@@ -545,9 +545,12 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
     auto ResolveFn = [&](llvm::StringRef Sym,
                          uint32_t) -> std::optional<uint64_t> {
       std::string Name = Sym.str();
-      if (Fmt == BinaryFormat::COFF)
+      if (Fmt == BinaryFormat::COFF) {
         if (auto Personality = findCOFFExceptionPersonalityVA(Image, Sym))
           return SerializeResolvedCode(*Personality, true);
+        if (auto Slot = findCOFFGuardRuntimeSlotVA(Image, Sym))
+          return serializeImageDataSymbolAddress(Image, *Slot);
+      }
       auto FIt = FuncOrigVAs.find(Name);
       if (FIt != FuncOrigVAs.end())
         return SerializeResolvedCode(FIt->second, true);
@@ -746,9 +749,17 @@ PatchResult InplaceRewriter::rewrite(const std::filesystem::path &InputPath,
       }
     }
 
-    if (!ImageOut.Unresolved.empty())
+    if (Fmt == BinaryFormat::COFF) {
+      if (llvm::Error Err =
+              checkCOFFResolvedSymbols(ImageOut.Unresolved, TargetArch)) {
+        llvm::WithColor::error()
+            << "inplace: " << llvm::toString(std::move(Err)) << "\n";
+        return PatchResult{};
+      }
+    } else if (!ImageOut.Unresolved.empty()) {
       llvm::WithColor::warning() << "inplace: " << ImageOut.Unresolved.size()
                                  << " unresolved symbols\n";
+    }
 
     State.ObjText = ImageOut.Bytes;
     State.Mappings = std::move(AppliedMappings);

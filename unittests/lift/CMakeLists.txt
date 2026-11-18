@@ -4510,6 +4510,37 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking guarded x64 SEH fixture")
   list(APPEND TEST_OBJECTS ${coff_seh_guard_obj} ${coff_seh_guard_exe})
 
+  # One CF-instrumented object, linked without /guard:cf (CF_INSTRUMENTED
+  # only) and with it (enforced).
+  set(coff_guard_src "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_guard.c")
+  set(coff_guard_obj "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_guard.obj")
+  set(coff_guard_dormant_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_guard_dormant.exe")
+  set(coff_guard_enforced_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_guard_enforced.exe")
+  add_custom_command(
+    OUTPUT ${coff_guard_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -O1
+            -fno-inline-functions -Xclang -cfguard -c ${coff_guard_src}
+            -o ${coff_guard_obj}
+    DEPENDS ${coff_guard_src}
+    COMMENT "Compiling CF-instrumented x64 COFF fixture")
+  add_custom_command(
+    OUTPUT ${coff_guard_dormant_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:mainCRTStartup /subsystem:console
+            /nodefaultlib ${coff_guard_obj} /out:${coff_guard_dormant_exe}
+    DEPENDS ${coff_guard_obj}
+    COMMENT "Linking CF-instrumented x64 PE without /guard:cf")
+  add_custom_command(
+    OUTPUT ${coff_guard_enforced_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:mainCRTStartup /subsystem:console
+            /nodefaultlib /guard:cf ${coff_guard_obj}
+            /out:${coff_guard_enforced_exe}
+    DEPENDS ${coff_guard_obj}
+    COMMENT "Linking CF-instrumented x64 PE with /guard:cf")
+  list(APPEND TEST_OBJECTS ${coff_guard_obj} ${coff_guard_dormant_exe}
+       ${coff_guard_enforced_exe})
+
   set(mingw_startup_seh_src
       "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_mingw_startup_seh.s")
   set(mingw_startup_seh_obj

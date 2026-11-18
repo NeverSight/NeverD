@@ -59,6 +59,21 @@ llvm::Expected<COFFRuntimeFunctionRecord> decodeCOFFRuntimeFunction(
 std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
                                                    llvm::StringRef SymbolName);
 
+/// Return the load-configuration slot that LLVM's Control Flow Guard
+/// instrumentation reads through \p SymbolName: `__guard_dispatch_icall_fptr`
+/// (x64) or `__guard_check_icall_fptr` (x86, ARM, AArch64).  A lifted module
+/// of a CF-instrumented image keeps that instrumentation, and the image's
+/// runtime fills the slot with its own dispatcher or checker, whether or not
+/// the loader enforces the guard.  Empty when the image names no such slot.
+std::optional<va_t> findCOFFGuardRuntimeSlotVA(const BinaryImage &Image,
+                                               llvm::StringRef SymbolName);
+
+/// Refuse generated code that references a symbol neither COFF route could
+/// bind: an unresolved relocation would be written as its bare addend.  A
+/// Control Flow Guard slot name says that the load configuration lacks it.
+llvm::Error checkCOFFResolvedSymbols(llvm::ArrayRef<std::string> Unresolved,
+                                     Arch TargetArch);
+
 /// Facts established before a PE patch is allowed to mutate the output image.
 struct COFFExceptionPatchPlan {
   std::vector<va_t> ExceptionFunctionEntries;

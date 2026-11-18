@@ -3444,7 +3444,13 @@ refused.
 `HighCPointerAddresses.TransfersThroughTheGuardDispatchSlotGoToRax` prints a
 call and a tail jump through an x64 image's Control Flow Guard dispatch slot as
 calls of the function loaded into RAX, with the argument the caller set and no
-reference to the slot.
+reference to the slot. `PatchCOFF_X64.GuardedCallsGoThroughTheLoadConfigurationSlot`
+compiles `test_patch_coff_guard.c` with `-cfguard` and links it without and with
+`/guard:cf`. It lifts the two functions that call and tail-jump through the
+dispatch slot and patches them in section and in-place mode: the rewrite loads
+the pointer the source loads and transfers through the image's own slot. An
+image whose load configuration has no dispatch slot, and a module that needs a
+function the image does not name, are refused.
 
 `LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
 optimized functions that read a record's member, store to it, and then use the

@@ -15,6 +15,8 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Object/COFF.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SHA256.h"
 #include "llvm/Support/Win64EH.h"
 
@@ -1520,6 +1522,224 @@ TEST_F(PatchCOFF_X64, InplaceBindsFunctionsByTheirSourceIdentity) {
     ASSERT_TRUE(static_cast<bool>(Patched))
         << llvm::toString(Patched.takeError());
     EXPECT_EQ(CallTargets(*Patched, Entry, 64), Callees) << Diagnostic;
+  }
+}
+
+TEST_F(PatchCOFF_X64, GuardedCallsGoThroughTheLoadConfigurationSlot) {
+  // test_patch_coff_guard.c is compiled with -cfguard: its two functions call
+  // and tail-jump through __guard_dispatch_icall_fptr, the load
+  // configuration's dispatch slot, with the target in RAX.  The lifted
+  // functions call the target, and their module keeps the instrumentation
+  // (cfguard=2), so the rewrite calls through the image's slot again: in an
+  // image linked without /guard:cf, which is CF_INSTRUMENTED only, in one
+  // linked with it, and in both patch modes.  An image whose load
+  // configuration has no dispatch slot is refused rather than written with
+  // the unresolved reference, and so is a module that needs a function the
+  // image does not name (the pointer both functions load starts at Twice,
+  // which the module only declares).
+  const auto Dormant =
+      fs::path(TEST_OBJ_DIR) / "test_patch_coff_guard_dormant.exe";
+  const auto Enforced =
+      fs::path(TEST_OBJ_DIR) / "test_patch_coff_guard_enforced.exe";
+  if (!fs::exists(Dormant) || !fs::exists(Enforced))
+    GTEST_SKIP() << "CF-instrumented COFF executables not built";
+
+  const fs::path NoSlot = tmpFile("guard-no-dispatch-slot.exe");
+  {
+    auto Buffer = llvm::MemoryBuffer::getFile(Dormant.string());
+    ASSERT_TRUE(static_cast<bool>(Buffer)) << Buffer.getError().message();
+    auto Object =
+        llvm::object::COFFObjectFile::create((*Buffer)->getMemBufferRef());
+    ASSERT_TRUE(static_cast<bool>(Object))
+        << llvm::toString(Object.takeError());
+    const llvm::object::coff_load_configuration64 *Config =
+        (*Object)->getLoadConfig64();
+    ASSERT_NE(Config, nullptr);
+    ASSERT_NE(Config->GuardCFCheckDispatch, 0u);
+    const size_t Field =
+        reinterpret_cast<const char *>(&Config->GuardCFCheckDispatch) -
+        (*Buffer)->getBufferStart();
+    std::string Bytes((*Buffer)->getBufferStart(), (*Buffer)->getBufferSize());
+    std::fill_n(Bytes.begin() + Field, sizeof(Config->GuardCFCheckDispatch),
+                '\0');
+    std::ofstream(NoSlot, std::ios::binary) << Bytes;
+  }
+
+  // The bytes from \p VA to the end of its segment, at most \p Size.
+  const auto Available = [](const BinaryImage &In, va_t VA, size_t Size) {
+    const Segment *Seg = In.getSegmentFor(VA);
+    return Seg && VA >= Seg->VA && VA - Seg->VA < Seg->Data.size()
+               ? std::min<size_t>(Size, Seg->Data.size() - (VA - Seg->VA))
+               : size_t(0);
+  };
+  // The targets of the direct calls in the first \p Size bytes at \p VA.
+  const auto CallTargets = [&](const BinaryImage &In, va_t VA, size_t Size) {
+    std::vector<va_t> Targets;
+    Size = Available(In, VA, Size);
+    const uint8_t *Code = Size ? In.readVA(VA, Size) : nullptr;
+    for (size_t I = 0; Code && I + 5 <= Size; ++I)
+      if (Code[I] == 0xE8) {
+        int32_t Displacement = 0;
+        std::memcpy(&Displacement, Code + I + 1, sizeof(Displacement));
+        Targets.push_back(VA + I + 5 + static_cast<int64_t>(Displacement));
+        I += 4;
+      }
+    return Targets;
+  };
+  // What the function at \p VA, through the jump a relocated entry holds,
+  // reads through RIP-relative memory: the slots `call [m]` and `jmp [m]`
+  // transfer through, and the ones `mov rax, [m]` loads.
+  struct RipReads {
+    std::vector<va_t> Transfers, Loads;
+  };
+  const auto ReadsOf = [&](const BinaryImage &In, va_t VA) {
+    RipReads Reads;
+    const uint8_t *Code = In.readVA(VA, 5);
+    if (Code && Code[0] == 0xE9) {
+      int32_t Displacement = 0;
+      std::memcpy(&Displacement, Code + 1, sizeof(Displacement));
+      VA = VA + 5 + static_cast<int64_t>(Displacement);
+    }
+    // The generated function's own bytes: its unwind range where it has
+    // one, else up to its return.
+    size_t Window = Available(In, VA, 64);
+    bool ToReturn = true;
+    for (const ExceptionFunction &EH : In.ExceptionMetadata.Functions)
+      if (EH.CodeRange.Begin == VA && EH.CodeRange.End > VA) {
+        Window = Available(In, VA, EH.CodeRange.End - VA);
+        ToReturn = false;
+      }
+    Code = Window ? In.readVA(VA, Window) : nullptr;
+    const auto Target = [&](size_t Displacement, size_t End) {
+      int32_t Value = 0;
+      std::memcpy(&Value, Code + Displacement, sizeof(Value));
+      return VA + End + static_cast<int64_t>(Value);
+    };
+    for (size_t I = 0; Code && I < Window; ++I) {
+      if (ToReturn && Code[I] == 0xC3)
+        break;
+      if (I + 6 <= Window && Code[I] == 0xFF &&
+          (Code[I + 1] == 0x15 || Code[I + 1] == 0x25)) {
+        Reads.Transfers.push_back(Target(I + 2, I + 6));
+        if (ToReturn && Code[I + 1] == 0x25)
+          break;
+      } else if (I + 7 <= Window && Code[I] == 0x48 && Code[I + 1] == 0x8B &&
+                 Code[I + 2] == 0x05) {
+        Reads.Loads.push_back(Target(I + 3, I + 7));
+      }
+    }
+    return Reads;
+  };
+
+  struct Case {
+    const char *Trace;
+    fs::path Image;
+    bool Inplace;
+    bool HasSlot;
+    bool NamesTwice = true;
+  };
+  const Case Cases[] = {
+      {"linked without /guard:cf, new section", Dormant, false, true},
+      {"linked without /guard:cf, in place", Dormant, true, true},
+      {"linked with /guard:cf, new section", Enforced, false, true},
+      {"linked with /guard:cf, in place", Enforced, true, true},
+      {"no dispatch slot, new section", NoSlot, false, false},
+      {"no dispatch slot, in place", NoSlot, true, false},
+      {"Twice unnamed, new section", Dormant, false, true, false},
+      {"Twice unnamed, in place", Dormant, true, true, false},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(C.Trace);
+    auto Loaded = loadBinary(C.Image);
+    ASSERT_TRUE(static_cast<bool>(Loaded))
+        << llvm::toString(Loaded.takeError());
+    BinaryImage Image = std::move(*Loaded);
+    EXPECT_NE(Image.DynInfo.GuardFlags &
+                  uint32_t(llvm::COFF::GuardFlags::CF_INSTRUMENTED),
+              0u);
+    std::optional<va_t> Slot;
+    for (const RuntimeCallablePointerSlot &Record :
+         Image.RuntimeCallablePointerSlots)
+      if (Record.Kind == RuntimeCallablePointerSlotKind::GuardCFDispatch)
+        Slot = Record.SlotVA;
+    ASSERT_EQ(Slot.has_value(), C.HasSlot);
+    // mainCRTStartup calls CallThrough and then TailThrough. The image has
+    // no PDB; give them the symbols one would, as leaf TailThrough has no
+    // unwind record to authenticate its entry. Both load the pointer
+    // variable that starts at Twice.
+    const std::vector<va_t> Functions = CallTargets(Image, Image.Entry, 48);
+    ASSERT_EQ(Functions.size(), 2u);
+    std::vector<std::pair<va_t, const char *>> Names = {
+        {Functions[0], "CallThrough"}, {Functions[1], "TailThrough"}};
+    if (C.NamesTwice) {
+      const std::vector<va_t> Loads = ReadsOf(Image, Functions[0]).Loads;
+      ASSERT_EQ(Loads.size(), 1u);
+      const uint8_t *Pointer = Image.readVA(Loads[0], sizeof(uint64_t));
+      ASSERT_NE(Pointer, nullptr);
+      Names.push_back({readLE<uint64_t>(Pointer), "Twice"});
+    }
+    for (const auto &[VA, Name] : Names) {
+      Symbol Function = Symbol::makeFunc(VA);
+      Function.Name = Name;
+      Image.Symbols.push_back(std::move(Function));
+    }
+
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = true;
+    Options.OnlyFunctionEntries.insert(Functions.begin(), Functions.end());
+    PipelineResult Lifted = Pipeline().run(Image, Context, Options);
+    ASSERT_TRUE(Lifted.Success) << Lifted.Error;
+    ASSERT_NE(Lifted.LlvmModule, nullptr);
+
+    const fs::path Output = tmpFile("guard-patched.exe");
+    fs::remove(Output);
+    testing::internal::CaptureStderr();
+    PatchResult Result;
+    if (C.Inplace) {
+      Result =
+          InplaceRewriter::create(BinaryFormat::COFF)
+              ->rewrite(C.Image, Output, *Lifted.LlvmModule, Image, Arch::X64);
+    } else {
+      auto Patcher = BinaryPatcher::create(BinaryFormat::COFF);
+      Patcher->setImageContext(&Image);
+      Result = Patcher->patch(C.Image, Output, *Lifted.LlvmModule, Arch::X64);
+    }
+    const std::string Diagnostic = testing::internal::GetCapturedStderr();
+    if (!C.HasSlot) {
+      EXPECT_FALSE(Result.Success) << Diagnostic;
+      EXPECT_NE(Diagnostic.find("calls through __guard_dispatch_icall_fptr, "
+                                "but the image's load configuration names "
+                                "no such slot"),
+                std::string::npos)
+          << Diagnostic;
+      continue;
+    }
+    if (!C.NamesTwice) {
+      EXPECT_FALSE(Result.Success) << Diagnostic;
+      EXPECT_NE(Diagnostic.find("generated code references sub_"),
+                std::string::npos)
+          << Diagnostic;
+      EXPECT_NE(Diagnostic.find("that the image does not provide"),
+                std::string::npos)
+          << Diagnostic;
+      continue;
+    }
+    ASSERT_TRUE(Result.Success) << Diagnostic;
+    EXPECT_EQ(Diagnostic.find("unresolved"), std::string::npos) << Diagnostic;
+    auto Patched = loadBinary(Output);
+    ASSERT_TRUE(static_cast<bool>(Patched))
+        << llvm::toString(Patched.takeError());
+    for (const va_t Function : Functions) {
+      SCOPED_TRACE(llvm::utohexstr(Function));
+      // The rewrite transfers through the slot once and never loads the
+      // slot as the callee: the target is the pointer the source loaded.
+      const RipReads Reads = ReadsOf(*Patched, Function);
+      EXPECT_EQ(Reads.Transfers, std::vector<va_t>{*Slot});
+      EXPECT_EQ(std::count(Reads.Loads.begin(), Reads.Loads.end(), *Slot), 0);
+      EXPECT_FALSE(Reads.Loads.empty());
+    }
   }
 }
 
