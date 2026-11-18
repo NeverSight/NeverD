@@ -226,10 +226,17 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true,
       }
       ASSERT_TRUE(Result.LlvmModule);
       EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      if (Symbolic) {
+        const auto *Target = Result.LlvmModule->getFunction("target");
+        ASSERT_TRUE(Target);
+        EXPECT_FALSE(Target->use_empty());
+      }
       ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit));
     } else
       ASSERT_TRUE(HighCEmitter().emit(Result.HighFuncs, Out, Emit));
     EXPECT_EQ(Text.find("target") != std::string::npos, Symbolic) << Text;
+    if (Symbolic)
+      EXPECT_EQ(Text.find("neverd.image:"), std::string::npos) << Text;
   }
 }
 
