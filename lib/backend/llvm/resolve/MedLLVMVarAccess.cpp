@@ -1192,7 +1192,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                 "MIPS copied callable has an invalid mode tag");
           Address = *Entry;
         }
-        if (llvm::Constant *Code = resolveLiftedCodeAddress(Address)) {
+        if (llvm::Constant *Code = resolveImageFunctionAddress(Address)) {
           mips::requireNumericCodePointerSource(Img, Address);
           return Builder.CreatePtrToInt(Code, sizeToType(V.Size),
                                         "codeptr.prov");
