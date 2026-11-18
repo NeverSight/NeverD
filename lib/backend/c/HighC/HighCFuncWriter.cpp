@@ -26,6 +26,7 @@
 #include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVEVectorState.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighPointerTypeInference.h"
