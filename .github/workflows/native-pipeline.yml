@@ -28,6 +28,7 @@ on:
         options:
           - qualification
           - macos-qualification
+          - record-unix-qualification
           - constructor-repro
           - render-store-probe
           - render-store-profile
@@ -269,13 +270,13 @@ jobs:
           if-no-files-found: error
           path: constructor-evidence/
   native:
-    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification' || inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification'
+    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification' || inputs.scope == 'record-unix-qualification' || inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix: >-
-        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
+        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
     timeout-minutes: 180
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
@@ -470,7 +471,7 @@ jobs:
           assert all(counts[owner] > 0 for owner in owners), counts
           assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
           assert sum(count for owner, count in counts.items() if owner.startswith('NeverDMIPS')) == int(os.environ['EXPECTED_MIPS_TEST_COUNT'])
-          if os.environ['QUALIFICATION_ROLE'] == 'candidate' and os.environ['QUALIFICATION_SCOPE'] in ('qualification','macos-qualification'):
+          if os.environ['QUALIFICATION_ROLE'] == 'candidate' and os.environ['QUALIFICATION_SCOPE'] in ('qualification','macos-qualification','record-unix-qualification'):
               assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
               assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
               assert 'MIPSScalarCalls.TailTransfersPreserveTheCompleteIntegerResultCarrier' in name_to_owner
@@ -537,6 +538,8 @@ jobs:
           record_bridge_names = {
               'RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
               'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
+              'RecordCallContract.FloatingRecordResultsKeepPhysicalLocals',
+              'RecordCallContract.FloatingRecordResultsKeepIntegerExpressionCarriers',
           }
           if 'NeverDRecordCallContractTests' in owners:
               assert record_bridge_names <= set(actual_names), 'record bridge regressions absent'
