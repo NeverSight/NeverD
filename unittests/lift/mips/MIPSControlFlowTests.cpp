@@ -345,6 +345,8 @@ TEST_P(MIPSControl, PhysicalDecodeAndOwnedExecutionUnitsRemainDistinct) {
   DecodedInsn Other;
   ASSERT_EQ(Decode.decodeOneForLift(Bytes.data() + 8, 4, 0x1008, Other), 4);
   std::vector<LowOp> Ops;
+  EXPECT_THROW(Decode.liftToLow(Unit.Head, Ops), UnliftedInstruction);
+  EXPECT_TRUE(Ops.empty());
   auto Member = Decode.liftUnitToLow(Unit, Ops);
   ASSERT_TRUE(Member);
   BinaryImage Image;
