@@ -1,4 +1,5 @@
-//===- RewriteCodegenHarness.cpp - rewrite codegen + Unicorn verify -*- C++ -*-===//
+//===- RewriteCodegenHarness.cpp - rewrite codegen + Unicorn verify -*- C++
+//-*-===//
 //
 // NeverD Decompiler
 //
@@ -10,8 +11,9 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "RewriteCodegenHarness.h"
+
+#include "neverd/support/LLVMTargetInitialization.h"
 
 using namespace neverd;
 
@@ -21,25 +23,21 @@ void ensureLLVMTargets() {
   static bool Done = false;
   if (Done)
     return;
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   Done = true;
 }
 
 // Build IR: int add(int a, int b) { return a + b; }
 // AArch64/x86-64 ABI: a=first int reg, b=second int reg, return in first.
-std::unique_ptr<llvm::Module>
-buildAddIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildAddIR(llvm::LLVMContext &Ctx,
+                                         const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
   auto *FTy = llvm::FunctionType::get(I32, {I32, I32}, false);
-  auto *F = llvm::Function::Create(FTy, llvm::Function::ExternalLinkage,
-                                   "add", M.get());
+  auto *F = llvm::Function::Create(FTy, llvm::Function::ExternalLinkage, "add",
+                                   M.get());
   auto *BB = llvm::BasicBlock::Create(Ctx, "entry", F);
   llvm::IRBuilder<> B(BB);
   auto *Sum = B.CreateAdd(F->getArg(0), F->getArg(1));
@@ -50,8 +48,8 @@ buildAddIR(llvm::LLVMContext &Ctx, const char *Triple) {
 }
 
 // Build IR: int compute(int x) { return x * 3 + 7; }
-std::unique_ptr<llvm::Module>
-buildComputeIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildComputeIR(llvm::LLVMContext &Ctx,
+                                             const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
@@ -72,8 +70,8 @@ buildComputeIR(llvm::LLVMContext &Ctx, const char *Triple) {
 // Build IR with data reference:
 //   @counter = global i32 42
 //   int get_and_inc() { counter++; return counter; }
-std::unique_ptr<llvm::Module>
-buildDataRefIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildDataRefIR(llvm::LLVMContext &Ctx,
+                                             const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
@@ -100,16 +98,16 @@ buildDataRefIR(llvm::LLVMContext &Ctx, const char *Triple) {
 // Build IR with cross-function call:
 //   int helper(int x) { return x * 2 + 1; }
 //   int caller(int a, int b) { return helper(a) + helper(b); }
-std::unique_ptr<llvm::Module>
-buildCrossCallIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildCrossCallIR(llvm::LLVMContext &Ctx,
+                                               const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
 
   auto *HelperTy = llvm::FunctionType::get(I32, {I32}, false);
-  auto *Helper = llvm::Function::Create(HelperTy,
-      llvm::Function::InternalLinkage, "helper", M.get());
+  auto *Helper = llvm::Function::Create(
+      HelperTy, llvm::Function::InternalLinkage, "helper", M.get());
   Helper->setDSOLocal(true);
   {
     auto *BB = llvm::BasicBlock::Create(Ctx, "entry", Helper);
@@ -120,8 +118,8 @@ buildCrossCallIR(llvm::LLVMContext &Ctx, const char *Triple) {
   }
 
   auto *CallerTy = llvm::FunctionType::get(I32, {I32, I32}, false);
-  auto *Caller = llvm::Function::Create(CallerTy,
-      llvm::Function::ExternalLinkage, "caller", M.get());
+  auto *Caller = llvm::Function::Create(
+      CallerTy, llvm::Function::ExternalLinkage, "caller", M.get());
   {
     auto *BB = llvm::BasicBlock::Create(Ctx, "entry", Caller);
     llvm::IRBuilder<> B(BB);
@@ -140,21 +138,20 @@ buildCrossCallIR(llvm::LLVMContext &Ctx, const char *Triple) {
 //   int wrap_ext(int x) { return external_fn(x + 10); }
 // DSOLocal controls whether the call goes direct (dso_local=true) or via @PLT.
 std::unique_ptr<llvm::Module>
-buildExternalCallIR(llvm::LLVMContext &Ctx, const char *Triple,
-                    bool DSOLocal) {
+buildExternalCallIR(llvm::LLVMContext &Ctx, const char *Triple, bool DSOLocal) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
   auto *ExtTy = llvm::FunctionType::get(I32, {I32}, false);
-  auto *ExtFn = llvm::Function::Create(ExtTy,
-      llvm::Function::ExternalLinkage, "external_fn", M.get());
+  auto *ExtFn = llvm::Function::Create(ExtTy, llvm::Function::ExternalLinkage,
+                                       "external_fn", M.get());
   if (DSOLocal)
     ExtFn->setDSOLocal(true);
 
   auto *WrapTy = llvm::FunctionType::get(I32, {I32}, false);
-  auto *Wrap = llvm::Function::Create(WrapTy,
-      llvm::Function::ExternalLinkage, "wrap_ext", M.get());
+  auto *Wrap = llvm::Function::Create(WrapTy, llvm::Function::ExternalLinkage,
+                                      "wrap_ext", M.get());
   auto *BB = llvm::BasicBlock::Create(Ctx, "entry", Wrap);
   llvm::IRBuilder<> B(BB);
   auto *Added = B.CreateAdd(Wrap->getArg(0), B.getInt32(10));
@@ -176,16 +173,16 @@ buildExternalFunctionPointerIR(llvm::LLVMContext &Ctx, const char *Triple) {
 
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
   auto *ExtTy = llvm::FunctionType::get(I32, {I32}, false);
-  auto *ExtFn = llvm::Function::Create(
-      ExtTy, llvm::Function::ExternalLinkage, "external_fn", M.get());
+  auto *ExtFn = llvm::Function::Create(ExtTy, llvm::Function::ExternalLinkage,
+                                       "external_fn", M.get());
   ExtFn->setDSOLocal(true);
-  auto *Slot = new llvm::GlobalVariable(
-      *M, ExtFn->getType(), false, llvm::GlobalValue::ExternalLinkage, ExtFn,
-      "external_slot");
+  auto *Slot = new llvm::GlobalVariable(*M, ExtFn->getType(), false,
+                                        llvm::GlobalValue::ExternalLinkage,
+                                        ExtFn, "external_slot");
   Slot->setDSOLocal(true);
 
-  auto *Wrap = llvm::Function::Create(
-      ExtTy, llvm::Function::ExternalLinkage, "call_external_ptr", M.get());
+  auto *Wrap = llvm::Function::Create(ExtTy, llvm::Function::ExternalLinkage,
+                                      "call_external_ptr", M.get());
   auto *BB = llvm::BasicBlock::Create(Ctx, "entry", Wrap);
   llvm::IRBuilder<> B(BB);
   auto *Fn = B.CreateLoad(ExtFn->getType(), Slot);
@@ -195,9 +192,10 @@ buildExternalFunctionPointerIR(llvm::LLVMContext &Ctx, const char *Triple) {
   return M;
 }
 
-// Build IR with a loop: int sum_to(int n) { int s=0; for(int i=1;i<=n;i++) s+=i; return s; }
-std::unique_ptr<llvm::Module>
-buildLoopIR(llvm::LLVMContext &Ctx, const char *Triple) {
+// Build IR with a loop: int sum_to(int n) { int s=0; for(int i=1;i<=n;i++)
+// s+=i; return s; }
+std::unique_ptr<llvm::Module> buildLoopIR(llvm::LLVMContext &Ctx,
+                                          const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
@@ -241,8 +239,8 @@ buildLoopIR(llvm::LLVMContext &Ctx, const char *Triple) {
 //       default: return -1;
 //     }
 //   }
-std::unique_ptr<llvm::Module>
-buildSwitchIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildSwitchIR(llvm::LLVMContext &Ctx,
+                                            const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
 
@@ -264,11 +262,16 @@ buildSwitchIR(llvm::LLVMContext &Ctx, const char *Triple) {
   SW->addCase(B.getInt32(2), Case2);
   SW->addCase(B.getInt32(3), Case3);
 
-  B.SetInsertPoint(Case0);  B.CreateRet(B.getInt32(10));
-  B.SetInsertPoint(Case1);  B.CreateRet(B.getInt32(20));
-  B.SetInsertPoint(Case2);  B.CreateRet(B.getInt32(30));
-  B.SetInsertPoint(Case3);  B.CreateRet(B.getInt32(40));
-  B.SetInsertPoint(Default); B.CreateRet(B.getInt32(-1));
+  B.SetInsertPoint(Case0);
+  B.CreateRet(B.getInt32(10));
+  B.SetInsertPoint(Case1);
+  B.CreateRet(B.getInt32(20));
+  B.SetInsertPoint(Case2);
+  B.CreateRet(B.getInt32(30));
+  B.SetInsertPoint(Case3);
+  B.CreateRet(B.getInt32(40));
+  B.SetInsertPoint(Default);
+  B.CreateRet(B.getInt32(-1));
 
   assert(!llvm::verifyModule(*M, &llvm::errs()));
   return M;
@@ -279,18 +282,18 @@ buildSwitchIR(llvm::LLVMContext &Ctx, const char *Triple) {
 //   @g2 = global i32 222
 //   int sum_globals() { g1 += 1; g2 += 2; return g1 + g2; }
 // Expected result: (111+1) + (222+2) = 336
-std::unique_ptr<llvm::Module>
-buildMultiGlobalIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildMultiGlobalIR(llvm::LLVMContext &Ctx,
+                                                 const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
-  auto *G1 = new llvm::GlobalVariable(
-      *M, I32, false, llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(I32, 111), "g1");
+  auto *G1 = new llvm::GlobalVariable(*M, I32, false,
+                                      llvm::GlobalValue::InternalLinkage,
+                                      llvm::ConstantInt::get(I32, 111), "g1");
   G1->setDSOLocal(true);
-  auto *G2 = new llvm::GlobalVariable(
-      *M, I32, false, llvm::GlobalValue::InternalLinkage,
-      llvm::ConstantInt::get(I32, 222), "g2");
+  auto *G2 = new llvm::GlobalVariable(*M, I32, false,
+                                      llvm::GlobalValue::InternalLinkage,
+                                      llvm::ConstantInt::get(I32, 222), "g2");
   G2->setDSOLocal(true);
 
   auto *FTy = llvm::FunctionType::get(I32, false);
@@ -310,9 +313,9 @@ buildMultiGlobalIR(llvm::LLVMContext &Ctx, const char *Triple) {
   return M;
 }
 
-llvm::mc_rewrite::RewriteResult
-compileRewrite(llvm::Module &Mod, Arch Ar, BinaryFormat Fmt,
-          ResolveCallback Resolve) {
+llvm::mc_rewrite::RewriteResult compileRewrite(llvm::Module &Mod, Arch Ar,
+                                               BinaryFormat Fmt,
+                                               ResolveCallback Resolve) {
   ensureLLVMTargets();
 
   llvm::mc_rewrite::RewriteOptions Opts;
@@ -328,7 +331,8 @@ compileRewrite(llvm::Module &Mod, Arch Ar, BinaryFormat Fmt,
   if (Resolve)
     Opts.Model.resolve = Resolve;
   else
-    Opts.Model.resolve = [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+    Opts.Model.resolve = [](llvm::StringRef,
+                            uint32_t) -> std::optional<uint64_t> {
       return std::nullopt;
     };
 
@@ -336,10 +340,11 @@ compileRewrite(llvm::Module &Mod, Arch Ar, BinaryFormat Fmt,
   return CG.compileForRewrite(Mod, Ar, Opts, Fmt);
 }
 
-llvm::mc_rewrite::RewriteResult
-compileRewriteWithVAs(llvm::Module &Mod, Arch Ar, BinaryFormat Fmt,
-                 uint64_t CodeVA, uint64_t DataVA,
-                 ResolveCallback Resolve) {
+llvm::mc_rewrite::RewriteResult compileRewriteWithVAs(llvm::Module &Mod,
+                                                      Arch Ar, BinaryFormat Fmt,
+                                                      uint64_t CodeVA,
+                                                      uint64_t DataVA,
+                                                      ResolveCallback Resolve) {
   ensureLLVMTargets();
 
   llvm::mc_rewrite::RewriteOptions Opts;
@@ -355,7 +360,8 @@ compileRewriteWithVAs(llvm::Module &Mod, Arch Ar, BinaryFormat Fmt,
   if (Resolve)
     Opts.Model.resolve = Resolve;
   else
-    Opts.Model.resolve = [](llvm::StringRef, uint32_t) -> std::optional<uint64_t> {
+    Opts.Model.resolve = [](llvm::StringRef,
+                            uint32_t) -> std::optional<uint64_t> {
       return std::nullopt;
     };
 
@@ -385,7 +391,7 @@ findTextSection(const llvm::mc_rewrite::RewriteResult &R) {
 
 // MachO prefixes symbols with '_'; this helper checks both variants.
 uint64_t findSymbolVA(const llvm::mc_rewrite::RewriteResult &R,
-                             const char *Name, uint64_t Default) {
+                      const char *Name, uint64_t Default) {
   if (R.SymbolAddrs.count(Name))
     return R.SymbolAddrs.at(Name);
   std::string Prefixed = std::string("_") + Name;
@@ -397,8 +403,8 @@ uint64_t findSymbolVA(const llvm::mc_rewrite::RewriteResult &R,
 // ==================== Float via integer wrapper ====================
 // int float_add_trunc(int a, int b) { return (int)((float)a + (float)b); }
 // Tests FP codegen while keeping Unicorn I/O in integer regs.
-std::unique_ptr<llvm::Module>
-buildFloatAddTruncIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildFloatAddTruncIR(llvm::LLVMContext &Ctx,
+                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
@@ -420,8 +426,8 @@ buildFloatAddTruncIR(llvm::LLVMContext &Ctx, const char *Triple) {
 // ==================== Chained functions (10 deep) ====================
 // f0(x)=x+1, f1(x)=f0(x)+1, ..., f9(x)=f8(x)+1
 // chain_entry(x) = f9(x) → x + 10
-std::unique_ptr<llvm::Module>
-buildChainedFunctionsIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildChainedFunctionsIR(llvm::LLVMContext &Ctx,
+                                                      const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
@@ -430,8 +436,8 @@ buildChainedFunctionsIR(llvm::LLVMContext &Ctx, const char *Triple) {
   llvm::Function *Prev = nullptr;
   for (int I = 0; I < 10; ++I) {
     std::string Name = "f" + std::to_string(I);
-    auto *F = llvm::Function::Create(FTy, llvm::Function::InternalLinkage,
-                                     Name, M.get());
+    auto *F = llvm::Function::Create(FTy, llvm::Function::InternalLinkage, Name,
+                                     M.get());
     F->setDSOLocal(true);
     auto *BB = llvm::BasicBlock::Create(Ctx, "entry", F);
     llvm::IRBuilder<> B(BB);
@@ -456,8 +462,8 @@ buildChainedFunctionsIR(llvm::LLVMContext &Ctx, const char *Triple) {
 // ==================== 64-bit wide arithmetic ====================
 // int64_t wide_mul(int64_t a, int64_t b) { return a * b + 7; }
 // On i386 this exercises register pairs for 64-bit values.
-std::unique_ptr<llvm::Module>
-buildWideMulIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildWideMulIR(llvm::LLVMContext &Ctx,
+                                             const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I64 = llvm::Type::getInt64Ty(Ctx);
@@ -478,8 +484,8 @@ buildWideMulIR(llvm::LLVMContext &Ctx, const char *Triple) {
 //   int d = a - b;
 //   return d >= 0 ? d : -d;
 // }
-std::unique_ptr<llvm::Module>
-buildAbsDiffIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildAbsDiffIR(llvm::LLVMContext &Ctx,
+                                             const char *Triple) {
   auto M = std::make_unique<llvm::Module>("rwtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I32 = llvm::Type::getInt32Ty(Ctx);
@@ -516,8 +522,8 @@ buildAbsDiffIR(llvm::LLVMContext &Ctx, const char *Triple) {
 // ---------------------------------------------------------------------------
 // Isolated smax/smin clamp test — diagnose LLVM fork codegen
 // ---------------------------------------------------------------------------
-std::unique_ptr<llvm::Module>
-buildSmaxSminClampIR(llvm::LLVMContext &Ctx, const char *Triple) {
+std::unique_ptr<llvm::Module> buildSmaxSminClampIR(llvm::LLVMContext &Ctx,
+                                                   const char *Triple) {
   auto M = std::make_unique<llvm::Module>("smaxtest", Ctx);
   M->setTargetTriple(llvm::Triple(Triple));
   auto *I32 = llvm::Type::getInt32Ty(Ctx);

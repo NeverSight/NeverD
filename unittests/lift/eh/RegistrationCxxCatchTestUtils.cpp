@@ -17,6 +17,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationLayout.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/loader/ExceptionInfo.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Mangler.h"
@@ -131,11 +132,7 @@ void checkUnboundCxxCatchEdits(const llvm::Function &Parent,
       llvm::consumeError(std::move(Rejected));
   }
 
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   auto Module = llvm::CloneModule(*Parent.getParent());
   auto *Function = Module->getFunction(Parent.getName());
   auto Resolve = [&](llvm::StringRef Symbol,

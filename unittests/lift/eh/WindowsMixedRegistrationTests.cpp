@@ -28,6 +28,7 @@
 #include "neverd/object/PELayout.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/Function.h"
@@ -94,11 +95,7 @@ TEST(WindowsMixedRegistration, InputPE32BothOrdersSurviveDefaultOptimization) {
   ASSERT_TRUE(bool(Input));
   const auto Bytes = (*Input)->getBuffer();
   const std::vector<uint8_t> Original(Bytes.bytes_begin(), Bytes.bytes_end());
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   for (bool Reverse : {false, true}) {
     SCOPED_TRACE(Reverse);
     if (Reverse)
