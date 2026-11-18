@@ -608,6 +608,19 @@ ordinary Clang 22 can fold the low bit to zero despite a mode attribute.
 The runtime matrix relocates rebuilt callees, then checks symbol-relative
 integer values, masks, offsets, equality and actual indirect calls.
 
+Linked ELF instruction fields can retain function identity through
+`R_MIPS_HI16/LO16/HIGHER/HIGHEST` records. The loader checks the symbol,
+instruction mode, bytes and addend; ELF32 implicit HI/LO pairs follow relocation
+table order, including a LO instruction scheduled before HI in different
+registers. Shared source projection applies each field's carry, shift and
+truncation to the rebuilt symbol address while keeping physical LowIR unchanged.
+Address arithmetic and bit projection retain that symbol's identity.
+This currently covers classic LUI, ADDIU, DADDIU and ORI fields naming defined
+function symbols. It does not cover compressed instruction relocation encodings
+or infer an address from an equal numeric literal. Without relocation or other
+authenticated use evidence, the original integer bits remain scalar. Conflicting,
+mismatched or unpaired claimed fields refuse source reconstruction.
+
 The microMIPS operation and slot rules were checked against
 [microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
 and the pinned [GNU simulator definitions](https://gnu.googlesource.com/binutils-gdb/+/d01e823438c7dc264d6885fbbfeace4d8955dcb7/sim/mips/micromips.igen).

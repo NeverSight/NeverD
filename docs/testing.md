@@ -25288,6 +25288,20 @@ expressions, equality and indirect calls are compared to each image's actual
 callee symbol, so matching link addresses cannot conceal a literal-address
 substitution. Generated objects and images are retired after every comparison.
 
+`MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
+ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
+addends, relocation-table ordering, split registers, all four field carries,
+high 64-bit addresses, conflicting records, mismatched instructions and missing
+HI/LO pairs. Both source routes must retain the original symbol operand through
+arithmetic; physical LowIR must retain the machine effects. Equal unrelocated
+values stay scalar. The HighIR bit-demand regressions separately ensure that
+code/data addresses and address fragments cannot become numeric masks or shift
+counts during projection.
+The compressed callable runtime driver links its positive originals with
+`--emit-relocs`. A separate image without those records retains the same symbol
+table: its numeric return must keep the original literal after moving the callee.
+This distinguishes symbol evidence from accidental address equality.
+
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
 rounded/non-rounded shifts, packing, expansion, replication, BITREV/RADDU,
