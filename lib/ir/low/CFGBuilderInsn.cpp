@@ -686,7 +686,7 @@ void CFGBuilder::rewriteAsIndirectTailCall(InsnRecord &Rec) {
   }
 
   const auto &TRI = getTargetRegInfo(CurrentImg->Arch);
-  NdVar RetReg = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
+  NdVar RetReg = NdVar::reg(TRI.IntReturnReg, TRI.integerReturnWordBytes());
   va_t At = Rec.Addr;
 
   // Replace `bx reg` (+ any unrelated ARM `COPY PC, next` pipeline model) with

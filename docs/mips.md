@@ -1588,7 +1588,9 @@ A floating result uses f0. Integer results use v0, or v0/v1 in target word
 order for an o32 64-bit result or an n32/n64 128-bit result. Narrow integers
 retain their declared signedness. Both signed and unsigned 32-bit results are
 sign-extended in n32/n64 registers. A pointer uses its ABI width, and a void
-call defines no result carrier. The ABI preserves the low eight bytes of even
+call defines no result carrier. Direct and indirect tail transfers preserve
+the complete integer result register; n32's four-byte pointer width does not
+narrow its eight-byte result carrier. The ABI preserves the low eight bytes of even
 F20–F30 on o32 and n32, or F24–F31 on n64. Unqualified FP profiles, unknown
 call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the

@@ -25899,7 +25899,11 @@ constant body requires the GCC compatibility prelude.
 integer, pointer and void signatures without any floating parameters in all
 six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void
 calls without a qualified floating profile; floating signatures and malformed
-descriptors must still fail. `MIPSN32Calls` checks the four-byte pointer
+descriptors must still fail. Its tail-transfer case checks direct and indirect
+jumps on all six profiles, including n32's eight-byte result carrier. After
+SSA and LLVM optimization, the return must still depend on the call, with the
+ABI's signed or unsigned byte/halfword/word extension and full doubleword
+results where supported. `MIPSN32Calls` checks the four-byte pointer
 spill beside an eight-byte saved RA, both stack-adjustment widths, both byte
 orders, public/private callees and both pipeline routes. Names-only providers,
 unknown return contracts,
