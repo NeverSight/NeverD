@@ -19,6 +19,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -30,14 +31,12 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/ARMWinEH.h"
 #include "llvm/Support/Error.h"
-#include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
 #include <limits>
 #include <map>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -129,17 +128,6 @@ public:
 namespace {
 
 using namespace neverd;
-
-void ensureCOFFCodegenTargets() {
-  static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
-  });
-}
 
 std::string printModuleIR(const llvm::Module &Module) {
   std::string IR;
@@ -1601,7 +1589,7 @@ TEST(COFFExceptionIR, EmitsCompilerOwnedGSContractForBoundedFH4) {
   constexpr va_t MayThrowVA = 0x140002000;
   constexpr va_t SecurityCookieVA = 0x140003000;
   constexpr va_t SecurityCheckVA = 0x140004000;
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       Fixture.Module, Arch::X64, BinaryFormat::COFF,
       /*BaseVA=*/0x140005000,
@@ -1774,7 +1762,7 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeCatchAllSEH) {
   ASSERT_TRUE(static_cast<bool>(OptimizedPlan))
       << llvm::toString(OptimizedPlan.takeError());
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -2025,7 +2013,7 @@ TEST(COFFExceptionIR, NativeSEHHandlerReadsTheCatchPadExceptionCode) {
       HandlerLoadsSlot |= Load->getPointerOperand() == Slot;
   EXPECT_TRUE(HandlerLoadsSlot) << printModuleIR(*Mod);
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -2258,7 +2246,7 @@ TEST(COFFExceptionIR,
   ASSERT_TRUE(static_cast<bool>(OptimizedPlan))
       << llvm::toString(OptimizedPlan.takeError());
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::AArch64, BinaryFormat::COFF, 0x140004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -2570,7 +2558,7 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeARM32CatchAllSEH) {
   auto Plan = planCOFFExceptionPatch(*Module, Image, Arch::ARM);
   ASSERT_TRUE(static_cast<bool>(Plan)) << llvm::toString(Plan.takeError());
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::ARM, BinaryFormat::COFF, 0x10004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -3025,7 +3013,7 @@ TEST(COFFExceptionIR, PreservesAndAuthenticatesHardwareOnlySEHRanges) {
   ASSERT_TRUE(static_cast<bool>(OptimizedPlan))
       << llvm::toString(OptimizedPlan.takeError());
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Mod, Arch::X64, BinaryFormat::COFF, 0x140004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -4320,7 +4308,7 @@ TEST(COFFExceptionIR, PreservesNativeFilterCallbackThroughO3AndCodegen) {
       << llvm::toString(OptimizedPlan.takeError()) << '\n'
       << printModuleIR(*Module);
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::X64, BinaryFormat::COFF, 0x140098000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -4624,7 +4612,7 @@ TEST(COFFExceptionIR, EmitsNestedFinallyCallbackInvokeToExactParentDispatch) {
       << llvm::toString(OptimizedPlan.takeError()) << '\n'
       << printModuleIR(*Module);
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::X64, BinaryFormat::COFF, 0x140110000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -4789,7 +4777,7 @@ TEST(COFFExceptionIR, EmitsOuterFinallyCallbackWithoutSyntheticLocalUnwind) {
       << llvm::toString(OptimizedPlan.takeError()) << '\n'
       << printModuleIR(*Module);
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::X64, BinaryFormat::COFF, 0x140120000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -4993,7 +4981,7 @@ TEST(COFFExceptionIR, PreservesNestedFinallyToFinallyUnwindThroughO3) {
 }
 
 TEST(COFFExceptionIR, ReportsUnresolvedNativePersonalityExactlyOnce) {
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
 
   llvm::LLVMContext Context;
   llvm::Module Module("unresolved-native-personality", Context);
@@ -5656,7 +5644,7 @@ TEST(COFFExceptionIR, CompilesBoundedTypedFH4LiftToNativeCOFFObject) {
   ASSERT_EQ(Plan->LanguageExceptionFunctionEntries,
             std::vector<va_t>{FunctionVA});
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::X64, BinaryFormat::COFF, /*SectionVA=*/0x140004000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -5861,7 +5849,7 @@ TEST(COFFExceptionIR, CompilesBoundedGSFH4LiftToNativeCOFFObject) {
   ExpectGSPlanRejected(std::move(DefinedPersonality),
                        "exception rewrite contract for '__CxxFrameHandler4'");
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::X64, BinaryFormat::COFF, /*SectionVA=*/0x140015000,
       [&](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {
@@ -6075,7 +6063,7 @@ TEST(COFFExceptionIR, EmitsVerifierCleanNativeSimpleFH3Catch) {
   ASSERT_TRUE(static_cast<bool>(RestoredAdjectivesPlan))
       << llvm::toString(RestoredAdjectivesPlan.takeError());
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   constexpr uint64_t GeneratedVA = 0x140004000;
   CompiledImage Compiled = compileImageForPatch(
       *Mod, Arch::X64, BinaryFormat::COFF, GeneratedVA,
@@ -6231,7 +6219,7 @@ TEST(COFFExceptionIR, CompilesBoundedAArch64FH3LiftToNativeCOFFObject) {
   ASSERT_EQ(Plan->LanguageExceptionFunctionEntries,
             std::vector<va_t>{FunctionVA});
 
-  ensureCOFFCodegenTargets();
+  initializeLLVMCodegenTargets();
   CompiledImage Compiled = compileImageForPatch(
       *Module, Arch::AArch64, BinaryFormat::COFF,
       /*SectionVA=*/0x140004000,
