@@ -50,6 +50,7 @@ void collectMIPSInstructionRelocations(BinaryImage &Image) {
     const auto &Symbol = *R.ELF->Symbol;
     const auto *Bytes = Image.readVA(R.Address, 4);
     if (Claims[R.Address] != 1 || !Symbol.isDefined() || !Bytes ||
+        extractionOf(*Part).Shift >= 8 * Image.getPointerSize() ||
         R.Address % 4 || !Image.isCodeRange(R.Address, 4) ||
         !mips::codeModeRangeMatches(Image, R.Address, 4,
                                     InstructionMode::MIPSClassic))

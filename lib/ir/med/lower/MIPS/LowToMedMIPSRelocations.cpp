@@ -25,16 +25,24 @@ void LowToMedConverter::projectMIPSRelocatedImmediates(MedFunc &Func) {
   const auto &Fields = Image->MIPS->InstructionRelocations;
   const uint16_t PointerBytes = Image->getPointerSize();
   for (auto &Block : Func.Blocks) {
+    const auto Before = [](const auto &Field, va_t VA) {
+      return Field.Address < VA;
+    };
+    const auto First =
+        std::lower_bound(Fields.begin(), Fields.end(), Block.StartAddr, Before);
+    if (First == Fields.end() || First->Address >= Block.EndAddr)
+      continue;
+    const auto Last =
+        std::lower_bound(First, Fields.end(), Block.EndAddr, Before);
     std::vector<MedOp> Projected;
     for (size_t Begin = 0; Begin < Block.Ops.size();) {
       size_t End = Begin + 1;
       const va_t Address = Block.Ops[Begin].Addr;
       while (End < Block.Ops.size() && Block.Ops[End].Addr == Address)
         ++End;
-      const auto At = std::lower_bound(
-          Fields.begin(), Fields.end(), Address,
-          [](const auto &Field, va_t VA) { return Field.Address < VA; });
-      if (At == Fields.end() || At->Address != Address) {
+      const auto At = std::lower_bound(First, Last, Address, Before);
+      if (At == Last || At->Address != Address ||
+          (At->Value && !((At->Value->Instruction >> 16) & 31))) {
         if (!Projected.empty())
           Projected.insert(Projected.end(), Block.Ops.begin() + Begin,
                            Block.Ops.begin() + End);

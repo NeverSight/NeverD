@@ -184,14 +184,26 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true) {
       continue;
     }
     EXPECT_EQ(Result.MedIRVerifierFailures, 0u);
+    // Source relocation expressions must not replace physical machine effects.
+    for (const auto &Function : Result.LowFuncs)
+      for (const auto &Block : Function.Blocks)
+        for (const auto &Op : Block.Ops)
+          for (unsigned I = 0; I < Op.NumInputs; ++I)
+            EXPECT_NE(Op.Inputs[I].Provenance,
+                      ConstantAddressProvenance::CodeAddress);
     bool SawAddress = false;
     for (const auto &Function : Result.MedFuncs)
       for (const auto &Block : Function.Blocks)
         for (const auto &Op : Block.Ops)
           for (unsigned I = 0; I < Op.NumInputs; ++I)
-            SawAddress |= Op.Inputs[I].isConst() &&
-                          Op.Inputs[I].Provenance ==
-                              ConstantAddressProvenance::CodeAddress;
+            if (Op.Inputs[I].isConst() &&
+                Op.Inputs[I].Provenance ==
+                    ConstantAddressProvenance::CodeAddress) {
+              SawAddress = true;
+              // Addends and HI carries observe bits of this same symbol;
+              // neither may become a new unrelated interior code identity.
+              EXPECT_EQ(Op.Inputs[I].ConstVal, File.Target);
+            }
     EXPECT_EQ(SawAddress, Symbolic);
     CEmitterOptions Emit;
     Emit.TheArch = Image->Arch;
@@ -231,21 +243,29 @@ TEST_P(MIPSInstructionRelocations, ConflictingAndMismatchedClaimsRefuseSource) {
   SplitAddressELF Mismatch(GetParam(), true);
   Mismatch.put(0x104, 0x3c010003, 4);
   checkSource(Mismatch, false, false);
+  SplitAddressELF Undefined(GetParam(), true);
+  Undefined.put(0x8500 + 2 * (Undefined.Is64 ? 24 : 16) +
+                    (Undefined.Is64 ? 6 : 14),
+                0, 2);
+  checkSource(Undefined, false, false);
 }
 
-TEST_P(MIPSInstructionRelocations, High64FieldsUseIndependentCarries) {
-  if (!isMIPS64(GetParam()) || isMIPSN32(GetParam()))
-    return;
-  SplitAddressELF File(GetParam(), true, 0, false, true);
-  checkSource(File, true);
+TEST(MIPSSplitAddressFields, High64FieldsUseIndependentCarries) {
+  for (Arch A : {Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SplitAddressELF File(A, true, 0, false, true);
+    checkSource(File, true);
+  }
 }
 
-TEST_P(MIPSInstructionRelocations, UnpairedImplicitHighRefusesSource) {
-  if (isMIPS64(GetParam()) && !isMIPSN32(GetParam()))
-    return;
-  SplitAddressELF File(GetParam(), false);
-  File.relocationCount(1);
-  checkSource(File, false, false);
+TEST(MIPSSplitAddressFields, UnpairedImplicitHighRefusesSource) {
+  for (Arch A :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SplitAddressELF File(A, false);
+    File.relocationCount(1);
+    checkSource(File, false, false);
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(ByArchitecture, MIPSInstructionRelocations,
