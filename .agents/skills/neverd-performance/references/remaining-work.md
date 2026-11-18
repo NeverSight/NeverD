@@ -99,11 +99,15 @@ A/B with identical output.
      a graph build differs from the callee's own build by the no-return
      depth (one deeper) and the context sets.
    - Exact levers, each a resolver-level change:
-     - reuse a first-round graph in the rebuild round when every read the
-       build made of the two protection sets has the same answer and the
-       size-based work charges (`orderedLookupWork(size)`) are unchanged;
-       this needs those reads recorded at all of their sites, including the
-       whole-set walk in `JumpTableResolver.cpp`;
+     - reuse a first-round graph in the rebuild round. Recording the
+       membership reads is easy: the unsafe branches are read only by
+       `count` of the build's own instructions and by a walk that keeps
+       those. The sizes are not: `orderedLookupWork` charges the protected
+       slots' size at about 12 sites, and `JumpTableResolverGroup::work` adds
+       both sets' sizes, so a grown set can exhaust a budget the first build
+       did not. Reuse needs a proof that every such budget had the slack, or
+       a decision to charge by the queries made instead of the set size
+       (a budget policy change, the user's call);
      - publish an x64 callee's own build as its graph under the one-deeper
        context when the no-return answers it read hold at that depth;
      - track the resolver's stage-loop dependencies (item 4).
