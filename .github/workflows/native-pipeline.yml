@@ -136,7 +136,7 @@ jobs:
           for name in ['cl','clang','x86_64-w64-mingw32-gcc']:
               tool=shutil.which(name)
               if tool:run([tool,*([] if name=='cl' else ['--version'])],name+'-version')
-          files={str(p.relative_to(temporary)):{'sha256':digest(p),'bytes':p.stat().st_size} for p in temporary.rglob('*') if p.is_file()}
+          files={p.relative_to(temporary).as_posix():{'sha256':digest(p),'bytes':p.stat().st_size} for p in temporary.rglob('*') if p.is_file()}
           archive=out/'temporary-diagnostics.tar.gz'
           with tarfile.open(archive,'w:gz') as t:
               for name in files:
