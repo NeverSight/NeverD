@@ -1979,11 +1979,42 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   Func.SEHLocalUnwindExits = Med.SEHLocalUnwindExits;
   for (const auto &Entry : Med.CxxContinuationEntries)
     Func.CxxContinuationTargets.insert(Entry.Target);
+  // A catch-all handler can fall into a tail also reached by its protected
+  // code. Keep that protected region together before ordinary if recovery
+  // nests only its prefix and leaves the shared continuation at outer scope.
+  const bool SEHSharedFallthrough = [&] {
+    if (!Med.ExceptionMetadata || !Med.ExceptionMetadata->SEH ||
+        Med.ExceptionMetadata->SEH->Scopes.size() != 1)
+      return false;
+    const auto &Scope = Med.ExceptionMetadata->SEH->Scopes.front();
+    if (Scope.Kind != SEHScopeKind::CatchAll)
+      return false;
+    const auto Handler = llvm::find_if(Med.Blocks, [&](const MedBlock &B) {
+      return B.StartAddr == Scope.HandlerVA;
+    });
+    if (Handler == Med.Blocks.end() || Handler->Succs.size() != 1 ||
+        Handler->Ops.empty())
+      return false;
+    const auto Opcode = Handler->Ops.back().Opcode;
+    if (Opcode == NdOp::BRANCH || Opcode == NdOp::COND_BR ||
+        Opcode == NdOp::INDIR_BR || Opcode == NdOp::RETURN)
+      return false;
+    const auto Tail = llvm::find_if(Med.Blocks, [&](const MedBlock &B) {
+      return B.Id == Handler->Succs.front();
+    });
+    if (Tail == Med.Blocks.end() || Tail->StartAddr != Handler->EndAddr ||
+        Scope.GuardedRange.contains(Tail->StartAddr))
+      return false;
+    return llvm::any_of(Med.Blocks, [&](const MedBlock &B) {
+      return Scope.GuardedRange.contains(B.StartAddr) &&
+             llvm::is_contained(B.Succs, Tail->Id);
+    });
+  }();
   // Catch returns enter the parent through edges absent from its ordinary
   // CFG. Publish those edges before control-flow cleanup can discard or move
   // their target statements; the funclet bodies are attached module-wide.
-  const bool EarlyCxxRegions =
-      !Func.CxxContinuationTargets.empty() ||
+  const bool EarlyExceptionRegions =
+      SEHSharedFallthrough || !Func.CxxContinuationTargets.empty() ||
       (Med.ExceptionMetadata && Med.ExceptionMetadata->Registration &&
        Med.ExceptionMetadata->Registration->hasCxxCallbackStack());
   Func.ReturnType = Med.ReturnType ? Med.ReturnType : inferReturnType(Med);
@@ -2131,7 +2162,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
     structureControlFlow(Func, Med);
     CaptureSwiftError();
     SeedMutableStackParamHomes();
-    if (EarlyCxxRegions)
+    if (EarlyExceptionRegions)
       structureExceptionRegions(Func, Med);
     Trace.high(Func, "structured");
     inferTypes(Func);
@@ -2142,7 +2173,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
                  S.Dst->Var == S.Val->Var;
         });
     ensureTrailingReturn(Func, Med);
-    if (!EarlyCxxRegions)
+    if (!EarlyExceptionRegions)
       structureExceptionRegions(Func, Med);
     attachSEHHandlerEntryCopies(Func, Med);
     // Keep value/effect cleanup independent of CFG structuring.
@@ -2170,7 +2201,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   structureControlFlow(Func, Med);
   CaptureSwiftError();
   SeedMutableStackParamHomes();
-  if (EarlyCxxRegions)
+  if (EarlyExceptionRegions)
     structureExceptionRegions(Func, Med);
   Trace.high(Func, "structured");
   auto TSimp = std::chrono::steady_clock::now();
@@ -2195,7 +2226,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   // Nest handler/filter bodies into try clauses before DCE.  Those blocks are
   // entered by the personality, so ordinary reachability would delete them
   // and leave empty __except/__catch arms.
-  if (!EarlyCxxRegions)
+  if (!EarlyExceptionRegions)
     structureExceptionRegions(Func, Med);
   attachSEHHandlerEntryCopies(Func, Med);
   auto TEh = std::chrono::steady_clock::now();
