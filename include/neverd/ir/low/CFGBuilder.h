@@ -1406,6 +1406,10 @@ private:
   /// `jmp *disp(%ebx)` by the GOT address its callers hold in EBX, is lifted
   /// as the jump through that import's slot (CFGBuilderX86PLT.cpp).
   void rewriteI386PLTJump(const BinaryImage &Img, InsnRecord &Rec);
+  /// An x64 call or tail jump through the load configuration's Control Flow
+  /// Guard dispatch slot is lifted as the transfer through RAX the
+  /// dispatcher makes (CFGBuilderX86GuardDispatch.cpp).
+  void rewriteGuardDispatchTransfer(const BinaryImage &Img, InsnRecord &Rec);
   struct OwnInteriorReturn {
     va_t Target;
     va_t CallSite;

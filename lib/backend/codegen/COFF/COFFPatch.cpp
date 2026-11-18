@@ -478,6 +478,9 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
             if (auto Personality =
                     findCOFFExceptionPersonalityVA(*CachedImage, Sym))
               return SerializeResolvedCode(*Personality, true);
+          if (CachedImage)
+            if (auto Slot = findCOFFGuardRuntimeSlotVA(*CachedImage, Sym))
+              return serializeImageDataSymbolAddress(*CachedImage, *Slot);
           if (auto Import = SourceCalls->Imports.find(Name);
               Import != SourceCalls->Imports.end())
             return Import->second;
@@ -550,9 +553,11 @@ PatchResult COFFPatcher::patch(const std::filesystem::path &InputPath,
           return false;
         }
 
-        if (!Img.Unresolved.empty()) {
-          llvm::WithColor::warning() << "coff_patch: " << Img.Unresolved.size()
-                                     << " unresolved symbols\n";
+        if (llvm::Error Err =
+                checkCOFFResolvedSymbols(Img.Unresolved, TargetArch)) {
+          llvm::WithColor::error()
+              << "coff_patch: " << llvm::toString(std::move(Err)) << "\n";
+          return false;
         }
 
         std::vector<va_t> PatchedOriginalEntries;

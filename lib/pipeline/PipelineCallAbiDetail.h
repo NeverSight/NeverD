@@ -83,6 +83,7 @@ struct OmittedCalleeMemo {
     std::optional<FloatingCallArguments> FloatingArguments;
     std::optional<FixedIntegerCallArguments> IntegerArguments;
     std::optional<std::vector<uint16_t>> VariadicArguments;
+    std::optional<int> VariadicFrom;
     bool operator==(const SummaryRead &) const = default;
   };
   static SummaryRead readAt(const PipelineResult &Result, va_t Key);

@@ -4067,11 +4067,19 @@ TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
     GTEST_SKIP() << "needs a GNU-style host C compiler";
   // An MSVC-style variadic function spills its variadic argument registers
   // to their home slots and passes a pointer to the first of them on as its
-  // va_list, which a helper walks on into the caller's stack arguments:
-  //   caller(n):  return variadic(n, 1, 2, 3, 4, 5);   // 4 and 5 on the stack
+  // va_list, which a helper walks on into the caller's stack arguments. The
+  // second holds that pointer in RSI, which Win64 preserves, across another
+  // call first, as MSVC's printf does:
+  //   caller(n):  return variadic(n, 1, 2, 3, 4, 5)     // 4 and 5 on the
+  //                    + held(n, 1, 2, 3, 4, 5) - n;    // stack
   //   variadic(n, ...):
   //     mov [rsp+10h], rdx; mov [rsp+18h], r8; mov [rsp+20h], r9
   //     sub rsp, 28h; lea rdx, [rsp+38h]; call walk; add rsp, 28h; retn
+  //   held(n, ...):
+  //     mov [rsp+10h], rdx; mov [rsp+18h], r8; mov [rsp+20h], r9
+  //     push rsi; push rdi; sub rsp, 28h; mov rdi, rcx; lea rsi, [rsp+48h]
+  //     call nothing; mov rdx, rsi; mov rcx, rdi; call walk
+  //     add rsp, 28h; pop rdi; pop rsi; retn
   //   walk(n, va): return n + va[0] + 2*va[1] + 3*va[2] + 4*va[3] + 5*va[4];
   constexpr uint64_t Base = 0x140000000, Text = Base + 0x1000;
   std::string Code;
@@ -4080,15 +4088,28 @@ TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
     while (Code.size() % 16)
       Code.push_back('\xcc');
   };
-  bytes("4883ec38");           // sub rsp, 38h
-  bytes("48c744242805000000"); // mov qword ptr [rsp+28h], 5
-  bytes("48c744242004000000"); // mov qword ptr [rsp+20h], 4
-  bytes("41b903000000");       // mov r9d, 3
-  bytes("41b802000000");       // mov r8d, 2
-  bytes("ba01000000");         // mov edx, 1
+  const auto passOneToFive = [&] {
+    bytes("48c744242805000000"); // mov qword ptr [rsp+28h], 5
+    bytes("48c744242004000000"); // mov qword ptr [rsp+20h], 4
+    bytes("41b903000000");       // mov r9d, 3
+    bytes("41b802000000");       // mov r8d, 2
+    bytes("ba01000000");         // mov edx, 1
+  };
+  bytes("5356");     // push rbx; push rsi
+  bytes("4883ec38"); // sub rsp, 38h
+  bytes("4889cb");   // mov rbx, rcx
+  passOneToFive();
   const size_t CallVariadic = Code.size();
   bytes("e800000000"); // call variadic
-  bytes("4883c438c3"); // add rsp, 38h; retn
+  bytes("4889c6");     // mov rsi, rax
+  passOneToFive();
+  bytes("4889d9"); // mov rcx, rbx
+  const size_t CallHeld = Code.size();
+  bytes("e800000000"); // call held
+  bytes("4801f0");     // add rax, rsi
+  bytes("4829d8");     // sub rax, rbx
+  bytes("4883c438");   // add rsp, 38h
+  bytes("5e5bc3");     // pop rsi; pop rbx; retn
   align();
   const size_t Variadic = Code.size();
   bytes("4889542410"); // mov [rsp+10h], rdx
@@ -4099,6 +4120,26 @@ TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
   const size_t CallWalk = Code.size();
   bytes("e800000000"); // call walk
   bytes("4883c428c3"); // add rsp, 28h; retn
+  align();
+  const size_t Held = Code.size();
+  bytes("4889542410"); // mov [rsp+10h], rdx
+  bytes("4c89442418"); // mov [rsp+18h], r8
+  bytes("4c894c2420"); // mov [rsp+20h], r9
+  bytes("5657");       // push rsi; push rdi
+  bytes("4883ec28");   // sub rsp, 28h
+  bytes("4889cf");     // mov rdi, rcx
+  bytes("488d742448"); // lea rsi, [rsp+48h]
+  const size_t CallNothing = Code.size();
+  bytes("e800000000"); // call nothing
+  bytes("4889f2");     // mov rdx, rsi
+  bytes("4889f9");     // mov rcx, rdi
+  const size_t HeldCallsWalk = Code.size();
+  bytes("e800000000"); // call walk
+  bytes("4883c428");   // add rsp, 28h
+  bytes("5f5ec3");     // pop rdi; pop rsi; retn
+  align();
+  const size_t Nothing = Code.size();
+  bytes("31c0c3"); // xor eax, eax; retn
   align();
   const size_t Walk = Code.size();
   bytes("4889c8");   // mov rax, rcx
@@ -4121,9 +4162,31 @@ TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
       Code[Call + 1 + I] = static_cast<char>(Displacement >> (8 * I));
   };
   patchCall(CallVariadic, Variadic);
+  patchCall(CallHeld, Held);
+  patchCall(CallNothing, Nothing);
   patchCall(CallWalk, Walk);
+  patchCall(HeldCallsWalk, Walk);
   const auto Input = write("variadic.exe", makePE64(Code));
   const std::string Caller = "sub_" + llvm::utohexstr(Text);
+  // Decompiled alone, the caller reads its callees' signatures from their
+  // bodies without defining them, and still passes all five to each.
+  ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
+      << takeString(neverd_last_error(Session));
+  for (int Llvm : {0, 1}) {
+    SCOPED_TRACE(Llvm ? "LLVM C alone" : "HighC alone");
+    const std::string Alone =
+        takeString(Llvm ? neverd_decompile_llvm(Session, Text)
+                        : neverd_decompile(Session, Text));
+    ASSERT_FALSE(Alone.empty()) << takeString(neverd_last_error(Session));
+    const std::regex FiveValues(
+        R"(\(arg0, (\(\w+\))?1, (\(\w+\))?2, (\(\w+\))?3, (\(\w+\))?4, )"
+        R"((\(\w+\))?5\))");
+    EXPECT_EQ(std::distance(
+                  std::sregex_iterator(Alone.begin(), Alone.end(), FiveValues),
+                  std::sregex_iterator()),
+              2)
+        << Alone;
+  }
   for (int Llvm : {0, 1}) {
     SCOPED_TRACE(Llvm ? "LLVM C" : "HighC");
     ASSERT_EQ(neverd_session_load(Session, Input.c_str()), 1)
@@ -4131,13 +4194,17 @@ TEST_F(SessionCAPITest, Win64VariadicFunctionsTakeTheirHomedArguments) {
     const std::string Unit = takeString(neverd_decompile_all(
         Session, Input.c_str(), /*UseLlvmRoute=*/Llvm, 0, 0));
     ASSERT_FALSE(Unit.empty()) << takeString(neverd_last_error(Session));
-    // The variadic function takes the registers it homes: no read of one is
-    // an unknown register, and the call passes all five variadic values.
+    // Each variadic function takes the registers it homes: no read of one is
+    // an unknown register, and each call passes all five variadic values.
     EXPECT_EQ(Unit.find("__builtin_trap"), std::string::npos) << Unit;
-    EXPECT_NE(Unit.find("(arg0, 1, 2, 3, 4, 5)"), std::string::npos) << Unit;
+    const size_t FirstCall = Unit.find("(arg0, 1, 2, 3, 4, 5)");
+    ASSERT_NE(FirstCall, std::string::npos) << Unit;
+    EXPECT_NE(Unit.find("(arg0, 1, 2, 3, 4, 5)", FirstCall + 1),
+              std::string::npos)
+        << Unit;
     const std::string Program = write("variadic-" + std::to_string(Llvm) + ".c",
                                       Unit + "\nint main(void) { return " +
-                                          Caller + "(100) != 155; }\n");
+                                          Caller + "(100) != 210; }\n");
     for (llvm::StringRef Level : {"-O0", "-O2"}) {
       SCOPED_TRACE(Level.str());
       const std::string Binary =

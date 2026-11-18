@@ -3846,6 +3846,11 @@ MedLLVMEmitter::tryResolveIndirectCallTarget(const MedVar &V,
     // turn a known relocation fragment into an unconstrained runtime target.
     const PointerTableLoadRoleSummary SlotRoles =
         classifyPointerTableLoadRoles(V, /*RequirePointerWidth=*/false);
+    // A call in the walk of an empty table never runs; its target is the
+    // loaded value, whatever it would have been.
+    if (SlotRoles.NeverLoaded && SlotRoles.ValueAdjustment == 0)
+      if (llvm::Value *Target = getVar(V, Builder))
+        return Target;
     if (SlotRoles.Recognized) {
       // The source view reads the provider's live image, not a private table
       // whose code slots need rebasing to rebuilt functions. Preserve the

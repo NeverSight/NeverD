@@ -891,9 +891,11 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           !TailCall) {
         // A returning callee reads its own slots, below this function's, and
-        // leaves nothing in the registers it may clobber.
+        // leaves nothing in the registers it may clobber: the convention's,
+        // so a Win64 RSI or RDI keeps an incoming-area address across it.
         for (uint64_t Family = 0; Family < kX64GPRBytes; Family += 8)
-          if (!TRI.isCalleeSaveReg(Family) && StackKey{false, Family} != SP)
+          if (!TRI.isCallPreserved(Family, 8, Img.abiFormat()) &&
+              StackKey{false, Family} != SP)
             S.erase(StackKey{false, Family});
         continue;
       }

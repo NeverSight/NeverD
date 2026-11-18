@@ -122,6 +122,7 @@ add_neverd_component_library(NeverDIRLow
   AArch64/SEHLocalUnwindAArch64.cpp
   ARM/SEHLocalUnwindARM.cpp
   X86/CFGBuilderX86GetPc.cpp
+  X86/CFGBuilderX86GuardDispatch.cpp
   X86/CFGBuilderX86PLT.cpp
   CallRegisterEffects.cpp
   CallStackOffsets.cpp

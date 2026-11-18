@@ -2861,6 +2861,7 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
           registration_state::restoreAdjacentSEHFinallyCall(Img, *EH, Rec.Addr,
                                                             Rec.Size, Rec.Ops);
       rewriteI386PLTJump(Img, Rec);
+      rewriteGuardDispatchTransfer(Img, Rec);
       bool InvalidCallMode = false;
       if (hasCompressedMIPSCode(Img.Mode))
         for (const auto &Op : Rec.Ops)

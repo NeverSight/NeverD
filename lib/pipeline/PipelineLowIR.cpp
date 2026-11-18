@@ -3613,6 +3613,9 @@ namespace {
 /// Guard dispatch pointer, as ntoskrnl's KeGuardDispatchICall does with
 /// `jmp [__guard_dispatch_icall_fptr]`.  Whichever dispatcher the runtime
 /// installs in that pointer calls RAX with the caller's argument registers.
+/// CFG construction keeps such a function's own jump through the slot while
+/// it lifts every other transfer through it as one through RAX
+/// (CFGBuilderX86GuardDispatch.cpp).
 bool forwardsToGuardDispatch(const BinaryImage &Img,
                              llvm::ArrayRef<LowBlock> Blocks) {
   if (Blocks.size() != 1)
