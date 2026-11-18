@@ -372,7 +372,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDHighCParamUsageTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -390,7 +390,7 @@ jobs:
                     'NeverDAArch64DecodeValidityTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
-                    'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDLLVMCVectorTests',
+                    'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests',
                     'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests',
                     'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests',
                     'NeverDMedCachedCallTargetTests',
