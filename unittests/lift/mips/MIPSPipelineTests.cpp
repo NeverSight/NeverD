@@ -901,6 +901,10 @@ TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
           auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
           recoverCallAbi(Med, Target, {{0x10200, "callee"}}, &*Image);
           inferMedTypes(Med, Target);
+          // Observe the complete ABI register, including a narrow callee's
+          // sign/zero extension. Inferring a narrow logical return would
+          // otherwise discard those bits before this check can see them.
+          Med.ReturnType = NdType::makeInt(Word, false);
           llvm::LLVMContext Context;
           MedLLVMEmitter Emitter;
           const auto Module =
