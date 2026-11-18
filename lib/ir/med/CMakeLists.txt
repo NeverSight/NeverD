@@ -76,6 +76,7 @@ add_neverd_component_library(NeverDIRMed
   flags/ARM/MedFlagsARM.cpp
   flags/X86/MedFlagsX86.cpp
   lower/LowToMed.cpp
+  lower/MIPS/LowToMedMIPSRelocations.cpp
   lower/LowToMedScalarSelectors.cpp
   lower/LowToMedSourceCalls.cpp
   lower/ARM/LowToMedARM.cpp

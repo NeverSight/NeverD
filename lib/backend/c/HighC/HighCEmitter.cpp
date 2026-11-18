@@ -1816,6 +1816,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
   const bool HasMicroModes = isMIPS(Opts.TheArch) && Opts.Image &&
                              hasCompressedMIPSCode(Opts.Image->Mode);
   bool NeedsMicroMode = false;
+  bool NeedsMicroModeReference = false;
   bool NeedsMIPS16Mode = false;
   bool NeedsBool = false;
   bool HasFloatingArithmetic = false;
@@ -1852,7 +1853,7 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
     if (Expr->Kind == ExprKind::Call) {
       if (HasMicroModes && !Expr->IsIndirectCall && Expr->CallAddr) {
         const auto Mode = Opts.Image->instructionModeAt(Expr->CallAddr);
-        NeedsMicroMode |= Mode == InstructionMode::MicroMIPS;
+        NeedsMicroModeReference |= Mode == InstructionMode::MicroMIPS;
         NeedsMIPS16Mode |= Mode == InstructionMode::MIPS16;
       }
       NeedsAArch64ResultStorageCall |=
@@ -1933,6 +1934,8 @@ void HighCWriter::writeIncludes(const std::vector<HighFunc> &Funcs) {
 #include "neverd/backend/c/render/CRotateBuiltins.def"
   if (NeedsMicroMode)
     OS << mips::MicroModeCPrelude;
+  if (NeedsMicroModeReference)
+    OS << mips::MicroModeReferenceCPrelude;
   if (NeedsMIPS16Mode)
     OS << mips::MIPS16ModeCPrelude;
   if (isMIPS(Opts.TheArch))
@@ -2578,7 +2581,7 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     }
     if (const auto Mode = MIPSCallModes.find(Name);
         Mode != MIPSCallModes.end() && !ImportSlot)
-      OS << mips::instructionModeCAttribute(Mode->second);
+      OS << mips::instructionModeCAttribute(Mode->second, /*HasBody=*/false);
     auto SourceSignature = SourceNativeSignatures.find(Name);
     if (SourceSignature != SourceNativeSignatures.end() &&
         !ConflictingSourceNativeSignatures.count(Name)) {

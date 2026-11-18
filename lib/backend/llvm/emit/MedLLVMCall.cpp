@@ -703,6 +703,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Target = GetInput(0);
   }
   uint64_t CallAddr = Op.Inputs[0].isConst() ? Op.Inputs[0].ConstVal : 0;
+  // A source prototype changes the callable type, not the original target's
+  // identity or instruction mode. Bind the same facts on both the ordinary
+  // and explicit source-call paths before either publishes its declaration.
+  const auto bindCalleeSourceIdentity = [&](llvm::Function &Callee) {
+    if (Op.Opcode == NdOp::CALL && CallAddr > 1 && Callee.isDeclaration()) {
+      auto VAOr = rewrite_source::getOriginalVA(Callee);
+      if (VAOr && !*VAOr)
+        rewrite_source::setOriginalVA(Callee, CallAddr);
+    }
+    if (Img && isMIPS(TargetArch) && hasCompressedMIPSCode(Img->Mode) && CI &&
+        !CI->IsIndirect)
+      if (const auto Mode = Img->instructionModeAt(CallAddr))
+        mips::applyInstructionModeLLVMAttributes(Callee, *Mode);
+  };
   const Section *TargetSection =
       Img && CallAddr != 0 ? Img->getSectionFor(CallAddr) : nullptr;
   const bool IsObjCMessageStub =
@@ -1172,6 +1186,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Declaration->setCallingConv(Convention);
         Callable = Declaration;
       }
+      if (auto *Function = llvm::dyn_cast<llvm::Function>(Callable))
+        bindCalleeSourceIdentity(*Function);
     }
     if (Callable->getType()->isIntegerTy())
       Callable = Builder.CreateIntToPtr(Callable, PtrTy);
@@ -1953,20 +1969,8 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return;
   }
 
-  if (Op.Opcode == NdOp::CALL && Callee && CallAddr > 1 &&
-      Callee->isDeclaration()) {
-    auto VAOr = rewrite_source::getOriginalVA(*Callee);
-    if (VAOr && !*VAOr)
-      rewrite_source::setOriginalVA(*Callee, CallAddr);
-  }
-
   if (Callee) {
-    // An omitted body still has a physical instruction mode. In particular,
-    // a MIPS16 declaration selects GPR floating-argument transport in C.
-    if (Img && isMIPS(TargetArch) && hasCompressedMIPSCode(Img->Mode) && CI &&
-        !CI->IsIndirect)
-      if (const auto Mode = Img->instructionModeAt(CallAddr))
-        mips::applyInstructionModeLLVMAttributes(*Callee, *Mode);
+    bindCalleeSourceIdentity(*Callee);
     auto *CalleeTy = Callee->getFunctionType();
     // A formatted call's recovered arguments are the inputs its format
     // names, in the source's order (MedOp::ExactArguments).

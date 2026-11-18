@@ -25300,13 +25300,14 @@ The ordinary four-profile run remains the default. Only the micro fixture's
 functions may be selected with `--function` in that mode. The instruction-level
 `MicroMIPSInteger` tests separately check independent literal memory encodings,
 signed/unsigned loads, exact store bytes, failed writes and original-target
-execution. Numeric r2/o32 defined code identities require the LLVM r7 SDK and
-the matching NeverSight Clang; unknown-mode imports and wide compressed
-profiles remain refused. The pipeline suite checks the boundary and ensures
+execution. Numeric r2 microMIPS identities in o32/n32/n64 and MIPS16 identities
+in o32 require the LLVM r7 SDK and the matching NeverSight Clang; unknown-mode
+imports and other compressed profiles remain refused. The pipeline suite checks
+the boundary and ensures
 LLVM does not infer a zero callable tag from a function's code alignment.
 
 `unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
-`--neverd`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
+`--neverd`, `--sdk`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
 pinned Unicorn bindings on `PYTHONPATH`, it executes microMIPS, MIPS16 and a
 classic control in both byte orders, original and rebuilt O0/O2, and both C
 backends. The callee is separately compiled with stronger code alignment;
@@ -25314,6 +25315,41 @@ rebuilt images use a different link address. Pointer bits, tag/mask/offset
 expressions, equality and indirect calls are compared to each image's actual
 callee symbol, so matching link addresses cannot conceal a literal-address
 substitution. Generated objects and images are retired after every comparison.
+The indirect call supplies its fixed original declaration through the public
+call-site edit interface. This establishes the outgoing argument extent needed
+to prove saved FP/link storage private; an unknown call does not inherit that
+contract merely from its observed arguments.
+
+`unittests/lift/mips/wide-compressed-code-pointer-roundtrip.py` adds n32 and n64
+with explicit `--gcc` and the same tool paths. Independent GCC/Clang O0/O2
+callers observe separately compiled classic and microMIPS targets in either
+byte order. It checks relocated numeric identities, literal controls, direct
+and indirect calls, and full-width results with nonzero high words. Each call
+must execute the intended callee once and preserve SP, RA and callee-saved
+registers. `--original-only` validates the fixtures without claiming NeverD
+reconstruction. High-address execution uses Unicorn's virtual TLB and does not
+qualify a hardware MMU.
+
+`MicroMIPSPipelineSource.TypedCallsRetainExternalInstructionModes` checks
+ordinary and explicitly typed direct calls on all six MIPS ABI/byte-order
+profiles. LLVM declarations and regenerated C must retain classic, microMIPS
+and supported MIPS16 target modes even when the callee body is omitted. The
+wide runtime driver's GCC O2 cases additionally catch an unannotated declaration
+becoming a tail jump that cannot switch instruction modes.
+
+`MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
+ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
+addends, relocation-table ordering, split registers, all four field carries,
+high 64-bit addresses, conflicting records, mismatched instructions and missing
+HI/LO pairs. Both source routes must retain the original symbol operand through
+arithmetic; physical LowIR must retain the machine effects. Equal unrelocated
+values stay scalar. The HighIR bit-demand regressions separately ensure that
+code/data addresses and address fragments cannot become numeric masks or shift
+counts during projection.
+The compressed callable runtime driver links its positive originals with
+`--emit-relocs`. A separate image without those records retains the same symbol
+table: its numeric return must keep the original literal after moving the callee.
+This distinguishes symbol evidence from accidental address equality.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
@@ -25908,7 +25944,11 @@ constant body requires the GCC compatibility prelude.
 integer, pointer and void signatures without any floating parameters in all
 six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void
 calls without a qualified floating profile; floating signatures and malformed
-descriptors must still fail. `MIPSN32Calls` checks the four-byte pointer
+descriptors must still fail. Its tail-transfer case checks direct and indirect
+jumps on all six profiles, including n32's eight-byte result carrier. After
+SSA and LLVM optimization, the return must still depend on the call, with the
+ABI's signed or unsigned byte/halfword/word extension and full doubleword
+results where supported. `MIPSN32Calls` checks the four-byte pointer
 spill beside an eight-byte saved RA, both stack-adjustment widths, both byte
 orders, public/private callees and both pipeline routes. Names-only providers,
 unknown return contracts,

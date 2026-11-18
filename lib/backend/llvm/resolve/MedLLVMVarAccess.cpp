@@ -1192,7 +1192,13 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
                 "MIPS copied callable has an invalid mode tag");
           Address = *Entry;
         }
-        if (llvm::Constant *Code = resolveLiftedCodeAddress(Address)) {
+        // A proven callable entry names a function even when surrounding
+        // data/code-byte reads use the original image's storage. That storage
+        // contract cannot erase a serialized callable's ISA tag.
+        llvm::Constant *Code = resolveImageFunctionEntry(Address);
+        if (!Code)
+          Code = resolveImageFunctionAddress(Address);
+        if (Code) {
           mips::requireNumericCodePointerSource(Img, Address);
           return Builder.CreatePtrToInt(Code, sizeToType(V.Size),
                                         "codeptr.prov");

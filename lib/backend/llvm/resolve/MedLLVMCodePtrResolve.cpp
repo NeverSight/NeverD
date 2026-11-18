@@ -3247,6 +3247,12 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
         ConflictingLiftedCodeBlocks.count(Normalized)
             ? nullptr
             : resolveLiftedFunctionEntry(Normalized);
+    // A numeric expression may use an authenticated image function that the
+    // current request did not select. Materialize the same declaration used
+    // for a whole address before classifying its arithmetic dependencies.
+    if (!LiftedFunction && !ConflictingLiftedCodeBlocks.count(Normalized) &&
+        Current.Provenance == ConstantAddressProvenance::CodeAddress)
+      LiftedFunction = resolveImageFunctionEntry(Normalized);
     const bool HasFunctionIdentity = LiftedFunction != nullptr;
     const bool HasAuthenticatedFunctionEntry =
         hasAuthenticatedFunctionEntryVA(Normalized);

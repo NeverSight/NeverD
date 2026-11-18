@@ -189,7 +189,7 @@ public:
                                    llvm::StringRef Text,
                                    llvm::StringRef Globals);
   void writeForwardDecls(llvm::Module &Mod);
-  const char *mipsModeAttribute(const llvm::Function &Function);
+  const char *mipsModeAttribute(const llvm::Function &Function, bool HasBody);
 
   //--- PE image headers (COFF/LLVMCImageBase.cpp) ---
   /// Whether \p Global is the linker's `__ImageBase`, through which the
@@ -1021,6 +1021,7 @@ public:
   llvm::DenseMap<const llvm::BasicBlock *, size_t> BlockLayout;
   bool HasCIntrinsics = false;
   bool UsesMicroMIPSAttribute = false;
+  bool UsesMicroMIPSReferenceAttribute = false;
   bool UsesMIPS16Attribute = false;
   /// A simple load or store has a type with an aligned(1), may_alias alias,
   /// so the aliases are declared when UseUnalignedPointers is set.

@@ -14,6 +14,7 @@
 #define NEVERD_LOADER_ELF_MIPSIMAGEMETADATA_H
 
 #include "neverd/Common.h"
+#include "neverd/loader/ELF/MIPSInstructionRelocation.h"
 
 #include <cstdint>
 #include <map>
@@ -65,6 +66,10 @@ struct MIPSImageMetadata {
   /// Linked GP used to authenticate a function-local PIC address calculation.
   /// This value does not describe the caller's incoming GP.
   std::optional<uint64_t> PICGP;
+
+  /// Retained linked instruction relocations, sorted by instruction VA. They
+  /// authenticate individual fields, never unrelated equal-valued literals.
+  std::vector<MIPSInstructionRelocation> InstructionRelocations;
 
   /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
   bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }

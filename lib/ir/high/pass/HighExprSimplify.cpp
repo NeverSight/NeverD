@@ -103,6 +103,12 @@ static bool isZeroConst(const ExprPtr &E) {
   return E && E->Kind == ExprKind::Const && E->ConstVal == 0;
 }
 
+static bool isScalarLiteral(const ExprPtr &E) {
+  return E && E->Kind == ExprKind::Const && E->Operands.empty() &&
+         E->AddressOwnerVA == InvalidVA &&
+         !isAddressProvenance(E->ConstProvenance);
+}
+
 /// Whether \p Op yields a truth value: a comparison, a flag or a boolean
 /// operation, which is 0 or 1.
 static bool isTruthOp(NdOp Op) {
@@ -139,7 +145,7 @@ static bool zeroOrOne(const ExprPtr &E, unsigned Depth = 0) {
     return false;
   switch (E->Kind) {
   case ExprKind::Const:
-    return E->Operands.empty() && E->ConstVal <= 1;
+    return isScalarLiteral(E) && E->ConstVal <= 1;
   case ExprKind::Cast:
     return E->Operands.size() == 1 && zeroOrOne(E->Operands[0], Depth + 1);
   case ExprKind::UnaryOp:
@@ -710,6 +716,11 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
       E->MemoryAddressSpace != NdMemoryAddressSpace::Default)
     return E;
   --Budget;
+  // A relocatable leaf identifies its complete symbol even when this use
+  // observes only some bits. Its old numeric payload is neither a mask nor
+  // a stable value to trim; the surrounding operation reads the rebuilt bits.
+  if (E->Kind == ExprKind::Const && !isScalarLiteral(E))
+    return E;
   const auto Mask = [](unsigned Bytes) {
     return Bytes == 8 ? UINT64_MAX : (uint64_t{1} << (Bytes * 8)) - 1;
   };
@@ -779,7 +790,7 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
   const auto &L = E->Operands[0], &R = E->Operands[1];
   if (L && R && L->Type && R->Type && L->Type->Kind == NdTypeKind::Int &&
       R->Type->Kind == NdTypeKind::Int && L->Type->Size == E->Type->Size &&
-      R->Kind == ExprKind::Const && R->Operands.empty() &&
+      isScalarLiteral(R) &&
       (E->Op == NdOp::INT_LEFT || E->Op == NdOp::INT_RIGHT ||
        E->Op == NdOp::INT_ASHR) &&
       R->ConstVal < unsigned(E->Type->Size * 8)) {
@@ -804,7 +815,7 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
   if (E->Op == NdOp::INT_MULT) {
     for (unsigned I = 0; I < 2; ++I) {
       const auto &Factor = E->Operands[I];
-      if (Factor->Kind != ExprKind::Const || !Factor->Operands.empty())
+      if (!isScalarLiteral(Factor))
         continue;
       const auto Value = Factor->ConstVal & Mask(E->Type->Size);
       if (!std::has_single_bit(Value))
@@ -825,7 +836,7 @@ static ExprPtr demandMaskedBits(const ExprPtr &E, uint64_t Demand,
   auto ChildDemand = [&](const ExprPtr &Other) {
     // Two constants must not each give the other responsibility for a set
     // OR bit and then both erase it.
-    if (Other->Kind != ExprKind::Const ||
+    if (!isScalarLiteral(Other) ||
         (L->Kind == ExprKind::Const && R->Kind == ExprKind::Const))
       return Demand;
     if (E->Op == NdOp::INT_AND)
@@ -881,7 +892,7 @@ static ExprPtr demandLowBytes(const ExprPtr &X, unsigned Bytes) {
   switch (X->Op) {
   case NdOp::INT_AND: {
     for (const auto &[C, Other] : {std::pair{R, L}, std::pair{L, R}})
-      if (C && C->Kind == ExprKind::Const) {
+      if (isScalarLiteral(C)) {
         if ((C->ConstVal & Mask) == 0 && Other && isEffectFree(Other))
           return Zero();
         if ((C->ConstVal & Mask) == Mask)
@@ -897,9 +908,9 @@ static ExprPtr demandLowBytes(const ExprPtr &X, unsigned Bytes) {
   case NdOp::INT_XOR: {
     ExprPtr NL = demandLowBytes(L, Bytes);
     ExprPtr NR = demandLowBytes(R, Bytes);
-    if (isZeroConst(NL))
+    if (isScalarLiteral(NL) && isZeroConst(NL))
       return NR;
-    if (isZeroConst(NR))
+    if (isScalarLiteral(NR) && isZeroConst(NR))
       return NL;
     if (NL == L && NR == R)
       return X;
@@ -917,7 +928,7 @@ static ExprPtr demandLowBytes(const ExprPtr &X, unsigned Bytes) {
     return WithOperands({NL, NR});
   }
   case NdOp::INT_LEFT: {
-    if (!Integer || !R || R->Kind != ExprKind::Const)
+    if (!Integer || !isScalarLiteral(R))
       return X;
     // Every demanded byte comes from below the shift amount: all zero.
     if (R->ConstVal >= uint64_t{Bytes} * 8 && L && isEffectFree(L))
@@ -1665,7 +1676,7 @@ static void simplifyExprNode(ExprPtr &E, const HighExprSet &OrderedMemory,
       E->MemoryAddressSpace == NdMemoryAddressSpace::Default &&
       E->Operands[0] && E->Operands[1])
     for (unsigned I = 0; I < 2; ++I)
-      if (E->Operands[I]->Kind == ExprKind::Const && E->Operands[1 - I]->Type &&
+      if (isScalarLiteral(E->Operands[I]) && E->Operands[1 - I]->Type &&
           E->Operands[1 - I]->Type->Size == E->Type->Size) {
         size_t Budget = ::neverd::limits::ir::kHighExpressionDemandedMaskWork;
         auto Projected =
