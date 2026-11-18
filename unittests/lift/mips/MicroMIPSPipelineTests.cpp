@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -307,6 +308,102 @@ TEST(MicroMIPSPipelineSource, ExternalMicroModeDoesNotRequireBodyCodegen) {
         EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE extern int"),
                   std::string::npos)
             << Text;
+    }
+  }
+}
+
+TEST(MicroMIPSPipelineSource, TypedCallsRetainExternalInstructionModes) {
+  for (Arch Architecture :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+        Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    const auto &TRI = getTargetRegInfo(Architecture);
+    const auto Word = TRI.integerReturnWordBytes();
+    for (auto Mode : {InstructionMode::MIPSClassic, InstructionMode::MicroMIPS,
+                      InstructionMode::MIPS16}) {
+      if (Mode == InstructionMode::MIPS16 && isMIPS64(Architecture))
+        continue;
+      for (bool Analyst : {false, true}) {
+        SCOPED_TRACE(static_cast<unsigned>(Architecture));
+        SCOPED_TRACE(static_cast<unsigned>(Mode));
+        SCOPED_TRACE(Analyst);
+        auto Image = mixedImage(Architecture);
+        Image.MIPS->HasMIPS16 = Mode == InstructionMode::MIPS16;
+        Image.MIPS->HasMicroMIPS = !Image.MIPS->HasMIPS16;
+        Image.MIPS->CodeModeEntries[0x1100] = Mode;
+        ASSERT_EQ(Image.instructionModeAt(0x1100), Mode);
+        MedFunc Function;
+        Function.Entry = 0x1000;
+        Function.Name = "typed_caller";
+        Function.ReturnType = NdType::makeInt(Word, false);
+        MedBlock Block;
+        Block.Id = 0;
+        Block.StartAddr = Function.Entry;
+        MedOp Call;
+        Call.Opcode = NdOp::CALL;
+        Call.Addr = Function.Entry;
+        Call.OriginSeq = 0;
+        Call.Output.Kind = MedVar::Reg;
+        Call.Output.RegOff = TRI.IntReturnReg;
+        Call.Output.Size = Word;
+        Call.Output.TheArch = Architecture;
+        Call.Output.Id = 1;
+        Call.Output.SSAVer = 1;
+        Call.addInput(MedVar::makeConst(0x1100, TRI.PointerSize));
+        Call.addInput(MedVar::makeConst(0x12345678, Word));
+        MedCallInfo Info;
+        Info.BlockId = Block.Id;
+        Info.OpIdx = 0;
+        Info.TargetAddr = 0x1100;
+        Info.TargetName = "micro_target";
+        Info.Args = {Call.Inputs[1]};
+        if (Analyst) {
+          auto Hint = std::make_shared<SourceCallTypeHint>();
+          Hint->CallKind = SourceCallTypeHint::Kind::Analyst;
+          Hint->AnalystSite = SourceCallOccurrenceKey{
+              Call.Addr, Call.OriginSeq, NdOp::CALL, Info.TargetAddr};
+          Hint->Signature.ReturnType = Function.ReturnType;
+          Hint->Signature.Parameters = {{"value", Function.ReturnType}};
+          std::string Error;
+          ASSERT_TRUE(assignAnalystCallABI(*Hint, Architecture,
+                                           BinaryFormat::ELF, Error, Mode))
+              << Error;
+          Call.SourceCallHint = Hint;
+          Info.SourceCallHint = std::move(Hint);
+        }
+        Block.Ops.push_back(Call);
+        MedOp Return;
+        Return.Opcode = NdOp::RETURN;
+        Return.addInput(Call.Output);
+        Block.Ops.push_back(Return);
+        Function.Blocks.push_back(std::move(Block));
+        Function.CallInfos.push_back(std::move(Info));
+        llvm::LLVMContext Context;
+        MedLLVMEmitter Emitter;
+        Emitter.setAnalystSourceProjection(Analyst);
+        auto Module = Emitter.emit({Function}, Context, "typed_call_mode",
+                                   Architecture, {}, &Image, BinaryFormat::ELF);
+        ASSERT_TRUE(Module);
+        EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+        const auto *Callee = Module->getFunction("micro_target");
+        ASSERT_TRUE(Callee);
+        EXPECT_EQ(mips::instructionModeFromLLVM(*Callee), Mode);
+        CEmitterOptions Options;
+        Options.TheArch = Architecture;
+        Options.Format = BinaryFormat::ELF;
+        Options.Image = &Image;
+        std::string Text;
+        llvm::raw_string_ostream Output(Text);
+        ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
+        const std::string Attribute =
+            mips::instructionModeCAttribute(Mode, /*HasBody=*/false);
+        const unsigned DeclarationBits =
+            Callee->getReturnType()->getIntegerBitWidth();
+        EXPECT_NE(Text.find(Attribute + "uint" +
+                            std::to_string(DeclarationBits) +
+                            "_t micro_target("),
+                  std::string::npos)
+            << Text;
+      }
     }
   }
 }

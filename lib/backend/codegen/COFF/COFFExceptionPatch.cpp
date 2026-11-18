@@ -2212,6 +2212,68 @@ std::optional<va_t> findCOFFExceptionPersonalityVA(const BinaryImage &Image,
   return std::nullopt;
 }
 
+llvm::Error checkCOFFResolvedSymbols(llvm::ArrayRef<std::string> Unresolved,
+                                     Arch TargetArch) {
+  if (Unresolved.empty())
+    return llvm::Error::success();
+  // Instrumented code calls through the image's guard slot whether or not the
+  // image has a function table: an image whose objects were compiled with
+  // /guard:cf but linked without it has only CF_INSTRUMENTED.  The resolvers
+  // bind the slot the load configuration names (findCOFFGuardRuntimeSlotVA).
+  for (const std::string &Symbol : Unresolved) {
+    llvm::StringRef Name(Symbol);
+    Name.consume_front("\01");
+    Name.consume_front("__imp_");
+    if (TargetArch == Arch::X86 && Name.starts_with("___guard_"))
+      Name = Name.drop_front();
+    if (Name == "__guard_check_icall_fptr" ||
+        Name == "__guard_dispatch_icall_fptr" ||
+        Name == "__guard_xfg_check_icall_fptr" ||
+        Name == "__guard_xfg_dispatch_icall_fptr")
+      return patchError("generated CFG instrumentation calls through " +
+                        llvm::Twine(Name) +
+                        ", but the image's load configuration names no such "
+                        "slot");
+  }
+  // Any other reference the image cannot bind would be written as whatever
+  // the relocation's addend leaves.
+  llvm::StringRef First(Unresolved.front());
+  First.consume_front("\01");
+  return patchError(
+      "generated code references " + llvm::Twine(First) +
+      (Unresolved.size() > 1
+           ? " and " + llvm::Twine(Unresolved.size() - 1) + " more symbol(s)"
+           : llvm::Twine()) +
+      " that the image does not provide");
+}
+
+std::optional<va_t> findCOFFGuardRuntimeSlotVA(const BinaryImage &Image,
+                                               llvm::StringRef SymbolName) {
+  if (Image.Format != BinaryFormat::COFF)
+    return std::nullopt;
+  SymbolName.consume_front("\01");
+  // An x86 object spells a C symbol with one more leading underscore.
+  if (Image.Arch == Arch::X86 && SymbolName.starts_with("___guard_"))
+    SymbolName = SymbolName.drop_front();
+  RuntimeCallablePointerSlotKind Kind;
+  if (SymbolName == "__guard_dispatch_icall_fptr")
+    Kind = RuntimeCallablePointerSlotKind::GuardCFDispatch;
+  else if (SymbolName == "__guard_check_icall_fptr")
+    Kind = RuntimeCallablePointerSlotKind::GuardCFCheck;
+  else
+    return std::nullopt;
+  std::optional<va_t> Slot;
+  for (const RuntimeCallablePointerSlot &Record :
+       Image.RuntimeCallablePointerSlots) {
+    if (Record.Kind != Kind)
+      continue;
+    if (Slot && *Slot != Record.SlotVA)
+      return std::nullopt;
+    Slot = Record.SlotVA;
+  }
+  return Slot;
+}
+
 llvm::Error validateCOFFReplacementFeatures(const BinaryImage &Image,
                                             Arch TargetArch) {
   const auto Headers = locatePEHeaders(const_cast<uint8_t *>(Image.Raw.data()),
@@ -3759,22 +3821,10 @@ llvm::Expected<COFFGuardTableUpdate> prepareCOFFGuardTables(
     return patchError(
         "input uses a guard instrumentation mode not supported by generated "
         "code");
+  if (auto Error = checkCOFFResolvedSymbols(Compiled.Unresolved, TargetArch))
+    return std::move(Error);
   if (!HasCF && !HasEHCont)
     return Update;
-
-  if (HasCF) {
-    for (const std::string &Unresolved : Compiled.Unresolved) {
-      llvm::StringRef Name(Unresolved);
-      Name.consume_front("\01");
-      Name.consume_front("__imp_");
-      if (Name == "__guard_check_icall_fptr" ||
-          Name == "__guard_dispatch_icall_fptr" ||
-          Name == "__guard_xfg_check_icall_fptr" ||
-          Name == "__guard_xfg_dispatch_icall_fptr")
-        return patchError("generated CFG instrumentation has an unresolved " +
-                          llvm::Twine(Unresolved));
-    }
-  }
 
   const bool HasGeneratedCFReferences = std::any_of(
       Compiled.Sections.begin(), Compiled.Sections.end(),

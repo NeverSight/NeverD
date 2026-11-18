@@ -1321,6 +1321,9 @@ private:
     bool SawRuntimeCallable = false;
     bool SawUnknown = false;
     bool SawConflict = false;
+    /// The LOAD sits in a loop that walks [begin, end) of a table and the
+    /// table is empty: it never runs.
+    bool NeverLoaded = false;
 
     bool isCallableOnly() const {
       return Complete && (SawCode || SawImport || SawRuntimeCallable) &&

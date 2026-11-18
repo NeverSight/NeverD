@@ -3441,6 +3441,17 @@ the image lists after it, the replacement is installed and its relocated code
 calls the original functions; named as another function of the image, it is
 refused.
 
+`HighCPointerAddresses.TransfersThroughTheGuardDispatchSlotGoToRax` prints a
+call and a tail jump through an x64 image's Control Flow Guard dispatch slot as
+calls of the function loaded into RAX, with the argument the caller set and no
+reference to the slot. `PatchCOFF_X64.GuardedCallsGoThroughTheLoadConfigurationSlot`
+compiles `test_patch_coff_guard.c` with `-cfguard` and links it without and with
+`/guard:cf`. It lifts the two functions that call and tail-jump through the
+dispatch slot and patches them in section and in-place mode: the rewrite loads
+the pointer the source loads and transfers through the image's own slot. An
+image whose load configuration has no dispatch slot, and a module that needs a
+function the image does not name, are refused.
+
 `LLVMCValues.AMemberReadKeepsItsValueAcrossAStoreToTheMember` prints a unit of
 optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,
@@ -8419,10 +8430,12 @@ in both routes.
 `NeverDWorkerCallSiteTypes` compiles and executes both C routes, including all
 five Win64 variadic integer arguments, and retains partial-stack-write refusal.
 `SessionCAPITest.Win64VariadicFunctionsTakeTheirHomedArguments` decompiles a
-PE whose MSVC-style variadic function homes RDX, R8 and R9 and passes their
+PE whose MSVC-style variadic functions home RDX, R8 and R9 and pass their
 first slot on as a va_list that a helper walks into the caller's two stack
-arguments: both C routes take the homed registers as parameters, contain no
-trap, pass all five values and return the machine's result at -O0 and -O2.
+arguments; the second holds that pointer in RSI across another call first, as
+MSVC's `printf` does. Both C routes take the homed registers as parameters,
+contain no trap, pass all five values to each and return the machine's result
+at -O0 and -O2, and the caller decompiled alone passes all five to each too.
 `CallExitRegisters.OverwrittenEntrySpillsAreNotValueReads` keeps a function
 whose R9 spill is overwritten before its slot escapes at three parameters: a
 dead spill publishes no variadic position.
@@ -25316,6 +25329,13 @@ must execute the intended callee once and preserve SP, RA and callee-saved
 registers. `--original-only` validates the fixtures without claiming NeverD
 reconstruction. High-address execution uses Unicorn's virtual TLB and does not
 qualify a hardware MMU.
+
+`MicroMIPSPipelineSource.TypedCallsRetainExternalInstructionModes` checks
+ordinary and explicitly typed direct calls on all six MIPS ABI/byte-order
+profiles. LLVM declarations and regenerated C must retain classic, microMIPS
+and supported MIPS16 target modes even when the callee body is omitted. The
+wide runtime driver's GCC O2 cases additionally catch an unannotated declaration
+becoming a tail jump that cannot switch instruction modes.
 
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit

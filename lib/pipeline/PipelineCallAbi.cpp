@@ -186,6 +186,9 @@ OmittedCalleeMemo::readAt(const PipelineResult &Result, va_t Key) {
   const auto &Variadic = omittedCalleeVariadicArguments(Result);
   if (const auto It = Variadic.find(Key); It != Variadic.end())
     Read.VariadicArguments = It->second;
+  if (const auto It = Result.CallVariadicFrom.find(Key);
+      It != Result.CallVariadicFrom.end())
+    Read.VariadicFrom = It->second;
   return Read;
 }
 
@@ -980,6 +983,9 @@ private:
           &omittedCalleeFloatingArguments(Result));
       Converter.setCallEntryVariadicArguments(
           &omittedCalleeVariadicArguments(Result));
+      // A variadic callee takes its parameters, and its calls of others pass
+      // their arguments, as the whole module's recovery reads them.
+      Converter.setCallVariadicFrom(&Result.CallVariadicFrom.get());
       Converter.setCallSummaryKeysRead(&Keys);
       Converter.setRuntimeRoutineCalls(&runtimeRoutineCalls());
       Converter.setCodePointerTargets(&codePointerTargets());

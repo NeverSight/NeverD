@@ -1433,6 +1433,20 @@ executable section nor a decodable prefix alone establishes a callable entry.
 Continuation ownership excludes both proof paths. A validated CFG entry needs
 no pointer relocation elsewhere in the image.
 
+An x64 call or tail jump through the load configuration's Control Flow Guard
+dispatch slot (`call [__guard_dispatch_icall_fptr]`, and the XFG slot) is a
+transfer through RAX: the dispatcher the loader installs checks RAX and jumps to
+it with the caller's registers, stack and return address, and a CF-instrumented
+image linked without `/guard:cf` keeps a plain `jmp rax` there. CFG
+construction lifts it so (`CFGBuilderX86GuardDispatch.cpp`); a function that is
+only that jump keeps it, and its callers call the function in RAX
+(`forwardsToGuardDispatch`). A lifted module of such an image carries
+`cfguard`, so LLVM instruments its indirect calls again; both COFF patch routes
+bind `__guard_dispatch_icall_fptr` and `__guard_check_icall_fptr` to the slots
+the load configuration names (`findCOFFGuardRuntimeSlotVA`), and
+`checkCOFFResolvedSymbols` refuses generated code with any reference neither
+route binds instead of writing the relocation's bare addend.
+
 `BinaryImage::isFunctionEntryCandidateAt` owns the shared structural gate for
 independent entries: executable ownership, instruction alignment, data-object
 exclusion and normalized continuation identity. Discovery, CFG tail calls,
@@ -10074,6 +10088,13 @@ completed top-level failure can mark all visited dependencies as rootless;
 a nested cycle cutoff is never published as a negative fact. Feasible-edge
 publication and function changes retire these answers with their owner.
 
+A loop that walks a table by comparing the address itself with the table's
+end, `for (p = begin; p < end; p++)` as the CRT's initializer walks
+(`_initterm`, `_RTC_Initialize`) do, bounds the slots the role proof reads to
+[begin, end) (`guardedIterationCount`). A walk of an empty table never runs its
+load (`PointerTableLoadRoleSummary::NeverLoaded`), so a call of the loaded value
+there needs no slot role.
+
 The LLVM pointer-table role proof treats a frame slot as a PHI over the
 values stored to it (`collectFrameReloadSources`). As a PHI's recurrent arm
 does, a stored value that is the slot's reload advanced by a stable offset
@@ -11508,7 +11529,13 @@ drops it, and its register is no parameter. The function is variadic from the
 first stack argument on: each call passes what it sets,
 `finalizeVariadicCallees` adds a trailing parameter for every stack argument a
 call passes and pads the others, and both C routes keep the home area and that
-overflow contiguous in their frame headroom.
+overflow contiguous in their frame headroom. The pointer may wait across a call
+in a register the convention preserves (MSVC's `printf` holds it in RSI over
+`__acrt_iob_func`): the summary walk keeps what such a register holds at a
+call by `isCallPreserved` for the image's ABI. The probe that reads an omitted
+callee's signature from its body converts it under the same `CallVariadicFrom`,
+so a function decompiled alone passes a variadic callee's arguments as a whole
+unit does.
 
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
