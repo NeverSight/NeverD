@@ -27,6 +27,7 @@ namespace {
 
 struct SplitAddressELF : mips_test::ELFBytes {
   bool Rela;
+  bool Compressed;
   va_t Base;
   va_t Target;
   size_t RelocationCount;
@@ -39,8 +40,9 @@ struct SplitAddressELF : mips_test::ELFBytes {
       : ELFBytes(isMIPSN32(A)
                      ? (archLittleEndian(A) ? Arch::MIPS32EL : Arch::MIPS32)
                      : A),
-        Rela(Explicit), Base(High64 ? 0x120010000ull : 0x10000),
-        Target(Base + 0x8100), RelocationCount(High64 ? 4 : 2),
+        Rela(Explicit), Compressed(Micro),
+        Base(High64 ? 0x120010000ull : 0x10000), Target(Base + 0x8100),
+        RelocationCount(High64 ? 4 : 2),
         RelocationSize(Is64 ? (Rela ? 24 : 16) : (Rela ? 12 : 8)) {
     Bytes.resize(0x9000);
     const unsigned Width = Is64 ? 8 : 4;
@@ -202,7 +204,8 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true) {
               SawAddress = true;
               // Addends and HI carries observe bits of this same symbol;
               // neither may become a new unrelated interior code identity.
-              EXPECT_EQ(Op.Inputs[I].ConstVal, File.Target);
+              EXPECT_EQ(Op.Inputs[I].ConstVal,
+                        File.Target | uint64_t(File.Compressed));
             }
     EXPECT_EQ(SawAddress, Symbolic);
     CEmitterOptions Emit;
@@ -255,6 +258,16 @@ TEST(MIPSSplitAddressFields, High64FieldsUseIndependentCarries) {
     SCOPED_TRACE(static_cast<unsigned>(A));
     SplitAddressELF File(A, true, 0, false, true);
     checkSource(File, true);
+  }
+}
+
+TEST(MIPSSplitAddressFields, CompressedO32CallableKeepsTagInBothSources) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    for (bool Explicit : {false, true}) {
+      SplitAddressELF File(A, Explicit, 0, true);
+      checkSource(File, true);
+    }
   }
 }
 
