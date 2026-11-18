@@ -7,6 +7,7 @@ add_neverd_unittest(NeverDMIPSPipelineTests
   mips/MicroMIPSPipelineTests.cpp
   mips/MIPSMergeValueTests.cpp
   mips/MIPSPipelineTests.cpp
+  mips/MIPSInstructionRelocationsTests.cpp
   LINK_COMPONENTS Pipeline BackendLLVM BackendC)
 
 if(TARGET neverd_shared)

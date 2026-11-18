@@ -25279,7 +25279,7 @@ profiles remain refused. The pipeline suite checks the boundary and ensures
 LLVM does not infer a zero callable tag from a function's code alignment.
 
 `unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
-`--neverd`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
+`--neverd`, `--sdk`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
 pinned Unicorn bindings on `PYTHONPATH`, it executes microMIPS, MIPS16 and a
 classic control in both byte orders, original and rebuilt O0/O2, and both C
 backends. The callee is separately compiled with stronger code alignment;
@@ -25287,6 +25287,24 @@ rebuilt images use a different link address. Pointer bits, tag/mask/offset
 expressions, equality and indirect calls are compared to each image's actual
 callee symbol, so matching link addresses cannot conceal a literal-address
 substitution. Generated objects and images are retired after every comparison.
+The indirect call supplies its fixed original declaration through the public
+call-site edit interface. This establishes the outgoing argument extent needed
+to prove saved FP/link storage private; an unknown call does not inherit that
+contract merely from its observed arguments.
+
+`MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
+ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
+addends, relocation-table ordering, split registers, all four field carries,
+high 64-bit addresses, conflicting records, mismatched instructions and missing
+HI/LO pairs. Both source routes must retain the original symbol operand through
+arithmetic; physical LowIR must retain the machine effects. Equal unrelocated
+values stay scalar. The HighIR bit-demand regressions separately ensure that
+code/data addresses and address fragments cannot become numeric masks or shift
+counts during projection.
+The compressed callable runtime driver links its positive originals with
+`--emit-relocs`. A separate image without those records retains the same symbol
+table: its numeric return must keep the original literal after moving the callee.
+This distinguishes symbol evidence from accidental address equality.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,

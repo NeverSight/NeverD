@@ -1915,6 +1915,11 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     Func.Blocks.push_back(std::move(MB));
   }
 
+  // Reconstruct loader-authenticated symbolic operands only in the source
+  // view. Do this before any SSA pass can freeze their link-time bit patterns.
+  if (isMIPS(TheArch))
+    projectMIPSRelocatedImmediates(Func);
+
   // Before sub-register fixup: model calls to known i64-returning callees
   // (32-bit register-pair return EDX:EAX / R1:R0) as defining the pair. Running
   // ahead of fixupSubRegisters lets its implicit zero-extension widen BOTH the

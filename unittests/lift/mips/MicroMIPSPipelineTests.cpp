@@ -332,9 +332,8 @@ void checkNumericLLVMIdentities(Arch Architecture) {
     MedOp Return;
     Return.Opcode = NdOp::RETURN;
     Block.Ops.push_back(Return);
-    // A symbol in executable bytes alone supplies no reconstructed LLVM
-    // function identity. Supply the lifted target that the numeric value
-    // actually names, as the production selection does.
+    // A selected target has a definition; an authenticated function outside
+    // the selection has a declaration. Mode evidence alone supplies neither.
     MedFunc TargetFunction = Function;
     TargetFunction.Entry = 0x1100;
     TargetFunction.Name = "micro_target";
@@ -344,8 +343,21 @@ void checkNumericLLVMIdentities(Arch Architecture) {
     llvm::LLVMContext Context;
     MedLLVMEmitter Emitter;
     if (Provenance == P::CodeAddress) {
+      auto Declared =
+          MedLLVMEmitter().emit({Function}, Context, "unselected_target",
+                                Architecture, {}, &Image, BinaryFormat::ELF);
+      ASSERT_TRUE(Declared);
+      EXPECT_FALSE(llvm::verifyModule(*Declared, &llvm::errs()));
+      const auto *Entry = Declared->getFunction("micro_target");
+      ASSERT_TRUE(Entry);
+      EXPECT_TRUE(Entry->isDeclaration());
+      EXPECT_FALSE(Entry->use_empty());
+      EXPECT_EQ(mips::instructionModeFromLLVM(*Entry),
+                InstructionMode::MicroMIPS);
+      auto Missing = mixedImage(Architecture);
+      Missing.Symbols.clear();
       EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
-                                         Architecture, {}, &Image,
+                                         Architecture, {}, &Missing,
                                          BinaryFormat::ELF));
     }
     auto Module =
