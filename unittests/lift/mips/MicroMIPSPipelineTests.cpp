@@ -64,7 +64,9 @@ TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
     EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
               CallsMicro)
         << Text;
-    EXPECT_EQ(Text.find("#error"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("#error \"this compiler cannot emit microMIPS"),
+              std::string::npos)
+        << Text;
     EXPECT_EQ(Text.find("NEVERD_MICROMIPS_REFERENCE ") != std::string::npos,
               CallsMicro)
         << Text;
@@ -302,7 +304,7 @@ TEST(MicroMIPSPipelineSource, ExternalMicroModeDoesNotRequireBodyCodegen) {
           << Text;
       EXPECT_NE(Text.find("micro_target("), std::string::npos) << Text;
       if (!HasBody)
-        EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE int"),
+        EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE extern int"),
                   std::string::npos)
             << Text;
     }
