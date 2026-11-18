@@ -27,6 +27,7 @@
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
 #include "neverd/ir/med/MedIR.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
 
 #include "llvm/ADT/StringRef.h"
@@ -402,63 +403,80 @@ std::vector<const llvm::CallBase *> ownCallsOf(const llvm::Function &Parent,
   return Calls;
 }
 
+/// \p Unit with each termination handler taking the arguments the runtime
+/// passes, which native IR requires of a callback it calls.
+std::vector<MedFunc> withCallbackArguments(std::vector<MedFunc> Unit) {
+  for (MedFunc &Function : Unit) {
+    if (Function.Entry != InnerFinallyVA && Function.Entry != OuterFinallyVA &&
+        Function.Entry != MiddleFinallyVA)
+      continue;
+    MedVar Abnormal;
+    Abnormal.Kind = MedVar::Param;
+    Abnormal.TheArch = Arch::X64;
+    Abnormal.Id = 0;
+    Abnormal.Size = 1;
+    Abnormal.RegOff = x86reg::RCX;
+    Function.Params.push_back(Abnormal);
+    Function.TypedParams.push_back(
+        {"abnormal_termination", NdType::makeInt(1, /*Signed=*/false)});
+    MedVar Frame;
+    Frame.Kind = MedVar::Param;
+    Frame.TheArch = Arch::X64;
+    Frame.Id = 1;
+    Frame.Size = 8;
+    Frame.RegOff = x86reg::RDX;
+    Function.Params.push_back(Frame);
+    Function.TypedParams.push_back({"establisher_frame", NdType::makePtr()});
+  }
+  return Unit;
+}
+
 // Rows over one range nest by their order, the earlier inside the later: the
-// handler's scan meets them in that order.
+// handler's scan meets them in that order.  Printed C and native IR build the
+// same chain of pads; the table the code generator writes for native output
+// repeats the range for each nesting level, and output ties those rows back
+// to these scopes.
 TEST(TableSEHSourceScopes, RowsOverOneRangeNestInTableOrder) {
   const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
   const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
-  EXPECT_TRUE(
-      classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
-                                    WindowsEHNativeCapability::SourceIRLowering)
-          .canLowerNativeIR());
-
-  llvm::LLVMContext Context;
-  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/true);
-  ASSERT_NE(Module, nullptr);
-  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
-  ASSERT_NE(Parent, nullptr);
-  ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
-
-  const Pads Found = padsOf(*Parent);
-  ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
-  ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
-  ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
-  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
-  EXPECT_EQ(llvm::cast<llvm::CatchSwitchInst>(Found.Except->getTerminator())
-                ->getUnwindDest(),
-            Found.cleanup("outer_finally"));
-  EXPECT_EQ(unwindOfCleanup(*Found.cleanup("outer_finally")), nullptr);
-
-  // The body's call is in all three: it unwinds to the innermost.
-  const auto Calls = ownCallsOf(*Parent, "may_throw");
-  ASSERT_EQ(Calls.size(), 1u) << printed(*Parent);
-  const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Calls.front());
-  ASSERT_NE(Invoke, nullptr) << printed(*Parent);
-  EXPECT_EQ(Invoke->getUnwindDest(), Found.cleanup("inner_finally"));
-}
-
-// Native output writes the table again and keeps such a function as
-// metadata; the capabilities that produce code still refuse the table.
-TEST(TableSEHSourceScopes, NativeOutputLeavesRowsOverOneRangeUnlowered) {
-  const std::vector<MedFunc> Unit = threeScopesOverOneRange(Leave::Branch);
-  const ExceptionFunction &EH = *Unit.front().ExceptionMetadata;
   for (WindowsEHNativeCapability Capability :
-       {WindowsEHNativeCapability::IRLowering,
+       {WindowsEHNativeCapability::SourceIRLowering,
+        WindowsEHNativeCapability::IRLowering,
         WindowsEHNativeCapability::OutputPatch}) {
     const WindowsEHNativeSourceClassification Source =
         classifyWindowsEHNativeSource(EH, Arch::X64, BinaryFormat::COFF,
                                       Capability);
-    EXPECT_FALSE(Source.isEligible());
-    EXPECT_EQ(Source.Reason,
-              WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph);
+    EXPECT_TRUE(Source.isEligible())
+        << getWindowsEHNativeSourceReasonName(Source.Reason);
   }
 
-  llvm::LLVMContext Context;
-  auto Module = emitUnit(Unit, Context, /*ForPrintedC=*/false);
-  ASSERT_NE(Module, nullptr);
-  const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
-  ASSERT_NE(Parent, nullptr);
-  EXPECT_FALSE(Parent->hasPersonalityFn()) << printed(*Parent);
+  for (const bool ForPrintedC : {true, false}) {
+    SCOPED_TRACE(ForPrintedC ? "printed C" : "native IR");
+    llvm::LLVMContext Context;
+    auto Module = emitUnit(ForPrintedC ? Unit : withCallbackArguments(Unit),
+                           Context, ForPrintedC);
+    ASSERT_NE(Module, nullptr);
+    const llvm::Function *Parent = Module->getFunction("three_scopes_parent");
+    ASSERT_NE(Parent, nullptr);
+    ASSERT_TRUE(Parent->hasPersonalityFn()) << printed(*Parent);
+
+    const Pads Found = padsOf(*Parent);
+    ASSERT_NE(Found.cleanup("inner_finally"), nullptr) << printed(*Parent);
+    ASSERT_NE(Found.Except, nullptr) << printed(*Parent);
+    ASSERT_NE(Found.cleanup("outer_finally"), nullptr) << printed(*Parent);
+    EXPECT_EQ(unwindOfCleanup(*Found.cleanup("inner_finally")), Found.Except);
+    EXPECT_EQ(llvm::cast<llvm::CatchSwitchInst>(Found.Except->getTerminator())
+                  ->getUnwindDest(),
+              Found.cleanup("outer_finally"));
+    EXPECT_EQ(unwindOfCleanup(*Found.cleanup("outer_finally")), nullptr);
+
+    // The body's call is in all three: it unwinds to the innermost.
+    const auto Calls = ownCallsOf(*Parent, "may_throw");
+    ASSERT_EQ(Calls.size(), 1u) << printed(*Parent);
+    const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Calls.front());
+    ASSERT_NE(Invoke, nullptr) << printed(*Parent);
+    EXPECT_EQ(Invoke->getUnwindDest(), Found.cleanup("inner_finally"));
+  }
 }
 
 // A table without such rows keeps the identity it had, and one with them has

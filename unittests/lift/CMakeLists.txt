@@ -4511,6 +4511,28 @@ if(LLD_LINK_EXEC)
     COMMENT "Linking guarded x64 SEH fixture")
   list(APPEND TEST_OBJECTS ${coff_seh_guard_obj} ${coff_seh_guard_exe})
 
+  set(coff_seh_nested_src
+      "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_seh_nested.s")
+  set(coff_seh_nested_obj
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_seh_nested.obj")
+  set(coff_seh_nested_exe
+      "${CMAKE_CURRENT_BINARY_DIR}/test_patch_coff_seh_nested.exe")
+  add_custom_command(
+    OUTPUT ${coff_seh_nested_obj}
+    COMMAND ${CLANG_EXEC} -target x86_64-pc-windows-msvc -c
+            ${coff_seh_nested_src} -o ${coff_seh_nested_obj}
+    DEPENDS ${coff_seh_nested_src}
+    COMMENT "Compiling nested x64 SEH fixture")
+  add_custom_command(
+    OUTPUT ${coff_seh_nested_exe}
+    COMMAND ${LLD_LINK_EXEC} /entry:nested_entry /subsystem:console
+            /nodefaultlib /export:nested_main /export:nested_may_throw
+            /export:__C_specific_handler ${coff_seh_nested_obj}
+            /out:${coff_seh_nested_exe}
+    DEPENDS ${coff_seh_nested_obj}
+    COMMENT "Linking nested x64 SEH fixture")
+  list(APPEND TEST_OBJECTS ${coff_seh_nested_obj} ${coff_seh_nested_exe})
+
   # One CF-instrumented object, linked without /guard:cf (CF_INSTRUMENTED
   # only) and with it (enforced).
   set(coff_guard_src "${CMAKE_CURRENT_SOURCE_DIR}/x86_64/test_patch_coff_guard.c")

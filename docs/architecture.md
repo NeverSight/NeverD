@@ -1303,9 +1303,9 @@ This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because
 `__C_specific_handler` scans the table from its first row; the scope identity
-(`getSEHScopeSemanticToken`) covers such a table only on request. Native
-output, where the code generator writes the table again, still leaves these
-functions as metadata. A local unwind reaches this view as MedIR spells it, a
+(`getSEHScopeSemanticToken`) covers such a table only on request, which native
+IR and output make as printed C does. Native IR lowers these functions with
+the same chain of pads. A local unwind reaches this view as MedIR spells it, a
 call of each termination handler at the runtime call's address
 (`MedSEHLocalUnwindExit`). The runtime calls the handler of row k with its
 scan already past k, so what that handler raises meets only the later rows
@@ -1316,10 +1316,32 @@ exit's address must be its handlers, in its order, with no other call after
 them in the block; anything else leaves the function unlowered. Native IR
 places these calls the same way and marks each with a provenance role of its
 own (`LocalUnwindHandlerCall`: the runtime call's address and the row the
-handler ends). The output gate refuses that role by name: its rule for a
-protected call is the innermost source scope at the call's address, which is
-the scope such a call has just left, and no execution has yet shown that the
-rewritten table gives the call the scopes the runtime gave it.
+handler ends). The output gate places such a call by the row it ends, not by
+the innermost scope at its address, which is the scope the call has just
+left: the call runs that row's termination handler from inside the row, with the
+flag and frame the lift gave it; a call no row holds stays a plain call, and one a
+row holds is the protected invoke of the row that holds it immediately; each
+handler of one unwind repeats the runtime call's address. The asynchronous
+table follows the range markers rather than the invokes' unwind edges, so the
+gate also walks the parent's normal edges from its entry and requires the
+markers to leave open at the call exactly the rows that hold the row it ends;
+a block two paths enter with different rows open has no answer and refuses.
+Rewritten MSVC x64 builds (`/O1` and `/O2`, with and without `/GS`) of a
+`goto` that leaves one or two `__finally` scopes inside a `__try`/`__except`,
+whose termination handlers may raise, print the original's transcript under
+wine: each form lifted with and without optimization and patched in section
+and in-place mode, with and without optimization (64 runs). Wine's
+transcripts of the originals equal Windows', and each wrong placement tried
+changed the transcript.
+LLVM writes an SEH row for each nesting level of the code in a range, so
+scopes nested over the same code repeat its range in the table the code
+generator writes. Output classifies that table as it classifies a source
+table, rows over one range nesting by their order, and binding ties each row
+to the source scope it stands for (`checkGeneratedSEHScopeChains`): in table
+order the next row over each row's range, or over a range holding it, stands
+for the parent of that row's scope (`sehParentScope`), and no later row holds
+the range of a scope without one, so the rows a scan meets at any address are
+the source's scope chain there, inner first.
 The gate also refuses a function whose termination handler or filter uses
 the EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The pad
 passes a termination handler `llvm.localaddress()` and the runtime passes a

@@ -324,7 +324,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.SemanticRange = *SemanticRange;
     R.SourceIndex = static_cast<uint32_t>(ScopeIndex);
     const auto SemanticToken = windows_eh_semantics::getSEHScopeSemanticToken(
-        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/SourceView,
+        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/true,
         /*AllowCookieCheck=*/SourceView);
     if (!SemanticToken)
       return false;
@@ -387,17 +387,16 @@ bool MedLLVMEmitter::emitNativeSEH(
   // Native WinEH can express nested or disjoint intervals.  Crossing
   // intervals have no unwind-parent relation.  Rows over one interval nest by
   // their order, the earlier inside the later, because __C_specific_handler
-  // scans the table from its first row.  Printed C takes that order; native
-  // output, where the code generator writes the table again, leaves such a
-  // function in lossless-metadata-only form.
+  // scans the table from its first row.  Both routes take that order; the
+  // table the code generator writes again repeats a range for each nesting
+  // level, which output ties back to these scopes.
   for (size_t I = 0; I < Regions.size(); ++I) {
     for (size_t J = I + 1; J < Regions.size(); ++J) {
       const ExceptionAddressRange &A = Regions[I].SemanticRange;
       const ExceptionAddressRange &B = Regions[J].SemanticRange;
       if (!A.overlaps(B))
         continue;
-      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
-      if ((Repeated && !SourceView) || (!A.contains(B) && !B.contains(A)))
+      if (!A.contains(B) && !B.contains(A))
         return false;
     }
   }
