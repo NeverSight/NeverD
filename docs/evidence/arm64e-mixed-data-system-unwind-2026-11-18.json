@@ -1,0 +1,220 @@
+{
+  "source": "9088d3b32bcc8efa182e9577c57c780119c5199c",
+  "base": "74fc484595a105a684d865634c22e06d23568781",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2410",
+  "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44220600796",
+  "compiler_original_control": "https://github.com/gmh5225/test_mac_intel/actions/runs/44217430465",
+  "linked_data_control": "https://github.com/gmh5225/test_mac_intel/actions/runs/44219402500",
+  "workflow_revision": "4b88088406a4c9e679964cf8702901b9bb2759d6",
+  "llvm_prebuilt": "r6",
+  "forks": {
+    "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "capstone": "3ea7f5838a88c9f34328dc6d8afb2ed89a30ab62",
+    "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+  },
+  "release_host_sha256": "d99a32522284641a63bee601d65c7a4feb7337040e7de4fec9b25a900bdaea93",
+  "replay_archive_sha256": "35eab989b08aa6638c36cf3d2971f104594f30e8ea26d8db525bad2ccf8de1ba",
+  "local_release": {
+    "tests": 1132,
+    "passed": 1080,
+    "skipped": 52,
+    "junit_sha256": "f1eb710d8cbdce3e4f836fe5c51bd619d2fc0a26f4f32564f9ec000038831047"
+  },
+  "jobs": {
+    "windows-frontend": "success",
+    "native (xcode-27)": "success",
+    "native (macos-26)": "success"
+  },
+  "macos": {
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t26.7.2",
+        "BuildVersion:\t\t25G332"
+      ],
+      "suite": {
+        "tests": 243,
+        "passed": 243,
+        "skipped": 0,
+        "junit_sha256": "e9a6fd9a4fb7bd3526c5ca20218f7a0a0c3f53d47de7aa5ff614de1f1d55a8ce"
+      },
+      "mixed": {
+        "published_data_in_code_records": 16,
+        "embedded_records_after_header_growth": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3,
+        "relift_defined_functions_0": 4,
+        "relift_defined_functions_1": 8,
+        "image_sha256": {
+          "original_sha256": "4f323abc3759d95eecad025ea61252aaada0143a32128b3f24f8ffceb8d06ac8",
+          "published_sha256": "a8085be3ab1dd4fc2a5832a83a97a1b100cebadd3624f1ffb13d96fc6bc39640",
+          "republished_sha256_0": "152bd3b21171288aec806bbb1b9361c2ecc00cd70e30f0f7ac23f3afefce0a1d",
+          "republished_sha256_1": "02fcac5ba2de96791c5cf2f6fef3735c53e92786dd846ecc818b94adc1be59df"
+        }
+      },
+      "entry": {
+        "native_old_entry_system_steps": 1,
+        "native_old_entry_raw_signal_walk": 1,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_original_fde_step": 1,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 1
+      },
+      "native_pac": true,
+      "compiler_call_and_unwind": true,
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "0f0257ec768d6f81b466f19faf96ef3b544f15fa850e59a49a287589d9195d6d",
+        "native-image/runtime.log": "710bdd4644f009d1c354564017ab03881dd833439ec051170dcae1843a05c394",
+        "x1/report.json": "ee846e2690e2fadaac213a8fa6ff9bc1f612035d62ec52fe515960c072d9697f",
+        "x1/probe/report.json": "2d02025446162cc002b5d01de40224e14df15449f3fc940c0469f70ec504a1a6",
+        "x1/probe-cursor/report.json": "2b03634db024b62828917546d95a2d8ab1ae52176d03bbdd7d19342da0a071d2",
+        "x1/probe-cpta/report.json": "01bd89ab272e94a8d055f2d24cad91e90a3139230f40f24fae6c6f926071a904"
+      }
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t27.0.1",
+        "BuildVersion:\t\t26A434"
+      ],
+      "suite": {
+        "tests": 243,
+        "passed": 243,
+        "skipped": 0,
+        "junit_sha256": "795c4823ea87846eb41917fc553f502ea75e8e9c2ded33125dc830d25bbf4396"
+      },
+      "mixed": {
+        "published_data_in_code_records": 16,
+        "embedded_records_after_header_growth": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3,
+        "relift_defined_functions_0": 4,
+        "relift_defined_functions_1": 8,
+        "image_sha256": {
+          "original_sha256": "5d76b84466d6397968d84fbe0eb775b3c69f48781a3cfa7dda00eff2367fcfc2",
+          "published_sha256": "e09673fc32c7d5e33ffbf897259953703b46ad907907a27a37e7dbbf9365f2c0",
+          "republished_sha256_0": "ae3ade2aa6b464e29321e6b540eccde42509fdb46559d601f29b450637fd38b7",
+          "republished_sha256_1": "f0dd8e3bc0b8c91e6c03fe63e9d20d4f9e4bc12d6b5f63b6b04a82fc63a748e1"
+        }
+      },
+      "entry": {
+        "native_old_entry_system_steps": 1,
+        "native_old_entry_raw_signal_walk": 1,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_original_fde_step": 1,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 0
+      },
+      "native_pac": true,
+      "compiler_call_and_unwind": true,
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "92d97f8cd3721bb23cc378133bad3ec399958bc61c9fae51749672291aeebef6",
+        "native-image/runtime.log": "3f92d9862c4040228863e09bf424deb466e58d57ef42241c7e0dba31e62c1e29",
+        "x1/report.json": "570249bcb96f8dd09f757eee623b8c61d3e071bb89bcf2eaeeb3ce73aa2c3614",
+        "x1/probe/report.json": "cc885e79abe7e032a9d0b61db1cd33691eb998779a14071f6ee9782ac934dad0",
+        "x1/probe-cursor/report.json": "e9e3bca6908988e09dbfc5b8b1fbaa4a095b9477af88a067fbf223184aeb17df",
+        "x1/probe-cpta/report.json": "147e4b89d9918910607e6651686a20d763b3e896fe515d48e9cd021c64486d82"
+      }
+    }
+  },
+  "local_supplemental": {
+    "real_dyld_cache": {
+      "suite": {
+        "tests": 5,
+        "passed": 5,
+        "skipped": 0,
+        "junit_sha256": "f11f2e555ff809784c672d18e6fb42fee495f26ad59d58650df5f42009b7a5b4"
+      },
+      "cases": {
+        "OptionalRealCacheAllImagesHaveValidAnalysisProjections": {
+          "images": 3257,
+          "total_projection_bytes": 4821737504
+        },
+        "OptionalRealCacheLoadsFoundationThroughSharedLoader": {
+          "ivars": 2474,
+          "metadata_references": 11159,
+          "methods": 42300,
+          "auth_slots": 28949,
+          "symbol_slots": 391
+        },
+        "OptionalRealCacheImageProjectionHasBoundedLinkeditStorage": {
+          "projection_bytes": 25518231,
+          "symbol_string_bytes": 7177839
+        },
+        "OptionalRealCachePreservesAllSlideRecipes": {
+          "authenticated_recipes": 7981837,
+          "plain_fixups": 14836648,
+          "images": 3257,
+          "mappings": 15
+        },
+        "OptionalRealCacheObjectiveCMetadataCrossesImageBoundaries": {
+          "classes": 882,
+          "methods": 42300,
+          "diagnostics": 0,
+          "named_methods": 42300,
+          "conditional_methods": 32919,
+          "properties": 6460,
+          "external_methods": 27590
+        }
+      }
+    },
+    "system_arm64e_decode_parity": {
+      "source": "/usr/bin/wc",
+      "slice": "arm64e",
+      "section": "__TEXT,__text",
+      "words": 653,
+      "sha256": "899252e4e4fda95687563d854b629d686e53023b7baf20a499520173ce3e71c0",
+      "exit": 0,
+      "suite": {
+        "tests": 1,
+        "passed": 1,
+        "skipped": 0,
+        "junit_sha256": "b3dfefd2baca35e7402fd48cebad6e2f3e3c5df2ff62acf2137474eb7713bd09"
+      }
+    }
+  }
+}

@@ -250,6 +250,8 @@ bool ExecutableCodeOwnerIndex::hasKnownOrTypedOwnerAt(va_t Addr) const {
 bool BinaryImage::hasExecutableCodeOwnerAt(
     va_t Addr, const ExecutableCodeOwnerIndex *Index) const {
   const va_t Normalized = normalizeCodeAddress(Addr, Arch, Mode);
+  if (!machODataInCodeRanges(MachODataInCode, Normalized, 1).empty())
+    return false;
   const Segment *Seg = getSegmentFor(Normalized);
   if (!Seg)
     return false;

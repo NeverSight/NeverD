@@ -509,6 +509,49 @@ __attribute__((section(COOL_SECTION), aligned(64)))
 unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
 )c")
 
+A64_LEAF_TEXT(kMixedOracle, "#define NEVERD_TEST_MIXED_DATA 1\n")
+A64_LEAF_TEXT(kRegionAssembly, ".data_region")
+A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
+A64_LEAF_TEXT(kPrefixControl, "prefix-control")
+A64_LEAF_TEXT(kMixedEntry, "-Wl,-e,_leaf_sum")
+A64_LEAF_TEXT(kPrefixRecords, "embedded_records_after_header_growth")
+A64_LEAF_TEXT(kMixedRecords, "published_data_in_code_records")
+A64_LEAF_TEXT(kMixedLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  ldr w8, Lbias
+  b Lresume
+.data_region
+Lbias:
+  .long 0xd503237f
+.end_data_region
+.data_region jt8
+  .byte 1,2
+.end_data_region
+.data_region jt16
+  .short 3
+.end_data_region
+.data_region jt32
+  .long 4
+.end_data_region
+Lresume:
+  add x0, x0, x1
+  add x0, x0, x8
+  ret
+.cfi_endproc
+.text
+.p2align 2
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  sub x0,x0,x1
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
 A64_LEAF_TEXT(kLeaves, R"c(
 unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
 unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }
@@ -542,6 +585,9 @@ int main(int argc, char **argv) {
 #if defined(NEVERD_TEST_TAIL_SUM)
       if (sum(values[i], values[j]) != values[i] + values[j] ||
           difference(values[i], values[j]) != values[i] + values[j])
+#elif defined(NEVERD_TEST_MIXED_DATA)
+      if (sum(values[i], values[j]) != values[i] + values[j] + UINT32_C(0xd503237f) ||
+          difference(values[i], values[j]) != values[i] - values[j])
 #elif defined(NEVERD_TEST_ZERO_RESULTS)
       if (sum(values[i], values[j]) != 0 || difference(values[i], values[j]) != 0)
 #else

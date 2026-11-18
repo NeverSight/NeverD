@@ -1,0 +1,23 @@
+//===- AArch64Literal.def - A64 PC-relative literal loads -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef A64_LITERAL_MASK
+#define A64_LITERAL_MASK(Value)
+#endif
+#ifndef A64_LITERAL_LOAD
+#define A64_LITERAL_LOAD(Opcode, Bytes)
+#endif
+
+A64_LITERAL_MASK(0xff000000u)
+A64_LITERAL_LOAD(0x18000000u, 4)  // LDR Wt
+A64_LITERAL_LOAD(0x58000000u, 8)  // LDR Xt
+A64_LITERAL_LOAD(0x98000000u, 4)  // LDRSW Xt
+A64_LITERAL_LOAD(0x1c000000u, 4)  // LDR St
+A64_LITERAL_LOAD(0x5c000000u, 8)  // LDR Dt
+A64_LITERAL_LOAD(0x9c000000u, 16) // LDR Qt
+
+#undef A64_LITERAL_LOAD
+#undef A64_LITERAL_MASK

@@ -49,6 +49,12 @@ ASYNC_FRAME_TEXT(kOriginalSamples, "original.samples")
 ASYNC_FRAME_TEXT(kEntryRules, "entry.rules")
 ASYNC_FRAME_TEXT(kEntrySamples, "entry.samples")
 ASYNC_FRAME_TEXT(kEntryMode, "entry")
+ASYNC_FRAME_TEXT(kRawEntryMode, "raw-entry")
+ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
+ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
+ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
+ASYNC_FRAME_TEXT(kEntryLookupOffset, "native_old_entry_fde_lookup_offset")
+ASYNC_FRAME_TEXT(kExactEntryStep, "native_old_entry_original_fde_step")
 ASYNC_FRAME_TEXT(kEntrySteps, "native_old_entry_system_steps")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
 ASYNC_FRAME_TEXT(kPublishedRules, "installed.rules")
@@ -537,7 +543,8 @@ _Atomic uintptr_t stage_entry_sp, incoming_x19;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
-static int entry_only;
+static int entry_only, raw_entry, visits_entry, exact_entry, raw_sp;
+static unsigned lookup_offset;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
   uintptr_t offset, depth;
@@ -585,12 +592,71 @@ static int at_signal_trampoline(unw_cursor_t *cursor) {
   }
 }
 
+static uintptr_t raw_pc(unw_cursor_t *cursor) {
+  unw_word_t value;
+  if (unw_get_reg(cursor, UNW_REG_IP, &value))
+    _exit(30);
+  return (uintptr_t)ptrauth_strip((void *)value, ptrauth_key_return_address);
+}
+
+static int check_raw_caller(unw_cursor_t *cursor, uintptr_t sp) {
+  unw_word_t saved_sp, saved_x19;
+  if (raw_pc(cursor) != expected_return ||
+      unw_get_reg(cursor, UNW_REG_SP, &saved_sp) ||
+      unw_get_reg(cursor, UNW_ARM64_X19, &saved_x19) ||
+      saved_x19 != atomic_load(&incoming_x19))
+    _exit(31);
+  if (unw_step(cursor) <= 0 || raw_pc(cursor) != expected_outer)
+    _exit(32);
+  return saved_sp == sp;
+}
+
+// Both walks use Darwin libunwind and the loaded image's registered tables.
+// The first starts in the handler. The second starts at the exact interrupted
+// PC, independently of whether this system exposes it when leaving _sigtramp.
+static void raw_entry_walk(const ucontext_t *uc) {
+  const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
+  unw_cursor_t cursor;
+  const uintptr_t sp = arm_thread_state64_get_sp(*regs);
+  if (sp != atomic_load(&stage_entry_sp) || !at_signal_trampoline(&cursor) ||
+      unw_step(&cursor) <= 0)
+    _exit(33);
+  if (raw_pc(&cursor) == owner) {
+    visits_entry = 1;
+    if (unw_step(&cursor) <= 0)
+      _exit(34);
+  }
+  raw_sp = check_raw_caller(&cursor, sp);
+
+  if (arm_thread_state64_get_lr(*regs) != expected_return ||
+      ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner + NDArm64eInstructionAlignment, &lookup_offset) ||
+      !ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner, &lookup_offset) ||
+      raw_pc(&cursor) != owner + lookup_offset)
+    _exit(35);
+  for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
+    unw_fpreg_t value;
+    if (unw_get_fpreg(&cursor, UNW_ARM64_D8 + i, &value) ||
+        memcmp(&value, &uc->uc_mcontext->__ns.__v[NDArm64eFirstPreservedD + i], sizeof(value)))
+      _exit(36);
+  }
+  if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp))
+    _exit(37);
+  exact_entry = 1;
+}
+
 static void observe(int signal, siginfo_t *info, void *context) {
   const ucontext_t *uc = context;
   const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
   const uintptr_t pc = arm_thread_state64_get_pc(*regs);
   if (entry_only && (pc != owner || atomic_load(&state.done)))
     return;
+  if (raw_entry) {
+    if (signal != SIGUSR1)
+      _exit(38);
+    raw_entry_walk(uc);
+    atomic_store(&state.done, 1);
+    return;
+  }
   const int stage = entry_only ? 1 : atomic_load(&state.ready);
   if (stage < 1 || stage > stages_count || signal != SIGUSR1)
     _exit(10);
@@ -725,8 +791,9 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  entry_only = argc == 7 && !strcmp(argv[6], "entry");
-  if ((!entry_only && argc != 6) || !read_rules(argv[5]))
+  raw_entry = argc == 7 && !strcmp(argv[6], "raw-entry");
+  entry_only = raw_entry || (argc == 7 && !strcmp(argv[6], "entry"));
+  if ((!entry_only && argc != 6) || (!raw_entry && !read_rules(argv[5])))
     return 1;
   alarm(20);
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -765,6 +832,10 @@ int main(int argc, char **argv) {
   FILE *out = fopen(argv[4], "w");
   if (!out)
     return 7;
+  if (raw_entry) {
+    fprintf(out, "%d %d %d %u\n", visits_entry, exact_entry, raw_sp, lookup_offset);
+    return fclose(out) || dlclose(image);
+  }
   for (int i = 0; i < (entry_only ? 1 : stages_count); ++i) {
     if (samples[i].pc < owner)
       return 8;
