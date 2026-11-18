@@ -25279,7 +25279,7 @@ profiles remain refused. The pipeline suite checks the boundary and ensures
 LLVM does not infer a zero callable tag from a function's code alignment.
 
 `unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
-`--neverd`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
+`--neverd`, `--sdk`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
 pinned Unicorn bindings on `PYTHONPATH`, it executes microMIPS, MIPS16 and a
 classic control in both byte orders, original and rebuilt O0/O2, and both C
 backends. The callee is separately compiled with stronger code alignment;
@@ -25287,6 +25287,10 @@ rebuilt images use a different link address. Pointer bits, tag/mask/offset
 expressions, equality and indirect calls are compared to each image's actual
 callee symbol, so matching link addresses cannot conceal a literal-address
 substitution. Generated objects and images are retired after every comparison.
+The indirect call supplies its fixed original declaration through the public
+call-site edit interface. This establishes the outgoing argument extent needed
+to prove saved FP/link storage private; an unknown call does not inherit that
+contract merely from its observed arguments.
 
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit

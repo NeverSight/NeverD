@@ -11,6 +11,7 @@ function symbol is present.
 """
 
 import argparse
+import importlib.util
 import io
 from pathlib import Path
 
@@ -25,6 +26,10 @@ FUNCTIONS = ("pointer_bits", "pointer_tag", "pointer_mask", "pointer_code",
              "pointer_offset", "pointer_equal", "call_pointer")
 VALUES = (0, 1, -7, 0x10203040)
 PRESERVED = {reg: 0x6a000000 + reg * 0x10101 for reg in (*range(16, 24), 30)}
+CALL_VIEWS_SPEC = importlib.util.spec_from_file_location(
+    "mips_floating_abi", Path(__file__).with_name("floating-abi-roundtrip.py"))
+CALL_VIEWS = importlib.util.module_from_spec(CALL_VIEWS_SPEC)
+CALL_VIEWS_SPEC.loader.exec_module(CALL_VIEWS)
 
 
 def callable_address(path):
@@ -75,15 +80,16 @@ def observe(path, function, little, compressed, literal_pointer=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("neverd", "clang", "assembler", "ld", "output"):
+    for name in ("neverd", "sdk", "clang", "assembler", "ld", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--mode", action="append",
                         choices=("micromips", "mips16", "nomips16"))
     parser.add_argument("--function", action="append", choices=FUNCTIONS)
     args = parser.parse_args()
     with MIPSValidationArtifacts(args.output, "compressed-numeric-code-pointers",
-                                 (args.neverd, args.clang, args.assembler,
+                                 (args.neverd, args.sdk, args.clang, args.assembler,
                                   args.ld)) as artifacts:
+        views = CALL_VIEWS.CallSiteViews(args.sdk)
         work = artifacts.work
         log = work / "command.log"
         (work / "string.h").write_text(
@@ -137,9 +143,22 @@ def main():
                         before = observe(original, function, little, mode != "nomips16")
                         for backend in ("highc", "llvmc"):
                             source = work / "reconstructed.c"
-                            roundtrip.run_command(artifacts, [args.neverd, "decompile",
-                                "--func", function, *(["--llvm"] if backend == "llvmc" else []),
-                                original, "-o", source], log)
+                            if function == "call_pointer":
+                                # A saved FP is private only with a complete
+                                # outgoing-call extent. Supply the original
+                                # declaration through the public occurrence
+                                # edit, as the floating ABI runtime does.
+                                elf = ELFFile(io.BytesIO(original.read_bytes()))
+                                entry = elf.get_section_by_name(".symtab").get_symbol_by_name(
+                                    function)[0]["st_value"]
+                                source.write_text(views.source(
+                                    original, backend, "int callee(int value);",
+                                    [], True, entry))
+                            else:
+                                roundtrip.run_command(artifacts, [args.neverd, "decompile",
+                                    "--func", function,
+                                    *(["--llvm"] if backend == "llvmc" else []),
+                                    original, "-o", source], log)
                             artifacts.keep_source(source)
                             for optimization in ("-O0", "-O2"):
                                 obj, rebuilt = work / "rebuilt.o", work / "rebuilt.elf"
@@ -153,6 +172,7 @@ def main():
                                 rows.append(dict(mode=mode, little=little,
                                     original_optimization=original_opt, function=function,
                                     backend=backend, optimization=optimization,
+                                    explicit_call_type=function == "call_pointer",
                                     source_sha256=digest(source), original_sha256=digest(original),
                                     rebuilt_sha256=digest(rebuilt), original=before, rebuilt=after))
                                 artifacts.write("results.json", rows)
@@ -194,7 +214,8 @@ def main():
         artifacts.write("summary.json", dict(complete=True, builds=len(rows),
             independent_rebuilt_executions=sum(len(row["rebuilt"]["observations"]) for row in rows),
             literal_control_builds=len(literal_controls),
-            source_compiler_sha256=digest(args.clang), neverd_sha256=digest(args.neverd)))
+            source_compiler_sha256=digest(args.clang), neverd_sha256=digest(args.neverd),
+            sdk_sha256=digest(args.sdk)))
     return 0
 
 
