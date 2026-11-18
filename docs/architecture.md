@@ -1445,7 +1445,11 @@ only that jump keeps it, and its callers call the function in RAX
 bind `__guard_dispatch_icall_fptr` and `__guard_check_icall_fptr` to the slots
 the load configuration names (`findCOFFGuardRuntimeSlotVA`), and
 `checkCOFFResolvedSymbols` refuses generated code with any reference neither
-route binds instead of writing the relocation's bare addend.
+route binds instead of writing the relocation's bare addend. The check form,
+a call through the check slot (`call [__guard_check_icall_fptr]` on x86 and
+x64, or `blr` of what an earlier load read from it), takes the target in ECX,
+RCX, R0 or X15 and returns with the registers the following call passes intact
+or ends the process; LowToMed lowers it to nothing, as it does a stack probe.
 
 `BinaryImage::isFunctionEntryCandidateAt` owns the shared structural gate for
 independent entries: executable ownership, instruction alignment, data-object

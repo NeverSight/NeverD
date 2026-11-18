@@ -47734,6 +47734,100 @@ TEST(HighCPointerAddresses, TransfersThroughTheGuardDispatchSlotGoToRax) {
   }
 }
 
+TEST(HighCPointerAddresses, GuardCheckCallsLeaveTheTargetToTheCall) {
+  // Control Flow Guard's check form: the target goes to the check routine the
+  // load configuration's slot holds, in ECX on x86 and RCX on x64, which
+  // returns with the registers the following call passes intact or ends the
+  // process. The call through the target is then the call; the check is no
+  // call of the program's.
+  constexpr va_t Slot32 = 0x402000;
+  std::vector<uint8_t> Code32 = {0x8b,
+                                 0x4c,
+                                 0x24,
+                                 0x04, // mov ecx, [esp+4]
+                                 0x8b,
+                                 0x01, // mov eax, [ecx]
+                                 0xff,
+                                 0x71,
+                                 0x04, // push dword [ecx+4]
+                                 0x89,
+                                 0xc1, // mov ecx, eax
+                                 0xff,
+                                 0x15,
+                                 uint8_t(Slot32),
+                                 uint8_t(Slot32 >> 8),
+                                 uint8_t(Slot32 >> 16),
+                                 uint8_t(Slot32 >> 24), // call [slot]
+                                 0xff,
+                                 0xd1, // call ecx
+                                 0x83,
+                                 0xc4,
+                                 0x04,  // add esp, 4
+                                 0xc3}; // ret
+  BinaryImage X86;
+  X86.Arch = Arch::X86;
+  X86.Bits = Bitness::Bits32;
+  X86.Format = BinaryFormat::COFF;
+  X86.Base = 0x400000;
+  X86.Entry = 0x401000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = X86.Entry;
+  Text.Size = Code32.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = Code32;
+  X86.Segments.push_back(std::move(Text));
+  Segment Data32;
+  Data32.Name = ".rdata";
+  Data32.VA = Slot32;
+  Data32.Size = 4;
+  Data32.Flags = SegmentFlags::Readable;
+  Data32.Data.assign(4, 0);
+  X86.Segments.push_back(std::move(Data32));
+  ASSERT_TRUE(X86.recordRuntimeCallablePointerSlot(
+      Slot32, RuntimeCallablePointerSlotKind::GuardCFCheck));
+  const std::string HighC32 = highcOnlyFunction(std::move(X86), 0x401000);
+  EXPECT_EQ(HighC32.find("402000"), std::string::npos) << HighC32;
+  EXPECT_EQ(HighC32.find("__builtin_trap"), std::string::npos) << HighC32;
+  // The pushed member is an argument of the call through the target.
+  EXPECT_TRUE(std::regex_search(
+      HighC32, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\([^;]*\b(\w+)\);)")))
+      << HighC32;
+  EXPECT_NE(HighC32.find(" + 4)"), std::string::npos) << HighC32;
+
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Slot64 = 0x140002000;
+  std::vector<uint8_t> Code64 = {0x53,                   // push rbx
+                                 0x48, 0x83, 0xec, 0x20, // sub rsp, 20h
+                                 0x48, 0x8b, 0x19,       // mov rbx, [rcx]
+                                 0x48, 0x89, 0xd9};      // mov rcx, rbx
+  const uint32_t Disp =
+      static_cast<uint32_t>(Slot64 - (Entry + Code64.size() + 6));
+  Code64.insert(Code64.end(),
+                {0xff, 0x15, uint8_t(Disp), uint8_t(Disp >> 8),
+                 uint8_t(Disp >> 16), uint8_t(Disp >> 24)}); // call [slot]
+  Code64.insert(Code64.end(), {0xb9, 0x07, 0x00, 0x00, 0x00, // mov ecx, 7
+                               0xff, 0xd3,                   // call rbx
+                               0x48, 0x83, 0xc4, 0x20,       // add rsp, 20h
+                               0x5b, 0xc3});                 // pop rbx; ret
+  BinaryImage X64 = makeCodeFixture(Entry, Code64);
+  Segment Data64;
+  Data64.Name = ".rdata";
+  Data64.VA = Slot64;
+  Data64.Size = 8;
+  Data64.Flags = SegmentFlags::Readable;
+  Data64.Data.assign(8, 0);
+  X64.Segments.push_back(std::move(Data64));
+  ASSERT_TRUE(X64.recordRuntimeCallablePointerSlot(
+      Slot64, RuntimeCallablePointerSlotKind::GuardCFCheck));
+  const std::string HighC64 = highcOnlyFunction(std::move(X64), Entry);
+  EXPECT_EQ(HighC64.find("140002000"), std::string::npos) << HighC64;
+  EXPECT_EQ(HighC64.find("__builtin_trap"), std::string::npos) << HighC64;
+  EXPECT_TRUE(std::regex_search(
+      HighC64, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\((\(\w+\))?7\);)")))
+      << HighC64;
+}
+
 TEST(HighCPointerAddresses, GuardDispatchTargetChosenOnTwoPathsStaysAssigned) {
   // IovpCancelRoutine: RAX is a loaded callback, or the caller's third
   // argument when there is none.  The dispatch call reads the value that

@@ -3441,6 +3441,11 @@ the image lists after it, the replacement is installed and its relocated code
 calls the original functions; named as another function of the image, it is
 refused.
 
+`HighCPointerAddresses.GuardCheckCallsLeaveTheTargetToTheCall` lifts an x86
+function that checks its target in ECX through the guard check slot and then
+calls ECX, and an x64 one that checks RCX and calls the copy it kept: both
+print the call of the loaded target with its argument, and neither the slot
+nor a trap.
 `HighCPointerAddresses.TransfersThroughTheGuardDispatchSlotGoToRax` prints a
 call and a tail jump through an x64 image's Control Flow Guard dispatch slot as
 calls of the function loaded into RAX, with the argument the caller set and no

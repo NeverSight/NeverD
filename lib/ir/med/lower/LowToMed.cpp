@@ -1429,6 +1429,26 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           libc::stackProbeEffect(*Image, LOp.Inputs[0].Offset, StackProbes) ==
               libc::StackProbeEffect::Probe)
         continue;
+      // A Control Flow Guard check, a call through the load configuration's
+      // check slot (`call [__guard_check_icall_fptr]`, or of what an earlier
+      // load read from it), takes the target in ECX, RCX, R0 or X15 and
+      // returns only when the target is valid, with every register the call
+      // that follows passes intact (LLVM's CFGuard_Check convention), or ends
+      // the process. On the path that returns it changes nothing the program
+      // observes either.
+      if (Image && LOp.Opcode == NdOp::INDIR_CALL && LOp.NumInputs >= 1 &&
+          !TailCall) {
+        const std::optional<va_t> Slot =
+            LOp.Inputs[0].isConst() ? std::optional<va_t>(LOp.Inputs[0].Offset)
+            : CachedTarget && CachedTarget->ThroughSlot
+                ? std::optional<va_t>(CachedTarget->Address)
+                : std::nullopt;
+        if (Slot && (Image->hasRuntimeCallablePointerSlotAt(
+                         *Slot, RuntimeCallablePointerSlotKind::GuardCFCheck) ||
+                     Image->hasRuntimeCallablePointerSlotAt(
+                         *Slot, RuntimeCallablePointerSlotKind::GuardXFGCheck)))
+          continue;
+      }
 
       MedOp MOp;
       if (const auto Site = sourceCallOccurrenceKey(LOp); Site) {
