@@ -1393,8 +1393,12 @@ frame's offset, and prints no function for the adapter itself. The source view
 that LLVM C prints by default passes the emulated frame the same way: a
 termination handler that reads its frame gets the address in it, and a filter
 that reads its frame is printed as a call with that address. The source view
-neither marks the frame nor makes protected accesses volatile; the printed
-`__try` carries the rules of the compiler that builds it. Over the 384 Windows
+makes the same protected accesses volatile: the optimizer runs before the C
+is printed, and no compiler of that C brings back a store it merged or
+dropped. Over the 98 corpus files it touches, that keeps 925 frame stores the
+optimizer had removed, with clang errors and unrecovered-value placeholders
+unchanged and 1.5% more text. Only native IR marks the frame for the output
+gate. Over the 384 Windows
 EH corpus files, 98 LLVM C files change: lines that name the frame
 `llvm.localaddress` gives (`seh_parent_frame`) fall from 6,470 to 879, and
 clang errors (98) and unrecovered-value placeholders (741) stay the same. The callback must reach the frame only by loads

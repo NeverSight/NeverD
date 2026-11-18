@@ -7265,6 +7265,53 @@ TEST(COFFExceptionIR, NativeFrameReadingCallbackIsPassedTheEmulatedFrame) {
         }
   EXPECT_TRUE(StoreInScope) << printModuleIR(*Module);
 
+  // Printed C passes the same address and keeps the same store in order
+  // with a fault, since the optimizer runs before the C is printed.  Only
+  // native IR marks the frame for the output gate.
+  {
+    llvm::LLVMContext SourceContext;
+    auto Source =
+        emitSourceView({Parent, Callback,
+                        makeAddressBackedPersonality(
+                            PersonalityVA, "\01__C_specific_handler")},
+                       SourceContext, Arch::X64);
+    ASSERT_NE(Source, nullptr);
+    expectVerifierClean(*Source);
+    const llvm::Function *SourceOwner = Source->getFunction(Parent.Name);
+    const llvm::Function *SourceCallback = Source->getFunction(Callback.Name);
+    ASSERT_NE(SourceOwner, nullptr);
+    ASSERT_NE(SourceCallback, nullptr);
+    const llvm::CallBase *SourcePad = nullptr;
+    bool SourceStore = false;
+    for (const llvm::BasicBlock &BB : *SourceOwner)
+      for (const llvm::Instruction &Instruction : BB) {
+        EXPECT_EQ(
+            Instruction.getMetadata(windows_eh_md::SEHEmulatedFrameAttachment),
+            nullptr);
+        if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+            Site && Site->getCalledFunction() == SourceCallback)
+          SourcePad = Site;
+        if (const auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+          if (const auto *Value =
+                  llvm::dyn_cast<llvm::ConstantInt>(Kept->getValueOperand());
+              Value && Value->getZExtValue() == 7) {
+            SourceStore = true;
+            EXPECT_TRUE(Kept->isVolatile()) << printModuleIR(*Source);
+          }
+      }
+    EXPECT_TRUE(SourceStore) << printModuleIR(*Source);
+    ASSERT_NE(SourcePad, nullptr) << printModuleIR(*Source);
+    const auto *SourceArgument =
+        llvm::dyn_cast<llvm::GetElementPtrInst>(SourcePad->getArgOperand(1));
+    ASSERT_NE(SourceArgument, nullptr) << printModuleIR(*Source);
+    EXPECT_TRUE(
+        llvm::isa<llvm::AllocaInst>(SourceArgument->getPointerOperand()));
+    llvm::APInt SourceOffset(64, 0);
+    ASSERT_TRUE(SourceArgument->accumulateConstantOffset(
+        Source->getDataLayout(), SourceOffset));
+    EXPECT_EQ(SourceOffset.getZExtValue(), EntryOffset - FrameBytes);
+  }
+
   BinaryImage Image;
   Image.Arch = Arch::X64;
   Image.Bits = Bitness::Bits64;

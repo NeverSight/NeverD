@@ -91,7 +91,14 @@ A/B with identical output.
      decoder functions each built twice. The second build of each comes from
      the jump-table rebuild round (`RebuildGraphs`, `PipelineLowIR.cpp`),
      whose cache is new because its protected relocation slots and unsafe
-     jump-table branches grew. Builds that end in `MissingTerminator` (an
+     jump-table branches grew. On capstone that round is the module-wide
+     fallback: the module arbitration runs out of
+     `limits::kMaxJumpTableEvidenceWork` (4096) at its physical-envelope
+     step, so all 325 code-pointer relocation slots become protected and all
+     689 functions are lifted again (logged 2026-11-18; the unsafe set stays
+     empty). A budget that lets capstone's arbitration finish would remove
+     the second lift and the second graph of every callee, but it changes
+     which slots are protected, so it is a budget policy decision. Builds that end in `MissingTerminator` (an
      indirect branch the resolver could not settle) hold 56% of the time,
      and only a complete CFG shows that rejection.
    - On x64 the raw-stack flag of a graph build does not change its CFG

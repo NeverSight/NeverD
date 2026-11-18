@@ -62,10 +62,15 @@ Update this file when an item closes or a new gap is proven.
   `__builtin_trap()` placeholders in the 24 `xframe_eh_dll` builds:
   `pass_through_2_dll` had lost `Disposition`, which only its filter reads
   from its home slot. The rule over-approximates: every spill counts, also
-  one that no callback reads. Open: a filter that reads its parent's stack
-  arguments (above the home area) still leaves them out of the signature,
-  and C++ catch and unwind funclets, which also get the frame, are not
-  covered by the rule.
+  one that no callback reads. The source view makes protected accesses
+  volatile as native IR does (without it, the optimizer dropped 925 frame
+  stores in the 98 changed corpus files). Open: a filter that reads its
+  parent's stack arguments (above the home area) still leaves them out of
+  the signature; C++ catch and unwind funclets, which also get the frame,
+  are not covered by the rule; HighC still calls a filter that reads its
+  frame without one (`sub_180001E0A(GetExceptionInformation())` in
+  `xframe_eh_dll`); ARM64 callbacks still get `llvm.localaddress` (403
+  calls in the corpus whose callee uses its frame argument).
 - With the `__finally` half, per function on the four vs2019 x64 xcpt4
   builds: the 15 functions per build the original-frame gate stopped now
   give 4 (5 at o0) that patch and run as the original in every run, 2 per

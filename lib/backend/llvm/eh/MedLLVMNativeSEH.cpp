@@ -1207,13 +1207,15 @@ bool MedLLVMEmitter::emitNativeSEH(
   // for one that can raise: each such access becomes volatile, as clang's
   // -EHa makes those of a __try, except a register home's, which no callback
   // can name, and a load of a global the image maps, which cannot fault.
-  // The output gate finds the frame by its mark.  Printed C needs neither:
-  // its `__try` carries the rules of the compiler that builds it.
-  if (UsesEmulatedFrame && !SourceView) {
-    FrameAlloca->setMetadata(
-        windows_eh_md::SEHEmulatedFrameAttachment,
-        llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, EH.CodeRange.Begin, 64),
-                                 mdUInt(*Ctx, FrameEntrySPOffset, 64)}));
+  // Printed C needs the same: the optimizer runs before it is printed, and
+  // the stores it would merge or drop no compiler of the C brings back.  The
+  // output gate finds the frame by its mark, which only native IR carries.
+  if (UsesEmulatedFrame) {
+    if (!SourceView)
+      FrameAlloca->setMetadata(
+          windows_eh_md::SEHEmulatedFrameAttachment,
+          llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, EH.CodeRange.Begin, 64),
+                                   mdUInt(*Ctx, FrameEntrySPOffset, 64)}));
     std::set<llvm::BasicBlock *> Protected;
     for (const Region &R : Regions)
       Protected.insert(R.Blocks.begin(), R.Blocks.end());

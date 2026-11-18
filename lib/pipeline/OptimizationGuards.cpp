@@ -39,9 +39,11 @@ void registerOptNoneInterproceduralGuard(
         // callee's ABI, so use the same module-wide boundary for both. Required
         // adaptors still run and optimize ordinary functions independently.
         // An SEH filter adapter (sehFilterAdapterName) is the exception: no
-        // code calls it, the runtime only takes its address, so no such pass
-        // reaches its arguments or its body, and output checks its exact
-        // shape again.  It must not turn these passes off for its module.
+        // code calls it and the runtime takes its address, so no such pass
+        // reaches its arguments, and the filter it calls is a lifted function
+        // with external linkage, whose signature no pass changes.  Output
+        // checks the adapter's exact shape again.  It must not turn these
+        // passes off for its module.
         for (const llvm::Function &F : *M)
           if (!F.isDeclaration() && F.hasOptNone() && !isSEHFilterAdapter(F))
             return false;
