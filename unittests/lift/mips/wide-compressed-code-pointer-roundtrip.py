@@ -31,6 +31,8 @@ def observe(path, function, abi, little, compressed):
     pointer = symbol["st_value"] | bool(symbol["st_other"]["local"] & 4)
     assert pointer & 1 == int(compressed), (path, pointer)
     mask = (1 << 64) - 1
+    if abi == "n32" and pointer & 0x80000000:
+        pointer |= 0xffffffff00000000
     if function == "call_pointer":
         cases = [([pointer, value], (value + 7) & mask)
                  for value in (0, 1, -17, 0x10203040)]
@@ -48,6 +50,22 @@ def observe(path, function, abi, little, compressed):
         cpu, entry = roundtrip.emulator(path, 64, little, function,
                                         cpu_model=model)
         cpu.ctl_set_tlb_mode(UC_TLB_VIRTUAL)
+        # n32 ELF stores 32-bit VAs, while execution carries canonical
+        # sign-extended pointers in its 64-bit registers. Map those exact
+        # aliases for this fixed-address fixture's upper-half image.
+        if abi == "n32" and entry & 0x80000000:
+            entry |= 0xffffffff00000000
+            pages = set()
+            for segment in elf.iter_segments():
+                if segment["p_type"] != "PT_LOAD":
+                    continue
+                begin = segment["p_vaddr"] | 0xffffffff00000000
+                end = begin + segment["p_memsz"]
+                for page in range(begin & ~4095, (end + 4095) & ~4095, 4096):
+                    if page not in pages:
+                        cpu.mem_map(page, 4096)
+                        pages.add(page)
+                cpu.mem_write(begin, segment.data())
         calls = []
         cpu.hook_add(UC_HOOK_CODE,
                      lambda uc, address, size, data: calls.append(address),
@@ -131,6 +149,8 @@ def main():
                     addresses = [(0x100000, 0x200000)]
                     if abi == "n64":
                         addresses.append((0x120010000, 0x140010000))
+                    else:
+                        addresses.append((0x90010000, 0xb0010000))
                     for original_address, rebuilt_address in addresses:
                         for producer in args.producer or ("gcc", "clang"):
                             for original_opt in ("-O0", "-O2"):
