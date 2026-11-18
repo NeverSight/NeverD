@@ -12,6 +12,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -169,7 +170,8 @@ TEST_P(MIPSInstructionRelocations, LinkedFieldsRetainModeAddendAndTableOrder) {
   }
 }
 
-void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true) {
+void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true,
+                 bool OriginalImage = false) {
   auto Image = ELFLoader().loadBuffer(File.buffer());
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
   for (bool LLVM : {false, true}) {
@@ -215,6 +217,13 @@ void checkSource(SplitAddressELF &File, bool Symbolic, bool Success = true) {
     std::string Text;
     llvm::raw_string_ostream Out(Text);
     if (LLVM) {
+      if (OriginalImage) {
+        MedLLVMEmitter Emitter;
+        Emitter.setOriginalImageStorageForSource(true);
+        Result.LlvmModule =
+            Emitter.emit(Result.MedFuncs, Context, "split_address", Image->Arch,
+                         {}, &*Image, BinaryFormat::ELF);
+      }
       ASSERT_TRUE(Result.LlvmModule);
       EXPECT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
       ASSERT_TRUE(LLVMCEmitter().emit(*Result.LlvmModule, Out, Emit));
@@ -268,6 +277,15 @@ TEST(MIPSSplitAddressFields, CompressedO32CallableKeepsTagInBothSources) {
       SplitAddressELF File(A, Explicit, 0, true);
       checkSource(File, true);
     }
+  }
+}
+
+TEST(MIPSSplitAddressFields, OriginalImageStorageRetainsExplicitCallable) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+                 Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SplitAddressELF File(A, true, 0, !isMIPS64(A));
+    checkSource(File, true, true, true);
   }
 }
 
