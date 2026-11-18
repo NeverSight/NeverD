@@ -360,7 +360,43 @@ jobs:
           assert actual_names == expected_names, 'incomplete inventory execution'
           assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped and not local_type_skipped, audit
           added_owners = ['NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests']
-          assert not [name for name in skipped if name_to_owner[name] in added_owners], audit
+          # These tests execute Linux x86 ELF binaries. Their existing compile-time
+          # host guards are unavailable coverage on Darwin/Windows, not MIPS skips.
+          # No fixture/compiler failure or test failure is excused by this list.
+          allowed_boundary_skips = {}
+          if platform.system() != 'Linux' or platform.machine().lower() not in ('x86_64', 'amd64'):
+              for suffix, reason in {
+                  'OptimizedSwitchTablesPreservePhysicalAndTwoLevelSelectors': 'native selector execution requires Linux x86-64',
+                  'NonlocalImportCallsPreserveLiveValuesAcrossBothReturns': 'native nonlocal-jump execution requires Linux x86-64',
+                  'BoundedRuntimeOffsetsAndNullableCallbacksExecute': 'native execution requires Linux x86-64',
+                  'OriginalImageOffsetsObserveCapturedFrameWrites': 'native execution requires Linux x86-64',
+                  'RuntimeIndexedMirrorSelectionsSurviveRelinking': 'native execution requires an x86-64 ELF host',
+                  'RuntimeIndexedMutableMirrorsKeepDirectAndSelectedStoresAliased': 'native execution requires an x86-64 ELF host',
+                  'RuntimeGlobalPointersFeedUnboundedScalarIndices': 'native execution requires an x86-64 ELF host',
+                  'ALinkedELFsLoadSegmentsKeepTheirNamesAndRelroIsTheAddresss': 'links an x86-64 Linux program with the host linker',
+                  'RelroWithoutACompleteProtectedPageRetainsNativeWrites': 'executes a public x86-64 Linux loader fixture',
+              }.items():
+                  allowed_boundary_skips['NativePointerRelocationBoundary.' + suffix] = reason
+          # Existing optional MinGW whole-program coverage requires that external
+          # compiler. Record its actual availability; missing cross-target Clang is
+          # not admitted because the workflow deliberately provisions it.
+          import shutil
+          mingw = shutil.which('x86_64-w64-mingw32-gcc')
+          if mingw is None:
+              for suffix, reason in {
+                  'MinGWPointerTableAmongCodeTooLargeToMirrorIsRefused': 'the oversized fixture needs the MinGW compiler',
+                  'MinGWProgramWholeModuleLLVMCCompiles': 'the program needs the MinGW compiler',
+                  'CRTHeaderRecordReuseChecksTheActualRuntimeLayout': 'needs Clang and the MinGW headers',
+              }.items():
+                  allowed_boundary_skips['NativePointerRelocationBoundary.' + suffix] = reason
+          boundary_skips = {case.get('name'): case.findtext('system-out') or '' for case in cases
+                            if case.find('skipped') is not None and name_to_owner[case.get('name')] in added_owners}
+          invalid_skips = [name for name, message in boundary_skips.items()
+                           if name not in allowed_boundary_skips or allowed_boundary_skips[name] not in message]
+          (output / 'boundary-skip-audit.json').write_text(json.dumps({
+              'mingw_compiler': mingw, 'unavailable': boundary_skips, 'unexpected': invalid_skips,
+              'scope': 'Existing platform/optional-tool guards only. No MIPS skips or failed cases admitted.'}, indent=2) + '\n')
+          assert not invalid_skips, invalid_skips
           PYTHON
       - name: Preserve mock-worker failure after owner diagnostics
         if: always() && steps.mock_worker.outcome == 'failure'
