@@ -1600,6 +1600,9 @@ program-defined callee. Whole-unit Windows syntax checks additionally use the
 real headers. `LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes`
 checks `_locale_t` and `_invalid_parameter_handler` against independent C
 prototypes and executes argument/return identity checks at O0/O2 with UBSan.
+`NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders`
+compares all six locale-bearing UCRT stdio prototypes and the handler exchange
+with the declarations in their actual MinGW headers.
 The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
 `_UCRT` alone does not select the old MinGW runtime headers.
 `MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks

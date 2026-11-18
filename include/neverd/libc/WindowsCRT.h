@@ -196,15 +196,15 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype(
         "__stdio_common_vsprintf", "int",
         {"uint64_t", "char *", "size_t", "const char *", "_locale_t", "char *"},
-        "stddef.h"),
+        "stdio.h"),
     windowsCRTPrototype(
         "__stdio_common_vsprintf_s", "int",
         {"uint64_t", "char *", "size_t", "const char *", "_locale_t", "char *"},
-        "stddef.h"),
+        "stdio.h"),
     windowsCRTPrototype("__stdio_common_vsnprintf_s", "int",
                         {"uint64_t", "char *", "size_t", "size_t",
                          "const char *", "_locale_t", "char *"},
-                        "stddef.h"),
+                        "stdio.h"),
     windowsCRTPrototype(
         "__stdio_common_vfscanf", "int",
         {"uint64_t", "FILE *", "const char *", "_locale_t", "char *"},
@@ -212,7 +212,7 @@ inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
     windowsCRTPrototype("__stdio_common_vsscanf", "int",
                         {"uint64_t", "const char *", "size_t", "const char *",
                          "_locale_t", "char *"},
-                        "stddef.h"),
+                        "stdio.h"),
     // vcruntime exception helpers.
     windowsCRTPrototype("__current_exception", "void **", {}),
     windowsCRTPrototype("__current_exception_context", "void **", {}),
