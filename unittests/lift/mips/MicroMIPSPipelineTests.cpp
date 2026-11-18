@@ -369,7 +369,7 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
   }
 }
 
-TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndWideProfiles) {
+TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndMismatchedABIs) {
   auto Image = mixedImage(GetParam());
   EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
   EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
@@ -385,6 +385,43 @@ TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndWideProfiles) {
   for (Arch Wide :
        {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
     Image.Arch = Wide;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+  }
+}
+
+TEST(MicroMIPSPipelineSource, NumericModeBoundaryAdmitsQualifiedWideProfiles) {
+  for (Arch Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    const bool N32 = Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+    auto Image = mixedImage(Target);
+    Image.Bits = N32 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.MIPS->ABI = N32 ? MIPSABI::N32 : MIPSABI::N64;
+    EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
+    EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1000));
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
+                 std::invalid_argument);
+    Image.MIPS->ABI = N32 ? MIPSABI::N64 : MIPSABI::N32;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->ABI = N32 ? MIPSABI::N32 : MIPSABI::N64;
+    for (unsigned Revision : {1u, 6u}) {
+      Image.MIPS->ISARevision = Revision;
+      EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                   std::invalid_argument);
+    }
+    Image.MIPS->ISARevision = 2;
+    Image.MIPS->HistoricalISA = 3;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->HistoricalISA = 0;
+    Image.MIPS->HasMicroMIPS = false;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->HasMIPS16 = true;
+    Image.Mode = InstructionMode::MIPS16;
+    Image.MIPS->CodeModeEntries.clear();
     EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
                  std::invalid_argument);
   }
