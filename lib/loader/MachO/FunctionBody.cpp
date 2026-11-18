@@ -28,12 +28,14 @@ std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
       !rangeInBounds(Start - Segment->VA, Word, Segment->FileSz))
     return std::nullopt;
   const auto *Section = Image.getSectionFor(Start);
-  if (Section && (!(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) ||
+  if (Section && (!(Section->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                                     llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) ||
                   Section->FileSz != Section->Size ||
                   !rangeInBounds(Start - Section->VA, Word, Section->Size)))
     return std::nullopt;
   const auto *First = Image.readVA(Start, Word);
-  if (!First)
+  if (!First ||
+      !machODataInCodeRanges(Image.MachODataInCode, Start, Word).empty())
     return std::nullopt;
   std::optional<va_t> ForwardTarget;
   if (const auto Jump =
@@ -63,11 +65,17 @@ std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
       }))
     return std::nullopt;
   if (ForwardTarget)
-    return MachOLiftedSource{{First, Word}, ForwardTarget};
+    return MachOLiftedSource{{First, Word}, ForwardTarget, {}};
   const auto *Bytes = Image.readVA(Start, End - Start);
   if (!Bytes)
     return std::nullopt;
-  return MachOLiftedSource{{Bytes, size_t(End - Start)}, std::nullopt};
+  const auto Embedded =
+      machODataInCodeRanges(Image.MachODataInCode, Start, End - Start);
+  if (!Embedded.empty() &&
+      (Embedded.front().Begin < Start || Embedded.back().End > End))
+    return std::nullopt;
+  return MachOLiftedSource{
+      {Bytes, size_t(End - Start)}, std::nullopt, Embedded};
 }
 
 } // namespace neverd

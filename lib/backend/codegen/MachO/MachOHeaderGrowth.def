@@ -38,5 +38,9 @@ MACHO_HEADER_TEXT(kSlideSymbol, "symbol has no section-relative slide contract")
 MACHO_HEADER_TEXT(kSlideOverflow,
                   "preferred image address overflows during slide")
 
+MACHO_HEADER_TEXT(kMixedCoverage,
+                  "instruction section lacks a usable data-in-code layout")
+MACHO_HEADER_TEXT(kSlideEmbedded,
+                  "embedded data table has no preferred-base slide contract")
 #undef MACHO_HEADER_VALUE
 #undef MACHO_HEADER_TEXT

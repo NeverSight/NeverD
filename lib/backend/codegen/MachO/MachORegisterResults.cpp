@@ -23,7 +23,9 @@
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/RelocationProvenance.h"
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
@@ -61,6 +63,7 @@ struct RegisterBody {
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
+  bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
   bool HasBareReturn = false;
@@ -560,6 +563,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   }
 
   RegisterBody Body;
+  Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
   Body.HasCompactFrame =
       Framed || (!Indexed && !Compact.SavedRegisterSlots.empty());
@@ -599,18 +603,46 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
   const uint8_t *Code = Source->Bytes.data();
   bool HasCall = false;
   for (size_t Offset = 0; Offset < End - Start; Offset += Word)
-    if (decodeDirectBranch(Image.Arch, InstructionMode::Default, Code + Offset,
+    if (machODataInCodeRanges(Source->Embedded, Start + Offset, Word).empty() &&
+        decodeDirectBranch(Image.Arch, InstructionMode::Default, Code + Offset,
                            Word, Start + Offset, {.Calls = true})) {
       HasCall = true;
       break;
     }
   llvm::SmallVector<ScratchFlow> Flow(HasCall ? (End - Start) / Word : 0);
-  for (va_t PC = Start; PC < End; PC += Word) {
+  auto Islands = Source->Embedded;
+  for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
+    NextPC = PC + Word;
     while (!Rows.empty() && Rows.front().CodeOffset == PC - Start) {
       if (!emitFrameRow(Rows.front(), OS))
         return std::nullopt;
       Rows = Rows.drop_front();
     }
+    if (!Islands.empty() && Islands.front().Begin == PC) {
+      const auto R = Islands.front();
+      const char *Directive = nullptr;
+      switch (R.Kind) {
+#define MACHO_REGISTER_REGION(Kind, Text)                                      \
+  case llvm::MachO::Kind:                                                      \
+    Directive = Text;                                                          \
+    break;
+#include "MachORegisterResults.def"
+      default:
+        return std::nullopt;
+      }
+      if (hasRelocationProvenanceIn(Image, R.Begin, R.End))
+        return std::nullopt;
+      OS << Directive << '\n';
+      for (const auto Byte : Source->Bytes.slice(PC - Start, R.End - PC))
+        OS << kByte << unsigned(Byte) << '\n';
+      OS << kEndDataRegion;
+      NextPC = R.End;
+      Islands = Islands.drop_front();
+      continue;
+    }
+    if (PC % Word || End - PC < Word ||
+        (!Islands.empty() && Islands.front().Begin - PC < Word))
+      return std::nullopt;
     DecodedInsn I{};
     if (Decode.decodeOne(Code + PC - Start, Word, PC, I) != int(Word) ||
         !I.Raw || !I.Raw->detail)
@@ -618,6 +650,17 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     Body.HasBareReturn |= End - Start == Word && I.Id == AARCH64_INS_RET;
     const auto &D = I.Raw->detail->aarch64;
     const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
+    const bool Jump =
+        decodeDirectBranch(Image.Arch, InstructionMode::Default, I.Raw->bytes,
+                           Word, PC, {.Jumps = true})
+            .has_value();
+    const auto PCSigning = pcSigningInstruction(I.Id);
+    const bool Stops = Jump || I.Id == AARCH64_INS_RET ||
+                       I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB ||
+                       I.Id == AARCH64_INS_BRK ||
+                       (PCSigning && PCSigning->Returns);
+    if (!Stops && !Islands.empty() && Islands.front().Begin == NextPC)
+      return std::nullopt;
     const auto Encoding = readLE<uint32_t>(I.Raw->bytes);
     const bool SIMDData = (Encoding & kSIMDDataMask) == kSIMDDataClass;
     Body.HasSIMDData |= SIMDData;
@@ -682,12 +725,12 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         OS << '\n';
         continue;
       }
-      if ((Target - Start) % Word)
+      if ((Target - Start) % Word ||
+          !machODataInCodeRanges(Source->Embedded, Target, Word).empty())
         return std::nullopt;
       if (!Flow.empty())
         Flow[(Target - Start) / Word].Predecessors.push_back(Index);
-      if (!decodeDirectBranch(Image.Arch, InstructionMode::Default,
-                              I.Raw->bytes, Word, PC, {.Jumps = true}))
+      if (!Jump)
         Fallthrough();
       OS << I.Raw->mnemonic << ' ';
       if (TestReg)
@@ -704,7 +747,6 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       OS << kLocal << (Target - Start) / Word << '\n';
       continue;
     }
-    const auto PCSigning = pcSigningInstruction(I.Id);
     if (PCSigning && PCSigning->Operands) {
       const auto Distance =
           ((Encoding >> kAArch64PAuthLRImmShift) & kAArch64PAuthLRImmMask) *
@@ -722,11 +764,22 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
         Ops[0].type == AARCH64_OP_REG && physicalRegister(Ops[0].reg) &&
         Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
         va_t(Ops[1].imm) < End && (va_t(Ops[1].imm) - Start) % Word == 0;
-    if (I.Id != AARCH64_INS_RET && I.Id != AARCH64_INS_RETAA &&
-        I.Id != AARCH64_INS_RETAB && !(PCSigning && PCSigning->Returns) &&
-        I.Id != AARCH64_INS_BRK)
+    if (LocalAddress &&
+        !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty())
+      return std::nullopt;
+    const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
+    if (Literal) {
+      const auto Data = machODataInCodeRanges(Source->Embedded,
+                                              Literal->Address, Literal->Width);
+      if (Data.size() != 1 ||
+          Data.front().Kind != llvm::MachO::DICE_KIND_DATA ||
+          Literal->Address < Data.front().Begin ||
+          Literal->Width > Data.front().End - Literal->Address)
+        return std::nullopt;
+    }
+    if (!Stops)
       Fallthrough();
-    if (!SIMDData && !LocalAddress && !independent(I))
+    if (!SIMDData && !LocalAddress && !Literal && !independent(I))
       return std::nullopt;
     // Classic compact mode cannot describe a saved PC-signed return. A
     // frameless body without calls or spills retains a live LR instead; the
@@ -760,7 +813,7 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     // lists and FP controls. PAuth_LR words retain their signing-PC distance
     // because every instruction keeps its offset within the copied body.
     // Both the assembly and final linked words are checked against the image.
-    if (SIMDData || PCSigning || PACM || LocalAddress) {
+    if (SIMDData || PCSigning || PACM || LocalAddress || Literal) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
@@ -849,7 +902,9 @@ bool canPublishMachOLanguageFrame(const BinaryImage &Image,
     return false;
   for (const auto &Site : LSDA.CallSites)
     if (!Frame.CodeRange.contains(Site.GuardedRange) ||
-        (Site.LandingPadVA && !Frame.CodeRange.contains(Site.LandingPadVA)))
+        (Site.LandingPadVA &&
+         (!Frame.CodeRange.contains(Site.LandingPadVA) ||
+          !Image.hasExecutableCodeOwnerAt(Site.LandingPadVA))))
       return false;
   // Rebuilding an explicit base retains the address-free bytes referenced by
   // action links and exception specifications.
@@ -966,7 +1021,7 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
-        Body.IsForwarder)
+        Body.IsForwarder || Body.HasEmbeddedData)
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))

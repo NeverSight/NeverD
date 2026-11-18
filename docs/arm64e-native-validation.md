@@ -2295,3 +2295,41 @@ Mixed code/data sections, inputs with missing entry or machine ABI facts, and
 asynchronous language cleanup without lifetime metadata still need additional
 evidence. Platform-wide asynchronous recovery through the original tables
 alone also remains unqualified. LLVM r6 stays pinned.
+
+### Embedded data in published instruction sections
+
+The Mach-O loader retains the half-open byte range and kind of each
+`LC_DATA_IN_CODE` entry. Function discovery and code ownership exclude those
+bytes, including an instruction-sized query crossing a record boundary. The
+object installer translates assembler section addresses to final VAs and
+writes both the retained and generated records into the signed image.
+
+The publication fixture uses a SOME-only instruction section with a literal
+whose bits encode a valid PAC instruction, followed by adjacent 8-, 16- and
+32-bit jump-table records. Its return value depends on loading that literal.
+The fixture checks the original and three successive publications for identical
+data bytes and kinds, verifies their signatures and exercises both exported
+functions. The register producer requires complete immutable local storage for
+a copied PC-relative literal load. Branches and fallthrough into an island
+abort publication. Absolute jump tables, runtime-relocated literals and
+unproved indirect dispatch still need additional relocation or control-flow
+evidence.
+
+### Original system tables at a forwarding entry
+
+`ndDarwinArm64eInitIndexedEntryCursor` initializes a Darwin stack-walking
+cursor from the signal's kernel register state at the first instruction of a
+known indexed function. It preserves the incoming SP, FP, live LR, callee-saved
+general registers and low halves of D8 through D15. The public system unwinder
+looks up the loaded image's indexed FDE and takes both steps to the caller and
+its caller. The original and published fixtures compare the original FDE
+instructions and require the sampled PC to equal the exported entry.
+
+The independent handler walk reaches the caller directly on the two measured
+systems. Its cursor retains the signal-frame SP there. Starting from the
+kernel's interrupted state recovers the actual caller SP. On the tested
+macOS 26 runner the exact entry lookup returned an index with an empty FDE.
+The first instruction's second byte returned the registered FDE for that same
+function. The Xcode 27 runner resolved the FDE at the entry itself. The cursor
+reports the lookup offset so consumers can retain the exact interrupted PC.
+[Compiler-original native controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44217430465)
