@@ -624,6 +624,13 @@ above 4 GiB. External microMIPS references do not require the compiler to emit
 a microMIPS body. Reconstructed bodies still require compiler support for
 that encoding.
 
+When HighC recovers a 32-bit integer declaration for an n32/n64 register
+parameter, a full 64-bit GPR read restores its ABI sign extension even for
+`uint32_t`. Narrow reads keep their logical width, so explicit zero extension
+remains distinct. The n32 integer view of a pointer parameter likewise keeps
+the canonical sign extension. These rules apply to known incoming argument
+registers; they do not assign values to stack padding or unknown live-ins.
+
 Linked ELF instruction fields can retain function identity through
 `R_MIPS_HI16/LO16/HIGHER/HIGHEST` records. The loader checks the symbol,
 instruction mode, bytes and addend; ELF32 implicit HI/LO pairs follow relocation
