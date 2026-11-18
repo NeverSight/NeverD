@@ -35,20 +35,27 @@ Update this file when an item closes or a new gap is proven.
 
 ## Open
 
+- `e3743938d5` admits no corpus function yet. Per function with the final
+  engine on four vs2019 x64 xcpt4 corpus builds (`fh3/gs/o2`,
+  `fh3/no-gs/o2`, `fh3/gs/o0`, `fh4/no-gs/o2`), each build has 24 functions
+  with nested or repeated rows, and every one stops at another gate; the two
+  functions per o2 build that patch run as the original in all eight runs
+  and were accepted before the change too.
 - Callbacks that read the parent's original frame need an emulated-frame
   output form (pass `rsp_init - frame bytes`, a gate form recomputed from the
-  unwind codes, a bound on what the callback reads). This gate keeps most
-  nested functions of the x64 xcpt4 images out of native output (11 per
-  image).
-- The other native gates those functions meet: a region dispatch detached
-  from its funclet (4 or 5 per image), a local unwind handler that does not
-  return (refused in `MedLLVMNativeSEH.cpp`), scope bounds that are not block
-  bounds, and a catchret whose continuation re-enters an outer row through
-  range-enter markers before the handler. A relaxation of the last (follow
-  blocks that hold only marker anchors and the marker invoke, each entering a
-  row that holds the handler) was written and set aside: every function it
-  would admit stopped at the original-frame gate, so no run could show it
-  right.
+  unwind codes, a bound on what the callback reads). This gate stops 11 of
+  those 24 functions (10 at o0). A new native output shape: the user
+  decides.
+- The other native gates those functions meet: incomplete native lowering
+  (8, 9 at o0: a local unwind handler that does not return, or scope bounds
+  that are not block bounds, refused in `MedLLVMNativeSEH.cpp`), a region
+  dispatch detached from its funclet (4, 3 at o0), at o0 an establisher
+  frame proof that finds an incomplete decoded CFG (1), and a catchret whose
+  continuation re-enters an outer row through range-enter markers before the
+  handler (1). A relaxation of that catchret check (follow blocks that hold
+  only marker anchors and the marker invoke, each entering a row that holds
+  the handler) was written and set aside: every function it would admit
+  stopped at the original-frame gate, so no run could show it right.
 - At /Od the local unwind fixture's unwinds are not certified (its native IR
   carries no handler-call marks), so native lowering stays incomplete and
   `patch` refuses; the cause is not examined yet.
