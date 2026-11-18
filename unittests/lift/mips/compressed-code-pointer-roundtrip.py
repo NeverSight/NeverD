@@ -152,7 +152,8 @@ def main():
                                 entry = elf.get_section_by_name(".symtab").get_symbol_by_name(
                                     function)[0]["st_value"]
                                 source.write_text(views.source(
-                                    original, backend, "int callee(int value);",
+                                    original, "c" if backend == "highc" else backend,
+                                    "int callee(int value);",
                                     [], True, entry))
                             else:
                                 roundtrip.run_command(artifacts, [args.neverd, "decompile",
