@@ -36,6 +36,8 @@ on:
           - windows-source-boundaries
           - windows-frame-proof
           - windows-crt-proof
+          - frame-unix-qualification
+          - crt-unix-qualification
 
 permissions:
   contents: read
@@ -267,18 +269,19 @@ jobs:
           if-no-files-found: error
           path: constructor-evidence/
   native:
-    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification'
+    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification' || inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix: >-
-        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
+        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
     timeout-minutes: 180
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
       QUALIFICATION_CXX: ${{ matrix.cxx }}
       QUALIFICATION_ROLE: ${{ inputs.qualification_role }}
+      QUALIFICATION_SCOPE: ${{ inputs.scope }}
       EXPECTED_MIPS_TEST_COUNT: ${{ inputs.mips_test_count }}
     defaults:
       run:
@@ -334,6 +337,14 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
+      - name: Install the CRT fixture toolchain on Unix
+        if: inputs.scope == 'crt-unix-qualification'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install --yes gcc-mingw-w64-x86-64
+          else
+            brew install mingw-w64
+          fi
       - name: Configure bounded Release qualification
         run: |
           platform_args=()
@@ -397,11 +408,15 @@ jobs:
       - name: Build complete owning test targets
         timeout-minutes: 125
         run: |
-          python scripts/build.py build-mips-ci --config Release --parallel ${{ matrix.parallel }} --target \
-            neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
-            NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
-            NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDHighCParamUsageTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests NeverDRecordCallContractTests
+          python - <<'PYTHON'
+          import os,subprocess
+          targets=['neverd', 'NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests', 'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests', 'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests', 'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests', 'NeverDAArch64DecodeValidityTests', 'NeverDSourceAnchorTests', 'NeverDTypesTests', 'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests', 'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests', 'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests', 'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests', 'NeverDMedCachedCallTargetTests', 'NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests', 'NeverDRecordCallContractTests']
+          if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
+              targets=['neverd','NeverDMachOPointerRelocationBoundaryTests']
+          elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
+              targets=['neverd','NeverDLibCTests','NeverDMedCachedCallTargetTests','NeverDWin64CallContractTests','NeverDLLVMCValueTests','NeverDNativePointerRelocationBoundaryTests']
+          subprocess.run(['python','scripts/build.py','build-mips-ci','--config','Release','--parallel','${{ matrix.parallel }}','--target',*targets],check=True)
+          PYTHON
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -435,6 +450,10 @@ jobs:
                     'NeverDRelocatedLiteralTests',
                     'NeverDDirectTailCallMetadataTests',
                     ]
+          if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
+              owners=['NeverDMachOPointerRelocationBoundaryTests']
+          elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
+              owners=['NeverDLibCTests','NeverDMedCachedCallTargetTests','NeverDWin64CallContractTests','NeverDLLVMCValueTests','NeverDNativePointerRelocationBoundaryTests']
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -451,10 +470,15 @@ jobs:
           assert all(counts[owner] > 0 for owner in owners), counts
           assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
           assert sum(count for owner, count in counts.items() if owner.startswith('NeverDMIPS')) == int(os.environ['EXPECTED_MIPS_TEST_COUNT'])
-          if os.environ['QUALIFICATION_ROLE'] == 'candidate':
+          if os.environ['QUALIFICATION_ROLE'] == 'candidate' and os.environ['QUALIFICATION_SCOPE'] in ('qualification','macos-qualification'):
               assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
               assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
               assert 'MIPSScalarCalls.TailTransfersPreserveTheCompleteIntegerResultCarrier' in name_to_owner
+          if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
+              assert 'LLVMFrameSlotProof.DeepOffsetChainsUseTheNodeBudget' in name_to_owner
+          elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
+              assert 'NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders' in name_to_owner
+              assert 'Win64CallContract.ImmutableImportReferencesKeepIncomingArguments' in name_to_owner
           (output / 'inventory.json').write_text(json.dumps(name_to_owner, indent=2) + '\n')
           source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           binary_hashes = {}
@@ -474,7 +498,7 @@ jobs:
               'platform': platform.platform(), 'machine': platform.machine(),
               'cpu_count': os.cpu_count(), 'python': sys.version,
               'llvm_mode': 'published prebuilt LLVM', 'configuration': 'Release',
-              'scope': 'complete MIPS, shared source ABI, source mapping, type-system, DebugInfo, integer-width source and C API/SessionLLVM owners; not the full repository CI profile',
+              'scope': os.environ['QUALIFICATION_SCOPE'] + '; complete listed owners, not the full repository CI profile',
               'owners': dict(counts), 'binary_sha256': binary_hashes,
               'commands': {'inventory': command + ['--show-only=json-v1'],
                            'test': command + ['--parallel', '4', '--no-tests=error', '--output-on-failure',
@@ -514,8 +538,9 @@ jobs:
               'RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
               'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
           }
-          assert record_bridge_names <= actual_names, 'record bridge regressions absent'
-          assert not any(case.get('name') in record_bridge_names and case.find('skipped') is not None for case in cases), 'record bridge regressions skipped'
+          if 'NeverDRecordCallContractTests' in owners:
+              assert record_bridge_names <= actual_names, 'record bridge regressions absent'
+              assert not any(case.get('name') in record_bridge_names and case.find('skipped') is not None for case in cases), 'record bridge regressions skipped'
           added_owners = ['NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests']
           # These tests execute Linux x86 ELF binaries. Their existing compile-time
           # host guards are unavailable coverage on Darwin/Windows, not MIPS skips.
