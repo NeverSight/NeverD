@@ -14899,6 +14899,7 @@ discovered case a CTest label equal to that executable's target name.
 | Source area | Target and CTest label | What it covers |
 |-------------|-------------------------|----------------|
 | `unittests/TestProcessTests.cpp` | `NeverDTestProcessTests` | Cross-platform child-process invocation, quoting, redirects, and exit codes |
+| `unittests/LLVMTargetInitializationTests.cpp` | `NeverDLLVMTargetInitializationTests` | Repeated initialization registers exactly the linked LLVM backends, including target machines, MC backends and assembly parsers; run with `NeverDTranslationContractTests` to exercise object emission for every supported host architecture |
 | `unittests/libc` | `NeverDLibCTests` | Known libc names and classification |
 | `unittests/safety` | `NeverDSafetyTests`, `NeverDSafetyIntegrationTests` | Sink catalog, identity precedence, argument prefilter, copy-overflow hunt, heap-lifetime audit, and the mandatory six-cell PE/ELF/Mach-O × x86-64/AArch64 matrix |
 | `unittests/loader` | `NeverDRawISATests` | Binary files: instruction-set identification from the bytes (data, the test's own code, code two bytes in, 32- versus 64-bit encodings per family, files that start with zeros) and the Cortex-M vector table. `scripts/validate_isa_model.py --engine build/bin/libneverd.so` checks the model on 180 real programs and libraries it never saw, downloaded by hash; it needs the network and is not part of CTest |
@@ -25272,8 +25273,20 @@ The ordinary four-profile run remains the default. Only the micro fixture's
 functions may be selected with `--function` in that mode. The instruction-level
 `MicroMIPSInteger` tests separately check independent literal memory encodings,
 signed/unsigned loads, exact store bytes, failed writes and original-target
-execution. Source numeric callable/import values remain explicitly unqualified;
-the pipeline suite checks those refusals as well as ordinary leaf emission.
+execution. Numeric r2/o32 defined code identities require the LLVM r7 SDK and
+the matching NeverSight Clang; unknown-mode imports and wide compressed
+profiles remain refused. The pipeline suite checks the boundary and ensures
+LLVM does not infer a zero callable tag from a function's code alignment.
+
+`unittests/lift/mips/compressed-code-pointer-roundtrip.py` takes explicit
+`--neverd`, `--clang`, `--assembler`, `--ld` and `--output` paths. With the
+pinned Unicorn bindings on `PYTHONPATH`, it executes microMIPS, MIPS16 and a
+classic control in both byte orders, original and rebuilt O0/O2, and both C
+backends. The callee is separately compiled with stronger code alignment;
+rebuilt images use a different link address. Pointer bits, tag/mask/offset
+expressions, equality and indirect calls are compared to each image's actual
+callee symbol, so matching link addresses cannot conceal a literal-address
+substitution. Generated objects and images are retired after every comparison.
 
 `MIPSDSPTests` in the integer target covers every control selector, ignored
 selector bits, missing state, sticky flags, saturated byte and signed-halfword lanes,
@@ -25875,6 +25888,14 @@ unknown return contracts,
 containing-function matches, non-platform or variadic declarations, custom
 parameter locations and incomplete types must still fail. A declaration also
 cannot admit an overlapping write to the saved link.
+
+`MIPSSourceReturnTargets.PrivateFrameSpillsDoNotPublishTheFrame` checks saved
+frame pointers and private SP spills across declared and untyped calls for
+o32, n32 and n64 in both byte orders. Callee-owned or external slots, published
+frame pointers, unknown call SP and a later call exposing an earlier private
+slot still reject the return proof. Reloading a private SP spill into a call
+argument or an external store also rejects it. The compressed code-pointer
+roundtrip also exercises compiler-generated O0 frames around indirect calls.
 
 `DWARFSourceTypes.MissingFunctionParameterTypesRemainUnknown` checks absent and
 malformed parameter types through the real shared DWARF reader, including
