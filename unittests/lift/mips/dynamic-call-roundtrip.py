@@ -27,13 +27,13 @@ def symbols(path):
 
 
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
-                 provider, companions, callbacks, little, values, results):
+                 provider, companions, callbacks, little, values, results, linker):
     work = artifacts.work
     name = profile + "-import"
     obj, shared = work / (name + ".o"), work / (name + ".so")
     command([args.clang, *original_flags, "-c", Path(__file__).with_name("pic-import.S"),
              "-o", obj], name + "-compile")
-    command([args.ld, "-shared", obj, *companions, "-o", shared], name + "-link")
+    command([*linker, "-shared", obj, *companions, "-o", shared], name + "-link")
     artifacts.discard(obj)
     elf = ELFFile(io.BytesIO(shared.read_bytes()))
     flags = 4 if args.linkage == "cpic" else 6
@@ -97,7 +97,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             hashes = []
             for variant, address in enumerate(callbacks):
                 rebuilt = work / f"{build}-{variant}.elf"
-                command([args.ld, "-e", "import_probe", "-Ttext=0x18000", *backing,
+                command([*linker, "-e", "import_probe", "-Ttext=0x18000", *backing,
                          f"--defsym=dispatch={address}", obj, "-o", rebuilt], f"{build}-link-{variant}")
                 uc, entry = emulator(rebuilt, 64, little, "import_probe", original=provider)
                 map_image(uc, elf, set(), bias)
@@ -139,6 +139,12 @@ def run(args, artifacts):
                   1 << (value_bits - 1), value_mask]
         values += [rng.getrandbits(value_bits) for _ in range(24)]
         bits = 32 if abi == "32" else 64
+        # GNU ld defaults to its configured ABI; an n32 object still uses
+        # 64-bit registers but needs the distinct ELF32/n32 emulation.
+        emulation = ("elf" + ("64" if abi == "64" else "32") +
+                     ("l" if little else "b") + "tsmip" +
+                     ("n32" if abi == "n32" else ""))
+        linker = [args.ld, "-m", emulation]
         profile = f"{abi}-{'le' if little else 'be'}-i{value_bits}"
         if pic:
             profile += "-" + args.linkage
@@ -178,7 +184,7 @@ word probe(word value) { return target(value, 37) + 1; }
             leaf_obj = work / (profile + "-leaf.o")
             command([args.clang, *original_flags, "-c", leaf, "-o", leaf_obj], profile + "-leaf")
             companions.append(leaf_obj)
-        command([args.ld, "-e", "probe", "-Ttext=0x20000", obj, *companions, "-o", original],
+        command([*linker, "-e", "probe", "-Ttext=0x20000", obj, *companions, "-o", original],
                 profile + "-link")
         artifacts.discard(obj)
         elf = ELFFile(io.BytesIO(original.read_bytes()))
@@ -305,7 +311,7 @@ word probe(word value) { return target(value, 37) + 1; }
                         raise AssertionError(f"unbound source dependency: {symbol}")
                     bindings.append(f"--defsym={symbol}={address + data_bias}")
                 # Keep external small-data bindings within signed GP displacement range.
-                command([args.ld, "-e", "probe", "-Ttext=0x18000", *bindings,
+                command([*linker, "-e", "probe", "-Ttext=0x18000", *bindings,
                          obj, "-o", rebuilt], name + "-link")
                 uc, entry = emulator(rebuilt, bits, little, "probe", original=original)
                 map_callback_aliases(uc)
@@ -329,7 +335,7 @@ word probe(word value) { return target(value, 37) + 1; }
         if pic and value_bits == 64:
             check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                          original, companions,
-                         callbacks, little, values, results)
+                         callbacks, little, values, results, linker)
         artifacts.discard(original, *companions)
     artifacts.write("results.json", {"complete": True, "passed": results})
     print(f"Passed {len(results)} dynamic MIPS source groups ({sum(r['cases'] for r in results)} executions)")

@@ -987,6 +987,7 @@ TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
             Med.ReturnType = NdType::makeInt(Word, false);
             llvm::LLVMContext Context;
             MedLLVMEmitter Emitter;
+            Emitter.setAnalystSourceProjection(Explicit);
             const auto Module =
                 Emitter.emit({Med}, Context, "tail", Target, {}, &*Image);
             ASSERT_NE(Module, nullptr);
