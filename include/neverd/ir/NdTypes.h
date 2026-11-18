@@ -534,8 +534,11 @@ struct NdType {
   }
   /// Construct a bounded naturally aligned record. Unsupported, cyclic or
   /// malformed member layouts return null rather than guessing padding.
+  /// PointerBytes is the target's pointer width, not its register width.
+  /// The default retains the existing eight-byte source-layout contract.
   static std::shared_ptr<NdType>
-  makeStruct(std::vector<std::shared_ptr<NdType>> Fields);
+  makeStruct(std::vector<std::shared_ptr<NdType>> Fields,
+             uint16_t PointerBytes = 8);
   /// A C complex value with two binary32 or binary64 components. Its
   /// calling convention remains distinct from a two-field C record.
   static std::shared_ptr<NdType> makeComplex(uint16_t ComponentBytes);

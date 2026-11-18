@@ -338,11 +338,15 @@ private:
   /// from whole-byte members.
   TypeRef record(llvm::StringRef Name, const types::RecordDef &Record,
                  unsigned Depth) {
+    // An anonymous union reaches this boundary without named()'s TypeKind.
+    // Even a one-member union has a distinct ABI classification.
+    if (CompleteValues && Record.Union)
+      return nullptr;
     TypeRef Named = recordNode(Name, Record);
     if (!Named)
       return nullptr;
     const uint32_t Alignment = Library.alignOf(Record);
-    if (!Name.empty())
+    if (!Name.empty() && !CompleteValues)
       Records[Name] = Named;
     // A recursive member refers to this identity, not ownership of the
     // record currently being built. A later member access may complete that
@@ -371,7 +375,8 @@ private:
         Offsets.push_back(
             static_cast<uint16_t>(Field.BitOffset / kSourceValueByteBits));
       }
-      const auto Natural = NdType::makeStruct(std::move(Fields));
+      const auto Natural = NdType::makeStruct(
+          std::move(Fields), types::pointerBytes(Library.dataModel()));
       if (!Natural || Natural->Size != Record.Size ||
           Natural->Alignment != Alignment || Natural->FieldOffsets != Offsets)
         return nullptr;
@@ -382,6 +387,10 @@ private:
       Named->FieldDisplayTypes = Natural->Fields;
       for (const auto &Field : Record.Members)
         Named->FieldDisplayNames.push_back(Field.Name);
+      // A failed complete conversion must not leave a partial record that
+      // a later member can mistake for a successfully converted value.
+      if (!Name.empty())
+        Records[Name] = Named;
     }
     return Named;
   }
@@ -660,16 +669,25 @@ signatureOf(const types::TypeLibrary &Library,
             const types::FunctionDef &Function, llvm::StringRef Name,
             const types::TypeSpeller *PrototypeSpeller) {
   Converter Convert(Library, PrototypeSpeller);
+  Converter Values(Library, PrototypeSpeller, true);
+  const auto declaredType = [&](const types::TypeExpr &Type) {
+    // Preserve a complete natural value graph when the declaration supplies
+    // one. Other records retain their existing display description; a name
+    // or partial graph still cannot authorize a source calling convention.
+    if (auto Complete = Values.convert(Type, 0))
+      return Complete;
+    return Convert.convert(Type, 0);
+  };
   FunctionSym Declared;
   Declared.Name = Name.str();
   Declared.IsVariadic = Function.Variadic;
   Declared.NoReturn = Function.NoReturn;
-  Declared.ReturnType = Function.Return ? Convert.convert(*Function.Return, 0)
-                                        : NdType::makeVoid();
+  Declared.ReturnType =
+      Function.Return ? declaredType(*Function.Return) : NdType::makeVoid();
   if (!Declared.ReturnType)
     return std::nullopt;
   for (const types::Parameter &Param : Function.Params) {
-    TypeRef Type = Param.Type ? Convert.convert(*Param.Type, 0) : nullptr;
+    TypeRef Type = Param.Type ? declaredType(*Param.Type) : nullptr;
     if (!Type || Type->Kind == NdTypeKind::Func ||
         Type->Kind == NdTypeKind::Void)
       return std::nullopt;

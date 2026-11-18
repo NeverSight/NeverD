@@ -37,5 +37,22 @@ LOCAL_SOURCE_CALL_VALUE(unsigned, kSourceValueWideBytes, 16)
 LOCAL_SOURCE_CALL_VALUE(unsigned, kSourceValueRecordFields, 2)
 LOCAL_SOURCE_CALL_TEXT(kDifferentOpaqueRecordName, "OtherNode")
 
+LOCAL_SOURCE_CALL_TEXT(kMIPSRecordValueDeclarations, R"(
+  struct PointerRecord { void *pointer; unsigned char tag; };
+  struct DoubleRecord { double value; };
+  struct NestedDoubleRecord { struct DoubleRecord member; };
+  struct ArrayDoubleRecord { double member[1]; };
+  struct AnonymousUnionRecord { union { double value; } member; };
+  union NamedSingleUnion { double value; };
+)")
+LOCAL_SOURCE_CALL_TEXT(
+    kMIPSRecordValueCall,
+    "struct PointerRecord transport(struct DoubleRecord direct, "
+    "struct NestedDoubleRecord nested, struct ArrayDoubleRecord array)")
+LOCAL_SOURCE_CALL_TEXT(
+    kMIPSRecordUnionCall,
+    "void unsupported(struct AnonymousUnionRecord nested, "
+    "union NamedSingleUnion named, union { double value; } anonymous)")
+
 #undef LOCAL_SOURCE_CALL_TEXT
 #undef LOCAL_SOURCE_CALL_VALUE

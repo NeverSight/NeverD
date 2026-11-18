@@ -17330,6 +17330,18 @@ byte ownership and execution order. MedIR expands predicated effects before SSA.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.
 
+`lib/ir/MIPS/SourceParameterPlacementMIPS.cpp` owns fixed n32/n64 natural
+record classification through `MIPS/SourceRecordABI.h`. Object byte offsets,
+physical carrier widths and register significance offsets remain separate:
+a partial big-endian record chunk is left-justified, while a stack tail keeps
+its memory byte address. Direct root double members and nested/array members
+have different argument classes. A hidden result address is an input, not an
+implicit v0 output. `NdType::makeStruct` accepts an explicit target pointer
+width while retaining its existing eight-byte default. DWARF and local-type
+readers supply complete field graphs only for proven natural values. The
+classifier does not widen generic source-record admission or publish a source
+entry/call without its separate carrier and defined-value proofs.
+
 `MIPSImageMetadata::HistoricalISA` separates MIPS I–V architecture levels
 from modern releases. `MIPSHistoricalISA.def` owns physical instruction
 availability; decoding and direct lifting use the same catalog. Only classic

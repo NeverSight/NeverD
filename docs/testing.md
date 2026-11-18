@@ -25352,6 +25352,9 @@ profiles. LLVM declarations and regenerated C must retain classic, microMIPS
 and supported MIPS16 target modes even when the callee body is omitted. The
 wide runtime driver's GCC O2 cases additionally catch an unannotated declaration
 becoming a tail jump that cannot switch instruction modes.
+`MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass` checks
+that a debug-only floating record declaration cannot replace a physical
+`v0/v1` integer result in n32/n64 and both byte orders.
 
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
@@ -26236,3 +26239,34 @@ must retain the selected historical ISA, ABI and byte order. Receipts record
 source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
 The same artifact owner records failed source/commands and removes generated
 ELFs, objects and superseded source after each attempt.
+
+### MIPS natural record transport
+
+`MIPSRecordABI.*` in `NeverDSourceCallABITests` checks fixed n32/n64 natural
+record placement in both byte orders: partial chunks, a7-to-stack splits,
+direct versus nested/array floating fields, target-width pointers, and hidden
+result storage without a v0 result. Invalid layouts and unqualified conventions
+must fail as complete contracts rather than publish a partial parameter prefix.
+The cases distinguish object offsets from register significance offsets.
+The two-float result case keeps the second object's four-byte offset separate
+from its f2 register, even though its argument occupies one integer carrier.
+`unittests/lift/mips/record-abi-roundtrip.py` checks typed entry contracts and
+cross-object direct/indirect calls against GCC and Clang at O0/O2. For hidden
+results it also poisons v0 after the callee's return delay slot, before the
+caller consumes the result. The caller must use its original result buffer;
+a callee that happens to return that address in v0 is not an ABI guarantee.
+
+`DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
+`DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in
+`NeverDDebugInfoTests` use independent ELF32/64, little/big-endian DWARF bytes.
+They reject missing or duplicate type/layout attributes, unbounded arrays,
+unions, recursion, overflowing sizes, wrong pointer widths and packed layouts.
+`LocalTypesDebugContext.SourceRecordValuesRetainTargetPointersAndDirectMemberKinds`
+checks the matching local declarations and anonymous/nested union boundary.
+Run those owners plus `NeverDTypesTests` and the source-call owners when
+changing the complete-value metadata path. These tests qualify classification
+and type evidence; they do not establish general record source reconstruction.
+`MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass` keeps
+an unbound v0/v1 result in its recovered representation when debug information
+describes an equally sized f0/f2 record. Run it for n32/n64 in both byte orders;
+complete field metadata alone cannot replace a source entry ABI contract.

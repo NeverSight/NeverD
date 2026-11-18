@@ -42,6 +42,12 @@ struct SourceParameterPiece {
   /// The location holds the address of a copy of the value (a record the
   /// convention passes by reference), not the value.
   bool Indirect = false;
+  /// Explicit physical slices used by record transport. Zero CarrierBytes
+  /// retains the legacy low-ValueBytes scalar location. RegisterBitOffset is
+  /// a significance offset within the carrier, independent of object Offset.
+  /// Stack pieces use their exact address/extent and no register bit offset.
+  uint16_t CarrierBytes = 0;
+  uint16_t RegisterBitOffset = 0;
 };
 
 struct SourceParameterPlacement {

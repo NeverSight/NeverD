@@ -19,6 +19,7 @@
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/DebugInfoDiscovery.h"
 #include "neverd/debug/MapFile.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -807,11 +808,12 @@ std::vector<uint8_t> makeELFDWARFReturnFixture(DWARFReturnFixtureKind Kind,
   return Bytes;
 }
 
-std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
-                                      const std::vector<uint8_t> &Info) {
-  using ELFT = llvm::object::ELF64LE;
-  using Elf_Ehdr = ELFT::Ehdr;
-  using Elf_Shdr = ELFT::Shdr;
+template <typename ELFT>
+std::vector<uint8_t> makeELFWithDWARFFor(const std::vector<uint8_t> &Abbrev,
+                                         const std::vector<uint8_t> &Info,
+                                         uint16_t Machine) {
+  using Elf_Ehdr = typename ELFT::Ehdr;
+  using Elf_Shdr = typename ELFT::Shdr;
   using namespace llvm::ELF;
 
   std::string SectionNames(1, '\0');
@@ -843,11 +845,12 @@ std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
 
   Elf_Ehdr Header{};
   std::memcpy(Header.e_ident, ElfMagic, sizeof(ElfMagic) - 1);
-  Header.e_ident[EI_CLASS] = ELFCLASS64;
-  Header.e_ident[EI_DATA] = ELFDATA2LSB;
+  Header.e_ident[EI_CLASS] = ELFT::Is64Bits ? ELFCLASS64 : ELFCLASS32;
+  Header.e_ident[EI_DATA] =
+      ELFT::Endianness == llvm::endianness::little ? ELFDATA2LSB : ELFDATA2MSB;
   Header.e_ident[EI_VERSION] = EV_CURRENT;
   Header.e_type = ET_EXEC;
-  Header.e_machine = EM_X86_64;
+  Header.e_machine = Machine;
   Header.e_version = EV_CURRENT;
   Header.e_entry = 0x1000;
   Header.e_ehsize = sizeof(Elf_Ehdr);
@@ -887,6 +890,178 @@ std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
   std::memcpy(Bytes.data() + SectionTableOffset, Sections.data(),
               sizeof(Sections));
   return Bytes;
+}
+
+std::vector<uint8_t> makeELFWithDWARF(const std::vector<uint8_t> &Abbrev,
+                                      const std::vector<uint8_t> &Info) {
+  return makeELFWithDWARFFor<llvm::object::ELF64LE>(Abbrev, Info,
+                                                    llvm::ELF::EM_X86_64);
+}
+
+enum class RecordValueFixture {
+  Pointer,
+  Double,
+  NestedDouble,
+  ArrayDouble,
+  NestedUnion,
+  MissingType,
+  MissingOffset,
+  MissingEncoding,
+  MissingArrayBound,
+  Packed,
+  WrongPointerWidth,
+  OversizedRecord,
+  OversizedScalar,
+  RecursiveValue,
+  DuplicateSize,
+  DuplicateOffset
+};
+
+std::vector<uint8_t> makeMIPSDWARFRecordValue(unsigned PointerBytes,
+                                              bool Little,
+                                              RecordValueFixture Kind) {
+  using namespace llvm::dwarf;
+  std::vector<uint8_t> Abbrev, Info;
+  const auto declare =
+      [&](unsigned Code, Tag TheTag, bool Children,
+          std::initializer_list<std::pair<Attribute, Form>> Attributes) {
+        appendULEB(Abbrev, Code);
+        appendULEB(Abbrev, TheTag);
+        Abbrev.push_back(Children ? DW_CHILDREN_yes : DW_CHILDREN_no);
+        for (const auto &[Attr, Form] : Attributes)
+          appendAttributeSpec(Abbrev, Attr, Form);
+        Abbrev.insert(Abbrev.end(), {0, 0});
+      };
+  declare(1, DW_TAG_compile_unit, true, {{DW_AT_language, DW_FORM_data2}});
+  declare(2, DW_TAG_base_type, false,
+          {{DW_AT_byte_size, DW_FORM_data4}, {DW_AT_encoding, DW_FORM_data1}});
+  declare(3, DW_TAG_pointer_type, false, {{DW_AT_byte_size, DW_FORM_data1}});
+  declare(4, DW_TAG_structure_type, true, {{DW_AT_byte_size, DW_FORM_data4}});
+  declare(5, DW_TAG_member, false,
+          {{DW_AT_type, DW_FORM_ref4},
+           {DW_AT_data_member_location, DW_FORM_data1}});
+  declare(6, DW_TAG_array_type, true, {{DW_AT_type, DW_FORM_ref4}});
+  declare(7, DW_TAG_subrange_type, false, {{DW_AT_count, DW_FORM_data1}});
+  declare(8, DW_TAG_union_type, true, {{DW_AT_byte_size, DW_FORM_data4}});
+  declare(9, DW_TAG_subprogram, true,
+          {{DW_AT_name, DW_FORM_string},
+           {DW_AT_low_pc, DW_FORM_addr},
+           {DW_AT_high_pc, DW_FORM_data4},
+           {DW_AT_type, DW_FORM_ref4}});
+  declare(10, DW_TAG_formal_parameter, false, {{DW_AT_type, DW_FORM_ref4}});
+  declare(11, DW_TAG_member, false,
+          {{DW_AT_data_member_location, DW_FORM_data1}});
+  declare(12, DW_TAG_member, false, {{DW_AT_type, DW_FORM_ref4}});
+  declare(13, DW_TAG_base_type, false, {{DW_AT_byte_size, DW_FORM_data4}});
+  declare(14, DW_TAG_structure_type, true,
+          {{DW_AT_byte_size, DW_FORM_data4}, {DW_AT_byte_size, DW_FORM_data4}});
+  declare(15, DW_TAG_member, false,
+          {{DW_AT_type, DW_FORM_ref4},
+           {DW_AT_data_member_location, DW_FORM_data1},
+           {DW_AT_data_member_location, DW_FORM_data1}});
+  Abbrev.push_back(0);
+  const auto word = [&](uint64_t Value, unsigned Bytes) {
+    for (unsigned I = 0; I < Bytes; ++I)
+      Info.push_back(Value >> (8 * (Little ? I : Bytes - 1 - I)));
+  };
+  const auto member = [&](uint32_t Type, uint8_t Offset) {
+    Info.push_back(5);
+    word(Type, 4);
+    Info.push_back(Offset);
+  };
+  word(0, 4);
+  word(4, 2);
+  word(0, 4);
+  Info.push_back(PointerBytes);
+  Info.push_back(1);
+  word(DW_LANG_C99, 2);
+  const auto Byte = static_cast<uint32_t>(Info.size());
+  Info.push_back(2);
+  word(1, 4);
+  Info.push_back(DW_ATE_unsigned_char);
+  const auto Double = static_cast<uint32_t>(Info.size());
+  Info.push_back(Kind == RecordValueFixture::MissingEncoding ? 13 : 2);
+  word(Kind == RecordValueFixture::OversizedScalar ? 0x10008 : 8, 4);
+  if (Kind != RecordValueFixture::MissingEncoding)
+    Info.push_back(DW_ATE_float);
+  const auto Pointer = static_cast<uint32_t>(Info.size());
+  Info.push_back(3);
+  const unsigned DeclaredPointer = Kind == RecordValueFixture::WrongPointerWidth
+                                       ? 12 - PointerBytes
+                                       : PointerBytes;
+  Info.push_back(DeclaredPointer);
+  const auto Nested = static_cast<uint32_t>(Info.size());
+  Info.push_back(Kind == RecordValueFixture::NestedUnion ? 8 : 4);
+  word(8, 4);
+  member(Double, 0);
+  Info.push_back(0);
+  const auto Array = static_cast<uint32_t>(Info.size());
+  Info.push_back(6);
+  word(Double, 4);
+  if (Kind != RecordValueFixture::MissingArrayBound)
+    Info.insert(Info.end(), {7, 1});
+  Info.push_back(0);
+  const auto Record = static_cast<uint32_t>(Info.size());
+  Info.push_back(Kind == RecordValueFixture::DuplicateSize ? 14 : 4);
+  const bool Pointers = Kind == RecordValueFixture::Pointer ||
+                        Kind == RecordValueFixture::WrongPointerWidth;
+  word(Pointers                                      ? 2 * DeclaredPointer
+       : Kind == RecordValueFixture::Packed          ? 9
+       : Kind == RecordValueFixture::OversizedRecord ? 0x10008
+                                                     : 8,
+       4);
+  if (Kind == RecordValueFixture::DuplicateSize)
+    word(8, 4);
+  if (Pointers) {
+    member(Pointer, 0);
+    member(Byte, DeclaredPointer);
+  } else if (Kind == RecordValueFixture::MissingType) {
+    Info.insert(Info.end(), {11, 0});
+  } else if (Kind == RecordValueFixture::MissingOffset) {
+    Info.push_back(12);
+    word(Double, 4);
+  } else if (Kind == RecordValueFixture::Packed) {
+    member(Byte, 0);
+    member(Double, 1);
+  } else if (Kind == RecordValueFixture::DuplicateOffset) {
+    Info.push_back(15);
+    word(Double, 4);
+    Info.insert(Info.end(), {0, 0});
+  } else {
+    member(Kind == RecordValueFixture::NestedDouble ||
+                   Kind == RecordValueFixture::NestedUnion
+               ? Nested
+           : Kind == RecordValueFixture::ArrayDouble ||
+                   Kind == RecordValueFixture::MissingArrayBound
+               ? Array
+           : Kind == RecordValueFixture::RecursiveValue ? Record
+                                                        : Double,
+           0);
+  }
+  Info.push_back(0);
+  Info.push_back(9);
+  constexpr llvm::StringLiteral Name = "record_value";
+  Info.insert(Info.end(), Name.begin(), Name.end());
+  Info.push_back(0);
+  word(0x1000, PointerBytes);
+  word(16, 4);
+  word(Record, 4);
+  Info.push_back(10);
+  word(Record, 4);
+  Info.insert(Info.end(), {0, 0});
+  llvm::support::endian::write32(Info.data(), Info.size() - 4,
+                                 Little ? llvm::endianness::little
+                                        : llvm::endianness::big);
+  if (PointerBytes == 4)
+    return Little
+               ? makeELFWithDWARFFor<llvm::object::ELF32LE>(Abbrev, Info,
+                                                            llvm::ELF::EM_MIPS)
+               : makeELFWithDWARFFor<llvm::object::ELF32BE>(Abbrev, Info,
+                                                            llvm::ELF::EM_MIPS);
+  return Little ? makeELFWithDWARFFor<llvm::object::ELF64LE>(Abbrev, Info,
+                                                             llvm::ELF::EM_MIPS)
+                : makeELFWithDWARFFor<llvm::object::ELF64BE>(
+                      Abbrev, Info, llvm::ELF::EM_MIPS);
 }
 
 /// The DIEs of an inlined function kept out of line, as compilers emit them:
@@ -2170,6 +2345,80 @@ TEST(DWARFSourceTypes, ReferencesPreserveQualifiedRecordIdentity) {
     EXPECT_EQ(Record->SourceName, "Demo::Widget<int>");
     EXPECT_EQ(Record->Size, 16);
   }
+}
+
+TEST(DWARFSourceTypes, NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth) {
+  ScratchDir Dir;
+  for (unsigned PointerBytes : {4, 8})
+    for (bool Little : {false, true})
+      for (auto Kind : {RecordValueFixture::Pointer, RecordValueFixture::Double,
+                        RecordValueFixture::NestedDouble,
+                        RecordValueFixture::ArrayDouble}) {
+        SCOPED_TRACE(::testing::Message()
+                     << PointerBytes << ':' << Little << ':' << unsigned(Kind));
+        const auto Bytes = makeMIPSDWARFRecordValue(PointerBytes, Little, Kind);
+        const auto Context = DWARFDebugContext::load(
+            Dir.writeBytes("record.elf", Bytes), BinaryFormat::ELF,
+            DWARFLoadTrust::InImage, Bytes);
+        ASSERT_TRUE(Context);
+        const auto Function = Context->resolveFunction(0x1000);
+        ASSERT_TRUE(Function && Function->ReturnType);
+        ASSERT_EQ(Function->Params.size(), 1u);
+        const auto &Result = Function->ReturnType;
+        ASSERT_FALSE(Result->Fields.empty());
+        EXPECT_EQ(Result->Passing, NdRecordPassing::ByValue);
+        const auto ExpectedKind =
+            Kind == RecordValueFixture::Pointer        ? NdTypeKind::Ptr
+            : Kind == RecordValueFixture::Double       ? NdTypeKind::Float
+            : Kind == RecordValueFixture::NestedDouble ? NdTypeKind::Struct
+                                                       : NdTypeKind::Array;
+        EXPECT_EQ(Result->Fields[0]->Kind, ExpectedKind);
+        if (Kind == RecordValueFixture::Pointer) {
+          EXPECT_EQ(Result->Fields[0]->Size, PointerBytes);
+          EXPECT_EQ(Result->FieldOffsets[1], PointerBytes);
+        }
+        const Arch A = PointerBytes == 4
+                           ? (Little ? Arch::MIPS64N32EL : Arch::MIPS64N32)
+                           : (Little ? Arch::MIPS64EL : Arch::MIPS64);
+        const auto Placement = mips::placeRecordCall(
+            A, BinaryFormat::ELF, Result, {Function->Params[0].second});
+        ASSERT_TRUE(Placement);
+        EXPECT_EQ(Placement->Arguments.Parameters[0][0].Location.Kind,
+                  Kind == RecordValueFixture::Double
+                      ? SourceABICarrierKind::FloatingRegister
+                      : SourceABICarrierKind::IntegerRegister);
+      }
+}
+
+TEST(DWARFSourceTypes, PartialOrOverlappingRecordsCannotBecomeCompleteValues) {
+  ScratchDir Dir;
+  for (unsigned PointerBytes : {4, 8})
+    for (bool Little : {false, true})
+      for (auto Kind :
+           {RecordValueFixture::NestedUnion, RecordValueFixture::MissingType,
+            RecordValueFixture::MissingOffset,
+            RecordValueFixture::MissingEncoding, RecordValueFixture::Packed,
+            RecordValueFixture::MissingArrayBound,
+            RecordValueFixture::WrongPointerWidth,
+            RecordValueFixture::OversizedRecord,
+            RecordValueFixture::OversizedScalar,
+            RecordValueFixture::RecursiveValue,
+            RecordValueFixture::DuplicateSize,
+            RecordValueFixture::DuplicateOffset}) {
+        SCOPED_TRACE(::testing::Message()
+                     << PointerBytes << ':' << Little << ':' << unsigned(Kind));
+        const auto Bytes = makeMIPSDWARFRecordValue(PointerBytes, Little, Kind);
+        const auto Context = DWARFDebugContext::load(
+            Dir.writeBytes("incomplete.elf", Bytes), BinaryFormat::ELF,
+            DWARFLoadTrust::InImage, Bytes);
+        ASSERT_TRUE(Context);
+        const auto Function = Context->resolveFunction(0x1000);
+        ASSERT_TRUE(Function && Function->ReturnType);
+        EXPECT_TRUE(Function->ReturnType->Fields.empty());
+        ASSERT_EQ(Function->Params.size(), 1u);
+        ASSERT_TRUE(Function->Params[0].second);
+        EXPECT_TRUE(Function->Params[0].second->Fields.empty());
+      }
 }
 
 TEST(DWARFSourceTypes, CallbackSignaturesUseTheSharedFunctionTypeContract) {
