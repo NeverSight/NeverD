@@ -17,7 +17,7 @@ inline std::vector<LowOp> directTailCallOperations(Arch Architecture, va_t At,
   LowOp Call;
   Call.Opcode = NdOp::CALL;
   Call.Output = Result;
-  Call.addInput(NdVar::cst(Target, TRI.PointerSize));
+  Call.addInput(NdVar::cst(Target, TRI.addressRegisterBytes()));
   Call.Addr = At;
   LowOp Return;
   Return.Opcode = NdOp::RETURN;

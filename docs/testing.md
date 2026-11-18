@@ -25961,7 +25961,10 @@ integer, pointer and void signatures without any floating parameters in all
 six MIPS ABI/byte-order profiles. `MIPSScalarCalls` checks integer/pointer/void
 calls without a qualified floating profile; floating signatures and malformed
 descriptors must still fail. Its tail-transfer case checks direct and indirect
-jumps on all six profiles, including n32's eight-byte result carrier. After
+jumps on all six profiles, including n32's eight-byte target and result
+carriers, through both explicit source prototypes and scalar ABI descriptors.
+Narrowing the n32 target must still reject the architecture-qualified call
+identity. The fixtures enable the incoming-link and mode proof. After
 SSA and LLVM optimization, the return must still depend on the call, with the
 ABI's signed or unsigned byte/halfword/word extension and full doubleword
 results where supported. `MIPSN32Calls` checks the four-byte pointer
