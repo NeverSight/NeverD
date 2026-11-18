@@ -14515,24 +14515,33 @@ where it is, and only the place a read through one starts at stays unnamed
 A read of a record's member or of an element through a pointer
 (`typedLoadAccess`, `typedIndexAccess`) prints as the member at each use of
 its value, and so reads the member again there.
-`LLVMCWriter::readCrossesItsStore` looks for a store to bytes the load read,
-at an address the same value and offsets name, that can run after the load and
-before a statement that would evaluate the read: `old = p->next; p->next = 0;
-return old;` must not return a second read of `p->next`. Such a load reads
-into its temporary where it stands, as a frame member does, a member read
-through its value casts the temporary, and from its statement on a member
-read is one of the expressions computed where they stand
-(`MaterializedExpressions`). The statements that
-evaluate a read are the users of its value through the values computed from
-it, a PHI's copies where its incoming blocks end, the users of a PHI every
-incoming value of which reads that member, and the later reads in its block of
-a local such a value is stored to. A load the store cannot reach, and a store
-ahead of the load in its block, leave the read where it was. Only that store
-is looked for, and not for a read whose value is also stored to a local, which
-may print as the member wherever it is read. That read, a call, a store
-through another pointer value or at a computed index, and the callee a call
-reads through a chain of loads still leave a read at its uses, where it can
-read a later value. A PHI has no statement but its copies, so the source map
+`LLVMCWriter::readCrossesItsStore` looks for anything that may write a byte
+the load read and can run after the load and before a statement that would
+evaluate the read: a store at an address the same value and offsets name over
+those bytes, a store through another pointer or at a computed index, a call, or
+an atomic. `old = p->next; p->next = 0; return old;` must not return a second
+read of `p->next`, nor `v = n->v; poke(n); return v + n->v;` add the new value
+twice. Such a load reads into its temporary where it stands, as a frame member
+does, a member read through its value casts the temporary, and from its
+statement on a member read is one of the expressions computed where they stand
+(`MaterializedExpressions`). The statements that evaluate a read are the users
+of its value through the values computed from it, a PHI's copies where its
+incoming blocks end, the users of a PHI every incoming value of which reads
+that member, and the later reads in its block of a local such a value is
+stored to; a call that uses the value evaluates it where the call stands, not
+where its result is used. Memory the read cannot reach is not looked at: a
+local whose address never escapes, any local when the read goes through an
+argument or a global, a local when it goes through a pointer the function had
+before the local's address could get out (`localEscapesBefore`: no store,
+call or return of a value computed from that address can run first), and
+another global; nor is a load, volatile or atomic, which changes nothing. The
+x86 return-address push prints as a frame store ahead of its call, which so
+keeps a member call its member's name.
+The function's writers are collected once, and each read takes one walk forward
+from its block and one walk back from each use's block. A store ahead of the
+load in its block leaves the read where it was, and so does a read whose value
+is also stored to a local, which may print as the member wherever it is read.
+A PHI has no statement but its copies, so the source map
 records its occurrences there.
 
 ## Cross-architecture translation contract

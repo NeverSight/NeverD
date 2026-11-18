@@ -3462,10 +3462,14 @@ optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,
 a cleared callback slot, a callee read through the old object, an element of a
 pointer table, a store on one path, a store in a loop, a PHI's copy and a PHI
-of two reads. The unit runs at O0 and O2 against what the C of each function
+of two reads, a call that changes the member, a store through a pointer that
+may be the same one, and a store at a computed index that may be the same
+element. The unit runs at O0 and O2 against what the C of each function
 computes. A store to another member, a store that runs before the load each
-time the load runs, a read on the path the store is not on, and a local that
-holds the value keep their shorter forms.
+time the load runs, a read on the path the store is not on, a store to a local
+nothing else sees, a store to a local whose address leaves only after the
+read's pointer was read, and a local that holds the value keep their shorter
+forms; once that address has left, the read is taken before the store.
 
 `LLVMCValues.LocalRegister*` checks direct and import-slot scalar declarations
 on x64 and ARM64 across COFF, ELF and Mach-O. Independent C providers observe

@@ -9873,6 +9873,7 @@ TEST(LLVMCValues, AMemberReadKeepsItsValueAcrossAStoreToTheMember) {
   auto Module = llvm::parseAssemblyString(R"ir(
 target datalayout = "e-p:64:64"
 declare void @observe(ptr)
+declare void @poke(ptr)
 
 ; old = n->next; n->next = 0; return old;
 define ptr @take(ptr %n) {
@@ -10182,6 +10183,69 @@ define ptr @next_after_store_before(ptr %n) {
   %next = load ptr, ptr %n
   ret ptr %next
 }
+
+; old = n->v; poke(n); return old + n->v; where poke changes n->v.
+define i32 @value_around_call(ptr %n) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  call void @poke(ptr %n)
+  %new = load i32, ptr %slot
+  %sum = add i32 %old, %new
+  ret i32 %sum
+}
+
+; old = n->v; m->v = 9; return old; where m may be n.
+define i32 @value_around_other(ptr %n, ptr %m) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  %other = getelementptr i8, ptr %m, i64 8
+  store i32 9, ptr %other
+  ret i32 %old
+}
+
+; old = table[i]; table[j] = 0; return old; where j may be i.
+define i32 @entry_around_store(ptr %table, i64 %i, i64 %j) {
+  %at = getelementptr i32, ptr %table, i64 %i
+  %old = load i32, ptr %at
+  %to = getelementptr i32, ptr %table, i64 %j
+  store i32 0, ptr %to
+  ret i32 %old
+}
+
+; old = n->v; scratch = 4; return old; where nothing else sees scratch.
+define i32 @value_around_local(ptr %n) {
+  %scratch = alloca i32
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  ret i32 %old
+}
+
+; v = n->next->v; scratch = 4; *out = v; observe(&scratch); where n->next was
+; read before scratch's address left, so it cannot point at scratch.
+define void @value_before_escape(ptr %n, ptr %out) {
+  %scratch = alloca i32
+  %next = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %next, i64 8
+  %v = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  store i32 %v, ptr %out
+  call void @observe(ptr %scratch)
+  ret void
+}
+
+; observe(&scratch); v = n->next->v; scratch = 4; *out = v; where n->next was
+; read after scratch's address left, so it may point at scratch.
+define void @value_after_escape(ptr %n, ptr %out) {
+  %scratch = alloca i32
+  call void @observe(ptr %scratch)
+  %next = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %next, i64 8
+  %v = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  store i32 %v, ptr %out
+  ret void
+}
 )ir",
                                           Error, Context);
   ASSERT_TRUE(Module) << Error.getMessage().str();
@@ -10270,6 +10334,22 @@ define ptr @next_after_store_before(ptr %n) {
             std::string::npos)
       << Source;
   EXPECT_EQ(Kept.find("old"), std::string::npos) << Source;
+  // A store to a local that nothing else can see changes no member.
+  EXPECT_NE(
+      Body("uint32_t value_around_local(node* n)").find("    return n->v;"),
+      std::string::npos)
+      << Source;
+  // A local's address that leaves only after the read's pointer was read
+  // cannot be that pointer: the read prints at its use, past the local's
+  // store.  Once the address has left, the read is taken before the store.
+  const std::string Before =
+      Body("void value_before_escape(node* n, node* out)");
+  ASSERT_NE(Before.find("= 4;"), std::string::npos) << Source;
+  EXPECT_GT(Before.find("n->next->v"), Before.find("= 4;")) << Source;
+  const std::string After = Body("void value_after_escape(node* n, node* out)");
+  ASSERT_NE(After.find("= 4;"), std::string::npos) << Source;
+  ASSERT_NE(After.find("n->next->v"), std::string::npos) << Source;
+  EXPECT_LT(After.find("n->next->v"), After.find("= 4;")) << Source;
   const std::string Program = R"c(
 #include <stdint.h>
 typedef struct node {
@@ -10285,6 +10365,7 @@ static int fired;
 static void on_fire(void *n) { fired += ((node *)n)->v; }
 static uint64_t called;
 static void on_called(uint64_t object) { called = object; }
+void poke(void *n) { ((node *)n)->v += 100; }
 int main(void) {
   node a = {0, 5, 0, 0}, b = {&a, 7, 0, 0}, c = {0, 1, 0, 0};
   if ((node *)take(&b) != &a || b.next)
@@ -10384,6 +10465,28 @@ int main(void) {
     return 15;
   if ((node *)next_after_store_before(&a) != &a)
     return 16;
+  a.v = 5;
+  if (value_around_call(&a) != 110 || a.v != 105)
+    return 30;
+  a.v = 5;
+  if (value_around_other(&a, &a) != 5 || a.v != 9)
+    return 31;
+  int32_t entries[4] = {10, 11, 12, 13};
+  if (entry_around_store(entries, 2, 2) != 12 || entries[2])
+    return 32;
+  a.v = 6;
+  if (value_around_local(&a) != 6)
+    return 33;
+  int32_t out = 0;
+  a.v = 21;
+  b.next = &a;
+  value_before_escape(&b, (node *)(void *)&out);
+  if (out != 21)
+    return 34;
+  out = 0;
+  value_after_escape(&b, (node *)(void *)&out);
+  if (out != 21)
+    return 35;
   return 0;
 }
 )c";
