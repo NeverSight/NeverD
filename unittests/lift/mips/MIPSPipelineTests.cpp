@@ -965,6 +965,9 @@ TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
             SourceCallTypeHint Hint;
             Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
             Hint.AnalystSite = *Site;
+            Hint.TargetAddress = Site->StaticTarget.value_or(0);
+            if (Site->StaticTarget)
+              Hint.TargetName = "callee";
             Hint.Signature.ReturnType = NdType::makeInt(Bytes, Signed);
             Hint.Signature.Parameters = {{"value", NdType::makeInt(4, true)}};
             std::string Error;
