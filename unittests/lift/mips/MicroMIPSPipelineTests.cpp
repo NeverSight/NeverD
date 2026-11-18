@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -234,8 +235,12 @@ BinaryImage mixedImage(Arch Target) {
   Image.Arch = Target;
   Image.Mode = InstructionMode::MixedMIPS;
   Image.Format = BinaryFormat::ELF;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = getTargetRegInfo(Target).PointerSize == 8 ? Bitness::Bits64
+                                                         : Bitness::Bits32;
   Image.MIPS.emplace();
+  Image.MIPS->ABI = isMIPSN32(Target)  ? MIPSABI::N32
+                    : isMIPS64(Target) ? MIPSABI::N64
+                                       : MIPSABI::O32;
   Image.MIPS->HasMicroMIPS = true;
   Image.MIPS->CodeModeEntries = {{0x1000, InstructionMode::MIPSClassic},
                                  {0x1100, InstructionMode::MicroMIPS}};
@@ -251,8 +256,9 @@ BinaryImage mixedImage(Arch Target) {
   return Image;
 }
 
-TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
-  auto Image = mixedImage(GetParam());
+void checkNumericHighCIdentities(Arch Architecture) {
+  auto Image = mixedImage(Architecture);
+  const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
   using P = ConstantAddressProvenance;
   for (P Provenance : {P::CodeAddress, P::Address, P::DataAddress, P::Scalar})
     for (va_t Value : {0x1100u, 0x1101u}) {
@@ -261,13 +267,13 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       HighFunc Function;
       Function.Entry = 0x1000;
       Function.Name = "numeric_value";
-      Function.ReturnType = NdType::makeInt(4, false);
+      Function.ReturnType = NdType::makeInt(PointerBytes, false);
       HighStmt Return;
       Return.Kind = StmtKind::Return;
-      Return.RetVal = HighExpr::makeConst(Value, 4, Provenance);
+      Return.RetVal = HighExpr::makeConst(Value, PointerBytes, Provenance);
       Function.Body.push_back(std::move(Return));
       CEmitterOptions Emit;
-      Emit.TheArch = GetParam();
+      Emit.TheArch = Architecture;
       Emit.Format = BinaryFormat::ELF;
       Emit.Image = &Image;
       std::string Text;
@@ -298,14 +304,15 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
     }
 }
 
-TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
-  auto Image = mixedImage(GetParam());
+void checkNumericLLVMIdentities(Arch Architecture) {
+  auto Image = mixedImage(Architecture);
+  const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
   using P = ConstantAddressProvenance;
   for (P Provenance : {P::CodeAddress, P::Address}) {
     MedFunc Function;
     Function.Entry = 0x1000;
     Function.Name = "numeric_value";
-    Function.ReturnType = NdType::makeInt(4, false);
+    Function.ReturnType = NdType::makeInt(PointerBytes, false);
     Function.Blocks.emplace_back();
     auto &Block = Function.Blocks.back();
     Block.Id = 0;
@@ -314,11 +321,11 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     Copy.Opcode = NdOp::COPY;
     Copy.Output.Kind = MedVar::Reg;
     Copy.Output.RegOff = mipsreg::V0;
-    Copy.Output.Size = 4;
-    Copy.Output.TheArch = GetParam();
+    Copy.Output.Size = PointerBytes;
+    Copy.Output.TheArch = Architecture;
     Copy.Output.Id = 1;
     Copy.Output.SSAVer = 1;
-    auto Value = MedVar::makeConst(0x1101, 4);
+    auto Value = MedVar::makeConst(0x1101, PointerBytes);
     Value.Provenance = Provenance;
     Copy.addInput(Value);
     Block.Ops.push_back(Copy);
@@ -333,17 +340,17 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     TargetFunction.Name = "micro_target";
     TargetFunction.Blocks.front().StartAddr = 0x1100;
     TargetFunction.Blocks.front().Ops.front().Inputs[0] =
-        MedVar::makeConst(42, 4);
+        MedVar::makeConst(42, PointerBytes);
     llvm::LLVMContext Context;
     MedLLVMEmitter Emitter;
     if (Provenance == P::CodeAddress) {
       EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
-                                         GetParam(), {}, &Image,
+                                         Architecture, {}, &Image,
                                          BinaryFormat::ELF));
     }
     auto Module =
         Emitter.emit({Function, TargetFunction}, Context, "micro_pointer",
-                     GetParam(), {}, &Image, BinaryFormat::ELF);
+                     Architecture, {}, &Image, BinaryFormat::ELF);
     ASSERT_TRUE(Module);
     EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto *Target = Module->getFunction("micro_target");
@@ -354,11 +361,11 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     // before native code generation or when the pointer is a constant.
     Target->setAlignment(llvm::Align(4));
     auto *Address = llvm::ConstantExpr::getPtrToInt(
-        Target, llvm::Type::getInt32Ty(Context));
+        Target, llvm::Type::getIntNTy(Context, 8 * PointerBytes));
     EXPECT_FALSE(
         llvm::computeKnownBits(Address, Module->getDataLayout()).Zero[0]);
     CEmitterOptions Options;
-    Options.TheArch = GetParam();
+    Options.TheArch = Architecture;
     Options.Format = BinaryFormat::ELF;
     Options.Image = &Image;
     std::string Text;
@@ -366,6 +373,23 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
     EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
     EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+  }
+}
+
+TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
+  checkNumericHighCIdentities(GetParam());
+}
+
+TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
+  checkNumericLLVMIdentities(GetParam());
+}
+
+TEST(MicroMIPS64Pipeline, BothSourcesPreserveNumericCodeIdentityAndWidth) {
+  for (Arch Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    checkNumericHighCIdentities(Target);
+    checkNumericLLVMIdentities(Target);
   }
 }
 
