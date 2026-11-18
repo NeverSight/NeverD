@@ -33,6 +33,7 @@ on:
           - render-store-profile
           - worker-cadence
           - dsp64-reference
+          - windows-source-boundaries
 
 permissions:
   contents: read
@@ -42,6 +43,126 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  windows_source_boundaries:
+    if: inputs.scope == 'windows-source-boundaries'
+    name: Windows exact-source boundary diagnosis
+    runs-on: windows-latest
+    timeout-minutes: 160
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Verify exact source
+        run: |
+          python - <<'PYTHON'
+          import os,re,subprocess
+          expected=os.environ['EXPECTED_SOURCE_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}',expected)
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==expected
+          PYTHON
+          git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+      - name: Install Windows build tools
+        shell: pwsh
+        run: choco install ninja --yes --no-progress
+      - name: Install pinned fixture compiler
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+      - name: Configure the same bounded Release profile
+        run: |
+          cmake -S . -B build-mips-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl \
+            -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
+            -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON \
+            "-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")"
+      - name: Build the two failing owners
+        run: |
+          python scripts/build.py build-mips-ci --config Release --parallel 4 --target \
+            neverd NeverDMachOPointerRelocationBoundaryTests NeverDNativePointerRelocationBoundaryTests
+      - name: Capture exact failures and a stack-size diagnostic
+        run: |
+          python - <<'PYTHON'
+          from pathlib import Path
+          import hashlib,json,os,platform,shutil,struct,subprocess,tarfile
+          root=Path('build-mips-ci');out=root/'evidence';out.mkdir()
+          temporary=(out/'temporary').resolve();temporary.mkdir()
+          environment=dict(os.environ,TMP=str(temporary),TEMP=str(temporary))
+          rows=[]
+          def digest(p):return hashlib.file_digest(p.open('rb'),'sha256').hexdigest()
+          def run(command,name):
+              log=out/(name+'.log')
+              with log.open('wb') as stream:
+                  result=subprocess.run(list(map(str,command)),env=environment,stdout=stream,stderr=subprocess.STDOUT,timeout=240)
+              row={'command':list(map(str,command)),'exit':result.returncode,'windows_status':hex(result.returncode&0xffffffff),'log_sha256':digest(log)}
+              rows.append(row);(out/'commands.json').write_text(json.dumps(rows,indent=2)+'\n')
+              return result.returncode
+          originals=[
+            ('NeverDMachOPointerRelocationBoundaryTests','LLVMFrameSlotProof.ExhaustedPrefixesAreNotIndependentProofs'),
+            ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles'),
+            ('NeverDNativePointerRelocationBoundaryTests','NativePointerRelocationBoundary.CRTHeaderRecordReuseChecksTheActualRuntimeLayout')]
+          source=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          assert source==os.environ['EXPECTED_SOURCE_SHA']
+          manifest={'source':source,'workflow':os.environ['GITHUB_SHA'],'platform':platform.platform(),'configuration':'Release','llvm_mode':'published prebuilt LLVM','binaries':{},'scope':'Three exact failing source-boundary tests; diagnostic stack copy is not a product fix or passing qualification.'}
+          codes=[]
+          for i,(owner,test) in enumerate(originals):
+              binary=root/'bin'/(owner+'.exe');manifest['binaries'][owner]=digest(binary)
+              codes.append(run([binary,'--gtest_filter='+test,'--gtest_output=xml:'+str((out/('original-'+str(i)+'.xml')).resolve())],'original-'+str(i)))
+          # Change only the copied executable's stack reservation. Keep the
+          # default failure and both header values; never qualify this copy.
+          binary=root/'bin'/(originals[0][0]+'.exe');copy=binary.with_name('frame-stack-diagnostic.exe');shutil.copy2(binary,copy)
+          def pe_stack(path):
+              data=path.read_bytes();pe=struct.unpack_from('<I',data,0x3c)[0];optional=pe+24
+              assert struct.unpack_from('<H',data,optional)[0]==0x20b
+              return struct.unpack_from('<Q',data,optional+72)[0]
+          before=pe_stack(copy)
+          assert run(['editbin','/STACK:8388608',copy],'edit-stack')==0
+          after=pe_stack(copy);assert after==8388608
+          diagnostic=run([copy,'--gtest_filter='+originals[0][1]],'stack-diagnostic')
+          manifest['stack_diagnostic']={'default_reserve':before,'diagnostic_reserve':after,'sha256':digest(copy),'exit':diagnostic}
+          copy.unlink()
+          for name in ['cl','clang','x86_64-w64-mingw32-gcc']:
+              tool=shutil.which(name)
+              if tool:run([tool,*([] if name=='cl' else ['--version'])],name+'-version')
+          files={str(p.relative_to(temporary)):{'sha256':digest(p),'bytes':p.stat().st_size} for p in temporary.rglob('*') if p.is_file()}
+          archive=out/'temporary-diagnostics.tar.gz'
+          with tarfile.open(archive,'w:gz') as t:
+              for name in files:
+                  if Path(name).suffix in ('.c','.cpp','.h','.log','.txt'):
+                      t.add(temporary/name,arcname=name)
+          with tarfile.open(archive,'r:gz') as t:
+              for member in t.getmembers():
+                  assert hashlib.sha256(t.extractfile(member).read()).hexdigest()==files[member.name]['sha256']
+          shutil.rmtree(temporary)
+          manifest['cleanup']={'removed_bytes':sum(x['bytes'] for x in files.values()),'products':files,'diagnostic_copy_removed':True}
+          (out/'source.json').write_text(json.dumps(manifest,indent=2)+'\n')
+          print(json.dumps({'source':source,'original_exits':codes,'stack_diagnostic':manifest['stack_diagnostic']},indent=2))
+          assert all(code==0 for code in codes),'Original failures are retained; diagnostic pass is not a waiver'
+          PYTHON
+      - name: Upload bounded Windows diagnosis
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mips-windows-boundaries-${{ inputs.source_sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build-mips-ci/evidence/
+            build-mips-ci/CMakeCache.txt
+            build-mips-ci/neverd-build-receipt.json
+            build-mips-ci/neverd-dependency-inputs.json
   constructor:
     if: inputs.scope == 'constructor-repro'
     name: MSVC noncopyable constructor reproducer
