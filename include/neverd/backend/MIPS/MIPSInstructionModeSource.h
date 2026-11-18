@@ -72,7 +72,12 @@ inline void requireNumericCodePointerSource(const BinaryImage *Image,
                               "projection is not qualified");
 }
 
-inline const char *instructionModeCAttribute(InstructionMode Mode) {
+/// An external symbol keeps its linker-supplied encoding. Referencing it does
+/// not require the compiler to generate a body in that encoding.
+inline const char *instructionModeCAttribute(InstructionMode Mode,
+                                             bool HasBody = true) {
+  if (!HasBody && Mode == InstructionMode::MicroMIPS)
+    return MicroModeReferenceCAttribute.data();
   switch (Mode) {
 #define MIPS_SOURCE_MODE(Name, Feature, Exclude, Attribute)                    \
   case InstructionMode::Name:                                                  \

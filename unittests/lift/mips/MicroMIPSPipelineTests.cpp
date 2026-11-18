@@ -64,7 +64,17 @@ TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
     EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
               CallsMicro)
         << Text;
+    EXPECT_EQ(Text.find("#error"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("NEVERD_MICROMIPS_REFERENCE ") != std::string::npos,
+              CallsMicro)
+        << Text;
   }
+  std::string Text;
+  llvm::raw_string_ostream Out(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
+  EXPECT_NE(Text.find("#error \"this compiler cannot emit microMIPS"),
+            std::string::npos)
+      << Text;
 }
 
 TEST(MicroMIPSPipelineSource, N32RetainsNativeWideRecordTypes) {
@@ -256,6 +266,49 @@ BinaryImage mixedImage(Arch Target) {
   return Image;
 }
 
+TEST(MicroMIPSPipelineSource, ExternalMicroModeDoesNotRequireBodyCodegen) {
+  for (Arch Architecture :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+        Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    auto Image = mixedImage(Architecture);
+    HighFunc Caller;
+    Caller.Entry = 0x1000;
+    Caller.Name = "calls_micro";
+    Caller.ReturnType = NdType::makeInt(4, true);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeCall("micro_target", 0x1100, {});
+    Return.RetVal->Type = Caller.ReturnType;
+    Caller.Body.push_back(Return);
+    HighFunc Target = Caller;
+    Target.Entry = 0x1100;
+    Target.Name = "micro_target";
+    Target.Body.front().RetVal = HighExpr::makeConst(7, 4);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    for (bool HasBody : {false, true}) {
+      std::string Text;
+      llvm::raw_string_ostream Out(Text);
+      std::vector<HighFunc> Functions{Caller};
+      if (HasBody)
+        Functions.push_back(Target);
+      ASSERT_TRUE(HighCEmitter().emit(Functions, Out, Options));
+      EXPECT_EQ(Text.find("#error \"this compiler cannot emit microMIPS") !=
+                    std::string::npos,
+                HasBody)
+          << Text;
+      EXPECT_NE(Text.find("micro_target("), std::string::npos) << Text;
+      if (!HasBody)
+        EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE int"),
+                  std::string::npos)
+            << Text;
+    }
+  }
+}
+
 void checkNumericHighCIdentities(Arch Architecture) {
   auto Image = mixedImage(Architecture);
   const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
@@ -354,6 +407,16 @@ void checkNumericLLVMIdentities(Arch Architecture) {
       EXPECT_FALSE(Entry->use_empty());
       EXPECT_EQ(mips::instructionModeFromLLVM(*Entry),
                 InstructionMode::MicroMIPS);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = BinaryFormat::ELF;
+      Options.Image = &Image;
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Declared, Output, Options));
+      EXPECT_EQ(Text.find("#error"), std::string::npos) << Text;
+      EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE "), std::string::npos)
+          << Text;
       auto Missing = mixedImage(Architecture);
       Missing.Symbols.clear();
       EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
@@ -385,6 +448,9 @@ void checkNumericLLVMIdentities(Arch Architecture) {
     ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
     EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
     EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("#error \"this compiler cannot emit microMIPS"),
+              std::string::npos)
+        << Text;
   }
 }
 

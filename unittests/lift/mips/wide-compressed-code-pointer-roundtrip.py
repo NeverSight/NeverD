@@ -20,7 +20,7 @@ from mips_validation_artifacts import MIPSValidationArtifacts, digest
 
 
 FUNCTIONS = ("pointer_bits", "pointer_tag", "pointer_mask", "pointer_code",
-             "pointer_offset", "pointer_equal", "call_pointer")
+             "pointer_offset", "pointer_equal", "call_pointer", "direct_call")
 PRESERVED = {reg: 0x61395217f0e0d000 + reg
              for reg in (*range(16, 24), 28, 30)}
 CALL_VIEWS_SPEC = importlib.util.spec_from_file_location(
@@ -39,8 +39,9 @@ def observe(path, function, abi, little, compressed, literal_pointer=None):
     if abi == "n32" and pointer & 0x80000000:
         pointer |= 0xffffffff00000000
     expected_pointer = pointer if literal_pointer is None else literal_pointer
-    if function == "call_pointer":
-        cases = [([pointer, value], (value + 7) & mask)
+    if function in ("call_pointer", "direct_call"):
+        cases = [(([pointer, value] if function == "call_pointer" else [value]),
+                  (value + 7) & mask)
                  for value in (0, 1, -17, 0x10203040)]
     elif function == "pointer_equal":
         cases = [([pointer], 1), ([pointer ^ 1], 0), ([pointer + 16], 0)]
@@ -79,7 +80,7 @@ def observe(path, function, abi, little, compressed, literal_pointer=None):
         result, memory = roundtrip.invoke(
             cpu, entry, 64, little, arguments, initial_registers=PRESERVED)
         assert result == expected, (path, abi, function, arguments, result, expected)
-        assert len(calls) == int(function == "call_pointer"), (path, calls)
+        assert len(calls) == int(function in ("call_pointer", "direct_call")), (path, calls)
         registers = {reg: cpu.reg_read(getattr(roundtrip.mips, f"UC_MIPS_REG_{reg}"))
                      for reg in PRESERVED}
         assert registers == PRESERVED, (path, function, registers)
@@ -153,7 +154,8 @@ def main():
                         "uptr pointer_code(void) { return (uptr)&target & ~(uptr)1; }\n"
                         "uptr pointer_offset(void) { return (uptr)&target + 4; }\n"
                         "int pointer_equal(uptr p) { return p == (uptr)&target; }\n"
-                        "int call_pointer(int (*callee)(int), int x) { return callee(x); }\n")
+                        "int call_pointer(int (*callee)(int), int x) { return callee(x); }\n"
+                        "int direct_call(int x) { return target(x); }\n")
                     artifacts.keep_source(target_source)
                     artifacts.keep_source(caller_source)
                     target_object = work / "target.o"
@@ -182,13 +184,14 @@ def main():
                                         continue
                                     for backend in ("highc", "llvmc"):
                                         source = work / "reconstructed.c"
-                                        if function == "call_pointer":
+                                        if function in ("call_pointer", "direct_call"):
                                             elf = ELFFile(io.BytesIO(original.read_bytes()))
                                             entry = elf.get_section_by_name(".symtab").get_symbol_by_name(
                                                 function)[0]["st_value"]
                                             source.write_text(views.source(
                                                 original, "c" if backend == "highc" else backend,
-                                                "int callee(int value);", [], True, entry))
+                                                "int callee(int value);", [],
+                                                function == "call_pointer", entry))
                                         else:
                                             command([args.neverd, "decompile", "--func", function,
                                                      *(["--llvm"] if backend == "llvmc" else []),
@@ -206,7 +209,7 @@ def main():
                                                     r["memory"] for r in after["observations"]]
                                                 rows.append(dict(**context, backend=backend, compiler=compiler,
                                                                  optimization=optimization,
-                                                                 explicit_call_type=function == "call_pointer",
+                                                                 explicit_call_type=function in ("call_pointer", "direct_call"),
                                                                  source_sha256=digest(source),
                                                                  rebuilt_sha256=digest(rebuilt), rebuilt=after))
                                                 artifacts.write("results.json", rows)

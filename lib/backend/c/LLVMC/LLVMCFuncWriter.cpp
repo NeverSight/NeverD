@@ -10657,7 +10657,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      SignatureOS << mipsModeAttribute(Fn);
+      SignatureOS << mipsModeAttribute(Fn, /*HasBody=*/true);
     }
     // Return pointers may contain callback or array declarators. Attach the
     // whole function name/parameter list at the shared declarator boundary;
