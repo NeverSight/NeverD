@@ -12616,6 +12616,9 @@ index together with all semantic caches.
 proof and refuses it with one fewer node, including n32 in both byte orders.
 The iterative walk and the exhausted-prefix case must run on the native
 Windows default stack; increasing the executable stack is diagnostic only.
+The default-budget cache lookup precedes an outlined miss continuation, so
+warm queries do not reserve the iterative walk's native stack storage.
+Cold and warmed queries must retain identical proof and work counters.
 `CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
 frame-address prefixes with known and unknown roots, with and without bound
 offsets, on all four architectures. Failed prefixes evaluate linear work while

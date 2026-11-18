@@ -485,6 +485,16 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       return It->second.Slot;
     }
   }
+  return resolveFrameSlotQuery(V, RequireEntryStackPointer, Bindings,
+                               SharedProofBudget, Cacheable, QueryKey);
+}
+
+LLVM_ATTRIBUTE_NOINLINE std::optional<med_llvm::SlotKey>
+MedLLVMEmitter::resolveFrameSlotQuery(
+    const MedVar &V, bool RequireEntryStackPointer,
+    const ControlValueBindings *Bindings, size_t *SharedProofBudget,
+    bool Cacheable,
+    const std::pair<AddressProvenanceVarKey, bool> &QueryKey) const {
   // The walk reads the budget only to stop when it is spent, and once it is
   // spent every step fails and so does the query. A shared-budget walk thus
   // repeats with the same charge under any budget covering its nodes, and runs
