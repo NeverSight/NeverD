@@ -2705,6 +2705,12 @@ TEST_F(NativePointerRelocationBoundary, MinGWProgramWholeModuleLLVMCCompiles) {
     GTEST_SKIP() << "the program needs the MinGW compiler";
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "compiling the program's C needs Clang's GNU driver";
+  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
+  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
+  // Homebrew's cross headers are outside Clang's default search paths.
+  // Use the same installation that builds the original PE on every host.
+  const std::string Sysroot =
+      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
   const fs::path Source = tmpFile("mingw_program.c");
   const fs::path Exe = tmpFile("mingw_program.exe");
   {
@@ -2739,14 +2745,15 @@ int main(int argc, char **argv) {
   }
   RunResult Syntax =
       exec(NEVERD_TEST_CLANG,
-           {"--target=x86_64-w64-mingw32", "-fms-extensions", "-fsyntax-only",
-            "-w", tmpFile("decompiled.c").string()});
+           {"--target=x86_64-w64-mingw32", Sysroot, "-fms-extensions",
+            "-fsyntax-only", "-w", tmpFile("decompiled.c").string()});
   EXPECT_TRUE(Syntax.ok()) << Syntax.err;
   for (const char *Level : {"-O0", "-O2"}) {
-    const auto Object = exec(
-        NEVERD_TEST_CLANG, {"--target=x86_64-w64-mingw32", "-fms-extensions",
-                            Level, "-c", "-w", tmpFile("decompiled.c").string(),
-                            "-o", tmpFile("mingw-c.obj").string()});
+    const auto Object =
+        exec(NEVERD_TEST_CLANG,
+             {"--target=x86_64-w64-mingw32", Sysroot, "-fms-extensions", Level,
+              "-c", "-w", tmpFile("decompiled.c").string(), "-o",
+              tmpFile("mingw-c.obj").string()});
     EXPECT_TRUE(Object.ok()) << Level << '\n' << Object.err;
   }
 }
@@ -2792,6 +2799,10 @@ TEST_F(NativePointerRelocationBoundary,
   if (!hasCrossTargetClang() ||
       !exec("x86_64-w64-mingw32-gcc", {"--version"}).ok())
     GTEST_SKIP() << "needs Clang and the MinGW headers";
+  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
+  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
+  const std::string Sysroot =
+      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
   for (unsigned Variant = 0; Variant != 3; ++Variant) {
     SCOPED_TRACE(Variant);
     const bool UCRT = Variant == 1;
@@ -2821,12 +2832,13 @@ TEST_F(NativePointerRelocationBoundary,
     // __MSVCRT_VERSION__. Select both parts of the header contract explicitly.
     for (const bool HeaderUCRT : {false, true}) {
       SCOPED_TRACE(HeaderUCRT);
-      const auto Syntax = exec(NEVERD_TEST_CLANG,
-                               {"--target=x86_64-w64-mingw32", "-fsyntax-only",
-                                HeaderUCRT ? "-D_UCRT" : "-U_UCRT",
-                                HeaderUCRT ? "-D__MSVCRT_VERSION__=0xE00"
-                                           : "-D__MSVCRT_VERSION__=0x700",
-                                Source.string()});
+      const auto Syntax =
+          exec(NEVERD_TEST_CLANG,
+               {"--target=x86_64-w64-mingw32", Sysroot, "-fsyntax-only",
+                HeaderUCRT ? "-D_UCRT" : "-U_UCRT",
+                HeaderUCRT ? "-D__MSVCRT_VERSION__=0xE00"
+                           : "-D__MSVCRT_VERSION__=0x700",
+                Source.string()});
       if (HeaderUCRT == UCRT && Variant != 2)
         EXPECT_TRUE(Syntax.ok()) << Syntax.err;
       else {

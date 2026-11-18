@@ -1605,6 +1605,8 @@ compares all six locale-bearing UCRT stdio prototypes and the handler exchange
 with the declarations in their actual MinGW headers.
 The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
 `_UCRT` alone does not select the old MinGW runtime headers.
+The Clang checks use the original MinGW compiler’s reported sysroot, including
+when cross headers are installed outside the host’s default search paths.
 `MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks
 complete PE32/PE32+ relocated data pointers and rejects writable, partial,
 ordered, ambiguous or wrong-owner evidence. The Win64
