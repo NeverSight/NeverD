@@ -328,7 +328,9 @@ TEST(MicroMIPSPipelineSource, TypedCallsRetainExternalInstructionModes) {
         SCOPED_TRACE(Analyst);
         auto Image = mixedImage(Architecture);
         Image.MIPS->HasMIPS16 = Mode == InstructionMode::MIPS16;
+        Image.MIPS->HasMicroMIPS = !Image.MIPS->HasMIPS16;
         Image.MIPS->CodeModeEntries[0x1100] = Mode;
+        ASSERT_EQ(Image.instructionModeAt(0x1100), Mode);
         MedFunc Function;
         Function.Entry = 0x1000;
         Function.Name = "typed_caller";
@@ -394,7 +396,10 @@ TEST(MicroMIPSPipelineSource, TypedCallsRetainExternalInstructionModes) {
         ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
         const std::string Attribute =
             mips::instructionModeCAttribute(Mode, /*HasBody=*/false);
-        EXPECT_NE(Text.find(Attribute + "uint" + std::to_string(Word * 8) +
+        const unsigned DeclarationBits =
+            Callee->getReturnType()->getIntegerBitWidth();
+        EXPECT_NE(Text.find(Attribute + "uint" +
+                            std::to_string(DeclarationBits) +
                             "_t micro_target("),
                   std::string::npos)
             << Text;
