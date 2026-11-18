@@ -8,6 +8,11 @@ on:
         description: Exact MIPS PR commit to qualify
         required: true
         type: string
+      mips_test_count:
+        description: Expected complete MIPS inventory at the exact source
+        required: true
+        default: '995'
+        type: string
       qualification_role:
         description: Source role for exact-base comparison
         required: true
@@ -124,6 +129,7 @@ jobs:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
       QUALIFICATION_CXX: ${{ matrix.cxx }}
       QUALIFICATION_ROLE: ${{ inputs.qualification_role }}
+      EXPECTED_MIPS_TEST_COUNT: ${{ inputs.mips_test_count }}
     defaults:
       run:
         shell: bash
@@ -245,7 +251,7 @@ jobs:
             neverd NeverDMIPSTests NeverDMIPSFlowTests NeverDMIPSIntegerTests \
             NeverDMIPSPipelineTests NeverDMIPSSDKTests NeverDSourceEntryBindingTests \
             NeverDHighControlFlowTests NeverDSourceCallABITests NeverDAArch64AuthenticatedCallTests NeverDAArch64DecodeValidityTests \
-            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests
+            NeverDSourceAnchorTests NeverDTypesTests NeverDSessionCAPITests NeverDSessionLLVMTests NeverDDebugInfoTests NeverDLLVMCValueTests NeverDNativeCallSignatureTests NeverDIntegerCallArgumentsTests NeverDHighCIntegerWidthTests NeverDLLVMCVectorTests NeverDLocalTypesDebugContextTests NeverDLLVMCSourcePointerTests NeverDCallArgumentRecoveryTests NeverDIndirectCallValueSourceTests NeverDFunctionAdmissionTests NeverDMedCachedCallTargetTests NeverDLLVMTargetInitializationTests NeverDTranslationContractTests NeverDHighSymSimplifyTests NeverDImageAnalysisBoundaryTests NeverDRelocatedFunctionEntryTests NeverDNativePointerRelocationBoundaryTests NeverDMachOPointerRelocationBoundaryTests NeverDLLVMImportVeneerBoundaryTests NeverDRelocatedLiteralTests NeverDDirectTailCallMetadataTests
       - name: Audit inventory and execute owners
         timeout-minutes: 90
         run: |
@@ -266,7 +272,18 @@ jobs:
                     'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDLLVMCVectorTests',
                     'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests',
                     'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests',
-                    'NeverDMedCachedCallTargetTests']
+                    'NeverDMedCachedCallTargetTests',
+                    'NeverDLLVMTargetInitializationTests',
+                    'NeverDTranslationContractTests',
+                    'NeverDHighSymSimplifyTests',
+                    'NeverDImageAnalysisBoundaryTests',
+                    'NeverDRelocatedFunctionEntryTests',
+                    'NeverDNativePointerRelocationBoundaryTests',
+                    'NeverDMachOPointerRelocationBoundaryTests',
+                    'NeverDLLVMImportVeneerBoundaryTests',
+                    'NeverDRelocatedLiteralTests',
+                    'NeverDDirectTailCallMetadataTests',
+                    ]
           command = ['ctest', '--test-dir', 'build-mips-ci', '-C', 'Release',
                      '-L', '^(' + '|'.join(owners) + ')$']
           inventory = json.loads(subprocess.check_output(command + ['--show-only=json-v1'], text=True))
@@ -282,9 +299,11 @@ jobs:
               counts[owner] += 1
           assert all(counts[owner] > 0 for owner in owners), counts
           assert len(name_to_owner) == len(tests), 'duplicate CTest identity'
+          assert sum(count for owner, count in counts.items() if owner.startswith('NeverDMIPS')) == int(os.environ['EXPECTED_MIPS_TEST_COUNT'])
           if os.environ['QUALIFICATION_ROLE'] == 'candidate':
               assert 'TypeJSONFixture.SharedSpellerMatchesOwnedLayouts' in name_to_owner
               assert 'SessionCAPITest.LocalTypePagesKeepQueryChangesIndependent' in name_to_owner
+              assert 'MIPSScalarCalls.TailTransfersPreserveTheCompleteIntegerResultCarrier' in name_to_owner
           (output / 'inventory.json').write_text(json.dumps(name_to_owner, indent=2) + '\n')
           source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           binary_hashes = {}
@@ -340,6 +359,8 @@ jobs:
           print(json.dumps(audit, indent=2))
           assert actual_names == expected_names, 'incomplete inventory execution'
           assert result.returncode == 0 and not failed and not mips_skipped and not source_anchor_skipped and not type_json_skipped and not local_type_skipped, audit
+          added_owners = ['NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests']
+          assert not [name for name in skipped if name_to_owner[name] in added_owners], audit
           PYTHON
       - name: Preserve mock-worker failure after owner diagnostics
         if: always() && steps.mock_worker.outcome == 'failure'
