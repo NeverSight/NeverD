@@ -84,6 +84,29 @@ A/B with identical output.
      - reuse of the callee graphs that the main lift already builds.
    - A per-function test is not enough: a returning wrapper can carry x87
      state with no local floating instruction (`CFGBuilderX86Fpu.cpp:2136`).
+   - Measured on capstone LLVM C (2026-11-18, a throwaway log in
+     `X87CallEffectIndex::graph`): 396 callee graph builds take 80-92 s of
+     CPU, 26.6% of all samples, and 97% of that is `resolveJumpTable` under
+     the second lift. The 10 slowest builds hold 85% of it: five large
+     decoder functions each built twice. The second build of each comes from
+     the jump-table rebuild round (`RebuildGraphs`, `PipelineLowIR.cpp`),
+     whose cache is new because its protected relocation slots and unsafe
+     jump-table branches grew. Builds that end in `MissingTerminator` (an
+     indirect branch the resolver could not settle) hold 56% of the time,
+     and only a complete CFG shows that rejection.
+   - On x64 the raw-stack flag of a graph build does not change its CFG
+     (`independentCallPop` and `usesAnalysisRecovery` are 32-bit x86 only);
+     a graph build differs from the callee's own build by the no-return
+     depth (one deeper) and the context sets.
+   - Exact levers, each a resolver-level change:
+     - reuse a first-round graph in the rebuild round when every read the
+       build made of the two protection sets has the same answer and the
+       size-based work charges (`orderedLookupWork(size)`) are unchanged;
+       this needs those reads recorded at all of their sites, including the
+       whole-set walk in `JumpTableResolver.cpp`;
+     - publish an x64 callee's own build as its graph under the one-deeper
+       context when the no-return answers it read hold at that depth;
+     - track the resolver's stage-loop dependencies (item 4).
 4. **Jump-table resolution rebuilds its flow graph.**
    - On the switch-heavy PE, about half of all CPU samples were in
      `buildResolverFlowGraph`
