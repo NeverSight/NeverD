@@ -280,8 +280,15 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       } else if (Provenance == P::CodeAddress ||
                  (Provenance == P::Address && Value == 0x1101)) {
         ASSERT_TRUE(HighCEmitter().emit({Function}, Output, Emit));
-        EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
-        EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+        // Numeric addresses retain the linked ELF symbol through an opaque
+        // assembler name, without inventing a C call signature for its body.
+        EXPECT_NE(Text.find("extern unsigned char neverd_code_micro_target[] "
+                            "__asm__(\"micro_target\");"),
+                  std::string::npos)
+            << Text;
+        EXPECT_NE(Text.find("(uintptr_t)neverd_code_micro_target"),
+                  std::string::npos)
+            << Text;
       } else {
         EXPECT_TRUE(HighCEmitter().emit({Function}, Output, Emit)) << Text;
         EXPECT_EQ(Text.find("micro_target"), std::string::npos) << Text;
