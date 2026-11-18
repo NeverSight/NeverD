@@ -12627,6 +12627,13 @@ results with the
 explicit-budget walk; shared-budget replay and bound queries retain saturating
 work accounting. Feasible-edge publication clears the structural dependency
 index together with all semantic caches.
+`DeepOffsetChainsUseTheNodeBudget` accepts an 8,192-node mixed copy/offset
+proof and refuses it with one fewer node, including n32 in both byte orders.
+The iterative walk and the exhausted-prefix case must run on the native
+Windows default stack; increasing the executable stack is diagnostic only.
+The default-budget cache lookup precedes an outlined miss continuation, so
+warm queries do not reserve the iterative walk's native stack storage.
+Cold and warmed queries must retain identical proof and work counters.
 `CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
 frame-address prefixes with known and unknown roots, with and without bound
 offsets, on all four architectures. Failed prefixes evaluate linear work while
@@ -20734,10 +20741,10 @@ publishes r4 across the PHI an `__except` arm leaves before a later `__try`, and
 `ATryAfterAnExceptArmFillsItsClause` prints that clause.
 `TableSEHSourceScopeTests.cpp` gives the LLVM emitter an x64 parent whose
 `__finally`, `__except` and outer `__finally` rows guard one range:
-`TableSEHSourceScopes.*` checks that the IR printed as C nests the three pads in
-table order while native output and both code-producing capabilities still
-refuse the table, that such a table has a scope identity only on request and a
-table without repeated ranges keeps the identity it had, that a local unwind's
+`TableSEHSourceScopes.*` checks that the IR printed as C and native IR nest the
+three pads in table order and that every capability takes the table, that
+such a table has a scope identity only on request and a table without
+repeated ranges keeps the identity it had, that a local unwind's
 inner handler call unwinds to the `__except` after the inner range's end marker
 and its outer handler call is a plain call, that three termination handlers of
 one unwind give two invokes at one address which the exception contract counts
@@ -20778,13 +20785,23 @@ only a handler's unwind enters, one of them entered from the other: the
 parent's printed C names exactly the targets no edge reaches, not one a branch
 reaches or the `__except` block an exception's pad reaches, and native IR
 carries no such list.
+`AFinallyThatResumesItsParentEndsWithAGoto` gives the inner `__finally` a
+handler that resumes the parent at a block only its unwind enters: printed C
+ends the `__finally` with a `goto` to that block, prints the block's store
+under the label it names, prints no second `__except` and no note, and native
+IR keeps the plain pad.
 `COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
 x64 IR for a local unwind out of the only scope, out of the inner of two and
 out of both: the handler's call is a plain one, an invoke to the outer row's
 pad, or both in that order; each carries one mark with the runtime call's
 address and the row it ends; the contract counts only the invokes; and
-`planCOFFExceptionPatch` refuses the module by the mark's name, before and
-after optimization.
+`planCOFFExceptionPatch` takes the module before and after optimization. It
+refuses a mark that names another row and a plain call moved back ahead of
+its row's range exit.
+`PatchCOFF_X64.GeneratedSEHRowsFollowTheSourceScopeChain` binds generated
+rows to two nested catch-all scopes of a fixture: the inner row ahead of its
+parent's over the same call, with the parent's rows around it, is taken; the
+parent's row first, or parent rows that leave the call out, are refused.
 `COFFExceptionIR.OutputRefusesACallbackThatUsesItsOriginalFrame` gives a
 `__finally` row and a filter row a callback that returns, keeps its frame
 argument in a home or in its own frame, reads through what either holds, lets

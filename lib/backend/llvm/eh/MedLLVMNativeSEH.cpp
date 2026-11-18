@@ -324,7 +324,7 @@ bool MedLLVMEmitter::emitNativeSEH(
     R.SemanticRange = *SemanticRange;
     R.SourceIndex = static_cast<uint32_t>(ScopeIndex);
     const auto SemanticToken = windows_eh_semantics::getSEHScopeSemanticToken(
-        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/SourceView,
+        EH, TargetArch, R.SourceIndex, /*AllowRepeatedRanges=*/true,
         /*AllowCookieCheck=*/SourceView);
     if (!SemanticToken)
       return false;
@@ -387,17 +387,16 @@ bool MedLLVMEmitter::emitNativeSEH(
   // Native WinEH can express nested or disjoint intervals.  Crossing
   // intervals have no unwind-parent relation.  Rows over one interval nest by
   // their order, the earlier inside the later, because __C_specific_handler
-  // scans the table from its first row.  Printed C takes that order; native
-  // output, where the code generator writes the table again, leaves such a
-  // function in lossless-metadata-only form.
+  // scans the table from its first row.  Both routes take that order; the
+  // table the code generator writes again repeats a range for each nesting
+  // level, which output ties back to these scopes.
   for (size_t I = 0; I < Regions.size(); ++I) {
     for (size_t J = I + 1; J < Regions.size(); ++J) {
       const ExceptionAddressRange &A = Regions[I].SemanticRange;
       const ExceptionAddressRange &B = Regions[J].SemanticRange;
       if (!A.overlaps(B))
         continue;
-      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
-      if ((Repeated && !SourceView) || (!A.contains(B) && !B.contains(A)))
+      if (!A.contains(B) && !B.contains(A))
         return false;
     }
   }
@@ -653,16 +652,49 @@ bool MedLLVMEmitter::emitNativeSEH(
       }
       llvm::SmallVector<llvm::Value *, 1> BundleInputs{Pad};
       llvm::OperandBundleDef Funclet("funclet", BundleInputs);
+      // Printed C: a handler that leaves by a local unwind into this function
+      // on every way out resumes it at one block. The pad unwinds to a catch
+      // whose pad returns there, which keeps that block's code; LLVM C prints
+      // a `goto` to it at the end of the `__finally` (HandlerResume).
+      llvm::BasicBlock *Unwind = ParentDest;
+      if (SourceView)
+        if (const auto Resume =
+                Func.SEHHandlerResumes.find(R.Scope->FilterOrFinallyVA);
+            Resume != Func.SEHHandlerResumes.end())
+          if (llvm::BasicBlock *ResumeAt = BlockAt(Resume->second)) {
+            auto *ResumeBB = llvm::BasicBlock::Create(
+                *Ctx, "seh.resume.dispatch." + Suffix, &LLVMFunc);
+            llvm::IRBuilder<> RB(ResumeBB);
+            auto *Resumes = RB.CreateCatchSwitch(TokenNone, ParentDest, 1,
+                                                 "seh.resume.switch");
+            Resumes->setMetadata(
+                windows_eh_md::HandlerResume,
+                llvm::MDTuple::get(
+                    *Ctx, {llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+                              llvm::Type::getInt64Ty(*Ctx), Resume->second))}));
+            auto *ResumePadBB = llvm::BasicBlock::Create(
+                *Ctx, "seh.resume.pad." + Suffix, &LLVMFunc);
+            Resumes->addHandler(ResumePadBB);
+            llvm::IRBuilder<> RPB(ResumePadBB);
+            auto *ResumePad =
+                RPB.CreateCatchPad(Resumes,
+                                   {llvm::ConstantPointerNull::get(
+                                       llvm::cast<llvm::PointerType>(PtrTy))},
+                                   "seh.resume.token");
+            RPB.CreateCatchRet(ResumePad, ResumeAt);
+            Unwind = ResumeBB;
+          }
       if (ParentDest) {
+        // Every unwind edge out of the pad goes where its cleanupret does.
         auto *ContinueBB = llvm::BasicBlock::Create(
             *Ctx, "seh.finally.continue." + Suffix, &LLVMFunc);
-        B.CreateInvoke(CallbackTy, R.Callback, ContinueBB, ParentDest, Args,
+        B.CreateInvoke(CallbackTy, R.Callback, ContinueBB, Unwind, Args,
                        {Funclet});
         llvm::IRBuilder<> ContinueBuilder(ContinueBB);
-        ContinueBuilder.CreateCleanupRet(Pad, ParentDest);
+        ContinueBuilder.CreateCleanupRet(Pad, Unwind);
       } else {
         B.CreateCall(CallbackTy, R.Callback, Args, {Funclet});
-        B.CreateCleanupRet(Pad, nullptr);
+        B.CreateCleanupRet(Pad, Unwind);
       }
       R.UnwindDest = PadBB;
       continue;
