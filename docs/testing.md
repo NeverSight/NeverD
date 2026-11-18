@@ -8430,10 +8430,12 @@ in both routes.
 `NeverDWorkerCallSiteTypes` compiles and executes both C routes, including all
 five Win64 variadic integer arguments, and retains partial-stack-write refusal.
 `SessionCAPITest.Win64VariadicFunctionsTakeTheirHomedArguments` decompiles a
-PE whose MSVC-style variadic function homes RDX, R8 and R9 and passes their
+PE whose MSVC-style variadic functions home RDX, R8 and R9 and pass their
 first slot on as a va_list that a helper walks into the caller's two stack
-arguments: both C routes take the homed registers as parameters, contain no
-trap, pass all five values and return the machine's result at -O0 and -O2.
+arguments; the second holds that pointer in RSI across another call first, as
+MSVC's `printf` does. Both C routes take the homed registers as parameters,
+contain no trap, pass all five values to each and return the machine's result
+at -O0 and -O2, and the caller decompiled alone passes all five to each too.
 `CallExitRegisters.OverwrittenEntrySpillsAreNotValueReads` keeps a function
 whose R9 spill is overwritten before its slot escapes at three parameters: a
 dead spill publishes no variadic position.

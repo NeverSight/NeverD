@@ -11529,7 +11529,13 @@ drops it, and its register is no parameter. The function is variadic from the
 first stack argument on: each call passes what it sets,
 `finalizeVariadicCallees` adds a trailing parameter for every stack argument a
 call passes and pads the others, and both C routes keep the home area and that
-overflow contiguous in their frame headroom.
+overflow contiguous in their frame headroom. The pointer may wait across a call
+in a register the convention preserves (MSVC's `printf` holds it in RSI over
+`__acrt_iob_func`): the summary walk keeps what such a register holds at a
+call by `isCallPreserved` for the image's ABI. The probe that reads an omitted
+callee's signature from its body converts it under the same `CallVariadicFrom`,
+so a function decompiled alone passes a variadic callee's arguments as a whole
+unit does.
 
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
