@@ -12,7 +12,8 @@ namespace neverd {
 inline std::vector<LowOp> directTailCallOperations(Arch Architecture, va_t At,
                                                    va_t Target) {
   const auto &TRI = getTargetRegInfo(Architecture);
-  const auto Result = NdVar::reg(TRI.IntReturnReg, TRI.PointerSize);
+  const auto Result =
+      NdVar::reg(TRI.IntReturnReg, TRI.integerReturnWordBytes());
   LowOp Call;
   Call.Opcode = NdOp::CALL;
   Call.Output = Result;

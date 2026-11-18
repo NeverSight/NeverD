@@ -8,6 +8,7 @@
 #include "MachODependencyState.h"
 #include "MachOExportLayout.h"
 #include "MachOLiftedObject.h"
+#include "MachOPublishedData.h"
 #include "MachOTLSRuntime.h"
 
 #include "neverd/backend/Limits.h"
@@ -79,6 +80,7 @@ struct NativeMachO {
   std::map<uint32_t, Symbol> Symbols;
   std::map<std::string, uint32_t> Names;
   std::vector<Relocation> Relocations;
+  std::vector<std::pair<size_t, MachODataInCodeRange>> Embedded;
   std::vector<NativeMachOCompactRange> Compact;
   std::vector<DwarfEHFrameRecord> OldFDEs;
   std::optional<size_t> EH, CompactSection;
@@ -131,7 +133,8 @@ struct NativeMachO {
 
 // New data mappings and dyld runtime sections require segment commands.
 // Reserve them before assigning code, unwind and fixup addresses.
-uint64_t installationCommandBytes(const NativeMachO &Object) {
+uint64_t installationCommandBytes(const NativeMachO &Object,
+                                  const BinaryImage &Original) {
   const auto Sections =
       ((Object.Descriptors || !Object.ThreadInitializers.empty())
            ? kTLVSectionCount
@@ -141,12 +144,16 @@ uint64_t installationCommandBytes(const NativeMachO &Object) {
     return S.IsAllocated && S.Size &&
            (S.Kind == Kind::WritableData || S.Kind == Kind::UninitializedData);
   });
-  return Sections || HasData
-             ? getMachOSegmentCmdSize(Object.Image.PointerWidth ==
-                                      sizeof(uint64_t)) *
-                       kRuntimeSegmentCount +
-                   sizeof(section_64) * Sections + sizeof(linkedit_data_command)
-             : 0;
+  // A nonempty source DICE command survives segment installation. An object
+  // introducing the first data island also needs room for the new command.
+  const bool NewDICE =
+      !Object.Embedded.empty() && Original.MachODataInCode.empty();
+  const auto SegmentBytes =
+      getMachOSegmentCmdSize(Object.Image.PointerWidth == sizeof(uint64_t));
+  if (Sections || HasData)
+    return SegmentBytes * kRuntimeSegmentCount + sizeof(section_64) * Sections +
+           sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
+  return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
 }
 
 // Count both possible sources. A frame described by both tables can reserve
@@ -486,6 +493,20 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
   Image.Format = BinaryFormat::MachO;
   Image.PointerWidth = Original.getPointerSize();
   Image.TargetTriple = Triple.str();
+  std::vector<MachODataInCodeRange> Data;
+  for (const auto &LC : M->load_commands()) {
+    if (!Original.isArm64e() || LC.C.cmd != LC_DATA_IN_CODE)
+      continue;
+    const auto D = M->getLinkeditDataLoadCommand(LC);
+    if (!rangeInBounds(D.dataoff, D.datasize, Bytes.size()))
+      return fail(kEmbeddedObject);
+    auto Parsed = decodeMachODataInCode(
+        llvm::arrayRefFromStringRef(Bytes.substr(D.dataoff, D.datasize)), 0,
+        llvm::endianness::little);
+    if (!Parsed)
+      return Parsed.takeError();
+    Data = std::move(*Parsed);
+  }
   uint64_t Total = 0;
   for (const auto &S : M->sections()) {
     auto Name = S.getName();
@@ -612,6 +633,15 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       }
     }
     const size_t Index = Image.Sections.size();
+    for (const auto &R :
+         machODataInCodeRanges(Data, S.getAddress(), S.getSize())) {
+      if (!Code || R.Begin < S.getAddress() ||
+          R.End - S.getAddress() > S.getSize())
+        return fail(kEmbeddedObject);
+      Result.Embedded.emplace_back(
+          Index, MachODataInCodeRange{R.Begin - S.getAddress(),
+                                      R.End - S.getAddress(), R.Kind});
+    }
     if (Initializers || ThreadInit) {
       if (Code || (Initializers && Result.InitializerPointers) ||
           Item.Size % arm64e::kPointerBytes)
@@ -740,6 +770,8 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
       Result.Relocations.push_back(R);
     }
   }
+  if (Data.size() != Result.Embedded.size())
+    return fail(kEmbeddedObject);
   for (const auto &S : M->symbols()) {
     auto Name = S.getName();
     if (!Name)
@@ -778,7 +810,8 @@ llvm::Expected<NativeMachO> readObject(llvm::StringRef Bytes,
           Value - Result.OldSectionVAs.at(Number) >= Section.Size)
         return fail("symbol exceeds native section");
       Item.Offset = Value - Result.OldSectionVAs.at(Number);
-      Item.Function = Section.Kind == Kind::Code && Name->starts_with("_");
+      Item.Function = Section.Kind == Kind::Code && Name->starts_with("_") &&
+                      machODataInCodeRanges(Data, Value, 1).empty();
       // Hidden compiler helpers (e.g. terminate landing pads) bind within this
       // object. Staging adds no exported weak definition or coalescing promise.
       if (PublicWeak) {
@@ -2417,7 +2450,7 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   auto Candidate = Binary;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, Candidate);
   std::optional<MachODependencyState> SlidDependencies;
-  const auto CommandBytes = installationCommandBytes(*Object);
+  const auto CommandBytes = installationCommandBytes(*Object, *Original);
   auto Slide = reserveMachOPublishedUnwind(
       Candidate, Original->Arch, ExtraEH, unwindFunctionCounts(*Object),
       CommandBytes != 0, SlidDependencies, CommandBytes);
@@ -2457,6 +2490,9 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
            Object->InitializerOffsets)
               ? &Object->Runtime
               : nullptr))
+    return Error;
+  if (auto Error =
+          installMachOPublishedData(Candidate, Object->Image, Object->Embedded))
     return Error;
   if (auto Error =
           installMachOThreadLocalExports(Candidate, Object->TLSExports))
@@ -2543,7 +2579,7 @@ static llvm::Expected<PatchResult> installObject(
   auto Slide = reserveMachOPublishedUnwind(
       LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
       Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-      installationCommandBytes(*Object));
+      installationCommandBytes(*Object, Original));
   if (!Slide)
     return Slide.takeError();
   for (auto &[Name, Binding] : Bindings)
@@ -2616,6 +2652,9 @@ static llvm::Expected<PatchResult> installObject(
                        Object->InitializerOffsets)
                           ? &Object->Runtime
                           : nullptr))
+                return Reject(std::move(E));
+              if (auto E = installMachOPublishedData(Binary, Object->Image,
+                                                     Object->Embedded))
                 return Reject(std::move(E));
               if (auto E = installMachOThreadLocalExports(Binary,
                                                           Object->TLSExports))

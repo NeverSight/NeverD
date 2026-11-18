@@ -85,6 +85,7 @@ add_neverd_component_library(NeverDLoader
   ELF/ELFDynamicSections.cpp
   ELF/ELFLoader.cpp
   ELF/ELFMIPSProfile.cpp
+  ELF/ELFMIPSInstructionRelocations.cpp
   ELF/ELFMIPSDynamic.cpp
   ELF/EmbeddedELF.cpp
   ELF/ELFLoaderExterns.cpp
@@ -121,6 +122,7 @@ add_neverd_component_library(NeverDLoader
   MachO/DarwinSourceDeclarations.cpp
   MachO/CFunctionParameterCalls.cpp
   MachO/ImmutableNativeCalls.cpp
+  MachO/DataInCode.cpp
   MachO/FunctionBody.cpp
   MachO/ImmutableNativeFrame.cpp
   MachO/RuntimeFunctionAddress.cpp

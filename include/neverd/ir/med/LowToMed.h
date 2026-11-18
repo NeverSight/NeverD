@@ -433,6 +433,7 @@ private:
   void propagate(MedFunc &Func);
   void resolveSwitchSelectorPlans(MedFunc &Func);
   void projectOriginalAddressSelectors(MedFunc &Func);
+  void projectMIPSRelocatedImmediates(MedFunc &Func);
   void resolveScalarAddressModels(
       MedFunc &Func,
       const std::vector<RelocatedInstructionScalarModelOccurrence> &Models);

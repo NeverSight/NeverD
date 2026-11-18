@@ -10657,7 +10657,7 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      SignatureOS << mipsModeAttribute(Fn);
+      SignatureOS << mipsModeAttribute(Fn, /*HasBody=*/true);
     }
     // Return pointers may contain callback or array declarators. Attach the
     // whole function name/parameter list at the shared declarator boundary;
@@ -10856,6 +10856,24 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
     emitIndent(1);
     OS << "/* neverd.seh: not lowered: no __try here, so this C runs none of "
           "the function's SEH handlers. */\n";
+  }
+  // Code a handler's local unwind resumes this function at, where no edge of
+  // it leads: the handler's page names the address, and this one says that
+  // nothing printed here reaches the code there.
+  if (const llvm::MDNode *Unreached =
+          Fn.getMetadata(windows_eh_md::UnreachedUnwindTargets)) {
+    std::string Addresses;
+    const unsigned Count = Unreached->getNumOperands();
+    for (unsigned I = 0; I < Count; ++I)
+      if (const auto *Address = llvm::mdconst::dyn_extract<llvm::ConstantInt>(
+              Unreached->getOperand(I))) {
+        if (!Addresses.empty())
+          Addresses += I + 1 == Count ? " and " : ", ";
+        Addresses += "0x" + llvm::utohexstr(Address->getZExtValue());
+      }
+    emitIndent(1);
+    OS << "/* neverd.seh: a handler's _local_unwind resumes this function at "
+       << Addresses << "; nothing printed here leads to the code there. */\n";
   }
   EHWrapIsCxx = functionIsCxxEH(Fn);
   EHTryDepth = 0;

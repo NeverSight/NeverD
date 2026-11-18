@@ -36,6 +36,23 @@ MIPS_SOURCE_TEXT(
     "#else\n"
     "#define NEVERD_MICROMIPS __attribute__((micromips))\n"
     "#endif\n\n")
+// A classic caller can reference an externally assembled microMIPS symbol
+// even when its compiler cannot generate microMIPS bodies (Clang n32/n64).
+// Preserve the attribute where supported; otherwise the ELF symbol and
+// relocation carry the mode. This spelling must never select a body encoding.
+MIPS_SOURCE_TEXT(MicroModeReferenceCAttribute, "NEVERD_MICROMIPS_REFERENCE ")
+MIPS_SOURCE_TEXT(
+    MicroModeReferenceCPrelude,
+    "#if defined(__clang__)\n"
+    "#if __has_attribute(micromips)\n"
+    "#define NEVERD_MICROMIPS_REFERENCE "
+    "__attribute__((micromips,nomips16))\n"
+    "#else\n"
+    "#define NEVERD_MICROMIPS_REFERENCE\n"
+    "#endif\n"
+    "#else\n"
+    "#define NEVERD_MICROMIPS_REFERENCE __attribute__((micromips))\n"
+    "#endif\n\n")
 // GCC also compiles classic functions participating in mixed-mode calls.
 // Preserve raw bits and single evaluation independently of instruction mode.
 MIPS_SOURCE_TEXT(BitCastCallPrefix, "__builtin_bit_cast(")

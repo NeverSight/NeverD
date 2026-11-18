@@ -38,10 +38,10 @@ inline std::string entryStubDefinitionStem(const BinaryImage *Image,
 }
 
 /// Called only when a source value acquires a resolved code identity. Direct
-/// control transfers do not use this boundary. The qualified o32 compiler must
+/// control transfers do not use this boundary. The qualified compiler must
 /// preserve the callable tag independently of the function's code alignment
 /// (Fi8 in the NeverSight LLVM fork). Unknown import modes and unqualified
-/// 64-bit compressed source ABIs still have no numerical projection.
+/// compressed source profiles still have no numerical projection.
 inline void requireNumericCodePointerSource(const BinaryImage *Image,
                                             va_t CanonicalAddress) {
   if (!Image || !hasCompressedMIPSCode(Image->Mode))
@@ -51,18 +51,33 @@ inline void requireNumericCodePointerSource(const BinaryImage *Image,
       !Image->isImportStubAt(CanonicalAddress)) {
     if (Mode == InstructionMode::MIPSClassic)
       return;
-    if ((Image->Arch == Arch::MIPS32 || Image->Arch == Arch::MIPS32EL) &&
-        Image->MIPS && Image->MIPS->ABI == MIPSABI::O32 &&
-        Image->MIPS->ISARevision == 2 && !Image->MIPS->HistoricalISA &&
-        ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16) ||
-         (Mode == InstructionMode::MicroMIPS && Image->MIPS->HasMicroMIPS)))
-      return;
+    if (Image->MIPS && Image->MIPS->ISARevision == 2 &&
+        !Image->MIPS->HistoricalISA) {
+      const bool O32 =
+          (Image->Arch == Arch::MIPS32 || Image->Arch == Arch::MIPS32EL) &&
+          Image->MIPS->ABI == MIPSABI::O32;
+      const bool N32 = (Image->Arch == Arch::MIPS64N32 ||
+                        Image->Arch == Arch::MIPS64N32EL) &&
+                       Image->MIPS->ABI == MIPSABI::N32;
+      const bool N64 =
+          (Image->Arch == Arch::MIPS64 || Image->Arch == Arch::MIPS64EL) &&
+          Image->MIPS->ABI == MIPSABI::N64;
+      if ((Mode == InstructionMode::MIPS16 && Image->MIPS->HasMIPS16 && O32) ||
+          (Mode == InstructionMode::MicroMIPS && Image->MIPS->HasMicroMIPS &&
+           (O32 || N32 || N64)))
+        return;
+    }
   }
   throw std::invalid_argument("compressed MIPS numeric code-pointer source "
                               "projection is not qualified");
 }
 
-inline const char *instructionModeCAttribute(InstructionMode Mode) {
+/// An external symbol keeps its linker-supplied encoding. Referencing it does
+/// not require the compiler to generate a body in that encoding.
+inline const char *instructionModeCAttribute(InstructionMode Mode,
+                                             bool HasBody = true) {
+  if (!HasBody && Mode == InstructionMode::MicroMIPS)
+    return MicroModeReferenceCAttribute.data();
   switch (Mode) {
 #define MIPS_SOURCE_MODE(Name, Feature, Exclude, Attribute)                    \
   case InstructionMode::Name:                                                  \

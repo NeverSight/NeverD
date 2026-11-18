@@ -575,6 +575,7 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   std::string Rest;
   llvm::raw_string_ostream RestOS(Rest);
   UsesMicroMIPSAttribute = false;
+  UsesMicroMIPSReferenceAttribute = false;
   UsesMIPS16Attribute = false;
   {
     RestoreOutput Restore{OS, &OS.stream()};
@@ -583,6 +584,8 @@ void LLVMCWriter::writeModule(llvm::Module &Mod, const llvm::Function *Only) {
   }
   if (UsesMicroMIPSAttribute)
     OS << mips::MicroModeCPrelude;
+  if (UsesMicroMIPSReferenceAttribute)
+    OS << mips::MicroModeReferenceCPrelude;
   if (UsesMIPS16Attribute)
     OS << mips::MIPS16ModeCPrelude;
   std::string Records;
@@ -2848,11 +2851,14 @@ static uint64_t argumentSlotBytes(const llvm::Function &Fn,
   return Bytes;
 }
 
-const char *LLVMCWriter::mipsModeAttribute(const llvm::Function &Function) {
+const char *LLVMCWriter::mipsModeAttribute(const llvm::Function &Function,
+                                           bool HasBody) {
   const auto Mode = mips::instructionModeFromLLVM(Function);
-  UsesMicroMIPSAttribute |= Mode == InstructionMode::MicroMIPS;
+  UsesMicroMIPSAttribute |= HasBody && Mode == InstructionMode::MicroMIPS;
+  UsesMicroMIPSReferenceAttribute |=
+      !HasBody && Mode == InstructionMode::MicroMIPS;
   UsesMIPS16Attribute |= Mode == InstructionMode::MIPS16;
-  return mips::instructionModeCAttribute(Mode);
+  return mips::instructionModeCAttribute(Mode, HasBody);
 }
 
 void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
@@ -2954,7 +2960,8 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
           Opts.TheArch, Img ? Img : Opts.Image,
           Fn.hasFnAttribute(mips::DSPSourceMarker),
           Fn.hasFnAttribute(mips::NoMSAMarker));
-      OS << mipsModeAttribute(Fn);
+      OS << mipsModeAttribute(Fn, !Fn.isDeclaration() &&
+                                      (!OnlyFunction || OnlyFunction == &Fn));
     }
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame"))
       OS << "__attribute__((ms_abi)) ";

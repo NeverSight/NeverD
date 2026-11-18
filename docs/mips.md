@@ -32,7 +32,17 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   extends the ELF32 value into its 64-bit GPR. GP-relative accesses in the
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
-  normally. PIC, CPIC and images with scoped GP values require local evidence.
+  normally.
+- In linked classic n32/n64 PIC and CPIC code, an ordinary entry block can
+  establish GP from its incoming `$t9` and a linker displacement. Source
+  conversion binds the completed register write when it matches the image-wide
+  register-info GP. This covers the assembler's `.cpsetup` and Clang's
+  equivalent calculation in a temporary GPR. The caller's incoming GP and
+  later register writes keep their own values. Scoped GP records cannot supply
+  this proof. A full-width GOT import load retains its symbol through n32's
+  sign extension. A static GNU GOT with a single GP and no TLS can supply the
+  initial address of a writable callback object. The call reads the object's
+  current pointer.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
@@ -595,10 +605,10 @@ Each covers 16 profiles, 128 builds and 4,096 executions with the same byte
 orders, FR modes, compilers and observations. The unit and isolated-function
 receipts identify their different tested commits explicitly.
 
-Numeric microMIPS and MIPS16 code identities are admitted for defined r2/o32
-targets with explicit ELF mode evidence. Both source backends share the same
-boundary; unknown-mode imports, including whole or partial GOT reads, and
-n32/n64 compressed numerical projections remain refused. Direct control
+Numeric microMIPS code identities are admitted for defined r2 targets with
+explicit ELF mode evidence in o32, n32 and n64. MIPS16 numerical identities
+remain limited to r2/o32. Both source backends share this boundary; unknown-mode
+imports, including whole or partial GOT reads, remain refused. Direct control
 identities, serialized callables and code-byte/data addresses retain distinct
 roles. The LLVM r7 SDK uses the fork's `Fi8` data layout, so stronger function
 code alignment cannot clear the callable ISA tag during LLVM optimization.
@@ -607,6 +617,25 @@ Recompiling numeric observations requires NeverSight Clang with the qualified
 ordinary Clang 22 can fold the low bit to zero despite a mode attribute.
 The runtime matrix relocates rebuilt callees, then checks symbol-relative
 integer values, masks, offsets, equality and actual indirect calls.
+The n32/n64 matrix additionally observes the complete 64-bit result of direct
+and indirect calls to separate classic and microMIPS targets. N32 upper-half
+addresses retain their canonical register representation; n64 cases execute
+above 4 GiB. External microMIPS references do not require the compiler to emit
+a microMIPS body. Reconstructed bodies still require compiler support for
+that encoding.
+
+Linked ELF instruction fields can retain function identity through
+`R_MIPS_HI16/LO16/HIGHER/HIGHEST` records. The loader checks the symbol,
+instruction mode, bytes and addend; ELF32 implicit HI/LO pairs follow relocation
+table order, including a LO instruction scheduled before HI in different
+registers. Shared source projection applies each field's carry, shift and
+truncation to the rebuilt symbol address while keeping physical LowIR unchanged.
+Address arithmetic and bit projection retain that symbol's identity.
+This currently covers classic LUI, ADDIU, DADDIU and ORI fields naming defined
+function symbols. It does not cover compressed instruction relocation encodings
+or infer an address from an equal numeric literal. Without relocation or other
+authenticated use evidence, the original integer bits remain scalar. Conflicting,
+mismatched or unpaired claimed fields refuse source reconstruction.
 
 The microMIPS operation and slot rules were checked against
 [microMIPS32 Volume II, revision 5.04](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00582-2B-microMIPS32-AFP-05.04.pdf)
@@ -1575,7 +1604,9 @@ A floating result uses f0. Integer results use v0, or v0/v1 in target word
 order for an o32 64-bit result or an n32/n64 128-bit result. Narrow integers
 retain their declared signedness. Both signed and unsigned 32-bit results are
 sign-extended in n32/n64 registers. A pointer uses its ABI width, and a void
-call defines no result carrier. The ABI preserves the low eight bytes of even
+call defines no result carrier. Direct and indirect tail transfers preserve
+the complete integer result register; n32's four-byte pointer width does not
+narrow its eight-byte result carrier. The ABI preserves the low eight bytes of even
 F20–F30 on o32 and n32, or F24–F31 on n64. Unqualified FP profiles, unknown
 call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the

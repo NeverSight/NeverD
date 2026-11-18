@@ -13,6 +13,7 @@
 
 #include "neverd/loader/MachO/MachOLoader.h"
 
+#include "DataInCode.h"
 #include "DyldCacheLoading.h"
 
 #include "neverd/Limits.h"
@@ -229,6 +230,7 @@ llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
   bool HasTextVMAddr = false;
   macho_loader::DyldInfoOffsets DyldInfo;
   macho_loader::FunctionStartsInfo FuncStarts;
+  linkedit_data_command Dice{};
   macho_loader::ChainedFixupsInfo ChainedFixups;
   std::vector<macho_loader::SectionInfo> Sections;
   const uint8_t *BasePtr = Img.Raw.data();
@@ -399,6 +401,9 @@ llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
       }
     }
 
+    if (LC.C.cmd == LC_DATA_IN_CODE)
+      Dice = Obj.getLinkeditDataLoadCommand(LC);
+
     if (LC.C.cmd == LC_FUNCTION_STARTS &&
         LC.C.cmdsize >= sizeof(linkedit_data_command)) {
       auto LDC = Obj.getLinkeditDataLoadCommand(LC);
@@ -436,6 +441,13 @@ llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
   if (OverlappingObjectSections)
     return llvm::make_error<llvm::StringError>(
         "macho: relocatable sections overlap", llvm::inconvertibleErrorCode());
+
+  if (Dice.datasize)
+    if (auto E =
+            loadMachODataInCode(Img, Dice,
+                                Obj.isLittleEndian() ? llvm::endianness::little
+                                                     : llvm::endianness::big))
+      return E;
 
   macho_loader::parseDyldInfoLoadCommands(Obj, DyldInfo);
 
@@ -545,7 +557,8 @@ llvm::Expected<BinaryImage> MachOLoader::loadBufferImpl(
       // inside a function and must not shorten the owning function's CFG.
       const bool IsAssemblerLocalLabel = NameOrErr->starts_with(".L");
       Sym.IsFunc =
-          IsInstructions && Sec.contains(SymAddr) && !IsAssemblerLocalLabel;
+          IsInstructions && Sec.contains(SymAddr) && !IsAssemblerLocalLabel &&
+          machODataInCodeRanges(Img.MachODataInCode, SymAddr, 1).empty();
     }
     Img.Symbols.push_back(Sym);
 

@@ -1,0 +1,19 @@
+//===- MIPSImmediateRelocations.def - MIPS split address fields ----------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+/// \file
+/// ELF relocation kind, right shift and carry before extracting sixteen bits.
+//===----------------------------------------------------------------------===//
+
+#ifndef NEVERD_MIPS_IMMEDIATE_RELOCATION
+#error "Define NEVERD_MIPS_IMMEDIATE_RELOCATION before including this file"
+#endif
+
+NEVERD_MIPS_IMMEDIATE_RELOCATION(Lo16, R_MIPS_LO16, 0, 0)
+NEVERD_MIPS_IMMEDIATE_RELOCATION(Hi16, R_MIPS_HI16, 16, 0x8000ULL)
+NEVERD_MIPS_IMMEDIATE_RELOCATION(Higher, R_MIPS_HIGHER, 32, 0x80008000ULL)
+NEVERD_MIPS_IMMEDIATE_RELOCATION(Highest, R_MIPS_HIGHEST, 48, 0x800080008000ULL)
+
+#undef NEVERD_MIPS_IMMEDIATE_RELOCATION

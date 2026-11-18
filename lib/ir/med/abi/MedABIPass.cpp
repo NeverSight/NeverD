@@ -1475,7 +1475,8 @@ void recoverCallAbi(
           CI.IsIndirect ? indirectCallSlot(Func, Op, lookupDefinition)
                         : std::nullopt;
       if (CI.IsIndirect && !CallSlot && Op.NumInputs)
-        if (const auto Cached = resolveMedCallTarget(Blk, OI, Op.Inputs[0]);
+        if (const auto Cached =
+                resolveMedCallTarget(Blk, OI, Op.Inputs[0], nullptr, TheArch);
             Cached && Cached->ThroughSlot)
           CallSlot = Cached->Address;
       // An import's slot names the import, whose ABI applies: a forwarded

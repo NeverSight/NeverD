@@ -4000,6 +4000,46 @@ TEST(HighExprSimplify, BitDemandRetainsImplicitAssignmentConversions) {
   EXPECT_TRUE(containsNode(F.Body[0].Val, X));
 }
 
+TEST(HighExprSimplify, BitDemandRetainsRelocatableConstantIdentity) {
+  using P = ConstantAddressProvenance;
+  for (P Provenance :
+       {P::AddressFragment, P::Address, P::DataAddress, P::CodeAddress}) {
+    auto Address = HighExpr::makeConst(0x100191, 4, Provenance, 0x100190);
+    for (uint64_t Mask : {1u, 0xffu, 0xffffu, 0xfffffffeu}) {
+      SCOPED_TRACE(Mask);
+      EXPECT_EQ(projectHighIntegerBits(Address, Mask), Address);
+      auto Masked = HighExpr::makeBinop(
+          NdOp::INT_AND, Address, HighExpr::makeConst(Mask, 4, P::Scalar));
+      EXPECT_TRUE(containsNode(basicSimplified(Masked), Address));
+    }
+  }
+  // A legacy occurrence can carry an owner before its role is classified.
+  auto Owned = HighExpr::makeConst(0x100191, 4, P::Unknown, 0x100190);
+  EXPECT_EQ(projectHighIntegerBits(Owned, 0xff), Owned);
+  for (P Provenance : {P::Unknown, P::Scalar}) {
+    auto Literal = HighExpr::makeConst(0x100191, 4, Provenance);
+    EXPECT_EQ(projectHighIntegerBits(Literal, 0xff)->ConstVal, 0x91u);
+    EXPECT_EQ(Literal->ConstVal, 0x100191u);
+  }
+}
+
+TEST(HighExprSimplify, BitDemandDoesNotUseRelocatedMasksOrShiftCounts) {
+  using P = ConstantAddressProvenance;
+  const auto X = HighExpr::makeVar(tempOfSize(1, 4));
+  auto Bits = HighExpr::makeBinop(NdOp::INT_OR, X,
+                                  HighExpr::makeConst(0x80, 4, P::Scalar));
+  for (NdOp Op : {NdOp::INT_AND, NdOp::INT_OR, NdOp::INT_LEFT, NdOp::INT_RIGHT,
+                  NdOp::INT_ASHR, NdOp::INT_MULT}) {
+    auto Address = HighExpr::makeConst(16, 4, P::CodeAddress, 16);
+    auto Before = HighExpr::makeBinop(Op, Bits, Address);
+    auto After = projectHighIntegerBits(Before, 0xff);
+    EXPECT_TRUE(containsNode(After, Address));
+    EXPECT_TRUE(containsNode(After, Bits->Operands[1])) << After->str();
+  }
+  auto LowAddress = HighExpr::makeConst(1, 4, P::CodeAddress, 0);
+  EXPECT_EQ(projectHighIntegerBits(LowAddress, 0x80), LowAddress);
+}
+
 TEST(HighExprSimplify, PackedPredicatesKeepOnlyTheirOwnObservedBit) {
   const auto X = HighExpr::makeVar(tempOfSize(1, 4));
   const auto Y = HighExpr::makeVar(tempOfSize(2, 4));

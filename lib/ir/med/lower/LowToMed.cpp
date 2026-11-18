@@ -19,6 +19,7 @@
 #include "../X86/RegistrationRoots.h"
 #include "../X86/RegistrationSEH4PhysicalFrame.h"
 #include "ComputedBranchScalars.h"
+#include "MIPS/PICGlobalPointer.h"
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
@@ -876,6 +877,9 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           : std::nullopt;
   if (SEHPhysical)
     Physical = std::move(SEHPhysical->Function);
+  if (Image && isMIPS64(TheArch) && Image->Arch == TheArch &&
+      Fmt == BinaryFormat::ELF)
+    Physical = projectMIPSPICGlobalPointer(SourceLow, *Image);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
   if (isMIPS(TheArch))
@@ -1914,6 +1918,11 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
 
     Func.Blocks.push_back(std::move(MB));
   }
+
+  // Reconstruct loader-authenticated symbolic operands only in the source
+  // view. Do this before any SSA pass can freeze their link-time bit patterns.
+  if (isMIPS(TheArch))
+    projectMIPSRelocatedImmediates(Func);
 
   // Before sub-register fixup: model calls to known i64-returning callees
   // (32-bit register-pair return EDX:EAX / R1:R0) as defining the pair. Running

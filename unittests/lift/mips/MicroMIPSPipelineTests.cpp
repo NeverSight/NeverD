@@ -14,6 +14,7 @@
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/pipeline/Pipeline.h"
@@ -63,7 +64,19 @@ TEST(MicroMIPSPipelineSource, LLVMCModePreludeFollowsEmittedSignatures) {
     EXPECT_EQ(Text.find("#define NEVERD_MICROMIPS") != std::string::npos,
               CallsMicro)
         << Text;
+    EXPECT_EQ(Text.find("#error \"this compiler cannot emit microMIPS"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("NEVERD_MICROMIPS_REFERENCE ") != std::string::npos,
+              CallsMicro)
+        << Text;
   }
+  std::string Text;
+  llvm::raw_string_ostream Out(Text);
+  ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options));
+  EXPECT_NE(Text.find("#error \"this compiler cannot emit microMIPS"),
+            std::string::npos)
+      << Text;
 }
 
 TEST(MicroMIPSPipelineSource, N32RetainsNativeWideRecordTypes) {
@@ -234,8 +247,12 @@ BinaryImage mixedImage(Arch Target) {
   Image.Arch = Target;
   Image.Mode = InstructionMode::MixedMIPS;
   Image.Format = BinaryFormat::ELF;
-  Image.Bits = Bitness::Bits32;
+  Image.Bits = getTargetRegInfo(Target).PointerSize == 8 ? Bitness::Bits64
+                                                         : Bitness::Bits32;
   Image.MIPS.emplace();
+  Image.MIPS->ABI = isMIPSN32(Target)  ? MIPSABI::N32
+                    : isMIPS64(Target) ? MIPSABI::N64
+                                       : MIPSABI::O32;
   Image.MIPS->HasMicroMIPS = true;
   Image.MIPS->CodeModeEntries = {{0x1000, InstructionMode::MIPSClassic},
                                  {0x1100, InstructionMode::MicroMIPS}};
@@ -251,8 +268,52 @@ BinaryImage mixedImage(Arch Target) {
   return Image;
 }
 
-TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
-  auto Image = mixedImage(GetParam());
+TEST(MicroMIPSPipelineSource, ExternalMicroModeDoesNotRequireBodyCodegen) {
+  for (Arch Architecture :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL,
+        Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Architecture));
+    auto Image = mixedImage(Architecture);
+    HighFunc Caller;
+    Caller.Entry = 0x1000;
+    Caller.Name = "calls_micro";
+    Caller.ReturnType = NdType::makeInt(4, true);
+    HighStmt Return;
+    Return.Kind = StmtKind::Return;
+    Return.RetVal = HighExpr::makeCall("micro_target", 0x1100, {});
+    Return.RetVal->Type = Caller.ReturnType;
+    Caller.Body.push_back(Return);
+    HighFunc Target = Caller;
+    Target.Entry = 0x1100;
+    Target.Name = "micro_target";
+    Target.Body.front().RetVal = HighExpr::makeConst(7, 4);
+    CEmitterOptions Options;
+    Options.TheArch = Architecture;
+    Options.Format = BinaryFormat::ELF;
+    Options.Image = &Image;
+    for (bool HasBody : {false, true}) {
+      std::string Text;
+      llvm::raw_string_ostream Out(Text);
+      std::vector<HighFunc> Functions{Caller};
+      if (HasBody)
+        Functions.push_back(Target);
+      ASSERT_TRUE(HighCEmitter().emit(Functions, Out, Options));
+      EXPECT_EQ(Text.find("#error \"this compiler cannot emit microMIPS") !=
+                    std::string::npos,
+                HasBody)
+          << Text;
+      EXPECT_NE(Text.find("micro_target("), std::string::npos) << Text;
+      if (!HasBody)
+        EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE extern int"),
+                  std::string::npos)
+            << Text;
+    }
+  }
+}
+
+void checkNumericHighCIdentities(Arch Architecture) {
+  auto Image = mixedImage(Architecture);
+  const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
   using P = ConstantAddressProvenance;
   for (P Provenance : {P::CodeAddress, P::Address, P::DataAddress, P::Scalar})
     for (va_t Value : {0x1100u, 0x1101u}) {
@@ -261,13 +322,13 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       HighFunc Function;
       Function.Entry = 0x1000;
       Function.Name = "numeric_value";
-      Function.ReturnType = NdType::makeInt(4, false);
+      Function.ReturnType = NdType::makeInt(PointerBytes, false);
       HighStmt Return;
       Return.Kind = StmtKind::Return;
-      Return.RetVal = HighExpr::makeConst(Value, 4, Provenance);
+      Return.RetVal = HighExpr::makeConst(Value, PointerBytes, Provenance);
       Function.Body.push_back(std::move(Return));
       CEmitterOptions Emit;
-      Emit.TheArch = GetParam();
+      Emit.TheArch = Architecture;
       Emit.Format = BinaryFormat::ELF;
       Emit.Image = &Image;
       std::string Text;
@@ -280,8 +341,8 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
       } else if (Provenance == P::CodeAddress ||
                  (Provenance == P::Address && Value == 0x1101)) {
         ASSERT_TRUE(HighCEmitter().emit({Function}, Output, Emit));
-        // Numeric addresses retain the linked ELF symbol through an opaque
-        // assembler name, without inventing a C call signature for its body.
+        // An image symbol alone supplies no C prototype. Its numeric identity
+        // uses the linker alias without inventing a callable declaration.
         EXPECT_NE(Text.find("extern unsigned char neverd_code_micro_target[] "
                             "__asm__(\"micro_target\");"),
                   std::string::npos)
@@ -289,6 +350,33 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
         EXPECT_NE(Text.find("(uintptr_t)neverd_code_micro_target"),
                   std::string::npos)
             << Text;
+        EXPECT_EQ(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+
+        // With an actual definition, both the mode and the typed callable
+        // identity must survive. Keep this separate from the symbol-only case.
+        HighFunc Target;
+        Target.Entry = 0x1100;
+        Target.Name = "micro_target";
+        Target.ReturnType = NdType::makeInt(4, false);
+        HighStmt TargetReturn;
+        TargetReturn.Kind = StmtKind::Return;
+        TargetReturn.RetVal = HighExpr::makeConst(42, 4);
+        Target.Body.push_back(std::move(TargetReturn));
+        std::string DefinedText;
+        llvm::raw_string_ostream DefinedOutput(DefinedText);
+        ASSERT_TRUE(
+            HighCEmitter().emit({Function, Target}, DefinedOutput, Emit));
+        EXPECT_NE(DefinedText.find("NEVERD_MICROMIPS uint32_t micro_target("),
+                  std::string::npos)
+            << DefinedText;
+        EXPECT_NE(DefinedText.find("return (uint" +
+                                   std::to_string(PointerBytes * 8) +
+                                   "_t)(uintptr_t)micro_target;"),
+                  std::string::npos)
+            << DefinedText;
+        EXPECT_EQ(DefinedText.find("neverd_code_micro_target"),
+                  std::string::npos)
+            << DefinedText;
       } else {
         EXPECT_TRUE(HighCEmitter().emit({Function}, Output, Emit)) << Text;
         EXPECT_EQ(Text.find("micro_target"), std::string::npos) << Text;
@@ -298,14 +386,15 @@ TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
     }
 }
 
-TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
-  auto Image = mixedImage(GetParam());
+void checkNumericLLVMIdentities(Arch Architecture) {
+  auto Image = mixedImage(Architecture);
+  const auto PointerBytes = getTargetRegInfo(Architecture).PointerSize;
   using P = ConstantAddressProvenance;
   for (P Provenance : {P::CodeAddress, P::Address}) {
     MedFunc Function;
     Function.Entry = 0x1000;
     Function.Name = "numeric_value";
-    Function.ReturnType = NdType::makeInt(4, false);
+    Function.ReturnType = NdType::makeInt(PointerBytes, false);
     Function.Blocks.emplace_back();
     auto &Block = Function.Blocks.back();
     Block.Id = 0;
@@ -314,36 +403,58 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     Copy.Opcode = NdOp::COPY;
     Copy.Output.Kind = MedVar::Reg;
     Copy.Output.RegOff = mipsreg::V0;
-    Copy.Output.Size = 4;
-    Copy.Output.TheArch = GetParam();
+    Copy.Output.Size = PointerBytes;
+    Copy.Output.TheArch = Architecture;
     Copy.Output.Id = 1;
     Copy.Output.SSAVer = 1;
-    auto Value = MedVar::makeConst(0x1101, 4);
+    auto Value = MedVar::makeConst(0x1101, PointerBytes);
     Value.Provenance = Provenance;
     Copy.addInput(Value);
     Block.Ops.push_back(Copy);
     MedOp Return;
     Return.Opcode = NdOp::RETURN;
     Block.Ops.push_back(Return);
-    // A symbol in executable bytes alone supplies no reconstructed LLVM
-    // function identity. Supply the lifted target that the numeric value
-    // actually names, as the production selection does.
+    // A selected target has a definition; an authenticated function outside
+    // the selection has a declaration. Mode evidence alone supplies neither.
     MedFunc TargetFunction = Function;
     TargetFunction.Entry = 0x1100;
     TargetFunction.Name = "micro_target";
     TargetFunction.Blocks.front().StartAddr = 0x1100;
     TargetFunction.Blocks.front().Ops.front().Inputs[0] =
-        MedVar::makeConst(42, 4);
+        MedVar::makeConst(42, PointerBytes);
     llvm::LLVMContext Context;
     MedLLVMEmitter Emitter;
     if (Provenance == P::CodeAddress) {
+      auto Declared =
+          MedLLVMEmitter().emit({Function}, Context, "unselected_target",
+                                Architecture, {}, &Image, BinaryFormat::ELF);
+      ASSERT_TRUE(Declared);
+      EXPECT_FALSE(llvm::verifyModule(*Declared, &llvm::errs()));
+      const auto *Entry = Declared->getFunction("micro_target");
+      ASSERT_TRUE(Entry);
+      EXPECT_TRUE(Entry->isDeclaration());
+      EXPECT_FALSE(Entry->use_empty());
+      EXPECT_EQ(mips::instructionModeFromLLVM(*Entry),
+                InstructionMode::MicroMIPS);
+      CEmitterOptions Options;
+      Options.TheArch = Architecture;
+      Options.Format = BinaryFormat::ELF;
+      Options.Image = &Image;
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      ASSERT_TRUE(LLVMCEmitter().emit(*Declared, Output, Options));
+      EXPECT_EQ(Text.find("#error"), std::string::npos) << Text;
+      EXPECT_NE(Text.find("NEVERD_MICROMIPS_REFERENCE "), std::string::npos)
+          << Text;
+      auto Missing = mixedImage(Architecture);
+      Missing.Symbols.clear();
       EXPECT_FALSE(MedLLVMEmitter().emit({Function}, Context, "missing_target",
-                                         GetParam(), {}, &Image,
+                                         Architecture, {}, &Missing,
                                          BinaryFormat::ELF));
     }
     auto Module =
         Emitter.emit({Function, TargetFunction}, Context, "micro_pointer",
-                     GetParam(), {}, &Image, BinaryFormat::ELF);
+                     Architecture, {}, &Image, BinaryFormat::ELF);
     ASSERT_TRUE(Module);
     EXPECT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
     auto *Target = Module->getFunction("micro_target");
@@ -354,11 +465,11 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     // before native code generation or when the pointer is a constant.
     Target->setAlignment(llvm::Align(4));
     auto *Address = llvm::ConstantExpr::getPtrToInt(
-        Target, llvm::Type::getInt32Ty(Context));
+        Target, llvm::Type::getIntNTy(Context, 8 * PointerBytes));
     EXPECT_FALSE(
         llvm::computeKnownBits(Address, Module->getDataLayout()).Zero[0]);
     CEmitterOptions Options;
-    Options.TheArch = GetParam();
+    Options.TheArch = Architecture;
     Options.Format = BinaryFormat::ELF;
     Options.Image = &Image;
     std::string Text;
@@ -366,10 +477,30 @@ TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
     ASSERT_TRUE(LLVMCEmitter().emit(*Module, Output, Options));
     EXPECT_NE(Text.find("micro_target"), std::string::npos) << Text;
     EXPECT_NE(Text.find("NEVERD_MICROMIPS"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("#error \"this compiler cannot emit microMIPS"),
+              std::string::npos)
+        << Text;
   }
 }
 
-TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndWideProfiles) {
+TEST_P(MicroMIPSPipeline, HighCDoesNotConfuseCodeBytesAndCallableValues) {
+  checkNumericHighCIdentities(GetParam());
+}
+
+TEST_P(MicroMIPSPipeline, LLVMRetainsNumericMicroIdentitiesBeforeOptimization) {
+  checkNumericLLVMIdentities(GetParam());
+}
+
+TEST(MicroMIPS64Pipeline, BothSourcesPreserveNumericCodeIdentityAndWidth) {
+  for (Arch Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    checkNumericHighCIdentities(Target);
+    checkNumericLLVMIdentities(Target);
+  }
+}
+
+TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndMismatchedABIs) {
   auto Image = mixedImage(GetParam());
   EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
   EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
@@ -385,6 +516,43 @@ TEST_P(MicroMIPSPipeline, NumericModeBoundaryRejectsUnknownAndWideProfiles) {
   for (Arch Wide :
        {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
     Image.Arch = Wide;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+  }
+}
+
+TEST(MicroMIPSPipelineSource, NumericModeBoundaryAdmitsQualifiedWideProfiles) {
+  for (Arch Target :
+       {Arch::MIPS64, Arch::MIPS64EL, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    const bool N32 = Target == Arch::MIPS64N32 || Target == Arch::MIPS64N32EL;
+    auto Image = mixedImage(Target);
+    Image.Bits = N32 ? Bitness::Bits32 : Bitness::Bits64;
+    Image.MIPS->ABI = N32 ? MIPSABI::N32 : MIPSABI::N64;
+    EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100));
+    EXPECT_NO_THROW(mips::requireNumericCodePointerSource(&Image, 0x1000));
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, InvalidVA),
+                 std::invalid_argument);
+    Image.MIPS->ABI = N32 ? MIPSABI::N64 : MIPSABI::N32;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->ABI = N32 ? MIPSABI::N32 : MIPSABI::N64;
+    for (unsigned Revision : {1u, 6u}) {
+      Image.MIPS->ISARevision = Revision;
+      EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                   std::invalid_argument);
+    }
+    Image.MIPS->ISARevision = 2;
+    Image.MIPS->HistoricalISA = 3;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->HistoricalISA = 0;
+    Image.MIPS->HasMicroMIPS = false;
+    EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
+                 std::invalid_argument);
+    Image.MIPS->HasMIPS16 = true;
+    Image.Mode = InstructionMode::MIPS16;
+    Image.MIPS->CodeModeEntries.clear();
     EXPECT_THROW(mips::requireNumericCodePointerSource(&Image, 0x1100),
                  std::invalid_argument);
   }

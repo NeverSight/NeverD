@@ -1,0 +1,10 @@
+//===- MachOPublishedData.def - Embedded data diagnostics -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+MACHO_PUBLISHED_DATA_TEXT(
+    kPublishedLayout,
+    "Mach-O data-in-code records do not fit the installed image layout")
+#undef MACHO_PUBLISHED_DATA_TEXT

@@ -1,0 +1,13 @@
+//===- DataInCode.def - Mach-O embedded data diagnostics --------*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+MACHO_DICE_TEXT(kRecordSize, "Mach-O data-in-code table ends inside a record")
+MACHO_DICE_TEXT(kRange, "Mach-O data-in-code record has an invalid byte range")
+MACHO_DICE_TEXT(kOverlap, "Mach-O data-in-code byte ranges overlap")
+MACHO_DICE_TEXT(kOwner,
+                "Mach-O data-in-code record has no file-backed code owner")
+
+#undef MACHO_DICE_TEXT

@@ -15,6 +15,7 @@
 
 #if defined(__APPLE__) && defined(__arm64e__)
 #include <libunwind.h>
+#include <mach-o/compact_unwind_encoding.h>
 #include <unwind.h>
 
 #define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)                    \
@@ -87,6 +88,72 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
       return Failure;
   }
   return Result;
+}
+
+/// Open the original indexed FDE for stack inspection at a known function
+/// entry. The kernel stopped before its first instruction, with incoming SP
+/// and live unsigned LR. Only the system unwinder interprets the frame.
+/// LookupOffset identifies the byte used for lookup in that first instruction.
+/// A false result leaves the output cursor unsuitable for use.
+static inline bool
+ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
+                                     const ucontext_t *Context, uintptr_t Entry,
+                                     unsigned *LookupOffset) {
+  if (!System || !Context || !Context->uc_mcontext || !LookupOffset || !Entry ||
+      Entry % NDArm64eInstructionAlignment)
+    return false;
+  const arm_thread_state64_t *Regs = &Context->uc_mcontext->__ss;
+  if (arm_thread_state64_get_pc(*Regs) != Entry)
+    return false;
+  const uintptr_t SP = arm_thread_state64_get_sp(*Regs);
+  const uintptr_t LR = arm_thread_state64_get_lr(*Regs);
+  if (!SP || SP % NDArm64eStackAlignment || !LR ||
+      LR != (uintptr_t)ptrauth_strip((void *)LR, ptrauth_key_return_address))
+    return false;
+  unw_context_t Local;
+  if (unw_getcontext(&Local) || unw_init_local(System, &Local) ||
+      unw_set_reg(System, UNW_REG_SP, SP) ||
+      unw_set_reg(System, UNW_ARM64_FP, arm_thread_state64_get_fp(*Regs)))
+    return false;
+  for (unsigned I = 0; I < NDArm64ePreservedGPRCount; ++I)
+    if (unw_set_reg(System, UNW_ARM64_X19 + I,
+                    Regs->__x[NDArm64eFirstPreservedGPR + I]))
+      return false;
+  for (unsigned I = 0; I < NDArm64ePreservedDCount; ++I) {
+    unw_fpreg_t Value;
+    memcpy(&Value, &Context->uc_mcontext->__ns.__v[NDArm64eFirstPreservedD + I],
+           sizeof(Value));
+    if (unw_set_fpreg(System, UNW_ARM64_D8 + I, Value))
+      return false;
+  }
+  // Darwin's cursor stores live LR in its return-address representation.
+  // Use only the incoming LR from the kernel's verified register state.
+  const uintptr_t SystemLR = (uintptr_t)ptrauth_sign_unauthenticated(
+      (void *)LR, ptrauth_key_return_address, SP);
+  if (unw_set_reg(System, UNW_ARM64_LR, SystemLR))
+    return false;
+  for (unsigned Offset = 0; Offset <= NDArm64eEntryLookupInteriorByte;
+       ++Offset) {
+    const uintptr_t IP = (uintptr_t)ptrauth_sign_unauthenticated(
+        (void *)(Entry + Offset), ptrauth_key_return_address, SP);
+    unw_proc_info_t Info;
+    if (unw_set_reg(System, UNW_REG_IP, IP) ||
+        unw_set_reg(System, UNW_REG_SP, SP) ||
+        unw_get_proc_info(System, &Info) || Info.start_ip != Entry ||
+        Info.end_ip <= Entry ||
+        Info.end_ip - Entry < NDArm64eInstructionAlignment ||
+        (Info.format & UNWIND_ARM64_MODE_MASK) != UNWIND_ARM64_MODE_DWARF)
+      return false;
+    if (Info.unwind_info && Info.unwind_info_size) {
+      *LookupOffset = Offset;
+      return true;
+    }
+    // Some systems return the compact DWARF index with an empty FDE at
+    // its inclusive start. The next byte is inside the same A64 instruction.
+    if (Info.unwind_info || Info.unwind_info_size)
+      return false;
+  }
+  return false;
 }
 
 // Recover from the interrupted stack before changing either native consumer.

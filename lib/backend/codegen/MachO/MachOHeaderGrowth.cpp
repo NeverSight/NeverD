@@ -14,6 +14,7 @@
 #include "neverd/backend/Limits.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/DataInCode.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -118,17 +119,28 @@ void uleb(Bytes &B, uint64_t V) {
 // arithmetic has no complete producer relocation evidence in linked images;
 // reject it rather than rewriting only the first instruction of a computation.
 llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
-                             uint64_t HeaderEnd, uint64_t Shift, Arch A) {
+                             uint64_t HeaderEnd, uint64_t Shift, Arch A,
+                             llvm::ArrayRef<MachODataInCodeRange> Data) {
   if (!(S.flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS)))
     return llvm::Error::success();
   const uint64_t Off = S.offset + Shift;
   if (A == Arch::AArch64) {
-    if (S.size % 4)
-      return fail("unaligned instruction section");
-    for (uint64_t I = 0; I < S.size; I += 4) {
+    constexpr uint64_t Word = sizeof(uint32_t);
+    for (uint64_t I = 0, Next; I < S.size; I = Next) {
+      const auto PC = S.addr + I;
+      if (!Data.empty() && Data.front().Begin == PC) {
+        if (Data.front().End - S.addr > S.size)
+          return fail(kMixedCoverage);
+        Next = Data.front().End - S.addr;
+        Data = Data.drop_front();
+        continue;
+      }
+      if (PC % Word || S.size - I < Word ||
+          (!Data.empty() && Data.front().Begin - PC < Word))
+        return fail(kMixedCoverage);
+      Next = I + Word;
       auto *P = B.data() + Off + I;
       const auto W = readLE<uint32_t>(P);
-      const auto PC = S.addr + I;
       if ((W & 0x1f000000) != 0x10000000)
         continue;
       const bool Page = W & 0x80000000;
@@ -138,7 +150,10 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
           Page ? (PC & ~uint64_t(4095)) + Imm * 4096 : PC + Imm;
       uint64_t Exact = Target;
       if (Page && Target == (Old & ~uint64_t(4095))) {
-        if (I + 8 > S.size)
+        if (I + 8 > S.size ||
+            !machODataInCodeRanges(Data, PC + sizeof(uint32_t),
+                                   sizeof(uint32_t))
+                 .empty())
           return fail("unresolved header-page ADRP");
         const auto Next = readLE<uint32_t>(P + 4), Reg = W & 31;
         if ((Next & 0xffc00000) != 0x91000000 || (Next & 31) != Reg ||
@@ -152,6 +167,8 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
     }
     return llvm::Error::success();
   }
+  if (!Data.empty())
+    return fail(kMixedCoverage);
   csh H = 0;
   if (cs_open(CS_ARCH_X86, CS_MODE_64, &H) != CS_ERR_OK)
     return fail("instruction decoder unavailable");
@@ -255,6 +272,28 @@ llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
       return fail(kSlideImage);
     }
   }
+  bool AbsoluteTable = false;
+  forEachMachOLoadCommand(
+      Binary.data(), Binary.size(),
+      [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+        if (ID != LC_DATA_IN_CODE)
+          return;
+        const auto &D = *reinterpret_cast<const linkedit_data_command *>(P);
+        if (D.datasize % sizeof(data_in_code_entry) ||
+            !rangeInBounds(D.dataoff, D.datasize, Binary.size())) {
+          AbsoluteTable = true;
+          return;
+        }
+        for (size_t At = 0; At < D.datasize; At += sizeof(data_in_code_entry)) {
+          const auto Kind =
+              readLE<uint16_t>(Binary.data() + D.dataoff + At +
+                               offsetof(data_in_code_entry, kind));
+          if (Kind < DICE_KIND_DATA || Kind > DICE_KIND_JUMP_TABLE32)
+            AbsoluteTable = true;
+        }
+      });
+  if (AbsoluteTable)
+    return fail(kSlideEmbedded);
   const symtab_command *Sym = nullptr;
   const uint64_t HeaderEnd = H.HeaderSize + H.SizeOfCmds;
   auto Candidate = Binary;
@@ -405,27 +444,41 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     return fail(kPrefixRange);
   if (OldBase < Shift)
     return llvm::make_error<InsufficientMachOHeaderPrefix>();
+  std::vector<MachODataInCodeRange> Embedded;
+  for (const auto Off : Commands) {
+    if (readLE<uint32_t>(Binary.data() + Off) != LC_DATA_IN_CODE)
+      continue;
+    const auto &D =
+        *reinterpret_cast<const linkedit_data_command *>(Binary.data() + Off);
+    if (!rangeInBounds(D.dataoff, D.datasize, Binary.size()))
+      return fail(kMixedCoverage);
+    auto Parsed = decodeMachODataInCode(
+        llvm::ArrayRef(Binary).slice(D.dataoff, D.datasize), OldBase,
+        llvm::endianness::little);
+    if (!Parsed)
+      return Parsed.takeError();
+    Embedded = std::move(*Parsed);
+  }
   std::vector<std::pair<uint64_t, uint64_t>> Code;
   for (const auto &R : Sections) {
     const auto &S =
         *reinterpret_cast<const section_64 *>(Binary.data() + R.HeaderOff);
     if ((S.flags & S_ATTR_SOME_INSTRUCTIONS) &&
-        !(S.flags & S_ATTR_PURE_INSTRUCTIONS))
-      return fail("mixed code/data sections lack a relocation contract");
-    if (S.flags & S_ATTR_PURE_INSTRUCTIONS)
+        !(S.flags & S_ATTR_PURE_INSTRUCTIONS) &&
+        machODataInCodeRanges(Embedded, S.addr, S.size).empty())
+      return fail(kMixedCoverage);
+    if (S.flags & (S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS))
       Code.push_back({S.addr, S.size});
   }
   auto InCode = [&](uint64_t VA) {
-    return llvm::any_of(
-        Code, [&](auto R) { return VA >= R.first && VA - R.first < R.second; });
+    return machODataInCodeRanges(Embedded, VA, 1).empty() &&
+           llvm::any_of(Code, [&](auto R) {
+             return VA >= R.first && VA - R.first < R.second;
+           });
   };
   bool Starts = false;
   for (const auto Off : Commands) {
     const auto ID = readLE<uint32_t>(Binary.data() + Off);
-    if (ID == LC_DATA_IN_CODE &&
-        reinterpret_cast<const linkedit_data_command *>(Binary.data() + Off)
-            ->datasize)
-      return fail("embedded code data needs producer relocation evidence");
     if (ID == LC_MAIN &&
         !InCode(OldBase + reinterpret_cast<const entry_point_command *>(
                               Binary.data() + Off)
@@ -563,7 +616,9 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
               writeLE<uint32_t>(Field, Value + Shift);
             }
           }
-          if (auto E = headerReferences(B, Old, OldBase, End, Shift, A))
+          if (auto E = headerReferences(
+                  B, Old, OldBase, End, Shift, A,
+                  machODataInCodeRanges(Embedded, Old.addr, Old.size)))
             return E;
           if (readMachOName(Old.sectname) == "__unwind_info")
             if (auto E = compact(B, A, Old.offset + Shift, Old.size, Shift))
@@ -694,7 +749,11 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
         for (unsigned I = 0; I < L->datasize; I += sizeof(data_in_code_entry)) {
           auto *D =
               reinterpret_cast<data_in_code_entry *>(B.data() + L->dataoff + I);
-          ShiftOff(D->offset, D->length);
+          // DICE offsets are relative to the mapped Mach header, even when a
+          // segment's file offset differs from its relative virtual address.
+          if (D->offset > UINT32_MAX - Shift)
+            return fail(kMixedCoverage);
+          D->offset += Shift;
         }
       }
       break;

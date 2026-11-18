@@ -19,6 +19,7 @@
 #include "neverd/loader/ELF/ELFLoader.h"
 
 #include "ELFLoaderDetail.h"
+#include "ELFMIPSInstructionRelocations.h"
 #include "ELFMIPSProfile.h"
 
 #include "neverd/Limits.h"
@@ -288,6 +289,7 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     if (auto Error =
             elf_loader::detail::collectMIPSDynamicGOT(ELF, Tables, Img))
       return Error;
+  elf_loader::collectMIPSInstructionRelocations(Img);
 
   Progress.check();
   // --- Loader-invoked lifecycle arrays and legacy constructor sections ---

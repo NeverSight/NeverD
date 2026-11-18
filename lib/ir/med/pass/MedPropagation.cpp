@@ -549,6 +549,14 @@ void LowToMedConverter::propagate(MedFunc &Func) {
               Image->isPotentiallyRelocatableAddress(Result);
           if (!CanonicalAddressAdjustment)
             continue;
+          // A function plus a numeric displacement observes that function's
+          // rebuilt address. Even if the old sum lies inside another code
+          // owner, it cannot become that owner's independently placed symbol.
+          const ConstantInfo &Base =
+              (A->HasAddressOrigin || A->HasAddressFragment) ? *A : *B;
+          if (Base.Provenance == ConstantAddressProvenance::CodeAddress &&
+              Result != Base.Value)
+            continue;
           ResultHasAddressOrigin = true;
         }
 

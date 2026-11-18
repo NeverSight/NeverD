@@ -20,10 +20,12 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSSourceAccumulators.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedTypePass.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -186,6 +188,50 @@ TEST(MIPSEntryGP, N32HighDataAddressesKeepTheirELF32IdentityInAWideGPR) {
           Found = true;
     EXPECT_TRUE(Found) << getArchName(Image->Arch);
   }
+}
+
+TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (bool LowFirst : {false, true})
+        for (unsigned Case = 0; Case != 3; ++Case) {
+          SCOPED_TRACE(testing::Message() << N32 << Little << LowFirst << Case);
+          mips_test::ELFBytes File(
+              N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                  : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+          File.put(N32 ? 36 : 48, N32 ? 0x80000024 : 0x80000004, 4);
+          File.globalPointer(0x18100 + (Case == 1 ? 4 : 0));
+          File.put(0x100, Case == 2 ? 0x0080c825 : 0, 4); // move t9,a0
+          File.put(0x104, 0x3c080001, 4);                 // lui t0,1
+          const uint32_t AddEntry = N32 ? 0x01194021 : 0x0119402d;
+          const uint32_t AddLow = LowFirst || N32 ? 0x25088000 : 0x65088000;
+          File.put(0x108, LowFirst ? AddLow : AddEntry, 4);
+          File.put(0x10c, LowFirst ? AddEntry : AddLow, 4);
+          File.put(0x110, 0x6502801c, 4); // daddiu v0,t0,-0x7fe4
+          File.put(0x114, 0x03e00008, 4); // jr ra
+          File.put(0x118, 0, 4);
+          ELFLoader Loader;
+          auto Image = Loader.loadBuffer(File.buffer());
+          ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+          Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, 28));
+          Decoder Decode;
+          ASSERT_TRUE(Decode.init(*Image));
+          const auto Low =
+              CFGBuilder().build(*Image, Decode, Image->Entry, "pic_address");
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+          bool Bound = false;
+          for (const auto &Block : Med.Blocks)
+            for (const auto &Op : Block.Ops)
+              for (unsigned I = 0; I < Op.NumInputs; ++I) {
+                const auto &V = Op.Inputs[I];
+                Bound |= V.isConst() && V.ConstVal == 0x1011c &&
+                         isExactAddressProvenance(V.Provenance);
+              }
+          EXPECT_EQ(Bound, Case == 0);
+        }
 }
 
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
@@ -836,6 +882,115 @@ TEST(MIPSScalarCalls, IntegerCallsDoNotRequireFloatingPointProfiles) {
       }
     }
   }
+}
+
+TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool Indirect : {false, true}) {
+      SCOPED_TRACE(getArchName(Target));
+      SCOPED_TRACE(Indirect);
+      const bool Wide = isMIPS64(Target);
+      const unsigned Word = Wide ? 8 : 4;
+      mips_test::ELFBytes File(
+          isMIPSN32(Target)
+              ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+              : Target);
+      if (isMIPSN32(Target))
+        File.put(36, 0x80000020, 4);
+      File.Bytes.resize(0x208);
+      const unsigned Program = File.Is64 ? 64 : 52;
+      File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
+               File.Is64 ? 8 : 4);
+      File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
+               File.Is64 ? 8 : 4);
+      // GCC's optimized indirect forwarder snapshots the pointer before
+      // moving the argument in the delay slot. Neither transfer changes RA.
+      const std::vector<uint32_t> Words =
+          Indirect ? std::vector<uint32_t>{0x0080c825, 0x03200008, 0x00a02025}
+                   : std::vector<uint32_t>{0x08004080, 0};
+      for (unsigned I = 0; I != Words.size(); ++I)
+        File.put(0x100 + 4 * I, Words[I], 4);
+      File.put(0x200, 0x03e00008, 4);
+      File.put(0x204, 0x00801025, 4); // jr ra; or v0,a0,zero
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      ASSERT_EQ(Image->Arch, Target);
+      Image->Symbols.push_back(
+          {"tail_result", Image->Entry, 4 * Words.size(), true});
+      Image->Symbols.push_back({"callee", 0x10200, 8, true});
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(*Image));
+      const auto Low =
+          CFGBuilder().build(*Image, Decode, Image->Entry, "tail_result");
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      std::optional<SourceCallOccurrenceKey> Site;
+      for (const auto &Block : Low.Blocks)
+        for (const auto &Op : Block.Ops) {
+          if (auto Key = sourceCallOccurrenceKey(Op)) {
+            ASSERT_FALSE(Site);
+            Site = *Key;
+            EXPECT_EQ(Op.Output.Size, Word);
+          }
+          if (Op.Opcode == NdOp::RETURN) {
+            ASSERT_EQ(Op.NumInputs, 1u);
+            EXPECT_EQ(Op.Inputs[0].Size, Word);
+          }
+        }
+      ASSERT_TRUE(Site);
+      for (unsigned Bytes : {1, 2, 4, 8}) {
+        if (Bytes > Word)
+          continue;
+        for (bool Signed : {false, true}) {
+          SCOPED_TRACE(Bytes);
+          SCOPED_TRACE(Signed);
+          const auto Signature = floatingCallArguments(
+              Target, BinaryFormat::ELF, NdType::makeInt(Bytes, Signed),
+              {NdType::makeInt(4, true)});
+          ASSERT_TRUE(Signature);
+          const std::map<SourceCallOccurrenceKey, FloatingCallArguments> Calls{
+              {*Site, *Signature}};
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&*Image);
+          Convert.setCallSiteFloatingArguments(&Calls);
+          auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+          recoverCallAbi(Med, Target, {{0x10200, "callee"}}, &*Image);
+          inferMedTypes(Med, Target);
+          // Observe the complete ABI register, including a narrow callee's
+          // sign/zero extension. Inferring a narrow logical return would
+          // otherwise discard those bits before this check can see them.
+          Med.ReturnType = NdType::makeInt(Word, false);
+          llvm::LLVMContext Context;
+          MedLLVMEmitter Emitter;
+          const auto Module =
+              Emitter.emit({Med}, Context, "tail", Target, {}, &*Image);
+          ASSERT_NE(Module, nullptr);
+          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+          Pipeline::optimizeModule(*Module);
+          const auto *Body = Module->getFunction("tail_result");
+          ASSERT_NE(Body, nullptr);
+          const auto *Ret =
+              llvm::dyn_cast<llvm::ReturnInst>(Body->back().getTerminator());
+          ASSERT_NE(Ret, nullptr);
+          const auto *Value = Ret->getReturnValue();
+          ASSERT_NE(Value, nullptr);
+          EXPECT_TRUE(Value->getType()->isIntegerTy(Word * 8));
+          if (Bytes < Word) {
+            const auto *Extend = llvm::dyn_cast<llvm::CastInst>(Value);
+            ASSERT_NE(Extend, nullptr);
+            EXPECT_EQ(Extend->getOpcode(), Signed || Bytes == 4
+                                               ? llvm::Instruction::SExt
+                                               : llvm::Instruction::ZExt);
+            Value = Extend->getOperand(0);
+          }
+          const auto *Call = llvm::dyn_cast<llvm::CallInst>(Value);
+          ASSERT_NE(Call, nullptr);
+          EXPECT_EQ(Call->getCalledFunction() == nullptr, Indirect);
+          EXPECT_TRUE(Call->getType()->isIntegerTy(Bytes * 8));
+        }
+      }
+    }
 }
 
 TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {

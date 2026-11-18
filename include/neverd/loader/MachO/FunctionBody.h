@@ -7,7 +7,7 @@
 #ifndef NEVERD_LOADER_MACHO_FUNCTIONBODY_H
 #define NEVERD_LOADER_MACHO_FUNCTIONBODY_H
 
-#include "neverd/Common.h"
+#include "neverd/loader/MachO/DataInCode.h"
 
 #include "llvm/ADT/ArrayRef.h"
 
@@ -22,6 +22,7 @@ struct BinaryImage;
 struct MachOLiftedSource {
   llvm::ArrayRef<uint8_t> Bytes;
   std::optional<va_t> ForwardTarget;
+  llvm::ArrayRef<MachODataInCodeRange> Embedded;
 };
 
 /// Bound an authenticated entry by its instruction section or, for sectionless
