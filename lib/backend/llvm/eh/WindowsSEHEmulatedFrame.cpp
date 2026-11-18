@@ -278,9 +278,14 @@ matchSEHFilterAdapter(const llvm::Function &Adapter,
   const auto *Filter = Call ? llvm::dyn_cast<llvm::Function>(
                                   Call->getCalledOperand()->stripPointerCasts())
                             : nullptr;
+  // A filter lifted for printed C may take its exception pointers as a
+  // pointer-wide integer.
+  const llvm::Value *Pointers = Call ? Call->getArgOperand(0) : nullptr;
+  if (const auto *Cast = llvm::dyn_cast_or_null<llvm::PtrToIntInst>(Pointers);
+      Cast && Cast->getParent() == &Body && Cast->hasOneUse())
+    Pointers = Cast->getOperand(0);
   if (!Filter || Call->getParent() != &Body || Call->arg_size() != 2 ||
-      Call->getNumOperandBundles() ||
-      Call->getArgOperand(0) != Adapter.getArg(0))
+      Call->getNumOperandBundles() || Pointers != Adapter.getArg(0))
     return std::nullopt;
   const auto Address = sehConstantAddress(*Call->getArgOperand(1),
                                           Parent.getParent()->getDataLayout());
@@ -304,7 +309,8 @@ matchSEHFilterAdapter(const llvm::Function &Adapter,
   for (const llvm::Instruction &Instruction : Body)
     if (&Instruction != ParentFrame && &Instruction != Recovered &&
         &Instruction != Call && &Instruction != Return &&
-        !(llvm::isa<llvm::GetElementPtrInst, llvm::BitCastInst>(Instruction) &&
+        !(llvm::isa<llvm::GetElementPtrInst, llvm::BitCastInst,
+                    llvm::PtrToIntInst>(Instruction) &&
           Instruction.hasOneUse()))
       return std::nullopt;
   const llvm::CallInst *Escape = nullptr;

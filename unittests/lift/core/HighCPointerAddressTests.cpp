@@ -43593,10 +43593,20 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
   // The call, not the prototype the unit declares before the bodies.
   const size_t RaiseAt = Source.find("    RaiseException(");
   // The exact four-byte local is shared by both arms and the continuation.
-  const std::string Slot = assignedNameBefore(Source, "= -100;");
-  ASSERT_FALSE(Slot.empty()) << Source;
-  EXPECT_EQ(assignedNameBefore(Source, "= 0x29;"), Slot) << Source;
-  EXPECT_NE(Source.find("uint32_t " + Slot + ";"), std::string::npos) << Source;
+  // The filter reads its parent's frame, so the parent keeps its original
+  // frame and passes the filter the EstablisherFrame inside it: the local is
+  // a member of that frame.
+  const std::string Member = assignedNameBefore(Source, "= -100;");
+  ASSERT_FALSE(Member.empty()) << Source;
+  const std::string Slot = "frame0." + Member;
+  EXPECT_NE(Source.find(Slot + " = -100;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(Slot + " = 0x29;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("uint32_t " + Member + ";"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("sub_1400024E0(GetExceptionInformation(), "
+                        "(void *)((char *)&frame0 + 16))"),
+            std::string::npos)
+      << Source;
   const size_t SuccessAt = Source.find(Slot + " = -100;");
   const size_t HandlerAt = Source.find(Slot + " = 0x29;");
   ASSERT_NE(TryAt, std::string::npos) << Source;
@@ -43622,7 +43632,7 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
       << Source;
   EXPECT_EQ(Source.find("llvm_x2E_seh_x2E_try"), std::string::npos) << Source;
   checkCorpusSehPaths(Source, "sub_140001050", "sub_1400024E0", "unk_140001000",
-                      16608);
+                      16608, /*EmulatedHome=*/0x40);
 
   // The CLI's analysis-only LLVM route can print register-home assignments
   // that its earlier declaration prediction did not see. Every simple local

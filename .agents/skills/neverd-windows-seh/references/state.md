@@ -54,6 +54,17 @@ Update this file when an item closes or a new gap is proven.
   pointers into the parent's frame and read them back, so an offset moved by
   8 changes nothing and only a frame moved off the stack proves the adapters
   ran. The MinGW fixture below is the frame-register case.
+- The source view (default LLVM C) passes the emulated frame too, and a
+  Win64 home spill counts as an argument read wherever an SEH filter or
+  termination handler receives the frame (`sehCallbacksReceiveFrame` in
+  `CallRegisterEffects.cpp`). Without that rule the printed frame stored
+  `__builtin_trap()` placeholders in the 24 `xframe_eh_dll` builds:
+  `pass_through_2_dll` had lost `Disposition`, which only its filter reads
+  from its home slot. The rule over-approximates: every spill counts, also
+  one that no callback reads. Open: a filter that reads its parent's stack
+  arguments (above the home area) still leaves them out of the signature,
+  and C++ catch and unwind funclets, which also get the frame, are not
+  covered by the rule.
 - With the `__finally` half, per function on the four vs2019 x64 xcpt4
   builds: the 15 functions per build the original-frame gate stopped now
   give 4 (5 at o0) that patch and run as the original in every run, 2 per

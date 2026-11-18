@@ -1363,7 +1363,10 @@ filter that reads its frame runs behind an adapter native IR writes
 (`sehFilterAdapterName`, internal, with no source address): it recovers the
 frame the parent escapes with `llvm.localescape` (`llvm.eh.recoverfp`, then
 `llvm.localrecover`) and returns what the source filter returns for the
-exception pointers and the emulated frame. Any other callback keeps
+exception pointers and the emulated frame. The adapter is `optnone` so that
+output finds that exact shape; the guard that turns interprocedural passes off
+in a module with an `optnone` definition (`registerOptNoneInterproceduralGuard`)
+leaves adapters out, since only the runtime takes an adapter's address. Any other callback keeps
 `llvm.localaddress()`, and the gate refuses one that uses the
 EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). A helper a
 compiler outlined
@@ -1386,7 +1389,15 @@ gives its definition (`CompiledImage::SourceFunctionOwners`), and in-place
 mode, which places only functions with a source address, hands such a module
 to the section patch. Native IR printed as LLVM C spells an adapter as the
 call of the filter it adapts with the parent's frame object at the emulated
-frame's offset, and prints no function for the adapter itself. The callback must reach the frame only by loads
+frame's offset, and prints no function for the adapter itself. The source view
+that LLVM C prints by default passes the emulated frame the same way: a
+termination handler that reads its frame gets the address in it, and a filter
+that reads its frame is printed as a call with that address. The source view
+neither marks the frame nor makes protected accesses volatile; the printed
+`__try` carries the rules of the compiler that builds it. Over the 384 Windows
+EH corpus files, 98 LLVM C files change: lines that name the frame
+`llvm.localaddress` gives (`seh_parent_frame`) fall from 6,470 to 879, and
+clang errors (98) and unrecovered-value placeholders (741) stay the same. The callback must reach the frame only by loads
 and stores at fixed offsets (`collectSEHCallbackFrameAccesses`), and only
 bytes the lifted parent keeps as the original did: its fixed frame and the
 argument homes above the return address, not a pushed or saved register,
@@ -11631,6 +11642,13 @@ unit does.
 
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
+A function whose SEH filters or termination handlers the runtime enters with
+its EstablisherFrame (`sehCallbacksReceiveFrame`) keeps every such spill as a
+read: the home slots lie at fixed offsets from that frame, and an MSVC filter
+reads there a parameter that its parent only spills. `pass_through_2_dll` of
+the `xframe_eh_dll` builds takes its `Disposition` again, and in the xcpt4
+builds a call passes the counter that its callee's filter increments through
+the callee's first argument, where it passed zero.
 FS/GS and ordered stores keep their register observations. Returning an
 incoming-area address also retains its possible readers; it cannot establish
 a variadic forwarding contract. The variadic save-area rule still requires

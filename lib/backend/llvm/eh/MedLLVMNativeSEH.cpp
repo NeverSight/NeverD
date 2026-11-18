@@ -726,7 +726,7 @@ bool MedLLVMEmitter::emitNativeSEH(
           ? getTargetRegInfo(TargetArch).integerParamRegs(TargetFormat)[1]
           : 0;
   auto EmulatedFrameOffset = [&](va_t Entry) -> std::optional<uint64_t> {
-    if (SourceView || TargetArch != Arch::X64 || !FrameAlloca ||
+    if (TargetArch != Arch::X64 || !FrameAlloca ||
         FrameAlloca->getParent() != &LLVMFunc.getEntryBlock() ||
         !FrameAlloca->isStaticAlloca())
       return std::nullopt;
@@ -752,8 +752,15 @@ bool MedLLVMEmitter::emitNativeSEH(
                                       Mod, llvm::Intrinsic::localescape),
                                   {FrameAlloca});
     }
+    // Native IR lifts a filter with the runtime's type (FilterCallbackTy).
+    // A filter lifted for printed C takes what it reads, at the widths it
+    // reads it, so the adapter returns the filter's result and converts each
+    // pointer the filter takes as an integer.
+    llvm::FunctionType *CallbackTy = R.Callback->getFunctionType();
     auto *Adapter = llvm::Function::Create(
-        FilterCallbackTy, llvm::GlobalValue::InternalLinkage,
+        llvm::FunctionType::get(CallbackTy->getReturnType(), {PtrTy, PtrTy},
+                                false),
+        llvm::GlobalValue::InternalLinkage,
         sehFilterAdapterName(EH.CodeRange.Begin, R.SourceIndex), Mod);
     Adapter->addFnAttr(llvm::Attribute::NoInline);
     Adapter->addFnAttr(llvm::Attribute::OptimizeNone);
@@ -772,8 +779,11 @@ bool MedLLVMEmitter::emitNativeSEH(
                       {&LLVMFunc, ParentFrame, AB.getInt32(0)});
     llvm::Value *Frame = AB.CreateInBoundsGEP(
         AB.getInt8Ty(), Escaped, AB.getInt64(Offset), "seh.establisher.frame");
-    AB.CreateRet(AB.CreateCall(FilterCallbackTy, R.Callback,
-                               {Adapter->getArg(0), Frame}));
+    llvm::SmallVector<llvm::Value *, 2> Args{Adapter->getArg(0), Frame};
+    for (unsigned I = 0; I < 2; ++I)
+      if (CallbackTy->getParamType(I)->isIntegerTy())
+        Args[I] = AB.CreatePtrToInt(Args[I], CallbackTy->getParamType(I));
+    AB.CreateRet(AB.CreateCall(CallbackTy, R.Callback, Args));
     return Adapter;
   };
 
@@ -881,7 +891,7 @@ bool MedLLVMEmitter::emitNativeSEH(
             ? static_cast<llvm::Value *>(llvm::ConstantPointerNull::get(
                   llvm::cast<llvm::PointerType>(PtrTy)))
             : static_cast<llvm::Value *>(R.Callback);
-    if (R.Scope->Kind == SEHScopeKind::Filter)
+    if (R.Scope->Kind == SEHScopeKind::Filter && R.Callback->arg_size() == 2)
       if (const auto Offset = EmulatedFrameOffset(R.Scope->FilterOrFinallyVA)) {
         Filter = FilterAdapter(R, *Offset);
         UsesEmulatedFrame = true;
@@ -1197,8 +1207,9 @@ bool MedLLVMEmitter::emitNativeSEH(
   // for one that can raise: each such access becomes volatile, as clang's
   // -EHa makes those of a __try, except a register home's, which no callback
   // can name, and a load of a global the image maps, which cannot fault.
-  // The output gate finds the frame by its mark.
-  if (UsesEmulatedFrame) {
+  // The output gate finds the frame by its mark.  Printed C needs neither:
+  // its `__try` carries the rules of the compiler that builds it.
+  if (UsesEmulatedFrame && !SourceView) {
     FrameAlloca->setMetadata(
         windows_eh_md::SEHEmulatedFrameAttachment,
         llvm::MDNode::get(*Ctx, {mdUInt(*Ctx, EH.CodeRange.Begin, 64),

@@ -115,6 +115,20 @@ Each entry happened. The fix is the habit after the colon.
 - A rewritten parent passed its own frame to a termination handler that read
   the original frame layout, and the image printed `count = -1`: execute
   every newly accepted shape before relying on the gate.
+- One `optnone` definition turns off every interprocedural pass of its
+  module (`registerOptNoneInterproceduralGuard`): no GlobalDCE, IPSCCP or
+  inlining for any function in the unit. The first printed-C frame prototype
+  printed less optimized units and renamed declarations
+  (`__security_check_cookie_2(...) __asm__("__security_check_cookie")`,
+  stems taken by dead declarations) until filter adapters were left out of
+  the guard. Compare line counts and look for `_2(` labels after adding any
+  `optnone` function.
+- Passing a callback the parent's real frame keeps every store into that
+  frame alive, including stores of values the source view could not
+  recover. A register only a callback reads through its home slot is such a
+  value until parameter recovery counts the spill as a read: the printed C
+  then traps at entry on every call. Count `no recovered machine state`
+  placeholders before and after any change that connects frames.
 - A filter that only keeps a value in its parent's frame and reads it back
   behaves the same when its frame moves by a few bytes: such a probe proves
   nothing. Move the frame off the stack instead.
