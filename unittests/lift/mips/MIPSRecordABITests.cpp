@@ -11,12 +11,14 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -308,5 +310,53 @@ TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
           assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic));
       EXPECT_FALSE(Diagnostic.empty());
     }
+}
+
+TEST(MIPSRecordABI, IntegerCallsKeepPartialRegisterAndStackWords) {
+  for (Arch A : Architectures)
+    for (uint16_t Bytes : {3, 5, 6, 7, 9, 10, 13, 15, 16, 17})
+      for (unsigned Prefix : {0u, 7u, 8u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << ':' << Bytes << ':' << Prefix);
+        std::vector<TypeRef> Parameters(Prefix, NdType::makeInt(8, false));
+        Parameters.push_back(bytes(Bytes));
+        Parameters.push_back(NdType::makeInt(8, false));
+        const auto Call = integerCallArguments(A, BinaryFormat::ELF,
+                                               NdType::makeInt(8), Parameters);
+        ASSERT_TRUE(Call);
+        ASSERT_EQ(Call->Parameters.size(), Parameters.size());
+        const unsigned Words = (Bytes + 7) / 8;
+        EXPECT_EQ(Call->Registers, std::min(8u, Prefix + Words + 1));
+        EXPECT_EQ(Call->Positions, Prefix + Words + 1);
+        const auto &Pieces = Call->Parameters[Prefix].Pieces;
+        ASSERT_EQ(Pieces.size(), Words);
+        for (unsigned I = 0; I != Words; ++I) {
+          const unsigned Count = std::min(8u, unsigned(Bytes) - I * 8);
+          EXPECT_EQ(Pieces[I].Argument, Prefix + I);
+          EXPECT_EQ(Pieces[I].Offset, I * 8);
+          EXPECT_EQ(Pieces[I].Bytes, Count);
+          EXPECT_EQ(Pieces[I].CarrierBytes, 8);
+          EXPECT_EQ(Pieces[I].BitOffset,
+                    archLittleEndian(A) ? 0 : (8 - Count) * 8);
+        }
+        EXPECT_EQ(Call->Parameters.back().Pieces[0].Argument, Prefix + Words);
+        EXPECT_EQ(Call->Parameters.back().Pieces[0].CarrierBytes, 0);
+      }
+}
+
+TEST(MIPSRecordABI, IntegerAdapterDoesNotAdmitAnotherResultOrRegisterBank) {
+  for (Arch A : Architectures) {
+    for (const auto &Result :
+         {bytes(3), bytes(17), NdType::makeFloat(8), NdType::makeInt(16)})
+      EXPECT_FALSE(
+          integerCallArguments(A, BinaryFormat::ELF, Result, {bytes(3)}));
+    for (const auto &Parameter :
+         {NdType::makeFloat(8), record({NdType::makeFloat(8)}),
+          record({NdType::makeInt(8), NdType::makeFloat(8)})})
+      EXPECT_FALSE(integerCallArguments(
+          A, BinaryFormat::ELF, NdType::makeInt(8), {bytes(3), Parameter}));
+    EXPECT_FALSE(integerCallArguments(A, BinaryFormat::COFF, NdType::makeInt(8),
+                                      {bytes(3)}));
+  }
 }
 } // namespace

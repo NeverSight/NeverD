@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/c/CRecordCall.h"
 #include "../../HostCompiler.h"
 #include "LocalTypesDebugContext.h"
 #include "gtest/gtest.h"
@@ -40,6 +41,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 
+#include <bit>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -179,6 +181,67 @@ TEST(RecordCallContract, LLVMOperandsKeepPhysicalStackPieceLocations) {
   }
 }
 
+TEST(RecordCallContract, MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots) {
+  auto Record = NdType::makeStruct(
+      {NdType::makeArray(NdType::makeInt(1, false), 10, 10)});
+  ASSERT_TRUE(Record);
+  Record->Passing = NdRecordPassing::ByValue;
+  std::vector<TypeRef> Parameters(7, NdType::makeInt(8, false));
+  Parameters.insert(Parameters.end(), {Record, NdType::makeInt(8, false)});
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Layout = integerCallArguments(A, BinaryFormat::ELF,
+                                             NdType::makeInt(8), Parameters);
+    ASSERT_TRUE(Layout);
+    for (unsigned Variant = 0; Variant != 9; ++Variant) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << ':' << Variant);
+      llvm::LLVMContext Context;
+      llvm::Module Module("mips-record-call", Context);
+      llvm::IRBuilder<> Builder(Context);
+      std::vector<llvm::Type *> Types;
+      std::vector<llvm::Value *> Values;
+      const unsigned Count = Variant == 5 ? 9 : 10;
+      for (unsigned I = 0; I != Count; ++I) {
+        auto *Type = (Variant == 3 && I == 7) || (Variant == 4 && I == 8)
+                         ? Builder.getInt32Ty()
+                         : Builder.getInt64Ty();
+        Types.push_back(Type);
+        Values.push_back(
+            llvm::ConstantInt::get(Type, 0x94716315f1e2d3c4ULL + I));
+      }
+      auto *Caller = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getVoidTy(), false),
+          llvm::GlobalValue::ExternalLinkage, "caller", Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Caller));
+      auto *Callee = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getInt64Ty(), Types, false),
+          llvm::GlobalValue::ExternalLinkage, "callee", Module);
+      auto *Call = Builder.CreateCall(Callee, Values);
+      Builder.CreateRetVoid();
+      if (Variant && Variant != 3 && Variant != 5) {
+        const std::vector<int64_t> Offsets =
+            Variant == 2   ? std::vector<int64_t>{8, 0}
+            : Variant == 6 ? std::vector<int64_t>{0, 0}
+                           : std::vector<int64_t>{0, 8};
+        setLLVMArgumentBanks(*Call, 8, Variant == 8 ? 1 : 0, Offsets,
+                             Variant == 7 ? 4 : 8);
+      }
+      const auto Bound =
+          bindLLVMIntegerCallArguments(*Call, *Layout, A, BinaryFormat::ELF);
+      ASSERT_EQ(bool(Bound), Variant < 3);
+      if (!Bound)
+        continue;
+      ASSERT_EQ(Bound->Parameters[7].Pieces.size(), 2u);
+      const auto &Tail = Bound->Parameters[7].Pieces[1];
+      EXPECT_EQ(Tail.Argument, Variant == 2 ? 9 : 8);
+      EXPECT_EQ(Tail.Bytes, 2);
+      EXPECT_EQ(Tail.CarrierBytes, 8);
+      EXPECT_EQ(Tail.BitOffset, archLittleEndian(A) ? 0 : 48);
+    }
+  }
+}
+
 const char *Original = R"(
 #define _GNU_SOURCE 1
 #include <stdio.h>
@@ -269,6 +332,73 @@ bool execute(llvm::StringRef Program, std::vector<llvm::StringRef> Arguments,
                 << (Log ? (*Log)->getBuffer().str() : "") << '\n'
                 << "exit status " << Status;
   return false;
+}
+
+TEST(RecordCallContract, PartialRecordCBridgesPreserveBitsAndEvaluateOnce) {
+  // Run the actual shared C bridge on this host's byte order. The separate
+  // MIPS GCC/Clang corpus owns execution under each target ABI and endianness.
+  // A deliberately narrow uintptr_t catches accidental n32 word truncation.
+  const Arch Target = std::endian::native == std::endian::little
+                          ? Arch::MIPS64N32EL
+                          : Arch::MIPS64N32;
+  std::string Source =
+      "typedef unsigned int uintptr_t;\n"
+      "typedef unsigned long long uint64_t;\n"
+      "static uint64_t words[16]; static unsigned counts[16];\n"
+      "static uint64_t word(unsigned i) { ++counts[i]; return words[i]; }\n"
+      "int main(void) { unsigned char bytes[128];\n"
+      "for (unsigned i=0; i<128; ++i) bytes[i]=(unsigned char)(0x91+i*23);\n";
+  for (uint16_t Bytes : {3, 5, 6, 7, 9, 10, 13, 15, 16, 17})
+    for (unsigned Prefix : {0u, 7u, 8u}) {
+      auto Record = NdType::makeStruct(
+          {NdType::makeArray(NdType::makeInt(1, false), Bytes, Bytes)});
+      ASSERT_TRUE(Record);
+      Record->Passing = NdRecordPassing::ByValue;
+      std::vector<TypeRef> Types(Prefix, NdType::makeInt(8, false));
+      Types.push_back(Record);
+      const auto Layout = integerCallArguments(Target, BinaryFormat::ELF,
+                                               NdType::makeInt(8), Types);
+      ASSERT_TRUE(Layout);
+      const auto &Parameter = Layout->Parameters.back();
+      const auto Text = c_detail::recordCallArgument(
+          "struct R", Parameter, Target,
+          [](const IntegerCallArgumentPiece &Piece) {
+            return "word(" + std::to_string(Piece.Argument) + ")";
+          });
+      Source += "{ struct R { unsigned char data[" + std::to_string(Bytes) +
+                "]; };\n"
+                "for (unsigned i=0; i<16; ++i) counts[i]=0;\n"
+                "__builtin_memcpy(words,bytes,sizeof words);\n"
+                "struct R value = " +
+                Text +
+                ";\n"
+                "for(unsigned i=0;i<" +
+                std::to_string(Bytes) + ";++i) if(value.data[i]!=bytes[" +
+                std::to_string(Prefix * 8) +
+                "+i]) return 1;\n"
+                "for(unsigned i=0;i<16;++i) if(counts[i] != (i >= " +
+                std::to_string(Prefix) + " && i < " +
+                std::to_string(Prefix + (Bytes + 7) / 8) + ")) return 2; }\n";
+    }
+  Source += "return 0; }\n";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-record-slices", Directory));
+  const auto Cleanup = llvm::make_scope_exit(
+      [&] { llvm::sys::fs::remove_directories(Directory); });
+  const auto Input = (Directory + "/bridge.c").str();
+  const auto Product = (Directory + "/bridge").str();
+  const auto Errors = (Directory + "/errors.txt").str();
+  write(Input, Source);
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization);
+    ASSERT_TRUE(execute(
+        Compiler, {Compiler, "-std=gnu11", Optimization, Input, "-o", Product},
+        Errors))
+        << Source;
+    ASSERT_TRUE(execute(Product, {Product}, Errors)) << Source;
+  }
 }
 
 TEST(RecordCallContract, LinkedLibCRecordsExecuteThroughBothCEmitters) {

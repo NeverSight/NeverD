@@ -16,6 +16,7 @@
 
 #include "CIdentifier.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/c/render/CTypeFormat.h"
 #include "neverd/ir/IntegerCallArguments.h"
@@ -106,23 +107,26 @@ inline std::string recordCallType(const TypeRef &Type,
   throw std::runtime_error("A record call's header type cannot be spelled");
 }
 
-inline std::string
-recordCallArgument(const std::string &Type,
-                   const IntegerCallParameter &Parameter,
-                   llvm::function_ref<std::string(unsigned)> Operand) {
+inline std::string recordCallArgument(
+    const std::string &Type, const IntegerCallParameter &Parameter,
+    Arch Architecture,
+    llvm::function_ref<std::string(const IntegerCallArgumentPiece &)> Operand) {
   if (Type.empty() || Parameter.Pieces.empty())
     throw std::runtime_error("A record call argument has no complete type");
   if (Parameter.Indirect)
     return "*(const " + Type + " *)(uintptr_t)(" +
-           Operand(Parameter.Pieces[0].Argument) + ")";
+           Operand(Parameter.Pieces[0]) + ")";
   std::string Text = "({ " + Type + " __neverd_record; ";
   for (size_t I = 0; I < Parameter.Pieces.size(); ++I) {
     const auto &Piece = Parameter.Pieces[I];
     unsigned Word = 1;
     while (Word < Piece.Bytes)
       Word *= 2;
-    if (Word > 8)
-      throw std::runtime_error("A record call carrier is wider than a word");
+    if (Piece.CarrierBytes)
+      Word = Piece.CarrierBytes;
+    if (Word > 8 || !Word || (Word & (Word - 1)) || !Piece.Bytes ||
+        Piece.Bytes > Word || Piece.BitOffset + Piece.Bytes * 8 > Word * 8)
+      throw std::runtime_error("A record call has an invalid carrier slice");
     const std::string Integer = "uint" + std::to_string(Word * 8) + "_t";
     const std::string Name = "__neverd_piece" + std::to_string(I);
     if (Piece.Floating) {
@@ -131,13 +135,21 @@ recordCallArgument(const std::string &Type,
             "A floating record piece has unsupported width");
       const std::string Float = Piece.Bytes == 4 ? "float" : "double";
       Text += Integer + " " + Name + " = __builtin_bit_cast(" + Integer +
-              ", (" + Float + ")(" + Operand(Piece.Argument) + ")); ";
+              ", (" + Float + ")(" + Operand(Piece) + ")); ";
     } else {
-      Text += Integer + " " + Name + " = (" + Integer + ")(uintptr_t)(" +
-              Operand(Piece.Argument) + "); ";
+      Text += Integer + " " + Name + " = (" + Integer + ")" +
+              (Piece.CarrierBytes ? "" : "(uintptr_t)") + "(" + Operand(Piece) +
+              "); ";
     }
+    if (Piece.BitOffset)
+      Text += Name + " >>= " + std::to_string(Piece.BitOffset) + "; ";
+    const std::string Address =
+        !archLittleEndian(Architecture) && Word != Piece.Bytes
+            ? "(const unsigned char *)&" + Name + " + " +
+                  std::to_string(Word - Piece.Bytes)
+            : "&" + Name;
     Text += "__builtin_memcpy((unsigned char *)&__neverd_record + " +
-            std::to_string(Piece.Offset) + ", &" + Name + ", " +
+            std::to_string(Piece.Offset) + ", " + Address + ", " +
             std::to_string(Piece.Bytes) + "); ";
   }
   return Text + "__neverd_record; })";

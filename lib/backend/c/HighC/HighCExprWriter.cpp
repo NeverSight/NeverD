@@ -2848,9 +2848,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
               ? c_detail::recordCallType(Type, Opts)
               : typeToC(Type);
       S += c_detail::recordCallArgument(
-          Spelling, RecordCall->Parameters[I], [&](unsigned Index) {
+          Spelling, RecordCall->Parameters[I], Opts.TheArch,
+          [&](const IntegerCallArgumentPiece &Piece) {
+            const unsigned Index = Piece.Argument;
             if (Index >= E.Operands.size() || !E.Operands[Index])
               throw std::runtime_error("A record call argument is incomplete");
+            if (Piece.CarrierBytes &&
+                (!E.Operands[Index]->Type ||
+                 E.Operands[Index]->Type->Size < Piece.CarrierBytes))
+              throw std::runtime_error(
+                  "A record call argument lost its physical word");
             return exprStr(*E.Operands[Index]);
           });
       continue;
