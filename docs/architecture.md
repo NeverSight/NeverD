@@ -13077,8 +13077,14 @@ relocation predicate for untagged constants; equal original VAs alone cannot
 establish equality between independently rebuilt objects.
 
 The x86 CFG builder proves local x87 call-stack effects before constructing
-TOP-state block copies. A shape-checked integer DIV/IDIV precondition preserves
-x87 state on normal continuation. It remains in the emitted body and grants no
+TOP-state block copies. A function that names no x87 register still needs its
+callees' contracts: a wrapper returns a callee's long double in ST(0) and can
+carry one callee's result to another. A session's builds share those proofs
+(`X87CallGraphCache::contract`): each answer is kept with the no-return
+answers of the incomplete lifts its proof read and holds while they do, as
+kept context uses do, so a callee is proved once rather than once per caller.
+Builds with registration callees share no proof. A shape-checked integer
+DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
 One LowIR analysis may share up to 128 immutable machine

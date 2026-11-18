@@ -9453,9 +9453,13 @@ graphs, including exact remaining proof budgets, recursion-depth failures,
 changed image and analysis contexts, concurrent queries and bounded eviction.
 Complete instruction graphs rejected for exceptional edges or unresolved
 terminal dispatch retain only an immutable rejection marker: tests require
-actual warm hits, identical cold/warm budget consumption and a fresh successful
-proof when the same address belongs to a different valid image. Truncated
-instruction streams remain unretained.
+actual warm hits (of a graph or of a kept call contract), identical cold/warm
+budget consumption and a fresh successful proof when the same address belongs
+to a different valid image. Truncated instruction streams remain unretained.
+`ASessionProvesEachCallContractOnceWhileItsAnswersHold` builds two callers of
+a function whose lift is incomplete until its callee is proved never to
+return: the second build's kept contract answers and it reads no graph, and
+once the prover's answer changes the call is proved again.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a
