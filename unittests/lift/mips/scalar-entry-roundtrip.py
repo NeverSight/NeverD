@@ -88,7 +88,7 @@ def main():
             "void *memcpy(void *, const void *, size_t);" + chr(10))
         originals, rows = [], []
         def command(argv):
-            roundtrip.run_command(a, argv, log)
+            roundtrip.run_command(artifacts, argv, log)
         for abi in args.abi or ("n32", "n64"):
             for little in (False, True):
                 endian = "-EL" if little else "-EB"
