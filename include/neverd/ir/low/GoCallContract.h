@@ -17,6 +17,7 @@
 #include "neverd/Common.h"
 #include "neverd/ir/CallRegisterContract.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/LanguageEHGo.h"
@@ -59,6 +60,19 @@ std::optional<uint64_t> goCallResultRegister(const BinaryImage &Img,
 /// x86-64 image whose pclntab records which is which
 /// (GoModuleInfo::RegisterArguments).
 bool usesGoRegisterArguments(const BinaryImage &Img, va_t Entry);
+
+/// Whether Go assembly at \p Entry takes its arguments in Go's registers,
+/// in Go's order, as `memmove(to, from, n)` takes them in RAX, RBX and RCX.
+/// The image's compiled code must (usesGoRegisterArguments), and the call
+/// summary \p Reads must show the entry reading, of the general-purpose
+/// registers, the first one or more of Go's integer argument registers and
+/// otherwise only registers with a fixed meaning: the stack and frame
+/// pointers, the closure context RDX and the goroutine register R14.  ABI0
+/// assembly, which Go code reaches through a wrapper, reads its arguments
+/// from the stack, and assembly entered another way, such as `rt0_go` with
+/// the process's RDI and RSI, reads no such run.
+bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
+                                      const GPRReadWidths &Reads);
 
 /// The integer argument registers of Go's internal ABI on \p A, in order
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.

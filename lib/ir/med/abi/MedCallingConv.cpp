@@ -1579,9 +1579,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     }
   }
   // Go code the toolchain compiled takes its integer arguments in Go's
-  // registers (usesGoRegisterArguments).
+  // registers (usesGoRegisterArguments), and so does Go assembly whose
+  // summary reads them so (goAssemblyTakesRegisterArguments).
+  const GPRReadWidths *OwnReads = nullptr;
+  if (CallEntryReadGPRs)
+    if (const auto R = CallEntryReadGPRs->find(Func.Entry);
+        R != CallEntryReadGPRs->end())
+      OwnReads = &R->second;
   const bool GoRegisterArguments =
-      Image && usesGoRegisterArguments(*Image, Func.Entry);
+      Image && (usesGoRegisterArguments(*Image, Func.Entry) ||
+                (OwnReads && goAssemblyTakesRegisterArguments(
+                                 *Image, Func.Entry, *OwnReads)));
   if (GoRegisterArguments) {
     const llvm::ArrayRef<uint64_t> Go = goIntegerArgumentRegisters(TheArch);
     Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());

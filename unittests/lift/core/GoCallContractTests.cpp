@@ -436,6 +436,88 @@ TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
   EXPECT_TRUE(hasOp(F, NdOp::CALL));
 }
 
+constexpr va_t AssemblyCaller = kTextVA + 0x280;
+
+/// main.h calls the assembly main.add, which takes its arguments in Go's
+/// registers as runtime.memmove does:
+///
+///   main.h:   mov eax, 1; mov ebx, 2; call main.add; ret
+///   main.add: lea rax, [rax+rbx]; ret
+BinaryImage assemblyImage() {
+  GoTestImage T;
+  T.writeText(AssemblyCaller, {0xB8, 1, 0, 0, 0, 0xBB, 2, 0, 0, 0});
+  T.writeText(AssemblyCaller + 0x0A, makeCall(AssemblyCaller + 0x0A, Assembly));
+  T.writeText(AssemblyCaller + 0x0F, {0xC3});
+  T.writeText(Assembly, {0x48, 0x8D, 0x04, 0x18, 0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{GoCallee, kTextVA + 0x500}};
+  Module.GoAssembly = {{Assembly, kTextVA + 0x500}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  return std::move(T.Img);
+}
+
+GPRReadWidths reads(std::initializer_list<uint64_t> Registers) {
+  GPRReadWidths Reads{};
+  for (const uint64_t Register : Registers)
+    Reads[Register / 8] = 8;
+  return Reads;
+}
+
+TEST(GoAssembly, ARunOfGoArgumentRegistersIsItsArguments) {
+  const BinaryImage Img = assemblyImage();
+  using namespace x86reg;
+  // memmove(to, from, n), and memequal_varlen, which reads its closure.
+  EXPECT_TRUE(
+      goAssemblyTakesRegisterArguments(Img, Assembly, reads({RAX, RBX, RCX})));
+  EXPECT_TRUE(goAssemblyTakesRegisterArguments(Img, Assembly,
+                                               reads({RAX, RBX, RDX, R14})));
+  // rt0_go reads the process's RDI and RSI; spillArgs reads R12 as well;
+  // a skipped argument register is no run; nothing read is no argument.
+  EXPECT_FALSE(
+      goAssemblyTakesRegisterArguments(Img, Assembly, reads({RDI, RSI})));
+  EXPECT_FALSE(
+      goAssemblyTakesRegisterArguments(Img, Assembly, reads({RAX, R12})));
+  EXPECT_FALSE(
+      goAssemblyTakesRegisterArguments(Img, Assembly, reads({RAX, RCX})));
+  EXPECT_FALSE(goAssemblyTakesRegisterArguments(Img, Assembly, reads({})));
+  // Compiled code answers to usesGoRegisterArguments instead.
+  EXPECT_FALSE(
+      goAssemblyTakesRegisterArguments(Img, AssemblyCaller, reads({RAX, RBX})));
+}
+
+TEST(GoAssembly, ACallPassesItsArgumentsInGoRegisters) {
+  const BinaryImage Img = assemblyImage();
+  const std::map<va_t, GPRReadWidths> Summaries{
+      {Assembly, reads({x86reg::RAX, x86reg::RBX})}};
+  LowToMedConverter Caller;
+  Caller.setBinaryImage(&Img);
+  Caller.setCallEntryReadGPRs(&Summaries);
+  const MedFunc H =
+      Caller.convert(build(Img, AssemblyCaller), Img.Arch, Img.Format);
+  const MedOp *Call = onlyCall(H);
+  ASSERT_NE(Call, nullptr);
+  // System V's first slots are RDI and RSI, which main.add never reads.
+  ASSERT_EQ(Call->NumInputs, 3u);
+  for (unsigned I = 1; I < 3; ++I) {
+    const MedVar &Argument = Call->Inputs[I];
+    if (Argument.Kind == MedVar::Const)
+      EXPECT_EQ(Argument.ConstVal, I);
+    else
+      EXPECT_EQ(Argument.RegOff, I == 1 ? x86reg::RAX : x86reg::RBX);
+  }
+  LowToMedConverter Callee;
+  Callee.setBinaryImage(&Img);
+  Callee.setCallEntryReadGPRs(&Summaries);
+  const MedFunc Add =
+      Callee.convert(build(Img, Assembly), Img.Arch, Img.Format);
+  ASSERT_FALSE(Add.IntegerArgumentRegisters.empty());
+  EXPECT_EQ(Add.IntegerArgumentRegisters.front(), x86reg::RAX);
+  ASSERT_EQ(Add.Params.size(), 2u);
+  EXPECT_EQ(Add.Params[0].RegOff, x86reg::RAX);
+  EXPECT_EQ(Add.Params[1].RegOff, x86reg::RBX);
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

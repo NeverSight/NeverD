@@ -5784,8 +5784,14 @@ Go metadata and keeps the platform contract.
 On x86-64, Go code also takes its integer arguments in Go's registers, in
 Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is
 `usesGoRegisterArguments`. Go 1.18 and later mark the functions Go assembled
-(`GoModuleInfo::RegisterArguments`, `GoModuleInfo::GoAssembly`), and only code
-the toolchain compiled qualifies. `detectCc` gives such a function that
+(`GoModuleInfo::RegisterArguments`, `GoModuleInfo::GoAssembly`), and code the
+toolchain compiled qualifies. So does assembly whose call summary reads a run
+of Go's argument registers from RAX on, and otherwise only the stack and frame
+pointers, the closure context RDX and R14 (`goAssemblyTakesRegisterArguments`),
+as `memmove(to, from, n)` reads RAX, RBX and RCX. ABI0 assembly reads its
+arguments from the stack, and assembly entered another way, such as `rt0_go`
+with the process's RDI and RSI, reads no such run. `detectCc` gives such a
+function that
 register order (`MedFunc::IntegerArgumentRegisters`). A direct call to one
 publishes its arguments in it, and the ABI pass binds them by the callee's
 order. System V reads a summary that reads one byte of RAX as a variadic
@@ -5818,9 +5824,8 @@ a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
 routines take no register argument.
 
-Results, calls through function values and interfaces, arm64, Go code in images
-before 1.18 and assembly that uses the internal ABI still follow the platform
-convention. So do DWARF-typed signatures, whose parameters Go's own register
+Results, calls through function values and interfaces, arm64 and Go code in
+images before 1.18 still follow the platform convention. So do DWARF-typed signatures, whose parameters Go's own register
 assignment would place. On the machine routes (lift, patch), a Go function's
 LLVM arguments take its Go registers as well.
 

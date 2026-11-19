@@ -604,9 +604,17 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
           CallEntryStackSlots->count(ArgumentsKey))
         MOp.CalleeRegisterArgs = 0;
     }
-  // A Go callee takes its integer arguments in Go's registers, in Go's order.
-  const bool GoCallee =
-      Image && ConstantTarget && usesGoRegisterArguments(*Image, Key);
+  // A Go callee takes its integer arguments in Go's registers, in Go's order:
+  // compiled Go code, and Go assembly whose summary reads them so.
+  const GPRReadWidths *CalleeReads = nullptr;
+  if (CallEntryReadGPRs && ArgumentsKey == Key)
+    if (const auto R = CallEntryReadGPRs->find(Key);
+        R != CallEntryReadGPRs->end())
+      CalleeReads = &R->second;
+  const bool GoCallee = Image && ConstantTarget &&
+                        (usesGoRegisterArguments(*Image, Key) ||
+                         (CalleeReads && goAssemblyTakesRegisterArguments(
+                                             *Image, Key, *CalleeReads)));
   const llvm::ArrayRef<uint64_t> ArgRegs =
       GoCallee ? goIntegerArgumentRegisters(TargetArch)
                : TRI.integerParamRegs(TargetFormat);

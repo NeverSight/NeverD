@@ -536,14 +536,21 @@ Still open, in order of yield:
    Leaving the stack-growth path out of MedIR (`elideGoStackGrowth`) took them
    to 384,412 and shrank Go outputs 4-9%. Keeping System V's vector-count
    rule off Go summaries, whose one-byte RAX read is a `bool` argument, took
-   them to 378,526. Still open, in order of yield:
+   them to 378,526. Assembly whose summary reads a run of Go's argument
+   registers (`goAssemblyTakesRegisterArguments`) took them to 374,902, and
+   the corpus's 623 `runtime_memmove(0, 0, 0, n)` calls now pass
+   `(to, from, n)`. Still open, in order of yield:
+   - Go's stack ABI: compiled code before Go 1.17, and ABI0 assembly in every
+     version. Its stack arguments print after six zero System V register
+     slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg, len)` (1,086 calls in
+     the Go 1.16 binary). Go 1.17 passes register arguments under the 1.16
+     pclntab magic, so it must be told apart first.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
    - arm64. Go's R0-R7 and F0-F7 match AAPCS64 positions, but its summaries
      publish no entry reads, so every call there prints eight arguments.
    - DWARF-typed signatures. They need Go's register assignment by type.
-   - Assembly that uses the internal ABI, such as `memmove` and `memequal`.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
 2. The goroutine register (R14, R28), X15 and the closure context register

@@ -193,6 +193,33 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   return {};
 }
 
+bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
+                                      const GPRReadWidths &Reads) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module || !Module->RegisterArguments || Img.Arch != Arch::X64 ||
+      !isGoCode(Img, Entry) || !inRanges(Module->GoAssembly, Entry))
+    return false;
+  const llvm::ArrayRef<uint64_t> Arguments =
+      goIntegerArgumentRegisters(Img.Arch);
+  size_t Leading = 0;
+  while (Leading < Arguments.size() && Reads[Arguments[Leading] / 8])
+    ++Leading;
+  if (Leading == 0)
+    return false;
+  constexpr unsigned GeneralFamilies = 16;
+  for (unsigned Family = 0; Family < GeneralFamilies; ++Family) {
+    const uint64_t Register = uint64_t(Family) * 8;
+    if (!Reads[Family] || Register == x86reg::RSP || Register == x86reg::RBP ||
+        Register == x86reg::RDX || Register == x86reg::R14)
+      continue;
+    const auto Position = llvm::find(Arguments, Register);
+    if (Position == Arguments.end() ||
+        static_cast<size_t>(Position - Arguments.begin()) >= Leading)
+      return false;
+  }
+  return true;
+}
+
 std::optional<std::vector<GoArgumentSpill>>
 goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   if (std::optional<GoStackGrowth> Growth = goStackGrowth(Img, Blocks))
