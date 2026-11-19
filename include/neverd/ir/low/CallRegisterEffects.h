@@ -185,6 +185,11 @@ struct LocalRegisterEffect {
   /// bounds the callee, when that is not the solve's convention set: Go code
   /// keeps only the stack and frame pointers across a call (isGoCode).
   std::optional<GPRFamilyMask> CallClobbers;
+  /// The register arguments a Go function's stack-growth path spills
+  /// (goMorestackSpills): exactly the ones it uses, which the solve takes as
+  /// its entry reads, as it takes a prototype's, in place of what its calls
+  /// appear to forward.
+  std::optional<GPRReadWidths> GoArgumentReads;
   /// The body itself is not fully known, so neither summary exists.
   bool Incomplete = false;
   /// Control leaves for code no summary describes (an indirect tail call)

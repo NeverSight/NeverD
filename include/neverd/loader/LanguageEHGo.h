@@ -334,6 +334,18 @@ struct GoModuleInfo {
   /// text base is proven: a routine at a guessed address would give an
   /// unrelated callee its contract.
   std::vector<GoWriteBarrier> WriteBarriers;
+  /// The pclntab is Go 1.18 or later: on amd64 and arm64 every function Go
+  /// compiled takes its arguments in registers (the internal ABI, amd64 since
+  /// Go 1.17), and the pclntab marks the functions Go assembled.
+  bool RegisterArguments = false;
+  /// The code of every Go function whose record carries the assembly flag
+  /// (`FuncFlagAsm`), sorted, with adjacent functions merged.  Go 1.18 added
+  /// the flag, so an earlier image records none.
+  std::vector<ExceptionAddressRange> GoAssembly;
+  /// Entries of the runtime's stack-growth routines a function's prologue
+  /// calls (`runtime.morestack`, `runtime.morestack_noctxt`,
+  /// `runtime.morestackc`), sorted.  Empty unless the text base is proven.
+  std::vector<va_t> MorestackEntries;
 };
 
 } // namespace neverd

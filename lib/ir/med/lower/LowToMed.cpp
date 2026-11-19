@@ -603,7 +603,11 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
           CallEntryStackSlots->count(ArgumentsKey))
         MOp.CalleeRegisterArgs = 0;
     }
-  const llvm::ArrayRef<uint64_t> ArgRegs = TRI.integerParamRegs(TargetFormat);
+  // A Go callee takes its integer arguments in Go's registers, in Go's order.
+  const llvm::ArrayRef<uint64_t> ArgRegs =
+      Image && ConstantTarget && usesGoRegisterArguments(*Image, Key)
+          ? goIntegerArgumentRegisters(TargetArch)
+          : TRI.integerParamRegs(TargetFormat);
   const auto FPParamRegs = TRI.floatingParamRegs(TargetFormat);
   const int8_t Slots =
       static_cast<int8_t>(std::min<size_t>(ArgRegs.size(), kTrackedArgSlots));
@@ -2241,6 +2245,11 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       }
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
+    GoArgumentSpillBegin.reset();
+    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+      if (const auto Spills = goMorestackSpills(*Image, Low.Blocks);
+          Spills && !Spills->empty())
+        GoArgumentSpillBegin = Spills->front().EntryOffset;
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");

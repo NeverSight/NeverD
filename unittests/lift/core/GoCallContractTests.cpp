@@ -22,6 +22,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/lift/X86/X86Regs.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -210,6 +211,127 @@ TEST(GoCallContract, SummariesFollowTheContract) {
   const LocalRegisterEffect Platform = localRegisterEffect(
       Img, build(Img, CFunction), nullptr, nullptr, nullptr, nullptr);
   EXPECT_FALSE(Platform.CallClobbers.has_value());
+}
+
+//===----------------------------------------------------------------------===//
+// Register arguments
+//===----------------------------------------------------------------------===//
+
+constexpr va_t GoCallee = kTextVA + 0x100;
+constexpr va_t GoCaller = kTextVA + 0x200;
+constexpr va_t Morestack = kTextVA + 0x300;
+constexpr va_t Assembly = kTextVA + 0x400;
+
+/// A Go 1.18+ image whose main.f takes two register arguments and grows its
+/// stack the way the compiler emits it, and whose main.g passes them:
+///
+///   main.f: cmp rsp, [r14+0x10]; jbe grow; lea rax, [rax+rbx]; ret
+///     grow: mov [rsp+8], rax; mov [rsp+0x10], rbx; call morestack_noctxt
+///           mov rax, [rsp+8]; mov rbx, [rsp+0x10]; jmp main.f
+///   main.g: mov eax, 1; mov ebx, 2; call main.f; ret
+BinaryImage registerArgumentImage() {
+  GoTestImage T;
+  T.writeText(GoCallee,
+              {0x49, 0x3B, 0x66, 0x10, 0x76, 0x05, 0x48, 0x8D, 0x04, 0x18, 0xC3,
+               0x48, 0x89, 0x44, 0x24, 0x08, 0x48, 0x89, 0x5C, 0x24, 0x10});
+  T.writeText(GoCallee + 0x15, makeCall(GoCallee + 0x15, Morestack));
+  T.writeText(GoCallee + 0x1A, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x8B, 0x5C,
+                                0x24, 0x10, 0xEB, 0xDA});
+  T.writeText(GoCaller, {0xB8, 1, 0, 0, 0, 0xBB, 2, 0, 0, 0});
+  T.writeText(GoCaller + 0x0A, makeCall(GoCaller + 0x0A, GoCallee));
+  T.writeText(GoCaller + 0x0F, {0xC3});
+  T.writeText(Morestack, {0xC3});
+  T.writeText(Assembly, {0x48, 0x8D, 0x04, 0x18, 0xC3});
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{GoCallee, kTextVA + 0x500}};
+  Module.GoAssembly = {{Assembly, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  return std::move(T.Img);
+}
+
+TEST(GoRegisterArguments, TheStackGrowthPathSpillsExactlyTheArguments) {
+  const BinaryImage Img = registerArgumentImage();
+  const auto Spills = goMorestackSpills(Img, build(Img, GoCallee).Blocks);
+  ASSERT_TRUE(Spills.has_value());
+  ASSERT_EQ(Spills->size(), 2u);
+  EXPECT_EQ((*Spills)[0].Register, x86reg::RAX);
+  EXPECT_EQ((*Spills)[0].EntryOffset, 8);
+  EXPECT_EQ((*Spills)[1].Register, x86reg::RBX);
+  EXPECT_EQ((*Spills)[1].EntryOffset, 0x10);
+  // A caller without a stack-growth path has no such list.
+  EXPECT_FALSE(goMorestackSpills(Img, build(Img, GoCaller).Blocks));
+}
+
+TEST(GoRegisterArguments, AWideningReloadRestoresASpilledByte) {
+  // main.h(b bool): cmp rsp, [r14+0x10]; jbe grow; mov eax, ecx; ret
+  //   grow: mov [rsp+8], cl; call morestack_noctxt
+  //         movzx ecx, byte [rsp+8]; jmp main.h
+  GoTestImage T;
+  constexpr va_t Byte = kTextVA + 0x100;
+  T.writeText(Byte, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x03, 0x89, 0xC8, 0xC3, 0x88,
+                     0x4C, 0x24, 0x08});
+  T.writeText(Byte + 0x0D, makeCall(Byte + 0x0D, Morestack));
+  T.writeText(Byte + 0x12, {0x0F, 0xB6, 0x4C, 0x24, 0x08, 0xEB, 0xE7});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Byte, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Spills = goMorestackSpills(T.Img, build(T.Img, Byte).Blocks);
+  ASSERT_TRUE(Spills.has_value());
+  ASSERT_EQ(Spills->size(), 1u);
+  EXPECT_EQ((*Spills)[0].Register, x86reg::RCX);
+  EXPECT_EQ((*Spills)[0].Size, 1u);
+  EXPECT_EQ((*Spills)[0].EntryOffset, 8);
+}
+
+TEST(GoRegisterArguments, AGoFunctionTakesThemInGoRegisters) {
+  const BinaryImage Img = registerArgumentImage();
+  EXPECT_TRUE(usesGoRegisterArguments(Img, GoCallee));
+  EXPECT_FALSE(usesGoRegisterArguments(Img, Assembly));
+  const MedFunc F = lift(Img, GoCallee);
+  ASSERT_FALSE(F.IntegerArgumentRegisters.empty());
+  EXPECT_EQ(F.IntegerArgumentRegisters.front(), x86reg::RAX);
+  // RAX and RBX, and no stack parameter read back from the spill area.
+  ASSERT_EQ(F.Params.size(), 2u);
+  EXPECT_EQ(F.Params[0].RegOff, x86reg::RAX);
+  EXPECT_EQ(F.Params[1].RegOff, x86reg::RBX);
+
+  const LocalRegisterEffect Effect = localRegisterEffect(
+      Img, build(Img, GoCallee), nullptr, nullptr, nullptr, nullptr);
+  ASSERT_TRUE(Effect.GoArgumentReads.has_value());
+  EXPECT_EQ((*Effect.GoArgumentReads)[x86reg::RAX / 8], 8u);
+  EXPECT_EQ((*Effect.GoArgumentReads)[x86reg::RBX / 8], 8u);
+  EXPECT_EQ((*Effect.GoArgumentReads)[x86reg::RDI / 8], 0u);
+  EXPECT_EQ(Effect.StackArgs, 0);
+}
+
+TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
+  const BinaryImage Img = registerArgumentImage();
+  GPRReadWidths Reads{};
+  Reads[x86reg::RAX / 8] = 8;
+  Reads[x86reg::RBX / 8] = 8;
+  const std::map<va_t, GPRReadWidths> Summaries{{GoCallee, Reads}};
+  LowToMedConverter Converter;
+  Converter.setBinaryImage(&Img);
+  Converter.setCallEntryReadGPRs(&Summaries);
+  const MedFunc F =
+      Converter.convert(build(Img, GoCaller), Img.Arch, Img.Format);
+  const MedOp *Call = onlyCall(F);
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->NumInputs, 3u);
+  // The values the caller set in RAX and RBX, not System V's RDI and RSI.
+  for (unsigned I = 1; I < 3; ++I) {
+    const MedVar &Argument = Call->Inputs[I];
+    if (Argument.Kind == MedVar::Const)
+      EXPECT_EQ(Argument.ConstVal, I);
+    else
+      EXPECT_EQ(Argument.RegOff, I == 1 ? x86reg::RAX : x86reg::RBX);
+  }
 }
 
 } // namespace

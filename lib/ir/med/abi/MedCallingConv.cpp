@@ -23,6 +23,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -1576,6 +1577,13 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       IntegerRegs = Func.IntegerArgumentRegisters;
     }
   }
+  // Go code the toolchain compiled takes its integer arguments in Go's
+  // registers (usesGoRegisterArguments).
+  if (Image && usesGoRegisterArguments(*Image, Func.Entry)) {
+    const llvm::ArrayRef<uint64_t> Go = goIntegerArgumentRegisters(TheArch);
+    Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());
+    IntegerRegs = Func.IntegerArgumentRegisters;
+  }
   if (TheArch == Arch::X86) {
     const auto Additional =
         med_calling_conv_detail::additionalI386ParameterRegisters(Func);
@@ -1708,8 +1716,10 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // variadic function reads its overflow stack arguments through the va_arg
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
+  // A Go function's spill area holds none of its stack arguments.
   if (!Func.IsVariadic)
-    med_calling_conv_detail::detectStackParams(Func, TargetArch, Fmt, 0, Image);
+    med_calling_conv_detail::detectStackParams(
+        Func, TargetArch, Fmt, GoArgumentSpillBegin.value_or(0), Image);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count

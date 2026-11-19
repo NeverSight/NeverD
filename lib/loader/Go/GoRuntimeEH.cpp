@@ -305,6 +305,35 @@ void parseGoExceptions(BinaryImage &Img) {
              [](const GoWriteBarrier &A, const GoWriteBarrier &B) {
                return A.Entry < B.Entry;
              });
+  // `FuncFlagAsm` (internal/abi/symtab.go) exists from Go 1.18 on.
+  constexpr uint8_t FuncFlagAsm = 1u << 2;
+  if (Header->Magic == Go118Magic || Header->Magic == Go120Magic) {
+    Module.RegisterArguments =
+        Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64;
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && (G.Raw.Flag & FuncFlagAsm) &&
+          G.CodeRange.isValid())
+        Module.GoAssembly.push_back(G.CodeRange);
+    llvm::sort(Module.GoAssembly, [](const ExceptionAddressRange &A,
+                                     const ExceptionAddressRange &B) {
+      return A.Begin < B.Begin;
+    });
+    std::vector<ExceptionAddressRange> Assembly;
+    for (const ExceptionAddressRange &Range : Module.GoAssembly)
+      if (!Assembly.empty() && Range.Begin <= Assembly.back().End)
+        Assembly.back().End = std::max(Assembly.back().End, Range.End);
+      else
+        Assembly.push_back(Range);
+    Module.GoAssembly = std::move(Assembly);
+  }
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          (G.Name == "runtime.morestack" ||
+           G.Name == "runtime.morestack_noctxt" ||
+           G.Name == "runtime.morestackc"))
+        Module.MorestackEntries.push_back(G.CodeRange.Begin);
+  llvm::sort(Module.MorestackEntries);
 
   if (!Layout.StackMapPCDataIndex) {
     Layout.StackMapPCDataIndex =

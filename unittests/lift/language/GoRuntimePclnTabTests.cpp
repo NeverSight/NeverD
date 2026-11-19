@@ -326,4 +326,26 @@ TEST(GoWriteBarriers, ARM64TakesItsOwnRegisters) {
   EXPECT_EQ(Module->WriteBarriers[1].Kind, GoWriteBarrierKind::Buffer);
 }
 
+TEST(GoRegisterArguments, NeedAPclntabThatMarksAssembly) {
+  // Go 1.16-1.17 records no assembly flag, so no function of such an image
+  // is taken to use the internal register ABI; its stack-growth routines
+  // are still found by name.
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("main.a", kTextVA + 0x100),
+                    makeGoCode("runtime.morestack_noctxt", kTextVA + 0x200),
+                    makeGoCode("runtime.morestack", kTextVA + 0x300)},
+                   kTextVA + 0x400)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_FALSE(Module->RegisterArguments);
+  EXPECT_TRUE(Module->GoAssembly.empty());
+  EXPECT_EQ(Module->MorestackEntries,
+            (std::vector<va_t>{kTextVA + 0x200, kTextVA + 0x300}));
+}
+
 } // namespace

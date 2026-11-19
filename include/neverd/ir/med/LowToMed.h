@@ -459,6 +459,11 @@ private:
   Arch TargetArch = Arch::Unknown;
   /// Set by convert(). Win64 COFF preserves RSI/RDI; SysV does not.
   BinaryFormat TargetFormat = BinaryFormat::Unknown;
+  /// Where the function being converted spills its register arguments when
+  /// its stack grows, as an offset from the stack pointer at entry
+  /// (goMorestackSpills): the spill area, which holds none of its stack
+  /// arguments.  Unset for any other function.
+  std::optional<int64_t> GoArgumentSpillBegin;
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;

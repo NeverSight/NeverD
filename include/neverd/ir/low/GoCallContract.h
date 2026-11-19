@@ -17,11 +17,15 @@
 #include "neverd/Common.h"
 #include "neverd/ir/CallRegisterContract.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIR.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/LanguageEHGo.h"
 
+#include "llvm/ADT/ArrayRef.h"
+
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace neverd {
 
@@ -49,6 +53,33 @@ CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
 std::optional<uint64_t> goCallResultRegister(const BinaryImage &Img,
                                              CallRegisterContract Contract,
                                              va_t Callee);
+
+/// Whether the function at \p Entry takes its arguments in Go's internal
+/// register ABI: Go code the toolchain compiled rather than assembled, in an
+/// x86-64 image whose pclntab records which is which
+/// (GoModuleInfo::RegisterArguments).
+bool usesGoRegisterArguments(const BinaryImage &Img, va_t Entry);
+
+/// The integer argument registers of Go's internal ABI on \p A, in order
+/// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
+llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
+
+/// One register argument a function's stack-growth path spills.
+struct GoArgumentSpill {
+  uint64_t Register = 0;
+  uint16_t Size = 0;
+  /// The spill slot, as an offset from the stack pointer at entry.
+  int64_t EntryOffset = 0;
+};
+
+/// The register arguments the stack-growth path of a function whose entry is
+/// block 0 of \p Blocks spills before it calls the runtime's morestack and
+/// reloads after it, sorted by slot.  The compiler spills exactly the
+/// register arguments the function uses, each to its slot in the spill area
+/// above the return address (cmd/compile/internal/amd64/ssa.go, RegArgs).
+/// nullopt where the entry has no such path, or one of another shape.
+std::optional<std::vector<GoArgumentSpill>>
+goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks);
 
 /// The low bytes of the register view at \p RegOff of \p Size bytes that a
 /// call under \p Contract keeps, before what a summary of its callee proves:

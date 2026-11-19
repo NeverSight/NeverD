@@ -1545,6 +1545,15 @@ localRegisterEffect(const BinaryImage &Img, const LowFunc &F,
                              FixedCallReads, ArgumentSources, StackProbes);
 }
 
+namespace {
+LocalRegisterEffect
+localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
+                          const libc::NoReturnTargetIndex *NoReturnTargets,
+                          const std::map<va_t, GPRReadWidths> *FixedCallReads,
+                          const std::map<va_t, va_t> *ArgumentSources,
+                          const libc::StackProbeIndex *StackProbes);
+} // namespace
+
 LocalRegisterEffect
 localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
                     const libc::NoReturnTargetIndex *NoReturnTargets,
@@ -1555,9 +1564,35 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   if (Entry != InvalidVA)
     if (const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry))
       return goWriteBarrierEffect(Img.Arch, *Barrier);
+  LocalRegisterEffect Effect = localRegisterEffectOfBody(
+      Img, F, NoReturnTargets, FixedCallReads, ArgumentSources, StackProbes);
+  if (Entry == InvalidVA || !isGoCode(Img, Entry))
+    return Effect;
+  Effect.CallClobbers = goCodeCallClobbers(Img.Arch);
+  // A Go function takes exactly the register arguments its stack-growth
+  // path spills, and the spill area above the return address holds none of
+  // its stack arguments: they lie below it.
+  if (usesGoRegisterArguments(Img, Entry))
+    if (const auto Spills = goMorestackSpills(Img, F.Blocks)) {
+      GPRReadWidths Reads{};
+      for (const GoArgumentSpill &Spill : *Spills)
+        addRead(Img.Arch, Reads, Spill.Register, Spill.Size);
+      Effect.GoArgumentReads = Reads;
+      if (!Spills->empty() && !Effect.UnknownStackReads)
+        Effect.StackArgs = static_cast<int>(
+            std::max<int64_t>(Spills->front().EntryOffset - 8, 0) / 8);
+    }
+  return Effect;
+}
+
+namespace {
+LocalRegisterEffect
+localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
+                          const libc::NoReturnTargetIndex *NoReturnTargets,
+                          const std::map<va_t, GPRReadWidths> *FixedCallReads,
+                          const std::map<va_t, va_t> *ArgumentSources,
+                          const libc::StackProbeIndex *StackProbes) {
   LocalRegisterEffect Effect;
-  if (Entry != InvalidVA && isGoCode(Img, Entry))
-    Effect.CallClobbers = goCodeCallClobbers(Img.Arch);
   Effect.BodyUnknown = F.HasIndependentRoots ||
                        (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64);
   Effect.BodyWrites = ~GPRFamilyMask{0xFFFF};
@@ -1876,6 +1911,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   joinPlainSteps(Effect);
   return Effect;
 }
+} // namespace
 
 namespace {
 /// Bytes of each family live on entry to \p F, given the current callee
@@ -2040,8 +2076,21 @@ solveCallRegisterEffects(const std::map<va_t, LocalRegisterEffect> &Funcs,
 CallRegisterSummaries solveCallRegisterEffects(
     const LocalRegisterEffectRefs &Funcs, GPRFamilyMask VolatileFamilies,
     GPRFamilyMask ArgumentFamilies, const std::set<va_t> &DispatchThunks,
-    const std::map<va_t, GPRReadWidths> &FixedEntryReads,
+    const std::map<va_t, GPRReadWidths> &PrototypeEntryReads,
     const std::map<va_t, int> &FixedEntryStackArgs) {
+  // A Go function reads at entry exactly the register arguments its
+  // stack-growth path spills, as a prototype fixes an import's reads.
+  std::map<va_t, GPRReadWidths> WithGoArguments;
+  const std::map<va_t, GPRReadWidths> *Fixed = &PrototypeEntryReads;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (Effect->GoArgumentReads && !PrototypeEntryReads.count(Entry)) {
+      if (Fixed != &WithGoArguments) {
+        WithGoArguments = PrototypeEntryReads;
+        Fixed = &WithGoArguments;
+      }
+      WithGoArguments.emplace(Entry, *Effect->GoArgumentReads);
+    }
+  const std::map<va_t, GPRReadWidths> &FixedEntryReads = *Fixed;
   CallRegisterSummaries Result;
   Result.Unread = proveUnreadCallRegisters(Funcs);
   for (const auto &[Entry, Effect] : Funcs)
