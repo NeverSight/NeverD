@@ -130,10 +130,26 @@ A/B with identical output.
      it borrows on every large image before; on Rust its fixed point also
      never settled, and on libsqlite3, libstdc++ and ntoskrnl a call window
      with two cells at one coordinate refused the module (both fixed in
-     `671a79251b`). Six alternating pairs: capstone LLVM C CPU -44%, wall
-     -42%; pe64-capstone -18%/-23%; x64 Rust -21%/-33%; Mach-O Rust -6%/-21%;
-     libsqlite3 -6%/-4%; libstdc++ -5%/-5%; ntoskrnl -2%/-2%, where the output
-     also improves (the system service dispatch resolves).
+     `671a79251b`). Six alternating pairs, whole images: capstone LLVM C CPU
+     -44%, wall -42%; pe64-capstone -18%/-23%; x64 Rust -21%/-33%; Mach-O Rust
+     -6%/-21%; libsqlite3 -6%/-4%; libstdc++ -5%/-5%; ntoskrnl -2%/-2%.
+     250-function selections, which took the fallback too: capstone LLVM C
+     -48%/-30%, pe64-capstone -31%/-30%, x64 Rust -27%/-34%; identical output.
+     LLVM C over the 176 x64 corpus binaries changes only the six Rust
+     x86_64-pc-windows-msvc outputs that HighC changes.
+   - On ntoskrnl the fallback had left KiServiceInternal's argument-copy
+     dispatch unproved (a trap), and with it the 247 `Zw` stubs showed no
+     arguments; now the dispatch resolves and each stub shows the four
+     registers it forwards, which over-approximates services with fewer
+     (`ZwFlushInstructionCache` gains a fourth parameter beyond its declared
+     three, the policy that already extends nine declared prototypes there).
+     The cause is the rebuild itself, not the fallback's two settings: with
+     every code-pointer slot unprotected, with potential table branches
+     unpreserved, and with both, the rebuilt dispatch stays unproved, while
+     the first lift proves it. The rebuild's remaining difference is the first
+     lift's published-branch history; the mechanism is not isolated. (The
+     commit message of `3533bc3bee` blames the protected set's size; that is
+     wrong.)
    - Limits kept, measured (a private build that scales every inventory
      account with the module's operations: twice them for the queue, 32 times
      for transfers, 4 times for evidence and pair scans). It completes the

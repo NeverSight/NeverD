@@ -165,6 +165,12 @@ most time. Each step is an instruction, its reason and the case it comes from.
   instead had to sit above slow but monotone ascents (522 visits of one block
   in a function that settled) and cost an oscillating function about eight
   times as many visits before it ended.
+- **Remove the cause you name before you write it down.** The arbitration
+  commit blamed the fallback's protected set for an ntoskrnl dispatch the
+  fallback left unproved. A probe that kept the fallback but dropped the
+  protection, the branch preservation, and both, left the dispatch unproved
+  every time: the rebuild itself was the cause, and the wrong message was
+  already pushed (`3533bc3bee`).
 - **Identity over a corpus, not a spot check.** Hash every non-timing output,
   the whole payload and not only the text, for each view of a large sample, in
   forward and in reverse order: 2,980 of 2,980 identical both ways is the form
