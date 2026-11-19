@@ -35,27 +35,39 @@ using namespace neverd;
 
 namespace {
 
-std::vector<uint8_t> encodeDSP(llvm::ArrayRef<uint32_t> Words, Arch Target) {
+std::vector<uint8_t> encodeDSP(llvm::ArrayRef<uint32_t> Words, Arch Target,
+                               bool Micro = false) {
   std::vector<uint8_t> Bytes;
-  for (uint32_t Word : Words)
+  for (uint32_t Word : Words) {
+    if (Micro && archLittleEndian(Target))
+      Word = (Word << 16) | (Word >> 16);
     for (unsigned I = 0; I != 4; ++I)
       Bytes.push_back(Word >> (8 * (archLittleEndian(Target) ? I : 3 - I)));
+  }
   return Bytes;
 }
 
-BinaryImage dspImage(Arch Target) {
+BinaryImage dspImage(Arch Target, bool Micro = false) {
   BinaryImage Image;
   Image.Arch = Target;
-  Image.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
+  Image.Bits = isMIPS64(Target) && !isMIPSN32(Target) ? Bitness::Bits64
+                                                      : Bitness::Bits32;
   Image.Entry = 0x10000;
   Image.MIPS.emplace();
-  Image.MIPS->ABI = isMIPS64(Target) ? MIPSABI::N64 : MIPSABI::O32;
+  Image.MIPS->ABI = isMIPSN32(Target)  ? MIPSABI::N32
+                    : isMIPS64(Target) ? MIPSABI::N64
+                                       : MIPSABI::O32;
   Image.MIPS->HasDSP = true;
+  if (Micro) {
+    Image.Mode = InstructionMode::MicroMIPS;
+    Image.MIPS->HasMicroMIPS = true;
+  }
   return Image;
 }
 
 std::vector<LowOp> liftDSP(Decoder &Decode, Arch Target, uint32_t Word) {
-  const auto Bytes = encodeDSP({Word}, Target);
+  const auto Bytes = encodeDSP(
+      {Word}, Target, Decode.currentMode() == InstructionMode::MicroMIPS);
   DecodedInsn Insn;
   if (Decode.decodeOneForLift(Bytes.data(), Bytes.size(), 0x10000, Insn) != 4)
     throw std::runtime_error("reference DSP encoding did not decode");
@@ -85,6 +97,146 @@ uint32_t selectedFields(unsigned Selector) {
 }
 
 class MIPSDSP : public ::testing::TestWithParam<Arch> {};
+
+class MIPSDSPPosition : public ::testing::TestWithParam<Arch> {};
+INSTANTIATE_TEST_SUITE_P(AllABIsAndByteOrders, MIPSDSPPosition,
+                         ::testing::Values(Arch::MIPS32, Arch::MIPS32EL,
+                                           Arch::MIPS64N32, Arch::MIPS64N32EL,
+                                           Arch::MIPS64, Arch::MIPS64EL));
+
+TEST_P(MIPSDSPPosition, BranchUsesIncomingPositionBeforeSlotWritesIt) {
+  const Arch Target = GetParam();
+  for (bool Micro : {false, true}) {
+    SCOPED_TRACE(Micro);
+    const auto Image = dspImage(Target, Micro);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    // bposge32 -3; wrdsp a0,1. Classic displacements count words,
+    // microMIPS displacements count halfwords.
+    const auto Bytes = encodeDSP(
+        {Micro ? 0x4360fffdu : 0x041cfffd, Micro ? 0x0080567cu : 0x7c800cf8},
+        Target, Micro);
+    DecodedExecutionUnit Unit;
+    ASSERT_EQ(
+        D.decodeUnitForLift(Bytes.data(), Bytes.size(), Image.Entry, Unit), 8);
+    ASSERT_TRUE(Unit.HasDelaySlot);
+    std::vector<LowOp> Ops;
+    ASSERT_TRUE(D.liftUnitToLow(Unit, Ops));
+    ASSERT_FALSE(Ops.empty());
+    const auto &Branch = Ops.back();
+    ASSERT_EQ(Branch.Opcode, NdOp::COND_BR);
+    ASSERT_TRUE(Branch.Inputs[0].isConst());
+    EXPECT_EQ(Branch.Inputs[0].Offset, Image.Entry - (Micro ? 2 : 8));
+    for (unsigned Pos = 0; Pos < (isMIPS64(Target) ? 128u : 64u); ++Pos) {
+      SCOPED_TRACE(Pos);
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      const unsigned NewPos = Pos >= 32 ? 0 : 32;
+      E.setRegister(mipsreg::DSPControl, 0x05554000 | Pos);
+      E.setRegister(mipsreg::A0, NewPos);
+      for (const auto &Op : llvm::ArrayRef(Ops).drop_back())
+        ASSERT_TRUE(E.step(Op));
+      ASSERT_EQ(E.getRegister(Branch.Inputs[1].Offset), Pos >= 32);
+      ASSERT_EQ(E.getRegister(mipsreg::DSPControl), 0x05554000u | NewPos);
+    }
+  }
+}
+
+TEST_P(MIPSDSPPosition, WordExtractionReadsSixBitsAndUpdatesTheEntirePosition) {
+  const Arch Target = GetParam();
+  const unsigned PosMask = isMIPS64(Target) ? 127 : 63;
+  for (bool Micro : {false, true}) {
+    SCOPED_TRACE(Micro);
+    const auto Image = dspImage(Target, Micro);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    // Each encoding extracts from ac2 into v0. The variable forms use a0.
+    struct Form {
+      uint32_t Classic, Micro;
+      bool Variable, Decrement;
+    };
+    constexpr Form Forms[] = {
+        {0x7c0210b8, 0x0040a67c, false, false}, // EXTP
+        {0x7c8210f8, 0x0044a8bc, true, false},  // EXTPV
+        {0x7c0212b8, 0x0040b67c, false, true},  // EXTPDP
+        {0x7c8212f8, 0x0044b8bc, true, true},   // EXTPDPV
+    };
+    constexpr uint64_t Acc = 0xa5326ce789abcdef;
+    for (const auto &F : Forms)
+      for (unsigned Size = 0; Size < 32; ++Size) {
+        uint32_t Word = Micro ? F.Micro : F.Classic;
+        if (!F.Variable)
+          Word |= Size << (Micro ? 16 : 21);
+        const auto Ops = liftDSP(D, Target, Word);
+        for (unsigned Pos = 0; Pos <= PosMask; ++Pos) {
+          SCOPED_TRACE(::testing::Message()
+                       << std::hex << Word << " POS " << Pos);
+          NdOpEmulator E(Image);
+          E.setStrictMode(true);
+          E.setRegister(mipsreg::DSPControl,
+                        0x05550000 | (Pos & 1 ? 0x4000 : 0) | Pos);
+          E.setRegister(mipsreg::A0, 0x60 | Size);
+          E.setRegister(mipsreg::AC2HI, uint32_t(Acc >> 32));
+          E.setRegister(mipsreg::AC2LO, uint32_t(Acc));
+          for (const auto &Op : Ops)
+            ASSERT_TRUE(E.step(Op));
+          const unsigned Start = Pos & 63;
+          const bool Success = Start >= Size;
+          const auto Updated =
+              Success && F.Decrement ? (Pos - Size - 1) & PosMask : Pos;
+          ASSERT_EQ(E.getRegister(mipsreg::DSPControl),
+                    (Success ? 0x05550000u : 0x05554000u) | Updated);
+          if (!Success) {
+            ASSERT_FALSE(E.getRegister(mipsreg::V0));
+            continue;
+          }
+          const uint32_t Bits =
+              (Acc >> (Start - Size)) & (UINT32_MAX >> (31 - Size));
+          const uint64_t Expected =
+              isMIPS64(Target) && !F.Variable && !F.Decrement
+                  ? uint64_t(int64_t(int32_t(Bits)))
+                  : Bits;
+          ASSERT_EQ(E.getRegister(mipsreg::V0), Expected);
+        }
+      }
+  }
+}
+
+TEST_P(MIPSDSPPosition, MthlipMarksOnlyPositionUnknownAbove32) {
+  const Arch Target = GetParam();
+  const unsigned PosMask = isMIPS64(Target) ? 127 : 63;
+  for (bool Micro : {false, true}) {
+    SCOPED_TRACE(Micro);
+    const auto Image = dspImage(Target, Micro);
+    Decoder D;
+    ASSERT_TRUE(D.init(Image));
+    const auto Move = liftDSP(D, Target, Micro ? 0x0004827cu : 0x7c8017f8u);
+    // rddsp v0,1 and rddsp v0,62 observe the two fields independently.
+    const auto ReadPos = liftDSP(D, Target, Micro ? 0x0040467cu : 0x7c0114b8u);
+    const auto ReadRest = liftDSP(D, Target, Micro ? 0x004f867cu : 0x7c3e14b8u);
+    for (unsigned Pos = 0; Pos <= PosMask; ++Pos) {
+      SCOPED_TRACE(Pos);
+      NdOpEmulator E(Image);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::DSPControl, 0x05554000 | Pos);
+      E.setRegister(mipsreg::AC2LO, 7);
+      E.setRegister(mipsreg::A0, 13);
+      for (const auto &Op : Move)
+        ASSERT_TRUE(E.step(Op));
+      ASSERT_EQ(E.getRegister(mipsreg::AC2HI), 7u);
+      ASSERT_EQ(E.getRegister(mipsreg::AC2LO), 13u);
+      for (const auto &Op : ReadPos)
+        ASSERT_TRUE(E.step(Op));
+      if (Pos <= 32)
+        ASSERT_EQ(E.getRegister(mipsreg::V0), (Pos + 32) & PosMask);
+      else
+        ASSERT_FALSE(E.getRegister(mipsreg::V0));
+      for (const auto &Op : ReadRest)
+        ASSERT_TRUE(E.step(Op));
+      ASSERT_EQ(E.getRegister(mipsreg::V0), 0x05554000u);
+    }
+  }
+}
 
 struct PureCase {
   const char *Name;

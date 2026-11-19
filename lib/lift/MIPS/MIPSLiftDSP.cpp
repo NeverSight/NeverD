@@ -108,17 +108,22 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
     if (Decrement || *Kind == DSP::ExtractPosition ||
         *Kind == DSP::ExtractVariablePosition) {
       const auto Control = ReadControl();
-      const auto Position = S.binary(NdOp::INT_AND, Control, NdVar::cst(63, 4));
-      const auto Failed = S.binary(NdOp::INT_LESS, Position, Size, 1);
-      const auto Offset = S.binary(NdOp::INT_SUB, Position, Size);
+      // A word extraction indexes HI[31:0] || LO[31:0] with six bits.
+      // A successful DP form subtracts from the complete DSPControl.POS.
+      const auto Start = S.binary(NdOp::INT_AND, Control, NdVar::cst(63, 4));
+      const auto Failed = S.binary(NdOp::INT_LESS, Start, Size, 1);
+      const auto Offset = S.binary(NdOp::INT_SUB, Start, Size);
+      const uint32_t Clear = 0x4000u | (Decrement ? 63u : 0u);
       auto SuccessState =
-          S.binary(NdOp::INT_AND, Control, NdVar::cst(~0x4000u, 4));
+          S.binary(NdOp::INT_AND, Control, NdVar::cst(~Clear, 4));
       if (Decrement) {
+        // On success Next is in [-1, 62]. Its low six bits replace the
+        // cleared field. Its seventh bit toggles the saved POS[6] on borrow.
         const auto Next = S.binary(NdOp::INT_SUB, Offset, NdVar::cst(1, 4));
+        const auto PosMask = mips::dspControlMask(1, S.Width == 8);
         SuccessState =
-            S.binary(NdOp::INT_OR,
-                     S.binary(NdOp::INT_AND, SuccessState, NdVar::cst(~63u, 4)),
-                     S.binary(NdOp::INT_AND, Next, NdVar::cst(63, 4)));
+            S.binary(NdOp::INT_XOR, SuccessState,
+                     S.binary(NdOp::INT_AND, Next, NdVar::cst(PosMask, 4)));
       }
       WriteControl(S.select(
           Failed, S.binary(NdOp::INT_OR, Control, NdVar::cst(0x4000, 4)),
@@ -141,7 +146,7 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
         const auto Result = S.makeTemp(4);
         S.emitIntrinsic(Intrinsic::MIPSExtractResult, Result,
                         {Failed, S.binary(NdOp::INT_AND, Bits, Mask)});
-        S.write(RT, Result);
+        S.write(RT, Result, /*SignExtend=*/ *Kind == DSP::ExtractPosition);
       }
       return true;
     }
