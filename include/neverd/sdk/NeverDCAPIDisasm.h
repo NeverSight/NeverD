@@ -8,8 +8,7 @@
 /// Per-function views of a loaded binary: the recovered function table, raw
 /// bytes, disassembly, decompiled C, and each intermediate representation.
 ///
-/// All returned strings are heap-allocated via strdup(); callers must
-/// free them with neverd_free_string().
+/// The caller owns each returned string and frees it with neverd_free_string().
 ///
 //===----------------------------------------------------------------------===//
 

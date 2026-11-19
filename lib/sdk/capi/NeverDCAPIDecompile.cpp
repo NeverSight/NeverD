@@ -52,6 +52,8 @@
 #include "llvm/Support/xxhash.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <set>
@@ -418,7 +420,13 @@ static const char *cachedSource(Session &S, va_t Entry,
     *SourceMap = *Source->Map;
     SourceMap->Recognitions = &S.PipeResult.LibraryRecognitions;
   }
-  return dupStr(Source->Text);
+  // The cached string already knows its byte count, including where to copy
+  // the terminator. A warm query only needs one pass over the source.
+  const size_t Bytes = Source->Text.size() + 1;
+  auto *Copy = static_cast<char *>(std::malloc(Bytes));
+  if (Copy)
+    std::memcpy(Copy, Source->Text.c_str(), Bytes);
+  return Copy;
 }
 
 /// Keep what an emission of \p Entry's source produced and return a copy for
