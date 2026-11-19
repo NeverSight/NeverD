@@ -1605,8 +1605,9 @@ compares all six locale-bearing UCRT stdio prototypes and the handler exchange
 with the declarations in their actual MinGW headers.
 The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
 `_UCRT` alone does not select the old MinGW runtime headers.
-The Clang checks use the original MinGW compiler’s reported sysroot, including
-when cross headers are installed outside the host’s default search paths.
+The Clang checks locate the MinGW target installation from the GCC startup
+object used to link the original PE. This also covers native Windows GCCs
+with an empty configured sysroot and cross headers outside Clang's search path.
 `MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks
 complete PE32/PE32+ relocated data pointers and rejects writable, partial,
 ordered, ambiguous or wrong-owner evidence. The Win64
@@ -25403,6 +25404,22 @@ must execute the intended callee once and preserve SP, RA and callee-saved
 registers. `--original-only` validates the fixtures without claiming NeverD
 reconstruction. High-address execution uses Unicorn's virtual TLB and does not
 qualify a hardware MMU.
+
+`unittests/lift/mips/scalar-entry-roundtrip.py` uses the same explicit compiler,
+assembler, linker and output paths to compare n32/n64 scalar carrier reads in
+both byte orders. GCC/Clang O0/O2 originals include signed/unsigned byte,
+halfword and word parameters, pointers, and separate logical zero/sign-extension
+controls. Inline assembly observes the compiler's operand register after any
+materialization; it does not assume that narrow operands retain arbitrary high
+bits. Both reconstructed backends must match every bit of the independently
+executed original result and preserve SP, RA, saved registers and memory.
+The complete matrix has 16 original images, 720 original executions, 1,152
+rebuilds and 5,760 rebuilt executions. `--original-only` qualifies only the
+original fixtures. Failed and successful attempts retain source/command receipts
+and retire generated objects and executables through `MIPSValidationArtifacts`.
+`HighCParamUsage.MIPSFullGPRReadsKeepTheIncomingWordExtension` separately executes
+emitted expressions with boundary words, while its companion negative test keeps
+unknown declarations, stack slots and other ABI profiles outside this rule.
 
 `MicroMIPSPipelineSource.TypedCallsRetainExternalInstructionModes` checks
 ordinary and explicitly typed direct calls on all six MIPS ABI/byte-order

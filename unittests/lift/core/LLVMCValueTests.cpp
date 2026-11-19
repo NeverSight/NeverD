@@ -4664,10 +4664,16 @@ define i32 @print_with_locale(ptr %stream, ptr %format, ptr %locale, ptr %args) 
     ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
     // Independent CRT declarations: void* is not a compatible locale
     // parameter type, and exchanging a handler returns a callable pointer.
+    // Alias the fixture after including the host headers so it cannot
+    // redeclare the Windows SDK types or override its runtime functions.
     const std::string Prelude = R"c(
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#define _locale_t fixture_locale_t
+#define _invalid_parameter_handler fixture_invalid_handler
+#define _set_invalid_parameter_handler fixture_set_handler
+#define __stdio_common_vfprintf fixture_vfprintf
 typedef struct fixture_locale { int value; } *_locale_t;
 typedef void (*_invalid_parameter_handler)(const wchar_t *, const wchar_t *,
                                          const wchar_t *, unsigned int,
@@ -4726,7 +4732,7 @@ int main(void) {
       // Execute the actual emitted C. Its scalar widths fit the host even
       // when the general wide-integer fixture's 129-bit probe does not.
       source_call_execution_test::compileAndRun(
-          withRuntimeMocks(Prelude + Source + Harness),
+          Prelude + Source + Harness,
           {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
            "-Werror=uninitialized"});
   }

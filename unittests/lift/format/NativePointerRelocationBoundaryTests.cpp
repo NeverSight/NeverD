@@ -62,6 +62,22 @@ protected:
     return fs::path(TEST_OBJ_DIR) / Name;
   }
 
+  // A relocated MinGW GCC can have an empty configured sysroot. Its startup
+  // object still identifies the target installation used to link the PE.
+  ::testing::AssertionResult mingwSysroot(std::string &Argument) const {
+    const auto CRT =
+        exec("x86_64-w64-mingw32-gcc", {"-print-file-name=crt2.o"});
+    if (!CRT.ok())
+      return ::testing::AssertionFailure() << CRT.err;
+    const fs::path Object(llvm::StringRef(CRT.out).trim().str());
+    if (!Object.is_absolute() || !fs::is_regular_file(Object))
+      return ::testing::AssertionFailure()
+             << "MinGW startup object: " << Object;
+    Argument = "--sysroot=" +
+               Object.lexically_normal().parent_path().parent_path().string();
+    return ::testing::AssertionSuccess();
+  }
+
   static bool hasBaseRelocation(const BinaryImage &Img, va_t Address) {
     return std::any_of(
         Img.BaseRelocations.begin(), Img.BaseRelocations.end(),
@@ -2705,12 +2721,8 @@ TEST_F(NativePointerRelocationBoundary, MinGWProgramWholeModuleLLVMCCompiles) {
     GTEST_SKIP() << "the program needs the MinGW compiler";
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "compiling the program's C needs Clang's GNU driver";
-  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
-  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
-  // Homebrew's cross headers are outside Clang's default search paths.
-  // Use the same installation that builds the original PE on every host.
-  const std::string Sysroot =
-      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
+  std::string Sysroot;
+  ASSERT_TRUE(mingwSysroot(Sysroot));
   const fs::path Source = tmpFile("mingw_program.c");
   const fs::path Exe = tmpFile("mingw_program.exe");
   {
@@ -2799,10 +2811,8 @@ TEST_F(NativePointerRelocationBoundary,
   if (!hasCrossTargetClang() ||
       !exec("x86_64-w64-mingw32-gcc", {"--version"}).ok())
     GTEST_SKIP() << "needs Clang and the MinGW headers";
-  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
-  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
-  const std::string Sysroot =
-      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
+  std::string Sysroot;
+  ASSERT_TRUE(mingwSysroot(Sysroot));
   for (unsigned Variant = 0; Variant != 3; ++Variant) {
     SCOPED_TRACE(Variant);
     const bool UCRT = Variant == 1;
