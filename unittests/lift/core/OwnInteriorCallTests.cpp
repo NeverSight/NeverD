@@ -767,6 +767,48 @@ int main(void) {
   }
 }
 
+TEST(ComputedCodeBranch, ASeededRebuildKeepsTheTableALaterResolveRecovers) {
+  // The resolver runs again after computed-branch recovery.  A module rebuild
+  // seeds this branch as published, so its first resolve ends before the
+  // recovery has run and without targets.  The table recovered afterwards is
+  // the build's final graph: it is neither lost nor an unsafe branch.
+  std::vector<uint8_t> Code = {
+      0x89, 0xc8, 0x83, 0xe0, 15, 0xc1, 0xe0, 3,
+      0x4c, 0x8d, 0x1d, 0x79, 0,  0,    0, // lea r11,[+0x88]
+      0x49, 0x29, 0xc3,                    // sub r11,rax; +16: sub ebx,eax
+      0x41, 0xff, 0xe3};                   // +18: jmp r11
+  Code.resize(0x90, 0xcc);
+  for (unsigned I = 0; I != 15; ++I) {
+    const auto Offset = 0x88 - I * 8;
+    Code[Offset] = 0xb8; // mov eax,I; ret
+    Code[Offset + 1] = I;
+    Code[Offset + 2] = Code[Offset + 3] = Code[Offset + 4] = 0;
+    Code[Offset + 5] = 0xc3;
+  }
+  const BinaryImage Image = makeImage(Code, Win64);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const LowFunc First = CFGBuilder().build(Image, Dec, Entry);
+  ASSERT_EQ(First.JumpTables.size(), 1u);
+  const va_t Branch = First.JumpTables.front().InsnAddr;
+  ASSERT_EQ(First.JumpTables.front().Targets.size(), 16u);
+  ASSERT_EQ(First.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+  ASSERT_TRUE(First.UnsafeIndirectBranchAddresses.empty());
+
+  CFGBuilder Seeded;
+  Seeded.setPreviouslyPublishedJumpTableBranches(
+      &First.EverPublishedJumpTableBranchAddresses);
+  Decoder SeededDec;
+  ASSERT_TRUE(SeededDec.init(Image));
+  const LowFunc Rebuilt = Seeded.build(Image, SeededDec, Entry);
+  ASSERT_EQ(Rebuilt.JumpTables.size(), 1u);
+  EXPECT_EQ(Rebuilt.JumpTables.front().Targets,
+            First.JumpTables.front().Targets);
+  EXPECT_EQ(Rebuilt.EverPublishedJumpTableBranchAddresses.count(Branch), 1u);
+  EXPECT_TRUE(Rebuilt.UnsafeIndirectBranchAddresses.empty());
+  EXPECT_EQ(Rebuilt.Blocks.size(), First.Blocks.size());
+}
+
 TEST(ComputedCodeBranch, DataAddressArithmeticUsesTheSameNumericCoordinate) {
   std::vector<uint8_t> Code = {
       0x89, 0xc8, 0x83, 0xe0, 3,    0xc1, 0xe0, 3,

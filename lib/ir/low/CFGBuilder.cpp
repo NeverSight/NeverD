@@ -1640,6 +1640,21 @@ LowFunc CFGBuilder::buildOnce(const BinaryImage &Img, Decoder &Dec,
     }
   if (ScalarTailCalls)
     rebuildBlocks(Func);
+  // A transient empty target set can recover in a later stage, and the
+  // resolver runs again after each scalar or computed-branch recovery above.
+  // A seeded rebuild names a computed dispatch as published before the
+  // recovery that republishes it has run, so its first resolve ends without
+  // targets.  A table is lost only when this final graph has none of its
+  // edges.  These addresses are not generic detector claims: every member
+  // published at least one concrete table edge earlier in this build or in a
+  // seeded build of this same function, or was a strong table proposal.
+  for (const std::set<va_t> *Branches :
+       {&EverPublishedJumpTableBranches, &EverStrongJumpTableProposalBranches})
+    for (va_t Addr : *Branches)
+      if (auto It = Insns.find(Addr);
+          It != Insns.end() && It->second.IsBranch && It->second.IsIndirect &&
+          !It->second.IsCall && It->second.JumpTableTargets.empty())
+        LostValidatedJumpTableBranches.insert(Addr);
   convertIndirectTailCalls(Func);
   dispatchUnprovedBranchesByValue(Img, Func);
   closeRegistrationCxxContinuations(Img, Dec, Func);
@@ -6313,30 +6328,15 @@ void CFGBuilder::multiStageResolve(const BinaryImage &Img, Decoder &Dec,
   StageAmbiguousI386GOTPCBranches.clear();
   StageReplayedI386GOTPCKeys.clear();
 
-  // A transient empty target set can recover in a later stage, so classify a
-  // lost validated table only after convergence (or the bounded cleanup above)
-  // has established the final target state.  These addresses are not generic
-  // detector claims: every member published at least one concrete table edge
-  // earlier in this build or in a seeded build of this same function.
+  // Published identities name current non-call indirect branches only.
   for (auto It = EverPublishedJumpTableBranches.begin();
        It != EverPublishedJumpTableBranches.end();) {
-    const va_t Addr = *It;
-    auto InsnIt = Insns.find(Addr);
+    auto InsnIt = Insns.find(*It);
     if (InsnIt == Insns.end() || !InsnIt->second.IsBranch ||
-        !InsnIt->second.IsIndirect || InsnIt->second.IsCall) {
+        !InsnIt->second.IsIndirect || InsnIt->second.IsCall)
       It = EverPublishedJumpTableBranches.erase(It);
-      continue;
-    }
-    if (InsnIt->second.JumpTableTargets.empty())
-      LostValidatedJumpTableBranches.insert(Addr);
-    ++It;
-  }
-  for (va_t Addr : EverStrongJumpTableProposalBranches) {
-    auto InsnIt = Insns.find(Addr);
-    if (InsnIt != Insns.end() && InsnIt->second.IsBranch &&
-        InsnIt->second.IsIndirect && !InsnIt->second.IsCall &&
-        InsnIt->second.JumpTableTargets.empty())
-      LostValidatedJumpTableBranches.insert(Addr);
+    else
+      ++It;
   }
 }
 
