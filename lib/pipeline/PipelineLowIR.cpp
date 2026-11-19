@@ -5726,14 +5726,22 @@ void Pipeline::buildLowIR(
   // recorded answers, replayed with their work, are the fresh ones.
   RegistrationStackPopMemo StackPops(Img);
   RegistrationLeafPrefixMemo LeafPrefixes(Img);
-  parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
-    ReadOnlyBytesScope ReadScope(Img);
-    RegistrationStackPopMemoScope StackPopScope(StackPops);
-    RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
-    Decoder LocalDec;
-    if (!LocalDec.init(Img))
-      return;
-    CFGBuilder LocalCFG;
+  // An ordinary build asks the x87 call graph of each callee it calls, and a
+  // graph not yet kept lifts the callee again, often while the callee's own
+  // build is still running in the batch: on a switch-heavy x64 image those
+  // second lifts took about a tenth of the whole run's CPU in this pass
+  // alone.  An x64 batch therefore first builds every function without the
+  // x87 fixup, which asks no graph, each build keeping the graph its callers
+  // will ask for (buildDeferringX87).  A second pass keeps each body the
+  // fixup would leave unchanged and builds the rest again, reading the
+  // graphs kept.  A batch too small to run in parallel keeps its single pass,
+  // and so does one whose facts keep callee bodies (a selected run's): those
+  // come from the graph builds the first pass leaves out.
+  const bool DeferX87Fixup = Img.Arch == Arch::X64 && X87Graphs &&
+                             Total >= limits::kMinParallelIRWorkItems;
+  std::vector<std::optional<CFGBuilder::DeferredX87Build>> Deferred(
+      DeferX87Fixup ? Total : 0);
+  const auto configure = [&](CFGBuilder &LocalCFG) {
     LocalCFG.setAnalysisRecoveryEnabled(Opts.allowsAnalysisRecovery());
     LocalCFG.setKnownFuncEntries(&FuncEntries);
     LocalCFG.setNoReturnTargetIndex(&NoReturnTargets);
@@ -5742,6 +5750,21 @@ void Pipeline::buildLowIR(
     LocalCFG.setExecutableCodeOwnerIndex(CodeOwnerIndex);
     LocalCFG.setX87CallGraphCache(X87Graphs);
     LocalCFG.setX87CallProofThreads(X87ProofThreads);
+  };
+  const auto finish = [&](size_t I) {
+    pipeline_detail::prepareAnalysisBody(Img, Opts, AnalysisCallbacks,
+                                         AllLow[I]);
+    trimFuncStorage(AllLow[I]);
+  };
+  parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+    ReadOnlyBytesScope ReadScope(Img);
+    RegistrationStackPopMemoScope StackPopScope(StackPops);
+    RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
+    Decoder LocalDec;
+    if (!LocalDec.init(Img))
+      return;
+    CFGBuilder LocalCFG;
+    configure(LocalCFG);
     for (size_t I; (I = Claim()) < N;) {
       // Only the initial default construction may reuse a complete body.
       // Module table arbitration and continuation closure below still rebuild
@@ -5750,14 +5773,44 @@ void Pipeline::buildLowIR(
           X87Graphs, Img, Candidates[I].first, Candidates[I].second,
           &FuncEntries, &NoReturnTargets, &NoReturnCallees,
           &AbsoluteRelocationRoots, CodeOwnerIndex);
+      if (!Cached && DeferX87Fixup) {
+        Deferred[I] = CFGBuilder::buildDeferringX87(
+            X87Graphs, Img, LocalDec, Candidates[I].first, Candidates[I].second,
+            &FuncEntries, &NoReturnTargets, &NoReturnCallees,
+            &AbsoluteRelocationRoots, CodeOwnerIndex);
+        if (Deferred[I])
+          continue;
+      }
       AllLow[I] = Cached ? std::move(*Cached)
                          : LocalCFG.build(Img, LocalDec, Candidates[I].first,
                                           Candidates[I].second);
-      pipeline_detail::prepareAnalysisBody(Img, Opts, AnalysisCallbacks,
-                                           AllLow[I]);
-      trimFuncStorage(AllLow[I]);
+      finish(I);
     }
   });
+  if (DeferX87Fixup)
+    parallelForEachWeighted(Weight, [&](auto Claim, size_t N) {
+      ReadOnlyBytesScope ReadScope(Img);
+      RegistrationStackPopMemoScope StackPopScope(StackPops);
+      RegistrationLeafPrefixMemoScope LeafPrefixScope(LeafPrefixes);
+      Decoder LocalDec;
+      if (!LocalDec.init(Img))
+        return;
+      CFGBuilder LocalCFG;
+      configure(LocalCFG);
+      for (size_t I; (I = Claim()) < N;) {
+        if (!Deferred[I])
+          continue;
+        AllLow[I] =
+            CFGBuilder::deferredBuildStandsIn(
+                X87Graphs, Img, *Deferred[I], &FuncEntries, &NoReturnTargets,
+                &NoReturnCallees, &AbsoluteRelocationRoots, CodeOwnerIndex)
+                ? std::move(Deferred[I]->Func)
+                : LocalCFG.build(Img, LocalDec, Candidates[I].first,
+                                 Candidates[I].second);
+        Deferred[I].reset();
+        finish(I);
+      }
+    });
 
   std::vector<std::set<va_t>> EverPublishedJumpTableBranchHistory(Total);
   for (size_t I = 0; I < Total; ++I)

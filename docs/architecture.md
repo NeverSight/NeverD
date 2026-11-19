@@ -13198,6 +13198,17 @@ Builds with registration callees share no proof. A shape-checked integer
 DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
+An x64 batch large enough to run in parallel first builds every function
+without the fixup (`CFGBuilder::buildDeferringX87`). Such a build asks no
+callee's call graph, and it keeps its own for its callers: it is configured
+as their proofs configure a callee's graph build, one no-return level
+shallower, and the graph holds while the prover answers each question the
+build asked as it did one level deeper, which every reader checks as it
+checks an incomplete lift's answers. A second pass keeps each body the fixup
+would leave unchanged, by the checks a retained body passes
+(`deferredBuildStandsIn`), and builds the rest again with every graph they
+read already kept. Before, a graph not yet kept lifted the callee again, most
+often while the callee's own build was still running.
 One LowIR analysis may share up to 128 immutable machine
 graphs or empty projection-refusal markers across its independent CFG builders,
 under an 8 MiB retained-payload allowance including the construction context.

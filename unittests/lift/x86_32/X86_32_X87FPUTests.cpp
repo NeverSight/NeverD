@@ -33,6 +33,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <map>
 #include <mutex>
 #include <set>
 #include <stdexcept>
@@ -2668,6 +2669,195 @@ TEST_F(X86_32_X87FPU,
 #endif
 }
 } // namespace
+
+/// 0x1000 tests its argument and either calls 0x1100, after which the bytes
+/// decode as no instruction, or returns 1.0 on the x87 stack; 0x1100 loops.
+/// 0x1180 calls 0x1000, 0x11c0 returns zero and 0x11e0 calls 0x11c0.
+BinaryImage deferredFloatingImage() {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Entry = 0x1000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Size = Text.FileSz = 0x200;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  const auto Publish = [&](va_t Address, const std::vector<uint8_t> &Bytes) {
+    std::copy(Bytes.begin(), Bytes.end(),
+              Text.Data.begin() + Address - Text.VA);
+    Image.Symbols.push_back(Symbol::makeFunc(Address, Bytes.size()));
+    Image.KnownCodeRanges.emplace_back(Address, Address + Bytes.size());
+  };
+  // test edi, edi; jz 0x100b; call 0x1100; ff ff; fld1; ret
+  Publish(0x1000, {0x85, 0xff, 0x74, 0x07, 0xe8, 0xf7, 0, 0, 0, 0xff, 0xff,
+                   0xd9, 0xe8, 0xc3});
+  Publish(0x1100, {0xeb, 0xfe});                         // jmp $
+  Publish(0x1180, {0xe8, 0x7b, 0xfe, 0xff, 0xff, 0xc3}); // call 0x1000; ret
+  Publish(0x11c0, {0x31, 0xc0, 0xc3});                   // xor eax, eax; ret
+  Publish(0x11e0, {0xe8, 0xdb, 0xff, 0xff, 0xff, 0xc3}); // call 0x11c0; ret
+  Image.Segments.push_back(std::move(Text));
+  return Image;
+}
+
+/// 0x1100 never returns when asked at a depth below NeverReturnsBelow.
+/// Counts the questions asked at each depth.
+struct DepthNoReturnProver final : NoReturnCalleeProver {
+  unsigned NeverReturnsBelow = ~0u;
+  mutable std::map<unsigned, size_t> Questions;
+  bool neverReturns(va_t Target, unsigned Depth) const override {
+    ++Questions[Depth];
+    return Target == 0x1100 && Depth < NeverReturnsBelow;
+  }
+  bool mayNeverReturn(va_t Target) const override { return Target == 0x1100; }
+};
+
+/// Whether a call in \p Function takes its result from the x87 stack.
+bool bindsFloatingCallResult(const LowFunc &Function) {
+  for (const LowBlock &Block : Function.Blocks)
+    for (const LowOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::CALL && Op.Output.isReg() &&
+          Op.Output.Offset >= x86reg::ST0 && Op.Output.Offset <= x86reg::ST7)
+        return true;
+  return false;
+}
+
+struct DeferredX87Fixture {
+  const BinaryImage Image = deferredFloatingImage();
+  const std::set<va_t> Entries{0x1000, 0x1100, 0x1180, 0x11c0, 0x11e0};
+  DepthNoReturnProver Prover;
+  Decoder Dec;
+  DeferredX87Fixture() { (void)Dec.init(Image); }
+  std::shared_ptr<X87CallGraphCache> cache() {
+    return createX87CallGraphCache(&Prover, nullptr);
+  }
+  std::optional<CFGBuilder::DeferredX87Build>
+  deferred(const std::shared_ptr<X87CallGraphCache> &Cache, va_t Entry) {
+    return CFGBuilder::buildDeferringX87(Cache, Image, Dec, Entry, "", &Entries,
+                                         nullptr, &Prover, nullptr, nullptr);
+  }
+  bool standsIn(const std::shared_ptr<X87CallGraphCache> &Cache,
+                const CFGBuilder::DeferredX87Build &Build) {
+    return CFGBuilder::deferredBuildStandsIn(
+        Cache, Image, Build, &Entries, nullptr, &Prover, nullptr, nullptr);
+  }
+  LowFunc ordinary(const std::shared_ptr<X87CallGraphCache> &Cache,
+                   va_t Entry) {
+    CFGBuilder Builder;
+    Builder.setKnownFuncEntries(&Entries);
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Cache);
+    return Builder.build(Image, Dec, Entry);
+  }
+};
+
+TEST(DeferredX87Fixup, ABuildKeepsTheGraphItsCallersReadInsteadOfALift) {
+  // 0x1100 never returns at any depth, so 0x1000's lift is complete and
+  // returns 1.0.  Its build without the fixup keeps the graph a caller's
+  // proof asks for: the caller does not lift 0x1000 again, asking the
+  // prover once whether the answer the graph depends on holds one level
+  // deeper, and binds the result as it does without that graph.  Binding
+  // it makes the caller prove its own contract, the one graph it adds.
+  using Access = detail::X87CallGraphCacheTestAccess;
+  DeferredX87Fixture F;
+  auto Cache = F.cache();
+  CFGBuilder Probe;
+  Probe.setX87CallGraphCache(Cache);
+  const auto Floating = F.deferred(Cache, 0x1000);
+  ASSERT_TRUE(Floating);
+  EXPECT_TRUE(Floating->Func.hasCompleteInstructionLift());
+  const auto Kept = Access::stats(Probe);
+  EXPECT_EQ(Kept[1], 1u);
+  F.Prover.Questions.clear();
+  const LowFunc Warm = F.ordinary(Cache, 0x1180);
+  EXPECT_EQ(F.Prover.Questions[1], 1u);
+  const auto Read = Access::stats(Probe);
+  EXPECT_GT(Read[0], Kept[0]);
+  EXPECT_EQ(Read[1], Kept[1] + 1);
+  const LowFunc Cold = F.ordinary(F.cache(), 0x1180);
+  EXPECT_TRUE(bindsFloatingCallResult(Cold));
+  expectSameFunctionFacts(Cold, Warm);
+}
+
+TEST(DeferredX87Fixup, OnlyABodyTheFixupLeavesUnchangedStandsIn) {
+  // 0x1000 pushes 1.0 itself, and 0x1180 binds that result: the fixup
+  // changes both, so neither body built without it stands in.  0x11e0 and
+  // its integer leaf stand in, each the body of its ordinary build.
+  DeferredX87Fixture F;
+  auto Cache = F.cache();
+  const auto Floating = F.deferred(Cache, 0x1000);
+  ASSERT_TRUE(Floating);
+  EXPECT_FALSE(Floating->FixupFree);
+  EXPECT_FALSE(F.standsIn(Cache, *Floating));
+  const auto Caller = F.deferred(Cache, 0x1180);
+  ASSERT_TRUE(Caller);
+  EXPECT_TRUE(Caller->FixupFree);
+  EXPECT_EQ(Caller->Calls, (std::set<va_t>{0x1000}));
+  EXPECT_FALSE(F.standsIn(Cache, *Caller));
+  EXPECT_FALSE(bindsFloatingCallResult(Caller->Func));
+  EXPECT_TRUE(bindsFloatingCallResult(F.ordinary(Cache, 0x1180)));
+  for (const va_t Entry : {va_t(0x11c0), va_t(0x11e0)}) {
+    SCOPED_TRACE(Entry);
+    const auto Plain = F.deferred(Cache, Entry);
+    ASSERT_TRUE(Plain);
+    EXPECT_TRUE(F.standsIn(Cache, *Plain));
+    expectSameFunctionFacts(F.ordinary(F.cache(), Entry), Plain->Func);
+  }
+}
+
+TEST(DeferredX87Fixup, AGraphIsBuiltAgainWhereTheDeeperAnswerDiffers) {
+  // 0x1100 never returns only when asked at depth 0: the build of 0x1000 at
+  // that depth is complete and returns 1.0, but its caller's proof asks one
+  // level deeper, where the call returns into no instruction.  The caller
+  // finds the kept graph's answer changed there and lifts 0x1000 itself,
+  // asking the prover again, and binds no result, as without the kept
+  // graph.  A later caller reads what that build kept.
+  using Access = detail::X87CallGraphCacheTestAccess;
+  DeferredX87Fixture F;
+  F.Prover.NeverReturnsBelow = 1;
+  auto Cache = F.cache();
+  CFGBuilder Probe;
+  Probe.setX87CallGraphCache(Cache);
+  const auto Floating = F.deferred(Cache, 0x1000);
+  ASSERT_TRUE(Floating);
+  EXPECT_TRUE(Floating->Func.hasCompleteInstructionLift());
+  const LowFunc Cold = F.ordinary(F.cache(), 0x1180);
+  EXPECT_FALSE(bindsFloatingCallResult(Cold));
+  F.Prover.Questions.clear();
+  const LowFunc Warm = F.ordinary(Cache, 0x1180);
+  EXPECT_GT(F.Prover.Questions[1], 1u);
+  expectSameFunctionFacts(Cold, Warm);
+  EXPECT_EQ(Access::stats(Probe)[1], 1u);
+  F.Prover.Questions.clear();
+  expectSameFunctionFacts(Cold, F.ordinary(Cache, 0x1180));
+  EXPECT_EQ(F.Prover.Questions[1], 1u);
+}
+
+TEST(DeferredX87Fixup, AGraphBuiltAtTheCalleesDepthStaysInPlace) {
+  // As above, 0x1000's build at depth 0 differs from its graph one level
+  // deeper, where its lift is incomplete.  A caller's proof has kept that
+  // deeper graph already; a later build of 0x1000 without the fixup leaves
+  // it in place, so the next caller reads it, asking the prover once,
+  // instead of finding a shallower graph's answer changed and lifting
+  // 0x1000 again.
+  DeferredX87Fixture F;
+  F.Prover.NeverReturnsBelow = 1;
+  auto Cache = F.cache();
+  const LowFunc Cold = F.ordinary(F.cache(), 0x1180);
+  expectSameFunctionFacts(Cold, F.ordinary(Cache, 0x1180));
+  ASSERT_TRUE(F.deferred(Cache, 0x1000));
+  F.Prover.Questions.clear();
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&F.Entries);
+  Builder.setNoReturnCalleeProver(&F.Prover);
+  Builder.setX87CallGraphCache(Cache);
+  const auto Effect =
+      detail::X87CallGraphCacheTestAccess::query(Builder, F.Image, 0x1000);
+  EXPECT_FALSE(Effect.first);
+  EXPECT_EQ(F.Prover.Questions[1], 1u);
+}
 
 TEST(CompleteFunctionCache, DefaultBodiesPreserveFactsAndUseTheRequestedName) {
   using Access = detail::X87CallGraphCacheTestAccess;

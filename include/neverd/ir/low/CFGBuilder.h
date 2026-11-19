@@ -794,6 +794,51 @@ public:
       const detail::AbsoluteRelocationRootIndex *RelocationRoots,
       const ExecutableCodeOwnerIndex *CodeOwners);
 
+  /// A build without the x87 stack fixup (buildDeferringX87).
+  struct DeferredX87Build {
+    LowFunc Func;
+    /// Whether Func holds no x87 or MMX operation and no instruction that
+    /// moves TOP (recordSkippedFpuFixup).  Unlike a retained body, it may be
+    /// an incomplete lift: it was built at the ordinary build's depth, and
+    /// the fixup reads nothing of a lift's completeness.
+    bool FixupFree = false;
+    /// The functions Func calls, each of which the fixup would ask about.
+    std::set<va_t> Calls;
+  };
+  /// Builds \p Entry without the x87 stack fixup, configured as the x87
+  /// call graph of a callee is built (X87CallEffectIndex::graph) but at the
+  /// no-return depth of the ordinary build, and publishes into \p Cache the
+  /// graph of the result for the ordinary builds that ask about \p Entry as
+  /// a callee.  That graph is their own one level deeper while the prover
+  /// answers each question the build asked as it did.  Such a build asks no
+  /// call graph about its own callees, so the functions of a batch built so
+  /// first do not lift one another while they run.  On x64 alone, where the
+  /// fixup is the only part of a build SkipX87StackFixup changes, and with a
+  /// cache that keeps no call-register bodies, which callee graph builds
+  /// would supply; nullopt otherwise.  As for cachedDefaultFunction, the result
+  /// stands in for an ordinary build of initial, default-policy construction
+  /// only, and only where deferredBuildStandsIn says so.
+  static std::optional<DeferredX87Build>
+  buildDeferringX87(const std::shared_ptr<X87CallGraphCache> &Cache,
+                    const BinaryImage &Img, Decoder &Dec, va_t Entry,
+                    const std::string &Name, const std::set<va_t> *Entries,
+                    const libc::NoReturnTargetIndex *NoReturnTargets,
+                    const NoReturnCalleeProver *NoReturnCallees,
+                    const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+                    const ExecutableCodeOwnerIndex *CodeOwners);
+  /// Whether \p Build is the ordinary build of its function, because the
+  /// fixup would change nothing in it: the checks cachedDefaultFunction makes
+  /// of a retained body, whose depth is the ordinary build's here already.
+  /// The call graphs these checks read are the ones the batch's deferred
+  /// builds published.
+  static bool deferredBuildStandsIn(
+      const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
+      const DeferredX87Build &Build, const std::set<va_t> *Entries,
+      const libc::NoReturnTargetIndex *NoReturnTargets,
+      const NoReturnCalleeProver *NoReturnCallees,
+      const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+      const ExecutableCodeOwnerIndex *CodeOwners);
+
   size_t relativeRelocationRootSourceCacheBuildCountForTesting() const {
     return RelativeRelocationRootSourceCacheBuildCountForTesting;
   }

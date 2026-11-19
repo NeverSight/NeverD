@@ -339,6 +339,17 @@ struct X87CallGraph {
   /// is a function of the image, the cache context and those answers, so
   /// the same answers lift the same incomplete CFG again.
   std::vector<X87NoReturnAnswer> NoReturnAnswers;
+  /// Set when the graph projects a function's own build one no-return level
+  /// shallower than this context's (CFGBuilder::buildDeferringX87), with
+  /// NoReturnAnswers its answers at this context's depth.  Each depth asks
+  /// the same questions as long as it gets the same answers, so the graph
+  /// is this context's build while the prover answers those as before.
+  bool FromShallowerBuild = false;
+  /// Whether the graph holds only while NoReturnAnswers do.
+  bool dependsOnAnswers() const {
+    return Rejection == ProjectionRejection::IncompleteLift ||
+           FromShallowerBuild;
+  }
 };
 
 /// What one CFG build's queries found comparing the inventories its builder
@@ -1077,12 +1088,16 @@ private:
       return Graph;
     // Another worker may have published while this worker built outside the
     // lock. Use its identical immutable projection without waiting on builds.
-    // An incomplete-lift refusal is identical only while its answers hold;
-    // this build read the answers of now, so it replaces the refusal.
+    // A graph that holds only while its answers do is identical only then;
+    // this build read the answers of now, so it replaces that graph.  A
+    // shallower build's projection leaves a graph this context built in
+    // place: where the two differ, readers would find the projection's
+    // answers changed and lift the callee again.
     if (const auto Found = GraphIndex.find(Address);
         Found != GraphIndex.end()) {
-      if (Found->second->Value->Rejection !=
-          X87CallGraph::ProjectionRejection::IncompleteLift) {
+      const X87CallGraph &Kept = *Found->second->Value;
+      if (!Kept.dependsOnAnswers() ||
+          (Graph->FromShallowerBuild && !Kept.FromShallowerBuild)) {
         Graphs.splice(Graphs.begin(), Graphs, Found->second);
         return Graphs.front().Value;
       }
@@ -1338,10 +1353,11 @@ class X87CallEffectIndex {
   }
 
   /// Whether a request would read \p G's no-return answers again: always for
-  /// a complete projection or an immutable refusal, and for an
-  /// incomplete-lift refusal when the prover answers each question as before.
+  /// a graph this context built, and for an incomplete-lift refusal or a
+  /// shallower build's projection when the prover answers each question as
+  /// before.
   bool answersHold(const Graph &G) const {
-    if (G.Rejection != Graph::ProjectionRejection::IncompleteLift)
+    if (!G.dependsOnAnswers())
       return true;
     for (const X87NoReturnAnswer &Answer : G.NoReturnAnswers)
       if (!Settings.NoReturnCallees ||
@@ -1349,6 +1365,123 @@ class X87CallEffectIndex {
               Answer.NeverReturns)
         return false;
     return true;
+  }
+
+  /// Configures \p Builder for a raw build, without the x87 fixup, of a
+  /// callee of a build configured as \p Settings, at no-return depth
+  /// \p Depth.  An x87 call graph is built one level deeper than \p Settings
+  /// (graph), a deferred build at the depth of \p Settings itself
+  /// (CFGBuilder::buildDeferringX87): the two differ in that alone.
+  static void
+  configureRawBuild(CFGBuilder &Builder, const CFGBuilder &Settings,
+                    RegistrationCallCalleeIndex *RegistrationCallees,
+                    unsigned Depth) {
+    Builder.SkipX87StackFixup = true;
+    Builder.setRegistrationCalleeIndex(RegistrationCallees);
+    Builder.setKnownFuncEntries(Settings.KnownFuncEntries);
+    Builder.setNoReturnTargetIndex(Settings.NoReturnTargets);
+    Builder.setNoReturnCalleeProver(Settings.NoReturnCallees, Depth);
+    Builder.setAbsoluteRelocationRootIndex(Settings.AbsoluteRelocationRoots);
+    Builder.setExecutableCodeOwnerIndex(Settings.ExecutableCodeOwners);
+    Builder.ProtectedJumpTableRelocationSlots =
+        Settings.ProtectedJumpTableRelocationSlots;
+    Builder.UnsafeJumpTableBranches = Settings.UnsafeJumpTableBranches;
+  }
+
+  /// Projects \p F, \p Builder's raw build of its entry with a complete
+  /// lift, into \p G; a rejection, if any, of the projection.  The caller
+  /// empties \p G for a rejection.
+  static std::optional<Graph::ProjectionRejection>
+  project(const BinaryImage &Image, const CFGBuilder &Builder, const LowFunc &F,
+          Graph &G) {
+    G.Blocks.resize(F.Blocks.size());
+    for (size_t I = 0; I < F.Blocks.size(); ++I) {
+      const LowBlock &Source = F.Blocks[I];
+      Block &B = G.Blocks[I];
+      if (Source.Id != static_cast<int>(I) ||
+          Source.InstructionBoundaries.empty())
+        return Graph::ProjectionRejection::InconsistentBlocks;
+      if (!Source.ExceptionalSuccs.empty() || !Source.ExceptionalPreds.empty())
+        return Graph::ProjectionRejection::ExceptionalEdges;
+      G.Cost += 1 + Source.Ops.size() + Source.Succs.size();
+      if (G.Cost > limits::kMaxX87CallProofWork)
+        return Graph::ProjectionRejection::ExceedsProofWork;
+      B.Successors = Source.Succs;
+      for (int S : B.Successors)
+        if (S < 0 || static_cast<size_t>(S) >= F.Blocks.size())
+          return Graph::ProjectionRejection::InconsistentBlocks;
+      for (const LowInstructionBoundary &Boundary :
+           Source.InstructionBoundaries) {
+        const auto RecIt = Builder.Insns.find(Boundary.Address);
+        if (RecIt == Builder.Insns.end() ||
+            RecIt->second.Size != Boundary.Size ||
+            Boundary.FirstOp > Source.Ops.size() ||
+            Boundary.OpCount > Source.Ops.size() - Boundary.FirstOp)
+          return Graph::ProjectionRejection::InconsistentBlocks;
+        const auto &Rec = RecIt->second;
+        Step S;
+        S.Delta = demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
+        S.Unknown = Rec.FpuReset;
+        for (size_t O = Boundary.FirstOp;
+             O < Boundary.FirstOp + Boundary.OpCount; ++O) {
+          const LowOp &Op = Source.Ops[O];
+          S.ChangesControl |=
+              Op.Output.isReg() && Op.Output.Offset == x86reg::FPU_CW;
+          if (Op.Opcode == NdOp::INTRINSIC) {
+            G.UsesContext |= Op.NumInputs && Op.Inputs[0].isConst() &&
+                             isX87ContextIntrinsic(
+                                 static_cast<Intrinsic>(Op.Inputs[0].Offset));
+            S.Unknown |= !modeledIntrinsic(Op, Image.Arch);
+            S.ChangesControl |=
+                Op.NumInputs && Op.Inputs[0].isConst() &&
+                Op.Inputs[0].Offset ==
+                    static_cast<uint64_t>(Intrinsic::X87WriteControl);
+            B.Stops |= isArchitecturalNoReturn(Op);
+          }
+          for (unsigned K = 0; K < Op.NumInputs; ++K)
+            if (isStReg(Op.Inputs[K])) {
+              const uint8_t Bit =
+                  uint8_t(1u << ((x86reg::stRegIndex(Op.Inputs[K].Offset) -
+                                  Rec.FpuTopIn) &
+                                 7));
+              S.Reads |= Bit & ~S.Writes;
+              S.Unknown |= Op.Inputs[K].Size != x86reg::FPURegSize;
+            }
+          if (isStReg(Op.Output)) {
+            if (Op.Output.Size != x86reg::FPURegSize)
+              S.Unknown = true;
+            else
+              S.Writes |= uint8_t(
+                  1u << ((x86reg::stRegIndex(Op.Output.Offset) - Rec.FpuTopIn) &
+                         7));
+          }
+          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+            if (hasLowInstructionControlFlag(
+                    Boundary.ControlFlags,
+                    LowInstructionControlFlag::NoReturn)) {
+              B.Stops = true;
+              continue;
+            }
+            if (S.Callee || Op.NumInputs == 0)
+              S.Unknown = true;
+            else if (Op.Inputs[0].isConst())
+              S.Callee = Op.Inputs[0].Offset;
+            else
+              S.Callee = loadedCallSlot(F, Source, O, Op.Inputs[0]);
+            S.Unknown |= !S.Callee;
+            S.CalleeImport =
+                S.Callee && !importCalleeName(Image, *S.Callee).empty();
+          }
+          B.Returns |= Op.Opcode == NdOp::RETURN;
+        }
+        if (S.Delta || S.Reads || S.Writes || S.Callee || S.Unknown ||
+            S.ChangesControl)
+          B.Steps.push_back(S);
+      }
+      if (B.Successors.empty() && !B.Returns && !B.Stops)
+        return Graph::ProjectionRejection::MissingTerminator;
+    }
+    return std::nullopt;
   }
 
   const Graph &graph(va_t Entry) {
@@ -1389,17 +1522,8 @@ class X87CallEffectIndex {
     if (!Dec.init(Image))
       return G;
     CFGBuilder Builder;
-    Builder.SkipX87StackFixup = true;
-    Builder.setRegistrationCalleeIndex(RegistrationCallees);
-    Builder.setKnownFuncEntries(Settings.KnownFuncEntries);
-    Builder.setNoReturnTargetIndex(Settings.NoReturnTargets);
-    Builder.setNoReturnCalleeProver(Settings.NoReturnCallees,
-                                    Settings.NoReturnCalleeDepth + 1);
-    Builder.setAbsoluteRelocationRootIndex(Settings.AbsoluteRelocationRoots);
-    Builder.setExecutableCodeOwnerIndex(Settings.ExecutableCodeOwners);
-    Builder.ProtectedJumpTableRelocationSlots =
-        Settings.ProtectedJumpTableRelocationSlots;
-    Builder.UnsafeJumpTableBranches = Settings.UnsafeJumpTableBranches;
+    configureRawBuild(Builder, Settings, RegistrationCallees,
+                      Settings.NoReturnCalleeDepth + 1);
     CFGBuilder::CallRegisterBodyWitness Witness;
     // Every no-return answer the build reads, with its depth, for a refusal
     // of an incomplete lift; mayNeverReturn screens the image alone.
@@ -1483,101 +1607,43 @@ class X87CallEffectIndex {
       Complete.completed(It->second);
       return *It->second;
     }
-    G.Blocks.resize(F.Blocks.size());
-    for (size_t I = 0; I < F.Blocks.size(); ++I) {
-      const LowBlock &Source = F.Blocks[I];
-      Block &B = G.Blocks[I];
-      if (Source.Id != static_cast<int>(I) ||
-          Source.InstructionBoundaries.empty())
-        return RejectProjection(Graph::ProjectionRejection::InconsistentBlocks);
-      if (!Source.ExceptionalSuccs.empty() || !Source.ExceptionalPreds.empty())
-        return RejectProjection(Graph::ProjectionRejection::ExceptionalEdges);
-      G.Cost += 1 + Source.Ops.size() + Source.Succs.size();
-      if (G.Cost > limits::kMaxX87CallProofWork)
-        return RejectProjection(Graph::ProjectionRejection::ExceedsProofWork);
-      B.Successors = Source.Succs;
-      for (int S : B.Successors)
-        if (S < 0 || static_cast<size_t>(S) >= F.Blocks.size())
-          return RejectProjection(
-              Graph::ProjectionRejection::InconsistentBlocks);
-      for (const LowInstructionBoundary &Boundary :
-           Source.InstructionBoundaries) {
-        const auto RecIt = Builder.Insns.find(Boundary.Address);
-        if (RecIt == Builder.Insns.end() ||
-            RecIt->second.Size != Boundary.Size ||
-            Boundary.FirstOp > Source.Ops.size() ||
-            Boundary.OpCount > Source.Ops.size() - Boundary.FirstOp)
-          return RejectProjection(
-              Graph::ProjectionRejection::InconsistentBlocks);
-        const auto &Rec = RecIt->second;
-        Step S;
-        S.Delta = demaskDelta(Rec.FpuTopOut - Rec.FpuTopIn);
-        S.Unknown = Rec.FpuReset;
-        for (size_t O = Boundary.FirstOp;
-             O < Boundary.FirstOp + Boundary.OpCount; ++O) {
-          const LowOp &Op = Source.Ops[O];
-          S.ChangesControl |=
-              Op.Output.isReg() && Op.Output.Offset == x86reg::FPU_CW;
-          if (Op.Opcode == NdOp::INTRINSIC) {
-            G.UsesContext |= Op.NumInputs && Op.Inputs[0].isConst() &&
-                             isX87ContextIntrinsic(
-                                 static_cast<Intrinsic>(Op.Inputs[0].Offset));
-            S.Unknown |= !modeledIntrinsic(Op, Image.Arch);
-            S.ChangesControl |=
-                Op.NumInputs && Op.Inputs[0].isConst() &&
-                Op.Inputs[0].Offset ==
-                    static_cast<uint64_t>(Intrinsic::X87WriteControl);
-            B.Stops |= isArchitecturalNoReturn(Op);
-          }
-          for (unsigned K = 0; K < Op.NumInputs; ++K)
-            if (isStReg(Op.Inputs[K])) {
-              const uint8_t Bit =
-                  uint8_t(1u << ((x86reg::stRegIndex(Op.Inputs[K].Offset) -
-                                  Rec.FpuTopIn) &
-                                 7));
-              S.Reads |= Bit & ~S.Writes;
-              S.Unknown |= Op.Inputs[K].Size != x86reg::FPURegSize;
-            }
-          if (isStReg(Op.Output)) {
-            if (Op.Output.Size != x86reg::FPURegSize)
-              S.Unknown = true;
-            else
-              S.Writes |= uint8_t(
-                  1u << ((x86reg::stRegIndex(Op.Output.Offset) - Rec.FpuTopIn) &
-                         7));
-          }
-          if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-            if (hasLowInstructionControlFlag(
-                    Boundary.ControlFlags,
-                    LowInstructionControlFlag::NoReturn)) {
-              B.Stops = true;
-              continue;
-            }
-            if (S.Callee || Op.NumInputs == 0)
-              S.Unknown = true;
-            else if (Op.Inputs[0].isConst())
-              S.Callee = Op.Inputs[0].Offset;
-            else
-              S.Callee = loadedCallSlot(F, Source, O, Op.Inputs[0]);
-            S.Unknown |= !S.Callee;
-            S.CalleeImport =
-                S.Callee && !importCalleeName(Image, *S.Callee).empty();
-          }
-          B.Returns |= Op.Opcode == NdOp::RETURN;
-        }
-        if (S.Delta || S.Reads || S.Writes || S.Callee || S.Unknown ||
-            S.ChangesControl)
-          B.Steps.push_back(S);
-      }
-      if (B.Successors.empty() && !B.Returns && !B.Stops)
-        return RejectProjection(Graph::ProjectionRejection::MissingTerminator);
-    }
+    if (const auto Rejection = project(Image, Builder, F, G))
+      return RejectProjection(*Rejection);
     G.Complete = true;
     if (SharedGraphs)
       It->second =
           SharedGraphs->publish(Settings, Entry, Built, &ContextMatches);
     Complete.completed(It->second);
     return *It->second;
+  }
+
+  /// Publishes into the cache of \p Settings, for the builds configured as
+  /// \p Settings that ask about \p Entry as a callee, the graph of \p F:
+  /// \p Builder's raw build of it at the depth of \p Settings itself
+  /// (configureRawBuild), which read \p Answers, recorded at the depth those
+  /// builds build the graph at.  graph() builds and publishes this graph the
+  /// same way, except that it builds one level deeper; the caller checks the
+  /// cases in which graph() publishes nothing.
+  static void publishShallowerBuild(const CFGBuilder &Settings,
+                                    const CFGBuilder &Builder, va_t Entry,
+                                    const LowFunc &F,
+                                    std::vector<X87NoReturnAnswer> Answers) {
+    auto Built = std::make_shared<Graph>();
+    Graph &G = *Built;
+    if (!F.hasCompleteInstructionLift() || !F.TruncatedPathAddresses.empty() ||
+        F.Blocks.empty() || F.Blocks.front().StartAddr != Entry) {
+      G.Rejection = Graph::ProjectionRejection::IncompleteLift;
+    } else if (const auto Rejection =
+                   project(*Settings.CurrentImg, Builder, F, G)) {
+      G = Graph{};
+      G.Rejection = *Rejection;
+    } else {
+      G.Complete = true;
+    }
+    G.FromShallowerBuild = true;
+    G.NoReturnAnswers = std::move(Answers);
+    (void)Settings.SharedX87CallGraphs->publish(Settings, Entry,
+                                                std::move(Built));
   }
 
   std::optional<X87CallContract> prove(va_t Entry, unsigned Depth, Query &Q) {
@@ -1751,15 +1817,15 @@ class X87CallEffectIndex {
 public:
   explicit X87CallEffectIndex(const CFGBuilder &Builder)
       : Settings(Builder), Image(*Builder.CurrentImg) {}
-  /// The no-return answers of every incomplete lift this index's queries
-  /// read: their answers hold while these do.  nullopt when a lift's answers
-  /// went unrecorded.
+  /// The no-return answers of every graph this index's queries read that
+  /// holds only while its answers do: their answers hold while these do.
+  /// nullopt when a lift's answers went unrecorded.
   std::optional<std::vector<X87NoReturnAnswer>> liftDependencies() const {
     if (UnrecordedLift)
       return std::nullopt;
     std::vector<X87NoReturnAnswer> Dependencies;
     for (const auto &[Address, G] : Graphs)
-      if (G && G->Rejection == Graph::ProjectionRejection::IncompleteLift)
+      if (G && G->dependsOnAnswers())
         Dependencies.insert(Dependencies.end(), G->NoReturnAnswers.begin(),
                             G->NoReturnAnswers.end());
     return Dependencies;
@@ -2218,6 +2284,110 @@ std::optional<LowFunc> CFGBuilder::cachedDefaultFunction(
   Result.Name =
       Name.empty() ? (kAutoFuncPrefix + llvm::utohexstr(Entry)).str() : Name;
   return Result;
+}
+
+std::optional<CFGBuilder::DeferredX87Build> CFGBuilder::buildDeferringX87(
+    const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
+    Decoder &Dec, va_t Entry, const std::string &Name,
+    const std::set<va_t> *Entries,
+    const libc::NoReturnTargetIndex *NoReturnTargets,
+    const NoReturnCalleeProver *NoReturnCallees,
+    const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+    const ExecutableCodeOwnerIndex *CodeOwners) {
+  // usesAnalysisRecovery and independent call pops, the other readers of
+  // SkipX87StackFixup, are 32-bit x86 proofs.  A body being replayed for a
+  // registered callback takes its ordinary build, as validatedSummary's do.
+  // A cache that keeps call-register bodies gets them from the callee graph
+  // builds this leaves out, and the run's call summaries would lift those
+  // callees again a few at a time: a selected batch of capstone took 30%
+  // longer so.
+  if (!Cache || Img.Arch != Arch::X64 || ReplayingCallRegisterBody ||
+      Cache->RetainCallRegisterBodies)
+    return std::nullopt;
+  // The ordinary build's configuration, as validatedSummary's request has
+  // it, and the raw build of it its callees' graphs make.
+  CFGBuilder Settings;
+  Settings.CurrentImg = &Img;
+  Settings.setKnownFuncEntries(Entries);
+  Settings.setNoReturnTargetIndex(NoReturnTargets);
+  Settings.setNoReturnCalleeProver(NoReturnCallees);
+  Settings.setAbsoluteRelocationRootIndex(RelocationRoots);
+  Settings.setExecutableCodeOwnerIndex(CodeOwners);
+  Settings.setX87CallGraphCache(Cache);
+  CFGBuilder Builder;
+  X87CallEffectIndex::configureRawBuild(Builder, Settings, nullptr,
+                                        Settings.NoReturnCalleeDepth);
+  CallRegisterBodyWitness Witness;
+  Builder.CollectCallRegisterBody = &Witness;
+  // Every no-return answer the build reads, at the depth one level deeper
+  // at which the graph build of a caller's proof would ask the same.
+  std::vector<X87NoReturnAnswer> Answers;
+  bool AnswersComplete = true;
+  struct RecordingProver final : NoReturnCalleeProver {
+    const NoReturnCalleeProver &Original;
+    std::vector<X87NoReturnAnswer> &Answers;
+    bool &AnswersComplete;
+    RecordingProver(const NoReturnCalleeProver &P,
+                    std::vector<X87NoReturnAnswer> &A, bool &Complete)
+        : Original(P), Answers(A), AnswersComplete(Complete) {}
+    bool mayNeverReturn(va_t Target) const override {
+      return Original.mayNeverReturn(Target);
+    }
+    bool neverReturns(va_t Target, unsigned Depth) const override {
+      const bool Result = Original.neverReturns(Target, Depth);
+      if (AnswersComplete) {
+        if (Answers.size() >= CallRegisterBodyWitness::MaxDependencies)
+          AnswersComplete = false;
+        else
+          Answers.push_back({Target, Depth + 1, Result});
+      }
+      return Result;
+    }
+  };
+  std::optional<RecordingProver> Recorder;
+  if (NoReturnCallees) {
+    Recorder.emplace(*NoReturnCallees, Answers, AnswersComplete);
+    Builder.setNoReturnCalleeProver(&*Recorder, Settings.NoReturnCalleeDepth);
+  }
+  DeferredX87Build Result;
+  Result.Func = Builder.build(Img, Dec, Entry, Name);
+  Result.FixupFree = Witness.Complete;
+  Result.Calls = std::move(Witness.Calls);
+  // graph() publishes nothing without a code owner or for a registration
+  // frame, and nothing can name an unrecorded answer.
+  const auto *EH = Img.ExceptionMetadata.findFunction(Entry);
+  if (AnswersComplete && Img.hasExecutableCodeOwnerAt(Entry) &&
+      (!EH || !EH->Registration || EH->Registration->Scopes.empty()))
+    X87CallEffectIndex::publishShallowerBuild(Settings, Builder, Entry,
+                                              Result.Func, std::move(Answers));
+  return Result;
+}
+
+bool CFGBuilder::deferredBuildStandsIn(
+    const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
+    const DeferredX87Build &Build, const std::set<va_t> *Entries,
+    const libc::NoReturnTargetIndex *NoReturnTargets,
+    const NoReturnCalleeProver *NoReturnCallees,
+    const detail::AbsoluteRelocationRootIndex *RelocationRoots,
+    const ExecutableCodeOwnerIndex *CodeOwners) {
+  if (!Cache || !Build.FixupFree || Img.Arch != Arch::X64 ||
+      ReplayingCallRegisterBody)
+    return false;
+  CFGBuilder Request;
+  Request.CurrentImg = &Img;
+  Request.setKnownFuncEntries(Entries);
+  Request.setNoReturnTargetIndex(NoReturnTargets);
+  Request.setNoReturnCalleeProver(NoReturnCallees);
+  Request.setAbsoluteRelocationRootIndex(RelocationRoots);
+  Request.setExecutableCodeOwnerIndex(CodeOwners);
+  Request.setX87CallGraphCache(Cache);
+  // As validatedSummary asks of a retained body: nested summary requests
+  // take their ordinary build.
+  llvm::SaveAndRestore<bool> Replaying(ReplayingCallRegisterBody, true);
+  for (va_t Target : Build.Calls)
+    if (Cache->refusesCall(Request, Target))
+      return false;
+  return true;
 }
 
 std::optional<int> CFGBuilder::x87CallEffectForTesting(const BinaryImage &Image,

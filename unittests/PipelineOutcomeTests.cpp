@@ -163,6 +163,17 @@ public:
     buildLowIR(Image, Result, {Image.Entry});
   }
 
+  /// A run of every one of \p Entries that selects none of them, as a
+  /// whole-image decompile is.
+  static void buildWholeLowIR(const BinaryImage &Image, PipelineResult &Result,
+                              const std::vector<va_t> &Entries) {
+    PipelineOptions Options;
+    std::vector<std::pair<va_t, std::string>> Candidates;
+    for (va_t Entry : Entries)
+      Candidates.emplace_back(Entry, Image.getFunctionNameAt(Entry));
+    Pipeline().buildLowIR(Image, Candidates, Options, nullptr, Result);
+  }
+
   static bool runLift(const BinaryImage &Image, llvm::LLVMContext &Context,
                       PipelineResult &Result) {
     PipelineOptions Options;
@@ -611,6 +622,78 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
   Run(Again, 0x401060, &Cache);
   Run(Cold, 0x401060, nullptr);
   expectSameSelection(Again, Cold);
+}
+
+TEST(PipelineOutcome, AnX64BatchLiftsNoFunctionAgainAsItsCallersCallee) {
+  // Two chains of wrappers, one ending in a leaf that returns 1.0 on the x87
+  // stack and one in a leaf that returns zero: a whole-image batch large
+  // enough to run in parallel.  The batch builds every function without the
+  // x87 fixup first, keeping its graph for its caller; a body the fixup
+  // changes (each wrapper of the floating leaf binds its call's result) is
+  // built anew.  Every body is the one a run of that function alone builds,
+  // which takes the ordinary build.
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::ELF;
+  Image.Entry = 0x1000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = Image.Entry;
+  Text.Size = Text.FileSz = 0x2000;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data.assign(Text.Size, 0xcc);
+  constexpr unsigned ChainLength = 20;
+  std::vector<va_t> Entries;
+  for (const va_t Chain : {va_t(0x1000), va_t(0x1800)}) {
+    for (unsigned I = 0; I != ChainLength; ++I) {
+      const va_t From = Chain + I * 0x40;
+      Entries.push_back(From);
+      Image.Symbols.push_back(Symbol::makeFunc(From, 0x40));
+      const size_t Offset = static_cast<size_t>(From - Text.VA);
+      if (I + 1 == ChainLength) {
+        // fld1; ret, or xor eax, eax; ret.
+        Text.Data[Offset] = Chain == 0x1000 ? 0xd9 : 0x31;
+        Text.Data[Offset + 1] = Chain == 0x1000 ? 0xe8 : 0xc0;
+        Text.Data[Offset + 2] = 0xc3;
+        continue;
+      }
+      // call the next function; ret.
+      const uint32_t Relative = static_cast<uint32_t>(0x40 - 5);
+      Text.Data[Offset] = 0xe8;
+      for (unsigned K = 0; K != 4; ++K)
+        Text.Data[Offset + 1 + K] = static_cast<uint8_t>(Relative >> (K * 8));
+      Text.Data[Offset + 5] = 0xc3;
+    }
+  }
+  Image.Segments.push_back(std::move(Text));
+  ASSERT_GE(Entries.size(), limits::kMinParallelIRWorkItems);
+
+  PipelineResult Batch;
+  PipelineTestPeer::buildWholeLowIR(Image, Batch, Entries);
+  ASSERT_EQ(Batch.LowFuncs.size(), Entries.size());
+
+  const auto Dump = [](const LowFunc &Function) {
+    std::string Text;
+    llvm::raw_string_ostream Stream(Text);
+    Pipeline::dumpLowIR({Function}, Stream);
+    return Text;
+  };
+  bool BoundFloatingResult = false;
+  for (const LowFunc &Function : Batch.LowFuncs) {
+    SCOPED_TRACE(Function.Entry);
+    PipelineResult Alone;
+    PipelineTestPeer::buildLowIR(Image, Alone, {Function.Entry});
+    ASSERT_EQ(Alone.LowFuncs.size(), 1u);
+    EXPECT_EQ(Dump(Function), Dump(Alone.LowFuncs.front()));
+    for (const LowBlock &Block : Function.Blocks)
+      for (const LowOp &Op : Block.Ops)
+        BoundFloatingResult |= Op.Opcode == NdOp::CALL && Op.Output.isReg() &&
+                               Op.Output.Offset >= x86reg::ST0 &&
+                               Op.Output.Offset <= x86reg::ST7;
+  }
+  // The floating chain's results are bound, so its bodies took the new build.
+  EXPECT_TRUE(BoundFloatingResult);
 }
 
 TEST(PipelineOutcome, ArbitrationRebuildsUnderUnchangedInputsKeepTheirBodies) {
