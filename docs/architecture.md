@@ -5781,9 +5781,30 @@ platform contract. R14 and X15 on amd64, and R28 on arm64, are not assumed
 kept until the image's internal ABI is proven. A restricted PE load skips the
 Go metadata and keeps the platform contract.
 
-Callee-side questions still follow the platform convention: which registers a
-Go function takes arguments in and returns results in, and which of its entry
-reads are parameters. Go's register arguments and results are the next stage.
+On x86-64, Go code also takes its integer arguments in Go's registers, in
+Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is
+`usesGoRegisterArguments`. Go 1.18 and later mark the functions Go assembled
+(`GoModuleInfo::RegisterArguments`, `GoModuleInfo::GoAssembly`), and only code
+the toolchain compiled qualifies. `detectCc` gives such a function that
+register order (`MedFunc::IntegerArgumentRegisters`). A direct call to one
+publishes its arguments in it, and the ABI pass binds them by the callee's
+order.
+
+A function's stack-growth path decides which arguments it takes
+(`goMorestackSpills`). The compiler spills exactly the register arguments a
+function uses into the spill area above the return address, calls the runtime's
+`morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
+The spills become the function's entry reads in the call summaries
+(`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
+place of what its calls appear to forward. The spill area is uninitialized at a
+call, so it bounds the function's stack parameters (`detectStackParams`) and
+holds none of them.
+
+Results, calls through function values and interfaces, arm64, Go code in images
+before 1.18 and assembly that uses the internal ABI still follow the platform
+convention. So do DWARF-typed signatures, whose parameters Go's own register
+assignment would place. On the machine routes (lift, patch), a Go function's
+LLVM arguments take its Go registers as well.
 
 The GUI's analysis replicas restore with `call_summaries:true`: they discover
 the image's functions, warm a page of functions per idle step, solve, drop
