@@ -32,6 +32,7 @@ on:
         options:
           - qualification
           - macos-qualification
+          - windows-qualification
           - pr-owners
           - record-unix-qualification
           - constructor-repro
@@ -275,14 +276,14 @@ jobs:
           if-no-files-found: error
           path: constructor-evidence/
   native:
-    if: inputs.scope == 'qualification' || inputs.scope == 'macos-qualification' || inputs.scope == 'record-unix-qualification' || inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification'
+    if: inputs.scope == 'qualification' || inputs.scope == 'windows-qualification' || inputs.scope == 'macos-qualification' || inputs.scope == 'record-unix-qualification' || inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification'
     name: ${{ matrix.name }} MIPS and source ABI
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix: >-
-        ${{ fromJSON(inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
-    timeout-minutes: 180
+        ${{ fromJSON(inputs.scope == 'windows-qualification' && '{"include":[{"name":"Windows MSVC","runner":"windows-2025-vs2026","cc":"cl","cxx":"cl","parallel":4}]}' || inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
+    timeout-minutes: ${{ inputs.scope == 'windows-qualification' && 240 || 180 }}
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
       QUALIFICATION_CXX: ${{ matrix.cxx }}
@@ -369,6 +370,38 @@ jobs:
             -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
             -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
+      - name: Compile the Release x86 decoder with an isolated MSVC heap
+        if: inputs.scope == 'windows-qualification'
+        shell: pwsh
+        timeout-minutes: 65
+        env:
+          _CL_: /cgthreads1
+        run: |
+          $target = 'third_party/capstone/CMakeFiles/capstone.dir/arch/X86/X86DisassemblerDecoder.c.obj'
+          $evidence = New-Item -ItemType Directory -Force build-mips-ci/evidence
+          $command = (ninja -C build-mips-ci -t commands $target | Select-Object -Last 1)
+          if ($LASTEXITCODE -ne 0 -or $command -notmatch '(?i)(?:^|\s)[/-]O2(?:\s|$)') {
+            throw "Release decoder command missing /O2: $command"
+          }
+          $memory = Get-CimInstance Win32_OperatingSystem |
+            Select-Object TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory
+          $cl = Get-Item (Get-Command cl.exe).Source
+          $proof = [ordered]@{
+            source = $env:EXPECTED_SOURCE_SHA
+            capstone = (git -C third_party/capstone rev-parse HEAD)
+            image = $env:ImageVersion
+            compiler = $cl.FullName
+            version = $cl.VersionInfo.FileVersion
+            optimizer_threads = $env:_CL_
+            build_parallel = 1
+            command = $command
+            memory_kib = $memory
+          }
+          $proof | ConvertTo-Json | Tee-Object "$evidence/decoder-toolchain.json"
+          python scripts/build.py build-mips-ci --config Release --parallel 1 --target $target
+          $buildExit = $LASTEXITCODE
+          Copy-Item build-mips-ci/neverd-build-receipt.json "$evidence/decoder-build-receipt.json"
+          exit $buildExit
       - name: Compile known portability boundaries first
         timeout-minutes: 60
         run: |
