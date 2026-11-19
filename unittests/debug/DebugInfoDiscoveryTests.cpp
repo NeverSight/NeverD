@@ -2390,6 +2390,38 @@ TEST(DWARFSourceTypes, NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth) {
       }
 }
 
+TEST(DWARFSourceTypes, RepeatedRecordDIEKeepsMutableSignatureTypesIndependent) {
+  ScratchDir Dir;
+  for (unsigned PointerBytes : {4, 8}) {
+    for (bool Little : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << PointerBytes << ':' << Little);
+      const auto Bytes = makeMIPSDWARFRecordValue(
+          PointerBytes, Little, RecordValueFixture::ArrayDouble);
+      const auto Context = DWARFDebugContext::load(
+          Dir.writeBytes("shared.elf", Bytes), BinaryFormat::ELF,
+          DWARFLoadTrust::InImage, Bytes);
+      ASSERT_TRUE(Context);
+      const auto Function = Context->resolveFunction(0x1000);
+      ASSERT_TRUE(Function && Function->ReturnType);
+      ASSERT_EQ(Function->Params.size(), 1u);
+      const auto &Result = Function->ReturnType;
+      const auto &Param = Function->Params.front().second;
+      ASSERT_TRUE(Param);
+      ASSERT_EQ(Result->Fields.size(), 1u);
+      ASSERT_EQ(Param->Fields.size(), 1u);
+      ASSERT_TRUE(Result->Fields.front()->ElemType);
+      ASSERT_TRUE(Param->Fields.front()->ElemType);
+      ASSERT_EQ(Param->Fields.front()->ElemType->Kind, NdTypeKind::Float);
+      Param->Fields.front()->ElemType->SourceName = "parameter_element";
+      EXPECT_TRUE(Result->Fields.front()->ElemType->SourceName.empty());
+      ASSERT_EQ(Result->ScalarLeaves.size(), 1u);
+      ASSERT_EQ(Param->ScalarLeaves.size(), 1u);
+      EXPECT_TRUE(Param->ScalarLeaves.front().Floating);
+      EXPECT_EQ(Param->ScalarLeaves.front().Size, Result->Size);
+    }
+  }
+}
+
 TEST(DWARFSourceTypes, PartialOrOverlappingRecordsCannotBecomeCompleteValues) {
   ScratchDir Dir;
   for (unsigned PointerBytes : {4, 8})

@@ -26345,6 +26345,8 @@ a callee that happens to return that address in v0 is not an ABI guarantee.
 `NeverDDebugInfoTests` use independent ELF32/64, little/big-endian DWARF bytes.
 They reject missing or duplicate type/layout attributes, unbounded arrays,
 unions, recursion, overflowing sizes, wrong pointer widths and packed layouts.
+The repeated-record DIE test edits a parameter's nested array element and
+checks that the return type keeps its own fields in all four ELF profiles.
 `LocalTypesDebugContext.SourceRecordValuesRetainTargetPointersAndDirectMemberKinds`
 checks the matching local declarations and anonymous/nested union boundary.
 Run those owners plus `NeverDTypesTests` and the source-call owners when

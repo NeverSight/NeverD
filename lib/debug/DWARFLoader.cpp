@@ -24,6 +24,7 @@
 #define DEBUG_TYPE "neverd-dwarf-loader"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
@@ -411,7 +412,10 @@ struct DWARFDebugContext::Impl {
 
   TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0,
                            bool CompleteValue = false) const;
-  TypeRef signatureType(llvm::DWARFDie Die) const;
+  using RecordSignatureTypes =
+      llvm::DenseMap<std::pair<const llvm::DWARFUnit *, uint64_t>, TypeRef>;
+  TypeRef signatureType(llvm::DWARFDie Die,
+                        RecordSignatureTypes &Records) const;
   std::optional<AuthenticatedRecordParameter>
   recordParameter(llvm::DWARFDie Die, va_t Entry) const;
   /// Where each formal parameter of the i386 function \p Die enters it at
@@ -442,7 +446,7 @@ struct DWARFDebugContext::Impl {
   void parseCompileUnits(const llvm::object::ObjectFile &Object);
   void parseUnits(size_t Begin, size_t End);
   void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit,
-                     unsigned UnitIndex);
+                     unsigned UnitIndex, RecordSignatureTypes &Records);
   void parseFunctionLocals(llvm::DWARFDie Die,
                            llvm::ArrayRef<AddressRange> ScopeRanges,
                            std::vector<LocalObject> &Objects) const;
@@ -1588,16 +1592,46 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
   }
 }
 
-TypeRef DWARFDebugContext::Impl::signatureType(llvm::DWARFDie Die) const {
+/// The declaration owns its mutable types, including nested member, pointer
+/// and callback types. DWARF conversion bounds the graph before it gets here.
+static TypeRef copySignatureType(const TypeRef &Type) {
+  if (!Type)
+    return nullptr;
+  auto Copy = std::make_shared<NdType>(*Type);
+  Copy->Pointee = copySignatureType(Type->Pointee);
+  Copy->ElemType = copySignatureType(Type->ElemType);
+  Copy->RetType = copySignatureType(Type->RetType);
+  for (auto &Field : Copy->Fields)
+    Field = copySignatureType(Field);
+  for (auto &Param : Copy->ParamTypes)
+    Param = copySignatureType(Param);
+  return Copy;
+}
+
+TypeRef
+DWARFDebugContext::Impl::signatureType(llvm::DWARFDie Die,
+                                       RecordSignatureTypes &Records) const {
   const auto Record = unqualifiedType(Die);
   if (Record.isValid() &&
       (Record.getTag() == llvm::dwarf::DW_TAG_structure_type ||
-       Record.getTag() == llvm::dwarf::DW_TAG_class_type))
-    if (auto Complete = convertDwarfType(Die, 0, true))
+       Record.getTag() == llvm::dwarf::DW_TAG_class_type)) {
+    // The declared DIE includes the qualifier chain that complete conversion
+    // validates. A referenced type may belong to a different unit.
+    const auto Key = std::make_pair(Die.getDwarfUnit(), Die.getOffset());
+    if (const auto It = Records.find(Key); It != Records.end())
+      return copySignatureType(It->second);
+    if (auto Complete = convertDwarfType(Die, 0, true)) {
+      describeRecordPassing(Die, *Complete);
+      Records.try_emplace(Key, Complete);
       return Complete;
+    }
+  }
   // A display type may retain a name and size without a complete value
   // graph. Source ABI owners must still reject that incomplete evidence.
-  return convertDwarfType(Die);
+  auto Type = convertDwarfType(Die);
+  if (Type)
+    describeRecordPassing(Die, *Type);
+  return Type;
 }
 
 DWARFDebugContext::Impl::DeclaredTypeResolution
@@ -2025,7 +2059,8 @@ void DWARFDebugContext::Impl::parseFunctionLocals(
 
 void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
                                             llvm::DWARFUnit *Unit,
-                                            unsigned UnitIndex) {
+                                            unsigned UnitIndex,
+                                            RecordSignatureTypes &Records) {
   llvm::Expected<llvm::DWARFAddressRangesVector> DwarfRanges =
       Die.getAddressRanges();
   if (!DwarfRanges) {
@@ -2081,11 +2116,9 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     Sym.ReturnType = NdType::makeVoid();
   } else if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Found) {
     ReturnState = classifyReturnValue(ReturnType.TypeDie);
-    Sym.ReturnType = signatureType(ReturnType.TypeDie);
+    Sym.ReturnType = signatureType(ReturnType.TypeDie, Records);
     if (!Sym.ReturnType || Sym.ReturnType->Kind == NdTypeKind::Unknown)
       ReturnState = {};
-    else
-      describeRecordPassing(ReturnType.TypeDie, *Sym.ReturnType);
   } else {
     // A present but malformed reference is not evidence of void.
     Sym.ReturnType = std::make_shared<NdType>();
@@ -2104,9 +2137,8 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     if (const char *RawName = Child.getName(llvm::DINameKind::ShortName))
       Name = RawName;
     auto ParamDie = declaredTypeDie(Child);
-    TypeRef Type = ParamDie.isValid() ? signatureType(ParamDie) : nullptr;
-    if (ParamDie.isValid() && Type)
-      describeRecordPassing(ParamDie, *Type);
+    TypeRef Type =
+        ParamDie.isValid() ? signatureType(ParamDie, Records) : nullptr;
     Sym.Params.emplace_back(std::move(Name), std::move(Type));
   }
   Sym.PlatformConvention = platformConvention(Die);
@@ -2139,12 +2171,13 @@ void DWARFDebugContext::Impl::parseUnits(size_t Begin, size_t End) {
     if (!Root.isValid())
       continue;
     const unsigned UnitIndex = static_cast<unsigned>(Index - 1);
+    RecordSignatureTypes Records;
 
     std::function<void(llvm::DWARFDie)> Walk = [&](llvm::DWARFDie Die) {
       if (!Die.isValid())
         return;
       if (Die.getTag() == llvm::dwarf::DW_TAG_subprogram) {
-        parseFunction(Die, CU.get(), UnitIndex);
+        parseFunction(Die, CU.get(), UnitIndex, Records);
         return;
       }
       if (Die.getTag() == llvm::dwarf::DW_TAG_variable)
