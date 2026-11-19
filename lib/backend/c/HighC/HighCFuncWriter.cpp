@@ -1205,6 +1205,10 @@ HighCWriter::dispatchFrame(va_t Entry) const {
 }
 
 void HighCWriter::writeFunction(const HighFunc &Func) {
+  // Native exception region labels are a definition's own: C labels have
+  // function scope, and writeFunctionsInParallel writes each definition with
+  // a writer copy that may have written any of the others first.
+  NativeExceptionRegionNumber = 0;
   if (const auto Unbacked = UnbackedEscapes.find(&Func);
       Unbacked != UnbackedEscapes.end())
     throw std::invalid_argument("escaped image address 0x" +

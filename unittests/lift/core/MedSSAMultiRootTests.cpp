@@ -28,6 +28,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BinaryLoading.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
@@ -965,6 +966,48 @@ TEST(MedSEHEstablisherFrame, SourceIndependentEntriesKeepUnknownStackValues) {
                                           BinaryFormat::COFF),
                  std::runtime_error);
   }
+}
+
+TEST(MedSEHEstablisherFrame, EachDefinitionNumbersItsOwnNativeEntryLabels) {
+  // A unit of enough definitions is written on worker threads, each with a
+  // copy of the writer that may have written any other definitions first.
+  // A shared handler's runtime entry is printed under labels numbered for
+  // its native exception region: every definition numbers its own, so the
+  // unit reads the same on one thread and on four.
+  auto Img = makeFixedSEHFrameImage();
+  // The ordinary branch also reaches the exception handler.
+  Img.Segments.front().Data[0x12] = 0x0d;
+  auto Low = decodeFixedSEHFrame(Img);
+  Low.ModuleAnalysisRoots.insert(Img.Entry + 0x10);
+  Low.OrdinaryModuleAnalysisRoots.insert(Img.Entry + 0x10);
+  LowToMedConverter Converter;
+  Converter.setSEHSourceProjectionEnabled(true);
+  const auto High = MedToHighConverter().convert(
+      Converter.convert(Low, Arch::X64, BinaryFormat::COFF), Arch::X64);
+  std::vector<HighFunc> Unit;
+  for (size_t I = 0; I != limits::kMinParallelCFunctionDefinitions + 8; ++I) {
+    Unit.push_back(High);
+    Unit.back().Name = "handler_entry_copy_" + std::to_string(I);
+  }
+  const unsigned Previous = workerThreadOverride().load();
+  const auto Emit = [&](unsigned Threads) {
+    setWorkerThreadCount(Threads);
+    std::string Source;
+    llvm::raw_string_ostream Stream(Source);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    EXPECT_TRUE(HighCEmitter().emit(Unit, Stream, Options));
+    return Source;
+  };
+  const std::string Serial = Emit(1), Parallel = Emit(4);
+  setWorkerThreadCount(Previous);
+  EXPECT_EQ(Serial, Parallel);
+  size_t Regions = 0;
+  for (size_t At = Serial.find("L_windows_eh_after_0:;");
+       At != std::string::npos;
+       At = Serial.find("L_windows_eh_after_0:;", At + 1))
+    ++Regions;
+  EXPECT_EQ(Regions, Unit.size()) << Serial;
 }
 
 TEST(MedSEHEstablisherFrame, SourceSwitchRequiresEveryResolvedTarget) {
