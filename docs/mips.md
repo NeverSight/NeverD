@@ -1049,6 +1049,11 @@ preserves QEMU's wrapping-arithmetic build contract. Every reference lane,
 saved register and regenerated result must match the independent expectation.
 No unimplemented W-register API is used as an oracle.
 
+A complete debug record layout does not by itself establish its MIPS return
+carriers. Until a source entry contract binds that return, HighC keeps the
+recovered result representation instead of changing between integer and
+floating register banks based only on the debug type.
+
 ## Ordinary memory source qualification
 
 LowIR preserves ordinary load/store checks and fault order, including dead load

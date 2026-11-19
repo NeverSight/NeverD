@@ -26,6 +26,7 @@
 #include "neverd/backend/MIPS/MIPSSourceCompiler.h"
 #include "neverd/backend/c/render/AArch64/AArch64ReturnProtectionC.h"
 #include "neverd/backend/c/render/AArch64/AArch64SVEVectorState.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighPointerTypeInference.h"
@@ -318,6 +319,14 @@ TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
       return NdType::makeVoid();
     return {};
   }
+  // Complete record fields describe a C value, not its physical result
+  // carriers. MIPS can return equal-sized records through different register
+  // banks or a hidden buffer. Only a bound source entry contract may replace
+  // the recovered result with that logical record type.
+  if (isMIPS(Opts.TheArch) && DebugFn->ReturnType->Kind == NdTypeKind::Struct &&
+      !DebugFn->ReturnType->IsEnum &&
+      !sourceComplexComponentBytes(DebugFn->ReturnType))
+    return {};
   if (isMsvcIndirectReturn(DebugFn->ReturnType, Opts.TheArch, Opts.Format)) {
     const NdType *Record = msvcIndirectReturnRecord(DebugFn->ReturnType,
                                                     Opts.TheArch, Opts.Format);

@@ -25427,6 +25427,9 @@ profiles. LLVM declarations and regenerated C must retain classic, microMIPS
 and supported MIPS16 target modes even when the callee body is omitted. The
 wide runtime driver's GCC O2 cases additionally catch an unannotated declaration
 becoming a tail jump that cannot switch instruction modes.
+`MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass` checks
+that a debug-only floating record declaration cannot replace a physical
+`v0/v1` integer result in n32/n64 and both byte orders.
 
 `MIPSInstructionRelocationsTests.cpp` builds independent linked ELF32/o32,
 ELF32/n32 and ELF64/n64 bytes in both orders. It checks explicit and implicit
