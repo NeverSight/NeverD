@@ -1299,6 +1299,70 @@ untagged:
   EXPECT_FALSE(Image->instructionModeAt(UntaggedSlot));
 }
 
+// The exception index names where each function starts, and a function's
+// address has bit 0 set exactly when it is Thumb code: a stored value with
+// bit 0 clear at an indexed start addresses ARM code.  One that names code
+// inside an index range but no start of it still states nothing, as one
+// does where no index exists.
+TEST_F(ELFARM32ModeTest, StoredPointersAtIndexedStartsStateARMCode) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "ARM fixture requires cross-target clang";
+  if (!exec("ld.lld", {"--version"}).ok())
+    GTEST_SKIP() << "ARM ELF linker is unavailable";
+
+  auto Image = loadStrippedSharedAssembly("indexed_starts", R"(
+.syntax unified
+.text
+.arm
+.p2align 2
+.type indexed,%function
+indexed:
+  .fnstart
+  mov r0, #3
+  add r0, r0, #4
+  bx lr
+  .cantunwind
+  .fnend
+.p2align 2
+.type unindexed,%function
+unindexed:
+  mov r0, #5
+  add r0, r0, #6
+  bx lr
+.data
+.p2align 2
+  .word indexed
+  .word unindexed
+)");
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  EXPECT_TRUE(Image->LoadDiagnostics.empty());
+  const Section *Data = nullptr;
+  for (const Section &Sec : Image->Sections)
+    if (Sec.Name == ".data")
+      Data = &Sec;
+  ASSERT_NE(Data, nullptr);
+  const uint8_t *Slots = Image->readVA(Data->VA, 8);
+  ASSERT_NE(Slots, nullptr);
+  const va_t Indexed = readLE<uint32_t>(Slots);
+  const va_t Unindexed = readLE<uint32_t>(Slots + 4);
+  ASSERT_EQ(Indexed & 1u, 0u);
+  ASSERT_EQ(Unindexed & 1u, 0u);
+  const auto StartsAt = [&](va_t Address) {
+    return llvm::any_of(Image->ExceptionMetadata.Functions,
+                        [&](const ExceptionFunction &Function) {
+                          return Function.Kind ==
+                                     RuntimeFunctionKind::Primary &&
+                                 Function.CodeRange.Begin == Address;
+                        });
+  };
+  ASSERT_TRUE(StartsAt(Indexed));
+  ASSERT_FALSE(StartsAt(Unindexed));
+
+  EXPECT_EQ(Image->instructionModeAt(Indexed), InstructionMode::ARM);
+  EXPECT_EQ(Image->instructionModeAt(Indexed + 4), InstructionMode::ARM);
+  EXPECT_FALSE(Image->instructionModeAt(Unindexed));
+}
+
 // Position-independent Thumb code takes a routine's address as
 // `ldr rN, [pc, #k]; add rN, pc`, the literal being the routine's address
 // with bit 0 set less the PC: what it gets is a Thumb code address, as a

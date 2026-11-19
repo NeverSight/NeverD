@@ -1297,7 +1297,29 @@ ARMModeDiscovery::ARMModeDiscovery(BinaryImage &Image) : Img(Image) {}
 
 ARMModeDiscovery::~ARMModeDiscovery() = default;
 
-llvm::Error ARMModeDiscovery::discover() {
+llvm::Error ARMModeDiscovery::discover(const std::set<va_t> &FunctionStarts) {
+  // A stored pointer whose value is exactly where the exception index says a
+  // function starts is a function pointer, and a Thumb function's address
+  // always has bit 0 set: one with bit 0 clear addresses ARM code, which an
+  // interworking call through it runs.  Odd stored values were read with the
+  // symbols, and a start another entry states keeps that entry's mode.
+  std::vector<va_t> PointedStarts;
+  if (Img.Arch == Arch::ARM && !Img.IsRelocatable && !FunctionStarts.empty())
+    for (const BaseRelocation &Slot : Img.BaseRelocations) {
+      const uint8_t *Bytes = Img.readVA(Slot.Address, sizeof(uint32_t));
+      if (!Bytes)
+        continue;
+      const uint32_t Value = readLE<uint32_t>(Bytes);
+      if ((Value & 1u) || !FunctionStarts.count(Value) ||
+          Img.ARMCodeModeEntries.count(Value))
+        continue;
+      recordARMCodePointerMode(Img, Value,
+                               ARMCodePointerUse::StoredAtFunctionStart);
+      if (const auto Entry = Img.ARMCodeModeEntries.find(Value);
+          Entry != Img.ARMCodeModeEntries.end() &&
+          Entry->second == InstructionMode::ARM)
+        PointedStarts.push_back(Value);
+    }
   // Mapping symbols describe their own section intervals, but a rewritten
   // ELF can append executable program bytes without adding a section-table
   // owner. Mach-O has exact Thumb symbols but no mapping intervals. Follow
@@ -1313,8 +1335,23 @@ llvm::Error ARMModeDiscovery::discover() {
   S = std::make_unique<State>(Img, Disassembled);
   if (llvm::Error E = S->open())
     return E;
-  if (llvm::Error E = S->run())
-    return E;
+  if (llvm::Error E = S->run()) {
+    if (PointedStarts.empty())
+      return E;
+    // A pointed function whose decode fails withdraws them all, and the
+    // passes start again from what they would have known without them.
+    llvm::consumeError(std::move(E));
+    for (const va_t Start : PointedStarts)
+      Img.ARMCodeModeEntries.erase(Start);
+    S.reset();
+    if (Img.ARMCodeModeEntries.empty())
+      return llvm::Error::success();
+    S = std::make_unique<State>(Img, Disassembled);
+    if (llvm::Error Open = S->open())
+      return Open;
+    if (llvm::Error Again = S->run())
+      return Again;
+  }
   S->publish();
   // What the passes committed needs no keeping until the pads extend them.
   S->Origins.clear();

@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <map>
 #include <memory>
+#include <set>
 
 namespace neverd {
 
@@ -82,6 +83,10 @@ enum class ARMCodePointerUse : uint8_t {
   /// still a Thumb code address, in a section the image marks executable;
   /// clear, it states nothing.
   Stored,
+  /// A stored value that is exactly where the exception index says a
+  /// function starts: a function pointer, whose bit 0 a Thumb function's
+  /// address always has set.  Clear, it is ARM code.
+  StoredAtFunctionStart,
 };
 
 /// Record the instruction set that \p Pointer, an AArch32 code pointer of a
@@ -111,8 +116,11 @@ public:
   /// Follow direct ARM/Thumb control-flow edges from exact code entries.
   /// Records only decoded reachable instruction spans; malformed or
   /// conflicting state transitions fail instead of assigning a file-wide
-  /// default mode.
-  llvm::Error discover();
+  /// default mode.  A stored pointer with bit 0 clear at one of
+  /// \p FunctionStarts, the starts the exception index names, is an entry
+  /// too, as ARM code; if what such entries reach contradicts the decode,
+  /// they are withdrawn and the decode is the one the other entries give.
+  llvm::Error discover(const std::set<va_t> &FunctionStarts = {});
 
   /// After the exception tables are read, follow the landing pads of the call
   /// sites decoding reached, in the mode of that code: the unwinder resumes a

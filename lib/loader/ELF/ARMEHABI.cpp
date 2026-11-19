@@ -57,12 +57,6 @@ struct DeferredTypeTable {
 };
 
 /// One index entry, resolved but not yet decoded.
-struct IndexEntry {
-  va_t EntryVA = 0;
-  va_t FunctionVA = 0;
-  uint32_t Word = 0;
-};
-
 /// Normalize both inline and out-of-line opcode streams with one failure
 /// policy.
 void decodeFrameOpcodes(llvm::ArrayRef<uint8_t> Opcodes, ExceptionFunction &F) {
@@ -92,40 +86,9 @@ void parseARMEHABIExceptions(BinaryImage &Img) {
   // the bottom of the synthesized layout.
   if (Img.IsRelocatable)
     return;
-  std::vector<TableSection> Indexes = findIndexSections(Img);
-  if (Indexes.empty())
-    return;
-
   // --- Collect the index -------------------------------------------------
-  std::vector<IndexEntry> Entries;
   size_t Unreadable = 0;
-  for (const TableSection &Index : Indexes) {
-    const size_t Count = std::min<size_t>(Index.Size / kIndexEntrySize,
-                                          kMaxIndexEntries - Entries.size());
-    for (size_t I = 0; I < Count; ++I) {
-      const uint8_t *Bytes = Index.Data + I * kIndexEntrySize;
-      const uint32_t Word0 = readLE<uint32_t>(Bytes);
-      const uint32_t Word1 = readLE<uint32_t>(Bytes + 4);
-      const va_t EntryVA = static_cast<va_t>(Index.VA + I * kIndexEntrySize);
-      // The first word is a `prel31`, so its top bit is not part of the
-      // displacement.  An entry that sets it is not an index entry.
-      if ((Word0 & kCompactBit) != 0) {
-        ++Unreadable;
-        continue;
-      }
-      IndexEntry Entry;
-      Entry.EntryVA = EntryVA;
-      // The linker clears the Thumb bit in the index because the table is
-      // searched by program counter, but a hand-written or rewritten one may
-      // not have; a function address that names an odd byte names none.
-      Entry.FunctionVA =
-          static_cast<va_t>(clearThumbBit(resolvePrel31(Word0, EntryVA)));
-      Entry.Word = Word1;
-      Entries.push_back(Entry);
-    }
-    if (Entries.size() >= kMaxIndexEntries)
-      break;
-  }
+  std::vector<IndexEntry> Entries = readIndexEntries(Img, Unreadable);
   if (Entries.empty())
     return;
 

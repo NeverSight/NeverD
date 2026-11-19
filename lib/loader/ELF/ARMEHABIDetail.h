@@ -180,7 +180,24 @@ namespace neverd::arm_ehabi {
 namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE detail {
 inline constexpr size_t kMaxIndexEntries =
     ::neverd::limits::loader::kARMEHABIDetailMaxIndexEntries;
-}
+
+/// One entry of the exception index: where it lies, the function start its
+/// first word names, with the Thumb bit cleared, and its second word.
+struct IndexEntry {
+  va_t EntryVA = 0;
+  va_t FunctionVA = 0;
+  uint32_t Word = 0;
+  /// The first word named an odd byte: a hand-written or rewritten index
+  /// that kept the Thumb bit the linker clears.
+  bool OddStart = false;
+};
+
+/// Every entry of the image's exception index sections, in section order, up
+/// to kMaxIndexEntries.  An entry whose first word sets the prel31 top bit is
+/// not an index entry; Unreadable counts them.
+std::vector<IndexEntry> readIndexEntries(const BinaryImage &Img,
+                                         size_t &Unreadable);
+} // namespace LLVM_LIBRARY_VISIBILITY_NAMESPACE detail
 } // namespace neverd::arm_ehabi
 
 #endif // NEVERD_LIB_LOADER_ELF_ARMEHABIDETAIL_H

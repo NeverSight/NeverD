@@ -439,7 +439,8 @@ ELFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
     return std::move(E);
   ARMModeDiscovery ARMModes(Img);
   if (Img.Arch == Arch::ARM && !Img.IsRelocatable && HasProgramHeaders)
-    if (llvm::Error E = ARMModes.discover())
+    if (llvm::Error E =
+            ARMModes.discover(arm_ehabi::indexedFunctionStarts(Img)))
       return std::move(E);
   if (llvm::Error E = verifyARMFunctionModeHints(Img, ARMFunctionModes))
     return std::move(E);

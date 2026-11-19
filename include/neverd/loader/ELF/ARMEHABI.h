@@ -34,6 +34,8 @@
 
 #include "neverd/loader/BinaryImage.h"
 
+#include <set>
+
 namespace neverd::arm_ehabi {
 
 /// Decode `.ARM.exidx` and every `.ARM.extab` entry it names into
@@ -47,6 +49,12 @@ namespace neverd::arm_ehabi {
 /// `.eh_frame` beside `.ARM.exidx` -- and each describes the same frames from
 /// a different direction.
 void parseARMEHABIExceptions(BinaryImage &Img);
+
+/// The function starts the image's exception index names, each the start of
+/// a code range an index entry describes.  Only entries whose start keeps
+/// bit 0 clear count: the index states no instruction set, and a start with
+/// bit 0 set would claim one.  Empty for an image without an index.
+std::set<va_t> indexedFunctionStarts(const BinaryImage &Img);
 
 /// Validate a bounded unwind program with the loader's opcode decoder. A
 /// complete program has an implicit finish at its end; an explicit B0 is not

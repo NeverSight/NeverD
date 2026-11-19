@@ -15,6 +15,7 @@
 #include "ARMEHABIDetail.h"
 
 #include "neverd/object/SectionNames.h"
+#include "neverd/support/BinaryEncoding.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -79,6 +80,40 @@ std::vector<TableSection> findIndexSections(const BinaryImage &Img) {
   return Result;
 }
 
+std::vector<IndexEntry> readIndexEntries(const BinaryImage &Img,
+                                         size_t &Unreadable) {
+  std::vector<IndexEntry> Entries;
+  for (const TableSection &Index : findIndexSections(Img)) {
+    const size_t Count = std::min<size_t>(Index.Size / kIndexEntrySize,
+                                          kMaxIndexEntries - Entries.size());
+    for (size_t I = 0; I < Count; ++I) {
+      const uint8_t *Bytes = Index.Data + I * kIndexEntrySize;
+      const uint32_t Word0 = readLE<uint32_t>(Bytes);
+      const uint32_t Word1 = readLE<uint32_t>(Bytes + 4);
+      const va_t EntryVA = static_cast<va_t>(Index.VA + I * kIndexEntrySize);
+      // The first word is a `prel31`, so its top bit is not part of the
+      // displacement.  An entry that sets it is not an index entry.
+      if ((Word0 & kCompactBit) != 0) {
+        ++Unreadable;
+        continue;
+      }
+      IndexEntry Entry;
+      Entry.EntryVA = EntryVA;
+      // The linker clears the Thumb bit in the index because the table is
+      // searched by program counter, but a hand-written or rewritten one may
+      // not have; a function address that names an odd byte names none.
+      const va_t Start = resolvePrel31(Word0, EntryVA);
+      Entry.FunctionVA = static_cast<va_t>(clearThumbBit(Start));
+      Entry.OddStart = (Start & 1u) != 0;
+      Entry.Word = Word1;
+      Entries.push_back(Entry);
+    }
+    if (Entries.size() >= kMaxIndexEntries)
+      break;
+  }
+  return Entries;
+}
+
 va_t executableEndFor(const BinaryImage &Img, va_t Address) {
   va_t End = 0;
   for (const Section &Sec : Img.Sections) {
@@ -99,4 +134,17 @@ va_t executableEndFor(const BinaryImage &Img, va_t Address) {
 }
 
 } // namespace detail
+
+std::set<va_t> indexedFunctionStarts(const BinaryImage &Img) {
+  std::set<va_t> Starts;
+  if (Img.Arch != Arch::ARM || Img.IsRelocatable)
+    return Starts;
+  size_t Unreadable = 0;
+  for (const detail::IndexEntry &Entry :
+       detail::readIndexEntries(Img, Unreadable))
+    if (!Entry.OddStart)
+      Starts.insert(Entry.FunctionVA);
+  return Starts;
+}
+
 } // namespace neverd::arm_ehabi
