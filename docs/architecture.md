@@ -5803,6 +5803,21 @@ place of what its calls appear to forward. The spill area is uninitialized at a
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 
+The stack-growth path is not part of what a function computes, and MedIR leaves
+it out (`elideGoStackGrowth`, `lib/ir/med/lower/GoStackGrowth.cpp`). `morestack`
+grows the goroutine's stack and resumes at its call's return address
+(src/runtime/stack.go, `newstack`), so the path reloads the arguments it
+spilled and starts the function again. Its own body ends in `abort`, so read
+as an ordinary call it looked like a call that never returns, and the function
+seemed to end where its stack ran short. The path is left out only when the
+entry does nothing but compare and branch, so running it again is the same as
+running it once (`GoStackGrowth::Restarts`). The path must also call a routine
+that grows the stack rather than `runtime.morestackc`, which throws, and the
+entry alone must reach it. A frame larger than 4 KiB checks for underflow with
+a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
+thread-local load before it, and both forms qualify. The runtime's growth
+routines take no register argument.
+
 Results, calls through function values and interfaces, arm64, Go code in images
 before 1.18 and assembly that uses the internal ABI still follow the platform
 convention. So do DWARF-typed signatures, whose parameters Go's own register

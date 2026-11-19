@@ -331,9 +331,13 @@ void parseGoExceptions(BinaryImage &Img) {
       if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
           (G.Name == "runtime.morestack" ||
            G.Name == "runtime.morestack_noctxt" ||
-           G.Name == "runtime.morestackc"))
+           G.Name == "runtime.morestackc")) {
         Module.MorestackEntries.push_back(G.CodeRange.Begin);
+        if (G.Name == "runtime.morestackc")
+          Module.ThrowingMorestackEntries.push_back(G.CodeRange.Begin);
+      }
   llvm::sort(Module.MorestackEntries);
+  llvm::sort(Module.ThrowingMorestackEntries);
 
   if (!Layout.StackMapPCDataIndex) {
     Layout.StackMapPCDataIndex =

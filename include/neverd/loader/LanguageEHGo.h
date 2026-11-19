@@ -346,6 +346,10 @@ struct GoModuleInfo {
   /// calls (`runtime.morestack`, `runtime.morestack_noctxt`,
   /// `runtime.morestackc`), sorted.  Empty unless the text base is proven.
   std::vector<va_t> MorestackEntries;
+  /// The entries of MorestackEntries that throw rather than grow the stack
+  /// (`runtime.morestackc`, a system-stack function called on a user stack):
+  /// a growth path that calls one never restarts its function.
+  std::vector<va_t> ThrowingMorestackEntries;
 };
 
 } // namespace neverd

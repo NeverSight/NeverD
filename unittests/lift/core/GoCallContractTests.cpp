@@ -364,6 +364,78 @@ TEST(GoRegisterArguments, ABoolFirstArgumentIsNoVectorCount) {
   EXPECT_EQ(F.Params[1].RegOff, x86reg::RBX);
 }
 
+/// Whether \p F has an operation of opcode \p Opcode.
+bool hasOp(const MedFunc &F, NdOp Opcode) {
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == Opcode)
+        return true;
+  return false;
+}
+
+TEST(GoStackGrowth, TheFunctionEntersItsBodyDirectly) {
+  // The growth path restarts main.f with the arguments it spilled, so the
+  // body is all main.f computes: no morestack call, no stack check branch,
+  // and the entry goes straight on to `lea rax, [rax+rbx]`.
+  const BinaryImage Img = registerArgumentImage();
+  const MedFunc F = lift(Img, GoCallee);
+  EXPECT_FALSE(hasOp(F, NdOp::CALL));
+  EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
+  ASSERT_EQ(F.Params.size(), 2u);
+  EXPECT_EQ(F.Params[0].RegOff, x86reg::RAX);
+  EXPECT_EQ(F.Params[1].RegOff, x86reg::RBX);
+}
+
+/// A Go function at kTextVA + 0x100 whose entry is \p Check, then `ret`,
+/// and whose growth path is `call morestack_noctxt; jmp entry`, as Go 1.16
+/// and earlier emit it: nothing is spilled.
+BinaryImage stackGrowthImage(std::vector<uint8_t> Check) {
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T;
+  const uint8_t Length = static_cast<uint8_t>(Check.size());
+  Check.insert(Check.end(), {0x76, 0x01, 0xC3});
+  T.writeText(Function, Check);
+  const va_t Grow = Function + Length + 3;
+  T.writeText(Grow, makeCall(Grow, Morestack));
+  T.writeText(Grow + 5, {0xEB, static_cast<uint8_t>(Function - (Grow + 7))});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  return std::move(T.Img);
+}
+
+TEST(GoStackGrowth, GReadFromThreadLocalStorageChecksTheSameWay) {
+  // mov rcx, fs:[-8]; cmp rsp, [rcx+0x10]; jbe grow
+  const BinaryImage Img =
+      stackGrowthImage({0x64, 0x48, 0x8B, 0x0C, 0x25, 0xF8, 0xFF, 0xFF, 0xFF,
+                        0x48, 0x3B, 0x61, 0x10});
+  const auto Growth = goStackGrowth(Img, build(Img, kTextVA + 0x100).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  EXPECT_TRUE(Growth->Spills.empty());
+  EXPECT_TRUE(Growth->Restarts);
+  EXPECT_FALSE(hasOp(lift(Img, kTextVA + 0x100), NdOp::CALL));
+}
+
+TEST(GoStackGrowth, AnEntryThatStoresIsNoStackCheck) {
+  // mov [rsp+8], rax; cmp rsp, [r14+0x10]; jbe grow: running the entry again
+  // would store again, so the path is not one that changes nothing.
+  const BinaryImage Img =
+      stackGrowthImage({0x48, 0x89, 0x44, 0x24, 0x08, 0x49, 0x3B, 0x66, 0x10});
+  EXPECT_FALSE(goStackGrowth(Img, build(Img, kTextVA + 0x100).Blocks));
+  EXPECT_TRUE(hasOp(lift(Img, kTextVA + 0x100), NdOp::CALL));
+}
+
+TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
+  // runtime.morestackc throws: a system-stack function that runs short of
+  // stack never starts again, so its path stays.
+  BinaryImage Img = registerArgumentImage();
+  Img.ExceptionMetadata.GoModule->ThrowingMorestackEntries = {Morestack};
+  const MedFunc F = lift(Img, GoCallee);
+  EXPECT_TRUE(hasOp(F, NdOp::CALL));
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

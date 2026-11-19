@@ -531,7 +531,12 @@ Still open, in order of yield:
    pass them so (2026-11-19). On the 14 such binaries of the corpus,
    placeholders fell 27-58% (611,966 -> 439,796 across all 25 Go binaries), and
    calls print `printstring(&str, 0x15)` and
-   `mheap.alloc(&mheap_, npages, spanclass)`. Still open, in order of yield:
+   `mheap.alloc(&mheap_, npages, spanclass)`. Growth paths padded with `nop`
+   and the runtime's argument-free growth routines then took them to 397,701.
+   Leaving the stack-growth path out of MedIR (`elideGoStackGrowth`) took them
+   to 384,412 and shrank Go outputs 4-9%. Keeping System V's vector-count
+   rule off Go summaries, whose one-byte RAX read is a `bool` argument, took
+   them to 378,526. Still open, in order of yield:
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
@@ -541,15 +546,24 @@ Still open, in order of yield:
    - Assembly that uses the internal ABI, such as `memmove` and `memequal`.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
-2. The goroutine register (R14, R28) and X15 should become fixed values once
-   an image's internal ABI is proven.
-3. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
+2. The goroutine register (R14, R28), X15 and the closure context register
+   (RDX, R26) should become fixed values or parameters once an image's
+   internal ABI is proven. Once the growth path is gone, a closure's reads of
+   RDX show as "incoming register" placeholders. Together these registers are
+   about a fifth of what remains on Go 1.18+ amd64 binaries.
+3. Go 1.26 bounds failures call one `runtime.panicBounds`, and the call
+   site's `PCDATA_PanicBounds` entry names the registers or constants holding
+   the index and the length (`internal/abi/bounds.go`). About 690 calls per
+   binary print placeholders until that table is read.
+4. A frame larger than 4 KiB reaches its growth path from two branches and
+   keeps it, and so does the growth path of arm64 code.
+5. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
    C writer drops it because the stub's own signature is `void`.
-4. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
+6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
    calls per binary).
-5. Go code on targets other than x86-64 and AArch64 still keeps the platform
+7. Go code on targets other than x86-64 and AArch64 still keeps the platform
    contract.
-6. Restricted PE loads skip the Go metadata.
+8. Restricted PE loads skip the Go metadata.
 
 Explicit continuation exports now include a separately bounded environment
 driver. A caller-provided callback receives the complete boundary state and

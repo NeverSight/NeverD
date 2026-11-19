@@ -94,6 +94,42 @@ public:
   }
 };
 
+/// Whether \p Op is one a stack check computes with: it reads memory and
+/// registers and writes registers, and has no other effect.
+bool isStackCheckStep(const LowOp &Op) {
+  switch (Op.Opcode) {
+  case NdOp::LOAD:
+    return Op.MemoryOrdering == NdMemoryOrdering::None;
+  case NdOp::COPY:
+  case NdOp::INT_ADD:
+  case NdOp::INT_SUB:
+  case NdOp::INT_AND:
+  case NdOp::INT_OR:
+  case NdOp::INT_XOR:
+  case NdOp::INT_EQUAL:
+  case NdOp::INT_NOTEQUAL:
+  case NdOp::INT_LESS:
+  case NdOp::INT_SLESS:
+  case NdOp::INT_LESSEQUAL:
+  case NdOp::INT_SLESSEQUAL:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_CARRY:
+  case NdOp::INT_SOVF:
+  case NdOp::INT_SBOR:
+  case NdOp::BOOL_AND:
+  case NdOp::BOOL_OR:
+  case NdOp::BOOL_XOR:
+  case NdOp::BOOL_NOT:
+  case NdOp::SUBBYTES:
+  case NdOp::POPCOUNT:
+  case NdOp::NOP:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace
 
 bool isGoCode(const BinaryImage &Img, va_t Address) {
@@ -159,25 +195,27 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
 
 std::optional<std::vector<GoArgumentSpill>>
 goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
+  if (std::optional<GoStackGrowth> Growth = goStackGrowth(Img, Blocks))
+    return std::move(Growth->Spills);
+  return std::nullopt;
+}
+
+std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
+                                           llvm::ArrayRef<LowBlock> Blocks) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   if (!Module || Img.Arch != Arch::X64 || Blocks.empty() ||
       Blocks.front().Ops.empty())
     return std::nullopt;
   // The entry compares the stack pointer with the goroutine's stack guard,
-  // `g.stackguard0` at 16(R14), and branches to the growth path below it.
+  // `g.stackguard0` at 16(g), and branches to the growth path.  It computes
+  // nothing else, so running it again when the function restarts is the
+  // same as running it once.  g is R14 from Go 1.17 and a thread-local load
+  // before it, which the check need not tell apart.
   const LowBlock &Entry = Blocks.front();
-  BaseTracker EntryValues;
-  bool ReadsGuard = false;
-  for (const LowOp &Op : Entry.Ops) {
-    if (Op.Opcode == NdOp::LOAD && Op.NumInputs >= 1)
-      if (const std::optional<BasePlus> Address = EntryValues.of(Op.Inputs[0]);
-          Address && Address->Base == x86reg::R14 && Address->Offset == 0x10)
-        ReadsGuard = true;
-    EntryValues.step(Op);
-  }
   const LowOp &Check = Entry.Ops.back();
-  if (!ReadsGuard || Check.Opcode != NdOp::COND_BR || Check.NumInputs < 1 ||
-      !Check.Inputs[0].isConst())
+  if (Check.Opcode != NdOp::COND_BR || Check.NumInputs < 1 ||
+      !Check.Inputs[0].isConst() ||
+      !llvm::all_of(llvm::ArrayRef(Entry.Ops).drop_back(), isStackCheckStep))
     return std::nullopt;
   const auto Growth =
       llvm::find_if(Blocks.drop_front(), [&](const LowBlock &Block) {
@@ -190,6 +228,7 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   BaseTracker Values;
   std::vector<GoArgumentSpill> Spills, Reloads;
   std::map<uint64_t, std::pair<int64_t, uint16_t>> Loaded;
+  bool Throws = false;
   enum class Phase { Spilling, Reloading, Restarted } At = Phase::Spilling;
   for (const LowOp &Op : Growth->Ops) {
     switch (Op.Opcode) {
@@ -209,6 +248,9 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
                               Module->MorestackEntries.end(),
                               Op.Inputs[0].Offset))
         return std::nullopt;
+      Throws = std::binary_search(Module->ThrowingMorestackEntries.begin(),
+                                  Module->ThrowingMorestackEntries.end(),
+                                  Op.Inputs[0].Offset);
       At = Phase::Reloading;
       break;
     case NdOp::LOAD: {
@@ -281,7 +323,11 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   for (size_t I = 1; I < Spills.size(); ++I)
     if (Spills[I].EntryOffset < Spills[I - 1].EntryOffset + Spills[I - 1].Size)
       return std::nullopt;
-  return Spills;
+  GoStackGrowth Result;
+  Result.Spills = std::move(Spills);
+  Result.GrowthStart = Growth->StartAddr;
+  Result.Restarts = !Throws;
+  return Result;
 }
 
 uint16_t goContractKeptBytes(const TargetRegInfo &TRI,

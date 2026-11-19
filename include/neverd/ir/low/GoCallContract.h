@@ -72,12 +72,31 @@ struct GoArgumentSpill {
   int64_t EntryOffset = 0;
 };
 
-/// The register arguments the stack-growth path of a function whose entry is
-/// block 0 of \p Blocks spills before it calls the runtime's morestack and
-/// reloads after it, sorted by slot.  The compiler spills exactly the
-/// register arguments the function uses, each to its slot in the spill area
-/// above the return address (cmd/compile/internal/amd64/ssa.go, RegArgs).
-/// nullopt where the entry has no such path, or one of another shape.
+/// A Go function's stack-growth path: the entry compares the stack pointer
+/// with the goroutine's stack guard and branches to a block that spills the
+/// register arguments, calls the runtime's morestack, reloads them and starts
+/// the function again.
+struct GoStackGrowth {
+  /// The register arguments the path spills and reloads, sorted by slot.
+  /// The compiler spills exactly the register arguments the function uses,
+  /// each to its slot in the spill area above the return address
+  /// (cmd/compile/internal/amd64/ssa.go, RegArgs).
+  std::vector<GoArgumentSpill> Spills;
+  /// Where the growth block starts.
+  va_t GrowthStart = 0;
+  /// The morestack it calls grows the stack and restarts the function, so
+  /// the path changes nothing the function computes; `runtime.morestackc`
+  /// throws instead (GoModuleInfo::ThrowingMorestackEntries).
+  bool Restarts = false;
+};
+
+/// The stack-growth path of a function whose entry is block 0 of \p Blocks,
+/// or nullopt where the entry has no such path, or one of another shape.
+std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
+                                           llvm::ArrayRef<LowBlock> Blocks);
+
+/// The register arguments the stack-growth path spills
+/// (GoStackGrowth::Spills).
 std::optional<std::vector<GoArgumentSpill>>
 goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks);
 

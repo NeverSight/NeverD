@@ -19,6 +19,7 @@
 #include "../X86/RegistrationRoots.h"
 #include "../X86/RegistrationSEH4PhysicalFrame.h"
 #include "ComputedBranchScalars.h"
+#include "GoStackGrowth.h"
 #include "MIPS/PICGlobalPointer.h"
 
 #include "neverd/Limits.h"
@@ -2038,6 +2039,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     fixupSubRegisters(Func);
     debugVerifyMedFunc(Func, "fixupSubRegisters");
 
+    // A Go function enters its body directly: the stack-growth path restarts
+    // it unchanged (GoStackGrowth::Restarts).
+    const std::optional<GoStackGrowth> GoGrowth =
+        Image ? goStackGrowth(*Image, Low.Blocks) : std::nullopt;
+    if (GoGrowth && GoGrowth->Restarts)
+      elideGoStackGrowth(Func, GoGrowth->GrowthStart);
+
     simplifyCfg(Func);
     debugVerifyMedFunc(Func, "simplifyCfg");
 
@@ -2246,10 +2254,9 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     GoArgumentSpillBegin.reset();
-    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
-      if (const auto Spills = goMorestackSpills(*Image, Low.Blocks);
-          Spills && !Spills->empty())
-        GoArgumentSpillBegin = Spills->front().EntryOffset;
+    if (GoGrowth && !GoGrowth->Spills.empty() &&
+        usesGoRegisterArguments(*Image, Low.Entry))
+      GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");
