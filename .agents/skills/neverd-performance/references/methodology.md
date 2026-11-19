@@ -112,6 +112,26 @@ most time. Each step is an instruction, its reason and the case it comes from.
 - **Then the constant.** Reading strings only from the byte runs that can hold
   one took a kernel image's string scan from 260 ms to 41 ms on one thread
   and 9.5 ms on eight (`e75c37d2bc`).
+- **Ask whether a failing analysis could change its answer.** Module
+  jump-table arbitration ran out of its budgets on every large image, and its
+  failure protects every code-pointer slot and lifts every function again.
+  Its only outputs are protected requested slots and unsafe writable tables.
+  On PE, Mach-O and ELF PIC images no table requests a slot and none is
+  writable, so the answer was empty before the analysis started; 123 of the
+  126 EH-corpus binaries with tables and all seven performance inputs with
+  tables were of that kind. Read the output contract before raising a budget.
+- **Count every failure, not the first.** A probe that stopped at the first
+  failing function named one refusal in libsqlite3. Recording each failure
+  and continuing, with an allowance per function, found 22 functions of two
+  kinds (14 refusals, 8 that never settle) and the same two kinds in every
+  other input.
+- **Tell a cycle from a slow ascent.** A per-block visit count showed one
+  36-block function with a million visits per block while every function
+  that settled stayed under 600. A diff of each visit's input against the
+  previous one then showed a single fact appearing and disappearing on
+  alternate visits. Shrinking the real function with "the solve exhausts its
+  debits" as the oracle (delta debugging over its instructions) left 9 of its
+  187 instructions, which became the regression test.
 
 ## 5. Price the lever before building it
 
@@ -137,6 +157,14 @@ most time. Each step is an instruction, its reason and the case it comes from.
 
 ## 6. Prove the fast path exact
 
+- **Bound a non-monotone solve by the step that breaks it.** The module
+  address solve joins a block's earlier inputs only after one block has lost a
+  fact 128 times. Over 157,189 functions the 200 that never settle lose one
+  every second visit and every other function at most 22 times, so every
+  function that settled keeps its exact result. A bound on changed inputs
+  instead had to sit above slow but monotone ascents (522 visits of one block
+  in a function that settled) and cost an oscillating function about eight
+  times as many visits before it ended.
 - **Identity over a corpus, not a spot check.** Hash every non-timing output,
   the whole payload and not only the text, for each view of a large sample, in
   forward and in reverse order: 2,980 of 2,980 identical both ways is the form

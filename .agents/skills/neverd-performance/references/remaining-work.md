@@ -120,30 +120,30 @@ A/B with identical output.
      those, ntoskrnl and the x64 Windows EH corpus. Selected runs keep one
      pass: their cache keeps call-register bodies, which the left-out callee
      graph builds supply.
-   - Left: the graph builds of the fallback rebuild. Its builds read the
-     preserve flag and their published jump-table history, which a callee
-     graph build does not, and the history is read before the tables
-     resolve, so the rebuild's own bodies cannot stand in for them.
-   - The fallback itself is the larger lever and is a policy decision. The
-     module arbitration borrows `limits::kMaxJumpTableEvidenceWork`, one
-     occurrence's evidence budget, and `limits::kMaxSSAFunctionOps`, one
-     function's operation cap, for whole-image work. With them raised in a
-     private build, capstone's and pe64-capstone's arbitrations completed,
-     protected no slot and marked no branch, so no function was lifted
-     again and the output was identical. Capstone needed 558,780 evidence
-     units (the limit is 4,096), a 754,878-unit pair scan, 793,118
-     operations scanned and a 168,886-unit address fixed point (2.6 times
-     its limit); the arbitration ran for about 5 s on one thread. With the
-     evidence and scan limits raised and the fixed point at four times its
-     limit: capstone LLVM C CPU -45%, wall -29% (six alternating pairs);
-     pe64-capstone -15%/-19% (single runs); identical output on every input
-     tried. The cost, in alternating pairs: on both Rust inputs the fixed
-     point does not converge and spends its larger allowance before the
-     fallback, wall +20% (+0.7 and +1.2 s; at 256 times its limit, 50 to
-     86 s); ntoskrnl's arbitration still does not complete, wall +1.1%; and
-     libsqlite3 and libstdc++ stop for reasons other than a budget, not yet
-     diagnosed. A decision on module limits, a converging fixed point, or
-     both.
+   - The fallback rebuild, and with it that second half of the graph builds,
+     no longer runs on images whose arbitration has nothing to decide
+     (`3533bc3bee`): no recovered table requests a relocation slot and no
+     table's storage may be written. That held for every performance input
+     with tables and for 123 of the 126 EH-corpus binaries with tables (the
+     other three are Go arm64 executables with absolute or writable tables).
+     The inventory had run out of the per-occurrence and per-function limits
+     it borrows on every large image before; on Rust its fixed point also
+     never settled, and on libsqlite3, libstdc++ and ntoskrnl a call window
+     with two cells at one coordinate refused the module (both fixed in
+     `671a79251b`). Six alternating pairs: capstone LLVM C CPU -44%, wall
+     -42%; pe64-capstone -18%/-23%; x64 Rust -21%/-33%; Mach-O Rust -6%/-21%;
+     libsqlite3 -6%/-4%; libstdc++ -5%/-5%; ntoskrnl -2%/-2%, where the output
+     also improves (the system service dispatch resolves).
+   - Limits kept, measured (a private build that scales every inventory
+     account with the module's operations: twice them for the queue, 32 times
+     for transfers, 4 times for evidence and pair scans). It completes the
+     arbitration of Go arm64 binaries with absolute or writable tables (one
+     resolves 8 more switches) but its solve then takes 2 s on one thread per
+     pass there, and on ntoskrnl it completes the EH continuation discovery
+     (10.9 million operations) in 21 s on one thread and finds no
+     continuation. Next: solve only the functions whose occurrences can change
+     the answer, in parallel with an allowance per function, then scale the
+     limits with the module.
    - Exact levers, each a resolver-level change:
      - reuse a first-round graph in the rebuild round. Recording the
        membership reads is easy: the unsafe branches are read only by
@@ -229,8 +229,9 @@ no-return depth and jump-table settings differ, so it can reach code the
 primary build cut. A function's own build is exact when it is configured as
 a callee graph build at its own depth and the prover answers its questions
 one level deeper as before: `c41b8090fd` builds an x64 whole-image batch so
-first (item 3). Next: the fallback rebuild's graph builds, which item 3
-explains.
+first (item 3). The fallback rebuild's graph builds, the other half, went
+with the fallback wherever arbitration has nothing to decide (`3533bc3bee`,
+item 3).
 
 ## Default-off and unused code: verdicts
 
