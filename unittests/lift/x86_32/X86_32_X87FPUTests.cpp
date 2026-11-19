@@ -2807,6 +2807,17 @@ TEST(DeferredX87Fixup, OnlyABodyTheFixupLeavesUnchangedStandsIn) {
   }
 }
 
+TEST(DeferredX87Fixup, ACacheThatKeepsCalleeBodiesTakesNoDeferredBuild) {
+  // A cache that keeps call-register bodies gets them from the callee graph
+  // builds a deferred build would leave out, and a run's call summaries
+  // would lift those callees again: such a cache takes the ordinary build.
+  DeferredX87Fixture F;
+  EXPECT_TRUE(F.deferred(F.cache(), 0x11e0));
+  EXPECT_FALSE(F.deferred(createX87CallGraphCache(&F.Prover, nullptr,
+                                                  /*RetainBodies=*/true),
+                          0x11e0));
+}
+
 TEST(DeferredX87Fixup, AGraphIsBuiltAgainWhereTheDeeperAnswerDiffers) {
   // 0x1100 never returns only when asked at depth 0: the build of 0x1000 at
   // that depth is complete and returns 1.0, but its caller's proof asks one

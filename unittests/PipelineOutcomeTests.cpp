@@ -624,14 +624,15 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
   expectSameSelection(Again, Cold);
 }
 
-TEST(PipelineOutcome, AnX64BatchLiftsNoFunctionAgainAsItsCallersCallee) {
+TEST(PipelineOutcome, AnX64WholeImageBatchKeepsEveryOrdinaryBody) {
   // Two chains of wrappers, one ending in a leaf that returns 1.0 on the x87
   // stack and one in a leaf that returns zero: a whole-image batch large
   // enough to run in parallel.  The batch builds every function without the
   // x87 fixup first, keeping its graph for its caller; a body the fixup
   // changes (each wrapper of the floating leaf binds its call's result) is
   // built anew.  Every body is the one a run of that function alone builds,
-  // which takes the ordinary build.
+  // which takes the ordinary build.  That no graph is lifted again is the
+  // DeferredX87Fixup tests' to show.
   BinaryImage Image;
   Image.Arch = Arch::X64;
   Image.Bits = Bitness::Bits64;
