@@ -3514,7 +3514,10 @@ with address/undefined-behavior sanitizers. x64 hidden buffers and ARM64
 register HFAs preserve both returned fields through single and chained calls,
 including NaN payloads and signed zero; output sentinels bound every write.
 ARM64 explicitly stores both fields, so the test does not infer a wrapper's
-source return type from unused scratch registers. The shared placement suite
+source return type from unused scratch registers.
+`ReturnContracts.AArch64IncomingResultRegisterRequiresACallerRead` checks an
+entry self-copy, a caller that consumes the preserved register, and a real
+write to the register. The shared placement suite
 covers one through four float/double HFA members on COFF/ELF/Mach-O, including
 whole-record COFF/ELF/Mach-O stack placement and natural Darwin stack offsets,
 and rejects incomplete, padded and over-aligned HFA layouts.

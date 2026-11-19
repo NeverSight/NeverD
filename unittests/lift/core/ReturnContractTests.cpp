@@ -208,6 +208,51 @@ TEST(ReturnContracts, TheRegisterAsTheFunctionEnteredItIsNoValue) {
       std::vector<bool>{true});
 }
 
+TEST(ReturnContracts, AArch64IncomingResultRegisterRequiresACallerRead) {
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::COFF;
+  MedVar X0;
+  X0.Kind = MedVar::Reg;
+  X0.TheArch = Image.Arch;
+  X0.RegOff = getTargetRegInfo(Image.Arch).IntReturnReg;
+  X0.Size = 8;
+  MedVar Argument = X0;
+  Argument.Kind = MedVar::Param;
+  MedVar Link = temporary(9);
+  Link.TheArch = Image.Arch;
+  // AArch64 RET reads its link. The callee only writes through its pointer.
+  MedFunc Writer = function(
+      CalleeEntry,
+      {block({operation(NdOp::COPY, X0, {X0}),
+              operation(NdOp::STORE, {}, {X0, MedVar::makeConst(7, 8)}),
+              returning(Link)})});
+  Writer.Params.push_back(Argument);
+  PipelineResult Result;
+  Result.MedFuncs = {Writer};
+  settleReturnContracts(Image, Result);
+  EXPECT_TRUE(Result.MedFuncs.front().ReturnsNoValue);
+
+  MedVar Value = X0;
+  Value.SSAVer = 1;
+  MedFunc Caller = function(
+      CallerEntry,
+      {block({operation(NdOp::CALL, Value, {MedVar::makeConst(CalleeEntry, 8)}),
+              operation(NdOp::STORE, {}, {Argument, Value}),
+              returning(Link)})});
+  Result.MedFuncs = {Writer, Caller};
+  settleReturnContracts(Image, Result);
+  EXPECT_FALSE(Result.MedFuncs.front().ReturnsNoValue);
+
+  // A real write supplies a result even with no observed caller.
+  Writer.Blocks.front().Ops.insert(
+      Writer.Blocks.front().Ops.end() - 1,
+      operation(NdOp::COPY, Value, {MedVar::makeConst(1, 8)}));
+  Result.MedFuncs = {Writer};
+  settleReturnContracts(Image, Result);
+  EXPECT_FALSE(Result.MedFuncs.front().ReturnsNoValue);
+}
+
 TEST(ReturnContracts, DefinitionsAndCallsUseTheSameRuntimePrototype) {
   for (const char *Name : {"__cxa_end_catch", "_Unwind_Resume", "free"}) {
     MedFunc Runtime = function(

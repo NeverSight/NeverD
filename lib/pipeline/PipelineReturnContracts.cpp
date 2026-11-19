@@ -122,6 +122,14 @@ struct FunctionFacts {
   bool WritesReturnRegister = false;
 };
 
+/// A live-in self-copy names the value the register already holds.
+bool writesReturnRegister(const MedOp &Op, const MedVar &Value,
+                          const TargetRegInfo &TRI) {
+  return Value.Kind == MedVar::Reg && Value.RegOff == TRI.IntReturnReg &&
+         !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
+           Op.Inputs[0] == Value);
+}
+
 /// What the return register holds at the RETURN \p Index of \p Block: the
 /// RETURN's operand where that is the register, and any x86 RETURN's operand,
 /// which copy propagation may have left reading the register's source (a
@@ -151,9 +159,12 @@ std::optional<MedVar> returnRegisterAt(const MedFunc &Func,
   const MedBlock *Current = &Block;
   size_t End = Index;
   while (Current && Visited.insert(Current->Id).second) {
-    for (size_t I = End; I-- > 0;)
-      if (Writes(Current->Ops[I].Output))
-        return Current->Ops[I].Output;
+    for (size_t I = End; I-- > 0;) {
+      const MedOp &Op = Current->Ops[I];
+      if (Op.Output.Size == TRI.FullRegWidth &&
+          writesReturnRegister(Op, Op.Output, TRI))
+        return Op.Output;
+    }
     for (const PhiNode &Phi : Current->Phis)
       if (Writes(Phi.Output))
         return Phi.Output;
@@ -223,15 +234,11 @@ FunctionFacts collectFacts(const MedFunc &Func, const TargetRegInfo &TRI,
       }
     }
     for (const MedOp &Op : Block.Ops) {
-      // An entry copy of the register into itself writes nothing.
-      const auto WritesReturn = [&](const MedVar &Value) {
-        return Value.Kind == MedVar::Reg && Value.RegOff == TRI.IntReturnReg &&
-               !(Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
-                 keyOf(Op.Inputs[0]) == keyOf(Value));
-      };
       Facts.WritesReturnRegister |=
-          WritesReturn(Op.Output) ||
-          llvm::any_of(Op.IntrinsicOutputs, WritesReturn);
+          writesReturnRegister(Op, Op.Output, TRI) ||
+          llvm::any_of(Op.IntrinsicOutputs, [&](const MedVar &Output) {
+            return writesReturnRegister(Op, Output, TRI);
+          });
       if (Op.Output.Size && !Op.Output.isConst())
         Facts.Defs.emplace(keyOf(Op.Output), &Op);
       for (const MedVar &Output : Op.IntrinsicOutputs)
