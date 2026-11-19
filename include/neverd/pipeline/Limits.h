@@ -160,6 +160,12 @@ inline constexpr size_t kPipelineLowIRMaxExactAddressAlternatives = 16;
 // Frame offsets widen the same way; without a bound a frame-walking loop
 // adds one offset per fixpoint round.
 inline constexpr size_t kPipelineLowIRMaxFrameOffsetAlternatives = 64;
+// The module address solve joins each block's previous input once one block's
+// input has lost a fact this often, which makes a non-monotone solve ascend
+// and end.  Of 157,189 functions in the EH corpus and the performance inputs,
+// the 200 that turn forever lose one at every second visit; every other one
+// loses a fact at most 22 times at a block.
+inline constexpr size_t kPipelineLowIRAddressRetreatsBeforeJoin = 128;
 inline constexpr size_t kPipelineLowIRMaxOutgoingStackCells = 64;
 inline constexpr size_t kPipelineLowIRMaxBytes = size_t(256) << 20;
 // Table/stack proofs can dominate bodies only a few KiB long, so medium

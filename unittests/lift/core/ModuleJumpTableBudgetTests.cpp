@@ -1004,4 +1004,87 @@ TEST_F(ModuleJumpTableBudget, AWritableOwnerStillTakesTheInventory) {
             std::set<va_t>{I->Functions.front().JumpTables.front().InsnAddr});
 }
 
+TEST_F(ModuleJumpTableBudget, AFrameStoreAfterAJoinLetsTheSolveSettle) {
+  // The shape of rustc_demangle's hex-nibble iterator.  The join is first read
+  // before its other predecessors, which marks the frame base imprecise, so
+  // the frame address stored after it escapes; once every predecessor is read
+  // the base is exact and nothing escapes.  The loop that follows used to
+  // carry both states around until the fixed-point work ran out.
+  auto I = fixture(0, false, R"(
+        .text
+        .globl  module_owner_frame_store_loop
+        .type   module_owner_frame_store_loop,@function
+module_owner_frame_store_loop:
+        movq    %rsp, %rbp
+        jb      .Lmodule_owner_frame_store
+        jb      .Lmodule_owner_frame_store
+        cmpb    $0xf8, %r9b
+.Lmodule_owner_frame_store:
+        leaq    -0x14(%rbp), %r9
+        movq    %r9, -0x28(%rbp)
+.Lmodule_owner_frame_store_loop:
+        ja      .Lmodule_owner_frame_store_done
+        jae     .Lmodule_owner_frame_store_done
+        jne     .Lmodule_owner_frame_store_loop
+.Lmodule_owner_frame_store_done:
+        retq
+        .size   module_owner_frame_store_loop, .-module_owner_frame_store_loop
+)");
+  ASSERT_TRUE(I);
+  const auto Without = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Without.AnalysisComplete);
+  ASSERT_TRUE(appendFunction(*I, "module_owner_frame_store_loop"));
+  const auto With = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  EXPECT_TRUE(With.AnalysisComplete);
+  EXPECT_EQ(With.ProtectedRelocationSlots, Without.ProtectedRelocationSlots);
+  EXPECT_EQ(With.UnsafeBranches, Without.UnsafeBranches);
+}
+
+TEST_F(ModuleJumpTableBudget, MixedWidthStackArgumentsKeepTheirEscape) {
+  // Two paths store a scalar and the safe table's address at the same
+  // outgoing stack slot, at different widths.  The callee may read either,
+  // so the address escapes and the writable table becomes unsafe.
+  auto I = fixture(0, false, R"(
+        .text
+        .globl  module_owner_mixed_width_argument
+        .type   module_owner_mixed_width_argument,@function
+module_owner_mixed_width_argument:
+        subq    $24, %rsp
+        testl   %edi, %edi
+        je      .Lmodule_owner_mixed_table
+        movl    $1, (%rsp)
+        jmp     .Lmodule_owner_mixed_call
+.Lmodule_owner_mixed_table:
+        leaq    .Lmodule_owner_safe_table(%rip), %rax
+        movq    %rax, (%rsp)
+.Lmodule_owner_mixed_call:
+        callq   module_owner_unrelated_pointer_induction
+        addq    $24, %rsp
+        retq
+        .size   module_owner_mixed_width_argument, .-module_owner_mixed_width_argument
+)");
+  ASSERT_TRUE(I);
+  ASSERT_EQ(I->Functions.front().JumpTables.size(), 1u);
+  const va_t SafeBranch = I->Functions.front().JumpTables.front().InsnAddr;
+  const std::vector<va_t> SafeSlots =
+      I->Functions.front().JumpTables.front().SuppressibleRelocationSlots;
+  ASSERT_FALSE(SafeSlots.empty());
+  const auto Without = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Without.AnalysisComplete);
+  ASSERT_EQ(Without.UnsafeBranches.count(SafeBranch), 0u);
+  auto Protected = Without.ProtectedRelocationSlots;
+  Protected.insert(SafeSlots.begin(), SafeSlots.end());
+  auto Unsafe = Without.UnsafeBranches;
+  Unsafe.insert(SafeBranch);
+  ASSERT_TRUE(appendFunction(*I, "module_owner_mixed_width_argument"));
+  const auto With = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  EXPECT_TRUE(With.AnalysisComplete);
+  EXPECT_EQ(With.ProtectedRelocationSlots, Protected);
+  EXPECT_EQ(With.UnsafeBranches, Unsafe);
+}
+
 } // namespace
