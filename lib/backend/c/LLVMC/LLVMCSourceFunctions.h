@@ -11,6 +11,7 @@
 #define NEVERD_BACKEND_C_LLVMC_SOURCEFUNCTIONS_H
 
 #include "neverd/backend/llvm/LLVMSourceBody.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -42,8 +43,11 @@ public:
       }
   }
 
+  /// A filter adapter (sehFilterAdapterName) prints as the call of the
+  /// filter it adapts, not as a function of its own.
   bool contains(const llvm::Function &Function) const {
-    return WholeModule || Members.contains(&Function);
+    return WholeModule ? !isSEHFilterAdapter(Function)
+                       : Members.contains(&Function);
   }
   llvm::ArrayRef<const llvm::Function *> selected() const { return Selected; }
 

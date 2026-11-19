@@ -84,6 +84,44 @@ A/B with identical output.
      - reuse of the callee graphs that the main lift already builds.
    - A per-function test is not enough: a returning wrapper can carry x87
      state with no local floating instruction (`CFGBuilderX86Fpu.cpp:2136`).
+   - Measured on capstone LLVM C (2026-11-18, a throwaway log in
+     `X87CallEffectIndex::graph`): 396 callee graph builds take 80-92 s of
+     CPU, 26.6% of all samples, and 97% of that is `resolveJumpTable` under
+     the second lift. The 10 slowest builds hold 85% of it: five large
+     decoder functions each built twice. The second build of each comes from
+     the jump-table rebuild round (`RebuildGraphs`, `PipelineLowIR.cpp`),
+     whose cache is new because its protected relocation slots and unsafe
+     jump-table branches grew. On capstone that round is the module-wide
+     fallback: the module arbitration runs out of
+     `limits::kMaxJumpTableEvidenceWork` (4096) at its physical-envelope
+     step, so all 325 code-pointer relocation slots become protected and all
+     689 functions are lifted again (logged 2026-11-18; the unsafe set stays
+     empty). Raising that budget alone is not enough: with it at 1,048,576
+     (a private build), the module address-use inventory stops at its own
+     cap (`scan-cap`: all lifted operations of the module must fit
+     `limits::kMaxSSAFunctionOps`). Letting capstone's arbitration finish
+     would remove the second lift and the second graph of every callee, but
+     it needs both limits raised and changes which slots are protected, so
+     it is a policy decision whose output effect is not measured yet. Builds that end in `MissingTerminator` (an
+     indirect branch the resolver could not settle) hold 56% of the time,
+     and only a complete CFG shows that rejection.
+   - On x64 the raw-stack flag of a graph build does not change its CFG
+     (`independentCallPop` and `usesAnalysisRecovery` are 32-bit x86 only);
+     a graph build differs from the callee's own build by the no-return
+     depth (one deeper) and the context sets.
+   - Exact levers, each a resolver-level change:
+     - reuse a first-round graph in the rebuild round. Recording the
+       membership reads is easy: the unsafe branches are read only by
+       `count` of the build's own instructions and by a walk that keeps
+       those. The sizes are not: `orderedLookupWork` charges the protected
+       slots' size at about 12 sites, and `JumpTableResolverGroup::work` adds
+       both sets' sizes, so a grown set can exhaust a budget the first build
+       did not. Reuse needs a proof that every such budget had the slack, or
+       a decision to charge by the queries made instead of the set size
+       (a budget policy change, the user's call);
+     - publish an x64 callee's own build as its graph under the one-deeper
+       context when the no-return answers it read hold at that depth;
+     - track the resolver's stage-loop dependencies (item 4).
 4. **Jump-table resolution rebuilds its flow graph.**
    - On the switch-heavy PE, about half of all CPU samples were in
      `buildResolverFlowGraph`
@@ -141,6 +179,23 @@ A/B with identical output.
 8. **Serial loading of small inputs.** `Loader::loadWithProgress` held one
    thread for a visible part of the short libstdc++ runs. Entry: a latency
    target for opening small images.
+
+## x87 call proofs (capstone LLVM C, 2026-11-18)
+
+About a quarter of a whole-unit `decompile --llvm` of capstone (x64 ELF,
+about 36 s) is `X87CallEffectIndex::graph` under `fixupFpuStack`: each
+callee is lifted again (SkipX87StackFixup, no-return depth + 1) to prove an
+x87 contract, though capstone has no x87 code. `796c513988` keeps proved
+contracts for the session with their no-return dependencies (-3.3%,
+identical output). A decode scan that skips callees whose call closure has no
+x87 instruction (Tarjan components over direct calls) was exact but gained
+0.8%: 189 of about 570 scanned functions met a register-indirect transfer
+(switch tables, function pointers) and 78 an indexed or non-import slot.
+Borrowing the primary build's jump tables is not exact: the graph build's
+no-return depth and jump-table settings differ, so it can reach code the
+primary build cut. Next: a cheaper graph build (the projection needs blocks,
+x87 steps, call steps and completeness), or table resolution in the scan by
+the CFG builder's own bounds rule.
 
 ## Default-off and unused code: verdicts
 

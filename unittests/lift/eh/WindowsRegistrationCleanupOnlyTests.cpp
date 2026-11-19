@@ -28,6 +28,7 @@
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/object/PELayout.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicInst.h"
@@ -561,11 +562,7 @@ void checkCleanupOnlyInput(const char *Path, bool RegisterStateWrite) {
       Codegen().compile(*ObjectModule, Arch::X86, BinaryFormat::COFF);
   ASSERT_TRUE(Compiled.Success);
 #ifdef LLVM_NEVERD_X86_CXX_HANDLER_RECEIPTS
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   auto Resolve = [&](llvm::StringRef Symbol,
                      uint32_t) -> std::optional<uint64_t> {
     if (auto Address = parseNdDataSymbol(Symbol))

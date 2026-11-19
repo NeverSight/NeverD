@@ -173,12 +173,16 @@ sehLocalUnwindConvention(const LowFunc &Function, const TargetRegInfo &TRI,
 /// receives the addresses in the function its out-of-line termination handlers
 /// pass the routine with this frame and that nothing but such calls names: a
 /// handler's own local unwind names its target for no other entry.
+/// \p HandlerResumes, when given, receives each such termination handler that
+/// leaves by its local unwind on every way out, with the one target it names,
+/// when no row of the table guards that target.
 llvm::Expected<std::vector<LowSEHLocalUnwind>> certifyLowSEHLocalUnwinds(
     const LowFunc &Function, const BinaryImage &Image, const TargetRegInfo &TRI,
     const std::map<va_t, const LowFunc *> &Bodies, size_t &WorkRemaining,
     const std::map<va_t, GPRFamilyMask> *Unread = nullptr,
     std::vector<LowSEHLocalUnwindRefusal> *Refused = nullptr,
-    std::set<va_t> *HandlerTargets = nullptr);
+    std::set<va_t> *HandlerTargets = nullptr,
+    std::map<va_t, va_t> *HandlerResumes = nullptr);
 
 } // namespace neverd
 

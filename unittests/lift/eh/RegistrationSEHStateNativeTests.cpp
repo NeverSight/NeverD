@@ -19,6 +19,7 @@
 #include "neverd/backend/llvm/X86/X86RegistrationSEHJump.h"
 #include "neverd/ir/RegistrationState.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/IR/Verifier.h"
@@ -381,11 +382,7 @@ TEST(RegistrationSEHStateNative, PreservesExistingCompilerUsedOwners) {
 }
 
 CompiledImage compileStateFixture(StateFixture &F) {
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   return compileImageForPatch(
       F.Module, Arch::X86, BinaryFormat::COFF, 0x6000,
       [](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {

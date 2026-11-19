@@ -5309,6 +5309,71 @@ TEST(Win64CallContract, ACallThroughTheImportSlotPassesTheCallersArguments) {
   EXPECT_EQ(Body.find("unknown value"), std::string::npos) << Body;
 }
 
+TEST(Win64CallContract, ImmutableImportReferencesKeepIncomingArguments) {
+  constexpr va_t Reference = Text + 0x1000;
+  for (const char *Name : {"exit", "_exit", "fputs"})
+    for (bool NoOpt : {false, true}) {
+      SCOPED_TRACE(Name);
+      SCOPED_TRACE(NoOpt);
+      std::vector<uint8_t> Load = {0x48, 0x8b, 0x05}; // mov rax,[rip+refptr]
+      const auto Displacement = rel32(Text + 11, Reference);
+      Load.insert(Load.end(), Displacement.begin(), Displacement.end());
+      auto Image = makeImage(framed({Load, {0xff, 0x10}}),
+                             {{Text, "reference_wrapper"}}, {Name});
+      Segment Data;
+      Data.VA = Reference;
+      Data.Size = Data.FileSz = 8;
+      Data.Flags = SegmentFlags::Readable;
+      Data.Data.resize(8);
+      writeLE<uint64_t>(Data.Data.data(), Iat);
+      Image.Segments.push_back(std::move(Data));
+      for (auto &Segment : Image.Segments) {
+        Segment.FileSz = Segment.Data.size();
+        Section Storage;
+        Storage.VA = Segment.VA;
+        Storage.Flags = Segment.Flags;
+        Storage.Size = Segment.Size;
+        Storage.FileSz = Segment.FileSz;
+        Image.Sections.push_back(std::move(Storage));
+      }
+      Image.DataPtrRelocSlots.insert(Reference);
+      Image.DataPtrRelocTargetOwners.emplace(Reference, Iat);
+      Image.BaseRelocations.push_back(
+          {Reference, llvm::COFF::IMAGE_REL_BASED_DIR64});
+      ASSERT_TRUE(Image.recordImportStorageSlot(
+          Iat, Name, 0, ImportStorageEvidence::LoaderBind));
+      llvm::LLVMContext Context;
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = Options.SourceProjection = true;
+      Options.NoOpt = NoOpt;
+      Options.OnlyFunctionEntries = {Text};
+      auto Result = Pipeline().run(Image, Context, Options);
+      ASSERT_TRUE(Result.Success) << Result.Error;
+      ASSERT_NE(Result.LlvmModule, nullptr);
+      ASSERT_FALSE(llvm::verifyModule(*Result.LlvmModule, &llvm::errs()));
+      auto *Wrapper = Result.LlvmModule->getFunction("reference_wrapper");
+      auto *Callee = Result.LlvmModule->getFunction(Name);
+      ASSERT_NE(Wrapper, nullptr);
+      ASSERT_NE(Callee, nullptr);
+      const unsigned Arguments = llvm::StringRef(Name) == "fputs" ? 2 : 1;
+      ASSERT_EQ(Wrapper->arg_size(), Arguments);
+      ASSERT_EQ(Callee->arg_size(), Arguments);
+      unsigned Calls = 0;
+      for (const auto &Block : *Wrapper)
+        for (const auto &Instruction : Block)
+          if (const auto *Call = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+              Call && Call->getCalledFunction() == Callee) {
+            ++Calls;
+            ASSERT_EQ(Call->arg_size(), Arguments);
+            for (unsigned I = 0; I < Arguments; ++I)
+              EXPECT_EQ(Call->getArgOperand(I)->stripPointerCasts(),
+                        Wrapper->getArg(I)->stripPointerCasts());
+          }
+      EXPECT_EQ(Calls, 1u);
+    }
+}
+
 TEST(Win64CallContract, LLVMImportCallKeepsUnwrittenLeadingArgument) {
   // run_pipe(command): RCX is forwarded, only the second argument is set.
   constexpr va_t Wrap = Text;

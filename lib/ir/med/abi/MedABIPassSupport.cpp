@@ -26,6 +26,7 @@
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -656,16 +657,15 @@ completedAddressProvenance(const MedVar &Base) {
              : Base.Provenance;
 }
 
-std::optional<MedCallTarget>
-resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
-                     size_t *WorkRemaining, Arch Architecture) {
+static std::optional<MedCallTarget>
+resolveMedCallTargetImpl(const MedBlock &Block, size_t Before,
+                         const MedVar &Value, size_t *WorkRemaining,
+                         Arch Architecture, const BinaryImage *Image,
+                         unsigned Depth) {
   if (Before > Block.Ops.size() || !Value.Size || Value.Size > 8)
     return std::nullopt;
   MedVar Current = Value;
-  size_t OwnWork = limits::ir::kSourceFrameAnalysisRemaining;
-  if (!WorkRemaining)
-    WorkRemaining = &OwnWork;
-  for (unsigned Depth = 0; Depth < limits::kCallTargetSlotDepth; ++Depth) {
+  for (; Depth < limits::kCallTargetSlotDepth; ++Depth) {
     if (!consumeCallTargetWork(WorkRemaining))
       return std::nullopt;
     if (Current.isConst())
@@ -698,8 +698,9 @@ resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
         Def.NumInputs == 1 && Value.Size == 8 && Def.Inputs[0].Size == 4 &&
         Def.MemoryOrdering == NdMemoryOrdering::None &&
         Def.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
-      auto Slot = resolveMedCallTarget(Block, Before, Def.Inputs[0],
-                                       WorkRemaining, Architecture);
+      auto Slot =
+          resolveMedCallTargetImpl(Block, Before, Def.Inputs[0], WorkRemaining,
+                                   Architecture, Image, Depth + 1);
       if (Slot && Slot->ThroughSlot) {
         if (llvm::isInt<32>(int64_t(Slot->Address)))
           Slot->Address = uint32_t(Slot->Address);
@@ -743,9 +744,39 @@ resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
       return MedCallTarget{Slot.getZExtValue(), true, Before,
                            completedAddressProvenance(Address->Base)};
     }
+    // MinGW's immutable .refptr loads the address of an IAT slot before
+    // the actual runtime load. Authenticate that address at the same early
+    // proof boundary as spills, before summaries discard incoming arguments.
+    // Preserve the outer LOAD occurrence and never fold the mutable IAT.
+    if (Address && Image && Image->Arch == Architecture &&
+        Address->Base.Size == Image->getPointerSize() &&
+        Value.Size == Image->getPointerSize()) {
+      const auto Base =
+          resolveMedCallTargetImpl(Block, Before, Address->Base, WorkRemaining,
+                                   Architecture, Image, Depth + 1);
+      if (!Base || !Base->ThroughSlot || !consumeCallTargetWork(WorkRemaining))
+        return std::nullopt;
+      const auto Pointer = readImmutableImagePointer(*Image, Base->Address);
+      if (Pointer) {
+        llvm::APInt Slot(Address->Offset.getBitWidth(), *Pointer, false, true);
+        Slot += Address->Offset;
+        return MedCallTarget{Slot.getZExtValue(), true, Before,
+                             ConstantAddressProvenance::Address};
+      }
+    }
     return std::nullopt;
   }
   return std::nullopt;
+}
+
+std::optional<MedCallTarget>
+resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
+                     size_t *WorkRemaining, Arch Architecture,
+                     const BinaryImage *Image) {
+  size_t OwnWork = limits::ir::kSourceFrameAnalysisRemaining;
+  return resolveMedCallTargetImpl(Block, Before, Value,
+                                  WorkRemaining ? WorkRemaining : &OwnWork,
+                                  Architecture, Image, 0);
 }
 
 MedVar PreSSAMedCallTargets::read(MedVar Value) {
@@ -821,20 +852,20 @@ PreSSAMedCallTargets::resolve(const MedBlock &Block, const MedVar &Value,
       return std::nullopt;
     }
   return resolveMedCallTarget(Proof, Proof.Ops.size(), read(Value),
-                              WorkRemaining, Architecture);
+                              WorkRemaining, Architecture, Image);
 }
 
-std::optional<MedCallTarget> resolvePreSSAMedCallTarget(const MedBlock &Block,
-                                                        const MedVar &Value,
-                                                        Arch Architecture,
-                                                        size_t *WorkRemaining) {
-  return PreSSAMedCallTargets(Architecture)
+std::optional<MedCallTarget>
+resolvePreSSAMedCallTarget(const MedBlock &Block, const MedVar &Value,
+                           Arch Architecture, size_t *WorkRemaining,
+                           const BinaryImage *Image) {
+  return PreSSAMedCallTargets(Architecture, Image)
       .resolve(Block, Value, WorkRemaining);
 }
 
 std::map<size_t, MedCallTarget>
 resolveLowBlockCallTargets(const LowBlock &Block, Arch Architecture,
-                           size_t *WorkRemaining) {
+                           size_t *WorkRemaining, const BinaryImage *Image) {
   std::map<size_t, MedCallTarget> Result;
   if (Architecture == Arch::Unknown ||
       Block.Ops.size() > limits::kMaxCallSetupStackProofWork ||
@@ -866,7 +897,7 @@ resolveLowBlockCallTargets(const LowBlock &Block, Arch Architecture,
     return M;
   };
   MedBlock Prefix;
-  PreSSAMedCallTargets Targets(Architecture);
+  PreSSAMedCallTargets Targets(Architecture, Image);
   for (size_t I = 0; I < Block.Ops.size(); ++I) {
     if (!consumeCallTargetWork(WorkRemaining))
       return {};

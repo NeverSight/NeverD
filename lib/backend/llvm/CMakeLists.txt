@@ -3,6 +3,7 @@ add_neverd_component_library(NeverDWindowsEHMetadata
   eh/WindowsEHNativeSource.cpp
   X86/RegistrationCxxUnwind.cpp
   eh/WindowsEHSemanticDigest.cpp
+  eh/WindowsSEHEmulatedFrame.cpp
 )
 
 add_neverd_component_library(NeverDLLVMFloatConvertLowering

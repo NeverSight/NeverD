@@ -18,16 +18,7 @@
 
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/pipeline/Pipeline.h"
-
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <map>
-#include <memory>
-#include <string>
-#include <vector>
-
-#include <unicorn/unicorn.h>
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -35,6 +26,15 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/MC/BinaryRewrite.h"
 #include "llvm/Support/TargetSelect.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <string>
+#include <unicorn/unicorn.h>
+#include <vector>
 
 using namespace neverd;
 
@@ -62,12 +62,12 @@ struct EmuISA {
 };
 
 const EmuISA kISAs[] = {
-    {"aarch64-elf", Arch::AArch64, BinaryFormat::ELF, "aarch64-unknown-linux-elf",
-     UC_ARCH_ARM64, static_cast<uc_mode>(0)},
-    {"aarch64-coff", Arch::AArch64, BinaryFormat::COFF, "aarch64-pc-windows-msvc",
-     UC_ARCH_ARM64, static_cast<uc_mode>(0)},
-    {"aarch64-macho", Arch::AArch64, BinaryFormat::MachO, "arm64-apple-macos14.0",
-     UC_ARCH_ARM64, static_cast<uc_mode>(0)},
+    {"aarch64-elf", Arch::AArch64, BinaryFormat::ELF,
+     "aarch64-unknown-linux-elf", UC_ARCH_ARM64, static_cast<uc_mode>(0)},
+    {"aarch64-coff", Arch::AArch64, BinaryFormat::COFF,
+     "aarch64-pc-windows-msvc", UC_ARCH_ARM64, static_cast<uc_mode>(0)},
+    {"aarch64-macho", Arch::AArch64, BinaryFormat::MachO,
+     "arm64-apple-macos14.0", UC_ARCH_ARM64, static_cast<uc_mode>(0)},
     {"x64-elf", Arch::X64, BinaryFormat::ELF, "x86_64-unknown-linux-elf",
      UC_ARCH_X86, UC_MODE_64},
     {"arm32-elf", Arch::ARM, BinaryFormat::ELF, "arm-unknown-linux-gnueabihf",
@@ -78,11 +78,7 @@ void ensureTargets() {
   static bool Done = false;
   if (Done)
     return;
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   Done = true;
 }
 
@@ -130,9 +126,9 @@ llvm::mc_rewrite::RewriteResult compileRW(llvm::Module &M, const EmuISA &E) {
       (*RoVAByName)[Name.str()] = VA;
       return VA;
     }
-    if (Name.contains("data") || Name.contains("DATA") || Name.contains("bss") ||
-        Name.contains("BSS") || Name.contains("common") ||
-        Name.contains("COMMON")) {
+    if (Name.contains("data") || Name.contains("DATA") ||
+        Name.contains("bss") || Name.contains("BSS") ||
+        Name.contains("common") || Name.contains("COMMON")) {
       auto It = RwVAByName->find(Name.str());
       if (It != RwVAByName->end())
         return It->second;
@@ -259,7 +255,7 @@ bool emulateCall(const llvm::mc_rewrite::RewriteResult &RR, const EmuISA &E,
   switch (E.A) {
   case Arch::X64: {
     static const int AR[] = {UC_X86_REG_RDI, UC_X86_REG_RSI, UC_X86_REG_RDX,
-                             UC_X86_REG_RCX, UC_X86_REG_R8, UC_X86_REG_R9};
+                             UC_X86_REG_RCX, UC_X86_REG_R8,  UC_X86_REG_R9};
     for (size_t i = 0; i < Args.size() && i < 6; ++i) {
       uint64_t V = Args[i];
       uc_reg_write(uc, AR[i], &V);
@@ -457,9 +453,14 @@ int main(int argc, char **argv) {
   }
 
   const std::vector<std::vector<uint32_t>> kPairs = {
-      {0, 0},        {1, 0},          {0, 1},
-      {1, 1},        {17, 25},        {0xFFFFFFFFu, 1},
-      {123456u, 654321u}, {0x7FFFFFFFu, 0x7FFFFFFFu}};
+      {0, 0},
+      {1, 0},
+      {0, 1},
+      {1, 1},
+      {17, 25},
+      {0xFFFFFFFFu, 1},
+      {123456u, 654321u},
+      {0x7FFFFFFFu, 0x7FFFFFFFu}};
 
   int rc = 0;
   for (auto &In : kPairs) {

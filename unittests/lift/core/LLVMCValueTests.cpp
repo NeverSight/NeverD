@@ -4627,6 +4627,117 @@ int main(void) {
   }
 }
 
+TEST(LLVMCValues, WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64,
+                          neverd::Arch::ARM, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare ptr @_set_invalid_parameter_handler(ptr)
+declare i32 @__stdio_common_vfprintf(i64, ptr, ptr, ptr, ptr)
+define ptr @exchange_handler(ptr %handler) {
+  %previous = call ptr @_set_invalid_parameter_handler(ptr %handler)
+  ret ptr %previous
+}
+define i32 @print_with_locale(ptr %stream, ptr %format, ptr %locale, ptr %args) {
+  %result = call i32 @__stdio_common_vfprintf(i64 33, ptr %stream,
+                                             ptr %format, ptr %locale, ptr %args)
+  ret i32 %result
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    for (auto &Function : *Module)
+      Function.setName(neverd::symbolOfCName(Function.getName(),
+                                             neverd::BinaryFormat::COFF, Arch));
+    Module->setDataLayout(Arch == neverd::Arch::X86 || Arch == neverd::Arch::ARM
+                              ? "e-p:32:32-i64:64-n8:16:32"
+                              : "e-p:64:64-i64:64-n8:16:32:64");
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = Arch;
+    Options.Format = neverd::BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+    // Independent CRT declarations: void* is not a compatible locale
+    // parameter type, and exchanging a handler returns a callable pointer.
+    // Alias the fixture after including the host headers so it cannot
+    // redeclare the Windows SDK types or override its runtime functions.
+    const std::string Prelude = R"c(
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#define _locale_t fixture_locale_t
+#define _invalid_parameter_handler fixture_invalid_handler
+#define _set_invalid_parameter_handler fixture_set_handler
+#define __stdio_common_vfprintf fixture_vfprintf
+typedef struct fixture_locale { int value; } *_locale_t;
+typedef void (*_invalid_parameter_handler)(const wchar_t *, const wchar_t *,
+                                         const wchar_t *, unsigned int,
+                                         uintptr_t);
+_invalid_parameter_handler _set_invalid_parameter_handler(
+    _invalid_parameter_handler);
+int __stdio_common_vfprintf(uint64_t, FILE *, const char *, _locale_t, char *);
+)c";
+    const std::string Harness = R"c(
+static _invalid_parameter_handler current_handler;
+static unsigned handler_calls;
+static FILE *expected_stream;
+static const char *expected_format;
+static char *expected_args;
+_invalid_parameter_handler _set_invalid_parameter_handler(
+    _invalid_parameter_handler value) {
+  _invalid_parameter_handler previous = current_handler;
+  current_handler = value;
+  return previous;
+}
+static void previous_handler(const wchar_t *a, const wchar_t *b,
+                             const wchar_t *c, unsigned int line,
+                             uintptr_t reserved) {
+  handler_calls += line == 17 && reserved == 29;
+}
+static void next_handler(const wchar_t *a, const wchar_t *b,
+                         const wchar_t *c, unsigned int line,
+                         uintptr_t reserved) {
+  handler_calls += 2 * (line == 31 && reserved == 43);
+}
+int __stdio_common_vfprintf(uint64_t options, FILE *stream, const char *format,
+                           _locale_t locale, char *args) {
+  if (options != 33 || stream != expected_stream || format != expected_format ||
+      args != expected_args || locale->value != 71)
+    __builtin_trap();
+  return locale->value + 1;
+}
+int main(void) {
+  struct fixture_locale locale = {71};
+  int stream_token;
+  char args[] = "args";
+  expected_stream = (FILE *)&stream_token;
+  expected_format = "%d";
+  expected_args = args;
+  current_handler = previous_handler;
+  void *previous = exchange_handler((void *)next_handler);
+  if (previous != (void *)previous_handler || current_handler != next_handler)
+    return 1;
+  ((_invalid_parameter_handler)previous)(0, 0, 0, 17, 29);
+  current_handler(0, 0, 0, 31, 43);
+  return handler_calls != 3 ||
+         print_with_locale(expected_stream, expected_format, &locale, args) != 72;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      // Execute the actual emitted C. Its scalar widths fit the host even
+      // when the general wide-integer fixture's 129-bit probe does not.
+      source_call_execution_test::compileAndRun(
+          Prelude + Source + Harness,
+          {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
+           "-Werror=uninitialized"});
+  }
+}
+
 TEST(LLVMCValues, LocalRegisterImportPrototypesAgreeWithCalls) {
   for (const auto Arch : {neverd::Arch::X64, neverd::Arch::AArch64})
     for (const auto Format :
@@ -9873,6 +9984,7 @@ TEST(LLVMCValues, AMemberReadKeepsItsValueAcrossAStoreToTheMember) {
   auto Module = llvm::parseAssemblyString(R"ir(
 target datalayout = "e-p:64:64"
 declare void @observe(ptr)
+declare void @poke(ptr)
 
 ; old = n->next; n->next = 0; return old;
 define ptr @take(ptr %n) {
@@ -10182,6 +10294,69 @@ define ptr @next_after_store_before(ptr %n) {
   %next = load ptr, ptr %n
   ret ptr %next
 }
+
+; old = n->v; poke(n); return old + n->v; where poke changes n->v.
+define i32 @value_around_call(ptr %n) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  call void @poke(ptr %n)
+  %new = load i32, ptr %slot
+  %sum = add i32 %old, %new
+  ret i32 %sum
+}
+
+; old = n->v; m->v = 9; return old; where m may be n.
+define i32 @value_around_other(ptr %n, ptr %m) {
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  %other = getelementptr i8, ptr %m, i64 8
+  store i32 9, ptr %other
+  ret i32 %old
+}
+
+; old = table[i]; table[j] = 0; return old; where j may be i.
+define i32 @entry_around_store(ptr %table, i64 %i, i64 %j) {
+  %at = getelementptr i32, ptr %table, i64 %i
+  %old = load i32, ptr %at
+  %to = getelementptr i32, ptr %table, i64 %j
+  store i32 0, ptr %to
+  ret i32 %old
+}
+
+; old = n->v; scratch = 4; return old; where nothing else sees scratch.
+define i32 @value_around_local(ptr %n) {
+  %scratch = alloca i32
+  %slot = getelementptr i8, ptr %n, i64 8
+  %old = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  ret i32 %old
+}
+
+; v = n->next->v; scratch = 4; *out = v; observe(&scratch); where n->next was
+; read before scratch's address left, so it cannot point at scratch.
+define void @value_before_escape(ptr %n, ptr %out) {
+  %scratch = alloca i32
+  %next = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %next, i64 8
+  %v = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  store i32 %v, ptr %out
+  call void @observe(ptr %scratch)
+  ret void
+}
+
+; observe(&scratch); v = n->next->v; scratch = 4; *out = v; where n->next was
+; read after scratch's address left, so it may point at scratch.
+define void @value_after_escape(ptr %n, ptr %out) {
+  %scratch = alloca i32
+  call void @observe(ptr %scratch)
+  %next = load ptr, ptr %n
+  %slot = getelementptr i8, ptr %next, i64 8
+  %v = load i32, ptr %slot
+  store volatile i32 4, ptr %scratch
+  store i32 %v, ptr %out
+  ret void
+}
 )ir",
                                           Error, Context);
   ASSERT_TRUE(Module) << Error.getMessage().str();
@@ -10270,6 +10445,22 @@ define ptr @next_after_store_before(ptr %n) {
             std::string::npos)
       << Source;
   EXPECT_EQ(Kept.find("old"), std::string::npos) << Source;
+  // A store to a local that nothing else can see changes no member.
+  EXPECT_NE(
+      Body("uint32_t value_around_local(node* n)").find("    return n->v;"),
+      std::string::npos)
+      << Source;
+  // A local's address that leaves only after the read's pointer was read
+  // cannot be that pointer: the read prints at its use, past the local's
+  // store.  Once the address has left, the read is taken before the store.
+  const std::string Before =
+      Body("void value_before_escape(node* n, node* out)");
+  ASSERT_NE(Before.find("= 4;"), std::string::npos) << Source;
+  EXPECT_GT(Before.find("n->next->v"), Before.find("= 4;")) << Source;
+  const std::string After = Body("void value_after_escape(node* n, node* out)");
+  ASSERT_NE(After.find("= 4;"), std::string::npos) << Source;
+  ASSERT_NE(After.find("n->next->v"), std::string::npos) << Source;
+  EXPECT_LT(After.find("n->next->v"), After.find("= 4;")) << Source;
   const std::string Program = R"c(
 #include <stdint.h>
 typedef struct node {
@@ -10285,6 +10476,7 @@ static int fired;
 static void on_fire(void *n) { fired += ((node *)n)->v; }
 static uint64_t called;
 static void on_called(uint64_t object) { called = object; }
+void poke(void *n) { ((node *)n)->v += 100; }
 int main(void) {
   node a = {0, 5, 0, 0}, b = {&a, 7, 0, 0}, c = {0, 1, 0, 0};
   if ((node *)take(&b) != &a || b.next)
@@ -10384,6 +10576,28 @@ int main(void) {
     return 15;
   if ((node *)next_after_store_before(&a) != &a)
     return 16;
+  a.v = 5;
+  if (value_around_call(&a) != 110 || a.v != 105)
+    return 30;
+  a.v = 5;
+  if (value_around_other(&a, &a) != 5 || a.v != 9)
+    return 31;
+  int32_t entries[4] = {10, 11, 12, 13};
+  if (entry_around_store(entries, 2, 2) != 12 || entries[2])
+    return 32;
+  a.v = 6;
+  if (value_around_local(&a) != 6)
+    return 33;
+  int32_t out = 0;
+  a.v = 21;
+  b.next = &a;
+  value_before_escape(&b, (node *)(void *)&out);
+  if (out != 21)
+    return 34;
+  out = 0;
+  value_after_escape(&b, (node *)(void *)&out);
+  if (out != 21)
+    return 35;
   return 0;
 }
 )c";

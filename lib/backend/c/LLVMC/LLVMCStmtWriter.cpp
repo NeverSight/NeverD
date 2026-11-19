@@ -66,6 +66,7 @@
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86DivRem.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
@@ -8927,6 +8928,17 @@ std::string LLVMCWriter::windowsEHFilterExpr(const llvm::CatchSwitchInst &CS) {
       }
       return "(int32_t)" + functionIdentifier(*Fn) + "(" + Args + ")";
     }
+    // A filter that reads its frame runs behind an adapter native IR wrote:
+    // C calls the filter itself with the parent's emulated frame there.
+    std::optional<std::string> EmulatedFrame;
+    if (isSEHFilterAdapter(*Fn)) {
+      const auto Adapted = matchSEHFilterAdapter(*Fn, *CS.getFunction());
+      if (!Adapted)
+        throw std::runtime_error("invalid Windows SEH filter adapter");
+      Fn = Adapted->Filter;
+      EmulatedFrame = "(void *)((char *)" + valueStr(Adapted->Frame) + " + " +
+                      std::to_string(Adapted->Offset) + ")";
+    }
     // A filter takes the arguments it reads: none, the exception pointers,
     // or those and the establisher frame, each a pointer or, as lifted, a
     // pointer-wide integer.
@@ -8935,7 +8947,9 @@ std::string LLVMCWriter::windowsEHFilterExpr(const llvm::CatchSwitchInst &CS) {
     std::string Args;
     for (const llvm::Argument &Arg : Fn->args()) {
       std::string Value = "GetExceptionInformation()";
-      if (Arg.getArgNo() == 1) {
+      if (Arg.getArgNo() == 1 && EmulatedFrame) {
+        Value = *EmulatedFrame;
+      } else if (Arg.getArgNo() == 1) {
         if (SEHParentFrameName.empty())
           SEHParentFrameName = freshVar("seh_parent_frame");
         Value = SEHParentFrameName;
@@ -9025,6 +9039,9 @@ void LLVMCWriter::writeCleanupRet(llvm::CleanupReturnInst &CR, int Indent) {
   emitIndent(Indent);
   if (!Dest)
     OS << "return; /* __finally */\n";
+  else if (const llvm::BasicBlock *Resume = llvmcHandlerResumeTarget(Dest))
+    OS << "goto " << blockLabel(Resume) << "; " << LLVMCHandlerResumeNote
+       << "\n";
   else if (llvm::isa<llvm::CatchSwitchInst>(Dest->getTerminator()))
     OS << "/* __finally */\n";
   else

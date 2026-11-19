@@ -79,6 +79,7 @@
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/PEImportShadow.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/backend/llvm/X86/LLVMX86FPStateAsm.h"
 #include "neverd/backend/llvm/X86/LLVMX86SHA.h"
@@ -156,6 +157,13 @@ referencedGlobals(const llvm::Function &Function) {
     if (!Seen.insert(Value).second)
       continue;
     if (const auto *Global = llvm::dyn_cast<llvm::GlobalValue>(Value)) {
+      // A filter adapter prints as the call of the filter it adapts.
+      if (const auto *Adapter = llvm::dyn_cast<llvm::Function>(Global);
+          Adapter && isSEHFilterAdapter(*Adapter))
+        if (const auto Adapted = matchSEHFilterAdapter(*Adapter, Function)) {
+          Globals.insert(Adapted->Filter);
+          continue;
+        }
       Globals.insert(Global);
       if (const auto *Object = llvm::dyn_cast<llvm::GlobalVariable>(Global);
           Object && Object->hasInitializer() && !mirrorsImageStorage(*Object))

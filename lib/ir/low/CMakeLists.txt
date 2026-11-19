@@ -23,6 +23,7 @@ add_neverd_component_library(NeverDIRLowValidation
 
   LINK_COMPONENTS
   Digest
+  X64UnwindFrame
 )
 
 add_neverd_component_library(NeverDIRRegistrationState
