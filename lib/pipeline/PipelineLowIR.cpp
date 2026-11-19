@@ -2753,6 +2753,18 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
     }
   if (Owners.empty())
     return Result;
+  // Arbitration decides which requested relocation slots stay protected and
+  // which writable tables become unsafe.  With no requested slot and no
+  // writable owner neither decision has a member, whatever the module's
+  // address uses are, so the complete answer is the empty one and the module
+  // inventory below has nothing to settle.  An owner whose storage does not
+  // read as one table counts as writable and still takes the inventory.
+  const bool AnyWritableOwner = std::any_of(
+      Owners.begin(), Owners.end(), [&](const ModuleJumpTableOwner &Owner) {
+        return storageMayBeWritable(Img, Owner);
+      });
+  if (Requested.empty() && !AnyWritableOwner)
+    return Result;
   auto abandonAnalysis = [&]() {
     Result.AnalysisComplete = false;
     Result.ProtectedRelocationSlots.insert(Requested.begin(), Requested.end());

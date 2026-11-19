@@ -215,6 +215,54 @@ protected:
     return F;
   }
 
+  // Builds one more function of the fixture's image, as fixture() builds its
+  // own.
+  static bool appendFunction(Inputs &I, const char *Name) {
+    const Symbol *S = I.Image.findSymbol(Name);
+    if (!S)
+      return false;
+    std::set<va_t> Entries{S->Addr};
+    for (const LowFunc &F : I.Functions)
+      Entries.insert(F.Entry);
+    Decoder Dec;
+    if (!Dec.init(I.Image.Arch))
+      return false;
+    CFGBuilder Builder;
+    Builder.setKnownFuncEntries(&Entries);
+    I.Functions.push_back(Builder.build(I.Image, Dec, S->Addr, Name));
+    return true;
+  }
+
+  // Assembles a module of its own and builds the named functions.
+  std::optional<Inputs> assembled(const std::string &Assembly,
+                                  const std::vector<const char *> &Names) {
+    const auto Source = tmpFile("assembled.s");
+    const auto Object = tmpFile("assembled.o");
+    {
+      std::ofstream Out(Source);
+      Out << Assembly;
+    }
+    const auto Built =
+        exec(NEVERD_TEST_CLANG, {"-target", "x86_64-linux-gnu", "-c",
+                                 Source.string(), "-o", Object.string()});
+    EXPECT_TRUE(Built.ok()) << Built.err;
+    if (!Built.ok())
+      return std::nullopt;
+    auto Image = loadBinary(Object);
+    EXPECT_TRUE(static_cast<bool>(Image));
+    if (!Image) {
+      llvm::consumeError(Image.takeError());
+      return std::nullopt;
+    }
+    Inputs Result{std::move(*Image), {}};
+    for (const char *Name : Names)
+      if (!appendFunction(Result, Name)) {
+        ADD_FAILURE() << Name;
+        return std::nullopt;
+      }
+    return Result;
+  }
+
   static void expectAbandoned(const Inputs &I) {
     const auto Slots = requested(I.Functions);
     ASSERT_FALSE(Slots.empty());
@@ -228,7 +276,8 @@ protected:
   }
 };
 
-TEST_F(ModuleJumpTableBudget, PureIntrinsicAfterCallDoesNotDemandClobberedLanes) {
+TEST_F(ModuleJumpTableBudget,
+       PureIntrinsicAfterCallDoesNotDemandClobberedLanes) {
   // RCX/RDX are unknown after CALL. Resolving them merely because unused PDEP
   // reads them used to abandon the entire table-consumer completeness proof.
   auto I = fixture(0, true);
@@ -259,8 +308,8 @@ TEST(ModuleIntrinsicEffects, ExplicitValueContractsValidateCompleteShapes) {
     EXPECT_FALSE(lowIntrinsicHasOnlyValueEffects(Op));
   }
   for (uint16_t Size : {uint16_t{1}, uint16_t{4}, uint16_t{8}})
-    EXPECT_TRUE(lowIntrinsicHasOnlyValueEffects(Unary(Intrinsic::A64_Rbit,
-                                                      Size)));
+    EXPECT_TRUE(
+        lowIntrinsicHasOnlyValueEffects(Unary(Intrinsic::A64_Rbit, Size)));
   LowOp Fxam = Unary(Intrinsic::X87Fxam, 10);
   Fxam.Output = NdVar::tmp(TmpBase + 16, 2);
   Fxam.addInput(Fxam.Output);
@@ -280,8 +329,8 @@ TEST_F(ModuleJumpTableBudget, PureIntrinsicDoesNotEscapeItsUnusedInput) {
     // A pure intrinsic must neither publish it nor erase its reaching value.
     LowOp Argument;
     Argument.Opcode = NdOp::COPY;
-    Argument.Output = NdVar::reg(
-        getTargetRegInfo(I->Image.Arch).IntParamRegs[2], 8);
+    Argument.Output =
+        NdVar::reg(getTargetRegInfo(I->Image.Arch).IntParamRegs[2], 8);
     Argument.addInput(NdVar::tmp(TmpBase + 0x40000, 8));
     ASSERT_TRUE(insertTableConsumer(*I, {Argument, valueIntrinsic(Id)}));
     const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
@@ -304,8 +353,8 @@ TEST_F(ModuleJumpTableBudget, PureIntrinsicResultKeepsLaterEscapeEvidence) {
     if (UseKind == 1) {
       LowOp Argument;
       Argument.Opcode = NdOp::COPY;
-      Argument.Output = NdVar::reg(
-          getTargetRegInfo(I->Image.Arch).IntParamRegs[2], 8);
+      Argument.Output =
+          NdVar::reg(getTargetRegInfo(I->Image.Arch).IntParamRegs[2], 8);
       Argument.addInput(Transform.Output);
       Uses.push_back(Argument);
       LowOp Call;
@@ -315,8 +364,8 @@ TEST_F(ModuleJumpTableBudget, PureIntrinsicResultKeepsLaterEscapeEvidence) {
     } else {
       LowOp Store;
       Store.Opcode = NdOp::STORE;
-      Store.addInput(NdVar::reg(
-          getTargetRegInfo(I->Image.Arch).IntParamRegs[3], 8));
+      Store.addInput(
+          NdVar::reg(getTargetRegInfo(I->Image.Arch).IntParamRegs[3], 8));
       // The second form checks that a pure operation is not a call barrier
       // which destroys the original address held in an instruction temporary.
       Store.addInput(UseKind == 0 ? Transform.Output : Transform.Inputs[1]);
@@ -331,7 +380,8 @@ TEST_F(ModuleJumpTableBudget, PureIntrinsicResultKeepsLaterEscapeEvidence) {
   }
 }
 
-TEST_F(ModuleJumpTableBudget, EffectfulAndUnknownIntrinsicsRetainTheirOperands) {
+TEST_F(ModuleJumpTableBudget,
+       EffectfulAndUnknownIntrinsicsRetainTheirOperands) {
   for (unsigned Mutation = 0; Mutation != 8; ++Mutation) {
     SCOPED_TRACE(Mutation);
     auto I = fixture();
@@ -885,6 +935,73 @@ TEST_F(ModuleJumpTableBudget, FunctionsShareTheTransferAccount) {
   expectAbandoned(*I);
   std::reverse(I->Functions.begin(), I->Functions.end());
   expectAbandoned(*I);
+}
+
+// A relative table inside its function's code: no relocation slot to suppress,
+// and the bytes are read-only unless the section says otherwise.
+std::string relativeDispatch(const char *SectionDirective) {
+  return std::string("        ") + SectionDirective + "\n" + R"(
+        .globl  module_relative_dispatch
+        .type   module_relative_dispatch,@function
+module_relative_dispatch:
+        cmpl    $3, %edi
+        ja      .Lmodule_relative_default
+        movl    %edi, %edi
+        leaq    .Lmodule_relative_table(%rip), %rdx
+        movslq  (%rdx,%rdi,4), %rax
+        addq    %rdx, %rax
+        jmpq    *%rax
+.Lmodule_relative_case0:
+        movl    $7100, %eax
+        retq
+.Lmodule_relative_case1:
+        movl    $7101, %eax
+        retq
+.Lmodule_relative_case2:
+        movl    $7102, %eax
+        retq
+.Lmodule_relative_case3:
+        movl    $7103, %eax
+        retq
+.Lmodule_relative_default:
+        xorl    %eax, %eax
+        retq
+        .p2align 2
+.Lmodule_relative_table:
+        .long   .Lmodule_relative_case0-.Lmodule_relative_table
+        .long   .Lmodule_relative_case1-.Lmodule_relative_table
+        .long   .Lmodule_relative_case2-.Lmodule_relative_table
+        .long   .Lmodule_relative_case3-.Lmodule_relative_table
+        .size   module_relative_dispatch, .-module_relative_dispatch
+)";
+}
+
+TEST_F(ModuleJumpTableBudget, NothingToDecideNeedsNoModuleInventory) {
+  auto I = assembled(relativeDispatch(".text"), {"module_relative_dispatch"});
+  ASSERT_TRUE(I);
+  ASSERT_EQ(I->Functions.front().JumpTables.size(), 1u);
+  ASSERT_TRUE(requested(I->Functions).empty());
+  // A budget of zero cannot pay for the owner list, so any inventory abandons.
+  const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions, 0);
+  EXPECT_TRUE(Result.AnalysisComplete);
+  EXPECT_TRUE(Result.ProtectedRelocationSlots.empty());
+  EXPECT_TRUE(Result.UnsafeBranches.empty());
+}
+
+TEST_F(ModuleJumpTableBudget, AWritableOwnerStillTakesTheInventory) {
+  auto I = assembled(
+      relativeDispatch(
+          ".section .text.module_relative_writable,\"awx\",@progbits"),
+      {"module_relative_dispatch"});
+  ASSERT_TRUE(I);
+  ASSERT_EQ(I->Functions.front().JumpTables.size(), 1u);
+  ASSERT_TRUE(requested(I->Functions).empty());
+  const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions, 0);
+  EXPECT_FALSE(Result.AnalysisComplete);
+  EXPECT_EQ(Result.UnsafeBranches,
+            std::set<va_t>{I->Functions.front().JumpTables.front().InsnAddr});
 }
 
 } // namespace
