@@ -168,8 +168,13 @@ A/B with identical output.
      operation at most), all 548 outputs identical. Only three Go arm64
      arbitrations need more than the floor (0.31, 0.32, 0.73 visits per
      operation); they no longer take the fallback: linux-arm64 pie proves 8
-     more switches (unproved traps 16 to 8), and both darwin images give
-     `runtime_goStatusToTraceGoStatus` its 8 arguments. Six alternating pairs
+     more switches (unproved traps 16 to 8), and both darwin images pass the
+     live registers to `runtime_goStatusToTraceGoStatus`'s panic and throw
+     calls instead of traps. Its signature grows to 8 register parameters
+     where Go declares 2: the forwarding over-approximation the `Zw` stubs
+     show, not recovered arguments (the message of `3a1260673d` says the
+     darwin images keep the function's eight arguments; that overstates it).
+     Six alternating pairs
      on 12 threads against their fallback runs: CPU +0.6%, -0.5%, +1.9%; wall
      -5.7%, -2.8%, +1.3%. Without the widening the symbol-table image needed
      2.5 million visits, and a factor of 16 to cover it had cost 61% more CPU.

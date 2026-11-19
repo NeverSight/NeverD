@@ -10645,7 +10645,7 @@ previous one had. After one block has retreated
 `kPipelineLowIRAddressRetreatsBeforeJoin` times, every block of the function
 also joins its previous input, so the inputs ascend and the solve ends. No
 function of the EH corpus or the performance inputs that settles retreats more
-than 22 times at a block in the arbitration solve, nor more than 4 times in the
+than 22 times at a block in the arbitration solve, nor more than twice in the
 EH continuation solves, so those keep their solve exactly. Nothing reads the
 frame offsets of an imprecise value that may lie outside the frame: its escape
 marks every frame cell, a load through it reads none and a store through it

@@ -134,13 +134,14 @@ most time. Each step is an instruction, its reason and the case it comes from.
   187 instructions, which became the regression test.
 - **Find where an outlier's work goes before raising a limit for it.** One Go
   arm64 image needed 6.2 visits per operation where every other needed at most
-  0.73; a factor of 16 to cover it cost that image 61% more CPU for one
-  function's arguments. A per-function count showed slow ascents with a single
-  retreat, and a trace showed frame pointers that were already imprecise and
-  possibly outside the frame gaining one offset a round, offsets nothing
-  reads. Widening those at once cut the image from 2.5 to 0.3 million visits
-  and every arbitration inventory of the corpus by 70%, all 548 outputs
-  identical, so a factor of 2 covers every image with a 2.7x margin.
+  0.73; a factor of 16 to cover it cost that image 61% more CPU to take the
+  traps out of one function's panic and throw calls. A per-function count
+  showed slow ascents with a single retreat, and a trace showed frame pointers
+  that were already imprecise and possibly outside the frame gaining one
+  offset a round, offsets nothing reads. Widening those at once cut the image
+  from 2.5 to 0.3 million visits and every arbitration inventory of the corpus
+  by 70%, all 548 outputs identical, so a factor of 2 covers every image with
+  a 2.7x margin.
 - **Let a limit for a linear analysis grow with its input.** Fixed module caps
   (400,000 operations, 65,536 visits) refuse large modules however ordinary:
   a 403,896-operation Go image whose inventory needs 0.73 visits per

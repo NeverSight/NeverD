@@ -162,9 +162,10 @@ inline constexpr size_t kPipelineLowIRMaxExactAddressAlternatives = 16;
 inline constexpr size_t kPipelineLowIRMaxFrameOffsetAlternatives = 64;
 // The module address solve joins each block's previous input once one block's
 // input has lost a fact this often, which makes a non-monotone solve ascend
-// and end.  Of 157,189 functions in the EH corpus and the performance inputs,
-// the 200 that turn forever lose one at every second visit; every other one
-// loses a fact at most 22 times at a block.
+// and end.  Of 162,998 functions in the EH corpus and the performance inputs,
+// 215 reach this bound in arbitration's solve; every other one loses a fact at
+// most 22 times at a block there, and at most twice in the EH continuation
+// solves.
 inline constexpr size_t kPipelineLowIRAddressRetreatsBeforeJoin = 128;
 // The module address solve may visit blocks this many times per operation it
 // reads where that exceeds its fixed allowance; transfers and frame dataflow
