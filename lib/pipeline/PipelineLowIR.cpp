@@ -500,6 +500,37 @@ struct ModuleAddressFacts {
 };
 using ModuleAddressState = std::map<LowValueKey, ModuleAddressFacts>;
 
+/// Whether \p Now keeps every fact of \p Before: each of its keys, with the
+/// same or more roots, exact values and frame offsets (a widened set keeps
+/// them all) and every flag it set.
+bool addressStateCovers(const ModuleAddressState &Now,
+                        const ModuleAddressState &Before) {
+  auto factsCover = [](const ModuleAddressFacts &A,
+                       const ModuleAddressFacts &B) {
+    auto includes = [](const auto &Big, const auto &Small) {
+      return std::includes(Big.begin(), Big.end(), Small.begin(), Small.end());
+    };
+    auto keeps = [](bool A, bool B) { return A || !B; };
+    return includes(A.Roots, B.Roots) &&
+           (A.ExactValuesWidened || includes(A.ExactValues, B.ExactValues)) &&
+           (A.FrameOffsetsWidened ||
+            includes(A.FrameOffsets, B.FrameOffsets)) &&
+           keeps(A.FrameCellEscaped, B.FrameCellEscaped) &&
+           keeps(A.FrameCellPresent, B.FrameCellPresent) &&
+           keeps(A.FrameCellOutgoingSeed, B.FrameCellOutgoingSeed) &&
+           keeps(A.MayBeNonFrame, B.MayBeNonFrame) &&
+           keeps(A.Imprecise, B.Imprecise) &&
+           keeps(A.ExactValuesWidened, B.ExactValuesWidened) &&
+           keeps(A.FrameOffsetsWidened, B.FrameOffsetsWidened);
+  };
+  for (const auto &[Key, Facts] : Before) {
+    const auto It = Now.find(Key);
+    if (It == Now.end() || !factsCover(It->second, Facts))
+      return false;
+  }
+  return true;
+}
+
 /// The facts of \p State under keys in \p Space.  The map orders its keys by
 /// space first, so they are one run of it: a scan of the registers need not
 /// visit every frame cell and temporary, nor a scan of the frame the rest.
@@ -1743,7 +1774,8 @@ bool collectLowAddressUses(
             // not hidden by an untracked first scalar argument.
             const ModuleAddressFacts CurrentSP = factsFor(NdVar::reg(
                 TRI.StackPointer, static_cast<uint16_t>(TRI.PointerSize)));
-            if (CurrentSP.isPrivateFrameOnly()) {
+            bool WindowKnown = CurrentSP.isPrivateFrameOnly();
+            if (WindowKnown) {
               int64_t Cursor = *CurrentSP.FrameOffsets.begin();
               if (Img.Arch == Arch::X64 &&
                   Img.abiFormat() == BinaryFormat::COFF) {
@@ -1765,12 +1797,18 @@ bool collectLowAddressUses(
                   if (StoredSize == 0 || !Facts.FrameCellPresent ||
                       static_cast<int64_t>(RawOffset) != Cursor)
                     continue;
-                  if (Cell != nullptr)
-                    return false;
+                  // Paths that stored different widths at this coordinate
+                  // join into two cells.  Which one the callee reads, and
+                  // where its next argument starts, is then unknown: the
+                  // window is as ambiguous as one behind a pivoted SP.
+                  if (Cell != nullptr) {
+                    WindowKnown = false;
+                    break;
+                  }
                   Cell = &Facts;
                   CellSize = StoredSize;
                 }
-                if (!Cell)
+                if (!WindowKnown || !Cell)
                   break;
                 if (CellIndex == 0 && !Cell->FrameCellOutgoingSeed)
                   break;
@@ -1796,7 +1834,8 @@ bool collectLowAddressUses(
                   return false;
                 Cursor = Next;
               }
-            } else {
+            }
+            if (!WindowKnown) {
               // An ambiguous/pivoted call SP cannot establish a finite ABI
               // window.  Preserve soundness locally by treating every
               // address-bearing frame cell as a possible stack argument;
@@ -2198,6 +2237,19 @@ bool collectLowAddressUses(
       if (!queueRoot(Func.Entry))
         return false;
     }
+    // A predecessor not yet visited reads as one that keeps no fact, so a
+    // first visit marks every fact it joins imprecise.  The solve is then not
+    // monotone: those marks can clear once every predecessor has been read,
+    // and a loop can carry both states around it forever (a frame address
+    // stored through a marked frame base escapes, and not once the base is
+    // exact).  A retreat is a changed input that lacks a fact the previous
+    // one had.  After one block has retreated
+    // kPipelineLowIRAddressRetreatsBeforeJoin times, every block of the
+    // function also joins its previous input.  That only adds facts, so the
+    // inputs ascend through a finite lattice and the solve ends.  A function
+    // that settles sooner is solved exactly as before.
+    std::vector<size_t> Retreats(BlockCount, 0);
+    bool JoinPreviousInputs = false;
     for (size_t Cursor = 0; Cursor < Queue.size(); ++Cursor) {
       const size_t BlockIndex = Queue[Cursor];
       Queued[BlockIndex] = false;
@@ -2207,11 +2259,23 @@ bool collectLowAddressUses(
       if (!mergePredecessors(Func.Blocks[BlockIndex], Input))
         return failCollect("merge-preds", FuncIndex,
                            Func.Blocks[BlockIndex].StartAddr);
+      if (JoinPreviousInputs && Processed[BlockIndex]) {
+        ModuleAddressState Joined;
+        if (!mergeAlternativeStates(InStates[BlockIndex], Input, Joined))
+          return failCollect("merge-previous-input", FuncIndex,
+                             Func.Blocks[BlockIndex].StartAddr);
+        Input = std::move(Joined);
+      }
       // The graph and transfer rules are frozen for this solve. Identical
       // incoming facts already have a complete output; final use recording
       // remains a separate transfer below.
       if (Processed[BlockIndex] && Input == InStates[BlockIndex])
         continue;
+      if (Processed[BlockIndex] && !JoinPreviousInputs &&
+          !addressStateCovers(Input, InStates[BlockIndex]) &&
+          ++Retreats[BlockIndex] > ::neverd::limits::pipeline::
+                                       kPipelineLowIRAddressRetreatsBeforeJoin)
+        JoinPreviousInputs = true;
       ModuleAddressState Output;
       if (!transfer(Func.Blocks[BlockIndex], Input, nullptr, Output))
         return failCollect("transfer-fixpoint", FuncIndex,
@@ -2752,6 +2816,18 @@ collectModuleJumpTableArbitration(const BinaryImage &Img,
       Owners.push_back(std::move(Owner));
     }
   if (Owners.empty())
+    return Result;
+  // Arbitration decides which requested relocation slots stay protected and
+  // which writable tables become unsafe.  With no requested slot and no
+  // writable owner neither decision has a member, whatever the module's
+  // address uses are, so the complete answer is the empty one and the module
+  // inventory below has nothing to settle.  An owner whose storage does not
+  // read as one table counts as writable and still takes the inventory.
+  const bool AnyWritableOwner = std::any_of(
+      Owners.begin(), Owners.end(), [&](const ModuleJumpTableOwner &Owner) {
+        return storageMayBeWritable(Img, Owner);
+      });
+  if (Requested.empty() && !AnyWritableOwner)
     return Result;
   auto abandonAnalysis = [&]() {
     Result.AnalysisComplete = false;

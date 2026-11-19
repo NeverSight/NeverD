@@ -10617,6 +10617,33 @@ the frozen inventory, with a scan debit for every input. Only matching
 owner evidence spends the retained account. Any exhaustion protects every
 requested relocation slot and rejects writable dispatch owners.
 
+Arbitration decides two sets: the requested relocation slots that stay
+protected and the writable dispatch owners that become unsafe. When no table
+requests a slot and no table's storage may be written, both sets are empty
+whatever the module's address uses are, so arbitration answers complete
+without the inventory. Position-independent tables (PE and Mach-O offset
+tables, ELF PIC tables) are of this kind; before, the inventory could still
+exhaust its accounts on a large module and send it to the fail-closed fallback,
+which protects every code-pointer slot, preserves every potential table branch
+and rebuilds every function. On ntoskrnl that fallback left the system service
+dispatch unresolved, which also hid the arguments of every `Zw` stub.
+
+The inventory solves each function's address facts to a fixed point. A
+predecessor not yet visited reads as one that keeps no fact, so a first visit
+marks every fact it joins imprecise; the marks can clear once every
+predecessor has been read, and a loop could then carry both states around it
+forever (a frame address stored through a marked frame base escapes, and not
+once the base is exact). A retreat is a changed input that lacks a fact the
+previous one had. After one block has retreated
+`kPipelineLowIRAddressRetreatsBeforeJoin` times, every block of the function
+also joins its previous input, so the inputs ascend and the solve ends. No
+function of the EH corpus or the performance inputs that settles retreats more
+than 22 times at a block in the arbitration solve, nor more than 4 times in the
+EH continuation solves, so those keep their solve exactly. A call whose outgoing stack window meets
+two cells at one coordinate, where paths stored different widths, treats the
+window as unknown, as behind a pivoted stack pointer: every address-bearing
+frame cell is a possible argument.
+
 An x86/x64 absolute dispatch may name the preceding table's one-past address
 without using that preceding object. `CFGBuilder::proveInstructionLocalTableSource`
 replays the complete table proof against the frozen final LowIR, including
