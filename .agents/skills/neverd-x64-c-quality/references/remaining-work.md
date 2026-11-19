@@ -529,6 +529,24 @@ Still open, in order of yield:
    AAPCS64 parameters. Go's internal ABI uses RAX, RBX, RCX, RDI, RSI, R8-R11
    and X0-X14; arm64 uses R0-R15 and F0-F15. This holds most of the roughly
    610,000 Go placeholders that remain.
+   - Where they sit: in amd64 Go 1.26, 53% are call arguments, 22% are reads
+     of argument or result registers, and 14% are branches on such values. In
+     arm64, 78% are call arguments, because every call there prints eight
+     AAPCS64 arguments: the arm64 summaries publish no entry reads.
+   - A probe gave Go functions Go's integer order in `detectCc` and published
+     direct-call arguments in that order in `applyCallRegisterEffect`.
+     Placeholders fell 32-46% on the stripped 1.18, 1.22 and 1.26 binaries,
+     and printed calls such as `printstring(&str, 0x15)`.
+   - Changing parameters alone regresses, because callers keep System V
+     positions.
+   - The DWARF build regressed 60% for reasons still open.
+   - Assembly that saves every register (`debugCallV2`) gets bogus parameters.
+   - Go's morestack spill slots at `[rsp+8...]` already read as stack
+     parameters today. Go's spill area is uninitialized at a call, like Win64
+     home slots.
+   - The morestack slow path spills exactly the used register arguments, in
+     spill-slot order (cmd/compile/internal/amd64/ssa.go, `Func.RegArgs`). It
+     is the per-function proof, order and spill-area bound to build on.
 2. The goroutine register (R14, R28) and X15 should become fixed values once
    an image's internal ABI is proven.
 3. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
