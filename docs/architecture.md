@@ -5764,11 +5764,11 @@ except arm64's R27 and the R11 or X25 they return buffer space in, which the
 call defines. Barriers are recorded only where the text base is proven.
 
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
-there `callClobbersRegister`, SSA's partial clobbers, sub-register merges, the
-code-pointer resolver and HighIR argument collection read it. LowIR asks the
-authority directly, in the call-register summaries, the CFG builder's
-stack-offset model, both jump-table resolvers, the module address inventory
-and the AArch64 indirect-tail-frame guard.
+there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and
+the code-pointer resolver read it. The rest asks the authority directly: the
+call-register summaries, the CFG builder's stack-offset model, both jump-table
+resolvers, the module address inventory, the AArch64 indirect-tail-frame guard
+and HighIR argument collection, which asks `isGoCode` of its function.
 
 In the summaries, a Go call no summary bounds clobbers every tracked family
 but RSP and RBP (`LocalRegisterEffect::CallClobbers`). A write barrier's
