@@ -1597,7 +1597,22 @@ types cannot redefine the runtime headers' types. The corresponding
 `HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
 `NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
 program-defined callee. Whole-unit Windows syntax checks additionally use the
-real headers.
+real headers. `LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes`
+checks `_locale_t` and `_invalid_parameter_handler` against independent C
+prototypes and executes argument/return identity checks at O0/O2 with UBSan.
+`NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders`
+compares all six locale-bearing UCRT stdio prototypes and the handler exchange
+with the declarations in their actual MinGW headers.
+The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
+`_UCRT` alone does not select the old MinGW runtime headers.
+The Clang checks use the original MinGW compiler’s reported sysroot, including
+when cross headers are installed outside the host’s default search paths.
+`MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks
+complete PE32/PE32+ relocated data pointers and rejects writable, partial,
+ordered, ambiguous or wrong-owner evidence. The Win64
+`ImmutableImportReferencesKeepIncomingArguments` pipeline regression checks
+forwarded `exit`, `_exit` and `fputs` operands through `.refptr` and the IAT,
+with optimization enabled and disabled.
 `COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
 enum out of a runtime argument and prevents displayed header enumerators from
 requesting duplicate local definitions.
@@ -12612,6 +12627,13 @@ results with the
 explicit-budget walk; shared-budget replay and bound queries retain saturating
 work accounting. Feasible-edge publication clears the structural dependency
 index together with all semantic caches.
+`DeepOffsetChainsUseTheNodeBudget` accepts an 8,192-node mixed copy/offset
+proof and refuses it with one fewer node, including n32 in both byte orders.
+The iterative walk and the exhausted-prefix case must run on the native
+Windows default stack; increasing the executable stack is diagnostic only.
+The default-budget cache lookup precedes an outlined miss continuation, so
+warm queries do not reserve the iterative walk's native stack storage.
+Cold and warmed queries must retain identical proof and work counters.
 `CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
 frame-address prefixes with known and unknown roots, with and without bound
 offsets, on all four architectures. Failed prefixes evaluate linear work while

@@ -4627,6 +4627,111 @@ int main(void) {
   }
 }
 
+TEST(LLVMCValues, WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes) {
+  for (const auto Arch : {neverd::Arch::X86, neverd::Arch::X64,
+                          neverd::Arch::ARM, neverd::Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<unsigned>(Arch));
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    auto Module = llvm::parseAssemblyString(R"ir(
+declare ptr @_set_invalid_parameter_handler(ptr)
+declare i32 @__stdio_common_vfprintf(i64, ptr, ptr, ptr, ptr)
+define ptr @exchange_handler(ptr %handler) {
+  %previous = call ptr @_set_invalid_parameter_handler(ptr %handler)
+  ret ptr %previous
+}
+define i32 @print_with_locale(ptr %stream, ptr %format, ptr %locale, ptr %args) {
+  %result = call i32 @__stdio_common_vfprintf(i64 33, ptr %stream,
+                                             ptr %format, ptr %locale, ptr %args)
+  ret i32 %result
+}
+)ir",
+                                            Error, Context);
+    ASSERT_TRUE(Module) << Error.getMessage().str();
+    for (auto &Function : *Module)
+      Function.setName(neverd::symbolOfCName(Function.getName(),
+                                             neverd::BinaryFormat::COFF, Arch));
+    Module->setDataLayout(Arch == neverd::Arch::X86 || Arch == neverd::Arch::ARM
+                              ? "e-p:32:32-i64:64-n8:16:32"
+                              : "e-p:64:64-i64:64-n8:16:32:64");
+    ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+    neverd::CEmitterOptions Options;
+    Options.TheArch = Arch;
+    Options.Format = neverd::BinaryFormat::COFF;
+    Options.EmitIncludes = false;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(neverd::LLVMCEmitter().emit(*Module, OS, Options));
+    // Independent CRT declarations: void* is not a compatible locale
+    // parameter type, and exchanging a handler returns a callable pointer.
+    const std::string Prelude = R"c(
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef struct fixture_locale { int value; } *_locale_t;
+typedef void (*_invalid_parameter_handler)(const wchar_t *, const wchar_t *,
+                                         const wchar_t *, unsigned int,
+                                         uintptr_t);
+_invalid_parameter_handler _set_invalid_parameter_handler(
+    _invalid_parameter_handler);
+int __stdio_common_vfprintf(uint64_t, FILE *, const char *, _locale_t, char *);
+)c";
+    const std::string Harness = R"c(
+static _invalid_parameter_handler current_handler;
+static unsigned handler_calls;
+static FILE *expected_stream;
+static const char *expected_format;
+static char *expected_args;
+_invalid_parameter_handler _set_invalid_parameter_handler(
+    _invalid_parameter_handler value) {
+  _invalid_parameter_handler previous = current_handler;
+  current_handler = value;
+  return previous;
+}
+static void previous_handler(const wchar_t *a, const wchar_t *b,
+                             const wchar_t *c, unsigned int line,
+                             uintptr_t reserved) {
+  handler_calls += line == 17 && reserved == 29;
+}
+static void next_handler(const wchar_t *a, const wchar_t *b,
+                         const wchar_t *c, unsigned int line,
+                         uintptr_t reserved) {
+  handler_calls += 2 * (line == 31 && reserved == 43);
+}
+int __stdio_common_vfprintf(uint64_t options, FILE *stream, const char *format,
+                           _locale_t locale, char *args) {
+  if (options != 33 || stream != expected_stream || format != expected_format ||
+      args != expected_args || locale->value != 71)
+    __builtin_trap();
+  return locale->value + 1;
+}
+int main(void) {
+  struct fixture_locale locale = {71};
+  int stream_token;
+  char args[] = "args";
+  expected_stream = (FILE *)&stream_token;
+  expected_format = "%d";
+  expected_args = args;
+  current_handler = previous_handler;
+  void *previous = exchange_handler((void *)next_handler);
+  if (previous != (void *)previous_handler || current_handler != next_handler)
+    return 1;
+  ((_invalid_parameter_handler)previous)(0, 0, 0, 17, 29);
+  current_handler(0, 0, 0, 31, 43);
+  return handler_calls != 3 ||
+         print_with_locale(expected_stream, expected_format, &locale, args) != 72;
+}
+)c";
+    for (llvm::StringRef Level : {"-O0", "-O2"})
+      // Execute the actual emitted C. Its scalar widths fit the host even
+      // when the general wide-integer fixture's 129-bit probe does not.
+      source_call_execution_test::compileAndRun(
+          withRuntimeMocks(Prelude + Source + Harness),
+          {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
+           "-Werror=uninitialized"});
+  }
+}
+
 TEST(LLVMCValues, LocalRegisterImportPrototypesAgreeWithCalls) {
   for (const auto Arch : {neverd::Arch::X64, neverd::Arch::AArch64})
     for (const auto Format :

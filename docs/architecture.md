@@ -21470,6 +21470,11 @@ is proved before call-register summaries and SSA consume its parameter reads;
 only definitions preceding that query can supply the value. A numeric code
 value and a loaded pointer slot retain distinct roles. The machine call-summary adapter,
 pre-SSA Low-to-Med conversion, ABI recovery and HighIR reuse this proof.
+When image metadata is available, a complete immutable relocated data-pointer
+load may supply the address of the next load, as in MinGW's `.refptr` to an
+IAT slot. `readImmutableImagePointer` owns the mapping and fixup checks. The
+proof retains the final runtime load occurrence, shares the existing depth and
+work limits, and never reads the runtime callable from the IAT's file bytes.
 An observation retains the original LOAD index, including through private SSA
 versions. HighIR names an imported call only when the same memory-reachability
 proof used for callee-read inlining proves that original observation can reach

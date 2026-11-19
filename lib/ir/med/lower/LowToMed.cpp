@@ -1341,7 +1341,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     MB.ExceptionalPreds = LB.ExceptionalPreds;
 
     // MB only grows while its operations are converted.
-    PreSSAMedCallTargets CallTargets(TheArch);
+    PreSSAMedCallTargets CallTargets(TheArch, Image);
     size_t BoundaryIndex = 0;
     for (size_t LowOpIndex = 0; LowOpIndex < LB.Ops.size(); ++LowOpIndex) {
       // A call through a slot that always holds one of the image's own

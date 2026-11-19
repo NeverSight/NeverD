@@ -22,6 +22,8 @@
 
 namespace neverd {
 
+struct BinaryImage;
+
 struct MedCallTarget {
   va_t Address;
   bool ThroughSlot;
@@ -44,10 +46,13 @@ struct MedCallTarget {
 
 /// Query SSA values before \p Before. Calls, uncertain aliases, partial writes
 /// and ordered memory prevent a stored value from reaching a later reload.
+/// With an image, immutable relocated data pointers may identify an import
+/// slot address; the runtime import value is never read from image bytes.
 std::optional<MedCallTarget>
 resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
                      size_t *WorkRemaining = nullptr,
-                     Arch Architecture = Arch::Unknown);
+                     Arch Architecture = Arch::Unknown,
+                     const BinaryImage *Image = nullptr);
 
 /// Give a pre-SSA block prefix private value versions before using the same
 /// proof. Overlapping register writes and intervening calls kill old carriers.
@@ -55,7 +60,8 @@ resolveMedCallTarget(const MedBlock &Block, size_t Before, const MedVar &Value,
 /// Observation indexes still refer to the original input block.
 std::optional<MedCallTarget>
 resolvePreSSAMedCallTarget(const MedBlock &Block, const MedVar &Value,
-                           Arch Architecture, size_t *WorkRemaining = nullptr);
+                           Arch Architecture, size_t *WorkRemaining = nullptr,
+                           const BinaryImage *Image = nullptr);
 
 /// The same proof for successive queries of one block that only grows
 /// between them: each query versions just the operations appended since the
@@ -64,8 +70,9 @@ resolvePreSSAMedCallTarget(const MedBlock &Block, const MedVar &Value,
 /// indexes refer to the queried block, as for resolvePreSSAMedCallTarget.
 class PreSSAMedCallTargets {
 public:
-  explicit PreSSAMedCallTargets(Arch Architecture)
-      : Architecture(Architecture) {}
+  explicit PreSSAMedCallTargets(Arch Architecture,
+                                const BinaryImage *Image = nullptr)
+      : Architecture(Architecture), Image(Image) {}
 
   std::optional<MedCallTarget>
   resolve(const MedBlock &Block, const MedVar &Value, size_t *WorkRemaining);
@@ -77,6 +84,7 @@ private:
   bool version(const MedOp &Original, size_t *WorkRemaining);
 
   Arch Architecture;
+  const BinaryImage *Image;
   std::map<Key, int> Versions;
   int Next = 1;
   /// The versioned copy of the block prefix seen so far.
@@ -89,7 +97,8 @@ private:
 /// the machine operand nor an observed import value is replaced by this query.
 std::map<size_t, MedCallTarget>
 resolveLowBlockCallTargets(const LowBlock &Block, Arch Architecture,
-                           size_t *WorkRemaining = nullptr);
+                           size_t *WorkRemaining = nullptr,
+                           const BinaryImage *Image = nullptr);
 
 } // namespace neverd
 
