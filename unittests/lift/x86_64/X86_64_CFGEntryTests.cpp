@@ -1530,6 +1530,76 @@ TEST(CFGBuilderCoverage, FH4ContinuationRootsAreReadOncePerImage) {
   }
 }
 
+TEST(CFGBuilderCoverage, AnImageWithoutTheLocalUnwindRoutineNeedsNoInventory) {
+  // Only a call to the local-unwind import names a local-unwind continuation.
+  // An image that imports no such routine has no such evidence, so its
+  // discovery completes without the module inventory, even with no budget.
+  constexpr va_t SourceVA = 0x140001000;
+  constexpr va_t OwnerVA = SourceVA + 0x100;
+  constexpr va_t TargetVA = OwnerVA + 0x20;
+  BinaryImage Img = continuationPipelineImage();
+  Img.ExceptionMetadata.Functions.front().Cxx->IsCatchFunclet = false;
+  const std::set<va_t> Entries{SourceVA, OwnerVA};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  const std::vector<LowFunc> Bodies{Builder.build(Img, Dec, SourceVA, "source"),
+                                    Builder.build(Img, Dec, OwnerVA, "owner")};
+  ASSERT_EQ(Bodies.front().CodeRefTargets, (std::vector<va_t>{TargetVA}));
+  const auto Roots =
+      pipeline_detail::collectWindowsEHContinuationRootsForTesting(
+          Img, Bodies, Entries, size_t{0});
+  EXPECT_TRUE(Roots.AnalysisComplete);
+  EXPECT_TRUE(Roots.RootsByOwner.empty());
+  EXPECT_TRUE(Roots.LocalUnwindsByOwner.empty());
+
+  // With the routine imported, the same budget leaves the inventory, and so
+  // the discovery, incomplete.
+  Import LocalUnwind;
+  LocalUnwind.Name = "_local_unwind";
+  LocalUnwind.Module = "VCRUNTIME140.dll";
+  Img.Imports.push_back(LocalUnwind);
+  EXPECT_FALSE(pipeline_detail::collectWindowsEHContinuationRootsForTesting(
+                   Img, Bodies, Entries, size_t{0})
+                   .AnalysisComplete);
+}
+
+TEST(CFGBuilderCoverage, ACatchReturnIsReadFromTheFuncletsAlone) {
+  // Only a catch funclet's returned value is read, and no function's address
+  // solve reads another's, so a body elsewhere that would spend the
+  // inventory's budget leaves the funclet's continuation complete.
+  constexpr va_t CatchVA = 0x140001000;
+  constexpr va_t OwnerVA = CatchVA + 0x100;
+  constexpr va_t TargetVA = OwnerVA + 0x20;
+  constexpr va_t ChainVA = CatchVA + 0x40;
+  BinaryImage Img = continuationPipelineImage();
+  Segment &Text = Img.Segments.front();
+  std::vector<uint8_t> Chain;
+  for (int I = 0; I != 15; ++I)
+    Chain.insert(Chain.end(), {0x85, 0xc9, 0x74, 0x00}); // test ecx,ecx; je +0
+  Chain.push_back(0xc3);
+  std::copy(Chain.begin(), Chain.end(),
+            Text.Data.begin() + (ChainVA - Text.VA));
+  Img.KnownCodeRanges.emplace_back(ChainVA, ChainVA + Chain.size());
+  Img.Symbols.push_back(Symbol::makeFunc(ChainVA, Chain.size()));
+  const std::set<va_t> Entries{CatchVA, ChainVA, OwnerVA};
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Arch::X64));
+  CFGBuilder Builder;
+  Builder.setKnownFuncEntries(&Entries);
+  const std::vector<LowFunc> Bodies{Builder.build(Img, Dec, CatchVA, "catch"),
+                                    Builder.build(Img, Dec, OwnerVA, "owner"),
+                                    Builder.build(Img, Dec, ChainVA, "chain")};
+  ASSERT_GE(Bodies.back().Blocks.size(), 15u);
+  const auto Roots =
+      pipeline_detail::collectWindowsEHContinuationRootsForTesting(
+          Img, Bodies, Entries, size_t{8});
+  ASSERT_TRUE(Roots.AnalysisComplete);
+  EXPECT_EQ(Roots.RootsByOwner,
+            (std::map<va_t, std::set<va_t>>{{OwnerVA, {TargetVA}}}));
+}
+
 TEST(CFGBuilderCoverage, LocalUnwindTargetRequiresExclusiveSameFrameUses) {
   constexpr va_t Entry = 0x140001000, Target = Entry + 0x20;
   constexpr va_t Stub = Entry + 0x180;

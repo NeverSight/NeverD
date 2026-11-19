@@ -557,7 +557,21 @@ struct LocalUnwindContinuationEvidence {
   std::vector<bool> CompleteByFunction;
   std::vector<bool> SawCallByFunction;
   std::vector<std::vector<LowSEHLocalUnwindEvidence>> SameFrameCallsByFunction;
+
+  /// Count functions, none of which calls the local-unwind routine.
+  void reset(size_t Count) {
+    TargetsByFunction.assign(Count, {});
+    CompleteByFunction.assign(Count, true);
+    SawCallByFunction.assign(Count, false);
+    SameFrameCallsByFunction.assign(Count, {});
+  }
 };
+
+/// The runtime routine whose calls name a local-unwind continuation.  Only a
+/// call to an import stub of this routine is local-unwind evidence.
+bool isLocalUnwindImport(const Import &Imported) {
+  return stripLeadingUnderscores(Imported.Name) == "local_unwind";
+}
 
 enum class ModuleAddressEdgeTraversal : uint8_t {
   OrdinaryAndExceptional,
@@ -648,7 +662,9 @@ bool adjustFrameOffsets(ModuleAddressFacts &Facts, uint64_t RawDelta,
 /// relocation maps.  This deliberately computes a may-set: retaining an extra
 /// mirror field is harmless, while missing one can make a later function read
 /// a stale zero.  Exact address provenance is required at the root; scalar
-/// numeric coincidence never creates a use.
+/// numeric coincidence never creates a use.  Each function's solve reads no
+/// other function's state, so a caller that consumes only some functions'
+/// results passes them as FunctionScope and the inventory reads those alone.
 bool collectLowAddressUses(
     const BinaryImage &Img, const std::vector<LowFunc> &Funcs,
     const std::vector<ModuleJumpTableOwner> &Owners,
@@ -660,7 +676,11 @@ bool collectLowAddressUses(
         ModuleAddressEdgeTraversal::OrdinaryAndExceptional,
     LocalUnwindContinuationEvidence *LocalUnwind = nullptr,
     const std::set<va_t> *OccurrenceTableAnchors = nullptr,
-    const LowSEHWritableImageRanges *SEHWritable = nullptr) {
+    const LowSEHWritableImageRanges *SEHWritable = nullptr,
+    const std::vector<bool> *FunctionScope = nullptr) {
+  auto inScope = [&](size_t FuncIndex) {
+    return !FunctionScope || (*FunctionScope)[FuncIndex];
+  };
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.abiFormat());
@@ -675,9 +695,11 @@ bool collectLowAddressUses(
     return It->second;
   };
   // The image's writable ranges, where the caller keeps them, are the ones
-  // collectLowSEHRuntimeMemory would read again.
-  const auto SEHRuntimeMemory =
-      collectLowSEHRuntimeMemory(Img, Funcs, SEHWritable);
+  // collectLowSEHRuntimeMemory would read again.  Only a local-unwind frame
+  // proof reads runtime memory.
+  const LowSEHRuntimeMemory SEHRuntimeMemory =
+      LocalUnwind ? collectLowSEHRuntimeMemory(Img, Funcs, SEHWritable)
+                  : LowSEHRuntimeMemory{};
   std::map<va_t, const LowFunc *> SEHCallees;
   if (LocalUnwind)
     for (const auto &Func : Funcs)
@@ -715,24 +737,23 @@ bool collectLowAddressUses(
     --FixpointWorkRemaining;
     return true;
   };
-  for (const LowFunc &Func : Funcs)
-    for (const LowBlock &Block : Func.Blocks) {
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    if (!inScope(FuncIndex))
+      continue;
+    for (const LowBlock &Block : Funcs[FuncIndex].Blocks) {
       if (Block.Ops.size() > kMaxModuleAddressInputOps - ScanOps)
         return failCollect("scan-cap", 0, Block.StartAddr);
       ScanOps += Block.Ops.size();
     }
+  }
   if (ReturnedCode) {
     ReturnedCode->TargetsByFunction.assign(Funcs.size(), {});
     ReturnedCode->CompleteByFunction.assign(Funcs.size(), true);
     ReturnedCode->OccurrencesByFunction.assign(Funcs.size(), {});
     ReturnedCode->ExitsCompleteByFunction.assign(Funcs.size(), true);
   }
-  if (LocalUnwind) {
-    LocalUnwind->TargetsByFunction.assign(Funcs.size(), {});
-    LocalUnwind->CompleteByFunction.assign(Funcs.size(), true);
-    LocalUnwind->SawCallByFunction.assign(Funcs.size(), false);
-    LocalUnwind->SameFrameCallsByFunction.assign(Funcs.size(), {});
-  }
+  if (LocalUnwind)
+    LocalUnwind->reset(Funcs.size());
 
   std::map<va_t, std::vector<const ModuleJumpTableOwner *>> OwnersByContainer;
   for (const ModuleJumpTableOwner &Owner : Owners) {
@@ -879,6 +900,8 @@ bool collectLowAddressUses(
   };
 
   for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
+    if (!inScope(FuncIndex))
+      continue;
     const LowFunc &Func = Funcs[FuncIndex];
     const size_t BlockCount = Func.Blocks.size();
     std::map<int, size_t> PositionForId;
@@ -1679,8 +1702,7 @@ bool collectLowAddressUses(
               const va_t CalleeVA = normalizeCodeAddress(
                   static_cast<va_t>(Op.Inputs[0].Offset), Img.Arch, Img.Mode);
               const Import *Imported = Img.findImportStubAt(CalleeVA);
-              if (Imported &&
-                  stripLeadingUnderscores(Imported->Name) == "local_unwind") {
+              if (Imported && isLocalUnwindImport(*Imported)) {
                 LocalUnwind->SawCallByFunction[FuncIndex] = true;
                 if (TRI.Win64ParamRegs.size() < 2 || TRI.PointerSize == 0) {
                   LocalUnwind->CompleteByFunction[FuncIndex] = false;
@@ -2539,21 +2561,32 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
   // address inventory visits runtime activation roots from unknown state and
   // follows only ordinary edges; frame equality still comes from LowIR's
   // decoded-frame authority, never from this inventory or the runtime name.
+  //
+  // Only a catch funclet's returned value is read below, so that inventory
+  // reads the funclets alone.  The local-unwind inventory reads the whole
+  // module, whose uses decide whether a continuation escapes, but only where
+  // the image imports the routine: without the import no call can be its
+  // evidence, and every result below is the one a complete inventory gives.
   if (HasCatchSource) {
+    std::vector<bool> CatchFunclets(Funcs.size());
+    for (size_t I = 0; I < Funcs.size(); ++I)
+      CatchFunclets[I] = CatchSources[I] != nullptr;
     std::vector<ModuleAddressUse> ReturnedUses;
     if (!collectLowAddressUses(Img, Funcs, NoTableOwners, ReturnedUses, Budget,
                                TestBudget, &CandidateTargets, &Returned,
                                ModuleAddressEdgeTraversal::OrdinaryOnly,
-                               nullptr, nullptr, SEHWritable)) {
+                               nullptr, nullptr, SEHWritable, &CatchFunclets)) {
       Result.AnalysisComplete = false;
       return Result;
     }
   }
-  if (!collectLowAddressUses(
-          Img, Funcs, NoTableOwners, IgnoredUses, Budget, TestBudget,
-          &CandidateTargets, nullptr,
-          ModuleAddressEdgeTraversal::IndependentlyRootedOrdinaryOnly,
-          &LocalUnwind, nullptr, SEHWritable)) {
+  if (llvm::none_of(Img.Imports, isLocalUnwindImport)) {
+    LocalUnwind.reset(Funcs.size());
+  } else if (!collectLowAddressUses(
+                 Img, Funcs, NoTableOwners, IgnoredUses, Budget, TestBudget,
+                 &CandidateTargets, nullptr,
+                 ModuleAddressEdgeTraversal::IndependentlyRootedOrdinaryOnly,
+                 &LocalUnwind, nullptr, SEHWritable)) {
     Result.AnalysisComplete = false;
     return Result;
   }
@@ -2577,7 +2610,8 @@ EHContinuationRootDiscovery collectWindowsEHContinuationRoots(
   for (size_t I = 0; CompleteModule && I < Funcs.size(); ++I) {
     const LowFunc &F = Funcs[I];
     if (!F.ExceptionMetadata || !F.ExceptionMetadata->SEH ||
-        !LocalUnwind.CompleteByFunction[I])
+        !LocalUnwind.CompleteByFunction[I] ||
+        LocalUnwind.SameFrameCallsByFunction[I].empty())
       continue;
     const auto &EH = *F.ExceptionMetadata;
     std::map<va_t, std::set<va_t>> RelocationSources;
