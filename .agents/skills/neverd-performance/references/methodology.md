@@ -101,6 +101,14 @@ most time. Each step is an instruction, its reason and the case it comes from.
 - **A cache that is reset is a loop that restarts.** One fallback function's
   jump-table rebuild wiped 19,293 graphs for every later request of the
   session (`85e71477f4`). Count resets, not only hits.
+- **Ask where a repeated build's twin was when it started.** On capstone the
+  x87 callee graph builds repeated lifts the batch made anyway. Timing each
+  repeat against its twin showed 1% starting after the twin finished, 4%
+  before it started and 95% while it was still running, so keeping a
+  finished build's graph would have saved almost nothing. Building every
+  function without the fixup first, so that no build asks for a graph while
+  the others run, removed the first lift's repeats (`12e8609c35`). Pick the
+  design from that split, not from the total.
 - **Then the constant.** Reading strings only from the byte runs that can hold
   one took a kernel image's string scan from 260 ms to 41 ms on one thread
   and 9.5 ms on eight (`e75c37d2bc`).
@@ -142,6 +150,18 @@ most time. Each step is an instruction, its reason and the case it comes from.
   image's call summaries are solved may differ from the same view rendered
   after. That is one answer per state. A memo defect is two answers from one
   state.
+- **Measure every kind of run the change reaches.** The deferral cut a whole
+  capstone decompile by 12% and made a 250-function selection 30% slower: in
+  a selection the cache keeps callee bodies, and the callee graph builds it
+  removed had been keeping them for the call summaries, which then lifted the
+  callees again a few at a time. The A/B of whole-image runs could not show
+  it; a profile's single-thread stretches did. Selections keep the single
+  pass (`12e8609c35`).
+- **Run the base twice before reading a difference.** A whole-image identity
+  check of ntoskrnl differed in one function's exception region labels. Two
+  runs of the unchanged build differed in the same lines: parallel C emission
+  numbered those labels per worker thread (`d64eb388cc`). An identity claim
+  needs a base that matches itself.
 - **Prove the tests can see a wrong fast path.** Plant a small defect in it,
   such as a bound off by one or a dropped invalidation, and require a test or
   the differential fuzzer to fail. Eight plants were all caught for the name

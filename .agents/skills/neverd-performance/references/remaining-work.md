@@ -109,6 +109,39 @@ A/B with identical output.
      (`independentCallPop` and `usesAnalysisRecovery` are 32-bit x86 only);
      a graph build differs from the callee's own build by the no-return
      depth (one deeper) and the context sets.
+   - Landed (`12e8609c35`): an x64 whole-image batch large enough to run in
+     parallel first builds every function without the fixup, each build
+     keeping its own graph for its callers (valid while the prover answers
+     its questions one level deeper as before); a second pass keeps each
+     body the fixup leaves unchanged. Of capstone's graph-build time, 95%
+     had started while the callee's own build was still running. Capstone
+     LLVM C CPU -12%, wall -11.5%; pe64-capstone -4.8%/-8.6%; x64 Rust
+     -5.2%/-9.7%; libsqlite3 -1.8%; libstdc++ -0.6%; identical output on
+     those, ntoskrnl and the x64 Windows EH corpus. Selected runs keep one
+     pass: their cache keeps call-register bodies, which the left-out callee
+     graph builds supply.
+   - Left: the graph builds of the fallback rebuild. Its builds read the
+     preserve flag and their published jump-table history, which a callee
+     graph build does not, and the history is read before the tables
+     resolve, so the rebuild's own bodies cannot stand in for them.
+   - The fallback itself is the larger lever and is a policy decision. The
+     module arbitration borrows `limits::kMaxJumpTableEvidenceWork`, one
+     occurrence's evidence budget, and `limits::kMaxSSAFunctionOps`, one
+     function's operation cap, for whole-image work. With them raised in a
+     private build, capstone's and pe64-capstone's arbitrations completed,
+     protected no slot and marked no branch, so no function was lifted
+     again and the output was identical. Capstone needed 558,780 evidence
+     units (the limit is 4,096), a 754,878-unit pair scan, 793,118
+     operations scanned and a 168,886-unit address fixed point (2.6 times
+     its limit); the arbitration ran for about 5 s on one thread. With the
+     evidence and scan limits raised and the fixed point at four times its
+     limit: capstone LLVM C CPU -45%, wall -29% (six alternating pairs);
+     pe64-capstone -15%/-19%; identical output on every input tried. The
+     cost: on both Rust inputs the fixed point does not converge and spends
+     its larger allowance before the fallback (+0.7 and +1.4 s; at 256
+     times its limit, 50 to 86 s), ntoskrnl takes 26 s more wall time, and
+     libsqlite3 and libstdc++ stop for reasons other than a budget. A
+     decision on module limits, a converging fixed point, or both.
    - Exact levers, each a resolver-level change:
      - reuse a first-round graph in the rebuild round. Recording the
        membership reads is easy: the unsafe branches are read only by
@@ -119,8 +152,6 @@ A/B with identical output.
        did not. Reuse needs a proof that every such budget had the slack, or
        a decision to charge by the queries made instead of the set size
        (a budget policy change, the user's call);
-     - publish an x64 callee's own build as its graph under the one-deeper
-       context when the no-return answers it read hold at that depth;
      - track the resolver's stage-loop dependencies (item 4).
 4. **Jump-table resolution rebuilds its flow graph.**
    - On the switch-heavy PE, about half of all CPU samples were in
@@ -193,9 +224,11 @@ x87 instruction (Tarjan components over direct calls) was exact but gained
 (switch tables, function pointers) and 78 an indexed or non-import slot.
 Borrowing the primary build's jump tables is not exact: the graph build's
 no-return depth and jump-table settings differ, so it can reach code the
-primary build cut. Next: a cheaper graph build (the projection needs blocks,
-x87 steps, call steps and completeness), or table resolution in the scan by
-the CFG builder's own bounds rule.
+primary build cut. A function's own build is exact when it is configured as
+a callee graph build at its own depth and the prover answers its questions
+one level deeper as before: `12e8609c35` builds an x64 whole-image batch so
+first (item 3). Next: the fallback rebuild's graph builds, which item 3
+explains.
 
 ## Default-off and unused code: verdicts
 
