@@ -14,6 +14,7 @@
 #include "neverd/ir/X86/X86FPState.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/libc/LibCNames.h"
@@ -589,6 +590,7 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
     return;
   }
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  const va_t Entry = F.Blocks.empty() ? InvalidVA : F.Blocks.front().StartAddr;
   const IntegerArgumentLayout Layout =
       TRI.integerArgumentLayout(Img.abiFormat());
   // Win64 reserves a home slot for each register argument just above the
@@ -892,9 +894,20 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
           !TailCall) {
         // A returning callee reads its own slots, below this function's, and
         // leaves nothing in the registers it may clobber: the convention's,
-        // so a Win64 RSI or RDI keeps an incoming-area address across it.
+        // so a Win64 RSI or RDI keeps an incoming-area address across it, or
+        // all but the stack and frame pointers in Go code.
+        const va_t Callee = Op.Opcode == NdOp::CALL && DirectTarget
+                                ? Op.Inputs[0].Offset
+                                : InvalidVA;
+        const CallRegisterContract Contract =
+            callRegisterContractOf(Img, Entry, Callee);
+        const std::optional<uint64_t> Result =
+            goCallResultRegister(Img, Contract, Callee);
         for (uint64_t Family = 0; Family < kX64GPRBytes; Family += 8)
-          if (!TRI.isCallPreserved(Family, 8, Img.abiFormat()) &&
+          if (!(Contract == CallRegisterContract::Platform
+                    ? TRI.isCallPreserved(Family, 8, Img.abiFormat())
+                    : goContractKeptBytes(TRI, Contract, Family, 8, Result) ==
+                          8) &&
               StackKey{false, Family} != SP)
             S.erase(StackKey{false, Family});
         continue;
@@ -1396,6 +1409,45 @@ GPRExitConstants scalarExitConstants(const BinaryImage &Img,
   return Constants;
 }
 
+/// The families a call Go code makes may change where no summary bounds the
+/// callee (LocalRegisterEffect::CallClobbers): every tracked one but the
+/// stack and frame pointers, whose values Go keeps across any call.
+GPRFamilyMask goCodeCallClobbers(Arch A) {
+  GPRFamilyMask Mask = ((GPRFamilyMask(1) << 16) - 1) |
+                       vectorArgumentFamilies(kX64VectorArgumentFamilies);
+  if (A == Arch::X64)
+    Mask &= ~((GPRFamilyMask(1) << (x86reg::RSP / 8)) |
+              (GPRFamilyMask(1) << (x86reg::RBP / 8)));
+  return Mask;
+}
+
+/// The effect Go documents for a runtime write barrier (GoWriteBarrierKind),
+/// whatever its body appears to do: it writes the register it returns buffer
+/// space in, if any, and the vector registers, and reads only the address and
+/// pointer of the store it performs and, on amd64, the goroutine register.
+/// Its body saves and restores the rest around a call this summary would
+/// otherwise take to change them.
+LocalRegisterEffect goWriteBarrierEffect(Arch A,
+                                         const GoWriteBarrier &Barrier) {
+  LocalRegisterEffect Effect;
+  Effect.Writes = vectorArgumentFamilies(kX64VectorArgumentFamilies);
+  if (const std::optional<uint64_t> Buffer =
+          goWriteBarrierResult(A, Barrier.Kind))
+    Effect.Writes |= familyBit(A, *Buffer);
+  RegisterStep Read;
+  if (Barrier.Kind == GoWriteBarrierKind::Store) {
+    addRead(A, Read.Reads, Barrier.Destination, 8);
+    addRead(A, Read.Reads, Barrier.Value, 8);
+  }
+  // `MOVQ g_m(R14), R13`: the barrier finds its buffer through the
+  // goroutine in R14 (arm64's R28 is no tracked family).
+  if (A == Arch::X64)
+    addRead(A, Read.Reads, x86reg::R14, 8);
+  Effect.Blocks.resize(1);
+  Effect.Blocks.front().Steps.push_back(Read);
+  return Effect;
+}
+
 } // namespace
 
 std::optional<unsigned> gprFamilyOf(Arch A, uint64_t RegOff) {
@@ -1499,7 +1551,13 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
                     const std::map<va_t, GPRReadWidths> *FixedCallReads,
                     const std::map<va_t, va_t> *ArgumentSources,
                     const libc::StackProbeIndex *StackProbes) {
+  const va_t Entry = F.Blocks.empty() ? InvalidVA : F.Blocks.front().StartAddr;
+  if (Entry != InvalidVA)
+    if (const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry))
+      return goWriteBarrierEffect(Img.Arch, *Barrier);
   LocalRegisterEffect Effect;
+  if (Entry != InvalidVA && isGoCode(Img, Entry))
+    Effect.CallClobbers = goCodeCallClobbers(Img.Arch);
   Effect.BodyUnknown = F.HasIndependentRoots ||
                        (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64);
   Effect.BodyWrites = ~GPRFamilyMask{0xFFFF};
@@ -1859,10 +1917,12 @@ static GPRReadWidths returnedVectorCopies(const RegisterBlock &Block) {
 GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
                               const std::map<va_t, GPRFamilyMask> &MayWrite,
                               const std::map<va_t, GPRReadWidths> &EntryReads,
-                              GPRFamilyMask VolatileFamilies,
+                              GPRFamilyMask ConventionVolatile,
                               GPRFamilyMask ArgumentFamilies,
                               const std::set<va_t> &DispatchThunks,
                               const std::set<va_t> &VectorArgumentCallees) {
+  const GPRFamilyMask VolatileFamilies =
+      F.CallClobbers.value_or(ConventionVolatile);
   auto Clear = [](GPRReadWidths &Live, GPRFamilyMask Mask) {
     for (size_t I = 0; I < Live.size(); ++I)
       if ((Mask >> I) & 1)
@@ -2025,8 +2085,10 @@ CallRegisterSummaries solveCallRegisterEffects(
   // A call with fixed arguments may change every volatile register.
   for (const auto &[Entry, Effect] : Funcs)
     if (!Unknown.count(Entry))
-      Writes[Entry] =
-          Effect->Writes | (Effect->CallsFixedContract ? VolatileFamilies : 0);
+      Writes[Entry] = Effect->Writes |
+                      (Effect->CallsFixedContract
+                           ? Effect->CallClobbers.value_or(VolatileFamilies)
+                           : 0);
   for (const auto &[Entry, Effect] : Funcs)
     if (!BodyUnknown.count(Entry))
       Result.BodyMayWrite.emplace(Entry, Effect->BodyWrites);

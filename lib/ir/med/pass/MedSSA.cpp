@@ -555,8 +555,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
           auto It = RegVarOfId.find(Id);
           if (It == RegVarOfId.end())
             continue;
-          uint16_t Prefix = TRI.callPreservedPrefixSize(
-              It->second.RegOff, It->second.Size, TargetFormat);
+          uint16_t Prefix =
+              goCallKeptBytes(Op, TRI, It->second.RegOff, It->second.Size)
+                  .value_or(TRI.callPreservedPrefixSize(
+                      It->second.RegOff, It->second.Size, TargetFormat));
           if (Prefix > 0 && Prefix < It->second.Size && !Kill.count(Id)) {
             UEVar[B].insert(Id);
             VarOfId.emplace(Id, It->second);
@@ -1288,8 +1290,10 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
         MedVar PreservedInput;
         uint16_t PreservedPrefixSize = 0;
         if (It != RegVarOfId.end()) {
-          PreservedPrefixSize = TRI.callPreservedPrefixSize(
-              It->second.RegOff, It->second.Size, TargetFormat);
+          PreservedPrefixSize =
+              goCallKeptBytes(Op, TRI, It->second.RegOff, It->second.Size)
+                  .value_or(TRI.callPreservedPrefixSize(
+                      It->second.RegOff, It->second.Size, TargetFormat));
           if (PreservedPrefixSize > 0 &&
               PreservedPrefixSize < It->second.Size) {
             PreservedInput = It->second;

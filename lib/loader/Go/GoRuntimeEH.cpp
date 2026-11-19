@@ -8,12 +8,16 @@
 
 #include "GoRuntimeDetail.h"
 
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/DirectBranch.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -61,6 +65,41 @@ std::optional<RuntimeCallKind> classifyRuntimeName(llvm::StringRef Name) {
     return std::nullopt;
   if (Name.starts_with("runtime.goPanic") || Name.starts_with("runtime.panic"))
     return RuntimeCallKind::ImplicitPanic;
+  return std::nullopt;
+}
+
+/// The runtime write barrier routine the pclntab names \p Name at \p Entry
+/// on \p A, or none for any other function (GoWriteBarrierKind).
+std::optional<GoWriteBarrier> writeBarrierAt(Arch A, va_t Entry,
+                                             llvm::StringRef Name) {
+  if ((A != Arch::X64 && A != Arch::AArch64) ||
+      !Name.consume_front("runtime.gcWriteBarrier"))
+    return std::nullopt;
+  GoWriteBarrier Barrier;
+  Barrier.Entry = Entry;
+  if (Name.size() == 1 && Name.front() >= '1' && Name.front() <= '8') {
+    Barrier.Kind = GoWriteBarrierKind::Buffer;
+    return Barrier;
+  }
+  Barrier.Kind = GoWriteBarrierKind::Store;
+  if (A == Arch::AArch64) {
+    if (!Name.empty())
+      return std::nullopt;
+    Barrier.Destination = a64reg::X2;
+    Barrier.Value = a64reg::X3;
+    return Barrier;
+  }
+  // Go 1.16-1.20 amd64 also takes the written pointer in another register.
+  static constexpr std::pair<llvm::StringLiteral, uint64_t> ValueRegisters[] = {
+      {"", x86reg::RAX},   {"CX", x86reg::RCX}, {"DX", x86reg::RDX},
+      {"BX", x86reg::RBX}, {"BP", x86reg::RBP}, {"SI", x86reg::RSI},
+      {"R8", x86reg::R8},  {"R9", x86reg::R9}};
+  for (const auto &[Suffix, Register] : ValueRegisters)
+    if (Name == Suffix) {
+      Barrier.Destination = x86reg::RDI;
+      Barrier.Value = Register;
+      return Barrier;
+    }
   return std::nullopt;
 }
 
@@ -238,6 +277,34 @@ void parseGoExceptions(BinaryImage &Img) {
     }
     Funcs.push_back(std::move(G));
   }
+
+  // The code Go's register contract governs, and the write barriers that
+  // depart from it (GoModuleInfo::GoCode, GoModuleInfo::WriteBarriers).
+  for (const GoFunction &G : Funcs)
+    if (G.Raw.PcSP != 0 && G.CodeRange.isValid())
+      Module.GoCode.push_back(G.CodeRange);
+  llvm::sort(Module.GoCode,
+             [](const ExceptionAddressRange &A,
+                const ExceptionAddressRange &B) { return A.Begin < B.Begin; });
+  std::vector<ExceptionAddressRange> Merged;
+  for (const ExceptionAddressRange &Range : Module.GoCode)
+    if (!Merged.empty() && Range.Begin <= Merged.back().End)
+      Merged.back().End = std::max(Merged.back().End, Range.End);
+    else
+      Merged.push_back(Range);
+  Module.GoCode = std::move(Merged);
+  const bool TextBaseProven =
+      !Layout.EntryIsOffset || MD.TextBase != 0 || Header->TextStart != 0;
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid())
+        if (std::optional<GoWriteBarrier> Barrier =
+                writeBarrierAt(Img.Arch, G.CodeRange.Begin, G.Name))
+          Module.WriteBarriers.push_back(*Barrier);
+  llvm::sort(Module.WriteBarriers,
+             [](const GoWriteBarrier &A, const GoWriteBarrier &B) {
+               return A.Entry < B.Entry;
+             });
 
   if (!Layout.StackMapPCDataIndex) {
     Layout.StackMapPCDataIndex =

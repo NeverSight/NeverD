@@ -28,13 +28,22 @@ namespace neverd {
 
 struct TargetRegInfo;
 
+/// The low bytes of the register view \p Size bytes wide at \p RegOff that
+/// \p Call keeps under its Go register contract (MedOp::RegisterContract,
+/// goContractKeptBytes), before what its callee's summary proves.  nullopt
+/// under the platform convention, which each caller asks as it always has.
+std::optional<uint16_t> goCallKeptBytes(const MedOp &Call,
+                                        const TargetRegInfo &TRI,
+                                        uint64_t RegOff, uint16_t Size);
+
 /// Whether \p Call may change the register view \p Size bytes wide at
 /// \p RegOff, as the ABI lets a call change each caller-saved register.  It
 /// keeps the view when it keeps every caller-saved register
-/// (MedOp::PreservesCallerSaved), when the convention \p Format selects
-/// preserves all of it, when its callee is known never to write it
-/// (MedOp::CallPreservedGPRs), or when the view's register holds the call's
-/// result.  The stack, frame and link registers have models of their own.
+/// (MedOp::PreservesCallerSaved), when its register contract preserves all of
+/// it (the convention \p Format selects, or Go's: goCallKeptBytes), when its
+/// callee is known never to write it (MedOp::CallPreservedGPRs), or when the
+/// view's register holds the call's result.  The stack, frame and link
+/// registers have models of their own.
 bool callClobbersRegister(const MedOp &Call, uint64_t RegOff, uint16_t Size,
                           const TargetRegInfo &TRI, BinaryFormat Format);
 

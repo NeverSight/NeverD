@@ -23,6 +23,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
@@ -1898,11 +1899,23 @@ bool collectLowAddressUses(
             // registers and instruction-local temporaries.  Retaining their
             // pre-call address facts would later authenticate a stale table
             // base/index.  Preserve only byte views fully covered by the ABI's
-            // nonvolatile ranges.
+            // nonvolatile ranges, or what Go code keeps across the call.
+            const va_t Callee = Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                                        Op.Inputs[0].isConst()
+                                    ? Op.Inputs[0].Offset
+                                    : InvalidVA;
+            const CallRegisterContract Contract =
+                callRegisterContractOf(Img, Func.Entry, Callee);
+            const std::optional<uint64_t> Result =
+                goCallResultRegister(Img, Contract, Callee);
             for (auto It = State.begin(); It != State.end();) {
               const auto &[Space, Offset, Size] = It->first;
               bool Preserved = false;
-              if (Space == VnodeSpace::REG && Size <= InvalidVA - Offset)
+              if (Space == VnodeSpace::REG &&
+                  Contract != CallRegisterContract::Platform)
+                Preserved = goContractKeptBytes(TRI, Contract, Offset, Size,
+                                                Result) >= Size;
+              else if (Space == VnodeSpace::REG && Size <= InvalidVA - Offset)
                 for (const TargetRegisterRange &Range : PreservedRanges)
                   if (Range.Bytes <= InvalidVA - Range.Offset &&
                       Offset >= Range.Offset &&

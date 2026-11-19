@@ -8,6 +8,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -54,6 +55,17 @@ bool conventionPreserves(const TargetRegInfo &TRI, BinaryFormat Format,
 
 } // namespace
 
+std::optional<uint16_t> goCallKeptBytes(const MedOp &Call,
+                                        const TargetRegInfo &TRI,
+                                        uint64_t RegOff, uint16_t Size) {
+  if (Call.RegisterContract == CallRegisterContract::Platform)
+    return std::nullopt;
+  return goContractKeptBytes(TRI, Call.RegisterContract, RegOff, Size,
+                             Call.Output.Kind == MedVar::Reg && Call.Output.Size
+                                 ? std::optional<uint64_t>(Call.Output.RegOff)
+                                 : std::nullopt);
+}
+
 bool callClobbersRegister(const MedOp &Call, uint64_t RegOff, uint16_t Size,
                           const TargetRegInfo &TRI, BinaryFormat Format) {
   if ((Call.Opcode != NdOp::CALL && Call.Opcode != NdOp::INDIR_CALL) ||
@@ -76,7 +88,10 @@ bool callClobbersRegister(const MedOp &Call, uint64_t RegOff, uint16_t Size,
   if (TRI.isFrameOrLinkReg(RegOff) || TRI.isStackPointer(RegOff) ||
       (Call.Output.Kind == MedVar::Reg && Call.Output.RegOff == RegOff))
     return false;
-  return !conventionPreserves(TRI, Format, RegOff, Size) &&
+  const std::optional<uint16_t> GoKept =
+      goCallKeptBytes(Call, TRI, RegOff, Size);
+  return (GoKept ? *GoKept < Size
+                 : !conventionPreserves(TRI, Format, RegOff, Size)) &&
          !callPreservesRegisterBytes(TRI.TheArch, Call.CallPreservedGPRs,
                                      RegOff, Size);
 }

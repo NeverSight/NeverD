@@ -19,6 +19,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/HighIR.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedIR.h"
@@ -40,9 +41,13 @@ namespace call_args_detail {
 
 /// Win64 keeps RSI/RDI/XMM6-15; those are not in the SysV CalleeSaveRegs
 /// list. Walking past helper CALLs for `mov [rsp+20h], esi` must use the
-/// format-aware preserved set, not `isCalleeSaveReg`.
+/// format-aware preserved set, not `isCalleeSaveReg`.  Go code keeps only
+/// the stack and frame pointers across a call (\p GoCode, isGoCode).
 inline bool isCallPreservedReg(const TargetRegInfo &TRI, BinaryFormat Format,
-                               uint64_t RegOff, uint16_t Size) {
+                               bool GoCode, uint64_t RegOff, uint16_t Size) {
+  if (GoCode)
+    return goContractKeptBytes(TRI, CallRegisterContract::GoCode, RegOff, Size,
+                               std::nullopt) >= Size;
   if (TRI.isCalleeSaveReg(RegOff))
     return true;
   if (Size == 0)

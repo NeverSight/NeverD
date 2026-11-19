@@ -3215,8 +3215,9 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
            !Owner->DoesNotReturn &&
            callClobbersRegister(*Owner, Current.RegOff, Current.Size, TRI,
                                 TargetFormat) &&
-           TRI.callPreservedPrefixSize(Current.RegOff, Current.Size,
-                                       TargetFormat) == 0;
+           goCallKeptBytes(*Owner, TRI, Current.RegOff, Current.Size)
+                   .value_or(TRI.callPreservedPrefixSize(
+                       Current.RegOff, Current.Size, TargetFormat)) == 0;
   };
 
   auto classifyCodeConstant = [&](const MedVar &Current,

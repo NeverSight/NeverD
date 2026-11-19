@@ -181,6 +181,10 @@ struct LocalRegisterEffect {
   /// A call with fixed arguments (RegisterStep::FixedArguments) may change
   /// every volatile register.
   bool CallsFixedContract = false;
+  /// The families a call this function makes may change where no summary
+  /// bounds the callee, when that is not the solve's convention set: Go code
+  /// keeps only the stack and frame pointers across a call (isGoCode).
+  std::optional<GPRFamilyMask> CallClobbers;
   /// The body itself is not fully known, so neither summary exists.
   bool Incomplete = false;
   /// Control leaves for code no summary describes (an indirect tail call)

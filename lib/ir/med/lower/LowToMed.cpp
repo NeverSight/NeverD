@@ -34,6 +34,7 @@
 #include "neverd/ir/low/AArch64WritebackMemory.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowIntrinsicOutputs.h"
@@ -1509,6 +1510,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                                     MOp.Opcode == NdOp::RETURN);
       if (MOp.Opcode == NdOp::CALL || MOp.Opcode == NdOp::INDIR_CALL) {
         MOp.CallSiteId = NextCallSiteId++;
+        if (Image)
+          MOp.RegisterContract = callRegisterContractOf(
+              *Image, Low.Entry,
+              MOp.Opcode == NdOp::CALL && LOp.NumInputs &&
+                      LOp.Inputs[0].isConst()
+                  ? LOp.Inputs[0].Offset
+                  : InvalidVA);
         if (BoundaryIndex < LB.InstructionBoundaries.size()) {
           const LowInstructionBoundary &Boundary =
               LB.InstructionBoundaries[BoundaryIndex];
@@ -1664,6 +1672,22 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         MOp.SourceCallHint = std::make_shared<const SourceCallTypeHint>(*Site);
       } else if (!bindFormattedCall(MB, MOp, LOp))
         applyCallRegisterEffect(MB, MOp, LOp, TailCall);
+      // A write barrier defines only the buffer space it returns, in its own
+      // register, and returns nothing where it performs the store itself
+      // (GoWriteBarrierKind): no result register changes.
+      if (MOp.RegisterContract == CallRegisterContract::GoWriteBarrier &&
+          MOp.NumInputs && MOp.Inputs[0].isConst())
+        if (const GoWriteBarrier *Barrier =
+                goWriteBarrierAt(*Image, MOp.Inputs[0].ConstVal)) {
+          if (const std::optional<uint64_t> Buffer =
+                  goWriteBarrierResult(TheArch, Barrier->Kind)) {
+            MOp.Output = ndVarToMedVar(NdVar::reg(*Buffer, 8));
+          } else {
+            MOp.Output = MedVar{};
+            MOp.Output.Id = -1;
+            MOp.Output.Size = 0;
+          }
+        }
       if (CallUnreadGPRs && TheArch == Arch::X64 && LOp.Opcode == NdOp::CALL &&
           MOp.Opcode == NdOp::CALL && LOp.NumInputs &&
           LOp.Inputs[0].isConst() && MOp.NumInputs && MOp.Inputs[0].isConst() &&

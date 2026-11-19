@@ -13,6 +13,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/loader/BinaryImage.h"
@@ -31,11 +32,15 @@ namespace neverd::detail {
 
 // The graph is the resolver's immutable, rooted snapshot. Keeping this helper
 // private avoids introducing a second CFG or a persistent per-image state.
+// \p Caller is the function whose calls the walk crosses, which decides what
+// each keeps (callRegisterContractOf).
 template <typename GraphT, typename ConditionEdges, typename Consume>
-std::optional<uint64_t> readonlyScalarEnvelope(
-    const GraphT &Graph, const BinaryImage &Image, const NdVar &Candidate,
-    std::pair<int, int> Point, uint64_t Bound, ConditionEdges Edges,
-    Consume ConsumeWork, size_t *SharedWork, bool &Complete) {
+std::optional<uint64_t>
+readonlyScalarEnvelope(const GraphT &Graph, const BinaryImage &Image,
+                       va_t Caller, const NdVar &Candidate,
+                       std::pair<int, int> Point, uint64_t Bound,
+                       ConditionEdges Edges, Consume ConsumeWork,
+                       size_t *SharedWork, bool &Complete) {
   Complete = true;
   if (!Bound || Bound > 64 || !Candidate.Size || Candidate.Size > 8 ||
       !supportsImmutableImageReads(Image) || !Graph.InstructionGuards.empty())
@@ -173,7 +178,18 @@ std::optional<uint64_t> readonlyScalarEnvelope(
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         if (!charge(Registers.size() * (Preserved.size() + 1)))
           return {};
+        const va_t Callee =
+            Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst()
+                ? Op.Inputs[0].Offset
+                : InvalidVA;
+        const CallRegisterContract Contract =
+            callRegisterContractOf(Image, Caller, Callee);
+        const std::optional<uint64_t> Result =
+            goCallResultRegister(Image, Contract, Callee);
         std::erase_if(Registers, [&](const auto &Byte) {
+          if (Contract != CallRegisterContract::Platform)
+            return goContractKeptBytes(TRI, Contract, Byte.first, 1, Result) ==
+                   0;
           return std::none_of(Preserved.begin(), Preserved.end(),
                               [&](const TargetRegisterRange &Range) {
                                 return Byte.first >= Range.Offset &&

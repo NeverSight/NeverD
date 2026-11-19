@@ -82,9 +82,11 @@ void collectSpilledStackArgs(const CallArgScan &Scan,
       Scan.Convention && Scan.Convention->ReservedOutgoingArea;
   const auto Layout = TRI.integerArgumentLayout(Format);
 
+  const bool GoCode = Scan.Image && Scan.Function &&
+                      isGoCode(*Scan.Image, Scan.Function->Entry);
   auto preserved = [&](const MedVar &V) {
     return V.Kind == MedVar::Reg &&
-           isCallPreservedReg(TRI, Format, V.RegOff, V.Size);
+           isCallPreservedReg(TRI, Format, GoCode, V.RegOff, V.Size);
   };
 
   // Written slots of a reserved outgoing area (call-time offset, address) so
@@ -683,9 +685,11 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                  int Before) -> ExprPtr {
     const BinaryFormat Format =
         Image ? Image->abiFormat() : BinaryFormat::Unknown;
+    const bool GoCode = Image && CurMed && isGoCode(*Image, CurMed->Entry);
     auto preserved = [&](const MedVar &Reg) {
-      return Reg.Kind == MedVar::Reg && call_args_detail::isCallPreservedReg(
-                                            TRI, Format, Reg.RegOff, Reg.Size);
+      return Reg.Kind == MedVar::Reg &&
+             call_args_detail::isCallPreservedReg(TRI, Format, GoCode,
+                                                  Reg.RegOff, Reg.Size);
     };
     for (int Peel = 0;
          Peel <

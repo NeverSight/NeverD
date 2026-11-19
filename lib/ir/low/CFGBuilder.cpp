@@ -26,6 +26,7 @@
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/GuardedZeroSelect.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
 #include "neverd/ir/low/MIPS/MIPSControlTarget.h"
@@ -332,11 +333,15 @@ struct StackFrameModel {
   /// own return address and nothing else, as under both x86-64 conventions.
   /// An i386 callee may pop its arguments too (`ret imm`).
   bool CallsKeepStackPointer = false;
+  /// The image and the function whose calls the analysis follows, which
+  /// decide each call's register contract (callRegisterContractOf).
+  const BinaryImage *Img = nullptr;
+  va_t Caller = InvalidVA;
 
-  StackFrameModel(const TargetRegInfo &Info, BinaryFormat F)
-      : TRI(&Info), Format(F),
-        StackPointer{VnodeSpace::REG, Info.StackPointer, Info.PointerSize},
-        Width(Info.PointerSize) {}
+  StackFrameModel(const BinaryImage &Image, va_t Function)
+      : TRI(&getTargetRegInfo(Image.Arch)), Format(Image.abiFormat()),
+        StackPointer{VnodeSpace::REG, TRI->StackPointer, TRI->PointerSize},
+        Width(TRI->PointerSize), Img(&Image), Caller(Function) {}
 };
 constexpr int64_t kNoLowerBound = std::numeric_limits<int64_t>::min();
 constexpr int64_t kNoUpperBound = std::numeric_limits<int64_t>::max();
@@ -366,10 +371,23 @@ void transferStackOffsets(const StackFrameModel &M, const LowOp &Op,
                : std::next(It);
   };
   if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+    const va_t Callee =
+        Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst()
+            ? Op.Inputs[0].Offset
+            : InvalidVA;
+    const CallRegisterContract Contract =
+        callRegisterContractOf(*M.Img, M.Caller, Callee);
+    const std::optional<uint64_t> Result =
+        goCallResultRegister(*M.Img, Contract, Callee);
+    auto Keeps = [&](const StackOffsetKey &Key) {
+      return Contract == CallRegisterContract::Platform
+                 ? M.TRI->isCallPreserved(Key.Offset, Key.Size, M.Format)
+                 : goContractKeptBytes(*M.TRI, Contract, Key.Offset, Key.Size,
+                                       Result) >= Key.Size;
+    };
     for (auto It = S.begin(); It != S.end();)
       It = It->first.Space == VnodeSpace::REG &&
-                   (M.TRI->isCallPreserved(It->first.Offset, It->first.Size,
-                                           M.Format) ||
+                   (Keeps(It->first) ||
                     (M.CallsKeepStackPointer && It->first == M.StackPointer))
                ? std::next(It)
                : S.erase(It);
@@ -529,7 +547,7 @@ std::set<va_t> frameReleasingIndirectJumps(const BinaryImage &Img,
   const size_t N = Func.Blocks.size();
   if (N == 0)
     return Jumps;
-  StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  StackFrameModel M(Img, Func.Entry);
   M.CallsKeepStackPointer = Img.Arch == Arch::X64;
   std::vector<std::optional<StackOffsetState>> FromEntry(N);
   FromEntry[0] = StackOffsetState{{M.StackPointer, {0, 0, 0}}};
@@ -675,7 +693,7 @@ CFGBuilder::proveClosedOwnSubroutines(const BinaryImage &Img) const {
   Decoder Dec;
   if (!Dec.init(Img))
     return {};
-  StackFrameModel Model(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  StackFrameModel Model(Img, CurrentFuncEntry);
   Model.CallsKeepStackPointer = true;
   for (va_t Entry : Entries) {
     CFGBuilder Builder;
@@ -764,7 +782,7 @@ CFGBuilder::classifyOwnInteriorCalls(const BinaryImage &Img,
   const size_t N = Func.Blocks.size();
   if (N == 0)
     return Verdict;
-  StackFrameModel M(getTargetRegInfo(Img.Arch), Img.abiFormat());
+  StackFrameModel M(Img, Func.Entry);
   M.CallsKeepStackPointer = Img.Arch == Arch::X64;
   const StackOffsetKey &StackPointerKey = M.StackPointer;
   // Offsets from the entry stack pointer.  Any other root, including a block

@@ -251,6 +251,34 @@ struct GoFunctionEH {
   }
 };
 
+/// Which contract a Go runtime write barrier routine follows.  Go's runtime
+/// documents both beside the routines (src/runtime/asm_amd64.s and
+/// asm_arm64.s): neither follows the Go ABI, and neither clobbers a
+/// general-purpose register beyond what it returns.
+enum class GoWriteBarrierKind : uint8_t {
+  /// Go 1.11-1.20 `runtime.gcWriteBarrier` and the amd64 variants that take
+  /// the value in another register (`runtime.gcWriteBarrierCX` and so on): it
+  /// performs the pointer store itself and keeps every general-purpose
+  /// register.
+  Store,
+  /// Go 1.21 and later `runtime.gcWriteBarrier1` through `8`: it returns
+  /// write barrier buffer space for the caller to fill in R11 (amd64) or R25
+  /// (arm64), and keeps every other general-purpose register but arm64's
+  /// assembler temporary R27.
+  Buffer,
+};
+
+/// A runtime write barrier routine the `pclntab` names.
+struct GoWriteBarrier {
+  va_t Entry = 0;
+  GoWriteBarrierKind Kind = GoWriteBarrierKind::Store;
+  /// For a Store barrier, the registers holding the address it writes at
+  /// (RDI, X2) and the pointer it writes there (RAX or the register its name
+  /// gives, X3).  Unused for Buffer.
+  uint64_t Destination = 0;
+  uint64_t Value = 0;
+};
+
 /// Image-wide state recovered from the Go runtime's `pclntab` and the
 /// `moduledata` that anchors it.  A Go image needs both: the `pclntab` holds
 /// the per-function records, but the offsets inside them are relative to bases
@@ -294,6 +322,18 @@ struct GoModuleInfo {
   /// what the records themselves proved rather than what the header declared.
   GoOpenCodedDeferLayout OpenCodedDeferLayout =
       GoOpenCodedDeferLayout::Contiguous;
+  /// The code of every function whose `pclntab` record has a pc-SP table,
+  /// sorted, with adjacent functions merged: what the Go toolchain compiled
+  /// or assembled.  Go code keeps no register across a call but the stack and
+  /// frame pointers (isGoCode).  The linker writes that table for every
+  /// function it has Go frame data for and leaves its offset zero otherwise,
+  /// so C code a cgo image links internally, whose record carries no such
+  /// table, stays out; with external linking it has no record at all.
+  std::vector<ExceptionAddressRange> GoCode;
+  /// The runtime's write barrier routines, sorted by entry.  Empty unless the
+  /// text base is proven: a routine at a guessed address would give an
+  /// unrelated callee its contract.
+  std::vector<GoWriteBarrier> WriteBarriers;
 };
 
 } // namespace neverd

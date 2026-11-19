@@ -4,9 +4,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "GoRuntimeEHTestsDetail.h"
 #include "gtest/gtest.h"
 
-#include "GoRuntimeEHTestsDetail.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 namespace {
 
@@ -77,8 +79,7 @@ TEST(GoLegacyPclnTab, ReportsThatTheUnsafePointTableDoesNotExistYet) {
   PCValueTable RegMapIndex;
   RegMapIndex.Steps = {{-1, 0x40}, {0, 0x40}};
   Work.PCData = {RegMapIndex};
-  T.installPclnTab(
-      buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
@@ -138,8 +139,7 @@ TEST(GoLegacyPclnTab, ProvesWhichPCDataTableHoldsTheStackMapIndex) {
   StackMapIndex.Steps = {{0, 0x40}, {1, 0x40}};
   Work.PCData = {RegMapIndex, StackMapIndex};
   Work.FuncData = {std::nullopt, LocalsVA};
-  T.installPclnTab(
-      buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
@@ -163,16 +163,14 @@ TEST(GoLegacyPclnTab, ReportsNoStackMapRangesWhenBothCandidatesSurvive) {
   Ambiguous.Steps = {{0, 0x40}, {1, 0x40}};
   Work.PCData = {Ambiguous, Ambiguous};
   Work.FuncData = {std::nullopt, LocalsVA};
-  T.installPclnTab(
-      buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
   const ExceptionInfo &Info = T.Img.ExceptionMetadata;
   ASSERT_TRUE(Info.GoModule.has_value());
   EXPECT_FALSE(Info.GoModule->StackMapPCDataIndex.has_value());
-  EXPECT_TRUE(
-      anyDiagnosticContains(Info.Diagnostics, "PCDATA_StackMapIndex"));
+  EXPECT_TRUE(anyDiagnosticContains(Info.Diagnostics, "PCDATA_StackMapIndex"));
 
   const ExceptionFunction *F = findRecord(Info, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
@@ -191,13 +189,12 @@ TEST(GoLegacyPclnTab, ReadsOpenCodedDeferInfoFromItsPreGo116Index) {
   // index five unambiguous on a table this old.
   Work.FuncData = {std::nullopt, std::nullopt, std::nullopt,
                    std::nullopt, std::nullopt, DeferInfoVA};
-  T.installPclnTab(
-      buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
+  T.installPclnTab(buildPclnTab(kGo12Magic, {Work}, kTextVA + 0x200).Bytes);
 
   parseGoExceptions(T.Img);
 
-  const ExceptionFunction *F = findRecord(T.Img.ExceptionMetadata,
-                                          kTextVA + 0x100);
+  const ExceptionFunction *F =
+      findRecord(T.Img.ExceptionMetadata, kTextVA + 0x100);
   ASSERT_NE(F, nullptr);
   EXPECT_TRUE(F->Go->UsesOpenCodedDefers);
   ASSERT_TRUE(F->Go->OpenCodedDeferInfo.has_value());
@@ -226,8 +223,7 @@ TEST(GoLegacyPclnTab, StopsAtAFunctabEntryPointingOutsideTheImage) {
   GoTestImage T;
   GoFuncSpec First = makeDeferringFunc("main.first", kTextVA + 0x100);
   GoFuncSpec Second = makeDeferringFunc("main.second", kTextVA + 0x200);
-  BuiltPclnTab Tab = buildPclnTab(kGo12Magic, {First, Second},
-                                  kTextVA + 0x300);
+  BuiltPclnTab Tab = buildPclnTab(kGo12Magic, {First, Second}, kTextVA + 0x300);
   // Second entry's funcoff, i.e. the fourth word of the functab.
   Tab.put64(16 + 3 * 8, 0x00F00000);
   T.installPclnTab(Tab.Bytes);
@@ -239,6 +235,95 @@ TEST(GoLegacyPclnTab, StopsAtAFunctabEntryPointingOutsideTheImage) {
   EXPECT_EQ(Info.GoModule->FunctionCount, 1u);
   EXPECT_TRUE(anyDiagnosticContains(Info.Diagnostics, "ended early"));
   EXPECT_EQ(Info.ParseStatus, ExceptionParseStatus::Partial);
+}
+
+//===----------------------------------------------------------------------===//
+// Go code and the runtime's write barriers
+//===----------------------------------------------------------------------===//
+
+/// A function the Go toolchain built: its record carries a pc-SP table.
+GoFuncSpec makeGoCode(const std::string &Name, va_t EntryVA) {
+  GoFuncSpec F;
+  F.Name = Name;
+  F.EntryVA = EntryVA;
+  F.PcSP.Steps = {{0, 0x40}};
+  return F;
+}
+
+TEST(GoCodeRanges, LeaveOutCodeWhoseRecordHasNoFrameTable) {
+  // An internally linked cgo image lists its C functions too, without a
+  // pc-SP table: they keep the platform's register contract.
+  GoTestImage T;
+  GoFuncSpec C;
+  C.Name = "x_cgo_init";
+  C.EntryVA = kTextVA + 0x300;
+  T.installPclnTab(buildPclnTab(kGo116Magic,
+                                {makeGoCode("main.a", kTextVA + 0x100),
+                                 makeGoCode("main.b", kTextVA + 0x200), C,
+                                 makeGoCode("main.c", kTextVA + 0x400)},
+                                kTextVA + 0x500)
+                       .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->GoCode.size(), 2u);
+  // Adjacent Go functions merge into one range.
+  EXPECT_EQ(Module->GoCode[0].Begin, kTextVA + 0x100);
+  EXPECT_EQ(Module->GoCode[0].End, kTextVA + 0x300);
+  EXPECT_EQ(Module->GoCode[1].Begin, kTextVA + 0x400);
+  EXPECT_EQ(Module->GoCode[1].End, kTextVA + 0x500);
+  EXPECT_TRUE(Module->WriteBarriers.empty());
+}
+
+TEST(GoWriteBarriers, NameEachContractTheRuntimeDocuments) {
+  GoTestImage T;
+  GoFuncSpec Unbuilt = makeGoCode("runtime.gcWriteBarrier9", kTextVA + 0x500);
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.gcWriteBarrier", kTextVA + 0x100),
+                    makeGoCode("runtime.gcWriteBarrierR8", kTextVA + 0x200),
+                    makeGoCode("runtime.gcWriteBarrier3", kTextVA + 0x300),
+                    makeGoCode("runtime.gcWriteBarrierAX", kTextVA + 0x400),
+                    Unbuilt},
+                   kTextVA + 0x600)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->WriteBarriers.size(), 3u);
+  const GoWriteBarrier &Store = Module->WriteBarriers[0];
+  EXPECT_EQ(Store.Entry, kTextVA + 0x100);
+  EXPECT_EQ(Store.Kind, GoWriteBarrierKind::Store);
+  EXPECT_EQ(Store.Destination, x86reg::RDI);
+  EXPECT_EQ(Store.Value, x86reg::RAX);
+  const GoWriteBarrier &Variant = Module->WriteBarriers[1];
+  EXPECT_EQ(Variant.Kind, GoWriteBarrierKind::Store);
+  EXPECT_EQ(Variant.Value, x86reg::R8);
+  const GoWriteBarrier &Buffer = Module->WriteBarriers[2];
+  EXPECT_EQ(Buffer.Entry, kTextVA + 0x300);
+  EXPECT_EQ(Buffer.Kind, GoWriteBarrierKind::Buffer);
+}
+
+TEST(GoWriteBarriers, ARM64TakesItsOwnRegisters) {
+  GoTestImage T(Arch::AArch64);
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.gcWriteBarrier", kTextVA + 0x100),
+                    makeGoCode("runtime.gcWriteBarrierCX", kTextVA + 0x200),
+                    makeGoCode("runtime.gcWriteBarrier8", kTextVA + 0x300)},
+                   kTextVA + 0x400)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  // arm64 never had the register variants amd64 has.
+  ASSERT_EQ(Module->WriteBarriers.size(), 2u);
+  EXPECT_EQ(Module->WriteBarriers[0].Destination, a64reg::X2);
+  EXPECT_EQ(Module->WriteBarriers[0].Value, a64reg::X3);
+  EXPECT_EQ(Module->WriteBarriers[1].Kind, GoWriteBarrierKind::Buffer);
 }
 
 } // namespace

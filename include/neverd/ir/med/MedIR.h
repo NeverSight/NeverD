@@ -15,6 +15,7 @@
 #define NEVERD_IR_MED_MEDIR_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/CallRegisterContract.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/NdTypes.h"
@@ -273,6 +274,9 @@ struct MedOp {
   /// transaction stays observable; this never authorizes its removal.
   std::optional<uint16_t> SourceReturnSlotOffset;
   bool PreservesCallerSaved = false;
+  /// Which registers this call keeps where that is not the platform
+  /// convention's (CallRegisterContract, decided by callRegisterContractOf).
+  CallRegisterContract RegisterContract = CallRegisterContract::Platform;
   /// GPR families (see CallRegisterEffects.h) the direct callee provably
   /// never writes, so SSA keeps their pre-call values across this call.
   uint32_t CallPreservedGPRs = 0;

@@ -11,6 +11,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExceptionForwarding.h"
@@ -60,6 +61,8 @@ struct FrameState {
 class TailFrameGuard {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::AArch64);
   const std::vector<TargetRegisterRange> Preserved;
+  /// The function is Go code, whose calls keep no other register (isGoCode).
+  bool GoCode = false;
   size_t Remaining;
   const LowFunc *Owner = nullptr;
   const BinaryImage *Image = nullptr;
@@ -118,6 +121,10 @@ class TailFrameGuard {
   }
 
   bool callPreserves(uint64_t Offset) const {
+    // Go code keeps only the stack and frame pointers across a call.
+    if (GoCode)
+      return goContractKeptBytes(TRI, CallRegisterContract::GoCode, Offset, 8,
+                                 std::nullopt) == 8;
     for (const auto &Range : Preserved)
       if (Offset >= Range.Offset && Offset - Range.Offset <= Range.Bytes &&
           8 <= Range.Bytes - (Offset - Range.Offset))
@@ -594,6 +601,7 @@ public:
     Unwind =
         Function.ExceptionMetadata ? &*Function.ExceptionMetadata : nullptr;
     Owner = &Function;
+    GoCode = Image && isGoCode(*Image, Function.Entry);
     if (auto Error = validateLowInstructionBoundaries(Function)) {
       llvm::consumeError(std::move(Error));
       return {};

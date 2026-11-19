@@ -666,6 +666,7 @@ add_neverd_unittest(NeverDLiftTests
   core/FPParameterMaskTests.cpp
   core/MedDceImplicitSpTests.cpp
   core/MedCallLeftoversTests.cpp
+  core/GoCallContractTests.cpp
   core/MedPositionalCallArgumentsTests.cpp
   core/MedCallResultControlTests.cpp
   core/MedStackDeltaTests.cpp

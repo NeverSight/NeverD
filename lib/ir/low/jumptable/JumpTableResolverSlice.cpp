@@ -35,6 +35,7 @@
 #include "neverd/ir/low/AArch64ImmediateMemoryImage.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportedMemoryCopy.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/ir/low/RegistrationSharedCall.h"
@@ -5848,13 +5849,28 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
     if (Size > InvalidVA - Offset ||
         !consumeEvidence(CallPreservedRanges.size()))
       return false;
-    if (std::any_of(CallPreservedRanges.begin(), CallPreservedRanges.end(),
-                    [&](const TargetRegisterRange &Range) {
-                      return Range.Bytes <= InvalidVA - Range.Offset &&
-                             Offset >= Range.Offset &&
-                             Offset + Size <= Range.Offset + Range.Bytes;
-                    }))
+    // Go code keeps only the stack and frame pointers across a call, unless
+    // the callee is a write barrier (callRegisterContractOf).
+    const va_t Callee =
+        Call.Opcode == NdOp::CALL && Call.NumInputs && Call.Inputs[0].isConst()
+            ? Call.Inputs[0].Offset
+            : InvalidVA;
+    const CallRegisterContract Contract =
+        callRegisterContractOf(*CurrentImg, CurrentFuncEntry, Callee);
+    if (Contract != CallRegisterContract::Platform) {
+      if (goContractKeptBytes(
+              TRI, Contract, Offset, Size,
+              goCallResultRegister(*CurrentImg, Contract, Callee)) >= Size)
+        return true;
+    } else if (std::any_of(CallPreservedRanges.begin(),
+                           CallPreservedRanges.end(),
+                           [&](const TargetRegisterRange &Range) {
+                             return Range.Bytes <= InvalidVA - Range.Offset &&
+                                    Offset >= Range.Offset &&
+                                    Offset + Size <= Range.Offset + Range.Bytes;
+                           })) {
       return true;
+    }
     const auto Preserved = provedCalleePreservedGPRs(Call, consumeEvidence);
     return Preserved && callPreservesRegisterBytes(CurrentImg->Arch, *Preserved,
                                                    Offset, Size);
@@ -10819,9 +10835,9 @@ std::vector<bool> CFGBuilder::tableValuesMatchAtUses(
         continue;
       bool StateComplete = true;
       const auto Mask = detail::readonlyScalarEnvelope(
-          Graph, *CurrentImg, Query.Candidate, *Point, Query.UnsignedUpperBound,
-          resolverConditionEdges, consumeEvidence, GraphWorkBudget,
-          StateComplete);
+          Graph, *CurrentImg, CurrentFuncEntry, Query.Candidate, *Point,
+          Query.UnsignedUpperBound, resolverConditionEdges, consumeEvidence,
+          GraphWorkBudget, StateComplete);
       if (Mask && StateComplete) {
         Results[QueryIndex] = true;
         if (QueryUnsignedFeasibleMasks)

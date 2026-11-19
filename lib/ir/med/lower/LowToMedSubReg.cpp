@@ -13,6 +13,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedCallLeftovers.h"
 
 #include <algorithm>
 #include <map>
@@ -359,7 +360,9 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
         auto CollectPartial = [&](const RegWriteMap &Writes, bool FromZext) {
           for (const auto &[Key, Write] : Writes) {
             const uint16_t Prefix =
-                TRI.callPreservedPrefixSize(Key.first, Key.second);
+                goCallKeptBytes(MOp, TRI, Key.first, Key.second)
+                    .value_or(
+                        TRI.callPreservedPrefixSize(Key.first, Key.second));
             if (Prefix == 0 || Prefix >= Key.second)
               continue;
             auto [It, Inserted] =
@@ -373,7 +376,9 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
         for (const auto &[WideKey, Partial] : PartiallyPreserved) {
           const auto &WideWrite = Partial.Write;
           const uint16_t Prefix =
-              TRI.callPreservedPrefixSize(WideKey.first, WideKey.second);
+              goCallKeptBytes(MOp, TRI, WideKey.first, WideKey.second)
+                  .value_or(TRI.callPreservedPrefixSize(WideKey.first,
+                                                        WideKey.second));
           const auto NarrowKey = std::make_pair(WideKey.first, Prefix);
           auto NarrowId = RegVarMap.find(NarrowKey);
           if (NarrowId == RegVarMap.end())
@@ -422,8 +427,11 @@ void LowToMedConverter::fixupSubRegisters(MedFunc &Func) {
           for (auto It = Writes.begin(); It != Writes.end();) {
             uint64_t RegOff = It->first.first;
             uint16_t Size = It->first.second;
+            const std::optional<uint16_t> GoKept =
+                goCallKeptBytes(MOp, TRI, RegOff, Size);
             if (!TRI.isFrameOrLinkReg(RegOff) &&
-                !TRI.isCallPreserved(RegOff, Size, TargetFormat) &&
+                !(GoKept ? *GoKept >= Size
+                         : TRI.isCallPreserved(RegOff, Size, TargetFormat)) &&
                 !SummaryPreserved(RegOff, Size))
               It = Writes.erase(It);
             else
