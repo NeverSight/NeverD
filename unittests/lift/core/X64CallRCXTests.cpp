@@ -332,7 +332,9 @@ TEST(X64CallRCX, LLVMAndCRetainTheCallItsMemoryAndUnwindEffects) {
   EXPECT_NE(C.find("\"unwind\""), std::string::npos) << C;
   EXPECT_NE(C.find("-fexceptions"), std::string::npos) << C;
   EXPECT_EQ(C.find("__builtin_trap"), std::string::npos) << C;
-  EXPECT_NE(C.find("unk_2000"), std::string::npos) << C;
+  // A proven callable entry names its function even where the source view
+  // reads the original image's storage: the declared callee, not a label.
+  EXPECT_NE(C.find("(void*)native_target"), std::string::npos) << C;
   if (const auto *Directory = std::getenv("NEVERD_TEST_X64_CALL_RCX_EXPORT")) {
     std::error_code Error;
     llvm::raw_fd_ostream IR(std::string(Directory) + "/native.ll", Error);
