@@ -342,19 +342,21 @@ std::string notDecompiledNote(llvm::StringRef Name, va_t Entry,
          llvm::utohexstr(Entry) + ": " + Commented(Reason.str()) + " */\n";
 }
 
-std::string refusedFunctionNotes(const PipelineResult &Result) {
+std::string refusedFunctionNotes(const PipelineResult &Result,
+                                 const std::set<va_t> &AlreadyNoted) {
   std::vector<const PipelineFunctionAudit *> Refused;
   for (const PipelineFunctionAudit &Audit : Result.FunctionAudits)
-    switch (Audit.Disposition) {
-    case PipelineFunctionDisposition::RejectedLowIR:
-    case PipelineFunctionDisposition::RejectedIncomplete:
-    case PipelineFunctionDisposition::RejectedUnwindlessNonLeaf:
-    case PipelineFunctionDisposition::MedIRFailed:
-      Refused.push_back(&Audit);
-      break;
-    default:
-      break;
-    }
+    if (!AlreadyNoted.count(Audit.Entry))
+      switch (Audit.Disposition) {
+      case PipelineFunctionDisposition::RejectedLowIR:
+      case PipelineFunctionDisposition::RejectedIncomplete:
+      case PipelineFunctionDisposition::RejectedUnwindlessNonLeaf:
+      case PipelineFunctionDisposition::MedIRFailed:
+        Refused.push_back(&Audit);
+        break;
+      default:
+        break;
+      }
   llvm::sort(Refused,
              [](const auto *A, const auto *B) { return A->Entry < B->Entry; });
   std::string Notes;
@@ -2826,8 +2828,11 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     Opts.SymbolicLLVMSource = true;
   }
   // A named ARM function with no instruction-state evidence is not a
-  // candidate for either C route. Reject the whole requested output before
-  // analysis so a partly marked image cannot silently omit that function.
+  // candidate for either C route.  One the request names fails it; a whole
+  // unit leaves it out and names it at its head, with why, as it does a
+  // function the pipeline refuses, so the omission is never silent.
+  std::string ModeNotes;
+  std::set<va_t> ModeUnknownEntries;
   if (R.Img.Arch == Arch::ARM) {
     for (const Symbol &Sym : R.Img.Symbols) {
       if (!Sym.IsFunc || R.Img.isImportStubAt(Sym.Addr) ||
@@ -2835,9 +2840,15 @@ static const char *decompileAllImpl(neverd_session_t Sess,
            !Opts.OnlyFunctionEntries.count(Sym.Addr)))
         continue;
       if (auto Reason = missingARMModeReason(R.Img, Sym.Addr)) {
-        if (S)
-          S->setError(*Reason);
-        return nullptr;
+        if (!Opts.OnlyFunctionEntries.empty()) {
+          if (S)
+            S->setError(*Reason);
+          return nullptr;
+        }
+        if (ModeUnknownEntries.insert(Sym.Addr).second)
+          ModeNotes += notDecompiledNote(
+              Sym.Name.empty() ? "sub_" + llvm::utohexstr(Sym.Addr) : Sym.Name,
+              Sym.Addr, *Reason);
       }
     }
   }
@@ -2957,8 +2968,8 @@ static const char *decompileAllImpl(neverd_session_t Sess,
     return nullptr;
   }
 
-  // A function the pipeline refused is named at the unit's head.
-  OS << refusedFunctionNotes(R.Result);
+  // A function the pipeline refused is named at the unit's head, once.
+  OS << ModeNotes << refusedFunctionNotes(R.Result, ModeUnknownEntries);
   // Data takes the names a session's listing of the image gives it.
   const std::optional<DataAccessWidths> AccessWidths =
       collectDataAccessWidths(R.Img, runFunctions(R));

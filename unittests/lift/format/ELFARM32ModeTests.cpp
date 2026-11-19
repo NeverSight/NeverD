@@ -1363,6 +1363,64 @@ unindexed:
   EXPECT_FALSE(Image->instructionModeAt(Unindexed));
 }
 
+// A function no evidence gives a mode stays out of a whole unit, named once
+// at its head with why; asking for that function alone still fails.
+TEST_F(ELFARM32ModeTest, AWholeUnitNamesAFunctionWithoutAMode) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "ARM fixture requires cross-target clang";
+  if (!exec("ld.lld", {"--version"}).ok())
+    GTEST_SKIP() << "ARM ELF linker is unavailable";
+
+  auto Image = loadStrippedSharedAssembly("unknown_mode_unit", R"(
+.syntax unified
+.text
+.thumb
+.globl exported
+.type exported,%function
+.thumb_func
+exported:
+  movs r0, #1
+  bx lr
+.arm
+.p2align 2
+.type lone,%function
+lone:
+  .fnstart
+  mov r0, #2
+  bx lr
+  .cantunwind
+  .fnend
+)");
+  ASSERT_TRUE(static_cast<bool>(Image)) << llvm::toString(Image.takeError());
+  // lld closes the index with an empty entry at the end of the code.
+  std::optional<va_t> Lone;
+  for (const ExceptionFunction &Function : Image->ExceptionMetadata.Functions)
+    if (!Lone && Function.Kind == RuntimeFunctionKind::Primary &&
+        Function.ParseStatus != ExceptionParseStatus::Malformed &&
+        !Image->instructionModeAt(Function.CodeRange.Begin))
+      Lone = Function.CodeRange.Begin;
+  ASSERT_TRUE(Lone.has_value());
+  const std::string Library = tmpFile("unknown_mode_unit.so").string();
+  const std::string Named = " at 0x" + llvm::utohexstr(*Lone) +
+                            ": ARM/Thumb mode cannot be established";
+
+  const auto Unit = exec(ndBin(), {"decompile", Library});
+  ASSERT_TRUE(Unit.ok()) << Unit.err;
+  const size_t Note = Unit.out.find(Named);
+  ASSERT_NE(Note, std::string::npos) << Unit.out;
+  EXPECT_EQ(Unit.out.find(" at 0x" + llvm::utohexstr(*Lone) + ":", Note + 1),
+            std::string::npos)
+      << Unit.out;
+  EXPECT_NE(Unit.out.find("exported("), std::string::npos) << Unit.out;
+
+  const auto Alone = exec(
+      ndBin(), {"decompile", Library, "--func=0x" + llvm::utohexstr(*Lone)});
+  EXPECT_FALSE(Alone.ok());
+  EXPECT_NE(Alone.err.find("ARM/Thumb mode cannot be established"),
+            std::string::npos)
+      << Alone.err;
+}
+
 // Position-independent Thumb code takes a routine's address as
 // `ldr rN, [pc, #k]; add rN, pc`, the literal being the routine's address
 // with bit 0 set less the PC: what it gets is a Thumb code address, as a
