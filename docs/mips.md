@@ -283,12 +283,16 @@ no extra source parameter or zero-initialized C local substitutes for machine
 state. This source contract requires an enabled DSP execution environment and
 an original-target compiler. Disabled-DSP exception delivery is not modeled.
 Every generated function in a DSP image, including ordinary scalar functions
-and generated helpers, disables automatic DSP instruction selection with
-negative target features. Without an image, all MIPS32 source has the same
+and generated helpers, disables automatic DSP instruction selection.
+Without an image, all MIPS32 source has the same
 contract because no image profile rules out live DSPControl. This also covers
 pure arithmetic with no state intrinsics, siblings, helpers and source shards.
-Generated C requires Clang's scoped target attributes; both `-O0` and `-O2`
-are exercised with external `-mdsp` enabled.
+Clang applies negative target attributes to each function, including when
+the translation unit enables `-mdsp`. MIPS GCC can rebuild DSP-preserving C
+with `-mno-dsp -mno-dspr2` on the translation unit, including n32 and n64
+microMIPS functions. Generated C diagnoses GCC builds that enable automatic
+DSP or DSPR2 instruction selection. Big-endian MIPS32 source that also
+requires the `no-msa` target attribute still requires Clang.
 Explicit state transfers use local assembler directives. This prevents a
 compiler from replacing ordinary wide arithmetic with `ADDSC`/`ADDWC` and
 silently changing DSPControl. Source returns also require proof of the captured

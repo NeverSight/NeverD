@@ -13134,6 +13134,25 @@ TEST_F(SessionCAPITest, SourceOptionsValidateBeforeChangingAnalysis) {
   EXPECT_EQ(takeString(neverd_decompile(Session, Entry)), Original);
 }
 
+TEST_F(SessionCAPITest, CachedSourceCopiesHaveIndependentLifetimes) {
+  const auto Path = write("cached-source.elf", makeNativeELF(false));
+  ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);
+  const auto Entry = neverd_session_entry_addr(Session);
+  for (auto Read : {neverd_decompile, neverd_decompile_llvm}) {
+    const auto Expected = takeString(Read(Session, Entry));
+    ASSERT_FALSE(Expected.empty());
+    using OwnedText = std::unique_ptr<const char, decltype(&neverd_free_string)>;
+    OwnedText First(Read(Session, Entry), neverd_free_string);
+    OwnedText Second(Read(Session, Entry), neverd_free_string);
+    ASSERT_TRUE(First);
+    ASSERT_TRUE(Second);
+    ASSERT_NE(First.get(), Second.get());
+    EXPECT_EQ(Expected, First.get());
+    First.reset();
+    EXPECT_EQ(Expected, Second.get());
+  }
+}
+
 TEST_F(SessionCAPITest, SourceLLVMProfilesKeepTheirOwnModulesAndEmission) {
   const auto Path = write("llvm-options.elf", makeNativeELF(false));
   ASSERT_EQ(neverd_session_load(Session, Path.c_str()), 1);

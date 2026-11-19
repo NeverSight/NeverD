@@ -25357,8 +25357,11 @@ directory with `--neverd`, `--cc` (MIPS64 GNU C), `--assembler`, `--linker` and
 `--simulator` (GNU sim for `mipsisa64r2-mti-elf`). It checks the function tags
 in the rebuilt objects and executes both C backends at `-O0` and `-O2` for
 n32 and n64. Add `--suite division` to execute the corresponding doubleword
-division kernels, including their physical HI/LO reads. The default suite
-executes the merge-store kernels.
+division kernels, including their physical HI/LO reads. With
+`--suite dsp-position`, the driver checks the branch result and DSPControl
+after a delay-slot POS write. It also checks that GCC diagnoses `-mdsp`
+and `-mdspr2` for both generated sources. The default suite executes the
+merge-store kernels.
 An invalid-memory branch-likely slot is tested both annulled and executed.
 Bitfield and shuffle kernels cover all 13 classic SPECIAL3 forms and full-width
 fields with independent bit/lane expectations. MIPS64 invalid word inputs are
