@@ -11,6 +11,11 @@ from elftools.elf.elffile import ELFFile
 STORES = ("mips_merge_store_left_double", "mips_merge_store_right_double",
           "mips_merge_store_double")
 DIVISIONS = ("mips_ddiv_lo", "mips_ddiv_hi", "mips_ddivu_lo", "mips_ddivu_hi")
+SUITES = {
+    "stores": (STORES, "merge-store-word.S"),
+    "division": (DIVISIONS, "division.S"),
+    "dsp-position": (("mips_dsp_branch_slot",), "dsp-position-branch.S"),
+}
 SUCCESS = 211
 
 
@@ -80,11 +85,31 @@ def division_cases(text):
     return case
 
 
-def harness(little, division):
+def dsp_position_cases(text):
+    # GNU sim 17.1 models six POS bits even on wide targets.
+    flags = 0x05414000
+    positions = (0, 1, 30, 31, 32, 33, 62, 63)
+    for case, pos in enumerate(positions, 1):
+        replacement = 0 if pos >= 32 else 32
+        text.extend([f"li $4,{flags | pos:#x}", f"li $5,{replacement}",
+                     "jal mips_dsp_branch_slot", "nop",
+                     f"li $8,{11 if pos >= 32 else 7}", f"bne $2,$8,fail{case}", "nop",
+                     "rddsp $8,63", f"li $9,{flags | replacement:#x}",
+                     f"beq $8,$9,pass{case}", "nop", f"fail{case}:",
+                     f"li $4,{case}", "break 0x3ff", f"pass{case}:"])
+    return len(positions)
+
+
+def harness(little, suite):
     text = [".text", ".set noreorder", ".set micromips", ".set insn32",
             ".globl _start", ".ent _start", "_start:", "dla $29,stack_end"]
     data = [".data", ".balign 16", ".space 32768", "stack_end:"]
-    case = division_cases(text) if division else store_cases(text, data, little)
+    if suite == "division":
+        case = division_cases(text)
+    elif suite == "dsp-position":
+        case = dsp_position_cases(text)
+    else:
+        case = store_cases(text, data, little)
     text.extend([f"li $4,{SUCCESS}", "break 0x3ff", ".end _start"])
     return "\n".join(text + data) + "\n", case
 
@@ -100,9 +125,11 @@ def run(args, work, little, n32):
           "-mno-abicalls", "-minterlink-compressed",
           "-fno-pic", "-ffreestanding", "-fno-strict-aliasing", "-Werror=attributes",
           "-G0", endian]
-    division = args.suite == "division"
-    functions = DIVISIONS if division else STORES
-    fixture = Path(__file__).with_name("division.S" if division else "merge-store-word.S")
+    functions, fixture_name = SUITES[args.suite]
+    if args.suite == "dsp-position":
+        assemble.append("-mdsp")
+        cc.extend(["-mno-dsp", "-mno-dspr2"])
+    fixture = Path(__file__).with_name(fixture_name)
     (work / fixture.name).write_bytes(fixture.read_bytes())
     source = subprocess.check_output([*cc, "-DWIDE", "-E", "-P",
                                       "-x", "assembler-with-cpp", fixture.name], cwd=work)
@@ -110,7 +137,7 @@ def run(args, work, little, n32):
     subprocess.run([*assemble, "-o", "forms.o", "forms.s"], cwd=work, check=True)
     subprocess.run([*link, "-e", functions[0], "-o", "forms.elf", "forms.o"], cwd=work, check=True)
     check_micro_functions(work / "forms.elf", functions, n32)
-    driver, count = harness(little, division)
+    driver, count = harness(little, args.suite)
     (work / "driver.s").write_text(driver)
     subprocess.run([*assemble, "-o", "driver.o", "driver.s"], cwd=work, check=True)
 
@@ -133,8 +160,15 @@ def run(args, work, little, n32):
             subprocess.run([args.neverd, "decompile", "--func", name,
                             *(["--llvm"] if backend == "llvmc" else []),
                             "-o", f"{name}.c", "forms.elf"], cwd=work, check=True)
-            if not division and "volatile uint8_t" not in (work / f"{name}.c").read_text():
+            if args.suite == "stores" and "volatile uint8_t" not in (work / f"{name}.c").read_text():
                 raise ValueError(f"{backend} lost volatile byte stores in {name}")
+            if args.suite == "dsp-position":
+                for feature in ("-mdsp", "-mdspr2"):
+                    result = subprocess.run([*cc, feature, "-I.", "-E", f"{name}.c"],
+                                            cwd=work, stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.PIPE, text=True)
+                    if result.returncode == 0 or "Preserving DSPControl" not in result.stderr:
+                        raise ValueError(f"{backend} failed to diagnose GCC {feature}: {result.stderr}")
         for opt in ("-O0", "-O2"):
             for name in functions:
                 subprocess.run([*cc, "-I.", opt, "-c", f"{name}.c", "-o", f"{name}.o"],
@@ -145,7 +179,7 @@ def run(args, work, little, n32):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=("stores", "division"), default="stores")
+    parser.add_argument("--suite", choices=SUITES, default="stores")
     for flag in ("neverd", "cc", "assembler", "linker", "simulator"):
         parser.add_argument("--" + flag, type=lambda s: Path(s).absolute(), required=True)
     args = parser.parse_args()
