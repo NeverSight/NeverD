@@ -564,11 +564,12 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
         Value |= uint32_t(Match) << (24 + I);
       }
     } else if (Id == Intrinsic::MIPSMthlipPosition) {
-      const auto Pos = Value & 63;
-      if ((Unknown & 63) || Pos > 32)
-        Unknown |= 63;
+      const auto PosMask = mips::dspControlMask(1, isMIPS64(Img.Arch));
+      const auto Pos = Value & PosMask;
+      if ((Unknown & PosMask) || Pos > 32)
+        Unknown |= PosMask;
       else
-        Value = (Value & ~63u) | ((Pos + 32) & 63);
+        Value = (Value & ~PosMask) | ((Pos + 32) & PosMask);
     }
     writeOutput(Id == Intrinsic::MIPSReadDSPControl ? Op.Output : State, Value,
                 Unknown);

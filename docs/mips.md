@@ -311,9 +311,12 @@ to a signed word. Each saturation sets the bank's sticky OUTFLAG bit.
 EXTR[V].W, EXTR[V]_R.W, EXTR[V]_RS.W and EXTR[V]_S.H implement immediate
 and register counts. Word forms check the arithmetic shift and its rounded
 value for OUTFLAG[23], including when the returned word is unrounded.
-EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS. Failure sets EFI,
-preserves POS and yields an unknown GPR value. A successful DP extraction
-advances POS modulo 64. Source code traps if it needs an undefined result.
+EXTP[V] and EXTPDP[V] extract size + 1 bits ending at POS[5:0] from the low
+word of each accumulator half. Failure sets EFI, preserves POS and yields an
+unknown GPR value. A successful DP extraction subtracts size + 1 from the
+complete POS field, modulo 64 on MIPS32 and modulo 128 on MIPS64 (including
+n32). On MIPS64, immediate EXTP sign-extends its word result. EXTPV, EXTPDP
+and EXTPDPV zero-extend theirs. Source code traps if it needs an undefined result.
 MIPS64r2/n64 uses the word and packed DSP/DSPR2 operations from revision 3.02
 of the MIPS64 DSP specification. Arithmetic consumes the low word of each
 accumulator half and sign-extends each written half independently. The four
@@ -380,8 +383,12 @@ Their [qualification receipt](evidence/mips-dsp64-rounded-products-2026-11-17.js
 records the classic n64 slice; it does not establish execution on historical
 physical CPUs or support for deprecated microMIPS64 encodings. In n64 DSPControl,
 POS has seven bits and CCOND has eight. RDDSP zero-extends selected bits.
+BPOSGE32 tests the complete POS against 32 before its delay slot executes.
+MTHLIP adds 32 to an incoming POS of 0 through 32. Larger values leave only
+POS unpredictable. These rules also apply to the admitted microMIPS forms.
 See the register model and revision history in the
-[MIPS64 DSP Module, revision 3.02](https://docs.alexrp.com/mips/mips64_dsp_v3_02.pdf).
+[MIPS64 DSP Module, revision 3.02](https://docs.alexrp.com/mips/mips64_dsp_v3_02.pdf)
+and [microMIPS64 DSP Module, revision 3.02](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00765-2B-microMIPS64DSP-AFP-03.02.pdf).
 
 Classic AC0 partial writes preserve the pre-R6 unread-result restriction:
 MULT/MULTU/DIV/DIVU and their doubleword forms establish pending

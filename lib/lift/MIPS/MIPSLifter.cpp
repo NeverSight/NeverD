@@ -14,6 +14,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/MIPS/MIPSDSP.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSHistoricalISA.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSHistoricalTiming.h"
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.h"
@@ -741,9 +742,12 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     } else if ((Word >> 16) == 0x041c) {
       const auto Control = S.makeTemp(4);
       S.emitIntrinsic(Intrinsic::MIPSReadDSPControl, Control);
-      Condition = S.binary(NdOp::INT_NOTEQUAL,
-                           S.binary(NdOp::INT_AND, Control, NdVar::cst(32, 4)),
-                           NdVar::cst(0, 4), 1);
+      // POS >= 32 depends only on bits 6:5 of a wide POS, or bit 5 on o32.
+      const auto BranchBits = mips::dspControlMask(1, S.Width == 8) & ~31u;
+      Condition =
+          S.binary(NdOp::INT_NOTEQUAL,
+                   S.binary(NdOp::INT_AND, Control, NdVar::cst(BranchBits, 4)),
+                   NdVar::cst(0, 4), 1);
     } else if (Opcode == 17 && ISARevision == 6) {
       const auto Bit = S.binary(NdOp::INT_AND, NdVar::reg(mipsreg::w(RT), 4),
                                 NdVar::cst(1, 4));
