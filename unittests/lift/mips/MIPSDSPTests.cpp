@@ -163,7 +163,7 @@ TEST_P(MIPSDSPPosition, WordExtractionReadsSixBitsAndUpdatesTheEntirePosition) {
     };
     constexpr uint64_t Acc = 0xa5326ce789abcdef;
     for (const auto &F : Forms)
-      for (unsigned Size : {0u, 7u, 31u}) {
+      for (unsigned Size = 0; Size < 32; ++Size) {
         uint32_t Word = Micro ? F.Micro : F.Classic;
         if (!F.Variable)
           Word |= Size << (Micro ? 16 : 21);

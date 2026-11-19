@@ -113,20 +113,16 @@ bool MIPSLifter::liftDSP(State &S, uint32_t Word) const {
       const auto Start = S.binary(NdOp::INT_AND, Control, NdVar::cst(63, 4));
       const auto Failed = S.binary(NdOp::INT_LESS, Start, Size, 1);
       const auto Offset = S.binary(NdOp::INT_SUB, Start, Size);
-      const uint32_t PosMask = mips::dspControlMask(1, S.Width == 8);
-      const uint32_t Clear = 0x4000u | (Decrement ? PosMask : 0u);
+      const uint32_t Clear = 0x4000u | (Decrement ? 63u : 0u);
       auto SuccessState =
           S.binary(NdOp::INT_AND, Control, NdVar::cst(~Clear, 4));
       if (Decrement) {
-        auto Remaining = Offset;
-        if (S.Width == 8) {
-          const auto Position =
-              S.binary(NdOp::INT_AND, Control, NdVar::cst(PosMask, 4));
-          Remaining = S.binary(NdOp::INT_SUB, Position, Size);
-        }
-        const auto Next = S.binary(NdOp::INT_SUB, Remaining, NdVar::cst(1, 4));
+        // On success Next is in [-1, 62]. Its low six bits replace the
+        // cleared field. Its seventh bit toggles the saved POS[6] on borrow.
+        const auto Next = S.binary(NdOp::INT_SUB, Offset, NdVar::cst(1, 4));
+        const auto PosMask = mips::dspControlMask(1, S.Width == 8);
         SuccessState =
-            S.binary(NdOp::INT_OR, SuccessState,
+            S.binary(NdOp::INT_XOR, SuccessState,
                      S.binary(NdOp::INT_AND, Next, NdVar::cst(PosMask, 4)));
       }
       WriteControl(S.select(
