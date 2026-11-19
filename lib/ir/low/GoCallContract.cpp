@@ -249,6 +249,8 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
       break;
     case NdOp::INT_ADD:
     case NdOp::INT_SUB:
+    // Alignment padding (`nop`, `xchg ax, ax`).
+    case NdOp::NOP:
       break;
     case NdOp::BRANCH:
       if (At != Phase::Reloading || Op.NumInputs < 1 ||

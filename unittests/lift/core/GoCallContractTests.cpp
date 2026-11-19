@@ -289,6 +289,34 @@ TEST(GoRegisterArguments, AWideningReloadRestoresASpilledByte) {
   EXPECT_EQ((*Spills)[0].EntryOffset, 8);
 }
 
+TEST(GoRegisterArguments, PaddingInTheGrowthPathKeepsItsShape) {
+  // main.p: cmp rsp, [r14+0x10]; jbe grow; ret
+  //   grow: mov [rsp+8], rax; nop; call morestack_noctxt
+  //         mov rax, [rsp+8]; xchg ax, ax; jmp main.p
+  GoTestImage T;
+  constexpr va_t Padded = kTextVA + 0x100;
+  T.writeText(Padded, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0x48, 0x89,
+                       0x44, 0x24, 0x08, 0x90});
+  T.writeText(Padded + 0x0D, makeCall(Padded + 0x0D, Morestack));
+  T.writeText(Padded + 0x12,
+              {0x48, 0x8B, 0x44, 0x24, 0x08, 0x66, 0x90, 0xEB, 0xE5});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Padded, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Spills = goMorestackSpills(T.Img, build(T.Img, Padded).Blocks);
+  ASSERT_TRUE(Spills.has_value());
+  ASSERT_EQ(Spills->size(), 1u);
+  EXPECT_EQ((*Spills)[0].Register, x86reg::RAX);
+  // The growth routine itself takes no register argument.
+  const LocalRegisterEffect Grow = localRegisterEffect(
+      T.Img, build(T.Img, Morestack), nullptr, nullptr, nullptr, nullptr);
+  ASSERT_TRUE(Grow.GoArgumentReads.has_value());
+  EXPECT_EQ(*Grow.GoArgumentReads, GPRReadWidths{});
+}
+
 TEST(GoRegisterArguments, AGoFunctionTakesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   EXPECT_TRUE(usesGoRegisterArguments(Img, GoCallee));

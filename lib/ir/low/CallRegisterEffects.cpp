@@ -1569,6 +1569,15 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
   if (Entry == InvalidVA || !isGoCode(Img, Entry))
     return Effect;
   Effect.CallClobbers = goCodeCallClobbers(Img.Arch);
+  // The runtime's stack-growth routines take no register argument: a
+  // prologue calls them with its own frame, and `morestack` finds what it
+  // needs there and in its fixed registers (src/runtime/asm_amd64.s).
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (std::binary_search(Module->MorestackEntries.begin(),
+                         Module->MorestackEntries.end(), Entry)) {
+    Effect.GoArgumentReads = GPRReadWidths{};
+    return Effect;
+  }
   // A Go function takes exactly the register arguments its stack-growth
   // path spills, and the spill area above the return address holds none of
   // its stack arguments: they lie below it.
