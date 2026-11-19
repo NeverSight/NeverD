@@ -109,7 +109,7 @@ A/B with identical output.
      (`independentCallPop` and `usesAnalysisRecovery` are 32-bit x86 only);
      a graph build differs from the callee's own build by the no-return
      depth (one deeper) and the context sets.
-   - Landed (`12e8609c35`): an x64 whole-image batch large enough to run in
+   - Landed (`c41b8090fd`): an x64 whole-image batch large enough to run in
      parallel first builds every function without the fixup, each build
      keeping its own graph for its callers (valid while the prover answers
      its questions one level deeper as before); a second pass keeps each
@@ -136,12 +136,14 @@ A/B with identical output.
      its limit); the arbitration ran for about 5 s on one thread. With the
      evidence and scan limits raised and the fixed point at four times its
      limit: capstone LLVM C CPU -45%, wall -29% (six alternating pairs);
-     pe64-capstone -15%/-19%; identical output on every input tried. The
-     cost: on both Rust inputs the fixed point does not converge and spends
-     its larger allowance before the fallback (+0.7 and +1.4 s; at 256
-     times its limit, 50 to 86 s), ntoskrnl takes 26 s more wall time, and
-     libsqlite3 and libstdc++ stop for reasons other than a budget. A
-     decision on module limits, a converging fixed point, or both.
+     pe64-capstone -15%/-19% (single runs); identical output on every input
+     tried. The cost, in alternating pairs: on both Rust inputs the fixed
+     point does not converge and spends its larger allowance before the
+     fallback, wall +20% (+0.7 and +1.2 s; at 256 times its limit, 50 to
+     86 s); ntoskrnl's arbitration still does not complete, wall +1.1%; and
+     libsqlite3 and libstdc++ stop for reasons other than a budget, not yet
+     diagnosed. A decision on module limits, a converging fixed point, or
+     both.
    - Exact levers, each a resolver-level change:
      - reuse a first-round graph in the rebuild round. Recording the
        membership reads is easy: the unsafe branches are read only by
@@ -226,7 +228,7 @@ Borrowing the primary build's jump tables is not exact: the graph build's
 no-return depth and jump-table settings differ, so it can reach code the
 primary build cut. A function's own build is exact when it is configured as
 a callee graph build at its own depth and the prover answers its questions
-one level deeper as before: `12e8609c35` builds an x64 whole-image batch so
+one level deeper as before: `c41b8090fd` builds an x64 whole-image batch so
 first (item 3). Next: the fallback rebuild's graph builds, which item 3
 explains.
 

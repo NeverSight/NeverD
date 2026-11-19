@@ -107,7 +107,7 @@ most time. Each step is an instruction, its reason and the case it comes from.
   before it started and 95% while it was still running, so keeping a
   finished build's graph would have saved almost nothing. Building every
   function without the fixup first, so that no build asks for a graph while
-  the others run, removed the first lift's repeats (`12e8609c35`). Pick the
+  the others run, removed the first lift's repeats (`c41b8090fd`). Pick the
   design from that split, not from the total.
 - **Then the constant.** Reading strings only from the byte runs that can hold
   one took a kernel image's string scan from 260 ms to 41 ms on one thread
@@ -156,11 +156,11 @@ most time. Each step is an instruction, its reason and the case it comes from.
   removed had been keeping them for the call summaries, which then lifted the
   callees again a few at a time. The A/B of whole-image runs could not show
   it; a profile's single-thread stretches did. Selections keep the single
-  pass (`12e8609c35`).
+  pass (`c41b8090fd`).
 - **Run the base twice before reading a difference.** A whole-image identity
   check of ntoskrnl differed in one function's exception region labels. Two
   runs of the unchanged build differed in the same lines: parallel C emission
-  numbered those labels per worker thread (`d64eb388cc`). An identity claim
+  numbered those labels per worker thread (`11e29f6e8a`). An identity claim
   needs a base that matches itself.
 - **Prove the tests can see a wrong fast path.** Plant a small defect in it,
   such as a bound off by one or a dropped invalidation, and require a test or
