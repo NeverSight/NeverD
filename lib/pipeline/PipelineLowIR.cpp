@@ -684,16 +684,6 @@ bool collectLowAddressUses(
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const std::vector<TargetRegisterRange> PreservedRanges =
       TRI.callPreservedRanges(Img.abiFormat());
-  // The register containing a register, which every read and write asks of
-  // each register entry it scans; it depends on the target alone.
-  llvm::DenseMap<std::pair<uint64_t, uint16_t>, std::pair<uint64_t, uint16_t>>
-      WideRegisters;
-  auto wideRegister = [&](uint64_t Offset, uint16_t Size) {
-    auto [It, Inserted] = WideRegisters.try_emplace({Offset, Size});
-    if (Inserted)
-      It->second = TRI.findWideReg(Offset, Size);
-    return It->second;
-  };
   // The image's writable ranges, where the caller keeps them, are the ones
   // collectLowSEHRuntimeMemory would read again.  Only a local-unwind frame
   // proof reads runtime memory.
@@ -705,47 +695,40 @@ bool collectLowAddressUses(
     for (const auto &Func : Funcs)
       if (!SEHCallees.emplace(Func.Entry, &Func).second)
         return false;
-  // Input capacity is distinct from retained evidence and fixed-point work.
-  // Permit an inventory at the existing single-function SSA admission scale;
-  // this does not certify its address flow or enlarge the queue allowance.
-  constexpr size_t kMaxModuleAddressInputOps = limits::kMaxSSAFunctionOps;
-  constexpr size_t kMaxModuleAddressFixpointWork =
-      size_t{limits::kMaxJumpTableEvidenceWork} *
-      size_t{limits::kMaxMultiStageRetries};
-  // Address-use receipts and complete-CFG frame dataflow count different
-  // work. Charging every lifted operation to the small address-use budget
-  // would reject a straight-line function before its first continuation and
-  // would also discard unrelated module ownership evidence. Keep a separate,
-  // cumulative cap for frame transfers, joins and dependency hashing.
-  constexpr size_t kMaxSEHFrameWork = kMaxModuleAddressFixpointWork * 16;
-  size_t SEHFrameWorkRemaining =
-      std::min(TestBudget.value_or(kMaxSEHFrameWork), kMaxSEHFrameWork);
+  // The fixed point may visit blocks a fixed number of times, or a number per
+  // operation it reads where that is more: the work a solve needs grows with
+  // the code, so a large module is no reason to give up.  Address-use
+  // receipts and complete-CFG frame dataflow count different work. Charging
+  // every lifted operation to the small address-use budget would reject a
+  // straight-line function before its first continuation and would also
+  // discard unrelated module ownership evidence. Keep a separate, cumulative
+  // cap for frame transfers, joins and dependency hashing.  A queue debit
+  // alone does not bound repeatedly visiting a long block, so every operation
+  // in both the fixed point and the final recording pass is charged as well.
   size_t ScanOps = 0;
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex)
+    if (inScope(FuncIndex))
+      for (const LowBlock &Block : Funcs[FuncIndex].Blocks)
+        ScanOps += Block.Ops.size();
+  const size_t FixpointAllowance = std::max(
+      size_t{limits::kMaxJumpTableEvidenceWork} *
+          size_t{limits::kMaxMultiStageRetries},
+      llvm::SaturatingMultiply(
+          ScanOps,
+          ::neverd::limits::pipeline::kPipelineLowIRAddressVisitsPerOp));
+  const size_t TransferAllowance =
+      llvm::SaturatingMultiply(FixpointAllowance, size_t{16});
+  size_t SEHFrameWorkRemaining =
+      std::min(TestBudget.value_or(TransferAllowance), TransferAllowance);
   auto failCollect = [](const char *, size_t = 0, va_t = InvalidVA) {
     return false;
   };
+  // A test budget stands in for the visit allowance, which the transfer
+  // account keeps sixteen times of.
   size_t FixpointWorkRemaining =
-      std::min(TestBudget.value_or(kMaxModuleAddressFixpointWork),
-               kMaxModuleAddressFixpointWork);
-  // A queue debit alone does not bound repeatedly visiting a long block.
-  // Charge every operation in both the fixed point and final recording pass.
-  constexpr size_t kMaxAddressTransferWork = kMaxModuleAddressFixpointWork * 16;
-  size_t TransferWorkRemaining = kMaxAddressTransferWork;
-  auto consumeFixpointWork = [&]() {
-    if (FixpointWorkRemaining == 0)
-      return false;
-    --FixpointWorkRemaining;
-    return true;
-  };
-  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
-    if (!inScope(FuncIndex))
-      continue;
-    for (const LowBlock &Block : Funcs[FuncIndex].Blocks) {
-      if (Block.Ops.size() > kMaxModuleAddressInputOps - ScanOps)
-        return failCollect("scan-cap", 0, Block.StartAddr);
-      ScanOps += Block.Ops.size();
-    }
-  }
+      std::min(TestBudget.value_or(FixpointAllowance), FixpointAllowance);
+  size_t TransferWorkRemaining =
+      llvm::SaturatingMultiply(FixpointWorkRemaining, size_t{16});
   if (ReturnedCode) {
     ReturnedCode->TargetsByFunction.assign(Funcs.size(), {});
     ReturnedCode->CompleteByFunction.assign(Funcs.size(), true);
@@ -899,9 +882,32 @@ bool collectLowAddressUses(
       Facts.Roots.insert(FallbackRoots.begin(), FallbackRoots.end());
   };
 
-  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex) {
-    if (!inScope(FuncIndex))
-      continue;
+  // What one function's solve spends and records.  A solve reads the module
+  // facts above and its own function, never another function's state.
+  struct SolveAccounts {
+    size_t Fixpoint = 0;
+    size_t Transfer = 0;
+    size_t SEHFrame = 0;
+    size_t Evidence = 0;
+    std::vector<ModuleAddressUse> Uses;
+    // The register containing a register, which every read and write asks of
+    // each register entry it scans; it depends on the target alone.
+    llvm::DenseMap<std::pair<uint64_t, uint16_t>, std::pair<uint64_t, uint16_t>>
+        WideRegisters;
+  };
+  auto solveFunction = [&](size_t FuncIndex, SolveAccounts &Accounts) {
+    auto consumeFixpointWork = [&]() {
+      if (Accounts.Fixpoint == 0)
+        return false;
+      --Accounts.Fixpoint;
+      return true;
+    };
+    auto wideRegister = [&](uint64_t Offset, uint16_t Size) {
+      auto [It, Inserted] = Accounts.WideRegisters.try_emplace({Offset, Size});
+      if (Inserted)
+        It->second = TRI.findWideReg(Offset, Size);
+      return It->second;
+    };
     const LowFunc &Func = Funcs[FuncIndex];
     const size_t BlockCount = Func.Blocks.size();
     std::map<int, size_t> PositionForId;
@@ -1006,8 +1012,14 @@ bool collectLowAddressUses(
         Into.Imprecise = true;
       }
       Into.FrameOffsetsWidened |= From.FrameOffsetsWidened;
+      // An imprecise value that may lie outside the frame is read only for
+      // whether it carries a frame address: its escape marks every frame
+      // cell, a load through it reads none and a store through it clears
+      // them all.  Its finite offsets would feed nothing but the convergence
+      // test, so it takes the widened form now rather than gain one offset a
+      // round until the bound widens it.
       if (!Into.FrameOffsets.empty() &&
-          (Into.FrameOffsetsWidened ||
+          (Into.FrameOffsetsWidened || (Into.MayBeNonFrame && Into.Imprecise) ||
            Into.FrameOffsets.size() >
                ::neverd::limits::pipeline::
                    kPipelineLowIRMaxFrameOffsetAlternatives)) {
@@ -1074,9 +1086,9 @@ bool collectLowAddressUses(
     auto transfer = [&](const LowBlock &Block, ModuleAddressState State,
                         std::vector<ModuleAddressUse> *RecordedUses,
                         ModuleAddressState &Result) {
-      if (Block.Ops.size() > TransferWorkRemaining)
+      if (Block.Ops.size() > Accounts.Transfer)
         return false;
-      TransferWorkRemaining -= Block.Ops.size();
+      Accounts.Transfer -= Block.Ops.size();
       // The architectural stack epoch is a durable fact only at the real
       // function entry.  A disconnected relocation root, or a path after an
       // opaque/pivoting SP definition, must never manufacture a fresh epoch 0
@@ -1204,8 +1216,9 @@ bool collectLowAddressUses(
         // become a may-alias to every table merely because it is imprecise.
         if (Facts.empty())
           return true;
-        if (!Budget.consume())
+        if (Accounts.Evidence == 0)
           return false;
+        --Accounts.Evidence;
         ModuleAddressUse Use;
         Use.FuncIndex = FuncIndex;
         Use.Addr = Op.Addr;
@@ -1731,9 +1744,9 @@ bool collectLowAddressUses(
                         // its independently rooted frame lattice cannot veto
                         // or replace a checked runtime-activation coordinate.
                         if (!SEHFrameProof)
-                          SEHFrameProof = proveLowSEHFrames(
-                              Func, TRI, SEHFrameWorkRemaining, &SEHCallees,
-                              &SEHRuntimeMemory);
+                          SEHFrameProof =
+                              proveLowSEHFrames(Func, TRI, Accounts.SEHFrame,
+                                                &SEHCallees, &SEHRuntimeMemory);
                         const auto Proof =
                             SEHFrameProof->Calls.find({Op.Addr, Op.Seq});
                         if (Proof != SEHFrameProof->Calls.end())
@@ -2335,7 +2348,8 @@ bool collectLowAddressUses(
         continue;
       ModuleAddressState Ignored;
       // The recording pass reads each input state for the last time.
-      if (!transfer(Func.Blocks[I], std::move(InStates[I]), &Uses, Ignored))
+      if (!transfer(Func.Blocks[I], std::move(InStates[I]), &Accounts.Uses,
+                    Ignored))
         return failCollect("transfer-record", FuncIndex,
                            Func.Blocks[I].StartAddr);
     }
@@ -2347,6 +2361,98 @@ bool collectLowAddressUses(
         Published.push_back(std::move(Occurrence));
       }
     }
+    return true;
+  };
+
+  // A returned-code or local-unwind solve writes per-function evidence, and a
+  // local-unwind frame proof that exhausts the frame account withholds that
+  // proof rather than failing: those solves run one after another, each from
+  // the accounts the last one left.
+  if (ReturnedCode || LocalUnwind) {
+    SolveAccounts Accounts;
+    Accounts.Fixpoint = FixpointWorkRemaining;
+    Accounts.Transfer = TransferWorkRemaining;
+    Accounts.SEHFrame = SEHFrameWorkRemaining;
+    Accounts.Evidence = Budget.Remaining;
+    for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex)
+      if (inScope(FuncIndex) && !solveFunction(FuncIndex, Accounts))
+        return false;
+    Budget.Remaining = Accounts.Evidence;
+    Uses.insert(Uses.end(), std::make_move_iterator(Accounts.Uses.begin()),
+                std::make_move_iterator(Accounts.Uses.end()));
+    return true;
+  }
+
+  // Any other exhausted account fails the inventory, so arbitration's solves
+  // run in parallel.  Each may spend what the others have not yet charged: a
+  // solve that cannot fit, or a charge that overdraws an account, means the
+  // module's total would.  Charging what each spent in function order then
+  // fails exactly where one solve after another would, and leaves the same
+  // uses in the same order.
+  struct Spent {
+    size_t Fixpoint = 0;
+    size_t Transfer = 0;
+    size_t Evidence = 0;
+    std::vector<ModuleAddressUse> Uses;
+  };
+  std::vector<Spent> SpentBy(Funcs.size());
+  std::vector<uint64_t> Weights(Funcs.size(), 0);
+  for (size_t FuncIndex = 0; FuncIndex < Funcs.size(); ++FuncIndex)
+    if (inScope(FuncIndex))
+      for (const LowBlock &Block : Funcs[FuncIndex].Blocks)
+        Weights[FuncIndex] += Block.Ops.size() + 1;
+  std::atomic<bool> Failed{false};
+  std::atomic<size_t> FixpointCharged{0};
+  std::atomic<size_t> TransferCharged{0};
+  std::atomic<size_t> EvidenceCharged{0};
+  auto left = [](size_t Allowance, const std::atomic<size_t> &Charged) {
+    const size_t Used = Charged.load(std::memory_order_relaxed);
+    return Used < Allowance ? Allowance - Used : 0;
+  };
+  auto overdraws = [](std::atomic<size_t> &Charged, size_t Amount,
+                      size_t Allowance) {
+    return Charged.fetch_add(Amount, std::memory_order_relaxed) + Amount >
+           Allowance;
+  };
+  parallelForEachWeighted(Weights, [&](auto Claim, size_t Total) {
+    SolveAccounts Accounts;
+    for (size_t FuncIndex = Claim(); FuncIndex < Total; FuncIndex = Claim()) {
+      if (!inScope(FuncIndex) || Failed.load(std::memory_order_relaxed))
+        continue;
+      const size_t Fixpoint = left(FixpointWorkRemaining, FixpointCharged);
+      const size_t Transfer = left(TransferWorkRemaining, TransferCharged);
+      const size_t Evidence = left(Budget.Remaining, EvidenceCharged);
+      Accounts.Fixpoint = Fixpoint;
+      Accounts.Transfer = Transfer;
+      Accounts.SEHFrame = SEHFrameWorkRemaining;
+      Accounts.Evidence = Evidence;
+      Accounts.Uses.clear();
+      if (!solveFunction(FuncIndex, Accounts)) {
+        Failed.store(true, std::memory_order_relaxed);
+        continue;
+      }
+      Spent Function{Fixpoint - Accounts.Fixpoint, Transfer - Accounts.Transfer,
+                     Evidence - Accounts.Evidence, std::move(Accounts.Uses)};
+      if (overdraws(FixpointCharged, Function.Fixpoint,
+                    FixpointWorkRemaining) ||
+          overdraws(TransferCharged, Function.Transfer,
+                    TransferWorkRemaining) ||
+          overdraws(EvidenceCharged, Function.Evidence, Budget.Remaining))
+        Failed.store(true, std::memory_order_relaxed);
+      SpentBy[FuncIndex] = std::move(Function);
+    }
+  });
+  if (Failed.load())
+    return false;
+  for (Spent &Function : SpentBy) {
+    if (Function.Fixpoint > FixpointWorkRemaining ||
+        Function.Transfer > TransferWorkRemaining ||
+        !Budget.consume(Function.Evidence))
+      return false;
+    FixpointWorkRemaining -= Function.Fixpoint;
+    TransferWorkRemaining -= Function.Transfer;
+    Uses.insert(Uses.end(), std::make_move_iterator(Function.Uses.begin()),
+                std::make_move_iterator(Function.Uses.end()));
   }
   return true;
 }

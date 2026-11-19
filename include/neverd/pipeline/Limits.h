@@ -166,6 +166,13 @@ inline constexpr size_t kPipelineLowIRMaxFrameOffsetAlternatives = 64;
 // the 200 that turn forever lose one at every second visit; every other one
 // loses a fact at most 22 times at a block.
 inline constexpr size_t kPipelineLowIRAddressRetreatsBeforeJoin = 128;
+// The module address solve may visit blocks this many times per operation it
+// reads where that exceeds its fixed allowance; transfers and frame dataflow
+// keep sixteen times the visits.  Run on every image of the EH corpus and the
+// performance inputs, even where arbitration has nothing to decide, the
+// inventories need at most 0.73 visits per operation (a Go arm64 runtime),
+// and only three Go arm64 arbitrations need more than the fixed allowance.
+inline constexpr size_t kPipelineLowIRAddressVisitsPerOp = 2;
 inline constexpr size_t kPipelineLowIRMaxOutgoingStackCells = 64;
 inline constexpr size_t kPipelineLowIRMaxBytes = size_t(256) << 20;
 // Table/stack proofs can dominate bodies only a few KiB long, so medium

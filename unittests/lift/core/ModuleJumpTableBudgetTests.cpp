@@ -5,7 +5,8 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Separates module input capacity, retained evidence and repeated CFG work.
+/// Separates retained evidence from repeated CFG work, whose allowance grows
+/// with the code an inventory reads.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -17,7 +18,9 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/pipeline/Limits.h"
 #include "neverd/support/BinaryLoading.h"
+#include "neverd/support/Parallel.h"
 
 #include "llvm/Support/Error.h"
 
@@ -215,6 +218,88 @@ protected:
     return F;
   }
 
+  // The visits every inventory may make, whatever it reads.  Passed as the
+  // test budget it gives the transfer account its fixed sixteen times too.
+  static constexpr size_t FixedAllowance =
+      size_t{limits::kMaxJumpTableEvidenceWork} * limits::kMaxMultiStageRetries;
+
+  // One block that advances the stack pointer and loops to itself: its frame
+  // offsets gain one alternative a round until they widen.
+  static LowFunc frameWalk(va_t Entry, const BinaryImage &Image) {
+    LowFunc F = ordinaryPadding(1);
+    F.Entry = Entry;
+    LowBlock &B = F.Blocks.front();
+    B.StartAddr = Entry;
+    B.EndAddr = Entry + 1;
+    B.Preds = {0};
+    B.Succs = {0};
+    LowOp &Advance = B.Ops.front();
+    Advance.Opcode = NdOp::INT_ADD;
+    Advance.Output = NdVar::reg(getTargetRegInfo(Image.Arch).StackPointer, 8);
+    Advance.addInput(Advance.Output);
+    Advance.addInput(NdVar::cst(1, 8));
+    return F;
+  }
+
+  // A register that holds the frame address on the path from the entry and
+  // nothing known on the path from a second root, walked round a loop: an
+  // imprecise value that may lie outside the frame.
+  static LowFunc impreciseFrameWalk(va_t Entry, const BinaryImage &Image) {
+    const TargetRegInfo &TRI = getTargetRegInfo(Image.Arch);
+    const NdVar Walker = NdVar::reg(TRI.IntReturnReg, 8);
+    LowFunc F = ordinaryPadding(0);
+    F.Entry = Entry;
+    F.Blocks.resize(3);
+    for (size_t Index = 0; Index < F.Blocks.size(); ++Index) {
+      LowBlock &B = F.Blocks[Index];
+      B.Id = static_cast<int>(Index);
+      B.StartAddr = Entry + Index * 16;
+      B.EndAddr = B.StartAddr + 16;
+    }
+    LowOp Copy;
+    Copy.Opcode = NdOp::COPY;
+    Copy.Output = Walker;
+    Copy.addInput(NdVar::reg(TRI.StackPointer, 8));
+    LowOp Advance;
+    Advance.Opcode = NdOp::INT_ADD;
+    Advance.Output = Walker;
+    Advance.addInput(Walker);
+    Advance.addInput(NdVar::cst(8, 8));
+    F.Blocks[0].Ops = {Copy};
+    F.Blocks[0].Succs = {2};
+    F.Blocks[1].Succs = {2};
+    F.Blocks[2].Ops = {Advance};
+    F.Blocks[2].Preds = {0, 1, 2};
+    F.Blocks[2].Succs = {2};
+    for (LowBlock &B : F.Blocks)
+      for (size_t Index = 0; Index < B.Ops.size(); ++Index) {
+        B.Ops[Index].Addr = B.StartAddr + Index;
+        B.Ops[Index].Seq = 0;
+      }
+    F.ModuleAnalysisRoots = {F.Blocks[0].StartAddr, F.Blocks[1].StartAddr};
+    return F;
+  }
+
+  // The least test budget the arbitration of I completes with.
+  static size_t leastCompletingBudget(const Inputs &I) {
+    auto completes = [&](size_t Budget) {
+      return pipeline_detail::arbitrateModuleJumpTablesForTesting(
+                 I.Image, I.Functions, Budget)
+          .AnalysisComplete;
+    };
+    size_t Low = 0, High = FixedAllowance;
+    if (!completes(High))
+      return SIZE_MAX;
+    while (Low < High) {
+      const size_t Mid = Low + (High - Low) / 2;
+      if (completes(Mid))
+        High = Mid;
+      else
+        Low = Mid + 1;
+    }
+    return Low;
+  }
+
   // Builds one more function of the fixture's image, as fixture() builds its
   // own.
   static bool appendFunction(Inputs &I, const char *Name) {
@@ -263,11 +348,12 @@ protected:
     return Result;
   }
 
-  static void expectAbandoned(const Inputs &I) {
+  static void expectAbandoned(const Inputs &I,
+                              std::optional<size_t> Budget = std::nullopt) {
     const auto Slots = requested(I.Functions);
     ASSERT_FALSE(Slots.empty());
     const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
-        I.Image, I.Functions);
+        I.Image, I.Functions, Budget);
     EXPECT_FALSE(Result.AnalysisComplete);
     EXPECT_EQ(Result.ProtectedRelocationSlots, Slots);
     for (const LowFunc &F : I.Functions)
@@ -420,7 +506,7 @@ TEST_F(ModuleJumpTableBudget,
   }
 }
 
-TEST_F(ModuleJumpTableBudget, InputCapacityDoesNotSpendRetainedEvidence) {
+TEST_F(ModuleJumpTableBudget, ModuleSizeAloneDoesNotAbandonTheInventory) {
   auto I = fixture();
   ASSERT_TRUE(I);
   ASSERT_EQ(I->Functions.front().JumpTables.size(), 1u);
@@ -433,9 +519,11 @@ TEST_F(ModuleJumpTableBudget, InputCapacityDoesNotSpendRetainedEvidence) {
   for (va_t Slot : SafeSlots)
     ASSERT_EQ(Baseline.ProtectedRelocationSlots.count(Slot), 0u);
   const size_t BaseOps = opCount(I->Functions);
-  for (size_t Total :
-       {size_t{65537}, limits::kMaxSSAFunctionOps - 1,
-        limits::kMaxSSAFunctionOps, limits::kMaxSSAFunctionOps + 1}) {
+  // Padding spends no retained evidence, and its size is no reason to give
+  // up: the allowance for repeated work grows with the code read.
+  for (size_t Total : {size_t{65537}, limits::kMaxSSAFunctionOps - 1,
+                       limits::kMaxSSAFunctionOps,
+                       limits::kMaxSSAFunctionOps + 1, size_t{1000000}}) {
     SCOPED_TRACE(Total);
     I->Functions.push_back(ordinaryPadding(Total - BaseOps));
     for (bool Reverse : {false, true}) {
@@ -444,14 +532,10 @@ TEST_F(ModuleJumpTableBudget, InputCapacityDoesNotSpendRetainedEvidence) {
         std::reverse(I->Functions.begin(), I->Functions.end());
       const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
           I->Image, I->Functions);
-      if (Total <= limits::kMaxSSAFunctionOps) {
-        EXPECT_TRUE(Result.AnalysisComplete);
-        EXPECT_EQ(Result.ProtectedRelocationSlots,
-                  Baseline.ProtectedRelocationSlots);
-        EXPECT_EQ(Result.UnsafeBranches, Baseline.UnsafeBranches);
-      } else {
-        expectAbandoned(*I);
-      }
+      EXPECT_TRUE(Result.AnalysisComplete);
+      EXPECT_EQ(Result.ProtectedRelocationSlots,
+                Baseline.ProtectedRelocationSlots);
+      EXPECT_EQ(Result.UnsafeBranches, Baseline.UnsafeBranches);
       if (Reverse)
         std::reverse(I->Functions.begin(), I->Functions.end());
     }
@@ -774,9 +858,7 @@ TEST_F(ModuleJumpTableBudget, QueueAndRepeatedLongBlockWorkRemainBounded) {
   ASSERT_TRUE(I);
   LowFunc Chain = ordinaryPadding(1);
   Chain.Blocks.clear();
-  constexpr size_t QueueLimit =
-      size_t{limits::kMaxJumpTableEvidenceWork} * limits::kMaxMultiStageRetries;
-  for (size_t Index = 0; Index < QueueLimit / 2 + 1; ++Index) {
+  for (size_t Index = 0; Index < FixedAllowance / 2 + 1; ++Index) {
     LowBlock B;
     B.Id = static_cast<int>(Index);
     B.StartAddr = Chain.Entry + Index;
@@ -790,7 +872,7 @@ TEST_F(ModuleJumpTableBudget, QueueAndRepeatedLongBlockWorkRemainBounded) {
   }
   Chain.Blocks.back().Succs.clear();
   I->Functions.push_back(std::move(Chain));
-  expectAbandoned(*I);
+  expectAbandoned(*I, FixedAllowance);
   I->Functions.pop_back();
 
   LowFunc Loop = ordinaryPadding(100000);
@@ -804,7 +886,7 @@ TEST_F(ModuleJumpTableBudget, QueueAndRepeatedLongBlockWorkRemainBounded) {
   Advance.addInput(NdVar::cst(1, 8));
   B.Ops.push_back(Advance);
   I->Functions.push_back(std::move(Loop));
-  expectAbandoned(*I);
+  expectAbandoned(*I, FixedAllowance);
 }
 
 TEST_F(ModuleJumpTableBudget, FinalRecordingSpendsTheSameTransferAccount) {
@@ -821,10 +903,10 @@ TEST_F(ModuleJumpTableBudget, FinalRecordingSpendsTheSameTransferAccount) {
     I->Functions.push_back(std::move(Loop));
     if (Ops == 330000) {
       const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
-          I->Image, I->Functions);
+          I->Image, I->Functions, FixedAllowance);
       EXPECT_TRUE(Result.AnalysisComplete);
     } else {
-      expectAbandoned(*I);
+      expectAbandoned(*I, FixedAllowance);
     }
     I->Functions.pop_back();
   }
@@ -845,7 +927,7 @@ TEST_F(ModuleJumpTableBudget, UnchangedIncomingFactsReuseACompletedTransfer) {
     if (Reverse)
       std::reverse(I->Functions.begin(), I->Functions.end());
     const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
-        I->Image, I->Functions);
+        I->Image, I->Functions, FixedAllowance);
     ASSERT_TRUE(Result.AnalysisComplete);
     EXPECT_EQ(Result.ProtectedRelocationSlots,
               Baseline.ProtectedRelocationSlots);
@@ -924,17 +1006,111 @@ TEST_F(ModuleJumpTableBudget, FunctionsShareTheTransferAccount) {
     Loop.Blocks.front().Succs = {0};
     I->Functions.push_back(Loop);
     const auto Alone = pipeline_detail::arbitrateModuleJumpTablesForTesting(
-        I->Image, I->Functions);
+        I->Image, I->Functions, FixedAllowance);
     EXPECT_TRUE(Alone.AnalysisComplete);
     I->Functions.pop_back();
     Loops.push_back(std::move(Loop));
   }
   for (LowFunc &Loop : Loops)
     I->Functions.push_back(std::move(Loop));
-  ASSERT_LE(opCount(I->Functions), limits::kMaxSSAFunctionOps);
-  expectAbandoned(*I);
+  expectAbandoned(*I, FixedAllowance);
   std::reverse(I->Functions.begin(), I->Functions.end());
-  expectAbandoned(*I);
+  expectAbandoned(*I, FixedAllowance);
+}
+
+TEST_F(ModuleJumpTableBudget, RepeatedCFGWorkGrowsWithTheCodeRead) {
+  // A chain of one-operation blocks needs two visits a block, more than the
+  // fixed allowance in all, and far fewer than its allowance per operation.
+  auto I = fixture();
+  ASSERT_TRUE(I);
+  const auto Baseline = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Baseline.AnalysisComplete);
+  LowFunc Chain = ordinaryPadding(1);
+  Chain.Blocks.clear();
+  for (size_t Index = 0; Index < FixedAllowance / 2 + 1; ++Index) {
+    LowBlock B;
+    B.Id = static_cast<int>(Index);
+    B.StartAddr = Chain.Entry + Index;
+    B.EndAddr = B.StartAddr + 1;
+    B.Ops.resize(1);
+    B.Ops.front().Opcode = NdOp::NOP;
+    if (Index)
+      B.Preds.push_back(B.Id - 1);
+    B.Succs.push_back(B.Id + 1);
+    Chain.Blocks.push_back(std::move(B));
+  }
+  Chain.Blocks.back().Succs.clear();
+  I->Functions.push_back(std::move(Chain));
+  expectAbandoned(*I, FixedAllowance);
+  const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Result.AnalysisComplete);
+  EXPECT_EQ(Result.ProtectedRelocationSlots, Baseline.ProtectedRelocationSlots);
+  EXPECT_EQ(Result.UnsafeBranches, Baseline.UnsafeBranches);
+}
+
+TEST_F(ModuleJumpTableBudget, WorkBeyondTheAllowancePerOperationIsAbandoned) {
+  // Each frame walk is one operation that takes over a hundred visits to
+  // widen.  A few fit the fixed allowance; a thousand need more than both it
+  // and their sixteen visits per operation.
+  for (size_t Walks : {size_t{100}, size_t{1000}}) {
+    SCOPED_TRACE(Walks);
+    auto I = fixture();
+    ASSERT_TRUE(I);
+    for (size_t Index = 0; Index < Walks; ++Index)
+      I->Functions.push_back(frameWalk(0x70000000 + Index * 0x100, I->Image));
+    ASSERT_LT(opCount(I->Functions) *
+                  ::neverd::limits::pipeline::kPipelineLowIRAddressVisitsPerOp,
+              FixedAllowance);
+    if (Walks == 100)
+      EXPECT_TRUE(pipeline_detail::arbitrateModuleJumpTablesForTesting(
+                      I->Image, I->Functions)
+                      .AnalysisComplete);
+    else
+      expectAbandoned(*I);
+  }
+}
+
+TEST_F(ModuleJumpTableBudget, ParallelSolvesChargeTheirWorkInFunctionOrder) {
+  // Arbitration solves its functions in parallel, each with every account
+  // whole, and charges them in function order afterwards.  On any number of
+  // threads it completes at the same least budget, fails one below it, and
+  // keeps the same answer.
+  auto I = fixture();
+  ASSERT_TRUE(I);
+  for (size_t Index = 0; Index < 2 * limits::kMinParallelIRWorkItems; ++Index)
+    I->Functions.push_back(frameWalk(0x70000000 + Index * 0x100, I->Image));
+  struct ThreadCount {
+    explicit ThreadCount(unsigned N) { setWorkerThreadCount(N); }
+    ~ThreadCount() { setWorkerThreadCount(0); }
+  };
+  auto completes = [&](size_t Budget) {
+    return pipeline_detail::arbitrateModuleJumpTablesForTesting(
+               I->Image, I->Functions, Budget)
+        .AnalysisComplete;
+  };
+  size_t Least = 0;
+  {
+    ThreadCount One(1);
+    Least = leastCompletingBudget(*I);
+  }
+  ASSERT_GT(Least, size_t{4096});
+  std::optional<pipeline_detail::ModuleJumpTableArbitrationTestResult> First;
+  for (unsigned Threads : {1u, 4u, 16u}) {
+    SCOPED_TRACE(Threads);
+    ThreadCount Count(Threads);
+    EXPECT_FALSE(completes(Least - 1));
+    const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+        I->Image, I->Functions, Least);
+    ASSERT_TRUE(Result.AnalysisComplete);
+    if (!First) {
+      First = Result;
+      continue;
+    }
+    EXPECT_EQ(Result.ProtectedRelocationSlots, First->ProtectedRelocationSlots);
+    EXPECT_EQ(Result.UnsafeBranches, First->UnsafeBranches);
+  }
 }
 
 // A relative table inside its function's code: no relocation slot to suppress,
@@ -1085,6 +1261,30 @@ module_owner_mixed_width_argument:
   EXPECT_TRUE(With.AnalysisComplete);
   EXPECT_EQ(With.ProtectedRelocationSlots, Protected);
   EXPECT_EQ(With.UnsafeBranches, Unsafe);
+}
+
+TEST_F(ModuleJumpTableBudget, AnImpreciseFrameWalkWidensAtOnce) {
+  // Nothing reads the frame offsets of an imprecise value that may lie
+  // outside the frame, so a loop walking one widens it at the first join
+  // rather than gaining an offset a round: each walk adds a few visits to the
+  // least budget the module completes with, not one per offset.
+  auto I = fixture();
+  ASSERT_TRUE(I);
+  const auto Baseline = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Baseline.AnalysisComplete);
+  const size_t Alone = leastCompletingBudget(*I);
+  ASSERT_NE(Alone, SIZE_MAX);
+  constexpr size_t Walks = 64;
+  for (size_t Index = 0; Index < Walks; ++Index)
+    I->Functions.push_back(
+        impreciseFrameWalk(0x70000000 + Index * 0x100, I->Image));
+  EXPECT_LE(leastCompletingBudget(*I), Alone + Walks * 16);
+  const auto Result = pipeline_detail::arbitrateModuleJumpTablesForTesting(
+      I->Image, I->Functions);
+  ASSERT_TRUE(Result.AnalysisComplete);
+  EXPECT_EQ(Result.ProtectedRelocationSlots, Baseline.ProtectedRelocationSlots);
+  EXPECT_EQ(Result.UnsafeBranches, Baseline.UnsafeBranches);
 }
 
 } // namespace
