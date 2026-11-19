@@ -1408,8 +1408,10 @@ jobs:
           if stage >= 2417:
               required.append('MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass')
           if stage >= 2418:
-              owners.extend(['NeverDRecordCallContractTests', 'NeverDSourceCallABITests', 'NeverDLocalTypesDebugContextTests'])
-              required.extend(['RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
+              owners.extend(['NeverDRecordCallContractTests', 'NeverDSourceCallABITests', 'NeverDLocalTypesDebugContextTests',
+                             'NeverDDebugInfoTests', 'NeverDReturnContractTests'])
+              required.extend(['ReturnContracts.AArch64IncomingResultRegisterRequiresACallerRead',
+                               'RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
                                'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
                                'RecordCallContract.FloatingRecordResultsKeepPhysicalLocals',
                                'RecordCallContract.FloatingRecordResultsKeepIntegerExpressionCarriers'])
