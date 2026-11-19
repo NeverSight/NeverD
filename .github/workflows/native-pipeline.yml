@@ -344,13 +344,14 @@ jobs:
         with:
           arch: x64
       - name: Install the CRT fixture toolchain on Unix
-        if: inputs.scope == 'crt-unix-qualification'
+        if: runner.os != 'Windows' && inputs.scope != 'frame-unix-qualification'
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
             sudo apt-get install --yes gcc-mingw-w64-x86-64
           else
             brew install mingw-w64
           fi
+          x86_64-w64-mingw32-gcc --version
       - name: Configure bounded Release qualification
         run: |
           platform_args=()
