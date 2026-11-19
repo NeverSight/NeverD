@@ -24,6 +24,8 @@
 #define DEBUG_TYPE "neverd-dwarf-loader"
 #include "neverd/support/Parallel.h"
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
@@ -97,6 +99,21 @@ bool hasCompleteAttributePayload(
     ++Spec;
   }
   return Spec == SpecEnd;
+}
+
+/// Complete source values may not inherit a guessed field from truncated or
+/// duplicate attributes. Display-only conversion keeps its existing policy.
+bool completeValueAttributes(llvm::DWARFDie Die) {
+  if (!Die.isValid())
+    return false;
+  const auto *Abbrev = Die.getAbbreviationDeclarationPtr();
+  if (!Abbrev || !hasCompleteAttributePayload(Die, *Abbrev))
+    return false;
+  llvm::SmallDenseSet<unsigned, 16> Seen;
+  for (const auto &Spec : Abbrev->attributes())
+    if (!Seen.insert(Spec.Attr).second)
+      return false;
+  return true;
 }
 
 StrictAttributeLookup strictAttribute(llvm::DWARFDie Die,
@@ -296,6 +313,7 @@ DecodedLocationExpression decodeLocationExpressionShape(
 
 } // namespace dwarf_loader_detail
 
+using dwarf_loader_detail::completeValueAttributes;
 using dwarf_loader_detail::strictAttribute;
 using dwarf_loader_detail::StrictAttributeLookup;
 
@@ -392,7 +410,12 @@ struct DWARFDebugContext::Impl {
     llvm::DWARFDie TypeDie;
   };
 
-  TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0) const;
+  TypeRef convertDwarfType(llvm::DWARFDie Die, int Depth = 0,
+                           bool CompleteValue = false) const;
+  using RecordSignatureTypes =
+      llvm::DenseMap<std::pair<const llvm::DWARFUnit *, uint64_t>, TypeRef>;
+  TypeRef signatureType(llvm::DWARFDie Die,
+                        RecordSignatureTypes &Records) const;
   std::optional<AuthenticatedRecordParameter>
   recordParameter(llvm::DWARFDie Die, va_t Entry) const;
   /// Where each formal parameter of the i386 function \p Die enters it at
@@ -423,7 +446,7 @@ struct DWARFDebugContext::Impl {
   void parseCompileUnits(const llvm::object::ObjectFile &Object);
   void parseUnits(size_t Begin, size_t End);
   void parseFunction(llvm::DWARFDie Die, llvm::DWARFUnit *Unit,
-                     unsigned UnitIndex);
+                     unsigned UnitIndex, RecordSignatureTypes &Records);
   void parseFunctionLocals(llvm::DWARFDie Die,
                            llvm::ArrayRef<AddressRange> ScopeRanges,
                            std::vector<LocalObject> &Objects) const;
@@ -1301,18 +1324,37 @@ bool platformConvention(llvm::DWARFDie Die) {
 }
 } // namespace
 
-TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
-                                                  int Depth) const {
+TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
+                                                  bool CompleteValue) const {
   if (!Die.isValid() ||
       Depth > ::neverd::limits::debug::
                   kDWARFLoaderDWARFDebugContextImplConvertDwarfTypeDepthLimit)
-    return NdType::makeInt(4);
+    return CompleteValue ? nullptr : NdType::makeInt(4);
+
+  if (CompleteValue && !completeValueAttributes(Die))
+    return nullptr;
 
   auto Tag = Die.getTag();
   switch (Tag) {
   case llvm::dwarf::DW_TAG_base_type: {
     auto SizeAttr = Die.find(llvm::dwarf::DW_AT_byte_size);
     auto Encoding = Die.find(llvm::dwarf::DW_AT_encoding);
+    if (CompleteValue) {
+      const auto Bytes =
+          SizeAttr ? SizeAttr->getAsUnsignedConstant() : std::nullopt;
+      const auto Enc =
+          Encoding ? Encoding->getAsUnsignedConstant() : std::nullopt;
+      if (!Bytes || !Enc ||
+          (*Bytes != 1 && *Bytes != 2 && *Bytes != 4 && *Bytes != 8) ||
+          (*Enc != llvm::dwarf::DW_ATE_boolean &&
+           *Enc != llvm::dwarf::DW_ATE_signed &&
+           *Enc != llvm::dwarf::DW_ATE_signed_char &&
+           *Enc != llvm::dwarf::DW_ATE_unsigned &&
+           *Enc != llvm::dwarf::DW_ATE_unsigned_char &&
+           *Enc != llvm::dwarf::DW_ATE_float) ||
+          (*Enc == llvm::dwarf::DW_ATE_float && *Bytes < 4))
+        return nullptr;
+    }
     uint16_t Sz = SizeAttr ? static_cast<uint16_t>(
                                  SizeAttr->getAsUnsignedConstant().value_or(4))
                            : 4;
@@ -1362,6 +1404,13 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
         Bytes ? Bytes->getAsUnsignedConstant().value_or(0)
               : (Die.getDwarfUnit() ? Die.getDwarfUnit()->getAddressByteSize()
                                     : 0);
+    if (CompleteValue) {
+      if (Size != 4 && Size != 8)
+        return nullptr;
+      if (const auto AddressClass = Die.find(llvm::dwarf::DW_AT_address_class);
+          AddressClass && AddressClass->getAsUnsignedConstant() != 0)
+        return nullptr;
+    }
     if (Size == 4 || Size == 8)
       Pointer->Size = static_cast<uint16_t>(Size);
     return Pointer;
@@ -1371,18 +1420,38 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
   case llvm::dwarf::DW_TAG_volatile_type:
   case llvm::dwarf::DW_TAG_restrict_type: {
     auto Ref = Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-    return Ref.isValid() ? convertDwarfType(Ref, Depth + 1)
-                         : NdType::makeVoid();
+    return Ref.isValid()   ? convertDwarfType(Ref, Depth + 1, CompleteValue)
+           : CompleteValue ? nullptr
+                           : NdType::makeVoid();
   }
   case llvm::dwarf::DW_TAG_array_type: {
     const bool Vector =
         constantAttribute(Die, llvm::dwarf::DW_AT_GNU_vector).value_or(0);
     auto ElemDie =
         Die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_type);
-    auto Elem = ElemDie.isValid() ? convertDwarfType(ElemDie, Depth + 1)
-                                  : NdType::makeInt(1, false);
+    auto Elem = ElemDie.isValid()
+                    ? convertDwarfType(ElemDie, Depth + 1, CompleteValue)
+                : CompleteValue ? nullptr
+                                : NdType::makeInt(1, false);
     if (!Elem)
       return nullptr;
+    if (CompleteValue) {
+      bool HasDimension = false;
+      for (const auto Child : Die.children())
+        if (!completeValueAttributes(Child))
+          return nullptr;
+        else
+          HasDimension |= Child.getTag() == llvm::dwarf::DW_TAG_subrange_type;
+      const auto Count = arrayElements(Die);
+      if (Vector || !HasDimension || !Count || !*Count || !Elem->Size ||
+          *Count > UINT16_MAX / Elem->Size)
+        return nullptr;
+      const auto Bytes = static_cast<uint16_t>(*Count * Elem->Size);
+      if (auto Stated = Die.find(llvm::dwarf::DW_AT_byte_size);
+          Stated && Stated->getAsUnsignedConstant() != Bytes)
+        return nullptr;
+      return NdType::makeArray(Elem, static_cast<uint32_t>(*Count), Bytes);
+    }
     uint32_t Count = 0;
     for (auto Child : Die.children()) {
       if (Child.getTag() == llvm::dwarf::DW_TAG_subrange_type) {
@@ -1438,6 +1507,51 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
     auto Sz = Die.find(llvm::dwarf::DW_AT_byte_size);
     T->Size =
         Sz ? static_cast<uint16_t>(Sz->getAsUnsignedConstant().value_or(0)) : 0;
+    if (CompleteValue) {
+      if (Tag == llvm::dwarf::DW_TAG_union_type ||
+          Die.find(llvm::dwarf::DW_AT_declaration) || !Sz ||
+          Sz->getAsUnsignedConstant() != T->Size ||
+          recordPassing(Die) != NdRecordPassing::ByValue)
+        return nullptr;
+      std::vector<TypeRef> Fields;
+      std::vector<uint16_t> Offsets;
+      for (const auto Child : Die.children()) {
+        if (Child.getTag() == llvm::dwarf::DW_TAG_variant_part ||
+            Child.getTag() == llvm::dwarf::DW_TAG_inheritance)
+          return nullptr;
+        if (Child.getTag() != llvm::dwarf::DW_TAG_member ||
+            Child.find(llvm::dwarf::DW_AT_external) ||
+            Child.find(llvm::dwarf::DW_AT_declaration))
+          continue;
+        if (!completeValueAttributes(Child) ||
+            Child.find(llvm::dwarf::DW_AT_bit_size) ||
+            Child.find(llvm::dwarf::DW_AT_bit_offset) ||
+            Child.find(llvm::dwarf::DW_AT_data_bit_offset) ||
+            Fields.size() >=
+                ::neverd::limits::debug::kDWARFLoaderMaxLayoutElements)
+          return nullptr;
+        const auto Location =
+            Child.find(llvm::dwarf::DW_AT_data_member_location);
+        const auto Offset = Location ? memberLocation(*Location) : std::nullopt;
+        if (!Offset || *Offset > T->Size)
+          return nullptr;
+        Fields.push_back(
+            convertDwarfType(declaredTypeDie(Child), Depth + 1, true));
+        Offsets.push_back(static_cast<uint16_t>(*Offset));
+      }
+      const unsigned PointerBytes = Die.getDwarfUnit()->getAddressByteSize();
+      const auto Natural = NdType::makeStruct(std::move(Fields), PointerBytes);
+      if (!Natural || Natural->Size != T->Size ||
+          Natural->FieldOffsets != Offsets)
+        return nullptr;
+      if (const auto Align = Die.find(llvm::dwarf::DW_AT_alignment);
+          Align && Align->getAsUnsignedConstant() != Natural->Alignment)
+        return nullptr;
+      T->Fields = std::move(Natural->Fields);
+      T->FieldOffsets = std::move(Natural->FieldOffsets);
+      T->Alignment = Natural->Alignment;
+      T->Passing = NdRecordPassing::ByValue;
+    }
     return T;
   }
   case llvm::dwarf::DW_TAG_subroutine_type: {
@@ -1466,14 +1580,58 @@ TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die,
     return T;
   }
   case llvm::dwarf::DW_TAG_enumeration_type: {
+    if (CompleteValue)
+      return nullptr;
     auto Sz = Die.find(llvm::dwarf::DW_AT_byte_size);
     uint16_t S =
         Sz ? static_cast<uint16_t>(Sz->getAsUnsignedConstant().value_or(4)) : 4;
     return NdType::makeInt(S);
   }
   default:
-    return NdType::makeInt(4);
+    return CompleteValue ? nullptr : NdType::makeInt(4);
   }
+}
+
+/// The declaration owns its mutable types, including nested member, pointer
+/// and callback types. DWARF conversion bounds the graph before it gets here.
+static TypeRef copySignatureType(const TypeRef &Type) {
+  if (!Type)
+    return nullptr;
+  auto Copy = std::make_shared<NdType>(*Type);
+  Copy->Pointee = copySignatureType(Type->Pointee);
+  Copy->ElemType = copySignatureType(Type->ElemType);
+  Copy->RetType = copySignatureType(Type->RetType);
+  for (auto &Field : Copy->Fields)
+    Field = copySignatureType(Field);
+  for (auto &Param : Copy->ParamTypes)
+    Param = copySignatureType(Param);
+  return Copy;
+}
+
+TypeRef
+DWARFDebugContext::Impl::signatureType(llvm::DWARFDie Die,
+                                       RecordSignatureTypes &Records) const {
+  const auto Record = unqualifiedType(Die);
+  if (Record.isValid() &&
+      (Record.getTag() == llvm::dwarf::DW_TAG_structure_type ||
+       Record.getTag() == llvm::dwarf::DW_TAG_class_type)) {
+    // The declared DIE includes the qualifier chain that complete conversion
+    // validates. A referenced type may belong to a different unit.
+    const auto Key = std::make_pair(Die.getDwarfUnit(), Die.getOffset());
+    if (const auto It = Records.find(Key); It != Records.end())
+      return copySignatureType(It->second);
+    if (auto Complete = convertDwarfType(Die, 0, true)) {
+      describeRecordPassing(Die, *Complete);
+      Records.try_emplace(Key, Complete);
+      return Complete;
+    }
+  }
+  // A display type may retain a name and size without a complete value
+  // graph. Source ABI owners must still reject that incomplete evidence.
+  auto Type = convertDwarfType(Die);
+  if (Type)
+    describeRecordPassing(Die, *Type);
+  return Type;
 }
 
 DWARFDebugContext::Impl::DeclaredTypeResolution
@@ -1901,7 +2059,8 @@ void DWARFDebugContext::Impl::parseFunctionLocals(
 
 void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
                                             llvm::DWARFUnit *Unit,
-                                            unsigned UnitIndex) {
+                                            unsigned UnitIndex,
+                                            RecordSignatureTypes &Records) {
   llvm::Expected<llvm::DWARFAddressRangesVector> DwarfRanges =
       Die.getAddressRanges();
   if (!DwarfRanges) {
@@ -1957,11 +2116,9 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     Sym.ReturnType = NdType::makeVoid();
   } else if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Found) {
     ReturnState = classifyReturnValue(ReturnType.TypeDie);
-    Sym.ReturnType = convertDwarfType(ReturnType.TypeDie);
+    Sym.ReturnType = signatureType(ReturnType.TypeDie, Records);
     if (!Sym.ReturnType || Sym.ReturnType->Kind == NdTypeKind::Unknown)
       ReturnState = {};
-    else
-      describeRecordPassing(ReturnType.TypeDie, *Sym.ReturnType);
   } else {
     // A present but malformed reference is not evidence of void.
     Sym.ReturnType = std::make_shared<NdType>();
@@ -1980,9 +2137,8 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     if (const char *RawName = Child.getName(llvm::DINameKind::ShortName))
       Name = RawName;
     auto ParamDie = declaredTypeDie(Child);
-    TypeRef Type = ParamDie.isValid() ? convertDwarfType(ParamDie) : nullptr;
-    if (ParamDie.isValid() && Type)
-      describeRecordPassing(ParamDie, *Type);
+    TypeRef Type =
+        ParamDie.isValid() ? signatureType(ParamDie, Records) : nullptr;
     Sym.Params.emplace_back(std::move(Name), std::move(Type));
   }
   Sym.PlatformConvention = platformConvention(Die);
@@ -2015,12 +2171,13 @@ void DWARFDebugContext::Impl::parseUnits(size_t Begin, size_t End) {
     if (!Root.isValid())
       continue;
     const unsigned UnitIndex = static_cast<unsigned>(Index - 1);
+    RecordSignatureTypes Records;
 
     std::function<void(llvm::DWARFDie)> Walk = [&](llvm::DWARFDie Die) {
       if (!Die.isValid())
         return;
       if (Die.getTag() == llvm::dwarf::DW_TAG_subprogram) {
-        parseFunction(Die, CU.get(), UnitIndex);
+        parseFunction(Die, CU.get(), UnitIndex, Records);
         return;
       }
       if (Die.getTag() == llvm::dwarf::DW_TAG_variable)

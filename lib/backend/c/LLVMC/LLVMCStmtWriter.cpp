@@ -6799,8 +6799,10 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
         continue;
       }
       Expr += c_detail::recordCallArgument(
-          Spelling, RecordCall->Parameters[ArgIdx],
-          [&](unsigned Index) { return valueStr(Call.getArgOperand(Index)); });
+          Spelling, RecordCall->Parameters[ArgIdx], Opts.TheArch,
+          [&](const IntegerCallArgumentPiece &Piece) {
+            return valueStr(Call.getArgOperand(Piece.Argument));
+          });
       continue;
     }
     const unsigned Source =

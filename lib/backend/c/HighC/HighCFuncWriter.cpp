@@ -35,6 +35,7 @@
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCNames.h"
+#include "neverd/libc/LibCRecordArguments.h"
 #include "neverd/libc/LibCResult.h"
 #include "neverd/libc/LibCVariadicArguments.h"
 #include "neverd/loader/BinaryImage.h"
@@ -5000,6 +5001,25 @@ TypeRef HighCWriter::integerCallResultCarrier(const HighExpr &Call,
   return {};
 }
 
+bool HighCWriter::sourceRecordCallee(llvm::StringRef Name,
+                                     const FunctionSym &Callee,
+                                     const HighFunc *Definition) const {
+  return !Definition &&
+         ((Name == Callee.Name && includesHeaderOf(Name)) ||
+          libc::floatingCallArguments(Callee, Opts.TheArch, Opts.Format, Dbg));
+}
+
+TypeRef HighCWriter::recordCallResultCarrier(const HighExpr &Call,
+                                             const FunctionSym &Callee) const {
+  if (!Callee.ReturnType || Callee.ReturnType->Kind != NdTypeKind::Struct ||
+      Callee.ReturnType->IsEnum ||
+      !sourceRecordCallee(callIdentifier(Call), Callee, calledDefinition(Call)))
+    return {};
+  const auto Contract = libc::recordCallArguments(
+      Callee, Opts.TheArch, Opts.Format, Opts.libcVariant());
+  return Contract && Contract->FloatingResult ? Call.Type : nullptr;
+}
+
 TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
   if (Call.SourceCallHint &&
       Call.SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst) {
@@ -5020,6 +5040,8 @@ TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
       FS && debugCallReturnIsDeclared(Call, *FS)) {
     if (Dbg)
       Dbg->completeType(FS->ReturnType);
+    if (auto Carrier = recordCallResultCarrier(Call, *FS))
+      return Carrier;
     ReturnType = FS->ReturnType;
     if (isMsvcIndirectReturn(FS->ReturnType, Opts.TheArch, Opts.Format) &&
         ReturnType && ReturnType->Kind != NdTypeKind::Ptr) {

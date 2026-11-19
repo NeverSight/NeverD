@@ -3514,7 +3514,10 @@ with address/undefined-behavior sanitizers. x64 hidden buffers and ARM64
 register HFAs preserve both returned fields through single and chained calls,
 including NaN payloads and signed zero; output sentinels bound every write.
 ARM64 explicitly stores both fields, so the test does not infer a wrapper's
-source return type from unused scratch registers. The shared placement suite
+source return type from unused scratch registers.
+`ReturnContracts.AArch64IncomingResultRegisterRequiresACallerRead` checks an
+entry self-copy, a caller that consumes the preserved register, and a real
+write to the register. The shared placement suite
 covers one through four float/double HFA members on COFF/ELF/Mach-O, including
 whole-record COFF/ELF/Mach-O stack placement and natural Darwin stack offsets,
 and rejects incomplete, padded and over-aligned HFA layouts.
@@ -3540,6 +3543,15 @@ HighIR retains checked HFA results as records of their returned registers;
 field reads do not require unsupported 192/256-bit C integers on AArch64.
 `RecordCallContract.HFAResultRecordsRequireTheExactDeclaredLayout` rejects
 changed member classes, offsets, alignment, size and an unproved carrier.
+`FloatingRecordResultsKeepPhysicalLocals` and
+`FloatingRecordResultsKeepIntegerExpressionCarriers` compile and execute HighC
+on every host with the configured Clang, using AArch64 COFF/ELF/Mach-O call
+contracts and both header and local declarations. They check the converted
+result's local type and nested expression type, exact NaN/signed-zero bytes,
+and one provider invocation at O0/O2 with undefined-behavior checks. The
+three-float legacy integer case also checks the twelve declared bytes when
+the host C integer has padding. These are C projection checks, not native
+execution of the three target platforms.
 `RecordCallContract.WindowsHFAProjectionsExecuteOnAArch64` and
 `RecordCallContract.WindowsHFAImportSlotProjectionsExecuteOnAArch64` execute
 those C matrices as freestanding Linux AArch64 programs, directly on that
@@ -26311,3 +26323,36 @@ must retain the selected historical ISA, ABI and byte order. Receipts record
 source, code-generation and rebuilt ISA; no physical historical CPU is claimed.
 The same artifact owner records failed source/commands and removes generated
 ELFs, objects and superseded source after each attempt.
+
+### MIPS natural record transport
+
+`MIPSRecordABI.*` in `NeverDSourceCallABITests` checks fixed n32/n64 natural
+record placement in both byte orders: partial chunks, a7-to-stack splits,
+direct versus nested/array floating fields, target-width pointers, and hidden
+result storage without a v0 result. Invalid layouts and unqualified conventions
+must fail as complete contracts rather than publish a partial parameter prefix.
+The cases distinguish object offsets from register significance offsets.
+The two-float result case keeps the second object's four-byte offset separate
+from its f2 register, even though its argument occupies one integer carrier.
+`unittests/lift/mips/record-abi-roundtrip.py` checks typed entry contracts and
+cross-object direct/indirect calls against GCC and Clang at O0/O2. For hidden
+results it also poisons v0 after the callee's return delay slot, before the
+caller consumes the result. The caller must use its original result buffer;
+a callee that happens to return that address in v0 is not an ABI guarantee.
+
+`DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
+`DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in
+`NeverDDebugInfoTests` use independent ELF32/64, little/big-endian DWARF bytes.
+They reject missing or duplicate type/layout attributes, unbounded arrays,
+unions, recursion, overflowing sizes, wrong pointer widths and packed layouts.
+The repeated-record DIE test edits a parameter's nested array element and
+checks that the return type keeps its own fields in all four ELF profiles.
+`LocalTypesDebugContext.SourceRecordValuesRetainTargetPointersAndDirectMemberKinds`
+checks the matching local declarations and anonymous/nested union boundary.
+Run those owners plus `NeverDTypesTests` and the source-call owners when
+changing the complete-value metadata path. These tests qualify classification
+and type evidence; they do not establish general record source reconstruction.
+`MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass` keeps
+an unbound v0/v1 result in its recovered representation when debug information
+describes an equally sized f0/f2 record. Run it for n32/n64 in both byte orders;
+complete field metadata alone cannot replace a source entry ABI contract.

@@ -2780,9 +2780,7 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
   if (const auto Declared = plainDeclarationArity(E))
     PrintedArgs = std::max(PrintedArgs, *Declared);
   const bool SourceRecord =
-      !Defined && Callee &&
-      ((Name == Callee->Name && includesHeaderOf(Name)) ||
-       libc::floatingCallArguments(*Callee, Opts.TheArch, Opts.Format, Dbg));
+      Callee && sourceRecordCallee(Name, *Callee, Defined);
   const auto RecordCall =
       SourceRecord ? libc::recordCallArguments(*Callee, Opts.TheArch,
                                                Opts.Format, Opts.libcVariant())
@@ -2848,9 +2846,16 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
               ? c_detail::recordCallType(Type, Opts)
               : typeToC(Type);
       S += c_detail::recordCallArgument(
-          Spelling, RecordCall->Parameters[I], [&](unsigned Index) {
+          Spelling, RecordCall->Parameters[I], Opts.TheArch,
+          [&](const IntegerCallArgumentPiece &Piece) {
+            const unsigned Index = Piece.Argument;
             if (Index >= E.Operands.size() || !E.Operands[Index])
               throw std::runtime_error("A record call argument is incomplete");
+            if (Piece.CarrierBytes &&
+                (!E.Operands[Index]->Type ||
+                 E.Operands[Index]->Type->Size < Piece.CarrierBytes))
+              throw std::runtime_error(
+                  "A record call argument lost its physical word");
             return exprStr(*E.Operands[Index]);
           });
       continue;
@@ -4372,6 +4377,8 @@ TypeRef HighCWriter::knownCallReturnType(const HighExpr &E) const {
       return Return;
   if (const auto Callee = debugCallee(E);
       Callee && debugCallReturnIsDeclared(E, *Callee)) {
+    if (auto Carrier = recordCallResultCarrier(E, *Callee))
+      return Carrier;
     // A result whose type C cannot spell is the register it arrives in.
     if (!hasCValueLayout(Callee->ReturnType))
       return {};

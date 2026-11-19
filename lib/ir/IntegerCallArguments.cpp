@@ -13,6 +13,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -68,7 +69,25 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                              llvm::ArrayRef<TypeRef> Parameters) {
   if (!ReturnType)
     return std::nullopt;
-  const auto Placement = placeSourceParameters(A, F, ReturnType, Parameters);
+  std::optional<SourceParameterPlacement> Placement;
+  bool MIPSRecords = false;
+  if (isMIPS64(A) && llvm::any_of(Parameters, [](const TypeRef &Type) {
+        return Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum;
+      })) {
+    // This adapter owns integer argument words only. Record/FP results and
+    // floating argument registers need their complete independent transport;
+    // a record layout must not authorize a different result convention.
+    if (ReturnType->Kind != NdTypeKind::Void &&
+        ReturnType->Kind != NdTypeKind::Int &&
+        ReturnType->Kind != NdTypeKind::Ptr)
+      return std::nullopt;
+    auto Record = mips::placeRecordCall(A, F, ReturnType, Parameters);
+    if (!Record || Record->Arguments.ResultPointer)
+      return std::nullopt;
+    Placement = std::move(Record->Arguments);
+    MIPSRecords = true;
+  } else
+    Placement = placeSourceParameters(A, F, ReturnType, Parameters);
   if (!Placement || Placement->Parameters.size() != Parameters.size())
     return std::nullopt;
   const auto Layout = getTargetRegInfo(A).integerArgumentLayout(F);
@@ -147,9 +166,19 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
         if (Argument >= static_cast<unsigned>(limits::kMaxCallArgs) ||
             (!Piece.Indirect && Piece.Offset + Offset + Bytes > Type->Size))
           return std::nullopt;
-        Parameter.Pieces.push_back(
-            {Argument, static_cast<uint16_t>(Piece.Offset + Offset),
-             static_cast<uint16_t>(Bytes)});
+        IntegerCallArgumentPiece Bound{
+            Argument, static_cast<uint16_t>(Piece.Offset + Offset),
+            static_cast<uint16_t>(Bytes)};
+        if (MIPSRecords && Type->Kind == NdTypeKind::Struct && !Type->IsEnum) {
+          Bound.CarrierBytes = Layout.SlotBytes;
+          // The flat call operand reads the whole stack slot. Record bytes
+          // start at its lowest address, unlike a narrow scalar's low bits.
+          Bound.BitOffset =
+              Location.Kind == SourceABICarrierKind::Stack
+                  ? (archLittleEndian(A) ? 0 : (Layout.SlotBytes - Bytes) * 8)
+                  : Piece.RegisterBitOffset;
+        }
+        Parameter.Pieces.push_back(Bound);
         Result.Positions = std::max(Result.Positions, Argument + 1);
       }
     }

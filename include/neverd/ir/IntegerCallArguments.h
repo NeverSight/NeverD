@@ -27,6 +27,11 @@ struct IntegerCallArgumentPiece {
   /// A record adapter may supply a typed FP operand; copy its bits, never
   /// convert its numeric value to the integer storage used for assembly.
   bool Floating = false;
+  /// A physical word can hold a partial record chunk above its low bits.
+  /// Zero retains the ordinary low-Bytes carrier. These explicit slices are
+  /// supplied by the record ABI owner, independently of the object Offset.
+  uint16_t CarrierBytes = 0;
+  uint16_t BitOffset = 0;
 };
 
 struct IntegerCallParameter {
@@ -74,6 +79,8 @@ fixedIntegerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
 /// Describe every parameter or return none. Floating carriers, hidden result
 /// pointers outside Windows x86/x64, over-aligned stack values, and incomplete
 /// placements are rejected.
+/// Fixed n32/n64 natural records with integer-only carriers and an ordinary
+/// scalar integer/pointer/void result retain their explicit physical slices.
 /// The result uses recoverCallAbi's integer register/stack operand order.
 std::optional<IntegerCallArguments>
 integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,

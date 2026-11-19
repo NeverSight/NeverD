@@ -10,8 +10,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../../../lib/backend/c/CRecordCall.h"
 #include "../../HostCompiler.h"
 #include "LocalTypesDebugContext.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -40,6 +42,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Program.h"
 
+#include <bit>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -179,6 +182,67 @@ TEST(RecordCallContract, LLVMOperandsKeepPhysicalStackPieceLocations) {
   }
 }
 
+TEST(RecordCallContract, MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots) {
+  auto Record = NdType::makeStruct(
+      {NdType::makeArray(NdType::makeInt(1, false), 10, 10)});
+  ASSERT_TRUE(Record);
+  Record->Passing = NdRecordPassing::ByValue;
+  std::vector<TypeRef> Parameters(7, NdType::makeInt(8, false));
+  Parameters.insert(Parameters.end(), {Record, NdType::makeInt(8, false)});
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto Layout = integerCallArguments(A, BinaryFormat::ELF,
+                                             NdType::makeInt(8), Parameters);
+    ASSERT_TRUE(Layout);
+    for (unsigned Variant = 0; Variant != 9; ++Variant) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << ':' << Variant);
+      llvm::LLVMContext Context;
+      llvm::Module Module("mips-record-call", Context);
+      llvm::IRBuilder<> Builder(Context);
+      std::vector<llvm::Type *> Types;
+      std::vector<llvm::Value *> Values;
+      const unsigned Count = Variant == 5 ? 9 : 10;
+      for (unsigned I = 0; I != Count; ++I) {
+        auto *Type = (Variant == 3 && I == 7) || (Variant == 4 && I == 8)
+                         ? Builder.getInt32Ty()
+                         : Builder.getInt64Ty();
+        Types.push_back(Type);
+        Values.push_back(
+            llvm::ConstantInt::get(Type, 0x94716315f1e2d3c4ULL + I));
+      }
+      auto *Caller = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getVoidTy(), false),
+          llvm::GlobalValue::ExternalLinkage, "caller", Module);
+      Builder.SetInsertPoint(
+          llvm::BasicBlock::Create(Context, "entry", Caller));
+      auto *Callee = llvm::Function::Create(
+          llvm::FunctionType::get(Builder.getInt64Ty(), Types, false),
+          llvm::GlobalValue::ExternalLinkage, "callee", Module);
+      auto *Call = Builder.CreateCall(Callee, Values);
+      Builder.CreateRetVoid();
+      if (Variant && Variant != 3 && Variant != 5) {
+        const std::vector<int64_t> Offsets =
+            Variant == 2   ? std::vector<int64_t>{8, 0}
+            : Variant == 6 ? std::vector<int64_t>{0, 0}
+                           : std::vector<int64_t>{0, 8};
+        setLLVMArgumentBanks(*Call, 8, Variant == 8 ? 1 : 0, Offsets,
+                             Variant == 7 ? 4 : 8);
+      }
+      const auto Bound =
+          bindLLVMIntegerCallArguments(*Call, *Layout, A, BinaryFormat::ELF);
+      ASSERT_EQ(bool(Bound), Variant < 3);
+      if (!Bound)
+        continue;
+      ASSERT_EQ(Bound->Parameters[7].Pieces.size(), 2u);
+      const auto &Tail = Bound->Parameters[7].Pieces[1];
+      EXPECT_EQ(Tail.Argument, Variant == 2 ? 9 : 8);
+      EXPECT_EQ(Tail.Bytes, 2);
+      EXPECT_EQ(Tail.CarrierBytes, 8);
+      EXPECT_EQ(Tail.BitOffset, archLittleEndian(A) ? 0 : 48);
+    }
+  }
+}
+
 const char *Original = R"(
 #define _GNU_SOURCE 1
 #include <stdio.h>
@@ -269,6 +333,73 @@ bool execute(llvm::StringRef Program, std::vector<llvm::StringRef> Arguments,
                 << (Log ? (*Log)->getBuffer().str() : "") << '\n'
                 << "exit status " << Status;
   return false;
+}
+
+TEST(RecordCallContract, PartialRecordCBridgesPreserveBitsAndEvaluateOnce) {
+  // Run the actual shared C bridge on this host's byte order. The separate
+  // MIPS GCC/Clang corpus owns execution under each target ABI and endianness.
+  // A deliberately narrow uintptr_t catches accidental n32 word truncation.
+  const Arch Target = std::endian::native == std::endian::little
+                          ? Arch::MIPS64N32EL
+                          : Arch::MIPS64N32;
+  std::string Source =
+      "typedef unsigned int uintptr_t;\n"
+      "typedef unsigned long long uint64_t;\n"
+      "static uint64_t words[16]; static unsigned counts[16];\n"
+      "static uint64_t word(unsigned i) { ++counts[i]; return words[i]; }\n"
+      "int main(void) { unsigned char bytes[128];\n"
+      "for (unsigned i=0; i<128; ++i) bytes[i]=(unsigned char)(0x91+i*23);\n";
+  for (uint16_t Bytes : {3, 5, 6, 7, 9, 10, 13, 15, 16, 17})
+    for (unsigned Prefix : {0u, 7u, 8u}) {
+      auto Record = NdType::makeStruct(
+          {NdType::makeArray(NdType::makeInt(1, false), Bytes, Bytes)});
+      ASSERT_TRUE(Record);
+      Record->Passing = NdRecordPassing::ByValue;
+      std::vector<TypeRef> Types(Prefix, NdType::makeInt(8, false));
+      Types.push_back(Record);
+      const auto Layout = integerCallArguments(Target, BinaryFormat::ELF,
+                                               NdType::makeInt(8), Types);
+      ASSERT_TRUE(Layout);
+      const auto &Parameter = Layout->Parameters.back();
+      const auto Text = c_detail::recordCallArgument(
+          "struct R", Parameter, Target,
+          [](const IntegerCallArgumentPiece &Piece) {
+            return "word(" + std::to_string(Piece.Argument) + ")";
+          });
+      Source += "{ struct R { unsigned char data[" + std::to_string(Bytes) +
+                "]; };\n"
+                "for (unsigned i=0; i<16; ++i) counts[i]=0;\n"
+                "__builtin_memcpy(words,bytes,sizeof words);\n"
+                "struct R value = " +
+                Text +
+                ";\n"
+                "for(unsigned i=0;i<" +
+                std::to_string(Bytes) + ";++i) if(value.data[i]!=bytes[" +
+                std::to_string(Prefix * 8) +
+                "+i]) return 1;\n"
+                "for(unsigned i=0;i<16;++i) if(counts[i] != (i >= " +
+                std::to_string(Prefix) + " && i < " +
+                std::to_string(Prefix + (Bytes + 7) / 8) + ")) return 2; }\n";
+    }
+  Source += "return 0; }\n";
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(
+      llvm::sys::fs::createUniqueDirectory("neverd-record-slices", Directory));
+  const auto Cleanup = llvm::make_scope_exit(
+      [&] { llvm::sys::fs::remove_directories(Directory); });
+  const auto Input = (Directory + "/bridge.c").str();
+  const auto Product = (Directory + "/bridge").str();
+  const auto Errors = (Directory + "/errors.txt").str();
+  write(Input, Source);
+  const std::string Compiler = NEVERD_TEST_CLANG;
+  for (const char *Optimization : {"-O0", "-O2"}) {
+    SCOPED_TRACE(Optimization);
+    ASSERT_TRUE(execute(
+        Compiler, {Compiler, "-std=gnu11", Optimization, Input, "-o", Product},
+        Errors))
+        << Source;
+    ASSERT_TRUE(execute(Product, {Product}, Errors)) << Source;
+  }
 }
 
 TEST(RecordCallContract, LinkedLibCRecordsExecuteThroughBothCEmitters) {
@@ -780,6 +911,122 @@ TEST(RecordCallContract, HFAResultRecordsRequireTheExactDeclaredLayout) {
       EXPECT_NE(Source.find("__neverd_result"), std::string::npos) << Source;
     }
   }
+}
+
+void checkFloatingRecordResult(bool IntegerCarrier) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Header : {false, true})
+      for (uint16_t Bytes : {4, 8}) {
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Header);
+        SCOPED_TRACE(Bytes);
+        const unsigned Count = Bytes == 4 ? 3 : 2;
+        const std::string Scalar = Bytes == 4 ? "float" : "double";
+        auto Types = std::make_shared<types::TypeLibrary>(
+            Format == BinaryFormat::COFF ? types::DataModel::LLP64
+                                         : types::DataModel::LP64);
+        if (Format == BinaryFormat::COFF)
+          Types->setRecordABI(types::RecordABI::Microsoft);
+        ASSERT_TRUE(types::parseCTypes("typedef struct HFA { " + Scalar +
+                                           " lane[" + std::to_string(Count) +
+                                           "]; } HFA; HFA fixture_hfa(void);",
+                                       *Types)
+                        .ok());
+        BinaryImage Image;
+        Image.Arch = Arch::AArch64;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        Import Imported;
+        Imported.Name = "fixture_hfa";
+        Imported.IATAddr = 0x2000;
+        Image.Imports.push_back(Imported);
+        EmptyDebug Empty;
+        sdk::LocalTypesDebugContext Context(Empty, Types, {}, &Image);
+        DeclaredHeaderDebug HeaderDebug(Context);
+        DebugContext &Debug =
+            Header ? static_cast<DebugContext &>(HeaderDebug) : Context;
+        const auto Prototype = Debug.resolvePrototype("fixture_hfa");
+        ASSERT_TRUE(Prototype);
+        const auto Signature =
+            libc::floatingCallArguments(*Prototype, Image.Arch, Image.Format);
+        ASSERT_TRUE(Signature);
+        auto Call = HighExpr::makeCall(Imported.Name, Imported.IATAddr, {});
+        Call->FloatingCallSignature =
+            std::make_shared<FloatingCallArguments>(*Signature);
+        Call->Type = IntegerCarrier ? NdType::makeInt(Bytes * Count, false)
+                                    : NdType::makeStruct(std::vector<TypeRef>(
+                                          Count, NdType::makeFloat(Bytes)));
+        Call->Type->RegisterReturnRecord = !IntegerCarrier;
+        HighFunc Function;
+        Function.Entry = 0x1000;
+        Function.Name = "consume_result";
+        Function.ReturnType = Call->Type;
+        HighStmt Return;
+        Return.Kind = StmtKind::Return;
+        if (IntegerCarrier) {
+          // The enclosing expression must not pack an already packed result.
+          Return.RetVal = Call;
+        } else {
+          MedVar Temp;
+          Temp.Kind = MedVar::Temp;
+          Temp.Id = 27;
+          Temp.SSAVer = 1;
+          Temp.Size = Call->Type->Size;
+          auto Local = HighExpr::makeVar(Temp, Call->Type);
+          HighStmt Assign;
+          Assign.Kind = StmtKind::Assign;
+          Assign.Dst = Local;
+          Assign.Val = Call;
+          Function.Body.push_back(Assign);
+          // Read every field so forwarding cannot erase the local carrier.
+          std::vector<ExprPtr> Fields;
+          for (unsigned I = 0; I != Count; ++I)
+            Fields.push_back(
+                HighExpr::makeRecordField(Local, I * Bytes, Bytes));
+          Return.RetVal = HighExpr::makeRecord(Call->Type, std::move(Fields));
+        }
+        Function.Body.push_back(Return);
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Image.Format;
+        Options.Image = &Image;
+        Options.RecordDefinitions = [&](const std::vector<TypeRef> &Records) {
+          return Context.definitions(Records);
+        };
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+        // The independent provider returns NaN payloads, signed zero and an
+        // ordinary lane. Observe every byte and exactly one invocation.
+        const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+        const std::string Bits =
+            Bytes == 4 ? "0x7FC12345U, 0x80000000U, 0x3F800000U"
+                       : "0x7FF8123456789ABCULL, 0x8000000000000000ULL";
+        Source += "\nstatic unsigned calls;\nstruct HFA fixture_hfa(void) {\n"
+                  "const " +
+                  Word + " bits[] = {" + Bits +
+                  "}; struct HFA value;\n"
+                  "__builtin_memcpy(&value, bits, sizeof(value));\n"
+                  "++calls; return value; }\nint main(void) {\n"
+                  "const " +
+                  Word + " expected[] = {" + Bits +
+                  "}; __auto_type result = consume_result();\n"
+                  "return calls != 1 || __builtin_memcmp(&result, expected, "
+                  "sizeof(expected)); }\n";
+        for (const char *Level : {"-O0", "-O2"})
+          ASSERT_NO_FATAL_FAILURE(source_call_execution_test::compileAndRun(
+              Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
+                       "-Werror=uninitialized"}));
+      }
+}
+
+TEST(RecordCallContract, FloatingRecordResultsKeepPhysicalLocals) {
+  checkFloatingRecordResult(false);
+}
+
+TEST(RecordCallContract, FloatingRecordResultsKeepIntegerExpressionCarriers) {
+  checkFloatingRecordResult(true);
 }
 
 TEST(RecordCallContract, WindowsRecordResultsPreserveEveryByte) {

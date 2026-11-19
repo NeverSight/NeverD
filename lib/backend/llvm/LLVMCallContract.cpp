@@ -134,9 +134,20 @@ bindLLVMIntegerCallArguments(const llvm::CallBase &Call,
                              const IntegerCallArguments &Layout, Arch A,
                              BinaryFormat F) {
   const auto *Metadata = Call.getMetadata(ArgumentBanks);
-  if (!Metadata)
+  if (!Metadata) {
+    // Positional calls have no bank map, but a partial record still needs
+    // the complete physical word containing its declared slice. In n32 a
+    // pointer-width operand cannot supply the upper half of a 64-bit GPR.
+    for (const auto &Parameter : Layout.Parameters)
+      for (const auto &Piece : Parameter.Pieces)
+        if (Piece.CarrierBytes && (Piece.Argument >= Call.arg_size() ||
+                                   !Call.getArgOperand(Piece.Argument)
+                                        ->getType()
+                                        ->isIntegerTy(Piece.CarrierBytes * 8)))
+          return std::nullopt;
     return Layout.Positions <= Call.arg_size() ? std::optional(Layout)
                                                : std::nullopt;
+  }
   const auto Banks = getLLVMArgumentBanks(Call);
   const auto Physical = getTargetRegInfo(A).integerArgumentLayout(F);
   if (!Banks || Banks->second || !Physical.SlotBytes)
@@ -184,7 +195,9 @@ bindLLVMIntegerCallArguments(const llvm::CallBase &Call,
     return std::nullopt;
   for (auto &Parameter : Bound.Parameters)
     for (auto &Piece : Parameter.Pieces)
-      if (Piece.Floating || !Bind(Piece.Argument, Piece.Bytes))
+      if (Piece.Floating ||
+          !Bind(Piece.Argument,
+                Piece.CarrierBytes ? Piece.CarrierBytes : Piece.Bytes))
         return std::nullopt;
   return Bound;
 }

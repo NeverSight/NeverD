@@ -1627,6 +1627,16 @@ call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the
 [SGI n32/n64 calling convention](https://techpubs.jurassic.nl/library/manuals/2000/007-2816-005/sgi_html/ch02.html).
 
+Natural n32/n64 C record transport has a separate classifier in
+`neverd/ir/MIPS/SourceRecordABI.h`. It retains target-width pointers, direct
+double fields, nested records and arrays, partial big-endian register chunks,
+and register-to-stack splits. A hidden result pointer consumes the first
+argument position without defining a pointer return in v0. DWARF and local
+declarations preserve complete natural field graphs when available; incomplete
+layouts and unions remain display-only evidence. This classifier does not yet
+enable general record entry, call or return reconstruction in HighC/LLVMC.
+Those routes still require complete original-carrier and value-use proofs.
+
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.

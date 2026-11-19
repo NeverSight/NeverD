@@ -98,7 +98,7 @@ NdType::displayBitFieldPathAt(uint64_t BitOffset, uint32_t BitWidth) const {
 namespace {
 bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
             std::vector<uint16_t> &Offsets, unsigned Depth, unsigned &Budget,
-            bool Constructing = false) {
+            uint16_t PointerBytes, bool Constructing = false) {
   if (!Budget || Depth > ::neverd::limits::ir::kNdTypesLayoutDepthLimit)
     return false;
   --Budget;
@@ -106,8 +106,8 @@ bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
     if (!T.ElemType || !T.ArrayCount)
       return false;
     std::vector<uint16_t> ElementOffsets;
-    if (!layout(*T.ElemType, Size, Alignment, ElementOffsets, Depth + 1,
-                Budget))
+    if (!layout(*T.ElemType, Size, Alignment, ElementOffsets, Depth + 1, Budget,
+                PointerBytes))
       return false;
     const uint64_t Bytes = uint64_t(Size) * T.ArrayCount;
     if (Bytes != T.Size || Bytes > ::neverd::limits::ir::kMaxNaturalStructBytes)
@@ -122,7 +122,8 @@ bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
         (T.Kind == NdTypeKind::Int &&
          (T.Size == 1 || T.Size == 2 || T.Size == 4 || T.Size == 8)) ||
         (T.Kind == NdTypeKind::Float && (T.Size == 4 || T.Size == 8)) ||
-        (T.Kind == NdTypeKind::Ptr && T.Size == 8 && T.Pointee);
+        (T.Kind == NdTypeKind::Ptr && (T.Size == 4 || T.Size == 8) &&
+         (!PointerBytes || T.Size == PointerBytes) && T.Pointee);
     Size = Alignment = T.Size;
     return (Scalar && !sourceAArch64VectorBytes(&T)) ||
            isSourceAArch64VectorType(&T);
@@ -135,7 +136,8 @@ bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
   for (const auto &Field : T.Fields) {
     uint16_t Bytes, Align;
     std::vector<uint16_t> Nested;
-    if (!Field || !layout(*Field, Bytes, Align, Nested, Depth + 1, Budget))
+    if (!Field ||
+        !layout(*Field, Bytes, Align, Nested, Depth + 1, Budget, PointerBytes))
       return false;
     Alignment = std::max(Alignment, Align);
     End = (End + Align - 1) & -uint32_t(Align);
@@ -151,12 +153,16 @@ bool layout(const NdType &T, uint16_t &Size, uint16_t &Alignment,
 } // namespace
 
 std::shared_ptr<NdType>
-NdType::makeStruct(std::vector<std::shared_ptr<NdType>> Fields) {
+NdType::makeStruct(std::vector<std::shared_ptr<NdType>> Fields,
+                   uint16_t PointerBytes) {
+  if (PointerBytes != 4 && PointerBytes != 8)
+    return nullptr;
   auto T = std::make_shared<NdType>();
   T->Kind = NdTypeKind::Struct;
   T->Fields = std::move(Fields);
   unsigned Budget = ::neverd::limits::ir::kNdTypesNdTypeMakeStructBudget;
-  if (!layout(*T, T->Size, T->Alignment, T->FieldOffsets, 0, Budget, true))
+  if (!layout(*T, T->Size, T->Alignment, T->FieldOffsets, 0, Budget,
+              PointerBytes, true))
     return nullptr;
   return T;
 }
@@ -219,7 +225,9 @@ std::string NdType::str() const {
     unsigned Budget = ::neverd::limits::ir::kNdTypesNdTypeStrBudget;
     uint16_t Bytes, Align;
     std::vector<uint16_t> Offsets;
-    if (!layout(*this, Bytes, Align, Offsets, 0, Budget))
+    // Display the stored member widths. ABI classification separately checks
+    // every pointer against its target; spelling never supplies that proof.
+    if (!layout(*this, Bytes, Align, Offsets, 0, Budget, 0))
       return "invalid_record";
     std::string Result = "record{";
     for (size_t I = 0; I < Fields.size(); ++I) {
