@@ -21,6 +21,10 @@ on:
         options:
           - baseline
           - candidate
+      pr_number:
+        description: Pending PR number for the pr-owners scope
+        required: false
+        type: string
       scope:
         description: Native owners or a bounded compiler/worker reproducer
         type: choice
@@ -28,6 +32,7 @@ on:
         options:
           - qualification
           - macos-qualification
+          - pr-owners
           - record-unix-qualification
           - constructor-repro
           - render-store-probe
@@ -1275,3 +1280,189 @@ jobs:
           path: |
             reference-evidence/
             build-reference/CMakeCache.txt
+  pr_owners:
+    if: inputs.scope == 'pr-owners'
+    name: ${{ matrix.name }} PR ${{ inputs.pr_number }} native owners
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: Linux, runner: ubuntu-24.04, cc: clang-18, cxx: clang++-18, parallel: 4}
+          - {name: macOS, runner: macos-15, cc: clang, cxx: clang++, parallel: 3}
+          - {name: Windows, runner: windows-latest, cc: cl, cxx: cl, parallel: 4}
+    timeout-minutes: 180
+    env:
+      EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      BUILD_JOBS: ${{ matrix.parallel }}
+      QUALIFICATION_CXX: ${{ matrix.cxx }}
+      QUALIFICATION_ROLE: ${{ inputs.qualification_role }}
+      QUALIFICATION_SCOPE: ${{ inputs.scope }}
+      EXPECTED_MIPS_TEST_COUNT: ${{ inputs.mips_test_count }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Verify source identity
+        run: |
+          python - <<'PYTHON'
+          import os, re, subprocess
+          expected = os.environ['EXPECTED_SOURCE_SHA']
+          assert re.fullmatch(r'[0-9a-f]{40}', expected), expected
+          actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert actual == expected, (actual, expected)
+          PYTHON
+          git submodule update --init --depth 1 third_party/capstone third_party/unicorn signatures
+      - name: Install Linux build and fixture tools
+        if: runner.os == 'Linux'
+        run: |
+          curl --fail --silent --show-error --retry 3 https://apt.llvm.org/llvm-snapshot.gpg.key \
+            --output "$RUNNER_TEMP/neverd-llvm.asc"
+          gpg --show-keys --with-colons "$RUNNER_TEMP/neverd-llvm.asc" \
+            | grep '^fpr:.*6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:'
+          sudo install -m 0644 "$RUNNER_TEMP/neverd-llvm.asc" /usr/share/keyrings/neverd-llvm.asc
+          echo 'deb [signed-by=/usr/share/keyrings/neverd-llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main' \
+            | sudo tee /etc/apt/sources.list.d/neverd-llvm.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 clang-23 cmake libclang-rt-23-dev lld-23 llvm-23 ninja-build gcc-multilib g++-14 zlib1g-dev
+          printf '%s\n' /usr/lib/llvm-23/bin >> "$GITHUB_PATH"
+          printf '%s\n' 'NEVERD_SOURCE_CLANG=/usr/lib/llvm-23/bin/clang' >> "$GITHUB_ENV"
+          sudo sysctl -w kernel.core_pattern=/dev/null
+      - name: Install macOS build and fixture tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake lld ninja llvm@22
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "NEVERD_SOURCE_CLANG=$(brew --prefix llvm@22)/bin/clang" >> "$GITHUB_ENV"
+      - name: Install Windows build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install ninja --yes --no-progress
+      - name: Install pinned fixture compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/Install-WindowsFixtureClang.ps1
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Install the CRT fixture toolchain on Unix
+        if: runner.os != 'Windows'
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install --yes gcc-mingw-w64-x86-64
+          else
+            brew install mingw-w64
+          fi
+      - name: Configure bounded Release qualification
+        run: |
+          platform_args=()
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            test -d /usr/lib/gcc/x86_64-linux-gnu/14
+            platform_args+=("-DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/14")
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            platform_args+=("-DNEVERD_ARM64E_TEST_CLANG_EXECUTABLE=$(cygpath -m "$NEVERD_SOURCE_CLANG")")
+          else
+            platform_args+=("-DNEVERD_SOURCE_PATCH_TEST_CLANG_EXECUTABLE=$NEVERD_SOURCE_CLANG")
+          fi
+          cmake -S . -B build-mips-ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
+            -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
+            -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
+      - name: Build and run complete PR test owners
+        run: |
+          python - <<'PYTHON'
+          from collections import Counter
+          from pathlib import Path
+          import hashlib
+          import json
+          import os
+          import platform
+          import re
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          stage = int(os.environ['PR_NUMBER'])
+          assert stage in (2416, 2417, 2418, 2419)
+          source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert source == os.environ['EXPECTED_SOURCE_SHA']
+          owners = ['NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests',
+                    'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests', 'NeverDHighCParamUsageTests',
+                    'NeverDLLVMCValueTests', 'NeverDNativePointerRelocationBoundaryTests']
+          required = ['HighCParamUsage.MIPSFullGPRReadsKeepTheIncomingWordExtension',
+                      'LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes',
+                      'NativePointerRelocationBoundary.MinGWProgramWholeModuleLLVMCCompiles',
+                      'NativePointerRelocationBoundary.CRTHeaderRecordReuseChecksTheActualRuntimeLayout',
+                      'NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders']
+          if stage >= 2417:
+              required.append('MIPSRecordSource.DebugLayoutAloneCannotChangeThePhysicalReturnClass')
+          if stage >= 2418:
+              owners.extend(['NeverDRecordCallContractTests', 'NeverDSourceCallABITests', 'NeverDLocalTypesDebugContextTests'])
+              required.extend(['RecordCallContract.MIPSRecordSlicesRequireWholeGPRsAndExactStackSlots',
+                               'RecordCallContract.PartialRecordCBridgesPreserveBitsAndEvaluateOnce',
+                               'RecordCallContract.FloatingRecordResultsKeepPhysicalLocals',
+                               'RecordCallContract.FloatingRecordResultsKeepIntegerExpressionCarriers'])
+              if platform.system() == 'Linux':
+                  required.append('RecordCallContract.WindowsRecordResultsPreserveEveryByte')
+          if stage >= 2419:
+              owners.append('NeverDDirectTailCallMetadataTests')
+              required.append('MIPSScalarCalls.TailTransfersPreserveTheCompleteIntegerResultCarrier')
+          root = Path('build-mips-ci')
+          out = root/'evidence'
+          out.mkdir(exist_ok=True)
+          subprocess.run([sys.executable, 'scripts/build.py', str(root), '--config', 'Release',
+                          '--parallel', os.environ['BUILD_JOBS'], '--target', 'neverd', *owners], check=True)
+          ctest = ['ctest', '--test-dir', str(root), '-C', 'Release', '-L', '^(' + '|'.join(owners) + ')$']
+          tests = json.loads(subprocess.check_output(ctest + ['--show-only=json-v1'], text=True))['tests']
+          by_name = {}
+          for test in tests:
+              labels = next(p['value'] for p in test['properties'] if p['name'] == 'LABELS')
+              matches = set(labels).intersection(owners)
+              assert len(matches) == 1 and test['name'] not in by_name, test['name']
+              by_name[test['name']] = matches.pop()
+          counts = Counter(by_name.values())
+          assert set(counts) == set(owners), counts
+          assert sum(n for owner, n in counts.items() if owner.startswith('NeverDMIPS')) == int(os.environ['EXPECTED_MIPS_TEST_COUNT']), counts
+          assert set(required) <= by_name.keys(), set(required) - by_name.keys()
+          def digest(file):
+              with file.open('rb') as stream:
+                  return hashlib.file_digest(stream, 'sha256').hexdigest()
+          suffix = '.exe' if platform.system() == 'Windows' else ''
+          receipt = dict(source=source, workflow=os.environ['GITHUB_SHA'], platform=platform.platform(),
+                         compiler=os.environ['QUALIFICATION_CXX'], owners=counts, required=required,
+                         binaries={o: digest(root/'bin'/(o+suffix)) for o in owners})
+          (out/'inventory.json').write_text(json.dumps(receipt, indent=2))
+          xml = out/'results.xml'
+          result = subprocess.run(ctest + ['--parallel', os.environ['BUILD_JOBS'], '--no-tests=error',
+                                            '--output-on-failure', '--output-junit', str(xml.resolve())])
+          cases = {case.get('name'): case for case in ET.parse(xml).iter('testcase')}
+          assert cases.keys() == by_name.keys()
+          skips = sorted(n for n,c in cases.items() if c.find('skipped') is not None)
+          failures = sorted(n for n,c in cases.items() if c.find('failure') is not None or c.find('error') is not None)
+          (out/'outcome.json').write_text(json.dumps(dict(source=source, tests=len(cases), skips=skips, failures=failures,
+                                                            result_sha256=digest(xml), exit=result.returncode), indent=2))
+          assert not failures and result.returncode == 0, failures
+          assert not any(n in required or by_name[n].startswith('NeverDMIPS') for n in skips), skips
+          PYTHON
+      - name: Upload native PR evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mips-pr-${{ inputs.pr_number }}-${{ runner.os }}-${{ inputs.source_sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            build-mips-ci/evidence/
+            build-mips-ci/neverd-build-receipt.json
+            build-mips-ci/neverd-dependency-inputs.json
