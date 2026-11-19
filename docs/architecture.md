@@ -10592,10 +10592,12 @@ missing owner, changed member, observable table use or exhausted proof retains
 the unresolved transfers. Module-wide mutation and consumer arbitration still
 owns the final publication decision.
 
-Module arbitration keeps input capacity, retained evidence and repeated work
-separate. The LowIR inventory admits at most 400000 operations; its queue still
-has 65536 debits, and block transfers share 1048576 operation debits across
-functions, fixed-point visits and final use recording. A completed transfer is
+Module arbitration keeps retained evidence and repeated work separate. The
+LowIR inventory's queue may make 65536 debits, or
+`kPipelineLowIRAddressVisitsPerOp` per operation it reads where that is more,
+and block transfers share sixteen times as many operation debits across
+functions, fixed-point visits and final use recording; a module's size alone
+is no reason to give up. A completed transfer is
 reused when its complete incoming state is unchanged; only a changed output
 schedules successors. The solver still saves changed incoming facts when a
 block kills them, because final use recording must observe those inputs.
@@ -10625,8 +10627,13 @@ without the inventory. Position-independent tables (PE and Mach-O offset
 tables, ELF PIC tables) are of this kind; before, the inventory could still
 exhaust its accounts on a large module and send it to the fail-closed fallback,
 which protects every code-pointer slot, preserves every potential table branch
-and rebuilds every function. On ntoskrnl that fallback left the system service
-dispatch unresolved, which also hid the arguments of every `Zw` stub.
+and rebuilds every function. Each rebuild is seeded with the branches its
+function published before. A build resolves again after scalar-constant and
+computed-branch recovery, and a published table without targets is lost, an
+opaque unsafe branch, only when the build's final graph has none of its edges;
+judged at the end of every resolve, the seeded rebuild of ntoskrnl's system
+service dispatch (`sub r11, rax; jmp r11`) was lost before the computed-branch
+recovery republished all 16 targets.
 
 The inventory solves each function's address facts to a fixed point. A
 predecessor not yet visited reads as one that keeps no fact, so a first visit
@@ -10639,10 +10646,24 @@ previous one had. After one block has retreated
 also joins its previous input, so the inputs ascend and the solve ends. No
 function of the EH corpus or the performance inputs that settles retreats more
 than 22 times at a block in the arbitration solve, nor more than 4 times in the
-EH continuation solves, so those keep their solve exactly. A call whose outgoing stack window meets
+EH continuation solves, so those keep their solve exactly. Nothing reads the
+frame offsets of an imprecise value that may lie outside the frame: its escape
+marks every frame cell, a load through it reads none and a store through it
+clears them all. Such a value takes the widened form at once instead of gaining
+one offset a round until the bound widens it; on Go's arm64 runtime, frame
+pointers that lose 640 bytes a loop round had cost the solve up to 170 visits a
+block. A call whose outgoing stack window meets
 two cells at one coordinate, where paths stored different widths, treats the
 window as unknown, as behind a pivoted stack pointer: every address-bearing
 frame cell is a possible argument.
+
+Each function's solve reads only its own function and the module's read-only
+facts. Arbitration's solves run in parallel. Each may spend what the others
+have not yet charged, and their spending is charged in function order
+afterwards, so the inventory completes exactly when one solve after another
+would, with the same uses in the same order. The returned-code and
+local-unwind solves run in order: a local-unwind frame proof that exhausts the
+frame account withholds the proof rather than failing.
 
 An x86/x64 absolute dispatch may name the preceding table's one-past address
 without using that preceding object. `CFGBuilder::proveInstructionLocalTableSource`
@@ -13472,10 +13493,14 @@ as emitted by [older LLVM versions](https://github.com/llvm/llvm-project/blob/ll
 HighIR uses only certified catch returns to form continuation jumps, including
 nested catches. Independent ordinary entries cannot borrow this frame proof.
 
-For x64 SEH, whole-module LowIR analysis can narrow an address-taken label to
-a local-unwind continuation when every address use is an exact imported
-`_local_unwind` call in the same owner. Relocation pointers, sibling users,
-selected-function scans and exhausted budgets cannot establish exclusivity.
+Only a catch funclet's returned value is read, so returned-code discovery
+solves the funclets alone. For x64 SEH, whole-module LowIR analysis can narrow
+an address-taken label to a local-unwind continuation when every address use is
+an exact imported `_local_unwind` call in the same owner. Without that import no
+call can be such evidence, so an image that does not import the routine skips
+the module inventory and its discovery is complete. Relocation pointers,
+sibling users, selected-function scans and exhausted budgets cannot establish
+exclusivity.
 An independent call-site proof requires the frame argument to equal current
 SP through full-width copies, constant offsets or private spills untouched by
 an intervening opaque call or write. Generic address may-facts alone cannot

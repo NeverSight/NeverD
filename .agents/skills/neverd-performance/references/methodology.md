@@ -132,6 +132,20 @@ most time. Each step is an instruction, its reason and the case it comes from.
   alternate visits. Shrinking the real function with "the solve exhausts its
   debits" as the oracle (delta debugging over its instructions) left 9 of its
   187 instructions, which became the regression test.
+- **Find where an outlier's work goes before raising a limit for it.** One Go
+  arm64 image needed 6.2 visits per operation where every other needed at most
+  0.73; a factor of 16 to cover it cost that image 61% more CPU for one
+  function's arguments. A per-function count showed slow ascents with a single
+  retreat, and a trace showed frame pointers that were already imprecise and
+  possibly outside the frame gaining one offset a round, offsets nothing
+  reads. Widening those at once cut the image from 2.5 to 0.3 million visits
+  and every arbitration inventory of the corpus by 70%, all 548 outputs
+  identical, so a factor of 2 covers every image with a 2.7x margin.
+- **Let a limit for a linear analysis grow with its input.** Fixed module caps
+  (400,000 operations, 65,536 visits) refuse large modules however ordinary:
+  a 403,896-operation Go image whose inventory needs 0.73 visits per
+  operation took the fallback. Keep the fixed allowance as a floor and add an
+  allowance per operation measured on the corpus.
 
 ## 5. Price the lever before building it
 
@@ -165,12 +179,28 @@ most time. Each step is an instruction, its reason and the case it comes from.
   instead had to sit above slow but monotone ascents (522 visits of one block
   in a function that settled) and cost an oscillating function about eight
   times as many visits before it ended.
+- **Parallelize an all-or-nothing solve only where every budget failure is
+  hard.** Any exhausted account fails module arbitration's whole inventory, so
+  its functions are solved in parallel, each capped by what the others have
+  not yet charged, and charged in function order afterwards: the outcome is
+  the serial one, and a failing inventory stops near its allowance instead of
+  after all its work. The local-unwind solve's frame proof withholds a proof
+  instead of failing when its account runs out, so it stays serial. The test
+  finds the least completing budget on one thread and checks that every thread
+  count completes there and fails one below.
+- **Solve only what the caller reads.** EH continuation discovery solved every
+  function for the returned values only catch funclets have, and ran a whole
+  module local-unwind inventory on images that import no `_local_unwind`;
+  ntoskrnl and Go Windows exhausted that inventory and lost the discovery.
+  Scoping both changed no output and cut the Rust windows-msvc probe's wall
+  time by 30%.
 - **Remove the cause you name before you write it down.** The arbitration
   commit blamed the fallback's protected set for an ntoskrnl dispatch the
   fallback left unproved. A probe that kept the fallback but dropped the
   protection, the branch preservation, and both, left the dispatch unproved
-  every time: the rebuild itself was the cause, and the wrong message was
-  already pushed (`3533bc3bee`).
+  every time; one that also dropped the published-branch history proved it.
+  The cause was a lost-table verdict taken before the rebuild's last resolve
+  (`a3e5abd7ba`), and the wrong message was already pushed (`3533bc3bee`).
 - **Identity over a corpus, not a spot check.** Hash every non-timing output,
   the whole payload and not only the text, for each view of a large sample, in
   forward and in reverse order: 2,980 of 2,980 identical both ways is the form

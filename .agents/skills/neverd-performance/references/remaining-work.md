@@ -143,23 +143,36 @@ A/B with identical output.
      registers it forwards, which over-approximates services with fewer
      (`ZwFlushInstructionCache` gains a fourth parameter beyond its declared
      three, the policy that already extends nine declared prototypes there).
-     The cause is the rebuild itself, not the fallback's two settings: with
-     every code-pointer slot unprotected, with potential table branches
-     unpreserved, and with both, the rebuilt dispatch stays unproved, while
-     the first lift proves it. The rebuild's remaining difference is the first
-     lift's published-branch history; the mechanism is not isolated. (The
-     commit message of `3533bc3bee` blames the protected set's size; that is
-     wrong.)
-   - Limits kept, measured (a private build that scales every inventory
-     account with the module's operations: twice them for the queue, 32 times
-     for transfers, 4 times for evidence and pair scans). It completes the
-     arbitration of Go arm64 binaries with absolute or writable tables (one
-     resolves 8 more switches) but its solve then takes 2 s on one thread per
-     pass there, and on ntoskrnl it completes the EH continuation discovery
-     (10.9 million operations) in 21 s on one thread and finds no
-     continuation. Next: solve only the functions whose occurrences can change
-     the answer, in parallel with an allowance per function, then scale the
-     limits with the module.
+     The cause was the lost-table verdict, fixed in `a3e5abd7ba`: a build
+     resolves again after computed-branch recovery, a rebuild is seeded with
+     the branches its function published, and each resolve judged a published
+     table without targets lost at its own end. The rebuild's first resolve
+     ran before the recovery that republishes this dispatch
+     (`sub r11, rax; jmp r11`), so the final graph kept all 16 targets and
+     still published the branch unsafe. Judged once, on the final graph, the
+     full fallback keeps the switch; no corpus output changes. (The commit
+     message of `3533bc3bee` blames the protected set's size; that is wrong.)
+   - Limits decided (`3a1260673d`), after scoping (`a55d84570b`). EH
+     continuation discovery now solves only catch funclets for returned
+     continuations and runs the local-unwind inventory only where the image
+     imports `_local_unwind`; it completes on every input, ntoskrnl and Go
+     Windows included, with no inventory there and identical output (Rust
+     windows-msvc probe wall -30%, CPU -8%). The arbitration inventory has no
+     input cap and may make 65536 visits or 2 per operation it reads,
+     transfers sixteen times that; its solves run in parallel, exactly. A
+     census of every inventory, run on every image with the nothing-to-decide
+     shortcut off, found the work where the limits bit: frame pointers already
+     imprecise and possibly outside the frame gaining one offset a round
+     (up to 170 visits a block on Go's arm64 runtime) though nothing reads
+     them. Widening those at once cut arbitration visits 70% (6.2 to 0.73 per
+     operation at most), all 548 outputs identical. Only three Go arm64
+     arbitrations need more than the floor (0.31, 0.32, 0.73 visits per
+     operation); they no longer take the fallback: linux-arm64 pie proves 8
+     more switches (unproved traps 16 to 8), and both darwin images give
+     `runtime_goStatusToTraceGoStatus` its 8 arguments. Six alternating pairs
+     on 12 threads against their fallback runs: CPU +0.6%, -0.5%, +1.9%; wall
+     -5.7%, -2.8%, +1.3%. Without the widening the symbol-table image needed
+     2.5 million visits, and a factor of 16 to cover it had cost 61% more CPU.
    - Exact levers, each a resolver-level change:
      - reuse a first-round graph in the rebuild round. Recording the
        membership reads is easy: the unsafe branches are read only by
