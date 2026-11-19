@@ -887,110 +887,145 @@ TEST(MIPSScalarCalls, IntegerCallsDoNotRequireFloatingPointProfiles) {
 TEST(MIPSScalarCalls, TailTransfersPreserveTheCompleteIntegerResultCarrier) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
-    for (bool Indirect : {false, true}) {
-      SCOPED_TRACE(getArchName(Target));
-      SCOPED_TRACE(Indirect);
-      const bool Wide = isMIPS64(Target);
-      const unsigned Word = Wide ? 8 : 4;
-      mips_test::ELFBytes File(
-          isMIPSN32(Target)
-              ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
-              : Target);
-      if (isMIPSN32(Target))
-        File.put(36, 0x80000020, 4);
-      File.Bytes.resize(0x208);
-      const unsigned Program = File.Is64 ? 64 : 52;
-      File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
-               File.Is64 ? 8 : 4);
-      File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
-               File.Is64 ? 8 : 4);
-      // GCC's optimized indirect forwarder snapshots the pointer before
-      // moving the argument in the delay slot. Neither transfer changes RA.
-      const std::vector<uint32_t> Words =
-          Indirect ? std::vector<uint32_t>{0x0080c825, 0x03200008, 0x00a02025}
-                   : std::vector<uint32_t>{0x08004080, 0};
-      for (unsigned I = 0; I != Words.size(); ++I)
-        File.put(0x100 + 4 * I, Words[I], 4);
-      File.put(0x200, 0x03e00008, 4);
-      File.put(0x204, 0x00801025, 4); // jr ra; or v0,a0,zero
-      ELFLoader Loader;
-      auto Image = Loader.loadBuffer(File.buffer());
-      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-      ASSERT_EQ(Image->Arch, Target);
-      Image->Symbols.push_back(
-          {"tail_result", Image->Entry, 4 * Words.size(), true});
-      Image->Symbols.push_back({"callee", 0x10200, 8, true});
-      Decoder Decode;
-      ASSERT_TRUE(Decode.init(*Image));
-      const auto Low =
-          CFGBuilder().build(*Image, Decode, Image->Entry, "tail_result");
-      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
-      std::optional<SourceCallOccurrenceKey> Site;
-      for (const auto &Block : Low.Blocks)
-        for (const auto &Op : Block.Ops) {
-          if (auto Key = sourceCallOccurrenceKey(Op)) {
-            ASSERT_FALSE(Site);
-            Site = *Key;
-            EXPECT_EQ(Op.Output.Size, Word);
+    for (bool Explicit : {false, true})
+      for (bool Indirect : {false, true}) {
+        SCOPED_TRACE(Explicit);
+        SCOPED_TRACE(getArchName(Target));
+        SCOPED_TRACE(Indirect);
+        const bool Wide = isMIPS64(Target);
+        const unsigned Word = Wide ? 8 : 4;
+        mips_test::ELFBytes File(
+            isMIPSN32(Target)
+                ? (archLittleEndian(Target) ? Arch::MIPS32EL : Arch::MIPS32)
+                : Target);
+        if (isMIPSN32(Target))
+          File.put(36, 0x80000020, 4);
+        File.Bytes.resize(0x208);
+        const unsigned Program = File.Is64 ? 64 : 52;
+        File.put(Program + (File.Is64 ? 32 : 16), File.Bytes.size(),
+                 File.Is64 ? 8 : 4);
+        File.put(Program + (File.Is64 ? 40 : 20), File.Bytes.size(),
+                 File.Is64 ? 8 : 4);
+        // GCC's optimized indirect forwarder snapshots the pointer before
+        // moving the argument in the delay slot. Neither transfer changes RA.
+        const std::vector<uint32_t> Words =
+            Indirect ? std::vector<uint32_t>{0x0080c825, 0x03200008, 0x00a02025}
+                     : std::vector<uint32_t>{0x08004080, 0};
+        for (unsigned I = 0; I != Words.size(); ++I)
+          File.put(0x100 + 4 * I, Words[I], 4);
+        File.put(0x200, 0x03e00008, 4);
+        File.put(0x204, 0x00801025, 4); // jr ra; or v0,a0,zero
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        ASSERT_EQ(Image->Arch, Target);
+        Image->MIPS->FPABI = Wide ? 1 : 6;
+        Image->Symbols.push_back(
+            {"tail_result", Image->Entry, 4 * Words.size(), true});
+        Image->Symbols.push_back({"callee", 0x10200, 8, true});
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        const auto Low =
+            CFGBuilder().build(*Image, Decode, Image->Entry, "tail_result");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        std::optional<SourceCallOccurrenceKey> Site;
+        for (const auto &Block : Low.Blocks)
+          for (const auto &Op : Block.Ops) {
+            if (auto Key = sourceCallOccurrenceKey(Op)) {
+              ASSERT_FALSE(Site);
+              Site = *Key;
+              EXPECT_EQ(sourceCallOccurrenceKey(Op, Target), Site);
+              if (!Indirect && isMIPSN32(Target)) {
+                auto Narrowed = Op;
+                Narrowed.Inputs[0].Size = 4;
+                EXPECT_FALSE(sourceCallOccurrenceKey(Narrowed, Target));
+              }
+              EXPECT_EQ(Op.Output.Size, Word);
+            }
+            if (Op.Opcode == NdOp::RETURN) {
+              ASSERT_EQ(Op.NumInputs, 1u);
+              EXPECT_EQ(Op.Inputs[0].Size, Word);
+            }
           }
-          if (Op.Opcode == NdOp::RETURN) {
-            ASSERT_EQ(Op.NumInputs, 1u);
-            EXPECT_EQ(Op.Inputs[0].Size, Word);
+        ASSERT_TRUE(Site);
+        for (unsigned Bytes : {1, 2, 4, 8}) {
+          if (Bytes > Word)
+            continue;
+          for (bool Signed : {false, true}) {
+            SCOPED_TRACE(Bytes);
+            SCOPED_TRACE(Signed);
+            const auto Signature = floatingCallArguments(
+                Target, BinaryFormat::ELF, NdType::makeInt(Bytes, Signed),
+                {NdType::makeInt(4, true)});
+            ASSERT_TRUE(Signature);
+            const std::map<SourceCallOccurrenceKey, FloatingCallArguments>
+                Calls{{*Site, *Signature}};
+            LowToMedConverter Convert;
+            Convert.setBinaryImage(&*Image);
+            SourceCallTypeHint Hint;
+            Hint.CallKind = SourceCallTypeHint::Kind::Analyst;
+            Hint.AnalystSite = *Site;
+            Hint.TargetAddress = Site->StaticTarget.value_or(0);
+            if (Site->StaticTarget)
+              Hint.TargetName = "callee";
+            Hint.Signature.ReturnType = NdType::makeInt(Bytes, Signed);
+            Hint.Signature.Parameters = {{"value", NdType::makeInt(4, true)}};
+            std::string Error;
+            ASSERT_TRUE(
+                assignAnalystCallABI(Hint, Target, BinaryFormat::ELF, Error))
+                << Error;
+            const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> Sites{
+                {*Site, Hint}};
+            Convert.setSourceCallHintsEnabled(true);
+            if (Explicit)
+              Convert.setSourceCallSiteHints(&Sites);
+            else
+              Convert.setCallSiteFloatingArguments(&Calls);
+            auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+            recoverCallAbi(Med, Target, {{0x10200, "callee"}}, &*Image);
+            inferMedTypes(Med, Target);
+            // Observe the complete ABI register, including a narrow callee's
+            // sign/zero extension. Inferring a narrow logical return would
+            // otherwise discard those bits before this check can see them.
+            Med.ReturnType = NdType::makeInt(Word, false);
+            llvm::LLVMContext Context;
+            MedLLVMEmitter Emitter;
+            Emitter.setAnalystSourceProjection(Explicit);
+            const auto Module =
+                Emitter.emit({Med}, Context, "tail", Target, {}, &*Image);
+            ASSERT_NE(Module, nullptr);
+            ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
+            Pipeline::optimizeModule(*Module);
+            const auto *Body = Module->getFunction("tail_result");
+            ASSERT_NE(Body, nullptr);
+            const auto *Ret =
+                llvm::dyn_cast<llvm::ReturnInst>(Body->back().getTerminator());
+            ASSERT_NE(Ret, nullptr);
+            const auto *Value = Ret->getReturnValue();
+            ASSERT_NE(Value, nullptr);
+            EXPECT_TRUE(Value->getType()->isIntegerTy(Word * 8));
+            if (Bytes < Word) {
+              const auto *Extend = llvm::dyn_cast<llvm::CastInst>(Value);
+              ASSERT_NE(Extend, nullptr);
+              EXPECT_EQ(Extend->getOpcode(), Signed || Bytes == 4
+                                                 ? llvm::Instruction::SExt
+                                                 : llvm::Instruction::ZExt);
+              Value = Extend->getOperand(0);
+            }
+            const auto *Call = llvm::dyn_cast<llvm::CallInst>(Value);
+            ASSERT_NE(Call, nullptr);
+            // An analyst prototype may call a generic external declaration
+            // through its own function type; getCalledFunction() also checks
+            // type identity, not just whether the target is a named function.
+            const auto *Callee = llvm::dyn_cast<llvm::Function>(
+                Call->getCalledOperand()->stripPointerCasts());
+            EXPECT_EQ(Callee == nullptr, Indirect);
+            if (Callee)
+              EXPECT_EQ(Callee->getName(), "callee");
+            EXPECT_TRUE(Call->getType()->isIntegerTy(Bytes * 8));
           }
-        }
-      ASSERT_TRUE(Site);
-      for (unsigned Bytes : {1, 2, 4, 8}) {
-        if (Bytes > Word)
-          continue;
-        for (bool Signed : {false, true}) {
-          SCOPED_TRACE(Bytes);
-          SCOPED_TRACE(Signed);
-          const auto Signature = floatingCallArguments(
-              Target, BinaryFormat::ELF, NdType::makeInt(Bytes, Signed),
-              {NdType::makeInt(4, true)});
-          ASSERT_TRUE(Signature);
-          const std::map<SourceCallOccurrenceKey, FloatingCallArguments> Calls{
-              {*Site, *Signature}};
-          LowToMedConverter Convert;
-          Convert.setBinaryImage(&*Image);
-          Convert.setCallSiteFloatingArguments(&Calls);
-          auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
-          recoverCallAbi(Med, Target, {{0x10200, "callee"}}, &*Image);
-          inferMedTypes(Med, Target);
-          // Observe the complete ABI register, including a narrow callee's
-          // sign/zero extension. Inferring a narrow logical return would
-          // otherwise discard those bits before this check can see them.
-          Med.ReturnType = NdType::makeInt(Word, false);
-          llvm::LLVMContext Context;
-          MedLLVMEmitter Emitter;
-          const auto Module =
-              Emitter.emit({Med}, Context, "tail", Target, {}, &*Image);
-          ASSERT_NE(Module, nullptr);
-          ASSERT_FALSE(llvm::verifyModule(*Module, &llvm::errs()));
-          Pipeline::optimizeModule(*Module);
-          const auto *Body = Module->getFunction("tail_result");
-          ASSERT_NE(Body, nullptr);
-          const auto *Ret =
-              llvm::dyn_cast<llvm::ReturnInst>(Body->back().getTerminator());
-          ASSERT_NE(Ret, nullptr);
-          const auto *Value = Ret->getReturnValue();
-          ASSERT_NE(Value, nullptr);
-          EXPECT_TRUE(Value->getType()->isIntegerTy(Word * 8));
-          if (Bytes < Word) {
-            const auto *Extend = llvm::dyn_cast<llvm::CastInst>(Value);
-            ASSERT_NE(Extend, nullptr);
-            EXPECT_EQ(Extend->getOpcode(), Signed || Bytes == 4
-                                               ? llvm::Instruction::SExt
-                                               : llvm::Instruction::ZExt);
-            Value = Extend->getOperand(0);
-          }
-          const auto *Call = llvm::dyn_cast<llvm::CallInst>(Value);
-          ASSERT_NE(Call, nullptr);
-          EXPECT_EQ(Call->getCalledFunction() == nullptr, Indirect);
-          EXPECT_TRUE(Call->getType()->isIntegerTy(Bytes * 8));
         }
       }
-    }
 }
 
 TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {

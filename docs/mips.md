@@ -1621,7 +1621,9 @@ retain their declared signedness. Both signed and unsigned 32-bit results are
 sign-extended in n32/n64 registers. A pointer uses its ABI width, and a void
 call defines no result carrier. Direct and indirect tail transfers preserve
 the complete integer result register; n32's four-byte pointer width does not
-narrow its eight-byte result carrier. The ABI preserves the low eight bytes of even
+narrow its eight-byte result carrier. Direct tail calls also retain the full
+machine address width, so an explicit source prototype binds the same call
+occurrence as an ordinary MIPS64 call. The ABI preserves the low eight bytes of even
 F20–F30 on o32 and n32, or F24–F31 on n64. Unqualified FP profiles, unknown
 call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the
