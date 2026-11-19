@@ -68,7 +68,7 @@ namespace neverd {
 
 namespace detail {
 struct X87CallGraphCacheTestAccess {
-  static std::array<size_t, 3> stats(const CFGBuilder &Builder) {
+  static std::array<size_t, 4> stats(const CFGBuilder &Builder) {
     return Builder.x87CallGraphCacheStatsForTesting();
   }
 };
@@ -150,9 +150,9 @@ public:
     return Reader.importCallAddressesOf(Image, &Cache, Own);
   }
 
-  /// Hits, graphs and retained bytes of the x87 call graph cache the symbol
-  /// inventory's runs share.
-  static std::array<size_t, 3>
+  /// Graph hits, graphs, retained bytes and kept-contract hits of the x87
+  /// call graph cache the symbol inventory's runs share.
+  static std::array<size_t, 4>
   x87CallGraphStats(const PipelineAnalysisCache &Cache) {
     CFGBuilder Reader;
     Reader.setX87CallGraphCache(Pipeline::x87CallGraphsForTesting(Cache));
@@ -591,7 +591,7 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
     PipelineResult Warm;
     Run(Warm, Entry, &Cache);
   }
-  const std::array<size_t, 3> Kept = PipelineTestPeer::x87CallGraphStats(Cache);
+  const std::array<size_t, 4> Kept = PipelineTestPeer::x87CallGraphStats(Cache);
   // The runs' walks keep the graphs of the chains they read.
   ASSERT_GE(Kept[1], 2u);
 
@@ -602,7 +602,7 @@ TEST(PipelineOutcome, JumpTableRebuildsKeepTheImageX87Graphs) {
   Run(Rebuilt, 0x401000, &Cache, /*Budget=*/0);
   Run(ColdRebuilt, 0x401000, nullptr, /*Budget=*/0);
   expectSameSelection(Rebuilt, ColdRebuilt);
-  const std::array<size_t, 3> After =
+  const std::array<size_t, 4> After =
       PipelineTestPeer::x87CallGraphStats(Cache);
   EXPECT_EQ(After[1], Kept[1]);
   EXPECT_EQ(After[2], Kept[2]);

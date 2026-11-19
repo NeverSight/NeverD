@@ -9,6 +9,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/IRBuilder.h"
@@ -206,6 +207,49 @@ TEST(PipelineOptNone, OrdinaryModulesKeepInterproceduralOptimization) {
   ASSERT_TRUE(Value);
   EXPECT_TRUE(Value->isOne());
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
+TEST(PipelineOptNone, AFilterAdapterKeepsInterproceduralOptimization) {
+  // An SEH filter adapter is optnone so that output finds its exact shape,
+  // but only the runtime takes its address: it must not turn off the
+  // interprocedural passes for the rest of its module.  Any other optnone
+  // definition still does.
+  for (const bool Adapter : {true, false}) {
+    SCOPED_TRACE(Adapter);
+    llvm::LLVMContext C;
+    llvm::Module M("adapter-ipo", C);
+    auto *Callee = buildRoot(M, "callee", false);
+    Callee->setLinkage(llvm::GlobalValue::InternalLinkage);
+    auto *Caller = buildRoot(M, "caller", false);
+    llvm::IRBuilder<> B(Caller->getEntryBlock().getTerminator());
+    Caller->getEntryBlock().getTerminator()->setOperand(
+        0, B.CreateCall(Callee, {B.getInt32(1)}));
+    auto *Protected = buildRoot(
+        M, Adapter ? sehFilterAdapterName(0x140001000, 0) : "protected", true);
+    Protected->setLinkage(llvm::GlobalValue::InternalLinkage);
+    llvm::appendToCompilerUsed(M, {Protected});
+    const std::string Name = Protected->getName().str();
+    const auto Before = body(*Protected);
+    ASSERT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+    Pipeline::OptimizationOptions Options;
+    Options.Strength = Pipeline::OptStrength::Deep;
+
+    const auto Result = Pipeline::optimizeModule(M, Options);
+
+    EXPECT_NE(Result.Stop, OptimizationStopReason::VerificationFailed);
+    Protected = M.getFunction(Name);
+    ASSERT_TRUE(Protected);
+    EXPECT_EQ(body(*Protected), Before);
+    Caller = M.getFunction("caller");
+    ASSERT_TRUE(Caller);
+    const auto *Return = llvm::dyn_cast<llvm::ReturnInst>(
+        Caller->getEntryBlock().getTerminator());
+    ASSERT_TRUE(Return);
+    const auto *Value =
+        llvm::dyn_cast<llvm::ConstantInt>(Return->getReturnValue());
+    EXPECT_EQ(Value && Value->isOne(), Adapter);
+    EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+  }
 }
 
 } // namespace

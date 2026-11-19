@@ -77,6 +77,15 @@ public:
   }
 };
 
+/// The block \p Dest resumes the function at when it is the catch a printed-C
+/// `__finally` pad unwinds to for its handler's local unwind
+/// (windows_eh_md::HandlerResume), or null.
+const llvm::BasicBlock *llvmcHandlerResumeTarget(const llvm::BasicBlock *Dest);
+
+/// What LLVM C prints after the `goto` that ends such a `__finally`.
+inline constexpr llvm::StringLiteral LLVMCHandlerResumeNote =
+    "/* neverd.seh: the handler's _local_unwind resumes here */";
+
 /// Internal writer that converts LLVM IR modules to goto-style C source.
 /// Split across LLVMCEmitter.cpp (module-level orchestration),
 /// LLVMCFuncWriter.cpp (function rendering), LLVMCStmtWriter.cpp (instruction
@@ -1243,36 +1252,66 @@ public:
   /// Otherwise the load reads the slot into its temporary where it is.
   bool slotReadAtUses(const llvm::LoadInst &Load) const;
   mutable std::map<const llvm::LoadInst *, bool> SlotReadAtUses;
-  /// Whether a store to bytes \p Load read, at an address the same value and
-  /// offsets name (peelPointerOffset), can run after the load and before a
-  /// statement that would evaluate the read where it prints at its uses. A
-  /// member or element read (typedLoadAccess, typedIndexAccess) prints there
-  /// as the member, which would then read what the store left: `old =
-  /// p->next; p->next = 0; return old;` must not return a second read of
-  /// `p->next`. Such a load reads into its temporary where it is, as a frame
-  /// slot's does (slotReadAtUses), and a member read is from its statement on
-  /// one of the expressions computed where they stand
-  /// (MaterializedExpressions).
+  /// Whether something that may write a byte \p Load read can run after the
+  /// load and before a statement that would evaluate the read where it
+  /// prints at its uses: a store at an address the same value and offsets
+  /// name (peelPointerOffset) over those bytes, a store through another
+  /// pointer or at a computed index, a call, or an atomic. A member or
+  /// element read (typedLoadAccess, typedIndexAccess) prints there as the
+  /// member, which would then read what that left: `old = p->next;
+  /// p->next = 0; return old;` must not return a second read of `p->next`,
+  /// nor `v = n->v; poke(n); return v + n->v;` add the new value twice. Such
+  /// a load reads into its temporary where it is, as a frame slot's does
+  /// (slotReadAtUses), and a member read is from its statement on one of the
+  /// expressions computed where they stand (MaterializedExpressions).
   ///
-  /// Only that store is looked for, and not for a read whose value is also
-  /// stored to a local: that local may print as the member wherever it is
-  /// read, a form with no temporary to name. A call, a store through another
-  /// pointer value or at a computed index, and the callee a call reads
-  /// through a chain of loads leave a read at its uses as well.
+  /// Memory the read cannot reach is not looked at: a local of the function
+  /// whose address never escapes, any local when the read goes through an
+  /// argument or a global (those cannot point into a frame that did not
+  /// exist yet) or through a pointer the function had before the local's
+  /// address could get out (localEscapesBefore), and another global. A read
+  /// whose value is also stored to a local is left alone: that local may print
+  /// as the member wherever it is read, a form with no temporary to name.
   bool readCrossesItsStore(const llvm::LoadInst &Load) const;
   /// Drops what readCrossesItsStore decided: an address can peel to another
   /// value once more homes and texts are known.
   void forgetReadCrossings() const;
-  struct StoreAt {
-    const llvm::StoreInst *Store;
-    uint64_t Off;
-    uint64_t Bytes;
+  /// One instruction of a function that may write memory: a store at an
+  /// offset from \p Base (\p Bytes of it, any where 0), or anything else
+  /// (a call, an atomic, a store whose address does not peel) with no base.
+  struct ReadWriter {
+    const llvm::Instruction *Inst;
+    const llvm::Value *Base = nullptr;
+    uint64_t Off = 0;
+    uint64_t Bytes = 0;
   };
+  struct ReadWriters {
+    std::vector<ReadWriter> All;
+    /// Indexes into All, in each block's order.
+    llvm::DenseMap<const llvm::BasicBlock *, llvm::SmallVector<unsigned, 4>>
+        ByBlock;
+  };
+  /// The writers of \p Fn, kept for the function written last.
+  const ReadWriters &functionWriters(const llvm::Function &Fn) const;
+  /// Whether the pointer \p At produces may point into \p Local: it is
+  /// computed from the local's address, or that address can be in memory, or
+  /// with a callee, by the time \p At runs (a store of it or of anything
+  /// computed from it, a call or a return that takes such a value, or a use
+  /// the walk does not know, that can run before \p At).
+  bool localEscapesBefore(const llvm::AllocaInst &Local,
+                          const llvm::Instruction &At) const;
   mutable std::map<const llvm::LoadInst *, bool> ReadCrossesItsStore;
-  /// The function's stores by the value their address is an offset from.
-  mutable std::optional<
-      std::map<const llvm::Value *, llvm::SmallVector<StoreAt, 2>>>
-      StoresByBase;
+  mutable std::optional<std::pair<const llvm::Function *, ReadWriters>>
+      ReadWritersOf;
+  /// What localEscapesBefore found of a local: the values computed from its
+  /// address and the instructions that may let it out, or nothing when the
+  /// walk ran out of work.
+  struct LocalAddressUses {
+    bool Complete = true;
+    llvm::SmallPtrSet<const llvm::Value *, 16> Derived;
+    std::vector<const llvm::Instruction *> Escapes;
+  };
+  mutable std::map<const llvm::AllocaInst *, LocalAddressUses> LocalEscapes;
   /// Different overlapping memory extents cannot become independent scalar
   /// locals. Keep unnamed views of those bytes in the shared backing frame.
   std::set<uint64_t> OverlappingFrameAccessOffsets;

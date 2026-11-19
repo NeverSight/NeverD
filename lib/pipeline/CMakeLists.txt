@@ -70,4 +70,5 @@ add_neverd_component_library(NeverDPipeline
   Digest
   EVM
   SBF
+  WindowsEHMetadata
 )

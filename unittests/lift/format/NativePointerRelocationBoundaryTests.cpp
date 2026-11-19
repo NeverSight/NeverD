@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/libc/LibCNames.h"
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/CodePointerSources.h"
 #include "neverd/loader/PointerRelocation.h"
@@ -2704,6 +2705,12 @@ TEST_F(NativePointerRelocationBoundary, MinGWProgramWholeModuleLLVMCCompiles) {
     GTEST_SKIP() << "the program needs the MinGW compiler";
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "compiling the program's C needs Clang's GNU driver";
+  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
+  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
+  // Homebrew's cross headers are outside Clang's default search paths.
+  // Use the same installation that builds the original PE on every host.
+  const std::string Sysroot =
+      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
   const fs::path Source = tmpFile("mingw_program.c");
   const fs::path Exe = tmpFile("mingw_program.exe");
   {
@@ -2738,15 +2745,52 @@ int main(int argc, char **argv) {
   }
   RunResult Syntax =
       exec(NEVERD_TEST_CLANG,
-           {"--target=x86_64-w64-mingw32", "-fms-extensions", "-fsyntax-only",
-            "-w", tmpFile("decompiled.c").string()});
+           {"--target=x86_64-w64-mingw32", Sysroot, "-fms-extensions",
+            "-fsyntax-only", "-w", tmpFile("decompiled.c").string()});
   EXPECT_TRUE(Syntax.ok()) << Syntax.err;
   for (const char *Level : {"-O0", "-O2"}) {
-    const auto Object = exec(
-        NEVERD_TEST_CLANG, {"--target=x86_64-w64-mingw32", "-fms-extensions",
-                            Level, "-c", "-w", tmpFile("decompiled.c").string(),
-                            "-o", tmpFile("mingw-c.obj").string()});
+    const auto Object =
+        exec(NEVERD_TEST_CLANG,
+             {"--target=x86_64-w64-mingw32", Sysroot, "-fms-extensions", Level,
+              "-c", "-w", tmpFile("decompiled.c").string(), "-o",
+              tmpFile("mingw-c.obj").string()});
     EXPECT_TRUE(Object.ok()) << Level << '\n' << Object.err;
+  }
+}
+
+TEST_F(NativePointerRelocationBoundary,
+       CRTPrototypesAgreeWithTheirOwningHeaders) {
+  if (!exec("x86_64-w64-mingw32-gcc", {"--version"}).ok())
+    GTEST_SKIP() << "needs the MinGW compiler and headers";
+  for (const char *Name :
+       {"_set_invalid_parameter_handler", "__stdio_common_vfprintf",
+        "__stdio_common_vsprintf", "__stdio_common_vsprintf_s",
+        "__stdio_common_vsnprintf_s", "__stdio_common_vfscanf",
+        "__stdio_common_vsscanf"}) {
+    SCOPED_TRACE(Name);
+    const auto *Prototype = libc::libcPrototype(Name, BinaryFormat::COFF);
+    ASSERT_NE(Prototype, nullptr);
+    ASSERT_FALSE(Prototype->Header.empty());
+    const auto Source = tmpFile("crt_prototype.c");
+    {
+      std::ofstream Out(Source);
+      ASSERT_TRUE(Out);
+      Out << "#include <stdint.h>\n#include <" << Prototype->Header
+          << ">\ntypedef " << Prototype->Return << " (*expected)(";
+      for (unsigned I = 0; I < Prototype->ParamCount; ++I) {
+        if (I)
+          Out << ", ";
+        Out << Prototype->Params[I];
+      }
+      // The real header supplies the independent declaration, including
+      // its calling convention and nominal callback/locale pointer types.
+      Out << ");\n_Static_assert(__builtin_types_compatible_p(__typeof__(&"
+          << Name << "), expected), \"CRT prototype\");\n";
+    }
+    const auto Syntax = exec("x86_64-w64-mingw32-gcc",
+                             {"-std=c11", "-fsyntax-only", "-Werror", "-D_UCRT",
+                              "-D__MSVCRT_VERSION__=0xE00", Source.string()});
+    EXPECT_TRUE(Syntax.ok()) << Syntax.err;
   }
 }
 
@@ -2755,6 +2799,10 @@ TEST_F(NativePointerRelocationBoundary,
   if (!hasCrossTargetClang() ||
       !exec("x86_64-w64-mingw32-gcc", {"--version"}).ok())
     GTEST_SKIP() << "needs Clang and the MinGW headers";
+  const auto GCCSysroot = exec("x86_64-w64-mingw32-gcc", {"-print-sysroot"});
+  ASSERT_TRUE(GCCSysroot.ok()) << GCCSysroot.err;
+  const std::string Sysroot =
+      "--sysroot=" + llvm::StringRef(GCCSysroot.out).trim().str();
   for (unsigned Variant = 0; Variant != 3; ++Variant) {
     SCOPED_TRACE(Variant);
     const bool UCRT = Variant == 1;
@@ -2780,12 +2828,17 @@ TEST_F(NativePointerRelocationBoundary,
       Out << "#include <stdio.h>\n"
           << Rendered.Text << "\nstruct _iobuf object;\n";
     }
+    // A UCRT-configured MinGW installation redefines _UCRT from its default
+    // __MSVCRT_VERSION__. Select both parts of the header contract explicitly.
     for (const bool HeaderUCRT : {false, true}) {
       SCOPED_TRACE(HeaderUCRT);
       const auto Syntax =
           exec(NEVERD_TEST_CLANG,
-               {"--target=x86_64-w64-mingw32", "-fsyntax-only",
-                HeaderUCRT ? "-D_UCRT" : "-U_UCRT", Source.string()});
+               {"--target=x86_64-w64-mingw32", Sysroot, "-fsyntax-only",
+                HeaderUCRT ? "-D_UCRT" : "-U_UCRT",
+                HeaderUCRT ? "-D__MSVCRT_VERSION__=0xE00"
+                           : "-D__MSVCRT_VERSION__=0x700",
+                Source.string()});
       if (HeaderUCRT == UCRT && Variant != 2)
         EXPECT_TRUE(Syntax.ok()) << Syntax.err;
       else {

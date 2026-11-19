@@ -997,11 +997,24 @@ void summarizeIncomingStackReads(const BinaryImage &Img, CallRegisterBodyView F,
   for (size_t K = std::max(VariadicFrom, 0); SaveArea && K < NumArgRegs; ++K)
     SaveArea = !SpillDead[K];
   Effect.VariadicSaveArea = SaveArea;
+  // The runtime enters this function's SEH filters and termination handlers
+  // with its EstablisherFrame, and the home slots lie at fixed offsets from
+  // that frame.  So such a callback can read a spill that this body never
+  // loads back: an MSVC filter reads a parameter it needs from there.  Every
+  // such spill counts, also one that no callback reads, so the function may
+  // take a parameter that nothing uses.
+  const ExceptionFunction *Exception =
+      HomeSlots
+          ? Img.ExceptionMetadata.findFunctionEntry(F.Blocks.front().StartAddr)
+          : nullptr;
+  const bool CallbacksSeeHomes =
+      Exception && Exception->SEH && sehCallbacksReceiveFrame(*Exception->SEH);
   for (size_t K = 0; K < NumArgRegs; ++K) {
     if (!HomeSpill[K])
       continue;
-    const bool Reads = VariadicFrom >= 0 ? static_cast<int>(K) < VariadicFrom
-                                         : Unknown || HomeLoaded[K];
+    const bool Reads = VariadicFrom >= 0
+                           ? static_cast<int>(K) < VariadicFrom
+                           : Unknown || HomeLoaded[K] || CallbacksSeeHomes;
     if (auto Family = gprFamilyOf(Img.Arch, Layout.Registers[K]);
         Family && !Reads)
       Effect.Blocks.front().Steps[*HomeSpill[K]].Reads[*Family] = 0;

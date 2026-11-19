@@ -836,6 +836,9 @@ struct MedFunc {
   /// The addresses in this function its termination handlers local-unwind to:
   /// a `goto` in the `__finally` that holds such a handler lands on one.
   std::set<va_t> SEHHandlerUnwindTargets;
+  /// Of those, by termination handler entry: the one target a handler that
+  /// leaves by its local unwind on every way out resumes this function at.
+  std::map<va_t, va_t> SEHHandlerResumes;
   /// The certified same-frame local unwinds this function makes, each
   /// already replaced by its handler calls and jump, by call address.
   std::vector<MedSEHLocalUnwindExit> SEHLocalUnwindExits;

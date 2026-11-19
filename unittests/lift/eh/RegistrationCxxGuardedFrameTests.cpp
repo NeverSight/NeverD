@@ -28,6 +28,7 @@
 #include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/object/PELayout.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/ADT/SmallString.h"
 #include "llvm/IR/IRBuilder.h"
@@ -179,11 +180,7 @@ protected:
                                    Calls, Cleanups, ChainReads);
   }
   void compile() {
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmParsers();
-    llvm::InitializeAllAsmPrinters();
+    neverd::initializeLLVMCodegenTargets();
     auto Input = llvm::MemoryBuffer::getFile(
         std::getenv("NEVERD_REGISTRATION_GUARDED_PE32"));
     ASSERT_TRUE(bool(Input));

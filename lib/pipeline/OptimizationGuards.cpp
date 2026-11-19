@@ -8,6 +8,8 @@
 
 #include "OptimizationGuards.h"
 
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
+
 #include "llvm/ADT/Any.h"
 #include "llvm/Analysis/LazyCallGraph.h"
 #include "llvm/IR/Module.h"
@@ -36,8 +38,14 @@ void registerOptNoneInterproceduralGuard(
         // A call-graph pass on an ordinary caller can also affect a protected
         // callee's ABI, so use the same module-wide boundary for both. Required
         // adaptors still run and optimize ordinary functions independently.
+        // An SEH filter adapter (sehFilterAdapterName) is the exception: no
+        // code calls it and the runtime takes its address, so no such pass
+        // reaches its arguments, and the filter it calls is a lifted function
+        // with external linkage, whose signature no pass changes.  Output
+        // checks the adapter's exact shape again.  It must not turn these
+        // passes off for its module.
         for (const llvm::Function &F : *M)
-          if (!F.isDeclaration() && F.hasOptNone())
+          if (!F.isDeclaration() && F.hasOptNone() && !isSEHFilterAdapter(F))
             return false;
         return true;
       });

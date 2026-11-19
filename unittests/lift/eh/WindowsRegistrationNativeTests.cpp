@@ -42,6 +42,7 @@
 #include "neverd/loader/COFF/COFFSEH4Entry.h"
 #include "neverd/loader/ExceptionInfo.h"
 #include "neverd/object/PELayout.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/IRBuilder.h"
@@ -561,11 +562,7 @@ TEST(WindowsRegistrationCxxSource, InputPE32EmitsTypedCatchAndCleanupIR) {
     ASSERT_FALSE(bool(EC)) << EC.message();
     Module->print(Stream, nullptr);
   }
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   auto Resolve = [&](llvm::StringRef Symbol,
                      uint32_t) -> std::optional<uint64_t> {
     if (auto Address = parseNdDataSymbol(Symbol))
@@ -2716,11 +2713,7 @@ TEST(WindowsRegistrationNative, InputPE32PreservesItsCheckedSourceContract) {
           return false;
         },
         "exception pointers");
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   auto Buffer = llvm::MemoryBuffer::getFile(Path);
   ASSERT_TRUE(bool(Buffer));
   const auto Bytes = (*Buffer)->getBuffer();
@@ -3858,11 +3851,7 @@ TEST(WindowsRegistrationNative, SynchronizesRuntimeTryLevelBeforeHandlerEntry) {
 
 #ifdef LLVM_NEVERD_X86_REGISTRATION_EH
 CompiledImage compileFixture(RegistrationNativeFixture &F) {
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   return compileImageForPatch(
       F.Module, Arch::X86, BinaryFormat::COFF, 0x6000,
       [](llvm::StringRef Symbol, uint32_t) -> std::optional<uint64_t> {

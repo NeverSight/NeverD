@@ -15,6 +15,8 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/ExceptionInfo.h"
@@ -6697,16 +6699,18 @@ TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
     Image.Base = 0x140000000;
     Image.ExceptionMetadata.Functions.push_back(EH);
     Image.ExceptionMetadata.rebuildIndex();
+    // What the output gate says of a module: nothing when it plans it.
     const auto Refusal = [&](llvm::Module &Candidate) {
       expectVerifierClean(Candidate);
       auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
-      EXPECT_FALSE(static_cast<bool>(Plan));
       return Plan ? std::string() : llvm::toString(Plan.takeError());
     };
-    EXPECT_NE(Refusal(*Module).find(
-                  "local unwind's handler call has no certified output form"),
-              std::string::npos);
-    // The optimizer keeps the marks.
+    // The gate places each handler call by the scope it ends: outside that
+    // scope's range markers, inside those of the scopes that hold it, and
+    // protected by the one that holds it immediately.  Running the lu3
+    // fixture's rewrites under Windows certified that placement.
+    EXPECT_EQ(Refusal(*Module), "");
+    // The optimizer keeps the marks and the placement.
     std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Module);
     Pipeline::OptimizationOptions Options;
     Options.Strength = Pipeline::OptStrength::Deep;
@@ -6715,10 +6719,50 @@ TEST(COFFExceptionIR, NativeLocalUnwindHandlerCallsLeaveTheirScope) {
         Pipeline::optimizeModule(*Optimized, Options);
     EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
     EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
-    EXPECT_NE(Refusal(*Optimized)
-                  .find("local unwind's handler call has no certified output "
-                        "form"),
-              std::string::npos);
+    EXPECT_EQ(Refusal(*Optimized), "");
+    EXPECT_EQ(Marks(*Optimized->getFunction(Parent.Name)).size(),
+              Marked.size());
+
+    // A mark that names another row is no handler call the runtime makes.
+    {
+      std::unique_ptr<llvm::Module> Other = llvm::CloneModule(*Module);
+      llvm::CallInst *Mark = Marks(*Other->getFunction(Parent.Name)).front();
+      auto Bundle = *Mark->getOperandBundle(windows_eh_md::ProvenanceBundle);
+      std::vector<llvm::Value *> Inputs(Bundle.Inputs.begin(),
+                                        Bundle.Inputs.end());
+      Inputs[windows_eh_md::ProvenanceRegion] = llvm::ConstantInt::get(
+          Inputs[windows_eh_md::ProvenanceRegion]->getType(), TwoRows ? 1 : 5);
+      llvm::OperandBundleDef Renamed(windows_eh_md::ProvenanceBundle.str(),
+                                     Inputs);
+      llvm::CallInst *Replacement = llvm::CallInst::Create(
+          Mark->getFunctionType(), Mark->getCalledOperand(), {}, {Renamed}, "",
+          Mark->getIterator());
+      Mark->eraseFromParent();
+      (void)Replacement;
+      EXPECT_NE(Refusal(*Other), "");
+    }
+    // A handler call moved back before its scope's range exit stands in the
+    // scope it ends, whatever unwind edge it keeps.
+    if (How == Shape::OnlyScope) {
+      std::unique_ptr<llvm::Module> Inside = llvm::CloneModule(*Module);
+      llvm::CallInst *Mark = Marks(*Inside->getFunction(Parent.Name)).front();
+      auto *HandlerCall = llvm::dyn_cast<llvm::CallInst>(Mark->getNextNode());
+      ASSERT_NE(HandlerCall, nullptr) << printModuleIR(*Inside);
+      llvm::BasicBlock *Before = Mark->getParent()->getSinglePredecessor();
+      ASSERT_NE(Before, nullptr) << printModuleIR(*Inside);
+      const auto *Exit =
+          llvm::dyn_cast<llvm::InvokeInst>(Before->getTerminator());
+      ASSERT_TRUE(Exit && Exit->getCalledFunction() &&
+                  Exit->getCalledFunction()->getIntrinsicID() ==
+                      llvm::Intrinsic::seh_try_end)
+          << printModuleIR(*Inside);
+      // Ahead of the range exit's own mark, which its marker must follow.
+      Mark->moveBefore(Before->getFirstNonPHIIt());
+      HandlerCall->moveAfter(Mark);
+      EXPECT_NE(Refusal(*Inside).find("outside the range markers"),
+                std::string::npos)
+          << Refusal(*Inside);
+    }
     // Without the marks the gate's other rules still refuse a handler that
     // was invoked: its scope is not the innermost one at its address.  They
     // have nothing to say about a handler called outside every scope.
@@ -7006,6 +7050,760 @@ TEST(COFFExceptionIR, OutputRefusesACallbackThatUsesItsOriginalFrame) {
             << Error << '\n'
             << printModuleIR(*Module);
     }
+}
+
+// A termination handler lifted from the image reads its parent's locals at
+// EstablisherFrame + k.  The lifted parent keeps its original frame in an
+// alloca, so native IR passes a callback that reads its frame the address
+// there of the frame the runtime gave the original: the bytes below the
+// entry stack pointer that the unwind codes put the EstablisherFrame at.  It
+// marks that alloca (neverd.windows.seh.frame) and makes the parent's memory
+// accesses in protected code volatile.  The output gate recomputes the frame
+// from the unwind codes and takes the callback only when it reaches the
+// parent's fixed frame or argument homes, at fixed offsets.
+TEST(COFFExceptionIR, NativeFrameReadingCallbackIsPassedTheEmulatedFrame) {
+  constexpr va_t ParentVA = 0x140201000;
+  constexpr va_t BodyVA = ParentVA + 0x10;
+  constexpr va_t AfterVA = ParentVA + 0x20;
+  constexpr va_t EndVA = ParentVA + 0x40;
+  constexpr va_t CallbackVA = 0x140202000;
+  constexpr va_t MayThrowVA = 0x140203000;
+  constexpr va_t PersonalityVA = 0x140204000;
+  // push rbx; sub rsp, 0x20
+  constexpr uint64_t FrameBytes = 0x28;
+  const auto &TRI = getTargetRegInfo(Arch::X64);
+
+  const auto Block = [](int Id, va_t Begin, va_t End) {
+    MedBlock B;
+    B.Id = Id;
+    B.StartAddr = Begin;
+    B.EndAddr = End;
+    return B;
+  };
+  const auto Branch = [](va_t At, va_t To) {
+    MedOp Op;
+    Op.Opcode = NdOp::BRANCH;
+    Op.Addr = At;
+    Op.addInput(MedVar::makeConst(To, 8));
+    return Op;
+  };
+  MedVar SP;
+  SP.Kind = MedVar::Reg;
+  SP.Id = 1;
+  SP.RegOff = TRI.StackPointer;
+  SP.Size = 8;
+  SP.TheArch = Arch::X64;
+  MedVar Local;
+  Local.Kind = MedVar::Temp;
+  Local.Id = 2;
+  Local.Size = 8;
+  Local.TheArch = Arch::X64;
+
+  MedFunc Parent;
+  Parent.Entry = ParentVA;
+  Parent.Name = "emulated_frame_parent";
+  Parent.ReturnType = NdType::makeVoid();
+  Parent.FrameSize = static_cast<int32_t>(FrameBytes);
+  Parent.FrameHeadroom = 0x28;
+  Parent.SEHTerminationFrameBytes[CallbackVA] = FrameBytes;
+  MedBlock Entry = Block(0, ParentVA, BodyVA);
+  Entry.Ops.push_back(Branch(ParentVA + 4, BodyVA));
+  Entry.Succs = {1};
+  // In the scope: a store to a local, then a call that may raise.
+  MedBlock Body = Block(1, BodyVA, AfterVA);
+  MedOp Address;
+  Address.Opcode = NdOp::INT_SUB;
+  Address.Addr = BodyVA;
+  Address.Output = Local;
+  Address.addInput(SP);
+  Address.addInput(
+      MedVar::makeConst(0x18, 8, ConstantAddressProvenance::Scalar));
+  Body.Ops.push_back(std::move(Address));
+  MedOp Store;
+  Store.Opcode = NdOp::STORE;
+  Store.Addr = BodyVA + 2;
+  Store.addInput(Local);
+  Store.addInput(MedVar::makeConst(7, 8));
+  Body.Ops.push_back(std::move(Store));
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = BodyVA + 4;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  Body.Ops.push_back(std::move(Call));
+  Body.Ops.push_back(Branch(BodyVA + 8, AfterVA));
+  Body.Preds = {0};
+  Body.Succs = {2};
+  MedBlock After = Block(2, AfterVA, EndVA);
+  MedOp Return;
+  Return.Opcode = NdOp::RETURN;
+  Return.Addr = AfterVA + 4;
+  After.Ops.push_back(std::move(Return));
+  After.Preds = {1};
+  Parent.Blocks = {Entry, Body, After};
+
+  ExceptionFunction EH;
+  EH.CodeRange = {ParentVA, EndVA};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.UnwindVersion = 1;
+  EH.UnwindFlags = 2;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = PersonalityVA;
+  EH.PrologueSize = 6;
+  UnwindOperation Allocate;
+  Allocate.Kind = UnwindOperationKind::AllocateSmall;
+  Allocate.CodeOffset = 6;
+  Allocate.StackOffset = 0x20;
+  UnwindOperation Push;
+  Push.Kind = UnwindOperationKind::PushNonVolatile;
+  Push.CodeOffset = 2;
+  Push.Register = 3;
+  EH.UnwindOperations = {Allocate, Push};
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {BodyVA, AfterVA};
+  Scope.Kind = SEHScopeKind::Finally;
+  Scope.FilterOrFinallyVA = CallbackVA;
+  Scope.HandlerVA = CallbackVA;
+  EH.SEH->Scopes.push_back(Scope);
+  Parent.ExceptionMetadata = EH;
+
+  // The callback reads through the frame it is passed.
+  MedFunc Callback;
+  Callback.Entry = CallbackVA;
+  Callback.Name = "frame_reading_finally";
+  Callback.ReturnType = NdType::makeVoid();
+  for (unsigned I = 0; I < 2; ++I) {
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.TheArch = Arch::X64;
+    Param.Id = static_cast<int>(I);
+    Param.Size = I == 0 ? 1 : 8;
+    Param.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Callback.Params.push_back(Param);
+    Callback.TypedParams.push_back(
+        {I == 0 ? "abnormal_termination" : "establisher_frame",
+         I == 0 ? NdType::makeInt(1, /*Signed=*/false) : NdType::makePtr()});
+  }
+  MedBlock CallbackBody = Block(0, CallbackVA, CallbackVA + 8);
+  MedVar Read;
+  Read.Kind = MedVar::Temp;
+  Read.TheArch = Arch::X64;
+  Read.Id = 40;
+  Read.SSAVer = 1;
+  Read.Size = 8;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = CallbackVA;
+  Load.addInput(Callback.Params.back());
+  Load.Output = Read;
+  CallbackBody.Ops.push_back(std::move(Load));
+  MedOp CallbackReturn;
+  CallbackReturn.Opcode = NdOp::RETURN;
+  CallbackReturn.Addr = CallbackVA + 4;
+  CallbackBody.Ops.push_back(std::move(CallbackReturn));
+  Callback.Blocks.push_back(std::move(CallbackBody));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Parent, Callback,
+       makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler")},
+      Context, "emulated_frame", Arch::X64, {{MayThrowVA, "may_throw"}},
+      nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectVerifierClean(*Module);
+  llvm::Function *Owner = Module->getFunction(Parent.Name);
+  llvm::Function *Lifted = Module->getFunction(Callback.Name);
+  ASSERT_NE(Owner, nullptr);
+  ASSERT_NE(Lifted, nullptr);
+  ASSERT_TRUE(Owner->hasPersonalityFn()) << printModuleIR(*Module);
+
+  // The marked frame, and the pad's argument at the EstablisherFrame's bytes
+  // below the entry byte.
+  const llvm::AllocaInst *Frame = nullptr;
+  uint64_t EntryOffset = 0;
+  for (const llvm::Instruction &Instruction : Owner->getEntryBlock())
+    if (const llvm::MDNode *Mark = Instruction.getMetadata(
+            windows_eh_md::SEHEmulatedFrameAttachment)) {
+      Frame = llvm::dyn_cast<llvm::AllocaInst>(&Instruction);
+      ASSERT_EQ(Mark->getNumOperands(), 2u);
+      EXPECT_EQ(llvm::mdconst::extract<llvm::ConstantInt>(Mark->getOperand(0))
+                    ->getZExtValue(),
+                ParentVA);
+      EntryOffset =
+          llvm::mdconst::extract<llvm::ConstantInt>(Mark->getOperand(1))
+              ->getZExtValue();
+    }
+  ASSERT_NE(Frame, nullptr) << printModuleIR(*Module);
+  ASSERT_GE(EntryOffset, FrameBytes);
+  const llvm::CallBase *PadCall = nullptr;
+  for (const llvm::BasicBlock &BB : *Owner)
+    for (const llvm::Instruction &Instruction : BB)
+      if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+          Site && Site->getCalledFunction() == Lifted)
+        PadCall = Site;
+  ASSERT_NE(PadCall, nullptr) << printModuleIR(*Module);
+  const auto *Argument =
+      llvm::dyn_cast<llvm::GetElementPtrInst>(PadCall->getArgOperand(1));
+  ASSERT_NE(Argument, nullptr) << printModuleIR(*Module);
+  EXPECT_EQ(Argument->getPointerOperand(), Frame);
+  llvm::APInt Offset(64, 0);
+  ASSERT_TRUE(
+      Argument->accumulateConstantOffset(Module->getDataLayout(), Offset));
+  EXPECT_EQ(Offset.getZExtValue(), EntryOffset - FrameBytes);
+  // The store in the scope keeps its order with a fault.
+  bool StoreInScope = false;
+  for (const llvm::BasicBlock &BB : *Owner)
+    for (const llvm::Instruction &Instruction : BB)
+      if (const auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+        if (const auto *Value =
+                llvm::dyn_cast<llvm::ConstantInt>(Kept->getValueOperand());
+            Value && Value->getZExtValue() == 7) {
+          StoreInScope = true;
+          EXPECT_TRUE(Kept->isVolatile()) << printModuleIR(*Module);
+        }
+  EXPECT_TRUE(StoreInScope) << printModuleIR(*Module);
+
+  // Printed C passes the same address and keeps the same store in order
+  // with a fault, since the optimizer runs before the C is printed.  Only
+  // native IR marks the frame for the output gate.
+  {
+    llvm::LLVMContext SourceContext;
+    auto Source =
+        emitSourceView({Parent, Callback,
+                        makeAddressBackedPersonality(
+                            PersonalityVA, "\01__C_specific_handler")},
+                       SourceContext, Arch::X64);
+    ASSERT_NE(Source, nullptr);
+    expectVerifierClean(*Source);
+    const llvm::Function *SourceOwner = Source->getFunction(Parent.Name);
+    const llvm::Function *SourceCallback = Source->getFunction(Callback.Name);
+    ASSERT_NE(SourceOwner, nullptr);
+    ASSERT_NE(SourceCallback, nullptr);
+    const llvm::CallBase *SourcePad = nullptr;
+    bool SourceStore = false;
+    for (const llvm::BasicBlock &BB : *SourceOwner)
+      for (const llvm::Instruction &Instruction : BB) {
+        EXPECT_EQ(
+            Instruction.getMetadata(windows_eh_md::SEHEmulatedFrameAttachment),
+            nullptr);
+        if (const auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+            Site && Site->getCalledFunction() == SourceCallback)
+          SourcePad = Site;
+        if (const auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction))
+          if (const auto *Value =
+                  llvm::dyn_cast<llvm::ConstantInt>(Kept->getValueOperand());
+              Value && Value->getZExtValue() == 7) {
+            SourceStore = true;
+            EXPECT_TRUE(Kept->isVolatile()) << printModuleIR(*Source);
+          }
+      }
+    EXPECT_TRUE(SourceStore) << printModuleIR(*Source);
+    ASSERT_NE(SourcePad, nullptr) << printModuleIR(*Source);
+    const auto *SourceArgument =
+        llvm::dyn_cast<llvm::GetElementPtrInst>(SourcePad->getArgOperand(1));
+    ASSERT_NE(SourceArgument, nullptr) << printModuleIR(*Source);
+    EXPECT_TRUE(
+        llvm::isa<llvm::AllocaInst>(SourceArgument->getPointerOperand()));
+    llvm::APInt SourceOffset(64, 0);
+    ASSERT_TRUE(SourceArgument->accumulateConstantOffset(
+        Source->getDataLayout(), SourceOffset));
+    EXPECT_EQ(SourceOffset.getZExtValue(), EntryOffset - FrameBytes);
+  }
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  Image.ExceptionMetadata.Functions.push_back(EH);
+  Image.ExceptionMetadata.rebuildIndex();
+  const auto Refusal = [&](llvm::Module &Candidate) {
+    expectVerifierClean(Candidate);
+    auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
+    return Plan ? std::string() : llvm::toString(Plan.takeError());
+  };
+
+  // What the callback does through its frame, written as lifted code does:
+  // the frame from a home, plus a constant, through inttoptr.
+  enum class Use {
+    ReadsALocal,
+    WritesALocal,
+    ReadsAHome,
+    ReadsTheReturnAddress,
+    ReadsAPushedRegister,
+    ReadsACallerArgument,
+    ReadsBelowTheFrame,
+    PassesIt,
+    PassesWhatItReads,
+    PassesWhatItWrote,
+    AddsAVariable,
+  };
+  struct Case {
+    Use How;
+    const char *Refused;
+  };
+  constexpr const char *Unkept = "reaches bytes of its parent's frame that "
+                                 "output does not keep";
+  constexpr const char *Unfixed = "other than by loads and stores at fixed "
+                                  "offsets";
+  const int64_t EntrySP = static_cast<int64_t>(FrameBytes);
+  const Case Cases[] = {
+      {Use::ReadsALocal, nullptr},         {Use::WritesALocal, nullptr},
+      {Use::ReadsAHome, nullptr},          {Use::ReadsTheReturnAddress, Unkept},
+      {Use::ReadsAPushedRegister, Unkept}, {Use::ReadsACallerArgument, Unkept},
+      {Use::ReadsBelowTheFrame, Unkept},   {Use::PassesIt, Unfixed},
+      {Use::PassesWhatItReads, Unfixed},   {Use::PassesWhatItWrote, nullptr},
+      {Use::AddsAVariable, Unfixed},
+  };
+  for (const Case &C : Cases) {
+    SCOPED_TRACE(static_cast<int>(C.How));
+    std::unique_ptr<llvm::Module> Candidate = llvm::CloneModule(*Module);
+    llvm::Function *Body = Candidate->getFunction(Callback.Name);
+    for (llvm::BasicBlock &BB : *Body)
+      BB.dropAllReferences();
+    while (!Body->empty())
+      Body->begin()->eraseFromParent();
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Body));
+    auto *I64 = B.getInt64Ty();
+    llvm::AllocaInst *Home = B.CreateAlloca(I64);
+    B.CreateStore(B.CreatePtrToInt(Body->getArg(1), I64), Home);
+    llvm::Value *Base = B.CreateLoad(I64, Home);
+    const auto At = [&](int64_t Displacement) {
+      return B.CreateIntToPtr(
+          B.CreateAdd(Base, B.getInt64(static_cast<uint64_t>(Displacement))),
+          B.getPtrTy());
+    };
+    switch (C.How) {
+    case Use::ReadsALocal:
+      B.CreateLoad(I64, At(0x10));
+      break;
+    case Use::WritesALocal:
+      B.CreateStore(B.getInt32(1), At(0x18));
+      break;
+    case Use::ReadsAHome:
+      B.CreateLoad(I64, At(EntrySP + 0x18));
+      break;
+    case Use::ReadsTheReturnAddress:
+      B.CreateLoad(I64, At(EntrySP));
+      break;
+    case Use::ReadsAPushedRegister:
+      B.CreateLoad(I64, At(EntrySP - 8));
+      break;
+    case Use::ReadsACallerArgument:
+      B.CreateLoad(I64, At(EntrySP + 0x28));
+      break;
+    case Use::ReadsBelowTheFrame:
+      B.CreateLoad(I64, At(-8));
+      break;
+    case Use::PassesIt:
+      B.CreateCall(
+          Candidate->getOrInsertFunction(
+              "takes_a_pointer",
+              llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false)),
+          {At(0x10)});
+      break;
+    case Use::PassesWhatItReads:
+      // A frame the lifted parent saved there is an address in the emulated
+      // frame, which `_local_unwind` would take for a real one.
+      B.CreateCall(Candidate->getOrInsertFunction(
+                       "_local_unwind", llvm::FunctionType::get(
+                                            B.getVoidTy(), {I64, I64}, false)),
+                   {B.CreateLoad(I64, At(0x10)), B.getInt64(0)});
+      break;
+    case Use::PassesWhatItWrote:
+      // As an /Od filter keeps its exception pointers in its parent's frame:
+      // what it reads back is its own.
+      B.CreateStore(B.CreateZExt(Body->getArg(0), I64), At(0x10));
+      B.CreateCall(Candidate->getOrInsertFunction(
+                       "takes_a_value",
+                       llvm::FunctionType::get(B.getVoidTy(), {I64}, false)),
+                   {B.CreateLoad(I64, At(0x10))});
+      break;
+    case Use::AddsAVariable:
+      B.CreateLoad(I64,
+                   B.CreateIntToPtr(
+                       B.CreateAdd(Base, B.CreateZExt(Body->getArg(0), I64)),
+                       B.getPtrTy()));
+      break;
+    }
+    B.CreateRetVoid();
+    const std::string Error = Refusal(*Candidate);
+    if (!C.Refused) {
+      EXPECT_EQ(Error, "") << printModuleIR(*Candidate);
+      // The optimizer keeps the frame, its mark and the order.
+      std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Candidate);
+      Pipeline::OptimizationOptions Options;
+      Options.Strength = Pipeline::OptStrength::Deep;
+      Options.LLVMLevel = llvm::OptimizationLevel::O3;
+      const OptimizationResult Optimization =
+          Pipeline::optimizeModule(*Optimized, Options);
+      EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+      EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+      EXPECT_EQ(Refusal(*Optimized), "") << printModuleIR(*Optimized);
+    } else {
+      EXPECT_NE(Error.find(C.Refused), std::string::npos)
+          << Error << '\n'
+          << printModuleIR(*Candidate);
+    }
+  }
+
+  // The pad's argument eight bytes off, the frame unmarked, and a plain
+  // store in the scope are each refused.
+  const auto PadArgument = [&](llvm::Module &Candidate) {
+    llvm::Function *Function = Candidate.getFunction(Parent.Name);
+    llvm::Function *Handler = Candidate.getFunction(Callback.Name);
+    for (llvm::BasicBlock &BB : *Function)
+      for (llvm::Instruction &Instruction : BB)
+        if (auto *Site = llvm::dyn_cast<llvm::CallBase>(&Instruction);
+            Site && Site->getCalledFunction() == Handler)
+          return llvm::cast<llvm::GetElementPtrInst>(Site->getArgOperand(1));
+    return static_cast<llvm::GetElementPtrInst *>(nullptr);
+  };
+  {
+    std::unique_ptr<llvm::Module> Moved = llvm::CloneModule(*Module);
+    llvm::GetElementPtrInst *Pad = PadArgument(*Moved);
+    ASSERT_NE(Pad, nullptr);
+    Pad->setOperand(1, llvm::ConstantInt::get(Pad->getOperand(1)->getType(),
+                                              EntryOffset - FrameBytes + 8));
+    EXPECT_NE(Refusal(*Moved).find("not passed its parent's original "
+                                   "EstablisherFrame"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Unmarked = llvm::CloneModule(*Module);
+    llvm::GetElementPtrInst *Pad = PadArgument(*Unmarked);
+    ASSERT_NE(Pad, nullptr);
+    llvm::cast<llvm::Instruction>(Pad->getPointerOperand())
+        ->setMetadata(windows_eh_md::SEHEmulatedFrameAttachment, nullptr);
+    EXPECT_NE(Refusal(*Unmarked).find("names no emulated frame"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Plain = llvm::CloneModule(*Module);
+    bool Cleared = false;
+    for (llvm::BasicBlock &BB : *Plain->getFunction(Parent.Name))
+      for (llvm::Instruction &Instruction : BB)
+        if (auto *Kept = llvm::dyn_cast<llvm::StoreInst>(&Instruction);
+            Kept && Kept->isVolatile()) {
+          Kept->setVolatile(false);
+          Cleared = true;
+        }
+    ASSERT_TRUE(Cleared);
+    EXPECT_NE(Refusal(*Plain).find("out of order with faults"),
+              std::string::npos)
+        << printModuleIR(*Plain);
+  }
+
+  // With a frame register the runtime puts the EstablisherFrame where the
+  // stack pointer stood when the prologue set it (`push rbp; sub rsp, 0x20;
+  // lea rbp, [rsp+0x20]; sub rsp, 0x10`): what the prologue allocates after
+  // that lies below the frame and is still the parent's, and nothing below
+  // it is.
+  {
+    ExceptionFunction Framed = EH;
+    Framed.FrameRegister = 5;
+    Framed.FrameOffset = 2;
+    Framed.PrologueSize = 13;
+    UnwindOperation SetFrame;
+    SetFrame.Kind = UnwindOperationKind::SetFramePointer;
+    SetFrame.CodeOffset = 9;
+    UnwindOperation Below;
+    Below.Kind = UnwindOperationKind::AllocateSmall;
+    Below.CodeOffset = 13;
+    Below.StackOffset = 0x10;
+    Framed.UnwindOperations = {Below, SetFrame, Allocate, Push};
+    MedFunc FramedParent = Parent;
+    FramedParent.FrameSize = 0x38;
+    FramedParent.ExceptionMetadata = Framed;
+    BinaryImage FramedImage = Image;
+    FramedImage.ExceptionMetadata.Functions = {Framed};
+    FramedImage.ExceptionMetadata.rebuildIndex();
+    for (const int64_t Displacement : {int64_t(-8), int64_t(-0x18)}) {
+      SCOPED_TRACE(Displacement);
+      auto FramedModule = MedLLVMEmitter().emit(
+          {FramedParent, Callback,
+           makeAddressBackedPersonality(PersonalityVA,
+                                        "\01__C_specific_handler")},
+          Context, "emulated_frame_register", Arch::X64,
+          {{MayThrowVA, "may_throw"}}, nullptr, BinaryFormat::COFF);
+      ASSERT_NE(FramedModule, nullptr);
+      llvm::Function *Body = FramedModule->getFunction(Callback.Name);
+      for (llvm::BasicBlock &BB : *Body)
+        BB.dropAllReferences();
+      while (!Body->empty())
+        Body->begin()->eraseFromParent();
+      llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Body));
+      B.CreateLoad(
+          B.getInt64Ty(),
+          B.CreateIntToPtr(
+              B.CreateAdd(B.CreatePtrToInt(Body->getArg(1), B.getInt64Ty()),
+                          B.getInt64(static_cast<uint64_t>(Displacement))),
+              B.getPtrTy()));
+      B.CreateRetVoid();
+      expectVerifierClean(*FramedModule);
+      auto Plan = planCOFFExceptionPatch(*FramedModule, FramedImage, Arch::X64);
+      const std::string Error =
+          Plan ? std::string() : llvm::toString(Plan.takeError());
+      if (Displacement == -8)
+        EXPECT_EQ(Error, "") << printModuleIR(*FramedModule);
+      else
+        EXPECT_NE(Error.find(Unkept), std::string::npos) << Error;
+    }
+  }
+}
+
+// The runtime calls a filter with the frame of the function the code
+// generator wrote, so a filter that reads its frame runs behind an adapter
+// native IR writes: it recovers the emulated frame the parent escapes
+// (`llvm.eh.recoverfp`, `llvm.localrecover`) and returns what the source
+// filter returns for the exception pointers and that frame.  The output
+// gate takes the adapter only in exactly that shape.
+TEST(COFFExceptionIR, NativeFrameReadingFilterRunsBehindAnAdapter) {
+  constexpr va_t ParentVA = 0x140201000;
+  constexpr va_t BodyVA = ParentVA + 0x10;
+  constexpr va_t HandlerVA = ParentVA + 0x20;
+  constexpr va_t EndVA = ParentVA + 0x40;
+  constexpr va_t FilterVA = 0x140202000;
+  constexpr va_t MayThrowVA = 0x140203000;
+  constexpr va_t PersonalityVA = 0x140204000;
+  constexpr uint64_t FrameBytes = 0x28;
+
+  const auto Block = [](int Id, va_t Begin, va_t End) {
+    MedBlock B;
+    B.Id = Id;
+    B.StartAddr = Begin;
+    B.EndAddr = End;
+    return B;
+  };
+  const auto Return = [](va_t At) {
+    MedOp Op;
+    Op.Opcode = NdOp::RETURN;
+    Op.Addr = At;
+    return Op;
+  };
+  MedFunc Parent;
+  Parent.Entry = ParentVA;
+  Parent.Name = "adapted_filter_parent";
+  Parent.ReturnType = NdType::makeVoid();
+  Parent.FrameSize = static_cast<int32_t>(FrameBytes);
+  Parent.FrameHeadroom = 0x28;
+  Parent.SEHTerminationFrameBytes[FilterVA] = FrameBytes;
+  MedBlock Body = Block(0, BodyVA, HandlerVA);
+  MedOp Call;
+  Call.Opcode = NdOp::CALL;
+  Call.Addr = BodyVA + 4;
+  Call.addInput(MedVar::makeConst(MayThrowVA, 8));
+  Body.Ops.push_back(std::move(Call));
+  Body.Ops.push_back(Return(BodyVA + 8));
+  MedBlock Handler = Block(1, HandlerVA, EndVA);
+  Handler.Ops.push_back(Return(HandlerVA + 4));
+  Parent.Blocks = {Body, Handler};
+
+  ExceptionFunction EH;
+  EH.CodeRange = {ParentVA, EndVA};
+  EH.Encoding = ExceptionEncoding::X64UnwindV1;
+  EH.UnwindVersion = 1;
+  EH.UnwindFlags = 1;
+  EH.ParseStatus = ExceptionParseStatus::Complete;
+  EH.Personality = ExceptionPersonality::CSpecificHandler;
+  EH.PersonalityVA = PersonalityVA;
+  EH.PrologueSize = 6;
+  UnwindOperation Allocate;
+  Allocate.Kind = UnwindOperationKind::AllocateSmall;
+  Allocate.CodeOffset = 6;
+  Allocate.StackOffset = 0x20;
+  UnwindOperation Push;
+  Push.Kind = UnwindOperationKind::PushNonVolatile;
+  Push.CodeOffset = 2;
+  Push.Register = 3;
+  EH.UnwindOperations = {Allocate, Push};
+  EH.SEH.emplace();
+  SEHScopeRecord Scope;
+  Scope.ParseStatus = ExceptionParseStatus::Complete;
+  Scope.GuardedRange = {BodyVA, HandlerVA};
+  Scope.Kind = SEHScopeKind::Filter;
+  Scope.FilterOrFinallyVA = FilterVA;
+  Scope.HandlerVA = HandlerVA;
+  Scope.ContinuationVA = HandlerVA;
+  EH.SEH->Scopes.push_back(Scope);
+  Parent.ExceptionMetadata = EH;
+
+  MedFunc Filter;
+  Filter.Entry = FilterVA;
+  Filter.Name = "frame_reading_filter";
+  Filter.ReturnType = NdType::makeInt(4, /*Signed=*/true);
+  for (unsigned I = 0; I < 2; ++I) {
+    MedVar Param;
+    Param.Kind = MedVar::Param;
+    Param.TheArch = Arch::X64;
+    Param.Id = static_cast<int>(I);
+    Param.Size = 8;
+    Param.RegOff = I == 0 ? x86reg::RCX : x86reg::RDX;
+    Filter.Params.push_back(Param);
+    Filter.TypedParams.push_back(
+        {I == 0 ? "exception_pointers" : "establisher_frame",
+         NdType::makePtr()});
+  }
+  MedBlock FilterBody = Block(0, FilterVA, FilterVA + 8);
+  MedVar Read;
+  Read.Kind = MedVar::Temp;
+  Read.TheArch = Arch::X64;
+  Read.Id = 40;
+  Read.SSAVer = 1;
+  Read.Size = 4;
+  MedOp Load;
+  Load.Opcode = NdOp::LOAD;
+  Load.Addr = FilterVA;
+  Load.addInput(Filter.Params.back());
+  Load.Output = Read;
+  FilterBody.Ops.push_back(std::move(Load));
+  MedOp Disposition = Return(FilterVA + 4);
+  Disposition.addInput(MedVar::makeConst(1, 4));
+  FilterBody.Ops.push_back(std::move(Disposition));
+  Filter.Blocks.push_back(std::move(FilterBody));
+
+  llvm::LLVMContext Context;
+  auto Module = MedLLVMEmitter().emit(
+      {Parent, Filter,
+       makeAddressBackedPersonality(PersonalityVA, "\01__C_specific_handler")},
+      Context, "adapted_filter", Arch::X64, {{MayThrowVA, "may_throw"}},
+      nullptr, BinaryFormat::COFF);
+  ASSERT_NE(Module, nullptr);
+  expectVerifierClean(*Module);
+  llvm::Function *Owner = Module->getFunction(Parent.Name);
+  llvm::Function *Lifted = Module->getFunction(Filter.Name);
+  ASSERT_NE(Owner, nullptr);
+  ASSERT_NE(Lifted, nullptr);
+  ASSERT_TRUE(Owner->hasPersonalityFn()) << printModuleIR(*Module);
+  const std::string AdapterName = sehFilterAdapterName(ParentVA, 0);
+  llvm::Function *Adapter = Module->getFunction(AdapterName);
+  ASSERT_NE(Adapter, nullptr) << printModuleIR(*Module);
+  EXPECT_TRUE(Adapter->hasLocalLinkage());
+  EXPECT_TRUE(hasSEHFilterAdapter(*Module));
+  const llvm::CatchPadInst *Pad = nullptr;
+  const llvm::CallInst *Escape = nullptr;
+  for (const llvm::BasicBlock &BB : *Owner)
+    for (const llvm::Instruction &Instruction : BB) {
+      if (const auto *Catch = llvm::dyn_cast<llvm::CatchPadInst>(&Instruction))
+        Pad = Catch;
+      if (const auto *Site = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+          Site && Site->getCalledFunction() &&
+          Site->getCalledFunction()->getIntrinsicID() ==
+              llvm::Intrinsic::localescape)
+        Escape = Site;
+    }
+  ASSERT_NE(Pad, nullptr) << printModuleIR(*Module);
+  EXPECT_EQ(Pad->getArgOperand(0), Adapter);
+  ASSERT_NE(Escape, nullptr) << printModuleIR(*Module);
+  EXPECT_EQ(Escape->getParent(), &Owner->getEntryBlock());
+  ASSERT_EQ(Escape->arg_size(), 1u);
+  const auto *Escaped = llvm::dyn_cast<llvm::AllocaInst>(
+      Escape->getArgOperand(0)->stripPointerCasts());
+  ASSERT_NE(Escaped, nullptr);
+  EXPECT_NE(Escaped->getMetadata(windows_eh_md::SEHEmulatedFrameAttachment),
+            nullptr);
+
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Base = 0x140000000;
+  Image.ExceptionMetadata.Functions.push_back(EH);
+  Image.ExceptionMetadata.rebuildIndex();
+  const auto Refusal = [&](llvm::Module &Candidate) {
+    expectVerifierClean(Candidate);
+    auto Plan = planCOFFExceptionPatch(Candidate, Image, Arch::X64);
+    return Plan ? std::string() : llvm::toString(Plan.takeError());
+  };
+  EXPECT_EQ(Refusal(*Module), "") << printModuleIR(*Module);
+  {
+    std::unique_ptr<llvm::Module> Optimized = llvm::CloneModule(*Module);
+    Pipeline::OptimizationOptions Options;
+    Options.Strength = Pipeline::OptStrength::Deep;
+    Options.LLVMLevel = llvm::OptimizationLevel::O3;
+    const OptimizationResult Optimization =
+        Pipeline::optimizeModule(*Optimized, Options);
+    EXPECT_NE(Optimization.Stop, OptimizationStopReason::InputInvalid);
+    EXPECT_NE(Optimization.Stop, OptimizationStopReason::VerificationFailed);
+    EXPECT_EQ(Refusal(*Optimized), "") << printModuleIR(*Optimized);
+  }
+
+  // The adapter's frame eight bytes off, a call of another function, one
+  // more instruction, another escaped alloca, and a filter that reads the
+  // return address are each refused.
+  const auto AdapterCall = [&](llvm::Module &Candidate) {
+    llvm::Function *Function = Candidate.getFunction(AdapterName);
+    for (llvm::Instruction &Instruction : Function->getEntryBlock())
+      if (auto *Site = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+          Site && Site->getCalledFunction() &&
+          !Site->getCalledFunction()->isIntrinsic())
+        return Site;
+    return static_cast<llvm::CallInst *>(nullptr);
+  };
+  {
+    std::unique_ptr<llvm::Module> Moved = llvm::CloneModule(*Module);
+    auto *Frame = llvm::cast<llvm::GetElementPtrInst>(
+        AdapterCall(*Moved)->getArgOperand(1));
+    Frame->setOperand(1, llvm::ConstantInt::get(
+                             Frame->getOperand(1)->getType(),
+                             llvm::cast<llvm::ConstantInt>(Frame->getOperand(1))
+                                     ->getZExtValue() +
+                                 8));
+    EXPECT_NE(Refusal(*Moved).find("not passed its parent's original "
+                                   "EstablisherFrame"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Other = llvm::CloneModule(*Module);
+    llvm::CallInst *Site = AdapterCall(*Other);
+    llvm::Function *Elsewhere = llvm::Function::Create(
+        Site->getFunctionType(), llvm::GlobalValue::ExternalLinkage,
+        "another_filter", *Other);
+    Site->setCalledFunction(Elsewhere);
+    EXPECT_NE(Refusal(*Other).find("filter adapter was altered"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Longer = llvm::CloneModule(*Module);
+    llvm::CallInst *Site = AdapterCall(*Longer);
+    llvm::IRBuilder<> B(Site);
+    B.CreateStore(B.getInt32(0), B.CreateAlloca(B.getInt32Ty()));
+    EXPECT_NE(Refusal(*Longer).find("filter adapter was altered"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Escaped = llvm::CloneModule(*Module);
+    llvm::Function *Function = Escaped->getFunction(Parent.Name);
+    llvm::CallInst *Site = nullptr;
+    for (llvm::Instruction &Instruction : Function->getEntryBlock())
+      if (auto *Call = llvm::dyn_cast<llvm::CallInst>(&Instruction);
+          Call && Call->getCalledFunction() &&
+          Call->getCalledFunction()->getIntrinsicID() ==
+              llvm::Intrinsic::localescape)
+        Site = Call;
+    ASSERT_NE(Site, nullptr);
+    llvm::IRBuilder<> B(&*Function->getEntryBlock().getFirstInsertionPt());
+    Site->setArgOperand(0, B.CreateAlloca(B.getInt64Ty()));
+    EXPECT_NE(Refusal(*Escaped).find("filter adapter was altered"),
+              std::string::npos);
+  }
+  {
+    std::unique_ptr<llvm::Module> Reads = llvm::CloneModule(*Module);
+    llvm::Function *Body = Reads->getFunction(Filter.Name);
+    for (llvm::BasicBlock &BB : *Body)
+      BB.dropAllReferences();
+    while (!Body->empty())
+      Body->begin()->eraseFromParent();
+    llvm::IRBuilder<> B(llvm::BasicBlock::Create(Context, "entry", Body));
+    B.CreateLoad(B.getInt64Ty(),
+                 B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), Body->getArg(1),
+                                              FrameBytes));
+    B.CreateRet(B.getInt32(1));
+    EXPECT_NE(Refusal(*Reads).find("reaches bytes of its parent's frame"),
+              std::string::npos);
+  }
 }
 
 } // namespace
