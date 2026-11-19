@@ -149,6 +149,14 @@ most time. Each step is an instruction, its reason and the case it comes from.
   failed it. A test binary that links the library statically proves nothing
   when only the shared library is swapped: rebuild the binary, and rebuild
   from clean sources afterwards.
+- **Identity over samples does not make a skip sound.** A skip of x87 call
+  proofs in x64 functions that name no x87 register left the corpus and
+  capstone byte for byte the same and cut 25%, and was wrong: a wrapper
+  returns its callee's ST(0) without naming a register, which
+  `X87CallStack.ProvesCrossBlockResultsBeforeExpandingLoopStates` (it
+  iterates X86 and X64) showed. Before a skip, state why the skipped work
+  cannot change the output, and run every suite of that area; prefer a memo
+  whose dependencies are recorded to a predicate that guesses.
 - The identity runs cost more machine time than the change does. They are
   still cheaper than one wrong-output report.
 

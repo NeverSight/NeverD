@@ -1171,7 +1171,9 @@ private:
   friend struct detail::X87CallGraphCacheTestAccess;
   friend struct detail::NoReturnProofTestAccess;
   friend struct detail::AnalysisRecoveryTestAccess;
-  std::array<size_t, 3> x87CallGraphCacheStatsForTesting() const;
+  /// Graph hits, graphs and retained bytes of the shared x87 call graph
+  /// cache, and the calls a kept contract answered.
+  std::array<size_t, 4> x87CallGraphCacheStatsForTesting() const;
   std::array<size_t, 5> x87CallGraphFlightStatsForTesting() const;
   bool waitForX87CallGraphWaitersForTesting(size_t Count) const;
   std::array<size_t, 2> callRegisterBodyCacheStatsForTesting() const;

@@ -131,6 +131,12 @@ inline constexpr size_t kCOFFExceptionPatchMaxCallbackFrameUses = 1u << 16;
 // lib/backend/codegen/COFF/COFFPatchObject.cpp
 inline constexpr uint64_t kCOFFPatchObjectMaxStorage = 64 * 1024 * 1024;
 
+// lib/backend/llvm/eh/WindowsSEHEmulatedFrame.cpp
+/// Uses followed from an SEH callback's EstablisherFrame argument when its
+/// accesses through an emulated frame are collected; a callback with more is
+/// taken to let the frame leave.
+inline constexpr size_t kSEHEmulatedFrameMaxCallbackUses = 1u << 16;
+
 // lib/backend/codegen/ELF/ELFExceptionPatch.cpp
 inline constexpr uint64_t kELFExceptionPatchDecodeBudget = 64 * 1024 * 1024;
 

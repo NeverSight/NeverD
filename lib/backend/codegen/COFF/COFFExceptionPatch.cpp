@@ -18,10 +18,13 @@
 #include "neverd/backend/llvm/WindowsEHMetadataEncoder.h"
 #include "neverd/backend/llvm/WindowsEHNativeSource.h"
 #include "neverd/backend/llvm/WindowsEHSemanticDigest.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/COFF/COFFException.h"
 #include "neverd/loader/COFF/COFFLoaderUtils.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
+#include "neverd/loader/COFF/X64UnwindFrame.h"
 #include "neverd/object/PELayout.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/ISAEncoding.h"
@@ -81,6 +84,77 @@ bool isFH3OutputArchitecture(Arch TargetArch) {
 llvm::Error patchError(const llvm::Twine &Message) {
   return llvm::createStringError(llvm::errc::invalid_argument,
                                  "coff exception patch: " + Message);
+}
+
+/// The scope of \p EH's SEH table that immediately holds scope \p Index.
+/// Rows over one range nest by their order, the earlier inside the later, so
+/// a row's parent is the next row over its range, or else the first row over
+/// the smallest range that holds it (as getSEHScopeSemanticToken orders
+/// them).  The output classification admits no other overlap.
+std::optional<uint32_t> sehParentScope(const ExceptionFunction &EH,
+                                       size_t Index) {
+  const ExceptionAddressRange &Range = EH.SEH->Scopes[Index].GuardedRange;
+  for (size_t Next = Index + 1; Next < EH.SEH->Scopes.size(); ++Next)
+    if (EH.SEH->Scopes[Next].GuardedRange.Begin == Range.Begin &&
+        EH.SEH->Scopes[Next].GuardedRange.End == Range.End)
+      return static_cast<uint32_t>(Next);
+  std::optional<uint32_t> Parent;
+  uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
+  for (size_t Candidate = 0; Candidate < EH.SEH->Scopes.size(); ++Candidate) {
+    const ExceptionAddressRange &CandidateRange =
+        EH.SEH->Scopes[Candidate].GuardedRange;
+    if (Candidate == Index || !CandidateRange.contains(Range) ||
+        CandidateRange.size() <= Range.size() ||
+        CandidateRange.size() >= ParentSize)
+      continue;
+    Parent = static_cast<uint32_t>(Candidate);
+    ParentSize = CandidateRange.size();
+  }
+  return Parent;
+}
+
+/// LLVM writes an SEH row for each nesting level of the code in a range, so
+/// scopes nested over the same code repeat its range.  __C_specific_handler
+/// runs the rows over an address in table order: at every address they must
+/// be the source's scope chain there, inner first.  In a table whose
+/// overlapping rows nest, inner first, that holds when the next row over
+/// each row's range, or over a range holding it, stands for the parent of
+/// that row's scope, and no later row holds the range of a scope with none.
+llvm::Error checkGeneratedSEHScopeChains(
+    llvm::ArrayRef<COFFGeneratedEHSemanticBinding> Bindings,
+    llvm::function_ref<const ExceptionFunction *(va_t)> FindSourceEH) {
+  std::map<uint32_t, std::vector<const COFFGeneratedEHSemanticBinding *>>
+      Tables;
+  for (const COFFGeneratedEHSemanticBinding &Binding : Bindings)
+    if (Binding.Kind == COFFGeneratedEHSemanticKind::SEHScope &&
+        Binding.Model == COFFGeneratedLanguageModel::SEH)
+      Tables[Binding.GeneratedOwnerRVA].push_back(&Binding);
+  for (auto &[Owner, Rows] : Tables) {
+    llvm::sort(Rows, [](const auto *A, const auto *B) {
+      return A->RecordRVA < B->RecordRVA;
+    });
+    const ExceptionFunction *Source =
+        FindSourceEH(Rows.front()->SourceFunctionVA);
+    if (!Source || !Source->SEH)
+      return patchError("generated SEH rows have no source scope table");
+    for (size_t I = 0; I < Rows.size(); ++I) {
+      const COFFGeneratedEHSemanticBinding &Row = *Rows[I];
+      if (Row.SourceFunctionVA != Rows.front()->SourceFunctionVA ||
+          Row.Region >= Source->SEH->Scopes.size())
+        return patchError("generated SEH rows name another source table");
+      std::optional<size_t> Holder;
+      for (size_t J = I + 1; J < Rows.size() && !Holder; ++J)
+        if (Rows[J]->BeginRVA <= Row.BeginRVA && Row.EndRVA <= Rows[J]->EndRVA)
+          Holder = J;
+      const std::optional<uint32_t> Parent =
+          sehParentScope(*Source, Row.Region);
+      if (Parent ? !Holder || Rows[*Holder]->Region != *Parent
+                 : Holder.has_value())
+        return patchError("generated SEH rows do not follow the source scope "
+                          "chain of their code");
+    }
+  }
+  return llvm::Error::success();
 }
 
 llvm::Expected<coff_fh4::FuncInfoLayout> parseGeneratedFH4Layout(
@@ -535,6 +609,16 @@ struct NativeEHProtectedInvoke {
   const llvm::InvokeInst *Invoke = nullptr;
   va_t SourceVA = 0;
   uint32_t Region = 0;
+  /// For a local unwind's handler call, the scope the handler ends.
+  std::optional<uint32_t> Ended;
+};
+
+/// A call a local unwind makes of the termination handler of scope Ended,
+/// at the runtime call's address (MedSEHLocalUnwindExit).
+struct NativeEHLocalUnwindCall {
+  const llvm::CallBase *Call = nullptr;
+  va_t SourceVA = 0;
+  uint32_t Ended = 0;
 };
 
 struct NativeEHRangeMarker {
@@ -758,6 +842,240 @@ bool sehCallbackUsesOriginalFrame(const llvm::Function &Callback,
   return false;
 }
 
+/// \p Parent's emulated frame and the fixed frame the source's unwind codes
+/// record, which together say where the EstablisherFrame lies in it.
+struct SEHEmulatedFrameContext {
+  SEHEmulatedFrame Frame;
+  X64UnwindFrame Unwind;
+};
+
+llvm::Expected<SEHEmulatedFrameContext>
+sehEmulatedFrameContext(const llvm::Function &Parent,
+                        const ExceptionFunction &EH) {
+  auto Frame = findSEHEmulatedFrame(Parent, EH.CodeRange.Begin);
+  if (!Frame)
+    return patchError(llvm::toString(Frame.takeError()));
+  if (!*Frame)
+    return patchError("native SEH callback is passed a frame that names no "
+                      "emulated frame in function " +
+                      Parent.getName());
+  // RtlVirtualUnwind puts the EstablisherFrame at the frame register less
+  // its scaled offset, which is where the stack pointer stood when the
+  // prologue set the register.
+  auto Unwind = decodeX64UnwindFrame(EH, /*AllowFrameRegister=*/true);
+  if (!Unwind)
+    return patchError(
+        "native SEH emulated frame of function " + Parent.getName() +
+        " has no fixed source frame: " + llvm::toString(Unwind.takeError()));
+  return SEHEmulatedFrameContext{**Frame, *Unwind};
+}
+
+/// Whether \p Callback, passed the byte \p SlotOffset of \p Parent's
+/// emulated frame as its EstablisherFrame, is passed the frame the source's
+/// unwind codes give it: the entry byte less the EstablisherFrame's bytes.
+/// And whether it reaches through it only bytes the lifted parent keeps as
+/// the original did.  Those are its fixed frame and the argument homes above
+/// its return address, but not a pushed or saved register, which emission
+/// leaves out, the return address or the caller's stack arguments, and all
+/// of them inside the alloca.  Neither the frame nor anything the callback
+/// reads through it may reach a call: RtlUnwind, `_local_unwind` and longjmp
+/// compare an EstablisherFrame, or a frame the parent saved there, with real
+/// frames.
+llvm::Error checkSEHEmulatedFrameCallback(
+    const SEHEmulatedFrameContext &Context, int64_t SlotOffset,
+    const llvm::Function &Callback, const llvm::Function &Parent) {
+  const int64_t Establisher =
+      static_cast<int64_t>(Context.Unwind.EstablisherBytes);
+  const int64_t Entry = static_cast<int64_t>(Context.Frame.EntryOffset);
+  if (SlotOffset != Entry - Establisher)
+    return patchError("native SEH callback is not passed its parent's "
+                      "original EstablisherFrame in function " +
+                      Parent.getName());
+  const auto Accesses = collectSEHCallbackFrameAccesses(Callback);
+  if (!Accesses)
+    return patchError("native SEH callback reaches its parent's emulated "
+                      "frame other than by loads and stores at fixed "
+                      "offsets, or passes a call what it reads there, in "
+                      "function " +
+                      Parent.getName());
+  const int64_t HomesEnd = getTargetRegInfo(Arch::X64)
+                               .integerArgumentLayout(BinaryFormat::COFF)
+                               .EntryStackBase;
+  constexpr int64_t ReturnAddressBytes = 8;
+  for (const SEHFrameAccess &Access : *Accesses) {
+    // Relative to the entry stack pointer.
+    const int64_t Begin = Access.Offset - Establisher;
+    const int64_t End = Begin + static_cast<int64_t>(Access.Size);
+    const bool Fixed =
+        Begin >= -static_cast<int64_t>(Context.Unwind.AllocatedBytes) &&
+        End <= 0;
+    const bool Home = Begin >= ReturnAddressBytes && End <= HomesEnd;
+    const bool Saved =
+        llvm::any_of(Context.Unwind.SavedRegisterSlots,
+                     [&](const std::pair<int64_t, int64_t> &Slot) {
+                       return Begin < Slot.second && Slot.first < End;
+                     });
+    const bool Inside = Entry + Begin >= 0 &&
+                        Entry + End <= static_cast<int64_t>(Context.Frame.Size);
+    if (!Access.Size || !(Fixed || Home) || Saved || !Inside)
+      return patchError("native SEH callback reaches bytes of its parent's "
+                        "frame that output does not keep in function " +
+                        Parent.getName());
+  }
+  return llvm::Error::success();
+}
+
+/// Whether \p Argument, what native IR passes \p Callback as its
+/// EstablisherFrame, is \p Parent's emulated frame where the source's unwind
+/// codes put the EstablisherFrame, and \p Callback uses it as
+/// checkSEHEmulatedFrameCallback allows.
+llvm::Error checkSEHEmulatedFrameArgument(const llvm::Value &Argument,
+                                          const llvm::Function &Callback,
+                                          const llvm::Function &Parent,
+                                          const ExceptionFunction &EH) {
+  auto Context = sehEmulatedFrameContext(Parent, EH);
+  if (!Context)
+    return Context.takeError();
+  const auto Address =
+      sehConstantAddress(Argument, Parent.getParent()->getDataLayout());
+  if (!Address || Address->first->stripPointerCasts() != Context->Frame.Slot)
+    return patchError("native SEH callback is not passed its parent's "
+                      "original EstablisherFrame in function " +
+                      Parent.getName());
+  return checkSEHEmulatedFrameCallback(*Context, Address->second, Callback,
+                                       Parent);
+}
+
+/// The source filter that \p Operand, the filter a catchpad of \p Parent
+/// names for source row \p Region, runs behind an adapter native IR wrote
+/// (sehFilterAdapterName); null when \p Operand is no adapter.  The adapter
+/// has no source address and does nothing but recover the parent's escaped
+/// emulated frame from the frame the runtime passes it (`llvm.eh.recoverfp`,
+/// `llvm.localrecover` of the frame the parent's one `llvm.localescape`
+/// names) and return what the source filter returns for the exception
+/// pointers and the emulated frame, which checkSEHEmulatedFrameCallback must
+/// take.
+llvm::Expected<const llvm::Function *>
+sehFilterAdapterSource(const llvm::Value &Operand, const llvm::Function &Parent,
+                       const ExceptionFunction &EH, uint32_t Region,
+                       const llvm::FunctionType &FilterType) {
+  const auto *Adapter =
+      llvm::dyn_cast<llvm::Function>(Operand.stripPointerCasts());
+  if (!Adapter ||
+      Adapter->getName() != sehFilterAdapterName(EH.CodeRange.Begin, Region))
+    return nullptr;
+  const auto Altered = [&]() {
+    return patchError("native SEH filter adapter was altered in function " +
+                      Parent.getName());
+  };
+  auto Identity = rewrite_source::getOriginalVA(*Adapter);
+  if (!Identity) {
+    llvm::consumeError(Identity.takeError());
+    return Altered();
+  }
+  if (*Identity || !Adapter->hasLocalLinkage() ||
+      Adapter->getFunctionType() != &FilterType ||
+      Adapter->getCallingConv() != llvm::CallingConv::C)
+    return Altered();
+  const auto Adapted = matchSEHFilterAdapter(*Adapter, Parent);
+  if (!Adapted || Adapted->Call->getFunctionType() != &FilterType ||
+      Adapted->Call->getCallingConv() != llvm::CallingConv::C ||
+      !hasExactSourceFunctionIdentity(
+          *Adapter, *Adapted->Call->getCalledOperand(),
+          EH.SEH->Scopes[Region].FilterOrFinallyVA, FilterType))
+    return Altered();
+  auto Context = sehEmulatedFrameContext(Parent, EH);
+  if (!Context)
+    return Context.takeError();
+  // The parent escapes its emulated frame, and the adapter recovers that.
+  if (Adapted->Frame != Context->Frame.Slot)
+    return Altered();
+  if (auto Error = checkSEHEmulatedFrameCallback(*Context, Adapted->Offset,
+                                                 *Adapted->Filter, Parent))
+    return std::move(Error);
+  return Adapted->Filter;
+}
+
+/// With its emulated frame passed to a callback, a store \p F makes in
+/// protected code is one the callback may read at the next fault there, and
+/// no plain load or store can raise to LLVM; so each memory access in such
+/// code keeps its order with faults (findSEHUnorderedAccess).  Protected code
+/// is every block the range markers leave a scope open at, from the entry
+/// and from each block a catchret resumes, over normal edges, and every
+/// block two paths enter with different scopes open.
+llvm::Error checkSEHEmulatedFrameOrdering(
+    const llvm::Function &F, const ExceptionFunction &EH,
+    const std::map<std::pair<uint32_t, uint32_t>, NativeEHRangeMarker>
+        &RangeEnters,
+    const std::map<std::pair<uint32_t, uint32_t>, NativeEHRangeMarker>
+        &RangeExits) {
+  std::map<const llvm::InvokeInst *, std::pair<uint32_t, bool>> Markers;
+  for (const auto &[Key, Marker] : RangeEnters)
+    Markers.emplace(Marker.Invoke, std::pair(Key.first, true));
+  for (const auto &[Key, Marker] : RangeExits)
+    Markers.emplace(Marker.Invoke, std::pair(Key.first, false));
+  std::map<const llvm::BasicBlock *, std::optional<std::set<uint32_t>>> Open;
+  llvm::SmallVector<const llvm::BasicBlock *, 16> Work;
+  const auto Seed = [&](const llvm::BasicBlock *Block) {
+    if (Open.emplace(Block, std::set<uint32_t>()).second)
+      Work.push_back(Block);
+  };
+  Seed(&F.getEntryBlock());
+  for (const llvm::BasicBlock &Block : F)
+    if (const auto *Return = llvm::dyn_cast_or_null<llvm::CatchReturnInst>(
+            Block.getTerminator()))
+      Seed(Return->getSuccessor());
+  while (!Work.empty()) {
+    const llvm::BasicBlock *Block = Work.pop_back_val();
+    std::optional<std::set<uint32_t>> Out = Open[Block];
+    const llvm::Instruction *Terminator = Block->getTerminator();
+    if (!Terminator)
+      return patchError("native SEH function has an unterminated block in "
+                        "function " +
+                        F.getName());
+    llvm::SmallVector<const llvm::BasicBlock *, 4> Next;
+    if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Terminator)) {
+      if (const auto Marker = Markers.find(Invoke);
+          Marker != Markers.end() && Out) {
+        if (Marker->second.second)
+          Out->insert(Marker->second.first);
+        else
+          Out->erase(Marker->second.first);
+      }
+      Next.push_back(Invoke->getNormalDest());
+    } else if (!llvm::isa<llvm::CatchSwitchInst, llvm::CatchReturnInst,
+                          llvm::CleanupReturnInst, llvm::ResumeInst>(
+                   Terminator)) {
+      llvm::append_range(Next, llvm::successors(Block));
+    }
+    for (const llvm::BasicBlock *Successor : Next) {
+      const auto [Known, Fresh] = Open.try_emplace(Successor, Out);
+      if (Fresh) {
+        Work.push_back(Successor);
+      } else if (Known->second && Known->second != Out) {
+        Known->second = std::nullopt;
+        Work.push_back(Successor);
+      }
+    }
+  }
+  std::vector<const llvm::BasicBlock *> Protected;
+  for (const auto &[Block, Scopes] : Open)
+    if (!Scopes || !Scopes->empty())
+      Protected.push_back(Block);
+  auto Frame = findSEHEmulatedFrame(F, EH.CodeRange.Begin);
+  if (!Frame)
+    return patchError(llvm::toString(Frame.takeError()));
+  if (!*Frame)
+    return patchError("native SEH emulated frame is missing in function " +
+                      F.getName());
+  if (findSEHUnorderedAccess(**Frame, Protected))
+    return patchError("native SEH function passes a callback its emulated "
+                      "frame but keeps a memory access in protected code out "
+                      "of order with faults in function " +
+                      F.getName());
+  return llvm::Error::success();
+}
+
 llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                                           const ExceptionFunction &EH,
                                           Arch TargetArch) {
@@ -783,6 +1101,11 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
   std::set<const llvm::InvokeInst *> FinallyCallbackInvokes;
   std::set<const llvm::InvokeInst *> ValidatedFinallyCallbackInvokes;
   std::set<va_t> SourceAddresses;
+  // A local unwind's handler calls, the protected-invoke anchors that follow
+  // them by the scope each call ends, and each call's address and scope.
+  std::vector<NativeEHLocalUnwindCall> LocalUnwindCalls;
+  std::map<const llvm::CallInst *, uint32_t> LocalUnwindProtections;
+  std::set<std::pair<va_t, uint32_t>> LocalUnwindEnds;
   std::map<std::pair<uint32_t, uint32_t>, NativeEHHandlerTarget> HandlerTargets;
   using RangeKey = std::pair<uint32_t, uint32_t>;
   std::map<RangeKey, NativeEHRangeMarker> RangeEnters;
@@ -790,6 +1113,9 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
   std::map<RangeKey, NativeEHRangeTarget> RangeEnterTargets;
   std::map<RangeKey, NativeEHRangeTarget> RangeExitTargets;
   std::set<const llvm::InvokeInst *> AnchoredRangeMarkers;
+  // Whether a callback is passed the parent's emulated frame, whose stores in
+  // protected code must then keep their order with a fault.
+  bool UsesEmulatedFrame = false;
 
   for (const llvm::BasicBlock &Block : F) {
     for (const llvm::Instruction &Instruction : Block) {
@@ -812,14 +1138,48 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
 
       // The runtime calls a local unwind's handler with its scan already
       // past the scope the handler ends, so the lowering places the call
-      // outside that scope.  Nothing has yet shown by execution that the
-      // rewritten table gives such a call the scopes the runtime gave it:
-      // output refuses it, whatever else the function holds.
+      // outside that scope and inside the scopes that hold it.  The call, or
+      // the protected-invoke anchor ahead of its invoke, follows the mark;
+      // each handler the unwind runs repeats the runtime call's address.
+      // The checks of the SEH table below place the call by its markers.
       if (Provenance->Role ==
-          windows_eh_md::NativeProvenanceRole::LocalUnwindHandlerCall)
-        return patchError("a local unwind's handler call has no certified "
-                          "output form in function " +
-                          F.getName());
+          windows_eh_md::NativeProvenanceRole::LocalUnwindHandlerCall) {
+        if (ExpectedModel != windows_eh_md::NativeProvenanceModel::SEH ||
+            Anchor->getNumOperandBundles() != 1 || Provenance->Clause != 0 ||
+            Provenance->AuxVA != 0 || Provenance->Flags != 0 ||
+            !EH.CodeRange.contains(Provenance->SourceVA) ||
+            !LocalUnwindEnds.emplace(Provenance->SourceVA, Provenance->Region)
+                 .second)
+          return patchError("malformed local-unwind handler-call provenance "
+                            "in function " +
+                            F.getName());
+        const llvm::Instruction *Next = nextSemanticInstruction(*Anchor);
+        const auto *NextCall = llvm::dyn_cast_or_null<llvm::CallInst>(Next);
+        const llvm::CallBase *HandlerCall = nullptr;
+        if (NextCall && NextCall->countOperandBundlesOfType(
+                            windows_eh_md::ProvenanceBundle) != 0) {
+          const auto Protection = parseNativeEHProvenance(*NextCall);
+          if (!Protection ||
+              Protection->Role !=
+                  windows_eh_md::NativeProvenanceRole::ProtectedInvoke ||
+              Protection->SourceVA != Provenance->SourceVA)
+            return patchError("local-unwind handler call has no exact "
+                              "protected invoke in function " +
+                              F.getName());
+          LocalUnwindProtections.emplace(NextCall, Provenance->Region);
+          HandlerCall = llvm::dyn_cast_or_null<llvm::InvokeInst>(
+              nextSemanticInstruction(*NextCall));
+        } else {
+          HandlerCall = NextCall;
+        }
+        if (!HandlerCall)
+          return patchError("local-unwind handler-call provenance is "
+                            "detached from its call in function " +
+                            F.getName());
+        LocalUnwindCalls.push_back(
+            {HandlerCall, Provenance->SourceVA, Provenance->Region});
+        continue;
+      }
       if (Provenance->Role ==
           windows_eh_md::NativeProvenanceRole::ProtectedInvoke) {
         if (Anchor->getNumOperandBundles() != 1 || Provenance->Clause != 0 ||
@@ -832,15 +1192,21 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
             nextSemanticInstruction(*Anchor));
         const llvm::Function *Callee =
             Invoke ? Invoke->getCalledFunction() : nullptr;
+        // A local unwind's handler calls share the runtime call's address.
+        const auto Ends = LocalUnwindProtections.find(Anchor);
+        const bool LocalUnwind = Ends != LocalUnwindProtections.end();
         if (!Invoke || (Callee && Callee->isIntrinsic()) ||
             !AnchoredInvokes.insert(Invoke).second ||
-            !SourceAddresses.insert(Provenance->SourceVA).second)
+            (!LocalUnwind &&
+             !SourceAddresses.insert(Provenance->SourceVA).second))
           return patchError(
               "protected invoke has invalid native WinEH provenance in "
               "function " +
               F.getName());
         ProtectedInvokes.push_back(
-            {Invoke, Provenance->SourceVA, Provenance->Region});
+            {Invoke, Provenance->SourceVA, Provenance->Region,
+             LocalUnwind ? std::optional<uint32_t>(Ends->second)
+                         : std::nullopt});
         continue;
       }
 
@@ -1041,22 +1407,8 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
       return patchError("native SEH region provenance is incomplete for "
                         "function " +
                         F.getName());
-    auto ParentRegion = [&](size_t Region) -> std::optional<uint32_t> {
-      const ExceptionAddressRange &Range = EH.SEH->Scopes[Region].GuardedRange;
-      std::optional<uint32_t> Parent;
-      uint64_t ParentSize = std::numeric_limits<uint64_t>::max();
-      for (size_t Candidate = 0; Candidate < EH.SEH->Scopes.size();
-           ++Candidate) {
-        const ExceptionAddressRange &CandidateRange =
-            EH.SEH->Scopes[Candidate].GuardedRange;
-        if (Candidate == Region || !CandidateRange.contains(Range) ||
-            CandidateRange.size() <= Range.size() ||
-            CandidateRange.size() >= ParentSize)
-          continue;
-        Parent = static_cast<uint32_t>(Candidate);
-        ParentSize = CandidateRange.size();
-      }
-      return Parent;
+    auto ParentRegion = [&](size_t Region) {
+      return sehParentScope(EH, Region);
     };
     auto ExpectedParentDestination =
         [&](size_t Region) -> const llvm::BasicBlock * {
@@ -1173,7 +1525,8 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
         const llvm::CatchPadInst &Pad = *Semantics->second.CatchPad;
         const auto ExpectedToken =
             windows_eh_semantics::getSEHScopeSemanticToken(
-                EH, TargetArch, static_cast<uint32_t>(I));
+                EH, TargetArch, static_cast<uint32_t>(I),
+                /*AllowRepeatedRanges=*/true);
         if (!ExpectedToken ||
             parseRewriteWinEHSemanticToken(
                 Pad, llvm::mc_rewrite::RewriteWinEHSemanticKind::SEHScope) !=
@@ -1191,7 +1544,16 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
           return patchError("native SEH catch funclet ABI was altered in "
                             "function " +
                             F.getName());
-        if (Scope.Kind == SEHScopeKind::CatchAll) {
+        auto Adapted =
+            Scope.Kind == SEHScopeKind::Filter
+                ? sehFilterAdapterSource(*Pad.getArgOperand(0), F, EH,
+                                         static_cast<uint32_t>(I), *FilterType)
+                : llvm::Expected<const llvm::Function *>(nullptr);
+        if (!Adapted)
+          return Adapted.takeError();
+        if (*Adapted) {
+          UsesEmulatedFrame = true;
+        } else if (Scope.Kind == SEHScopeKind::CatchAll) {
           if (!llvm::isa<llvm::ConstantPointerNull>(Pad.getArgOperand(0)))
             return patchError("native SEH catch-all filter was altered in "
                               "function " +
@@ -1222,7 +1584,8 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                           F.getName());
       const llvm::CleanupPadInst &Pad = *Semantics->second.CleanupPad;
       const auto ExpectedToken = windows_eh_semantics::getSEHScopeSemanticToken(
-          EH, TargetArch, static_cast<uint32_t>(I));
+          EH, TargetArch, static_cast<uint32_t>(I),
+          /*AllowRepeatedRanges=*/true);
       if (!ExpectedToken ||
           parseRewriteWinEHSemanticToken(
               Pad, llvm::mc_rewrite::RewriteWinEHSemanticKind::SEHScope) !=
@@ -1323,13 +1686,23 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                                  CallbackCall->getArgOperand(1) == LocalAddress;
       const bool HasDiscardedFrame =
           LocalAddressCount == 0 && IsProvablyDiscardedArgument(1);
+      // Without llvm.localaddress() in the pad, the argument must be the
+      // parent's emulated frame (checkSEHEmulatedFrameArgument).
+      const bool HasEmulatedFrame =
+          LocalAddressCount == 0 && !HasDiscardedFrame;
       if (!Funclet || Funclet->Inputs.size() != 1 ||
           Funclet->Inputs.front().get() != &Pad ||
           (!HasExactAbnormalTermination && !IsProvablyDiscardedArgument(0)) ||
-          (!HasExactFrame && !HasDiscardedFrame))
+          (!HasExactFrame && !HasDiscardedFrame && !HasEmulatedFrame))
         return patchError("native SEH finally callback ABI was altered in "
                           "function " +
                           F.getName());
+      if (HasEmulatedFrame) {
+        if (auto Error = checkSEHEmulatedFrameArgument(
+                *CallbackCall->getArgOperand(1), *CallbackFunction, F, EH))
+          return Error;
+        UsesEmulatedFrame = true;
+      }
       if (HasExactFrame && sehCallbackUsesOriginalFrame(*CallbackFunction, F))
         return patchError("native SEH finally callback uses its parent's "
                           "original frame, which output does not rebuild, in "
@@ -1346,20 +1719,126 @@ llvm::Error validateNativeLanguageIRGraph(const llvm::Function &F,
                         F.getName());
     for (const NativeEHProtectedInvoke &Protected : ProtectedInvokes) {
       std::optional<uint32_t> ExpectedRegion;
-      uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
-      for (size_t I = 0; I < EH.SEH->Scopes.size(); ++I) {
-        const ExceptionAddressRange &Range = EH.SEH->Scopes[I].GuardedRange;
-        if (!Range.contains(Protected.SourceVA) ||
-            Range.size() >= InnermostSize)
-          continue;
-        ExpectedRegion = static_cast<uint32_t>(I);
-        InnermostSize = Range.size();
+      if (Protected.Ended) {
+        // A local unwind's handler call stands in the scope that holds the
+        // one the handler ends.
+        if (*Protected.Ended < EH.SEH->Scopes.size())
+          ExpectedRegion = sehParentScope(EH, *Protected.Ended);
+      } else {
+        uint64_t InnermostSize = std::numeric_limits<uint64_t>::max();
+        for (size_t I = 0; I < EH.SEH->Scopes.size(); ++I) {
+          const ExceptionAddressRange &Range = EH.SEH->Scopes[I].GuardedRange;
+          if (!Range.contains(Protected.SourceVA) ||
+              Range.size() >= InnermostSize)
+            continue;
+          ExpectedRegion = static_cast<uint32_t>(I);
+          InnermostSize = Range.size();
+        }
       }
       if (!ExpectedRegion || Protected.Region != *ExpectedRegion)
         return patchError("protected invoke does not match its source SEH "
                           "scope in function " +
                           F.getName());
     }
+    if (!LocalUnwindCalls.empty()) {
+      // The asynchronous table follows the range markers, not the invokes'
+      // unwind edges: which scopes are open at each block of the function's
+      // own code, from its entry over normal edges.  A block two paths enter
+      // with different scopes open has no answer.
+      std::map<const llvm::InvokeInst *, std::pair<uint32_t, bool>> Markers;
+      for (const auto &[Key, Marker] : RangeEnters)
+        Markers.emplace(Marker.Invoke, std::pair(Key.first, true));
+      for (const auto &[Key, Marker] : RangeExits)
+        Markers.emplace(Marker.Invoke, std::pair(Key.first, false));
+      std::map<const llvm::BasicBlock *, std::optional<std::set<uint32_t>>>
+          Open;
+      llvm::SmallVector<const llvm::BasicBlock *, 16> Work{&F.getEntryBlock()};
+      Open.emplace(&F.getEntryBlock(), std::set<uint32_t>());
+      while (!Work.empty()) {
+        const llvm::BasicBlock *Block = Work.pop_back_val();
+        std::optional<std::set<uint32_t>> Out = Open[Block];
+        const llvm::Instruction *Terminator = Block->getTerminator();
+        llvm::SmallVector<const llvm::BasicBlock *, 4> Next;
+        if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Terminator)) {
+          if (const auto Marker = Markers.find(Invoke);
+              Marker != Markers.end() && Out) {
+            if (Marker->second.second)
+              Out->insert(Marker->second.first);
+            else
+              Out->erase(Marker->second.first);
+          }
+          Next.push_back(Invoke->getNormalDest());
+        } else if (!llvm::isa<llvm::CatchSwitchInst, llvm::CatchReturnInst,
+                              llvm::CleanupReturnInst, llvm::ResumeInst>(
+                       Terminator)) {
+          llvm::append_range(Next, llvm::successors(Block));
+        }
+        for (const llvm::BasicBlock *Successor : Next) {
+          const auto [Known, Fresh] = Open.try_emplace(Successor, Out);
+          if (Fresh) {
+            Work.push_back(Successor);
+          } else if (Known->second && Known->second != Out) {
+            Known->second = std::nullopt;
+            Work.push_back(Successor);
+          }
+        }
+      }
+      for (const NativeEHLocalUnwindCall &Unwind : LocalUnwindCalls) {
+        if (Unwind.Ended >= EH.SEH->Scopes.size())
+          return patchError("local-unwind handler call names an unknown "
+                            "scope in function " +
+                            F.getName());
+        const SEHScopeRecord &Scope = EH.SEH->Scopes[Unwind.Ended];
+        // The runtime call runs the scope's own termination handler, from
+        // inside the scope; the lift passed it the flag and the frame, as the
+        // pad passes its callback (LowToMedSEHLocalUnwind.cpp).
+        if (Scope.Kind != SEHScopeKind::Finally ||
+            !Scope.GuardedRange.contains(Unwind.SourceVA) ||
+            Unwind.Call->arg_size() != 2 ||
+            Unwind.Call->getFunctionType() != FinallyType ||
+            Unwind.Call->getCallingConv() != llvm::CallingConv::C ||
+            !hasExactSourceFunctionIdentity(F, *Unwind.Call->getCalledOperand(),
+                                            Scope.FilterOrFinallyVA,
+                                            *FinallyType))
+          return patchError("local-unwind handler call does not run its "
+                            "scope's termination handler in function " +
+                            F.getName());
+        // A handler that reads its frame is passed the emulated one, as its
+        // pad passes it.
+        const auto &Handler = *llvm::cast<llvm::Function>(
+            Unwind.Call->getCalledOperand()->stripPointerCasts());
+        if (sehCallbackUsesOriginalFrame(Handler, F)) {
+          if (auto Error = checkSEHEmulatedFrameArgument(
+                  *Unwind.Call->getArgOperand(1), Handler, F, EH))
+            return Error;
+          UsesEmulatedFrame = true;
+        }
+        // A call no scope holds stays a call; one a scope holds is that
+        // scope's protected invoke.
+        const std::optional<uint32_t> Holder = sehParentScope(EH, Unwind.Ended);
+        if (Holder.has_value() != llvm::isa<llvm::InvokeInst>(Unwind.Call))
+          return patchError("local-unwind handler call is not protected by "
+                            "the scope that holds it in function " +
+                            F.getName());
+        // The scopes open where the call stands are those that hold the
+        // scope it ends, which the call has left.
+        std::set<uint32_t> Holders;
+        for (std::optional<uint32_t> At = Holder; At;
+             At = sehParentScope(EH, *At))
+          if (!Holders.insert(*At).second)
+            break;
+        const auto Found = Open.find(Unwind.Call->getParent());
+        if (Found == Open.end() || !Found->second || *Found->second != Holders)
+          return patchError("local-unwind handler call stands outside the "
+                            "range markers of the scopes that hold it in "
+                            "function " +
+                            F.getName());
+      }
+    }
+    if (UsesEmulatedFrame)
+      if (auto Error =
+              checkSEHEmulatedFrameOrdering(F, EH, RangeEnters, RangeExits))
+        return Error;
     return ValidateUnwindDestinations();
   }
 
@@ -3155,7 +3634,8 @@ llvm::Expected<COFFExceptionDirectoryUpdate> prepareCOFFExceptionDirectory(
         if (ScopeIndex > std::numeric_limits<uint32_t>::max())
           return patchError("source SEH scope index exceeds token limits");
         const auto Token = windows_eh_semantics::getSEHScopeSemanticToken(
-            *SourceEH, TargetArch, static_cast<uint32_t>(ScopeIndex));
+            *SourceEH, TargetArch, static_cast<uint32_t>(ScopeIndex),
+            /*AllowRepeatedRanges=*/true);
         if (!Token ||
             !RequiredSemanticTokens.emplace(TokenIdentity(*Token), 1).second)
           return patchError(
@@ -3392,7 +3872,8 @@ llvm::Expected<COFFExceptionDirectoryUpdate> prepareCOFFExceptionDirectory(
     std::optional<SemanticToken> ExpectedToken;
     if (Record.Token.Kind == SemanticKind::SEHScope)
       ExpectedToken = windows_eh_semantics::getSEHScopeSemanticToken(
-          *SourceEH, TargetArch, Record.Token.Region);
+          *SourceEH, TargetArch, Record.Token.Region,
+          /*AllowRepeatedRanges=*/true);
     else if (Record.Token.Kind == SemanticKind::CxxCatch)
       ExpectedToken = windows_eh_semantics::getCxxCatchSemanticToken(
           *SourceEH, TargetArch, Record.Token.Region, Record.Token.Clause);
@@ -3480,8 +3961,35 @@ llvm::Expected<COFFExceptionDirectoryUpdate> prepareCOFFExceptionDirectory(
       else if (Scope.Kind == SEHScopeKind::CatchAll)
         ExpectedAction = 1;
       else {
-        const std::optional<uint32_t> FilterRVA =
-            ToRVA(Scope.FilterOrFinallyVA);
+        // A filter that reads its frame runs behind the adapter native IR
+        // wrote for its row, which the plan's gate took
+        // (sehFilterAdapterSource): the row names that adapter.
+        // The adapter has no source address and may stay private, so the
+        // compiler's receipt for its IR definition gives its address.
+        std::optional<uint32_t> FilterRVA = ToRVA(Scope.FilterOrFinallyVA);
+        const std::string AdapterName =
+            sehFilterAdapterName(SourceOriginal->second, Record.Token.Region);
+        if (const auto Adapter = llvm::find_if(
+                Compiled.SourceFunctionOwners,
+                [&](const llvm::mc_rewrite::RewriteSourceFunctionOwner &Owner) {
+                  return Owner.SourceFunction == AdapterName &&
+                         Owner.Kind ==
+                             llvm::mc_rewrite::RewriteSourceFunctionOwnerKind::
+                                 FunctionEntry;
+                });
+            Adapter != Compiled.SourceFunctionOwners.end()) {
+          FilterRVA = ToRVA(Adapter->OwnerVA);
+          auto AdapterOwner =
+              FilterRVA ? FindGeneratedSection(*FilterRVA, /*Size=*/1,
+                                               /*RequireXData=*/false,
+                                               "SEH filter adapter")
+                        : llvm::Expected<const CompiledSection *>(nullptr);
+          if (!AdapterOwner)
+            return AdapterOwner.takeError();
+          if (!*AdapterOwner || (*AdapterOwner)->Kind !=
+                                    llvm::mc_rewrite::RewriteSectionKind::Code)
+            return patchError("SEH filter adapter is not generated code");
+        }
         if (!FilterRVA)
           return patchError("source SEH filter exceeds PE RVA limits");
         ExpectedAction = encodeSEHCodeRVA(*FilterRVA);
@@ -3601,6 +4109,9 @@ llvm::Expected<COFFExceptionDirectoryUpdate> prepareCOFFExceptionDirectory(
     return patchError(
         "compiler EH semantic bindings do not close the generated language "
         "tables");
+  if (llvm::Error Err = checkGeneratedSEHScopeChains(
+          Update.GeneratedEHSemantics, FindSourceEH))
+    return Err;
   std::sort(Update.GeneratedEHSemantics.begin(),
             Update.GeneratedEHSemantics.end(),
             [](const COFFGeneratedEHSemanticBinding &A,
@@ -5099,6 +5610,10 @@ static llvm::Error validatePatchedCOFFImageImpl(
       if (Receipt.Role != COFFGeneratedLanguageOwnerRole::MappedRoot)
         return patchError(
             "final generated SEH owner has an invalid receipt role");
+      // LLVM repeats a range for each nesting level of its code, which the
+      // classification nests by row order; the rows were tied to the
+      // source's scope chains as they were bound
+      // (checkGeneratedSEHScopeChains), and they are those bindings' rows.
       const WindowsEHNativeSourceClassification Classification =
           classifyWindowsEHNativeSource(*Owner.EH, TargetArch,
                                         BinaryFormat::COFF,

@@ -27,6 +27,7 @@
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -484,6 +485,16 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
       return It->second.Slot;
     }
   }
+  return resolveFrameSlotQuery(V, RequireEntryStackPointer, Bindings,
+                               SharedProofBudget, Cacheable, QueryKey);
+}
+
+LLVM_ATTRIBUTE_NOINLINE std::optional<med_llvm::SlotKey>
+MedLLVMEmitter::resolveFrameSlotQuery(
+    const MedVar &V, bool RequireEntryStackPointer,
+    const ControlValueBindings *Bindings, size_t *SharedProofBudget,
+    bool Cacheable,
+    const std::pair<AddressProvenanceVarKey, bool> &QueryKey) const {
   // The walk reads the budget only to stop when it is spent, and once it is
   // spent every step fails and so does the query. A shared-budget walk thus
   // repeats with the same charge under any budget covering its nodes, and runs
@@ -732,28 +743,137 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
     return Result;
   };
 
-  // Cycle detection, rather than the syntactic length of an ESP/RSP
-  // round-trip chain, determines termination.  Real i386 prologues with
-  // callee-save pushes, a large local frame, and one outgoing call already
-  // exceed the legacy depth cap of 24.  Keep an aggregate work bound for
-  // hostile/degenerate DAGs while allowing any finite normal chain.
-  std::function<std::optional<med_llvm::SlotKey>(const MedVar &, int)> rec =
-      [&](const MedVar &Cur, int Depth) -> std::optional<med_llvm::SlotKey> {
-    if (Cur.isConst() || Cur.Size < PointerSize || !consumeNode())
-      return std::nullopt;
+  // Keep the depth-first proof order and shared node budget without consuming
+  // one native stack frame per input definition. Long, valid copy/offset chains
+  // can reach the full budget on Windows' default thread stack.
+  enum class WalkStage : uint8_t {
+    Enter,
+    Forward,
+    Offset,
+    FirstAdd,
+    SecondAdd,
+    NextPhi,
+    PhiArm
+  };
+  struct WalkFrame {
+    const MedVar &Var;
+    AddressProvenanceVarKey Key;
+    const MedOp *Def = nullptr;
+    const PhiNode *Phi = nullptr;
+    std::optional<size_t> Component;
+    std::optional<med_llvm::SlotKey> CommonArm;
+    size_t NextArm = 0;
+    int64_t Delta = 0;
+    WalkStage Stage = WalkStage::Enter;
+    bool Active = false;
+    bool CanRetry = false;
 
-    const AddressProvenanceVarKey Key = addressProvenanceVarKey(Cur);
+    explicit WalkFrame(const MedVar &Var)
+        : Var(Var), Key(addressProvenanceVarKey(Var)) {}
+  };
+  llvm::SmallVector<WalkFrame, 8> Walk;
+  Walk.emplace_back(V);
+  std::optional<med_llvm::SlotKey> Result;
+  auto finish = [&](std::optional<med_llvm::SlotKey> Proof) {
+    const WalkFrame &Frame = Walk.back();
+    if (Frame.Active) {
+      // Only positive proofs are independent of an active outer PHI. A failed
+      // arm must still leave its positive child proofs for a bound ADD retry.
+      if (Proof)
+        ProvenSlots.emplace(Frame.Key, *Proof);
+      Active.erase(Frame.Key);
+      if (Frame.Component)
+        --ActiveComponents[*Frame.Component];
+      RetryingAdditions -= Frame.CanRetry;
+    }
+    Result = Proof;
+    Walk.pop_back();
+  };
+  auto offsetResult = [&](int64_t Delta) -> std::optional<med_llvm::SlotKey> {
+    int64_t Offset = 0;
+    if (!Result || llvm::AddOverflow(Result->second, Delta, Offset))
+      return std::nullopt;
+    return med_llvm::SlotKey{Result->first, Offset};
+  };
+  while (!Walk.empty()) {
+    WalkFrame &Frame = Walk.back();
+    const MedVar &Cur = Frame.Var;
+    switch (Frame.Stage) {
+    case WalkStage::Forward:
+      finish(Result);
+      continue;
+    case WalkStage::Offset:
+      finish(offsetResult(Frame.Delta));
+      continue;
+    case WalkStage::FirstAdd:
+      if (auto Proof = offsetResult(Frame.Delta)) {
+        finish(Proof);
+        continue;
+      }
+      Frame.Stage = WalkStage::SecondAdd;
+      continue;
+    case WalkStage::SecondAdd:
+      if (Frame.Def->NumInputs >= 2 &&
+          (Frame.Def->Inputs[0].isConst() || Bindings)) {
+        if (auto Delta = signedDelta(Frame.Def->Inputs[0], Cur.Size)) {
+          Frame.Delta = *Delta;
+          Frame.Stage = WalkStage::Offset;
+          Walk.emplace_back(Frame.Def->Inputs[1]);
+          continue;
+        }
+      }
+      finish(std::nullopt);
+      continue;
+    case WalkStage::PhiArm:
+      if (!Result || (Frame.CommonArm && *Frame.CommonArm != *Result)) {
+        finish(std::nullopt);
+        continue;
+      }
+      Frame.CommonArm = Result;
+      Frame.Stage = WalkStage::NextPhi;
+      continue;
+    case WalkStage::NextPhi: {
+      if (Frame.NextArm == Frame.Phi->Args.size()) {
+        finish(Frame.CommonArm);
+        continue;
+      }
+      const auto &[PredId, Arg] = Frame.Phi->Args[Frame.NextArm++];
+      PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Frame.Phi, PredId);
+      if (Edge == PhiEdgeFeasibility::Infeasible)
+        continue;
+      if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
+        finish(std::nullopt);
+        continue;
+      }
+      if (auto Delta = affineDeltaTo(Arg, Cur, 0)) {
+        if (*Delta != 0)
+          finish(std::nullopt);
+        continue;
+      }
+      Frame.Stage = WalkStage::PhiArm;
+      Walk.emplace_back(Arg);
+      continue;
+    }
+    case WalkStage::Enter:
+      break;
+    }
+
+    if (Cur.isConst() || Cur.Size < PointerSize || !consumeNode()) {
+      finish(std::nullopt);
+      continue;
+    }
+    const AddressProvenanceVarKey &Key = Frame.Key;
     if (auto It = ProvenSlots.find(Key); It != ProvenSlots.end()) {
       ++AddressProvenanceWork.FrameSlotCacheHits;
-      return It->second;
+      finish(It->second);
+      continue;
     }
-    std::optional<size_t> Component;
     if (ReuseClosedDependencies && Generation == FrameReloadCacheGeneration &&
         FrameDependencyIndexFor == CurMedFunc) {
       if (auto It = FrameDependencyComponents.find(frameKey(Cur));
           It != FrameDependencyComponents.end())
-        Component = It->second;
-      if (Component && ActiveComponents[*Component] == 0 &&
+        Frame.Component = It->second;
+      if (Frame.Component && ActiveComponents[*Frame.Component] == 0 &&
           ProvenSlots.empty() && RetryingAdditions == 0) {
         const ClosedFrameSlotProof *Known = nullptr;
         if (Cacheable) {
@@ -782,150 +902,110 @@ std::optional<med_llvm::SlotKey> MedLLVMEmitter::canonicalFrameSlotKey(
           if (!Exhausted)
             AddressProvenanceWork.FrameSlotCacheHits += Known->WalkCacheHits;
           ++AddressProvenanceWork.FrameSlotCacheHits;
-          return std::nullopt;
+          finish(std::nullopt);
+          continue;
         }
       }
     }
-    if (!Active.insert(Key).second)
-      return std::nullopt;
-    if (Component)
-      ++ActiveComponents[*Component];
-    const MedOp *Def = lookupDef(Cur);
+    if (!Active.insert(Key).second) {
+      finish(std::nullopt);
+      continue;
+    }
+    Frame.Active = true;
+    if (Frame.Component)
+      ++ActiveComponents[*Frame.Component];
+    Frame.Def = lookupDef(Cur);
+    const MedOp *Def = Frame.Def;
     // With bindings, ADD may retry the other base after a failed first one.
     // That continuation could need slots the cached failed walk had visited.
-    const bool CanRetry = Bindings && Def && Def->Opcode == NdOp::INT_ADD &&
-                          Def->NumInputs >= 2 && !Def->Inputs[0].isConst() &&
-                          !Def->Inputs[1].isConst();
-    RetryingAdditions += CanRetry;
-    auto Cleanup = llvm::scope_exit([&] {
-      Active.erase(Key);
-      if (Component)
-        --ActiveComponents[*Component];
-      RetryingAdditions -= CanRetry;
-    });
-    auto Proof = [&]() -> std::optional<med_llvm::SlotKey> {
-      // A runtime definition or entry realignment is not an identity copy of
-      // the ordinary entry register. Keep the exact definition as the origin
-      // of derived slots, without inventing a displacement from entry SP.
-      if (Def && (Def->RegistrationRoot != MedOp::RegistrationRootKind::None ||
-                  isEntryStackRealignmentRoot(Cur)))
-        return RequireEntryStackPointer ? std::nullopt
-                                        : std::optional<med_llvm::SlotKey>(
-                                              {{Cur.Id, Cur.SSAVer}, 0});
-      // The lifter's entry register seeds are represented as self-copies.  They
-      // are roots, not definitions to recurse through.  Only the physical stack
-      // pointer is the preferred canonical frame origin.  A physical frame
-      // pointer with no provable definition is also an exact origin, but
-      // remains distinct from SP: only an explicit affine FP definition may
-      // unify them. This admits i386 live-in EBP slots without guessing their
-      // SP delta.
-      const bool IsSelfCopy = Def && Def->Opcode == NdOp::COPY &&
-                              Def->NumInputs >= 1 &&
-                              sameVar(Cur, Def->Inputs[0]);
-      const bool IsMergedValue = lookupPhi(Cur) != nullptr;
-      const bool IsEntryStackPointer =
-          Cur.Kind == MedVar::Reg && SpOff != 0 && Cur.RegOff == SpOff &&
-          Cur.Size >= PointerSize && !IsMergedValue && (!Def || IsSelfCopy);
-      const bool IsLiveInFramePointer =
-          Cur.Kind == MedVar::Reg && FpOff != 0 && Cur.RegOff == FpOff &&
-          Cur.Size >= PointerSize && !IsMergedValue && (!Def || IsSelfCopy);
-      if (IsEntryStackPointer || IsLiveInFramePointer) {
-        if (RequireEntryStackPointer && !IsEntryStackPointer)
-          return std::nullopt;
-        return med_llvm::SlotKey{{Cur.Id, Cur.SSAVer}, 0};
-      }
+    Frame.CanRetry = Bindings && Def && Def->Opcode == NdOp::INT_ADD &&
+                     Def->NumInputs >= 2 && !Def->Inputs[0].isConst() &&
+                     !Def->Inputs[1].isConst();
+    RetryingAdditions += Frame.CanRetry;
 
-      std::optional<med_llvm::SlotKey> Result;
-      if (const PhiNode *Phi = lookupPhi(Cur)) {
-        bool SawRootArm = false;
-        for (const auto &[PredId, Arg] : Phi->Args) {
-          PhiEdgeFeasibility Edge = classifyPhiIncomingEdge(*Phi, PredId);
-          if (Edge == PhiEdgeFeasibility::Infeasible)
-            continue;
-          if (Edge != PhiEdgeFeasibility::ProvenFeasible) {
-            return std::nullopt;
-          }
-          if (auto Delta = affineDeltaTo(Arg, Cur, 0)) {
-            if (*Delta != 0) {
-              return std::nullopt;
-            }
-            continue;
-          }
-          auto Arm = rec(Arg, Depth + 1);
-          if (!Arm || (Result && *Result != *Arm)) {
-            return std::nullopt;
-          }
-          Result = *Arm;
-          SawRootArm = true;
-        }
-        return SawRootArm ? Result : std::nullopt;
+    // Runtime definitions and realignments are distinct frame origins, not
+    // identity copies of the ordinary entry stack pointer.
+    if (Def && (Def->RegistrationRoot != MedOp::RegistrationRootKind::None ||
+                isEntryStackRealignmentRoot(Cur))) {
+      finish(RequireEntryStackPointer
+                 ? std::nullopt
+                 : std::optional<med_llvm::SlotKey>({{Cur.Id, Cur.SSAVer}, 0}));
+      continue;
+    }
+    const bool IsSelfCopy = Def && Def->Opcode == NdOp::COPY &&
+                            Def->NumInputs >= 1 && sameVar(Cur, Def->Inputs[0]);
+    Frame.Phi = lookupPhi(Cur);
+    const bool IsEntryStackPointer =
+        Cur.Kind == MedVar::Reg && SpOff != 0 && Cur.RegOff == SpOff &&
+        Cur.Size >= PointerSize && !Frame.Phi && (!Def || IsSelfCopy);
+    const bool IsLiveInFramePointer =
+        Cur.Kind == MedVar::Reg && FpOff != 0 && Cur.RegOff == FpOff &&
+        Cur.Size >= PointerSize && !Frame.Phi && (!Def || IsSelfCopy);
+    if (IsEntryStackPointer || IsLiveInFramePointer) {
+      // Keep an unproved live-in FP distinct from entry SP.
+      finish(RequireEntryStackPointer && !IsEntryStackPointer
+                 ? std::nullopt
+                 : std::optional<med_llvm::SlotKey>({{Cur.Id, Cur.SSAVer}, 0}));
+      continue;
+    }
+    if (Frame.Phi) {
+      Frame.Stage = WalkStage::NextPhi;
+      continue;
+    }
+    if (!Def || Def->NumInputs < 1) {
+      finish(std::nullopt);
+      continue;
+    }
+    switch (Def->Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+      // Neither side may discard any target pointer bits.
+      if (PointerSize != 0 && Def->Output.Size >= PointerSize &&
+          Def->Inputs[0].Size >= PointerSize) {
+        Frame.Stage = WalkStage::Forward;
+        Walk.emplace_back(Def->Inputs[0]);
+        continue;
       }
-
-      if (Def && Def->NumInputs >= 1) {
-        auto addOffset =
-            [&](const MedVar &Base,
-                int64_t Delta) -> std::optional<med_llvm::SlotKey> {
-          auto BaseKey = rec(Base, Depth + 1);
-          if (!BaseKey)
-            return std::nullopt;
-          int64_t Offset = 0;
-          if (llvm::AddOverflow(BaseKey->second, Delta, Offset))
-            return std::nullopt;
-          return med_llvm::SlotKey{BaseKey->first, Offset};
-        };
-        switch (Def->Opcode) {
-        case NdOp::COPY:
-        case NdOp::INT_ZEXT:
-        case NdOp::INT_SEXT:
-          // Width changes preserve a frame address only when neither side drops
-          // any target pointer bits.  This still admits 32->64 bookkeeping on a
-          // 32-bit target, while rejecting a lossy x86-64 low-register
-          // roundtrip.
-          if (PointerSize != 0 && Def->Output.Size >= PointerSize &&
-              Def->Inputs[0].Size >= PointerSize)
-            Result = rec(Def->Inputs[0], Depth + 1);
-          break;
-        case NdOp::SUBBYTES:
-          if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
-              Def->Inputs[1].ConstVal == 0 && PointerSize != 0 &&
-              Def->Output.Size >= PointerSize &&
-              Def->Inputs[0].Size >= PointerSize)
-            Result = rec(Def->Inputs[0], Depth + 1);
-          break;
-        case NdOp::INT_ADD:
-          if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
-            if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size))
-              Result = addOffset(Def->Inputs[0], *Delta);
-          }
-          if (!Result && Def->NumInputs >= 2 &&
-              (Def->Inputs[0].isConst() || Bindings)) {
-            if (auto Delta = signedDelta(Def->Inputs[0], Cur.Size))
-              Result = addOffset(Def->Inputs[1], *Delta);
-          }
-          break;
-        case NdOp::INT_SUB:
-          if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
-            if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
-              int64_t Negated = 0;
-              if (!llvm::SubOverflow(int64_t{0}, *Delta, Negated))
-                Result = addOffset(Def->Inputs[0], Negated);
-            }
-          }
-          break;
-        default:
-          break;
+      break;
+    case NdOp::SUBBYTES:
+      if (Def->NumInputs >= 2 && Def->Inputs[1].isConst() &&
+          Def->Inputs[1].ConstVal == 0 && PointerSize != 0 &&
+          Def->Output.Size >= PointerSize &&
+          Def->Inputs[0].Size >= PointerSize) {
+        Frame.Stage = WalkStage::Forward;
+        Walk.emplace_back(Def->Inputs[0]);
+        continue;
+      }
+      break;
+    case NdOp::INT_ADD:
+      Frame.Stage = WalkStage::SecondAdd;
+      if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
+        if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
+          Frame.Delta = *Delta;
+          Frame.Stage = WalkStage::FirstAdd;
+          Walk.emplace_back(Def->Inputs[0]);
         }
       }
-      return Result;
-    }();
-    // A failed slot walk may depend on an active outer PHI. Cache only closed
-    // positive proofs, so traversal order cannot poison a later independent
-    // query for the same value.
-    if (Proof)
-      ProvenSlots.emplace(Key, *Proof);
-    return Proof;
-  };
-  auto Result = rec(V, 0);
+      continue;
+    case NdOp::INT_SUB:
+      if (Def->NumInputs >= 2 && (Def->Inputs[1].isConst() || Bindings)) {
+        if (auto Delta = signedDelta(Def->Inputs[1], Cur.Size)) {
+          int64_t Negated = 0;
+          if (!llvm::SubOverflow(int64_t{0}, *Delta, Negated)) {
+            Frame.Delta = Negated;
+            Frame.Stage = WalkStage::Offset;
+            Walk.emplace_back(Def->Inputs[0]);
+            continue;
+          }
+        }
+      }
+      break;
+    default:
+      break;
+    }
+    finish(std::nullopt);
+  }
   const bool WalkFailed = !Result;
   const uint64_t WalkCacheHits =
       AddressProvenanceWork.FrameSlotCacheHits - CacheHitsBefore;

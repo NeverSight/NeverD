@@ -49,6 +49,7 @@
 
 #include "neverd/backend/codegen/CodeGen.h" // Codegen, Arch, BinaryFormat (via Common.h)
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
@@ -130,11 +131,7 @@ void ensureTargets() {
   static bool Done = false;
   if (Done)
     return;
-  llvm::InitializeAllTargetInfos();
-  llvm::InitializeAllTargets();
-  llvm::InitializeAllTargetMCs();
-  llvm::InitializeAllAsmParsers();
-  llvm::InitializeAllAsmPrinters();
+  neverd::initializeLLVMCodegenTargets();
   Done = true;
 }
 

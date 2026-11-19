@@ -145,6 +145,54 @@ TEST(CallStackRange, DecodedSegmentOverridesRetainTheStoredRegister) {
   }
 }
 
+TEST(CallStackRange, HomeSpillsAnSEHCallbackCanReadAreArgumentReads) {
+  // An MSVC filter reads a parameter its parent only spills to its home slot:
+  // the runtime enters the filter with the parent's EstablisherFrame, and the
+  // home slots lie at fixed offsets from that frame.  A constant filter
+  // (CatchAll) runs no code.
+  enum class Scope { None, CatchAll, Filter, Finally };
+  for (const Scope Kind :
+       {Scope::None, Scope::CatchAll, Scope::Filter, Scope::Finally}) {
+    SCOPED_TRACE(unsigned(Kind));
+    auto Image = image();
+    Segment Code;
+    Code.VA = Image.Entry = 0x1000;
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Code.Data = {0x89, 0x54, 0x24, 0x10, // mov [rsp+16],edx
+                 0x31, 0xc0, 0xc3};      // xor eax,eax; ret
+    Code.Size = Code.FileSz = Code.Data.size();
+    Image.Segments.push_back(std::move(Code));
+    if (Kind != Scope::None) {
+      ExceptionFunction EH;
+      EH.CodeRange = {0x1000, 0x1007};
+      EH.Encoding = ExceptionEncoding::X64UnwindV1;
+      EH.UnwindVersion = 1;
+      EH.Personality = ExceptionPersonality::CSpecificHandler;
+      EH.SEH.emplace();
+      SEHScopeRecord Record;
+      Record.GuardedRange = {0x1004, 0x1006};
+      Record.Kind = Kind == Scope::CatchAll ? SEHScopeKind::CatchAll
+                    : Kind == Scope::Filter ? SEHScopeKind::Filter
+                                            : SEHScopeKind::Finally;
+      Record.FilterOrFinallyVA = Kind == Scope::CatchAll ? 1 : 0x2000;
+      Record.HandlerVA = Kind == Scope::Finally ? 0x2000 : 0x1006;
+      EH.SEH->Scopes.push_back(Record);
+      Image.ExceptionMetadata.Functions.push_back(std::move(EH));
+      Image.ExceptionMetadata.rebuildIndex();
+    }
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Image));
+    const auto Function = CFGBuilder().build(Image, Decode, Image.Entry);
+    ASSERT_TRUE(Function.hasCompleteLiftCoverage());
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Solved =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, 0xF07, 0x306);
+    const bool CallbackReads = Kind == Scope::Filter || Kind == Scope::Finally;
+    EXPECT_EQ(Solved.EntryReads.at(Function.Entry)[x86reg::RDX / 8],
+              CallbackReads ? 4u : 0u);
+  }
+}
+
 TEST(CallStackRange, NarrowHomeReadsRetainTheirIncomingBytes) {
   for (const unsigned Bytes : {1u, 2u, 4u, 8u}) {
     SCOPED_TRACE(Bytes);

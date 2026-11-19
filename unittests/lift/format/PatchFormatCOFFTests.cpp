@@ -298,6 +298,135 @@ TEST_F(PatchCOFF_X64, RejectsGeneratedSEHHandlerInsideGuardedRange) {
             "failed output checks: invalid-seh-scope");
 }
 
+// LLVM writes an SEH row for each nesting level of the code in a range, so
+// two scopes nested over one call repeat its range.  Each row binds to the
+// source scope it stands for, and __C_specific_handler runs the rows over an
+// address in table order: over the same code the inner scope's row comes
+// first and its parent's row covers it.
+TEST_F(PatchCOFF_X64, GeneratedSEHRowsFollowTheSourceScopeChain) {
+  auto PE = fs::path(TEST_OBJ_DIR) / "test_patch_coff_seh_nested.exe";
+  if (!fs::exists(PE))
+    GTEST_SKIP() << "nested COFF SEH executable not built";
+
+  auto OriginalOrErr = loadBinary(PE);
+  ASSERT_TRUE(static_cast<bool>(OriginalOrErr))
+      << llvm::toString(OriginalOrErr.takeError());
+  const BinaryImage &Original = *OriginalOrErr;
+  const ExceptionFunction *OriginalSEH = nullptr;
+  for (const ExceptionFunction &EH : Original.ExceptionMetadata.Functions)
+    if (EH.Kind == RuntimeFunctionKind::Primary &&
+        EH.Personality == ExceptionPersonality::CSpecificHandler) {
+      OriginalSEH = &EH;
+      break;
+    }
+  ASSERT_NE(OriginalSEH, nullptr);
+  ASSERT_TRUE(OriginalSEH->SEH.has_value());
+  ASSERT_EQ(OriginalSEH->SEH->Scopes.size(), 2u);
+  ASSERT_TRUE(OriginalSEH->SEH->Scopes[1].GuardedRange.contains(
+      OriginalSEH->SEH->Scopes[0].GuardedRange));
+  ASSERT_GT(OriginalSEH->PersonalityVA, Original.Base);
+
+  std::ifstream Input(PE, std::ios::binary);
+  ASSERT_TRUE(Input.good());
+  const std::vector<uint8_t> Bytes(std::istreambuf_iterator<char>(Input), {});
+  ASSERT_FALSE(Bytes.empty());
+  COFFPatcher Patcher;
+  const va_t NewSectionVA = Patcher.plannedExecSegmentVA(Bytes, Arch::X64);
+  ASSERT_GT(NewSectionVA, Original.Base);
+  const uint32_t NewSectionRVA =
+      static_cast<uint32_t>(NewSectionVA - Original.Base);
+  const uint32_t PersonalityRVA =
+      static_cast<uint32_t>(OriginalSEH->PersonalityVA - Original.Base);
+  std::array<std::optional<llvm::mc_rewrite::RewriteWinEHSemanticToken>, 2>
+      Tokens;
+  for (uint32_t Scope = 0; Scope < Tokens.size(); ++Scope) {
+    Tokens[Scope] = windows_eh_semantics::getSEHScopeSemanticToken(
+        *OriginalSEH, Arch::X64, Scope);
+    ASSERT_TRUE(Tokens[Scope].has_value());
+  }
+
+  // A generated row: the source scope it stands for, and its range and
+  // handler as offsets in the new code.
+  struct Row {
+    uint32_t Scope;
+    uint32_t Begin;
+    uint32_t End;
+    uint32_t Handler;
+  };
+  constexpr uint32_t TableAt = 0x3c;
+  auto Prepare = [&](llvm::ArrayRef<Row> Rows) {
+    CompiledImage Compiled;
+    Compiled.Bytes.resize(TableAt + Rows.size() * 4 * sizeof(uint32_t), 0);
+    Compiled.BaseVA = NewSectionVA;
+    Compiled.TargetArch = Arch::X64;
+    Compiled.Format = BinaryFormat::COFF;
+    Compiled.PointerWidth = 8;
+    Compiled.Success = true;
+    Compiled.FunctionOwnerAddrs.emplace("seh.owner", NewSectionVA);
+    Compiled.FunctionRanges.push_back({1, "seh.owner", NewSectionVA,
+                                       "seh.begin", NewSectionVA, "seh.end",
+                                       NewSectionVA + 0x20});
+    Compiled.SourceFunctionOwners.push_back(
+        {"source.seh", "seh.owner", NewSectionVA});
+    Compiled.SourceFunctionOriginalVAs.emplace("source.seh",
+                                               OriginalSEH->CodeRange.Begin);
+    for (size_t I = 0; I < Rows.size(); ++I) {
+      const uint32_t At = TableAt + uint32_t(I) * 4 * sizeof(uint32_t);
+      const std::string Suffix = "." + std::to_string(I);
+      Compiled.WinEHSemanticRecords.push_back(
+          {*Tokens[Rows[I].Scope], "source.seh", "seh.owner", NewSectionVA,
+           "seh.scope.table", NewSectionVA + TableAt, NewSectionVA + At,
+           4 * sizeof(uint32_t), "seh.scope.begin" + Suffix,
+           NewSectionVA + Rows[I].Begin, "seh.scope.end" + Suffix,
+           NewSectionVA + Rows[I].End, "seh.handler" + Suffix,
+           NewSectionVA + Rows[I].Handler});
+      writeLE<uint32_t>(Compiled.Bytes.data() + At,
+                        NewSectionRVA + Rows[I].Begin);
+      writeLE<uint32_t>(Compiled.Bytes.data() + At + 4,
+                        NewSectionRVA + Rows[I].End);
+      writeLE<uint32_t>(Compiled.Bytes.data() + At + 8, 1);
+      writeLE<uint32_t>(Compiled.Bytes.data() + At + 12,
+                        NewSectionRVA + Rows[I].Handler);
+    }
+    Compiled.Sections.push_back({".text", 0, NewSectionVA, 0x20, 16,
+                                 llvm::mc_rewrite::RewriteSectionKind::Code,
+                                 true});
+    Compiled.Sections.push_back(
+        {".pdata", 0x20, NewSectionVA + 0x20, 0x0c, 4,
+         llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData, true});
+    Compiled.Sections.push_back(
+        {".xdata", 0x30, NewSectionVA + 0x30,
+         uint32_t(Compiled.Bytes.size() - 0x30), 4,
+         llvm::mc_rewrite::RewriteSectionKind::ReadOnlyData, true});
+    writeLE<uint32_t>(Compiled.Bytes.data() + 0x20, NewSectionRVA);
+    writeLE<uint32_t>(Compiled.Bytes.data() + 0x24, NewSectionRVA + 0x20);
+    writeLE<uint32_t>(Compiled.Bytes.data() + 0x28, NewSectionRVA + 0x30);
+    Compiled.Bytes[0x30] = 1 | (llvm::Win64EH::UNW_ExceptionHandler << 3);
+    writeLE<uint32_t>(Compiled.Bytes.data() + 0x34, PersonalityRVA);
+    writeLE<uint32_t>(Compiled.Bytes.data() + 0x38, uint32_t(Rows.size()));
+    const std::array<va_t, 1> Entries{{OriginalSEH->CodeRange.Begin}};
+    const std::array<std::pair<va_t, va_t>, 1> Mapping{
+        {{OriginalSEH->CodeRange.Begin, NewSectionVA}}};
+    auto Update = prepareCOFFExceptionDirectory(
+        Bytes, Original, Compiled, Entries, Mapping, NewSectionVA, Arch::X64);
+    return Update ? std::string() : llvm::toString(Update.takeError());
+  };
+  constexpr const char *OffChain = "coff exception patch: generated SEH rows "
+                                   "do not follow the source scope chain of "
+                                   "their code";
+  // The inner scope's row, then its parent's over the same call, then the
+  // parent's alone over the code around it.
+  EXPECT_EQ(Prepare({{0, 0x04, 0x0c, 0x10},
+                     {1, 0x04, 0x0c, 0x18},
+                     {1, 0x00, 0x04, 0x18},
+                     {1, 0x0c, 0x0e, 0x18}}),
+            "");
+  // The parent's row first: a scan runs the outer handler before the inner.
+  EXPECT_EQ(Prepare({{1, 0x04, 0x0c, 0x18}, {0, 0x04, 0x0c, 0x10}}), OffChain);
+  // The parent's rows leave the call out: its handler never sees the call.
+  EXPECT_EQ(Prepare({{0, 0x04, 0x0c, 0x10}, {1, 0x00, 0x04, 0x18}}), OffChain);
+}
+
 TEST_F(PatchCOFF_X64, RequiresExactGeneratedLanguageEHRuntimeOwnerMapping) {
   auto PE = fs::path(TEST_OBJ_DIR) / "test_patch_coff_seh_guard.exe";
   if (!fs::exists(PE))

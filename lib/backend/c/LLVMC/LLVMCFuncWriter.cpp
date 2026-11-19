@@ -42,6 +42,7 @@
 #include "neverd/backend/llvm/SourceFrameBytes.h"
 #include "neverd/backend/llvm/SourceImageBytes.h"
 #include "neverd/backend/llvm/WindowsEHMetadata.h"
+#include "neverd/backend/llvm/WindowsSEHEmulatedFrame.h"
 #include "neverd/backend/llvm/X86/LLVMX86AddressSpaces.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/libc/LibCNames.h"
@@ -86,6 +87,21 @@
 #include <vector>
 
 namespace neverd {
+
+/// The block \p Dest resumes the function at when it is the catch a printed-C
+/// `__finally` pad unwinds to for its handler's local unwind
+/// (windows_eh_md::HandlerResume), or null.
+const llvm::BasicBlock *llvmcHandlerResumeTarget(const llvm::BasicBlock *Dest) {
+  const auto *Switch =
+      Dest ? llvm::dyn_cast<llvm::CatchSwitchInst>(Dest->getTerminator())
+           : nullptr;
+  if (!Switch || !Switch->getMetadata(windows_eh_md::HandlerResume) ||
+      Switch->getNumHandlers() != 1)
+    return nullptr;
+  const auto *Ret = llvm::dyn_cast<llvm::CatchReturnInst>(
+      (*Switch->handler_begin())->getTerminator());
+  return Ret ? Ret->getSuccessor() : nullptr;
+}
 
 namespace {
 #define C_STACK_TEXT(Name, Text) constexpr llvm::StringLiteral Name = Text;
@@ -1373,7 +1389,8 @@ LLVMCWriter::collectWindowsEHWraps(const llvm::Function &Fn) {
   std::vector<const llvm::CleanupPadInst *> Cleanups;
   for (const llvm::BasicBlock &BB : Fn) {
     if (const auto *CS =
-            llvm::dyn_cast<llvm::CatchSwitchInst>(BB.getTerminator()))
+            llvm::dyn_cast<llvm::CatchSwitchInst>(BB.getTerminator());
+        CS && !llvmcHandlerResumeTarget(&BB))
       Switches.push_back(CS);
     for (const llvm::Instruction &Inst : BB)
       if (const auto *Pad = llvm::dyn_cast<llvm::CleanupPadInst>(&Inst))
@@ -10190,6 +10207,9 @@ struct SEHBlockClause {
   llvm::SmallVector<const llvm::BasicBlock *, 4> CleanupBody;
   bool LinearCleanup = true;
   const llvm::BasicBlock *Unwind = nullptr;
+  /// The block a `__finally`'s handler resumes this function at by its local
+  /// unwind on every way out (windows_eh_md::HandlerResume).
+  const llvm::BasicBlock *ResumeTo = nullptr;
 };
 
 struct SEHBlockScopes {
@@ -10212,6 +10232,9 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
       if (!isEHTokenNone(Switch->getParentPad()) ||
           Switch->getNumHandlers() != 1)
         return std::nullopt;
+      // A handler's resume is the end of its `__finally`, no clause.
+      if (llvmcHandlerResumeTarget(&BB))
+        continue;
       auto &Clause = Plan.Clauses[&BB];
       Clause.Dispatch = Switch;
       Clause.Pad = firstCatchPad(*Switch);
@@ -10302,15 +10325,24 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
       Clause.CleanupBody.push_back(BB);
       const auto *Term = BB->getTerminator();
       if (const auto *Ret = llvm::dyn_cast<llvm::CleanupReturnInst>(Term)) {
-        if (Ret->getCleanupPad() != Clause.Cleanup ||
-            !SetUnwind(Ret->getUnwindDest()))
+        const llvm::BasicBlock *Unwind = Ret->getUnwindDest();
+        if (const llvm::BasicBlock *Resume = llvmcHandlerResumeTarget(Unwind)) {
+          Clause.ResumeTo = Resume;
+          Unwind = llvm::cast<llvm::CatchSwitchInst>(Unwind->getTerminator())
+                       ->getUnwindDest();
+        }
+        if (Ret->getCleanupPad() != Clause.Cleanup || !SetUnwind(Unwind))
           return std::nullopt;
         continue;
       }
       if (llvm::isa<llvm::UnreachableInst>(Term))
         continue;
       if (const auto *Invoke = llvm::dyn_cast<llvm::InvokeInst>(Term)) {
-        if (!SetUnwind(Invoke->getUnwindDest()))
+        const llvm::BasicBlock *Unwind = Invoke->getUnwindDest();
+        if (llvmcHandlerResumeTarget(Unwind))
+          Unwind = llvm::cast<llvm::CatchSwitchInst>(Unwind->getTerminator())
+                       ->getUnwindDest();
+        if (!SetUnwind(Unwind))
           return std::nullopt;
         Work.push_back(Invoke->getNormalDest());
       } else if (llvm::isa<llvm::UncondBrInst, llvm::CondBrInst,
@@ -10353,9 +10385,15 @@ std::optional<SEHBlockScopes> planSEHBlockScopes(const llvm::Function &Fn) {
   llvm::SmallVector<std::pair<const llvm::BasicBlock *, SEHBlockScopes::Scope>,
                     16>
       Work{{&Fn.getEntryBlock(), {}}};
-  for (const auto &[Entry, Clause] : Plan.Clauses)
+  // A handler's code, and the code a `__finally`'s handler resumes the
+  // function at (which the lift took only outside every scope), stand
+  // outside the scopes.
+  for (const auto &[Entry, Clause] : Plan.Clauses) {
     if (Clause.Handler)
       Work.emplace_back(Clause.Handler, SEHBlockScopes::Scope{});
+    if (Clause.ResumeTo)
+      Work.emplace_back(Clause.ResumeTo, SEHBlockScopes::Scope{});
+  }
   while (!Work.empty()) {
     auto [BB, Incoming] = Work.pop_back_val();
     auto [It, Inserted] = Plan.Protected.emplace(BB, Incoming);
@@ -10886,8 +10924,9 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                              ? llvm::dyn_cast<llvm::Function>(
                                    Pad->getArgOperand(0)->stripPointerCasts())
                              : nullptr;
+    // A filter adapter passes the parent's emulated frame instead.
     return Filter && !Filter->hasFnAttribute(LLVMSourceSEHFilter) &&
-           Filter->arg_size() == 2;
+           !isSEHFilterAdapter(*Filter) && Filter->arg_size() == 2;
   };
   if (SEHParentFrameName.empty() && (!EHWraps.empty() || BlockScopes))
     for (const llvm::BasicBlock &BB : Fn)
@@ -11610,6 +11649,13 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
             if (Next && !AfterCxxThrow)
               writePhiCopies(CleanupBB, Next, Indent + 2);
           }
+        }
+        // The handler's local unwind resumes the function there, as a
+        // `goto` out of a `__finally` does.
+        if (Clause.ResumeTo) {
+          emitIndent(Indent + 2);
+          OS << "goto " << blockLabel(Clause.ResumeTo) << "; "
+             << LLVMCHandlerResumeNote << "\n";
         }
         emitIndent(Indent + 1);
         OS << "}\n";

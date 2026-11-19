@@ -85,6 +85,19 @@ struct SEHExceptionInfo {
   std::vector<SEHScopeRecord> Scopes;
 };
 
+/// Whether \p SEH runs a callback that the runtime enters with its function's
+/// EstablisherFrame: a filter or a termination handler.  Such a callback can
+/// read any byte of that frame at a fixed offset from it, including the home
+/// slots above the return address.
+inline bool sehCallbacksReceiveFrame(const SEHExceptionInfo &SEH) {
+  for (const SEHScopeRecord &Scope : SEH.Scopes)
+    if ((Scope.Kind == SEHScopeKind::Filter ||
+         Scope.Kind == SEHScopeKind::Finally) &&
+        Scope.FilterOrFinallyVA)
+      return true;
+  return false;
+}
+
 struct CxxUnwindAction {
   int32_t ToState = -1;
   va_t ActionVA = 0;

@@ -1303,9 +1303,9 @@ This view also takes a table with several rows over one range, which MSVC and
 clang-cl write for a `__try` whose body is exactly another `__try`. The rows
 nest by their order, the earlier inside the later, because
 `__C_specific_handler` scans the table from its first row; the scope identity
-(`getSEHScopeSemanticToken`) covers such a table only on request. Native
-output, where the code generator writes the table again, still leaves these
-functions as metadata. A local unwind reaches this view as MedIR spells it, a
+(`getSEHScopeSemanticToken`) covers such a table only on request, which native
+IR and output make as printed C does. Native IR lowers these functions with
+the same chain of pads. A local unwind reaches this view as MedIR spells it, a
 call of each termination handler at the runtime call's address
 (`MedSEHLocalUnwindExit`). The runtime calls the handler of row k with its
 scan already past k, so what that handler raises meets only the later rows
@@ -1316,26 +1316,122 @@ exit's address must be its handlers, in its order, with no other call after
 them in the block; anything else leaves the function unlowered. Native IR
 places these calls the same way and marks each with a provenance role of its
 own (`LocalUnwindHandlerCall`: the runtime call's address and the row the
-handler ends). The output gate refuses that role by name: its rule for a
-protected call is the innermost source scope at the call's address, which is
-the scope such a call has just left, and no execution has yet shown that the
-rewritten table gives the call the scopes the runtime gave it.
-The gate also refuses a function whose termination handler or filter uses
-the EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). The pad
-passes a termination handler `llvm.localaddress()` and the runtime passes a
-filter the frame of the function the code generator wrote; a callback lifted
-from the image reads its parent's locals at the offsets the original frame
-gave them, where that frame holds something else, and such a rewrite ran and
-read the wrong bytes. A helper a compiler outlined reads them through
-`llvm.localrecover`, after `llvm.eh.recoverfp` in a filter, which that frame
-is for, and stays accepted. Keeping the argument in a home (an alloca only
-loads and stores name, as a lifted register is) or in the callback's own
-frame is no use of it until a load reads it back into one, or the frame's
-address leaves the callback; a callback whose body the module does not hold
-may do anything. The lifted parent does keep its original frame (the `frame`
-alloca and `rsp_init`), and a local unwind's handler calls in its body already
-pass the frame's address there; an output form that passes a pad's callback
-that address as well does not exist yet.
+handler ends). The output gate places such a call by the row it ends, not by
+the innermost scope at its address, which is the scope the call has just
+left: the call runs that row's termination handler from inside the row, with the
+flag and frame the lift gave it; a call no row holds stays a plain call, and one a
+row holds is the protected invoke of the row that holds it immediately; each
+handler of one unwind repeats the runtime call's address. The asynchronous
+table follows the range markers rather than the invokes' unwind edges, so the
+gate also walks the parent's normal edges from its entry and requires the
+markers to leave open at the call exactly the rows that hold the row it ends;
+a block two paths enter with different rows open has no answer and refuses.
+Rewritten MSVC x64 builds (`/O1` and `/O2`, with and without `/GS`) of a
+`goto` that leaves one or two `__finally` scopes inside a `__try`/`__except`,
+whose termination handlers may raise, print the original's transcript under
+wine: each form lifted with and without optimization and patched in section
+and in-place mode, with and without optimization (64 runs). Wine's
+transcripts of the originals equal Windows', and each wrong placement tried
+changed the transcript.
+LLVM writes an SEH row for each nesting level of the code in a range, so
+scopes nested over the same code repeat its range in the table the code
+generator writes. Output classifies that table as it classifies a source
+table, rows over one range nesting by their order, and binding ties each row
+to the source scope it stands for (`checkGeneratedSEHScopeChains`): in table
+order the next row over each row's range, or over a range holding it, stands
+for the parent of that row's scope (`sehParentScope`), and no later row holds
+the range of a scope without one, so the rows a scan meets at any address are
+the source's scope chain there, inner first.
+A callback lifted from the image reads its parent's locals at the offsets
+the original frame gave them, `EstablisherFrame + k`. The lifted parent keeps
+that frame: the `frame` alloca, whose byte at `rsp_init` stands for the entry
+stack pointer. Native IR passes a termination handler that reads its frame
+(MedIR: a value derived from its second argument register reaches memory, a
+call, a branch or the return) the address there of the frame the runtime gave
+the original: the certified bytes below the entry stack pointer
+(`SEHTerminationFrameBytes`); with a frame register, the bytes allocated
+before `UWOP_SET_FPREG`, where RtlVirtualUnwind puts the EstablisherFrame. It
+marks the alloca with its owner and entry byte
+(`neverd.windows.seh.frame`), and makes every load, store, atomic and memory
+intrinsic in protected code volatile, except a register home's, as clang's
+`-EHa` does for a `__try`: the callback sees at a fault every store made
+before it, and LLVM takes no plain load or store for one that can raise. A
+load of a global the image maps cannot fault and stays as it was. A
+local unwind's handler calls in the body pass the same address. The runtime
+calls a filter with the frame of the function the code generator wrote, so a
+filter that reads its frame runs behind an adapter native IR writes
+(`sehFilterAdapterName`, internal, with no source address): it recovers the
+frame the parent escapes with `llvm.localescape` (`llvm.eh.recoverfp`, then
+`llvm.localrecover`) and returns what the source filter returns for the
+exception pointers and the emulated frame. The adapter is `optnone` so that
+output finds that exact shape; the guard that turns interprocedural passes off
+in a module with an `optnone` definition (`registerOptNoneInterproceduralGuard`)
+leaves adapters out, since only the runtime takes an adapter's address. Any other callback keeps
+`llvm.localaddress()`, and the gate refuses one that uses the
+EstablisherFrame it is passed (`sehCallbackUsesOriginalFrame`). A helper a
+compiler outlined
+reads its parent's locals through `llvm.localrecover`, after
+`llvm.eh.recoverfp` in a filter, which that frame is for, and stays accepted.
+Keeping the argument in a home (an alloca only loads and stores name, as a
+lifted register is) or in the callback's own frame is no use of it until a
+load reads it back into one, or the frame's address leaves the callback; a
+callback whose body the module does not hold may do anything.
+The gate takes the emulated frame only as it rebuilds it
+(`checkSEHEmulatedFrameArgument`). It finds the marked alloca and reads the
+source's unwind codes again (`decodeX64UnwindFrame`, which the lift's frame
+proof shares), and the argument must be that alloca at the entry byte less
+the EstablisherFrame's bytes. A filter's adapter must be exactly that
+recovery, of the alloca the parent's one `llvm.localescape` names, the
+address computed from it and the call of the source filter
+(`sehFilterAdapterSource`). The adapter has no source address and may stay
+private, so the filter row is bound to the address the compiler's receipt
+gives its definition (`CompiledImage::SourceFunctionOwners`), and in-place
+mode, which places only functions with a source address, hands such a module
+to the section patch. Native IR printed as LLVM C spells an adapter as the
+call of the filter it adapts with the parent's frame object at the emulated
+frame's offset, and prints no function for the adapter itself. The source view
+that LLVM C prints by default passes the emulated frame the same way: a
+termination handler that reads its frame gets the address in it, and a filter
+that reads its frame is printed as a call with that address. The source view
+makes the same protected accesses volatile: the optimizer runs before the C
+is printed, and no compiler of that C brings back a store it merged or
+dropped. Over the 98 corpus files it touches, 925 more frame store statements
+print (volatile also keeps merged and wide stores apart, so not every one is a
+store the optimizer would have removed), with clang errors and
+unrecovered-value placeholders unchanged and 1.5% more text. Only native IR marks the frame for the output
+gate. Over the 384 Windows
+EH corpus files, 98 LLVM C files change: lines that name the frame
+`llvm.localaddress` gives (`seh_parent_frame`) fall from 6,470 to 879, and
+clang errors (98) and unrecovered-value placeholders (741) stay the same. The callback must reach the frame only by loads
+and stores at fixed offsets (`collectSEHCallbackFrameAccesses`), and only
+bytes the lifted parent keeps as the original did: its fixed frame and the
+argument homes above the return address, not a pushed or saved register,
+which emission leaves out, the return address or the caller's stack
+arguments, all inside the alloca. Neither the frame nor anything the callback
+reads through it may reach a call: the runtime compares an EstablisherFrame,
+or a frame the parent saved there for `_local_unwind`, with real frames, and
+the emulated one is none. A read of a slot the callback wrote earlier in its
+block, with nothing between that could write the frame, reads its own value
+back and may: an `/Od` filter keeps its exception pointers in its parent's
+frame and passes them on. In the parent, every memory access in protected
+code must be volatile, except a store inside a private slot and a load inside
+an alloca or a mapped global at a fixed offset (`findSEHUnorderedAccess`); protected code is
+every block the range markers leave a scope open at, from the entry and from
+each block a catchret resumes. Rewritten alone, `sub_140001150` and
+`sub_140001180` of `xcpt4-msvc-x86_64-fh4-gs-o2.exe`, which printed
+`count = -1` before the gate refused them, print the original's transcript
+under wine, and an argument eight bytes off prints `count = -1` again. No
+filter of the 16 MSVC x64 xcpt4 builds that reads its frame reaches output:
+each such function stops at another gate. In the 12 MSVC `/Od` builds of
+`nested_collided`, the function whose two `__except` filters keep their
+exception pointers in their parent's frame and pass them on patches and runs
+as the original behind two adapters, lifted and patched with and without
+optimization in both modes; moved off the stack, the adapters' frame makes
+the test fail. A clang build for MinGW
+(`-O1`, `-O2`) of a `__try` whose filter reads a local the protected code
+set, with its frame on RBP, runs as the original under wine behind the
+adapter, lifted and patched with and without optimization in both modes; an
+adapter eight bytes off leaves the fault unhandled.
 A termination handler that leaves its `__finally` by a jump is the other
 side of a local unwind: it calls the runtime with a block of its parent to
 resume at (`MedFunc::SEHHandlerUnwindTargets`). In IR that target is a block
@@ -1350,7 +1446,15 @@ entry, over its branches and into its pads, leaves printed C with its code; the
 emitter lists such targets on the parent
 (`windows_eh_md::UnreachedUnwindTargets`, printed C only), and the parent's C
 says that a handler's `_local_unwind` resumes it there and that nothing printed
-in it leads to the code there.
+in it leads to the code there. A handler that leaves by its local unwind on
+every way out and names one target, which no row guards and no other entry
+names, is certified so by the lift (`certifyLowSEHLocalUnwinds`,
+`MedFunc::SEHHandlerResumes`), and printed C resumes its parent there as the
+source's jump out of the `__finally` does: the emitter gives the clause's pad
+a catch that returns to the target (`windows_eh_md::HandlerResume`), which
+keeps the target's code, and LLVM C prints a `goto` to the target's label at
+the end of the `__finally` and no `__except` for that catch. Native IR keeps
+the plain pad.
 For navigation these handler calls, which no instruction of the function
 makes, observe the runtime call they stand for (its address and LowIR
 sequence), and the form that prints each block in its own `__try` marks a call
@@ -1445,7 +1549,11 @@ only that jump keeps it, and its callers call the function in RAX
 bind `__guard_dispatch_icall_fptr` and `__guard_check_icall_fptr` to the slots
 the load configuration names (`findCOFFGuardRuntimeSlotVA`), and
 `checkCOFFResolvedSymbols` refuses generated code with any reference neither
-route binds instead of writing the relocation's bare addend.
+route binds instead of writing the relocation's bare addend. The check form,
+a call through the check slot (`call [__guard_check_icall_fptr]` on x86 and
+x64, or `blr` of what an earlier load read from it), takes the target in ECX,
+RCX, R0 or X15 and returns with the registers the following call passes intact
+or ends the process; LowToMed lowers it to nothing, as it does a stack probe.
 
 `BinaryImage::isFunctionEntryCandidateAt` owns the shared structural gate for
 independent entries: executable ownership, instruction alignment, data-object
@@ -11539,6 +11647,13 @@ unit does.
 
 Win64 home-spill input elision accepts ordinary stores of an incoming
 register's low bytes only when their home slot is unread and does not escape.
+A function whose SEH filters or termination handlers the runtime enters with
+its EstablisherFrame (`sehCallbacksReceiveFrame`) keeps every such spill as a
+read: the home slots lie at fixed offsets from that frame, and an MSVC filter
+reads there a parameter that its parent only spills. `pass_through_2_dll` of
+the `xframe_eh_dll` builds takes its `Disposition` again, and in the xcpt4
+builds a call passes the counter that its callee's filter increments through
+the callee's first argument, where it passed zero.
 FS/GS and ordered stores keep their register observations. Returning an
 incoming-area address also retains its possible readers; it cannot establish
 a variadic forwarding contract. The variadic save-area rule still requires
@@ -13073,8 +13188,14 @@ relocation predicate for untagged constants; equal original VAs alone cannot
 establish equality between independently rebuilt objects.
 
 The x86 CFG builder proves local x87 call-stack effects before constructing
-TOP-state block copies. A shape-checked integer DIV/IDIV precondition preserves
-x87 state on normal continuation. It remains in the emitted body and grants no
+TOP-state block copies. A function that names no x87 register still needs its
+callees' contracts: a wrapper returns a callee's long double in ST(0) and can
+carry one callee's result to another. A session's builds share those proofs
+(`X87CallGraphCache::contract`): each answer is kept with the no-return
+answers of the incomplete lifts its proof read and holds while they do, as
+kept context uses do, so a callee is proved once rather than once per caller.
+Builds with registration callees share no proof. A shape-checked integer
+DIV/IDIV precondition preserves x87 state on normal continuation. It remains in the emitted body and grants no
 permission to suppress divide faults; malformed guards and unknown state
 intrinsics still refuse the call summary.
 One LowIR analysis may share up to 128 immutable machine
@@ -14511,24 +14632,33 @@ where it is, and only the place a read through one starts at stays unnamed
 A read of a record's member or of an element through a pointer
 (`typedLoadAccess`, `typedIndexAccess`) prints as the member at each use of
 its value, and so reads the member again there.
-`LLVMCWriter::readCrossesItsStore` looks for a store to bytes the load read,
-at an address the same value and offsets name, that can run after the load and
-before a statement that would evaluate the read: `old = p->next; p->next = 0;
-return old;` must not return a second read of `p->next`. Such a load reads
-into its temporary where it stands, as a frame member does, a member read
-through its value casts the temporary, and from its statement on a member
-read is one of the expressions computed where they stand
-(`MaterializedExpressions`). The statements that
-evaluate a read are the users of its value through the values computed from
-it, a PHI's copies where its incoming blocks end, the users of a PHI every
-incoming value of which reads that member, and the later reads in its block of
-a local such a value is stored to. A load the store cannot reach, and a store
-ahead of the load in its block, leave the read where it was. Only that store
-is looked for, and not for a read whose value is also stored to a local, which
-may print as the member wherever it is read. That read, a call, a store
-through another pointer value or at a computed index, and the callee a call
-reads through a chain of loads still leave a read at its uses, where it can
-read a later value. A PHI has no statement but its copies, so the source map
+`LLVMCWriter::readCrossesItsStore` looks for anything that may write a byte
+the load read and can run after the load and before a statement that would
+evaluate the read: a store at an address the same value and offsets name over
+those bytes, a store through another pointer or at a computed index, a call, or
+an atomic. `old = p->next; p->next = 0; return old;` must not return a second
+read of `p->next`, nor `v = n->v; poke(n); return v + n->v;` add the new value
+twice. Such a load reads into its temporary where it stands, as a frame member
+does, a member read through its value casts the temporary, and from its
+statement on a member read is one of the expressions computed where they stand
+(`MaterializedExpressions`). The statements that evaluate a read are the users
+of its value through the values computed from it, a PHI's copies where its
+incoming blocks end, the users of a PHI every incoming value of which reads
+that member, and the later reads in its block of a local such a value is
+stored to; a call that uses the value evaluates it where the call stands, not
+where its result is used. Memory the read cannot reach is not looked at: a
+local whose address never escapes, any local when the read goes through an
+argument or a global, a local when it goes through a pointer the function had
+before the local's address could get out (`localEscapesBefore`: no store,
+call or return of a value computed from that address can run first), and
+another global; nor is a load, volatile or atomic, which changes nothing. The
+x86 return-address push prints as a frame store ahead of its call, which so
+keeps a member call its member's name.
+The function's writers are collected once, and each read takes one walk forward
+from its block and one walk back from each use's block. A store ahead of the
+load in its block leaves the read where it was, and so does a read whose value
+is also stored to a local, which may print as the member wherever it is read.
+A PHI has no statement but its copies, so the source map
 records its occurrences there.
 
 ## Cross-architecture translation contract
@@ -21352,6 +21482,11 @@ is proved before call-register summaries and SSA consume its parameter reads;
 only definitions preceding that query can supply the value. A numeric code
 value and a loaded pointer slot retain distinct roles. The machine call-summary adapter,
 pre-SSA Low-to-Med conversion, ABI recovery and HighIR reuse this proof.
+When image metadata is available, a complete immutable relocated data-pointer
+load may supply the address of the next load, as in MinGW's `.refptr` to an
+IAT slot. `readImmutableImagePointer` owns the mapping and fixup checks. The
+proof retains the final runtime load occurrence, shares the existing depth and
+work limits, and never reads the runtime callable from the IAT's file bytes.
 An observation retains the original LOAD index, including through private SSA
 versions. HighIR names an imported call only when the same memory-reachability
 proof used for callee-read inlining proves that original observation can reach

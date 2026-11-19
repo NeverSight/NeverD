@@ -4404,7 +4404,8 @@ static LocalRegisterEffect summarizeRecoveredCallRegisters(
   // pointer that is an address of the object's own, never a scalar that
   // equals one, a slot, or a register constant.
   for (size_t B = 0; B < Body.Blocks.size(); ++B) {
-    auto Targets = resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work);
+    auto Targets =
+        resolveLowBlockCallTargets(Body.Blocks[B], Img.Arch, &Work, &Img);
     for (size_t I = 0; !Img.IsRelocatable && I < Body.Blocks[B].Ops.size(); ++I)
       if (const auto &Call = Body.Blocks[B].Ops[I];
           !Targets.count(I) && Call.Opcode == NdOp::INDIR_CALL &&

@@ -757,6 +757,27 @@ TEST(LibCPrototype, WindowsLongJumpHasTwoParametersAndNoResult) {
   EXPECT_EQ(libcPrototype("_longjmpex", BinaryFormat::MachO), nullptr);
 }
 
+TEST(LibCPrototype, WindowsCRTHandlerAndLocaleKeepPointerContracts) {
+  const auto *Handler =
+      libcPrototype("_set_invalid_parameter_handler", BinaryFormat::COFF);
+  ASSERT_NE(Handler, nullptr);
+  EXPECT_EQ(Handler->ParamCount, 1u);
+  EXPECT_EQ(libcResult(Handler->Name, LibCVariant::Windows),
+            LibCResult::Pointer);
+  EXPECT_TRUE(isPointerType(Handler->Params[0]));
+  // The format-qualified prototype owns this callback contract. It must
+  // not enter the portable registry after stripping its leading underscore.
+  EXPECT_FALSE(libcArityForSymbol(Handler->Name, LibCVariant::GNU));
+  EXPECT_EQ(libcPrototype(Handler->Name, BinaryFormat::ELF), nullptr);
+  EXPECT_EQ(libcPrototype(Handler->Name, BinaryFormat::MachO), nullptr);
+  const auto *Print =
+      libcPrototype("__stdio_common_vfprintf", BinaryFormat::COFF);
+  ASSERT_NE(Print, nullptr);
+  ASSERT_EQ(Print->ParamCount, 5u);
+  EXPECT_TRUE(isPointerType(Print->Params[3]));
+  EXPECT_EQ(Print->Params[3], "_locale_t");
+}
+
 TEST(LibCPrototype, WindowsSetjmpKeepsItsCountedVariadicTail) {
   const auto *Prototype = libcPrototype("_setjmp3", BinaryFormat::COFF);
   ASSERT_NE(Prototype, nullptr);

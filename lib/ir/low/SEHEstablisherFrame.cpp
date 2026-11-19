@@ -13,6 +13,7 @@
 #include "neverd/ir/X86/X87Context.h"
 #include "neverd/ir/low/SEHFrameProof.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/loader/COFF/X64UnwindFrame.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Errc.h"
@@ -930,55 +931,17 @@ prepareTerminationFrame(const LowFunc &Low, const TargetRegInfo &TRI,
   if (!Frame.Preds[0].empty())
     return Fail("ordinary control flow re-enters the prologue");
 
-  // X64 CodeOffset is the byte offset of the prologue instruction end.  The
-  // codes run from the prologue's last instruction back to its first.
-  uint32_t PreviousOffset = EH.PrologueSize;
-  bool SawSetFramePointer = false;
-  for (const UnwindOperation &Op : EH.UnwindOperations) {
-    if (!Charge())
-      return Fail("work budget exhausted");
-    if (UnwindV2 && Op.Kind == UnwindOperationKind::Epilog)
-      continue;
-    if (!Op.CodeOffset || Op.CodeOffset > PreviousOffset)
-      return Fail("invalid unwind instruction offset");
-    PreviousOffset = Op.CodeOffset;
-    uint64_t Bytes = 0;
-    switch (Op.Kind) {
-    case UnwindOperationKind::PushNonVolatile:
-      Bytes = 8;
-      break;
-    case UnwindOperationKind::AllocateSmall:
-    case UnwindOperationKind::AllocateLarge:
-      Bytes = Op.StackOffset;
-      if (!Bytes || Bytes % 8)
-        return Fail("invalid fixed allocation");
-      break;
-    case UnwindOperationKind::SaveNonVolatile:
-    case UnwindOperationKind::SaveNonVolatileFar:
-    case UnwindOperationKind::SaveXMM128:
-    case UnwindOperationKind::SaveXMM128Far:
-      break;
-    case UnwindOperationKind::SetFramePointer:
-      if (!HasFrameRegister || SawSetFramePointer)
-        return Fail("frame register disagrees with UWOP_SET_FPREG");
-      SawSetFramePointer = true;
-      Frame.FrameRegister = x86reg::generalReg(EH.FrameRegister);
-      Frame.SetFramePointerOffset = Op.CodeOffset;
-      break;
-    default:
-      return Fail("unwind action has no certified fixed SP effect");
-    }
-    if (Bytes &&
-        (!Frame.ExpectedAdjustments.emplace(Op.CodeOffset, Bytes).second ||
-         Bytes >
-             uint64_t(std::numeric_limits<int64_t>::max()) - Frame.FrameBytes))
-      return Fail("conflicting or overflowing allocation");
-    // Below the frame register the establisher does not move.
-    if (!HasFrameRegister || SawSetFramePointer)
-      Frame.FrameBytes += Bytes;
+  // The codes run from the prologue's last instruction back to its first;
+  // output reads them again the same way (decodeX64UnwindFrame).
+  auto Decoded = decodeX64UnwindFrame(EH, AllowFrameRegister, &WorkRemaining);
+  if (!Decoded)
+    return Fail(llvm::toString(Decoded.takeError()));
+  Frame.ExpectedAdjustments = std::move(Decoded->Adjustments);
+  Frame.FrameBytes = Decoded->EstablisherBytes;
+  if (Decoded->FrameRegister) {
+    Frame.FrameRegister = x86reg::generalReg(*Decoded->FrameRegister);
+    Frame.SetFramePointerOffset = Decoded->SetFramePointerOffset;
   }
-  if (HasFrameRegister && !SawSetFramePointer)
-    return Fail("frame register disagrees with UWOP_SET_FPREG");
   return Frame;
 }
 

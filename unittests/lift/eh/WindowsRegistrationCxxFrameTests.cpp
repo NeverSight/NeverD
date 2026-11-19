@@ -6,6 +6,8 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/support/LLVMTargetInitialization.h"
+
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/IRBuilder.h"
@@ -156,12 +158,7 @@ TEST(WindowsRegistrationCxxFrame, EmitsGenuineRuntimeCatchFrameProfiles) {
   llvm::Module &Module = *Owner;
   ASSERT_FALSE(llvm::verifyModule(Module, &llvm::errs()));
   static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-  });
+  std::call_once(Once, [] { neverd::initializeLLVMCodegenTargets(); });
   std::string Error;
   const auto *Target =
       llvm::TargetRegistry::lookupTarget(Module.getTargetTriple(), Error);

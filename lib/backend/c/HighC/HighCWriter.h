@@ -832,11 +832,15 @@ public:
   /// result declares it (collectCallResultNames, emitLocalDecls), whatever
   /// the type of its machine value; null for any other value or name.
   TypeRef callResultPointerType(const HighExpr &Value) const;
-  /// The type a typed call's result declares the local it is assigned to
-  /// with (collectCallResultNames): its callee's return, a pointer to the
-  /// record an MSVC call returns through a hidden pointer; null where C
-  /// cannot spell it.
+  /// The type of the rendered call result, including a converted record
+  /// carrier or an MSVC hidden result pointer; null where C cannot spell it.
   TypeRef callResultType(const HighExpr &Call) const;
+  bool sourceRecordCallee(llvm::StringRef Name, const FunctionSym &Callee,
+                          const HighFunc *Definition) const;
+  /// A header/local record call is converted back to its physical carrier.
+  /// Locals and enclosing expressions must observe that converted type.
+  TypeRef recordCallResultCarrier(const HighExpr &Call,
+                                  const FunctionSym &Callee) const;
   /// A lifted integer carrier of a different width from its C declaration.
   /// Both expression conversion and local storage must keep these bits.
   static TypeRef integerCallResultCarrier(const HighExpr &Call,

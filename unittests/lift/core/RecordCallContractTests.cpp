@@ -13,6 +13,7 @@
 #include "../../../lib/backend/c/CRecordCall.h"
 #include "../../HostCompiler.h"
 #include "LocalTypesDebugContext.h"
+#include "SourceCallExecution.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
@@ -910,6 +911,122 @@ TEST(RecordCallContract, HFAResultRecordsRequireTheExactDeclaredLayout) {
       EXPECT_NE(Source.find("__neverd_result"), std::string::npos) << Source;
     }
   }
+}
+
+void checkFloatingRecordResult(bool IntegerCarrier) {
+  for (auto Format :
+       {BinaryFormat::COFF, BinaryFormat::ELF, BinaryFormat::MachO})
+    for (bool Header : {false, true})
+      for (uint16_t Bytes : {4, 8}) {
+        SCOPED_TRACE(static_cast<unsigned>(Format));
+        SCOPED_TRACE(Header);
+        SCOPED_TRACE(Bytes);
+        const unsigned Count = Bytes == 4 ? 3 : 2;
+        const std::string Scalar = Bytes == 4 ? "float" : "double";
+        auto Types = std::make_shared<types::TypeLibrary>(
+            Format == BinaryFormat::COFF ? types::DataModel::LLP64
+                                         : types::DataModel::LP64);
+        if (Format == BinaryFormat::COFF)
+          Types->setRecordABI(types::RecordABI::Microsoft);
+        ASSERT_TRUE(types::parseCTypes("typedef struct HFA { " + Scalar +
+                                           " lane[" + std::to_string(Count) +
+                                           "]; } HFA; HFA fixture_hfa(void);",
+                                       *Types)
+                        .ok());
+        BinaryImage Image;
+        Image.Arch = Arch::AArch64;
+        Image.Format = Format;
+        Image.Bits = Bitness::Bits64;
+        Import Imported;
+        Imported.Name = "fixture_hfa";
+        Imported.IATAddr = 0x2000;
+        Image.Imports.push_back(Imported);
+        EmptyDebug Empty;
+        sdk::LocalTypesDebugContext Context(Empty, Types, {}, &Image);
+        DeclaredHeaderDebug HeaderDebug(Context);
+        DebugContext &Debug =
+            Header ? static_cast<DebugContext &>(HeaderDebug) : Context;
+        const auto Prototype = Debug.resolvePrototype("fixture_hfa");
+        ASSERT_TRUE(Prototype);
+        const auto Signature =
+            libc::floatingCallArguments(*Prototype, Image.Arch, Image.Format);
+        ASSERT_TRUE(Signature);
+        auto Call = HighExpr::makeCall(Imported.Name, Imported.IATAddr, {});
+        Call->FloatingCallSignature =
+            std::make_shared<FloatingCallArguments>(*Signature);
+        Call->Type = IntegerCarrier ? NdType::makeInt(Bytes * Count, false)
+                                    : NdType::makeStruct(std::vector<TypeRef>(
+                                          Count, NdType::makeFloat(Bytes)));
+        Call->Type->RegisterReturnRecord = !IntegerCarrier;
+        HighFunc Function;
+        Function.Entry = 0x1000;
+        Function.Name = "consume_result";
+        Function.ReturnType = Call->Type;
+        HighStmt Return;
+        Return.Kind = StmtKind::Return;
+        if (IntegerCarrier) {
+          // The enclosing expression must not pack an already packed result.
+          Return.RetVal = Call;
+        } else {
+          MedVar Temp;
+          Temp.Kind = MedVar::Temp;
+          Temp.Id = 27;
+          Temp.SSAVer = 1;
+          Temp.Size = Call->Type->Size;
+          auto Local = HighExpr::makeVar(Temp, Call->Type);
+          HighStmt Assign;
+          Assign.Kind = StmtKind::Assign;
+          Assign.Dst = Local;
+          Assign.Val = Call;
+          Function.Body.push_back(Assign);
+          // Read every field so forwarding cannot erase the local carrier.
+          std::vector<ExprPtr> Fields;
+          for (unsigned I = 0; I != Count; ++I)
+            Fields.push_back(
+                HighExpr::makeRecordField(Local, I * Bytes, Bytes));
+          Return.RetVal = HighExpr::makeRecord(Call->Type, std::move(Fields));
+        }
+        Function.Body.push_back(Return);
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Image.Format;
+        Options.Image = &Image;
+        Options.RecordDefinitions = [&](const std::vector<TypeRef> &Records) {
+          return Context.definitions(Records);
+        };
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options, &Debug));
+        // The independent provider returns NaN payloads, signed zero and an
+        // ordinary lane. Observe every byte and exactly one invocation.
+        const std::string Word = Bytes == 4 ? "uint32_t" : "uint64_t";
+        const std::string Bits =
+            Bytes == 4 ? "0x7FC12345U, 0x80000000U, 0x3F800000U"
+                       : "0x7FF8123456789ABCULL, 0x8000000000000000ULL";
+        Source += "\nstatic unsigned calls;\nstruct HFA fixture_hfa(void) {\n"
+                  "const " +
+                  Word + " bits[] = {" + Bits +
+                  "}; struct HFA value;\n"
+                  "__builtin_memcpy(&value, bits, sizeof(value));\n"
+                  "++calls; return value; }\nint main(void) {\n"
+                  "const " +
+                  Word + " expected[] = {" + Bits +
+                  "}; __auto_type result = consume_result();\n"
+                  "return calls != 1 || __builtin_memcmp(&result, expected, "
+                  "sizeof(expected)); }\n";
+        for (const char *Level : {"-O0", "-O2"})
+          ASSERT_NO_FATAL_FAILURE(source_call_execution_test::compileAndRun(
+              Source, {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
+                       "-Werror=uninitialized"}));
+      }
+}
+
+TEST(RecordCallContract, FloatingRecordResultsKeepPhysicalLocals) {
+  checkFloatingRecordResult(false);
+}
+
+TEST(RecordCallContract, FloatingRecordResultsKeepIntegerExpressionCarriers) {
+  checkFloatingRecordResult(true);
 }
 
 TEST(RecordCallContract, WindowsRecordResultsPreserveEveryByte) {

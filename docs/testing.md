@@ -1597,7 +1597,23 @@ types cannot redefine the runtime headers' types. The corresponding
 `HighCSourceCalls.RuntimeHeaderOwnsItsEnumerationDefinitions` check, in
 `NeverDSourceEntryBindingTests`, retains local enum definitions for an actual
 program-defined callee. Whole-unit Windows syntax checks additionally use the
-real headers.
+real headers. `LLVMCValues.WindowsCRTLocaleAndHandlerKeepTheirHeaderTypes`
+checks `_locale_t` and `_invalid_parameter_handler` against independent C
+prototypes and executes argument/return identity checks at O0/O2 with UBSan.
+`NativePointerRelocationBoundary.CRTPrototypesAgreeWithTheirOwningHeaders`
+compares all six locale-bearing UCRT stdio prototypes and the handler exchange
+with the declarations in their actual MinGW headers.
+The legacy/UCRT layout fixture sets `__MSVCRT_VERSION__` explicitly: undefining
+`_UCRT` alone does not select the old MinGW runtime headers.
+The Clang checks locate the MinGW target installation from the GCC startup
+object used to link the original PE. This also covers native Windows GCCs
+with an empty configured sysroot and cross headers outside Clang's search path.
+`MedCachedCallTarget.ImmutableReferencesRetainTheRuntimeImportLoad` checks
+complete PE32/PE32+ relocated data pointers and rejects writable, partial,
+ordered, ambiguous or wrong-owner evidence. The Win64
+`ImmutableImportReferencesKeepIncomingArguments` pipeline regression checks
+forwarded `exit`, `_exit` and `fputs` operands through `.refptr` and the IAT,
+with optimization enabled and disabled.
 `COFFExceptionIR.LLVMCCRTArgumentsKeepTheRuntimeType` keeps a mismatched debug
 enum out of a runtime argument and prevents displayed header enumerators from
 requesting duplicate local definitions.
@@ -3441,6 +3457,11 @@ the image lists after it, the replacement is installed and its relocated code
 calls the original functions; named as another function of the image, it is
 refused.
 
+`HighCPointerAddresses.GuardCheckCallsLeaveTheTargetToTheCall` lifts an x86
+function that checks its target in ECX through the guard check slot and then
+calls ECX, and an x64 one that checks RCX and calls the copy it kept: both
+print the call of the loaded target with its argument, and neither the slot
+nor a trap.
 `HighCPointerAddresses.TransfersThroughTheGuardDispatchSlotGoToRax` prints a
 call and a tail jump through an x64 image's Control Flow Guard dispatch slot as
 calls of the function loaded into RAX, with the argument the caller set and no
@@ -3457,10 +3478,14 @@ optimized functions that read a record's member, store to it, and then use the
 value read: an exchange, an advanced index, a byte written inside the member,
 a cleared callback slot, a callee read through the old object, an element of a
 pointer table, a store on one path, a store in a loop, a PHI's copy and a PHI
-of two reads. The unit runs at O0 and O2 against what the C of each function
+of two reads, a call that changes the member, a store through a pointer that
+may be the same one, and a store at a computed index that may be the same
+element. The unit runs at O0 and O2 against what the C of each function
 computes. A store to another member, a store that runs before the load each
-time the load runs, a read on the path the store is not on, and a local that
-holds the value keep their shorter forms.
+time the load runs, a read on the path the store is not on, a store to a local
+nothing else sees, a store to a local whose address leaves only after the
+read's pointer was read, and a local that holds the value keep their shorter
+forms; once that address has left, the read is taken before the store.
 
 `LLVMCValues.LocalRegister*` checks direct and import-slot scalar declarations
 on x64 and ARM64 across COFF, ELF and Mach-O. Independent C providers observe
@@ -3489,7 +3514,10 @@ with address/undefined-behavior sanitizers. x64 hidden buffers and ARM64
 register HFAs preserve both returned fields through single and chained calls,
 including NaN payloads and signed zero; output sentinels bound every write.
 ARM64 explicitly stores both fields, so the test does not infer a wrapper's
-source return type from unused scratch registers. The shared placement suite
+source return type from unused scratch registers.
+`ReturnContracts.AArch64IncomingResultRegisterRequiresACallerRead` checks an
+entry self-copy, a caller that consumes the preserved register, and a real
+write to the register. The shared placement suite
 covers one through four float/double HFA members on COFF/ELF/Mach-O, including
 whole-record COFF/ELF/Mach-O stack placement and natural Darwin stack offsets,
 and rejects incomplete, padded and over-aligned HFA layouts.
@@ -3515,6 +3543,15 @@ HighIR retains checked HFA results as records of their returned registers;
 field reads do not require unsupported 192/256-bit C integers on AArch64.
 `RecordCallContract.HFAResultRecordsRequireTheExactDeclaredLayout` rejects
 changed member classes, offsets, alignment, size and an unproved carrier.
+`FloatingRecordResultsKeepPhysicalLocals` and
+`FloatingRecordResultsKeepIntegerExpressionCarriers` compile and execute HighC
+on every host with the configured Clang, using AArch64 COFF/ELF/Mach-O call
+contracts and both header and local declarations. They check the converted
+result's local type and nested expression type, exact NaN/signed-zero bytes,
+and one provider invocation at O0/O2 with undefined-behavior checks. The
+three-float legacy integer case also checks the twelve declared bytes when
+the host C integer has padding. These are C projection checks, not native
+execution of the three target platforms.
 `RecordCallContract.WindowsHFAProjectionsExecuteOnAArch64` and
 `RecordCallContract.WindowsHFAImportSlotProjectionsExecuteOnAArch64` execute
 those C matrices as freestanding Linux AArch64 programs, directly on that
@@ -9444,9 +9481,13 @@ graphs, including exact remaining proof budgets, recursion-depth failures,
 changed image and analysis contexts, concurrent queries and bounded eviction.
 Complete instruction graphs rejected for exceptional edges or unresolved
 terminal dispatch retain only an immutable rejection marker: tests require
-actual warm hits, identical cold/warm budget consumption and a fresh successful
-proof when the same address belongs to a different valid image. Truncated
-instruction streams remain unretained.
+actual warm hits (of a graph or of a kept call contract), identical cold/warm
+budget consumption and a fresh successful proof when the same address belongs
+to a different valid image. Truncated instruction streams remain unretained.
+`ASessionProvesEachCallContractOnceWhileItsAnswersHold` builds two callers of
+a function whose lift is incomplete until its callee is proved never to
+return: the second build's kept contract answers and it reads no graph, and
+once the prover's answer changes the call is proved again.
 
 Publishing an additional code reference may retain the pipeline's raw x87
 graphs, but cannot retain an earlier tag proof. A shared-cache test publishes a
@@ -12599,6 +12640,13 @@ results with the
 explicit-budget walk; shared-budget replay and bound queries retain saturating
 work accounting. Feasible-edge publication clears the structural dependency
 index together with all semantic caches.
+`DeepOffsetChainsUseTheNodeBudget` accepts an 8,192-node mixed copy/offset
+proof and refuses it with one fewer node, including n32 in both byte orders.
+The iterative walk and the exhausted-prefix case must run on the native
+Windows default stack; increasing the executable stack is diagnostic only.
+The default-budget cache lookup precedes an outlined miss continuation, so
+warm queries do not reserve the iterative walk's native stack storage.
+Cold and warmed queries must retain identical proof and work counters.
 `CompletedPrefixesAvoidRepeatedIndependentWalks` checks 1,024 increasing
 frame-address prefixes with known and unknown roots, with and without bound
 offsets, on all four architectures. Failed prefixes evaluate linear work while
@@ -20706,10 +20754,10 @@ publishes r4 across the PHI an `__except` arm leaves before a later `__try`, and
 `ATryAfterAnExceptArmFillsItsClause` prints that clause.
 `TableSEHSourceScopeTests.cpp` gives the LLVM emitter an x64 parent whose
 `__finally`, `__except` and outer `__finally` rows guard one range:
-`TableSEHSourceScopes.*` checks that the IR printed as C nests the three pads in
-table order while native output and both code-producing capabilities still
-refuse the table, that such a table has a scope identity only on request and a
-table without repeated ranges keeps the identity it had, that a local unwind's
+`TableSEHSourceScopes.*` checks that the IR printed as C and native IR nest the
+three pads in table order and that every capability takes the table, that
+such a table has a scope identity only on request and a table without
+repeated ranges keeps the identity it had, that a local unwind's
 inner handler call unwinds to the `__except` after the inner range's end marker
 and its outer handler call is a plain call, that three termination handlers of
 one unwind give two invokes at one address which the exception contract counts
@@ -20750,13 +20798,23 @@ only a handler's unwind enters, one of them entered from the other: the
 parent's printed C names exactly the targets no edge reaches, not one a branch
 reaches or the `__except` block an exception's pad reaches, and native IR
 carries no such list.
+`AFinallyThatResumesItsParentEndsWithAGoto` gives the inner `__finally` a
+handler that resumes the parent at a block only its unwind enters: printed C
+ends the `__finally` with a `goto` to that block, prints the block's store
+under the label it names, prints no second `__except` and no note, and native
+IR keeps the plain pad.
 `COFFExceptionIR.NativeLocalUnwindHandlerCallsLeaveTheirScope` emits native
 x64 IR for a local unwind out of the only scope, out of the inner of two and
 out of both: the handler's call is a plain one, an invoke to the outer row's
 pad, or both in that order; each carries one mark with the runtime call's
 address and the row it ends; the contract counts only the invokes; and
-`planCOFFExceptionPatch` refuses the module by the mark's name, before and
-after optimization.
+`planCOFFExceptionPatch` takes the module before and after optimization. It
+refuses a mark that names another row and a plain call moved back ahead of
+its row's range exit.
+`PatchCOFF_X64.GeneratedSEHRowsFollowTheSourceScopeChain` binds generated
+rows to two nested catch-all scopes of a fixture: the inner row ahead of its
+parent's over the same call, with the parent's rows around it, is taken; the
+parent's row first, or parent rows that leave the call out, are refused.
 `COFFExceptionIR.OutputRefusesACallbackThatUsesItsOriginalFrame` gives a
 `__finally` row and a filter row a callback that returns, keeps its frame
 argument in a home or in its own frame, reads through what either holds, lets
@@ -20764,7 +20822,36 @@ that frame's address go to a call, reads or writes through the argument,
 passes it on, recovers a local of its parent or of another function with
 `llvm.localrecover`, or has no body in the module: `planCOFFExceptionPatch`
 takes the module where the callback only keeps the argument or recovers its
-parent's local and refuses the others by name.
+parent's local and refuses the others by name. Its parent has no frame, so
+native IR passes the callback `llvm.localaddress()`.
+`COFFExceptionIR.NativeFrameReadingCallbackIsPassedTheEmulatedFrame` gives a
+parent with a fixed frame (`push rbx; sub rsp, 0x20`) a `__finally` whose
+lifted body reads its frame: native IR marks the parent's frame alloca and
+passes the callback the alloca at the entry byte less 0x28, and the store in
+the scope is volatile. With the callback reading a local, writing one or
+reading an argument home, `planCOFFExceptionPatch` takes the module before
+and after optimization; reading the return address, a pushed register, a
+caller's argument or below the frame, passing the frame to a call, passing a
+call what it reads there, and adding a variable to the frame are refused,
+while passing a call what the callback wrote there and reads back is taken, as
+are the pad's argument eight bytes off, the frame unmarked and the store
+made plain. With a frame register set after the first allocation and more
+allocated after it, the callback may read below the EstablisherFrame into
+that allocation but not below it.
+`COFFExceptionIR.NativeFrameReadingFilterRunsBehindAnAdapter` gives the same
+parent a filter that reads its frame: the catchpad names the adapter
+(`sehFilterAdapterName`), the parent escapes its marked frame, and
+`planCOFFExceptionPatch` takes the module before and after optimization. The
+adapter's frame eight bytes off, a call of another function, one more
+instruction, another escaped alloca and a filter that reads the return
+address are refused.
+`LLVMCPointerAddresses.CorpusFuncLoadSehProbeLlvmcExceptContainsHandler`
+prints the native IR of the `/Od` `seh_probe` parent as LLVM C. Its filter
+reads its frame, so the `__except` calls the filter with the parent's frame
+object at the emulated frame's offset; clang's outlined filter recovers that
+object instead of a captured `llvm.localaddress`, and run under a `setjmp`
+model the filter finds the parent's homed argument through the frame it is
+passed.
 `WindowsEHNativeSource.DestructorsAloneAreRefusedAsUnwindActions` classifies
 x64 FH3 and FH4 tables with no try block: empty without an action, an unwind
 action table with one, on all three capabilities; behind a cookie record that
