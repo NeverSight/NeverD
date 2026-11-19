@@ -108,8 +108,7 @@ bool cookieCheckPassesEveryScope(const ExceptionFunction &EH, Arch TargetArch) {
 }
 
 WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
-                                        Arch TargetArch,
-                                        bool AllowRepeatedRanges) {
+                                        Arch TargetArch) {
   if (!EH.SEH)
     return WindowsEHNativeSourceReason::MissingSEHTable;
   if (EH.SEH->Scopes.empty())
@@ -163,12 +162,13 @@ WindowsEHNativeSourceReason validateSEH(const ExceptionFunction &EH,
       const ExceptionAddressRange &B = SemanticRanges[J];
       if (!A.overlaps(B))
         continue;
-      const bool Repeated = A.Begin == B.Begin && A.End == B.End;
       // Two rows over one range nest by their order: the scan reaches the
-      // earlier row first, so that one is the inner scope.
-      if (Repeated && AllowRepeatedRanges)
+      // earlier row first, so that one is the inner scope.  MSVC and
+      // clang-cl write them for a `__try` whose body is exactly another
+      // `__try`, and LLVM for each nesting level of the code in a range.
+      if (A.Begin == B.Begin && A.End == B.End)
         continue;
-      if (Repeated || (!A.contains(B) && !B.contains(A)))
+      if (!A.contains(B) && !B.contains(A))
         return WindowsEHNativeSourceReason::UnsupportedSEHScopeGraph;
       // __C_specific_handler scans the native table in order. For one PC that
       // lies in nested ranges, the inner row must precede its enclosing row or
@@ -824,10 +824,7 @@ classifyWindowsEHNativeSource(const ExceptionFunction &EH, Arch TargetArch,
                   Capability);
 
   WindowsEHNativeSourceReason Reason =
-      Model == WindowsEHNativeSourceModel::SEH
-          ? validateSEH(EH, TargetArch,
-                        Capability ==
-                            WindowsEHNativeCapability::SourceIRLowering)
+      Model == WindowsEHNativeSourceModel::SEH ? validateSEH(EH, TargetArch)
       : Model == WindowsEHNativeSourceModel::CxxFH3 ? validateCxxFH3(EH)
                                                     : validateCxxFH4(EH);
   // Output patch stays fail-closed for every unwind action and for an

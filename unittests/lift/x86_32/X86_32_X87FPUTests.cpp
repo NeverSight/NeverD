@@ -39,7 +39,7 @@
 
 namespace neverd::detail {
 struct X87CallGraphCacheTestAccess {
-  static std::array<size_t, 3> stats(const CFGBuilder &Builder) {
+  static std::array<size_t, 4> stats(const CFGBuilder &Builder) {
     return Builder.x87CallGraphCacheStatsForTesting();
   }
   static std::array<size_t, 5> flightStats(const CFGBuilder &Builder) {
@@ -1870,13 +1870,14 @@ TEST(X87CallGraphCache, IndependentBuildersRetainTheSameCallAndReturnIR) {
       if (I == 1) {
         const auto Stats = detail::X87CallGraphCacheTestAccess::stats(Builder);
         EXPECT_GT(Stats[1], 0u);
-        ColdHits = Stats[0];
+        ColdHits = Stats[0] + Stats[3];
       }
     }
     EXPECT_EQ(Dumps[0], Dumps[1]);
     EXPECT_EQ(Dumps[0], Dumps[2]);
-    EXPECT_GT(detail::X87CallGraphCacheTestAccess::stats(Builders[2])[0],
-              ColdHits);
+    // The warm build reads a kept graph or a kept call contract.
+    const auto Warm = detail::X87CallGraphCacheTestAccess::stats(Builders[2]);
+    EXPECT_GT(Warm[0] + Warm[3], ColdHits);
   }
 }
 
@@ -1890,7 +1891,7 @@ TEST(X87CallGraphCache, OwnedAndEqualInventoriesShareGraphsOthersDoNot) {
                                        X87CallGraphCacheLimits(), &Entries);
   // Each build reports the cache's hits and graphs after it.
   const auto Build = [&](const std::set<va_t> &Known, bool Shared,
-                         std::array<size_t, 3> *Stats = nullptr) {
+                         std::array<size_t, 4> *Stats = nullptr) {
     Decoder Dec;
     EXPECT_TRUE(Dec.init(Image));
     CFGBuilder Builder;
@@ -1906,15 +1907,19 @@ TEST(X87CallGraphCache, OwnedAndEqualInventoriesShareGraphsOthersDoNot) {
     return Dump;
   };
   const std::string Cold = Build(Entries, false);
-  std::array<size_t, 3> First{}, Again{}, Equal{};
+  std::array<size_t, 4> First{}, Again{}, Equal{};
   EXPECT_EQ(Build(Entries, true, &First), Cold);
   ASSERT_GT(First[1], 0u);
   // The owner's inventory matches by identity; an equal set it does not own
-  // matches by contents.  Both find the graphs the first build published.
+  // matches by contents.  Both find the graphs or the call contracts the
+  // first build published.
+  const auto Reused = [](const std::array<size_t, 4> &Stats) {
+    return Stats[0] + Stats[3];
+  };
   EXPECT_EQ(Build(Entries, true, &Again), Cold);
-  EXPECT_GT(Again[0], First[0]);
+  EXPECT_GT(Reused(Again), Reused(First));
   EXPECT_EQ(Build(Copy, true, &Equal), Cold);
-  EXPECT_GT(Equal[0], Again[0]);
+  EXPECT_GT(Reused(Equal), Reused(Again));
   // Another inventory binds other graphs, as a cold build would.
   EXPECT_EQ(Build(Other, true), Build(Other, false));
 }
@@ -1926,7 +1931,7 @@ TEST(X87CallGraphCache, ContextsBorrowTheOwnedInventoryInsteadOfCopyingIt) {
   // One build in a cache that owns the inventory, one in a cache that does
   // not; each reports the cache's hits, graphs and retained bytes.
   const auto Build = [&](const std::set<va_t> *Owned,
-                         std::array<size_t, 3> &Stats) {
+                         std::array<size_t, 4> &Stats) {
     auto Cache = createX87CallGraphCache(nullptr, nullptr, false,
                                          X87CallGraphCacheLimits(), Owned);
     Decoder Dec;
@@ -1941,7 +1946,7 @@ TEST(X87CallGraphCache, ContextsBorrowTheOwnedInventoryInsteadOfCopyingIt) {
     Stats = Access::stats(Builder);
     return Dump;
   };
-  std::array<size_t, 3> Borrowed{}, Copied{};
+  std::array<size_t, 4> Borrowed{}, Copied{};
   EXPECT_EQ(Build(&Entries, Borrowed), Build(nullptr, Copied));
   ASSERT_GT(Borrowed[1], 0u);
   EXPECT_EQ(Borrowed[1], Copied[1]);
@@ -2211,6 +2216,68 @@ TEST(X87CallGraphCache, AReusedBodyProvesEachCallOnceWhileItsAnswersHold) {
   Prover.Never = {0x1100};
   ASSERT_TRUE(Reuse());
   EXPECT_GT(Access::stats(Probe)[0], Graphs[0]);
+}
+
+TEST(X87CallGraphCache, ASessionProvesEachCallContractOnceWhileItsAnswersHold) {
+  // Two functions call the caller of callThenNoInstructionImage, whose lift
+  // is complete only once 0x1100 is proved never to return.  The first build
+  // proves what its call does to the x87 stack and keeps the answer with the
+  // no-return answer the incomplete lift read: the second build of a caller
+  // reads no graph, and once 0x1100 never returns the call is proved again.
+  using Access = detail::X87CallGraphCacheTestAccess;
+  BinaryImage Image = callThenNoInstructionImage();
+  for (const va_t Address : {va_t(0x1180), va_t(0x11a0)}) {
+    const uint32_t Displacement = uint32_t(0x1000 - (Address + 5));
+    // call 0x1000; ret
+    const std::vector<uint8_t> Outer = {0xe8,
+                                        uint8_t(Displacement),
+                                        uint8_t(Displacement >> 8),
+                                        uint8_t(Displacement >> 16),
+                                        uint8_t(Displacement >> 24),
+                                        0xc3};
+    std::copy(Outer.begin(), Outer.end(),
+              Image.Segments[0].Data.begin() + (Address - 0x1000));
+    Symbol Sym = Symbol::makeFunc(Address, Outer.size());
+    Sym.Name = Address == 0x1180 ? "first" : "second";
+    Image.Symbols.push_back(Sym);
+    Image.KnownCodeRanges.emplace_back(Address, Address + Outer.size());
+  }
+  const std::set<va_t> Entries{0x1000, 0x1100, 0x1180, 0x11a0};
+  struct TargetProver final : NoReturnCalleeProver {
+    std::set<va_t> Never;
+    bool neverReturns(va_t Target, unsigned) const override {
+      return Never.count(Target) != 0;
+    }
+    bool mayNeverReturn(va_t) const override { return true; }
+  } Prover;
+  auto Cache = createX87CallGraphCache();
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(Image));
+  const auto Build = [&](va_t Entry) {
+    CFGBuilder Builder;
+    Builder.setKnownFuncEntries(&Entries);
+    Builder.setNoReturnCalleeProver(&Prover);
+    Builder.setX87CallGraphCache(Cache);
+    return Builder.build(Image, Dec, Entry, "outer");
+  };
+  CFGBuilder Probe;
+  Probe.setX87CallGraphCache(Cache);
+  ASSERT_TRUE(Build(0x1180).hasCompleteInstructionLift());
+  const auto Before = Access::stats(Probe);
+  ASSERT_GT(Before[1], 0u);
+  ASSERT_TRUE(Build(0x11a0).hasCompleteInstructionLift());
+  const auto Warm = Access::stats(Probe);
+  EXPECT_EQ(Warm[0], Before[0]);
+  EXPECT_EQ(Warm[1], Before[1]);
+  EXPECT_EQ(Warm[2], Before[2]);
+  EXPECT_GT(Warm[3], Before[3]);
+  // The answer no longer holds: the call is proved again, which lifts the
+  // callee's caller again.
+  Prover.Never = {0x1100};
+  ASSERT_TRUE(Build(0x11a0).hasCompleteInstructionLift());
+  const auto Changed = Access::stats(Probe);
+  EXPECT_EQ(Changed[3], Warm[3]);
+  EXPECT_NE(Changed[2], Warm[2]);
 }
 
 TEST(X87CallGraphCache, ChangedBuildContextsCannotHitThePreviousGraph) {

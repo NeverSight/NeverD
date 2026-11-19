@@ -1608,9 +1608,8 @@ MedLLVMEmitter::emit(const std::vector<MedFunc> &Funcs, llvm::LLVMContext &LCtx,
   initializeCxxContinuationPlans(Funcs, BodyMask);
   SEHCallbackBodies.clear();
   SEHCallbackReadsOnlyArguments.clear();
-  if (AnalysisRecoveryForSource)
-    for (const MedFunc &Func : Funcs)
-      SEHCallbackBodies.emplace(Func.Entry, &Func);
+  for (const MedFunc &Func : Funcs)
+    SEHCallbackBodies.emplace(Func.Entry, &Func);
 
   DirectCallArgumentCounts.clear();
   for (const auto &Func : Funcs)

@@ -2206,6 +2206,13 @@ private:
   using BoundFrameSlotQuery =
       std::tuple<AddressProvenanceVarKey, bool,
                  std::vector<std::pair<AddressProvenanceVarKey, uint64_t>>>;
+  /// Continue after the default-budget cache miss. Keep the walk's native
+  /// stack storage out of the frequently reused closed-cache lookup.
+  std::optional<med_llvm::SlotKey> resolveFrameSlotQuery(
+      const MedVar &V, bool RequireEntryStackPointer,
+      const ControlValueBindings *Bindings, size_t *SharedProofBudget,
+      bool Cacheable,
+      const std::pair<AddressProvenanceVarKey, bool> &QueryKey) const;
   // Hashes the frame-slot caches' keys. The caches are only probed, filled
   // and cleared, so their order cannot reach an answer.
   struct FrameSlotQueryHash {

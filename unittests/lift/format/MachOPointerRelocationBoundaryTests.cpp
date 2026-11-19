@@ -28846,6 +28846,63 @@ TEST(LLVMFrameSlotProof, ExhaustedPrefixesAreNotIndependentProofs) {
   }
 }
 
+TEST(LLVMFrameSlotProof, DeepOffsetChainsUseTheNodeBudget) {
+  for (Arch TargetArch :
+       {Arch::X86, Arch::X64, Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(TargetArch));
+    FrameSlotProofFixture Fixture(TargetArch);
+    MedVar Previous = Fixture.SP;
+    int64_t ExpectedOffset = 0;
+    for (unsigned I = 0; I != 8191; ++I) {
+      const MedVar Next = Fixture.temp();
+      switch (I % 7) {
+      case 0:
+        Fixture.op(0, NdOp::COPY, Next, {Previous});
+        break;
+      case 1:
+        Fixture.op(0, NdOp::INT_ZEXT, Next, {Previous});
+        break;
+      case 2:
+        Fixture.op(0, NdOp::INT_SEXT, Next, {Previous});
+        break;
+      case 3:
+        Fixture.op(0, NdOp::SUBBYTES, Next,
+                   {Previous, MedVar::makeConst(0, 1)});
+        break;
+      case 4:
+        Fixture.op(0, NdOp::INT_ADD, Next,
+                   {Previous, MedVar::makeConst(7, Fixture.Width)});
+        ExpectedOffset += 7;
+        break;
+      case 5:
+        Fixture.op(0, NdOp::INT_SUB, Next,
+                   {Previous, MedVar::makeConst(3, Fixture.Width)});
+        ExpectedOffset -= 3;
+        break;
+      case 6:
+        Fixture.op(0, NdOp::INT_ADD, Next,
+                   {MedVar::makeConst(2, Fixture.Width), Previous});
+        ExpectedOffset += 2;
+        break;
+      }
+      Previous = Next;
+    }
+    for (size_t Budget : {8192u, 8191u}) {
+      MedLLVMEmitter Emitter;
+      const auto Slot = MedLLVMProvenanceTestPeer::canonicalFrameSlot(
+          Emitter, Fixture.Func, TargetArch, Previous, Budget);
+      ASSERT_EQ(Slot.has_value(), Budget == 8192);
+      if (Slot) {
+        EXPECT_EQ(Slot->first,
+                  std::make_pair(Fixture.SP.Id, Fixture.SP.SSAVer));
+        EXPECT_EQ(Slot->second, ExpectedOffset);
+      }
+      EXPECT_EQ(MedLLVMProvenanceTestPeer::frameSlotWork(Emitter).first,
+                Budget);
+    }
+  }
+}
+
 TEST(LLVMFrameSlotProof, CompletedQueriesKeepRecurrenceContextsSeparate) {
   for (Arch TargetArch : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
     for (unsigned Variant = 0; Variant != 6; ++Variant)

@@ -43210,7 +43210,7 @@ std::optional<CapturedImageStore>
 capturedVolatileImageStore(const std::string &Source, const std::string &Base,
                            unsigned Offset) {
   const std::regex Store(
-      R"(\{ uint32_t (\w+) = (\w+);\s*)"
+      R"(\{ uint32_t (\w+) = ([\w.]+);\s*)"
       R"(for \(unsigned (\w+) = 0; \3 < 4; \+\+\3\)\s*)"
       R"(\(\(volatile uint8_t\*\)\()" +
       Base + " \\+ " + std::to_string(Offset) +
@@ -43242,9 +43242,15 @@ bool insidePrintedTry(const std::string &Source, size_t Position) {
 // printed order of try ranges. The Windows compile check below separately
 // rejects illegal jumps into protected scopes; this provider checks values,
 // filter arguments, side effects and joins at both optimization levels.
+/// \p EmulatedHome, when given, is where the filter finds the parent's
+/// homed first argument through the frame it is passed: native IR passes a
+/// filter that reads its frame the parent's emulated EstablisherFrame.
+/// Otherwise the filter is passed the parent's frame as `llvm.localaddress`
+/// names it.
 void checkCorpusSehPaths(std::string Source, const std::string &Entry,
                          const std::string &Filter, const std::string &Storage,
-                         unsigned SinkOffset) {
+                         unsigned SinkOffset,
+                         std::optional<unsigned> EmulatedHome = std::nullopt) {
   const std::string Include = "#include <excpt.h>\n";
   if (auto At = Source.find(Include); At != std::string::npos)
     Source.erase(At, Include.size());
@@ -43268,12 +43274,18 @@ void RaiseException(uint32_t code, uint32_t flags, uint32_t count,
   if (raising) longjmp(destination, 1);
 }
 )";
-  std::string Provider =
-      "\nuint32_t " + Filter +
-      "(void *info, void *frame) {\n"
-      "  if (info != &destination || frame != &parent_frame) "
-      "__builtin_trap();\n"
-      "  ++filters; return 1;\n}\n";
+  // The filter runs only for an input of 7.
+  const std::string FrameCheck =
+      EmulatedHome ? "*(const uint32_t *)((const char *)frame + " +
+                         std::to_string(*EmulatedHome) + ") != 7"
+                   : std::string("frame != &parent_frame");
+  std::string Provider = "\nuint32_t " + Filter +
+                         "(void *info, void *frame) {\n"
+                         "  if (info != &destination || " +
+                         FrameCheck +
+                         ") "
+                         "__builtin_trap();\n"
+                         "  ++filters; return 1;\n}\n";
   if (Source.find("extern uint8_t " + Storage + "[") != std::string::npos) {
     const auto At = Source.find("extern uint8_t " + Storage + "[");
     const auto End = Source.find(';', At);
@@ -43370,7 +43382,10 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   const auto Sink = capturedVolatileImageStore(Join, "unk_140005000", 224);
   ASSERT_TRUE(Sink.has_value()) << Source;
   const std::string &SinkValue = Sink->Value;
-  if (SinkValue != NormalSlot)
+  // The filter reads the parent's frame, which keeps the slot there: it
+  // prints as a member of the frame.
+  if (SinkValue != NormalSlot &&
+      !llvm::StringRef(SinkValue).ends_with("." + NormalSlot))
     EXPECT_NE(Join.find(SinkValue + " = " + NormalSlot + ";"),
               std::string::npos)
         << Source;
@@ -43428,6 +43443,9 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   llvm::SMDiagnostic Diagnostic;
   auto Recompiled = llvm::parseIRFile(IRPath, Diagnostic, Context);
   ASSERT_NE(Recompiled, nullptr) << Diagnostic.getMessage().str();
+  // The filter reads its frame, so it is passed the parent's emulated frame:
+  // the outlined filter computes it from the parent's recovered frame object
+  // instead of loading a captured `llvm.localaddress`.
   unsigned ParentFrameCaptures = 0, FilterCalls = 0;
   for (const auto &Function : *Recompiled)
     for (const auto &Block : Function)
@@ -43436,25 +43454,31 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
         const auto *Callee = Call ? Call->getCalledFunction() : nullptr;
         if (!Callee)
           continue;
-        if (Callee->getIntrinsicID() == llvm::Intrinsic::localaddress) {
+        if (Callee->getIntrinsicID() == llvm::Intrinsic::localaddress)
           ++ParentFrameCaptures;
-          EXPECT_EQ(Function.getName(), "sub_140001050");
-        }
         if (Callee->getName() == "sub_1400024E0") {
           ++FilterCalls;
           ASSERT_EQ(Call->arg_size(), 2u);
-          EXPECT_TRUE(llvm::isa<llvm::LoadInst>(Call->getArgOperand(1)))
-              << "the outlined filter must recover the parent's captured frame";
+          const auto *Frame = llvm::dyn_cast<llvm::GetElementPtrInst>(
+              Call->getArgOperand(1)->stripPointerCasts());
+          const auto *Recovered =
+              Frame ? llvm::dyn_cast<llvm::CallBase>(
+                          Frame->getPointerOperand()->stripPointerCasts())
+                    : nullptr;
+          EXPECT_TRUE(Recovered && Recovered->getCalledFunction() &&
+                      Recovered->getCalledFunction()->getIntrinsicID() ==
+                          llvm::Intrinsic::localrecover)
+              << "the outlined filter must pass the parent's emulated frame";
         }
       }
-  EXPECT_EQ(ParentFrameCaptures, 1u);
+  EXPECT_EQ(ParentFrameCaptures, 0u);
   unsigned ExceptClauses = 0;
   for (size_t At = Source.find("} __except ("); At != std::string::npos;
        At = Source.find("} __except (", At + 1))
     ++ExceptClauses;
   EXPECT_EQ(FilterCalls, ExceptClauses);
   checkCorpusSehPaths(Source, "sub_140001050", "sub_1400024E0", "unk_140005000",
-                      224);
+                      224, /*EmulatedHome=*/0x40);
 
   auto OptImg = loadBinary(Path, FuncOpts);
   ASSERT_TRUE(static_cast<bool>(OptImg)) << llvm::toString(OptImg.takeError());
@@ -43465,7 +43489,7 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadSehProbeLlvmcExceptContainsHandler) {
   EXPECT_EQ(OptSource.find("= 0xE0421001"), std::string::npos) << OptSource;
   EXPECT_EQ(OptSource.find("5368722016"), std::string::npos) << OptSource;
   checkCorpusSehPaths(OptSource, "sub_140001050", "sub_1400024E0",
-                      "unk_140005000", 224);
+                      "unk_140005000", 224, /*EmulatedHome=*/0x40);
 }
 
 TEST(LLVMCPointerAddresses, CorpusOptimizedSehResultIsAssignedOnBothPaths) {
@@ -43569,10 +43593,20 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
   // The call, not the prototype the unit declares before the bodies.
   const size_t RaiseAt = Source.find("    RaiseException(");
   // The exact four-byte local is shared by both arms and the continuation.
-  const std::string Slot = assignedNameBefore(Source, "= -100;");
-  ASSERT_FALSE(Slot.empty()) << Source;
-  EXPECT_EQ(assignedNameBefore(Source, "= 0x29;"), Slot) << Source;
-  EXPECT_NE(Source.find("uint32_t " + Slot + ";"), std::string::npos) << Source;
+  // The filter reads its parent's frame, so the parent keeps its original
+  // frame and passes the filter the EstablisherFrame inside it: the local is
+  // a member of that frame.
+  const std::string Member = assignedNameBefore(Source, "= -100;");
+  ASSERT_FALSE(Member.empty()) << Source;
+  const std::string Slot = "frame0." + Member;
+  EXPECT_NE(Source.find(Slot + " = -100;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find(Slot + " = 0x29;"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("uint32_t " + Member + ";"), std::string::npos)
+      << Source;
+  EXPECT_NE(Source.find("sub_1400024E0(GetExceptionInformation(), "
+                        "(void *)((char *)&frame0 + 16))"),
+            std::string::npos)
+      << Source;
   const size_t SuccessAt = Source.find(Slot + " = -100;");
   const size_t HandlerAt = Source.find(Slot + " = 0x29;");
   ASSERT_NE(TryAt, std::string::npos) << Source;
@@ -43598,7 +43632,7 @@ TEST(LLVMCPointerAddresses, CorpusSehProbeCliLlvmcKeepsProtectedEffects) {
       << Source;
   EXPECT_EQ(Source.find("llvm_x2E_seh_x2E_try"), std::string::npos) << Source;
   checkCorpusSehPaths(Source, "sub_140001050", "sub_1400024E0", "unk_140001000",
-                      16608);
+                      16608, /*EmulatedHome=*/0x40);
 
   // The CLI's analysis-only LLVM route can print register-home assignments
   // that its earlier declaration prediction did not see. Every simple local
@@ -43657,7 +43691,10 @@ TEST(LLVMCPointerAddresses, CorpusFuncLoadGsWrappedSehLlvmcNestsHandlerBodies) {
     EXPECT_NE(Source.find("#define NEVERD_X86_REP(native, ...)"),
               std::string::npos)
         << Source;
-    EXPECT_NE(Source.find("__asm__(\"llvm.localaddress\")"), std::string::npos)
+    // Its filter reads its frame: C calls it with the parent's emulated
+    // frame, which native output's adapter passes it.
+    EXPECT_NE(Source.find("GetExceptionInformation(), (void *)((char *)&frame"),
+              std::string::npos)
         << Source;
     // Function selection retains the emitter's exact dependency declarations.
     // Supply only the source-level compiler builtin declaration.
@@ -47732,6 +47769,100 @@ TEST(HighCPointerAddresses, TransfersThroughTheGuardDispatchSlotGoToRax) {
         HighC, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\([^,;]+\);)")))
         << HighC;
   }
+}
+
+TEST(HighCPointerAddresses, GuardCheckCallsLeaveTheTargetToTheCall) {
+  // Control Flow Guard's check form: the target goes to the check routine the
+  // load configuration's slot holds, in ECX on x86 and RCX on x64, which
+  // returns with the registers the following call passes intact or ends the
+  // process. The call through the target is then the call; the check is no
+  // call of the program's.
+  constexpr va_t Slot32 = 0x402000;
+  std::vector<uint8_t> Code32 = {0x8b,
+                                 0x4c,
+                                 0x24,
+                                 0x04, // mov ecx, [esp+4]
+                                 0x8b,
+                                 0x01, // mov eax, [ecx]
+                                 0xff,
+                                 0x71,
+                                 0x04, // push dword [ecx+4]
+                                 0x89,
+                                 0xc1, // mov ecx, eax
+                                 0xff,
+                                 0x15,
+                                 uint8_t(Slot32),
+                                 uint8_t(Slot32 >> 8),
+                                 uint8_t(Slot32 >> 16),
+                                 uint8_t(Slot32 >> 24), // call [slot]
+                                 0xff,
+                                 0xd1, // call ecx
+                                 0x83,
+                                 0xc4,
+                                 0x04,  // add esp, 4
+                                 0xc3}; // ret
+  BinaryImage X86;
+  X86.Arch = Arch::X86;
+  X86.Bits = Bitness::Bits32;
+  X86.Format = BinaryFormat::COFF;
+  X86.Base = 0x400000;
+  X86.Entry = 0x401000;
+  Segment Text;
+  Text.Name = ".text";
+  Text.VA = X86.Entry;
+  Text.Size = Code32.size();
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = Code32;
+  X86.Segments.push_back(std::move(Text));
+  Segment Data32;
+  Data32.Name = ".rdata";
+  Data32.VA = Slot32;
+  Data32.Size = 4;
+  Data32.Flags = SegmentFlags::Readable;
+  Data32.Data.assign(4, 0);
+  X86.Segments.push_back(std::move(Data32));
+  ASSERT_TRUE(X86.recordRuntimeCallablePointerSlot(
+      Slot32, RuntimeCallablePointerSlotKind::GuardCFCheck));
+  const std::string HighC32 = highcOnlyFunction(std::move(X86), 0x401000);
+  EXPECT_EQ(HighC32.find("402000"), std::string::npos) << HighC32;
+  EXPECT_EQ(HighC32.find("__builtin_trap"), std::string::npos) << HighC32;
+  // The pushed member is an argument of the call through the target.
+  EXPECT_TRUE(std::regex_search(
+      HighC32, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\([^;]*\b(\w+)\);)")))
+      << HighC32;
+  EXPECT_NE(HighC32.find(" + 4)"), std::string::npos) << HighC32;
+
+  constexpr va_t Entry = 0x140001000;
+  constexpr va_t Slot64 = 0x140002000;
+  std::vector<uint8_t> Code64 = {0x53,                   // push rbx
+                                 0x48, 0x83, 0xec, 0x20, // sub rsp, 20h
+                                 0x48, 0x8b, 0x19,       // mov rbx, [rcx]
+                                 0x48, 0x89, 0xd9};      // mov rcx, rbx
+  const uint32_t Disp =
+      static_cast<uint32_t>(Slot64 - (Entry + Code64.size() + 6));
+  Code64.insert(Code64.end(),
+                {0xff, 0x15, uint8_t(Disp), uint8_t(Disp >> 8),
+                 uint8_t(Disp >> 16), uint8_t(Disp >> 24)}); // call [slot]
+  Code64.insert(Code64.end(), {0xb9, 0x07, 0x00, 0x00, 0x00, // mov ecx, 7
+                               0xff, 0xd3,                   // call rbx
+                               0x48, 0x83, 0xc4, 0x20,       // add rsp, 20h
+                               0x5b, 0xc3});                 // pop rbx; ret
+  BinaryImage X64 = makeCodeFixture(Entry, Code64);
+  Segment Data64;
+  Data64.Name = ".rdata";
+  Data64.VA = Slot64;
+  Data64.Size = 8;
+  Data64.Flags = SegmentFlags::Readable;
+  Data64.Data.assign(8, 0);
+  X64.Segments.push_back(std::move(Data64));
+  ASSERT_TRUE(X64.recordRuntimeCallablePointerSlot(
+      Slot64, RuntimeCallablePointerSlotKind::GuardCFCheck));
+  const std::string HighC64 = highcOnlyFunction(std::move(X64), Entry);
+  EXPECT_EQ(HighC64.find("140002000"), std::string::npos) << HighC64;
+  EXPECT_EQ(HighC64.find("__builtin_trap"), std::string::npos) << HighC64;
+  EXPECT_TRUE(std::regex_search(
+      HighC64, std::regex(R"(\(\*\(void \*\*\)\(arg0\)\)\)\((\(\w+\))?7\);)")))
+      << HighC64;
 }
 
 TEST(HighCPointerAddresses, GuardDispatchTargetChosenOnTwoPathsStaysAssigned) {

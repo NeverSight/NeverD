@@ -1724,7 +1724,110 @@ bool LLVMCWriter::slotReadAtUses(const llvm::LoadInst &Load) const {
 
 void LLVMCWriter::forgetReadCrossings() const {
   ReadCrossesItsStore.clear();
-  StoresByBase.reset();
+  ReadWritersOf.reset();
+  LocalEscapes.clear();
+}
+
+bool LLVMCWriter::localEscapesBefore(const llvm::AllocaInst &Local,
+                                     const llvm::Instruction &At) const {
+  auto Found = LocalEscapes.find(&Local);
+  if (Found == LocalEscapes.end()) {
+    // The values computed from the local's address, and the users that let
+    // one out: an access through one, a comparison and a value computed
+    // from one keep it in.
+    size_t Remaining = limits::backend::kLLVMCReadStoreCrossingWork;
+    LocalAddressUses Uses;
+    Uses.Derived.insert(&Local);
+    llvm::SmallVector<const llvm::Value *, 16> Work{&Local};
+    while (!Work.empty() && Uses.Complete) {
+      const llvm::Value *Value = Work.pop_back_val();
+      for (const llvm::Use &Use : Value->uses()) {
+        const auto *User = llvm::dyn_cast<llvm::Instruction>(Use.getUser());
+        if (!Remaining-- || !User) {
+          Uses.Complete = false;
+          break;
+        }
+        if (llvm::isa<llvm::LoadInst, llvm::ICmpInst>(User))
+          continue;
+        if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(User)) {
+          if (Store->getValueOperand() == Value)
+            Uses.Escapes.push_back(Store);
+          continue;
+        }
+        if (llvm::isa<llvm::GetElementPtrInst, llvm::CastInst,
+                      llvm::BinaryOperator, llvm::SelectInst, llvm::PHINode,
+                      llvm::FreezeInst>(User)) {
+          if (Uses.Derived.insert(User).second)
+            Work.push_back(User);
+          continue;
+        }
+        if (const auto *Intrinsic = llvm::dyn_cast<llvm::IntrinsicInst>(User);
+            Intrinsic && (Intrinsic->isAssumeLikeIntrinsic() ||
+                          Intrinsic->isLifetimeStartOrEnd()))
+          continue;
+        Uses.Escapes.push_back(User);
+      }
+    }
+    Found = LocalEscapes.emplace(&Local, std::move(Uses)).first;
+  }
+  const LocalAddressUses &Uses = Found->second;
+  if (!Uses.Complete || Uses.Derived.contains(&At))
+    return true;
+  // An escape that runs before At: earlier in At's block, or in a block
+  // from which control can reach At's block.
+  size_t Remaining = limits::backend::kLLVMCReadStoreCrossingWork;
+  llvm::SmallPtrSet<const llvm::BasicBlock *, 16> Reaching;
+  llvm::SmallVector<const llvm::BasicBlock *, 16> Pending(
+      llvm::pred_begin(At.getParent()), llvm::pred_end(At.getParent()));
+  while (!Pending.empty()) {
+    if (!Remaining--)
+      return true;
+    const llvm::BasicBlock *Block = Pending.pop_back_val();
+    if (Reaching.insert(Block).second)
+      Pending.append(llvm::pred_begin(Block), llvm::pred_end(Block));
+  }
+  return llvm::any_of(Uses.Escapes, [&](const llvm::Instruction *Escape) {
+    return Reaching.contains(Escape->getParent()) ||
+           (Escape->getParent() == At.getParent() &&
+            (Escape == &At || Escape->comesBefore(&At)));
+  });
+}
+
+const LLVMCWriter::ReadWriters &
+LLVMCWriter::functionWriters(const llvm::Function &Fn) const {
+  if (ReadWritersOf && ReadWritersOf->first == &Fn)
+    return ReadWritersOf->second;
+  ReadWriters Writers;
+  for (const llvm::BasicBlock &Block : Fn)
+    for (const llvm::Instruction &I : Block) {
+      ReadWriter W{&I};
+      if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I)) {
+        if (const auto To = peelPointerOffset(Store->getPointerOperand())) {
+          W.Base = To->first;
+          W.Off = To->second;
+          W.Bytes = llvmAccessSize(Store->getValueOperand()->getType());
+        } else if (const auto *Local = llvm::dyn_cast<llvm::AllocaInst>(
+                       Store->getPointerOperand()->stripPointerCasts())) {
+          // A local at an offset that does not peel: any of its bytes.
+          W.Base = Local;
+          W.Off = 0;
+          W.Bytes = 0;
+        }
+      } else if (const auto *Intrinsic =
+                     llvm::dyn_cast<llvm::IntrinsicInst>(&I);
+                 Intrinsic && (Intrinsic->isAssumeLikeIntrinsic() ||
+                               Intrinsic->isLifetimeStartOrEnd())) {
+        continue;
+      } else if (llvm::isa<llvm::LoadInst>(I) || !I.mayWriteToMemory()) {
+        // A volatile or atomic load orders memory but changes none of it.
+        continue;
+      }
+      Writers.ByBlock[&Block].push_back(
+          static_cast<unsigned>(Writers.All.size()));
+      Writers.All.push_back(W);
+    }
+  ReadWritersOf.emplace(&Fn, std::move(Writers));
+  return ReadWritersOf->second;
 }
 
 bool LLVMCWriter::readCrossesItsStore(const llvm::LoadInst &Load) const {
@@ -1738,28 +1841,33 @@ bool LLVMCWriter::readCrossesItsStore(const llvm::LoadInst &Load) const {
     // A local's bytes have their own rule (slotReadAtUses).
     if (!At || llvm::isa<llvm::AllocaInst>(At->first->stripPointerCasts()))
       return false;
-    if (!StoresByBase) {
-      StoresByBase.emplace();
-      for (const llvm::BasicBlock &Block : *Load.getFunction())
-        for (const llvm::Instruction &I : Block)
-          if (const auto *Store = llvm::dyn_cast<llvm::StoreInst>(&I))
-            if (const auto To = peelPointerOffset(Store->getPointerOperand()))
-              (*StoresByBase)[To->first].push_back(
-                  {Store, To->second,
-                   llvmAccessSize(Store->getValueOperand()->getType())});
-    }
-    const auto Known = StoresByBase->find(At->first);
-    if (Known == StoresByBase->end())
+    const ReadWriters &Writers = functionWriters(*Load.getFunction());
+    if (Writers.All.empty())
       return false;
-    // Stores of the bytes the load read; one of no known size may be any.
     const uint64_t Bytes = llvmAccessSize(Load.getType());
-    llvm::SmallVector<const llvm::StoreInst *, 4> Writers;
-    for (const StoreAt &Store : Known->second)
-      if (!Bytes || !Store.Bytes || At->second - Store.Off < Store.Bytes ||
-          Store.Off - At->second < Bytes)
-        Writers.push_back(Store.Store);
-    if (Writers.empty())
-      return false;
+    // An argument or a global the load reads through cannot point into one
+    // of the function's locals: those exist only from its entry on.
+    const bool FromOutside = llvm::isa<llvm::Argument, llvm::GlobalVariable>(
+        At->first->stripPointerCasts());
+    // The instruction that produced the pointer the load reads through.
+    const auto *Defined =
+        llvm::dyn_cast<llvm::Instruction>(At->first->stripPointerCasts());
+    // Whether \p W may write a byte the load read.
+    const auto MayWrite = [&](const ReadWriter &W) {
+      if (!W.Base)
+        return true;
+      if (W.Base == At->first)
+        return !Bytes || !W.Bytes || At->second - W.Off < W.Bytes ||
+               W.Off - At->second < Bytes;
+      const auto *Local = llvm::dyn_cast<llvm::AllocaInst>(W.Base);
+      if (Local && (FromOutside ||
+                    (Local != SyntheticFrame && !allocaAddressTaken(Local)) ||
+                    (Defined && !localEscapesBefore(*Local, *Defined))))
+        return false;
+      // Two objects the program names apart do not overlap.
+      return !(llvm::isa<llvm::GlobalVariable>(W.Base) &&
+               llvm::isa<llvm::GlobalVariable>(At->first->stripPointerCasts()));
+    };
 
     size_t Remaining = limits::backend::kLLVMCReadStoreCrossingWork;
     // Whether \p Value reads the member the load reads, through casts.
@@ -1823,56 +1931,87 @@ bool LLVMCWriter::readCrossesItsStore(const llvm::LoadInst &Load) const {
         }
         if (User->getType()->isVoidTy() || User->isTerminator())
           continue;
+        // A call, or anything else with an effect, is a statement where it
+        // stands: the read is evaluated there, not where its result is used.
+        if (User->mayHaveSideEffects())
+          continue;
         if (Seen.insert(User).second)
           Work.push_back(User);
       }
     }
 
-    // Blocks control enters after leaving one of \p From without running
-    // the load again: the load's own block is entered, and runs up to it.
+    // Blocks control enters after leaving the load's block without running
+    // the load again: that block itself is entered at its start.
     const llvm::BasicBlock *Own = Load.getParent();
     using BlockSet = llvm::SmallPtrSet<const llvm::BasicBlock *, 32>;
-    const auto Enter = [&](const llvm::BasicBlock *From, BlockSet &Entered) {
+    BlockSet AfterLoad;
+    {
       llvm::SmallVector<const llvm::BasicBlock *, 16> Pending(
-          llvm::succ_begin(From), llvm::succ_end(From));
+          llvm::succ_begin(Own), llvm::succ_end(Own));
       while (!Pending.empty()) {
         if (!Remaining--)
-          return false;
+          return true;
         const llvm::BasicBlock *Block = Pending.pop_back_val();
-        if (Entered.insert(Block).second && Block != Own)
+        if (AfterLoad.insert(Block).second && Block != Own)
           Pending.append(llvm::succ_begin(Block), llvm::succ_end(Block));
       }
-      return true;
-    };
-    BlockSet AfterLoad;
-    if (!Enter(Own, AfterLoad))
-      return true;
-    for (const llvm::StoreInst *Store : Writers) {
-      const llvm::BasicBlock *Block = Store->getParent();
-      // The store ahead of the load in its block runs before the load does
-      // again; any other leaves its block as its block's end does.
-      const bool Ahead = Block == Own && Store->comesBefore(&Load);
-      if (Block == Own ? Ahead && !AfterLoad.count(Own)
-                       : !AfterLoad.count(Block))
-        continue;
-      BlockSet AfterStore;
-      if (!Ahead && !Enter(Block, AfterStore))
-        return true;
-      for (const llvm::Instruction *Use : Uses) {
-        if (!Remaining--)
-          return true;
-        const llvm::BasicBlock *Where = Use->getParent();
-        // Whether the use runs before the load does in the load's block.
-        const bool BeforeLoad = Where == Own && !Load.comesBefore(Use);
-        if (Where == Block && Store->comesBefore(Use)) {
-          // Later in the store's block, unless the load is between them.
-          if (!Ahead || BeforeLoad)
-            return true;
-          continue;
-        }
-        if (AfterStore.count(Where) && (Where != Own || BeforeLoad))
+    }
+    // Whether a writer that may change the read runs in \p Block after
+    // \p From and before \p To (the block's start and end where null).
+    const auto WritesIn = [&](const llvm::BasicBlock *Block,
+                              const llvm::Instruction *From,
+                              const llvm::Instruction *To) {
+      const auto Found = Writers.ByBlock.find(Block);
+      if (Found == Writers.ByBlock.end())
+        return false;
+      for (const unsigned Index : Found->second) {
+        const ReadWriter &W = Writers.All[Index];
+        if ((!From || From->comesBefore(W.Inst)) &&
+            (!To || W.Inst->comesBefore(To)) && MayWrite(W))
           return true;
       }
+      return false;
+    };
+    bool TailWrites = false, TailKnown = false;
+    for (const llvm::Instruction *Use : Uses) {
+      const llvm::BasicBlock *Where = Use->getParent();
+      // Later in the load's block, past nothing but that block.
+      if (Where == Own && Load.comesBefore(Use)) {
+        if (WritesIn(Own, &Load, Use))
+          return true;
+        continue;
+      }
+      // A use control cannot reach after the load reads nothing it read.
+      if (!AfterLoad.count(Where))
+        continue;
+      if (!TailKnown) {
+        TailWrites = WritesIn(Own, &Load, nullptr);
+        TailKnown = true;
+      }
+      if (TailWrites)
+        return true;
+      // The blocks between: those after the load that reach the use's block
+      // without running the load again, the use's block among them when a
+      // cycle that avoids the load returns to it.
+      BlockSet Between;
+      llvm::SmallVector<const llvm::BasicBlock *, 16> Pending(
+          llvm::pred_begin(Where), llvm::pred_end(Where));
+      while (!Pending.empty()) {
+        if (!Remaining--)
+          return true;
+        const llvm::BasicBlock *Block = Pending.pop_back_val();
+        if (Block == Own || !AfterLoad.count(Block) ||
+            !Between.insert(Block).second)
+          continue;
+        Pending.append(llvm::pred_begin(Block), llvm::pred_end(Block));
+      }
+      for (const llvm::BasicBlock *Block : Between)
+        if (Block != Where && WritesIn(Block, nullptr, nullptr))
+          return true;
+      if (WritesIn(Where, nullptr, Use))
+        return true;
+      if (Where != Own && Between.count(Where) && WritesIn(Where, Use, nullptr))
+        return true;
     }
     return false;
   };

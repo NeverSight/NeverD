@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/llvm/WindowsRegistrationFrame.h"
+#include "neverd/support/LLVMTargetInitialization.h"
 
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/GlobalVariable.h"
@@ -94,12 +95,7 @@ struct Fixture {
 llvm::Expected<std::vector<char>> emitObject(llvm::Module &Module) {
   std::string Errors;
   static std::once_flag Once;
-  std::call_once(Once, [] {
-    llvm::InitializeAllTargetInfos();
-    llvm::InitializeAllTargets();
-    llvm::InitializeAllTargetMCs();
-    llvm::InitializeAllAsmPrinters();
-  });
+  std::call_once(Once, [] { neverd::initializeLLVMCodegenTargets(); });
   const llvm::Target *Target =
       llvm::TargetRegistry::lookupTarget(Module.getTargetTriple(), Errors);
   if (!Target)

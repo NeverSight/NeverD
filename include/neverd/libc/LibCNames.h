@@ -151,9 +151,10 @@ makeLibCPrototype(std::string_view Name, std::string_view Return,
 /// Whether C type \p Type is a pointer: to an object or to a function, or to
 /// a pointer to one.
 constexpr bool isPointerType(std::string_view Type) {
-  // process.h owns this callback's unsigned-long parameter and, on x86,
-  // stdcall convention. Keep its typedef rather than rewriting its pointees.
-  return Type == "_tls_callback_type" ||
+  // Keep header-owned pointer typedefs nominally compatible with their
+  // declarations, including callback conventions and locale record pointers.
+  return Type == "_tls_callback_type" || Type == "_invalid_parameter_handler" ||
+         Type == "_locale_t" ||
          (!Type.empty() &&
           (Type.back() == '*' || Type.find("*)") != std::string_view::npos));
 }

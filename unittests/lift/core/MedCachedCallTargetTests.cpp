@@ -127,6 +127,101 @@ TEST(MedCachedCallTarget, N32RecoversOnlyACompleteSignExtendedPointerLoad) {
     }
 }
 
+TEST(MedCachedCallTarget, ImmutableReferencesRetainTheRuntimeImportLoad) {
+  for (const Arch Architecture :
+       {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})
+    for (unsigned Variant = 0; Variant != 11; ++Variant) {
+      SCOPED_TRACE(static_cast<unsigned>(Architecture));
+      SCOPED_TRACE(Variant);
+      const uint16_t Width = getTargetRegInfo(Architecture).PointerSize;
+      BinaryImage Image;
+      Image.Arch = Architecture;
+      Image.Bits = Width == 8 ? Bitness::Bits64 : Bitness::Bits32;
+      Image.Format = BinaryFormat::COFF;
+      Segment Reference;
+      Reference.VA = 0x2000;
+      Reference.Size = Reference.FileSz = 0x20;
+      Reference.Flags = SegmentFlags::Readable;
+      Reference.Data.resize(0x20);
+      if (Width == 8)
+        writeLE<uint64_t>(Reference.Data.data(), 0x3000);
+      else
+        writeLE<uint32_t>(Reference.Data.data(), 0x3000);
+      Image.Segments.push_back(std::move(Reference));
+      Segment IAT;
+      IAT.VA = 0x3000;
+      IAT.Size = IAT.FileSz = Width;
+      IAT.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+      IAT.Data.resize(Width, 0xa5); // Runtime target is not an image address.
+      Image.Segments.push_back(std::move(IAT));
+      for (const auto &Segment : Image.Segments) {
+        Section Storage;
+        Storage.VA = Segment.VA;
+        Storage.Size = Storage.FileSz = Segment.Size;
+        Storage.Flags = Segment.Flags;
+        Image.Sections.push_back(std::move(Storage));
+      }
+      Image.DataPtrRelocSlots.insert(0x2000);
+      Image.DataPtrRelocTargetOwners.emplace(0x2000, 0x3000);
+      Image.BaseRelocations.push_back(
+          {0x2000, uint8_t(Width == 8 ? llvm::COFF::IMAGE_REL_BASED_DIR64
+                                      : llvm::COFF::IMAGE_REL_BASED_HIGHLOW)});
+      auto Address = value(1, Width), Callable = value(2, Width);
+      Address.TheArch = Callable.TheArch = Architecture;
+      MedBlock Block;
+      Block.Ops = {op(NdOp::LOAD, Address, {MedVar::makeConst(0x2000, Width)}),
+                   op(NdOp::LOAD, Callable, {Address})};
+      switch (Variant) {
+      case 1:
+        Image.Segments.front().Flags =
+            SegmentFlags::Readable | SegmentFlags::Writable;
+        break;
+      case 2:
+        Block.Ops.front().MemoryOrdering = NdMemoryOrdering::Acquire;
+        break;
+      case 3:
+        Block.Ops.front().Output.Size = Width / 2;
+        break;
+      case 4:
+        Image.BaseRelocations.push_back(Image.BaseRelocations.front());
+        break;
+      case 5:
+        Image.DataPtrRelocTargetOwners[0x2000] = 0x4000;
+        break;
+      case 6:
+        Block.Ops.insert(Block.Ops.begin() + 1,
+                         op(NdOp::COPY, Address, {value(99, Width)}));
+        break;
+      case 7: // No image evidence.
+        break;
+      case 8:
+        Image.DataPtrRelocSlots.clear();
+        Image.CodePtrRelocSlots.insert(0x2000);
+        break;
+      case 9:
+        Block.Ops.back().MemoryOrdering = NdMemoryOrdering::Acquire;
+        break;
+      case 10:
+        Block.Ops.front().MemoryAddressSpace = NdMemoryAddressSpace::X86GS;
+        break;
+      }
+      const auto Original = Block.Ops.back().Inputs[0];
+      const auto Target =
+          resolvePreSSAMedCallTarget(Block, Callable, Architecture, nullptr,
+                                     Variant == 7 ? nullptr : &Image);
+      ASSERT_EQ(Target.has_value(), Variant == 0);
+      if (Target) {
+        EXPECT_TRUE(Target->ThroughSlot);
+        EXPECT_EQ(Target->Address, 0x3000u);
+        EXPECT_EQ(Target->LoadIndex, 1u);
+        EXPECT_EQ(Block.Ops.back().Inputs[0], Original);
+        size_t Work = 0;
+        EXPECT_FALSE(resolvePreSSAMedCallTarget(Block, Callable, Architecture,
+                                                &Work, &Image));
+      }
+    }
+}
+
 TEST(MedCachedCallTarget, RejectsInterveningCallsAndMayAliasWrites) {
   for (bool Call : {false, true}) {
     auto B = cached();

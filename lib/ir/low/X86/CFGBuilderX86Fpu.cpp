@@ -309,6 +309,14 @@ struct X87NoReturnAnswer {
   unsigned Depth;
   bool NeverReturns;
 };
+/// What a call does to the x87 stack, as X87CallEffectIndex::contract
+/// proves it.
+struct X87CallContract {
+  int Delta = 0;
+  bool ConsumesInput = false;
+  unsigned ScratchSlots = 0;
+  unsigned ImportArguments = 0;
+};
 
 struct X87CallGraph {
   enum class ProjectionRejection : uint8_t {
@@ -407,6 +415,8 @@ class X87CallGraphCache {
   std::unordered_map<va_t, std::list<Entry>::iterator> GraphIndex;
   size_t RetainedBytes = 0;
   size_t Hits = 0;
+  /// Calls a kept contract answered (keptContract).
+  size_t ContractHits = 0;
   const NoReturnCalleeProver *NonReentrantProver;
   const libc::NoReturnTargetIndex *NonReentrantTargets;
   const std::set<va_t> *ImmutableEntries;
@@ -466,6 +476,17 @@ class X87CallGraphCache {
   };
   std::optional<Context> ContextUseInputs;
   std::unordered_map<va_t, ContextUse> ContextUses;
+  /// What a call to a target does to the x87 stack
+  /// (X87CallEffectIndex::contract), with the no-return answers of every
+  /// incomplete lift its proof read.  Kept under ContractInputs while those
+  /// answers hold, as context uses are: the functions of a session call the
+  /// same callees, and each build would prove their call closures again.
+  struct KeptContract {
+    std::optional<X87CallContract> Contract;
+    std::vector<X87NoReturnAnswer> Dependencies;
+  };
+  std::optional<Context> ContractInputs;
+  std::unordered_map<va_t, KeptContract> Contracts;
 
 public:
   X87CallGraphCache(const NoReturnCalleeProver *Prover,
@@ -714,6 +735,26 @@ private:
   /// X87CallEffectIndex::usesContext for \p B, kept as refusesCall keeps its
   /// answers.
   std::optional<bool> usesContext(const CFGBuilder &B, va_t Target);
+  /// X87CallEffectIndex::contract for \p B, kept as usesContext keeps its
+  /// answers.  \p Own, the build's index, holds what the build asked or
+  /// prepared already, and keeps the answer for the rest of the build.
+  std::optional<X87CallContract> contract(const CFGBuilder &B, va_t Target,
+                                          X87CallEffectIndex &Own);
+  /// The contract kept for a call to \p Target that still holds for \p B.
+  std::optional<std::optional<X87CallContract>>
+  keptContract(const CFGBuilder &B, va_t Target);
+  /// Keeps \p Contract for a call to \p Target, with \p Dependencies, the
+  /// no-return answers of the incomplete lifts its proof read (nullopt when
+  /// they went unrecorded, which keeps nothing).
+  void keepContract(const CFGBuilder &B, va_t Target,
+                    const std::optional<X87CallContract> &Contract,
+                    std::optional<std::vector<X87NoReturnAnswer>> Dependencies);
+  /// Whether \p B's proofs may share kept contracts: registration and
+  /// floating-call proofs that request one another share no graph either.
+  static bool sharesContracts(const CFGBuilder &B) {
+    return B.SharedX87CallGraphs && !B.BorrowedRegistrationCallees &&
+           !B.RegistrationCallees;
+  }
   std::shared_ptr<const SummaryFacts> validatedSummary(
       const std::shared_ptr<X87CallGraphCache> &Cache, const BinaryImage &Img,
       va_t Entry, const std::set<va_t> *Entries,
@@ -1098,12 +1139,13 @@ std::shared_ptr<X87CallGraphCache> createX87CallGraphCache(
       ImmutableEntries, std::move(DeclaredFloatingImports));
 }
 
-std::array<size_t, 3> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
+std::array<size_t, 4> CFGBuilder::x87CallGraphCacheStatsForTesting() const {
   if (!SharedX87CallGraphs)
     return {};
   std::lock_guard<std::mutex> Lock(SharedX87CallGraphs->Mutex);
   return {SharedX87CallGraphs->Hits, SharedX87CallGraphs->Graphs.size(),
-          SharedX87CallGraphs->RetainedBytes};
+          SharedX87CallGraphs->RetainedBytes,
+          SharedX87CallGraphs->ContractHits};
 }
 
 std::array<size_t, 2> CFGBuilder::callRegisterBodyCacheStatsForTesting() const {
@@ -1139,15 +1181,9 @@ bool CFGBuilder::waitForX87CallGraphWaitersForTesting(size_t Count) const {
 /// The index lives for one CFG build of an unchanged image. Its cached local
 /// graphs contain machine facts, not answers obtained under a caller's budget.
 /// Each query pays for its complete call closure and every dataflow transfer.
-struct X87CallContract {
-  int Delta = 0;
-  bool ConsumesInput = false;
-  unsigned ScratchSlots = 0;
-  unsigned ImportArguments = 0;
-};
-
 class X87CallEffectIndex {
   friend class CFGBuilder;
+  friend class X87CallGraphCache;
   using Step = X87CallGraphStep;
   using Block = X87CallGraphBlock;
   using Graph = X87CallGraph;
@@ -1821,6 +1857,11 @@ public:
                                   : loadedCallSlot(F, Block, O, Op.Inputs[0]);
           if (!Target || Answers.count(*Target) || !Seen.insert(*Target).second)
             continue;
+          if (!ContextOwnership && X87CallGraphCache::sharesContracts(Settings))
+            if (const auto Kept = Cache->keptContract(Settings, *Target)) {
+              Answers.emplace(*Target, *Kept);
+              continue;
+            }
           const auto End = Image.getFunctionMetadataEnd(
               *Target, Settings.ExecutableCodeOwners);
           const uint64_t Weight =
@@ -1837,19 +1878,31 @@ public:
       return;
     std::vector<std::optional<X87CallContract>> Values(Targets.size());
     std::vector<std::exception_ptr> Failures(Targets.size());
+    const bool Keep =
+        !ContextOwnership && X87CallGraphCache::sharesContracts(Settings);
     parallelForEachWeighted(
         Weights,
         [&](auto Claim, size_t N) {
           X87CallEffectIndex Worker(Settings);
+          std::vector<size_t> Proved;
           for (size_t I; (I = Claim()) < N;)
             try {
-              if (ContextOwnership)
+              if (ContextOwnership) {
                 Worker.usesContext(Targets[I]);
-              else
+              } else {
                 Values[I] = Worker.contract(Targets[I]);
+                Proved.push_back(I);
+              }
             } catch (...) {
               Failures[I] = std::current_exception();
             }
+          // Every lift the worker read for any of its queries is a
+          // dependency of each answer it keeps.
+          if (Keep && !Proved.empty())
+            if (const auto Dependencies = Worker.liftDependencies())
+              for (size_t I : Proved)
+                Cache->keepContract(Settings, Targets[I], Values[I],
+                                    *Dependencies);
         },
         2, std::min(Settings.X87CallProofThreads, 4u));
     // Each query kept its own recursion state and full work allowance. Only
@@ -2001,6 +2054,67 @@ std::optional<bool> X87CallGraphCache::usesContext(const CFGBuilder &B,
     // Remembering is optional; the answer itself stands.
   }
   return Uses;
+}
+
+std::optional<std::optional<X87CallContract>>
+X87CallGraphCache::keptContract(const CFGBuilder &B, va_t Target) {
+  std::optional<KeptContract> Kept;
+  {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (ContractInputs && matches(*ContractInputs, B))
+      if (const auto Found = Contracts.find(Target); Found != Contracts.end())
+        Kept = Found->second;
+  }
+  // The answer holds while the prover answers as it did for the incomplete
+  // lifts the proof read, as a kept context use's does.
+  if (!Kept || !llvm::all_of(Kept->Dependencies, [&](const auto &Answer) {
+        return B.NoReturnCallees &&
+               B.NoReturnCallees->neverReturns(Answer.Target, Answer.Depth) ==
+                   Answer.NeverReturns;
+      }))
+    return std::nullopt;
+  std::lock_guard<std::mutex> Lock(Mutex);
+  ++ContractHits;
+  return Kept->Contract;
+}
+
+void X87CallGraphCache::keepContract(
+    const CFGBuilder &B, va_t Target,
+    const std::optional<X87CallContract> &Contract,
+    std::optional<std::vector<X87NoReturnAnswer>> Dependencies) {
+  if (!Dependencies || Dependencies->size() > MaxRefusalDependencies)
+    return;
+  try {
+    std::lock_guard<std::mutex> Lock(Mutex);
+    if (!ContractInputs || !matches(*ContractInputs, B)) {
+      Context Next = freezeContext(B);
+      if (!contextBytes(Next))
+        return;
+      Contracts.clear();
+      ContractInputs = std::move(Next);
+    }
+    if (Contracts.size() < MaxRefusals || Contracts.count(Target))
+      Contracts.insert_or_assign(
+          Target, KeptContract{Contract, std::move(*Dependencies)});
+  } catch (const std::bad_alloc &) {
+    // Remembering is optional; the answer itself stands.
+  }
+}
+
+std::optional<X87CallContract>
+X87CallGraphCache::contract(const CFGBuilder &B, va_t Target,
+                            X87CallEffectIndex &Own) {
+  if (const auto Asked = Own.Answers.find(Target); Asked != Own.Answers.end())
+    return Asked->second;
+  if (const auto Kept = keptContract(B, Target)) {
+    Own.Answers.emplace(Target, *Kept);
+    return *Kept;
+  }
+  // The build's index proves it from a fresh allowance, as it would alone.
+  // The lifts it read for earlier queries only add dependencies.
+  const auto Contract = Own.contract(Target);
+  keepContract(B, Target, Contract, Own.liftDependencies());
+  return Contract;
 }
 
 CFGBuilder::CallGraphWarmup CFGBuilder::warmCallGraphs(
@@ -2586,7 +2700,11 @@ void CFGBuilder::fixupFpuStack(
           continue;
         if (!X87CallEffects)
           X87CallEffects = std::make_shared<X87CallEffectIndex>(*this);
-        const auto Contract = X87CallEffects->contract(*Target);
+        // A session's builds share what proofs of the same callees found.
+        const auto Contract =
+            X87CallGraphCache::sharesContracts(*this)
+                ? SharedX87CallGraphs->contract(*this, *Target, *X87CallEffects)
+                : X87CallEffects->contract(*Target);
         const bool CRTStackCall =
             isX87CRTImportName(importCalleeName(*CurrentImg, *Target));
         if (CRTStackCall) {
@@ -2662,7 +2780,10 @@ void CFGBuilder::fixupFpuStack(
     return;
   if (!X87CallEffects)
     X87CallEffects = std::make_shared<X87CallEffectIndex>(*this);
-  const auto EntryContract = X87CallEffects->contract(Func.Entry);
+  const auto EntryContract =
+      X87CallGraphCache::sharesContracts(*this)
+          ? SharedX87CallGraphs->contract(*this, Func.Entry, *X87CallEffects)
+          : X87CallEffects->contract(Func.Entry);
   Func.ConsumesX87Argument = EntryContract && EntryContract->ConsumesInput;
   const bool ReturnsX87 = EntryContract && !EntryContract->ConsumesInput &&
                           EntryContract->Delta == -1;
