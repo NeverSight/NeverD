@@ -513,6 +513,32 @@ configurations remain separate coverage.
 
 ## Open
 
+Go code keeps Go's call register contract (`callRegisterContractOf`,
+2026-11-19). A call from code the Go `pclntab` lists keeps only the stack and
+frame pointers. A call to a runtime write barrier keeps the general-purpose
+registers Go documents for it. On the 25 Go binaries of the corpus the change
+removed 56,364 "no recovered semantics" placeholders, 33,418 "incoming
+register" placeholders and 22 refused functions. The 528 other outputs stayed
+byte-identical. Most of the gain is bogus System V argument registers and
+parameters, which disappear once a Go callee's summary sees what its own calls
+really clobber.
+
+Still open, in order of yield:
+
+1. Go's register arguments and multiple results are still read as System V and
+   AAPCS64 parameters. Go's internal ABI uses RAX, RBX, RCX, RDI, RSI, R8-R11
+   and X0-X14; arm64 uses R0-R15 and F0-F15. This holds most of the roughly
+   610,000 Go placeholders that remain.
+2. The goroutine register (R14, R28) and X15 should become fixed values once
+   an image's internal ABI is proven.
+3. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
+   C writer drops it because the stub's own signature is `void`.
+4. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
+   calls per binary).
+5. Go code on targets other than x86-64 and AArch64 still keeps the platform
+   contract.
+6. Restricted PE loads skip the Go metadata.
+
 Explicit continuation exports now include a separately bounded environment
 driver. A caller-provided callback receives the complete boundary state and
 can return another physical PC/stack for resumption. Invalid state and

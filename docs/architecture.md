@@ -5737,6 +5737,54 @@ The MedIR call-clobber query uses the target's format-aware preserved-byte
 contract for platform registers as well. An ARM64 X18 view is not implicitly
 preserved merely because the ISA names a platform register; the selected ABI
 and complete byte width must permit it, including partial-register queries.
+
+Go code has no callee-saved registers: a call may overwrite every register
+that has no fixed meaning (`src/cmd/compile/abi-internal.md`). Only the stack
+pointer and the frame pointer, RBP or X29, keep their values. RBX, R12-R15
+and X19-X28 are scratch to Go, and RBX is where Go returns a call's second
+result. Read as a System V or AAPCS64 call, a Go call printed whatever a
+caller had left in such a register before the call as its value after the
+call.
+
+`callRegisterContractOf` (`lib/ir/low/GoCallContract.cpp`) is the one
+authority on which registers a call keeps. A caller the Go `pclntab` does not
+list keeps its image's platform contract. Code the Go toolchain built follows
+Go's: every function whose record carries a pc-SP table
+(`GoModuleInfo::GoCode`). The linker leaves that offset zero for code it has
+no Go frame data for. So C code that an internally linked cgo image lists
+keeps the platform contract, and with external linking it has no record at
+all.
+
+A call to a runtime write barrier (`GoModuleInfo::WriteBarriers`) follows the
+contract Go documents beside the routine (`src/runtime/asm_amd64.s`,
+`asm_arm64.s`). Go 1.11-1.20 `runtime.gcWriteBarrier` and its amd64 register
+variants perform the store and keep every general-purpose register. Go 1.21
+and later `runtime.gcWriteBarrier1`-`8` keep every general-purpose register
+except arm64's R27 and the R11 or X25 they return buffer space in, which the
+call defines. Barriers are recorded only where the text base is proven.
+
+MedIR caches the decision on each call (`MedOp::RegisterContract`). From
+there `callClobbersRegister`, SSA's partial clobbers, sub-register merges, the
+code-pointer resolver and HighIR argument collection read it. LowIR asks the
+authority directly, in the call-register summaries, the CFG builder's
+stack-offset model, both jump-table resolvers, the module address inventory
+and the AArch64 indirect-tail-frame guard.
+
+In the summaries, a Go call no summary bounds clobbers every tracked family
+but RSP and RBP (`LocalRegisterEffect::CallClobbers`). A write barrier's
+effect is its documented one, not what its body appears to write: it writes
+its buffer register and the vector registers, and reads its store operands
+and, on amd64, R14.
+
+The contract covers x86-64 and AArch64; Go code for other targets keeps the
+platform contract. R14 and X15 on amd64, and R28 on arm64, are not assumed
+kept until the image's internal ABI is proven. A restricted PE load skips the
+Go metadata and keeps the platform contract.
+
+Callee-side questions still follow the platform convention: which registers a
+Go function takes arguments in and returns results in, and which of its entry
+reads are parameters. Go's register arguments and results are the next stage.
+
 The GUI's analysis replicas restore with `call_summaries:true`: they discover
 the image's functions, warm a page of functions per idle step, solve, drop
 their cached replies so the shown source is read again, and then read ahead
