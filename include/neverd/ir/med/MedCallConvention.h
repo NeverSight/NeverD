@@ -199,6 +199,16 @@ std::optional<CallingConv> callingConventionOf(Arch A, BinaryFormat F);
 /// every format of the architecture.
 const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F);
 
+/// Whether the call-graph summary \p Reads of a function lists no parameters
+/// under \p Convention (CallArgumentConvention::SummaryListsNoParameters).
+/// A summary of Go code that takes its arguments in Go's registers
+/// (usesGoRegisterArguments, \p GoRegisterArguments) always lists them: Go
+/// has no C variadic functions, and a one-byte RAX read is a `bool` argument,
+/// not a variadic prologue's vector count.
+bool summaryListsNoParameters(const CallArgumentConvention &Convention,
+                              const GPRReadWidths &Reads,
+                              bool GoRegisterArguments);
+
 /// Whether a recovered parameter covers every incoming byte of \p V.
 /// An internal convention can pass an argument in a normally saved register;
 /// forwarding that value on the stack is not merely saving it for restoration.

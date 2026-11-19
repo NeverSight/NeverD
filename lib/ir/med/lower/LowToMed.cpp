@@ -604,10 +604,11 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
         MOp.CalleeRegisterArgs = 0;
     }
   // A Go callee takes its integer arguments in Go's registers, in Go's order.
+  const bool GoCallee =
+      Image && ConstantTarget && usesGoRegisterArguments(*Image, Key);
   const llvm::ArrayRef<uint64_t> ArgRegs =
-      Image && ConstantTarget && usesGoRegisterArguments(*Image, Key)
-          ? goIntegerArgumentRegisters(TargetArch)
-          : TRI.integerParamRegs(TargetFormat);
+      GoCallee ? goIntegerArgumentRegisters(TargetArch)
+               : TRI.integerParamRegs(TargetFormat);
   const auto FPParamRegs = TRI.floatingParamRegs(TargetFormat);
   const int8_t Slots =
       static_cast<int8_t>(std::min<size_t>(ArgRegs.size(), kTrackedArgSlots));
@@ -710,8 +711,7 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
              CallEntryReadGPRs && MOp.NumInputs == 1)
     if (auto R = CallEntryReadGPRs->find(ArgumentsKey);
         R != CallEntryReadGPRs->end() &&
-        !(Convention->SummaryListsNoParameters &&
-          Convention->SummaryListsNoParameters(R->second))) {
+        !summaryListsNoParameters(*Convention, R->second, GoCallee)) {
       // A positional convention passes a floating argument in its slot's
       // vector register: the whole register, whose value every write
       // reaches, and the bytes the callee reads of it.

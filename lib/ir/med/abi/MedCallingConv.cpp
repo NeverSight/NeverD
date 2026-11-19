@@ -707,7 +707,8 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> IntegerRegs,
                           std::set<uint64_t> UsedParamRegs, Arch TargetArch,
                           const CallArgumentConvention *Convention,
-                          const GPRReadWidths *EntryReadSummary = nullptr) {
+                          const GPRReadWidths *EntryReadSummary = nullptr,
+                          bool GoRegisterArguments = false) {
   // A routine with a platform prototype (a documented WDK routine) takes
   // exactly its declared parameters, however its body forwards registers to
   // other calls.
@@ -725,8 +726,8 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   // use either.
   const bool FromSummary =
       !ProtoArgs && EntryReadSummary && FromIncomingReads &&
-      !(Convention->SummaryListsNoParameters &&
-        Convention->SummaryListsNoParameters(*EntryReadSummary));
+      !summaryListsNoParameters(*Convention, *EntryReadSummary,
+                                GoRegisterArguments);
   if (ProtoArgs) {
     UsedParamRegs.clear();
     for (size_t I = 0; I < ParamRegs.size() && I < *ProtoArgs; ++I)
@@ -1579,7 +1580,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   }
   // Go code the toolchain compiled takes its integer arguments in Go's
   // registers (usesGoRegisterArguments).
-  if (Image && usesGoRegisterArguments(*Image, Func.Entry)) {
+  const bool GoRegisterArguments =
+      Image && usesGoRegisterArguments(*Image, Func.Entry);
+  if (GoRegisterArguments) {
     const llvm::ArrayRef<uint64_t> Go = goIntegerArgumentRegisters(TheArch);
     Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());
     IntegerRegs = Func.IntegerArgumentRegisters;
@@ -1655,7 +1658,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         SummaryVariadicFrom = It->second;
       }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
-                         TargetArch, Convention, Summary);
+                         TargetArch, Convention, Summary, GoRegisterArguments);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1677,8 +1680,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
           !Convention->PositionalArgumentSlots &&
           !(Convention->PrototypeArgCount &&
             Convention->PrototypeArgCount(Func.Name)) &&
-          !(Convention->SummaryListsNoParameters &&
-            Convention->SummaryListsNoParameters(*Summary)))
+          !summaryListsNoParameters(*Convention, *Summary, GoRegisterArguments))
         detectSummaryVectorParams(Func, TRI, *Summary, TargetArch,
                                   TargetFormat);
     } else if (Func.takesVectorArgumentRegisters()) {

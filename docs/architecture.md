@@ -5788,7 +5788,10 @@ Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is
 the toolchain compiled qualifies. `detectCc` gives such a function that
 register order (`MedFunc::IntegerArgumentRegisters`). A direct call to one
 publishes its arguments in it, and the ABI pass binds them by the callee's
-order.
+order. System V reads a summary that reads one byte of RAX as a variadic
+prologue's vector count, which lists no parameters; a Go summary always lists
+them (`summaryListsNoParameters`), since a Go function's first argument may be
+a `bool`.
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a

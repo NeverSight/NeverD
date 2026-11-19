@@ -338,6 +338,32 @@ TEST(GoRegisterArguments, AGoFunctionTakesThemInGoRegisters) {
   EXPECT_EQ(Effect.StackArgs, 0);
 }
 
+TEST(GoRegisterArguments, ABoolFirstArgumentIsNoVectorCount) {
+  // System V reads a summary that reads one byte of RAX as a variadic
+  // prologue's vector count, which lists no parameters.  A Go function's
+  // first argument can be a bool: printhexopts(include0x bool, ...) in AL.
+  const BinaryImage Img = registerArgumentImage();
+  GPRReadWidths Reads{};
+  Reads[x86reg::RAX / 8] = 1;
+  Reads[x86reg::RBX / 8] = 8;
+  const std::map<va_t, GPRReadWidths> Summaries{{GoCallee, Reads}};
+  LowToMedConverter Caller;
+  Caller.setBinaryImage(&Img);
+  Caller.setCallEntryReadGPRs(&Summaries);
+  const MedFunc G = Caller.convert(build(Img, GoCaller), Img.Arch, Img.Format);
+  const MedOp *Call = onlyCall(G);
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->NumInputs, 3u);
+  // The callee's own parameters follow the same summary.
+  LowToMedConverter Callee;
+  Callee.setBinaryImage(&Img);
+  Callee.setCallEntryReadGPRs(&Summaries);
+  const MedFunc F = Callee.convert(build(Img, GoCallee), Img.Arch, Img.Format);
+  ASSERT_EQ(F.Params.size(), 2u);
+  EXPECT_EQ(F.Params[0].RegOff, x86reg::RAX);
+  EXPECT_EQ(F.Params[1].RegOff, x86reg::RBX);
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

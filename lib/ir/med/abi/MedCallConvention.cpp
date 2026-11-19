@@ -19,6 +19,13 @@ extern const CallArgumentConvention AAPCS64CallArguments;
   extern const CallArgumentConvention Name##CallArguments;
 #include "neverd/MIPSTargets.def"
 
+bool summaryListsNoParameters(const CallArgumentConvention &Convention,
+                              const GPRReadWidths &Reads,
+                              bool GoRegisterArguments) {
+  return !GoRegisterArguments && Convention.SummaryListsNoParameters &&
+         Convention.SummaryListsNoParameters(Reads);
+}
+
 const CallArgumentConvention *callArgumentConvention(Arch A, BinaryFormat F) {
   static constexpr const CallArgumentConvention *Conventions[] = {
       &Win64CallArguments,          &SysVX64CallArguments,
