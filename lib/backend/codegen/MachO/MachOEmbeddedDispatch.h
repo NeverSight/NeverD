@@ -25,6 +25,12 @@ struct MachOEmbeddedDispatch {
   std::vector<MachODataInCodeRange> Recovered;
 };
 
+/// Cover a machine read with same-kind records. If supplied, Missing receives
+/// only the portions of the read omitted from the source table.
+bool coverMachOEmbeddedRead(
+    const MachOLiftedSource &Source, va_t Start, va_t Address, uint64_t Size,
+    uint16_t Kind, std::vector<MachODataInCodeRange> *Missing = nullptr);
+
 std::optional<MachOEmbeddedDispatch>
 machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
                       const MachOLiftedSource &Source, const LowFunc &Function);

@@ -176,11 +176,12 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool LiteralWidths = Preamble == kLiteralWidthsOracle;
+  const bool SplitLiterals = Preamble == kSplitLiteralOracle;
+  const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
   const bool Embedded = Declared || Recover;
-  if (Declared || PartialRecords)
+  if (Declared || PartialRecords || SplitLiterals)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
@@ -369,7 +370,6 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   }
   auto ExpectedData = Image->MachODataInCode;
   if (LiteralWidths) {
-    ASSERT_TRUE(ExpectedData.empty());
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);
     ASSERT_TRUE(First && Second && First->Addr < Second->Addr);
@@ -381,13 +381,54 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     const auto SIMDBytes =
         sizeof(uint32_t) + sizeof(uint64_t) + 2 * sizeof(uint64_t);
     const auto Limit = Text->VA + Text->Size;
-    ExpectedData = {{Second->Addr - IntegerBytes, Second->Addr,
-                     llvm::MachO::DICE_KIND_DATA},
-                    {Limit - SIMDBytes, Limit, llvm::MachO::DICE_KIND_DATA}};
+    const auto IntPool = Second->Addr - IntegerBytes;
+    const auto VectorPool = Limit - SIMDBytes;
+    constexpr auto Data = llvm::MachO::DICE_KIND_DATA;
+    std::vector<MachODataInCodeRange> Missing;
+    if (SplitLiterals) {
+      const auto Mark = IntPool + sizeof(uint32_t) + sizeof(uint16_t);
+      const auto Tail = Mark + sizeof(uint16_t);
+      const auto Quad = Limit - 2 * sizeof(uint64_t);
+      const auto High = Limit - sizeof(uint64_t);
+      const auto Double = Quad - sizeof(uint64_t);
+      const auto Gap = Double + sizeof(uint16_t);
+      const auto GapEnd = Quad - sizeof(uint16_t);
+      const std::vector<MachODataInCodeRange> Marked{{Mark, Tail, Data},
+                                                     {Double, Gap, Data},
+                                                     {GapEnd, Quad, Data},
+                                                     {Quad, High, Data},
+                                                     {High, Limit, Data}};
+      ASSERT_EQ(Image->MachODataInCode, Marked);
+      Missing = {{IntPool, Mark, Data},
+                 {Tail, Second->Addr, Data},
+                 {VectorPool, Double, Data},
+                 {Gap, GapEnd, Data}};
+      llvm::append_range(ExpectedData, Missing);
+      llvm::sort(ExpectedData, [](const auto &L, const auto &R) {
+        return L.Begin < R.Begin;
+      });
+    } else {
+      ASSERT_TRUE(ExpectedData.empty());
+      Missing = {{IntPool, Second->Addr, Data}, {VectorPool, Limit, Data}};
+      ExpectedData = Missing;
+    }
     std::vector<MachODataInCodeRange> Ranges;
     auto Entries = validateMachORegisterResults(Module, *Image, &Ranges);
     ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
-    EXPECT_EQ(Ranges, ExpectedData);
+    EXPECT_EQ(Ranges, Missing);
+    if (SplitLiterals) {
+      // Change only the high half of the Q literal to a typed jump table.
+      // Revalidation must reject the read and leave the output ranges alone.
+      auto Conflicting = Reader->load(Input);
+      ASSERT_TRUE(bool(Conflicting)) << llvm::toString(Conflicting.takeError());
+      Conflicting->MachODataInCode.back().Kind =
+          llvm::MachO::DICE_KIND_JUMP_TABLE8;
+      auto Invalid =
+          validateMachORegisterResults(Module, *Conflicting, &Ranges);
+      ASSERT_FALSE(bool(Invalid));
+      llvm::consumeError(Invalid.takeError());
+      EXPECT_EQ(Ranges, Missing);
+    }
   }
   if (Recover) {
     ExpectedData.clear();
@@ -1660,6 +1701,11 @@ TEST(AArch64LiftedImage, PartialSwitchRecordsPreserveUnalignedStorage) {
 TEST(AArch64LiftedImage, UnmarkedIntegerAndSIMDLiteralPoolsSurviveRelifting) {
   verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
                         kLiteralWidthsOracle, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, FragmentedIntegerAndSIMDLiteralsSurviveRelifting) {
+  verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
+                        kSplitLiteralOracle, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {

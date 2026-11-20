@@ -2482,3 +2482,19 @@ classifier test. Both hosted Apple M1 virtual machines qualified native PAC,
 authenticated calls and signed language unwinding. The strict PAuth_LR,
 PACM-PC and CPTA-on hardware checks reported unavailable.
 [Source, image hashes and per-host measurements](evidence/arm64e-inferred-data-2026-11-20.json).
+
+### Literal loads crossing Mach-O data-in-code records
+
+An AArch64 literal load can span several consecutive records or a gap in
+the source table. The publisher walks the records intersecting the decoded
+read and keeps their original extents. It fills only the bytes within the
+read that lack a record. The installer requires complete coverage of the
+read in the resulting layout. A conflicting record kind invalidates the read,
+including a conflict confined to the high half of a vector.
+
+The signed fixture marks two bytes in the middle of a 64-bit integer, leaves
+a gap inside a double, and describes a 128-bit vector with two adjacent
+eight-byte records. The comparison program reads all six integer and SIMD
+literal forms and compares both halves of the vector. The test checks the
+five source records, four recovered extents and the bytes and types in three
+successive publications.

@@ -553,9 +553,17 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
+A64_LEAF_TEXT(kSplitLiteralOracle, "#define NEVERD_TEST_SPLIT_LITERALS 1\n")
 A64_LEAF_TEXT(kLiteralComparisons, "native_literal_width_comparisons")
 A64_LEAF_VALUE(unsigned, kLiteralInputs, 5)
 A64_LEAF_TEXT(kLiteralWidths, R"asm(
+#ifdef NEVERD_TEST_SPLIT_LITERALS
+#define BEGIN_LITERAL .data_region
+#define END_LITERAL .end_data_region
+#else
+#define BEGIN_LITERAL
+#define END_LITERAL
+#endif
 .text
 .p2align 2
 .globl _leaf_sum
@@ -572,7 +580,11 @@ Lword: ldr w0,LwordData
 Ldouble: ldr x0,LdoubleData
  ret
 LwordData: .long 0x8fedcba1
-LdoubleData: .quad 0x12345678abcdef01
+LdoubleData: .short 0xef01
+ BEGIN_LITERAL
+ .short 0xabcd
+ END_LITERAL
+ .long 0x12345678
 LsignedData: .long 0x80000005
 .cfi_endproc
 .globl _leaf_difference
@@ -583,9 +595,11 @@ _leaf_difference:
  cmp w0,#1
  b.eq LfloatDouble
  ldr q0,Lquad
- mov x9,v0.d[1]
+ cmp w0,#2
+ b.ne Lhigh
  fmov x0,d0
- eor x0,x0,x9
+ ret
+Lhigh: mov x0,v0.d[1]
  ret
 Lsingle: ldr s0,LsingleData
  fmov w0,s0
@@ -594,8 +608,21 @@ LfloatDouble: ldr d0,LfloatData
  fmov x0,d0
  ret
 LsingleData: .long 0x7fc00021
-LfloatData: .quad 0x8000000000000000
-Lquad: .quad 0x1122334455667788,0x9abcdef012345678
+LfloatData:
+ BEGIN_LITERAL
+ .short 0
+ END_LITERAL
+ .long 0
+ BEGIN_LITERAL
+ .short 0x8000
+ END_LITERAL
+Lquad:
+ BEGIN_LITERAL
+ .quad 0x1122334455667788
+ END_LITERAL
+ BEGIN_LITERAL
+ .quad 0x9abcdef012345678
+ END_LITERAL
 .cfi_endproc
 .subsections_via_symbols
 )asm")
@@ -617,12 +644,11 @@ int main(int argc, char **argv) {
   const uint64_t integers[] = {UINT64_C(0x8fedcba1), UINT64_C(0x12345678abcdef01),
                                UINT64_C(0xffffffff80000005)};
   const uint64_t vectors[] = {UINT64_C(0x7fc00021), UINT64_C(0x8000000000000000),
-                              UINT64_C(0x1122334455667788) ^ UINT64_C(0x9abcdef012345678)};
+                              UINT64_C(0x1122334455667788), UINT64_C(0x9abcdef012345678)};
   for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
     uint32_t index = (uint32_t)inputs[i];
-    if (index >= 2)
-      index = 2;
-    if (integer(inputs[i]) != integers[index] || vector(inputs[i]) != vectors[index])
+    if (integer(inputs[i]) != integers[index < 2 ? index : 2] ||
+        vector(inputs[i]) != vectors[index < 3 ? index : 3])
       return 4;
   }
   return dlclose(image) != 0;

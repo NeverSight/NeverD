@@ -17,6 +17,36 @@
 #include "llvm/BinaryFormat/MachO.h"
 
 namespace neverd {
+bool coverMachOEmbeddedRead(const MachOLiftedSource &Source, va_t Start,
+                            va_t Address, uint64_t Size, uint16_t Kind,
+                            std::vector<MachODataInCodeRange> *Missing) {
+  if (Address < Start || !Size ||
+      !rangeInBounds(Address - Start, Size, Source.Bytes.size()))
+    return false;
+  const auto Records = machODataInCodeRanges(Source.Embedded, Address, Size);
+  if (llvm::any_of(Records, [Kind](const auto &R) { return R.Kind != Kind; }))
+    return false;
+
+  // Keep declared record boundaries for publication. A decoded read supplies
+  // ownership for its uncovered bytes, including gaps between records.
+  const va_t End = Address + Size;
+  va_t Next = Address;
+  for (const auto &R : Records) {
+    if (Next < R.Begin) {
+      if (!Missing)
+        return false;
+      Missing->push_back({Next, R.Begin, Kind});
+    }
+    Next = R.End;
+  }
+  if (Next < End) {
+    if (!Missing)
+      return false;
+    Missing->push_back({Next, End, Kind});
+  }
+  return true;
+}
+
 namespace {
 #define MACHO_DISPATCH_VALUE(Name, Value) constexpr unsigned Name = Value;
 #include "MachOEmbeddedDispatch.def"
@@ -113,22 +143,6 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
   return MovingTable{Storage->PC, Kind};
 }
 
-// A source record is authoritative. Only an uncovered read may introduce a
-// new record; its instruction must never change the kind of a declared one.
-bool recordRead(const MachOLiftedSource &Source, va_t Start, va_t Begin,
-                va_t End, uint16_t Kind,
-                std::vector<MachODataInCodeRange> &Recovered) {
-  if (Begin < Start || End <= Begin || End - Start > Source.Bytes.size())
-    return false;
-  const auto Existing =
-      machODataInCodeRanges(Source.Embedded, Begin, End - Begin);
-  if (!Existing.empty())
-    return Existing.size() == 1 && Existing.front().Kind == Kind &&
-           Existing.front().Begin <= Begin && End <= Existing.front().End;
-  Recovered.push_back({Begin, End, Kind});
-  return true;
-}
-
 bool recordTable(const MachOLiftedSource &Source, va_t Start,
                  const JumpTable &Table, uint16_t Kind,
                  std::vector<MachODataInCodeRange> &Recovered) {
@@ -141,13 +155,15 @@ bool recordTable(const MachOLiftedSource &Source, va_t Start,
         Range.EntrySize != Table.EntrySize)
       return false;
     if (Range.EntrySize == Range.EntryStride || Range.PhysicalSlotCount == 1) {
-      if (!recordRead(Source, Start, Range.BaseAddr, *End, Kind, Recovered))
+      if (!coverMachOEmbeddedRead(Source, Start, Range.BaseAddr,
+                                  *End - Range.BaseAddr, Kind, &Recovered))
         return false;
       continue;
     }
     for (uint64_t I = 0; I < Range.PhysicalSlotCount; ++I) {
       const va_t At = Range.BaseAddr + I * Range.EntryStride;
-      if (!recordRead(Source, Start, At, At + Range.EntrySize, Kind, Recovered))
+      if (!coverMachOEmbeddedRead(Source, Start, At, Range.EntrySize, Kind,
+                                  &Recovered))
         return false;
     }
   }
@@ -249,9 +265,9 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       if (Load && Load->Address >= Function.Entry &&
           rangeInBounds(Load->Address - Function.Entry, Load->Width,
                         Source.Bytes.size()) &&
-          !recordRead(Source, Function.Entry, Load->Address,
-                      Load->Address + Load->Width, llvm::MachO::DICE_KIND_DATA,
-                      Result.Recovered))
+          !coverMachOEmbeddedRead(Source, Function.Entry, Load->Address,
+                                  Load->Width, llvm::MachO::DICE_KIND_DATA,
+                                  &Result.Recovered))
         return std::nullopt;
     }
     if (Block.EndAddr < aarch64::kInsnSize)
