@@ -591,6 +591,15 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       for (const auto &P : Signature.Parameters) {
         if (P.Components.empty()) {
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
+        } else if (Signature.MIPSRecords && mips::isSplitRecordScalar(P)) {
+          auto First = medvarToExpr(Call.Inputs[++Index]);
+          auto Second = medvarToExpr(Call.Inputs[++Index]);
+          if (archLittleEndian(TargetArch))
+            std::swap(First, Second);
+          auto Bits = HighExpr::makeBinop(NdOp::CONCAT, std::move(First),
+                                          std::move(Second));
+          Bits->Type = NdType::makeInt(8, false);
+          Hinted.push_back(HighExpr::makeBitCast(std::move(Bits), P.Type));
         } else if (Signature.MIPSRecords && mips::isByteRecord(P.Type)) {
           const auto Members = sourceValueMembers(P.Type);
           std::vector<ExprPtr> Leaves;

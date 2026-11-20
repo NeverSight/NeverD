@@ -10,6 +10,7 @@
 
 #include "MIPS/SourceScalarResult.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
@@ -668,7 +669,13 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                ? P.Type->Pointee
                : P.Type,
            P.Location});
-    else if (Hint.MIPSRecords && mips::isByteRecord(P.Type)) {
+    else if (Hint.MIPSRecords && mips::isSplitRecordScalar(P)) {
+      const bool Little = archLittleEndian(Hint.Architecture);
+      for (unsigned Word = 0; Word < 2; ++Word)
+        Result.push_back(
+            {I, static_cast<uint16_t>((Little ? Word : 1 - Word) * 4), P.Name,
+             NdType::makeInt(4, false), P.Components[Word]});
+    } else if (Hint.MIPSRecords && mips::isByteRecord(P.Type)) {
       uint16_t Offset = 0;
       for (const auto &L : P.Components) {
         Result.push_back(

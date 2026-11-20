@@ -389,6 +389,59 @@ TEST(MIPSRecordABI, HiddenResultPreservesStorageWidthAndLLVMArgumentPositions) {
   }
 }
 
+TEST(MIPSRecordABI, O32ScalarWordPairsAreOneCAndLLVMArgument) {
+  llvm::LLVMContext Context;
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 5, 5);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool Stack : {false, true})
+      for (bool Floating : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << ' ' << Stack << ' ' << Floating);
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Record;
+        const auto Scalar =
+            Floating ? NdType::makeFloat(8) : NdType::makeInt(8, false);
+        S.Parameters =
+            Stack ? std::vector<SourceParameterTypeHint>{{"bytes", Record},
+                                                         {"number", Scalar}}
+                  : std::vector<SourceParameterTypeHint>{{"number", Scalar},
+                                                         {"bytes", Record}};
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        const auto Parts = sourceABIParameters(S);
+        const auto Args = llvmMIPSRecordArguments(Context, S, Parts);
+        ASSERT_EQ(Args.size(), 3u);
+        const unsigned I = Stack ? 2 : 0;
+        const auto &Number = Args[I];
+        ASSERT_EQ(Number.PieceCount, 2u);
+        EXPECT_EQ(Number.Type, Floating ? llvm::Type::getDoubleTy(Context)
+                                        : llvm::Type::getInt64Ty(Context));
+        EXPECT_FALSE(Number.InReg);
+        for (unsigned J = 0; J < 2; ++J) {
+          const auto &P = Parts[Number.FirstPiece + J];
+          EXPECT_EQ(P.ByteOffset, (archLittleEndian(A) ? J : 1 - J) * 4);
+          EXPECT_EQ(P.Location.ValueBytes, 4u);
+          if (Stack) {
+            EXPECT_EQ(P.Location.Kind, SourceABICarrierKind::Stack);
+            EXPECT_EQ(P.Location.EntryStackOffset, 16u + J * 4u);
+          } else {
+            EXPECT_EQ(P.Location.RegisterOffset,
+                      getTargetRegInfo(A).IntParamRegs[2 + J]);
+          }
+        }
+        const auto Attrs = mips::recordCallAttributes(Context, {}, S, Parts);
+        EXPECT_FALSE(Attrs.hasParamAttr(I + 1, llvm::Attribute::InReg));
+        EXPECT_EQ(Attrs.hasParamAttr(I + 1, llvm::Attribute::ZExt), !Floating);
+        auto Changed = S;
+        std::swap(Changed.Parameters[Stack ? 1 : 0].Components[0],
+                  Changed.Parameters[Stack ? 1 : 0].Components[1]);
+        std::string Diagnostic;
+        EXPECT_FALSE(validateSourceABI(Changed, Diagnostic));
+      }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);

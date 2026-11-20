@@ -53,6 +53,9 @@ bool isByteRecord(const TypeRef &Type);
 bool isPackedRecordWord(const TypeRef &Type,
                         llvm::ArrayRef<SourceABIValueLocation> Locations);
 
+/// An o32 double or long long carried as two words of one source parameter.
+bool isSplitRecordScalar(const SourceParameterTypeHint &Parameter);
+
 /// Bind a source declaration whose components can be represented independently
 /// in the source IR. Retains the input unchanged when a carrier is unavailable.
 bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,

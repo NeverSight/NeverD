@@ -1682,7 +1682,9 @@ record result uses caller-provided storage and the callee returns its address
 in v0. Large n32/n64 results use caller-provided storage and leave v0
 unspecified. A typed call passes the original result address as LLVM `sret`.
 The saved-link check accounts for every byte that the result writes into a
-private frame, including the last byte of a short final word. Both C emitters can build a typed entry around a recovered body
+private frame, including the last byte of a short final word. An o32 double or long long
+alongside a record uses an aligned pair of physical words. Both C backends
+recombine the words in target order for the single typed argument. Both C emitters can build a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final
 word uses only the object's remaining bytes, including on big-endian targets.

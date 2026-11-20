@@ -1175,7 +1175,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
           // input. Its typed wrapper owns the caller-provided result storage.
           if (Pieces.empty() &&
               It->second.ReturnLocation.Kind !=
-                  SourceABICarrierKind::IndirectResultPointer) {
+                  SourceABICarrierKind::IndirectResultPointer &&
+              llvm::none_of(It->second.Parameters, mips::isSplitRecordScalar)) {
             SourceEntryHints.emplace(LF.Entry, It->second);
             SourceHints.emplace(LF.Entry, &It->second);
           }

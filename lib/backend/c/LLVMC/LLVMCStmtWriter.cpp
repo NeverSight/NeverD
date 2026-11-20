@@ -6436,8 +6436,10 @@ void checkSourceCallCarriers(const llvm::CallBase &Call,
     throw std::runtime_error("The call-site source result carrier changed");
   if (Signature.MIPSRecords) {
     const auto Pieces = sourceABIParameters(Signature);
+    const auto Arguments =
+        llvmMIPSRecordArguments(Call.getContext(), Signature, Pieces);
     if (!Call.hasFnAttr(LLVMMIPSRecordCall) ||
-        Call.arg_size() != Pieces.size() + unsigned(Hidden) ||
+        Call.arg_size() != Arguments.size() + unsigned(Hidden) ||
         Call.hasRetAttr(llvm::Attribute::InReg) !=
             !Signature.ReturnComponents.empty())
       throw std::runtime_error("The MIPS record call lost its ABI carriers");
@@ -6449,13 +6451,11 @@ void checkSourceCallCarriers(const llvm::CallBase &Call,
           Call.getParamAlign(0) != llvm::Align(Signature.ReturnType->Alignment))
         throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
     }
-    for (unsigned I = 0; I < Pieces.size(); ++I)
+    for (const auto &[I, Argument] : llvm::enumerate(Arguments))
       if (Call.getArgOperand(I + unsigned(Hidden))->getType() !=
-              llvmMIPSRecordPieceType(Call.getContext(), Pieces[I],
-                                      Signature) ||
+              Argument.Type ||
           Call.paramHasAttr(I + unsigned(Hidden), llvm::Attribute::InReg) !=
-              !Signature.Parameters[Pieces[I].ParameterIndex]
-                   .Components.empty())
+              Argument.InReg)
         throw std::runtime_error("A MIPS record component changed ABI class");
     return;
   }
@@ -6583,6 +6583,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
                         Signature->ReturnLocation.Kind ==
                             SourceABICarrierKind::IndirectResultPointer;
     unsigned Operand = unsigned(Hidden);
+    unsigned Physical = 0;
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Expression += ", ";
@@ -6594,12 +6595,13 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
                                  Call.getAttributes().hasParamAttr(
                                      Operand, LLVMSourceSignedParameter));
       if (Signature && Signature->MIPSRecords &&
+          Signature->Parameters[I].Type->Kind == NdTypeKind::Struct &&
           !Signature->Parameters[I].Components.empty()) {
         const auto &Parameter = Signature->Parameters[I];
         IntegerCallParameter Packed;
-        while (Operand - unsigned(Hidden) < RecordPieces.size() &&
-               RecordPieces[Operand - unsigned(Hidden)].ParameterIndex == I) {
-          const auto &Piece = RecordPieces[Operand - unsigned(Hidden)];
+        while (Physical < RecordPieces.size() &&
+               RecordPieces[Physical].ParameterIndex == I) {
+          const auto &Piece = RecordPieces[Physical++];
           const bool FP =
               Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
           Packed.Pieces.push_back(
@@ -6612,6 +6614,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
             });
         continue;
       }
+      if (Signature && Signature->MIPSRecords)
+        Physical += mips::isSplitRecordScalar(Signature->Parameters[I]) ? 2 : 1;
       const auto *Argument = Call.getArgOperand(Operand++);
       if (Signature && !Signature->Parameters[I].IndirectByValue &&
           Signature->Parameters[I].Type->Kind == NdTypeKind::Struct)

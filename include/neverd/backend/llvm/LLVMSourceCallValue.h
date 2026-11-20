@@ -12,8 +12,10 @@
 #ifndef NEVERD_BACKEND_LLVM_LLVMSOURCECALLVALUE_H
 #define NEVERD_BACKEND_LLVM_LLVMSOURCECALLVALUE_H
 
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DerivedTypes.h"
 
 #include <vector>
@@ -77,6 +79,35 @@ inline llvm::Type *llvmMIPSRecordPieceType(llvm::LLVMContext &Context,
        Piece.Type->Kind == NdTypeKind::Float && Piece.Type->Size == 8))
     return llvmSourceCallValueType(Context, Piece.Type, true);
   return llvm::IntegerType::get(Context, Piece.Location.ValueBytes * 8);
+}
+
+struct LLVMMIPSRecordArgument {
+  llvm::Type *Type;
+  unsigned FirstPiece;
+  unsigned PieceCount;
+  bool InReg;
+};
+
+/// Clang coerces each record word into a separate inreg argument. An aligned
+/// o32 scalar pair instead occupies a single LLVM argument of its source type.
+inline llvm::SmallVector<LLVMMIPSRecordArgument, 8>
+llvmMIPSRecordArguments(llvm::LLVMContext &Context,
+                        const SourceFunctionTypeHint &Hint,
+                        llvm::ArrayRef<SourceABIParameter> Pieces) {
+  llvm::SmallVector<LLVMMIPSRecordArgument, 8> Result;
+  for (unsigned I = 0; I < Pieces.size();) {
+    const auto &P = Hint.Parameters[Pieces[I].ParameterIndex];
+    if (mips::isSplitRecordScalar(P)) {
+      Result.push_back(
+          {llvmSourceCallValueType(Context, P.Type, true), I, 2, false});
+      I += 2;
+    } else {
+      Result.push_back({llvmMIPSRecordPieceType(Context, Pieces[I], Hint), I, 1,
+                        !P.Components.empty()});
+      ++I;
+    }
+  }
+  return Result;
 }
 
 /// A MIPS record result has one LLVM element for each physical register.

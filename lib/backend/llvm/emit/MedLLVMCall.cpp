@@ -1119,52 +1119,63 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       return Value;
     };
-    size_t At = 0;
-    for (const auto &Parameter : Hint.Signature.Parameters) {
-      if (Parameter.Components.empty()) {
-        Types.push_back(Carriers[At]->getType());
-        Values.push_back(Carriers[At++]);
-        continue;
-      }
-      if (Hint.Signature.MIPSRecords) {
-        for (size_t End = At + Parameter.Components.size(); At < End; ++At) {
-          auto *Type =
-              llvmMIPSRecordPieceType(*Ctx, Bindings[At], Hint.Signature);
-          auto *Part = Carriers[At];
-          Types.push_back(Type);
-          Values.push_back(Type == Part->getType() ? Part : IntegerBits(Part));
+    if (Hint.Signature.MIPSRecords) {
+      const auto Arguments =
+          llvmMIPSRecordArguments(*Ctx, Hint.Signature, Bindings);
+      for (const auto &A : Arguments) {
+        auto *Value = Carriers[A.FirstPiece];
+        if (A.PieceCount == 2) {
+          const auto First = A.FirstPiece;
+          SourceAggregateMember Members[] = {
+              {Bindings[First].Type, Bindings[First].ByteOffset},
+              {Bindings[First + 1].Type, Bindings[First + 1].ByteOffset}};
+          Value = Pack(llvm::ArrayRef(Carriers).slice(First, 2), Members, 8);
         }
-        continue;
+        if (Value->getType() != A.Type)
+          Value = A.Type->isIntegerTy() ? IntegerBits(Value)
+                                        : Builder.CreateBitCast(Value, A.Type);
+        Types.push_back(A.Type);
+        Values.push_back(Value);
       }
-      const auto Members = sourceABIValueMembers(Parameter.Type);
-      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
-                                                Members.size());
-      At += Members.size();
-      auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
-      if (Parameter.Type->Kind == NdTypeKind::Int) {
-        Types.push_back(Packed->getType());
-        Values.push_back(Packed);
-        continue;
+    } else {
+      size_t At = 0;
+      for (const auto &Parameter : Hint.Signature.Parameters) {
+        if (Parameter.Components.empty()) {
+          Types.push_back(Carriers[At]->getType());
+          Values.push_back(Carriers[At++]);
+          continue;
+        }
+        const auto Members = sourceABIValueMembers(Parameter.Type);
+        const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                  Members.size());
+        At += Members.size();
+        auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
+        if (Parameter.Type->Kind == NdTypeKind::Int) {
+          Types.push_back(Packed->getType());
+          Values.push_back(Packed);
+          continue;
+        }
+        const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
+                              isSourceAArch64VectorType(Members.front().Type);
+        auto *Array = llvm::cast<llvm::ArrayType>(
+            llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
+        const unsigned Count = Array->getNumElements();
+        llvm::Value *Value = llvm::PoisonValue::get(Array);
+        for (unsigned I = 0; I < Count; ++I) {
+          auto *Part =
+              Floating
+                  ? Parts[I]
+                  : Builder.CreateZExtOrTrunc(
+                        Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
+                                                       kSourceCallByteBits),
+                        I64Ty);
+          if (Part->getType() != Array->getElementType())
+            Part = Builder.CreateBitCast(Part, Array->getElementType());
+          Value = Builder.CreateInsertValue(Value, Part, {I});
+        }
+        Types.push_back(Array);
+        Values.push_back(Value);
       }
-      const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
-                            isSourceAArch64VectorType(Members.front().Type);
-      auto *Array = llvm::cast<llvm::ArrayType>(
-          llvmSourceCallValueType(*Ctx, Parameter.Type, /*Parameter=*/true));
-      const unsigned Count = Array->getNumElements();
-      llvm::Value *Value = llvm::PoisonValue::get(Array);
-      for (unsigned I = 0; I < Count; ++I) {
-        auto *Part =
-            Floating ? Parts[I]
-                     : Builder.CreateZExtOrTrunc(
-                           Builder.CreateLShr(Packed, I * kSourceCallWordBytes *
-                                                          kSourceCallByteBits),
-                           I64Ty);
-        if (Part->getType() != Array->getElementType())
-          Part = Builder.CreateBitCast(Part, Array->getElementType());
-        Value = Builder.CreateInsertValue(Value, Part, {I});
-      }
-      Types.push_back(Array);
-      Values.push_back(Value);
     }
     const unsigned Fixed =
         Hint.AnalystFixedCount < 0 ? Types.size() : Hint.AnalystFixedCount;

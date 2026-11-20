@@ -308,19 +308,38 @@ bool mips::isPackedRecordWord(
   return sourceValueMembers(Type).size() > 1;
 }
 
+bool mips::isSplitRecordScalar(const SourceParameterTypeHint &P) {
+  return P.Components.size() == 2 && P.Type->Size == 8 &&
+         (P.Type->Kind == NdTypeKind::Int || P.Type->Kind == NdTypeKind::Float);
+}
+
 static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                           const mips::RecordCallPlacement &Layout) {
   auto Bound = Hint;
-  const auto Bind = [](const TypeRef &Type,
-                       llvm::ArrayRef<SourceParameterPiece> Pieces,
-                       SourceABIValueLocation &Scalar,
-                       std::vector<SourceABIValueLocation> &Components,
-                       bool Argument) {
+  const auto Bind = [Architecture](
+                        const TypeRef &Type,
+                        llvm::ArrayRef<SourceParameterPiece> Pieces,
+                        SourceABIValueLocation &Scalar,
+                        std::vector<SourceABIValueLocation> &Components,
+                        bool Argument) {
     Scalar = {};
     Components.clear();
     if (Type->Kind == NdTypeKind::Void)
       return Pieces.empty();
     if (!isRecord(Type)) {
+      if (Argument && isMIPSO32(Architecture) && Type->Size == 8 &&
+          Pieces.size() == 2) {
+        for (unsigned I = 0; I < 2; ++I) {
+          const auto &P = Pieces[I];
+          if (P.Offset != (archLittleEndian(Architecture) ? I : 1 - I) * 4 ||
+              P.Location.ValueBytes != 4 || P.RegisterBitOffset || P.Indirect ||
+              (P.Location.Kind != SourceABICarrierKind::IntegerRegister &&
+               P.Location.Kind != SourceABICarrierKind::Stack))
+            return false;
+          Components.push_back(P.Location);
+        }
+        return true;
+      }
       if (Pieces.size() != 1 || Pieces[0].Offset ||
           Pieces[0].RegisterBitOffset ||
           Pieces[0].Location.ValueBytes != Type->Size)

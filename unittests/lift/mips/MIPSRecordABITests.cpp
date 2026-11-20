@@ -346,26 +346,24 @@ TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
       EXPECT_FALSE(validateSourceABI(Hint.Signature, Diagnostic));
       EXPECT_TRUE(sourceABIParameters(Hint.Signature).empty());
       EXPECT_FALSE(sourceABICallResultType(Hint.Signature));
-      // A checked declaration may bind full independent members. An incomplete
-      // location or a partially defined physical word remains insufficient.
-      const bool CanBind = Type->Size <= 16;
-      EXPECT_EQ(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic),
-                CanBind);
-      if (CanBind) {
-        EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
-        EXPECT_TRUE(Hint.Signature.MIPSRecords);
-        EXPECT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
+      ASSERT_TRUE(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic));
+      EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
+      EXPECT_TRUE(Hint.Signature.MIPSRecords);
+      if (Type->Size > 16) {
+        EXPECT_EQ(Hint.Signature.ReturnLocation.Kind,
+                  SourceABICarrierKind::IndirectResultPointer);
+        EXPECT_TRUE(Hint.Signature.ReturnComponents.empty());
+      } else {
+        ASSERT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
         if (mips::isByteRecord(Type)) {
           const auto &L = Hint.Signature.ReturnComponents.front();
           EXPECT_EQ(L.CarrierBytes, 8);
           EXPECT_EQ(L.RegisterByteOffset, archLittleEndian(A) ? 0 : 5);
         }
-        auto Bad = Hint.Signature;
-        Bad.Parameters.front().Components.front().RegisterOffset += 8;
-        EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
-      } else {
-        EXPECT_FALSE(Diagnostic.empty());
       }
+      auto Bad = Hint.Signature;
+      Bad.Parameters.front().Components.front().RegisterOffset += 8;
+      EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
     }
 }
 

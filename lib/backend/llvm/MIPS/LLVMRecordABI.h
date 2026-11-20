@@ -9,6 +9,7 @@
 
 #include "LLVMIntegerResult.h"
 
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/ir/SourceABI.h"
 
 #include "llvm/IR/DerivedTypes.h"
@@ -37,10 +38,12 @@ recordCallAttributes(llvm::LLVMContext &Context, llvm::AttributeList Attrs,
     Attrs = integerResultAttributes(Context, Attrs, Signature.ReturnType->Size,
                                     Signature.ReturnType->IsSigned,
                                     Signature.Architecture);
-  for (unsigned I = 0; I < Pieces.size(); ++I) {
-    const auto &P = Pieces[I];
+  const auto Arguments = llvmMIPSRecordArguments(Context, Signature, Pieces);
+  for (const auto &[I, Argument] : llvm::enumerate(Arguments)) {
+    const auto &P =
+        Signature.Parameters[Pieces[Argument.FirstPiece].ParameterIndex];
     const unsigned Index = I + unsigned(Indirect);
-    if (!Signature.Parameters[P.ParameterIndex].Components.empty())
+    if (Argument.InReg)
       Attrs = Attrs.addParamAttribute(Context, Index, llvm::Attribute::InReg);
     else if (P.Type->Kind == NdTypeKind::Int) {
       if (P.Type->IsSigned)
