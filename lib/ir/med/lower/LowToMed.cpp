@@ -70,6 +70,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/loader/SymbolDecoration.h"
 
 #include "llvm/Support/Debug.h"
@@ -896,6 +897,10 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       Fmt == BinaryFormat::ELF)
     Physical = projectMIPSPICGlobalPointer(SourceLow, *Image);
   const LowFunc &Low = Physical ? *Physical : SourceLow;
+  const bool MIPS16Literals =
+      SourceCallRuntimeHintsEnabled && Image && isMIPSO32(TheArch) &&
+      Image->MIPS && Image->MIPS->HasMIPS16 &&
+      Image->instructionModeAt(Low.Entry) == InstructionMode::MIPS16;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
   if (isMIPS(TheArch))
     requireMIPSSourceVectors(
@@ -1556,15 +1561,20 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       // Folding them here keeps that value from becoming a read before SSA:
       // otherwise a path where it is undefined merges `0 /* unknown */` into
       // it.
-      const std::optional<uint64_t> AbsorbingConstant =
-          lowAbsorbingConstant(LOp);
+      std::optional<uint64_t> Scalar = lowAbsorbingConstant(LOp);
+      if (MIPS16Literals && LOp.Opcode == NdOp::LOAD && LOp.NumInputs == 1 &&
+          LOp.Output.Size == 4 && LOp.Inputs[0].isConst() &&
+          isDataAddressProvenance(LOp.Inputs[0].Provenance) &&
+          LOp.MemoryOrdering == NdMemoryOrdering::None &&
+          LOp.MemoryAddressSpace == NdMemoryAddressSpace::Default)
+        Scalar = readMIPS16LiteralWord(*Image, LOp.Inputs[0].Offset);
       if (SelfXor) {
         MOp.Opcode = NdOp::COPY;
         MOp.addInput(MedVar::makeConst(0, LOp.Output.Size,
                                        ConstantAddressProvenance::Scalar));
-      } else if (AbsorbingConstant) {
+      } else if (Scalar) {
         MOp.Opcode = NdOp::COPY;
-        MOp.addInput(MedVar::makeConst(*AbsorbingConstant, LOp.Output.Size,
+        MOp.addInput(MedVar::makeConst(*Scalar, LOp.Output.Size,
                                        ConstantAddressProvenance::Scalar));
       } else {
         for (uint8_t I = 0; I < LOp.NumInputs; ++I)

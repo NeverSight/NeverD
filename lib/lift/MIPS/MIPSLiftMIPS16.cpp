@@ -346,7 +346,11 @@ bool MIPSLifter::liftPCRelative(State &S, uint32_t Word, va_t BasePC) const {
     S.write((Word >> 16) & 31, NdVar::cst(uint32_t(Base + int16_t(Word)), 4));
     return true;
   }
-  return liftMemory(S, Word, NdVar::cst(Base, 4));
+  // Both inputs to the effective address are encoded in LWPC. Keep this
+  // concrete address on the LOAD for consumers that can authenticate the
+  // linked literal. Execution still reads the actual memory at that address.
+  const uint32_t Address = Base + int16_t(Word);
+  return liftMemory(S, Word & 0xffff0000u, NdVar::dataAddress(Address, 4));
 }
 
 } // namespace neverd

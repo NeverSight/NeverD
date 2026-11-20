@@ -11,6 +11,7 @@
 
 #include "ReadOnlyBytesIndex.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Limits.h"
 #include "neverd/loader/ReadOnlyBytesScope.h"
@@ -504,6 +505,25 @@ std::optional<uint64_t> readImmutableImageScalar(const BinaryImage &Image,
       Image.isPotentiallyRelocatableAddress(Bits))
     return std::nullopt;
   return Bits;
+}
+
+std::optional<uint32_t> readMIPS16LiteralWord(const BinaryImage &Image,
+                                              va_t Address) {
+  if (Image.Format != BinaryFormat::ELF || Image.IsRelocatable ||
+      Image.Bits != Bitness::Bits32 || !isMIPSO32(Image.Arch) || !Image.MIPS ||
+      !Image.MIPS->HasMIPS16 || (Address & 3))
+    return std::nullopt;
+  const auto *Bytes =
+      mappedBytes(Image, Address, 4, true, Image.isCodeAddress(Address));
+  if (!Bytes || hasConflictingFixups(Image, Address, 4, false))
+    return std::nullopt;
+  const auto Value = archLittleEndian(Image.Arch)
+                         ? llvm::support::endian::read32le(Bytes)
+                         : llvm::support::endian::read32be(Bytes);
+  if (Image.isPotentiallyRelocatableAddress(Value) ||
+      ((Value & 1) && Image.isPotentiallyRelocatableAddress(Value & ~1u)))
+    return std::nullopt;
+  return Value;
 }
 
 bool isFileBackedCodeImageRange(const BinaryImage &Image, va_t Address,
