@@ -512,7 +512,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       auto Records =
           machODataInCodeRanges(Image->MachODataInCode, Table.BaseAddr,
                                 kDispatchSlots * Table.EntrySize);
-      ASSERT_EQ(Records.size(), GappedTables ? 2u : 3u);
+      ASSERT_EQ(Records.size(),
+                GappedTables ? kGappedTableRecordCount : kSplitTableRecordCount);
       const auto Begin = Table.BaseAddr + Offset;
       EXPECT_EQ(Records.front().Begin, Table.BaseAddr);
       EXPECT_EQ(Records.front().End, Begin);

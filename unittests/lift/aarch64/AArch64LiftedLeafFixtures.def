@@ -655,14 +655,18 @@ int main(int argc, char **argv) {
 }
 )c")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
-A64_LEAF_TEXT(kFragmentedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
+A64_LEAF_TEXT(kFragmentedDispatchOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
 A64_LEAF_TEXT(kGappedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
-                                     "#define NEVERD_TEST_TABLE_GAPS 1\n")
-A64_LEAF_TEXT(kMaskedFragmentedOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
-                                      "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+                                    "#define NEVERD_TEST_TABLE_GAPS 1\n")
+A64_LEAF_TEXT(kMaskedFragmentedOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
 A64_LEAF_TEXT(kMaskedGappedOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
                                   "#define NEVERD_TEST_TABLE_GAPS 1\n"
                                   "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_VALUE(unsigned, kGappedTableRecordCount, 2)
+A64_LEAF_VALUE(unsigned, kSplitTableRecordCount, 3)
 A64_LEAF_VALUE(unsigned, kByteTableGapOffset, 1)
 A64_LEAF_VALUE(unsigned, kByteTableGapSize, 2)
 A64_LEAF_VALUE(unsigned, kHalfTableGapOffset, 3)
