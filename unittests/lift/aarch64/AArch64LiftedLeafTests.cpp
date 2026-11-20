@@ -176,12 +176,15 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  const bool GappedTables = Preamble == kGappedDispatchOracle;
+  const bool SplitTables =
+      Preamble == kFragmentedDispatchOracle || GappedTables;
   const bool SplitLiterals = Preamble == kSplitLiteralOracle;
   const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
-  const bool Embedded = Declared || Recover;
-  if (Declared || PartialRecords || SplitLiterals)
+  const bool Embedded = Declared || Recover || SplitTables;
+  if (Declared || PartialRecords || SplitLiterals || SplitTables)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
@@ -487,6 +490,82 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       llvm::consumeError(Rejected.takeError());
     EXPECT_EQ(Recovered, OnlyMissing);
     testing::Test::RecordProperty(kRecoveredRecords, int(Recovered.size()));
+  }
+  if (SplitTables) {
+    std::vector<MachODataInCodeRange> Gaps;
+    unsigned Conflicts = 0;
+    for (const auto &F : Lifted.LowFuncs) {
+      ASSERT_EQ(F.JumpTables.size(), 1u);
+      const auto &Table = F.JumpTables.front();
+      ASSERT_TRUE(Table.IndexDomainAuthenticated);
+      ASSERT_EQ(Table.Targets.size(), kDispatchSlots);
+      const auto [Offset, Size] =
+          Table.EntrySize == sizeof(uint8_t)
+              ? std::pair{kByteTableGapOffset, kByteTableGapSize}
+          : Table.EntrySize == sizeof(uint16_t)
+              ? std::pair{kHalfTableGapOffset, kHalfTableGapSize}
+              : std::pair{kWordTableGapOffset, kWordTableGapSize};
+      auto Records =
+          machODataInCodeRanges(Image->MachODataInCode, Table.BaseAddr,
+                                kDispatchSlots * Table.EntrySize);
+      ASSERT_EQ(Records.size(), GappedTables ? 2u : 3u);
+      const auto Begin = Table.BaseAddr + Offset;
+      EXPECT_EQ(Records.front().Begin, Table.BaseAddr);
+      EXPECT_EQ(Records.front().End, Begin);
+      EXPECT_EQ(Records.back().Begin, Begin + Size);
+      if (GappedTables)
+        Gaps.push_back({Begin, Begin + Size, Records.front().Kind});
+      else {
+        EXPECT_EQ(Records[1].Begin, Begin);
+        EXPECT_EQ(Records[1].End, Begin + Size);
+      }
+
+      // The first slot alone cannot certify a disagreeing record farther
+      // into the guarded domain, even when the disagreement is part of a slot.
+      auto Conflict = *Image;
+      auto It = llvm::lower_bound(
+          Conflict.MachODataInCode, Begin,
+          [](const auto &R, va_t VA) { return R.Begin < VA; });
+      if (GappedTables)
+        Conflict.MachODataInCode.insert(
+            It, {Begin, Begin + Size, llvm::MachO::DICE_KIND_DATA});
+      else
+        It->Kind = llvm::MachO::DICE_KIND_DATA;
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Conflict));
+      EXPECT_TRUE(
+          CFGBuilder().build(Conflict, Decode, F.Entry).JumpTables.empty());
+      // Outside a declared section only the actual records own bytes.
+      auto Appended = *Image;
+      const auto *Sec = Appended.getSectionFor(Table.BaseAddr);
+      ASSERT_TRUE(Sec);
+      const auto SectionVA = Sec->VA;
+      llvm::erase_if(Appended.Sections,
+                     [&](const auto &S) { return S.VA == SectionVA; });
+      const auto *Seg = Appended.getSegmentFor(Table.BaseAddr);
+      ASSERT_TRUE(Seg && Appended.segmentHasReadableSectionMetadata(*Seg));
+      auto Rebuilt = CFGBuilder().build(Appended, Decode, F.Entry);
+      if (GappedTables) {
+        EXPECT_TRUE(Rebuilt.JumpTables.empty());
+      } else {
+        ASSERT_EQ(Rebuilt.JumpTables.size(), 1u);
+        EXPECT_EQ(Rebuilt.JumpTables.front().Targets, Table.Targets);
+      }
+      ++Conflicts;
+    }
+    ASSERT_EQ(Conflicts, kDispatchFunctions);
+    llvm::sort(Gaps,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    std::vector<MachODataInCodeRange> Recovered;
+    auto Valid = validateMachORegisterResults(Module, *Image, &Recovered);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    EXPECT_EQ(Recovered, Gaps);
+    ExpectedData.insert(ExpectedData.end(), Gaps.begin(), Gaps.end());
+    llvm::sort(ExpectedData,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    testing::Test::RecordProperty(kRecoveredRecords, int(Gaps.size()));
+    testing::Test::RecordProperty(kDispatchGuards, kDispatchFunctions);
+    testing::Test::RecordProperty(kFragmentConflicts, Conflicts);
   }
   if (Preamble == kDispatchOracle) {
     unsigned Proved = 0;
@@ -1153,7 +1232,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
         const auto &Records = Loaded->MachODataInCode;
-        if ((Recover || LiteralWidths) && !Generation) {
+        if ((Recover || LiteralWidths || GappedTables) && !Generation) {
           EXPECT_EQ(Records, Image->MachODataInCode);
           continue;
         }
@@ -1202,7 +1281,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
-    if (Preamble == kDispatchOracle || Recover)
+    if (Preamble == kDispatchOracle || Recover || SplitTables)
       testing::Test::RecordProperty(kDispatchComparisons,
                                     ExecutionPaths.size() * kDispatchFunctions *
                                         kDispatchInputs * kDispatchArguments);
@@ -1695,6 +1774,18 @@ TEST(AArch64LiftedImage, UnmarkedLiteralsAndRelativeSwitchesSurviveRelifting) {
 TEST(AArch64LiftedImage, PartialSwitchRecordsPreserveUnalignedStorage) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kPartialDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, FragmentedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kFragmentedDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, GappedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kGappedDispatchOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
 }
 

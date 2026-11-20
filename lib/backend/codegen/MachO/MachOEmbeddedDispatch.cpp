@@ -10,6 +10,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/EmbeddedRead.h"
 #include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
@@ -23,28 +24,8 @@ bool coverMachOEmbeddedRead(const MachOLiftedSource &Source, va_t Start,
   if (Address < Start || !Size ||
       !rangeInBounds(Address - Start, Size, Source.Bytes.size()))
     return false;
-  const auto Records = machODataInCodeRanges(Source.Embedded, Address, Size);
-  if (llvm::any_of(Records, [Kind](const auto &R) { return R.Kind != Kind; }))
-    return false;
-
-  // Keep declared record boundaries for publication. A decoded read supplies
-  // ownership for its uncovered bytes, including gaps between records.
-  const va_t End = Address + Size;
-  va_t Next = Address;
-  for (const auto &R : Records) {
-    if (Next < R.Begin) {
-      if (!Missing)
-        return false;
-      Missing->push_back({Next, R.Begin, Kind});
-    }
-    Next = R.End;
-  }
-  if (Next < End) {
-    if (!Missing)
-      return false;
-    Missing->push_back({Next, End, Kind});
-  }
-  return true;
+  return coverMachODataInCodeRead(Source.Embedded, Address, Size, Kind,
+                                  Missing != nullptr, Missing);
 }
 
 namespace {

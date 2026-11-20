@@ -655,6 +655,16 @@ int main(int argc, char **argv) {
 }
 )c")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
+A64_LEAF_TEXT(kFragmentedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
+A64_LEAF_TEXT(kGappedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                     "#define NEVERD_TEST_TABLE_GAPS 1\n")
+A64_LEAF_VALUE(unsigned, kByteTableGapOffset, 1)
+A64_LEAF_VALUE(unsigned, kByteTableGapSize, 2)
+A64_LEAF_VALUE(unsigned, kHalfTableGapOffset, 3)
+A64_LEAF_VALUE(unsigned, kHalfTableGapSize, 1)
+A64_LEAF_VALUE(unsigned, kWordTableGapOffset, 4)
+A64_LEAF_VALUE(unsigned, kWordTableGapSize, 8)
+A64_LEAF_TEXT(kFragmentConflicts, "rejected_fragment_kind_conflicts")
 A64_LEAF_TEXT(kUnmarkedDispatchOracle,
               "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
 A64_LEAF_TEXT(kPartialDispatchOracle,
@@ -726,7 +736,21 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  .end_data_region
  .data_region jt8
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .byte (3b-1b)/4
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt8
+#endif
+ .byte 0, (2b-1b)/4
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt8
+ .byte 0
+#else
 8: .byte (3b-1b)/4, 0, (2b-1b)/4, 0
+#endif
 #if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .space 3
 #endif
@@ -734,7 +758,22 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .data_region jt16
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .short (3b-1b)/4
+ .byte 0
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt16
+#endif
+ .byte 0
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt16
+ .short (2b-1b)/4,0
+#else
 8: .short (3b-1b)/4, 0, (2b-1b)/4, 0
+#endif
 #ifdef NEVERD_TEST_PARTIAL_DISPATCH
  .end_data_region
 #endif
@@ -742,7 +781,21 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .data_region jt32
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .long 0
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt32
+#endif
+ .long 1b-3b,2b-3b
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt32
+ .long 1b-3b
+#else
 8: .long 0, 1b-3b, 2b-3b, 1b-3b
+#endif
  .endif
 #ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .end_data_region

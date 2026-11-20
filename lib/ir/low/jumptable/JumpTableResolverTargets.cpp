@@ -25,6 +25,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/MachO/EmbeddedRead.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -292,16 +293,21 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
   const auto *Seg = Img.getSegmentFor(Info.BaseAddr);
   if (!Seg || Seg->Data.empty())
     return {};
-  const std::optional<va_t> StorageEnd =
-      Img.mappedObjectOwnerEnd(Info.BaseAddr);
-  if (!StorageEnd || *StorageEnd <= Info.BaseAddr)
-    return {};
 
   const bool ExplicitDomain = !Info.RuntimeSlotIndices.empty();
   if (ExplicitDomain &&
       Info.RuntimeSlotIndices.size() != Info.RuntimeCaseLabels.size())
     return {};
   const bool Bounded = Info.MaxEntries > 0 || ExplicitDomain;
+  const auto Embedded =
+      Bounded && Info.IsRelative && Info.HasTargetBase &&
+              Policy == JumpTableTargetReadPolicy::SwitchPublication
+          ? getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize)
+          : std::nullopt;
+  const auto StorageEnd = Embedded ? std::optional<va_t>(Embedded->End)
+                                   : Img.mappedObjectOwnerEnd(Info.BaseAddr);
+  if (!StorageEnd || *StorageEnd <= Info.BaseAddr)
+    return {};
   uint32_t Limit = ExplicitDomain
                        ? static_cast<uint32_t>(Info.RuntimeSlotIndices.size())
                        : Info.MaxEntries;
@@ -336,8 +342,10 @@ CFGBuilder::readTableEntries(const BinaryImage &Img, const JumpTableInfo &Info,
       break;
     }
     const va_t EntryVA = Seg->VA + EntryOff;
-    if (Info.EntrySize - 1 > InvalidVA - EntryVA || EntryVA >= *StorageEnd ||
-        Info.EntrySize > *StorageEnd - EntryVA) {
+    if (Info.EntrySize - 1 > InvalidVA - EntryVA ||
+        (Embedded ? !Embedded->contains(EntryVA, Info.EntrySize)
+                  : EntryVA >= *StorageEnd ||
+                        Info.EntrySize > *StorageEnd - EntryVA)) {
       if (FailOrStop())
         return {};
       break;

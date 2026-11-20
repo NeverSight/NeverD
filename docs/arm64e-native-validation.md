@@ -2530,3 +2530,30 @@ and the regression unit against the macOS arm64 r6 SDK. It set
 `NEVERD_LLVM_PREBUILT_TAG` to `neverd-llvm-v23.0.0-r6` and supplied the
 published archive SHA-256 in `NEVERD_LLVM_PREBUILT_SHA256`. An old tag alone
 allows CMake to migrate the build to the current default. [LLVM r6 release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r6).
+
+### Relative jumps across separate data-in-code records
+
+An arm64e switch can load entries from several consecutive
+`LC_DATA_IN_CODE` records. A record boundary can fall inside a halfword.
+NeverD follows the dispatch's proven selector range and checks the actual
+bytes of each selected entry against its Mach-O kind. In an instruction
+section, the load can also establish the type of unmarked bytes between
+matching records. Outside the declared sections of a sectioned segment,
+the records must cover the whole selected read. Unbounded scans and
+physical branch probes retain their original storage limits.
+
+The compiler fixtures split byte, halfword and signed word tables.
+Their callers cover the four legal selector values, the default edge,
+32-bit truncation and unsigned argument wraparound. Each publication
+preserves the original record boundaries and adds only the three interior
+gaps present in the partially marked fixture. Reclassifying a selected
+fragment as ordinary data prevents publication.
+[Compiler-original executions](https://github.com/gmh5225/test_mac_intel/actions/runs/44740300809).
+
+At a signal interrupt on an old entry,
+`ndDarwinArm64eInitInterruptedEntryCursor` takes the handler's
+`ucontext_t` and looks up the interrupted PC in Darwin's registered tables.
+It selects the indexed DWARF or zero-stack frameless recipe from the system
+result, including the compact language form. The caller can use `unw_step`
+on the returned cursor. The API also checks the size of the supplied
+machine context before reading its registers.
