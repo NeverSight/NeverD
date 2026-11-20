@@ -1852,10 +1852,8 @@ int main(void) {
 }
 
 TEST(LLVMCIntrinsicSemantics, FloatingPointIntrinsicsAreCompilerBuiltins) {
-  // Each floating-point intrinsic prints as an elementwise builtin with
-  // the specified behavior at its operand width: no C library header, no errno
-  // from a square root, and the fused multiply-add, the four minimum and
-  // maximum rules and the rounding modes each keep their own.
+  // Check the emitted operations at each width, including round-to-even on
+  // hosts whose C runtime has no entry point for the compiler builtin.
   llvm::LLVMContext Context;
   llvm::SMDiagnostic Error;
   auto Module = llvm::parseAssemblyString(R"ir(
@@ -1866,6 +1864,8 @@ declare double @llvm.maximum.f64(double, double)
 declare double @llvm.minnum.f64(double, double)
 declare double @llvm.maxnum.f64(double, double)
 declare double @llvm.copysign.f64(double, double)
+declare half @llvm.roundeven.f16(half)
+declare float @llvm.roundeven.f32(float)
 declare double @llvm.roundeven.f64(double)
 declare double @llvm.trunc.f64(double)
 declare double @llvm.fabs.f64(double)
@@ -1907,6 +1907,14 @@ define double @signed_as(double %a, double %b) {
   %r = call double @llvm.copysign.f64(double %a, double %b)
   ret double %r
 }
+define half @to_even_half(half %a) {
+  %r = call half @llvm.roundeven.f16(half %a)
+  ret half %r
+}
+define float @to_even_single(float %a) {
+  %r = call float @llvm.roundeven.f32(float %a)
+  ret float %r
+}
 define double @to_even(double %a) {
   %r = call double @llvm.roundeven.f64(double %a)
   ret double %r
@@ -1944,9 +1952,14 @@ define double @between(double %a) {
     EXPECT_NE(Text.find(Spelling.str()), std::string::npos)
         << Spelling.str() << "\n"
         << Text;
-  EXPECT_EQ(Text.find("llvm_"), std::string::npos) << Text;
+  for (auto Width : {"16", "32", "64"})
+    EXPECT_NE(Text.find(std::string("neverd_llvm_roundeven_f") + Width + "("),
+              std::string::npos)
+        << Text;
+  EXPECT_EQ(Text.find("llvm_x2E_"), std::string::npos) << Text;
   EXPECT_EQ(Text.find("math.h"), std::string::npos) << Text;
   const std::string Source = Text + R"(
+#include <fenv.h>
 static uint64_t bits(double value) {
   uint64_t out;
   __builtin_memcpy(&out, &value, 8);
@@ -1981,7 +1994,35 @@ int main(void) {
   /* A half constant is a half: 1.5 * 2 + 1.5, then the greater of it and 2. */
   volatile _Float16 small = 1.5f16, two = 2.0f16;
   if (fused_half(small, two) != 4.5f16) return 15;
-  return 0;
+  const struct { double x, expected; } rounds[] = {
+    {-4.5, -4}, {-3.5, -4}, {-2.5, -2}, {-1.5, -2}, {-0.5, -0.0},
+    {-0.25, -0.0}, {-0.0, -0.0}, {0.0, 0.0}, {0.25, 0.0}, {0.5, 0.0},
+    {1.5, 2}, {2.5, 2}, {3.5, 4}, {4.5, 4},
+    {-__builtin_inf(), -__builtin_inf()}, {__builtin_inf(), __builtin_inf()}
+  };
+  const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};
+  const int saved = fegetround();
+  for (unsigned m = 0; m < sizeof(modes) / sizeof(*modes); ++m) {
+    if (fesetround(modes[m])) return 16;
+    for (unsigned i = 0; i < sizeof(rounds) / sizeof(*rounds); ++i) {
+      volatile double x = rounds[i].x;
+      uint64_t want = bits(rounds[i].expected);
+      if (bits(to_even(x)) != want || bits(to_even_single((float)x)) != want ||
+          bits(to_even_half((_Float16)x)) != want) return 17;
+    }
+    volatile double dtiny = -0x1p-1074, dmax = 0x1.fffffffffffffp1023;
+    volatile float stiny = -0x1p-149f, smax = 0x1.fffffep127f;
+    volatile _Float16 htiny = -0x1p-24f16, hmax = 65504.0f16;
+    if (bits(to_even(dtiny)) != bits(-0.0) || to_even(dmax) != dmax ||
+        bits(to_even_single(stiny)) != bits(-0.0) ||
+        to_even_single(smax) != smax ||
+        bits(to_even_half(htiny)) != bits(-0.0) ||
+        to_even_half(hmax) != hmax) return 18;
+    if (!__builtin_isnan(to_even(nan)) ||
+        !__builtin_isnan(to_even_single((float)nan)) ||
+        !__builtin_isnan(to_even_half((_Float16)nan))) return 19;
+  }
+  return fesetround(saved) != 0;
 }
 )";
   // An older compiler lacks some of these builtins, and one without the

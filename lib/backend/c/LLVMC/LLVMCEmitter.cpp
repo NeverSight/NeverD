@@ -354,7 +354,7 @@ void LLVMCWriter::prepareFunctionIdentifiers(llvm::Module &Mod) {
         IntrinsicHelper += "_i" + std::to_string(Integer->getBitWidth());
       Name = IntrinsicHelper;
     }
-    if (const char *Kind = scalarUnarySpelling(Fn.getIntrinsicID())) {
+    if (const char *Kind = scalarUnarySpelling(Fn)) {
       IntrinsicHelper = std::string("neverd_llvm_") + Kind;
       if (const auto *Integer =
               llvm::dyn_cast<llvm::IntegerType>(Fn.getReturnType()))
@@ -1541,6 +1541,24 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   if (UnalignedTypesWritten)
     c_memory::writeTypes(OS, Opts.ScalarPointers);
   for (const auto &[Name, Shape] : ScalarUnaries) {
+    if (Shape.Kind == llvm::Intrinsic::roundeven) {
+      const char *Type = Shape.FloatBits == 16   ? "_Float16"
+                         : Shape.FloatBits == 32 ? "float"
+                                                 : "double";
+      // Without SSE4.1 Clang emits a roundeven libcall that the UCRT lacks.
+      // C99 remainder(x, 1) subtracts the nearest even-when-tied integer.
+      OS << "static inline " << Type << " " << Name << "(" << Type
+         << " value) {\n"
+         << "#if defined(_WIN32) && (defined(__i386__) || defined(__x86_64__)) "
+            "&& !defined(__SSE4_1__)\n"
+         << "    const double x = value;\n"
+         << "    if (!__builtin_isfinite(x)) return value + value;\n"
+         << "    return (" << Type
+         << ")__builtin_copysign(x - __builtin_remainder(x, 1.0), x);\n"
+         << "#else\n    return __builtin_elementwise_roundeven(value);\n"
+         << "#endif\n}\n\n";
+      continue;
+    }
     const unsigned CarrierBits = Shape.carrierBits();
     const std::string Type = CarrierBits == 128
                                  ? "__uint128_t"

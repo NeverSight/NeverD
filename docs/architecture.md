@@ -13878,8 +13878,13 @@ LLVM C spells an LLVM intrinsic one of three ways. `intrinsics_llvm_cnames.inc`
 names a compiler builtin with the required semantics. For `llvm.minnum` and
 `llvm.maxnum`, the IEEE 754-2019 number builtins select the numeric operand
 when one operand is NaN and order negative zero below positive zero. These
-builtins work directly in cross-target C without a library header. A floating-point
-operation is its type-generic elementwise builtin at any width, half included
+builtins work directly in cross-target C without a library header. Scalar
+`llvm.roundeven` uses the elementwise builtin where the target supports it.
+For baseline Windows x86, the UCRT supplies C99 `remainder`. Subtracting the
+remainder modulo one rounds to the nearest integer with ties to even in every
+rounding mode. The helper preserves the sign of zero and handles infinities
+and NaNs before the subtraction. Other floating-point operations use their
+type-generic elementwise builtins at any supported width, half included
 (`__builtin_elementwise_sqrt`, which sets no errno as `sqrt` may;
 `__builtin_elementwise_fma`; `__builtin_elementwise_minimum`, which keeps a NaN
 and orders the zeros where `fmin` leaves the zeros open), so a floating-point
