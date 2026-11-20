@@ -282,7 +282,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: >-
-        ${{ fromJSON(inputs.scope == 'windows-qualification' && '{"include":[{"name":"Windows MSVC","runner":"windows-2025-vs2026","cc":"cl","cxx":"cl","parallel":4}]}' || inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
+        ${{ fromJSON(inputs.scope == 'windows-qualification' && '{"include":[{"name":"Windows MSVC v143","runner":"windows-2025-vs2026","cc":"cl","cxx":"cl","parallel":4}]}' || inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
     timeout-minutes: ${{ inputs.scope == 'windows-qualification' && 240 || 180 }}
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
@@ -344,6 +344,7 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
+          toolset: "${{ inputs.scope == 'windows-qualification' && '14.44' || '' }}"
       - name: Install the CRT fixture toolchain on Unix
         if: runner.os != 'Windows' && inputs.scope != 'frame-unix-qualification'
         run: |
@@ -386,6 +387,9 @@ jobs:
           $memory = Get-CimInstance Win32_OperatingSystem |
             Select-Object TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory
           $cl = Get-Item (Get-Command cl.exe).Source
+          if ($cl.VersionInfo.FileVersion -notmatch '^19\.44\.' -or $command -notmatch '(?i)[\\/]14\.44\.') {
+            throw "Expected the v143 compiler for the isolated Release decoder: $command"
+          }
           $proof = [ordered]@{
             source = $env:EXPECTED_SOURCE_SHA
             capstone = (git -C third_party/capstone rev-parse HEAD)
