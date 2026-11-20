@@ -1485,7 +1485,10 @@ clears the load-linked reservation. A misaligned R4000 return destination
 raises an instruction-fetch address error after ERET restores Status. Signed
 ADD/SUB and immediate forms
 deliver overflow before writeback. Aligned scalar integer loads and stores
-report address errors before accessing memory. A disabled coprocessor
+report address errors before accessing memory. MIPS II and III conditional register and
+immediate traps compare at the GPR width. A true predicate records Cause
+code 13 and the appropriate EPC and BD before the instruction retires. A
+false predicate completes normally. A disabled coprocessor
 sets the CE field. Interrupts sample the observed IP and IM bits at issue
 after the corresponding write hazard. The platform can update its six
 hardware interrupt lines between physical instructions. Reset, TLB state

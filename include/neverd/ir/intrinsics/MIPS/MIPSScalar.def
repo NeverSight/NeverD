@@ -55,6 +55,8 @@ NEVERD_MIPS_SCALAR_INTRINSIC(MIPSHistoricalOverflow, 16057,
                              "neverd_mips_historical_overflow")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSHistoricalAddressCheck, 16058,
                              "neverd_mips_historical_address_check")
+NEVERD_MIPS_SCALAR_INTRINSIC(MIPSHistoricalTrap, 16059,
+                             "neverd_mips_historical_trap")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSExecutionHazardBarrier, 16013,
                              "neverd_mips_ehb")
 NEVERD_MIPS_SCALAR_INTRINSIC(MIPSSync, 16014, "neverd_mips_sync")

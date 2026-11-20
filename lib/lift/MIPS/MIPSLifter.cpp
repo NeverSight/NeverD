@@ -602,6 +602,36 @@ bool MIPSLifter::liftHistoricalSystem(State &S, uint32_t Word) const {
         S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Left, Right, Bytes));
     return true;
   }
+  if (const auto Trap = mips::historicalTrap(Word)) {
+    const auto Left = S.read(Word >> 21 & 31);
+    const auto Right =
+        Word >> 26 ? NdVar::cst(uint64_t(int64_t(int16_t(Word))), S.Width)
+                   : S.read(Word >> 16 & 31);
+    using enum mips::HistoricalTrap;
+    NdVar Condition;
+    switch (*Trap) {
+    case SignedGE:
+      Condition = S.binary(NdOp::INT_SLESSEQUAL, Right, Left, 1);
+      break;
+    case UnsignedGE:
+      Condition = S.binary(NdOp::INT_LESSEQUAL, Right, Left, 1);
+      break;
+    case SignedLT:
+      Condition = S.binary(NdOp::INT_SLESS, Left, Right, 1);
+      break;
+    case UnsignedLT:
+      Condition = S.binary(NdOp::INT_LESS, Left, Right, 1);
+      break;
+    case Equal:
+      Condition = S.binary(NdOp::INT_EQUAL, Left, Right, 1);
+      break;
+    case NotEqual:
+      Condition = S.binary(NdOp::INT_NOTEQUAL, Left, Right, 1);
+      break;
+    }
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalTrap, {}, {Condition});
+    return true;
+  }
   if (Word == 0x42000010) {
     S.emitIntrinsic(Intrinsic::MIPSHistoricalRFE, {});
     return true;

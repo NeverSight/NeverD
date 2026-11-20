@@ -543,6 +543,75 @@ TEST(MIPSHistoricalScheduling,
     }
 }
 
+TEST(MIPSHistoricalScheduling,
+     ConditionalTrapsUseTheGPRWidthAndSignedImmediate) {
+  for (auto CPU :
+       {HistoricalProcessor::CW4011R3000, HistoricalProcessor::CW4011R4000,
+        HistoricalProcessor::R4000})
+    for (bool Little : {false, true}) {
+      const bool Wide = CPU == HistoricalProcessor::R4000;
+      const unsigned ISA = Wide ? 3 : 2;
+      auto Img = image(Wide ? (Little ? Arch::MIPS64EL : Arch::MIPS64)
+                            : (Little ? Arch::MIPS32EL : Arch::MIPS32),
+                       ISA);
+      for (unsigned Condition : {0u, 1u, 2u, 3u, 4u, 6u})
+        for (bool Immediate : {false, true}) {
+          const uint32_t Word =
+              Immediate
+                  ? (1u << 26) | (4u << 21) | ((8u + Condition) << 16) | 0xfffe
+                  : (4u << 21) | (5u << 16) | (0x155u << 6) | (48u + Condition);
+          ASSERT_FALSE(historicalInstructionAvailable(Word, 1));
+          const auto Ops = lift(Img, 0x1080, {Word});
+          for (int64_t Input : std::array<int64_t, 4>{-3, -2, 3, 0x1fffffffe}) {
+            const int64_t Left = Wide ? Input : int32_t(Input);
+            const auto Unsigned = [Wide](int64_t X) -> uint64_t {
+              return Wide ? uint64_t(X) : uint32_t(X);
+            };
+            const bool Expected[] = {Left >= -2, Unsigned(Left) >= Unsigned(-2),
+                                     Left < -2,  Unsigned(Left) < Unsigned(-2),
+                                     Left == -2, false,
+                                     Left != -2};
+            SCOPED_TRACE(::testing::Message() << ISA << ' ' << Little << ' '
+                                              << Word << ' ' << Input);
+            MIPSSystemContext C;
+            C.Historical = HistoricalSchedule::fromSnapshot(
+                ISA, {}, HistoricalCP0{CPU, 0, 0, 0x1234, {}, {}});
+            NdOpEmulator E(Img);
+            E.setRegister(mipsreg::A0, Input);
+            E.setRegister(mipsreg::A1, uint64_t(-2));
+            const bool Trapped = Expected[Condition];
+            EXPECT_EQ(execute(Ops, E, C), !Trapped);
+            const auto &System = *C.Historical->system();
+            EXPECT_EQ((System.Cause >> 2) & 31, Trapped ? 13u : 0u);
+            EXPECT_EQ(System.Cause >> 31, 0u);
+            EXPECT_EQ(System.EPC, Trapped ? 0x1080u : 0x1234u);
+          }
+        }
+    }
+}
+
+TEST(MIPSHistoricalScheduling, ConditionalTrapInAnExecutedOrAnnulledSlot) {
+  for (auto A : {Arch::MIPS64, Arch::MIPS64EL})
+    for (bool Annul : {false, true})
+      for (bool Taken : {false, true}) {
+        auto Img = image(A, 3);
+        MIPSSystemContext C;
+        C.Historical = HistoricalSchedule::fromSnapshot(
+            3, {},
+            HistoricalCP0{HistoricalProcessor::R4000, 0, 0, 0x1234, {}, {}});
+        NdOpEmulator E(Img);
+        E.setRegister(mipsreg::A0, Taken ? 0 : 1);
+        // BEQ or BEQL a0,zero followed by TEQ zero,zero.
+        const uint32_t Branch = (Annul ? 0x50800002u : 0x10800002u);
+        const bool Executed = !Annul || Taken;
+        EXPECT_EQ(execute(lift(Img, 0x2000, {Branch, 0x34}), E, C), !Executed);
+        const auto &System = *C.Historical->system();
+        EXPECT_EQ((System.Cause >> 2) & 31, Executed ? 13u : 0u);
+        EXPECT_EQ(System.Cause >> 31, unsigned(Executed));
+        EXPECT_EQ(System.EPC, Executed ? 0x2000u : 0x1234u);
+      }
+}
+
 TEST(MIPSHistoricalScheduling, AnnulledSyscallCannotChangeExceptionState) {
   for (bool Little : {false, true}) {
     auto Img = image(Little ? Arch::MIPS64EL : Arch::MIPS64, 3);
