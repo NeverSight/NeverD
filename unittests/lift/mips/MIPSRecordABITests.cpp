@@ -282,8 +282,50 @@ TEST(MIPSRecordABI, RefusesPartialLayoutsAndUnqualifiedConventions) {
     EXPECT_FALSE(
         mips::placeRecordCall(A, BinaryFormat::ELF, InvalidVoid, {Good}));
   }
-  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::X64, Arch::AArch64})
+  for (Arch A : {Arch::X64, Arch::AArch64})
     EXPECT_FALSE(mips::placeRecordCall(A, BinaryFormat::ELF, Good, {Good}));
+}
+
+TEST(MIPSRecordABI, O32ReturnsTheStorageAddressAndSplitsRecordArguments) {
+  for (Arch A :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64O32, Arch::MIPS64O32EL}) {
+    const auto Tiny = bytes(3);
+    const auto Split = bytes(7);
+    const auto Word = NdType::makeInt(4, false);
+    const auto Double = record({NdType::makeFloat(8)}, 4);
+    auto Layout = mips::placeRecordCall(A, BinaryFormat::ELF, Tiny,
+                                        {Word, Word, Split, Double});
+    ASSERT_TRUE(Layout);
+    ASSERT_TRUE(Layout->Arguments.ResultPointer);
+    EXPECT_TRUE(Layout->ReturnsResultPointer);
+    EXPECT_TRUE(Layout->Result.empty());
+    EXPECT_EQ(Layout->Arguments.ResultPointer->ValueBytes, 4u);
+    EXPECT_EQ(Layout->Arguments.ResultPointer->RegisterOffset, mipsreg::A0);
+    const auto &Pieces = Layout->Arguments.Parameters[2];
+    ASSERT_EQ(Pieces.size(), 2u);
+    EXPECT_EQ(Pieces[0].Location.RegisterOffset, mipsreg::r(7));
+    EXPECT_EQ(Pieces[0].CarrierBytes, 4u);
+    EXPECT_EQ(Pieces[1].Location.EntryStackOffset, 16);
+    EXPECT_EQ(Pieces[1].Location.ValueBytes, 3u);
+    EXPECT_EQ(Layout->Arguments.Parameters[3][0].Location.EntryStackOffset, 24);
+    auto Call =
+        integerCallArguments(A, BinaryFormat::ELF, Tiny, {Word, Word, Split});
+    ASSERT_TRUE(Call);
+    EXPECT_EQ(Call->ResultPointer, 0u);
+    EXPECT_EQ(Call->Parameters[2].Pieces[1].BitOffset,
+              archLittleEndian(A) ? 0u : 8u);
+    auto Aligned = mips::placeRecordCall(A, BinaryFormat::ELF, Tiny, {Double});
+    ASSERT_TRUE(Aligned);
+    EXPECT_EQ(Aligned->Arguments.Parameters[0][0].Location.RegisterOffset,
+              mipsreg::r(6));
+    EXPECT_EQ(Aligned->Arguments.Parameters[0][1].Location.RegisterOffset,
+              mipsreg::r(7));
+    auto Scalar =
+        mips::placeRecordCall(A, BinaryFormat::ELF, NdType::makeInt(8), {Tiny});
+    ASSERT_TRUE(Scalar);
+    EXPECT_EQ(Scalar->Result.size(), 2u);
+    EXPECT_EQ(Scalar->Result[0].Offset, archLittleEndian(A) ? 0u : 4u);
+  }
 }
 
 TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
@@ -304,11 +346,21 @@ TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
       EXPECT_FALSE(validateSourceABI(Hint.Signature, Diagnostic));
       EXPECT_TRUE(sourceABIParameters(Hint.Signature).empty());
       EXPECT_FALSE(sourceABICallResultType(Hint.Signature));
-      // The scalar declaration path cannot silently reinterpret record bytes
-      // as a register scalar while the complete record call proof is absent.
-      EXPECT_FALSE(
-          assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic));
-      EXPECT_FALSE(Diagnostic.empty());
+      // A checked declaration may bind full independent members. An incomplete
+      // location or a partially defined physical word remains insufficient.
+      const bool CanBind = Type->Fields.front()->Kind != NdTypeKind::Array;
+      EXPECT_EQ(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic),
+                CanBind);
+      if (CanBind) {
+        EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
+        EXPECT_TRUE(Hint.Signature.MIPSRecords);
+        EXPECT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
+        auto Bad = Hint.Signature;
+        Bad.Parameters.front().Components.front().RegisterOffset += 8;
+        EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+      } else {
+        EXPECT_FALSE(Diagnostic.empty());
+      }
     }
 }
 

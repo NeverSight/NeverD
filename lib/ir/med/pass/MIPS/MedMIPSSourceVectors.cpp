@@ -46,6 +46,8 @@ const SourceCallTypeHint *mipsFloatingCallSite(
       if (const auto It = Sites->find(*Key); It != Sites->end()) {
         const auto &H = It->second;
         std::string Diagnostic;
+        if (H.Signature.MIPSRecords)
+          return nullptr; // The record binder owns its complete piece layout.
         if (H.CallKind != SourceCallTypeHint::Kind::Analyst ||
             H.AnalystSite != Key || H.Signature.Architecture != Target ||
             !H.Signature.MIPSScalars ||

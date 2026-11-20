@@ -13,6 +13,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
@@ -462,7 +463,8 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
 
 bool equalSourceABIs(const SourceFunctionTypeHint &Left,
                      const SourceFunctionTypeHint &Right) {
-  if (bool(Left.MIPSScalars) != bool(Right.MIPSScalars) ||
+  if (Left.MIPSRecords != Right.MIPSRecords ||
+      bool(Left.MIPSScalars) != bool(Right.MIPSScalars) ||
       (Left.MIPSScalars && *Left.MIPSScalars != *Right.MIPSScalars) ||
       Left.Origin != Right.Origin || Left.Convention != Right.Convention ||
       Left.Architecture != Right.Architecture ||
@@ -704,6 +706,20 @@ TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint) {
 bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                        std::string &Diagnostic) {
   Diagnostic.clear();
+  if (Hint.MIPSRecords) {
+    if (!isMIPS(Hint.Architecture) || Hint.MIPSScalars ||
+        !Hint.HasExplicitABI ||
+        Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        (Hint.Origin != SourceFunctionTypeHint::OriginKind::ExplicitSource &&
+         Hint.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis))
+      return fail(Diagnostic, "Invalid MIPS record declaration");
+    auto Expected = Hint;
+    return (mips::assignRecordSourceABI(Expected, Hint.Architecture,
+                                        BinaryFormat::ELF) &&
+            equalSourceABIs(Hint, Expected)) ||
+           fail(Diagnostic,
+                "MIPS record members disagree with physical carriers");
+  }
   if (Hint.MIPSScalars) {
     const auto &S = *Hint.MIPSScalars;
     if (!isMIPS(Hint.Architecture) || !Hint.HasExplicitABI ||

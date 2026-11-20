@@ -12,6 +12,7 @@
 
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -123,6 +124,24 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
     return refuse(Error, "A variadic call-site needs a nonempty fixed prefix "
                          "within its actual operands");
   if (isMIPS(Architecture) && Format == BinaryFormat::ELF) {
+
+    const bool HasRecord =
+        (Signature.ReturnType &&
+         Signature.ReturnType->Kind == NdTypeKind::Struct &&
+         !Signature.ReturnType->IsEnum) ||
+        llvm::any_of(Signature.Parameters, [](const auto &P) {
+          return P.Type && P.Type->Kind == NdTypeKind::Struct &&
+                 !P.Type->IsEnum;
+        });
+    if (HasRecord && Hint.AnalystFixedCount < 0 &&
+        EntryMode != InstructionMode::MIPS16) {
+      auto Bound = Signature;
+      Bound.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      if (mips::assignRecordSourceABI(Bound, Architecture, Format)) {
+        Signature = std::move(Bound);
+        return true;
+      }
+    }
     std::vector<TypeRef> Types;
     for (const auto &P : Signature.Parameters)
       Types.push_back(P.Type);
@@ -149,6 +168,7 @@ bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
     mips::placeScalarResult(getTargetRegInfo(Architecture), *Scalars,
                             Signature.ReturnLocation,
                             Signature.ReturnComponents);
+    Signature.MIPSRecords = false;
     Signature.MIPSScalars =
         std::make_shared<const FloatingCallArguments>(std::move(*Scalars));
     return validateSourceABI(Signature, Error);

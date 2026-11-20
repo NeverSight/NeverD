@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Physical carriers of complete fixed n32/n64 natural C record signatures.
+/// Physical carriers of complete fixed o32/n32/n64 natural C record signatures.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_MIPS_SOURCERECORDABI_H
@@ -22,8 +22,10 @@ namespace neverd::mips {
 struct RecordCallPlacement {
   SourceParameterPlacement Arguments;
   /// Empty for void and for a result written through Arguments.ResultPointer.
-  /// A hidden result pointer is an input; it does not define a v0 return.
+  /// The object resides in the storage described by Arguments.ResultPointer.
   std::vector<SourceParameterPiece> Result;
+  /// o32 additionally returns the storage address in v0. n32/n64 do not.
+  bool ReturnsResultPointer = false;
 };
 
 /// Classify complete by-value natural structs, including nested structs,
@@ -37,6 +39,11 @@ std::optional<RecordCallPlacement>
 placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
+
+/// Bind a source declaration whose components can be represented independently
+/// in the source IR. Retains the input unchanged when a carrier is unavailable.
+bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
+                           BinaryFormat Format);
 
 } // namespace neverd::mips
 

@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS scalar locations and separate complete n32/n64 record transport.
+/// MIPS scalar and fixed natural-record transport.
 /// ELF source admission authenticates the FP profile and callable contract.
 //===----------------------------------------------------------------------===//
 
@@ -109,10 +109,15 @@ bool completeRecord(const TypeRef &Type, const TargetRegInfo &TRI) {
 
 void setCarrierWidths(std::vector<SourceParameterPiece> &Pieces,
                       const TargetRegInfo &TRI) {
-  for (auto &Piece : Pieces)
-    Piece.CarrierBytes = Piece.Location.Kind == SourceABICarrierKind::Stack
-                             ? Piece.Location.ValueBytes
-                             : TRI.FullRegWidth;
+  for (auto &Piece : Pieces) {
+    if (Piece.Location.Kind == SourceABICarrierKind::Stack)
+      Piece.CarrierBytes = Piece.Location.ValueBytes;
+    else if (Piece.Location.Kind == SourceABICarrierKind::IntegerRegister)
+      Piece.CarrierBytes = TRI.integerReturnWordBytes();
+    else
+      Piece.CarrierBytes =
+          std::max<uint16_t>(TRI.FullRegWidth, Piece.Location.ValueBytes);
+  }
 }
 } // namespace
 
@@ -152,8 +157,8 @@ std::optional<mips::RecordCallPlacement>
 mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
                       const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters, bool Variadic) {
-  if ((!isMIPSN32(Architecture) && !isMIPSN64(Architecture)) ||
-      Format != BinaryFormat::ELF || Variadic || !ReturnType ||
+  if (!isMIPS(Architecture) || Format != BinaryFormat::ELF || Variadic ||
+      !ReturnType ||
       (ReturnType->Kind == NdTypeKind::Void && ReturnType->Size != 0))
     return std::nullopt;
   const auto &TRI = getTargetRegInfo(Architecture);
@@ -171,11 +176,16 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
   RecordCallPlacement Result;
   ParameterCursor Cursor{TRI, TRI.integerArgumentLayout(Format), false, 0, 0,
                          true};
-  if (RecordResult && ReturnType->Size > 2 * TRI.FullRegWidth) {
+  const bool O32 = isMIPSO32(Architecture);
+  if (RecordResult && (O32 || ReturnType->Size > 2 * TRI.FullRegWidth)) {
     Result.Arguments.ResultPointer =
         SourceABIValueLocation{SourceABICarrierKind::IntegerRegister,
                                Cursor.Layout.Registers[0], 0, TRI.PointerSize};
     ++Cursor.Next;
+    Cursor.LeadingFloating = false;
+    if (O32)
+      Result.ReturnsResultPointer =
+          true; // System V MIPS ABI, Function Return Values.
   } else if (RecordResult) {
     const bool Floating =
         ReturnType->Fields.size() <= 2 &&
@@ -203,10 +213,20 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
     }
   } else if (ReturnType->Kind != NdTypeKind::Void) {
     const bool Floating = ReturnType->Kind == NdTypeKind::Float;
-    Result.Result.push_back(registerPiece(
-        Floating ? SourceABICarrierKind::FloatingRegister
-                 : SourceABICarrierKind::IntegerRegister,
-        Floating ? TRI.FPReturnReg : TRI.IntReturnReg, 0, ReturnType->Size));
+    if (O32 && !Floating && ReturnType->Size == 8) {
+      const bool Little = archLittleEndian(Architecture);
+      Result.Result.push_back(
+          registerPiece(SourceABICarrierKind::IntegerRegister, TRI.IntReturnReg,
+                        Little ? 0 : 4, 4));
+      Result.Result.push_back(
+          registerPiece(SourceABICarrierKind::IntegerRegister,
+                        TRI.IntReturnReg2, Little ? 4 : 0, 4));
+    } else {
+      Result.Result.push_back(registerPiece(
+          Floating ? SourceABICarrierKind::FloatingRegister
+                   : SourceABICarrierKind::IntegerRegister,
+          Floating ? TRI.FPReturnReg : TRI.IntReturnReg, 0, ReturnType->Size));
+    }
   }
   setCarrierWidths(Result.Result, TRI);
   bool HasRecord = RecordResult;
@@ -222,6 +242,9 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
     if (!completeRecord(Type, TRI))
       return std::nullopt;
     HasRecord = true;
+    Cursor.LeadingFloating = false;
+    if (O32 && Type->Alignment == 8)
+      Cursor.Next = (Cursor.Next + 1) & ~1u;
     size_t Field = 0;
     for (unsigned Offset = 0; Offset < Type->Size;
          Offset += Cursor.Layout.SlotBytes, ++Cursor.Next) {
@@ -240,7 +263,8 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
       while (Field < Type->Fields.size() && Type->FieldOffsets[Field] < Offset)
         ++Field;
       const bool Floating =
-          Field < Type->Fields.size() && Type->FieldOffsets[Field] == Offset &&
+          !O32 && Field < Type->Fields.size() &&
+          Type->FieldOffsets[Field] == Offset &&
           Type->Fields[Field]->Kind == NdTypeKind::Float &&
           Type->Fields[Field]->Size == Cursor.Layout.SlotBytes;
       auto Piece =
@@ -250,10 +274,68 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
                                  : Cursor.Layout.Registers[Cursor.Next],
                         Offset, Bytes);
       if (!Floating && !archLittleEndian(Architecture))
-        Piece.RegisterBitOffset = (TRI.FullRegWidth - Bytes) * 8;
+        Piece.RegisterBitOffset = (Cursor.Layout.SlotBytes - Bytes) * 8;
       Pieces.push_back(Piece);
     }
     setCarrierWidths(Pieces, TRI);
   }
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
+}
+
+bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
+                                 Arch Architecture, BinaryFormat Format) {
+  std::vector<TypeRef> Types;
+  for (const auto &P : Hint.Parameters) {
+    if (P.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+        P.IndirectByValue)
+      return false;
+    Types.push_back(P.Type);
+  }
+  const auto Layout =
+      placeRecordCall(Architecture, Format, Hint.ReturnType, Types);
+  if (!Layout || Layout->Arguments.ResultPointer)
+    return false;
+  auto Bound = Hint;
+  const auto Bind = [](const TypeRef &Type,
+                       llvm::ArrayRef<SourceParameterPiece> Pieces,
+                       SourceABIValueLocation &Scalar,
+                       std::vector<SourceABIValueLocation> &Components) {
+    Scalar = {};
+    Components.clear();
+    if (Type->Kind == NdTypeKind::Void)
+      return Pieces.empty();
+    if (!isRecord(Type)) {
+      if (Pieces.size() != 1 || Pieces[0].Offset ||
+          Pieces[0].RegisterBitOffset ||
+          Pieces[0].Location.ValueBytes != Type->Size)
+        return false;
+      Scalar = Pieces[0].Location;
+      return true;
+    }
+    const auto Members = sourceABIValueMembers(Type);
+    if (Members.empty() || Members.size() != Pieces.size())
+      return false;
+    for (size_t I = 0; I < Members.size(); ++I) {
+      const auto &M = Members[I];
+      const auto &P = Pieces[I];
+      if (P.Offset != M.ByteOffset || P.Location.ValueBytes != M.Type->Size ||
+          P.RegisterBitOffset || P.Indirect)
+        return false;
+      Components.push_back(P.Location);
+    }
+    return true;
+  };
+  if (!Bind(Bound.ReturnType, Layout->Result, Bound.ReturnLocation,
+            Bound.ReturnComponents))
+    return false;
+  for (size_t I = 0; I < Types.size(); ++I)
+    if (!Bind(Types[I], Layout->Arguments.Parameters[I],
+              Bound.Parameters[I].Location, Bound.Parameters[I].Components))
+      return false;
+  Bound.Architecture = Architecture;
+  Bound.HasExplicitABI = true;
+  Bound.MIPSRecords = true;
+  Bound.MIPSScalars.reset();
+  Hint = std::move(Bound);
+  return true;
 }

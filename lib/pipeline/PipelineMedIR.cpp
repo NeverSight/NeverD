@@ -26,6 +26,7 @@
 #include "neverd/Limits.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -1157,6 +1158,32 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   std::map<va_t, SourceFunctionTypeHint> SourceEntryHints;
   for (const auto &[Entry, Hint] : SourceHints)
     SourceEntryHints.emplace(Entry, *Hint);
+  if (Opts.usesSourceDeclarations() && Img.MIPS && Dbg &&
+      Dbg->hasAuthenticatedFunctionSignatures()) {
+    for (const auto &LF : Result.LowFuncs) {
+      if (SourceEntryHints.contains(LF.Entry) ||
+          Img.instructionModeAt(LF.Entry) == InstructionMode::MIPS16)
+        continue;
+      const auto FS = Dbg->resolveFunction(LF.Entry);
+      if (!FS || FS->Addr != LF.Entry || !FS->PlatformConvention ||
+          FS->IsVariadic || !FS->ReturnType ||
+          (FS->ReturnType->Kind != NdTypeKind::Struct &&
+           llvm::none_of(FS->Params, [](const auto &P) {
+             return P.second && P.second->Kind == NdTypeKind::Struct;
+           })))
+        continue;
+      SourceFunctionTypeHint Candidate;
+      Candidate.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Candidate.ReturnType = FS->ReturnType;
+      for (const auto &[Name, Type] : FS->Params)
+        Candidate.Parameters.push_back({Name, Type});
+      if (mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())) {
+        auto It =
+            SourceEntryHints.emplace(LF.Entry, std::move(Candidate)).first;
+        SourceHints.emplace(LF.Entry, &It->second);
+      }
+    }
+  }
   auto SourceCalleeHints = SourceEntryHints;
   auto SourceSites = Opts.usesSourceDeclarations()
                          ? Opts.SourceCallSiteHints

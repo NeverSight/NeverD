@@ -41,10 +41,28 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   const auto *EntryHints =
       SourceEntryTypeHints ? SourceEntryTypeHints : SourceCalleeTypeHints;
   const bool ExplicitEntry = EntryHints && EntryHints->count(Low.Entry);
+  const bool MIPSRecords =
+      isMIPS(TargetArch) && Fmt == BinaryFormat::ELF &&
+      ((ExplicitEntry && EntryHints->at(Low.Entry).MIPSRecords) ||
+       (ExplicitSites && llvm::any_of(*SourceCallSiteHints,
+                                      [](const auto &S) {
+                                        return S.second.Signature.MIPSRecords;
+                                      })) ||
+       (SourceCalleeTypeHints && !SourceCalleeTypeHints->empty() &&
+        llvm::any_of(Low.Blocks, [&](const auto &B) {
+          return llvm::any_of(B.Ops, [&](const auto &Op) {
+            if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
+                !Op.Inputs[0].isConst())
+              return false;
+            auto It = SourceCalleeTypeHints->find(Op.Inputs[0].Offset);
+            return It != SourceCalleeTypeHints->end() && It->second.MIPSRecords;
+          });
+        })));
   if (!SourceCallHintsEnabled ||
-      (Image && !RuntimeHints && !ExplicitSites && !ExplicitEntry) ||
+      (Image && !RuntimeHints && !ExplicitSites && !ExplicitEntry &&
+       !MIPSRecords) ||
       (Image && (Image->IsRelocatable || Image->Arch != TargetArch)) ||
-      (TargetArch != Arch::AArch64 && TargetArch != Arch::X64))
+      (TargetArch != Arch::AArch64 && TargetArch != Arch::X64 && !MIPSRecords))
     return;
   const std::map<unsigned, ObjCReceiverTypeHint> *BlockParameters = nullptr;
   if (ObjCBlockParameterReceivers)
@@ -91,7 +109,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (EntryHints)
     if (auto It = EntryHints->find(Low.Entry); It != EntryHints->end()) {
       std::string Diagnostic;
-      if (It->second.Architecture == TargetArch &&
+      if ((!MIPSRecords || It->second.MIPSRecords) &&
+          It->second.Architecture == TargetArch &&
           validateSourceABI(It->second, Diagnostic))
         EntrySignature = &It->second;
     }
@@ -291,11 +310,14 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Hint = SiteHint->second;
       else if (auto It = Hints.find(Op.Addr); It != Hints.end())
         Hint = It->second;
-      else if ((RuntimeHints || !Image) && SourceCalleeTypeHints &&
-               Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst()) {
+      else if ((RuntimeHints || !Image || MIPSRecords) &&
+               SourceCalleeTypeHints && Op.Opcode == NdOp::CALL &&
+               Op.Inputs[0].isConst()) {
         auto It = SourceCalleeTypeHints->find(Op.Inputs[0].ConstVal);
         if (It != SourceCalleeTypeHints->end()) {
           Hint.emplace();
+          if (MIPSRecords)
+            Hint->CallKind = SourceCallTypeHint::Kind::Native;
           Hint->Signature = It->second;
           Hint->TargetAddress = It->first;
           // The real native name is resolved by the ordinary call ABI pass.
@@ -336,7 +358,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           SourceCalleeFunctions->at(Hint->TargetAddress) &&
           SourceCalleeFunctions->at(Hint->TargetAddress)->Entry ==
               Hint->TargetAddress;
-      if (!Hint || Hint->Signature.Architecture != TargetArch ||
+      if (!Hint || (MIPSRecords && !Hint->Signature.MIPSRecords) ||
+          Hint->Signature.Architecture != TargetArch ||
           !validateSourceABI(Hint->Signature, Diagnostic) ||
           (Hint->Signature.ReturnLocation.Kind ==
                SourceABICarrierKind::IndirectResultPointer &&
@@ -451,10 +474,11 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           MedOp Address;
           Address.Opcode = NdOp::INT_ADD;
           Address.Addr = Op.Addr;
-          Address.Output = Temporary(8);
-          Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, 8)));
+          const auto Width = TRI.addressRegisterBytes();
+          Address.Output = Temporary(Width);
+          Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, Width)));
           Address.addInput(
-              MedVar::makeConst(Location.EntryStackOffset - *Bias, 8,
+              MedVar::makeConst(Location.EntryStackOffset - *Bias, Width,
                                 ConstantAddressProvenance::Scalar));
           MedOp Load;
           Load.Opcode = NdOp::LOAD;
