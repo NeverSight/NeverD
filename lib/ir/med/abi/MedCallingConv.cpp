@@ -1608,13 +1608,15 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());
     IntegerRegs = Func.IntegerArgumentRegisters;
   }
-  // A stub that passes registers on as a stack-ABI routine's arguments takes
-  // them so, and nothing else (goRegisterStubArguments).
-  const bool GoRegisterStub = !GoRegisterArguments && GoStubArguments;
-  if (GoRegisterStub) {
+  // A routine whose operands are fixed takes them so, and nothing else: a
+  // stub that passes registers on as a stack-ABI routine's arguments
+  // (goRegisterStubArguments), or a write barrier that performs the store
+  // itself (goWriteBarrierArguments).
+  const bool GoFixedOperands = !GoRegisterArguments && GoFixedArguments;
+  if (GoFixedOperands) {
     Func.IntegerArgumentRegisters.clear();
     for (const FixedIntegerCallArguments::Parameter &Parameter :
-         GoStubArguments->Parameters)
+         GoFixedArguments->Parameters)
       Func.IntegerArgumentRegisters.push_back(Parameter.Register);
     IntegerRegs = Func.IntegerArgumentRegisters;
   }
@@ -1624,7 +1626,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // stub such as Go 1.16's panicIndex (AX and CX), duffzero (DI and X0), or
   // a trampoline the platform's code enters, as the kernel enters a signal
   // handler.
-  if (Image && !GoRegisterArguments && !GoRegisterStub &&
+  if (Image && !GoRegisterArguments && !GoFixedOperands &&
       !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry)) {
     // The entry's leading self-copies name every register read before the
     // body writes it (findLiveInParamRegs).  One whose incoming value no
@@ -1738,11 +1740,11 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &NoReads;
       Func.ExactRegisterParameters = true;
     }
-    GPRReadWidths StubReads{};
-    if (GoRegisterStub) {
+    GPRReadWidths FixedReads{};
+    if (GoFixedOperands) {
       for (uint64_t Register : IntegerRegs)
-        StubReads[Register / 8] = 8;
-      Summary = &StubReads;
+        FixedReads[Register / 8] = 8;
+      Summary = &FixedReads;
       Func.ExactRegisterParameters = true;
     }
     // A variadic function's summary (Win64's home-slot spills) lists only the
@@ -1773,7 +1775,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
                          TargetArch, Convention, Summary,
                          GoRegisterArguments || BufferBarrier ||
                              BoundsRoutine || Func.StackArgumentsOnly ||
-                             GoRegisterStub);
+                             GoFixedOperands);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1841,9 +1843,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Func.StackArgumentsOnly && Image
           ? goFrameArgumentBytes(*Image, Func.Entry)
           : std::nullopt;
-  // A register stub writes the slots it passes on itself: its arguments are
-  // its registers alone (goRegisterStubArguments).
-  if (!Func.IsVariadic && !GoRegisterStub)
+  // A routine with fixed operands takes no stack word: a register stub writes
+  // the slots it passes on itself, and a write barrier's frame is its own.
+  if (!Func.IsVariadic && !GoFixedOperands)
     med_calling_conv_detail::detectStackParams(
         Func, TargetArch, Fmt,
         GoFrameBytes

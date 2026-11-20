@@ -556,6 +556,120 @@ TEST(GoWriteBarriers, ABufferBarrierTakesNoRegisterArgument) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoWriteBarriers, AStoringBarrierTakesItsAddressAndPointer) {
+  // A Go 1.11-1.20 barrier takes the address it writes at and the pointer it
+  // writes there in registers of its own: RDI and the register its name gives
+  // (`runtime.gcWriteBarrierCX`), or arm64's X2 and X3.  Read by position, a
+  // System V call passed `gcWriteBarrierCX(slot, 0, 0, value)`, a Win64 call
+  // `(value)`, and an AAPCS64 call `(x0, <placeholder>, slot, value)`.
+  //   main.f: mov edi, 0x1000; mov ecx, 0x2000; call barrier; ret
+  //   barrier: mov [rdi], rcx; ret
+  //   arm64: mov x2, #0x1000; mov x3, #0x2000; bl barrier; ret
+  //          barrier: str x3, [x2]; ret
+  constexpr va_t Caller = kTextVA + 0x100;
+  constexpr va_t BarrierEntry = kTextVA + 0x200;
+  struct Shape {
+    Arch A;
+    BinaryFormat Format;
+    bool StackArguments;
+  };
+  for (const Shape &Case : {Shape{Arch::X64, BinaryFormat::ELF, false},
+                            Shape{Arch::X64, BinaryFormat::COFF, false},
+                            Shape{Arch::X64, BinaryFormat::ELF, true},
+                            Shape{Arch::AArch64, BinaryFormat::ELF, false}})
+    for (const bool Restricted : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "arm64=" << (Case.A == Arch::AArch64)
+                   << " pe=" << (Case.Format == BinaryFormat::COFF) << " stack="
+                   << Case.StackArguments << " restricted=" << Restricted);
+      GoTestImage T(Case.A);
+      T.Img.Format = Case.Format;
+      GoWriteBarrier Barrier;
+      Barrier.Entry = BarrierEntry;
+      Barrier.Kind = GoWriteBarrierKind::Store;
+      if (Case.A == Arch::X64) {
+        std::vector<uint8_t> Body = {0xBF, 0x00, 0x10, 0x00, 0x00,
+                                     0xB9, 0x00, 0x20, 0x00, 0x00};
+        const std::vector<uint8_t> Call =
+            makeCall(Caller + Body.size(), BarrierEntry);
+        Body.insert(Body.end(), Call.begin(), Call.end());
+        Body.push_back(0xC3);
+        T.writeText(Caller, Body);
+        T.writeText(BarrierEntry, {0x48, 0x89, 0x0F, 0xC3});
+        Barrier.Destination = x86reg::RDI;
+        Barrier.Value = x86reg::RCX;
+      } else {
+        const uint32_t Call =
+            0x94000000u | (((BarrierEntry - (Caller + 8)) >> 2) & 0x3FFFFFFu);
+        T.writeText(Caller, words({0xD2820002, 0xD2840003, Call, 0xD65F03C0}));
+        T.writeText(BarrierEntry, words({0xF9000043, 0xD65F03C0}));
+        Barrier.Destination = a64reg::X2;
+        Barrier.Value = a64reg::X3;
+      }
+      GoModuleInfo Module;
+      Module.RegisterArguments = !Case.StackArguments;
+      Module.StackArguments = Case.StackArguments;
+      Module.GoCode = {{Caller, kTextVA + 0x300}};
+      Module.GoAssembly = {{BarrierEntry, kTextVA + 0x300}};
+      Module.WriteBarriers = {Barrier};
+      T.Img.ExceptionMetadata.GoModule = std::move(Module);
+      for (const auto &[Entry, Name] :
+           {std::pair{Caller, "main.f"},
+            std::pair{BarrierEntry, "runtime.gcWriteBarrierCX"}}) {
+        Symbol Function = Symbol::makeFunc(Entry);
+        Function.Name = Name;
+        T.Img.Symbols.push_back(std::move(Function));
+      }
+      const std::optional<FixedIntegerCallArguments> Operands =
+          goWriteBarrierArguments(T.Img, BarrierEntry);
+      ASSERT_TRUE(Operands.has_value());
+      ASSERT_EQ(Operands->Parameters.size(), 2u);
+      EXPECT_EQ(Operands->Parameters[0].Register, Barrier.Destination);
+      EXPECT_EQ(Operands->Parameters[1].Register, Barrier.Value);
+
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      if (Restricted)
+        Options.OnlyFunctionEntries = {Caller};
+      llvm::LLVMContext Context;
+      const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      const auto F = llvm::find_if(
+          R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+      ASSERT_NE(F, R.MedFuncs.end());
+      // The call binds the two registers before SSA, and a recovery of its
+      // operands, which an image with the stack ABI runs, keeps them.
+      auto IsOperand = [](const MedVar &V, uint64_t Constant,
+                          uint64_t Register) {
+        return V.isConst() ? V.ConstVal == Constant
+                           : V.Kind == MedVar::Reg && V.RegOff == Register;
+      };
+      const MedOp *Call = onlyCall(*F);
+      ASSERT_NE(Call, nullptr);
+      ASSERT_EQ(Call->NumInputs, 3u);
+      EXPECT_TRUE(IsOperand(Call->Inputs[1], 0x1000, Barrier.Destination));
+      EXPECT_TRUE(IsOperand(Call->Inputs[2], 0x2000, Barrier.Value));
+      if (!F->CallInfos.empty()) {
+        ASSERT_EQ(F->CallInfos.size(), 1u);
+        const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+        ASSERT_EQ(Arguments.size(), 2u);
+        EXPECT_TRUE(IsOperand(Arguments[0], 0x1000, Barrier.Destination));
+        EXPECT_TRUE(IsOperand(Arguments[1], 0x2000, Barrier.Value));
+      }
+      if (Restricted)
+        continue;
+      // The barrier's own parameters are the same two registers.
+      const auto B = llvm::find_if(R.MedFuncs, [&](const MedFunc &M) {
+        return M.Entry == BarrierEntry;
+      });
+      ASSERT_NE(B, R.MedFuncs.end());
+      ASSERT_EQ(B->Params.size(), 2u);
+      EXPECT_EQ(B->Params[0].RegOff, Barrier.Destination);
+      EXPECT_EQ(B->Params[1].RegOff, Barrier.Value);
+      EXPECT_TRUE(B->ExactRegisterParameters);
+    }
+}
+
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
   // runtime.morestackc throws: a system-stack function that runs short of
   // stack never starts again, so its path stays.
@@ -1092,8 +1206,8 @@ TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
     const LocalRegisterEffect Effect =
         localRegisterEffect(T.Img, CallRegisterBodyView(StubLow), nullptr,
                             nullptr, nullptr, nullptr);
-    ASSERT_TRUE(Effect.GoStubArguments.has_value());
-    EXPECT_EQ(*Effect.GoStubArguments, *Arguments);
+    ASSERT_TRUE(Effect.GoFixedArguments.has_value());
+    EXPECT_EQ(*Effect.GoFixedArguments, *Arguments);
     ASSERT_TRUE(Effect.GoArgumentReads.has_value());
     GPRReadWidths Reads{};
     Reads[x86reg::RAX / 8] = 8;
@@ -1240,7 +1354,7 @@ TEST(GoStackArguments, OnlyAStubPassesItsRegistersOn) {
     EXPECT_FALSE(goRegisterStubArguments(T.Img, Entry, Low.Blocks));
     EXPECT_FALSE(localRegisterEffect(T.Img, CallRegisterBodyView(Low), nullptr,
                                      nullptr, nullptr, nullptr)
-                     .GoStubArguments);
+                     .GoFixedArguments);
   }
 }
 

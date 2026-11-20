@@ -2330,9 +2330,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       if (!GoGrowth->Spills.empty())
         GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
     }
-    GoStubArguments =
-        Image ? goRegisterStubArguments(*Image, Low.Entry, Low.Blocks)
-              : std::nullopt;
+    GoFixedArguments.reset();
+    if (Image) {
+      GoFixedArguments = goWriteBarrierArguments(*Image, Low.Entry);
+      if (!GoFixedArguments)
+        GoFixedArguments =
+            goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
+    }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");

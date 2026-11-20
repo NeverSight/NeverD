@@ -160,6 +160,20 @@ std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
   return std::nullopt;
 }
 
+std::optional<FixedIntegerCallArguments>
+goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
+  const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry);
+  if (!Barrier || Barrier->Kind != GoWriteBarrierKind::Store)
+    return std::nullopt;
+  const auto Bytes =
+      static_cast<uint16_t>(getTargetRegInfo(Img.Arch).PointerSize);
+  FixedIntegerCallArguments Arguments;
+  for (const uint64_t Register : {Barrier->Destination, Barrier->Value})
+    Arguments.Parameters.push_back(
+        {SourceABICarrierKind::IntegerRegister, Register, 0, Bytes});
+  return Arguments;
+}
+
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
