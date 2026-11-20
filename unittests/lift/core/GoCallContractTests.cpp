@@ -919,6 +919,56 @@ TEST(GoStackArguments, ACalleeWithoutASizeTakesWhatItReads) {
     }
 }
 
+TEST(GoStackArguments, ARunOfTheCallerAlonePassesItsStackArguments) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller, run over
+  // the caller alone, as `--func` and the GUI run one function.  The call
+  // took main.add's summary, which counts its stack words after System V's
+  // six register positions: `main_add(0, 0, 0, 0, 0, 0, 1, 2)`.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                      0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+    std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                 0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                 0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.insert(Body.end(),
+                {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+    T.writeText(Caller, Body);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Add, kTextVA + 0x300}};
+    Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] :
+         {std::pair{Add, "main.add"}, std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    ASSERT_EQ(F->CallInfos.size(), 1u);
+    const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+    ASSERT_EQ(Arguments.size(), 2u);
+    EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+    EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+  }
+}
+
 TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
   // Registers a Go 1.16 function reads at its entry without taking an
   // argument there.  Read as register arguments, each put an unused parameter

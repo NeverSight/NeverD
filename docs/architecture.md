@@ -5964,6 +5964,13 @@ where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete
 (`MedCallInfo::ArgumentsFromPrototype`), so HighIR collection appends nothing.
+A run of some functions alone, as `--func` and the GUI make, recovers its
+calls as a run of the whole image does: HighIR runs call recovery in an image
+with the stack ABI (`prepareSourceMedIR`), and every direct callee that is
+Go code is read for its own recovery, where a summary would count its stack
+words after the platform's register positions (`calleesToRead`). Before,
+`runtime_futex(0, 0, 0, 0, 0, 0, addr, op, ...)` printed alone beside
+`runtime_futex(addr, op, ...)` in the image.
 A record that gives no size, as Go assembly declared `$0` has, bounds nothing:
 the call takes the words the callee reads, as Windows' `ctrlhandler` passes
 `externalthreadhandler` its handler and the control type. A block NeverD

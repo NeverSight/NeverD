@@ -20635,6 +20635,9 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoStackArguments.ARunOfTheCallerAlonePassesItsStackArguments` runs the
+pipeline over `main.add`'s caller alone and over the whole image: both pass
+`(1, 2)` on the stack.
 `GoStackArguments.AValueNothingNeedsTakesNoArgument` lifts five Go 1.16
 functions that read a register at their entry without taking an argument
 there: `sete r9b`, the nil check `testb al, (rbx)`, a return, `memmove`'s byte

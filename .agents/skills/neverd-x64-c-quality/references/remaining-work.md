@@ -563,6 +563,16 @@ Still open, in order of yield:
      - On Windows, a block inside a Go function is sometimes split off as a
        function of its own (`ensureSwept`'s 0x420515), and its call passes
        Win64 positions, which widens the enclosing function.
+     - A run of some functions alone recovers stack-ABI calls as the whole
+       image does; on a 40-function Go 1.16 sample, 16 of 23 bodies match the
+       image's, up from 8. Still apart: parameter types the image's callers
+       give, omitted callees whose recovery stops early (`gentraceback` 14
+       words beside 10), and register-ABI images, where `throw` and the
+       write barriers, listed or contract routines, take System V positions
+       alone (`runtime_throw` 7 arguments beside 2).
+     - `SYSCALL` reads all six syscall argument registers whatever the
+       call, so `runtime.exit` (`exit_group(code)`) is no stack-only
+       function.
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
      - ABI0 assembly in register-ABI images.

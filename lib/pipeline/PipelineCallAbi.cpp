@@ -21,6 +21,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/RegistrationABI.h"
@@ -579,9 +580,16 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
       // missing. A complete read summary already includes zero stack demand;
       // traversing all of its descendants cannot strengthen that contract.
       // A frame borrow has a separate pointer-use proof to establish.
+      // Before Go's internal ABI, whether a Go callee takes every argument on
+      // the stack is its own recovery's to say (MedFunc::StackArgumentsOnly):
+      // a summary counts its stack words after the platform's register
+      // positions.
+      const bool GoStackCallee =
+          Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          goTakesStackArguments(Img, Op.Inputs[0].ConstVal);
       if (Convention && !Convention->ArgumentsFromCallSetup &&
           Convention->StackArgumentSummary && Op.CalleeStackArgs >= 0 &&
-          !FrameBorrows.count(&Op))
+          !FrameBorrows.count(&Op) && !GoStackCallee)
         continue;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
         Callees.push_back(importOwnRoutine(Img,

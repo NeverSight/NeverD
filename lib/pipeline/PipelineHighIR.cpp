@@ -225,7 +225,13 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
           });
         });
       });
-  if (SetupArguments || HasIndirectCalls) {
+  // Before Go's internal ABI a call passes its arguments on the stack, as
+  // call recovery reads them (MedFunc::StackArgumentsOnly) and the HighIR
+  // collection does not: a run of one Go function takes them so too, as a
+  // run of the whole image does.
+  const bool GoStackArguments = Img.ExceptionMetadata.GoModule &&
+                                Img.ExceptionMetadata.GoModule->StackArguments;
+  if (SetupArguments || HasIndirectCalls || GoStackArguments) {
     recoverModuleCallAbi(Img, Result, AllFuncNames,
                          /*SourceDeclarations=*/false,
                          /*SourceParameterReads=*/true);
