@@ -581,7 +581,10 @@ Still open, in order of yield:
      can install a different g.
    - A closure's context register (RDX, arm64 R26) should become a
      parameter. Its reads are "incoming register" placeholders once the
-     growth path is gone, about 5% of what remains.
+     growth path is gone, about 5% of what remains. A closure call
+     (`callsThroughContext`) no longer counts it as a positional argument.
+     Go code's stores of an incoming RBX or X19-X28 are no prologue saves.
+     Together these took Go 1.18-1.22 amd64 down 15-21%.
 3. Go 1.26 bounds failures call one `runtime.panicBounds`. The call site's
    `PCDATA_PanicBounds` entry names the registers or constants holding the
    index and the length (`internal/abi/bounds.go`), and the loader now reads

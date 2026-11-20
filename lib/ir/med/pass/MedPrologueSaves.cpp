@@ -18,6 +18,7 @@
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/low/BlockRegisterConstant.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -407,7 +408,8 @@ void markCalleeSavePrologueSaves(
     MedFunc &Func, Arch Architecture, BinaryFormat Format, StackEntryKind Entry,
     std::vector<FrameAccess> &Loads, std::vector<FrameAccess> &Stores,
     const ValueReads &Reads, std::vector<CalleeSaveRead> &BodyReads,
-    std::vector<FrameAccess> *NeutralAtomics = nullptr) {
+    std::vector<FrameAccess> *NeutralAtomics = nullptr,
+    const BinaryImage *Image = nullptr) {
   const auto &TRI = getTargetRegInfo(Architecture);
   const BinaryFormat Convention =
       Func.CC == CallingConv::Win64 ? BinaryFormat::COFF : BinaryFormat::ELF;
@@ -444,11 +446,17 @@ void markCalleeSavePrologueSaves(
   OpPositions Positions;
   std::vector<MedOp *> Saves;
   std::vector<MedOp *> Uses;
+  // Go code keeps no register for its caller but the stack and frame
+  // pointers, as its calls keep none (callRegisterContractOf): an incoming
+  // RBX, R12 or X19 is a parameter or scratch there, and a store of it, such
+  // as a closure's captured string length, is no prologue save.
+  const bool KeepsOnlyFrame = Image && isGoCode(*Image, Func.Entry);
   for (const FrameAccess &Save : Stores) {
     const MedVar &Saved = Save.Op->Inputs[1];
     if (Saved.Kind != MedVar::Reg || !Saved.Size ||
         !isEntryLiveInValue(Func, Saved, Saved.RegOff) ||
-        !(TRI.isCallPreserved(Saved.RegOff, Saved.Size, Convention) ||
+        !((!KeepsOnlyFrame &&
+           TRI.isCallPreserved(Saved.RegOff, Saved.Size, Convention)) ||
           TRI.isFramePointer(Saved.RegOff) || TRI.isLinkRegister(Saved.RegOff)))
       continue;
     if (!isPrivateFrameAccess(Func, Layout, Save.Offset, Saved.Size))
@@ -1968,7 +1976,7 @@ void markSourceStackAccesses(MedFunc &Func, Arch Architecture,
   std::vector<CalleeSaveRead> BodyReads;
   const ValueReads Reads(Func);
   markCalleeSavePrologueSaves(Func, Architecture, Format, Entry, Loads, Stores,
-                              Reads, BodyReads, &NeutralAtomics);
+                              Reads, BodyReads, &NeutralAtomics, Image);
   // Annotate before source-only replacement. No access proof survives the
   // replacements at the end of this preparation.
   if (hasStackReturnAddress(Architecture, Entry))

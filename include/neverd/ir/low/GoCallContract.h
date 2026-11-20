@@ -78,6 +78,10 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
 
+/// The register Go passes a func value its closure in on \p A: RDX, or R26 on
+/// arm64.  It is no positional argument.
+std::optional<uint64_t> goClosureContextRegister(Arch A);
+
 /// One register argument a function's stack-growth path spills.
 struct GoArgumentSpill {
   uint64_t Register = 0;

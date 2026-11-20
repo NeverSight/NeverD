@@ -207,6 +207,14 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   return {};
 }
 
+std::optional<uint64_t> goClosureContextRegister(Arch A) {
+  if (A == Arch::X64)
+    return x86reg::RDX;
+  if (A == Arch::AArch64)
+    return a64reg::X26;
+  return std::nullopt;
+}
+
 bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
                                       const GPRReadWidths &Reads) {
   const auto &Module = Img.ExceptionMetadata.GoModule;

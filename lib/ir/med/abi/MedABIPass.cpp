@@ -22,6 +22,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -1931,6 +1932,24 @@ void recoverCallAbi(
           }
           if (IsCall)
             break;
+        }
+      // Go passes a func value its closure in a context register (RDX, arm64
+      // R26): an indirect call whose target is the word at the address that
+      // register holds (`mov rax, [rdx]; call rax`, or assembly's `mov rdx,
+      // rdi; mov rdi, [rdi]; call rdi`) calls a closure, and the register is
+      // its context, no argument.  Where the convention numbers it (Go
+      // assembly and stack-ABI code read as System V's), setting it passes
+      // no RDI or RSI before it.
+      if (CI.IsIndirect && Img && Op.NumInputs >= 1 &&
+          isGoCode(*Img, Func.Entry))
+        if (const auto Context = goClosureContextRegister(TheArch)) {
+          const int Slot = regToIntArgIdx(*Context);
+          if (Slot >= 0 && Slot < MaxArgs && FoundMask[Slot] &&
+              callsThroughContext(Blk, static_cast<int>(OI), Op.Inputs[0],
+                                  Found[Slot])) {
+            FoundMask[Slot] = false;
+            Found[Slot] = MedVar();
+          }
         }
       const std::vector<bool> SetInBlock = FoundMask;
       // The nearest in-block register write executes after the block PHIs and

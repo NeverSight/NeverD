@@ -19,7 +19,9 @@
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -692,6 +694,70 @@ TEST(GoInternalABI, X15ReadsAsZero) {
           Op.Inputs[0].ConstVal == 0)
         Zero = true;
   EXPECT_TRUE(Zero);
+}
+
+TEST(GoPrologueSaves, AStoreOfRBXIsNoPrologueSave) {
+  // main.f: push rbp; mov rbp, rsp; sub rsp, 0x20; mov [rsp+0x18], rbx;
+  // add rsp, 0x20; pop rbp; ret.  C keeps RBX for its caller, so this is a
+  // save of it.  Go keeps none but RBP: RBX is its second integer argument,
+  // and runtime.throw stores it so into the closure it hands systemstack.
+  BinaryImage Img = registerArgumentImage();
+  constexpr va_t Function = kTextVA + 0x380;
+  GoTestImage T;
+  T.Img = std::move(Img);
+  T.writeText(Function,
+              {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0x48, 0x89, 0x5C,
+               0x24, 0x18, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3});
+  ASSERT_TRUE(isGoCode(T.Img, Function));
+  const auto Saves = [&](const BinaryImage *Image) {
+    MedFunc F = lift(T.Img, Function);
+    markSourceStackAccesses(F, T.Img.Arch, T.Img.Format, StackEntryKind::Call,
+                            Image);
+    std::map<uint64_t, bool> SavedRegisters;
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+            Op.Inputs[1].Kind == MedVar::Reg)
+          SavedRegisters[Op.Inputs[1].RegOff] = Op.PrologueSave;
+    return SavedRegisters;
+  };
+  const std::map<uint64_t, bool> AsC = Saves(nullptr);
+  ASSERT_TRUE(AsC.count(x86reg::RBX));
+  EXPECT_TRUE(AsC.at(x86reg::RBX));
+  const std::map<uint64_t, bool> AsGo = Saves(&T.Img);
+  ASSERT_TRUE(AsGo.count(x86reg::RBX));
+  EXPECT_FALSE(AsGo.at(x86reg::RBX));
+  // Go keeps its frame pointer as C does.
+  ASSERT_TRUE(AsGo.count(x86reg::RBP));
+  EXPECT_TRUE(AsGo.at(x86reg::RBP));
+}
+
+TEST(GoClosureCalls, TheContextRegisterIsNoArgument) {
+  // runtime.systemstack: mov rdi, [rsp+8]; mov rdx, rdi; mov rdi, [rdi];
+  // call rdi; ret.  Go calls the func value with its closure in RDX.  Read
+  // as System V's, setting RDX made RDI and an unset RSI arguments before
+  // it, and the routine took the caller's RSI as a parameter.
+  BinaryImage Img = registerArgumentImage();
+  constexpr va_t GoAssembler = kTextVA + 0x480;
+  constexpr va_t CCode = kTextVA + 0x600;
+  GoTestImage T;
+  T.Img = std::move(Img);
+  const std::vector<uint8_t> Body = {0x48, 0x8B, 0x7C, 0x24, 0x08, 0x48, 0x89,
+                                     0xFA, 0x48, 0x8B, 0x3F, 0xFF, 0xD7, 0xC3};
+  T.writeText(GoAssembler, Body);
+  T.writeText(CCode, Body);
+  ASSERT_TRUE(isGoCode(T.Img, GoAssembler));
+  ASSERT_FALSE(usesGoRegisterArguments(T.Img, GoAssembler));
+  ASSERT_FALSE(isGoCode(T.Img, CCode));
+  const auto Arguments = [&](va_t Entry) {
+    MedFunc F = lift(T.Img, Entry);
+    recoverCallAbi(F, T.Img.Arch, {}, &T.Img);
+    EXPECT_EQ(F.CallInfos.size(), 1u);
+    return F.CallInfos.empty() ? std::vector<MedVar>{} : F.CallInfos[0].Args;
+  };
+  EXPECT_TRUE(Arguments(GoAssembler).empty());
+  // C code passes what it sets up: RDI, RSI and RDX.
+  EXPECT_EQ(Arguments(CCode).size(), 3u);
 }
 
 TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {

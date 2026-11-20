@@ -5779,6 +5779,24 @@ effect is its documented one, not what its body appears to write: it writes
 its buffer register and the vector registers, and reads its store operands
 and, on amd64, R14.
 
+The same contract holds for what Go code keeps for its own caller: only the
+frame pointer and the link register. Source mode's prologue saves
+(`markCalleeSavePrologueSaves`) therefore treat Go code's store of an
+incoming RBX, R12-R15 or X19-X28 as no save. In Go, RBX is the second integer
+argument. Read as System V's callee-saved register, `runtime.throw`'s store
+of its string length into the closure it hands `systemstack` disappeared
+from the C.
+
+Go passes a func value its closure in a context register, RDX or arm64's
+R26, and it is no positional argument. MedABIPass recognizes an indirect call
+from Go code whose target is the word at the address that register holds
+(`callsThroughContext`). Compiled code does it as `mov rax, [rdx]; call rax`,
+and assembly as `mov rdx, rdi; mov rdi, [rdi]; call rdi`. Such a call is a
+closure call, and setting the register passes no argument. Read as System V's
+third argument, setting RDX made RDI and an unset RSI arguments before it.
+`systemstack` then took its caller's RSI as a parameter, and every
+`runtime_throw` call passed an unknown value for it.
+
 The contract covers x86-64 and AArch64; Go code for other targets keeps the
 platform contract. Calls from compiled code of a register-ABI amd64 image
 (usesGoRegisterArguments) keep X15 zero (`CallRegisterContract::GoInternal`,
