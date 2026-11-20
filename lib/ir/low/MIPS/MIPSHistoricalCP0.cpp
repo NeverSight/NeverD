@@ -16,6 +16,12 @@ constexpr uint32_t StatusCU = 0xf0000000u, CauseBD = 1u << 31;
 constexpr uint32_t SoftwareIP = 0x300u;
 constexpr uint32_t StatusKSU = 0x18, StatusUX = 0x20, StatusSX = 0x40;
 
+constexpr uint16_t R30xxIM = 0xff, R30xxIE = 0x100;
+uint16_t r30xxInterruptFields(uint32_t Status, uint32_t Cause) {
+  return ((Status & StatusIM) >> 8) | ((Status & StatusIE) << 8) |
+         ((Cause & SoftwareIP) << 1);
+}
+
 std::optional<unsigned> readHazardSlot(unsigned Register) {
   if (Register >= 12 && Register <= 14)
     return Register - 12;
@@ -31,7 +37,15 @@ bool HistoricalCP0::usesModeStack() const {
 bool HistoricalCP0::supportsLevel(unsigned Level) const {
   switch (Processor) {
   case HistoricalProcessor::R30xx:
-    return Level == 1;
+    return Level == 1 && (!R30xxRecognized.has_value() || InterruptDelay) &&
+           InterruptDelay <= R30xxInterrupts.size() &&
+           std::all_of(R30xxInterrupts.begin(),
+                       R30xxInterrupts.begin() + InterruptDelay,
+                       [](R30xxInterruptVisibility V) {
+                         return !(V.Required & ~V.Possible) &&
+                                !(V.Possible &
+                                  ~R30xxInterruptVisibility::AllFields);
+                       });
   case HistoricalProcessor::CW4011R3000:
   case HistoricalProcessor::CW4011R4000:
     return Level == 2;
@@ -123,6 +137,9 @@ bool HistoricalCP0::coprocessorUsable(unsigned Number) const {
 }
 
 bool HistoricalCP0::permitsIssue(uint32_t Word) const {
+  if (Processor == HistoricalProcessor::R30xx && InterruptDelay &&
+      !interruptRecognition().has_value())
+    return false;
   const unsigned Major = Word >> 26, RS = Word >> 21 & 31;
   if (const auto Cop = coprocessorOf(Word); Cop && CoprocessorDelay[*Cop])
     return false;
@@ -139,6 +156,11 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
     if (Delay)
       --Delay;
   };
+  const bool R30xx = Processor == HistoricalProcessor::R30xx;
+  if (R30xx && InterruptDelay) {
+    R30xxInterrupts[0] = R30xxInterrupts[1];
+    R30xxRecognized.reset();
+  }
   Age(InterruptDelay);
   Age(ExceptionReturnDelay);
   Age(ExceptionModeDelay);
@@ -149,7 +171,7 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
   if (!Register)
     return;
   const bool R4000 = Processor == HistoricalProcessor::R4000;
-  const bool R30xx = Processor == HistoricalProcessor::R30xx;
+  const uint16_t Previous = R30xx ? r30xxInterruptFields(Status, Cause) : 0;
   ReadDelay[*readHazardSlot(*Register)] = R4000 ? 2 : R30xx ? 3 : 1;
   if (*Register == 14 || *Register == 30) {
     ExceptionReturnDelay =
@@ -168,29 +190,86 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
                                                                            : 1);
     if (R4000 && (Changed & (StatusEXL | StatusERL)))
       ExceptionModeDelay = 3;
-    if (Changed & (StatusIE | StatusIM | (R4000 ? StatusEXL | StatusERL : 0)))
-      InterruptDelay = R4000 ? 3 : R30xx ? 2 : 1;
+    if (!R30xx &&
+        (Changed & (StatusIE | StatusIM | (R4000 ? StatusEXL | StatusERL : 0))))
+      InterruptDelay = R4000 ? 3 : 1;
     for (unsigned I = 0; I < 4; ++I)
       if (Changed & (1u << (28 + I)))
         CoprocessorDelay[I] = R4000 ? 4 : R30xx ? 2 : 1;
   } else if (*Register == 13) {
-    if ((Cause ^ uint32_t(Value)) & SoftwareIP)
-      InterruptDelay = R4000 ? 3 : R30xx ? 2 : 1;
+    if (!R30xx && ((Cause ^ uint32_t(Value)) & SoftwareIP))
+      InterruptDelay = R4000 ? 3 : 1;
     Cause = (Cause & ~SoftwareIP) | (uint32_t(Value) & SoftwareIP);
+  }
+  if (R30xx && (*Register == 12 || *Register == 13))
+    propagateR30xxInterrupts(Previous, r30xxInterruptFields(Status, Cause));
+}
+
+void HistoricalCP0::propagateR30xxInterrupts(uint16_t Before, uint16_t After) {
+  const uint16_t Changed = Before ^ After;
+  if (!Changed)
+    return;
+  // R30xx manual 13-3. An ordinary enable cannot interrupt the next two
+  // instructions. A disable may still admit an old source. IEc and IM can
+  // reach the controller separately, including across overlapping writes.
+  for (unsigned I = 0; I < R30xxInterrupts.size(); ++I) {
+    auto View = I < InterruptDelay ? R30xxInterrupts[I]
+                                   : R30xxInterruptVisibility{Before, Before};
+    // Opposing gate/mask changes can momentarily open a line that both
+    // endpoints close. Setting both gates from zero still needs two slots.
+    if ((View.Possible & R30xxIE) && !(After & R30xxIE))
+      View.MixedLines |= R30xxIM & After & ~View.Required;
+    if (!(View.Required & R30xxIE) && (After & R30xxIE))
+      View.MixedLines |= R30xxIM & View.Possible & ~After;
+    View.Required &= ~Changed;
+    R30xxInterrupts[I] = View;
+  }
+  InterruptDelay = R30xxInterrupts.size();
+}
+
+void HistoricalCP0::restoreR30xxInterruptEnable() {
+  // Exception entry and RFE set IEc as part of the mode-stack operation.
+  // Keep any independently propagating IM or software-IP bits.
+  if (Processor != HistoricalProcessor::R30xx || !InterruptDelay)
+    return;
+  R30xxRecognized.reset();
+  const uint16_t IE = Status & StatusIE ? R30xxIE : 0;
+  for (auto &View : R30xxInterrupts) {
+    View.Required = (View.Required & ~R30xxIE) | IE;
+    View.Possible = (View.Possible & ~R30xxIE) | IE;
+    View.MixedLines = 0;
   }
 }
 
 void HistoricalCP0::restoreExceptionState() {
-  if (usesModeStack())
+  if (usesModeStack()) {
     Status = (Status & ~0xfu) | ((Status >> 2) & 0xf);
-  else
+    restoreR30xxInterruptEnable();
+  } else
     Status &= ~(Status & StatusERL ? StatusERL : StatusEXL);
 }
 
-bool HistoricalCP0::canTakeInterrupt() const {
+std::optional<bool> HistoricalCP0::interruptRecognition() const {
+  if (Processor == HistoricalProcessor::R30xx && InterruptDelay) {
+    const auto Asserted = [&](uint16_t Fields, uint8_t MixedLines) {
+      const auto Pending = ((Cause >> 8) & 0xfc) | ((Fields >> 9) & 3);
+      const auto Enabled = Fields & R30xxIE ? Fields & R30xxIM : 0;
+      return ((Enabled | MixedLines) & Pending) != 0;
+    };
+    const auto &View = R30xxInterrupts.front();
+    if (Asserted(View.Required, 0))
+      return true;
+    if (!Asserted(View.Possible, View.MixedLines))
+      return false;
+    return R30xxRecognized;
+  }
   return !InterruptDelay && (Status & StatusIE) &&
          (usesModeStack() || !(Status & (StatusEXL | StatusERL))) &&
          (Status & Cause & StatusIM);
+}
+
+bool HistoricalCP0::canTakeInterrupt() const {
+  return interruptRecognition().value_or(false);
 }
 
 bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
@@ -207,8 +286,7 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
       (Code == 4 || Code == 5) != FaultAddress.has_value() ||
       (Code == 0 && !canTakeInterrupt()))
     return false;
-  // Refuse interrupt sampling while a software enable/mask update has
-  // implementation-dependent visibility. A fault never retires the victim.
+  // A fault never retires the victim.
   if (usesModeStack() || !(Status & StatusEXL)) {
     EPC = Branch.value_or(PC);
   }
@@ -225,9 +303,10 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
   if (FaultAddress || usesModeStack())
     BadVAddr = FaultAddress;
   const bool BEV = Status & StatusBEV;
-  if (usesModeStack())
+  if (usesModeStack()) {
     Status = (Status & ~0x3fu) | ((Status << 2) & 0x3fu);
-  else
+    restoreR30xxInterruptEnable();
+  } else
     Status |= StatusEXL;
   const auto Base = BEV ? 0xbfc00000u : 0x80000000u;
   const auto Offset = (BEV ? (usesModeStack() ? 0x100u : 0x200u) : 0u) +

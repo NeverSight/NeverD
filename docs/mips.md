@@ -1472,8 +1472,14 @@ address. R4000 also exposes word and doubleword transfers of ErrorEPC. Word
 writes to either exception PC sign-extend into the 64-bit register. A handler
 can update its exception level in kernel mode and prepare the saved KSU/UX/SX
 under an active exception level. Cause writes change only the software
-interrupt bits. Accepted Status
-writes track interrupt visibility and coprocessor usability separately.
+interrupt bits. Accepted Status writes track interrupt visibility and
+coprocessor usability separately. On R30xx an ordinary enable becomes
+eligible after the next two instructions retire. During a disable, an old
+source can still interrupt either instruction. Simultaneous changes to IEc
+and IM can also expose a line masked at both endpoints. For such a pending
+source, execution stops before writeback until the board supplies the
+recognition result with `HistoricalSchedule::observeInterruptRecognition`.
+An unchanged enabled source remains eligible throughout the window.
 Register updates and hazard aging occur on successful physical retirement.
 
 SYSCALL and BREAK enter the common exception handler, including inside delay

@@ -140,6 +140,15 @@ TEST(MIPSHistoricalScheduling,
   EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {0, 0, 3, 0, 0}));
   EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {0, 0, 0, 3, 0}));
   EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {0, 0, 0, 0, 3}));
+  HistoricalCP0 CP0{HistoricalProcessor::R30xx, 1, 0, 0, {}, {}};
+  CP0.InterruptDelay = 3;
+  EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {}, CP0));
+  CP0.InterruptDelay = 1;
+  CP0.R30xxInterrupts[0] = {2, 1};
+  EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {}, CP0));
+  CP0.InterruptDelay = 0;
+  CP0.R30xxRecognized = false;
+  EXPECT_FALSE(HistoricalSchedule::fromSnapshot(1, {}, CP0));
   auto S = quiescent();
   EXPECT_FALSE(S.retire(0x1000));
   EXPECT_FALSE(S.begin(0x1002, 0, 0, 0));
@@ -685,6 +694,161 @@ TEST(MIPSHistoricalScheduling,
     ASSERT_TRUE(S.stageCP0Write(0x8000, 14, 0x81234560, false));
     ASSERT_TRUE(S.abort());
     EXPECT_EQ(S.system()->EPC, 0x2000u);
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R30xxMixedInterruptRequiresAnIssueSample) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    const auto Set = lift(Img, 0x1000, {0x40846000}); // MTC0 a0,Status.
+    const auto Add = lift(Img, 0x1004, {0x24021234}); // ADDIU v0,zero,0x1234.
+    for (auto Old : {1u, 0x400u}) {
+      for (bool Taken : {false, true}) {
+        MIPSSystemContext C;
+        C.Historical = HistoricalSchedule::fromSnapshot(
+            1, {},
+            HistoricalCP0{HistoricalProcessor::R30xx, Old, 0x400, 0, {}, {}});
+        NdOpEmulator E(Img);
+        auto &S = *C.Historical;
+        E.setRegister(mipsreg::A0, Old ^ 0x401);
+        E.setRegister(mipsreg::V0, 0xa5a5);
+        ASSERT_TRUE(execute(Set, E, C));
+        EXPECT_EQ(S.system()->interruptRecognition(), std::nullopt);
+        EXPECT_FALSE(execute(Add, E, C));
+        EXPECT_FALSE(S.hasActiveInstruction());
+        EXPECT_FALSE(S.system()->ExceptionVector);
+        EXPECT_EQ(S.system()->InterruptDelay, 2);
+        EXPECT_EQ(E.getRegister(mipsreg::V0), 0xa5a5u);
+
+        ASSERT_TRUE(S.observeInterruptRecognition(false));
+        ASSERT_TRUE(S.beginPhysical(0x1004, 0x24021234, false));
+        EXPECT_FALSE(S.observeInterruptRecognition(true));
+        ASSERT_TRUE(S.abort());
+        ASSERT_TRUE(S.setHardwareInterrupts(1)); // Same input, same sample.
+        EXPECT_EQ(S.system()->interruptRecognition(), false);
+        EXPECT_FALSE(S.observeInterruptRecognition(true));
+        ASSERT_TRUE(S.setHardwareInterrupts(0));
+        EXPECT_EQ(S.system()->interruptRecognition(), false);
+        ASSERT_TRUE(S.setHardwareInterrupts(1));
+        ASSERT_TRUE(S.observeInterruptRecognition(Taken));
+        EXPECT_EQ(execute(Add, E, C), !Taken);
+        EXPECT_EQ(E.getRegister(mipsreg::V0), Taken ? 0xa5a5u : 0x1234u);
+        if (Taken) {
+          EXPECT_EQ(S.system()->ExceptionVector, 0x80000080u);
+          EXPECT_EQ(S.system()->EPC, 0x1004u);
+          EXPECT_EQ(S.system()->Cause, 0x400u);
+          EXPECT_EQ(S.system()->interruptRecognition(), false);
+        } else {
+          EXPECT_FALSE(S.system()->ExceptionVector);
+          EXPECT_EQ(S.system()->interruptRecognition(), std::nullopt);
+          ASSERT_TRUE(S.observeInterruptRecognition(false));
+          ASSERT_TRUE(execute(lift(Img, 0x1008, {0}), E, C));
+          EXPECT_EQ(S.system()->interruptRecognition(), false);
+        }
+      }
+    }
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R30xxInterruptWindowIsSpecificToTheSource) {
+  struct Transition {
+    uint32_t Old, New;
+    std::optional<bool> FirstTwo;
+    bool Settled;
+  };
+  const Transition Cases[] = {
+      {0, 0x401, false, true},     // Enable both gates.
+      {0x400, 0x401, false, true}, // Only IEc changes.
+      {1, 0x401, false, true},     // Only IM changes.
+      {0x401, 0xc01, true, true},  // A different line changes.
+      {0x401, 0x400, {}, false},   // Disable the global gate.
+      {0x401, 1, {}, false},       // Mask the active line.
+      {0x401, 0, {}, false},       // Close both gates.
+      {0, 0x801, false, false},    // Only the masked input is pending.
+  };
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    const auto Set = lift(Img, 0x1000, {0x40846000});
+    const auto Nop = lift(Img, 0x2000, {0});
+    for (const auto &T : Cases) {
+      SCOPED_TRACE(T.Old);
+      SCOPED_TRACE(T.New);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          1, {},
+          HistoricalCP0{HistoricalProcessor::R30xx, T.Old, 0, 0, {}, {}});
+      NdOpEmulator E(Img);
+      E.setRegister(mipsreg::A0, T.New);
+      ASSERT_TRUE(execute(Set, E, C));
+      auto &S = *C.Historical;
+      for (unsigned I = 0; I < 2; ++I) {
+        ASSERT_TRUE(S.setHardwareInterrupts(1));
+        EXPECT_EQ(S.system()->interruptRecognition(), T.FirstTwo);
+        EXPECT_EQ(S.observeInterruptRecognition(false),
+                  !T.FirstTwo.has_value());
+        ASSERT_TRUE(S.setHardwareInterrupts(0));
+        ASSERT_TRUE(execute(Nop, E, C));
+      }
+      ASSERT_TRUE(S.setHardwareInterrupts(1));
+      EXPECT_EQ(S.system()->interruptRecognition(), T.Settled);
+      EXPECT_FALSE(S.observeInterruptRecognition(!T.Settled));
+    }
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R30xxOverlappingWritesAgeEachInterruptField) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    MIPSSystemContext C;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        1, {}, HistoricalCP0{HistoricalProcessor::R30xx, 0x101, 0, 0, {}, {}});
+    auto &S = *C.Historical;
+    NdOpEmulator E(Img);
+    E.setRegister(mipsreg::A0, 0x100);
+    ASSERT_TRUE(execute(lift(Img, 0x1000, {0x40846800}), E, C)); // Cause.IP0.
+    E.setRegister(mipsreg::A0, 0x501);
+    ASSERT_TRUE(execute(lift(Img, 0x1004, {0x40846000}), E, C)); // Unmask HW0.
+    EXPECT_EQ(S.system()->interruptRecognition(), false);
+    ASSERT_TRUE(execute(lift(Img, 0x1008, {0}), E, C));
+    EXPECT_EQ(S.system()->interruptRecognition(), true); // IP0 has propagated.
+    EXPECT_FALSE(execute(lift(Img, 0x100c, {0}), E, C));
+    EXPECT_EQ(S.system()->EPC, 0x100cu);
+    EXPECT_EQ(S.system()->Cause, 0x100u);
+    EXPECT_EQ(S.system()->interruptRecognition(),
+              false); // Handler IEc is clear.
+  }
+}
+
+TEST(MIPSHistoricalScheduling, R30xxPendingDisableCanInterruptABranchSlot) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    auto Img = image(A, 1);
+    MIPSSystemContext C;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        1, {}, HistoricalCP0{HistoricalProcessor::R30xx, 0x401, 0, 0, {}, {}});
+    auto &S = *C.Historical;
+    NdOpEmulator E(Img);
+    E.setRegister(mipsreg::A0, 0x400);
+    E.setRegister(mipsreg::V0, 99);
+    ASSERT_TRUE(execute(lift(Img, 0x1000, {0x40846000}), E, C));
+    // The board raises IP2 after BEQ retires, just before its ADDIU slot.
+    const auto Branch = lift(Img, 0x1004, {0x10000002, 0x24021234});
+    bool Delivered = false;
+    for (const auto &Op : Branch) {
+      if (Op.Addr == 0x1008 && Op.Opcode == NdOp::INTRINSIC &&
+          Op.Inputs[0].Offset == unsigned(Intrinsic::MIPSHistoricalBegin)) {
+        ASSERT_TRUE(S.setHardwareInterrupts(1));
+        ASSERT_TRUE(S.observeInterruptRecognition(true));
+        EXPECT_FALSE(E.stepMIPSSystem(Op, C));
+        Delivered = true;
+        break;
+      }
+      ASSERT_TRUE(execute({Op}, E, C));
+    }
+    EXPECT_TRUE(Delivered);
+    EXPECT_EQ(S.system()->EPC, 0x1004u);
+    EXPECT_EQ(S.system()->Cause, 0x80000400u);
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 99u);
+    EXPECT_FALSE(S.hasActiveInstruction());
   }
 }
 
