@@ -102,9 +102,9 @@ void writeMIPSScalarHelpers(
     if (mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id)) {
       if (!Image || !Image->MIPS ||
           (Image->MIPS->ISARevision != 6 &&
-           !Image->MIPS->hasScalarFPABI(Wide)) ||
+           !Image->MIPS->hasScalarFPABI(Target)) ||
           !mips::scalarFPAvailable(Id, Image->MIPS->ISARevision,
-                                   Image->MIPS->hasScalarFP32ABI(Wide),
+                                   Image->MIPS->hasScalarFP32ABI(Target),
                                    Image->MIPS->HistoricalISA))
         throw std::runtime_error(
             "native scalar FPU requires a matching FP profile");
@@ -115,7 +115,7 @@ void writeMIPSScalarHelpers(
         throw std::runtime_error(
             "FP control register is absent from historical ISA");
       const auto Asm = mips::scalarFPAssembly(
-          Id, Selector, false, Image->MIPS->hasScalarFP32ABI(Wide));
+          Id, Selector, false, Image->MIPS->hasScalarFP32ABI(Target));
       OS << "static __attribute__((noinline)) "
          << mips::instructionModeCAttribute(InstructionMode::MIPSClassic);
       if (Asm.Read || Asm.Write) {

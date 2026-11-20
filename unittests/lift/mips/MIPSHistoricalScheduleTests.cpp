@@ -172,11 +172,13 @@ LowOp retire(uint64_t PC) {
 BinaryImage image(Arch Target, unsigned Level) {
   BinaryImage Img;
   Img.Arch = Target;
-  Img.Bits = isMIPS64(Target) ? Bitness::Bits64 : Bitness::Bits32;
+  Img.Bits = isMIPSN64(Target) ? Bitness::Bits64 : Bitness::Bits32;
   Img.MIPS.emplace();
   Img.MIPS->ISARevision = 0;
   Img.MIPS->HistoricalISA = Level;
-  Img.MIPS->ABI = isMIPS64(Target) ? MIPSABI::N64 : MIPSABI::O32;
+  Img.MIPS->ABI = isMIPSN64(Target)   ? MIPSABI::N64
+                  : isMIPSN32(Target) ? MIPSABI::N32
+                                      : MIPSABI::O32;
   return Img;
 }
 
@@ -327,6 +329,29 @@ bool execute(const std::vector<LowOp> &Ops, NdOpEmulator &E,
       return false;
   }
   return true;
+}
+
+TEST(MIPSHistoricalScheduling, O32ReadsAndWritesFullMIPSIIIGPRs) {
+  for (Arch A : {Arch::MIPS64O32, Arch::MIPS64O32EL}) {
+    auto Img = image(A, 3);
+    Img.MIPS->FPABI = 1;
+    MIPSSystemContext C;
+    C.Historical = HistoricalSchedule::fromSnapshot(3, {});
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, 0x100000001ULL);
+    E.setRegister(mipsreg::A1, 0x123456787fffffffULL);
+    const auto Add = lift(Img, 0x1000, {0x0085102d}); // DADDU.
+    EXPECT_FALSE(execute(Add, E, C));
+    EXPECT_FALSE(C.Historical->hasActiveInstruction());
+    C.HistoricalO32DoublewordEnabled = true;
+    ASSERT_TRUE(execute(Add, E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x1234567980000000ULL);
+    ASSERT_TRUE(execute(lift(Img, 0x1004, {0x0002183f}), E, C)); // DSRA32.
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 0x12345679ULL);
+    ASSERT_TRUE(execute(lift(Img, 0x1008, {0x00021000}), E, C)); // SLL v0,v0,0.
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0xffffffff80000000ULL);
+  }
 }
 
 void data(BinaryImage &Img) {

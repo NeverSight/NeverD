@@ -480,9 +480,9 @@ private:
   // word. Recover the full input for that exact sequence. An arbitrary low
   // slice or a zero extension does not prove a machine stack address.
   const MedVar *n32WordAdjustment(const MedOp &Op, int64_t &Delta) {
-    if (!isMIPSN32(Architecture) || Op.Opcode != NdOp::INT_SEXT ||
-        Op.NumInputs != 1 || Op.Output.Size != AddressBytes ||
-        Op.Inputs[0].Size != TRI.PointerSize)
+    if (!hasMIPS32BitAddressIn64BitGPR(Architecture) ||
+        Op.Opcode != NdOp::INT_SEXT || Op.NumInputs != 1 ||
+        Op.Output.Size != AddressBytes || Op.Inputs[0].Size != TRI.PointerSize)
       return nullptr;
     const auto Add = scalarDefinition(Op.Inputs[0]);
     if (!Add || !*Add || (*Add)->Opcode != NdOp::INT_ADD ||
@@ -1245,7 +1245,8 @@ private:
             Links.emplace_back(0, false);
             Current = &Op.Inputs[0];
             continue;
-          } else if (Op.Opcode == NdOp::INT_SEXT && isMIPSN32(Architecture)) {
+          } else if (Op.Opcode == NdOp::INT_SEXT &&
+                     hasMIPS32BitAddressIn64BitGPR(Architecture)) {
             int64_t Delta;
             if (const MedVar *Base = n32WordAdjustment(Op, Delta)) {
               Links.emplace_back(Delta, false);

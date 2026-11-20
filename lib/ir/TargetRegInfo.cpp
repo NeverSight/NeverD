@@ -286,6 +286,8 @@ const TargetRegInfo &getTargetRegInfo(Arch TheArch) {
     return ARMRegInfo;
   case Arch::MIPS32:
   case Arch::MIPS32EL:
+  case Arch::MIPS64O32:
+  case Arch::MIPS64O32EL:
   case Arch::MIPS64:
   case Arch::MIPS64N32:
   case Arch::MIPS64N32EL:
@@ -309,7 +311,7 @@ bool TargetRegInfo::isX87StackReg(uint64_t RegOff) const {
 
 bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
   if (isCalleeSaveReg(RegOff))
-    return true;
+    return !isMIPS64O32(TheArch) || Size <= 4;
 
   // AAPCS-VFP preserves d8-d15.  S-register views and aligned Q4-Q7 views are
   // preserved exactly when their complete byte range is inside that bank.
@@ -322,9 +324,8 @@ bool TargetRegInfo::isCallPreserved(uint64_t RegOff, uint16_t Size) const {
 
   if (isMIPS(TheArch) && isVectorReg(RegOff)) {
     const unsigned Index = (RegOff - VecRegBase) / VecRegStride;
-    return Size <= 8 && (isMIPS64(TheArch) && !isMIPSN32(TheArch)
-                             ? Index >= 24
-                             : Index >= 20 && Index % 2 == 0);
+    return Size <= 8 &&
+           (isMIPSN64(TheArch) ? Index >= 24 : Index >= 20 && Index % 2 == 0);
   }
 
   // AAPCS64 requires callees to preserve only the low 64 bits of v8-v15.
@@ -341,6 +342,8 @@ uint16_t TargetRegInfo::callPreservedPrefixSize(uint64_t RegOff,
                                                 uint16_t Size) const {
   if (isCallPreserved(RegOff, Size))
     return Size;
+  if (isMIPS64O32(TheArch) && Size > 4 && isCalleeSaveReg(RegOff))
+    return 4;
   if (isMIPS(TheArch) && Size > 8 && isCallPreserved(RegOff, 8))
     return 8;
   if (TheArch != Arch::AArch64 || Size <= 8 || !isVectorReg(RegOff))
@@ -451,7 +454,7 @@ IntegerArgumentLayout TargetRegInfo::integerArgumentLayout(bool IsWin64) const {
   const bool Win64 = TheArch == Arch::X64 && IsWin64 && !Win64ParamRegs.empty();
   IntegerArgumentLayout Layout;
   Layout.Registers = Win64 ? Win64ParamRegs : IntParamRegs;
-  Layout.SlotBytes = isMIPS(TheArch) ? FullRegWidth : PointerSize;
+  Layout.SlotBytes = isMIPSN32(TheArch) ? FullRegWidth : PointerSize;
   Layout.CallStackBase = Win64 ? int64_t(Layout.Registers.size()) * PointerSize
                                : CallStackArgumentBase;
   Layout.EntryStackBase =

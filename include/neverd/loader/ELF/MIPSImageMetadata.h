@@ -71,6 +71,16 @@ struct MIPSImageMetadata {
   /// authenticate individual fields, never unrelated equal-valued literals.
   std::vector<MIPSInstructionRelocation> InstructionRelocations;
 
+  Arch architecture(bool LittleEndian) const {
+    if (ABI == MIPSABI::N64)
+      return LittleEndian ? Arch::MIPS64EL : Arch::MIPS64;
+    if (ABI == MIPSABI::N32)
+      return LittleEndian ? Arch::MIPS64N32EL : Arch::MIPS64N32;
+    if (HistoricalISA == 3)
+      return LittleEndian ? Arch::MIPS64O32EL : Arch::MIPS64O32;
+    return LittleEndian ? Arch::MIPS32EL : Arch::MIPS32;
+  }
+
   /// An explicit scalar hard-float ABI with 64-bit FPRs (FR=1).
   bool hasScalarFP64ABI(bool Wide) const { return FPABI == (Wide ? 1 : 6); }
 
@@ -79,6 +89,16 @@ struct MIPSImageMetadata {
   bool hasScalarFP32ABI(bool Wide) const {
     return !Wide && ISARevision != 6 && FPABI == 1;
   }
+  bool hasScalarFP32ABI(Arch Target) const {
+    return hasScalarFP32ABI(!isMIPSO32(Target));
+  }
+  bool hasScalarFP64ABI(Arch Target) const {
+    return hasScalarFP64ABI(!isMIPSO32(Target));
+  }
+  bool hasScalarFPABI(Arch Target) const {
+    return hasScalarFPABI(!isMIPSO32(Target));
+  }
+
   bool hasScalarFPABI(bool Wide) const {
     return hasScalarFP64ABI(Wide) || hasScalarFP32ABI(Wide);
   }

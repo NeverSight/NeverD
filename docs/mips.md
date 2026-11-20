@@ -1428,11 +1428,16 @@ the ISA work belongs to [#97](https://github.com/NeverSight/NeverD/issues/97).
 
 ### Historical MIPS I–III scheduling
 
-Linked classic MIPS I/II o32 and MIPS III n32/n64 ELF profiles are admitted
+Linked classic MIPS I/II o32 and MIPS III o32/n32/n64 ELF profiles are admitted
 in both byte orders. The shared physical-word catalog rejects instructions
 introduced in later ISAs, release-only aliases and conflicting ABI evidence.
-MIPS I/II floating profiles require paired 32-bit FPRs. MIPS III o32 with
-64-bit GPRs remains unsupported.
+MIPS I/II floating profiles require paired 32-bit FPRs. MIPS III o32 ELF32
+uses 64-bit GPRs with four-byte pointers and argument words, four argument
+registers, and a 16-byte caller home area. GNU and Clang producers can declare
+a 32-bit or 64-bit GPR size in the ABI record. Both use the historical ISA
+from the ELF flags. Hard-double o32 uses paired FPRs when CPR1 is 32-bit.
+Concrete o32 doubleword GPR operations require the caller to bind
+`HistoricalO32DoublewordEnabled` for the selected processor mode.
 
 Each admitted I–III instruction carries ordered begin/retire operations in
 LowIR and MedIR. A branch and its executed delay slot retire separately; a

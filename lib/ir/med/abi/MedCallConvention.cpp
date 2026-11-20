@@ -88,6 +88,8 @@ std::optional<CallingConv> callingConventionOf(Arch A, BinaryFormat F) {
     return CallingConv::ARM_AAPCS;
   case Arch::MIPS32:
   case Arch::MIPS32EL:
+  case Arch::MIPS64O32:
+  case Arch::MIPS64O32EL:
     return CallingConv::MIPS_O32;
   case Arch::MIPS64N32:
   case Arch::MIPS64N32EL:

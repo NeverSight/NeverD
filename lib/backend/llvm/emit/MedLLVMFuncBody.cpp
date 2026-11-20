@@ -564,8 +564,9 @@ llvm::Function *MedLLVMEmitter::emitFunc(const MedFunc &Func) {
           llvm::Type::getInt8Ty(*Ctx), FrameAlloca,
           llvm::ConstantInt::get(llvm::Type::getInt64Ty(*Ctx), FrameBaseOffset),
           "frame_end");
-      auto *AddressType =
-          isMIPSN32(TargetArch) ? FrameB.getInt32Ty() : FrameB.getInt64Ty();
+      auto *AddressType = hasMIPS32BitAddressIn64BitGPR(TargetArch)
+                              ? FrameB.getInt32Ty()
+                              : FrameB.getInt64Ty();
       FrameBaseInt = FrameB.CreateSExtOrTrunc(
           FrameB.CreatePtrToInt(FrameEnd, AddressType, kRspInitValue),
           FrameB.getInt64Ty(), kRspInitValue);

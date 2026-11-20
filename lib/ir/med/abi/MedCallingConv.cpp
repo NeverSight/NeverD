@@ -1709,7 +1709,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     }
   }
 
-  if (isMIPS(TheArch) && !isMIPS64(TheArch) && !Func.IsVariadic)
+  if (isMIPSO32(TheArch) && !Func.IsVariadic)
     orderMIPSO32FloatingParameters(Func, TRI, Fmt);
 
   // Past its spilled argument registers, a variadic function whose summary

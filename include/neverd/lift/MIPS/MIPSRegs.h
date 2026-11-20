@@ -48,6 +48,7 @@ inline constexpr bool isVector(uint64_t Offset) {
 } // namespace mipsreg
 
 const char *getMIPS32RegName(uint64_t Offset, uint16_t Size);
+const char *getMIPS64O32RegName(uint64_t Offset, uint16_t Size);
 const char *getMIPS64RegName(uint64_t Offset, uint16_t Size);
 
 } // namespace neverd

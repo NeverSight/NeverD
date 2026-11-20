@@ -5054,14 +5054,14 @@ bool LLVMCWriter::writeInlineAsmCall(llvm::CallInst &Call,
                     (!mips::isMSANativeVector(Id) || !K->isZero())))
       throw std::runtime_error("invalid native MSA instruction");
     const auto A =
-        ScalarFP ? mips::scalarFPAssembly(
-                       Id, K->getZExtValue(),
-                       mips::instructionModeFromLLVM(*Call.getFunction()) ==
-                           InstructionMode::MicroMIPS,
-                       Img && Img->MIPS &&
-                           Img->MIPS->hasScalarFP32ABI(isMIPS64(Opts.TheArch)))
-                 : mips::msaAssembly(Id, K->getZExtValue(),
-                                     archLittleEndian(Opts.TheArch));
+        ScalarFP
+            ? mips::scalarFPAssembly(
+                  Id, K->getZExtValue(),
+                  mips::instructionModeFromLLVM(*Call.getFunction()) ==
+                      InstructionMode::MicroMIPS,
+                  Img && Img->MIPS && Img->MIPS->hasScalarFP32ABI(Opts.TheArch))
+            : mips::msaAssembly(Id, K->getZExtValue(),
+                                archLittleEndian(Opts.TheArch));
     if (!IA->hasSideEffects() || IA->isAlignStack() || IA->canThrow() ||
         IA->getDialect() != llvm::InlineAsm::AD_ATT ||
         IA->getAsmString() != A.llvmText() ||

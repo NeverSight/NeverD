@@ -520,8 +520,9 @@ void LowToMedConverter::propagate(MedFunc &Func) {
         if ((A->MayRelocate || B->MayRelocate) && !SameAddress) {
           // n32 carries a high-half ELF32 pointer sign-extended in a GPR.
           // Look up the ELF VA and retain the extension on the rebuilt pointer.
-          if (isMIPSN32(TargetArch) && Op.Output.Size == 8 &&
-              int64_t(Result) < 0 && llvm::isInt<32>(int64_t(Result))) {
+          if (hasMIPS32BitAddressIn64BitGPR(TargetArch) &&
+              Op.Output.Size == 8 && int64_t(Result) < 0 &&
+              llvm::isInt<32>(int64_t(Result))) {
             Result = uint32_t(Result);
             ConstantSize = PointerSize;
           }

@@ -61,7 +61,7 @@ const SourceCallTypeHint *mipsFloatingCallSite(
 }
 
 static bool hasScalarFP64ABI(const BinaryImage &Image, Arch Target) {
-  return Image.MIPS && Image.MIPS->hasScalarFP64ABI(isMIPS64(Target));
+  return Image.MIPS && Image.MIPS->hasScalarFP64ABI(Target);
 }
 
 void requireMIPSSourceVectors(
@@ -125,7 +125,7 @@ void requireMIPSSourceVectors(
         "MIPS FP/vector source requires a MIPS target");
   const bool FP64 = Image && hasScalarFP64ABI(*Image, Target);
   const bool FP32 =
-      Image && Image->MIPS && Image->MIPS->hasScalarFP32ABI(isMIPS64(Target));
+      Image && Image->MIPS && Image->MIPS->hasScalarFP32ABI(Target);
   const bool Scalar = FP64 || FP32;
   if (Image && !Scalar)
     throw LowToMedConversionError(
@@ -559,7 +559,7 @@ void discardUnobservedMIPSFPUpperBits(
     const DebugContext *Debug) {
   const Arch Target = Image.Arch;
   if (!isMIPS(Target) || Function.SkippedSSA ||
-      !(Image.MIPS && Image.MIPS->hasScalarFPABI(isMIPS64(Target))))
+      !(Image.MIPS && Image.MIPS->hasScalarFPABI(Target)))
     return;
   // A selected leaf need not occur in the outgoing call inventory. Resolve
   // its exact declaration even when it has no caller in this pipeline run.

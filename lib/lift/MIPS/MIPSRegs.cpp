@@ -61,6 +61,12 @@ const char *getMIPS32RegName(uint64_t Offset, uint16_t Size) {
              : UnknownRegister;
 }
 
+const char *getMIPS64O32RegName(uint64_t Offset, uint16_t Size) {
+  if (Offset <= mipsreg::PC && Offset % mipsreg::SlotBytes == 0 && Size <= 8)
+    return Names[Offset / mipsreg::SlotBytes].O32;
+  return getMIPS32RegName(Offset, Size);
+}
+
 const char *getMIPS64RegName(uint64_t Offset, uint16_t Size) {
   if (mipsreg::isVector(Offset))
     return vectorName(Offset, Size);

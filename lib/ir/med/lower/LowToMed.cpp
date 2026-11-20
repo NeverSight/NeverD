@@ -453,7 +453,7 @@ void LowToMedConverter::bindScalarCall(MedBlock &Block, MedOp &MOp,
       Block.Ops.push_back(std::move(Slice));
       continue;
     }
-    if (isMIPS(TargetArch) && !isMIPS64(TargetArch) &&
+    if (isMIPSO32(TargetArch) &&
         Parameter.Kind == SourceABICarrierKind::IntegerRegister &&
         Parameter.Bytes == 8) {
       const auto Layout = TRI.integerArgumentLayout(TargetFormat);
@@ -496,7 +496,8 @@ void LowToMedConverter::bindScalarCall(MedBlock &Block, MedOp &MOp,
   } else if (Signature.ReturnKind == NdTypeKind::Void) {
     MOp.Output = {};
     MOp.Output.Id = -1;
-  } else if (isMIPS(TargetArch) && Signature.ReturnBytes != TRI.FullRegWidth) {
+  } else if (isMIPS(TargetArch) &&
+             Signature.ReturnBytes != TRI.integerReturnWordBytes()) {
     MOp.Output = Temporary(Signature.ReturnBytes);
   } else {
     MOp.Output =
@@ -907,7 +908,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
            ? (hasCompressedMIPSCode(Image->Mode) ||
               (Image->MIPS && (Image->MIPS->HasDSP || Image->MIPS->HasMSA ||
                                Image->MIPS->ISARevision == 6 ||
-                               Image->MIPS->hasScalarFPABI(isMIPS64(TheArch)))))
+                               Image->MIPS->hasScalarFPABI(TheArch))))
            : llvm::any_of(Low.Blocks, [](const auto &Block) {
                // Standalone IR cannot drop a changed return link merely
                // because the original image's ASE record is unavailable.
@@ -1866,7 +1867,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
           MOp.ScalarCallSignature->ReturnKind != NdTypeKind::Float &&
           MOp.Output.Kind == MedVar::Temp) {
         const auto &Signature = *MOp.ScalarCallSignature;
-        const uint16_t Word = ConventionRegs.FullRegWidth;
+        const uint16_t Word = ConventionRegs.integerReturnWordBytes();
         if (Signature.ReturnBytes < Word) {
           MedOp Extend;
           Extend.Opcode = Signature.SignedResult || Signature.ReturnBytes == 4
@@ -2030,7 +2031,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "modelSEHFinallyRegisters");
 
     if (isMIPS(TheArch) && Image && Image->MIPS &&
-        Image->MIPS->hasScalarFP32ABI(isMIPS64(TheArch)))
+        Image->MIPS->hasScalarFP32ABI(TheArch))
       projectMIPSFP32Registers(
           Func,
           [&](uint16_t Bytes) {

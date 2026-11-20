@@ -378,11 +378,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     if (P == CallSP.end())
       return std::nullopt;
     const auto SP = Offset(P->second);
-    if (!SP || *SP % (isMIPS64(Target) ? 16 : 8) ||
+    if (!SP || *SP % (isMIPSO32(Target) ? 8 : 16) ||
         *SP < -limits::ir::kSourceFrameAnalysisMaxFrame)
       return std::nullopt;
-    const int64_t SlotBytes = isMIPS64(Target) ? 8 : 4;
-    int64_t Extent = isMIPS64(Target) ? 0 : 16;
+    const int64_t SlotBytes = isMIPSO32(Target) ? 4 : 8;
+    int64_t Extent = isMIPSO32(Target) ? 16 : 0;
     if (const auto S = Calls.find(&Call); S != Calls.end()) {
       for (const auto &A : S->second.Scalars)
         if (A.Kind == SourceABICarrierKind::Stack) {

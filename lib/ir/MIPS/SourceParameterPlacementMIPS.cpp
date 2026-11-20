@@ -125,8 +125,9 @@ std::optional<SourceParameterPlacement> source_placement::placeMIPS(
   if (F != BinaryFormat::ELF || !ReturnType ||
       (!ComplexResult && ReturnType->Kind != NdTypeKind::Void &&
        ((!isIntegerScalar(ReturnType) && !isFloatingScalar(ReturnType)) ||
-        ReturnType->Size >
-            (ReturnType->Kind == NdTypeKind::Int ? 2 * TRI.FullRegWidth : 8))))
+        ReturnType->Size > (ReturnType->Kind == NdTypeKind::Int
+                                ? 2 * TRI.integerReturnWordBytes()
+                                : 8))))
     return std::nullopt;
   // The MIPS16 body receives the leading floating arguments in GPRs.
   // Its classic entry stub is a separate function with ordinary FP carriers.
@@ -151,8 +152,8 @@ std::optional<mips::RecordCallPlacement>
 mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
                       const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters, bool Variadic) {
-  if (!isMIPS64(Architecture) || Format != BinaryFormat::ELF || Variadic ||
-      !ReturnType ||
+  if ((!isMIPSN32(Architecture) && !isMIPSN64(Architecture)) ||
+      Format != BinaryFormat::ELF || Variadic || !ReturnType ||
       (ReturnType->Kind == NdTypeKind::Void && ReturnType->Size != 0))
     return std::nullopt;
   const auto &TRI = getTargetRegInfo(Architecture);

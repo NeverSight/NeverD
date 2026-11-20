@@ -139,6 +139,8 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     break;
   case Arch::MIPS32:
   case Arch::MIPS32EL:
+  case Arch::MIPS64O32:
+  case Arch::MIPS64O32EL:
   case Arch::MIPS64:
   case Arch::MIPS64N32:
   case Arch::MIPS64N32EL:
@@ -146,6 +148,7 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
     if ((Mode != InstructionMode::Default &&
          Mode != InstructionMode::MIPSClassic && !isMIPSCompressedMode(Mode)) ||
         (isMIPS64(TheArch) && Mode == InstructionMode::MIPS16) ||
+        (isMIPS64O32(TheArch) && Historical != 3) ||
         (Historical ? (Historical > 5 || Revision ||
                        isMIPS64(TheArch) != (Historical >= 3) ||
                        isMIPSCompressedMode(Mode))
@@ -235,9 +238,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPSNeedsDecodeGuard =
         MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64();
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
-    MIPS->setScalarFPEnabled(
-        Img.MIPS && Img.MIPS->hasScalarFPABI(isMIPS64(Img.Arch)),
-        Img.MIPS && Img.MIPS->hasScalarFP32ABI(isMIPS64(Img.Arch)));
+    MIPS->setScalarFPEnabled(Img.MIPS && Img.MIPS->hasScalarFPABI(Img.Arch),
+                             Img.MIPS && Img.MIPS->hasScalarFP32ABI(Img.Arch));
   }
   if (AArch64)
     AArch64->setPreserveImmediateMemory(

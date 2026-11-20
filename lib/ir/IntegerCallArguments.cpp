@@ -71,7 +71,8 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
     return std::nullopt;
   std::optional<SourceParameterPlacement> Placement;
   bool MIPSRecords = false;
-  if (isMIPS64(A) && llvm::any_of(Parameters, [](const TypeRef &Type) {
+  if ((isMIPSN32(A) || isMIPSN64(A)) &&
+      llvm::any_of(Parameters, [](const TypeRef &Type) {
         return Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum;
       })) {
     // This adapter owns integer argument words only. Record/FP results and

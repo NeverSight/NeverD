@@ -155,7 +155,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
   if (!Scalar(ReturnType) && !ComplexResult) {
     const bool IntegerPair =
         isMIPS(A) && ReturnType && ReturnType->Kind == NdTypeKind::Int &&
-        ReturnType->Size == 2 * getTargetRegInfo(A).FullRegWidth;
+        ReturnType->Size == 2 * getTargetRegInfo(A).integerReturnWordBytes();
     const bool ScalarIntegerResult =
         (A == Arch::X64 || A == Arch::AArch64 ||
          (A == Arch::X86 && ReturnType &&
@@ -207,8 +207,7 @@ floatingCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       // o32 passes an eight-byte scalar outside the FP prefix as two
       // consecutive words. Keep one logical call argument; lowering joins
       // the register pair, or reads the contiguous stack object, once.
-      if (isMIPS(A) && !isMIPS64(A) && Parameters[I]->Size == 8 &&
-          Pieces.size() == 2) {
+      if (isMIPSO32(A) && Parameters[I]->Size == 8 && Pieces.size() == 2) {
         const auto &First = Pieces[0].Location;
         const auto &Second = Pieces[1].Location;
         if (First.Kind == SourceABICarrierKind::IntegerRegister) {

@@ -694,8 +694,9 @@ resolveMedCallTargetImpl(const MedBlock &Block, size_t Before,
     }
     // n32 LW carries an entire ELF32 function pointer sign-extended in a
     // 64-bit GPR. Preserve the original load occurrence and its memory proof.
-    if (isMIPSN32(Architecture) && Def.Opcode == NdOp::INT_SEXT &&
-        Def.NumInputs == 1 && Value.Size == 8 && Def.Inputs[0].Size == 4 &&
+    if (hasMIPS32BitAddressIn64BitGPR(Architecture) &&
+        Def.Opcode == NdOp::INT_SEXT && Def.NumInputs == 1 && Value.Size == 8 &&
+        Def.Inputs[0].Size == 4 &&
         Def.MemoryOrdering == NdMemoryOrdering::None &&
         Def.MemoryAddressSpace == NdMemoryAddressSpace::Default) {
       auto Slot =

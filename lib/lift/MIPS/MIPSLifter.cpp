@@ -23,6 +23,8 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Endian.h"
 
+#include <stdexcept>
+
 namespace neverd {
 
 MIPSLifter::MIPSLifter(Arch Target, InstructionMode Mode, uint8_t Revision,
@@ -31,7 +33,11 @@ MIPSLifter::MIPSLifter(Arch Target, InstructionMode Mode, uint8_t Revision,
       HistoricalISA(Historical), LittleEndian(archLittleEndian(Target)),
       RegisterBytes(isMIPS64(Target) ? 8 : 4),
       EncodingProfile(Revision | uint16_t(Historical) << 8),
-      TimedInstructions(Historical >= 1 && Historical <= 3) {}
+      TimedInstructions(Historical >= 1 && Historical <= 3) {
+  if (isMIPS64O32(Target) &&
+      (Revision || Historical != 3 || isMIPSCompressedMode(Mode)))
+    throw std::invalid_argument("wide-GPR o32 requires classic MIPS III");
+}
 
 uint32_t MIPSLifter::word(const cs_insn &Instruction) const {
   if (Instruction.size != 4)

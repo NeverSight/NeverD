@@ -25,8 +25,8 @@ namespace neverd {
       .TheArch = Arch::Name,                                                   \
       .ImportArgumentsFromPrototype = true,                                    \
       .PositionalArgumentSlots = true,                                         \
-      .PairAlignedWideArguments = !isMIPS64(Arch::Name),                       \
-      .IntegerParametersUseFullRegisters = true,                               \
+      .PairAlignedWideArguments = isMIPSO32(Arch::Name),                       \
+      .IntegerParametersUseFullRegisters = !isMIPS64O32(Arch::Name),           \
       .ArgumentsFromCallSetup = true,                                          \
   };
 #include "neverd/MIPSTargets.def"
