@@ -870,6 +870,69 @@ TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
   EXPECT_EQ(AddFunc.Params.size(), 2u);
 }
 
+TEST(GoInternalABI, AnIndirectCallReturnsEveryResultItsCallerReads) {
+  // Go's internal ABI returns results in RAX, RBX, RCX, RDI, RSI, R8-R11 and
+  // keeps none of those registers but its results, so a read of RBX after a
+  // call is its second result.  Modelled with RAX alone, an interface's data
+  // word (`call [rdx]; mov [rsp+8], rbx`) printed a placeholder.
+  //   main.f: sub rsp, 0x18; mov rdx, [rip+0x2000]; call [rdx]
+  //           mov [rsp+8], <reg>; add rsp, 0x18; ret
+  for (const uint8_t ModRM : {uint8_t(0x5C), uint8_t(0x54)}) {
+    const bool ReadsRBX = ModRM == 0x5C; // 0x54 stores RDX, no result
+    SCOPED_TRACE(ReadsRBX);
+    constexpr va_t Caller = kTextVA + 0x100;
+    GoTestImage T;
+    T.writeText(Caller, {0x48, 0x83, 0xEC, 0x18, 0x48, 0x8B, 0x15, 0x00,
+                         0x20, 0x00, 0x00, 0xFF, 0x12, 0x48, 0x89, ModRM,
+                         0x24, 0x08, 0x48, 0x83, 0xC4, 0x18, 0xC3});
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{Caller, kTextVA + 0x200}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    const MedFunc F = lift(T.Img, Caller);
+    const MedOp *Call = onlyCall(F);
+    ASSERT_NE(Call, nullptr);
+    ASSERT_EQ(Call->Opcode, NdOp::INDIR_CALL);
+    EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoInternal);
+    if (!ReadsRBX) {
+      EXPECT_FALSE(Call->RegisterReturnFields);
+      continue;
+    }
+    ASSERT_TRUE(Call->RegisterReturnFields);
+    ASSERT_EQ(Call->RegisterReturnFields->size(), 2u);
+    EXPECT_EQ((*Call->RegisterReturnFields)[0].RegOff, x86reg::RAX);
+    EXPECT_EQ((*Call->RegisterReturnFields)[1].RegOff, x86reg::RBX);
+    EXPECT_EQ(Call->Output.Kind, MedVar::Temp);
+    EXPECT_EQ(Call->Output.Size, 16u);
+    for (const MedCallClobber &Clobber : F.CallClobbers)
+      EXPECT_FALSE(Clobber.CallSiteId == Call->CallSiteId &&
+                   Clobber.Value.Kind == MedVar::Reg &&
+                   Clobber.Value.RegOff == x86reg::RBX);
+    // Every later read of RBX is the call's second field.
+    const MedOp *Field = nullptr;
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
+            Op.Inputs[0].Kind == MedVar::Temp &&
+            Op.Inputs[0].Id == Call->Output.Id && Op.Inputs[1].isConst() &&
+            Op.Inputs[1].ConstVal == 8)
+          Field = &Op;
+    ASSERT_NE(Field, nullptr);
+    unsigned Reads = 0;
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (Op.Addr > Call->Addr && Op.Inputs[I].Kind == MedVar::Reg &&
+              Op.Inputs[I].RegOff == x86reg::RBX) {
+            EXPECT_EQ(Op.Inputs[I].Id, Field->Output.Id);
+            EXPECT_EQ(Op.Inputs[I].SSAVer, Field->Output.SSAVer);
+            ++Reads;
+          }
+    EXPECT_GT(Reads, 0u);
+  }
+}
+
 TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {
   // Runtime calls can change g in R14; X15 is still zero across ordinary
   // compiled Go calls. Assembly callers do not get the same X15 contract.

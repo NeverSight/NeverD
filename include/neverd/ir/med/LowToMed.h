@@ -396,6 +396,12 @@ private:
   /// remodeling).  Runs before modelCallFPReturn so it claims the FP return
   /// register of a struct call.
   void modelCallStructReturn(MedFunc &Func);
+  /// x86-64 Go code under the internal register ABI: an indirect call whose
+  /// caller reads a result register past RAX (RBX, RCX, RDI, RSI, R8-R11)
+  /// returns every result up to it.  The call produces the packed results,
+  /// and each register the call left is defined from its field.  Runs before
+  /// modelCallStructReturn, whose platform registers Go's are not.
+  void modelGoCallResults(MedFunc &Func);
   void eliminateFlags(MedFunc &Func);
   /// Clear the modeled output of a GOT-indirect `____chkstk_darwin` stack-probe
   /// call (one whose loaded slot VA is in StackProbeSlots) so SSA liveness does

@@ -65,14 +65,23 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> RequiredNativeEntries,
                           llvm::ArrayRef<LowFunc> SourceFunctions = {});
 
+/// An ADR whose operand denotes an address in the original image. The
+/// instruction and target use the input image's preferred addresses.
+struct MachOLiftedSourceAddress {
+  va_t Instruction;
+  va_t Target;
+};
+
 /// Check each register body and its symbolic call operands against the image
 /// before submitting its inline assembly to MC. Returns the original entries
 /// for the separate verification of the final linked machine instructions.
 /// On success RecoveredData receives sorted, independently proved source
-/// ranges absent from the image's data-in-code table.
+/// ranges absent from the image's data-in-code table. SourceAddresses receives
+/// the sorted ADR sites that require a source-relative fixup after placement.
 llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
     llvm::Module &Module, const BinaryImage &Image,
-    std::vector<MachODataInCodeRange> *RecoveredData = nullptr);
+    std::vector<MachODataInCodeRange> *RecoveredData = nullptr,
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses = nullptr);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H

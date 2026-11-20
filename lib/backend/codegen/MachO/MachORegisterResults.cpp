@@ -13,6 +13,7 @@
 
 #include "../rewrite/BlockAddressUse.h"
 #include "MachOEmbeddedDispatch.h"
+#include "MachOPageAddress.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -36,6 +37,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/IRBuilder.h"
@@ -68,6 +70,8 @@ struct RegisterBody {
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
   std::vector<MachODataInCodeRange> RecoveredData;
+  llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
+  bool HasDataPage = false;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
@@ -165,6 +169,80 @@ bool physicalRegister(aarch64_reg R) {
          (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S31) || R == AARCH64_REG_FP ||
          R == AARCH64_REG_LR || R == AARCH64_REG_SP || R == AARCH64_REG_WSP ||
          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR;
+}
+
+// A source entry can escape in X0 or in a caller-supplied output slot. Follow
+// the value through full-width copies until the straight-line return.
+bool exportsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
+                    aarch64_reg AddressReg) {
+  constexpr auto Word = aarch64::kInsnSize;
+  bool Stored = false;
+  while (Bytes.size() >= Word) {
+    DecodedInsn I{};
+    if (Decode.decodeOne(Bytes.data(), Word, PC, I) != int(Word) || !I.Raw ||
+        !I.Raw->detail)
+      return false;
+    const auto &D = I.Raw->detail->aarch64;
+    if ((I.Id == AARCH64_INS_RET && !D.op_count) || I.Id == AARCH64_INS_RETAA ||
+        I.Id == AARCH64_INS_RETAB)
+      return Stored || AddressReg == AARCH64_REG_X0;
+    if (D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG)
+      return false;
+    if ((I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR) &&
+        D.operands[0].reg == AddressReg &&
+        D.operands[1].type == AARCH64_OP_MEM &&
+        D.operands[1].mem.base != AddressReg &&
+        D.operands[1].mem.index != AddressReg) {
+      Stored = true;
+    } else {
+      const bool Copy = I.Id == AARCH64_INS_MOV ||
+                        (I.Id == AARCH64_INS_ORR && I.Raw->is_alias);
+      if (!Copy || D.operands[0].reg < AARCH64_REG_X0 ||
+          D.operands[0].reg > AARCH64_REG_X28 ||
+          D.operands[1].type != AARCH64_OP_REG ||
+          D.operands[1].reg != AddressReg)
+        return false;
+      AddressReg = D.operands[0].reg;
+    }
+    Bytes = Bytes.drop_front(Word);
+    PC += Word;
+  }
+  return false;
+}
+
+// The existing PACM instruction table identifies the matching signing
+// instruction and the consumer of the local signing PC in X16.
+bool movesSigningPoint(const MachOLiftedSource &Source, va_t Start, va_t PC,
+                       va_t Target, aarch64_reg Reg) {
+  constexpr auto Word = aarch64::kInsnSize;
+  if (Reg != AARCH64_REG_X16 || Target <= Start || Target % Word ||
+      !rangeInBounds(Target - Start, Word, Source.Bytes.size()) ||
+      Source.Bytes.size() - (PC - Start) < 3 * Word ||
+      !machODataInCodeRanges(Source.Embedded, Target - Word, 2 * Word)
+           .empty() ||
+      !machODataInCodeRanges(Source.Embedded, PC + Word, 2 * Word).empty())
+    return false;
+  const auto At = [&](va_t VA) {
+    return readLE<uint32_t>(Source.Bytes.data() + (VA - Start));
+  };
+  if (At(Target - Word) != kAArch64PACMEncoding ||
+      At(PC + Word) != kAArch64PACMEncoding)
+    return false;
+  enum class Modifier { PC, X15, X16 };
+  const auto Operation = [](uint32_t Bits, Modifier Expected) {
+    switch (Bits) {
+#define NEVERD_A64_PAUTH_M_CONSUMER(Encoding, Id, Mod2)                        \
+  case Encoding:                                                               \
+    if (Expected == Modifier::Mod2)                                            \
+      return aarch64PAuthMOperation(Intrinsic::Id);                            \
+    break;
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+    }
+    return std::optional<AArch64PAuthLROperation>{};
+  };
+  const auto Sign = Operation(At(Target), Modifier::PC);
+  const auto Auth = Operation(At(PC + 2 * Word), Modifier::X16);
+  return Sign && Auth && Sign->Key == Auth->Key;
 }
 
 // Keep the constants and callees as actual LLVM operands. In particular a
@@ -500,7 +578,9 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
 std::optional<RegisterBody>
 registerBody(Decoder &Decode, const BinaryImage &Image,
              const Entries &Functions, Entries::const_iterator Owner,
-             const LowFunc *ControlFlow, bool Revalidate = false) {
+             const LowFunc *ControlFlow,
+             llvm::function_ref<llvm::GlobalVariable *(va_t)> DataSymbol,
+             bool Revalidate = false) {
   const va_t Start = Owner->first;
   auto Next = std::next(Owner);
   auto Source = machOLiftedSource(
@@ -641,6 +721,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       break;
     }
   llvm::SmallVector<ScratchFlow> Flow(HasCall ? (End - Start) / Word : 0);
+  llvm::GlobalVariable *PageOffset = nullptr;
   auto Islands = Source->Embedded;
   auto Unreached = llvm::ArrayRef(Dispatch.UnreachedCode);
   for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
@@ -807,22 +888,71 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       if (Distance > PC - Start)
         return std::nullopt;
     }
-    // ADR can materialize a signing point within this same body. Its relative
-    // distance survives publication, just like an internal branch. External
-    // data and page-relative addresses require a different relocation owner.
-    const bool TableAddress = Dispatch.TableAddresses.contains(PC);
-    const bool LocalAddress =
-        I.Id == AARCH64_INS_ADR && Ops.size() == 2 &&
-        Ops[0].type == AARCH64_OP_REG && physicalRegister(Ops[0].reg) &&
-        Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
-        va_t(Ops[1].imm) < End &&
-        (TableAddress || (va_t(Ops[1].imm) - Start) % Word == 0);
-    // A retained block can return the relocated PC. Its ADR has no proven
-    // use as a signing point, even with a complete map of embedded data.
-    if (LocalAddress && !TableAddress &&
-        (OutsideCFG ||
-         !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty()))
-      return std::nullopt;
+    if (PageOffset) {
+      // The preceding ADRP proved these physical ADD operands. Emit PAGEOFF12
+      // at its own label so CFI rows and incoming branch offsets stay intact.
+      OS << I.Raw->mnemonic << ' '
+         << cs_reg_name(Decode.getHandle(), Ops[0].reg) << kSeparator
+         << cs_reg_name(Decode.getHandle(), Ops[1].reg) << kSeparator;
+      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+      OS << kPageOffset;
+      PageOffset = nullptr;
+      Fallthrough();
+      continue;
+    }
+    if (I.Id == AARCH64_INS_ADRP) {
+      auto Pair = decodeMachOPageAddress(
+          Decode, Source->Bytes.drop_front(PC - Start), PC);
+      if (!Pair)
+        return std::nullopt;
+      const auto *Storage = Image.getSectionFor(Pair->Target);
+      if (!Storage || !Storage->isReadable() ||
+          (Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                            llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) ||
+          Pair->Target - Storage->VA >= Storage->FileSz)
+        return std::nullopt;
+      PageOffset = DataSymbol(Pair->Target);
+      if (!PageOffset)
+        return std::nullopt;
+      Body.HasDataPage = true;
+      OS << kAddressPage << cs_reg_name(Decode.getHandle(), Pair->PageRegister)
+         << kSeparator;
+      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+      OS << kPage;
+      Fallthrough();
+      continue;
+    }
+    // A table or signing point moves with this body. A pointer into declared
+    // literal storage or a returned function entry denotes the source image,
+    // including when a later publication lifts this copy again.
+    if (I.Id == AARCH64_INS_ADR) {
+      if (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
+          Ops[1].type != AARCH64_OP_IMM)
+        return std::nullopt;
+      const va_t Target = Ops[1].imm;
+      const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
+      const bool LiteralAddress =
+          !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
+      const auto Reg = Ops[0].reg;
+      if (Reg == AARCH64_REG_XZR)
+        return std::nullopt;
+      const bool Moves =
+          !OutsideCFG && (Dispatch.TableAddresses.contains(PC) ||
+                          movesSigningPoint(*Source, Start, PC, Target, Reg));
+      if (!Moves) {
+        // The lookahead consumes the borrowed instruction. The source word
+        // and destination register have already been copied.
+        if (!LiteralAddress &&
+            !(Image.hasAuthenticatedFunctionEntryAt(Target) &&
+              exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
+                             NextPC, Reg)))
+          return std::nullopt;
+        Body.SourceAddresses.push_back({PC, Target});
+      }
+      Fallthrough();
+      OS << kInstructionWord << Encoding << '\n';
+      continue;
+    }
     const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
     if (Literal &&
         !coverMachOEmbeddedRead(*Source, Start, Literal->Address,
@@ -834,8 +964,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       return std::nullopt;
     if (!Stops)
       Fallthrough();
-    if (!SIMDData && !LocalAddress && !Literal && !KeepEncoding &&
-        !independent(I))
+    if (!SIMDData && !Literal && !KeepEncoding && !independent(I))
       return std::nullopt;
     // Classic compact mode cannot describe a saved PC-signed return. A
     // frameless body without calls or spills retains a live LR instead; the
@@ -869,8 +998,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     // lists and FP controls. PAuth_LR words retain their signing-PC distance
     // because every instruction keeps its offset within the copied body.
     // Both the assembly and final linked words are checked against the image.
-    if (KeepEncoding || SIMDData || PCSigning || PACM || LocalAddress ||
-        Literal) {
+    if (KeepEncoding || SIMDData || PCSigning || PACM || Literal) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
@@ -1026,13 +1154,13 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   if (!Decode.init(Image))
     return Required.empty() ? llvm::Error::success() : invalidBody();
   llvm::DenseSet<va_t> Admitted(AdmittedEntries.begin(), AdmittedEntries.end());
+  auto *Byte = llvm::Type::getInt8Ty(M.getContext());
   for (const auto &[VA, F] : *Functions) {
     const auto *Frame = Image.ExceptionMetadata.findFunction(VA);
     if (!Admitted.contains(VA) || !Frame ||
         !canPublishMachOLanguageFrame(Image, *Frame))
       continue;
     const auto &Table = *Frame->Itanium;
-    auto *Byte = llvm::Type::getInt8Ty(M.getContext());
     if (Table.LandingPadBaseEncoding == dweh::Omit) {
       M.getOrInsertGlobal(makeNdDataSymbol(Table.LSDAVA), Byte);
       continue;
@@ -1049,6 +1177,20 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   llvm::DenseMap<va_t, const LowFunc *> SourceByEntry;
   for (const auto &F : SourceFunctions)
     SourceByEntry.try_emplace(F.Entry, &F);
+  llvm::SmallVector<llvm::GlobalVariable *> NewData;
+  const auto DiscardUnused = llvm::scope_exit([&] {
+    for (auto *G : NewData)
+      if (G->use_empty())
+        G->eraseFromParent();
+  });
+  const auto DataSymbol = [&](va_t Target) -> llvm::GlobalVariable * {
+    const auto Name = makeNdDataSymbol(Target);
+    if (auto *Existing = M.getNamedValue(Name))
+      return llvm::dyn_cast<llvm::GlobalVariable>(Existing);
+    auto *G = M.getOrInsertGlobal(Name, Byte);
+    NewData.push_back(G);
+    return G;
+  };
   bool HasVariadicCursor = false;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
@@ -1061,7 +1203,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
             return Owner == &F;
           }).empty()))
       continue;
-    if (auto Body = registerBody(Decode, Image, *Functions, It, Source)) {
+    if (auto Body =
+            registerBody(Decode, Image, *Functions, It, Source, DataSymbol)) {
       HasVariadicCursor |= F.isVarArg() && Body->MaterializesCursor;
       Bodies.try_emplace(&F, std::move(*Body));
     }
@@ -1088,7 +1231,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
-        Body.IsForwarder || Body.HasEmbeddedData)
+        Body.IsForwarder || Body.HasEmbeddedData || Body.HasDataPage ||
+        !Body.SourceAddresses.empty())
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
@@ -1150,14 +1294,17 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   return llvm::Error::success();
 }
 
-llvm::Expected<llvm::DenseSet<va_t>>
-validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
-                             std::vector<MachODataInCodeRange> *RecoveredData) {
+llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
+    llvm::Module &M, const BinaryImage &Image,
+    std::vector<MachODataInCodeRange> *RecoveredData,
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
           M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); })) {
     if (RecoveredData)
       RecoveredData->clear();
+    if (SourceAddresses)
+      SourceAddresses->clear();
     return Result;
   }
   auto Functions = definedEntries(M, Image);
@@ -1167,6 +1314,7 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   if (!Decode.init(Image))
     return invalidBody();
   std::vector<MachODataInCodeRange> VerifiedData;
+  std::vector<MachOLiftedSourceAddress> VerifiedAddresses;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!F.hasFnAttribute(kRegisterBody))
@@ -1176,7 +1324,10 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
         !llvm::isa<llvm::UnreachableInst>(F.front().back()))
       return invalidBody();
     const auto *Call = llvm::dyn_cast<llvm::CallInst>(&F.front().front());
-    auto Body = registerBody(Decode, Image, *Functions, It, nullptr, true);
+    auto Body = registerBody(
+        Decode, Image, *Functions, It, nullptr,
+        [&](va_t Target) { return M.getNamedGlobal(makeNdDataSymbol(Target)); },
+        true);
     if (!Call || !Body || !Call->doesNotReturn() ||
         Call->getCalledOperand() != assembly(F, *Body) ||
         !llvm::equal(Call->args(), Body->Operands))
@@ -1185,10 +1336,14 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
       return invalidBody();
     if (RecoveredData)
       llvm::append_range(VerifiedData, Body->RecoveredData);
+    if (SourceAddresses)
+      llvm::append_range(VerifiedAddresses, Body->SourceAddresses);
     Result.insert(It->first);
   }
   if (RecoveredData)
     *RecoveredData = std::move(VerifiedData);
+  if (SourceAddresses)
+    *SourceAddresses = std::move(VerifiedAddresses);
   return Result;
 }
 } // namespace neverd

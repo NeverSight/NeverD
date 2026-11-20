@@ -9,9 +9,13 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "LowToMedCallReturnDetail.h"
+
+#include "neverd/ir/CallRegisterContract.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallConvention.h"
@@ -39,11 +43,10 @@ bool sameValue(const MedVar &A, const MedVar &B) {
          A.RegOff == B.RegOff && A.Size == B.Size;
 }
 
-/// Whether \p Ops[\p At] reads a register only to keep the bytes a write of
-/// its low bytes leaves, as a partial register write lowers: `t = R & mask`,
-/// whose mask clears at least the low byte, then `u = t | v` and `R = u`
-/// within the next few operations.
-bool keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops, size_t At) {
+} // namespace
+
+bool lowtomed_detail::keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops,
+                                             size_t At) {
   const MedOp &Keep = Ops[At];
   if (Keep.Opcode != NdOp::INT_AND || Keep.NumInputs != 2 ||
       Keep.Inputs[0].Kind != MedVar::Reg || !Keep.Inputs[1].isConst() ||
@@ -75,6 +78,8 @@ bool keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops, size_t At) {
   return false;
 }
 
+namespace {
+using lowtomed_detail::keepsUpperBytesOfWrite;
 } // namespace
 
 void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
@@ -270,6 +275,20 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
         uint16_t Size;
         MedVar Value;
       };
+      const bool ConstantCallee =
+          Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst();
+      const GPRReadWidths *CalleeReads = nullptr;
+      if (ConstantCallee && CallEntryReadGPRs)
+        if (const auto R = CallEntryReadGPRs->find(Op.Inputs[0].ConstVal);
+            R != CallEntryReadGPRs->end())
+          CalleeReads = &R->second;
+      const bool GoCall =
+          Image &&
+          (Op.RegisterContract == CallRegisterContract::GoCode ||
+           Op.RegisterContract == CallRegisterContract::GoInternal) &&
+          goCallEntersInternalABI(
+              *Image, Func.Entry,
+              ConstantCallee ? Op.Inputs[0].ConstVal : InvalidVA, CalleeReads);
       std::vector<FieldRead> Fields;
       std::set<uint64_t> Redefined;
       for (size_t J = OI + 1; J < Blk.Ops.size(); ++J) {
@@ -305,6 +324,11 @@ void LowToMedConverter::modelCallStructReturn(MedFunc &Func) {
               continue;
             int CI = candIdx(In.RegOff);
             if (CI >= 1000 || Redefined.count(In.RegOff) || PreservedByCall(In))
+              continue;
+            // A call Go code makes returns nothing in a register Go's
+            // internal ABI returns no result in, as RDX, its closure
+            // context (goResultRegister).
+            if (GoCall && !goResultRegister(TargetArch, In.RegOff))
               continue;
             // The field holds every byte the caller reads from it: `mov ecx,
             // eax` followed by `shr rax, 32` needs all of RAX.

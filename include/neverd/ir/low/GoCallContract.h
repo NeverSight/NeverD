@@ -87,6 +87,23 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
 
+/// Whether a call the code at \p Caller makes to \p Callee (InvalidVA for an
+/// indirect call) enters Go code by Go's internal ABI, which returns its
+/// results in Go's registers (goResultRegister): a direct call to compiled Go
+/// code, or to assembly that takes Go's argument registers (\p CalleeReads,
+/// goAssemblyTakesRegisterArguments), and an indirect call compiled Go code
+/// makes, through a function value.  Go assembly also calls C through a
+/// pointer (darwin's `runtime.syscall6` calls libc), which returns in the
+/// platform's registers; an image without the assembly flag tells neither.
+bool goCallEntersInternalABI(const BinaryImage &Img, va_t Caller, va_t Callee,
+                             const GPRReadWidths *CalleeReads);
+
+/// Whether a result of a call under Go's internal ABI on \p A can be in the
+/// register at \p RegOff: an integer argument register, which results take in
+/// the same order, or X0-X14 (arm64 V0-V15).  RDX, the closure context, is
+/// none, nor is X15, which the ABI keeps zero.
+bool goResultRegister(Arch A, uint64_t RegOff);
+
 /// The register Go passes a func value its closure in on \p A: RDX, or R26 on
 /// arm64.  It is no positional argument.
 std::optional<uint64_t> goClosureContextRegister(Arch A);

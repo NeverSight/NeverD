@@ -11,6 +11,8 @@
 #include "neverd/loader/MachO/DataInCode.h"
 
 namespace neverd {
+struct MachOLiftedSourceAddress;
+
 /// Verify lifted code and language metadata in the installed private candidate
 /// before atomic publication. The image includes newly generated LSDA storage.
 using MachOLiftedObjectVerifier = llvm::function_ref<llvm::Error(
@@ -23,6 +25,7 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          llvm::ArrayRef<SourcePatchBinding> Bindings,
                          const std::filesystem::path &Output,
                          llvm::ArrayRef<MachODataInCodeRange> RecoveredData,
+                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses,
                          MachOLiftedObjectVerifier Verify);
 } // namespace neverd
 

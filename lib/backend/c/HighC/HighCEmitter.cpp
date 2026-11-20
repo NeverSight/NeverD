@@ -2209,7 +2209,9 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
                     "HighC callees disagree on MIPS instruction mode");
             }
           uint16_t &Bytes = ResultBytes[callIdentifier(E)];
-          if (E.Type && E.Type->RegisterReturnRecord) {
+          // An indirect call declares no function: the record it returns is
+          // its own, as Go's interface and closure calls each return theirs.
+          if (E.Type && E.Type->RegisterReturnRecord && !E.IsIndirectCall) {
             const auto [It, Inserted] =
                 RegisterRecordResults.emplace(callIdentifier(E), E.Type);
             if (!Inserted && typeToC(It->second) != typeToC(E.Type))
