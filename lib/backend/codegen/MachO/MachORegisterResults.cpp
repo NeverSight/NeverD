@@ -818,15 +818,10 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty())
       return std::nullopt;
     const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
-    if (Literal) {
-      const auto Data = machODataInCodeRanges(Source->Embedded,
-                                              Literal->Address, Literal->Width);
-      if (Data.size() != 1 ||
-          Data.front().Kind != llvm::MachO::DICE_KIND_DATA ||
-          Literal->Address < Data.front().Begin ||
-          Literal->Width > Data.front().End - Literal->Address)
-        return std::nullopt;
-    }
+    if (Literal &&
+        !coverMachOEmbeddedRead(*Source, Start, Literal->Address,
+                                Literal->Width, llvm::MachO::DICE_KIND_DATA))
+      return std::nullopt;
     if (!Stops)
       Fallthrough();
     if (!SIMDData && !LocalAddress && !Literal && !independent(I))
