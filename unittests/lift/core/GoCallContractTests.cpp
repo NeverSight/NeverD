@@ -638,6 +638,71 @@ TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {
             EXPECT_NE(Next.StartAddr, Panicking + 9);
 }
 
+/// main.b: call runtime.panicBounds, whose PCDATA_PanicBounds value for the
+/// call is \p Value (abi.BoundsEncode).
+BinaryImage panicBoundsImage(int32_t Value) {
+  constexpr va_t Caller = kTextVA + 0x100, PanicBounds = kTextVA + 0x200;
+  GoTestImage T;
+  T.writeText(Caller, makeCall(Caller, PanicBounds));
+  T.writeText(Caller + 5, {0xC3});
+  T.writeText(PanicBounds, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Caller, kTextVA + 0x300}};
+  Module.PanicBoundsEntry = PanicBounds;
+  Module.PanicBounds = {{{Caller, Caller + 5}, Value}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  return std::move(T.Img);
+}
+
+TEST(GoPanicBounds, DecodeTheCompilersEncoding) {
+  // abi.BoundsEncode(BoundsIndex, signed, CX, DX) and
+  // abi.BoundsEncode(BoundsSliceAlen, unsigned, 5, BX).
+  const BinaryImage Index = panicBoundsImage(2439);
+  const auto A = goBoundsFailureAt(Index, kTextVA + 0x100, kTextVA + 0x200);
+  ASSERT_TRUE(A.has_value());
+  EXPECT_EQ(A->Code, 0u);
+  EXPECT_TRUE(A->Signed);
+  EXPECT_TRUE(A->Index.Register);
+  EXPECT_EQ(A->Index.Value, x86reg::RCX);
+  EXPECT_TRUE(A->Bound.Register);
+  EXPECT_EQ(A->Bound.Value, x86reg::RDX);
+  const BinaryImage Slice = panicBoundsImage(3655);
+  const auto B = goBoundsFailureAt(Slice, kTextVA + 0x100, kTextVA + 0x200);
+  ASSERT_TRUE(B.has_value());
+  EXPECT_EQ(B->Code, 1u);
+  EXPECT_FALSE(B->Signed);
+  EXPECT_FALSE(B->Index.Register);
+  EXPECT_EQ(B->Index.Value, 5u);
+  EXPECT_EQ(B->Bound.Value, x86reg::RBX);
+  // panicBounds saves neither SP (4) nor g (14), so no entry names them:
+  // abi.BoundsEncode(BoundsIndex, unsigned, SP, DX).
+  EXPECT_FALSE(
+      goBoundsFailureAt(panicBoundsImage((1 | 2 | 4 << 3 | 2 << 7) * 9),
+                        kTextVA + 0x100, kTextVA + 0x200));
+  // Another callee, or a call no range covers, reports nothing.
+  EXPECT_FALSE(goBoundsFailureAt(Index, kTextVA + 0x100, kTextVA + 0x280));
+  EXPECT_FALSE(goBoundsFailureAt(Index, kTextVA + 0x105, kTextVA + 0x200));
+}
+
+TEST(GoPanicBounds, ACallPassesItsIndexAndBound) {
+  const BinaryImage Img = panicBoundsImage(2439);
+  const MedFunc F = lift(Img, kTextVA + 0x100);
+  const MedOp *Call = onlyCall(F);
+  ASSERT_NE(Call, nullptr);
+  ASSERT_EQ(Call->NumInputs, 3u);
+  EXPECT_EQ(Call->Inputs[1].RegOff, x86reg::RCX);
+  EXPECT_EQ(Call->Inputs[2].RegOff, x86reg::RDX);
+  // A constant index is passed as one.
+  const MedOp *Constant =
+      onlyCall(lift(panicBoundsImage(3655), kTextVA + 0x100));
+  ASSERT_NE(Constant, nullptr);
+  ASSERT_EQ(Constant->NumInputs, 3u);
+  EXPECT_EQ(Constant->Inputs[1].Kind, MedVar::Const);
+  EXPECT_EQ(Constant->Inputs[1].ConstVal, 5u);
+  EXPECT_EQ(Constant->Inputs[2].RegOff, x86reg::RBX);
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

@@ -347,6 +347,44 @@ void parseGoExceptions(BinaryImage &Img) {
           goRuntimeNeverReturns(G.Name))
         Module.NoReturnEntries.push_back(G.CodeRange.Begin);
   llvm::sort(Module.NoReturnEntries);
+  // Go 1.26 reports every bounds failure through one routine and records, at
+  // each call to it, which registers or constants hold the failing index and
+  // length (PCDATA_PanicBounds, internal/abi/symtab.go).
+  constexpr unsigned PCDataPanicBounds = 4;
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          G.Name == "runtime.panicBounds")
+        Module.PanicBoundsEntry = G.CodeRange.Begin;
+  if (Module.PanicBoundsEntry != InvalidVA) {
+    for (const GoFunction &G : Funcs) {
+      if (G.Raw.PcSP == 0 || !G.CodeRange.isValid())
+        continue;
+      const std::optional<uint32_t> Offset =
+          getPCDataOffset(R, Layout, G.Raw, PCDataPanicBounds);
+      if (!Offset || *Offset == 0)
+        continue;
+      // A table that does not decode to its end holds nothing to trust.
+      std::vector<GoPanicBoundsRange> Ranges;
+      const bool Walked = forEachPCValue(
+          R, Header->PcTab, *Offset, G.CodeRange.Begin, Header->MinLC,
+          [&](const PCValueRange &V) {
+            if (Ranges.size() >= MaxPCValueRanges)
+              return false;
+            if (V.Value >= 0)
+              Ranges.push_back(
+                  {ExceptionAddressRange{V.Begin, V.End}, V.Value});
+            return true;
+          });
+      if (Walked)
+        Module.PanicBounds.insert(Module.PanicBounds.end(), Ranges.begin(),
+                                  Ranges.end());
+    }
+    llvm::sort(Module.PanicBounds,
+               [](const GoPanicBoundsRange &A, const GoPanicBoundsRange &B) {
+                 return A.Range.Begin < B.Range.Begin;
+               });
+  }
 
   if (!Layout.StackMapPCDataIndex) {
     Layout.StackMapPCDataIndex =

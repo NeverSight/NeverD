@@ -284,6 +284,14 @@ struct GoWriteBarrier {
 /// `moduledata` that anchors it.  A Go image needs both: the `pclntab` holds
 /// the per-function records, but the offsets inside them are relative to bases
 /// that only `moduledata` names.
+/// A pc range and the PCDATA_PanicBounds value Go 1.26's compiler gives the
+/// call to `runtime.panicBounds` it covers: which registers or constants
+/// hold the failing index and length (internal/abi/bounds.go).
+struct GoPanicBoundsRange {
+  ExceptionAddressRange Range;
+  int32_t Value = -1;
+};
+
 /// Whether the Go runtime routine \p Name (`runtime.gopanic`) never returns
 /// to its caller: Go's compiler ends the calling block with it (`BlockExit`
 /// in cmd/compile/internal/ssagen/ssa.go: the routines it names, the ones
@@ -364,6 +372,11 @@ struct GoModuleInfo {
   /// `gopanic` and `fatalthrow` end in a store to nil and a reachable return.
   /// Empty unless the text base is proven.
   std::vector<va_t> NoReturnEntries;
+  /// Entry of Go 1.26's `runtime.panicBounds`, which reports every bounds
+  /// failure, or InvalidVA.
+  va_t PanicBoundsEntry = InvalidVA;
+  /// Every function's PCDATA_PanicBounds ranges, sorted by start.
+  std::vector<GoPanicBoundsRange> PanicBounds;
 };
 
 } // namespace neverd

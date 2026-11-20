@@ -3713,6 +3713,26 @@ formattedCallReads(const BinaryImage &Img, const CallRegisterBodyView &Body,
   if (Converted)
     for (auto &[Address, Call] : Calls)
       Converted->emplace(Address, std::move(Call));
+  // A call to Go 1.26's runtime.panicBounds reads the index and the bound
+  // its PCDATA_PanicBounds entry names, and no register else
+  // (goBoundsFailureAt).
+  if (const auto &Go = Img.ExceptionMetadata.GoModule;
+      Go && Go->PanicBoundsEntry != InvalidVA && Img.Arch == Arch::X64)
+    for (const LowBlock &Block : Body.Blocks)
+      for (const LowOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst())
+          if (const std::optional<GoBoundsFailure> Failure =
+                  goBoundsFailureAt(Img, Op.Addr, Op.Inputs[0].Offset)) {
+            GPRReadWidths Widths{};
+            for (const GoBoundsOperand &Operand :
+                 {Failure->Index, Failure->Bound})
+              if (Operand.Register)
+                if (const auto Family =
+                        registerFamilyOf(Img.Arch, Operand.Value))
+                  Widths[Family->first] = 8;
+            Reads.emplace_back(Op.Addr, Widths);
+          }
   return Reads;
 }
 

@@ -353,6 +353,29 @@ TEST(GoNoReturn, EveryLookupKnowsTheirEntries) {
   EXPECT_FALSE(Index.contains(T.Img, kTextVA + 0x200));
 }
 
+TEST(GoPanicBounds, TheLoaderReadsEveryCallsEntry) {
+  // main.f's PCDATA_PanicBounds table gives its first five bytes, a call to
+  // runtime.panicBounds, the value abi.BoundsEncode makes of a signed index
+  // in CX against DX.
+  GoTestImage T;
+  GoFuncSpec F = makeGoCode("main.f", kTextVA + 0x100);
+  F.PCData = {std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+              PCValueTable{{{2439, 5}}}};
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {F, makeGoCode("runtime.panicBounds", kTextVA + 0x200)},
+                   kTextVA + 0x300)
+          .Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_EQ(Module->PanicBoundsEntry, kTextVA + 0x200);
+  ASSERT_EQ(Module->PanicBounds.size(), 1u);
+  EXPECT_EQ(Module->PanicBounds[0].Range.Begin, kTextVA + 0x100);
+  EXPECT_EQ(Module->PanicBounds[0].Range.End, kTextVA + 0x105);
+  EXPECT_EQ(Module->PanicBounds[0].Value, 2439);
+}
+
 TEST(GoWriteBarriers, ARM64TakesItsOwnRegisters) {
   GoTestImage T(Arch::AArch64);
   T.installPclnTab(

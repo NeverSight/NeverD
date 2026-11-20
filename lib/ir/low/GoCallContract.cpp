@@ -242,6 +242,64 @@ bool goGrowthPathsModeled(const BinaryImage &Img) {
                     (Img.Arch == Arch::AArch64 && Module->RegisterArguments));
 }
 
+std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
+                                                 va_t CallAddr, va_t Callee) {
+  // AArch64 calls bind AAPCS64's eight positions until arm64 summaries
+  // publish entry reads, so its operands would go unused there.
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module || Callee == InvalidVA || Callee != Module->PanicBoundsEntry ||
+      Img.Arch != Arch::X64)
+    return std::nullopt;
+  const auto &Ranges = Module->PanicBounds;
+  auto It = std::upper_bound(
+      Ranges.begin(), Ranges.end(), CallAddr,
+      [](va_t A, const GoPanicBoundsRange &R) { return A < R.Range.Begin; });
+  if (It == Ranges.begin())
+    return std::nullopt;
+  --It;
+  if (CallAddr >= It->Range.End || It->Value < 0)
+    return std::nullopt;
+  // abi.BoundsDecode: the value is c * numBoundsCodes + code, where c packs
+  // whether each operand is a register, the index's signedness, and the two
+  // register numbers (0-15) or constants (0-31).
+  constexpr int NumBoundsCodes = 9;
+  GoBoundsFailure Failure;
+  Failure.Code = static_cast<uint8_t>(It->Value % NumBoundsCodes);
+  int C = It->Value / NumBoundsCodes;
+  const bool IndexIsRegister = C & 1;
+  C >>= 1;
+  const bool BoundIsRegister = C & 1;
+  C >>= 1;
+  unsigned IndexValue = 0, BoundValue = 0;
+  if (IndexIsRegister) {
+    Failure.Signed = C & 1;
+    C >>= 1;
+    IndexValue = C & 0xF;
+    C >>= 4;
+  } else {
+    IndexValue = C & 0x1F;
+    C >>= 5;
+  }
+  BoundValue = BoundIsRegister ? (C & 0xF) : (C & 0x1F);
+  // The registers panicBounds saves: x86-64's by hardware number but SP and
+  // R14, which holds g (src/runtime/asm_amd64.s).
+  const auto Operand = [&](bool IsRegister,
+                           unsigned Value) -> std::optional<GoBoundsOperand> {
+    if (!IsRegister)
+      return GoBoundsOperand{false, Value};
+    if (Value == 4 || Value == 14)
+      return std::nullopt;
+    return GoBoundsOperand{true, x86reg::RAX + uint64_t(Value) * 8};
+  };
+  const auto Index = Operand(IndexIsRegister, IndexValue);
+  const auto Bound = Operand(BoundIsRegister, BoundValue);
+  if (!Index || !Bound)
+    return std::nullopt;
+  Failure.Index = *Index;
+  Failure.Bound = *Bound;
+  return Failure;
+}
+
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   return goGrowthPathsModeled(Img) &&

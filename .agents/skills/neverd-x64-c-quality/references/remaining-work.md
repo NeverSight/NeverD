@@ -566,10 +566,14 @@ Still open, in order of yield:
    - A closure's context register (RDX, arm64 R26) should become a
      parameter. Its reads are "incoming register" placeholders once the
      growth path is gone, about 5% of what remains.
-3. Go 1.26 bounds failures call one `runtime.panicBounds`, and the call
-   site's `PCDATA_PanicBounds` entry names the registers or constants holding
-   the index and the length (`internal/abi/bounds.go`). About 690 calls per
-   binary print placeholders until that table is read.
+3. Go 1.26 bounds failures call one `runtime.panicBounds`. The call site's
+   `PCDATA_PanicBounds` entry names the registers or constants holding the
+   index and the length (`internal/abi/bounds.go`), and the loader now reads
+   it (`goBoundsFailureAt`). Calls pass that index and length on x86-64, but
+   not yet on arm64, whose calls bind AAPCS64's eight positions. The error
+   code (index or slice) is not printed.
+   The earlier stub families (`panicIndex` with x in AX and y in CX, and
+   others) still take System V's positions.
 4. A frame larger than 4 KiB reaches its growth path from two branches and
    keeps it. arm64 growth paths are left out only where the register ABI is
    modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait

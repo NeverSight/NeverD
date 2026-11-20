@@ -572,6 +572,18 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
     if (Keyed)
       CallSummaryKeysRead->insert(Key);
   }
+  // A call to Go 1.26's runtime.panicBounds passes the index and the bound
+  // its PCDATA_PanicBounds entry names, in that order (goBoundsFailureAt).
+  if (Image && ConstantTarget && MOp.NumInputs == 1)
+    if (const std::optional<GoBoundsFailure> Failure =
+            goBoundsFailureAt(*Image, LOp.Addr, Key)) {
+      for (const GoBoundsOperand &Operand : {Failure->Index, Failure->Bound})
+        MOp.addInput(Operand.Register
+                         ? ndVarToMedVar(NdVar::reg(Operand.Value, 8))
+                         : MedVar::makeConst(Operand.Value, 8));
+      MOp.CalleeRegisterArgs = 2;
+      return;
+    }
   // Publish the register arguments the callee reads as uses, so SSA sees a
   // pass-through argument and the call site knows its arity.  The calling
   // convention says whether and how (MedCallConvention.h); Mach-O
