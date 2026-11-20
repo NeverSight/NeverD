@@ -135,6 +135,7 @@ private:
   bool liftR6Compact(State &S, uint32_t Word, bool ForbiddenFollower) const;
   bool liftScalarFloat(State &S, uint32_t Word) const;
   bool liftRelease6(State &S, uint32_t Word) const;
+  bool liftHistoricalSystem(State &S, uint32_t Word) const;
   bool liftNonControl(State &S, Encoding Code, va_t BasePC) const;
   std::optional<Encoding> encoding(const cs_insn &Instruction) const;
   unsigned microDelaySlotBytes(const cs_insn &Instruction) const;

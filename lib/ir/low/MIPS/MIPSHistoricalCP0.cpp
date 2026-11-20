@@ -1,0 +1,205 @@
+//===- MIPSHistoricalCP0.cpp - Historical CP0 and exception entry --------===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#include "neverd/ir/low/MIPS/MIPSHistoricalCP0.h"
+
+#include <algorithm>
+
+namespace neverd::mips {
+namespace {
+constexpr uint32_t StatusIE = 1, StatusEXL = 2, StatusERL = 4;
+constexpr uint32_t StatusIM = 0xff00, StatusBEV = 1u << 22;
+constexpr uint32_t StatusCU = 0xf0000000u, CauseBD = 1u << 31;
+constexpr uint32_t SoftwareIP = 0x300u;
+} // namespace
+
+bool HistoricalCP0::usesModeStack() const {
+  return Processor == HistoricalProcessor::R30xx ||
+         Processor == HistoricalProcessor::CW4011R3000;
+}
+
+bool HistoricalCP0::supportsLevel(unsigned Level) const {
+  switch (Processor) {
+  case HistoricalProcessor::R30xx:
+    return Level == 1;
+  case HistoricalProcessor::CW4011R3000:
+  case HistoricalProcessor::CW4011R4000:
+    return Level == 2;
+  case HistoricalProcessor::R4000:
+    return Level == 3;
+  }
+  return false;
+}
+
+bool HistoricalCP0::canUseCP0() const {
+  const bool Kernel =
+      usesModeStack() ? !(Status & 2)
+                      : (Status & (StatusEXL | StatusERL)) || !(Status & 0x18);
+  return Kernel || (Status & (1u << 28));
+}
+
+std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
+                                            bool Doubleword) const {
+  if ((Register >= 12 && Register <= 14 && ReadDelay[Register - 12]) ||
+      !canUseCP0())
+    return std::nullopt;
+  if (Doubleword && (Processor != HistoricalProcessor::R4000 ||
+                     (Register != 8 && Register != 14)))
+    return std::nullopt;
+  switch (Register) {
+  case 8:
+    return BadVAddr;
+  case 12:
+    return Status;
+  case 13:
+    return Cause;
+  case 14:
+    return EPC;
+  default:
+    return std::nullopt;
+  }
+}
+
+bool HistoricalCP0::canWrite(unsigned Register, uint64_t Value,
+                             bool Doubleword) const {
+  if (!canUseCP0() || (Doubleword && (Processor != HistoricalProcessor::R4000 ||
+                                      Register != 14)))
+    return false;
+  if (Register == 14)
+    return Processor != HistoricalProcessor::R30xx && !(Value & 3);
+  if (Register == 13)
+    return true; // Only IP[1:0] is writable.
+  if (Register != 12)
+    return false;
+  const auto Changed = Status ^ uint32_t(Value);
+  // Keep the mode, translation, cache, diagnostic and FPU-layout state
+  // outside this transfer until their platform effects can be observed.
+  return !(Changed & ~(StatusIE | StatusIM | StatusCU));
+}
+
+std::optional<unsigned> HistoricalCP0::coprocessorOf(uint32_t Word) {
+  const unsigned Major = Word >> 26;
+  if ((Major >= 16 && Major <= 19) || Major == 49 || Major == 53 ||
+      Major == 57 || Major == 61)
+    return Major & 3;
+  return std::nullopt;
+}
+
+bool HistoricalCP0::coprocessorUsable(unsigned Number) const {
+  return Number == 0 ? canUseCP0()
+                     : Number < 4 && (Status & (1u << (28 + Number)));
+}
+
+bool HistoricalCP0::permitsIssue(uint32_t Word) const {
+  const unsigned Major = Word >> 26, RS = Word >> 21 & 31;
+  if (const auto Cop = coprocessorOf(Word); Cop && CoprocessorDelay[*Cop])
+    return false;
+  const unsigned Register = Word >> 11 & 31;
+  if (Major == 16 && (RS == 0 || RS == 1) && Register >= 12 && Register <= 14 &&
+      ReadDelay[Register - 12])
+    return false;
+  return true;
+}
+
+void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
+                           bool Doubleword) {
+  const auto Age = [](uint8_t &Delay) {
+    if (Delay)
+      --Delay;
+  };
+  Age(InterruptDelay);
+  Age(ExceptionReturnDelay);
+  for (auto &Delay : CoprocessorDelay)
+    Age(Delay);
+  for (auto &Delay : ReadDelay)
+    Age(Delay);
+  if (!Register)
+    return;
+  const bool R4000 = Processor == HistoricalProcessor::R4000;
+  const bool R30xx = Processor == HistoricalProcessor::R30xx;
+  ReadDelay[*Register - 12] = R4000 ? 2 : R30xx ? 3 : 1;
+  if (*Register == 14) {
+    ExceptionReturnDelay =
+        std::max<uint8_t>(ExceptionReturnDelay, R4000 ? 2 : 1);
+    EPC = R4000 && !Doubleword ? uint64_t(int64_t(int32_t(Value))) : Value;
+    if (!R4000)
+      EPC = uint32_t(EPC);
+  } else if (*Register == 12) {
+    const auto Changed = Status ^ uint32_t(Value);
+    Status = uint32_t(Value);
+    ExceptionReturnDelay = std::max<uint8_t>(ExceptionReturnDelay, R4000   ? 3
+                                                                   : R30xx ? 3
+                                                                           : 1);
+    if (Changed & (StatusIE | StatusIM))
+      InterruptDelay = R4000 ? 3 : R30xx ? 2 : 1;
+    for (unsigned I = 0; I < 4; ++I)
+      if (Changed & (1u << (28 + I)))
+        CoprocessorDelay[I] = R4000 ? 4 : R30xx ? 2 : 1;
+  } else if (*Register == 13) {
+    if ((Cause ^ uint32_t(Value)) & SoftwareIP)
+      InterruptDelay = R4000 ? 3 : R30xx ? 2 : 1;
+    Cause = (Cause & ~SoftwareIP) | (uint32_t(Value) & SoftwareIP);
+  }
+}
+
+void HistoricalCP0::restoreExceptionState() {
+  if (usesModeStack())
+    Status = (Status & ~0xfu) | ((Status >> 2) & 0xf);
+  else
+    Status &= ~(Status & StatusERL ? StatusERL : StatusEXL);
+}
+
+bool HistoricalCP0::canTakeInterrupt() const {
+  return !InterruptDelay && (Status & StatusIE) &&
+         (usesModeStack() || !(Status & (StatusEXL | StatusERL))) &&
+         (Status & Cause & StatusIM);
+}
+
+bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
+                                   std::optional<uint64_t> Branch,
+                                   std::optional<uint64_t> FaultAddress,
+                                   bool Taken,
+                                   std::optional<unsigned> Coprocessor) {
+  if (Code != 0 && Code != 4 && Code != 5 && Code != 8 && Code != 9 &&
+      Code != 10 && Code != 11 && Code != 12)
+    return false;
+  if ((Code == 11) != Coprocessor.has_value() ||
+      (Coprocessor && *Coprocessor >= 4) ||
+      (Code == 4 || Code == 5) != FaultAddress.has_value() ||
+      (Code == 0 && !canTakeInterrupt()))
+    return false;
+  // Refuse interrupt sampling while a software enable/mask update has
+  // implementation-dependent visibility. A fault never retires the victim.
+  if (usesModeStack() || !(Status & StatusEXL)) {
+    EPC = Branch.value_or(PC);
+  }
+  const bool CW4011 = tracksBranchTaken();
+  if (usesModeStack() || !(Status & StatusEXL) || CW4011)
+    Cause = Branch ? Cause | CauseBD : Cause & ~CauseBD;
+  if (CW4011) {
+    constexpr uint32_t CauseBT = 1u << 30;
+    Cause = Branch && Taken ? Cause | CauseBT : Cause & ~CauseBT;
+  }
+  if (Coprocessor)
+    Cause = (Cause & ~(3u << 28)) | (*Coprocessor << 28);
+  Cause = (Cause & ~0x7cu) | (uint32_t(Code) << 2);
+  if (FaultAddress || usesModeStack())
+    BadVAddr = FaultAddress;
+  const bool BEV = Status & StatusBEV;
+  if (usesModeStack())
+    Status = (Status & ~0x3fu) | ((Status << 2) & 0x3fu);
+  else
+    Status |= StatusEXL;
+  const auto Base = BEV ? 0xbfc00000u : 0x80000000u;
+  const auto Offset = (BEV ? (usesModeStack() ? 0x100u : 0x200u) : 0u) +
+                      (usesModeStack() ? 0x80u : 0x180u);
+  const auto Vector = Base + Offset;
+  ExceptionVector = Processor == HistoricalProcessor::R4000
+                        ? uint64_t(int64_t(int32_t(Vector)))
+                        : uint64_t(Vector);
+  return true;
+}
+} // namespace neverd::mips

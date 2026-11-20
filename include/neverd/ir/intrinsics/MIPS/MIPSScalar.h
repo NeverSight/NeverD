@@ -233,7 +233,12 @@ constexpr bool isStatefulScalar(Intrinsic Id) {
          reservationTransfer(Id).has_value() || isSystemIntrinsic(Id) ||
          Id == Intrinsic::MIPSPause || isCacheIntrinsic(Id) ||
          Id == Intrinsic::MIPSHistoricalBegin ||
-         Id == Intrinsic::MIPSHistoricalRetire;
+         Id == Intrinsic::MIPSHistoricalRetire ||
+         Id == Intrinsic::MIPSHistoricalException ||
+         Id == Intrinsic::MIPSHistoricalRFE ||
+         Id == Intrinsic::MIPSHistoricalERET ||
+         Id == Intrinsic::MIPSHistoricalOverflow ||
+         Id == Intrinsic::MIPSHistoricalAddressCheck;
 }
 constexpr bool localCP0Word(uint64_t Index, bool Write) {
   switch (Index) {
@@ -335,9 +340,26 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
   }
   if (isStatefulScalar(Id)) {
     if (Id == Intrinsic::MIPSHistoricalBegin)
-      return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 4 &&
-             S.FirstConstant && S.SecondBytes == 1;
-    if (Id == Intrinsic::MIPSHistoricalRetire)
+      return (S.Inputs == 3 || (S.Inputs == 4 && S.ThirdBytes == 1)) &&
+             !S.OutputBytes && S.FirstBytes == 4 && S.FirstConstant &&
+             S.SecondBytes == 1;
+    if (Id == Intrinsic::MIPSHistoricalException)
+      return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1 &&
+             (S.FirstConstant == 8 || S.FirstConstant == 9);
+    if (Id == Intrinsic::MIPSHistoricalOverflow)
+      return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1;
+    if (Id == Intrinsic::MIPSHistoricalAddressCheck)
+      return S.Inputs == 2 && !S.OutputBytes &&
+             (S.FirstBytes == 4 || S.FirstBytes == 8) &&
+             (S.Target == Arch::Unknown ||
+              S.FirstBytes == (isMIPS64(S.Target) ? 8 : 4));
+    if (Id == Intrinsic::MIPSHistoricalERET)
+      return S.Inputs == 1 && S.OutputWritable &&
+             (S.OutputBytes == 4 || S.OutputBytes == 8) &&
+             (S.Target == Arch::Unknown ||
+              S.OutputBytes == (isMIPS64(S.Target) ? 8 : 4));
+    if (Id == Intrinsic::MIPSHistoricalRetire ||
+        Id == Intrinsic::MIPSHistoricalRFE)
       return S.Inputs == 1 && !S.OutputBytes;
     if (isCacheIntrinsic(Id))
       return S.Inputs == 3 && !S.OutputBytes && S.FirstBytes == 1 &&

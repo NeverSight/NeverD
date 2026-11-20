@@ -580,6 +580,41 @@ bool MIPSLifter::liftInteger(State &S, uint32_t Word) const {
   }
 }
 
+bool MIPSLifter::liftHistoricalSystem(State &S, uint32_t Word) const {
+  if (const unsigned Bytes = mips::historicalTrappingArithmeticBytes(Word)) {
+    const bool Immediate = Word >> 26;
+    const bool Subtract = !Immediate && (Word & 2);
+    const unsigned RS = Word >> 21 & 31, RT = Word >> 16 & 31;
+    if (Bytes == 4) {
+      S.requireWord(RS);
+      if (!Immediate)
+        S.requireWord(RT);
+    }
+    const auto Left = S.read(RS, Bytes);
+    const auto Right = Immediate
+                           ? NdVar::cst(uint64_t(int64_t(int16_t(Word))), Bytes)
+                           : S.read(RT, Bytes);
+    const auto Overflow =
+        S.binary(Subtract ? NdOp::INT_SBOR : NdOp::INT_SOVF, Left, Right, 1);
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalOverflow, {}, {Overflow});
+    S.write(
+        Immediate ? RT : (Word >> 11 & 31),
+        S.binary(Subtract ? NdOp::INT_SUB : NdOp::INT_ADD, Left, Right, Bytes));
+    return true;
+  }
+  if (Word == 0x42000010) {
+    S.emitIntrinsic(Intrinsic::MIPSHistoricalRFE, {});
+    return true;
+  }
+  if (Word >> 26 == 16)
+    return liftSystem(S, Word);
+  if (Word >> 26 || ((Word & 63) != 12 && (Word & 63) != 13))
+    return false;
+  S.emitIntrinsic(Intrinsic::MIPSHistoricalException, {},
+                  {NdVar::cst((Word & 1) ? 9 : 8, 1)});
+  return true;
+}
+
 bool MIPSLifter::liftNonControl(State &S, Encoding Code, va_t BasePC) const {
   if (Code.R6)
     return liftRelease6(S, Code.Word);
@@ -619,9 +654,17 @@ MIPSLifter::liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
     return;
   }
   State S(Instruction.address, Ops, RegisterBytes, Instruction.size);
-  if constexpr (Timed)
+  if constexpr (Timed) {
     S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
                     {NdVar::cst(Word, 4), NdVar::cst(FP32Registers, 1)});
+    if (Word == 0x42000018) {
+      const auto Destination = S.makeTemp(S.Width);
+      S.emitIntrinsic(Intrinsic::MIPSHistoricalERET, Destination);
+      S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
+      S.emit(NdOp::INDIR_BR, {}, {Destination});
+      return;
+    }
+  }
   if (Code->R6 && isR6Compact(Word)) {
     if (Mode != InstructionMode::MicroMIPS && !ForbiddenFollower.has_value() &&
         isR6ConditionalCompact(Word))
@@ -629,7 +672,8 @@ MIPSLifter::liftInstruction(const cs_insn &Instruction, std::vector<LowOp> &Ops,
                                 "missing Release 6 forbidden-slot instruction");
     if (liftR6Compact(S, Word, ForbiddenFollower.value_or(false)))
       return;
-  } else if (liftNonControl(S, *Code, Instruction.address)) {
+  } else if ((Timed && liftHistoricalSystem(S, Word)) ||
+             liftNonControl(S, *Code, Instruction.address)) {
     if constexpr (Timed)
       S.emitIntrinsic(Intrinsic::MIPSHistoricalRetire, {});
     return;
@@ -676,6 +720,7 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
   const auto SlotCode = Slot ? encoding(*Slot) : std::nullopt;
   if (Slot &&
       (!SlotCode || SlotCode->SlotBytes ||
+       (Timed && SlotCode->Word == 0x42000018) ||
        (Mode == InstructionMode::MicroMIPS && SlotCode->hasSequence()) ||
        (SlotCode->R6 ? isR6Compact(SlotCode->Word)
                      : !SlotCode->hasSequence() &&
@@ -833,10 +878,12 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
     S.InsnSize = Slot->size;
     S.Seq = 0;
     if constexpr (Timed)
-      S.emitIntrinsic(
-          Intrinsic::MIPSHistoricalBegin, {},
-          {NdVar::cst(SlotCode->Word, 4), NdVar::cst(FP32Registers, 1)});
-    const bool Lifted = liftNonControl(S, *SlotCode, Head.address);
+      S.emitIntrinsic(Intrinsic::MIPSHistoricalBegin, {},
+                      {NdVar::cst(SlotCode->Word, 4),
+                       NdVar::cst(FP32Registers, 1),
+                       Conditional ? Condition : NdVar::cst(!ReadPC, 1)});
+    const bool Lifted = (Timed && liftHistoricalSystem(S, SlotCode->Word)) ||
+                        liftNonControl(S, *SlotCode, Head.address);
     if (!Lifted) {
       Ops.resize(Begin);
       throw UnliftedInstruction(Slot->address, Slot->mnemonic, Slot->op_str);
