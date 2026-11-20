@@ -5952,6 +5952,26 @@ calls read `runtime_throw(msg, len)`. A function that keeps its stack-growth
 loop still reads its parameters through the loop's join and recovers too few
 of them.
 
+A register stub takes its registers in the order of the argument words it
+stores them into, and LowIR recognizes it once (`goRegisterStubArguments`).
+Its body is one block that stores the incoming value of a general-purpose
+register into each word its record gives, writes no register, and ends in a
+tail call to a stack-ABI routine. `panicIndex` takes (AX, CX), and
+`panicSlice3Alen` takes (DX, BX). The stub's register summary publishes those
+registers as its complete operands (`LocalRegisterEffect::GoStubArguments`,
+`PipelineResult::CallEntryIntegerArguments`). Each x86-64 call binds them
+before SSA, as it binds a prototype's (`bindIntegerCall`), and `detectCc`
+gives the stub the same parameters. Read by platform position, a System V
+call passed `(0, 0, 0, y)` and a Win64 call passed only `y`. An arm64 stub
+takes R0-R3, which are AAPCS64 positions, and its calls find them in the
+stub's order. Go assembly with a register contract of its own (`memeqbody`,
+`aeshashbody`, `indexbytebody`) is no stub, and its calls keep the platform's
+reading. Where the code before a stub's call is a call to `runtime.throw`,
+the CFG still falls through into it (the no-return list waits for the
+register ABI, above). The registers that call clobbers then reach the stub
+as an undefined arm, and the argument prints a placeholder on that path where
+the positional reading printed a wrong value.
+
 Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
 formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go
 function returned nothing, so each call's result went unread. The loader

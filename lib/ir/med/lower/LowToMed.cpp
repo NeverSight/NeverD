@@ -2329,6 +2329,9 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       if (!GoGrowth->Spills.empty())
         GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
     }
+    GoStubArguments =
+        Image ? goRegisterStubArguments(*Image, Low.Entry, Low.Blocks)
+              : std::nullopt;
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");

@@ -5241,6 +5241,11 @@ bool computeCallRegisterEffects(
         Change(Effect->second)->StackArgs = Count;
     Result.CallFloatReturns = std::move(Prototyped.FloatReturns);
     Result.CallEntryFloatingArguments = std::move(Prototyped.FloatingArguments);
+    // A Go stub's callers bind the registers it passes on, in its order
+    // (LocalRegisterEffect::GoStubArguments).
+    for (const auto &[Entry, Effect] : Effects)
+      if (Effect->GoStubArguments)
+        FixedEntryIntegerArguments.try_emplace(Entry, *Effect->GoStubArguments);
     Result.CallEntryIntegerArguments = std::move(FixedEntryIntegerArguments);
     Result.CallEntryIntegerArguments.mutate().merge(
         Prototyped.IntegerArguments);

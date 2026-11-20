@@ -552,9 +552,13 @@ Still open, in order of yield:
        loads after the call.
      - ABI0 assembly in register-ABI images.
      - The no-return list and arm64 growth paths, which still wait on the
-       register-ABI gate.
-     - Bounds stubs (`panicIndex`: x in AX, y in CX), which still take
-       System V's positions for their registers.
+       register-ABI gate. A stub call after a `runtime.throw` call keeps an
+       undefined arm until `throw` ends its block.
+     Bounds stubs are done. LowIR recognizes a stub once
+     (`goRegisterStubArguments`), callers bind its registers before SSA, and
+     `panicIndex` calls pass `(x, y)` on every platform. Go assembly with a
+     register contract of its own (`memeqbody`, `aeshashbody`,
+     `indexbytebody`) still takes the platform's positions.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
@@ -597,7 +601,8 @@ Still open, in order of yield:
    on arm64 through copies into X0 and X1. The error code (index or slice) is
    not printed.
    The earlier stub families (`panicIndex` with x in AX and y in CX, and
-   others) still take System V's positions.
+   others) pass their registers in the stub's order
+   (`goRegisterStubArguments`).
 4. A frame larger than 4 KiB reaches its growth path from two branches and
    keeps it. arm64 growth paths are left out only where the register ABI is
    modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait

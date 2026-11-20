@@ -16,6 +16,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/CallRegisterContract.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowIR.h"
@@ -169,6 +170,20 @@ std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
 /// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is
 /// its caller's last act, a tail call, and never reaches the next instruction.
 bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee);
+
+/// The registers the Go stub at \p Entry takes its arguments in, in the
+/// order of the argument words it stores them into before it enters a
+/// stack-ABI routine with them: Go 1.16's bounds stubs, as `panicIndex`'s
+/// `mov [rsp+8], rax; mov [rsp+16], rcx; jmp goPanicIndex` takes AX and CX,
+/// which no platform position names.  \p Blocks, the stub's body, is one
+/// block that stores the incoming value of a general-purpose register into
+/// each word its record gives (goFrameArgumentBytes), writes no register,
+/// and ends in a tail call to a stack-ABI routine (goTakesStackArguments).
+/// None for any other body.  Its callers pass exactly these registers, bound
+/// before SSA as a prototype's operands are (FixedIntegerCallArguments).
+std::optional<FixedIntegerCallArguments>
+goRegisterStubArguments(const BinaryImage &Img, va_t Entry,
+                        llvm::ArrayRef<LowBlock> Blocks);
 
 /// The register arguments the stack-growth path spills
 /// (GoStackGrowth::Spills).

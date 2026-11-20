@@ -467,6 +467,10 @@ private:
   /// The register arguments a Go function's stack-growth path spills, as the
   /// entry reads detectCc takes for its parameters (goMorestackSpills).
   std::optional<GPRReadWidths> GoArgumentSpillReads;
+  /// The registers the Go stub being converted passes on as a stack-ABI
+  /// routine's arguments, which detectCc takes as its parameters, in their
+  /// order (goRegisterStubArguments).  Unset for any other function.
+  std::optional<FixedIntegerCallArguments> GoStubArguments;
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;

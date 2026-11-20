@@ -380,6 +380,71 @@ bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {
                             Module->ReturnsPastCallerEntries.end(), Callee);
 }
 
+std::optional<FixedIntegerCallArguments>
+goRegisterStubArguments(const BinaryImage &Img, va_t Entry,
+                        llvm::ArrayRef<LowBlock> Blocks) {
+  if ((Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64) ||
+      Blocks.size() != 1 || !goTakesStackArguments(Img, Entry))
+    return std::nullopt;
+  const IntegerArgumentLayout Layout = goStackArgumentLayout(Img.Arch);
+  const std::optional<uint32_t> Bytes = goFrameArgumentBytes(Img, Entry);
+  if (!Bytes || *Bytes == 0 || *Bytes % Layout.SlotBytes != 0)
+    return std::nullopt;
+  const std::vector<LowOp> &Ops = Blocks.front().Ops;
+  if (Ops.size() < 2 || Ops.back().Opcode != NdOp::RETURN)
+    return std::nullopt;
+  const LowOp &Call = Ops[Ops.size() - 2];
+  if (Call.Opcode != NdOp::CALL || Call.NumInputs < 1 ||
+      !Call.Inputs[0].isConst() ||
+      !goTakesStackArguments(Img, Call.Inputs[0].Offset))
+    return std::nullopt;
+  const uint64_t StackPointer = getTargetRegInfo(Img.Arch).StackPointer;
+  const uint32_t Words = *Bytes / Layout.SlotBytes;
+  FixedIntegerCallArguments Arguments;
+  Arguments.Parameters.resize(Words);
+  std::vector<bool> Stored(Words, false);
+  BaseTracker Values;
+  for (const LowOp &Op : llvm::ArrayRef(Ops).drop_back(2)) {
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::INT_ADD:
+    case NdOp::INT_SUB:
+      // Address arithmetic: every register keeps the value it came with.
+      if (!Op.Output.isTemp())
+        return std::nullopt;
+      Values.step(Op);
+      continue;
+    case NdOp::NOP:
+      continue;
+    case NdOp::STORE:
+      break;
+    default:
+      return std::nullopt;
+    }
+    if (Op.NumInputs < 2)
+      return std::nullopt;
+    const std::optional<BasePlus> Slot = Values.of(Op.Inputs[0]);
+    const NdVar &Value = Op.Inputs[1];
+    if (!Slot || Slot->Base != StackPointer || !Value.isReg() ||
+        Value.Size != Layout.SlotBytes || Value.Offset == StackPointer ||
+        !isGoGeneralRegister(Img.Arch, Value.Offset) ||
+        Slot->Offset < Layout.EntryStackBase ||
+        (Slot->Offset - Layout.EntryStackBase) % Layout.SlotBytes != 0)
+      return std::nullopt;
+    const int64_t Word =
+        (Slot->Offset - Layout.EntryStackBase) / Layout.SlotBytes;
+    if (Word >= static_cast<int64_t>(Words) || Stored[Word])
+      return std::nullopt;
+    Stored[Word] = true;
+    Arguments.Parameters[Word] = {SourceABICarrierKind::IntegerRegister,
+                                  Value.Offset, 0,
+                                  static_cast<uint16_t>(Layout.SlotBytes)};
+  }
+  if (llvm::is_contained(Stored, false))
+    return std::nullopt;
+  return Arguments;
+}
+
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks) {
   const auto &Module = Img.ExceptionMetadata.GoModule;

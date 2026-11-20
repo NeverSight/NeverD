@@ -1608,14 +1608,24 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());
     IntegerRegs = Func.IntegerArgumentRegisters;
   }
+  // A stub that passes registers on as a stack-ABI routine's arguments takes
+  // them so, and nothing else (goRegisterStubArguments).
+  const bool GoRegisterStub = !GoRegisterArguments && GoStubArguments;
+  if (GoRegisterStub) {
+    Func.IntegerArgumentRegisters.clear();
+    for (const FixedIntegerCallArguments::Parameter &Parameter :
+         GoStubArguments->Parameters)
+      Func.IntegerArgumentRegisters.push_back(Parameter.Register);
+    IntegerRegs = Func.IntegerArgumentRegisters;
+  }
   // Before Go's internal ABI, Go code takes every argument on the stack
   // (goTakesStackArguments).  A routine that reads another register at its
   // entry takes arguments there and keeps them (goStackABIEntryRegister): a
   // stub such as Go 1.16's panicIndex (AX and CX), duffzero (DI and X0), or
   // a trampoline the platform's code enters, as the kernel enters a signal
   // handler.
-  if (Image && !GoRegisterArguments && !Func.Blocks.empty() &&
-      goTakesStackArguments(*Image, Func.Entry)) {
+  if (Image && !GoRegisterArguments && !GoRegisterStub &&
+      !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry)) {
     // The entry's leading self-copies name every register read before the
     // body writes it (findLiveInParamRegs).
     Func.StackArgumentsOnly = true;
@@ -1718,6 +1728,13 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &NoReads;
       Func.ExactRegisterParameters = true;
     }
+    GPRReadWidths StubReads{};
+    if (GoRegisterStub) {
+      for (uint64_t Register : IntegerRegs)
+        StubReads[Register / 8] = 8;
+      Summary = &StubReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home
@@ -1745,7 +1762,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary,
                          GoRegisterArguments || BufferBarrier ||
-                             BoundsRoutine || Func.StackArgumentsOnly);
+                             BoundsRoutine || Func.StackArgumentsOnly ||
+                             GoRegisterStub);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1813,7 +1831,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Func.StackArgumentsOnly && Image
           ? goFrameArgumentBytes(*Image, Func.Entry)
           : std::nullopt;
-  if (!Func.IsVariadic)
+  // A register stub writes the slots it passes on itself: its arguments are
+  // its registers alone (goRegisterStubArguments).
+  if (!Func.IsVariadic && !GoRegisterStub)
     med_calling_conv_detail::detectStackParams(
         Func, TargetArch, Fmt,
         GoFrameBytes

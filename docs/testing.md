@@ -20627,6 +20627,13 @@ nothing is proved. The test also checks that the loader keeps `_func.args`.
 `main.add(a, b int) int` and its caller. The callee takes two stack
 parameters and no register, a register stub keeps its registers, and the
 call passes `(1, 2)`. The record's third word, the result, is no argument.
+`GoStackArguments.ARegisterStubTakesTheRegistersItPassesOn` builds Go 1.16's
+`panicIndex` stub, its stack-argument half and a caller, as ELF and as PE.
+The recognizer names (AX, CX), the stub's summary reads exactly those and
+names them for its callers, its parameters are AX and CX, and the caller
+binds `(5, 9)` before SSA. `OnlyAStubPassesItsRegistersOn` checks that
+`memeqbody`, which has no argument words, and a two-block `memequal` shape
+are no stubs.
 
 `GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
 `runtime.callbackasm1` from a pclntab. `GoCallbacks.
