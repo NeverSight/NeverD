@@ -79,6 +79,7 @@ struct HistoricalCP0 {
 
 private:
   friend class HistoricalSchedule;
+  std::optional<bool> pendingR30xxInterrupt() const;
   void propagateR30xxInterrupts(uint16_t Before, uint16_t After);
   void restoreR30xxInterruptEnable();
   void restoreExceptionState();

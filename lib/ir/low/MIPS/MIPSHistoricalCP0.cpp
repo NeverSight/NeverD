@@ -22,6 +22,17 @@ uint16_t r30xxInterruptFields(uint32_t Status, uint32_t Cause) {
          ((Cause & SoftwareIP) << 1);
 }
 
+bool hasRegisterHazards(const HistoricalCP0 &CPU) {
+  constexpr std::array<uint8_t, 4> Clear{};
+  return CPU.CoprocessorDelay != Clear || CPU.ReadDelay != Clear;
+}
+
+bool enabledInterrupt(const HistoricalCP0 &CPU) {
+  return (CPU.Status & StatusIE) &&
+         (CPU.usesModeStack() || !(CPU.Status & (StatusEXL | StatusERL))) &&
+         (CPU.Status & CPU.Cause & StatusIM);
+}
+
 std::optional<unsigned> readHazardSlot(unsigned Register) {
   if (Register >= 12 && Register <= 14)
     return Register - 12;
@@ -137,9 +148,11 @@ bool HistoricalCP0::coprocessorUsable(unsigned Number) const {
 }
 
 bool HistoricalCP0::permitsIssue(uint32_t Word) const {
-  if (Processor == HistoricalProcessor::R30xx && InterruptDelay &&
-      !interruptRecognition().has_value())
+  if (InterruptDelay && Processor == HistoricalProcessor::R30xx &&
+      !pendingR30xxInterrupt().has_value())
     return false;
+  if (!hasRegisterHazards(*this))
+    return true;
   const unsigned Major = Word >> 26, RS = Word >> 21 & 31;
   if (const auto Cop = coprocessorOf(Word); Cop && CoprocessorDelay[*Cop])
     return false;
@@ -156,20 +169,24 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
     if (Delay)
       --Delay;
   };
-  const bool R30xx = Processor == HistoricalProcessor::R30xx;
-  if (R30xx && InterruptDelay) {
-    R30xxInterrupts[0] = R30xxInterrupts[1];
-    R30xxRecognized.reset();
+  if (InterruptDelay) {
+    if (Processor == HistoricalProcessor::R30xx) {
+      R30xxInterrupts[0] = R30xxInterrupts[1];
+      R30xxRecognized.reset();
+    }
+    --InterruptDelay;
   }
-  Age(InterruptDelay);
   Age(ExceptionReturnDelay);
   Age(ExceptionModeDelay);
-  for (auto &Delay : CoprocessorDelay)
-    Age(Delay);
-  for (auto &Delay : ReadDelay)
-    Age(Delay);
+  if (hasRegisterHazards(*this)) {
+    for (auto &Delay : CoprocessorDelay)
+      Age(Delay);
+    for (auto &Delay : ReadDelay)
+      Age(Delay);
+  }
   if (!Register)
     return;
+  const bool R30xx = Processor == HistoricalProcessor::R30xx;
   const bool R4000 = Processor == HistoricalProcessor::R4000;
   const uint16_t Previous = R30xx ? r30xxInterruptFields(Status, Cause) : 0;
   ReadDelay[*readHazardSlot(*Register)] = R4000 ? 2 : R30xx ? 3 : 1;
@@ -249,27 +266,31 @@ void HistoricalCP0::restoreExceptionState() {
     Status &= ~(Status & StatusERL ? StatusERL : StatusEXL);
 }
 
+std::optional<bool> HistoricalCP0::pendingR30xxInterrupt() const {
+  const auto Asserted = [&](uint16_t Fields, uint8_t MixedLines) {
+    const auto Pending = ((Cause >> 8) & 0xfc) | ((Fields >> 9) & 3);
+    const auto Enabled = Fields & R30xxIE ? Fields & R30xxIM : 0;
+    return ((Enabled | MixedLines) & Pending) != 0;
+  };
+  const auto &View = R30xxInterrupts.front();
+  if (Asserted(View.Required, 0))
+    return true;
+  if (!Asserted(View.Possible, View.MixedLines))
+    return false;
+  return R30xxRecognized;
+}
+
 std::optional<bool> HistoricalCP0::interruptRecognition() const {
-  if (Processor == HistoricalProcessor::R30xx && InterruptDelay) {
-    const auto Asserted = [&](uint16_t Fields, uint8_t MixedLines) {
-      const auto Pending = ((Cause >> 8) & 0xfc) | ((Fields >> 9) & 3);
-      const auto Enabled = Fields & R30xxIE ? Fields & R30xxIM : 0;
-      return ((Enabled | MixedLines) & Pending) != 0;
-    };
-    const auto &View = R30xxInterrupts.front();
-    if (Asserted(View.Required, 0))
-      return true;
-    if (!Asserted(View.Possible, View.MixedLines))
-      return false;
-    return R30xxRecognized;
-  }
-  return !InterruptDelay && (Status & StatusIE) &&
-         (usesModeStack() || !(Status & (StatusEXL | StatusERL))) &&
-         (Status & Cause & StatusIM);
+  if (InterruptDelay && Processor == HistoricalProcessor::R30xx)
+    return pendingR30xxInterrupt();
+  return !InterruptDelay && enabledInterrupt(*this);
 }
 
 bool HistoricalCP0::canTakeInterrupt() const {
-  return interruptRecognition().value_or(false);
+  if (InterruptDelay)
+    return Processor == HistoricalProcessor::R30xx &&
+           pendingR30xxInterrupt().value_or(false);
+  return enabledInterrupt(*this);
 }
 
 bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
