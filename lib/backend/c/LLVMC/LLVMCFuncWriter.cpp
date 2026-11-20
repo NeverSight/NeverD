@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
+#include "../MIPS/CRecordEntry.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
@@ -10511,6 +10512,36 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   OS.retarget(&BufOS);
 
   std::string FName = functionIdentifier(Fn);
+  std::optional<mips::CRecordEntry> RecordEntry;
+  if (EmitFunctionWrapper && !Opts.PreserveLLVMFunctionTypes &&
+      isMIPS(Opts.TheArch) && DebugFn && FunctionEntry &&
+      mips::hasRecordEntryDeclaration(*DebugFn)) {
+    const auto Physical = [&](llvm::Type *T, RecoveredParamSite Site) {
+      if (T->isSized())
+        Site.Bytes = Fn.getDataLayout().getTypeStoreSize(T);
+      const auto K = T->isIntegerTy()         ? NdTypeKind::Int
+                     : T->isPointerTy()       ? NdTypeKind::Ptr
+                     : T->isFloatingPointTy() ? NdTypeKind::Float
+                     : T->isVoidTy()          ? NdTypeKind::Void
+                                              : NdTypeKind::Struct;
+      return mips::CEntryCarrier{Site, K, typeToCLLVM(T)};
+    };
+    if (const auto Sites = parameter_sites::getParameterSites(Fn)) {
+      std::vector<mips::CEntryCarrier> Inputs;
+      for (const auto &Arg : Fn.args()) {
+        const auto &Site = (*Sites)[Arg.getArgNo()];
+        Inputs.push_back(Physical(
+            Arg.getType(), {Site.RegOff, static_cast<int>(Site.MedIndex)}));
+      }
+      RecordEntry = mips::cRecordEntry(
+          Opts, Dbg, *DebugFn, *FunctionEntry, FName, Inputs,
+          Physical(InferredVoid ? llvm::Type::getVoidTy(Fn.getContext())
+                                : Fn.getReturnType(),
+                   {}));
+      if (RecordEntry)
+        FName = RecordEntry->BodyName;
+    }
+  }
   // A definition whose identifier is not its symbol names the symbol: a C++
   // one its demangled signature, as the C identifier keeps only its scopes
   // and name, and a start-up function the C runtime defines its own name.
@@ -10744,6 +10775,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         throw std::invalid_argument(kReturnProtectionCRequiresAArch64);
       OS << llvm::formatv(kReturnProtectionCAttribute,
                           aarch64ReturnProtectionCTarget(*Protection));
+    }
+    if (RecordEntry) {
+      DefinitionDeclarations[&Fn] = RecordEntry->Declaration;
+      OS << RecordEntry->Declaration << ";\nstatic ";
     }
     OS << Signature << " {\n";
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame")) {
@@ -12274,6 +12309,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           "LLVMC EH invoke normal target has no unique emitted label");
   }
   OS << Final;
+  if (RecordEntry)
+    OS << RecordEntry->Definition;
 }
 
 } // namespace neverd

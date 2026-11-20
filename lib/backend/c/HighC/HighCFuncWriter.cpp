@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
+#include "../MIPS/CRecordEntry.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
@@ -6495,6 +6496,26 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   std::string FName = functionIdentifier(Func);
+  std::optional<mips::CRecordEntry> RecordEntry;
+  if (EmitFunctionWrapper && !PortableInterface && !Func.SourceTypeHint &&
+      !Func.Body.empty() && isMIPS(Opts.TheArch) && DebugFn &&
+      mips::hasRecordEntryDeclaration(*DebugFn)) {
+    std::vector<mips::CEntryCarrier> Inputs;
+    for (const auto I : emittedParamIndices(Func)) {
+      const auto &P = Func.Params[I];
+      const auto Type = emittedParamType(Func, I);
+      Inputs.push_back({{P.RegOff, P.MedIndex, Type->Size},
+                        Type->Kind,
+                        declaredAs(Type, "")});
+    }
+    RecordEntry = mips::cRecordEntry(Opts, functionDebugContext(Func), *DebugFn,
+                                     Func.Entry, FName, Inputs,
+                                     {{kNoParamReg, -1, ReturnType->Size},
+                                      ReturnType->Kind,
+                                      declaredAs(ReturnType, "")});
+    if (RecordEntry)
+      FName = RecordEntry->BodyName;
+  }
 
   if (EmitFunctionWrapper && Func.Entry && !PortableInterface)
     OS << "/* neverd.entry: 0x" << llvm::utohexstr(Func.Entry) << " */\n";
@@ -6544,6 +6565,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   if (EmitFunctionWrapper) {
+    if (RecordEntry)
+      OS << RecordEntry->Declaration << ";\nstatic ";
     if (isMIPS(Opts.TheArch))
       OS << mips::sourceCompilerCAttribute(
           Opts.TheArch, Opts.Image,
@@ -6666,7 +6689,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
         emitParam(IndirectReturnPtr, IndirectReturnName);
     }
     // The declared parameters the code never reads, which its callers pass.
-    for (const size_t Index : unreadDeclaredParams(Func)) {
+    for (const size_t Index :
+         RecordEntry ? std::vector<size_t>() : unreadDeclaredParams(Func)) {
       const std::string &Name = DebugFn->Params[Index].first;
       emitParam(unreadDeclaredParamType(Func, Index),
                 Name.empty() ? "unread" + std::to_string(Index) : Name);
@@ -7218,6 +7242,8 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
   if (EmitFunctionWrapper)
     OS << "}\n";
+  if (RecordEntry)
+    OS << RecordEntry->Definition;
 }
 
 } // namespace neverd
