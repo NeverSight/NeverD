@@ -436,10 +436,73 @@ TEST(MIPSHistoricalScheduling, ErrorEPCAndStatusWritesReachTheSelectedReturn) {
       EXPECT_EQ(S.system()->Status, 0u);
       EXPECT_EQ(S.system()->EPC, 0x2000u);
     }
-    for (unsigned Level : {1u, 2u}) {
-      EXPECT_FALSE(historicalInstructionAvailable(0x4002f000, Level));
-      EXPECT_FALSE(historicalInstructionAvailable(0x4084f000, Level));
+  }
+}
+
+TEST(MIPSHistoricalScheduling, CW4011WordErrorEPCReachesTheSelectedReturn) {
+  ASSERT_TRUE(historicalInstructionAvailable(0x4084f000, 2));
+  ASSERT_TRUE(historicalInstructionAvailable(0x4002f000, 2));
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (auto CPU :
+         {HistoricalProcessor::CW4011R3000, HistoricalProcessor::CW4011R4000}) {
+      auto Img = image(A, 2);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          2, {}, HistoricalCP0{CPU, 4, 0, 0x2000, {}, {}});
+      ASSERT_TRUE(C.Historical);
+      auto &S = *C.Historical;
+      EXPECT_FALSE(S.system()->read(30, false));
+      EXPECT_FALSE(S.system()->canWrite(30, 0x80000102, false));
+      EXPECT_FALSE(S.system()->canWrite(30, 0x80000100, true));
+
+      NdOpEmulator E(Img);
+      E.setStrictMode(true);
+      E.setRegister(mipsreg::V0, 0x1234);
+      E.setRegister(mipsreg::A0, 0x80000100);
+      ASSERT_TRUE(execute(lift(Img, 0x1000, {0x4084f000}), E, C));
+      ASSERT_EQ(S.system()->ErrorEPC, 0x80000100u);
+      const auto Read = lift(Img, 0x1008, {0x4002f000});
+      EXPECT_FALSE(execute(Read, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0x1234u);
+      ASSERT_FALSE(S.hasActiveInstruction());
+      ASSERT_TRUE(execute(lift(Img, 0x1004, {0}), E, C));
+      ASSERT_TRUE(execute(Read, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), 0x80000100u);
+
+      const bool ERET = CPU == HistoricalProcessor::CW4011R4000;
+      ASSERT_TRUE(
+          S.beginPhysical(0x100c, ERET ? 0x42000018 : 0x42000010, false));
+      EXPECT_EQ(S.stageExceptionReturn(0x100c, ERET),
+                ERET ? 0x80000100u : 0x2000u);
+      ASSERT_TRUE(S.retire(0x100c));
+      EXPECT_EQ(S.system()->Status, ERET ? 0u : 1u);
+      EXPECT_EQ(S.system()->EPC, 0x2000u);
     }
+  for (uint32_t Word : {0x4002f000u, 0x4084f000u}) {
+    EXPECT_FALSE(historicalInstructionAvailable(Word, 1));
+    EXPECT_FALSE(historicalInstructionAvailable(Word | 1, 2));
+  }
+  for (uint32_t Word : {0x4022f000u, 0x40a4f000u})
+    EXPECT_FALSE(historicalInstructionAvailable(Word, 2));
+}
+
+TEST(MIPSHistoricalScheduling, CW4011SnapshotsUseItsPhysicalRegisterWidths) {
+  for (auto CPU :
+       {HistoricalProcessor::CW4011R3000, HistoricalProcessor::CW4011R4000}) {
+    HistoricalCP0 System{CPU, 0, 0, 0x2000, {}, {}};
+    for (uint32_t Mode : {0u, 8u, 16u, 24u}) {
+      System.Status = Mode;
+      EXPECT_EQ(HistoricalSchedule::fromSnapshot(2, {}, System).has_value(),
+                CPU == HistoricalProcessor::CW4011R3000 || Mode == 0 ||
+                    Mode == 16);
+    }
+    System.Status = 0;
+    for (uint64_t Address : {0x100000000ULL, 3ULL}) {
+      System.ErrorEPC = Address;
+      EXPECT_FALSE(HistoricalSchedule::fromSnapshot(2, {}, System));
+    }
+    System.ErrorEPC = 0xfffffffc;
+    EXPECT_TRUE(HistoricalSchedule::fromSnapshot(2, {}, System));
   }
 }
 

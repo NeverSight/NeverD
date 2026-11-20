@@ -1468,9 +1468,12 @@ A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
 selector zero. The bound state supplies Status, Cause, EPC and an observed bad
-address. R4000 also exposes word and doubleword transfers of ErrorEPC. Word
-writes to either exception PC sign-extend into the 64-bit register. A handler
-can update its exception level in kernel mode and prepare the saved KSU/UX/SX
+address. Both CW4011 compatibility modes expose the aligned 32-bit ErrorEPC
+through word transfers. A dependent read or exception return requires an
+intervening retired instruction. In R4000-compatible mode an active ERL
+selects ErrorEPC for ERET. On the R4000, ErrorEPC accepts word and doubleword
+transfers, and word writes to either exception PC sign-extend to 64 bits.
+A R4000 handler can update its exception level in kernel mode and prepare KSU/UX/SX
 under an active exception level. Cause writes change only the software
 interrupt bits. Accepted Status writes track interrupt visibility and
 coprocessor usability separately. On R30xx an ordinary enable becomes

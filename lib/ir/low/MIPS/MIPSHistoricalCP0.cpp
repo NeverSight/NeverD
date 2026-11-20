@@ -59,7 +59,11 @@ bool HistoricalCP0::supportsLevel(unsigned Level) const {
                        });
   case HistoricalProcessor::CW4011R3000:
   case HistoricalProcessor::CW4011R4000:
-    return Level == 2;
+    // The CW4011 has a word-aligned 32-bit ErrorEPC in both modes. In
+    // R4000-compatible mode its two defined base modes are kernel and user.
+    return Level == 2 &&
+           (!ErrorEPC || (*ErrorEPC <= UINT32_MAX && !(*ErrorEPC & 3))) &&
+           (usesModeStack() || !(Status & 8));
   case HistoricalProcessor::R4000:
     return Level == 3 && (Status & StatusKSU) != StatusKSU;
   }
@@ -99,7 +103,7 @@ std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
   case 14:
     return EPC;
   case 30:
-    return Processor == HistoricalProcessor::R4000 ? ErrorEPC : std::nullopt;
+    return Processor == HistoricalProcessor::R30xx ? std::nullopt : ErrorEPC;
   default:
     return std::nullopt;
   }
@@ -110,11 +114,9 @@ bool HistoricalCP0::canWrite(unsigned Register, uint64_t Value,
   if (!canUseCP0() || (Doubleword && (Processor != HistoricalProcessor::R4000 ||
                                       (Register != 14 && Register != 30))))
     return false;
-  if (Register == 14)
+  if (Register == 14 || Register == 30)
     return Processor == HistoricalProcessor::R4000 ||
            (Processor != HistoricalProcessor::R30xx && !(Value & 3));
-  if (Register == 30)
-    return Processor == HistoricalProcessor::R4000;
   if (Register == 13)
     return true; // Only IP[1:0] is writable.
   if (Register != 12)
@@ -193,12 +195,14 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
   if (*Register == 14 || *Register == 30) {
     ExceptionReturnDelay =
         std::max<uint8_t>(ExceptionReturnDelay, R4000 ? 2 : 1);
-    const auto Address =
-        R4000 && !Doubleword ? uint64_t(int64_t(int32_t(Value))) : Value;
+    if (!Doubleword) {
+      const auto Word = uint32_t(Value);
+      Value = R4000 ? uint64_t(int64_t(int32_t(Word))) : Word;
+    }
     if (*Register == 30)
-      ErrorEPC = Address;
+      ErrorEPC = Value;
     else
-      EPC = R4000 ? Address : uint32_t(Address);
+      EPC = Value;
   } else if (*Register == 12) {
     const auto Changed = Status ^ uint32_t(Value);
     Status = uint32_t(Value);
