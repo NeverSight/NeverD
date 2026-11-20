@@ -66,6 +66,7 @@ ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
 ASYNC_FRAME_TEXT(kEntryLookupOffset, "native_old_entry_fde_lookup_offset")
+ASYNC_FRAME_TEXT(kAutomaticEntryWalks, "native_automatic_original_table_entry_walks")
 ASYNC_FRAME_TEXT(kExactEntryStep, "native_old_entry_original_fde_step")
 ASYNC_FRAME_TEXT(kEntrySteps, "native_old_entry_system_steps")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
@@ -667,6 +668,15 @@ static void raw_entry_walk(const ucontext_t *uc) {
       ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner + NDArm64eInstructionAlignment, &lookup_offset) ||
       !ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, mode, &lookup_offset) ||
       raw_pc(&cursor) != owner + lookup_offset)
+    _exit(35);
+  const unsigned explicit_offset = lookup_offset;
+  ucontext_t incomplete = *uc;
+  incomplete.uc_mcsize = 0;
+  if (ndDarwinArm64eInitInterruptedEntryCursor(&cursor, &incomplete, &lookup_offset))
+    _exit(35);
+  if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp) ||
+      !ndDarwinArm64eInitInterruptedEntryCursor(&cursor, uc, &lookup_offset) ||
+      lookup_offset != explicit_offset || raw_pc(&cursor) != owner + lookup_offset)
     _exit(35);
   for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
     unw_fpreg_t value;

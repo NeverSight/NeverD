@@ -495,7 +495,8 @@ TEST(AArch64AsyncUnwind,
     ASSERT_TRUE(llvm::equal(
         OldFrame->Dwarf->Instructions, Trampoline->Dwarf->Instructions,
         [&](const auto &A, const auto &B) { return Fields(A) == Fields(B); }));
-    unsigned AlternateWalks = 0, HandlerVisits = 0, HandlerSP = 0;
+    unsigned AutomaticWalks = 0, AlternateWalks = 0, HandlerVisits = 0,
+             HandlerSP = 0;
     for (const auto &Path : {Input, Output}) {
       SCOPED_TRACE(Path);
       for (llvm::StringRef Mode :
@@ -518,6 +519,7 @@ TEST(AArch64AsyncUnwind,
           EXPECT_TRUE((Raw >> std::ws).eof());
           EXPECT_TRUE(Visited == 0 || Visited == 1);
           EXPECT_EQ(Exact, 1);
+          AutomaticWalks += Exact;
           EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
           EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
           if (Alternate) {
@@ -540,6 +542,7 @@ TEST(AArch64AsyncUnwind,
         }
       }
     }
+    RecordProperty(kAutomaticEntryWalks, AutomaticWalks);
     RecordProperty(kAlternateEntryWalks, AlternateWalks);
     RecordProperty(kAlternateHandlerVisits, HandlerVisits);
     RecordProperty(kAlternateHandlerSP, HandlerSP);

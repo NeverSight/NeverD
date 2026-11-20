@@ -67,6 +67,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/loader/MachO/EmbeddedRead.h"
 #include "neverd/symbolic/SymDispatch.h"
 
 #include "llvm/Support/Debug.h"
@@ -3805,16 +3806,24 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.AuthenticatedGuardBound = Info.MaxEntries;
     }
   }
-  // The owner capacity a compact table borrowed above only bounds storage for
-  // a selector no guard bounds.  An authenticated guard bounds every runtime
-  // coordinate, so the owner's bytes past it are adjacent data: decoding them
-  // would charge the fixed point for slots the dispatch cannot select, and the
-  // guarded domain would look like a partial subset of its storage.
+  const auto EmbeddedTable =
+      Info.IsRelative && Info.HasTargetBase
+          ? getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize)
+          : std::nullopt;
+  // A compact table borrows its owner's extent before the guard is known.
+  // An independent dense guard can shorten the span or cross a Mach-O record
+  // boundary when all selected bytes have compatible storage.
   if (CompactOwnerCapacity && GuardFound && !Info.PreScaledIndex &&
-      Info.AuthenticatedGuardBound != 0 &&
-      Info.AuthenticatedGuardBound == Info.MaxEntries &&
-      Info.PhysicalCapacity > Info.AuthenticatedGuardBound)
-    Info.PhysicalCapacity = Info.AuthenticatedGuardBound;
+      Info.AuthenticatedGuardBound &&
+      Info.AuthenticatedGuardBound == Info.MaxEntries) {
+    const uint32_t Bound = Info.AuthenticatedGuardBound;
+    if (Info.PhysicalCapacity > Bound ||
+        (EmbeddedTable &&
+         (!Info.EntryStride || Info.EntryStride == Info.EntrySize) &&
+         EmbeddedTable->contains(Info.BaseAddr,
+                                 uint64_t(Bound) * Info.EntrySize)))
+      Info.PhysicalCapacity = Bound;
+  }
   if (GuardedGroupProofContext && !FiniteJointGOTOFF && !FiniteJointAbsolute) {
     observeGroupProof("single-load-selector");
     if (!GroupHasSingleGuardedLoadAndSelector(Info))
@@ -5243,10 +5252,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       if (Info.EntrySize - 1 > InvalidVA - SlotVA ||
           !Img.readVA(SlotVA, Info.EntrySize))
         return {};
-      const std::optional<va_t> OwnerEnd = Img.mappedObjectOwnerEnd(SlotVA);
-      if (!OwnerEnd || SlotVA >= *OwnerEnd ||
-          Info.EntrySize > *OwnerEnd - SlotVA)
-        return {};
+      if (EmbeddedTable) {
+        if (!EmbeddedTable->contains(SlotVA, Info.EntrySize))
+          return {};
+      } else {
+        const auto OwnerEnd = Img.mappedObjectOwnerEnd(SlotVA);
+        if (!OwnerEnd || SlotVA >= *OwnerEnd ||
+            Info.EntrySize > *OwnerEnd - SlotVA)
+          return {};
+      }
       ExactStorage.push_back(
           JumpTableStorageRange{SlotVA, Info.EntrySize, Info.EntrySize, 1});
       if (Img.CodePtrRelocSlots.count(SlotVA))
