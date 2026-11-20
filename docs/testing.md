@@ -22259,6 +22259,10 @@ direct stubs and loader-bound import slots. Compile-time checks verify the
 tail expressions' word width before the provider can convert them.
 `LinuxSyscallJoinsKeepEveryPossibleRead` retains the largest possible read
 range across selectors, including an unknown alternative.
+`MedCallingConv.ASyscallTakesOnlyItsOwnArgumentsAsParameters` converts
+`mov rax, 60; syscall` to MedIR: the routine takes RDI alone, and the
+syscall's other operands are zero. A number the table does not list, and the
+same call in a FreeBSD image, keep R9 among the parameters.
 `LinuxSyscallUnusedClobbersDoNotTrap` executes both arms of an AArch64 call
 diamond: an unread clobber must not stop execution, while a read clobber must
 still reach the missing-value guard. Its test-only trap hook observes that
