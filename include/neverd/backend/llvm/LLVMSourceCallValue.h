@@ -75,6 +75,25 @@ inline llvm::Type *llvmMIPSRecordPieceType(llvm::LLVMContext &Context,
   return llvm::IntegerType::get(Context, Piece.Location.ValueBytes * 8);
 }
 
+/// A MIPS record result has one LLVM element for each physical register.
+/// Nested floating members and pointers may return through the GPR bank.
+inline llvm::Type *
+llvmSourceCallResultType(llvm::LLVMContext &Context,
+                         const SourceFunctionTypeHint &Hint) {
+  if (!Hint.MIPSRecords || Hint.ReturnComponents.empty())
+    return llvmSourceCallValueType(Context, Hint.ReturnType, false);
+  std::vector<llvm::Type *> Fields;
+  for (const auto &Piece : Hint.ReturnComponents) {
+    if (Piece.Kind == SourceABICarrierKind::FloatingRegister)
+      Fields.push_back(Piece.ValueBytes == 4
+                           ? llvm::Type::getFloatTy(Context)
+                           : llvm::Type::getDoubleTy(Context));
+    else
+      Fields.push_back(llvm::IntegerType::get(Context, Piece.ValueBytes * 8));
+  }
+  return llvm::StructType::get(Context, Fields);
+}
+
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_LLVM_LLVMSOURCECALLVALUE_H

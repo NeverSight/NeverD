@@ -321,7 +321,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // result in physical registers. A source return needs its own type hint.
   if ((!Med.SourceParametersBound || !Func.SourceTypeHint) && Func.ReturnType &&
       Func.ReturnType->Kind == NdTypeKind::Struct &&
-      Med.MultiReturn.size() >= 2 &&
+      (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&
       Func.ReturnType->Fields.size() == Med.MultiReturn.size()) {
     auto Reaching = [&](uint64_t RegOff, uint16_t Size) -> ExprPtr {
       // What the register holds at the end of \p Block: its last write

@@ -50,9 +50,9 @@ bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                            BinaryFormat Format);
 
 /// Recover a complete by-value declaration at its original ELF entry address.
-/// An entry whose object cannot be split into source leaves can still bind
-/// independent physical result words. Those words are for machine-body returns
-/// and never change the source type or authorize a call-site substitution.
+/// ResultPieces describes the machine body's actual return words even when
+/// they combine or split source members. The returned hint independently
+/// describes a call whose source leaves can be bound by the source IR.
 std::optional<SourceFunctionTypeHint>
 recordSourceABI(const BinaryImage &Image, const DebugContext &Debug, va_t Entry,
                 std::vector<SourceParameterPiece> *ResultPieces = nullptr);

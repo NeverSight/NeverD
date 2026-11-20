@@ -1165,10 +1165,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       return;
     }
     std::vector<llvm::Type *> Prefix(Types.begin(), Types.begin() + Fixed);
-    auto *ReturnType =
-        MachineCall ? llvm::Type::getVoidTy(*Ctx)
-                    : llvmSourceCallValueType(*Ctx, Hint.Signature.ReturnType,
-                                              /*Parameter=*/false);
+    auto *ReturnType = MachineCall
+                           ? llvm::Type::getVoidTy(*Ctx)
+                           : llvmSourceCallResultType(*Ctx, Hint.Signature);
     const auto ReturnMembers = sourceValueMembers(Hint.Signature.ReturnType);
     auto *FT = llvm::FunctionType::get(ReturnType, Prefix,
                                        Hint.AnalystFixedCount >= 0);
@@ -1363,10 +1362,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         for (unsigned I = 0; I < Count; ++I) {
           Parts.push_back(Builder.CreateExtractValue(Call, {I}));
           Members.push_back(
-              Floating ? ReturnMembers[I]
-                       : SourceAggregateMember{
-                             NdType::makeInt(kSourceCallWordBytes, false),
-                             uint16_t(I * kSourceCallWordBytes)});
+              (Floating || Hint.Signature.MIPSRecords)
+                  ? ReturnMembers[I]
+                  : SourceAggregateMember{
+                        NdType::makeInt(kSourceCallWordBytes, false),
+                        uint16_t(I * kSourceCallWordBytes)});
         }
         Value = Pack(Parts, Members, Hint.Signature.ReturnType->Size);
       }

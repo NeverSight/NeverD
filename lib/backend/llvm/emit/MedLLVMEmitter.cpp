@@ -805,7 +805,7 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
           "A MIPS record entry lost its bound parameter pieces");
     for (unsigned I = 0; I < Pieces.size(); ++I)
       ParamTypes[I] = llvmMIPSRecordPieceType(*Ctx, Pieces[I], *RecordABI);
-    RetType = llvmSourceCallValueType(*Ctx, RecordABI->ReturnType, false);
+    RetType = llvmSourceCallResultType(*Ctx, *RecordABI);
   }
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(

@@ -384,10 +384,13 @@ mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
       placeRecordCall(Img.Arch, Img.abiFormat(), Candidate.ReturnType, Types);
   if (!Layout)
     return std::nullopt;
+  // A machine body can operate on a pointer field as integer bits and split
+  // or combine nested fields. Capture the physical result independently of
+  // whether a typed call to this entry can also bind each source leaf.
+  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct &&
+      !Layout->Arguments.ResultPointer)
+    *ResultPieces = Layout->Result;
   if (bindRecordABI(Candidate, Img.Arch, *Layout))
     return Candidate;
-  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct &&
-      Layout->Result.size() == 2 && !Layout->Arguments.ResultPointer)
-    *ResultPieces = std::move(Layout->Result);
   return std::nullopt;
 }

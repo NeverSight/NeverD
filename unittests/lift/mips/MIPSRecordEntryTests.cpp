@@ -278,14 +278,23 @@ TEST(MIPSRecordSourceEntry, OnlyUnobservedFPReturnBytesCanBeFilled) {
       auto &Unknown = Ops.emplace_back();
       Unknown.Opcode = NdOp::INTRINSIC;
       Unknown.Output = Word;
+      Unknown.Output.Size = 8;
       Unknown.addInput(MedVar::makeConst(unsigned(Intrinsic::MIPSUnpredictable),
                                          sizeof(Intrinsic)));
+      const auto Register = Unknown.Output;
+      auto &Upper = Ops.emplace_back();
+      Upper.Opcode = NdOp::SUBBYTES;
+      Upper.Output = Word;
+      Upper.Output.Id = 4;
+      Upper.addInput(Register);
+      Upper.addInput(MedVar::makeConst(0, 4));
+      const auto UpperWord = Upper.Output;
       auto &Join = Ops.emplace_back();
       Join.Opcode = NdOp::CONCAT;
       Join.Output = Word;
       Join.Output.Id = 2;
       Join.Output.Size = 8;
-      Join.addInput(Word);
+      Join.addInput(UpperWord);
       Join.addInput(MedVar::makeConst(0, 4));
       const auto Joined = Join.Output;
       auto &Part = Ops.emplace_back();
@@ -302,6 +311,42 @@ TEST(MIPSRecordSourceEntry, OnlyUnobservedFPReturnBytesCanBeFilled) {
       discardUnobservedMIPSFPUpperBits(Body, F.Image, {}, nullptr);
       EXPECT_EQ(Ops.front().Opcode, ReadUpper ? NdOp::INTRINSIC : NdOp::COPY);
     }
+  }
+}
+
+TEST(MIPSRecordABI, LLVMReturnsNestedDoubleFieldsThroughIntegerRegisters) {
+  llvm::LLVMContext Context;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const auto D = NdType::makeFloat(8);
+    auto Nested = NdType::makeStruct({D});
+    Nested->Passing = NdRecordPassing::ByValue;
+    auto Pair = NdType::makeStruct({Nested, Nested});
+    Pair->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint S;
+    S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    S.ReturnType = Pair;
+    S.Parameters.push_back({"input", Pair});
+    ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+    auto *Type =
+        llvm::cast<llvm::StructType>(llvmSourceCallResultType(Context, S));
+    ASSERT_EQ(Type->getNumElements(), 2u);
+    EXPECT_TRUE(Type->getElementType(0)->isIntegerTy(64));
+    EXPECT_TRUE(Type->getElementType(1)->isIntegerTy(64));
+  }
+}
+
+TEST(MIPSRecordSourceEntry, AlignedTailMayLeaveADeadIncomingStackSlot) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    RecordFixture F(A, 13);
+    F.Function.Params.emplace_back("tail", NdType::makeInt(8, false));
+    for (int I = 5; I < 8; ++I)
+      F.Inputs.push_back({{kNoParamReg, I, 4}, NdTypeKind::Int, "uint32_t"});
+    EXPECT_FALSE(F.project());
+    F.Inputs[5].Unused = true;
+    ASSERT_TRUE(F.project());
+    F.Inputs[5].Site.MedIndex = -1;
+    EXPECT_FALSE(F.project());
   }
 }
 

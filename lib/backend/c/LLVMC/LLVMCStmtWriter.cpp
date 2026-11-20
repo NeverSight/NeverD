@@ -6430,8 +6430,7 @@ void checkSourceCallCarriers(const llvm::CallBase &Call,
       Signature.ReturnLocation.Kind ==
           SourceABICarrierKind::IndirectResultPointer)
     throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
-  if (Call.getType() !=
-      llvmSourceCallValueType(Call.getContext(), Signature.ReturnType, false))
+  if (Call.getType() != llvmSourceCallResultType(Call.getContext(), Signature))
     throw std::runtime_error("The call-site source result carrier changed");
   if (Signature.MIPSRecords) {
     const auto Pieces = sourceABIParameters(Signature);

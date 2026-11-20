@@ -1170,10 +1170,13 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         std::vector<SourceParameterPiece> Pieces;
         if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry, &Pieces)) {
           const auto It =
-              SourceEntryHints.emplace(LF.Entry, std::move(*Hint)).first;
-          SourceHints.emplace(LF.Entry, &It->second);
-          SourceCalleeHints.emplace(LF.Entry, It->second);
-        } else if (!Pieces.empty()) {
+              SourceCalleeHints.emplace(LF.Entry, std::move(*Hint)).first;
+          if (Pieces.empty()) {
+            SourceEntryHints.emplace(LF.Entry, It->second);
+            SourceHints.emplace(LF.Entry, &It->second);
+          }
+        }
+        if (!Pieces.empty()) {
           auto &Registers = RecordResults[LF.Entry];
           for (const auto &P : Pieces) {
             const bool FP =

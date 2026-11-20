@@ -2031,7 +2031,8 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
       Med.MultiReturn[0].Size == ReturnTRI.PointerSize &&
       Med.MultiReturn[1].Size == ReturnTRI.PointerSize)
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
-  else if (!Med.SourceParametersBound && Med.MultiReturn.size() >= 2 &&
+  else if (!Med.SourceParametersBound &&
+           (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&
            !sourceComplexComponentBytes(Func.ReturnType))
     if (TypeRef Record = multiRegisterReturnType(Med.MultiReturn))
       Func.ReturnType = std::move(Record);
