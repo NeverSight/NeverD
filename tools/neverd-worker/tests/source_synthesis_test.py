@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """GUI source requests and CLI flags reach the real semantic synthesis engine."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import re
 import shutil
@@ -492,92 +493,91 @@ def execute_source(root, name, text, compiler, expected):
         subprocess.run([str(binary)], check=True, timeout=30)
 
 
+def source_operations(text):
+    # C splices continuation lines before preprocessing. A compiler fallback
+    # macro can contain shifts or masks even when no emitted function uses it.
+    code = re.sub(r"\\\r?\n", "", text)
+    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", code, flags=re.S)
+    return re.sub(r"^[ \t]*#[^\n]*", "", code, flags=re.M)
+
+
 def run_fixture(worker, cli, compiler, kind, image, expected):
     def enhanced_shape(text):
+        code = source_operations(text)
         if kind in ("affine-residue-neighbor", "prefix-residue-neighbor"):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert ">>" in code, text
         elif kind == "coarse-residue-neighbor":
             # A nonzero frontier can become a predicate or a lookup. Execute
             # its original product oracle; allow the lookup's literal scale.
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 1 and "<<" not in code, text
         elif kind.startswith("multiple-residual-"):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             if not kind.endswith("neighbor"):
                 assert code.count("*") <= 3, text
         elif kind == "carry-product-isolated-column-64":
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 3 and code.count("^") <= 1, text
         elif kind.startswith("carry-product-partial-"):
             # Partial blocks keep complete unpaired words. Their original
             # degree-N product has two multiplications per factor; require
             # less than half that chain, then execute its full-word oracle.
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") < int(kind.rsplit("-", 1)[1]), text
         elif kind.startswith("carry-product-"):
             # Keep the proved bit selectors, including higher-bit shifts,
             # while eliminating the original long multiplication chain.
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             # A highest-bit coefficient absorbs a selector's mask, leaving
             # an exact complement that may be printed as XOR with -1.
             without_complements = re.sub(r"\^\s*-1\b", "", code)
             assert code.count("*") <= 3 and "^" not in without_complements, text
         elif kind.startswith("carry-cofactor-"):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 3 and code.count("^") <= 2, text
         elif kind == "distributed-residue-neighbor":
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
         elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-")):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert code.count("*") < int(kind.rsplit("-", 1)[1]) // 2, text
         elif kind.startswith("residue-"):
-            code = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.S)
             assert "*" not in code and "<<" not in code, text
         elif kind == "masked":
-            assert text.count("^") <= 2, text
+            assert code.count("^") <= 2, text
         elif kind == "frame":
-            assert all(op not in text for op in ("|", "^", "&")), text
+            assert all(op not in code for op in ("|", "^", "&")), text
         elif kind == "weighted":
-            assert text.count("&") <= 1 and text.count("^") <= 1, text
+            assert code.count("&") <= 1 and code.count("^") <= 1, text
         elif kind == "bitwise":
-            assert "&" not in text and text.count("^") <= 2, text
+            assert "&" not in code and code.count("^") <= 2, text
         elif kind == "interleaved":
-            assert text.count("&") <= 2 and text.count("^") <= 1, text
+            assert code.count("&") <= 2 and code.count("^") <= 1, text
         elif kind in ("partitioned", "mixed"):
-            assert "&" not in text and text.count("^") <= 1, text
+            assert "&" not in code and code.count("^") <= 1, text
         elif kind == "cubic":
-            assert text.count("&") <= 1 and text.count("^") <= 1, text
+            assert code.count("&") <= 1 and code.count("^") <= 1, text
         elif kind in ("quartic", "sextic"):
-            assert text.count("&") <= 2, text
-            assert text.count("^") <= (1 if kind == "quartic" else 3), text
+            assert code.count("&") <= 2, text
+            assert code.count("^") <= (1 if kind == "quartic" else 3), text
         elif kind == "missing-cubic":
             # Retain the missing corner's exact residual, while collapsing
             # the seven separately partitioned products. LLVM-to-C spells a
             # word complement as XOR -1; count it separately from binary XOR.
-            complements = len(re.findall(r"\^\s*-1\b", text))
-            assert text.count("&") <= 8, text
-            assert text.count("^") - complements <= 3, text
+            complements = len(re.findall(r"\^\s*-1\b", code))
+            assert code.count("&") <= 8, text
+            assert code.count("^") - complements <= 3, text
         elif kind in ("missing-degree12", "missing-degree24", "missing-degree48",
                       "missing-degree96"):
-            complements = len(re.findall(r"\^\s*-1\b", text))
+            complements = len(re.findall(r"\^\s*-1\b", code))
             limit = int(kind.removeprefix("missing-degree"))
-            assert text.count("&") <= limit, text
-            assert text.count("^") - complements <= limit, text
+            assert code.count("&") <= limit, text
+            assert code.count("^") - complements <= limit, text
         elif kind in ("perturbed-quartic", "perturbed-sextic",
                       "missing-quartic", "missing-sextic"):
             # Keep the changed original product, but eliminate the remaining
             # complemented partitions. The sextic tail adds two XOR factors.
-            assert text.count("&") <= 5 and "~" not in text, text
-            assert text.count("^") <= (
+            assert code.count("&") <= 5 and "~" not in code, text
+            assert code.count("^") <= (
                 3 if kind.endswith("quartic") else 5), text
         else:
-            assert ">>" not in text, text
+            assert ">>" not in code, text
 
     with tempfile.TemporaryDirectory(prefix="neverd-source-synthesis-") as directory:
         root = Path(directory)
@@ -592,25 +592,24 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 function_name(enhanced)
                 enhanced_shape(enhanced)
                 if representation == "source":
+                    code = source_operations(ordinary)
                     if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
-                        code = re.sub(r"/\*.*?\*/|//[^\n]*", "", ordinary,
-                                      flags=re.S)
                         assert "*" in code, ordinary
                     elif kind == "masked":
-                        assert ordinary.count("^") >= 3, ordinary
+                        assert code.count("^") >= 3, ordinary
                     elif kind == "frame":
-                        assert "|" in ordinary, ordinary
+                        assert "|" in code, ordinary
                     elif kind in ("weighted", "bitwise", "interleaved"):
-                        assert ordinary.count("&") >= 7, ordinary
+                        assert code.count("&") >= 7, ordinary
                     elif kind in ("partitioned", "mixed", "cubic", "quartic",
                                   "sextic", "perturbed-quartic",
                                   "perturbed-sextic", "missing-quartic",
                                   "missing-sextic", "missing-cubic",
                                   "missing-degree12", "missing-degree24",
                                   "missing-degree48", "missing-degree96"):
-                        assert ordinary.count("&") >= 4, ordinary
+                        assert code.count("&") >= 4, ordinary
                     else:
-                        assert ">>" in ordinary, ordinary
+                        assert ">>" in code, ordinary
                     if kind not in ("distributed-residue-neighbor", "multiple-residual-neighbor"):
                         assert enhanced != ordinary
                 # Turning the menu off restores its independent ordinary page.
@@ -649,9 +648,13 @@ if __name__ == "__main__":
     parser.add_argument("worker")
     parser.add_argument("--cli")
     parser.add_argument("--compiler", default=shutil.which("clang"))
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="number of independent fixtures to execute concurrently")
     options = parser.parse_args()
+    if options.jobs < 1:
+        parser.error("--jobs must be positive")
     try:
-        for kind, image, expected in (
+        fixtures = (
             ("residue-prefix-quartic", *prefix_residue_elf(4)),
             ("residue-prefix-octic", *prefix_residue_elf(8)),
             ("residue-coarse-quartic", *prefix_residue_elf(4, prefix_bits=1)),
@@ -777,9 +780,13 @@ if __name__ == "__main__":
              "(37U*(x^y)*(y|z)*(x|z)"
              "-37U*((x^y)&z)*((y|z)&x)*((x|z)&y))"
              + "*(x&y)*(x^z)*(y^z)" * 31 + "+x+y+(x&0x80000000U)"),
-        ):
-            run_fixture(options.worker, options.cli, options.compiler, kind,
-                        image, expected)
+        )
+        with ThreadPoolExecutor(max_workers=options.jobs) as pool:
+            checks = [pool.submit(run_fixture, options.worker, options.cli,
+                                  options.compiler, kind, image, expected)
+                      for kind, image, expected in fixtures]
+            for check in checks:
+                check.result()
     except subprocess.CalledProcessError as error:
         if error.stdout:
             sys.stderr.write(error.stdout)
