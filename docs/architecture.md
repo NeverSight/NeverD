@@ -12665,6 +12665,11 @@ which sees every hidden statement, decides the labels again from nothing
 for goes with that jump instead of standing in the text unreferenced. A unit of fewer than `kMinParallelCFunctionDefinitions`
 definitions, or one rendered with a source map, recorded positions or source
 names, which follow the text as one pass prints it, is written on one thread.
+An image object takes the pointer type debug information declares for it only
+where C can spell that type (`globalPointerTypeAt`, `hasCSpelling`): a
+callback that returns an array or takes a function has no declarator, and its
+declaration failed the whole unit, as the dynamic loader's globals did. The
+object keeps the type its accesses give.
 
 An x86 function whose whole body is one direct unconditional jump, after an
 optional `endbr` marker, passes its caller's return address, stack and

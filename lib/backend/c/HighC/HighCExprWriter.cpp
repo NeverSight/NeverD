@@ -3769,8 +3769,12 @@ TypeRef HighCWriter::globalPointerTypeAt(va_t Address, uint16_t Bytes) const {
   } else if (Offset) {
     return nullptr;
   }
-  return Type && Type->Kind == NdTypeKind::Ptr && Type->Size == Bytes ? Type
-                                                                      : nullptr;
+  // A pointer C cannot spell, as a callback whose signature names itself,
+  // declares nothing: the object keeps the type its accesses give.
+  return Type && Type->Kind == NdTypeKind::Ptr && Type->Size == Bytes &&
+                 hasCSpelling(Type)
+             ? Type
+             : nullptr;
 }
 
 HighPointerTypeFacts HighCWriter::pointerTypeFacts(
