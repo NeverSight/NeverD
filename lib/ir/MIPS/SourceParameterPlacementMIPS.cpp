@@ -306,7 +306,7 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       Scalar = Pieces[0].Location;
       return true;
     }
-    const auto Members = sourceABIValueMembers(Type);
+    const auto Members = sourceValueMembers(Type);
     if (Members.empty() || Members.size() != Pieces.size())
       return false;
     for (size_t I = 0; I < Members.size(); ++I) {

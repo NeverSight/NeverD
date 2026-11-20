@@ -1118,7 +1118,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Values.push_back(Carriers[At++]);
         continue;
       }
-      const auto Members = sourceABIValueMembers(Parameter.Type);
+      const auto Members = Hint.Signature.MIPSRecords
+                               ? sourceValueMembers(Parameter.Type)
+                               : sourceABIValueMembers(Parameter.Type);
       const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
                                                 Members.size());
       At += Members.size();

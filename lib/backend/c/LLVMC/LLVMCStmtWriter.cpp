@@ -6580,7 +6580,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       if (Signature && Signature->MIPSRecords &&
           !Signature->Parameters[I].Components.empty()) {
         const auto &Parameter = Signature->Parameters[I];
-        const auto Members = sourceABIValueMembers(Parameter.Type);
+        const auto Members = sourceValueMembers(Parameter.Type);
         IntegerCallParameter Packed;
         for (const auto &Member : Members) {
           const bool FP =

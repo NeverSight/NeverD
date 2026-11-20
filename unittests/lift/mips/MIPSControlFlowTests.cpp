@@ -12,6 +12,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -326,6 +327,12 @@ TEST(MIPSRecordSourceEntry, PICCallsOnlyObserveArgumentWritesThatReachThem) {
     Signature.Parameters.push_back({"value", Record});
     ASSERT_TRUE(
         mips::assignRecordSourceABI(Signature, Target, BinaryFormat::ELF));
+    const auto Pieces = sourceABIParameters(Signature);
+    ASSERT_EQ(Pieces.size(), 1u);
+    EXPECT_EQ(Pieces[0].ByteOffset, 0u);
+    EXPECT_EQ(Pieces[0].Location.Kind, SourceABICarrierKind::IntegerRegister);
+    EXPECT_EQ(Pieces[0].Location.RegisterOffset, mipsreg::r(4));
+    EXPECT_EQ(Pieces[0].Location.ValueBytes, Wide ? 8u : 4u);
     std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Signature}};
 
     constexpr uint32_t FrameInA1 = 0x03a02825, FrameInA0 = 0x03a02025;
