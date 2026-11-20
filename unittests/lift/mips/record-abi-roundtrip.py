@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay n32/n64 record entries and direct/indirect calls across compilers.
+"""Replay o32/n32/n64 record entries and direct/indirect calls across compilers.
 
 Each replacement links with the other original objects. The caller observes
 defined member bytes, untouched output sentinels, preserved machine state and
@@ -75,8 +75,9 @@ def argument_mix(prefix):
 
 
 def cases_for_abi(abi, selected):
-    return [(name, definition, size[abi] if isinstance(size, dict) else size,
-             defined[abi] if isinstance(defined, dict) else defined)
+    pointer_layout = '64' if abi == '64' else 'n32'
+    return [(name, definition, size[pointer_layout] if isinstance(size, dict) else size,
+             defined[pointer_layout] if isinstance(defined, dict) else defined)
             for name, definition, size, defined in CASES
             if not selected or name in selected]
 
@@ -118,20 +119,23 @@ def sources(case, prefix):
     return header, declaration, texts
 
 
-def observe(image, little, n32, case, function, prefix):
+def observe(image, little, abi, case, function, prefix):
     _, _, size, defined = case
+    o32 = abi == '32'
+    mask = (1 << (32 if o32 else 64)) - 1
     cpu, entry = roundtrip.emulator(
-        image, 64, little, function,
-        cpu_model=mips.UC_CPU_MIPS64_MIPS64R2_GENERIC)
+        image, 32 if o32 else 64, little, function,
+        cpu_model=mips.UC_CPU_MIPS32_74KF if o32 else mips.UC_CPU_MIPS64_MIPS64R2_GENERIC)
     elf = ELFFile(io.BytesIO(image.read_bytes()))
     symbols = {s.name: s['st_value'] for s in elf.get_section_by_name('.symtab').iter_symbols()}
     callee = symbols['record_callee']
     cpu.mem_map(DATA, 0x1000)
-    cpu.reg_write(mips.UC_MIPS_REG_CP0_STATUS,
-                  cpu.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | 0x24000000)
-    gprs = {r: 0x7139521700000000 + r for r in (*range(16, 24), 28, 30)}
-    fprs = {r: 0x3ff013579bdf0000 + r
-            for r in (range(20, 32, 2) if n32 else range(24, 32))}
+    status = cpu.reg_read(mips.UC_MIPS_REG_CP0_STATUS) | (1 << 29)
+    fr = 1 << 26
+    cpu.reg_write(mips.UC_MIPS_REG_CP0_STATUS, status & ~fr if o32 else status | fr)
+    gprs = {r: (0x71395217d1c30000 + r) & mask for r in (*range(16, 24), 28, 30)}
+    preserved_fp = {'32': range(20, 32), 'n32': range(20, 32, 2), '64': range(24, 32)}
+    fprs = {r: (0x3ff013579bdf0000 + r) & mask for r in preserved_fp[abi]}
     rng = random.Random(0x4d495053)
     values = [bytes(size), bytes([0xff]) * size]
     values += [bytes(rng.getrandbits(8) for _ in range(size)) for _ in range(6)]
@@ -139,13 +143,16 @@ def observe(image, little, n32, case, function, prefix):
     mix = argument_mix(prefix)
     returned = []
     return_pc = None
+    result_pointer = None
     poison_v0 = False
 
     def visit(uc, pc, instruction_size, user):
-        nonlocal return_pc
+        nonlocal return_pc, result_pointer
         if pc == callee:
             calls.append(pc)
             return_pc = uc.reg_read(mips.UC_MIPS_REG_RA)
+            if o32:
+                result_pointer = uc.reg_read(mips.UC_MIPS_REG_4)
         elif pc == return_pc:
             # n32/n64 hidden-result functions need not return their buffer
             # pointer in v0. Change it after the callee's delay slot and before
@@ -153,20 +160,22 @@ def observe(image, little, n32, case, function, prefix):
             # must keep using the originally supplied output storage.
             returned.append(pc)
             return_pc = None
+            if o32:
+                assert uc.reg_read(mips.UC_MIPS_REG_V0) == result_pointer, (image, function)
             if poison_v0:
                 uc.reg_write(mips.UC_MIPS_REG_V0, 0x5a71395362481a53)
 
     hook = cpu.hook_add(UC_HOOK_CODE, visit)
     try:
         attempts = [(value, poison) for value in values
-                    for poison in ((False, True) if size > 16 else (False,))]
+                    for poison in ((False, True) if not o32 and size > 16 else (False,))]
         for value, poison_v0 in attempts:
             for r in range(1, 32):
                 cpu.reg_write(getattr(mips, f'UC_MIPS_REG_{r}'),
-                              gprs.get(r, 0x5a00000000000000 + r))
+                              gprs.get(r, (0x5a0000005a000000 + r) & mask))
             for r in range(32):
                 cpu.reg_write(getattr(mips, f'UC_MIPS_REG_F{r}'),
-                              fprs.get(r, 0xa500000000000000 + r))
+                              fprs.get(r, (0xa5000000a5000000 + r) & mask))
             cpu.mem_write(roundtrip.STACK - 8192, bytes([0xcc]) * 16384)
             cpu.mem_write(DATA, value + bytes(128 - size))
             cpu.mem_write(DATA + 240, bytes([0xa5]) * 144)
@@ -213,15 +222,20 @@ def run(args, artifacts):
     def command(argv):
         roundtrip.run_command(artifacts, argv, artifacts.work / 'command.log')
 
-    for abi in args.abi or ('n32', '64'):
+    for abi in args.abi or ('32', 'n32', '64'):
         cases = cases_for_abi(abi, args.case)
+        architecture = 'mips32r2' if abi == '32' else 'mips64r2'
+        machine = ['-march=' + architecture, '-mabi=' + abi,
+                   '-mfp32' if abi == '32' else '-mfp64']
         for endian in args.endian or ('be', 'le'):
             little = endian == 'le'
             byte_order = '-EL' if little else '-EB'
-            triple = 'mips64el-linux-gnu' if little else 'mips64-linux-gnu'
-            emulation = (('elf32ltsmipn32' if little else 'elf32btsmipn32')
-                         if abi == 'n32' else ('elf64ltsmip' if little else 'elf64btsmip'))
-            common = ['-march=mips64r2', '-mabi=' + abi, '-mfp64', '-mhard-float',
+            target_arch = 'mips' if abi == '32' else 'mips64'
+            triple = target_arch + ('el' if little else '') + '-linux-gnu'
+            emulation = ('elf64' if abi == '64' else 'elf32') + ('ltsmip' if little else 'btsmip')
+            if abi == 'n32':
+                emulation += 'n32'
+            common = [*machine, '-mhard-float',
                       '-mno-abicalls', '-fno-pic', '-G0', '-ffreestanding', '-fno-builtin',
                       '-fno-stack-protector', '-fno-unwind-tables', '-fno-asynchronous-unwind-tables']
             for original_compiler in args.original_compiler or compilers:
@@ -240,8 +254,7 @@ def run(args, artifacts):
                                 target = ['--target=' + triple, '-fno-addrsig'] if compiler == 'clang' else [byte_order]
                                 command([compilers[compiler], *target, *common, opt, '-S', source, '-o', asm])
                                 artifacts.keep_source(asm)
-                                command([args.assembler, '-march=mips64r2', '-mabi=' + abi,
-                                         '-mfp64', byte_order, asm, '-o', obj])
+                                command([args.assembler, *machine, byte_order, asm, '-o', obj])
                                 artifacts.discard(source, asm)
                                 return obj
 
@@ -257,7 +270,7 @@ def run(args, artifacts):
                             original = folder / 'original.elf'
                             link([*objects.values(), runtime], original)
                             original_hash = digest(original)
-                            expected = {function: observe(original, little, abi == 'n32', case, function, prefix)
+                            expected = {function: observe(original, little, abi, case, function, prefix)
                                         for function in ('record_direct', 'record_indirect')}
                             rows.append(dict(profile=profile, route='original', image_sha256=original_hash,
                                              observations=expected))
@@ -305,7 +318,7 @@ def run(args, artifacts):
                                                 link([obj if name == function else original_obj
                                                       for name, original_obj in objects.items()] + [runtime], image)
                                                 targets = ('record_direct', 'record_indirect') if function == 'record_callee' else (function,)
-                                                observations = {target: observe(image, little, abi == 'n32', case, target, prefix)
+                                                observations = {target: observe(image, little, abi, case, target, prefix)
                                                                 for target in targets}
                                                 assert all(value == expected[target] for target, value in observations.items())
                                                 rows.append(dict(profile=profile, route=route, function=function, compiler=compiler,
@@ -333,14 +346,14 @@ def main():
     parser.add_argument('--neverd', type=Path)
     parser.add_argument('--sdk', type=Path)
     for name, choices in (
-            ('abi', ('n32', '64')), ('endian', ('be', 'le')),
+            ('abi', ('32', 'n32', '64')), ('endian', ('be', 'le')),
             ('original-compiler', ('clang', 'gcc')), ('rebuild-compiler', ('clang', 'gcc')),
             ('original-opt', ('-O0', '-O2')), ('rebuild-opt', ('-O0', '-O2')),
             ('route', ('highc', 'llvmc')),
             ('function', ('record_callee', 'record_direct', 'record_indirect')),
             ('case', tuple(case[0] for case in CASES))):
         parser.add_argument('--' + name, action='append', choices=choices)
-    parser.add_argument('--prefix', action='append', type=int, choices=(0, 7))
+    parser.add_argument('--prefix', action='append', type=int, choices=(0, 1, 7))
     args = parser.parse_args()
     if args.neverd and not args.sdk:
         args.sdk = args.neverd.resolve().with_name(
