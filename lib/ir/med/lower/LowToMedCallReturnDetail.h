@@ -22,8 +22,8 @@ namespace neverd::lowtomed_detail {
 
 /// Whether \p Ops[\p At] reads a register only to keep the bytes a write of
 /// its low bytes leaves, as a partial register write lowers: `t = R & mask`,
-/// whose mask clears at least the low byte, then `u = t | v` and `R = u`
-/// within the next few operations.
+/// whose mask clears at least the low byte, then `u = t | v`, or `t = R[k:]`
+/// then `u = concat(t, v)`, and `R = u` within the next few operations.
 bool keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops, size_t At);
 
 } // namespace neverd::lowtomed_detail

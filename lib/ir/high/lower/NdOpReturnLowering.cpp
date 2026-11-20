@@ -16,9 +16,14 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedReturnArguments.h"
 #include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/loader/BinaryImage.h"
+
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 
 #include <algorithm>
 #include <map>
@@ -323,20 +328,39 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       Func.ReturnType->Kind == NdTypeKind::Struct &&
       Med.MultiReturn.size() >= 2 &&
       Func.ReturnType->Fields.size() == Med.MultiReturn.size()) {
+    // Go's register results are a record because the function's callers
+    // read them, and every return hands each one back
+    // (materializeGoCallResults): a field the walks below still miss is a
+    // value this function returns, printed as unknown, not a sign the record
+    // is wrong.
+    const bool GoResults =
+        Image && Image->ExceptionMetadata.GoModule &&
+        Image->ExceptionMetadata.GoModule->RegisterArguments &&
+        isGoCode(*Image, Med.Entry) &&
+        llvm::all_of(llvm::enumerate(Med.MultiReturn), [&](const auto &E) {
+          return !E.value().IsFP &&
+                 goResultPosition(TargetArch, E.value().RegOff) ==
+                     static_cast<int>(E.index());
+        });
     auto Reaching = [&](uint64_t RegOff, uint16_t Size) -> ExprPtr {
       // What the register holds at the end of \p Block: its last write
       // there, or none where a call after that write may change it.  None
       // when the block neither writes nor clobbers it.
+      // A Go result is the whole register, which every write of it defines
+      // (goReturnedValue): a narrower value, a view copy propagation left
+      // on a temporary or the entry copy of the low byte, is no field.
       auto WrittenIn = [&](const MedBlock &Block) -> std::optional<ExprPtr> {
         for (auto RIt = Block.Ops.rbegin(); RIt != Block.Ops.rend(); ++RIt) {
           if (RIt->Opcode != NdOp::RETURN && RIt->Output.Kind == MedVar::Reg &&
               RIt->Output.Size > 0 && RIt->Output.RegOff == RegOff &&
-              !isRegisterLowView(*RIt))
+              !isRegisterLowView(*RIt) &&
+              (!GoResults || RIt->Output.Size >= Size))
             return ValueFromDefinition(*RIt);
           if (!callKeepsRegister(*RIt, RegOff, Size))
             return ExprPtr();
         }
-        if (const PhiNode *Phi = aggregateReturnPhi(Block, RegOff))
+        if (const PhiNode *Phi = aggregateReturnPhi(Block, RegOff);
+            Phi && (!GoResults || Phi->Output.Size >= Size))
           return HighExpr::makeVar(Phi->Output);
         return std::nullopt;
       };
@@ -352,7 +376,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         // The reaching helper reports the compare's low view as the write.
         // The field still holds the register that view was taken from.
         widenRegisterLowView(Med, Entry);
-        if (Entry.Size > 0 && !isEntryIdentity(Med, Entry))
+        if (Entry.Size > 0 && !isEntryIdentity(Med, Entry) &&
+            (!GoResults || Entry.Size >= Size))
           return medvarToExpr(Entry);
       }
       return nullptr;
@@ -407,6 +432,20 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       Padded->Type = NdType::makeInt(Field.Size, false);
       return Padded;
     };
+    const auto Argument = [&](const MedReturnReg &Field) -> ExprPtr {
+      if (std::none_of(
+              Med.Params.begin(), Med.Params.end(),
+              [&](const MedVar &P) { return P.RegOff == Field.RegOff; }))
+        return nullptr;
+      MedVar Param;
+      Param.Kind = MedVar::Param;
+      Param.Id = -1;
+      Param.RegOff = Field.RegOff;
+      Param.Size = Field.Size;
+      Param.TheArch = TargetArch;
+      return medvarToExpr(Param);
+    };
+    llvm::DenseMap<int, const MedBlock *> GoBlocks;
     std::vector<ExprPtr> Leaves;
     for (size_t I = 0; I < Med.MultiReturn.size(); ++I) {
       const MedReturnReg &Field = Med.MultiReturn[I];
@@ -415,21 +454,30 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         Value = Reaching(Field.RegOff, Field.Size);
       // A field the function never writes returns the argument its caller
       // passed in the register, which recoverCallAbi made a parameter.
-      if (!Value &&
-          returnsArgumentUnchanged(Med, Field, getTargetRegInfo(TargetArch),
-                                   Image ? Image->abiFormat()
-                                         : BinaryFormat::Unknown) &&
-          std::any_of(
-              Med.Params.begin(), Med.Params.end(),
-              [&](const MedVar &P) { return P.RegOff == Field.RegOff; })) {
-        MedVar Argument;
-        Argument.Kind = MedVar::Param;
-        Argument.Id = -1;
-        Argument.RegOff = Field.RegOff;
-        Argument.Size = Field.Size;
-        Argument.TheArch = TargetArch;
-        Value = medvarToExpr(Argument);
+      if (!Value && returnsArgumentUnchanged(
+                        Med, Field, getTargetRegInfo(TargetArch),
+                        Image ? Image->abiFormat() : BinaryFormat::Unknown))
+        Value = Argument(Field);
+      // A Go result is what the path to this return leaves in the register
+      // (goReturnedValue), as materializeGoCallResults found it: the
+      // argument where the path leaves it unchanged, whatever other paths
+      // write there (`if n.Bytes == nil { return "" }` returns the nil
+      // receiver as the pointer), or the whole register's value past a join.
+      if (!Value && GoResults) {
+        if (GoBlocks.empty())
+          for (const MedBlock &Block : Med.Blocks)
+            GoBlocks.try_emplace(Block.Id, &Block);
+        const GoReturnedValue Returned =
+            goReturnedValue(GoBlocks, CurBlock, Field.RegOff, TargetArch);
+        if (Returned.What == GoReturnedValue::Entry)
+          Value = Argument(Field);
+        else if ((Returned.What == GoReturnedValue::Defined ||
+                  Returned.What == GoReturnedValue::Phi) &&
+                 Returned.Value)
+          Value = HighExpr::makeVar(*Returned.Value);
       }
+      if (!Value && GoResults)
+        Value = HighExpr::makeUndef(Field.Size);
       if (!Value)
         throw std::runtime_error(
             "cannot recover a field of a multi-register struct return");

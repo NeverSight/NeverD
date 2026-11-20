@@ -188,6 +188,7 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
   modelWideIntReturns(Img, Result, MedStackProjection::Source);
   // Calls remodeled to return a packed register pair must agree with the
   // corresponding definition on the HighIR route as well as the LLVM route.
+  materializeGoCallResults(Img, Result);
   recoverStructReturnFromCallers(Img, Result);
   propagateStructReturnForwarderShapes(Img, Result);
   recoverStructReturnFromBody(Img, Result, StructReturnEvidence::Callers);

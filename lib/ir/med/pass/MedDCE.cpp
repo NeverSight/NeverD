@@ -13,11 +13,14 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallConvention.h"
 #include "neverd/ir/med/MedCallingConvDetail.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/X86/X86RegistrationSEHParentExit.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -383,6 +386,62 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   auto seedReachingStackPointer = [&](const MedBlock &Start, int Before) {
     seedReachingDef(Start, Before, TRI.StackPointer);
   };
+  // Go's internal ABI returns integer results in RAX, RBX, RCX, RDI, RSI and
+  // R8-R11 (goIntegerArgumentRegisters).  Which of them a function returns,
+  // only its callers tell, after this pass (materializeGoCallResults): keep
+  // the definition of each that reaches a return, so a result its callers
+  // read keeps its value, found as the return lowers it (goReturnedValue):
+  // the newest write of the whole register, or its PHI.  Every write of the
+  // register defines the whole of it too; a narrower value is one of its
+  // own, which a later write of the whole register leaves stale.  A call
+  // that clobbers the register before the return leaves the call's result
+  // there, which no op defines.
+  if (TargetArch == Arch::X64 && Image && Image->ExceptionMetadata.GoModule &&
+      Image->ExceptionMetadata.GoModule->RegisterArguments &&
+      isGoCode(*Image, Func.Entry)) {
+    llvm::SmallVector<std::pair<const MedBlock *, int>, 8> Work;
+    llvm::SmallDenseSet<const MedBlock *, 8> Ended;
+    for (const uint64_t Register :
+         goIntegerArgumentRegisters(TargetArch).drop_front()) {
+      Ended.clear();
+      for (const MedBlock &Blk : Func.Blocks)
+        if (!Blk.Ops.empty() && Blk.Ops.back().Opcode == NdOp::RETURN)
+          Work.push_back({&Blk, static_cast<int>(Blk.Ops.size()) - 2});
+      while (!Work.empty()) {
+        const auto [Block, Last] = Work.pop_back_val();
+        if (Last == static_cast<int>(Block->Ops.size()) - 1 &&
+            !Ended.insert(Block).second)
+          continue;
+        bool Ends = false;
+        for (int J = Last; J >= 0 && !Ends; --J) {
+          const MedOp &Op = Block->Ops[static_cast<size_t>(J)];
+          if (Op.Output.Kind == MedVar::Reg &&
+              Op.Output.Size == TRI.FullRegWidth &&
+              Op.Output.RegOff == Register) {
+            MarkLive(Op.Output);
+            Ends = true;
+          } else if ((Op.Opcode == NdOp::CALL ||
+                      Op.Opcode == NdOp::INDIR_CALL) &&
+                     !Op.PreservesCallerSaved &&
+                     !callPreservesRegisterBytes(TargetArch,
+                                                 Op.CallPreservedGPRs, Register,
+                                                 TRI.FullRegWidth)) {
+            Ends = true;
+          }
+        }
+        if (Ends)
+          continue;
+        if (const PhiNode *Phi = aggregateReturnPhi(*Block, Register);
+            Phi && Phi->Output.Size == TRI.FullRegWidth) {
+          MarkLive(Phi->Output);
+          continue;
+        }
+        for (const int PredId : Block->Preds)
+          if (const MedBlock *Pred = blockById(PredId))
+            Work.push_back({Pred, static_cast<int>(Pred->Ops.size()) - 1});
+      }
+    }
+  }
   bool KeepUnresolvedRegisterSetup = false;
   for (auto &Blk : Func.Blocks) {
     bool HasCall = false;

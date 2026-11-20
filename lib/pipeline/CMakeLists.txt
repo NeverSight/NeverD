@@ -48,6 +48,7 @@ add_neverd_component_library(NeverDPipeline
   PipelineOptimize.cpp
   PipelinePatchLift.cpp
   SemanticConvergence.cpp
+  PipelineGoResults.cpp
   PipelineStructReturn.cpp
   PipelineStructReturnCallSites.cpp
   PipelineReturnContracts.cpp

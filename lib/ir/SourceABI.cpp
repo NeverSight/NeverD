@@ -545,7 +545,7 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
   // A record of return registers takes no source convention's restrictions:
   // each member is the scalar one register carries, naturally aligned.
   if (Type->RegisterReturnRecord)
-    return Result.size() <= 4 &&
+    return Result.size() <= kSourceMaxRegisterReturnMembers &&
                    std::all_of(Result.begin(), Result.end(),
                                [](const auto &Member) {
                                  return Member.Type->Kind == NdTypeKind::Float

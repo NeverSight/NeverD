@@ -5857,6 +5857,34 @@ platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
 returning X0:X1 and joined it from the callee's record. An indirect call
 declares no function, so HighC holds its record to no other call's.
+A function returns one record to every call of it, so each direct call of a
+Go function returns as many results as any of its callers reads, from
+compiled code or assembly alike, and the function returns that record
+(`materializeGoCallResults`, `MedFunc::MultiReturn`): `t =
+runtime_mapaccess2(...); if (!(uint8_t)t.field_1)`, beside a definition that
+returns `{zeroVal, 0}` and `{elem, 1}`. A function whose return hands back
+what a call it makes returns (`CALL g; RET`) reads those results of that call,
+until no count grows. A run of some functions alone shapes the callees it
+calls from its own calls. A read that only keeps the bytes a byte write leaves
+(`t = R[1:]; concat(t, v)` as well as `R & ~0xff | v`) reads no result.
+
+Each return of the function must hand back every result it has
+(`goReturnedValue`): the newest write of the whole register, its PHI, a call
+that returns that many results itself, or the argument the caller passed there
+where the path leaves it unchanged. A narrower value is no result: an 8- or
+32-bit view is an SSA value of its own, which a later write of the whole
+register leaves stale, and `lea` copy-propagated into a temporary leaves only
+a view of that temporary. Results are a prefix from RAX, so the function keeps
+the results up to the first one some return leaves undefined, and the counts
+settle from above: `runtime.lock2` returns nothing, though a caller reads five
+registers past its call through a PHI no path uses. A read past that count
+stays the caller's unknown value, where an unknown field would fail every call
+of the function. HighC finds each field the same way, the unchanged argument
+past a join included (`if n.Bytes == nil { return "" }` returns the nil
+receiver as the string's pointer). Only the callers tell which registers a
+return hands back, after the function's dead code is gone, so register DCE
+keeps, in Go code, the definition of each result register that reaches a
+return: a function's callers read RCX after it, and its `lea rcx, ...` stays.
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a

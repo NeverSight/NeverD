@@ -67,6 +67,26 @@ TEST(SourceAggregate,
   EXPECT_FALSE(Deep);
 }
 
+TEST(SourceAggregate, ARegisterReturnRecordHoldsGosNineResults) {
+  // Go's internal ABI returns nine integer results on amd64 (RAX, RBX, RCX,
+  // RDI, RSI, R8-R11), where a platform convention returns four registers at
+  // most.  A record of five result words had no members, so every call of a
+  // Go function returning five results printed a placeholder beside a
+  // declaration that returned an integer.
+  const auto Members = [](size_t Words) {
+    TypeRef Record = NdType::makeStruct(
+        std::vector<TypeRef>(Words, NdType::makeInt(8, false)));
+    EXPECT_NE(Record, nullptr);
+    if (!Record)
+      return size_t(0);
+    Record->RegisterReturnRecord = true;
+    return sourceAggregateMembers(Record).size();
+  };
+  for (const size_t Words : {size_t(2), size_t(5), size_t(9)})
+    EXPECT_EQ(Members(Words), Words);
+  EXPECT_EQ(Members(kSourceMaxRegisterReturnMembers + 1), 0u);
+}
+
 TEST(SourceAggregate, RecordEncodingSeparatesShapeFromPhysicalABI) {
   auto A = parseObjCMethodEncoding(
       "value:", "{Outer={One=dd}{Two=dd}}48@0:8{Other={A=dd}{B=dd}}16");

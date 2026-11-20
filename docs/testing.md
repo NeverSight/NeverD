@@ -20658,6 +20658,26 @@ platform's reading.
 1.18 function that calls through a function value and stores RBX: the call
 returns RAX and RBX packed, every later read of RBX is its second field, and
 no clobber of RBX is left; a store of RDX instead gives the call no fields.
+`GoInternalABI.EveryDirectCallOfAFunctionReturnsTheSameResults` runs the
+pipeline over `main.f`, which returns two loads, a wrapper that returns what
+its call of `main.f` returns, a caller of the wrapper that reads RBX, and a
+caller of `main.f` that reads RAX alone: both functions return `{RAX, RBX}`,
+every call, the wrapper's and the RAX reader's included, returns both, and the
+load into RBX that only the callers show to be a result stays. Constant
+results would not do: a summary of `main.f` puts them at its calls.
+`GoInternalABI.AFunctionReturnsNoResultAReturnLeavesUndefined` gives `main.f`
+a return that leaves RBX as it entered, where no argument arrives: its caller
+reads RBX after the call, yet neither the function nor the call returns a
+second result. `GoInternalABI.AResultIsTheArgumentWhereAReturnLeavesItUnchanged`
+renders a `main.f` whose returns hand back RAX unchanged, after a single
+predecessor that copies AL at entry and past a join, while a third return
+writes RAX: its C holds no unknown value.
+`GoInternalABI.AByteWriteKeepsNoResultOfTheCall` writes R10's low byte after a
+call through a function value and returns R10: the lift slices R10's upper
+bytes off the old value and joins them above the byte, which reads no result,
+so the call returns none.
+`SourceAggregate.ARegisterReturnRecordHoldsGosNineResults` gives a record of
+two, five and nine register words its members, and one of ten none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.
