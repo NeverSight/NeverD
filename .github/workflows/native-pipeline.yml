@@ -686,6 +686,48 @@ jobs:
         run: |
           echo "::error::Mock-worker qualification failed; owner diagnostics do not waive it."
           exit 1
+      - name: Run generated C with the macOS fixture compiler
+        if: runner.os == 'macOS' && inputs.pr_number == '2432' && inputs.scope == 'record-unix-qualification'
+        run: |
+          python - <<'PYTHON'
+          import json
+          import os
+          import re
+          import shutil
+          import subprocess
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          build = Path('build-mips-ci')
+          evidence = build / 'evidence'
+          compiler = Path(os.environ['NEVERD_SOURCE_CLANG'])
+          env = dict(os.environ, PATH=str(compiler.parent) + os.pathsep + os.environ['PATH'])
+          assert Path(shutil.which('clang', path=env['PATH'])).samefile(compiler)
+          names = [
+              'LLVMCArithmeticShift.PreservesSignAtTheLLVMOperandWidth',
+              'LLVMCFunnelShift.GuardsZeroAndModuloCountsAtIntegerWidths',
+              'LLVMCIntrinsicSemantics.AnUnknownOperandOfATypeGenericBuiltinHasItsType',
+              'LLVMCIntrinsicSemantics.FloatingMinMaxKeepNaNsAndSignedZeros',
+              'LLVMCIntrinsicSemantics.FloatingPointIntrinsicsAreCompilerBuiltins',
+              'LLVMCIntrinsicSemantics.FusedMultiplyAddKeepsSingleRounding',
+          ]
+          selector = '^(' + '|'.join(map(re.escape, names)) + ')$'
+          output = (evidence / 'macos-fixture-results.xml').resolve()
+          version = subprocess.check_output([compiler, '--version'], text=True)
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == os.environ['EXPECTED_SOURCE_SHA']
+          command = ['ctest', '--test-dir', str(build), '--build-config', 'Release',
+                     '--no-tests=error', '-R', selector, '--output-on-failure',
+                     '--output-junit', str(output)]
+          receipt = {'source_sha': head, 'compiler': str(compiler), 'version': version,
+                     'command': command, 'expected_tests': names}
+          (evidence / 'macos-fixture-source.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          subprocess.run(command, env=env, check=True, timeout=240)
+          cases = list(ET.parse(output).iter('testcase'))
+          assert sorted(case.get('name') for case in cases) == sorted(names)
+          assert all(case.find(tag) is None for case in cases
+                     for tag in ('failure', 'error', 'skipped'))
+          PYTHON
       - name: Upload bounded qualification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
