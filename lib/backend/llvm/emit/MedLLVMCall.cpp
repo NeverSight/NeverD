@@ -1123,6 +1123,11 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       const auto Arguments =
           llvmMIPSRecordArguments(*Ctx, Hint.Signature, Bindings);
       for (const auto &A : Arguments) {
+        if (!A.PieceCount) {
+          Types.push_back(A.Type);
+          Values.push_back(llvm::UndefValue::get(A.Type));
+          continue;
+        }
         auto *Value = Carriers[A.FirstPiece];
         if (A.PieceCount == 2) {
           const auto First = A.FirstPiece;

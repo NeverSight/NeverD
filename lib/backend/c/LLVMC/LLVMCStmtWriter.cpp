@@ -6582,11 +6582,19 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     const bool Hidden = Signature && Signature->MIPSRecords &&
                         Signature->ReturnLocation.Kind ==
                             SourceABICarrierKind::IndirectResultPointer;
+    const auto RecordArgs =
+        Signature && Signature->MIPSRecords
+            ? llvmMIPSRecordArguments(Call.getContext(), *Signature,
+                                      RecordPieces)
+            : llvm::SmallVector<LLVMMIPSRecordArgument, 8>{};
     unsigned Operand = unsigned(Hidden);
     unsigned Physical = 0;
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Expression += ", ";
+      if (!RecordArgs.empty() &&
+          !RecordArgs[Operand - unsigned(Hidden)].PieceCount)
+        ++Operand;
       const auto Type =
           Signature
               ? declarationToC(

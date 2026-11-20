@@ -46,8 +46,8 @@ struct ParameterCursor {
       return false;
     // o32 long long uses an even/odd register pair, or an 8-byte aligned
     // stack pair; it never straddles a3 and the first stack argument.
-    if (Slot == 4 && Type->Size == 8)
-      Next = (Next + 1) & ~1u;
+    if (Slot == 4)
+      Next = mips::alignedO32ArgumentSlot(Next, Type);
     const unsigned Count = (Type->Size + Slot - 1) / Slot;
     // n32 and n64 share eight argument positions between a0-a7 and f12-f19.
     // o32 uses f12/f14 only for the first two leading FP arguments; their
@@ -246,8 +246,8 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
       return std::nullopt;
     HasRecord = true;
     Cursor.LeadingFloating = false;
-    if (O32 && Type->Alignment == 8)
-      Cursor.Next = (Cursor.Next + 1) & ~1u;
+    if (O32)
+      Cursor.Next = alignedO32ArgumentSlot(Cursor.Next, Type);
     size_t Field = 0;
     for (unsigned Offset = 0; Offset < Type->Size;
          Offset += Cursor.Layout.SlotBytes, ++Cursor.Next) {
@@ -283,6 +283,18 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
     setCarrierWidths(Pieces, TRI);
   }
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
+}
+
+unsigned mips::alignedO32ArgumentSlot(unsigned Next, const TypeRef &Type) {
+  const bool AlignPair =
+      isRecord(Type) ? Type->Alignment == 8 : Type->Size == 8;
+  return AlignPair ? (Next + 1u) & ~1u : Next;
+}
+
+bool mips::usesIntegerRecordWords(Arch Architecture,
+                                  const SourceParameterTypeHint &P) {
+  return isRecord(P.Type) && (isMIPSO32(Architecture) || isByteRecord(P.Type) ||
+                              isPackedRecordWord(P.Type, P.Components));
 }
 
 bool mips::isByteRecord(const TypeRef &Type) {
@@ -347,7 +359,14 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       Scalar = Pieces[0].Location;
       return true;
     }
-    if (mips::isByteRecord(Type)) {
+    if (mips::isByteRecord(Type) || (Argument && isMIPSO32(Architecture))) {
+      if (Argument && isMIPSO32(Architecture)) {
+        const auto Members = sourceValueMembers(Type);
+        if (Members.empty() || llvm::any_of(Members, [](const auto &M) {
+              return M.Type->Size > 8;
+            }))
+          return false;
+      }
       unsigned Offset = 0;
       for (const auto &P : Pieces) {
         auto L = P.Location;

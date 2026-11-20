@@ -436,6 +436,41 @@ unsigned MedToHighConverter::importFixedArgCount(size_t CallIdx,
              : 0;
 }
 
+ExprPtr
+MedToHighConverter::sourceRecordFromWords(const SourceParameterTypeHint &P,
+                                          llvm::ArrayRef<MedVar> Inputs) {
+  const bool Little = archLittleEndian(TargetArch);
+  const unsigned Slot = P.Components.front().ValueBytes;
+  llvm::SmallVector<ExprPtr, 4> Words;
+  for (const auto &Input : Inputs)
+    Words.push_back(medvarToExpr(Input));
+  std::vector<ExprPtr> Fields;
+  for (const auto &Member : sourceValueMembers(P.Type)) {
+    ExprPtr Bits;
+    unsigned Copied = 0;
+    while (Copied < Member.Type->Size) {
+      const unsigned Offset = Member.ByteOffset + Copied;
+      const unsigned Index = Offset / Slot;
+      const unsigned InWord = Offset % Slot;
+      const unsigned Width = P.Components[Index].ValueBytes;
+      const unsigned Count =
+          std::min<unsigned>(Member.Type->Size - Copied, Width - InWord);
+      const unsigned At = Little ? InWord : Width - InWord - Count;
+      auto Part = sourceBitSlice(Words[Index], At, Count);
+      if (Bits) {
+        Bits = Little ? HighExpr::makeBinop(NdOp::CONCAT, Part, Bits)
+                      : HighExpr::makeBinop(NdOp::CONCAT, Bits, Part);
+        Bits->Type = NdType::makeInt(Copied + Count, false);
+      } else {
+        Bits = std::move(Part);
+      }
+      Copied += Count;
+    }
+    Fields.push_back(HighExpr::makeBitCast(std::move(Bits), Member.Type));
+  }
+  return HighExpr::makeRecord(P.Type, std::move(Fields));
+}
+
 std::vector<ExprPtr>
 MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                     va_t ResolvedSlot) {
@@ -600,33 +635,12 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                           std::move(Second));
           Bits->Type = NdType::makeInt(8, false);
           Hinted.push_back(HighExpr::makeBitCast(std::move(Bits), P.Type));
-        } else if (Signature.MIPSRecords && mips::isByteRecord(P.Type)) {
-          const auto Members = sourceValueMembers(P.Type);
-          std::vector<ExprPtr> Leaves;
-          for (const auto &L : P.Components) {
-            auto Word = medvarToExpr(Call.Inputs[++Index]);
-            for (unsigned J = 0; J < L.ValueBytes; ++J) {
-              const unsigned Lane =
-                  archLittleEndian(TargetArch) ? J : L.ValueBytes - J - 1;
-              auto Byte = sourceBitSlice(Word, Lane, 1);
-              Leaves.push_back(HighExpr::makeBitCast(
-                  std::move(Byte), Members[Leaves.size()].Type));
-            }
-          }
-          Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
         } else if (Signature.MIPSRecords &&
-                   mips::isPackedRecordWord(P.Type, P.Components)) {
-          const auto Word = medvarToExpr(Call.Inputs[++Index]);
-          std::vector<ExprPtr> Leaves;
-          for (const auto &M : sourceValueMembers(P.Type)) {
-            const unsigned At =
-                archLittleEndian(TargetArch)
-                    ? M.ByteOffset
-                    : P.Type->Size - M.ByteOffset - M.Type->Size;
-            auto Bits = sourceBitSlice(Word, At, M.Type->Size);
-            Leaves.push_back(HighExpr::makeBitCast(std::move(Bits), M.Type));
-          }
-          Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
+                   mips::usesIntegerRecordWords(TargetArch, P)) {
+          Hinted.push_back(sourceRecordFromWords(
+              P, llvm::ArrayRef(Call.Inputs)
+                     .slice(Index + 1, P.Components.size())));
+          Index += P.Components.size();
         } else {
           std::vector<ExprPtr> Leaves;
           const auto Members = Signature.MIPSRecords

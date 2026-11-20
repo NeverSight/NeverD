@@ -675,18 +675,15 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
         Result.push_back(
             {I, static_cast<uint16_t>((Little ? Word : 1 - Word) * 4), P.Name,
              NdType::makeInt(4, false), P.Components[Word]});
-    } else if (Hint.MIPSRecords && mips::isByteRecord(P.Type)) {
+    } else if (Hint.MIPSRecords &&
+               mips::usesIntegerRecordWords(Hint.Architecture, P)) {
       uint16_t Offset = 0;
       for (const auto &L : P.Components) {
         Result.push_back(
             {I, Offset, P.Name, NdType::makeInt(L.ValueBytes, false), L});
         Offset += L.ValueBytes;
       }
-    } else if (Hint.MIPSRecords &&
-               mips::isPackedRecordWord(P.Type, P.Components))
-      Result.push_back({I, 0, P.Name, NdType::makeInt(P.Type->Size, false),
-                        P.Components.front()});
-    else {
+    } else {
       const auto Members = Hint.MIPSRecords ? sourceValueMembers(P.Type)
                                             : sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)

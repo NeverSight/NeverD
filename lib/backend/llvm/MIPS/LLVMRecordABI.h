@@ -40,6 +40,8 @@ recordCallAttributes(llvm::LLVMContext &Context, llvm::AttributeList Attrs,
                                     Signature.Architecture);
   const auto Arguments = llvmMIPSRecordArguments(Context, Signature, Pieces);
   for (const auto &[I, Argument] : llvm::enumerate(Arguments)) {
+    if (!Argument.PieceCount)
+      continue;
     const auto &P =
         Signature.Parameters[Pieces[Argument.FirstPiece].ParameterIndex];
     const unsigned Index = I + unsigned(Indirect);

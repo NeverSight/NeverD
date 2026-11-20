@@ -44,6 +44,14 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
 
+/// First o32 word occupied by a scalar or naturally aligned record.
+unsigned alignedO32ArgumentSlot(unsigned Next, const TypeRef &Type);
+
+/// A validated record argument represented by consecutive integer words in
+/// memory order. Only the last word may contain fewer than a full slot.
+bool usesIntegerRecordWords(Arch Architecture,
+                            const SourceParameterTypeHint &Parameter);
+
 /// A natural record whose complete object representation consists of byte
 /// fields.
 bool isByteRecord(const TypeRef &Type);

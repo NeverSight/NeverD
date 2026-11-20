@@ -84,6 +84,7 @@ inline llvm::Type *llvmMIPSRecordPieceType(llvm::LLVMContext &Context,
 struct LLVMMIPSRecordArgument {
   llvm::Type *Type;
   unsigned FirstPiece;
+  /// Zero for an unused o32 word inserted before an aligned aggregate.
   unsigned PieceCount;
   bool InReg;
 };
@@ -95,8 +96,20 @@ llvmMIPSRecordArguments(llvm::LLVMContext &Context,
                         const SourceFunctionTypeHint &Hint,
                         llvm::ArrayRef<SourceABIParameter> Pieces) {
   llvm::SmallVector<LLVMMIPSRecordArgument, 8> Result;
+  unsigned O32Slot =
+      Hint.ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer;
   for (unsigned I = 0; I < Pieces.size();) {
-    const auto &P = Hint.Parameters[Pieces[I].ParameterIndex];
+    const size_t Parameter = Pieces[I].ParameterIndex;
+    const auto &P = Hint.Parameters[Parameter];
+    if (isMIPSO32(Hint.Architecture) &&
+        (!I || Pieces[I - 1].ParameterIndex != Parameter)) {
+      const unsigned Start = mips::alignedO32ArgumentSlot(O32Slot, P.Type);
+      // A scalar i64/double retains its natural LLVM alignment. Flattening a
+      // record into inreg i32 operands removes that alignment from the type.
+      if (Start != O32Slot && P.Type->Kind == NdTypeKind::Struct)
+        Result.push_back({llvm::Type::getInt32Ty(Context), I, 0, false});
+      O32Slot = Start + (P.Type->Size + 3u) / 4u;
+    }
     if (mips::isSplitRecordScalar(P)) {
       Result.push_back(
           {llvmSourceCallValueType(Context, P.Type, true), I, 2, false});

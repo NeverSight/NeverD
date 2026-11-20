@@ -1684,7 +1684,11 @@ unspecified. A typed call passes the original result address as LLVM `sret`.
 The saved-link check accounts for every byte that the result writes into a
 private frame, including the last byte of a short final word. An o32 double or long long
 alongside a record uses an aligned pair of physical words. Both C backends
-recombine the words in target order for the single typed argument. Both C emitters can build a typed entry around a recovered body
+recombine the words in target order for the single typed argument. An o32
+record can also split a field across argument registers and stack words. Its
+LLVM call includes the unused alignment word when the flattened record needs
+eight-byte alignment after an odd number of slots. Both C emitters can build
+a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final
 word uses only the object's remaining bytes, including on big-endian targets.

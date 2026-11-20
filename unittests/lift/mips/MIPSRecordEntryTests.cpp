@@ -442,6 +442,66 @@ TEST(MIPSRecordABI, O32ScalarWordPairsAreOneCAndLLVMArgument) {
       }
 }
 
+TEST(MIPSRecordABI, O32AlignedRecordMaySpanArgumentRegistersAndStack) {
+  const auto U32 = NdType::makeInt(4, false);
+  const auto U64 = NdType::makeInt(8, false);
+  auto Record = NdType::makeStruct({NdType::makeFloat(8), U64}, 4);
+  Record->Passing = NdRecordPassing::ByValue;
+  llvm::LLVMContext Context;
+  for (const Arch A :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64O32, Arch::MIPS64O32EL})
+    for (bool Hidden : {false, true})
+      for (unsigned Prefix : {0u, 1u, 2u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << '/' << Hidden << '/' << Prefix);
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Hidden ? Record : NdType::makeVoid();
+        for (unsigned I = 0; I < Prefix; ++I)
+          S.Parameters.push_back({"tag", U32});
+        S.Parameters.push_back({"value", Record});
+        S.Parameters.push_back({"tail", U64});
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        const auto Pieces = sourceABIParameters(S);
+        ASSERT_EQ(Pieces.size(), Prefix + 4 + 2);
+        const auto Args = llvmMIPSRecordArguments(Context, S, Pieces);
+        const unsigned Incoming = unsigned(Hidden) + Prefix;
+        const unsigned Pad = Incoming % 2;
+        ASSERT_EQ(Args.size(), Prefix + Pad + 4 + 1);
+        const auto Attrs = mips::recordCallAttributes(Context, {}, S, Pieces);
+        if (Pad) {
+          const auto &Unused = Args[Prefix];
+          EXPECT_EQ(Unused.PieceCount, 0u);
+          EXPECT_TRUE(Unused.Type->isIntegerTy(32));
+          EXPECT_FALSE(Attrs.hasParamAttr(Incoming, llvm::Attribute::InReg));
+        }
+        for (unsigned Word = 0; Word < 4; ++Word) {
+          const auto &Piece = Pieces[Prefix + Word];
+          EXPECT_EQ(Piece.ByteOffset, Word * 4);
+          EXPECT_EQ(Piece.Type->Kind, NdTypeKind::Int);
+          EXPECT_EQ(Piece.Type->Size, 4);
+          const unsigned Slot = Incoming + Pad + Word;
+          if (Slot < 4) {
+            EXPECT_EQ(Piece.Location.Kind,
+                      SourceABICarrierKind::IntegerRegister);
+            EXPECT_EQ(Piece.Location.RegisterOffset,
+                      getTargetRegInfo(A).IntParamRegs[Slot]);
+          } else {
+            EXPECT_EQ(Piece.Location.Kind, SourceABICarrierKind::Stack);
+            EXPECT_EQ(Piece.Location.EntryStackOffset, Slot * 4);
+          }
+          const auto &Arg = Args[Prefix + Pad + Word];
+          EXPECT_TRUE(Arg.Type->isIntegerTy(32));
+          EXPECT_EQ(Arg.PieceCount, 1u);
+          EXPECT_TRUE(Attrs.hasParamAttr(Slot, llvm::Attribute::InReg));
+        }
+        EXPECT_TRUE(Args.back().Type->isIntegerTy(64));
+        EXPECT_EQ(Args.back().PieceCount, 2u);
+        EXPECT_TRUE(Attrs.hasParamAttr(unsigned(Hidden) + Args.size() - 1,
+                                       llvm::Attribute::ZExt));
+      }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);
