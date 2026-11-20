@@ -518,20 +518,30 @@ TEST(GoAssembly, ACallPassesItsArgumentsInGoRegisters) {
   EXPECT_EQ(Add.Params[1].RegOff, x86reg::RBX);
 }
 
-TEST(GoInternalABI, ACallKeepsTheGoroutineAndZeroRegisters) {
-  // R14 and X15 have the return meaning "Same" in abi-internal.md; RBX is
-  // scratch.  Calls from assembly, which may follow ABI0, keep neither.
+TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {
+  // Runtime calls can change g in R14; X15 is still zero across ordinary
+  // compiled Go calls. Assembly callers do not get the same X15 contract.
   const BinaryImage Img = registerArgumentImage();
   const MedFunc G = lift(Img, GoCaller);
   const MedOp *Call = onlyCall(G);
   ASSERT_NE(Call, nullptr);
   EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoInternal);
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
-  EXPECT_FALSE(callClobbersRegister(*Call, x86reg::R14, 8, TRI, Img.Format));
+  EXPECT_TRUE(callClobbersRegister(*Call, x86reg::R14, 8, TRI, Img.Format));
   EXPECT_FALSE(callClobbersRegister(*Call, x86reg::XMM15, 16, TRI, Img.Format));
   EXPECT_TRUE(callClobbersRegister(*Call, x86reg::RBX, 8, TRI, Img.Format));
   EXPECT_EQ(callRegisterContractOf(Img, Assembly, GoCallee),
             CallRegisterContract::GoCode);
+}
+
+TEST(GoInternalABI, ABufferWriteBarrierKeepsR14AndX15ButNotItsResult) {
+  const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
+  const auto Contract = CallRegisterContract::GoInternalWriteBarrier;
+  const auto Result = goWriteBarrierResult(Arch::X64, GoWriteBarrierKind::Buffer);
+  ASSERT_EQ(Result, x86reg::R11);
+  EXPECT_EQ(goContractKeptBytes(TRI, Contract, x86reg::R14, 8, Result), 8u);
+  EXPECT_EQ(goContractKeptBytes(TRI, Contract, x86reg::XMM15, 16, Result), 16u);
+  EXPECT_EQ(goContractKeptBytes(TRI, Contract, x86reg::R11, 8, Result), 0u);
 }
 
 TEST(GoInternalABI, X15ReadsAsZero) {
