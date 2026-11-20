@@ -122,8 +122,9 @@ def sources(case, prefix):
 
 
 def observe(image, little, abi, case, function, prefix):
-    _, _, size, defined = case
+    name, _, size, defined = case
     o32 = abi == '32'
+    narrow_word = not o32 and name == 'u32'
     mask = (1 << (32 if o32 else 64)) - 1
     cpu, entry = roundtrip.emulator(
         image, 32 if o32 else 64, little, function,
@@ -148,6 +149,16 @@ def observe(image, little, abi, case, function, prefix):
     result_pointer = None
     poison_v0 = False
 
+    def check_word(uc, register, expected_bytes):
+        # n32/n64 put a four-byte record in the low GPR half on LE and the
+        # high half on BE. Its caller and callee must ignore the other half.
+        shift = 0 if little else 32
+        bits = uc.reg_read(register)
+        expected = int.from_bytes(expected_bytes, 'little' if little else 'big')
+        assert (bits >> shift) & 0xffffffff == expected, (image, register, bits, expected)
+        if poison_v0:
+            uc.reg_write(register, bits ^ (0xffffffff << (32 - shift)))
+
     def visit(uc, pc, instruction_size, user):
         nonlocal return_pc, result_pointer
         if pc == callee:
@@ -155,6 +166,8 @@ def observe(image, little, abi, case, function, prefix):
             return_pc = uc.reg_read(mips.UC_MIPS_REG_RA)
             if o32:
                 result_pointer = uc.reg_read(mips.UC_MIPS_REG_4)
+            elif narrow_word:
+                check_word(uc, getattr(mips, f'UC_MIPS_REG_{4 + prefix}'), value)
         elif pc == return_pc:
             # n32/n64 hidden-result functions need not return their buffer
             # pointer in v0. Change it after the callee's delay slot and before
@@ -164,14 +177,16 @@ def observe(image, little, abi, case, function, prefix):
             return_pc = None
             if o32:
                 assert uc.reg_read(mips.UC_MIPS_REG_V0) == result_pointer, (image, function)
-            if poison_v0:
+            if narrow_word:
+                check_word(uc, mips.UC_MIPS_REG_V0, expected_bytes)
+            elif poison_v0:
                 uc.reg_write(mips.UC_MIPS_REG_V0, 0x5a71395362481a53)
 
     hook = cpu.hook_add(UC_HOOK_CODE, visit)
     try:
         word_bytes = 4 if o32 else 8
         attempts = [(i, value, poison) for i, value in enumerate(values)
-                    for poison in ((False, True) if not o32 and size > 16 else (False,))]
+                    for poison in ((False, True) if narrow_word or (not o32 and size > 16) else (False,))]
         for i, value, poison_v0 in attempts:
             # Both wrapper pointers address bytes. Exercise every word residue
             # and vary their alignments independently of the callee's ABI slots.
@@ -199,14 +214,14 @@ def observe(image, little, abi, case, function, prefix):
             calls.clear()
             returned.clear()
             return_pc = None
+            expected_bytes = bytes(byte ^ ((mix >> ((j & 7) * 8)) & 0xff)
+                                   for j, byte in enumerate(value))
             cpu.emu_start(entry, roundtrip.STOP, count=20000)
             output = bytes(cpu.mem_read(output_address, 128))
             context = (str(image), function, value.hex(), input_offset, output_offset, poison_v0)
             assert calls == [callee], (context, calls)
             assert len(returned) == 1, (context, returned)
-            expected = bytes(byte ^ ((mix >> ((i & 7) * 8)) & 0xff)
-                             for i, byte in enumerate(value))
-            assert all(output[i] == expected[i] for i in defined), (context, output.hex())
+            assert all(output[i] == expected_bytes[i] for i in defined), (context, output.hex())
             assert bytes(cpu.mem_read(output_address - 16, 16)) == bytes([0xa5]) * 16, context
             assert output[size:] == bytes([0xa5]) * (128 - size), context
             assert bytes(cpu.mem_read(input_address - 16, len(input_region))) == input_region, context
