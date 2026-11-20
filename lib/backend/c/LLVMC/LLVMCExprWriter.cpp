@@ -3948,6 +3948,17 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                ? "(" + typeToCLLVM(Ty) + ")(" + Text + ")"
                : Text;
   };
+  auto Bitwise = [&](const char *Operator) {
+    std::string Text = LHS + Operator + RHS;
+    // Bits outside a rounded C carrier's LLVM width do not belong to the
+    // result, including sign-extension bits in a printed negative constant.
+    if (Ty->isIntegerTy() && !Ty->isIntegerTy(1)) {
+      const unsigned Width = Ty->getIntegerBitWidth();
+      if (Width != signedIntegerCarrierWidth(Width))
+        return castStr(llvm::Instruction::Trunc, Text, Ty, Ty);
+    }
+    return Text;
+  };
   switch (Opcode) {
   case llvm::Instruction::FAdd:
     return Floating(" + ");
@@ -4004,11 +4015,11 @@ std::string LLVMCWriter::binopStr(unsigned Opcode, const std::string &LHS,
                    signedIntegerOperand(Ty, LHS) + " >> " + ShiftCount(), Ty,
                    Ty);
   case llvm::Instruction::And:
-    return LHS + " & " + RHS;
+    return Bitwise(" & ");
   case llvm::Instruction::Or:
-    return LHS + " | " + RHS;
+    return Bitwise(" | ");
   case llvm::Instruction::Xor:
-    return LHS + " ^ " + RHS;
+    return Bitwise(" ^ ");
   default:
     return LHS + " /* no recovered operator at 0x0 */ " + RHS;
   }
