@@ -887,8 +887,9 @@ int main(int argc, char **argv) {
   if (pthread_join(monitor, NULL))
     return 6;
   if (alternate) {
-    stack_t disable = {.ss_flags = SS_DISABLE};
-    if (sigaltstack(&disable, NULL))
+    // Darwin validates the registered size when disabling the alternate stack.
+    alternate_stack.ss_flags = SS_DISABLE;
+    if (sigaltstack(&alternate_stack, NULL))
       return 4;
     free(alternate_stack.ss_sp);
   }
