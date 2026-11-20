@@ -553,11 +553,13 @@ Still open, in order of yield:
    - DWARF-typed signatures. They need Go's register assignment by type.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
-2. The goroutine register (R14, R28), X15 and the closure context register
-   (RDX, R26) should become fixed values or parameters once an image's
-   internal ABI is proven. Once the growth path is gone, a closure's reads of
-   RDX show as "incoming register" placeholders. Together these registers are
-   about a fifth of what remains on Go 1.18+ amd64 binaries.
+2. Go's fixed registers. On register-ABI amd64 code, X15 now reads as zero
+   and calls keep R14 (`CallRegisterContract::GoInternal`). Still open:
+   - R14 (and arm64's R28) needs a name for the current goroutine. Its reads
+     are "incoming register" placeholders, about 4% of what remains.
+   - A closure's context register (RDX, arm64 R26) should become a
+     parameter. Its reads are "incoming register" placeholders once the
+     growth path is gone, about 5% of what remains.
 3. Go 1.26 bounds failures call one `runtime.panicBounds`, and the call
    site's `PCDATA_PanicBounds` entry names the registers or constants holding
    the index and the length (`internal/abi/bounds.go`). About 690 calls per

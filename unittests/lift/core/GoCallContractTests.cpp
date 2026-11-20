@@ -518,6 +518,50 @@ TEST(GoAssembly, ACallPassesItsArgumentsInGoRegisters) {
   EXPECT_EQ(Add.Params[1].RegOff, x86reg::RBX);
 }
 
+TEST(GoInternalABI, ACallKeepsTheGoroutineAndZeroRegisters) {
+  // R14 and X15 have the return meaning "Same" in abi-internal.md; RBX is
+  // scratch.  Calls from assembly, which may follow ABI0, keep neither.
+  const BinaryImage Img = registerArgumentImage();
+  const MedFunc G = lift(Img, GoCaller);
+  const MedOp *Call = onlyCall(G);
+  ASSERT_NE(Call, nullptr);
+  EXPECT_EQ(Call->RegisterContract, CallRegisterContract::GoInternal);
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  EXPECT_FALSE(callClobbersRegister(*Call, x86reg::R14, 8, TRI, Img.Format));
+  EXPECT_FALSE(callClobbersRegister(*Call, x86reg::XMM15, 16, TRI, Img.Format));
+  EXPECT_TRUE(callClobbersRegister(*Call, x86reg::RBX, 8, TRI, Img.Format));
+  EXPECT_EQ(callRegisterContractOf(Img, Assembly, GoCallee),
+            CallRegisterContract::GoCode);
+}
+
+TEST(GoInternalABI, X15ReadsAsZero) {
+  // main.z: movups [rcx], xmm15; ret: Go's internal ABI enters it with X15
+  // zero, so it stores sixteen zero bytes.
+  BinaryImage Img = registerArgumentImage();
+  constexpr va_t Zeroing = kTextVA + 0x380;
+  GoTestImage T;
+  T.Img = std::move(Img);
+  T.writeText(Zeroing, {0x44, 0x0F, 0x11, 0x39, 0xC3});
+  const MedFunc F = lift(T.Img, Zeroing);
+  const MedOp *Store = nullptr;
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::STORE)
+        Store = &Op;
+  ASSERT_NE(Store, nullptr);
+  ASSERT_GE(Store->NumInputs, 2u);
+  const MedVar &Value = Store->Inputs[1];
+  bool Zero = Value.Kind == MedVar::Const && Value.ConstVal == 0;
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::COPY && Op.Output.Kind == Value.Kind &&
+          Op.Output.Id == Value.Id && Op.Output.SSAVer == Value.SSAVer &&
+          Op.NumInputs == 1 && Op.Inputs[0].Kind == MedVar::Const &&
+          Op.Inputs[0].ConstVal == 0)
+        Zero = true;
+  EXPECT_TRUE(Zero);
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

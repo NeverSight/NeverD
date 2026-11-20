@@ -31,7 +31,26 @@ enum class CallRegisterContract : uint8_t {
   /// general-purpose register keeps its value but the one it returns buffer
   /// space in and arm64's R27; flags and vector registers do not.
   GoWriteBarrier,
+  /// GoCode, from code that follows Go's internal ABI on x86-64: R14 keeps
+  /// the current goroutine and X15 zero, whose return meaning is "Same" in
+  /// abi-internal.md.
+  GoInternal,
+  /// GoWriteBarrier, from code that follows Go's internal ABI on x86-64: R14
+  /// and X15 keep their values as well.
+  GoInternalWriteBarrier,
 };
+
+/// Whether \p Contract is a call to a Go runtime write barrier.
+constexpr bool isGoWriteBarrierContract(CallRegisterContract Contract) {
+  return Contract == CallRegisterContract::GoWriteBarrier ||
+         Contract == CallRegisterContract::GoInternalWriteBarrier;
+}
+
+/// Whether a call under \p Contract keeps Go's fixed registers, R14 and X15.
+constexpr bool keepsGoFixedRegisters(CallRegisterContract Contract) {
+  return Contract == CallRegisterContract::GoInternal ||
+         Contract == CallRegisterContract::GoInternalWriteBarrier;
+}
 
 } // namespace neverd
 

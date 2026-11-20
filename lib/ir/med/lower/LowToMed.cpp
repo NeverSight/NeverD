@@ -1688,8 +1688,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       // A write barrier defines only the buffer space it returns, in its own
       // register, and returns nothing where it performs the store itself
       // (GoWriteBarrierKind): no result register changes.
-      if (MOp.RegisterContract == CallRegisterContract::GoWriteBarrier &&
-          MOp.NumInputs && MOp.Inputs[0].isConst())
+      if (isGoWriteBarrierContract(MOp.RegisterContract) && MOp.NumInputs &&
+          MOp.Inputs[0].isConst())
         if (const GoWriteBarrier *Barrier =
                 goWriteBarrierAt(*Image, MOp.Inputs[0].ConstVal)) {
           if (const std::optional<uint64_t> Buffer =
@@ -2053,6 +2053,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         Image ? goStackGrowth(*Image, Low.Blocks) : std::nullopt;
     if (GoGrowth && GoGrowth->Restarts)
       elideGoStackGrowth(Func, GoGrowth->GrowthStart);
+    // Go's internal ABI enters a function with X15 zero, and its calls keep
+    // it so (CallRegisterContract::GoInternal).
+    if (Image && TheArch == Arch::X64 && !Func.Blocks.empty() &&
+        usesGoRegisterArguments(*Image, Low.Entry)) {
+      MedOp Zero;
+      Zero.Opcode = NdOp::COPY;
+      Zero.Addr = Func.Blocks.front().StartAddr;
+      Zero.Output = ndVarToMedVar(NdVar::reg(x86reg::XMM15, 16));
+      Zero.addInput(MedVar::makeConst(0, 16));
+      auto &EntryOps = Func.Blocks.front().Ops;
+      EntryOps.insert(EntryOps.begin(), std::move(Zero));
+    }
 
     simplifyCfg(Func);
     debugVerifyMedFunc(Func, "simplifyCfg");

@@ -164,15 +164,20 @@ CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
     return CallRegisterContract::Platform;
+  // Compiled code of a register-ABI image follows the internal ABI, and so
+  // keeps R14 and X15 across its calls.
+  const bool Internal = usesGoRegisterArguments(Img, Caller);
   if (Callee != InvalidVA && goWriteBarrierAt(Img, Callee))
-    return CallRegisterContract::GoWriteBarrier;
-  return CallRegisterContract::GoCode;
+    return Internal ? CallRegisterContract::GoInternalWriteBarrier
+                    : CallRegisterContract::GoWriteBarrier;
+  return Internal ? CallRegisterContract::GoInternal
+                  : CallRegisterContract::GoCode;
 }
 
 std::optional<uint64_t> goCallResultRegister(const BinaryImage &Img,
                                              CallRegisterContract Contract,
                                              va_t Callee) {
-  if (Contract != CallRegisterContract::GoWriteBarrier)
+  if (!isGoWriteBarrierContract(Contract))
     return std::nullopt;
   const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Callee);
   return Barrier ? goWriteBarrierResult(Img.Arch, Barrier->Kind) : std::nullopt;
@@ -360,6 +365,10 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
 uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
                              CallRegisterContract Contract, uint64_t RegOff,
                              uint16_t Size, std::optional<uint64_t> Result) {
+  // X15 holds zero in Go's internal ABI, before a call and after it.
+  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
+      RegOff >= x86reg::XMM15 && RegOff + Size <= x86reg::XMM15 + 16 && Size)
+    return Size;
   const uint16_t Width = TRI.FullRegWidth;
   if (Size == 0 || Width == 0 || RegOff % Width + Size > Width)
     return 0;
@@ -369,7 +378,11 @@ uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
   // abi-internal.md, likewise RSP and R29 on arm64).
   if (TRI.isFrameReg(Register))
     return Size;
-  if (Contract != CallRegisterContract::GoWriteBarrier ||
+  // R14 holds the current goroutine across any call.
+  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
+      Register == x86reg::R14)
+    return Size;
+  if (!isGoWriteBarrierContract(Contract) ||
       !isGoGeneralRegister(TRI.TheArch, Register) ||
       (Result && Register == *Result) ||
       (TRI.TheArch == Arch::AArch64 && Register == a64reg::X27))
