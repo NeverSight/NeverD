@@ -552,8 +552,9 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
           Audit.DecodeFailures.empty() && Audit.TruncatedPaths.empty() &&
           Audit.UnprovenReturns.empty())
         Admitted.push_back(Audit.Entry);
-    if (auto Error = lowerMachORegisterResults(*Result.LlvmModule, Img,
-                                               Admitted, NativeStackEntries)) {
+    if (auto Error =
+            lowerMachORegisterResults(*Result.LlvmModule, Img, Admitted,
+                                      NativeStackEntries, Result.LowFuncs)) {
       Result.Error = llvm::toString(std::move(Error));
       Result.LlvmModule.reset();
       Result.LLVMSources.reset();

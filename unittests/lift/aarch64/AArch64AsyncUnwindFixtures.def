@@ -50,6 +50,8 @@ ASYNC_FRAME_TEXT(kEntryRules, "entry.rules")
 ASYNC_FRAME_TEXT(kEntrySamples, "entry.samples")
 ASYNC_FRAME_TEXT(kEntryMode, "entry")
 ASYNC_FRAME_TEXT(kRawEntryMode, "raw-entry")
+ASYNC_FRAME_TEXT(kCompactEntryMode, "raw-compact-entry")
+ASYNC_FRAME_TEXT(kCompactOldEntry, "native_old_entry_original_compact_step")
 ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
@@ -543,7 +545,7 @@ _Atomic uintptr_t stage_entry_sp, incoming_x19;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
-static int entry_only, raw_entry, visits_entry, exact_entry, raw_sp;
+static int entry_only, raw_entry, compact_entry, visits_entry, exact_entry, raw_sp;
 static unsigned lookup_offset;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
@@ -628,9 +630,12 @@ static void raw_entry_walk(const ucontext_t *uc) {
   }
   raw_sp = check_raw_caller(&cursor, sp);
 
+  const uint32_t mode = compact_entry ? UNWIND_ARM64_MODE_FRAMELESS : UNWIND_ARM64_MODE_DWARF;
+  const uint32_t other = compact_entry ? UNWIND_ARM64_MODE_DWARF : UNWIND_ARM64_MODE_FRAMELESS;
   if (arm_thread_state64_get_lr(*regs) != expected_return ||
+      ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, other, &lookup_offset) ||
       ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner + NDArm64eInstructionAlignment, &lookup_offset) ||
-      !ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner, &lookup_offset) ||
+      !ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, mode, &lookup_offset) ||
       raw_pc(&cursor) != owner + lookup_offset)
     _exit(35);
   for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
@@ -791,7 +796,8 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  raw_entry = argc == 7 && !strcmp(argv[6], "raw-entry");
+  compact_entry = argc == 7 && !strcmp(argv[6], "raw-compact-entry");
+  raw_entry = compact_entry || (argc == 7 && !strcmp(argv[6], "raw-entry"));
   entry_only = raw_entry || (argc == 7 && !strcmp(argv[6], "entry"));
   if ((!entry_only && argc != 6) || (!raw_entry && !read_rules(argv[5])))
     return 1;
@@ -799,7 +805,7 @@ int main(int argc, char **argv) {
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!image)
     return 2;
-  entry run = (entry)dlsym(image, "stages");
+  entry run = (entry)dlsym(image, compact_entry ? "companion" : "stages");
   if (!run)
     return 3;
   const uintptr_t public_entry = (uintptr_t)ptrauth_strip(

@@ -16,6 +16,8 @@
 
 #include "neverd/backend/codegen/BinaryRewriter.h"
 
+#include "BlockAddressUse.h"
+
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/codegen/BinaryUtils.h"
 #include "neverd/backend/codegen/COFF/COFFExceptionPatch.h"
@@ -628,6 +630,48 @@ bool sourceEntryCanHostTrampoline(const BinaryImage &Image, va_t OriginalVA) {
                             &Image.Exports) >= TrampolineSize;
 }
 
+llvm::StringRef blockAddressEscape(
+    const llvm::Function &Body,
+    llvm::function_ref<bool(const llvm::Function *)> RemovesBody) {
+#define BLOCK_ADDRESS_ESCAPE(Name, Value)                                      \
+  constexpr llvm::StringLiteral Name = Value;
+#include "BlockAddressUse.def"
+  for (const llvm::BasicBlock &Block : Body) {
+    llvm::BlockAddress *Address = llvm::BlockAddress::lookup(&Block);
+    if (!Address)
+      continue;
+    if (Address->isUsedByMetadata())
+      return kMetadataEscape;
+
+    llvm::SmallVector<const llvm::User *, 8> Worklist;
+    llvm::SmallPtrSet<const llvm::User *, 16> SeenUsers;
+    llvm::append_range(Worklist, Address->users());
+    while (!Worklist.empty()) {
+      const llvm::User *User = Worklist.pop_back_val();
+      if (!SeenUsers.insert(User).second)
+        continue;
+      if (User->isUsedByMetadata())
+        return kMetadataEscape;
+
+      if (const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(User)) {
+        if (!RemovesBody(Instruction->getFunction()))
+          return kValueEscape;
+
+        continue;
+      }
+      if (llvm::isa<llvm::GlobalValue>(User))
+        return kValueEscape;
+
+      if (llvm::isa<llvm::Constant>(User)) {
+        llvm::append_range(Worklist, User->users());
+        continue;
+      }
+      return kValueEscape;
+    }
+  }
+  return {};
+}
+
 bool BinaryPatcher::prepareSourceFunctionsForPatch(
     llvm::Module &Module, const BinaryImage *Image,
     SourceFunctionPreparation &Preparation, std::string &Detail,
@@ -771,45 +815,13 @@ bool BinaryPatcher::prepareSourceFunctionsForPatch(
   for (const SourceCandidate &Candidate : Candidates) {
     if (Candidate.Replaceable)
       continue;
-    for (const llvm::BasicBlock &Block : *Candidate.Function) {
-      llvm::BlockAddress *Address = llvm::BlockAddress::lookup(&Block);
-      if (!Address)
-        continue;
-      if (Address->isUsedByMetadata()) {
-        Detail = "a preserved source has a metadata blockaddress escape";
-        return false;
-      }
-      llvm::SmallVector<const llvm::User *, 8> Worklist;
-      llvm::SmallPtrSet<const llvm::User *, 16> SeenUsers;
-      for (const llvm::User *User : Address->users())
-        Worklist.push_back(User);
-      while (!Worklist.empty()) {
-        const llvm::User *User = Worklist.pop_back_val();
-        if (!SeenUsers.insert(User).second)
-          continue;
-        if (User->isUsedByMetadata()) {
-          Detail = "a preserved source has a metadata blockaddress escape";
-          return false;
-        }
-        if (const auto *Instruction = llvm::dyn_cast<llvm::Instruction>(User)) {
-          if (!FunctionsToExternalize.contains(Instruction->getFunction())) {
-            Detail = "a preserved source has an escaping blockaddress";
-            return false;
-          }
-          continue;
-        }
-        if (llvm::isa<llvm::GlobalValue>(User)) {
-          Detail = "a preserved source has an escaping blockaddress";
-          return false;
-        }
-        if (llvm::isa<llvm::Constant>(User)) {
-          for (const llvm::User *Nested : User->users())
-            Worklist.push_back(Nested);
-          continue;
-        }
-        Detail = "a preserved source has an escaping blockaddress";
-        return false;
-      }
+    const auto Escape =
+        blockAddressEscape(*Candidate.Function, [&](const auto *F) {
+          return FunctionsToExternalize.contains(F);
+        });
+    if (!Escape.empty()) {
+      Detail = Escape.str();
+      return false;
     }
   }
 

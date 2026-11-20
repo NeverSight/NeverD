@@ -13,6 +13,7 @@
 #include "neverd/loader/DWARF/AArch64ReturnAddressState.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/ReturnAddressSigning.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -323,6 +324,20 @@ TEST(AArch64AsyncUnwind,
   ASSERT_TRUE(Before && After);
   ASSERT_EQ(llvm::ArrayRef(Before, Size), llvm::ArrayRef(After, Size));
   const va_t OldEntry = Entry + Patch->OriginalSectionSlide;
+  const auto OldCompanionEntry = Companion->Addr + Patch->OriginalSectionSlide;
+  const auto *CompactLeaf =
+      Original->ExceptionMetadata.findFunction(Companion->Addr);
+  const auto *CompactEntry =
+      Published->ExceptionMetadata.findFunction(OldCompanionEntry);
+  ASSERT_TRUE(CompactLeaf && CompactLeaf->Compact && !CompactLeaf->Dwarf);
+  ASSERT_TRUE(CompactEntry && CompactEntry->Compact && !CompactEntry->Dwarf);
+  EXPECT_EQ(CompactLeaf->Compact->NativeEncoding,
+            macho_unwind::kARM64ModeFrameless);
+  EXPECT_EQ(CompactEntry->Compact->NativeEncoding,
+            CompactLeaf->Compact->NativeEncoding);
+  const auto Forward =
+      machOLiftedSource(*Published, OldCompanionEntry, InvalidVA);
+  ASSERT_TRUE(Forward && Forward->ForwardTarget);
   const auto *Trampoline = Published->ExceptionMetadata.findFunction(OldEntry);
   ASSERT_TRUE(Trampoline && Trampoline->Dwarf);
   ASSERT_EQ(Trampoline->CodeRange.Begin, OldEntry);
@@ -468,27 +483,32 @@ TEST(AArch64AsyncUnwind,
         [&](const auto &A, const auto &B) { return Fields(A) == Fields(B); }));
     for (const auto &Path : {Input, Output}) {
       SCOPED_TRACE(Path);
-      ASSERT_EQ(
-          llvm::sys::ExecuteAndWait(
-              Driver, {Driver, Path, std::to_string(0),
-                       std::to_string(Path == Input ? kOldValue : kNewValue),
-                       EntrySamples, kRawEntryMode, kRawEntryMode}),
-          0);
-      std::ifstream Raw(EntrySamples);
-      int Visited, Exact, MatchedSP;
-      unsigned Lookup;
-      ASSERT_TRUE(Raw >> Visited >> Exact >> MatchedSP >> Lookup);
-      EXPECT_TRUE((Raw >> std::ws).eof());
-      EXPECT_TRUE(Visited == 0 || Visited == 1);
-      EXPECT_EQ(Exact, 1);
-      EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
-      EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
-      if (Path == Output) {
-        RecordProperty(kRawEntryWalk, 1);
-        RecordProperty(kRawEntryVisit, Visited);
-        RecordProperty(kExactEntryStep, Exact);
-        RecordProperty(kRawEntrySP, MatchedSP);
-        RecordProperty(kEntryLookupOffset, Lookup);
+      for (llvm::StringRef Mode : {kRawEntryMode, kCompactEntryMode}) {
+        SCOPED_TRACE(Mode.str());
+        ASSERT_EQ(
+            llvm::sys::ExecuteAndWait(
+                Driver, {Driver, Path, std::to_string(0),
+                         std::to_string(Path == Input ? kOldValue : kNewValue),
+                         EntrySamples, Mode, Mode}),
+            0);
+        std::ifstream Raw(EntrySamples);
+        int Visited, Exact, MatchedSP;
+        unsigned Lookup;
+        ASSERT_TRUE(Raw >> Visited >> Exact >> MatchedSP >> Lookup);
+        EXPECT_TRUE((Raw >> std::ws).eof());
+        EXPECT_TRUE(Visited == 0 || Visited == 1);
+        EXPECT_EQ(Exact, 1);
+        EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
+        EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
+        if (Path == Output && Mode == kCompactEntryMode)
+          RecordProperty(kCompactOldEntry, Exact);
+        if (Path == Output && Mode == kRawEntryMode) {
+          RecordProperty(kRawEntryWalk, 1);
+          RecordProperty(kRawEntryVisit, Visited);
+          RecordProperty(kExactEntryStep, Exact);
+          RecordProperty(kRawEntrySP, MatchedSP);
+          RecordProperty(kEntryLookupOffset, Lookup);
+        }
       }
     }
     for (auto [Path, Property] :

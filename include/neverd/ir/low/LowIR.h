@@ -1251,6 +1251,9 @@ struct JumpTableCompositeSelectorUseRef {
 struct JumpTable {
   /// Display candidates, not a proof that the selector stays in this table.
   bool AnalysisOnly = false;
+  /// The resolver proved a runtime index domain separately from the available
+  /// table bytes. Native publication consumes this occurrence-specific fact.
+  bool IndexDomainAuthenticated = false;
   va_t InsnAddr = 0;
   va_t BaseAddr = 0;
   /// Distinguishes an absent base from a relocation-proven table mapped at VA

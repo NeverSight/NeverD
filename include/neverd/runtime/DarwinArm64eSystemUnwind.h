@@ -90,17 +90,18 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
   return Result;
 }
 
-/// Open the original indexed FDE for stack inspection at a known function
-/// entry. The kernel stopped before its first instruction, with incoming SP
-/// and live unsigned LR. Only the system unwinder interprets the frame.
-/// LookupOffset identifies the byte used for lookup in that first instruction.
-/// A false result leaves the output cursor unsuitable for use.
-static inline bool
-ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
-                                     const ucontext_t *Context, uintptr_t Entry,
-                                     unsigned *LookupOffset) {
+/// Start a Darwin cursor at the interrupted entry, before its first
+/// instruction. The original system table must have the requested recipe.
+/// LookupOffset identifies the lookup byte in that instruction. On failure
+/// discard the cursor.
+static inline bool ndDarwinArm64eInitTableEntryCursor(unw_cursor_t *System,
+                                                      const ucontext_t *Context,
+                                                      uintptr_t Entry,
+                                                      uint32_t Mode,
+                                                      unsigned *LookupOffset) {
   if (!System || !Context || !Context->uc_mcontext || !LookupOffset || !Entry ||
-      Entry % NDArm64eInstructionAlignment)
+      Entry % NDArm64eInstructionAlignment ||
+      (Mode != UNWIND_ARM64_MODE_DWARF && Mode != UNWIND_ARM64_MODE_FRAMELESS))
     return false;
   const arm_thread_state64_t *Regs = &Context->uc_mcontext->__ss;
   if (arm_thread_state64_get_pc(*Regs) != Entry)
@@ -142,8 +143,16 @@ ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
         unw_get_proc_info(System, &Info) || Info.start_ip != Entry ||
         Info.end_ip <= Entry ||
         Info.end_ip - Entry < NDArm64eInstructionAlignment ||
-        (Info.format & UNWIND_ARM64_MODE_MASK) != UNWIND_ARM64_MODE_DWARF)
+        (Info.format & UNWIND_ARM64_MODE_MASK) != Mode)
       return false;
+    // A compact leaf with no saved pairs or stack adjustment already describes
+    // the live LR at entry. Other compact recipes describe later instructions.
+    if (Mode == UNWIND_ARM64_MODE_FRAMELESS) {
+      if (Info.format != UNWIND_ARM64_MODE_FRAMELESS)
+        return false;
+      *LookupOffset = Offset;
+      return true;
+    }
     if (Info.unwind_info && Info.unwind_info_size) {
       *LookupOffset = Offset;
       return true;
@@ -154,6 +163,15 @@ ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
       return false;
   }
   return false;
+}
+
+/// Use the original indexed FDE at an interrupted function entry.
+static inline bool
+ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
+                                     const ucontext_t *Context, uintptr_t Entry,
+                                     unsigned *LookupOffset) {
+  return ndDarwinArm64eInitTableEntryCursor(
+      System, Context, Entry, UNWIND_ARM64_MODE_DWARF, LookupOffset);
 }
 
 // Recover from the interrupted stack before changing either native consumer.
