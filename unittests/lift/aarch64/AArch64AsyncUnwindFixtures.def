@@ -34,11 +34,13 @@ ASYNC_FRAME_VALUE(int, kUnavailableCode, 2)
 ASYNC_FRAME_TEXT(kOldCompanion, "old.S")
 ASYNC_FRAME_TEXT(kNewCompanion, "new.S")
 ASYNC_FRAME_TEXT(kMapping, "companion")
+ASYNC_FRAME_TEXT(kLanguageMapping, "language_companion")
 ASYNC_FRAME_TEXT(kStagesMapping, "stages")
 ASYNC_FRAME_TEXT(kExplicit, "-DNEVERD_TEST_EXPLICIT_RA")
 ASYNC_FRAME_TEXT(kOriginalRows, "original_signal_rows")
 ASYNC_FRAME_TEXT(kPublishedRows, "published_signal_rows")
 ASYNC_FRAME_TEXT(kCompanionName, "_companion")
+ASYNC_FRAME_TEXT(kLanguageCompanionName, "_language_companion")
 ASYNC_FRAME_VALUE(unsigned, kOldValue, 3)
 ASYNC_FRAME_VALUE(unsigned, kNewValue, 29)
 ASYNC_FRAME_TEXT(kDriver, "driver")
@@ -51,7 +53,10 @@ ASYNC_FRAME_TEXT(kEntrySamples, "entry.samples")
 ASYNC_FRAME_TEXT(kEntryMode, "entry")
 ASYNC_FRAME_TEXT(kRawEntryMode, "raw-entry")
 ASYNC_FRAME_TEXT(kCompactEntryMode, "raw-compact-entry")
+ASYNC_FRAME_TEXT(kLanguageEntryMode, "raw-language-entry")
 ASYNC_FRAME_TEXT(kCompactOldEntry, "native_old_entry_original_compact_step")
+ASYNC_FRAME_TEXT(kLanguageOldEntry,
+                 "native_old_entry_original_compact_lsda_step")
 ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
@@ -401,6 +406,18 @@ _companion:
  mov w0, #3
  ret
 .cfi_endproc
+.globl _language_companion
+.p2align 2
+_language_companion:
+.cfi_startproc
+.cfi_personality 155, ___gxx_personality_v0
+.cfi_lsda 16, Lcompanion_lsda
+ mov w0, #3
+ ret
+.cfi_endproc
+.section __TEXT,__gcc_except_tab
+Lcompanion_lsda:
+ .byte 0xff, 0xff, 0x01, 0x00
 .subsections_via_symbols
 )asm")
 ASYNC_FRAME_TEXT(kReplacementCompanion, R"asm(
@@ -413,6 +430,13 @@ _companion:
  pacibsp
  mov w0, #29
  retab
+.cfi_endproc
+.globl _language_companion
+.p2align 2
+_language_companion:
+.cfi_startproc
+ mov w0, #29
+ ret
 .cfi_endproc
 .subsections_via_symbols
 )asm")
@@ -796,7 +820,9 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  compact_entry = argc == 7 && !strcmp(argv[6], "raw-compact-entry");
+  const int language_entry = argc == 7 && !strcmp(argv[6], "raw-language-entry");
+  const char *companion_name = language_entry ? "language_companion" : "companion";
+  compact_entry = language_entry || (argc == 7 && !strcmp(argv[6], "raw-compact-entry"));
   raw_entry = compact_entry || (argc == 7 && !strcmp(argv[6], "raw-entry"));
   entry_only = raw_entry || (argc == 7 && !strcmp(argv[6], "entry"));
   if ((!entry_only && argc != 6) || (!raw_entry && !read_rules(argv[5])))
@@ -805,13 +831,13 @@ int main(int argc, char **argv) {
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!image)
     return 2;
-  entry run = (entry)dlsym(image, compact_entry ? "companion" : "stages");
+  entry run = (entry)dlsym(image, compact_entry ? companion_name : "stages");
   if (!run)
     return 3;
   const uintptr_t public_entry = (uintptr_t)ptrauth_strip(
       run, ptrauth_key_function_pointer);
   typedef unsigned (*companion_fn)(void);
-  companion_fn companion = (companion_fn)dlsym(image, "companion");
+  companion_fn companion = (companion_fn)dlsym(image, companion_name);
   if (!companion || companion() != strtoul(argv[3], NULL, 10))
     return 9;
   owner = public_entry + strtoull(argv[2], NULL, 10);

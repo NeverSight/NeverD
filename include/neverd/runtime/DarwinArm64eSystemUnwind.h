@@ -145,10 +145,12 @@ static inline bool ndDarwinArm64eInitTableEntryCursor(unw_cursor_t *System,
         Info.end_ip - Entry < NDArm64eInstructionAlignment ||
         (Info.format & UNWIND_ARM64_MODE_MASK) != Mode)
       return false;
-    // A compact leaf with no saved pairs or stack adjustment already describes
-    // the live LR at entry. Other compact recipes describe later instructions.
+    // The personality index and LSDA flag select language metadata. The
+    // remaining bits must describe a function start with live LR, no saved
+    // registers and no stack adjustment at the interrupted instruction.
     if (Mode == UNWIND_ARM64_MODE_FRAMELESS) {
-      if (Info.format != UNWIND_ARM64_MODE_FRAMELESS)
+      if ((Info.format & ~(UNWIND_PERSONALITY_MASK | UNWIND_HAS_LSDA)) !=
+          UNWIND_ARM64_MODE_FRAMELESS)
         return false;
       *LookupOffset = Offset;
       return true;
