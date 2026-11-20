@@ -1297,7 +1297,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     PendingStackProof[I] = 0;
     if (MIPS16Runtime.contains(Result.LowFuncs[I].Entry)) {
       ConversionErrors[I] = "MIPS16 runtime helper uses a private register "
-                            "convention; retain the native helper";
+                            "convention; retain the native runtime helper";
       return;
     }
     try {
