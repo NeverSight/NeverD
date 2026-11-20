@@ -28,7 +28,8 @@ TEST(LLVMCFunnelShift, GuardsZeroAndModuloCountsAtIntegerWidths) {
   llvm::LLVMContext Context;
   llvm::Module Module("funnel-shifts", Context);
   llvm::IRBuilder<> Builder(Context);
-  for (unsigned Width : {8u, 16u, 32u, 64u, 128u}) {
+  for (unsigned Width :
+       {7u, 8u, 16u, 24u, 32u, 40u, 48u, 56u, 64u, 72u, 128u}) {
     auto *Ty = Builder.getIntNTy(Width);
     for (const auto &[Prefix, ID] :
          {std::pair{"fshl", llvm::Intrinsic::fshl},
@@ -61,25 +62,32 @@ TEST(LLVMCFunnelShift, GuardsZeroAndModuloCountsAtIntegerWidths) {
 
   const std::string Source = "#include <stdint.h>\n" + Emitted + R"(
 #define CHECK(W, T) do { \
+  const T mask = (T)((T)~(T)0 >> (sizeof(T) * 8 - W)); \
   const T values[] = {(T)0, (T)1, (T)0x80000001u, (T)~(T)0}; \
   const unsigned counts[] = {0, 1, 7, W - 1, W, W + 1, 2 * W - 1, 255}; \
   for (unsigned i = 0; i < 4; ++i) \
     for (unsigned j = 0; j < 4; ++j) \
       for (unsigned k = 0; k < 8; ++k) { \
-        T a = values[i], b = values[j]; \
-        unsigned s = counts[k] % W; \
+        T a = values[i] & mask, b = values[j] & mask; \
+        unsigned s = ((T)counts[k] & mask) % W; \
         T left = s ? (T)((a << s) | (b >> (W - s))) : a; \
         T right = s ? (T)((a << (W - s)) | (b >> s)) : b; \
-        if (fshl##W(a, b, (T)counts[k]) != (T)(left ^ (T)0x5a) || \
-            fshr##W(a, b, (T)counts[k]) != (T)(right ^ (T)0x5a)) \
+        if (fshl##W(values[i], values[j], (T)counts[k]) != ((left ^ (T)0x5a) & mask) || \
+            fshr##W(values[i], values[j], (T)counts[k]) != ((right ^ (T)0x5a) & mask)) \
           return 1; \
       } \
 } while (0)
 int main(void) {
+  CHECK(7, uint8_t);
   CHECK(8, uint8_t);
   CHECK(16, uint16_t);
+  CHECK(24, uint32_t);
   CHECK(32, uint32_t);
+  CHECK(40, uint64_t);
+  CHECK(48, uint64_t);
+  CHECK(56, uint64_t);
   CHECK(64, uint64_t);
+  CHECK(72, __uint128_t);
   CHECK(128, unsigned __int128);
   return 0;
 }

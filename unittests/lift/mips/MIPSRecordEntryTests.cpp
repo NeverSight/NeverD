@@ -8,7 +8,9 @@
 #include "../../../lib/backend/llvm/MIPS/LLVMRecordABI.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
@@ -21,6 +23,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 
@@ -440,6 +443,60 @@ TEST(MIPSRecordABI, O32ScalarWordPairsAreOneCAndLLVMArgument) {
         std::string Diagnostic;
         EXPECT_FALSE(validateSourceABI(Changed, Diagnostic));
       }
+}
+
+TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
+  struct Context final : NullDebugContext {
+    FunctionSym Callee;
+    std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
+      return Entry == Callee.Addr ? std::optional(Callee) : std::nullopt;
+    }
+    bool hasAuthenticatedFunctionSignatures() const override { return true; }
+    bool hasInfo() const override { return true; }
+  };
+  for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL})
+    for (unsigned Bytes : {3u, 8u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Bytes);
+      RecordFixture F(A, Bytes);
+      Context Debug;
+      Debug.Callee = F.Function;
+      Debug.Callee.Name = "consume_payload";
+      Debug.Callee.ReturnType = NdType::makeVoid();
+      F.Image.MIPS->ABI = MIPSABI::N32;
+      const auto S = mips::recordSourceABI(F.Image, Debug, Debug.Callee.Addr);
+      ASSERT_TRUE(S);
+      const auto Parts = sourceABIParameters(*S);
+      ASSERT_EQ(Parts.size(), 1u);
+
+      llvm::LLVMContext C;
+      llvm::Module Module("record-words", C);
+      Module.setDataLayout(archLittleEndian(A) ? "e-p:32:32" : "E-p:32:32");
+      llvm::IRBuilder<> B(C);
+      auto *Word = B.getIntNTy(Bytes * 8);
+      auto *Type = llvm::FunctionType::get(B.getVoidTy(), {Word}, false);
+      auto *Callee = llvm::Function::Create(
+          Type, llvm::GlobalValue::ExternalLinkage, Debug.Callee.Name, Module);
+      const auto Attrs = mips::recordCallAttributes(C, {}, *S, Parts);
+      Callee->setAttributes(Attrs);
+      rewrite_source::setOriginalVA(*Callee, Debug.Callee.Addr);
+      auto *Forward = llvm::Function::Create(
+          llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+          llvm::GlobalValue::ExternalLinkage, "forward_payload", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Forward));
+      auto *Value = B.CreateLoad(Word, Forward->getArg(0));
+      B.CreateCall(Callee, {Value})->setAttributes(Attrs);
+      B.CreateRetVoid();
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      ASSERT_TRUE(
+          LLVMCEmitter().emit(Module, Output, F.Options, &Debug, &F.Image));
+      Output.flush();
+      EXPECT_NE(Text.find("__neverd_piece0 = (uint"), std::string::npos)
+          << Text;
+      EXPECT_EQ(Text.find("__neverd_piece0 = (uint64_t)(uintptr_t)"),
+                std::string::npos)
+          << Text;
+    }
 }
 
 TEST(MIPSRecordABI, O32AlignedRecordMaySpanArgumentRegistersAndStack) {

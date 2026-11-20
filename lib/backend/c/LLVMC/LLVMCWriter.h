@@ -627,6 +627,11 @@ public:
   void collectTypedHomes(llvm::Function &Fn);
   /// The pointer type the callee's prototype gives argument \p Index of
   /// \p Call: its debug information or the MSVC callee table.
+  /// Logical scalar carried by a qualified MIPS LLVM operand. Record
+  /// parts, padding and hidden storage have no ordinary scalar argument.
+  TypeRef mipsRecordScalarOperand(const llvm::CallBase &Call,
+                                  unsigned Index) const;
+  static llvm::IntegerType *funnelShiftType(const llvm::CallBase &Call);
   TypeRef expectedCallArgType(const llvm::CallBase &Call, unsigned Index) const;
   std::optional<FunctionSym> debugCallee(const llvm::CallBase &Call) const;
   /// The debug information's function, or the prototype of its name, that

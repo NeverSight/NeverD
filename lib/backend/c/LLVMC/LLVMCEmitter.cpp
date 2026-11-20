@@ -126,6 +126,7 @@
 
 #define DEBUG_TYPE "neverd-llvmc-emitter"
 
+#include <bit>
 #include <cctype>
 #include <stdexcept>
 
@@ -995,6 +996,14 @@ void LLVMCWriter::recordSourceNames(const llvm::Module &Mod) {
   }
 }
 
+llvm::IntegerType *LLVMCWriter::funnelShiftType(const llvm::CallBase &Call) {
+  auto *Type = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
+  if (!Type || Call.arg_size() != 3 ||
+      Type->getBitWidth() > limits::kMaxCSourceIntegerBytes * 8)
+    throw std::runtime_error("unsupported LLVM funnel shift width");
+  return Type;
+}
+
 void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   bool NeedsAArch64RawCall = false;
   bool NeedsAArch64ResultStorageCall = false;
@@ -1047,7 +1056,7 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
   std::set<std::string> UserImports;
   Headers.insert("stdint.h");
   NeedsUnalignedTypes = false;
-  std::map<std::string, std::pair<unsigned, bool>> FunnelShifts;
+  std::map<std::string, std::pair<llvm::IntegerType *, bool>> FunnelShifts;
   std::map<std::string, ScalarIntegerMinMax> IntegerMinMax;
   std::map<std::string, ScalarIntegerSaturation> IntegerSaturations;
   std::map<std::string, ScalarIntegerThreeWay> IntegerThreeWays;
@@ -1342,15 +1351,9 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
               IID == llvm::Intrinsic::memmove || IID == llvm::Intrinsic::memset)
             Headers.insert("string.h");
           if (IID == llvm::Intrinsic::fshl || IID == llvm::Intrinsic::fshr) {
-            const auto *Ty = llvm::dyn_cast<llvm::IntegerType>(CI->getType());
-            const unsigned Width = Ty ? Ty->getBitWidth() : 0;
-            if (CI->arg_size() != 3 ||
-                (Width != 8 && Width != 16 && Width != 32 && Width != 64 &&
-                 Width != 128))
-              throw std::runtime_error("unsupported LLVM funnel shift width");
             FunnelShifts.emplace(
                 functionIdentifier(*Callee),
-                std::pair{Width, IID == llvm::Intrinsic::fshl});
+                std::pair{funnelShiftType(*CI), IID == llvm::Intrinsic::fshl});
           }
           auto Name = Callee->getName().str();
 
@@ -1650,19 +1653,29 @@ void LLVMCWriter::writeIncludes(llvm::Module &Mod) {
     OS << ";\n}\n\n";
   }
   for (const auto &[Name, Shape] : FunnelShifts) {
-    const auto [Width, Left] = Shape;
-    const std::string Type =
-        Width == 128 ? "__uint128_t" : "uint" + std::to_string(Width) + "_t";
+    const auto [Integer, Left] = Shape;
+    const unsigned Width = Integer->getBitWidth();
+    const std::string Type = typeToCLLVM(Integer);
+    const unsigned Storage =
+        Width <= 128 ? std::max(8u, std::bit_ceil(Width)) : Width;
     OS << "static inline " << Type << " " << Name << "(" << Type << " a, "
-       << Type << " b, " << Type << " amount) {\n"
-       << "    unsigned int shift = (unsigned int)(amount % " << Width
+       << Type << " b, " << Type << " amount) {\n";
+    if (Storage != Width) {
+      // A C integer parameter may have more bits than the LLVM argument.
+      OS << "    const " << Type << " mask = ((" << Type << ")~(" << Type
+         << ")0) >> " << Storage - Width << ";\n"
+         << "    a &= mask; b &= mask; amount &= mask;\n";
+    }
+    OS << "    unsigned int shift = (unsigned int)(amount % " << Width
        << ");\n";
+    const char *Mask = Storage == Width ? "" : " & mask";
     if (Left)
       OS << "    return shift == 0 ? a : (" << Type
-         << ")((a << shift) | (b >> (" << Width << " - shift)));\n";
+         << ")(((a << shift) | (b >> (" << Width << " - shift)))" << Mask
+         << ");\n";
     else
-      OS << "    return shift == 0 ? b : (" << Type << ")((a << (" << Width
-         << " - shift)) | (b >> shift));\n";
+      OS << "    return shift == 0 ? b : (" << Type << ")(((a << (" << Width
+         << " - shift)) | (b >> shift))" << Mask << ");\n";
     OS << "}\n\n";
   }
 }

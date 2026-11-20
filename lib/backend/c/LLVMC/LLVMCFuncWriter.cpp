@@ -38,6 +38,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
@@ -3988,6 +3989,10 @@ LLVMCWriter::recordCallArguments(const llvm::CallBase &Call,
 
 TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
                                          unsigned Index) const {
+  if (Call.hasFnAttr(LLVMMIPSRecordCall)) {
+    const auto Type = mipsRecordScalarOperand(Call, Index);
+    return isNamedPointerDisplay(Type) ? Type : TypeRef{};
+  }
   // The source-import table already proved this exact call's complete scalar
   // signature. Use the same binding for frame objects and call conversions.
   if (const auto *Source = sourceImportCallee(Call))

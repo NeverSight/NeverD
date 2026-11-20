@@ -1687,7 +1687,10 @@ alongside a record uses an aligned pair of physical words. Both C backends
 recombine the words in target order for the single typed argument. An o32
 record can also split a field across argument registers and stack words. Its
 LLVM call includes the unused alignment word when the flattened record needs
-eight-byte alignment after an odd number of slots. Both C emitters can build
+eight-byte alignment after an odd number of slots. An n32 record word retains
+all 64 data bits when the source pointer width is 32. LLVMC handles the
+nonstandard integer funnel shifts that LLVM creates when packing byte fields.
+Both C emitters can build
 a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final

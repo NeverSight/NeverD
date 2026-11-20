@@ -102,6 +102,7 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/SaveAndRestore.h"
 
+#include <bit>
 #include <cctype>
 #include <climits>
 #include <iterator>
@@ -6471,6 +6472,29 @@ void checkSourceCallCarriers(const llvm::CallBase &Call,
 }
 } // namespace
 
+TypeRef LLVMCWriter::mipsRecordScalarOperand(const llvm::CallBase &Call,
+                                             unsigned Index) const {
+  const auto *Edited = analystCallHint(Call);
+  const auto *Direct = Call.getCalledFunction();
+  const auto Native =
+      !Edited && Direct ? mipsRecordDeclaration(*Direct) : std::nullopt;
+  const auto *S = Edited ? &Edited->Signature : Native ? &*Native : nullptr;
+  if (!S || !S->MIPSRecords)
+    return {};
+  if (S->ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer) {
+    if (!Index)
+      return {};
+    --Index;
+  }
+  const auto Pieces = sourceABIParameters(*S);
+  const auto Args = llvmMIPSRecordArguments(Call.getContext(), *S, Pieces);
+  if (Index >= Args.size() || !Args[Index].PieceCount)
+    return {};
+  const auto &P = S->Parameters[Pieces[Args[Index].FirstPiece].ParameterIndex];
+  return P.Type->Kind == NdTypeKind::Struct && !P.Type->IsEnum ? TypeRef{}
+                                                               : P.Type;
+}
+
 const SourceCallTypeHint *
 LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
   const auto *Node = Call.getMetadata("neverd.source.analyst-call");
@@ -6612,8 +6636,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           const auto &Piece = RecordPieces[Physical++];
           const bool FP =
               Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
+          // The LLVM operand already holds the low bits of this piece. Its
+          // integer storage can be wider than uintptr_t on n32.
+          const auto Storage =
+              static_cast<uint16_t>(std::bit_ceil(unsigned(Piece.Type->Size)));
           Packed.Pieces.push_back(
-              {Operand++, Piece.ByteOffset, Piece.Type->Size, FP});
+              {Operand++, Piece.ByteOffset, Piece.Type->Size, FP, Storage});
         }
         noteRecordValue(Parameter.Type);
         Expression += c_detail::recordCallArgument(
@@ -6765,11 +6793,7 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       return Expr;
     }
     if (IID == llvm::Intrinsic::fshl || IID == llvm::Intrinsic::fshr) {
-      const auto *Ty = llvm::dyn_cast<llvm::IntegerType>(Call.getType());
-      const unsigned Width = Ty ? Ty->getBitWidth() : 0;
-      if (Call.arg_size() != 3 || (Width != 8 && Width != 16 && Width != 32 &&
-                                   Width != 64 && Width != 128))
-        throw std::runtime_error("unsupported LLVM funnel shift width");
+      funnelShiftType(Call);
       std::string Expr = functionIdentifier(*Callee) + "(";
       for (unsigned I = 0; I < 3; ++I) {
         if (I)
@@ -7368,12 +7392,19 @@ TypeRef LLVMCWriter::enumTypeUsedAsCallArg(const llvm::AllocaInst *Slot) const {
       const auto *CB = llvm::dyn_cast<llvm::CallBase>(User);
       if (!CB)
         continue;
-      const auto FS = debugCallee(*CB);
-      if (!FS)
+      const bool TypedRecord = CB->hasFnAttr(LLVMMIPSRecordCall);
+      const auto FS = TypedRecord ? std::nullopt : debugCallee(*CB);
+      if (!FS && !TypedRecord)
         continue;
       for (unsigned I = 0; I < CB->arg_size(); ++I) {
         if (peelIntCast(CB->getArgOperand(I)) != LI)
           continue;
+        if (TypedRecord) {
+          const auto Ty = mipsRecordScalarOperand(*CB, I);
+          if (Ty && Ty->Kind == NdTypeKind::Struct && Ty->IsEnum)
+            return Ty;
+          continue;
+        }
         unsigned Parameter = I;
         if (const auto Layout = recordCallArguments(*CB, *FS);
             Layout && !groupedFloatingCall(*CB, *FS)) {

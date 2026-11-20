@@ -79,7 +79,8 @@ void appendMIPSByteResult(
 
 const SourceFunctionTypeHint *
 LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
-                                   BinaryFormat Fmt) {
+                                   BinaryFormat Fmt,
+                                   bool &BoundMIPSRecordCall) {
   // Image-independent IR clients supply explicit source contracts. Their
   // physical carriers do not depend on a container format. Runtime discovery
   // from a loaded image remains restricted to its supported Mach-O path.
@@ -820,6 +821,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
            Hint->CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall ||
            Hint->CallKind == SourceCallTypeHint::Kind::SwiftRuntimeCall))
         Op.DoesNotReturn = true;
+      BoundMIPSRecordCall |= Signature.MIPSRecords;
       Op.SourceCallHint =
           std::make_shared<const SourceCallTypeHint>(std::move(*Hint));
       Ops.push_back(std::move(Op));
