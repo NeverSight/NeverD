@@ -17,6 +17,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/MachO.h"
 
+#include <array>
+
 namespace neverd {
 bool coverMachOEmbeddedRead(const MachOLiftedSource &Source, va_t Start,
                             va_t Address, uint64_t Size, uint16_t Kind,
@@ -57,17 +59,29 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
       Block.EndAddr - Start > Source.Bytes.size())
     return std::nullopt;
 
-  va_t Next = Block.EndAddr - SequenceBytes;
+  // NOPs can pad a dispatch without changing any reaching definition. Stop
+  // at the block boundary and retain every other word in program order.
+  std::array<va_t, kDispatchInstructions> Sites;
+  va_t Cursor = Block.EndAddr;
+  for (auto &Site : llvm::reverse(Sites)) {
+    do {
+      if (Cursor - Block.StartAddr < Word)
+        return std::nullopt;
+      Cursor -= Word;
+    } while (readLE<uint32_t>(Source.Bytes.data() + (Cursor - Start)) ==
+             aarch64::kNop);
+    Site = Cursor;
+  }
+  auto Next = Sites.begin();
   DecodedInsn I{};
   const auto Read = [&]() {
-    const auto PC = Next;
-    Next += Word;
+    const va_t PC = *Next++;
     return Decode.decodeOne(Source.Bytes.data() + (PC - Start), Word, PC, I) ==
                Word &&
            I.Raw && I.Raw->detail;
   };
   const auto ADR = [&]() -> std::optional<Address> {
-    if (!Read() || I.Id != AARCH64_INS_ADR)
+    if (I.Id != AARCH64_INS_ADR)
       return std::nullopt;
     const auto &D = I.Raw->detail->aarch64;
     if (D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG ||
@@ -75,14 +89,25 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
       return std::nullopt;
     return Address{D.operands[0].reg, va_t(D.operands[1].imm), I.Addr};
   };
-  auto Storage = ADR();
-  auto Anchor = ADR();
-  if (!Storage || !Anchor || Storage->Reg == Anchor->Reg)
+  if (!Read())
     return std::nullopt;
+  auto Storage = ADR();
+  if (!Storage || !Read())
+    return std::nullopt;
+
+  // When both addresses precede the load their registers must coexist.
+  // A later anchor may reuse the storage register once the load has read it.
+  std::optional<Address> Anchor;
+  if (I.Id == AARCH64_INS_ADR) {
+    Anchor = ADR();
+    if (!Anchor || Storage->Reg == Anchor->Reg)
+      return std::nullopt;
+    if (Storage->Target != Table.BaseAddr)
+      std::swap(Storage, Anchor);
+    if (!Read())
+      return std::nullopt;
+  }
   if (Storage->Target != Table.BaseAddr)
-    std::swap(Storage, Anchor);
-  if (Storage->Target != Table.BaseAddr || Anchor->Target != Table.TargetBase ||
-      !Read())
     return std::nullopt;
 
   uint16_t Kind;
@@ -104,7 +129,13 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
   // Replacing the load's W result by its X view is the architectural zero
   // extension used by compact tables. LDRSW already defines an X register.
   const auto Offset = mapCapstoneReg(Load.operands[0].reg).Offset;
-  if (Offset == mapCapstoneReg(Anchor->Reg).Offset || !Read() ||
+  if (!Anchor) {
+    if (!Read())
+      return std::nullopt;
+    Anchor = ADR();
+  }
+  if (!Anchor || Anchor->Target != Table.TargetBase ||
+      Offset == mapCapstoneReg(Anchor->Reg).Offset || !Read() ||
       I.Id != AARCH64_INS_ADD)
     return std::nullopt;
   const auto &Add = I.Raw->detail->aarch64;

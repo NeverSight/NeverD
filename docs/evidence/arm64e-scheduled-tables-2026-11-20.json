@@ -1,0 +1,683 @@
+{
+  "revision": "bd6fc850320bab2c3dca6e34a96e66c33eafaee6",
+  "before": {
+    "current": {
+      "cfg": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      },
+      "published": true,
+      "input": "d93afaaeba706784c2fd22e819c2ded68da7c15a80848de1787c93897319650e",
+      "errors": []
+    },
+    "late": {
+      "cfg": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      },
+      "published": false,
+      "input": "c70e6267d3d01ea331e784dff6286271152015a7595e0cb2c111cead1fbcdfdd",
+      "errors": [
+        "error: arm64e lifted image has no complete native leaf contract",
+        "error: patch failed: patch failed"
+      ]
+    }
+  },
+  "after": {
+    "current": {
+      "cfg": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      },
+      "published": true,
+      "input": "d93afaaeba706784c2fd22e819c2ded68da7c15a80848de1787c93897319650e",
+      "errors": []
+    },
+    "late": {
+      "cfg": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      },
+      "published": true,
+      "input": "c70e6267d3d01ea331e784dff6286271152015a7595e0cb2c111cead1fbcdfdd",
+      "errors": []
+    }
+  },
+  "llvm_fork": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "cli": {
+    "source": "bd6fc850320bab2c3dca6e34a96e66c33eafaee6",
+    "tools": {
+      "fork": {
+        "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+        "library_sha256": "3da2a7352535aea285e63b676bf444f47623dc9e2d426e6642846fc9068691ac"
+      },
+      "r6": {
+        "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+        "library_sha256": "bbbeec11806a534fd5caf018c678639bac685f7fd7990eb3dcf6f62d56a0b2ff"
+      }
+    },
+    "image_generation": {
+      "source_sha256": "548af43e421dc478701166a53857626bcd584e21fc8ddce2d834f5b397bcb797",
+      "oracle_sha256": "50d58fbabe0f44ef4e8d6b7e2b0cab8664e396b12e6a6c7f8f68324a5abbbde6",
+      "compiler": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+      "flags": [
+        "/usr/bin/clang",
+        "-target",
+        "arm64e-apple-macosx15.0",
+        "-dynamiclib",
+        "-Wl,-headerpad,0,-ld_classic,-data_in_code_info",
+        "-DNEVERD_TEST_MASKED_DISPATCH",
+        "-DNEVERD_TEST_SCHEDULED_DISPATCH",
+        "-DNEVERD_TEST_TABLE_FRAGMENTS"
+      ],
+      "compares": 72
+    },
+    "images": {
+      "split.dylib": {
+        "sha256": "06fc825528d6d2f872b4527d8ee9ab20c9897aef1a523900a957c2db9b260169",
+        "record_count": 10,
+        "bytes": 16952,
+        "generation": 0
+      },
+      "split-fork-default-1.dylib": {
+        "sha256": "70cd090756c8dfdfae6b71af93436cf4b6521a0b9b79daab52778ff429f0e7d6",
+        "record_count": 20,
+        "bytes": 52112,
+        "generation": 1
+      },
+      "split-fork-default-2.dylib": {
+        "sha256": "79beaa701e879ee2139134fca24264b88bab95aa7808719abc260da762da6e7d",
+        "record_count": 30,
+        "bytes": 87552,
+        "generation": 2
+      },
+      "split-fork-default-3.dylib": {
+        "sha256": "3a2211553193b2ab7ec10d42499dbc47f16d7638f0cea9e3a61ce7be875a775a",
+        "record_count": 40,
+        "bytes": 123360,
+        "generation": 3
+      },
+      "split-fork-no-opt-1.dylib": {
+        "sha256": "ecb375c4e2a0121384ab7648c93fbf4de9c67b4d241e852023cd841c7a9f5d14",
+        "record_count": 20,
+        "bytes": 52112,
+        "generation": 1
+      },
+      "split-fork-no-opt-2.dylib": {
+        "sha256": "2d7edc15029ce727a0fe60313883baec2905871780b752155a44402e002979c9",
+        "record_count": 30,
+        "bytes": 87552,
+        "generation": 2
+      },
+      "split-fork-no-opt-3.dylib": {
+        "sha256": "a8eef49366105017607748120d394e6ed9766706622fecb225533935d6c10321",
+        "record_count": 40,
+        "bytes": 123360,
+        "generation": 3
+      },
+      "split-r6-default-1.dylib": {
+        "sha256": "4805ef325583156adbfd5f8e76fa15aa7c5d9d682da79f1ee9cf91de4e21e7ea",
+        "record_count": 20,
+        "bytes": 52112,
+        "generation": 1
+      },
+      "split-r6-default-2.dylib": {
+        "sha256": "1d814c4d8de65a5dfa6ee309c1398e6d45dd5dfdc85446453b14d80efce4ee64",
+        "record_count": 30,
+        "bytes": 87552,
+        "generation": 2
+      },
+      "split-r6-default-3.dylib": {
+        "sha256": "219de0ae3fcd1d7ad1d3e551607514fec78b3e1b38a74c3d44257ea7e82edd94",
+        "record_count": 40,
+        "bytes": 123360,
+        "generation": 3
+      },
+      "split-r6-no-opt-1.dylib": {
+        "sha256": "6caa7da9a68c3fe7c16ed18ffe5dc944d795b4820e5d399688aa159a06c5868f",
+        "record_count": 20,
+        "bytes": 52112,
+        "generation": 1
+      },
+      "split-r6-no-opt-2.dylib": {
+        "sha256": "c0cd845cf5cf092eef0a24816f5c5f1379f75a712870d096190335ede8832468",
+        "record_count": 30,
+        "bytes": 87552,
+        "generation": 2
+      },
+      "split-r6-no-opt-3.dylib": {
+        "sha256": "69b304b8760d374acc2ff39c6c8d9e623c3dcd4b8c6108d28697e8fb7c28eb41",
+        "record_count": 40,
+        "bytes": 123360,
+        "generation": 3
+      },
+      "gapped.dylib": {
+        "sha256": "40667eda3652c9be310e580e43a672b7d3c0b2a3b825555610b608bb61049e4a",
+        "record_count": 7,
+        "bytes": 16928,
+        "generation": 0
+      },
+      "gapped-fork-default-1.dylib": {
+        "sha256": "c8d75a1db84b01275bc978233349a118c017403958f20a86b30e956522785de2",
+        "record_count": 20,
+        "bytes": 52096,
+        "generation": 1
+      },
+      "gapped-fork-default-2.dylib": {
+        "sha256": "6153323ee52ff646f2ad0aa7170f88950b6a851ca654d20fcbc4918e0f435e2a",
+        "record_count": 30,
+        "bytes": 87536,
+        "generation": 2
+      },
+      "gapped-fork-default-3.dylib": {
+        "sha256": "13440294767f42e8e095a12c7fa5d76ab1c6917c438ccef6c34a81a4f0b42c14",
+        "record_count": 40,
+        "bytes": 123344,
+        "generation": 3
+      },
+      "gapped-fork-no-opt-1.dylib": {
+        "sha256": "3cc283eed2b7b69307ea736150d3e34e4862a06471ee1cd9c29be16c827a0ae7",
+        "record_count": 20,
+        "bytes": 52096,
+        "generation": 1
+      },
+      "gapped-fork-no-opt-2.dylib": {
+        "sha256": "15b4ef8572c361cdfce57809766909d90a0df8c8c1004309ef157960525adc60",
+        "record_count": 30,
+        "bytes": 87536,
+        "generation": 2
+      },
+      "gapped-fork-no-opt-3.dylib": {
+        "sha256": "4cb35a1ba9f6bc33d564ff3fa9f2ee99e43db3e94f95e5cfa9064d6682722b73",
+        "record_count": 40,
+        "bytes": 123344,
+        "generation": 3
+      },
+      "gapped-r6-default-1.dylib": {
+        "sha256": "c580866a927b96f5073c716996984756655f2d7f577af3cc6bbdb95b7149115a",
+        "record_count": 20,
+        "bytes": 52096,
+        "generation": 1
+      },
+      "gapped-r6-default-2.dylib": {
+        "sha256": "5fe1d518ea65d58c8a3b8dd1511ccefeb50a618c523f70049e10131c409930c5",
+        "record_count": 30,
+        "bytes": 87536,
+        "generation": 2
+      },
+      "gapped-r6-default-3.dylib": {
+        "sha256": "e31ea1395d28bf61c68525afbdf4483d4a0904be9a4a20ceabfd3c748c59dda4",
+        "record_count": 40,
+        "bytes": 123344,
+        "generation": 3
+      },
+      "gapped-r6-no-opt-1.dylib": {
+        "sha256": "01f5f6cab34f6d77d091c2f08890cd116a7cb5328c13519d9541963c92d783e4",
+        "record_count": 20,
+        "bytes": 52096,
+        "generation": 1
+      },
+      "gapped-r6-no-opt-2.dylib": {
+        "sha256": "38452ef0d16ed6aa86b729a5b51076affe368e9a45b9b5cdeb57c1b27c584635",
+        "record_count": 30,
+        "bytes": 87536,
+        "generation": 2
+      },
+      "gapped-r6-no-opt-3.dylib": {
+        "sha256": "2c6815a2de906574d5a98c835d66cd6d4235ed63f76f2fe30028a0d158ee3ac5",
+        "record_count": 40,
+        "bytes": 123344,
+        "generation": 3
+      }
+    },
+    "clobbers_rejected": {
+      "split-fork-0": {
+        "exit": 1,
+        "unchanged_input_sha256": "35d383322c93ffe1df98b58bd1cf1e12f7f09849c264eb999202b35508f8d64a",
+        "created_output": false
+      },
+      "split-fork-1": {
+        "exit": 1,
+        "unchanged_input_sha256": "1e301aafc63f25aec5ffcebbce968403fa6cdec3de2c2978c90ff143ee8a0945",
+        "created_output": false
+      },
+      "split-fork-2": {
+        "exit": 1,
+        "unchanged_input_sha256": "a8f160895e79ee1e88df5ccb4f3f03d0bd9c98cdb227fdeb7d062d7376e1ae6a",
+        "created_output": false
+      },
+      "split-r6-0": {
+        "exit": 1,
+        "unchanged_input_sha256": "35d383322c93ffe1df98b58bd1cf1e12f7f09849c264eb999202b35508f8d64a",
+        "created_output": false
+      },
+      "split-r6-1": {
+        "exit": 1,
+        "unchanged_input_sha256": "1e301aafc63f25aec5ffcebbce968403fa6cdec3de2c2978c90ff143ee8a0945",
+        "created_output": false
+      },
+      "split-r6-2": {
+        "exit": 1,
+        "unchanged_input_sha256": "a8f160895e79ee1e88df5ccb4f3f03d0bd9c98cdb227fdeb7d062d7376e1ae6a",
+        "created_output": false
+      },
+      "gapped-fork-0": {
+        "exit": 1,
+        "unchanged_input_sha256": "14806e681667b9d3c1deee2b2a15c89de5ab35a7e3a1f75359fd70e1c04c59fc",
+        "created_output": false
+      },
+      "gapped-fork-1": {
+        "exit": 1,
+        "unchanged_input_sha256": "e3807a37f345f19c69de19bd54fc657bab627214b7a55647453699ee45d49074",
+        "created_output": false
+      },
+      "gapped-fork-2": {
+        "exit": 1,
+        "unchanged_input_sha256": "0917d9a25a3fc0aa395a5900a3d2ac5893234f5fe0625a6e12a1d386baa39156",
+        "created_output": false
+      },
+      "gapped-r6-0": {
+        "exit": 1,
+        "unchanged_input_sha256": "14806e681667b9d3c1deee2b2a15c89de5ab35a7e3a1f75359fd70e1c04c59fc",
+        "created_output": false
+      },
+      "gapped-r6-1": {
+        "exit": 1,
+        "unchanged_input_sha256": "e3807a37f345f19c69de19bd54fc657bab627214b7a55647453699ee45d49074",
+        "created_output": false
+      },
+      "gapped-r6-2": {
+        "exit": 1,
+        "unchanged_input_sha256": "0917d9a25a3fc0aa395a5900a3d2ac5893234f5fe0625a6e12a1d386baa39156",
+        "created_output": false
+      }
+    }
+  },
+  "local_fork_selection": {
+    "selected": 1039,
+    "passed": 992,
+    "skipped": 47,
+    "failed": 0,
+    "xml_sha256": "f9856b993933eda989d83455c6da274820a4ec07555564aaf77edd33b290c4d9"
+  },
+  "focused": {
+    "fork": {
+      "selected": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failed": 0,
+      "xml_sha256": "01df2796a3aa885df421d61b2bc139f2197aa4c8bf5a3039ceccda7cd22915d3"
+    },
+    "r6": {
+      "selected": 8,
+      "passed": 8,
+      "skipped": 0,
+      "failed": 0,
+      "xml_sha256": "eaab3c4addd510e1b994edaf17b60c904cfcbb8afeaf3ebbd17ff7d66ea04e00"
+    }
+  },
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44758696962",
+  "hosts": {
+    "scheduled-macos-26": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)",
+      "published_and_source_images": 26,
+      "image_comparisons": 1872,
+      "runner_built_originals": {
+        "split": {
+          "sha256": "97713c4ab4060ad043c784a791eb0f31544e076c34e03996e661006265f3e632",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "2064b88c199dc0bb265a3df6c598fd6afc408c6d63ecdf27fb210b5242b74d9f",
+          "comparisons": 72
+        }
+      },
+      "runner_original_comparisons": 144,
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "c59e4ee53c6270647754f6b09eb027ae092e58612344abc2408fac0d6a2a90bc"
+    },
+    "scheduled-xcode-27": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)",
+      "published_and_source_images": 26,
+      "image_comparisons": 1872,
+      "runner_built_originals": {
+        "split": {
+          "sha256": "8811d0eed13cc9852e089fa5a5d4c8ed4f3584450a81e665d9dffda89f9079ac",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "34376c696e828899a4b344d487e58c416a8113b7c94650f085808e4d47a483ae",
+          "comparisons": 72
+        }
+      },
+      "runner_original_comparisons": 144,
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "ad15d3a457e2a4564d84536a028c4beab2827626db3654d45037a6cf4c724c56"
+    }
+  },
+  "frozen-native": {
+    "source": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44765584364",
+    "hosts": {
+      "suite-macos-26": {
+        "revision": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+        "host_sha256": "20399ed540447f4f0e7200e2bd7e2a52fa6f8412f6dac6a60a5fdb0528667692",
+        "xml_sha256": "2833ba817554d685c308965785c483859bc1c62222516d44bd5dac438121dd97",
+        "hardware": "Apple M1 (Virtual)",
+        "cases": 253,
+        "failed": [
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "skipped": [
+          "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+          "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+        ],
+        "gtest_exit": 1,
+        "properties": {
+          "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+            "executed_native_images": 4,
+            "native_switch_comparisons": 288,
+            "proved_embedded_dispatches": 3,
+            "rejected_fragment_kind_conflicts": 3,
+            "published_data_in_code_records": 40,
+            "recovered_source_data_in_code_records": 3
+          },
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_automatic_original_table_entry_walks": 12,
+            "native_alternate_stack_table_walks": 6
+          }
+        },
+        "implicit_cfi_diagnostic": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "passed": 243
+      },
+      "suite-xcode-27": {
+        "revision": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+        "host_sha256": "20399ed540447f4f0e7200e2bd7e2a52fa6f8412f6dac6a60a5fdb0528667692",
+        "xml_sha256": "e12670e7058b2e02bd51d799e82146304a6d04f073909568f4449ba133f6f0c9",
+        "hardware": "Apple M1 (Virtual)",
+        "cases": 253,
+        "failed": [
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "skipped": [
+          "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+          "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+        ],
+        "gtest_exit": 1,
+        "properties": {
+          "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+            "executed_native_images": 4,
+            "native_switch_comparisons": 288,
+            "proved_embedded_dispatches": 3,
+            "rejected_fragment_kind_conflicts": 3,
+            "published_data_in_code_records": 40,
+            "recovered_source_data_in_code_records": 3
+          },
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_automatic_original_table_entry_walks": 12,
+            "native_alternate_stack_table_walks": 6
+          }
+        },
+        "implicit_cfi_diagnostic": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "passed": 243
+      }
+    },
+    "retirement": {
+      "asset": "integrated-frozen-suite.tgz",
+      "archive_sha256": "6efd39ba28e3618b70c58992f160bc9ec1636b1d6b0e727690271a1178e38171",
+      "host_sha256": "20399ed540447f4f0e7200e2bd7e2a52fa6f8412f6dac6a60a5fdb0528667692",
+      "tag": "neverd-integrated-r6-3ad7af859051",
+      "bytes": 49025152,
+      "release_http": 404,
+      "git_ref_http": 404,
+      "controller_cleanup": "84d788de3b3148387506fe30b0a37cb080f63553",
+      "restored_tree": "f1a20e77e5cb5382bca5ebfcf96f986839fb5c15"
+    }
+  },
+  "llvm-producers": {
+    "r6_tag": "neverd-llvm-v23.0.0-r6",
+    "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+    "source_fork": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "archive_counts": {
+      "fork": {
+        "bin/libneverd.dylib": 74,
+        "bin/NeverDArm64eLiftedImageTests": 73
+      },
+      "r6": {
+        "bin/libneverd.dylib": 73,
+        "bin/NeverDArm64eLiftedImageTests": 73
+      }
+    }
+  },
+  "full-native": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44762770209",
+    "source": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+    "hosts": {
+      "suite-macos-26": {
+        "revision": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+        "host_sha256": "12ecc08ebe53e469df52fad289ddbd0461303ab9cb60100dd4fd4c3504cdc0b6",
+        "xml_sha256": "f228782db4c4cb01086e0ca0b3a3df833ed8bc922df4fe9af100f9596eb22424",
+        "hardware": "Apple M1 (Virtual)",
+        "cases": 253,
+        "failed": [],
+        "skipped": [],
+        "gtest_exit": 0,
+        "properties": {
+          "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+            "executed_native_images": 4,
+            "native_switch_comparisons": 288,
+            "proved_embedded_dispatches": 3,
+            "rejected_fragment_kind_conflicts": 3,
+            "published_data_in_code_records": 40,
+            "recovered_source_data_in_code_records": 3
+          },
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_automatic_original_table_entry_walks": 12,
+            "native_alternate_stack_table_walks": 6
+          }
+        }
+      },
+      "suite-xcode-27": {
+        "revision": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+        "host_sha256": "12ecc08ebe53e469df52fad289ddbd0461303ab9cb60100dd4fd4c3504cdc0b6",
+        "xml_sha256": "3721bb97e0186760de7dec67f0aa46747b43b16194620239ce92d5ec0cabd44f",
+        "hardware": "Apple M1 (Virtual)",
+        "cases": 253,
+        "failed": [],
+        "skipped": [],
+        "gtest_exit": 0,
+        "properties": {
+          "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+            "executed_native_images": 4,
+            "native_switch_comparisons": 288,
+            "proved_embedded_dispatches": 3,
+            "rejected_fragment_kind_conflicts": 3,
+            "published_data_in_code_records": 40,
+            "recovered_source_data_in_code_records": 3
+          },
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+            "native_automatic_original_table_entry_walks": 12,
+            "native_alternate_stack_table_walks": 6
+          }
+        }
+      }
+    },
+    "retirement": {
+      "revision": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+      "tag": "neverd-integrated-arm64e-3ad7af859051",
+      "asset": "integrated-suite.tgz",
+      "archive_sha256": "886a219b473c16802fab396f82702a4289c0b6dfd38384817ae4102ae37e29fd",
+      "bytes": 49158465,
+      "host": "NeverDArm64eLiftedImageTests",
+      "host_sha256": "12ecc08ebe53e469df52fad289ddbd0461303ab9cb60100dd4fd4c3504cdc0b6",
+      "release_http": 404,
+      "git_ref_http": 404,
+      "controller_cleanup": "534a5e0d440a1968e1f1a6841a0db438ffd647f5",
+      "controller_restored_tree": "f1a20e77e5cb5382bca5ebfcf96f986839fb5c15"
+    },
+    "superseded_setup": {
+      "run": "44762734470",
+      "head": "b4ca44b7761752c327ca5197f11ce187dd41cf09",
+      "reason": "sparse checkout lacked native fixture sources"
+    }
+  },
+  "runner-inventory": {
+    "date": "2026-11-20",
+    "repository": "gmh5225/test_mac_intel",
+    "self_hosted": {
+      "names": [],
+      "total_count": 0
+    },
+    "standard_arm64_mac": "M1",
+    "standard_reference": "https://docs.github.com/en/actions/reference/runners/github-hosted-runners",
+    "xlarge_arm64_mac": "M2",
+    "xlarge_reference": "https://docs.github.com/en/actions/reference/runners/larger-runners"
+  },
+  "integration-qualification": {
+    "source_before_integration": "bd6fc850320bab2c3dca6e34a96e66c33eafaee6",
+    "dev": "6a2e3f5eacb32b10c143591ed5f1de1d2679a370",
+    "integrated": "3ad7af8590518a3b0c3fba65cf26e9cc97848b45",
+    "toolchains": {
+      "fork": {
+        "focused_tests": 8,
+        "identical_signed_outputs": [
+          "split-fork-default-1.dylib",
+          "split-fork-default-2.dylib",
+          "split-fork-default-3.dylib",
+          "split-fork-no-opt-1.dylib",
+          "split-fork-no-opt-2.dylib",
+          "split-fork-no-opt-3.dylib",
+          "gapped-fork-default-1.dylib",
+          "gapped-fork-default-2.dylib",
+          "gapped-fork-default-3.dylib",
+          "gapped-fork-no-opt-1.dylib",
+          "gapped-fork-no-opt-2.dylib",
+          "gapped-fork-no-opt-3.dylib"
+        ],
+        "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+        "library_sha256": "6386c0b436492c61927ff95d443d69ddb7baca1b7db62fcdf1ed5d4135d16e17",
+        "xml_sha256": "7b5552c475b6c6930ff69b4540532dee44fce3effcc7b485e71e59e0af58061d"
+      },
+      "r6": {
+        "focused_tests": 8,
+        "identical_signed_outputs": [
+          "split-r6-default-1.dylib",
+          "split-r6-default-2.dylib",
+          "split-r6-default-3.dylib",
+          "split-r6-no-opt-1.dylib",
+          "split-r6-no-opt-2.dylib",
+          "split-r6-no-opt-3.dylib",
+          "gapped-r6-default-1.dylib",
+          "gapped-r6-default-2.dylib",
+          "gapped-r6-default-3.dylib",
+          "gapped-r6-no-opt-1.dylib",
+          "gapped-r6-no-opt-2.dylib",
+          "gapped-r6-no-opt-3.dylib"
+        ],
+        "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+        "library_sha256": "ae3eee99c9ea78f89e3199e77f26f17fc83f608a4205f0b15d80e426796347ee",
+        "xml_sha256": "aa42943732c9cf469b59da44d41df518db77f62a871fa329483148f502068eca"
+      }
+    }
+  },
+  "retirement": {
+    "revision": "bd6fc850320bab2c3dca6e34a96e66c33eafaee6",
+    "asset": "native-images.tgz",
+    "tag": "neverd-scheduled-dispatch-bd6fc850320b",
+    "sha256": "0e1b6b5214f59fc4d8e2c91d4ac4737cca535139df47d761b78f2941ed7dc190",
+    "bytes": 61992,
+    "release_http": 404,
+    "git_ref_http": 404
+  },
+  "disposable-products": {
+    "files": 39,
+    "bytes": 2395541
+  },
+  "cleanup-build": {
+    "files": 499,
+    "bytes": 498593664
+  },
+  "ci-retirement": {
+    "baseline": "25336022359ffde605c70de8bae2cba9c8a6e965",
+    "restored_tree": "f1a20e77e5cb5382bca5ebfcf96f986839fb5c15",
+    "commit": "3e00b04ac49b734670114ac8e939a36f56c92ef6",
+    "branch": "codex/neverd-arm64e-scheduled-tables-20261120"
+  }
+}
