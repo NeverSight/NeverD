@@ -8,6 +8,7 @@
 
 #include "neverd/ir/SourceCallABI.h"
 
+#include "../safety/StackSlotFlow.h"
 #include "MIPS/SourceScalarResult.h"
 
 #include "neverd/ir/FloatingCallArguments.h"
@@ -524,6 +525,8 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
   if (!Call)
     return refuse(Error, "The call-site declaration could not bind to a "
                          "surviving original call");
+  const auto &TRI =
+      getTargetRegInfo(Call->SourceCallHint->Signature.Architecture);
   using Read = std::tuple<Key, unsigned, unsigned>;
   std::map<Read, unsigned> State;
   size_t Work = 0;
@@ -559,6 +562,15 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
           return false;
         }
         State[Query] = 1;
+        // The incoming SP is defined by the ABI even when it is absent from
+        // the C parameter list. Its canonical self-copy seeds frame addresses.
+        if (TRI.TheArch != Arch::Unknown && V.TheArch == TRI.TheArch &&
+            V.Kind == MedVar::Reg && V.RegOff == TRI.StackPointer &&
+            V.Size == TRI.addressRegisterBytes() &&
+            safety::detail::isAuthenticatedEntryRegisterLiveIn(Function, V)) {
+          State[Query] = 2;
+          return true;
+        }
         const auto It = Definitions.find(key(V));
         if (It == Definitions.end()) {
           Missing = V.display();

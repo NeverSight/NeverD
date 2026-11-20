@@ -1690,6 +1690,9 @@ LLVM call includes the unused alignment word when the flattened record needs
 eight-byte alignment after an odd number of slots. An n32 record word retains
 all 64 data bits when the source pointer width is 32. LLVMC handles the
 nonstandard integer funnel shifts that LLVM creates when packing byte fields.
+A by-value parameter keeps every physical operand live through C emission.
+An indirect call may use its caller’s frame for a hidden result when its
+address derives from the authenticated incoming stack register.
 Both C emitters can build
 a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
