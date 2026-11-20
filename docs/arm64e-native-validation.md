@@ -2453,3 +2453,32 @@ register files. It compares zero-extended W, full X, sign-extended LDRSW,
 the bit pattern of a single-precision NaN, double-precision negative zero
 and both lanes of a 128-bit Q load. Repeated publication checks the original
 and copied pools against independently sized extents.
+
+The macOS 26 and Xcode 27 runners each passed all 247 Release publication
+tests, plus 20 native installer cases and four default-startup cases.
+Each ran 4,032 independent return-value comparisons on 56 signed CLI inputs
+and outputs. These came from eight originals, two publication modes and
+three successive generations per mode. The original tables were absent,
+empty or partially populated. One local control clears
+`S_ATTR_PURE_INSTRUCTIONS` on a linked copy, retains
+`S_ATTR_SOME_INSTRUCTIONS`, and signs that copy before execution.
+[Hosted native run](https://github.com/gmh5225/test_mac_intel/actions/runs/44731143048).
+
+The signal tests sampled the original and published old entries with the
+handler on its regular stack and on a registered alternate stack. Starting
+Darwin libunwind at the kernel's interrupted PC recovered the incoming SP
+and both caller PCs in six alternate-stack runs per host. These covered an
+indexed FDE, a compact leaf, and a compact leaf with a personality and LSDA.
+The handler-initiated walk skipped the interrupted entry and reported a
+different SP in the caller on both systems, on both regular and alternate
+signal stacks.
+[Compiler-original alternate-stack controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44728953139).
+
+The five local Release targets accounted for 2,129 cases. Of these, 2,076
+passed and 53 had explicit skip conditions. One count-lane case reached the
+parallel timeout and passed the normal serial CTest in 24.40 seconds. A
+separate run supplied the arm64e text of `/usr/bin/wc` to the optional
+classifier test. Both hosted Apple M1 virtual machines qualified native PAC,
+authenticated calls and signed language unwinding. The strict PAuth_LR,
+PACM-PC and CPTA-on hardware checks reported unavailable.
+[Source, image hashes and per-host measurements](evidence/arm64e-inferred-data-2026-11-20.json).
