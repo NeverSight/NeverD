@@ -275,6 +275,10 @@ struct SourceCallTypeHint {
   };
   Kind CallKind = Kind::Native;
   std::optional<SourceCallOccurrenceKey> AnalystSite;
+  /// A proved MIPS16 runtime stub can expose an indirect target in a private
+  /// source view. The SDK edit and its defined-value audit still name the
+  /// direct machine occurrence; AnalystSite names the resulting source call.
+  std::optional<SourceCallOccurrenceKey> MIPS16RuntimeOrigin;
   int AnalystFixedCount = -1;
   struct BooleanResultProjection {
     va_t FunctionEntry = 0;

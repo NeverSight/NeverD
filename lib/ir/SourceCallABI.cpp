@@ -469,7 +469,15 @@ bool neverd::sourceCallArgumentsDefined(const MedFunc &Function,
               kSourceCallABINeverdSourceCallArgumentsDefinedGraphWorkLimit)
         return refuse(Error,
                       "The call-site carrier proof exceeded its graph budget");
-      if (Op.SourceCallHint && Op.SourceCallHint->AnalystSite == Site) {
+      if (Op.SourceCallHint &&
+          (Op.SourceCallHint->AnalystSite == Site ||
+           (isMIPSO32(Op.SourceCallHint->Signature.Architecture) &&
+            Site.Opcode == NdOp::CALL && Site.StaticTarget &&
+            Op.SourceCallHint->MIPS16RuntimeOrigin == Site &&
+            Op.SourceCallHint->AnalystSite ==
+                SourceCallOccurrenceKey{Site.Instruction, Op.OriginSeq,
+                                        NdOp::INDIR_CALL, std::nullopt} &&
+            Op.Addr == Site.Instruction && Op.Opcode == NdOp::INDIR_CALL))) {
         if (Call)
           return refuse(Error, "The original call occurrence has multiple "
                                "surviving source operations");

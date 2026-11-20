@@ -1295,14 +1295,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Call->setAttributes(
           mipsFloatingCallAttributes(*Ctx, Call->getAttributes(),
                                      *Hint.Signature.MIPSScalars, TargetArch));
-    if (Analyst && !MachineCall)
+    if (Analyst && !MachineCall) {
+      // LLVMC looks up the declaration the analyst applied to the original
+      // machine call. Expanding a MIPS16 stub adds LowIR operations before
+      // the indirect call, changing its private Op.OriginSeq.
+      const auto &Edit = Hint.MIPS16RuntimeOrigin ? *Hint.MIPS16RuntimeOrigin
+                                                  : *Hint.AnalystSite;
       Call->setMetadata(
           "neverd.source.analyst-call",
           llvm::MDNode::get(
               *Ctx, {llvm::ConstantAsMetadata::get(
-                         llvm::ConstantInt::get(I64Ty, Op.Addr)),
+                         llvm::ConstantInt::get(I64Ty, Edit.Instruction)),
                      llvm::ConstantAsMetadata::get(
-                         llvm::ConstantInt::get(I32Ty, Op.OriginSeq))}));
+                         llvm::ConstantInt::get(I32Ty, Edit.Sequence))}));
+    }
     if (TargetFormat == BinaryFormat::COFF && TargetArch == Arch::X64)
       Call->setCallingConv(llvm::CallingConv::Win64);
     if (SourceMap)
