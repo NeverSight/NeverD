@@ -238,6 +238,7 @@ constexpr bool isStatefulScalar(Intrinsic Id) {
          Id == Intrinsic::MIPSHistoricalRFE ||
          Id == Intrinsic::MIPSHistoricalERET ||
          Id == Intrinsic::MIPSHistoricalOverflow ||
+         Id == Intrinsic::MIPSHistoricalTrap ||
          Id == Intrinsic::MIPSHistoricalAddressCheck;
 }
 constexpr bool localCP0Word(uint64_t Index, bool Write) {
@@ -346,7 +347,8 @@ constexpr bool scalarShapeIsValid(Intrinsic Id, const ScalarShape &S) {
     if (Id == Intrinsic::MIPSHistoricalException)
       return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1 &&
              (S.FirstConstant == 8 || S.FirstConstant == 9);
-    if (Id == Intrinsic::MIPSHistoricalOverflow)
+    if (Id == Intrinsic::MIPSHistoricalOverflow ||
+        Id == Intrinsic::MIPSHistoricalTrap)
       return S.Inputs == 2 && !S.OutputBytes && S.FirstBytes == 1;
     if (Id == Intrinsic::MIPSHistoricalAddressCheck)
       return S.Inputs == 2 && !S.OutputBytes &&

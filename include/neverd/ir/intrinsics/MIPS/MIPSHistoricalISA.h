@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace neverd::mips {
 namespace historical {
@@ -45,6 +46,28 @@ constexpr unsigned historicalTrappingArithmeticBytes(uint32_t Word) {
   if (Major || (Word & 0x7c0))
     return 0;
   return Fn == 32 || Fn == 34 ? 4 : Fn == 44 || Fn == 46 ? 8 : 0;
+}
+
+/// SPECIAL and REGIMM encode the same six comparisons in their low selector
+/// bits. The ten-bit software code in the register form is opaque to the CPU.
+enum class HistoricalTrap : uint8_t {
+  SignedGE,
+  UnsignedGE,
+  SignedLT,
+  UnsignedLT,
+  Equal,
+  NotEqual = 6
+};
+
+constexpr std::optional<HistoricalTrap> historicalTrap(uint32_t Word) {
+  const unsigned Major = Word >> 26;
+  const unsigned Selector = Major ? (Word >> 16) & 31 : Word & 63;
+  if ((Major != 0 && Major != 1) || (Selector & ~7u) != (Major ? 8u : 48u))
+    return std::nullopt;
+  const unsigned Kind = Selector & 7;
+  if (Kind == 5 || Kind == 7)
+    return std::nullopt;
+  return static_cast<HistoricalTrap>(Kind);
 }
 
 constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {

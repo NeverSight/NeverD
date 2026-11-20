@@ -199,7 +199,8 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
                                    bool Taken,
                                    std::optional<unsigned> Coprocessor) {
   if (Code != 0 && Code != 4 && Code != 5 && Code != 8 && Code != 9 &&
-      Code != 10 && Code != 11 && Code != 12)
+      Code != 10 && Code != 11 && Code != 12 &&
+      (Code != 13 || Processor == HistoricalProcessor::R30xx))
     return false;
   if (ExceptionModeDelay || (Code == 11) != Coprocessor.has_value() ||
       (Coprocessor && *Coprocessor >= 4) ||
