@@ -65,6 +65,7 @@
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/LibCVariant.h"
 #include "neverd/libc/StackProbeIndex.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -577,10 +578,41 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
   if (Image && ConstantTarget && MOp.NumInputs == 1)
     if (const std::optional<GoBoundsFailure> Failure =
             goBoundsFailureAt(*Image, LOp.Addr, Key)) {
+      const auto ValueOf = [&](const GoBoundsOperand &Operand) {
+        return Operand.Register ? ndVarToMedVar(NdVar::reg(Operand.Value, 8))
+                                : MedVar::makeConst(Operand.Value, 8);
+      };
+      if (TargetArch == Arch::AArch64) {
+        // An arm64 call takes the registers set before it, so the index and
+        // the bound move into the routine's two parameters, X0 and X1,
+        // through temporaries: either may sit in the other's register.  The
+        // call never returns, so nothing after it reads the two.
+        MedVar Values[2];
+        const GoBoundsOperand Operands[2] = {Failure->Index, Failure->Bound};
+        for (unsigned I = 0; I < 2; ++I) {
+          MedOp Copy;
+          Copy.Opcode = NdOp::COPY;
+          Copy.Addr = LOp.Addr;
+          Copy.Output.Kind = MedVar::Temp;
+          Copy.Output.Id = allocVarId();
+          Copy.Output.Size = 8;
+          Copy.Output.TheArch = TargetArch;
+          Copy.addInput(ValueOf(Operands[I]));
+          Values[I] = Copy.Output;
+          Block.Ops.push_back(std::move(Copy));
+        }
+        for (unsigned I = 0; I < 2; ++I) {
+          MedOp Move;
+          Move.Opcode = NdOp::COPY;
+          Move.Addr = LOp.Addr;
+          Move.Output = ndVarToMedVar(NdVar::reg(a64reg::X0 + 8 * I, 8));
+          Move.addInput(Values[I]);
+          Block.Ops.push_back(std::move(Move));
+        }
+        return;
+      }
       for (const GoBoundsOperand &Operand : {Failure->Index, Failure->Bound})
-        MOp.addInput(Operand.Register
-                         ? ndVarToMedVar(NdVar::reg(Operand.Value, 8))
-                         : MedVar::makeConst(Operand.Value, 8));
+        MOp.addInput(ValueOf(Operand));
       MOp.CalleeRegisterArgs = 2;
       return;
     }

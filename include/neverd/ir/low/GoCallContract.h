@@ -126,9 +126,8 @@ struct GoBoundsFailure {
 
 /// The bounds failure the call at \p CallAddr to \p Callee reports, where
 /// \p Callee is `runtime.panicBounds` and the call's PCDATA_PanicBounds value
-/// decodes to registers the routine saves (`BoundsDecode`), x86-64's by their
-/// hardware number.  nullopt otherwise, and on AArch64, whose calls bind
-/// AAPCS64's eight positions until arm64 summaries publish entry reads.
+/// decodes to registers the routine saves (`BoundsDecode`): x86-64's by their
+/// hardware number, AArch64's R0-R15.  nullopt otherwise.
 std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
                                                  va_t CallAddr, va_t Callee);
 

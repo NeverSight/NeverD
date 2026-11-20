@@ -5878,8 +5878,11 @@ loader reads every function's table (`GoModuleInfo::PanicBounds`), and
 passes exactly that index and bound, the call summaries take them as the call's
 fixed reads, and the routine's own two parameters stand for them, so a call
 prints `runtime_panicBounds(i, n)` rather than the registers the routine saves.
-This holds on x86-64. arm64 calls bind AAPCS64's eight positions until arm64
-summaries publish entry reads, so the loader's ranges wait there.
+An arm64 call takes the registers set before it, so LowToMed copies the index
+and the bound into X0 and X1 before the call, through temporaries that keep a
+swapped pair apart. The call never returns, so nothing after it reads them.
+The routine's parameters are exact (X0, X1), and arm64's indirect-result
+recovery adds no X8 to exact parameters: Go's R8 is an ordinary argument.
 
 Results, calls through function values and interfaces, arm64 and Go code in
 images before 1.18 still follow the platform convention. So do DWARF-typed signatures, whose parameters Go's own register

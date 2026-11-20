@@ -783,6 +783,63 @@ TEST(GoPanicBounds, ACallPassesItsIndexAndBound) {
   EXPECT_EQ(Constant->Inputs[2].RegOff, x86reg::RBX);
 }
 
+TEST(GoPanicBounds, AnARM64CallMovesItsOperandsIntoTheParameters) {
+  // main.b: nop; bl runtime.panicBounds; ret, whose PCDATA_PanicBounds
+  // value is abi.BoundsEncode(BoundsIndex, signed, R3, R5).  An arm64 call
+  // takes the registers set before it, so R3 and R5 move into X0 and X1
+  // first.  The nop keeps the call apart from the entry's own copies.
+  constexpr va_t Caller = kTextVA + 0x100, PanicBounds = kTextVA + 0x200;
+  constexpr va_t Site = Caller + 4;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call =
+      0x94000000u | (((PanicBounds - Site) >> 2) & 0x3FFFFFFu);
+  T.writeText(Caller, words({0xD503201F, Call, 0xD65F03C0}));
+  // The routine saves X8 among the registers that may hold the index; that
+  // is no indirect-result pointer: stp x8, x9, [sp, #-16]!; ldp ...; ret.
+  T.writeText(PanicBounds, words({0xA9BF27E8, 0xA8C127E8, 0xD65F03C0}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Caller, kTextVA + 0x300}};
+  Module.GoAssembly = {{PanicBounds, PanicBounds + 12}};
+  Module.PanicBoundsEntry = PanicBounds;
+  Module.PanicBounds = {{{Site, Site + 4}, (1 | 2 | 4 | 3 << 3 | 5 << 7) * 9}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Failure = goBoundsFailureAt(T.Img, Site, PanicBounds);
+  ASSERT_TRUE(Failure.has_value());
+  EXPECT_EQ(Failure->Index.Value, a64reg::X3);
+  EXPECT_EQ(Failure->Bound.Value, a64reg::X5);
+  const MedFunc F = lift(T.Img, Caller);
+  // X0 and X1 take R3 and R5 before the call, directly or through the
+  // temporaries that keep a swapped pair apart.
+  std::map<std::pair<int, int>, uint64_t> TempSource;
+  std::map<uint64_t, uint64_t> Source;
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::COPY && Op.Addr == Site && Op.NumInputs == 1 &&
+          Op.Inputs[0].Kind == MedVar::Reg) {
+        if (Op.Output.Kind == MedVar::Temp)
+          TempSource[{Op.Output.Id, Op.Output.SSAVer}] = Op.Inputs[0].RegOff;
+        else if (Op.Output.Kind == MedVar::Reg)
+          Source[Op.Output.RegOff] = Op.Inputs[0].RegOff;
+      }
+  for (const MedBlock &Block : F.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::COPY && Op.Addr == Site && Op.NumInputs == 1 &&
+          Op.Output.Kind == MedVar::Reg && Op.Inputs[0].Kind == MedVar::Temp)
+        if (const auto It =
+                TempSource.find({Op.Inputs[0].Id, Op.Inputs[0].SSAVer});
+            It != TempSource.end())
+          Source[Op.Output.RegOff] = It->second;
+  EXPECT_EQ(Source[a64reg::X0], a64reg::X3);
+  EXPECT_EQ(Source[a64reg::X1], a64reg::X5);
+  // The routine takes exactly those two.
+  const MedFunc Routine = lift(T.Img, PanicBounds);
+  ASSERT_EQ(Routine.Params.size(), 2u);
+  EXPECT_EQ(Routine.Params[0].RegOff, a64reg::X0);
+  EXPECT_EQ(Routine.Params[1].RegOff, a64reg::X1);
+  EXPECT_TRUE(Routine.ExactRegisterParameters);
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};

@@ -1664,6 +1664,22 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &NoReads;
       Func.ExactRegisterParameters = true;
     }
+    // runtime.panicBounds takes the index and the bound in its first two
+    // argument registers, where each call's operands are bound
+    // (goBoundsFailureAt).
+    GPRReadWidths BoundsReads{};
+    const GoModuleInfo *GoModule = Image && Image->ExceptionMetadata.GoModule
+                                       ? &*Image->ExceptionMetadata.GoModule
+                                       : nullptr;
+    const bool BoundsRoutine =
+        GoModule && GoModule->PanicBoundsEntry == Func.Entry && Convention &&
+        (TargetArch == Arch::X64 || TargetArch == Arch::AArch64);
+    if (BoundsRoutine) {
+      for (unsigned I = 0; I < 2 && I < IntegerRegs.size(); ++I)
+        BoundsReads[IntegerRegs[I] / 8] = 8;
+      Summary = &BoundsReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home
@@ -1690,7 +1706,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary,
-                         GoRegisterArguments || BufferBarrier);
+                         GoRegisterArguments || BufferBarrier || BoundsRoutine);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1793,7 +1809,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // AArch64: recover the hidden indirect-result (sret) pointer in x8 for a
   // by-value aggregate return (no-op on targets without a dedicated x8).  A
   // captured register context holds x8 as one more of its caller's registers.
-  if (!Func.Blocks.empty() &&
+  // Exact parameters already name it where it is one: Go's R8 is its ninth
+  // integer argument, and Go returns no aggregate through it.
+  if (!Func.Blocks.empty() && !Func.ExactRegisterParameters &&
       !(TheArch == Arch::AArch64 &&
         llvm::is_contained(capturedContextRegisters(Func),
                            TRI.indirectResultReg())))

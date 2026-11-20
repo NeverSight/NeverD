@@ -576,9 +576,9 @@ Still open, in order of yield:
 3. Go 1.26 bounds failures call one `runtime.panicBounds`. The call site's
    `PCDATA_PanicBounds` entry names the registers or constants holding the
    index and the length (`internal/abi/bounds.go`), and the loader now reads
-   it (`goBoundsFailureAt`). Calls pass that index and length on x86-64, but
-   not yet on arm64, whose calls bind AAPCS64's eight positions. The error
-   code (index or slice) is not printed.
+   it (`goBoundsFailureAt`). Calls pass that index and length on x86-64, and
+   on arm64 through copies into X0 and X1. The error code (index or slice) is
+   not printed.
    The earlier stub families (`panicIndex` with x in AX and y in CX, and
    others) still take System V's positions.
 4. A frame larger than 4 KiB reaches its growth path from two branches and

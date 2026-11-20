@@ -253,11 +253,9 @@ bool goGrowthPathsModeled(const BinaryImage &Img) {
 
 std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
                                                  va_t CallAddr, va_t Callee) {
-  // AArch64 calls bind AAPCS64's eight positions until arm64 summaries
-  // publish entry reads, so its operands would go unused there.
   const auto &Module = Img.ExceptionMetadata.GoModule;
   if (!Module || Callee == InvalidVA || Callee != Module->PanicBoundsEntry ||
-      Img.Arch != Arch::X64)
+      (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64))
     return std::nullopt;
   const auto &Ranges = Module->PanicBounds;
   auto It = std::upper_bound(
@@ -291,11 +289,14 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
   }
   BoundValue = BoundIsRegister ? (C & 0xF) : (C & 0x1F);
   // The registers panicBounds saves: x86-64's by hardware number but SP and
-  // R14, which holds g (src/runtime/asm_amd64.s).
+  // R14, which holds g, and AArch64's R0-R15 (src/runtime/asm_amd64.s,
+  // asm_arm64.s).
   const auto Operand = [&](bool IsRegister,
                            unsigned Value) -> std::optional<GoBoundsOperand> {
     if (!IsRegister)
       return GoBoundsOperand{false, Value};
+    if (Img.Arch == Arch::AArch64)
+      return GoBoundsOperand{true, a64reg::X0 + uint64_t(Value) * 8};
     if (Value == 4 || Value == 14)
       return std::nullopt;
     return GoBoundsOperand{true, x86reg::RAX + uint64_t(Value) * 8};
