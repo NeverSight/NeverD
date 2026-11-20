@@ -20635,10 +20635,11 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
-`GoStackArguments.AValueNothingNeedsTakesNoArgument` lifts three Go 1.16
+`GoStackArguments.AValueNothingNeedsTakesNoArgument` lifts five Go 1.16
 functions that read a register at their entry without taking an argument
-there: `sete r9b`, the nil check `testb al, (rbx)`, and a return. Each is a
-stack-only function whose parameters start at the slot past its return
+there: `sete r9b`, the nil check `testb al, (rbx)`, a return, `memmove`'s byte
+path beside a path that returns without writing RAX, and `vzeroupper`. Each is
+a stack-only function whose parameters start at the slot past its return
 address.
 `GoStackArguments.ARegisterStubTakesTheRegistersItPassesOn` builds Go 1.16's
 `panicIndex` stub, its stack-argument half and a caller, as ELF and as PE.

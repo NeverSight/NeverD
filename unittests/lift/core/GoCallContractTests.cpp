@@ -932,6 +932,13 @@ TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
   //     mov [rsp+16], rax; ret
   //   a return reads RAX, where the stack ABI returns nothing:
   //     mov rcx, [rsp+8]; mov [rsp+16], rcx; ret
+  //   memmove keeps RAX's upper bytes on its byte path and returns
+  //   without writing RAX on another, where only its return reads it:
+  //     mov rcx, [rsp+16]; test rcx, rcx; je L; mov rsi, [rsp+8];
+  //     mov al, [rsi]; mov [rsp+24], al; L: ret
+  //   `vzeroupper` keeps each XMM, as a register stays itself, and the stack
+  //   ABI passes no vector argument:
+  //     mov rax, [rsp+8]; vzeroupper; mov [rsp+16], rax; ret
   struct Shape {
     std::vector<uint8_t> Code;
     uint32_t FrameBytes;
@@ -947,6 +954,14 @@ TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
        16,
        1},
       {{0x48, 0x8B, 0x4C, 0x24, 0x08, 0x48, 0x89, 0x4C, 0x24, 0x10, 0xC3},
+       16,
+       1},
+      {{0x48, 0x8B, 0x4C, 0x24, 0x10, 0x48, 0x85, 0xC9, 0x74, 0x0B, 0x48,
+        0x8B, 0x74, 0x24, 0x08, 0x8A, 0x06, 0x88, 0x44, 0x24, 0x18, 0xC3},
+       24,
+       2},
+      {{0x48, 0x8B, 0x44, 0x24, 0x08, 0xC5, 0xF8, 0x77, 0x48, 0x89, 0x44, 0x24,
+        0x10, 0xC3},
        16,
        1},
   };

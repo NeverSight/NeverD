@@ -334,6 +334,11 @@ bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
 
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
   const Arch A = TRI.TheArch;
+  // The stack ABI passes floating arguments on the stack too: a vector
+  // register's incoming value is what an earlier write left there, as a
+  // legacy SSE write keeps ZMM0's upper lanes and `vzeroupper` keeps XMM.
+  if (TRI.isVectorReg(Register))
+    return true;
   llvm::SmallVector<uint64_t, 5> Kept{TRI.StackPointer};
   if (TRI.FramePointer)
     Kept.push_back(TRI.FramePointer);

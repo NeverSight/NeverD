@@ -1643,7 +1643,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
           med_calling_conv_detail::liveInReachesLiveUse(Func,
                                                         Op.Output.RegOff) &&
           !(TheArch == Arch::X64 &&
-            med_calling_conv_detail::liveInOnlyFeedsScratch(
+            med_calling_conv_detail::liveInOnlyFeedsScratchOrReturns(
                 Func, Op.Output.RegOff))) {
         Func.StackArgumentsOnly = false;
         break;

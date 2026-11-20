@@ -773,7 +773,8 @@ void recoverFPStackReads(
 /// a phantom leading argument that shifts every real stack argument).
 static bool liveInOnlyFeedsScratchImpl(const MedFunc &Func,
                                        uint64_t ParamRegOff,
-                                       bool IgnoreStoredValues) {
+                                       bool IgnoreStoredValues,
+                                       bool IgnoreReturns = false) {
   if (Func.Blocks.empty())
     return false;
 
@@ -926,6 +927,10 @@ static bool liveInOnlyFeedsScratchImpl(const MedFunc &Func,
   }
 
   auto propagateOp = [&](const MedOp &Op) {
+    // A return under an ABI that returns nothing in a register reads none of
+    // it (Go before its internal ABI).
+    if (IgnoreReturns && Op.Opcode == NdOp::RETURN)
+      return true;
     llvm::SmallVector<uint64_t, 6> InputMasks(Op.NumInputs, 0);
     bool HasTaint = false;
     for (uint8_t I = 0; I < Op.NumInputs; ++I) {
@@ -1054,6 +1059,12 @@ static bool liveInOnlyFeedsScratchImpl(const MedFunc &Func,
 
 bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff) {
   return liveInOnlyFeedsScratchImpl(Func, ParamRegOff, false);
+}
+
+bool liveInOnlyFeedsScratchOrReturns(const MedFunc &Func,
+                                     uint64_t ParamRegOff) {
+  return liveInOnlyFeedsScratchImpl(Func, ParamRegOff, false,
+                                    /*IgnoreReturns=*/true);
 }
 
 static bool liveInReachesUse(const MedFunc &Func, uint64_t RegOff,

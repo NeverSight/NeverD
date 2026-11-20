@@ -149,7 +149,8 @@ bool goTakesStackArguments(const BinaryImage &Img, va_t Entry);
 
 /// Whether Go code before its internal ABI reads \p Register's incoming value
 /// without taking an argument in it: the stack and frame pointers, the link
-/// register, the closure context, and arm64's goroutine register R28.  Code
+/// register, the closure context, arm64's goroutine register R28, and every
+/// vector register, since floating arguments are on the stack too.  Code
 /// that reads any other register at its entry, as a register stub or a
 /// trampoline the platform's code calls does, takes arguments there.
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
