@@ -2744,3 +2744,66 @@ failures matched the retained-default control. Both virtual M1s
 reported unavailable for native PAuth_LR, PACM-PC and CPTA-on.
 [Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44786566570).
 [Input hashes, complete results and negative controls](evidence/arm64e-mixed-alignment-2026-11-21.json).
+
+### Preserving addresses of source data and function entries
+
+An arm64e function can expose its original address as a value. A copied
+`ADR` in a published function now resolves the same source byte or callable
+entry after the final image layout is known. The installer checks the
+original word and the compiled function extent before encoding the
+displacement. The final verifier decodes the resulting instruction and checks
+the register and absolute target. This covers pointers into a declared
+`DICE_KIND_DATA` literal, including an unaligned interior byte in another
+function, and original function entries returned in X0 or written through pointer
+parameters by STR and STUR. Full-width register moves preserve that identity.
+The switch recognizer identifies both the table address and the jump anchor.
+A local PACM signing point moves with a verified matching consumer. An
+unproved code address or a target beyond the signed byte displacement fails
+before publication.
+
+For normal static data, Clang also emits an `ADRP` and an unshifted X-register
+`ADD`. When this pair identifies a byte in file-backed data, the register
+producer emits Mach-O `PAGE21` and `PAGEOFF12` relocations against that
+source address. The final check decodes both instructions at their installed
+PC and compares the registers and complete byte address with the original.
+The native C caller independently obtains the array's exported alias through
+`dlsym`, then compares the interior pointer and each indexed load.
+
+The source-fork and frozen r6 Release CLIs each produced 72 signed images
+across three generations with default optimization and `--no-opt`. All 72
+pairs were byte-identical when given the same output filename. Darwin's
+ad-hoc signer includes that filename in its identifier. Each CLI rejected
+the ten controls for an out-of-range displacement, an unowned address or
+a code value without an established identity. The adjacent Release suites passed all 19 Mach-O ARM64 relocation cases,
+all 19 AArch64 return-protection cases and 792 of 798 jump-table cases,
+with six compiler-shape or cross-runtime skips. The static-array
+fixture was built at O0 and O2 by three Apple Clang installations.
+[Hosted compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44795711164).
+
+On macos-26 and xcode-27, each source-fork run passed all 262 tests. Each
+frozen r6 run passed 252, skipped the four compact PAuth_LR emitter tests
+and reproduced the six existing classic signed-return CFI failures. All
+five new cases passed on both producers. Each of the four jobs also checked
+56 byte-address calls and 294 calls on the C compiler images. The independent
+callers detected the pre-fix wrong self address both as a return value and
+through a caller-provided slot. Every corrected output-parameter image
+agreed with its exported entry. [Native publication matrix](https://github.com/gmh5225/test_mac_intel/actions/runs/44801521879).
+
+Both hosted Mac profiles recovered two callers at all twelve sampled old
+entries in the original and published images using Darwin's registered
+tables and the interrupted register state. A separate run on the original
+program sampled indexed, compact and compact-with-LSDA entries on ordinary
+and alternate stacks. At all six interruptions on each machine, initializing
+the cursor from the signal context recovered both callers and the correct
+SP. Darwin's direct walk from the handler skipped the old entry each time.
+The macos-15 runner terminated its minimal arm64e launch with SIGKILL.
+The measured machines were virtual M1s. Explicit PAuth_LR, PACM-PC, scalar
+CPTA-on and checked writeback still lack native qualification.
+[Compiler-original system unwind and hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/44792865868).
+
+A return of an entry address plus one still fails at MedIR code-identity
+resolution. Its post-ABI graph has already folded the entry and displacement
+to one interior address. The recorded input distinguishes this case from
+an explicitly declared literal interior. Temporary runner branches, the
+test release and its tag were removed after the runner reports were copied.
+[Source, compiler and CLI hashes, paired controls and per-run results](evidence/arm64e-source-addresses-2026-11-21.json).

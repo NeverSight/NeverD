@@ -4509,6 +4509,13 @@ at the same widths. Nested rotations move a source window across bit zero.
 Half the products retain a live bit in an extension or high piece.
 A 127-factor x64 fixture reads CH after rotating ECX and checks signed and
 unsigned byte extensions through the CLI and GUI worker source paths.
+Use `--family shifted-window --count 16` for 128 products of 83 to 281 factors.
+Each source passes through up to two shifts and an intervening rotation.
+Half the products place one observable bit in zero or sign padding. A
+163-factor x64 fixture reads CH after SHL, SHR and SAR through the CLI and
+GUI worker. Both source backends exercise complementary shift pairs, copied
+windows of widened registers, and masked right shifts. The generated C and
+the original machine code are checked against the same full-width oracle.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.
@@ -20647,6 +20654,10 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoInternalABI.AnIndirectCallReturnsEveryResultItsCallerReads` lifts a Go
+1.18 function that calls through a function value and stores RBX: the call
+returns RAX and RBX packed, every later read of RBX is its second field, and
+no clobber of RBX is left; a store of RDX instead gives the call no fields.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.

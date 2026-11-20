@@ -46,7 +46,8 @@ struct Address {
 /// target alone does not show that the table and its anchor move with the
 /// copy. Bind the reaching ADRs to the load and add in the same basic block.
 struct MovingTable {
-  va_t Producer;
+  va_t StoragePC;
+  va_t AnchorPC;
   uint16_t Kind;
 };
 
@@ -154,7 +155,7 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
   if (Branch.op_count != 1 || Branch.operands[0].type != AARCH64_OP_REG ||
       Branch.operands[0].reg != Destination)
     return std::nullopt;
-  return MovingTable{Storage->PC, Kind};
+  return MovingTable{Storage->PC, Anchor->PC, Kind};
 }
 
 bool recordTable(const MachOLiftedSource &Source, va_t Start,
@@ -329,7 +330,8 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       if (!recordTable(Source, Function.Entry, *Table, Producer->Kind,
                        Result.Recovered))
         return std::nullopt;
-      Result.TableAddresses.insert(Producer->Producer);
+      Result.TableAddresses.insert(Producer->StoragePC);
+      Result.TableAddresses.insert(Producer->AnchorPC);
       Result.BranchTargets.try_emplace(Table->InsnAddr, Table->Targets);
     }
   }

@@ -561,6 +561,186 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
+// The caller derives the literal address independently from the exported
+// input function. All four functions also run in each signed publication.
+A64_LEAF_VALUE(unsigned, kAddressFunctions, 4)
+A64_LEAF_TEXT(kDistantAddresses, "#define NEVERD_TEST_DISTANT_ADDRESSES 1\n")
+A64_LEAF_TEXT(kDistantAddressRefused, "out_of_range_source_adr_refused")
+A64_LEAF_TEXT(kAddressFixups, "verified_source_address_sites")
+A64_LEAF_TEXT(kAddressLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+Lsum:
+.cfi_startproc
+  adr x8, Lbytes
+  ldrb w8, [x8, #1]
+  add x0, x0, x8
+  ret
+.data_region
+Lbytes:
+  .byte 0x23, 0x36, 0x45, 0x52
+.end_data_region
+.cfi_endproc
+
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  adr x0, Lbytes+1
+  ret
+.cfi_endproc
+
+.globl _leaf_self
+_leaf_self:
+.cfi_startproc
+  adr x0, _leaf_self
+  ret
+.cfi_endproc
+
+.globl _leaf_peer
+_leaf_peer:
+.cfi_startproc
+  adr x8, Lsum
+  mov x9, x8
+  mov x0, x9
+  ret
+.cfi_endproc
+#ifdef NEVERD_TEST_DISTANT_ADDRESSES
+.section __TEXT,__const
+  .space (1 << 20)
+#endif
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kAddressCaller, R"c(
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <stdint.h>
+
+typedef uintptr_t (*reader)(uintptr_t);
+typedef uintptr_t (*address)(void);
+
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  reader sum = (reader)dlsym(image, "leaf_sum");
+  address byte = (address)dlsym(image, "leaf_difference");
+  address self = (address)dlsym(image, "leaf_self");
+  address peer = (address)dlsym(image, "leaf_peer");
+  if (!sum || !byte || !self || !peer)
+    return 3;
+  uintptr_t sum_entry = (uintptr_t)ptrauth_strip(sum, ptrauth_key_function_pointer);
+  uintptr_t self_entry = (uintptr_t)ptrauth_strip(self, ptrauth_key_function_pointer);
+  uintptr_t literal = sum_entry + 4 * sizeof(uint32_t) + 1;
+  if (byte() != literal || self() != self_entry || peer() != sum_entry ||
+      *(const uint8_t *)literal != 0x36)
+    return 4;
+  const uintptr_t inputs[] = {0, 1, 17, UINTPTR_MAX, UINT64_C(1) << 63};
+  for (unsigned i = 0; i != sizeof(inputs) / sizeof(*inputs); ++i)
+    if (sum(inputs[i]) != inputs[i] + 0x36)
+      return 5;
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kStoreEntryLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+Lsum:
+.cfi_startproc
+  adr x8, _leaf_sum
+  str x8, [x0, #8]
+  ret
+.data_region
+  .byte 0x23, 0x36, 0x45, 0x52
+.end_data_region
+.cfi_endproc
+
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  adr x8, Lsum
+  mov x9, x8
+  stur x9, [x0, #-8]
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kStoreEntryCaller, R"c(
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <stdint.h>
+
+typedef void (*writer)(uintptr_t *);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  writer after = (writer)dlsym(image, "leaf_sum");
+  writer before = (writer)dlsym(image, "leaf_difference");
+  if (!after || !before)
+    return 3;
+  uintptr_t entry = (uintptr_t)ptrauth_strip(after, ptrauth_key_function_pointer);
+  uintptr_t slots[] = {1, 2, 3};
+  after(&slots[0]);
+  if (slots[0] != 1 || slots[1] != entry || slots[2] != 3)
+    return 4;
+  slots[1] = 2;
+  before(&slots[2]);
+  if (slots[0] != 1 || slots[1] != entry || slots[2] != 3)
+    return 5;
+  return dlclose(image) != 0;
+}
+)c")
+// A second, exported name lets the native caller check the static array's
+// address with dlsym. Clang still sees ordinary translation-unit-local data.
+A64_LEAF_TEXT(kPageO0, "#define NEVERD_TEST_PAGE_O0 1\n")
+A64_LEAF_TEXT(kPageOffsetOperand, "@PAGEOFF")
+A64_LEAF_TEXT(kPageOperands, "symbolic_data_page_operands")
+A64_LEAF_TEXT(kPageLeaves, R"c(
+#include <stdint.h>
+
+static const unsigned char samples[] = {35, 54, 69, 82};
+__asm__(".globl _values_origin\n.set _values_origin, _samples");
+
+__attribute__((noinline)) uintptr_t leaf_sum(uintptr_t index) {
+  return samples[index & 3];
+}
+
+__attribute__((noinline)) const unsigned char *leaf_difference(void) {
+  return samples + 1;
+}
+)c")
+A64_LEAF_TEXT(kPageCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  uintptr_t (*read_value)(uintptr_t) = dlsym(image, "leaf_sum");
+  const unsigned char *(*interior)(void) = dlsym(image, "leaf_difference");
+  const unsigned char *base = dlsym(image, "values_origin");
+  if (!base || !read_value || !interior || interior() != base + 1)
+    return 3;
+  const unsigned char expected[] = {35, 54, 69, 82};
+  const uintptr_t inputs[] = {0, 1, 2, 3, 4, UINTPTR_MAX};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i)
+    if (read_value(inputs[i]) != expected[inputs[i] & 3] ||
+        base[inputs[i] & 3] != expected[inputs[i] & 3])
+      return 4;
+  return dlclose(image) != 0;
+}
+)c")
 A64_LEAF_TEXT(kSplitLiteralOracle, "#define NEVERD_TEST_SPLIT_LITERALS 1\n")
 A64_LEAF_TEXT(kLiteralComparisons, "native_literal_width_comparisons")
 A64_LEAF_VALUE(unsigned, kLiteralInputs, 5)

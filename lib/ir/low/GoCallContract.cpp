@@ -221,6 +221,28 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   return {};
 }
 
+bool goCallEntersInternalABI(const BinaryImage &Img, va_t Caller, va_t Callee,
+                             const GPRReadWidths *CalleeReads) {
+  if (Callee == InvalidVA)
+    return usesGoRegisterArguments(Img, Caller);
+  return usesGoRegisterArguments(Img, Callee) ||
+         (CalleeReads &&
+          goAssemblyTakesRegisterArguments(Img, Callee, *CalleeReads));
+}
+
+bool goResultRegister(Arch A, uint64_t RegOff) {
+  if (llvm::is_contained(goIntegerArgumentRegisters(A), RegOff))
+    return true;
+  if (A == Arch::X64)
+    return RegOff >= x86reg::VectorBase &&
+           RegOff < x86reg::VectorBase + 15 * x86reg::VectorRegStride &&
+           (RegOff - x86reg::VectorBase) % x86reg::VectorRegStride == 0;
+  if (A == Arch::AArch64)
+    return RegOff >= a64reg::V0 && RegOff < a64reg::V(16) &&
+           (RegOff - a64reg::V0) % (a64reg::V(1) - a64reg::V0) == 0;
+  return false;
+}
+
 std::optional<uint64_t> goClosureContextRegister(Arch A) {
   if (A == Arch::X64)
     return x86reg::RDX;
