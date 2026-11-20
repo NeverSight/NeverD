@@ -17,7 +17,11 @@
 #include <optional>
 #include <vector>
 
-namespace neverd::mips {
+namespace neverd {
+struct BinaryImage;
+class DebugContext;
+
+namespace mips {
 
 struct RecordCallPlacement {
   SourceParameterPlacement Arguments;
@@ -45,6 +49,12 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
 bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                            BinaryFormat Format);
 
-} // namespace neverd::mips
+/// Recover a complete by-value declaration at its original ELF entry address.
+std::optional<SourceFunctionTypeHint> recordSourceABI(const BinaryImage &Image,
+                                                      const DebugContext &Debug,
+                                                      va_t Entry);
+
+} // namespace mips
+} // namespace neverd
 
 #endif // NEVERD_IR_MIPS_SOURCERECORDABI_H

@@ -317,11 +317,18 @@ HighCWriter::mipsRecordEntry(const HighFunc &Func, const FunctionSym &DebugFn,
     Inputs.push_back(
         {{P.RegOff, P.MedIndex, Type->Size}, Type->Kind, declaredAs(Type, "")});
   }
+  mips::CEntryCarrier Result{{kNoParamReg, -1, ReturnType->Size},
+                             ReturnType->Kind,
+                             declaredAs(ReturnType, ""),
+                             {}};
+  if (ReturnType->RegisterReturnRecord)
+    for (unsigned I = 0; I < ReturnType->Fields.size(); ++I)
+      Result.Fields.push_back({ReturnType->Fields[I]->Kind,
+                               ReturnType->FieldOffsets[I],
+                               ReturnType->Fields[I]->Size});
   return mips::cRecordEntry(Opts, functionDebugContext(Func), DebugFn,
                             Func.Entry, functionIdentifier(Func), Inputs,
-                            {{kNoParamReg, -1, ReturnType->Size},
-                             ReturnType->Kind,
-                             declaredAs(ReturnType, "")});
+                            Result);
 }
 
 TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {

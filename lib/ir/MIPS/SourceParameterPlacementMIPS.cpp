@@ -11,9 +11,12 @@
 #include "../SourceParameterPlacementDetail.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 #include <utility>
@@ -338,4 +341,36 @@ bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
   Bound.MIPSScalars.reset();
   Hint = std::move(Bound);
   return true;
+}
+
+std::optional<SourceFunctionTypeHint>
+mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
+                      va_t Entry) {
+  if (!Img.MIPS || Img.instructionModeAt(Entry) == InstructionMode::MIPS16)
+    return std::nullopt;
+  const auto FS = Debug.resolveFunction(Entry);
+  if (!FS || FS->Addr != Entry || !FS->PlatformConvention || FS->IsVariadic ||
+      !FS->ReturnType ||
+      (!isUserFunctionDeclaration(*FS) &&
+       !Debug.hasAuthenticatedFunctionSignatures()) ||
+      (FS->ReturnType->Kind != NdTypeKind::Struct &&
+       llvm::none_of(FS->Params, [](const auto &P) {
+         return P.second && P.second->Kind == NdTypeKind::Struct;
+       })))
+    return std::nullopt;
+  SourceFunctionTypeHint Candidate;
+  Candidate.Origin = isUserFunctionDeclaration(*FS)
+                         ? SourceFunctionTypeHint::OriginKind::ExplicitSource
+                         : SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Debug.completeType(FS->ReturnType);
+  Candidate.ReturnType = FS->ReturnType;
+  for (const auto &[Name, Type] : FS->Params) {
+    if (!Type)
+      return std::nullopt;
+    Debug.completeType(Type);
+    Candidate.Parameters.push_back({Name, Type});
+  }
+  return mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())
+             ? std::optional(std::move(Candidate))
+             : std::nullopt;
 }

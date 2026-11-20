@@ -85,17 +85,34 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
   const bool HardFloat =
       Options.Image->MIPS->hasScalarFP64ABI(Options.TheArch) ||
       Options.Image->MIPS->hasScalarFP32ABI(Options.TheArch);
+  std::vector<unsigned> ResultOffsets;
   if (!Hidden && record(Function.ReturnType)) {
-    if (Layout->Result.size() != 1 || !word(Result.Site.Bytes))
+    const bool Tuple = Result.Kind == NdTypeKind::Struct;
+    if (Tuple ? Layout->Result.size() != Result.Fields.size()
+              : Layout->Result.size() != 1)
       return std::nullopt;
-    const auto &P = Layout->Result.front();
-    const bool FP = P.Location.Kind == SourceABICarrierKind::FloatingRegister;
-    if ((FP && (!HardFloat || Result.Kind != NdTypeKind::Float ||
-                P.Location.RegisterOffset != TRI.FPReturnReg)) ||
-        (!FP && (Result.Kind != NdTypeKind::Int ||
-                 P.Location.RegisterOffset != TRI.IntReturnReg)) ||
-        P.RegisterBitOffset + 8 * P.Location.ValueBytes > 8 * Result.Site.Bytes)
-      return std::nullopt;
+    unsigned End = 0;
+    for (unsigned I = 0; I < Layout->Result.size(); ++I) {
+      const auto &P = Layout->Result[I];
+      const auto Field =
+          Tuple ? Result.Fields[I]
+                : CEntryCarrier::Field{Result.Kind, 0, Result.Site.Bytes};
+      const bool FP = P.Location.Kind == SourceABICarrierKind::FloatingRegister;
+      if (!word(Field.Bytes) || Field.Offset < End ||
+          Field.Offset + Field.Bytes > Result.Site.Bytes ||
+          (FP && (!HardFloat || Field.Kind != NdTypeKind::Float ||
+                  I >= TRI.FPReturnRegs.size() ||
+                  P.Location.RegisterOffset != TRI.FPReturnRegs[I])) ||
+          (!FP &&
+           (Field.Kind != NdTypeKind::Int || I >= TRI.IntReturnRegs.size() ||
+            P.Location.RegisterOffset != TRI.IntReturnRegs[I])) ||
+          P.RegisterBitOffset + 8 * P.Location.ValueBytes > 8 * Field.Bytes)
+        return std::nullopt;
+      ResultOffsets.push_back(Field.Offset +
+                              memoryOffset(Field.Bytes, P.Location.ValueBytes,
+                                           P.RegisterBitOffset, Little));
+      End = Field.Offset + Field.Bytes;
+    }
   } else if (!Hidden && Function.ReturnType->Kind != Result.Kind) {
     return std::nullopt;
   }
@@ -194,17 +211,15 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
       return std::nullopt;
     OS << "    " << Call << ";\n    return " << ResultObject << ";\n";
   } else if (record(Function.ReturnType)) {
-    const auto &P = Layout->Result.front();
-    const auto Size = P.Location.ValueBytes;
     OS << "    " << Result.Spelling << " " << ResultWord << " = " << Call
-       << ";\n"
-       << "    __builtin_memcpy(" << bytes(ResultObject, P.Offset, false)
-       << ", "
-       << bytes(ResultWord,
-                memoryOffset(Result.Site.Bytes, Size, P.RegisterBitOffset,
-                             Little),
-                true)
-       << ", " << Size << ");\n    return " << ResultObject << ";\n";
+       << ";\n";
+    for (unsigned I = 0; I < Layout->Result.size(); ++I) {
+      const auto &P = Layout->Result[I];
+      OS << "    __builtin_memcpy(" << bytes(ResultObject, P.Offset, false)
+         << ", " << bytes(ResultWord, ResultOffsets[I], true) << ", "
+         << P.Location.ValueBytes << ");\n";
+    }
+    OS << "    return " << ResultObject << ";\n";
   } else {
     OS << "    " << (Result.Kind == NdTypeKind::Void ? "" : "return ") << Call
        << ";\n";

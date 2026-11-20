@@ -23,7 +23,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 
 #include "../../AArch64ImmediateMemoryBase.h"
-#include "../MIPS/LLVMIntegerResult.h"
+#include "../MIPS/LLVMRecordABI.h"
 
 #include "neverd/Common.h"
 #include "neverd/backend/ExceptionRewriteContract.h"
@@ -35,6 +35,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMEntryABI.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMName.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceMap.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/LanguageEHMetadata.h"
@@ -792,9 +793,26 @@ llvm::Function *MedLLVMEmitter::declareFunc(const MedFunc &Func) {
           ParamTypes[I] = sizeToType(Prototype->ArgWidths[I]);
     }
 
+  const auto *RecordABI = Func.SourceParametersBound && Func.SourceTypeHint &&
+                                  Func.SourceTypeHint->MIPSRecords
+                              ? &*Func.SourceTypeHint
+                              : nullptr;
+  std::vector<SourceABIParameter> Pieces;
+  if (RecordABI) {
+    Pieces = sourceABIParameters(*RecordABI);
+    if (Pieces.size() != ParamTypes.size() || Func.IsVariadic)
+      throw std::invalid_argument(
+          "A MIPS record entry lost its bound parameter pieces");
+    for (unsigned I = 0; I < Pieces.size(); ++I)
+      ParamTypes[I] = llvmMIPSRecordPieceType(*Ctx, Pieces[I], *RecordABI);
+    RetType = llvmSourceCallValueType(*Ctx, RecordABI->ReturnType, false);
+  }
   auto *FuncTy = llvm::FunctionType::get(RetType, ParamTypes, Func.IsVariadic);
   auto *LLVMFunc = llvm::Function::Create(
       FuncTy, llvm::GlobalValue::ExternalLinkage, EmittedName, Mod);
+  if (RecordABI)
+    LLVMFunc->setAttributes(mips::recordCallAttributes(
+        *Ctx, LLVMFunc->getAttributes(), *RecordABI, Pieces));
   if (sourceComplexComponentBytes(Func.ReturnType)) {
     LLVMFunc->addFnAttr(LLVMSourceComplexResult);
     if (!readLLVMSourceComplexResult(RetType, LLVMFunc->getAttributes()))

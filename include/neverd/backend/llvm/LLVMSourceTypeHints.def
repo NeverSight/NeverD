@@ -8,4 +8,5 @@
 #endif
 NEVERD_LLVM_SOURCE_TYPE_TEXT(LLVMSourceComplexResult,
                              "neverd.source.complex_result")
+NEVERD_LLVM_SOURCE_TYPE_TEXT(LLVMMIPSRecordCall, "neverd.mips.record_call")
 #undef NEVERD_LLVM_SOURCE_TYPE_TEXT

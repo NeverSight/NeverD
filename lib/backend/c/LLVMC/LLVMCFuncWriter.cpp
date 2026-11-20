@@ -10524,7 +10524,21 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
                      : T->isFloatingPointTy() ? NdTypeKind::Float
                      : T->isVoidTy()          ? NdTypeKind::Void
                                               : NdTypeKind::Struct;
-      return mips::CEntryCarrier{Site, K, typeToCLLVM(T)};
+      mips::CEntryCarrier Carrier{Site, K, typeToCLLVM(T), {}};
+      if (auto *ST = llvm::dyn_cast<llvm::StructType>(T); ST && ST->isSized()) {
+        const auto &DL = Fn.getDataLayout();
+        const auto *Layout = DL.getStructLayout(ST);
+        for (unsigned I = 0; I < ST->getNumElements(); ++I) {
+          auto *E = ST->getElementType(I);
+          if (!E->isIntegerTy() && !E->isFloatingPointTy())
+            break;
+          Carrier.Fields.push_back(
+              {E->isIntegerTy() ? NdTypeKind::Int : NdTypeKind::Float,
+               unsigned(Layout->getElementOffset(I)),
+               unsigned(DL.getTypeStoreSize(E))});
+        }
+      }
+      return Carrier;
     };
     if (const auto Sites = parameter_sites::getParameterSites(Fn)) {
       std::vector<mips::CEntryCarrier> Inputs;

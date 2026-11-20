@@ -171,6 +171,41 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return;
   }
 
+  if (CurMedFunc && CurMedFunc->SourceParametersBound &&
+      CurMedFunc->SourceTypeHint && CurMedFunc->SourceTypeHint->MIPSRecords) {
+    // The source binder captured these result operands before SSA, including
+    // a value written in the return delay slot. An ordinary JR input is not
+    // a return value and never enters this path.
+    const auto *Record = llvm::dyn_cast<llvm::StructType>(RetTy);
+    const unsigned Count = Record ? Record->getNumElements() : 1;
+    if (Op.NumInputs != Count)
+      throw std::invalid_argument(
+          "A MIPS record entry lost its bound return pieces");
+    llvm::Value *Result = Record ? llvm::PoisonValue::get(RetTy) : nullptr;
+    for (unsigned I = 0; I < Count; ++I) {
+      auto *Type = Record ? Record->getElementType(I) : RetTy;
+      auto *Value = GetReturnValue(Op.Inputs[I]);
+      const auto Bits = [&](llvm::Type *T) {
+        return T->isPointerTy()
+                   ? Mod->getDataLayout().getPointerSizeInBits()
+                   : unsigned(T->getPrimitiveSizeInBits().getFixedValue());
+      };
+      if (!Value || Bits(Value->getType()) != Bits(Type))
+        throw std::invalid_argument("A MIPS record result changed width");
+      if (Value->getType() != Type) {
+        if (Type->isPointerTy())
+          Value = Builder.CreateIntToPtr(Value, Type);
+        else if (Value->getType()->isPointerTy())
+          Value = Builder.CreatePtrToInt(Value, Type);
+        else
+          Value = Builder.CreateBitCast(Value, Type);
+      }
+      Result = Record ? Builder.CreateInsertValue(Result, Value, {I}) : Value;
+    }
+    llvm_value_provenance::markExplicitSourceReturn(*Builder.CreateRet(Result));
+    return;
+  }
+
   if (CurMedFunc && CurMedFunc->SkippedSSA && MutableReturnValue) {
     auto *Value = getVar(*MutableReturnValue, Builder);
     Value = Builder.CreateZExtOrTrunc(Value, RetTy);

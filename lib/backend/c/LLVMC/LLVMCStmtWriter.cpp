@@ -6422,6 +6422,46 @@ std::string LLVMCWriter::indirectCalleeType(const llvm::CallBase &Call,
          " (" + Convention + "*)(" + Parameters + ")";
 }
 
+namespace {
+void checkSourceCallCarriers(const llvm::CallBase &Call,
+                             const SourceFunctionTypeHint &Signature) {
+  std::string Diagnostic;
+  if (!validateSourceABI(Signature, Diagnostic) ||
+      Signature.ReturnLocation.Kind ==
+          SourceABICarrierKind::IndirectResultPointer)
+    throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
+  if (Call.getType() !=
+      llvmSourceCallValueType(Call.getContext(), Signature.ReturnType, false))
+    throw std::runtime_error("The call-site source result carrier changed");
+  if (Signature.MIPSRecords) {
+    const auto Pieces = sourceABIParameters(Signature);
+    if (!Call.hasFnAttr(LLVMMIPSRecordCall) ||
+        Call.arg_size() != Pieces.size() ||
+        Call.hasRetAttr(llvm::Attribute::InReg) !=
+            !Signature.ReturnComponents.empty())
+      throw std::runtime_error("The MIPS record call lost its ABI carriers");
+    for (unsigned I = 0; I < Pieces.size(); ++I)
+      if (Call.getArgOperand(I)->getType() !=
+              llvmMIPSRecordPieceType(Call.getContext(), Pieces[I],
+                                      Signature) ||
+          Call.paramHasAttr(I, llvm::Attribute::InReg) !=
+              !Signature.Parameters[Pieces[I].ParameterIndex]
+                   .Components.empty())
+        throw std::runtime_error("A MIPS record component changed ABI class");
+    return;
+  }
+  if (Call.arg_size() != Signature.Parameters.size())
+    throw std::runtime_error(
+        "The call-site source declaration lost its complete operands");
+  for (unsigned I = 0; I < Call.arg_size(); ++I)
+    if (Call.getArgOperand(I)->getType() !=
+        llvmSourceCallValueType(
+            Call.getContext(), sourceCallParameterType(Signature.Parameters[I]),
+            true))
+      throw std::runtime_error("A call-site source argument carrier changed");
+}
+} // namespace
+
 const SourceCallTypeHint *
 LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
   const auto *Node = Call.getMetadata("neverd.source.analyst-call");
@@ -6446,25 +6486,10 @@ LLVMCWriter::analystCallHint(const llvm::CallBase &Call) const {
             "The call-site source identity became ambiguous");
       Found = &Hint;
     }
-  if (!Found || Call.arg_size() != Found->Signature.Parameters.size())
+  if (!Found)
     throw std::runtime_error(
-        "The call-site source declaration lost its complete operands");
-  std::string Diagnostic;
-  if (!validateSourceABI(Found->Signature, Diagnostic) ||
-      Found->Signature.ReturnLocation.Kind ==
-          SourceABICarrierKind::IndirectResultPointer)
-    throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
-  if (Call.getType() != llvmSourceCallValueType(Call.getContext(),
-                                                Found->Signature.ReturnType,
-                                                /*Parameter=*/false))
-    throw std::runtime_error("The call-site source result carrier changed");
-  for (unsigned I = 0; I < Call.arg_size(); ++I)
-    if (Call.getArgOperand(I)->getType() !=
-        llvmSourceCallValueType(
-            Call.getContext(),
-            sourceCallParameterType(Found->Signature.Parameters[I]),
-            /*Parameter=*/true))
-      throw std::runtime_error("A call-site source argument carrier changed");
+        "The call-site source declaration lost its original occurrence");
+  checkSourceCallCarriers(Call, Found->Signature);
   return Found;
 }
 
@@ -6524,41 +6549,75 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       return getName(&Call);
   RenderingCalls.push_back(&Call);
 
-  if (Call.getMetadata("neverd.source.analyst-call")) {
-    const auto *Hint = analystCallHint(Call);
-    std::string Expression = preservedIndirectCalleeStr(Call) + "(";
-    for (unsigned I = 0; I < Call.arg_size(); ++I) {
+  const bool Edited = Call.getMetadata("neverd.source.analyst-call") != nullptr;
+  if (Edited || Call.hasFnAttr(LLVMMIPSRecordCall)) {
+    const auto *Hint = Edited ? analystCallHint(Call) : nullptr;
+    const auto *Direct = Edited ? nullptr : Call.getCalledFunction();
+    const auto Native = Direct ? mipsRecordDeclaration(*Direct) : std::nullopt;
+    const auto *Signature = Native ? &*Native
+                            : Hint ? &Hint->Signature
+                                   : nullptr;
+    if (Call.hasFnAttr(LLVMMIPSRecordCall) && !Signature)
+      throw std::runtime_error(
+          "The MIPS record call lost its original declaration");
+    if (Native)
+      checkSourceCallCarriers(Call, *Native);
+    std::string Expression = (Direct ? functionIdentifier(*Direct)
+                                     : preservedIndirectCalleeStr(Call)) +
+                             "(";
+    const unsigned Count =
+        Signature ? Signature->Parameters.size() : Call.arg_size();
+    unsigned Operand = 0;
+    for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Expression += ", ";
       const auto Type =
-          Hint ? declarationToC(
-                     (sourceCallParameterType(Hint->Signature.Parameters[I])),
-                     "")
-               : sourceScalarType(Call.getArgOperand(I)->getType(),
-                                  Call.getAttributes().hasParamAttr(
-                                      I, LLVMSourceSignedParameter));
-      const auto *Argument = Call.getArgOperand(I);
-      if (Hint && !Hint->Signature.Parameters[I].IndirectByValue &&
-          Hint->Signature.Parameters[I].Type->Kind == NdTypeKind::Struct)
+          Signature
+              ? declarationToC(
+                    (sourceCallParameterType(Signature->Parameters[I])), "")
+              : sourceScalarType(Call.getArgOperand(Operand)->getType(),
+                                 Call.getAttributes().hasParamAttr(
+                                     Operand, LLVMSourceSignedParameter));
+      if (Signature && Signature->MIPSRecords &&
+          !Signature->Parameters[I].Components.empty()) {
+        const auto &Parameter = Signature->Parameters[I];
+        const auto Members = sourceABIValueMembers(Parameter.Type);
+        IntegerCallParameter Packed;
+        for (const auto &Member : Members) {
+          const bool FP =
+              Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
+          Packed.Pieces.push_back({Operand++, Member.ByteOffset,
+                                   Member.Type->Size, FP, Member.Type->Size});
+        }
+        noteRecordValue(Parameter.Type);
+        Expression += c_detail::recordCallArgument(
+            Type, Packed, Opts.TheArch, [&](const auto &Piece) {
+              return valueStr(Call.getArgOperand(Piece.Argument));
+            });
+        continue;
+      }
+      const auto *Argument = Call.getArgOperand(Operand++);
+      if (Signature && !Signature->Parameters[I].IndirectByValue &&
+          Signature->Parameters[I].Type->Kind == NdTypeKind::Struct)
         Expression += c_detail::sourceRecordValue(
-            Hint->Signature.Parameters[I].Type,
-            typeToCLLVM(Argument->getType()), Type, valueStr(Argument));
+            Signature->Parameters[I].Type, typeToCLLVM(Argument->getType()),
+            Type, valueStr(Argument));
       else {
         std::string Projected = "(" + Type + ")(" + valueStr(Argument) + ")";
         const bool Pointer =
-            Hint ? sourceCallParameterType(Hint->Signature.Parameters[I])
-                           ->Kind == NdTypeKind::Ptr
-                 : Argument->getType()->isPointerTy();
+            Signature
+                ? sourceCallParameterType(Signature->Parameters[I])->Kind ==
+                      NdTypeKind::Ptr
+                : Argument->getType()->isPointerTy();
         Expression += Pointer
                           ? imagePointerArgument(Argument, std::move(Projected))
                           : std::move(Projected);
       }
     }
     Expression += ")";
-    if (Hint && Hint->Signature.ReturnType->Kind == NdTypeKind::Struct)
+    if (Signature && Signature->ReturnType->Kind == NdTypeKind::Struct)
       Expression = c_detail::sourceRecordValue(
-          Hint->Signature.ReturnType,
-          declarationToC(Hint->Signature.ReturnType, ""),
+          Signature->ReturnType, declarationToC(Signature->ReturnType, ""),
           typeToCLLVM(Call.getType()), Expression);
     RenderingCalls.pop_back();
     return Expression;

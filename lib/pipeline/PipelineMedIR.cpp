@@ -1163,41 +1163,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   if (Opts.usesSourceDeclarations() && Img.MIPS && Dbg &&
       (Dbg->hasAuthenticatedFunctionSignatures() ||
        Dbg->hasUserFunctionDeclarations())) {
-    const auto RecordHint =
-        [&](va_t Entry) -> std::optional<SourceFunctionTypeHint> {
-      if (Img.instructionModeAt(Entry) == InstructionMode::MIPS16)
-        return std::nullopt;
-      const auto FS = Dbg->resolveFunction(Entry);
-      if (!FS || FS->Addr != Entry || !FS->PlatformConvention ||
-          FS->IsVariadic || !FS->ReturnType ||
-          (!isUserFunctionDeclaration(*FS) &&
-           !Dbg->hasAuthenticatedFunctionSignatures()) ||
-          (FS->ReturnType->Kind != NdTypeKind::Struct &&
-           llvm::none_of(FS->Params, [](const auto &P) {
-             return P.second && P.second->Kind == NdTypeKind::Struct;
-           })))
-        return std::nullopt;
-      SourceFunctionTypeHint Candidate;
-      Candidate.Origin =
-          isUserFunctionDeclaration(*FS)
-              ? SourceFunctionTypeHint::OriginKind::ExplicitSource
-              : SourceFunctionTypeHint::OriginKind::NativeAnalysis;
-      Dbg->completeType(FS->ReturnType);
-      Candidate.ReturnType = FS->ReturnType;
-      for (const auto &[Name, Type] : FS->Params) {
-        if (!Type)
-          return std::nullopt;
-        Dbg->completeType(Type);
-        Candidate.Parameters.push_back({Name, Type});
-      }
-      return mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())
-                 ? std::optional(std::move(Candidate))
-                 : std::nullopt;
-    };
     std::set<va_t> Targets;
     for (const auto &LF : Result.LowFuncs) {
       if (!SourceEntryHints.contains(LF.Entry))
-        if (auto Hint = RecordHint(LF.Entry)) {
+        if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry)) {
           const auto It =
               SourceEntryHints.emplace(LF.Entry, std::move(*Hint)).first;
           SourceHints.emplace(LF.Entry, &It->second);
@@ -1210,7 +1179,7 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     }
     for (va_t Target : Targets)
       if (!SourceCalleeHints.contains(Target))
-        if (auto Hint = RecordHint(Target))
+        if (auto Hint = mips::recordSourceABI(Img, *Dbg, Target))
           SourceCalleeHints.emplace(Target, std::move(*Hint));
   }
   auto SourceSites = Opts.usesSourceDeclarations()

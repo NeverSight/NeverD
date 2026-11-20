@@ -21,6 +21,13 @@ struct CEntryCarrier {
   RecoveredParamSite Site;
   NdTypeKind Kind;
   std::string Spelling;
+  struct Field {
+    NdTypeKind Kind;
+    unsigned Offset;
+    unsigned Bytes;
+  };
+  /// Memory layout of a physical tuple, in return-register order.
+  std::vector<Field> Fields;
 };
 
 struct CRecordEntry {

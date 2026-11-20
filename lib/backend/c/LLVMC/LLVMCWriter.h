@@ -869,6 +869,8 @@ public:
   std::string getName(const llvm::Value *V);
   std::string rawSourceName(const llvm::Value *V);
   TypeRef statedVariableType(const llvm::Value *V) const;
+  std::optional<SourceFunctionTypeHint>
+  mipsRecordDeclaration(const llvm::Function &Function) const;
   const SourceCallTypeHint *analystCallHint(const llvm::CallBase &Call) const;
   std::string sourceVariableDeclaration(const llvm::Instruction &I,
                                         llvm::StringRef Name);

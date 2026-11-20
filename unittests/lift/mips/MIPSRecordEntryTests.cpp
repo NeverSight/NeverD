@@ -8,6 +8,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
@@ -15,6 +16,8 @@
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
+
+#include "llvm/IR/LLVMContext.h"
 
 using namespace neverd;
 
@@ -148,6 +151,75 @@ TEST(MIPSRecordSourceEntry,
     EXPECT_THROW(requireMIPSSourceVectors(Body, A, &F.Image, nullptr, nullptr,
                                           nullptr, &Callees),
                  LowToMedConversionError);
+  }
+}
+TEST(MIPSRecordSourceEntry, TwoRegisterResultKeepsThePartialSecondWord) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    RecordFixture F(A, 9);
+    EXPECT_FALSE(F.project());
+    F.Result = {{kNoParamReg, -1, 16},
+                NdTypeKind::Struct,
+                "word_pair",
+                {{NdTypeKind::Int, 0, 8}, {NdTypeKind::Int, 8, 8}}};
+    const auto Entry = F.project();
+    ASSERT_TRUE(Entry);
+    EXPECT_NE(Entry->Definition.find("&__neverd_result + 8, (const unsigned "
+                                     "char *)&__neverd_return_word + 8, 1)"),
+              std::string::npos);
+    F.Result.Fields.back().Kind = NdTypeKind::Float;
+    EXPECT_FALSE(F.project());
+    F.Result.Fields = {{NdTypeKind::Int, 0, 8}, {NdTypeKind::Int, 0, 8}};
+    EXPECT_FALSE(F.project());
+  }
+}
+
+TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
+  llvm::LLVMContext Context;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Double = NdType::makeFloat(8);
+    auto Pair = NdType::makeStruct({Double, Double});
+    Pair->Passing = NdRecordPassing::ByValue;
+    for (unsigned Prefix : {0u, 7u, 8u}) {
+      SourceFunctionTypeHint Sig;
+      Sig.ReturnType = Pair;
+      for (unsigned I = 0; I < Prefix; ++I)
+        Sig.Parameters.push_back({"word", NdType::makeInt(8, false)});
+      Sig.Parameters.push_back({"pair", Pair});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      const auto Operands = sourceABIParameters(Sig);
+      ASSERT_EQ(Operands.size(), Prefix + 2);
+      for (unsigned I = 0; I < Operands.size(); ++I) {
+        const auto *Type = llvmMIPSRecordPieceType(Context, Operands[I], Sig);
+        if (I < Prefix) {
+          EXPECT_TRUE(Type->isIntegerTy(64));
+        } else {
+          EXPECT_TRUE(Type->isDoubleTy());
+          EXPECT_EQ(Operands[I].ParameterIndex, Prefix);
+          EXPECT_EQ(Operands[I].ByteOffset, (I - Prefix) * 8);
+        }
+      }
+    }
+    auto Pointer = NdType::makePtr(NdType::makeInt(1));
+    Pointer->Size = getTargetRegInfo(A).PointerSize;
+    if (Pointer->Size == 8) {
+      auto PointerPair = NdType::makeStruct({Pointer, Pointer});
+      PointerPair->Passing = NdRecordPassing::ByValue;
+      SourceFunctionTypeHint Sig;
+      Sig.ReturnType = NdType::makeVoid();
+      Sig.Parameters.push_back({"pointer", Pointer});
+      Sig.Parameters.push_back({"record", PointerPair});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      auto Pieces = sourceABIParameters(Sig);
+      ASSERT_EQ(Pieces.size(), 3u);
+      EXPECT_TRUE(
+          llvmMIPSRecordPieceType(Context, Pieces[0], Sig)->isPointerTy());
+      EXPECT_TRUE(
+          llvmMIPSRecordPieceType(Context, Pieces[1], Sig)->isIntegerTy(64));
+      EXPECT_TRUE(
+          llvmMIPSRecordPieceType(Context, Pieces[2], Sig)->isIntegerTy(64));
+    }
   }
 }
 } // namespace

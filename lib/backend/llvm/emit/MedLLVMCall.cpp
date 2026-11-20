@@ -10,7 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "../MIPS/LLVMIntegerResult.h"
+#include "../MIPS/LLVMRecordABI.h"
 
 #include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
@@ -1007,16 +1007,18 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
   const bool NativeValueCall =
       CI && CI->SourceCallHint &&
       CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Native &&
-      TargetFormat == BinaryFormat::MachO && TargetArch == Arch::AArch64 &&
-      (Authentication ||
-       sourceCallUsesMachineABI(*CI->SourceCallHint, TargetFormat, false) ||
-       (Op.Opcode == NdOp::INDIR_CALL &&
-        CI->SourceCallHint->Signature.HasExplicitABI &&
-        CI->SourceCallHint->Signature.Convention ==
-            SourceFunctionTypeHint::ConventionKind::C &&
-        !hasIndirectSourceParameters(CI->SourceCallHint->Signature) &&
-        CI->SourceCallHint->Signature.ReturnLocation.Kind !=
-            SourceABICarrierKind::IndirectResultPointer));
+      ((TargetFormat == BinaryFormat::ELF && isMIPS(TargetArch) &&
+        CI->SourceCallHint->Signature.MIPSRecords) ||
+       (TargetFormat == BinaryFormat::MachO && TargetArch == Arch::AArch64 &&
+        (Authentication ||
+         sourceCallUsesMachineABI(*CI->SourceCallHint, TargetFormat, false) ||
+         (Op.Opcode == NdOp::INDIR_CALL &&
+          CI->SourceCallHint->Signature.HasExplicitABI &&
+          CI->SourceCallHint->Signature.Convention ==
+              SourceFunctionTypeHint::ConventionKind::C &&
+          !hasIndirectSourceParameters(CI->SourceCallHint->Signature) &&
+          CI->SourceCallHint->Signature.ReturnLocation.Kind !=
+              SourceABICarrierKind::IndirectResultPointer))));
   if (CI && CI->SourceCallHint &&
       (CI->SourceCallHint->CallKind == SourceCallTypeHint::Kind::Analyst ||
        NativeValueCall)) {
@@ -1120,6 +1122,16 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
                                                 Members.size());
       At += Members.size();
+      if (Hint.Signature.MIPSRecords) {
+        for (unsigned I = 0; I < Parts.size(); ++I) {
+          const auto &Binding = Bindings[At - Parts.size() + I];
+          auto *Type = llvmMIPSRecordPieceType(*Ctx, Binding, Hint.Signature);
+          auto *Part = Parts[I];
+          Types.push_back(Type);
+          Values.push_back(Type == Part->getType() ? Part : IntegerBits(Part));
+        }
+        continue;
+      }
       auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
       if (Parameter.Type->Kind == NdTypeKind::Int) {
         Types.push_back(Packed->getType());
@@ -1173,7 +1185,9 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       }
       Callable = Mod->getNamedValue(Name);
       if (!Callable) {
-        auto *DeclarationType = llvm::FunctionType::get(I64Ty, true);
+        auto *DeclarationType = Hint.Signature.MIPSRecords
+                                    ? FT
+                                    : llvm::FunctionType::get(I64Ty, true);
         unsigned Convention = llvm::CallingConv::C;
         if (AnalystTargets)
           if (const auto It = AnalystTargets->find(Name);
@@ -1279,7 +1293,19 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       Call->addRetAttr(Hint.Signature.ReturnType->IsSigned
                            ? llvm::Attribute::SExt
                            : llvm::Attribute::ZExt);
-    for (unsigned I = 0; !MachineCall && I < Hint.Signature.Parameters.size();
+    if (Hint.Signature.MIPSRecords) {
+      Call->setAttributes(mips::recordCallAttributes(
+          *Ctx, Call->getAttributes(), Hint.Signature, Bindings));
+      if (auto *Callee = Call->getCalledFunction();
+          !Analyst && Callee && Callee->isDeclaration()) {
+        Callee->addFnAttr(LLVMMIPSRecordCall);
+        if (Callee->getFunctionType() == FT)
+          Callee->setAttributes(mips::recordCallAttributes(
+              *Ctx, Callee->getAttributes(), Hint.Signature, Bindings));
+      }
+    }
+    for (unsigned I = 0; !MachineCall && !Hint.Signature.MIPSRecords &&
+                         I < Hint.Signature.Parameters.size();
          ++I) {
       const auto &Parameter = Hint.Signature.Parameters[I];
       if (Parameter.Type->Kind == NdTypeKind::Int && Parameter.Type->IsSigned)
