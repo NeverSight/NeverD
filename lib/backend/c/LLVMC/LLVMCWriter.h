@@ -100,6 +100,8 @@ public:
       : OS(OS), Opts(Opts), Dbg(Dbg), Img(Img),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SourceRecorder(Recorder), SourceAddresses(SourceAddresses) {
+    if (Img)
+      this->Opts.Image = Img;
     if (Img && importNamesAreCNames(Opts.Format))
       for (const Import &Imp : Img->Imports)
         if (!Imp.Name.empty())

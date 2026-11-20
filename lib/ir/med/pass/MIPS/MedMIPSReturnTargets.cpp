@@ -11,6 +11,7 @@
 #include "../../abi/MedABIPassDetail.h"
 
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
@@ -20,6 +21,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 
 #include <algorithm>
 #include <functional>
@@ -30,7 +32,8 @@
 namespace neverd {
 
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
-                                Arch Target, BinaryFormat Format) {
+                                Arch Target, BinaryFormat Format,
+                                unsigned SourceResultOperands) {
   if (auto Error = validateLowInstructionBoundaries(
           Low, LowInstructionBoundaryRequirement::Required)) {
     llvm::consumeError(std::move(Error));
@@ -96,7 +99,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   bool QualifiedMemory = true;
   size_t CallCount = 0;
   bool NeedsNativeArguments = false;
-  std::map<const MedOp *, FloatingCallArguments> Calls;
+  struct CallFrame {
+    llvm::SmallVector<SourceABIValueLocation, 8> Inputs;
+    unsigned FloatingResultBytes = 0;
+  };
+  std::map<const MedOp *, CallFrame> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
   for (size_t I = 0; I < Function.Blocks.size(); ++I) {
     const auto &Block = Function.Blocks[I];
@@ -122,14 +129,33 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         MemoryAddresses.push_back(Op.Inputs[0]);
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
         ++CallCount;
-        const auto Signature = boundFloatingCallArguments(Op, Target, Format);
-        if (Signature) {
-          Calls.emplace(&Op, *Signature);
-          if (Op.IsTailCall)
-            QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
+        if (Op.SourceCallHint && Op.SourceCallHint->Signature.MIPSRecords) {
+          const auto &Signature = Op.SourceCallHint->Signature;
+          const auto Pieces = sourceABIParameters(Signature);
+          if (Op.NumInputs != Pieces.size() + 1)
+            return false;
+          auto &Frame = Calls[&Op];
+          for (const auto &P : Pieces)
+            Frame.Inputs.push_back(P.Location);
+          if (Signature.ReturnType->Kind == NdTypeKind::Float ||
+              (!Signature.ReturnComponents.empty() &&
+               llvm::all_of(Signature.ReturnComponents, [](const auto &P) {
+                 return P.Kind == SourceABICarrierKind::FloatingRegister;
+               })))
+            Frame.FloatingResultBytes = Signature.ReturnType->Size;
+        } else if (const auto Signature =
+                       boundFloatingCallArguments(Op, Target, Format)) {
+          auto &Frame = Calls[&Op];
+          for (const auto &P : Signature->Scalars)
+            Frame.Inputs.push_back(
+                {P.Kind, P.Register, P.StackOffset, P.Bytes});
+          if (Signature->ReturnKind == NdTypeKind::Float)
+            Frame.FloatingResultBytes = Signature->ReturnBytes;
         } else {
           NeedsNativeArguments = true;
         }
+        if (Op.IsTailCall && Calls.contains(&Op))
+          QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
       }
       if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
            (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
@@ -328,12 +354,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // pointer-returning calls still provide no such proof.
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
-            Call->second.ReturnKind == NdTypeKind::Float &&
-            First + Bytes <= Call->second.ReturnBytes) {
+            First + Bytes <= Call->second.FloatingResultBytes) {
           Safe = IsNonFrame(Op.Inputs[0]);
-          for (size_t I = 0; Safe && I < Call->second.Scalars.size(); ++I)
+          for (size_t I = 0; Safe && I < Call->second.Inputs.size(); ++I)
             Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
-                                 Call->second.Scalars[I].Bytes);
+                                 Call->second.Inputs[I].ValueBytes);
         }
         break;
       case NdOp::INT_ZEXT:
@@ -384,9 +409,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     const int64_t SlotBytes = isMIPSO32(Target) ? 4 : 8;
     int64_t Extent = isMIPSO32(Target) ? 16 : 0;
     if (const auto S = Calls.find(&Call); S != Calls.end()) {
-      for (const auto &A : S->second.Scalars)
+      for (const auto &A : S->second.Inputs)
         if (A.Kind == SourceABICarrierKind::Stack) {
-          const auto End = A.StackOffset + A.Bytes;
+          const auto End = A.EntryStackOffset + A.ValueBytes;
           // A big-endian n64 float occupies the first word, but the callee
           // still owns its complete eight-byte argument slot.
           Extent =
@@ -472,11 +497,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             UnexposedFrame &= IsNonFrame(Op.Inputs[0]);
             const auto Signature = Calls.find(&Op);
             for (unsigned I = 1; I < Op.NumInputs; ++I)
-              UnexposedFrame &=
-                  NonFrameBytes(Op.Inputs[I], 0,
-                                Signature == Calls.end()
-                                    ? Op.Inputs[I].Size
-                                    : Signature->second.Scalars[I - 1].Bytes);
+              UnexposedFrame &= NonFrameBytes(
+                  Op.Inputs[I], 0,
+                  Signature == Calls.end()
+                      ? Op.Inputs[I].Size
+                      : Signature->second.Inputs[I - 1].ValueBytes);
           }
         }
       }
@@ -564,8 +589,9 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           TailReturns.erase(Tail);
           continue;
         }
-        if (!Required.erase(Origin) || Op.NumInputs != 1 ||
-            !Prove(Op.Inputs[0]))
+        if (!Required.erase(Origin) ||
+            Op.NumInputs != SourceResultOperands + 1 ||
+            !Prove(Op.Inputs[SourceResultOperands]))
           return false;
       }
   return Required.empty() && TailReturns.empty() && QualifiedTails.empty();

@@ -11,6 +11,7 @@
 
 #include "neverd/ArchSupport.h"
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -194,6 +195,39 @@ TEST_P(MIPSControl, SourceReturnRequiresTheWholeIncomingLink) {
   Check({0xafbffffc, ClearRA, 0x8fbffffc, Return, 0}, !Wide);
   if (Wide)
     Check({0xffbffff8, ClearRA, 0xdfbffff8, Return, 0}, true);
+}
+
+TEST(MIPSRecordSourceEntry, DelaySlotResultKeepsTheCapturedJumpTarget) {
+  for (const auto Target :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Record = NdType::makeStruct({NdType::makeFloat(8)});
+    Record->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Record;
+    ASSERT_TRUE(
+        mips::assignRecordSourceABI(Signature, Target, BinaryFormat::ELF));
+    for (const bool ClobberLink : {false, true}) {
+      // dmtc1 a0,f0 produces the declared result after jr has captured ra.
+      const uint32_t Before = ClobberLink ? 0x0000f825 : 0;
+      auto Image = image({Before, 0x03e00008, 0x44a40000}, Target);
+      Image.MIPS.emplace();
+      Image.MIPS->FPABI = 1;
+      Image.MIPS->ABI = isMIPSN32(Target) ? MIPSABI::N32 : MIPSABI::N64;
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      std::map<va_t, SourceFunctionTypeHint> Entries{{Image.Entry, Signature}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceEntryTypeHints(&Entries);
+      if (ClobberLink)
+        EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+    }
+  }
 }
 
 TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {

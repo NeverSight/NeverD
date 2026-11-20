@@ -10538,8 +10538,12 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Physical(InferredVoid ? llvm::Type::getVoidTy(Fn.getContext())
                                 : Fn.getReturnType(),
                    {}));
-      if (RecordEntry)
+      if (RecordEntry) {
+        noteRecordValue(DebugFn->ReturnType);
+        for (const auto &Parameter : DebugFn->Params)
+          noteRecordValue(Parameter.second);
         FName = RecordEntry->BodyName;
+      }
     }
   }
   // A definition whose identifier is not its symbol names the symbol: a C++

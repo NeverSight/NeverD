@@ -2034,7 +2034,10 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
 
     x86_registration::RegistrationRoots(Low, TheArch, Fmt)
         .disconnectNoReturnFallthroughs(Func);
-    bindSourceCalls(Func, Low, Fmt);
+    const auto *EntrySignature = bindSourceCalls(Func, Low, Fmt);
+    const bool RecordEntry = EntrySignature && EntrySignature->MIPSRecords;
+    if (RecordEntry)
+      MIPSReturnsQualified = false;
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
@@ -2105,12 +2108,22 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
-    if (QualifyMIPSReturns) {
+    if (QualifyMIPSReturns || RecordEntry) {
+      unsigned ResultInputs = 0;
+      if (RecordEntry && EntrySignature->ReturnType->Kind != NdTypeKind::Void)
+        ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
+                           ? EntrySignature->ReturnComponents.size()
+                           : 1;
       MIPSReturnsQualified =
-          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt);
+          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs);
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");
+      if (RecordEntry)
+        for (auto &Block : Func.Blocks)
+          for (auto &Op : Block.Ops)
+            if (Op.Opcode == NdOp::RETURN)
+              --Op.NumInputs;
     }
 
     // The x86 lifter's PUSHF and the ARM lifter's MRS of APSR.
