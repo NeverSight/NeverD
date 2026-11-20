@@ -5837,6 +5837,27 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+Results come back in the same registers, in the same order, and a call keeps
+none of them but its results ("There are no callee-save registers"), so a
+read of one after a call, before any write, is a result, and so is every
+register before it (`goResultRegister`). That holds for a call that enters Go
+code by the internal ABI (`goCallEntersInternalABI`): a direct call to
+compiled Go code or to `<ABIInternal>` assembly, and an indirect call compiled
+code makes, through a function value. Go assembly also calls C through a
+pointer, which returns in the platform's registers: darwin's
+`runtime.syscall6` calls libc and reads RDX after. An indirect call returns
+every result up to the last register its caller reads (`modelGoCallResults`):
+the call produces them packed, each result register the call left is defined
+from its field, in every block and through PHIs, and HighC prints the record
+(`t = ((struct nd_record_r2_u64_u64_e (*)())f)(...); t.field_1`). Modelled
+with RAX alone, an interface's data word (`call [rdx]; mov [rsp+8], rbx`)
+printed a placeholder. RDX, the closure context, is no result of such a call;
+read as System V's second result, it gave one a field. A shape other than the
+platform's integer pair is a record at a call as in the function it calls
+(`integerReturnPair`): arm64 printed `__int128` at each call of a function
+returning X0:X1 and joined it from the callee's record. An indirect call
+declares no function, so HighC holds its record to no other call's.
+
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's

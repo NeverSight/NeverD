@@ -20654,6 +20654,10 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoInternalABI.AnIndirectCallReturnsEveryResultItsCallerReads` lifts a Go
+1.18 function that calls through a function value and stores RBX: the call
+returns RAX and RBX packed, every later read of RBX is its second field, and
+no clobber of RBX is left; a store of RDX instead gives the call no fields.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.

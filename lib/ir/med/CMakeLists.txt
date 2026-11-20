@@ -84,6 +84,7 @@ add_neverd_component_library(NeverDIRMed
   lower/LowToMedCallReturnFP.cpp
   lower/GoStackGrowth.cpp
   lower/LowToMedCallReturnStruct.cpp
+  lower/LowToMedGoResults.cpp
   lower/LowToMedCallReturnWideInt.cpp
   lower/LowToMedSEHLocalUnwind.cpp
   lower/X86/LowToMedCallReturnX87.cpp

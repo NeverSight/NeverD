@@ -2214,6 +2214,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     // (x86-64 eightbytes / AArch64 HFA) before modelCallFPReturn so it claims
     // the FP return register of a struct-returning call as one of the aggregate
     // fields rather than the lone scalar FP result.
+    modelGoCallResults(Func);
+    debugVerifyMedFunc(Func, "modelGoCallResults");
     modelCallStructReturn(Func);
     debugVerifyMedFunc(Func, "modelCallStructReturn");
 
