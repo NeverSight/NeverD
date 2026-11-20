@@ -4,6 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "../../HostCompiler.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
@@ -109,15 +110,15 @@ int main(void) {
     ASSERT_FALSE(ErrorCode);
     File << Source;
   }
-  const llvm::SmallVector<llvm::StringRef, 12> Arguments{
-      *Compiler,
-      "-std=c11",
-      "-O1",
-      "-fsanitize=undefined",
-      "-fsanitize-trap=undefined",
-      Input,
-      "-o",
-      Output};
+  llvm::SmallVector<llvm::StringRef, 12> Arguments{*Compiler,
+                                                   "-std=c11",
+                                                   "-O1",
+                                                   "-fsanitize=undefined",
+                                                   "-fsanitize-trap=undefined",
+                                                   Input,
+                                                   "-o",
+                                                   Output};
+  neverd::test::appendHostCLinkFlags(Arguments);
   const std::optional<llvm::StringRef> Redirects[] = {
       std::nullopt, std::nullopt, Errors.str()};
   std::string Error;
@@ -230,15 +231,15 @@ int main(void) {
   }
   for (llvm::StringRef Optimization : {"-O0", "-O2"}) {
     SCOPED_TRACE(Optimization.str());
-    const llvm::SmallVector<llvm::StringRef, 12> Args{
-        *Compiler,
-        "-std=c11",
-        Optimization,
-        "-fsanitize=undefined",
-        "-fsanitize-trap=undefined",
-        Input,
-        "-o",
-        Output};
+    llvm::SmallVector<llvm::StringRef, 12> Args{*Compiler,
+                                                "-std=c11",
+                                                Optimization,
+                                                "-fsanitize=undefined",
+                                                "-fsanitize-trap=undefined",
+                                                Input,
+                                                "-o",
+                                                Output};
+    neverd::test::appendHostCLinkFlags(Args);
     const std::optional<llvm::StringRef> Redirects[] = {
         std::nullopt, std::nullopt, Errors.str()};
     std::string Error;

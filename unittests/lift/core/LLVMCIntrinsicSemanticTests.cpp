@@ -164,7 +164,8 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
                      llvm::StringRef Optimization = "-O1",
                      bool CheckUndefined = false,
                      llvm::StringRef ExtraInput = {},
-                     llvm::ArrayRef<llvm::StringRef> ExtraFlags = {}) {
+                     llvm::ArrayRef<llvm::StringRef> ExtraFlags = {},
+                     bool LinkMath = false) {
   auto Compiler = llvm::sys::findProgramByName("clang");
   ASSERT_TRUE(static_cast<bool>(Compiler)) << "clang is required";
   if (!LLVMOnly) {
@@ -204,11 +205,8 @@ void compileAndCheck(const std::string &Source, bool LLVMOnly = false,
   Args.append(ExtraFlags.begin(), ExtraFlags.end());
   if (LLVMOnly)
     Args.append({"-target", "x86_64-pc-windows-msvc", "-S", "-emit-llvm"});
-  // Clang lowers the i128 conversion controls to its compiler runtime. The
-  // MSVC CRT alone does not supply these builtins; retain execution coverage.
-  if (!LLVMOnly &&
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows())
-    Args.push_back("--rtlib=compiler-rt");
+  else
+    neverd::test::appendHostCLinkFlags(Args, LinkMath);
   if (CheckUndefined)
     Args.append({"-fsanitize=undefined", "-fsanitize-trap=undefined"});
   const std::optional<llvm::StringRef> Redirects[] = {
@@ -282,6 +280,8 @@ static int correct(double a, double b, double got, int kind) {
     return got == expected && !!signbit(got) == !!signbit(expected);
   }
   if (a == 0 && b == 0) {
+    // LLVM minnum and maxnum allow either operand when zero signs differ.
+    if (kind < 2 && !!signbit(a) != !!signbit(b)) return got == 0;
     const int negative = maximum ? (signbit(a) && signbit(b))
                                  : (signbit(a) || signbit(b));
     return got == 0 && !!signbit(got) == negative;
@@ -354,12 +354,9 @@ int main(void) {
   return 0;
 }
 )";
-  const bool Windows =
-      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
-    compileAndCheck(Source, false, {}, Optimization, false, {},
-                    Windows ? llvm::ArrayRef<llvm::StringRef>{}
-                            : llvm::ArrayRef<llvm::StringRef>{"-lm"});
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {},
+                    /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics,
@@ -1998,7 +1995,8 @@ int main(void) {
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
-    compileAndCheck(Source, false, {}, Optimization, false, {}, {"-lm"});
+    compileAndCheck(Source, false, {}, Optimization, false, {}, {},
+                    /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics, AnUnknownOperandOfATypeGenericBuiltinHasItsType) {
@@ -2045,7 +2043,7 @@ define float @least_of_one(float %a) {
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
   compileAndCheck(Text + "\nint main(void) { return 0; }\n", false, {}, "-O1",
-                  false, {}, {"-lm"});
+                  false, {}, {}, /*LinkMath=*/true);
 }
 
 TEST(LLVMCIntrinsicSemantics,
