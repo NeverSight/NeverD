@@ -6566,6 +6566,9 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
                              "(";
     const unsigned Count =
         Signature ? Signature->Parameters.size() : Call.arg_size();
+    const auto RecordPieces = Signature && Signature->MIPSRecords
+                                  ? sourceABIParameters(*Signature)
+                                  : std::vector<SourceABIParameter>{};
     unsigned Operand = 0;
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
@@ -6580,13 +6583,14 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       if (Signature && Signature->MIPSRecords &&
           !Signature->Parameters[I].Components.empty()) {
         const auto &Parameter = Signature->Parameters[I];
-        const auto Members = sourceABIValueMembers(Parameter.Type);
         IntegerCallParameter Packed;
-        for (const auto &Member : Members) {
+        while (Operand < RecordPieces.size() &&
+               RecordPieces[Operand].ParameterIndex == I) {
+          const auto &Piece = RecordPieces[Operand];
           const bool FP =
               Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
-          Packed.Pieces.push_back({Operand++, Member.ByteOffset,
-                                   Member.Type->Size, FP, Member.Type->Size});
+          Packed.Pieces.push_back({Operand++, Piece.ByteOffset,
+                                   Piece.Type->Size, FP, Piece.Type->Size});
         }
         noteRecordValue(Parameter.Type);
         Expression += c_detail::recordCallArgument(

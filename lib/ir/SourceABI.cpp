@@ -663,6 +663,9 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                ? P.Type->Pointee
                : P.Type,
            P.Location});
+    else if (Hint.MIPSRecords && mips::isPackedRecordWord(P.Type, P.Components))
+      Result.push_back({I, 0, P.Name, NdType::makeInt(P.Type->Size, false),
+                        P.Components.front()});
     else {
       const auto Members = sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)

@@ -230,6 +230,45 @@ TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
     }
   }
 }
+TEST(MIPSRecordABI, TwoFloatsShareOneArgumentWordAndReturnInTwoFPRs) {
+  llvm::LLVMContext Context;
+  auto Float = NdType::makeFloat(4);
+  auto Pair = NdType::makeStruct({Float, Float});
+  Pair->Passing = NdRecordPassing::ByValue;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Prefix : {0u, 7u, 8u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Prefix);
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Pair;
+      for (unsigned I = 0; I < Prefix; ++I)
+        Sig.Parameters.push_back({"word", NdType::makeInt(8, false)});
+      Sig.Parameters.push_back({"pair", Pair});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      std::string Diagnostic;
+      ASSERT_TRUE(validateSourceABI(Sig, Diagnostic)) << Diagnostic;
+      const auto Args = sourceABIParameters(Sig);
+      ASSERT_EQ(Args.size(), Prefix + 1);
+      const auto &Last = Args.back();
+      EXPECT_EQ(Last.ParameterIndex, Prefix);
+      EXPECT_EQ(Last.ByteOffset, 0);
+      EXPECT_TRUE(llvmMIPSRecordPieceType(Context, Last, Sig)->isIntegerTy(64));
+      EXPECT_EQ(Last.Location.Kind,
+                Prefix == 8 ? SourceABICarrierKind::Stack
+                            : SourceABICarrierKind::IntegerRegister);
+      ASSERT_EQ(Sig.ReturnComponents.size(), 2u);
+      for (unsigned I = 0; I < 2; ++I) {
+        EXPECT_EQ(Sig.ReturnComponents[I].RegisterOffset, mipsreg::w(I * 2));
+        EXPECT_EQ(Sig.ReturnComponents[I].ValueBytes, 4);
+      }
+      auto Bad = Sig;
+      Bad.Parameters.back().Components.front().ValueBytes = 4;
+      EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+    }
+  }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);

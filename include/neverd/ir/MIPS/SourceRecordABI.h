@@ -44,6 +44,11 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
 
+/// A complete record whose independently addressable leaves share a single
+/// full integer argument word. The source object uses memory byte order.
+bool isPackedRecordWord(const TypeRef &Type,
+                        llvm::ArrayRef<SourceABIValueLocation> Locations);
+
 /// Bind a source declaration whose components can be represented independently
 /// in the source IR. Retains the input unchanged when a carrier is unavailable.
 bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,

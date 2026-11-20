@@ -18,9 +18,11 @@
 #include "HighEntryStackOffsets.h"
 #include "VariadicStackArguments.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -587,6 +589,19 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       for (const auto &P : Signature.Parameters) {
         if (P.Components.empty()) {
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
+        } else if (Signature.MIPSRecords &&
+                   mips::isPackedRecordWord(P.Type, P.Components)) {
+          const auto Word = medvarToExpr(Call.Inputs[++Index]);
+          std::vector<ExprPtr> Leaves;
+          for (const auto &M : sourceABIValueMembers(P.Type)) {
+            const unsigned At =
+                archLittleEndian(TargetArch)
+                    ? M.ByteOffset
+                    : P.Type->Size - M.ByteOffset - M.Type->Size;
+            auto Bits = sourceBitSlice(Word, At, M.Type->Size);
+            Leaves.push_back(HighExpr::makeBitCast(std::move(Bits), M.Type));
+          }
+          Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
         } else {
           std::vector<ExprPtr> Leaves;
           for (const auto &Member : sourceABIValueMembers(P.Type))

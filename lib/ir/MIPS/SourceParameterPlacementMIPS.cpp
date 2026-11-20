@@ -285,6 +285,17 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
 }
 
+bool mips::isPackedRecordWord(
+    const TypeRef &Type, llvm::ArrayRef<SourceABIValueLocation> Locations) {
+  if (!isRecord(Type) || Locations.size() != 1 ||
+      (Locations.front().Kind != SourceABICarrierKind::IntegerRegister &&
+       Locations.front().Kind != SourceABICarrierKind::Stack) ||
+      Locations.front().ValueBytes != Type->Size ||
+      (Type->Size != 2 && Type->Size != 4 && Type->Size != 8))
+    return false;
+  return sourceABIValueMembers(Type).size() > 1;
+}
+
 static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                           const mips::RecordCallPlacement &Layout) {
   if (Layout.Arguments.ResultPointer)
@@ -293,7 +304,8 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
   const auto Bind = [](const TypeRef &Type,
                        llvm::ArrayRef<SourceParameterPiece> Pieces,
                        SourceABIValueLocation &Scalar,
-                       std::vector<SourceABIValueLocation> &Components) {
+                       std::vector<SourceABIValueLocation> &Components,
+                       bool Argument) {
     Scalar = {};
     Components.clear();
     if (Type->Kind == NdTypeKind::Void)
@@ -304,6 +316,12 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
           Pieces[0].Location.ValueBytes != Type->Size)
         return false;
       Scalar = Pieces[0].Location;
+      return true;
+    }
+    if (Argument && Pieces.size() == 1 && !Pieces[0].Offset &&
+        !Pieces[0].RegisterBitOffset && !Pieces[0].Indirect &&
+        mips::isPackedRecordWord(Type, Pieces[0].Location)) {
+      Components.push_back(Pieces[0].Location);
       return true;
     }
     const auto Members = sourceABIValueMembers(Type);
@@ -320,11 +338,12 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     return true;
   };
   if (!Bind(Bound.ReturnType, Layout.Result, Bound.ReturnLocation,
-            Bound.ReturnComponents))
+            Bound.ReturnComponents, false))
     return false;
   for (size_t I = 0; I < Bound.Parameters.size(); ++I)
     if (!Bind(Bound.Parameters[I].Type, Layout.Arguments.Parameters[I],
-              Bound.Parameters[I].Location, Bound.Parameters[I].Components))
+              Bound.Parameters[I].Location, Bound.Parameters[I].Components,
+              true))
       return false;
   Bound.Architecture = Architecture;
   Bound.HasExplicitABI = true;
