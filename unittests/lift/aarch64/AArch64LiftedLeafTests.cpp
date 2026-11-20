@@ -177,10 +177,13 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool MaskedTables =
-      Preamble == kMaskedFragmentedOracle || Preamble == kMaskedGappedOracle;
-  const bool GappedTables =
-      Preamble == kGappedDispatchOracle || Preamble == kMaskedGappedOracle;
+  const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
+  const bool MaskedTables = ScheduledTables ||
+                            Preamble == kMaskedFragmentedOracle ||
+                            Preamble == kMaskedGappedOracle;
+  const bool GappedTables = ScheduledTables ||
+                            Preamble == kGappedDispatchOracle ||
+                            Preamble == kMaskedGappedOracle;
   const bool SplitTables =
       Preamble == kFragmentedDispatchOracle || GappedTables || MaskedTables;
   const bool SplitLiterals = Preamble == kSplitLiteralOracle;
@@ -567,6 +570,24 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         ASSERT_TRUE(bool(Unbounded)) << llvm::toString(Unbounded.takeError());
         EXPECT_TRUE(
             CFGBuilder().build(*Unbounded, Decode, F.Entry).JumpTables.empty());
+      }
+      if (ScheduledTables) {
+        auto Bytes = Image->Raw;
+        const auto Pad = Table.InsnAddr - aarch64::kInsnSize;
+        auto *Word = Bytes.data() + Image->vaToFileOffset(Pad);
+        ASSERT_EQ(readLE<uint32_t>(Word), aarch64::kNop);
+        writeLE<uint32_t>(Word, kClearDispatchTarget);
+        auto Clobbered = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                            Bytes.size()),
+            Input));
+        ASSERT_TRUE(bool(Clobbered)) << llvm::toString(Clobbered.takeError());
+        EXPECT_TRUE(
+            CFGBuilder().build(*Clobbered, Decode, F.Entry).JumpTables.empty());
+        auto Rejected = validateMachORegisterResults(Module, *Clobbered);
+        EXPECT_FALSE(bool(Rejected));
+        if (!Rejected)
+          llvm::consumeError(Rejected.takeError());
       }
       ++Conflicts;
     }
@@ -1815,6 +1836,12 @@ TEST(AArch64LiftedImage, MaskedFragmentedRelativeTablesSurviveRelifting) {
 TEST(AArch64LiftedImage, MaskedGappedRelativeTablesSurviveRelifting) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kMaskedGappedOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, ScheduledRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kScheduledDispatchOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
 }
 

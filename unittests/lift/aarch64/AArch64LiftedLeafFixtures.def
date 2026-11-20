@@ -665,6 +665,13 @@ A64_LEAF_TEXT(kMaskedFragmentedOracle,
 A64_LEAF_TEXT(kMaskedGappedOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
                                    "#define NEVERD_TEST_TABLE_GAPS 1\n"
                                    "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kScheduledDispatchOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_TABLE_GAPS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_SCHEDULED_DISPATCH 1\n")
+// MOV X9, XZR destroys the computed target before BR X9.
+A64_LEAF_VALUE(uint32_t, kClearDispatchTarget, 0xaa1f03e9)
 A64_LEAF_VALUE(unsigned, kGappedTableRecordCount, 2)
 A64_LEAF_VALUE(unsigned, kSplitTableRecordCount, 3)
 A64_LEAF_VALUE(unsigned, kByteTableGapOffset, 1)
@@ -713,6 +720,32 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  cmp w0, #3
  b.hi 9f
 #endif
+#ifdef NEVERD_TEST_SCHEDULED_DISPATCH
+ .if \width == 2
+ adr x11, 1f
+ nop
+ adr x10, 8f
+ nop
+ ldrh w9, [x10, w0, uxtw #1]
+ nop
+ add x9, x11, x9, lsl #2
+ .else
+ adr x10, 8f
+ nop
+ .if \width == 4
+ ldrsw x9, [x10, w0, uxtw #2]
+ nop
+ adr x10, 3f
+ add x9, x10, x9
+ .else
+ ldrb w9, [x10, w0, uxtw]
+ nop
+ adr x10, 1f
+ add x9, x10, x9, lsl #2
+ .endif
+ .endif
+ nop
+#else
  adr x10, 8f
  .if \width == 4
  adr x11, 3f
@@ -727,6 +760,7 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  .endif
  add x9, x11, x9, lsl #2
  .endif
+#endif
  br x9
 1: add x0, x1, #11
  ret
