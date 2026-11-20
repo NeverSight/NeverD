@@ -13976,8 +13976,13 @@ system call tables and handler prototypes, for x86-64, AArch64 and ARM EABI,
 where a 64-bit argument takes an even-aligned register pair); the rest are
 no parameters of a wrapper, and the C writers pass them as 0. x86-64 passes
 RDX:RSI and R8:R10 as one operand each, read whole once either half is
-(`x64SyscallOperandRead`). A number the table does not list keeps every
-argument register.
+(`x64SyscallOperandRead`). LowToMed gives the intrinsic zero for each operand
+the call does not read, and the pair the lift packed for that operand alone
+reads no register either. A routine that makes the call then takes none of
+them at its entry: read whole, R8:R10 and R9 gave Go's `runtime.exit`
+every System V position up to R9 (`runtime_exit(0, 0, 0, 0, 0, 0, 2)`), and
+Go's stack-ABI routines no stack-only reading. A number the table does not
+list keeps every argument register.
 
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
