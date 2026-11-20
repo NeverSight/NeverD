@@ -654,11 +654,18 @@ void discardUnobservedMIPSFPUpperBits(
     }
   const unsigned ComplexBytes =
       sourceComplexComponentBytes(Function.ReturnType);
-  if (!Function.ReturnType || (!Function.MultiReturn.empty() && !ComplexBytes))
+  // Source-bound record returns explicitly read each declared register slice
+  // in RETURN. Their other bytes are observable only through real SSA uses.
+  const bool Record =
+      Function.ExplicitMIPSRecordResult ||
+      (Function.SourceParametersBound && Function.SourceTypeHint &&
+       Function.SourceTypeHint->MIPSRecords);
+  if (!Function.ReturnType ||
+      (!Function.MultiReturn.empty() && !ComplexBytes && !Record))
     return;
   const bool Floating =
       Function.ReturnType->Kind == NdTypeKind::Float || ComplexBytes;
-  if (!Declared && !Floating &&
+  if (!Record && !Declared && !Floating &&
       !(Function.ReturnType->Kind == NdTypeKind::Int &&
         !Function.ReturnsVectorRegister))
     return;
@@ -750,7 +757,7 @@ void discardUnobservedMIPSFPUpperBits(
         continue;
       // Keep every potentially returned FPR definition conservative unless
       // a later full write proves it cannot supply the implicit ABI result.
-      if (Floating && Value.Kind == MedVar::Reg &&
+      if (!Record && Floating && Value.Kind == MedVar::Reg &&
           (Value.RegOff == TRI.FPReturnReg ||
            (ComplexBytes && Value.RegOff == TRI.FPReturnRegs[1])) &&
           First < (ComplexBytes ? ComplexBytes : Function.ReturnType->Size) &&
@@ -758,7 +765,7 @@ void discardUnobservedMIPSFPUpperBits(
         return true;
       // RETURN may still carry only its branch target here. Integer
       // result registers are observable even without an explicit operand.
-      if (!Floating && Value.Kind == MedVar::Reg &&
+      if (!Record && !Floating && Value.Kind == MedVar::Reg &&
           !Overwritten.contains(KeyOf(Value)) &&
           ((Value.RegOff == TRI.IntReturnReg &&
             First < Function.ReturnType->Size) ||

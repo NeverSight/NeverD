@@ -226,4 +226,83 @@ TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
     }
   }
 }
+TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
+  for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    RecordFixture F(A, 8);
+    auto Record = NdType::makeStruct({NdType::makeFloat(8)});
+    Record->Passing = NdRecordPassing::ByValue;
+    Record->SourceName = "Payload";
+    F.Function.Params.front().second = Record;
+    F.Function.ReturnType = Record;
+    F.Inputs.push_back({{mipsreg::A3, 3, 4}, NdTypeKind::Int, "uint32_t"});
+    ASSERT_EQ(F.Inputs[1].Site.RegOff, mipsreg::A1);
+    EXPECT_FALSE(F.project());
+    F.Inputs[1].Unused = true;
+    const auto Entry = F.project();
+    ASSERT_TRUE(Entry);
+    EXPECT_FALSE(Entry->BodyReturnsVoid);
+    EXPECT_NE(Entry->Definition.find(", 0, __neverd_word2"), std::string::npos);
+    F.Inputs[1].Site.RegOff = mipsreg::RA;
+    EXPECT_FALSE(F.project());
+  }
+}
+
+TEST(MIPSRecordSourceEntry, LargeNewABIResultHasNoScalarBodyReturn) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    RecordFixture F(A, 17);
+    const auto Entry = F.project();
+    ASSERT_TRUE(Entry);
+    EXPECT_TRUE(Entry->BodyReturnsVoid);
+  }
+}
+
+TEST(MIPSRecordSourceEntry, OnlyUnobservedFPReturnBytesCanBeFilled) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    RecordFixture F(A, 8);
+    F.Image.MIPS->FPABI = 1;
+    for (bool ReadUpper : {false, true}) {
+      MedFunc Body;
+      Body.Entry = F.Function.Addr;
+      Body.ExplicitMIPSRecordResult = true;
+      Body.ReturnType =
+          NdType::makeStruct({NdType::makeFloat(4), NdType::makeFloat(4)});
+      Body.MultiReturn = {{mipsreg::w(0), 4, true}, {mipsreg::w(2), 4, true}};
+      auto &Ops = Body.Blocks.emplace_back().Ops;
+      MedVar Word;
+      Word.Kind = MedVar::Temp;
+      Word.TheArch = A;
+      Word.Size = 4;
+      Word.Id = 1;
+      auto &Unknown = Ops.emplace_back();
+      Unknown.Opcode = NdOp::INTRINSIC;
+      Unknown.Output = Word;
+      Unknown.addInput(MedVar::makeConst(unsigned(Intrinsic::MIPSUnpredictable),
+                                         sizeof(Intrinsic)));
+      auto &Join = Ops.emplace_back();
+      Join.Opcode = NdOp::CONCAT;
+      Join.Output = Word;
+      Join.Output.Id = 2;
+      Join.Output.Size = 8;
+      Join.addInput(Word);
+      Join.addInput(MedVar::makeConst(0, 4));
+      const auto Joined = Join.Output;
+      auto &Part = Ops.emplace_back();
+      Part.Opcode = NdOp::SUBBYTES;
+      Part.Output = Word;
+      Part.Output.Id = 3;
+      Part.addInput(Joined);
+      Part.addInput(MedVar::makeConst(ReadUpper ? 4 : 0, 4));
+      const auto Used = Part.Output;
+      auto &Ret = Ops.emplace_back();
+      Ret.Opcode = NdOp::RETURN;
+      Ret.addInput(Used);
+      Ret.addInput(MedVar::makeConst(0, 4));
+      discardUnobservedMIPSFPUpperBits(Body, F.Image, {}, nullptr);
+      EXPECT_EQ(Ops.front().Opcode, ReadUpper ? NdOp::INTRINSIC : NdOp::COPY);
+    }
+  }
+}
+
 } // namespace

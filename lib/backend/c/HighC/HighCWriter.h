@@ -380,6 +380,7 @@ public:
   /// (unreadDeclaredParams).
   size_t emittedParamCount(const HighFunc &Func) const;
   std::vector<size_t> emittedParamIndices(const HighFunc &Func) const;
+  std::set<int> readParamIndices(const HighFunc &Func) const;
   /// The parameters of \p Func's placed signature, by their indices in it,
   /// that come after every one a HighIR parameter binds and that its code
   /// never reads, such as a system call stub's stack arguments its

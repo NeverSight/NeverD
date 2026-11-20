@@ -28,12 +28,16 @@ struct CEntryCarrier {
   };
   /// Memory layout of a physical tuple, in return-register order.
   std::vector<Field> Fields;
+  /// The private body never reads this synthesized ABI position.
+  bool Unused = false;
 };
 
 struct CRecordEntry {
   std::string BodyName;
   std::string Declaration;
   std::string Definition;
+  /// An indirect n32/n64 result has no physical result register.
+  bool BodyReturnsVoid = false;
 };
 
 bool hasRecordEntryDeclaration(const FunctionSym &Function);

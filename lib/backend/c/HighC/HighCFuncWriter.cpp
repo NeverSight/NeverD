@@ -311,11 +311,19 @@ HighCWriter::mipsRecordEntry(const HighFunc &Func, const FunctionSym &DebugFn,
       !isMIPS(Opts.TheArch) || !mips::hasRecordEntryDeclaration(DebugFn))
     return std::nullopt;
   std::vector<mips::CEntryCarrier> Inputs;
-  for (const auto I : emittedParamIndices(Func)) {
+  const auto Indices = emittedParamIndices(Func);
+  ParamIndicesInProgress.insert(&Func);
+  const auto Done =
+      llvm::make_scope_exit([&] { ParamIndicesInProgress.erase(&Func); });
+  const auto Used = readParamIndices(Func);
+  for (const auto I : Indices) {
     const auto &P = Func.Params[I];
     const auto Type = emittedParamType(Func, I);
-    Inputs.push_back(
-        {{P.RegOff, P.MedIndex, Type->Size}, Type->Kind, declaredAs(Type, "")});
+    Inputs.push_back({{P.RegOff, P.MedIndex, Type->Size},
+                      Type->Kind,
+                      declaredAs(Type, ""),
+                      {},
+                      !Used.contains(static_cast<int>(I))});
   }
   mips::CEntryCarrier Result{{kNoParamReg, -1, ReturnType->Size},
                              ReturnType->Kind,
@@ -5347,6 +5355,38 @@ TypeRef HighCWriter::unreadDeclaredParamType(const HighFunc &Func,
                          Declared && Declared->IsSigned);
 }
 
+std::set<int> HighCWriter::readParamIndices(const HighFunc &Func) const {
+  std::set<int> Used;
+  // Expressions can share children, and several call edges can query the same
+  // definition. Visit each expression once and retain every completed answer.
+  HighExprSet Visited;
+  // An indirect call's target is a use too.  A call's operand that its
+  // callee's definition does not declare is none: the call does not pass it.
+  std::function<void(const HighExpr &)> Walk = [&](const HighExpr &E) {
+    if (!Visited.insert(&E).second)
+      return;
+    if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
+        E.Var.Kind == MedVar::Param)
+      Used.insert(E.Var.Id);
+    if (E.Kind == ExprKind::Call)
+      if (const std::vector<size_t> Passed = printedCallOperands(E);
+          !Passed.empty()) {
+        for (size_t I : Passed)
+          if (I < E.Operands.size() && E.Operands[I])
+            Walk(*E.Operands[I]);
+        return;
+      }
+    E.forEachChildExpr([&](const ExprPtr &Child) { Walk(*Child); });
+  };
+  walkStmts(Func.Body, [&](const HighStmt &S) {
+    forEachExpr(S, [&](const ExprPtr &E) {
+      if (E)
+        Walk(*E);
+    });
+  });
+  return Used;
+}
+
 std::vector<size_t>
 HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   const auto Key = std::make_pair(&Func, Func.Entry);
@@ -5379,37 +5419,10 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   if (auto It = EmittedParamIndices.find(Key);
       It != EmittedParamIndices.end() && It->second.size() <= N)
     return It->second;
-  std::set<int> Used;
-  // Expressions can share children, and several call edges can query the same
-  // definition. Visit each expression once and retain every completed answer.
-  HighExprSet Visited;
   ParamIndicesInProgress.insert(&Func);
   const auto Done =
       llvm::make_scope_exit([&] { ParamIndicesInProgress.erase(&Func); });
-  // An indirect call's target is a use too.  A call's operand that its
-  // callee's definition does not declare is none: the call does not pass it.
-  std::function<void(const HighExpr &)> Walk = [&](const HighExpr &E) {
-    if (!Visited.insert(&E).second)
-      return;
-    if ((E.Kind == ExprKind::Var || E.Kind == ExprKind::Phi) &&
-        E.Var.Kind == MedVar::Param)
-      Used.insert(E.Var.Id);
-    if (E.Kind == ExprKind::Call)
-      if (const std::vector<size_t> Passed = printedCallOperands(E);
-          !Passed.empty()) {
-        for (size_t I : Passed)
-          if (I < E.Operands.size() && E.Operands[I])
-            Walk(*E.Operands[I]);
-        return;
-      }
-    E.forEachChildExpr([&](const ExprPtr &Child) { Walk(*Child); });
-  };
-  walkStmts(Func.Body, [&](const HighStmt &S) {
-    forEachExpr(S, [&](const ExprPtr &E) {
-      if (E)
-        Walk(*E);
-    });
-  });
+  auto Used = readParamIndices(Func);
   if (DebugFn && !DebugFn->Params.empty()) {
     bindParams(Func);
     if (ParamsPlaced) {
@@ -6532,8 +6545,14 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
       EmitFunctionWrapper && isMIPS(Opts.TheArch) && DebugFn
           ? mipsRecordEntry(Func, *DebugFn, ReturnType)
           : std::nullopt;
-  if (RecordEntry)
+  if (RecordEntry) {
     FName = RecordEntry->BodyName;
+    if (RecordEntry->BodyReturnsVoid) {
+      ReturnType = NdType::makeVoid();
+      FuncReturnType = ReturnType;
+      InferredVoid = true;
+    }
+  }
 
   if (EmitFunctionWrapper && Func.Entry && !PortableInterface)
     OS << "/* neverd.entry: 0x" << llvm::utohexstr(Func.Entry) << " */\n";

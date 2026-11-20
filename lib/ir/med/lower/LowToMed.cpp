@@ -2052,6 +2052,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
             Op.addInput(Link);
           }
     }
+    // The logical parameters can still fail to bind (for example when a stack
+    // argument has a mutable home). Keep the already captured result operands
+    // and their register banks for the physical entry in that case.
+    if (RecordEntry && EntrySignature->ReturnType->Kind == NdTypeKind::Struct &&
+        EntrySignature->ReturnComponents.size() == 2) {
+      Func.MultiReturn.clear();
+      for (const auto &P : EntrySignature->ReturnComponents)
+        Func.MultiReturn.push_back(
+            {P.RegisterOffset, P.ValueBytes,
+             P.Kind == SourceABICarrierKind::FloatingRegister});
+      Func.ExplicitMIPSRecordResult = true;
+    }
     if (RecordEntry || Func.ExplicitMIPSRecordResult)
       MIPSReturnsQualified = false;
     modelKnownWideCallReturns(Func);

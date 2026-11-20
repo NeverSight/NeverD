@@ -10544,8 +10544,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
       std::vector<mips::CEntryCarrier> Inputs;
       for (const auto &Arg : Fn.args()) {
         const auto &Site = (*Sites)[Arg.getArgNo()];
-        Inputs.push_back(Physical(
-            Arg.getType(), {Site.RegOff, static_cast<int>(Site.MedIndex)}));
+        auto Carrier = Physical(Arg.getType(),
+                                {Site.RegOff, static_cast<int>(Site.MedIndex)});
+        Carrier.Unused = Arg.use_empty();
+        Inputs.push_back(std::move(Carrier));
       }
       RecordEntry = mips::cRecordEntry(
           Opts, Dbg, *DebugFn, *FunctionEntry, FName, Inputs,

@@ -1681,10 +1681,12 @@ its register or stack slot, and its position in the carrier. On o32 every
 record result uses caller-provided storage and the callee returns its address
 in v0. Large n32/n64 results use caller-provided storage and leave v0
 unspecified. Both C emitters can build a typed entry around a recovered body
-when the machine inputs match the declared record layout and the result is
-available from one checked register or the incoming storage pointer. The
-floating-call analysis tracks independently placed record fields, including
-both floating result registers. Reconstructing a source type requires an
+when the machine inputs match the declared layout. The return can occupy
+one register, a pair of GPRs or FPRs, or the caller's storage. A short final
+word uses only the object's remaining bytes, including on big-endian targets.
+Direct calls and explicitly typed indirect calls retain the register bank and
+byte offset of each independently placed field. A result written in the
+return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an
 explicit local declaration or matching debug information and a complete
 by-value field layout. Unions and incomplete field graphs retain their display
 types.
@@ -1694,6 +1696,10 @@ the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
+For record callers that copy an argument into a private stack buffer in a
+counted loop, the proof follows the loop's actual byte addresses and bound.
+A call with an unknown frame effect, an uninitialized private byte or an
+overlapping write to the saved link prevents this reconstruction.
 The shared call-stack proof computes that intersection using complete outgoing
 argument slots. An unknown call SP, an external store or a frame-derived call
 argument cannot obtain this exception.

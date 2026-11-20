@@ -170,8 +170,17 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
         Owner = J;
       }
     }
-    if (!Found)
-      return std::nullopt;
+    if (!Found) {
+      // An aligned o32 argument can skip a1. A double in an n32/n64 FPR
+      // likewise leaves the corresponding GPR position unused. Stack recovery
+      // retains these parameters to keep later machine positions numbered.
+      if (!Input.Unused || Input.Kind != NdTypeKind::Int ||
+          TRI.integerArgumentLayout(Options.Format).registerIndex(Site.RegOff) <
+              0)
+        return std::nullopt;
+      Arguments.emplace_back("0");
+      continue;
+    }
     const auto &P = *Found;
     const bool FP = P.Location.Kind == SourceABICarrierKind::FloatingRegister;
     if ((FP && !HardFloat) || P.RegisterBitOffset % 8 ||
@@ -209,6 +218,7 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
   if (Hidden) {
     if (!BoundResult)
       return std::nullopt;
+    Output.BodyReturnsVoid = !Layout->ReturnsResultPointer;
     OS << "    " << Call << ";\n    return " << ResultObject << ";\n";
   } else if (record(Function.ReturnType)) {
     OS << "    " << Result.Spelling << " " << ResultWord << " = " << Call
