@@ -1,0 +1,939 @@
+{
+  "source": "7c52e63b8cd89dc9b4ece3984b1b1260a55102b5",
+  "llvm_source": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "originals_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44750238073",
+  "local": {
+    "selected": 1064,
+    "passed": 1058,
+    "skipped": 6,
+    "failed": 0,
+    "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+    "library_sha256": "0ed24b6b21be64337662f5f3dc7cb7997fa3633484f0c196f4efe9bc18613a90",
+    "prebuilt_r6": {
+      "revision": "7c52e63b8cd89dc9b4ece3984b1b1260a55102b5",
+      "test_count": 252,
+      "failures": 6,
+      "skipped": 4,
+      "tag": "neverd-llvm-v23.0.0-r6",
+      "archive": "neverd-llvm-macos-arm64.tar.xz",
+      "archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+      "host_sha256": "780ff8b592affd8a221ec5f768cac4ccf90e7ef4428754ffaf64ff48f60f1216",
+      "failed_tests": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "diagnostic": "classic arm64e requires implicit signed-return CFI; use a compatible native object producer or fixed LLVM fork",
+      "passed": 242,
+      "linked_llvm_archives": 73
+    },
+    "prebuilt_r6_parent": {
+      "revision": "1d4617a15910a962f350fe678d2252c5f14b92e6",
+      "host_sha256": "29c4dbf3eb5c91626d7320b0c775f673f7138314c608cefa97a4d70092b91e1c",
+      "llvm_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+      "gtest_exit_code": 1,
+      "selected": 6,
+      "failed_tests": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "diagnostic": "classic arm64e requires implicit signed-return CFI; use a compatible native object producer or fixed LLVM fork",
+      "installer_blob": "661918bbdbbf861adcaeccb1970fc46a0351805f",
+      "xml_sha256": "9c334f49474838840e0eb6597d7f02569970f238f48f210474ca6835debc0379"
+    },
+    "fixture_constants": {
+      "r6": {
+        "cases": 5,
+        "xml_sha256": "a3e883e54e3cf9892b659fa63c9700dfd9ff201ec60fff7233c354ef1c5bad5f"
+      },
+      "fork": {
+        "cases": 5,
+        "xml_sha256": "da34cd007970011f749ef607fb6b0c7e09d025524f53560d6ba9668a5b3cf4ab"
+      }
+    },
+    "focused_signed_caller": {
+      "r6": {
+        "cases": 5,
+        "xml_sha256": "eb09a7e990b83d71eb088b0672bd55de70f5f6481cea08a72b3f9459d0e895c4"
+      },
+      "fork": {
+        "cases": 5,
+        "xml_sha256": "fbbd95e4a1c69260f2e7a6551e18f0f9a040aeb02b0045216857c292444b5252"
+      }
+    }
+  },
+  "cli": {
+    "oracle_sha256": "50d58fbabe0f44ef4e8d6b7e2b0cab8664e396b12e6a6c7f8f68324a5abbbde6",
+    "strict_signed_images": {
+      "cli-images/macos-26-fragmented-original.dylib": {
+        "sha256": "e21cf1a3d96de4d6a5dee41032e36c15f3fa31a7f9f10679420d04cc8c2bc6c7",
+        "bytes": 34976,
+        "data_in_code_records": 10
+      },
+      "cli-images/macos-26-fragmented-default-1.dylib": {
+        "sha256": "5ddb6cfd4f86f0e3a73b72b7fc52781878e9e95cfc6c6a88c9ef19d31a312f11",
+        "bytes": 70288,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-fragmented-default-2.dylib": {
+        "sha256": "e9d47b0ff4043264ac31a529af193553be9c565e9361a86f4d6eabb0154f2515",
+        "bytes": 105904,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-fragmented-default-3.dylib": {
+        "sha256": "603b683b990b6c10dc463c712f0680790789cc041d9aa1da244505f5fb9068b6",
+        "bytes": 141856,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-fragmented-no-opt-1.dylib": {
+        "sha256": "f9d3c19632c0e0b163ae9a8e215f12a1953308c551ffd4a8e9a971528628cc3b",
+        "bytes": 70288,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-fragmented-no-opt-2.dylib": {
+        "sha256": "25c74dd3a35e91422f9aa381355f77ac6df40b02b89b8732ce08cd75e5918c2b",
+        "bytes": 105904,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-fragmented-no-opt-3.dylib": {
+        "sha256": "9b795e1b2f7b24139a36ad38c9d10868f5cec1f3010ee2bd7082a9fcf09474c2",
+        "bytes": 141856,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-gapped-original.dylib": {
+        "sha256": "123b711104056b26eac7459d6972e2629f8598b5b3b2209b7c7b86b397404cb7",
+        "bytes": 34944,
+        "data_in_code_records": 7
+      },
+      "cli-images/macos-26-gapped-default-1.dylib": {
+        "sha256": "f06b610201fd49d95bc1439de7529bb7a46cd2d4661b8fb0992f7060ae5e410d",
+        "bytes": 70256,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-gapped-default-2.dylib": {
+        "sha256": "db8b69de04aa791043ffb63b7d86fc1cc099e593794759eb64f1be2cf2d8654d",
+        "bytes": 105872,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-gapped-default-3.dylib": {
+        "sha256": "6051721da20a041816845423122a0eefa58074e43e4f92a4ab32cd19b22a4b32",
+        "bytes": 141824,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-gapped-no-opt-1.dylib": {
+        "sha256": "b9e88439af0ed929c30b837578e72da1a62f8ac7113ce812fe2394316ad4e117",
+        "bytes": 70256,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-gapped-no-opt-2.dylib": {
+        "sha256": "ccb9a51f749f154f809a7b393af147be92ad5ede4f309eedbdca84b539763b41",
+        "bytes": 105872,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-gapped-no-opt-3.dylib": {
+        "sha256": "ddc64423fd779d116175ba84979b8e4d6024fbfd10f53ab39f3842e116c219fe",
+        "bytes": 141824,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-fragmented-original.dylib": {
+        "sha256": "623bd6f409f6e5a1c067fb602641a1b4389f9a7ddfb2532b21ae779e213cb562",
+        "bytes": 16992,
+        "data_in_code_records": 10
+      },
+      "cli-images/xcode-27-fragmented-default-1.dylib": {
+        "sha256": "457e1fcb74e50a8cd98de3b71057ae7703b0b90ba1dd21792f54b912e9afceb3",
+        "bytes": 52112,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-fragmented-default-2.dylib": {
+        "sha256": "8d51f436b16c5aa5db9573a86d48affd7da9328d580b94fd92db3d3c6d057d27",
+        "bytes": 87568,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-fragmented-default-3.dylib": {
+        "sha256": "a3747d58b2b3887838ee608655f3ee5345d3141130961dc2375f66b40612bda9",
+        "bytes": 123392,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-fragmented-no-opt-1.dylib": {
+        "sha256": "f71bd017ae28a5a9f89cc37eb5956bf7e1b3292707dbe6c2ccb241f9fb95e404",
+        "bytes": 52112,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-fragmented-no-opt-2.dylib": {
+        "sha256": "dd88b0edcb70e3262f7817237cbc2ebd1b896b32892875ecc3a2efedb1ddf2a3",
+        "bytes": 87568,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-fragmented-no-opt-3.dylib": {
+        "sha256": "c0f52809a574e2ebdac9433654e8958162cfce0acce410f78011d59b8265a50c",
+        "bytes": 123392,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-gapped-original.dylib": {
+        "sha256": "19d2243a99f939a6a4a56cb07fc2cbd7bf0fb32593ce77fc3eba216a04702eb3",
+        "bytes": 16960,
+        "data_in_code_records": 7
+      },
+      "cli-images/xcode-27-gapped-default-1.dylib": {
+        "sha256": "7b80fdd9cb042f5bfed33c40ed00b87846da7f971d0bfaa3216ee0d05c6cd5ee",
+        "bytes": 52080,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-gapped-default-2.dylib": {
+        "sha256": "cd722cde37b9d7a8f2a4193c7c76e52a5e7cf31bd5b15668bc3003adbd3f904f",
+        "bytes": 87536,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-gapped-default-3.dylib": {
+        "sha256": "cd4166938c7d6b74faa23d156d06f3b7dfbcdfbf7123e31c386a6b1c12752631",
+        "bytes": 123360,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-gapped-no-opt-1.dylib": {
+        "sha256": "6d0d671710959a6fd12244f6391c90f3d8e5f71b5aa80113eba04d004e1f284b",
+        "bytes": 52080,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-gapped-no-opt-2.dylib": {
+        "sha256": "e34c5309bbce403a86f165971ff79c0d0761f51d0efd3e4a0a5f04819d27f49a",
+        "bytes": 87536,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-gapped-no-opt-3.dylib": {
+        "sha256": "0b85b8e87fd8ea363e11f171ac21b643f300808a605c7fa5aa339af57aeac3a2",
+        "bytes": 123360,
+        "data_in_code_records": 40
+      }
+    },
+    "conflicting_records_rejected": {
+      "macos-26-fragmented-conflict-2": {
+        "input_sha256": "d6ded39f7ee1ffbe03b8049a25f44a8e151202d613078418803b5e77a0af8ea2",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-fragmented-conflict-3": {
+        "input_sha256": "cb631c659bc40c3fe8d1cbd5b062569c4d7e84f78f56f8a4405d6d675a1cd084",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-fragmented-conflict-4": {
+        "input_sha256": "135ce6d54bb0a8b45d243c0aeae5fdba6a0d65c28e142caaae6369c1b2aaa497",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-2": {
+        "input_sha256": "a81bef246463c1ae9097c006e6071ecb18cb81b142dbf9c7525c0107f9a74592",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-3": {
+        "input_sha256": "ed6b3dd27ca2c499a0158e737974edd5752d0cd85afe38d446c8344c7be0a8c0",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-4": {
+        "input_sha256": "c970bbb2c27dcf5ec007db66dcc063dceb937d832305df10d341b7fcb27d1aec",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-2": {
+        "input_sha256": "a8e84522ccb59183ef63cff15280d3dca1883d2a2a2681cf98de6882e7ef2bef",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-3": {
+        "input_sha256": "34d14859abe6d19cfdd90018a61947eb2968a6650b8456f5a4ca915cf1927246",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-4": {
+        "input_sha256": "ec01f1605cf7aadda467079c95f125fe06195c9381226432eb5593b9a2546727",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-2": {
+        "input_sha256": "674df54873cb8195f69904397ee927a871e544c25fdd109fae48e3951b6d9761",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-3": {
+        "input_sha256": "76cd333bc4096a47d13e2c37a130aa42c621538d226bd1907076e2ea2377f7b4",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-4": {
+        "input_sha256": "3047845c2bbeb4b18696701c8ac7c5c90925b66b1270736a2155ad9d45b5c690",
+        "exit": 1,
+        "output": false
+      }
+    }
+  },
+  "native": {
+    "macos-26": {
+      "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)",
+      "completed_cases": 252,
+      "cli_images": 28,
+      "executed_cli_comparisons": 2016,
+      "originals": {
+        "intact": {
+          "sha256": "a2259f5828dc7d13953b34fc614a951106ebcb55bd4a3e5a7ffbc278073798b9",
+          "comparisons": 72
+        },
+        "fragmented": {
+          "sha256": "e21cf1a3d96de4d6a5dee41032e36c15f3fa31a7f9f10679420d04cc8c2bc6c7",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "123b711104056b26eac7459d6972e2629f8598b5b3b2209b7c7b86b397404cb7",
+          "comparisons": 72
+        }
+      },
+      "switches": {
+        "FragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "GappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "MaskedFragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "MaskedGappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        }
+      },
+      "entry": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 1
+      },
+      "x1": {
+        "qualified": false,
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "qualification_sha256": "5361b0373d007c2ca9f3d7ba76ee30ee2f898ff0a1abfd0cc1a61ca4b2093ca7",
+      "signed_caller_validation": {
+        "revision": "4088158cf3600ec730d578da7336dd4415038bc7",
+        "current_fork_passed": 252,
+        "fork_test_host_sha256": "489146f411b0e2a68072ca7c351ba3ee3f0d12d9028cb9cfd6c3e0ff9820aff0",
+        "r6_test_host_sha256": "d03a7537888237c914b1f16a515e886050a257b2d06fd82fa5ece858ab3b4e4b",
+        "cli_comparisons": 2016,
+        "prebuilt_r6_focused": 5,
+        "prebuilt_r6_unfiltered": {
+          "discovered": 252,
+          "gtest_exit_code": 1,
+          "passed": 242,
+          "failed_tests": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "errors": [],
+          "implicit_cfi_diagnostic": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ]
+        },
+        "native_entry_walks_per_toolchain": 12,
+        "qualification_sha256": "93090a3e69548588324bd796cf9504d9f89c11468dffd38f3f64fbac8bf70b38",
+        "r6_full_xml_sha256": "63c01551a1d04af8a6363836be0cbcf8e7590251085e8a4e8bdfee80756316a4"
+      }
+    },
+    "xcode-27": {
+      "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.2\nBuildVersion:\t\t26B123",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)",
+      "completed_cases": 252,
+      "cli_images": 28,
+      "executed_cli_comparisons": 2016,
+      "originals": {
+        "intact": {
+          "sha256": "9e431e29a95ed8b80299bcf976251498d4fae469c71515c080c6bd10fb0b85b8",
+          "comparisons": 72
+        },
+        "fragmented": {
+          "sha256": "623bd6f409f6e5a1c067fb602641a1b4389f9a7ddfb2532b21ae779e213cb562",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "19d2243a99f939a6a4a56cb07fc2cbd7bf0fb32593ce77fc3eba216a04702eb3",
+          "comparisons": 72
+        }
+      },
+      "switches": {
+        "FragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "GappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "MaskedFragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "MaskedGappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        }
+      },
+      "entry": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 0
+      },
+      "x1": {
+        "qualified": false,
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "qualification_sha256": "fd8dc3ba56bb04dacf69ed28c9523a79386fde0f5cee17468674be96a7b2bf96",
+      "signed_caller_validation": {
+        "revision": "4088158cf3600ec730d578da7336dd4415038bc7",
+        "current_fork_passed": 252,
+        "fork_test_host_sha256": "489146f411b0e2a68072ca7c351ba3ee3f0d12d9028cb9cfd6c3e0ff9820aff0",
+        "r6_test_host_sha256": "d03a7537888237c914b1f16a515e886050a257b2d06fd82fa5ece858ab3b4e4b",
+        "cli_comparisons": 2016,
+        "prebuilt_r6_focused": 5,
+        "prebuilt_r6_unfiltered": {
+          "discovered": 252,
+          "gtest_exit_code": 1,
+          "passed": 242,
+          "failed_tests": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "errors": [],
+          "implicit_cfi_diagnostic": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ]
+        },
+        "native_entry_walks_per_toolchain": 12,
+        "qualification_sha256": "f2f09182526c04bb2a19cd93a03daeb5fd886aac6d8655bed5c98ee4a8cfa39a",
+        "r6_full_xml_sha256": "8b80108c33b40d796300ed10a535b43943531e1b299bf1d835074be6898d9cf9"
+      }
+    }
+  },
+  "baseline": {
+    "original-macos-26-intact": {
+      "input_sha256": "a2259f5828dc7d13953b34fc614a951106ebcb55bd4a3e5a7ffbc278073798b9",
+      "patch_exit": 0,
+      "output": true,
+      "cfg_edges": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      }
+    },
+    "original-macos-26-fragmented": {
+      "input_sha256": "e21cf1a3d96de4d6a5dee41032e36c15f3fa31a7f9f10679420d04cc8c2bc6c7",
+      "patch_exit": 1,
+      "output": false,
+      "cfg_edges": {
+        "_leaf_sum": 0,
+        "_leaf_difference": 0,
+        "_leaf_wide": 0
+      }
+    },
+    "original-macos-26-gapped": {
+      "input_sha256": "123b711104056b26eac7459d6972e2629f8598b5b3b2209b7c7b86b397404cb7",
+      "patch_exit": 1,
+      "output": false,
+      "cfg_edges": {
+        "_leaf_sum": 0,
+        "_leaf_difference": 0,
+        "_leaf_wide": 0
+      }
+    },
+    "original-xcode-27-intact": {
+      "input_sha256": "9e431e29a95ed8b80299bcf976251498d4fae469c71515c080c6bd10fb0b85b8",
+      "patch_exit": 0,
+      "output": true,
+      "cfg_edges": {
+        "_leaf_sum": 3,
+        "_leaf_difference": 3,
+        "_leaf_wide": 3
+      }
+    },
+    "original-xcode-27-fragmented": {
+      "input_sha256": "623bd6f409f6e5a1c067fb602641a1b4389f9a7ddfb2532b21ae779e213cb562",
+      "patch_exit": 1,
+      "output": false,
+      "cfg_edges": {
+        "_leaf_sum": 0,
+        "_leaf_difference": 0,
+        "_leaf_wide": 0
+      }
+    },
+    "original-xcode-27-gapped": {
+      "input_sha256": "19d2243a99f939a6a4a56cb07fc2cbd7bf0fb32593ce77fc3eba216a04702eb3",
+      "patch_exit": 1,
+      "output": false,
+      "cfg_edges": {
+        "_leaf_sum": 0,
+        "_leaf_difference": 0,
+        "_leaf_wide": 0
+      }
+    }
+  },
+  "unreachable_default": {
+    "revision": "7c52e63b8cd89dc9b4ece3984b1b1260a55102b5",
+    "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+    "hosts": {
+      "macos-26": {
+        "intact": {
+          "input_sha256": "fb6b3ff17ff2995d690943498bb34872492e6d964aaa618752d8ec7a0706e6a8",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 0,
+          "created_output": true,
+          "output_sha256": "2b04cd57ba894bbb3c025adf2fce7cf6dd975a75bed776f9878d1f553ecd6066"
+        },
+        "fragmented": {
+          "input_sha256": "f300bf7f72c661433f0f8eeaa450cfe172f46812028c1401ebcbcc6aeeff97f5",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 0,
+          "created_output": true,
+          "output_sha256": "6f74f324da9070e3ff13f3ee0c07291194be8c66863504b15b3f9a5e837e9725"
+        },
+        "gapped": {
+          "input_sha256": "68c5907d007a7a7aecee2ee19daba0387e769e1975746cabb6caa07a64403ab6",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 1,
+          "created_output": false,
+          "output_sha256": null
+        }
+      },
+      "xcode-27": {
+        "intact": {
+          "input_sha256": "2849c40858ec485e26fd3bc993d3dbae1e9c1205833197df518f61a1c051dc76",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 0,
+          "created_output": true,
+          "output_sha256": "2226199049803334e907316ee30335fea76a70885c2ceddd03f082c4793d71dc"
+        },
+        "fragmented": {
+          "input_sha256": "7b9ca581cb4c06cef5b68eca3d3e6695631e3c4f725f838ce8ffc8bc0cf50537",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 0,
+          "created_output": true,
+          "output_sha256": "46e48d7ddb190c49ce00bb79a8e290272934ef7620e2b529004bdfa83565b7d0"
+        },
+        "gapped": {
+          "input_sha256": "4340e734e19985765df87738701c435b9ad308459ec300036bca1e1309ff70d9",
+          "cfg_edges": {
+            "_leaf_sum": 3,
+            "_leaf_difference": 3,
+            "_leaf_wide": 3
+          },
+          "exit": 1,
+          "created_output": false,
+          "output_sha256": null
+        }
+      }
+    }
+  },
+  "unreachable_default_originals_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014",
+  "original_signal_trampoline": {
+    "ci": "https://github.com/gmh5225/test_mac_intel/actions/runs/44746453776",
+    "hosts": {
+      "original-macos-26": {
+        "source_original": true,
+        "raw_handler_visited_entry": 0,
+        "exact_fde_or_compact": 1,
+        "raw_caller_sp_matches": 0,
+        "entry_lookup_offset": 0,
+        "trampoline_covers_cursor": 1,
+        "trampoline_mode": "0x4000000",
+        "trampoline_has_fde": 0,
+        "trampoline_is_signal_frame": 0,
+        "sample": "0 1 0 0 1 67108864 0 0"
+      },
+      "original-xcode-27": {
+        "source_original": true,
+        "raw_handler_visited_entry": 0,
+        "exact_fde_or_compact": 1,
+        "raw_caller_sp_matches": 0,
+        "entry_lookup_offset": 0,
+        "trampoline_covers_cursor": 1,
+        "trampoline_mode": "0x4000000",
+        "trampoline_has_fde": 0,
+        "trampoline_is_signal_frame": 0,
+        "sample": "0 1 0 0 1 67108864 0 0"
+      }
+    }
+  },
+  "signed_caller_source": "4088158cf3600ec730d578da7336dd4415038bc7",
+  "signed_caller_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44756052544",
+  "pinned_llvm_cfi_fix": "https://github.com/NeverSight/llvm-project/pull/8",
+  "r6_initial_runs": [
+    "https://github.com/gmh5225/test_mac_intel/actions/runs/44753760311",
+    "https://github.com/gmh5225/test_mac_intel/actions/runs/44755110116"
+  ],
+  "r6_initial": {
+    "macos-26": {
+      "raw": {
+        "discovered": 252,
+        "gtest_exit_code": 1,
+        "passed": 242,
+        "failed_tests": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "skipped": [
+          "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+          "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+        ],
+        "errors": [],
+        "implicit_cfi_diagnostic": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ]
+      },
+      "sha256": "b02a6c268bc7e8183a7ffa749f8e4d63e1964d0e6f4d4316ad381afc6967b192"
+    },
+    "xcode-27": {
+      "raw": {
+        "discovered": 252,
+        "gtest_exit_code": 1,
+        "passed": 241,
+        "failed_tests": [
+          "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions",
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "skipped": [
+          "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+          "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+        ],
+        "errors": [],
+        "implicit_cfi_diagnostic": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ]
+      },
+      "sha256": "b6b498e5d2595e0061d8a51f61a7c2c55fae179d4932728d214d7209ef99e5e0"
+    }
+  },
+  "signal_sampling": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44756188548",
+    "images": {
+      "frame.dylib": {
+        "sha256": "1c331ee8f1d0911c5657fb538f01a4fab31beb90e2eabf90ffbabfc8bc1824b4",
+        "bytes": 33496,
+        "input_signature_exit": 0
+      },
+      "installed.dylib": {
+        "sha256": "d455b5e86a1e17bdd73eba287e6450b12250b6034f4253bbaf2c4b11df4ea2ef",
+        "bytes": 68640,
+        "input_signature_exit": 0
+      }
+    },
+    "profiles": {
+      "macos-26": {
+        "before": {
+          "driver_sha256": "47f275de5f5e393a30a0032167a895ff328641f59bfb41308d650b514a6cefa0",
+          "passed": 448,
+          "by_profile": {
+            "frame.dylib/entry/normal": 32,
+            "frame.dylib/raw-entry/normal": 32,
+            "frame.dylib/raw-entry/alternate": 32,
+            "frame.dylib/raw-compact-entry/normal": 32,
+            "frame.dylib/raw-compact-entry/alternate": 32,
+            "frame.dylib/raw-language-entry/normal": 32,
+            "frame.dylib/raw-language-entry/alternate": 32,
+            "installed.dylib/entry/normal": 32,
+            "installed.dylib/raw-entry/normal": 32,
+            "installed.dylib/raw-entry/alternate": 32,
+            "installed.dylib/raw-compact-entry/normal": 32,
+            "installed.dylib/raw-compact-entry/alternate": 32,
+            "installed.dylib/raw-language-entry/normal": 32,
+            "installed.dylib/raw-language-entry/alternate": 32
+          },
+          "failures": {}
+        },
+        "after": {
+          "driver_sha256": "f9d502fe7c025a02abc0524b3c07533e377859e9f94c670a46dea287c4754037",
+          "passed": 448,
+          "by_profile": {
+            "frame.dylib/entry/normal": 32,
+            "frame.dylib/raw-entry/normal": 32,
+            "frame.dylib/raw-entry/alternate": 32,
+            "frame.dylib/raw-compact-entry/normal": 32,
+            "frame.dylib/raw-compact-entry/alternate": 32,
+            "frame.dylib/raw-language-entry/normal": 32,
+            "frame.dylib/raw-language-entry/alternate": 32,
+            "installed.dylib/entry/normal": 32,
+            "installed.dylib/raw-entry/normal": 32,
+            "installed.dylib/raw-entry/alternate": 32,
+            "installed.dylib/raw-compact-entry/normal": 32,
+            "installed.dylib/raw-compact-entry/alternate": 32,
+            "installed.dylib/raw-language-entry/normal": 32,
+            "installed.dylib/raw-language-entry/alternate": 32
+          },
+          "failures": {}
+        }
+      },
+      "xcode-27": {
+        "before": {
+          "driver_sha256": "19e80a2c579ac17f110696be3cd094db4c0810166bafce448748abc64072fd9c",
+          "passed": 448,
+          "by_profile": {
+            "frame.dylib/entry/normal": 32,
+            "frame.dylib/raw-entry/normal": 32,
+            "frame.dylib/raw-entry/alternate": 32,
+            "frame.dylib/raw-compact-entry/normal": 32,
+            "frame.dylib/raw-compact-entry/alternate": 32,
+            "frame.dylib/raw-language-entry/normal": 32,
+            "frame.dylib/raw-language-entry/alternate": 32,
+            "installed.dylib/entry/normal": 32,
+            "installed.dylib/raw-entry/normal": 32,
+            "installed.dylib/raw-entry/alternate": 32,
+            "installed.dylib/raw-compact-entry/normal": 32,
+            "installed.dylib/raw-compact-entry/alternate": 32,
+            "installed.dylib/raw-language-entry/normal": 32,
+            "installed.dylib/raw-language-entry/alternate": 32
+          },
+          "failures": {}
+        },
+        "after": {
+          "driver_sha256": "a16ad891e6200c6d200b189ba1209291c9a9c941185bb1bd3c312a3d975634d4",
+          "passed": 448,
+          "by_profile": {
+            "frame.dylib/entry/normal": 32,
+            "frame.dylib/raw-entry/normal": 32,
+            "frame.dylib/raw-entry/alternate": 32,
+            "frame.dylib/raw-compact-entry/normal": 32,
+            "frame.dylib/raw-compact-entry/alternate": 32,
+            "frame.dylib/raw-language-entry/normal": 32,
+            "frame.dylib/raw-language-entry/alternate": 32,
+            "installed.dylib/entry/normal": 32,
+            "installed.dylib/raw-entry/normal": 32,
+            "installed.dylib/raw-entry/alternate": 32,
+            "installed.dylib/raw-compact-entry/normal": 32,
+            "installed.dylib/raw-compact-entry/alternate": 32,
+            "installed.dylib/raw-language-entry/normal": 32,
+            "installed.dylib/raw-language-entry/alternate": 32
+          },
+          "failures": {}
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "cleanup-products-early": {
+      "files": 47,
+      "bytes": 181452248
+    },
+    "cleanup-products-final": {
+      "files": 110,
+      "bytes": 4469135
+    },
+    "retired-package": {
+      "run": "44750238073",
+      "tag": "neverd-masked-tables-7c52e63b8cd8",
+      "asset": "masked-tables.tgz",
+      "bytes_removed": 49195491,
+      "sha256": "f8e70685b1468b4236451d138a841fc99ea05a948946f2547e72e80d46453c98",
+      "release_http": 404,
+      "git_ref_http": 404
+    },
+    "release-retirements": {
+      "r6": {
+        "tag": "neverd-masked-tables-r6-7c52e63b8cd8",
+        "asset": "masked-tables-r6.tgz",
+        "bytes": 49057021,
+        "sha256": "355b428736e00abeec27b4e9ae2b80da3a84e7d551c06e5e58ca2e8901871217",
+        "release_http": 404,
+        "git_ref_http": 404,
+        "last_run": "44755110116",
+        "run_conclusion": "failure"
+      },
+      "sampling": {
+        "tag": "neverd-entry-sampling-4088158cf360",
+        "asset": "entry-sampling.tgz",
+        "bytes": 3243,
+        "sha256": "c635122daa3685df7b1e54e3db00765af0dcaff2b505196189179b0e91487a6d",
+        "release_http": 404,
+        "git_ref_http": 404,
+        "last_run": "44756188548",
+        "run_conclusion": "success"
+      },
+      "entry": {
+        "tag": "neverd-arm64e-entry-4088158cf360",
+        "asset": "entry-qualification.tgz",
+        "bytes": 98036512,
+        "sha256": "98c39092bbcfcad6d4715946e71cdea9411244b35f3edfd5d24fdcc502dc467b",
+        "release_http": 404,
+        "git_ref_http": 404,
+        "last_run": "44756052544",
+        "run_conclusion": "success"
+      }
+    },
+    "ci-retirement": {
+      "repository": "gmh5225/test_mac_intel",
+      "branch": "codex/neverd-arm64e-bounded-tables-20261120",
+      "baseline": "fe8f78af9658f4f520852e3fbcce57506ecfd9fa",
+      "cleanup_commit": "25336022359ffde605c70de8bae2cba9c8a6e965",
+      "restored_tree": "f1a20e77e5cb5382bca5ebfcf96f986839fb5c15"
+    }
+  }
+}
