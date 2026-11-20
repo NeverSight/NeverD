@@ -9,6 +9,7 @@
 
 #include "neverd/backend/c/CEmitterOptions.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
+#include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
@@ -17,7 +18,9 @@
 #include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 
 using namespace neverd;
@@ -379,6 +382,64 @@ TEST(MIPSRecordSourceEntry, StackTailAlwaysOccupiesTheFirstAddressedBytes) {
     EXPECT_EQ(Prefix[1].Inputs[1].ConstVal, Little ? 0u : 2u);
     EXPECT_EQ(Read.Inputs[0].Id, Little ? 43 : 42);
     EXPECT_EQ(Read.Inputs[1].Id, Little ? 42 : 43);
+  }
+}
+
+TEST(MIPSRecordSourceEntry, N32StackReadsUseEightByteSlotsInMemoryOrder) {
+  for (Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL}) {
+    for (bool Wide : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Wide);
+      auto U64 = NdType::makeInt(8, false);
+      MedFunc F;
+      F.Entry = 0x1000;
+      F.Name = "read_stack";
+      F.ReturnType = U64;
+      for (int I = 0; I < 2; ++I) {
+        MedVar Slot;
+        Slot.Kind = MedVar::Param;
+        Slot.TheArch = A;
+        Slot.RegOff = kNoParamReg;
+        Slot.Size = 8;
+        Slot.Id = I;
+        F.Params.push_back(Slot);
+        F.TypedParams.push_back({I ? "second" : "first", U64});
+      }
+      MedBlock Block;
+      Block.Id = 0;
+      Block.StartAddr = F.Entry;
+      MedOp Read;
+      Read.Opcode = Wide ? NdOp::SUBBYTES : NdOp::COPY;
+      auto Bytes = F.Params.front();
+      Bytes.Size = Wide ? 16 : 8;
+      Read.addInput(Bytes);
+      if (Wide)
+        Read.addInput(MedVar::makeConst(8, 4));
+      Read.Output.Kind = MedVar::Reg;
+      Read.Output.TheArch = A;
+      Read.Output.RegOff = getTargetRegInfo(A).IntReturnReg;
+      Read.Output.Id = 10;
+      Read.Output.SSAVer = 1;
+      Read.Output.Size = 8;
+      Block.Ops.push_back(Read);
+      MedOp Ret;
+      Ret.Opcode = NdOp::RETURN;
+      Ret.addInput(Read.Output);
+      Block.Ops.push_back(Ret);
+      F.Blocks.push_back(std::move(Block));
+      llvm::LLVMContext Context;
+      auto Module = MedLLVMEmitter().emit({F}, Context, "stack", A, {}, nullptr,
+                                          BinaryFormat::ELF);
+      ASSERT_TRUE(Module);
+      Pipeline::optimizeModule(*Module);
+      auto *Fn = Module->getFunction(F.Name);
+      ASSERT_TRUE(Fn);
+      ASSERT_EQ(Fn->arg_size(), 2u);
+      auto *Return =
+          llvm::dyn_cast<llvm::ReturnInst>(Fn->back().getTerminator());
+      ASSERT_TRUE(Return);
+      EXPECT_EQ(Return->getReturnValue(),
+                Fn->getArg(Wide && archLittleEndian(A) ? 1 : 0));
+    }
   }
 }
 
