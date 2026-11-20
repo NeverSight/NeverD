@@ -62,18 +62,26 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         Context.FloatingPointException)
       return false;
     if (Id == Intrinsic::MIPSHistoricalRetire) {
-      const bool ERET = Context.Historical->retiringERET(Op.Addr);
+      const auto Target = Context.Historical->retiringERETTarget(Op.Addr);
       if (!Context.Historical->retire(Op.Addr))
         return false;
-      if (ERET)
+      if (Target) {
         clearMIPSReservation();
+        if (*Target & 3) {
+          Context.Historical->enterFetchAddressError(*Target);
+          return false;
+        }
+      }
       return true;
     }
     if (!knownOperandBytes(Op.Inputs[2], 0, 1) ||
         readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Img.Arch))
       return false;
-    if (isMIPS64O32(Img.Arch) && !Context.HistoricalO32DoublewordEnabled &&
-        mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset))
+    const auto &System = Context.Historical->system();
+    const bool Doubleword =
+        Wide && mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset);
+    if (Doubleword && !System && isMIPS64O32(Img.Arch) &&
+        !Context.HistoricalO32DoublewordEnabled)
       return false;
     std::optional<bool> Taken;
     if (Op.NumInputs == 4) {
@@ -92,7 +100,6 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
                                            Img.MIPS->hasScalarFP32ABI(Img.Arch),
                                            Taken))
       return false;
-    const auto &System = Context.Historical->system();
     if (System && System->canTakeInterrupt()) {
       Context.Historical->enterException(Op.Addr, 0);
       return false;
@@ -101,6 +108,10 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
       const auto Cop = mips::HistoricalCP0::coprocessorOf(Op.Inputs[1].Offset);
       if (Cop && !System->coprocessorUsable(*Cop)) {
         Context.Historical->enterException(Op.Addr, 11);
+        return false;
+      }
+      if (Doubleword && !System->permitsDoublewordGPRs()) {
+        Context.Historical->enterException(Op.Addr, 10);
         return false;
       }
     }

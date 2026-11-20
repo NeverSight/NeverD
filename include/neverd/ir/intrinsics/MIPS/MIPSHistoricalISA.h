@@ -76,9 +76,10 @@ constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
       return Level >= 2; // CW4011 R4000-compatible mode and R4000.
     const bool WordTransfer = RS == 0 || RS == 4;
     const bool DoubleTransfer = Level == 3 && (RS == 1 || RS == 5);
+    const bool Address = FS == 8 || FS == 14 || (Level == 3 && FS == 30);
     return !(Word & 0x7ff) && (WordTransfer || DoubleTransfer) &&
-           (FS == 8 || FS == 12 || FS == 13 || FS == 14) &&
-           (!(RS & 4) || FS != 8) && (!DoubleTransfer || FS == 8 || FS == 14);
+           (Address || (WordTransfer && (FS == 12 || FS == 13))) &&
+           (!(RS & 4) || FS != 8);
   }
   if (Op == 19)
     return Has(Cop1X, Fn);

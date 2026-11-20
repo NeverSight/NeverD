@@ -355,6 +355,118 @@ TEST(MIPSHistoricalScheduling, O32ReadsAndWritesFullMIPSIIIGPRs) {
 }
 
 TEST(MIPSHistoricalScheduling,
+     R4000DoublewordIssueUsesCurrentPrivilegeAndExtendedMode) {
+  for (Arch A : {Arch::MIPS64O32, Arch::MIPS64O32EL}) {
+    auto Img = image(A, 3);
+    const auto Slot = lift(Img, 0x1000, {0x10000002, 0x0085102d}); // DADDU.
+    for (const auto &[Status, Enabled] : {std::pair{0u, true},
+                                          {0x80u, true},
+                                          {0x08u, false},
+                                          {0x48u, true},
+                                          {0x10u, false},
+                                          {0x30u, true},
+                                          {0x12u, true},
+                                          {0x0cu, true}}) {
+      SCOPED_TRACE(Status);
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          3, {},
+          HistoricalCP0{HistoricalProcessor::R4000, Status, 0, 0, {}, {}});
+      ASSERT_TRUE(C.Historical);
+      C.HistoricalO32DoublewordEnabled = !Enabled;
+      NdOpEmulator E(Img);
+      E.setRegister(mipsreg::A0, 0x100000001ULL);
+      E.setRegister(mipsreg::A1, 0x200000008ULL);
+      E.setRegister(mipsreg::V0, 0xfeed);
+      EXPECT_EQ(execute(Slot, E, C), Enabled);
+      const auto &System = *C.Historical->system();
+      EXPECT_EQ(System.ExceptionVector.has_value(), !Enabled);
+      if (Enabled) {
+        EXPECT_EQ(E.getRegister(mipsreg::V0), 0x300000009ULL);
+      } else {
+        EXPECT_EQ(System.Cause, 0x80000028u); // BD and reserved instruction.
+        EXPECT_EQ(System.EPC, 0x1000u);
+        EXPECT_EQ(E.getRegister(mipsreg::V0), 0xfeedu);
+      }
+    }
+  }
+}
+
+TEST(MIPSHistoricalScheduling, ErrorEPCAndStatusWritesReachTheSelectedReturn) {
+  for (Arch A : {Arch::MIPS64O32, Arch::MIPS64O32EL}) {
+    auto Img = image(A, 3);
+    for (bool WideMove : {false, true}) {
+      MIPSSystemContext C;
+      C.Historical = HistoricalSchedule::fromSnapshot(
+          3, {},
+          HistoricalCP0{HistoricalProcessor::R4000, 0, 0, 0x2000, {}, {}});
+      NdOpEmulator E(Img);
+      auto &S = *C.Historical;
+      const auto Ref = WideMove ? 0x1012345678ULL : 0xffffffff82345678ULL;
+      E.setRegister(mipsreg::A0, WideMove ? Ref : uint32_t(Ref));
+      ASSERT_TRUE(execute(
+          lift(Img, 0x1100, {WideMove ? 0x40a4f000u : 0x4084f000u}), E, C));
+      ASSERT_EQ(S.system()->ErrorEPC, Ref);
+      const auto Read = lift(Img, 0x1200, {0x4022f000}); // DMFC0 v0,ErrorEPC.
+      EXPECT_FALSE(execute(Read, E, C));
+      for (unsigned Gap = 0; Gap != 2; ++Gap)
+        ASSERT_TRUE(execute(lift(Img, 0x1140 + 4 * Gap, {0}), E, C));
+      ASSERT_TRUE(execute(Read, E, C));
+      EXPECT_EQ(E.getRegister(mipsreg::V0), Ref);
+      E.setRegister(mipsreg::A0, 4);
+      ASSERT_TRUE(execute(lift(Img, 0x1210, {0x40846000}), E, C)); // Set ERL.
+      for (unsigned Gap = 0; Gap != 3; ++Gap) {
+        ASSERT_TRUE(S.beginPhysical(0x1220, 0x42000018, false));
+        EXPECT_FALSE(S.stageExceptionReturn(0x1220, true));
+        ASSERT_TRUE(S.abort());
+        ASSERT_TRUE(execute(lift(Img, 0x1230 + 4 * Gap, {0}), E, C));
+      }
+      ASSERT_TRUE(S.beginPhysical(0x1240, 0x42000018, false));
+      EXPECT_EQ(S.stageExceptionReturn(0x1240, true), Ref);
+      ASSERT_TRUE(S.retire(0x1240));
+      EXPECT_EQ(S.system()->Status, 0u);
+      EXPECT_EQ(S.system()->EPC, 0x2000u);
+    }
+    for (unsigned Level : {1u, 2u}) {
+      EXPECT_FALSE(historicalInstructionAvailable(0x4002f000, Level));
+      EXPECT_FALSE(historicalInstructionAvailable(0x4084f000, Level));
+    }
+  }
+}
+
+TEST(MIPSHistoricalScheduling,
+     UnalignedERETDestinationFaultsOnFetchAfterRestoringStatus) {
+  for (Arch A : {Arch::MIPS64O32, Arch::MIPS64O32EL})
+    for (unsigned Register : {14u, 30u})
+      for (unsigned Offset : {1u, 2u}) {
+        auto Img = image(A, 3);
+        HistoricalCP0 Sys{HistoricalProcessor::R4000,
+                          Register == 14 ? 2u : 4u,
+                          0x80000000u,
+                          0x2000,
+                          {},
+                          {}};
+        MIPSSystemContext C;
+        C.Historical = HistoricalSchedule::fromSnapshot(3, {}, Sys);
+        NdOpEmulator E(Img);
+        const auto Bad = 0xffffffffbfc00100ULL + Offset;
+        E.setRegister(mipsreg::A0, Bad);
+        ASSERT_TRUE(
+            execute(lift(Img, 0x1000, {0x40a40000u | Register << 11}), E, C));
+        for (unsigned Gap = 0; Gap != 2; ++Gap)
+          ASSERT_TRUE(execute(lift(Img, 0x1004 + 4 * Gap, {0}), E, C));
+        EXPECT_FALSE(execute(lift(Img, 0x1010, {0x42000018}), E, C));
+        const auto &Result = *C.Historical->system();
+        EXPECT_EQ(Result.Status, 2u);
+        EXPECT_EQ(Result.Cause, 4u << 2);
+        EXPECT_EQ(Result.EPC, Bad);
+        EXPECT_EQ(Result.BadVAddr, Bad);
+        EXPECT_EQ(Result.ExceptionVector, 0xffffffff80000180ULL);
+        EXPECT_FALSE(C.Historical->hasActiveInstruction());
+      }
+}
+
+TEST(MIPSHistoricalScheduling,
      ExceptionEPCDistinguishesOrdinaryAndDelaySlotEntry) {
   for (auto CPU :
        {HistoricalProcessor::R30xx, HistoricalProcessor::CW4011R3000,

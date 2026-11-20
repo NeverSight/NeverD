@@ -46,7 +46,8 @@ def boot_rom(order, prefix, instructions, return_offset):
     place(0, [*start, *instructions, 0x1000FFFF, 0])
     epc = BOOT + len(start) * 4
     if return_offset is not None:
-        place(return_offset, [12])  # SYSCALL at the ERET destination.
+        if return_offset % 4 == 0:
+            place(return_offset, [12])  # SYSCALL at an aligned destination.
         epc = BOOT + return_offset
 
     handler = [immediate(15, 0, 26, 0xA000), immediate(13, 26, 26, 0x1000)]
@@ -147,6 +148,19 @@ def qualify(executable, order):
           [immediate(15, 0, 9, 0xBFC0), immediate(13, 9, 9, 0x100), mtc0(9, 14),
            *[0] * 6, immediate(15, 0, 8, 0x40), immediate(13, 8, 8, 2), mtc0(8, 12),
            *[0] * 6], [0x42000018, 0], 8, return_offset=0x100)
+    for opcode, name in [(0x40800000, 'mtc0'), (0x40a00000, 'dmtc0')]:
+        write_error_epc = opcode | 9 << 16 | 30 << 11
+        check(f'eret-to-{name}-errorepc',
+              [immediate(15, 0, 9, 0xBFC0), immediate(13, 9, 9, 0x120),
+               write_error_epc, *[0] * 6, immediate(15, 0, 8, 0x40),
+               immediate(13, 8, 8, 4), mtc0(8, 12), *[0] * 6],
+              [0x42000018, 0], 8, return_offset=0x120)
+    for reg, level in [(14, 2), (30, 4)]:
+        check(f'eret-misaligned-register-{reg}',
+              [immediate(15, 0, 9, 0xBFC0), immediate(13, 9, 9, 0x102),
+               mtc0(9, reg), *[0] * 6, immediate(15, 0, 8, 0x40),
+               immediate(13, 8, 8, level), mtc0(8, 12), *[0] * 6],
+              [0x42000018, 0], 4, address=BOOT + 0x102, return_offset=0x102)
     return rows
 
 

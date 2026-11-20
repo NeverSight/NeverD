@@ -57,6 +57,11 @@ public:
 
   bool beginPhysical(uint64_t PC, uint32_t Word, bool Paired,
                      std::optional<bool> SlotTaken = {}) {
+    if (PC & 3) {
+      if (!SlotTaken)
+        enterFetchAddressError(PC);
+      return false;
+    }
     const auto T = historicalInstructionTiming(Word, ISA, Paired);
     if (!T || (System && !System->permitsIssue(Word)) ||
         !begin(PC, T->Reads, T->Delayed, T->Access, T->MergeSource,
@@ -99,16 +104,23 @@ public:
         System->ExceptionReturnDelay || Active->RestoresStatus ||
         (ERET && Active->SlotTaken))
       return std::nullopt;
-    auto Target = ERET && (System->Status & 4) ? System->ErrorEPC
-                                               : std::optional(System->EPC);
-    if (!Target || (ERET && (*Target & 3)))
+    const auto Target = System->returnAddress();
+    if (!Target)
       return std::nullopt;
     Active->RestoresStatus = true;
     return Target;
   }
-  bool retiringERET(uint64_t PC) const {
-    return Active && Active->PC == PC && Active->RestoresStatus &&
-           Active->Word == 0x42000018u;
+  std::optional<uint64_t> retiringERETTarget(uint64_t PC) const {
+    if (Active && Active->PC == PC && Active->RestoresStatus &&
+        Active->Word == 0x42000018u)
+      return System->returnAddress();
+    return std::nullopt;
+  }
+  /// A misaligned target faults on fetch, after the preceding transfer and
+  /// its executed slot have retired. The target instruction never issues.
+  bool enterFetchAddressError(uint64_t PC) {
+    return !Active && System && (PC & 3) &&
+           System->enterException(4, PC, {}, PC);
   }
   bool raiseSoftwareException(uint64_t PC, uint8_t Code) {
     if (!Active || !Active->Word ||
