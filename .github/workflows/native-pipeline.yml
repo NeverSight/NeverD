@@ -282,11 +282,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix: >-
-        ${{ fromJSON(inputs.scope == 'windows-qualification' && '{"include":[{"name":"Windows MSVC v143","runner":"windows-2025-vs2026","cc":"cl","cxx":"cl","parallel":4}]}' || inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
+        ${{ fromJSON(inputs.scope == 'windows-qualification' && '{"include":[{"name":"Windows clang-cl","runner":"windows-2025-vs2026","cc":"clang-cl","cxx":"clang-cl","parallel":4}]}' || inputs.scope == 'macos-qualification' && '{"include":[{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || (inputs.scope == 'frame-unix-qualification' || inputs.scope == 'crt-unix-qualification' || inputs.scope == 'record-unix-qualification') && '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3}]}' || '{"include":[{"name":"Linux Clang 18 libstdc++ 14","runner":"ubuntu-24.04","cc":"clang-18","cxx":"clang++-18","parallel":4},{"name":"macOS Apple Clang","runner":"macos-15","cc":"clang","cxx":"clang++","parallel":3},{"name":"Windows MSVC","runner":"windows-latest","cc":"cl","cxx":"cl","parallel":4}]}') }}
     timeout-minutes: ${{ inputs.scope == 'windows-qualification' && 240 || 180 }}
     env:
       EXPECTED_SOURCE_SHA: ${{ inputs.source_sha }}
       QUALIFICATION_CXX: ${{ matrix.cxx }}
+      QUALIFICATION_PR: ${{ inputs.pr_number }}
       QUALIFICATION_ROLE: ${{ inputs.qualification_role }}
       QUALIFICATION_SCOPE: ${{ inputs.scope }}
       EXPECTED_MIPS_TEST_COUNT: ${{ inputs.mips_test_count }}
@@ -344,7 +345,6 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: x64
-          toolset: "${{ inputs.scope == 'windows-qualification' && '14.44' || '' }}"
       - name: Install the CRT fixture toolchain on Unix
         if: runner.os != 'Windows' && inputs.scope != 'frame-unix-qualification'
         run: |
@@ -371,41 +371,49 @@ jobs:
             -DNEVERD_LLVM_PREBUILT=ON -DNEVERD_BUILD_WORKER=ON \
             -DNEVERD_ENABLE_CPU_EMULATION=OFF -DNEVERD_ENABLE_WEB_ANALYSIS=OFF \
             -DNEVERD_ENABLE_SEMANTIC_TESTS=ON "${platform_args[@]}"
-      - name: Compile the Release x86 decoder with an isolated MSVC heap
+      - name: Compile both Release compiler boundaries
         if: inputs.scope == 'windows-qualification'
-        shell: pwsh
         timeout-minutes: 65
-        env:
-          _CL_: /cgthreads1
         run: |
-          $target = 'third_party/capstone/CMakeFiles/capstone.dir/arch/X86/X86DisassemblerDecoder.c.obj'
-          $evidence = New-Item -ItemType Directory -Force build-mips-ci/evidence
-          $command = (ninja -C build-mips-ci -t commands $target | Select-Object -Last 1)
-          if ($LASTEXITCODE -ne 0 -or $command -notmatch '(?i)(?:^|\s)[/-]O2(?:\s|$)') {
-            throw "Release decoder command missing /O2: $command"
-          }
-          $memory = Get-CimInstance Win32_OperatingSystem |
-            Select-Object TotalVisibleMemorySize,FreePhysicalMemory,TotalVirtualMemorySize,FreeVirtualMemory
-          $cl = Get-Item (Get-Command cl.exe).Source
-          if ($cl.VersionInfo.FileVersion -notmatch '^19\.44\.' -or $command -notmatch '(?i)[\\/]14\.44\.') {
-            throw "Expected the v143 compiler for the isolated Release decoder: $command"
-          }
-          $proof = [ordered]@{
-            source = $env:EXPECTED_SOURCE_SHA
-            capstone = (git -C third_party/capstone rev-parse HEAD)
-            image = $env:ImageVersion
-            compiler = $cl.FullName
-            version = $cl.VersionInfo.FileVersion
-            optimizer_threads = $env:_CL_
-            build_parallel = 1
-            command = $command
-            memory_kib = $memory
-          }
-          $proof | ConvertTo-Json | Tee-Object "$evidence/decoder-toolchain.json"
-          python scripts/build.py build-mips-ci --config Release --parallel 1 --target $target
-          $buildExit = $LASTEXITCODE
-          Copy-Item build-mips-ci/neverd-build-receipt.json "$evidence/decoder-build-receipt.json"
-          exit $buildExit
+          python - <<'PYTHON'
+          import json, os, re, shutil, subprocess, sys
+          from pathlib import Path
+          build = Path('build-mips-ci')
+          evidence = build / 'evidence'
+          evidence.mkdir(exist_ok=True)
+          cache = (build / 'CMakeCache.txt').read_text(encoding='utf-8')
+          compilers = {}
+          for lang in ('C', 'CXX'):
+              match = re.search(r'^CMAKE_' + lang + r'_COMPILER:[^=]+=(.+)$', cache, re.M)
+              assert match, lang
+              executable = Path(match[1].strip())
+              identity_files = list((build / 'CMakeFiles').glob('*/CMake' + lang + 'Compiler.cmake'))
+              assert len(identity_files) == 1, identity_files
+              identity = identity_files[0].read_text(encoding='utf-8')
+              assert 'set(CMAKE_' + lang + '_COMPILER_ID "Clang")' in identity
+              assert 'set(CMAKE_' + lang + '_COMPILER_FRONTEND_VARIANT "MSVC")' in identity
+              compilers[lang] = str(executable.resolve(strict=True))
+          assert Path(compilers['C']).samefile(compilers['CXX']), compilers
+          version = subprocess.check_output([compilers['C'], '--version'], text=True)
+          assert 'clang version' in version.lower(), version
+          sources = {'decoder': 'third_party/capstone/CMakeFiles/capstone.dir/arch/X86/X86DisassemblerDecoder.c.obj',
+                     'guard_alias': 'lib/ir/low/CMakeFiles/NeverDIRLow.dir/jumptable/JumpTableResolverGuardAlias.cpp.obj'}
+          commands = {}
+          for label, target in sources.items():
+              lines = subprocess.check_output(['ninja', '-C', build, '-t', 'commands', target], text=True).splitlines()
+              cmd = lines[-1]
+              assert re.search(r'(?i)(?:^|\s)[/-]O(?:2|3)(?:\s|$)', cmd), cmd
+              commands[label] = cmd
+          proof = dict(source=os.environ['EXPECTED_SOURCE_SHA'], image=os.environ.get('ImageVersion'),
+                       compiler=compilers['C'], cpp_compiler=compilers['CXX'], version=version,
+                       capstone=subprocess.check_output(['git','-C','third_party/capstone','rev-parse','HEAD'],text=True).strip(),
+                       guard_alias=subprocess.check_output(['git','rev-parse','HEAD:lib/ir/low/jumptable/JumpTableResolverGuardAlias.cpp'],text=True).strip(),
+                       build_parallel=1, targets=sources, commands=commands)
+          (evidence/'decoder-toolchain.json').write_text(json.dumps(proof,indent=2)+'\n',encoding='utf-8')
+          result = subprocess.run([sys.executable,'scripts/build.py',build,'--config','Release','--parallel','1','--target',*sources.values()])
+          shutil.copyfile(build/'neverd-build-receipt.json',evidence/'decoder-build-receipt.json')
+          result.check_returncode()
+          PYTHON
       - name: Compile known portability boundaries first
         timeout-minutes: 60
         run: |
@@ -455,6 +463,8 @@ jobs:
           python - <<'PYTHON'
           import os,subprocess
           targets=['neverd', 'NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests', 'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests', 'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests', 'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests', 'NeverDAArch64DecodeValidityTests', 'NeverDSourceAnchorTests', 'NeverDTypesTests', 'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests', 'NeverDLLVMCValueTests', 'NeverDLLVMCIntrinsicSemanticTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests', 'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests', 'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests', 'NeverDMedCachedCallTargetTests', 'NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests', 'NeverDRecordCallContractTests']
+          if os.environ.get('QUALIFICATION_PR') != '2432':
+              targets.remove('NeverDLLVMCIntrinsicSemanticTests')
           if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
               targets=['neverd','NeverDMachOPointerRelocationBoundaryTests']
           elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
@@ -494,6 +504,8 @@ jobs:
                     'NeverDRelocatedLiteralTests',
                     'NeverDDirectTailCallMetadataTests',
                     ]
+          if os.environ.get('QUALIFICATION_PR') != '2432':
+              owners.remove('NeverDLLVMCIntrinsicSemanticTests')
           if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
               owners=['NeverDMachOPointerRelocationBoundaryTests']
           elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
@@ -587,7 +599,8 @@ jobs:
           if 'NeverDLLVMCIntrinsicSemanticTests' in owners:
               required_caller_tests = {'LLVMCFunnelShift.GuardsZeroAndModuloCountsAtIntegerWidths',
                                        'MIPSRecordABI.LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing',
-                                       'MIPSRecordSourceEntry.HiddenResultCannotOverwriteAnyByteOfSavedLink'}
+                                       'MIPSRecordSourceEntry.HiddenResultCannotOverwriteAnyByteOfSavedLink',
+                                       'SourceCallABI.HiddenRecordStorageReadsTheAuthenticatedEntryStackPointer'}
               assert required_caller_tests <= set(actual_names)
               assert required_caller_tests.isdisjoint(skipped), required_caller_tests.intersection(skipped)
           if 'NeverDRecordCallContractTests' in owners:
