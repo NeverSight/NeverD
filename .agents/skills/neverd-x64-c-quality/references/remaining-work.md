@@ -553,8 +553,13 @@ Still open, in order of yield:
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
-   - arm64. Go's R0-R7 and F0-F7 match AAPCS64 positions, but its summaries
-     publish no entry reads, so every call there prints eight arguments.
+   - arm64 calls. A Go function's parameters now come from its spills
+     (R0-R15), which took arm64 Go 1.26 down 28-34%. Callers still bind
+     AAPCS64's eight positions from the registers they set before a call, and
+     those widen a callee such as `makeslice(et, len, cap)` back to eight
+     parameters. Go callees need summary-driven publication on arm64
+     (`RegisterArgumentsFromCalleeSummary`, `SummarizedIntegerOperands` in
+     MedABIPass).
    - DWARF-typed signatures. They need Go's register assignment by type.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.

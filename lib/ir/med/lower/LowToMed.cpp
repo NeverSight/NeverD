@@ -2286,9 +2286,17 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       debugVerifyMedFunc(Func, "MIPS scalar value projection");
     }
     GoArgumentSpillBegin.reset();
-    if (GoGrowth && !GoGrowth->Spills.empty() &&
-        usesGoRegisterArguments(*Image, Low.Entry))
-      GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
+    GoArgumentSpillReads.reset();
+    if (GoGrowth && usesGoRegisterArguments(*Image, Low.Entry)) {
+      GPRReadWidths Reads{};
+      for (const GoArgumentSpill &Spill : GoGrowth->Spills)
+        if (Spill.Register / 8 < kX64VectorFamilyBase)
+          Reads[Spill.Register / 8] = std::max<uint8_t>(
+              Reads[Spill.Register / 8], static_cast<uint8_t>(Spill.Size));
+      GoArgumentSpillReads = Reads;
+      if (!GoGrowth->Spills.empty())
+        GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
+    }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");

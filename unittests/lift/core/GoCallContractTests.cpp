@@ -467,6 +467,10 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   const MedFunc F = lift(T.Img, Function);
   EXPECT_FALSE(hasOp(F, NdOp::CALL));
   EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
+  // Its parameters are the two registers the path spills, in Go's order.
+  ASSERT_EQ(F.Params.size(), 2u);
+  EXPECT_EQ(F.Params[0].RegOff, a64reg::X0);
+  EXPECT_EQ(F.Params[1].RegOff, a64reg::X1);
 }
 
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
@@ -579,7 +583,8 @@ TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {
 TEST(GoInternalABI, ABufferWriteBarrierKeepsR14AndX15ButNotItsResult) {
   const TargetRegInfo &TRI = getTargetRegInfo(Arch::X64);
   const auto Contract = CallRegisterContract::GoInternalWriteBarrier;
-  const auto Result = goWriteBarrierResult(Arch::X64, GoWriteBarrierKind::Buffer);
+  const auto Result =
+      goWriteBarrierResult(Arch::X64, GoWriteBarrierKind::Buffer);
   ASSERT_EQ(Result, x86reg::R11);
   EXPECT_EQ(goContractKeptBytes(TRI, Contract, x86reg::R14, 8, Result), 8u);
   EXPECT_EQ(goContractKeptBytes(TRI, Contract, x86reg::XMM15, 16, Result), 16u);

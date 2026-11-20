@@ -5789,7 +5789,8 @@ the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
 platform contract.
 
 On x86-64, Go code also takes its integer arguments in Go's registers, in
-Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is
+Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11, and on arm64 R0-R15.
+The gate is
 `usesGoRegisterArguments`. Go 1.18 and later mark the functions Go assembled
 (`GoModuleInfo::RegisterArguments`, `GoModuleInfo::GoAssembly`), and code the
 toolchain compiled qualifies. So does assembly whose call summary reads a run
@@ -5812,7 +5813,11 @@ function uses into the spill area above the return address, calls the runtime's
 `morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
 The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
-place of what its calls appear to forward. The spill area is uninitialized at a
+place of what its calls appear to forward. `detectCc` takes them as its
+parameters directly (`LowToMedConverter::GoArgumentSpillReads`), so they do
+not wait for a summary: arm64's convention reads none. arm64 callers still
+bind AAPCS64's eight positions from the registers they set before a call, and
+those widen a callee whose spills name fewer. The spill area is uninitialized at a
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 

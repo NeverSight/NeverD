@@ -185,7 +185,8 @@ std::optional<uint64_t> goCallResultRegister(const BinaryImage &Img,
 
 bool usesGoRegisterArguments(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && Module->RegisterArguments && Img.Arch == Arch::X64 &&
+  return Module && Module->RegisterArguments &&
+         (Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64) &&
          isGoCode(Img, Entry) && !inRanges(Module->GoAssembly, Entry);
 }
 
@@ -193,8 +194,16 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   static constexpr uint64_t X64[] = {x86reg::RAX, x86reg::RBX, x86reg::RCX,
                                      x86reg::RDI, x86reg::RSI, x86reg::R8,
                                      x86reg::R9,  x86reg::R10, x86reg::R11};
+  // arm64: R0-R15, whose first eight are AAPCS64's positions as well.
+  static constexpr uint64_t AArch64[] = {
+      a64reg::X0,  a64reg::X1,  a64reg::X2,  a64reg::X3,
+      a64reg::X4,  a64reg::X5,  a64reg::X6,  a64reg::X7,
+      a64reg::X8,  a64reg::X9,  a64reg::X10, a64reg::X11,
+      a64reg::X12, a64reg::X13, a64reg::X14, a64reg::X15};
   if (A == Arch::X64)
     return X64;
+  if (A == Arch::AArch64)
+    return AArch64;
   return {};
 }
 

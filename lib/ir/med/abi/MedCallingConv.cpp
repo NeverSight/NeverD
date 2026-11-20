@@ -724,8 +724,11 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   // covers the integer registers only.  A summary the convention says lists
   // no parameters (a variadic prologue's vector count) is none the callers
   // use either.
+  // A Go function's summary is its stack-growth path's spills, exact on
+  // every target (goMorestackSpills).
   const bool FromSummary =
-      !ProtoArgs && EntryReadSummary && FromIncomingReads &&
+      !ProtoArgs && EntryReadSummary &&
+      (FromIncomingReads || GoRegisterArguments) &&
       !summaryListsNoParameters(*Convention, *EntryReadSummary,
                                 GoRegisterArguments);
   if (ProtoArgs) {
@@ -1641,6 +1644,10 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       if (auto It = CallEntryReadGPRs->find(Func.Entry);
           It != CallEntryReadGPRs->end())
         Summary = &It->second;
+    // A Go function's stack-growth path names exactly the register arguments
+    // it takes, without a summary (LowToMedConverter::GoArgumentSpillReads).
+    if (GoRegisterArguments && GoArgumentSpillReads && Convention)
+      Summary = &*GoArgumentSpillReads;
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home

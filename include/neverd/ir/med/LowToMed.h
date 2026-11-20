@@ -464,6 +464,9 @@ private:
   /// (goMorestackSpills): the spill area, which holds none of its stack
   /// arguments.  Unset for any other function.
   std::optional<int64_t> GoArgumentSpillBegin;
+  /// The register arguments a Go function's stack-growth path spills, as the
+  /// entry reads detectCc takes for its parameters (goMorestackSpills).
+  std::optional<GPRReadWidths> GoArgumentSpillReads;
 
   const BinaryImage *Image = nullptr;
   bool SourceCallHintsEnabled = false;
