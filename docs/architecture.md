@@ -7180,7 +7180,8 @@ consecutive integers is always divisible by `j!`. The solver compares the
 two exact polynomial readings at the observed width.
 Nested affine spellings of a word are composed at the observed precision
 before grouping its factors. Polynomial arithmetic is charged at its actual
-coefficient precision. Completed polynomial groups remain factored beside
+coefficient precision. A signed one-limb affine scalar can multiply a wide
+coefficient in a single pass over its limbs. Completed polynomial groups remain factored beside
 independent scaled variables or XOR words; a shared direct factor or an AND
 partition still admits the nested reconstruction search.
 A product can also group different views of a word when their live low bits

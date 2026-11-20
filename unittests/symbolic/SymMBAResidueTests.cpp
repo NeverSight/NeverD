@@ -1375,6 +1375,46 @@ TEST(SymMBAResidue, ShiftedWindowsKeepZeroAndSignPadding) {
   }
 }
 
+TEST(SymMBAResidue, SignedScalarAffineProductsRetainEveryObservedLimb) {
+  constexpr unsigned Width = 141;
+  SymContext Ctx;
+  auto X = Ctx.mkVar("x", Width);
+  const auto Bit = llvm::APInt(Width, 1).shl(63);
+  const std::array<llvm::APInt, 5> Scalars = {-Bit, Bit - 1, Bit, -Bit - 1,
+                                              llvm::APInt::getAllOnes(Width)};
+  llvm::SmallVector<SymRef, 32> Factors;
+  for (unsigned I = 0; I < 29; ++I) {
+    const auto K = Ctx.mkConst(Scalars[I % Scalars.size()]);
+    auto Affine = Ctx.mkAdd(K, Ctx.mkMul(Ctx.mkConst(Width, 3), X));
+    if (I % 2)
+      Affine = Ctx.mkMul(K, Ctx.mkAdd(X, Ctx.mkOne(Width)));
+    auto Weight = Ctx.mkConst(llvm::APInt(Width, 1).shl(48 + I % 2));
+    Factors.push_back(
+        Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1), Ctx.mkMul(Weight, Affine)));
+  }
+  const auto Input = Ctx.mkMul(Factors);
+  MBAOptions Opt;
+  Opt.MaxWork = 65536;
+  const auto R = simplifyMBADeep(Ctx, Input, Opt);
+  ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+  ASSERT_LT(R.Work, Opt.MaxWork);
+  const auto One = llvm::APInt(Width, 1);
+  const std::array<llvm::APInt, 9> Values = {One - 1,
+                                             One,
+                                             One + 1,
+                                             -One,
+                                             Bit - 1,
+                                             Bit,
+                                             Bit + 1,
+                                             One.shl(64) + 37,
+                                             llvm::APInt::getSignMask(Width) -
+                                                 3};
+  for (const auto &Value : Values) {
+    std::array<llvm::APInt, 1> Args{Value};
+    EXPECT_EQ(Ctx.eval(Input, Args), Ctx.eval(R.Expr, Args));
+  }
+}
+
 TEST(SymMBAResidue, StreamsTopColumnAndRetainsLowerCofactors) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";

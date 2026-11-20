@@ -273,16 +273,30 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     do {
       const auto Op = Ctx.op(Word);
       if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul)) {
-        if (!Budget.consume(3 + ReadWords + ReadWords * ReadWords))
-          return false;
         const auto K = Ctx.constValue(Ctx.operand(Word, 0)).trunc(Observed);
-        if (Op == SymOp::Add)
+        // A signed one-limb multiplier needs one pass over B. In particular
+        // a negative scalar must subtract its magnitude at the observed width.
+        const bool Small = ReadWords > 1 && K.isSignedIntN(64);
+        if (!Budget.consume(3 + ReadWords +
+                            (Small ? ReadWords : ReadWords * ReadWords)))
+          return false;
+        if (Small) {
+          const bool Negative = K.isNegative();
+          const uint64_t Low = K.getSExtValue();
+          auto Product = B * (Negative ? uint64_t(0) - Low : Low);
+          if (Negative)
+            Product.negate();
+          if (Op == SymOp::Add)
+            A += Product;
+          else
+            B = std::move(Product);
+        } else if (Op == SymOp::Add) {
           A += B * K;
-        else {
+        } else {
           B *= K;
-          if (!K[0])
-            Zeros += std::min(Observed - Zeros, K.countr_zero());
         }
+        if (Op == SymOp::Mul && !K[0])
+          Zeros += std::min(Observed - Zeros, K.countr_zero());
         Word = Ctx.operand(Word, 1);
         continue;
       }
