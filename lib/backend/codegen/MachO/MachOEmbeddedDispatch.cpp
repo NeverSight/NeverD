@@ -223,22 +223,27 @@ bool completeLayout(const BinaryImage &Image, const LowFunc &Function,
   llvm::sort(Spans);
   const va_t Limit = Function.Entry + Source.Bytes.size();
   va_t Next = Function.Entry;
+  const auto AddPadding = [&](va_t Begin, va_t End) {
+    if (Begin < End)
+      Recovered.push_back({Begin, End, llvm::MachO::DICE_KIND_DATA});
+  };
   const auto CoverGap = [&](va_t End) {
     constexpr auto Word = aarch64::kInsnSize;
     if (Next == End)
       return true;
     if (Next > End)
       return false;
-    if (Next % Word == 0 && End % Word == 0) {
-      Layout.UnreachedCode.emplace_back(Next, End);
+    // Only complete aligned words could be instructions. The partial words
+    // on either side share an instruction word with an already owned span.
+    const auto WordEnd = llvm::alignDown(End, Word);
+    if (WordEnd <= Next || WordEnd - Next < Word) {
+      AddPadding(Next, End);
       return true;
     }
-    // Subword padding cannot hold an instruction. A mixed gap with room for
-    // an aligned word still has no known instruction/data boundary.
-    if (End - Next >= Word && llvm::alignDown(End - Word, Word) >= Next)
-      return false;
-    if (ReadCount)
-      Recovered.push_back({Next, End, llvm::MachO::DICE_KIND_DATA});
+    const auto FirstWord = llvm::alignTo(Next, Word);
+    AddPadding(Next, FirstWord);
+    Layout.UnreachedCode.emplace_back(FirstWord, WordEnd);
+    AddPadding(WordEnd, End);
     return true;
   };
   for (const auto &[Begin, End] : Spans) {
@@ -248,7 +253,7 @@ bool completeLayout(const BinaryImage &Image, const LowFunc &Function,
   }
   if (!CoverGap(Limit))
     return false;
-  if (!ReadCount || Layout.UnreachedCode.empty())
+  if (Recovered.empty() || Layout.UnreachedCode.empty())
     return ReadCount == Recovered.size() || coalesceReads(Recovered);
 
   // A pure instruction section supplies the code owner outside declared data
@@ -331,13 +336,15 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       Result.BranchTargets.try_emplace(Table->InsnAddr, Table->Targets);
     }
   }
-  if ((!Result.Recovered.empty() || !Result.BranchTargets.empty()) &&
+  const bool MissingReads = !Result.Recovered.empty();
+  if ((MissingReads || !Source.Embedded.empty()) &&
       !completeLayout(Image, Function, Source, Result)) {
-    if (!Result.Recovered.empty())
+    if (MissingReads)
       return std::nullopt;
     // Explicit data records need no inferred layout. The normal instruction
     // emitter still verifies the entire body in this case.
     Result.UnreachedCode.clear();
+    Result.Recovered.clear();
   }
   return Result;
 }

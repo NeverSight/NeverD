@@ -572,11 +572,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   std::optional<LowFunc> OriginalControl;
   MachOEmbeddedDispatch Dispatch;
   if (Revalidate && (Owner->second->hasFnAttribute(kRecoveredData) ||
-                     llvm::any_of(Source->Embedded, [](const auto &R) {
-                       return R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE8 ||
-                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE16 ||
-                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE32;
-                     }))) {
+                     !Source->Embedded.empty())) {
     OriginalControl = CFGBuilder().build(Image, Decode, Start);
     ControlFlow = &*OriginalControl;
   }
