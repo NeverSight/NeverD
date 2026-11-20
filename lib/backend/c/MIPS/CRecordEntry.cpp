@@ -8,6 +8,7 @@
 
 #include "../CRecordCall.h"
 
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/loader/BinaryImage.h"
@@ -61,7 +62,7 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
       !Options.RecordDefinitions || !Function.ReturnType ||
       !hasRecordEntryDeclaration(Function) ||
       (!Debug->hasAuthenticatedFunctionSignatures() &&
-       Function.PrototypeDeclaration.empty()) ||
+       !isUserFunctionDeclaration(Function)) ||
       Options.Image->instructionModeAt(Entry) == InstructionMode::MIPS16)
     return std::nullopt;
 

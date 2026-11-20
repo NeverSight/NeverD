@@ -2355,6 +2355,16 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     FuncReturnType = Return.Type;
     return InferredVoid ? NdType::makeVoid() : FuncReturnType;
   };
+  const auto WriteRecordDeclaration = [&](const HighFunc &Function,
+                                          const TypeRef &ReturnType) {
+    if (isMIPS(Opts.TheArch))
+      if (const auto F = debugFunction(Function))
+        if (const auto Entry = mipsRecordEntry(Function, *F, ReturnType)) {
+          OS << Entry->Declaration << ";\n";
+          return true;
+        }
+    return false;
+  };
   // A source-bound native helper can appear after its caller in the emitted
   // module. Declare its actual recovered function signature before any body.
   std::set<const HighFunc *> Prototyped;
@@ -2368,6 +2378,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
       continue;
     const auto &Function = *Definition->second;
     const auto ReturnType = DeclaredReturnType(Function);
+    if (WriteRecordDeclaration(Function, ReturnType))
+      continue;
     const auto Convention = Function.SourceTypeHint
                                 ? Function.SourceTypeHint->Convention
                                 : SourceFunctionTypeHint::ConventionKind::C;
@@ -2402,6 +2414,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
     if (!Prototyped.insert(Function).second)
       continue;
     const auto ReturnType = DeclaredReturnType(*Function);
+    if (WriteRecordDeclaration(*Function, ReturnType))
+      continue;
     std::string Declarator = functionIdentifier(*Function) + "(";
     const size_t ParamCount = emittedParamCount(*Function);
     for (size_t I = 0; I < ParamCount; ++I) {
@@ -2437,6 +2451,8 @@ void HighCWriter::writeForwardDecls(const std::vector<HighFunc> &Funcs) {
         !Prototyped.insert(Function).second)
       continue;
     const auto ReturnType = DeclaredReturnType(*Function);
+    if (WriteRecordDeclaration(*Function, ReturnType))
+      continue;
     NativeFrameConvention(*Function);
     if (Function->SourceTypeHint)
       OS << sourceConventionAttribute(Function->SourceTypeHint->Convention);

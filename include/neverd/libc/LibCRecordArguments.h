@@ -73,6 +73,7 @@ recordCallArguments(const FunctionSym &Function, Arch Architecture,
                     BinaryFormat Format, LibCVariant Variant) {
   const auto Floating = floatingCallArguments(Function, Architecture, Format);
   if ((!Function.PrototypeFromHeader && !Function.PrototypeFromCLibrary &&
+       !(isMIPS(Architecture) && isUserFunctionDeclaration(Function)) &&
        !Floating) ||
       !Function.PlatformConvention || Function.IsVariadic ||
       Function.CallConv == DebugCallConv::Fastcall ||

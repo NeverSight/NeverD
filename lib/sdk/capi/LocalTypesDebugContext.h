@@ -127,6 +127,10 @@ public:
                                              int64_t Offset) const override {
     return Inner.resolveVariable(FuncAddr, Offset);
   }
+  bool hasUserFunctionDeclarations() const override {
+    return !Declarations.empty() || !Types->prototypes().empty() ||
+           Inner.hasUserFunctionDeclarations();
+  }
   bool hasAuthenticatedFunctionSignatures() const override {
     return Inner.hasAuthenticatedFunctionSignatures();
   }

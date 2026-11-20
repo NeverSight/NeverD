@@ -28,6 +28,13 @@ namespace neverd {
 /// the program's local types, not one a header library holds.
 inline constexpr llvm::StringLiteral UserPrototypeLibrary = "local-types";
 
+/// A complete source declaration supplied by the analyst for the entry or by
+/// its unique local C prototype resolves the logical types in a stripped ELF.
+inline bool isUserFunctionDeclaration(const FunctionSym &Function) {
+  return Function.ExplicitEntryDeclaration ||
+         Function.PrototypeLibrary == UserPrototypeLibrary;
+}
+
 /// The prototype the user declares for the routine of C name \p CName, as
 /// \p Dbg resolves it (DebugContext::resolvePrototype).  None where \p Dbg
 /// resolves none, or one a header library holds.

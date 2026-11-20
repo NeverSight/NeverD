@@ -69,6 +69,7 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                              llvm::ArrayRef<TypeRef> Parameters) {
   if (!ReturnType)
     return std::nullopt;
+  IntegerCallArguments Result;
   std::optional<SourceParameterPlacement> Placement;
   bool MIPSRecords = false;
   if (isMIPS(A) &&
@@ -76,14 +77,24 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
        llvm::any_of(Parameters, [](const TypeRef &T) {
          return T && T->Kind == NdTypeKind::Struct && !T->IsEnum;
        }))) {
-    // The integer adapter can reproduce a hidden result pointer when the
-    // convention also returns that address. Floating and register-record
-    // results require a different binding.
     auto Record = mips::placeRecordCall(A, F, ReturnType, Parameters);
-    if (!Record || ReturnType->Kind == NdTypeKind::Float ||
-        (ReturnType->Kind == NdTypeKind::Struct && !ReturnType->IsEnum &&
-         !Record->ReturnsResultPointer))
+    if (!Record || ReturnType->Kind == NdTypeKind::Float)
       return std::nullopt;
+    if (ReturnType->Kind == NdTypeKind::Struct && !ReturnType->IsEnum &&
+        !Record->ReturnsResultPointer) {
+      // An n32/n64 hidden pointer does not define v0 after the call.
+      // Only expose the direct result when its full object occupies one GPR.
+      if (Record->Arguments.ResultPointer || Record->Result.size() != 1)
+        return std::nullopt;
+      const auto &P = Record->Result.front();
+      if (P.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+          P.Location.RegisterOffset != getTargetRegInfo(A).IntReturnReg ||
+          P.Offset || P.Location.ValueBytes != ReturnType->Size)
+        return std::nullopt;
+      Result.RecordResult =
+          IntegerCallArgumentPiece{0,     P.Offset,       P.Location.ValueBytes,
+                                   false, P.CarrierBytes, P.RegisterBitOffset};
+    }
     Placement = std::move(Record->Arguments);
     MIPSRecords = true;
   } else
@@ -95,7 +106,6 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       A == Arch::X86 ? llvm::ArrayRef<uint64_t>() : Layout.Registers;
   if (!Layout.SlotBytes)
     return std::nullopt;
-  IntegerCallArguments Result;
   std::set<unsigned> Registers;
   if (Placement->ResultPointer) {
     // Only these conventions both place the hidden pointer first and return

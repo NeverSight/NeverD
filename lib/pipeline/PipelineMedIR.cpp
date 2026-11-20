@@ -25,6 +25,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallABI.h"
@@ -1158,33 +1159,60 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   std::map<va_t, SourceFunctionTypeHint> SourceEntryHints;
   for (const auto &[Entry, Hint] : SourceHints)
     SourceEntryHints.emplace(Entry, *Hint);
+  auto SourceCalleeHints = SourceEntryHints;
   if (Opts.usesSourceDeclarations() && Img.MIPS && Dbg &&
-      Dbg->hasAuthenticatedFunctionSignatures()) {
-    for (const auto &LF : Result.LowFuncs) {
-      if (SourceEntryHints.contains(LF.Entry) ||
-          Img.instructionModeAt(LF.Entry) == InstructionMode::MIPS16)
-        continue;
-      const auto FS = Dbg->resolveFunction(LF.Entry);
-      if (!FS || FS->Addr != LF.Entry || !FS->PlatformConvention ||
+      (Dbg->hasAuthenticatedFunctionSignatures() ||
+       Dbg->hasUserFunctionDeclarations())) {
+    const auto RecordHint =
+        [&](va_t Entry) -> std::optional<SourceFunctionTypeHint> {
+      if (Img.instructionModeAt(Entry) == InstructionMode::MIPS16)
+        return std::nullopt;
+      const auto FS = Dbg->resolveFunction(Entry);
+      if (!FS || FS->Addr != Entry || !FS->PlatformConvention ||
           FS->IsVariadic || !FS->ReturnType ||
+          (!isUserFunctionDeclaration(*FS) &&
+           !Dbg->hasAuthenticatedFunctionSignatures()) ||
           (FS->ReturnType->Kind != NdTypeKind::Struct &&
            llvm::none_of(FS->Params, [](const auto &P) {
              return P.second && P.second->Kind == NdTypeKind::Struct;
            })))
-        continue;
+        return std::nullopt;
       SourceFunctionTypeHint Candidate;
-      Candidate.Origin = SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Candidate.Origin =
+          isUserFunctionDeclaration(*FS)
+              ? SourceFunctionTypeHint::OriginKind::ExplicitSource
+              : SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+      Dbg->completeType(FS->ReturnType);
       Candidate.ReturnType = FS->ReturnType;
-      for (const auto &[Name, Type] : FS->Params)
+      for (const auto &[Name, Type] : FS->Params) {
+        if (!Type)
+          return std::nullopt;
+        Dbg->completeType(Type);
         Candidate.Parameters.push_back({Name, Type});
-      if (mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())) {
-        auto It =
-            SourceEntryHints.emplace(LF.Entry, std::move(Candidate)).first;
-        SourceHints.emplace(LF.Entry, &It->second);
       }
+      return mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())
+                 ? std::optional(std::move(Candidate))
+                 : std::nullopt;
+    };
+    std::set<va_t> Targets;
+    for (const auto &LF : Result.LowFuncs) {
+      if (!SourceEntryHints.contains(LF.Entry))
+        if (auto Hint = RecordHint(LF.Entry)) {
+          const auto It =
+              SourceEntryHints.emplace(LF.Entry, std::move(*Hint)).first;
+          SourceHints.emplace(LF.Entry, &It->second);
+          SourceCalleeHints.emplace(LF.Entry, It->second);
+        }
+      for (const auto &B : LF.Blocks)
+        for (const auto &Op : B.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
+            Targets.insert(Op.Inputs[0].Offset);
     }
+    for (va_t Target : Targets)
+      if (!SourceCalleeHints.contains(Target))
+        if (auto Hint = RecordHint(Target))
+          SourceCalleeHints.emplace(Target, std::move(*Hint));
   }
-  auto SourceCalleeHints = SourceEntryHints;
   auto SourceSites = Opts.usesSourceDeclarations()
                          ? Opts.SourceCallSiteHints
                          : decltype(Opts.SourceCallSiteHints){};

@@ -155,6 +155,24 @@ inline std::string recordCallArgument(
   return Text + "__neverd_record; })";
 }
 
+/// A typed call yields an object. Carry its bytes back in the word observed
+/// by the original caller, keeping a short big-endian result left-justified.
+inline std::string recordCallResultWord(llvm::StringRef Type,
+                                        llvm::StringRef Call,
+                                        const IntegerCallArgumentPiece &Piece,
+                                        Arch Target) {
+  if (!Piece.CarrierBytes || Piece.Offset || Piece.BitOffset % 8 ||
+      Piece.BitOffset + Piece.Bytes * 8 > Piece.CarrierBytes * 8)
+    throw std::invalid_argument("Invalid direct record result carrier");
+  const unsigned At =
+      archLittleEndian(Target)
+          ? Piece.BitOffset / 8
+          : Piece.CarrierBytes - Piece.Bytes - Piece.BitOffset / 8;
+  return llvm::formatv(kSourceRecordCallWord.data(), Type, Call,
+                       Piece.CarrierBytes * 8, At, Piece.Bytes)
+      .str();
+}
+
 /// Reproduce the hidden-result write and integer pointer result together.
 /// Capturing the pointer once also keeps a source operand with side effects
 /// from being evaluated again after the call.

@@ -1675,15 +1675,19 @@ call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the
 [SGI n32/n64 calling convention](https://techpubs.jurassic.nl/library/manuals/2000/007-2816-005/sgi_html/ch02.html).
 
-Natural n32/n64 C record transport has a separate classifier in
-`neverd/ir/MIPS/SourceRecordABI.h`. It retains target-width pointers, direct
-double fields, nested records and arrays, partial big-endian register chunks,
-and register-to-stack splits. A hidden result pointer consumes the first
-argument position without defining a pointer return in v0. DWARF and local
-declarations preserve complete natural field graphs when available; incomplete
-layouts and unions remain display-only evidence. This classifier does not yet
-enable general record entry, call or return reconstruction in HighC/LLVMC.
-Those routes still require complete original-carrier and value-use proofs.
+Natural C record transport for o32, n32 and n64 is classified in
+`neverd/ir/MIPS/SourceRecordABI.h`. Each piece records its offset in the object,
+its register or stack slot, and its position in the carrier. On o32 every
+record result uses caller-provided storage and the callee returns its address
+in v0. Large n32/n64 results use caller-provided storage and leave v0
+unspecified. Both C emitters can build a typed entry around a recovered body
+when the machine inputs match the declared record layout and the result is
+available from one checked register or the incoming storage pointer. The
+floating-call analysis tracks independently placed record fields, including
+both floating result registers. Reconstructing a source type requires an
+explicit local declaration or matching debug information and a complete
+by-value field layout. Unions and incomplete field graphs retain their display
+types.
 
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing

@@ -6758,7 +6758,9 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
                          : DebugFunction ? &*DebugFunction
                                          : nullptr;
   const bool SourceRecord =
-      Function && ((Library && Function->Name == Library.Name) || SourceImport);
+      Function &&
+      ((Library && Function->Name == Library.Name) || SourceImport ||
+       (isMIPS(Opts.TheArch) && isUserFunctionDeclaration(*Function)));
   const bool Grouped = Function && groupedFloatingCall(Call, *Function);
   const auto RecordCall =
       SourceRecord ? recordCallArguments(Call, *Function) : std::nullopt;
@@ -6989,6 +6991,14 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     }
     return "__builtin_bit_cast(" + typeToCLLVM(Call.getType()) + ", " + Expr +
            ")";
+  }
+  if (RecordCall && RecordCall->RecordResult) {
+    if (!Call.getType()->isIntegerTy(RecordCall->RecordResult->CarrierBytes *
+                                     8))
+      throw std::runtime_error("MIPS record result lost its integer carrier");
+    return c_detail::recordCallResultWord(
+        c_detail::recordCallType(Function->ReturnType, Opts), Expr,
+        *RecordCall->RecordResult, Opts.TheArch);
   }
   if (RecordCall && RecordCall->ResultPointer)
     return c_detail::recordCallResult(

@@ -898,10 +898,11 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
   const LowFunc &Low = Physical ? *Physical : SourceLow;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
   if (isMIPS(TheArch))
-    requireMIPSSourceVectors(Low, TheArch, Image, CallEntryFloatingArguments,
-                             SourceCallHintsEnabled ? SourceCallSiteHints
-                                                    : nullptr,
-                             &ScalarCallTargets);
+    requireMIPSSourceVectors(
+        Low, TheArch, Image, CallEntryFloatingArguments,
+        SourceCallHintsEnabled ? SourceCallSiteHints : nullptr,
+        &ScalarCallTargets,
+        SourceCallHintsEnabled ? SourceCalleeTypeHints : nullptr);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image

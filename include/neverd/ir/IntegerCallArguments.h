@@ -42,7 +42,7 @@ struct IntegerCallParameter {
 
 struct IntegerCallArguments {
   std::vector<IntegerCallParameter> Parameters;
-  /// Windows x86/x64 returns this caller-owned buffer's address in EAX/RAX.
+  /// Windows x86/x64 and MIPS o32 return this caller-owned buffer's address.
   /// It is a physical operand, not a source parameter.
   std::optional<unsigned> ResultPointer;
   /// The integer-register prefix actually read by this signature.
@@ -50,6 +50,9 @@ struct IntegerCallArguments {
   /// Recovered operand positions, including unused register positions before
   /// a stack argument. They are not a count of source parameters.
   unsigned Positions = 0;
+  /// Object bytes returned in the ordinary integer result register. The
+  /// enclosing word can have an unobservable suffix on either byte order.
+  std::optional<IntegerCallArgumentPiece> RecordResult;
 };
 
 /// Complete scalar integer/pointer operands, in registers or on the stack.

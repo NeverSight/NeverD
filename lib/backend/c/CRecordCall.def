@@ -43,4 +43,9 @@ NEVERD_C_RECORD_TEXT(kSourceComplexCallResult,
                      "({{ {0} {3} = ({2}); "
                      "({1}){{__real__ {3}, __imag__ {3}}; })")
 
+NEVERD_C_RECORD_TEXT(kSourceRecordCallWord,
+                     "({{ {0} __neverd_record = {1}; uint{2}_t __neverd_word = 0; "
+                     "__builtin_memcpy((unsigned char *)&__neverd_word + {3}, "
+                     "&__neverd_record, {4}); __neverd_word; })")
+
 #undef NEVERD_C_RECORD_TEXT

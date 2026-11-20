@@ -38,7 +38,8 @@ void requireMIPSSourceVectors(
     const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites =
         nullptr,
     std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets =
-        nullptr);
+        nullptr,
+    const std::map<va_t, SourceFunctionTypeHint> *Callees = nullptr);
 
 /// After physical byte qualification, project FR=0 word FPRs into the paired
 /// eight-byte ABI carriers before SSA. Preserve unbound bytes as unpredictable.

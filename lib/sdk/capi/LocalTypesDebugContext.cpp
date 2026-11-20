@@ -1501,6 +1501,7 @@ LocalTypesDebugContext::resolveFunction(va_t Addr) const {
     // debug information's entered.
     Declared.PlatformConvention = true;
     Declared.ParamEntryLocations.clear();
+    Declared.ExplicitEntryDeclaration = true;
     return Declared;
   }
   return undeclared(Addr);

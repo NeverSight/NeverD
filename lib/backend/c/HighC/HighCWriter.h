@@ -20,6 +20,7 @@
 #include "../CValueAvailability.h"
 #include "../DebugParamBinding.h"
 #include "../FloatConversion.h"
+#include "../MIPS/CRecordEntry.h"
 #include "../StdcallImportPops.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
@@ -821,6 +822,9 @@ public:
   std::optional<FunctionSym> debugFunctionCalled(const HighExpr &E) const;
   /// Synthetic source bodies have their own interface, even when their
   /// address marker coincides with a real native debug declaration at zero.
+  std::optional<mips::CRecordEntry>
+  mipsRecordEntry(const HighFunc &Func, const FunctionSym &DebugFn,
+                  const TypeRef &ReturnType) const;
   std::optional<FunctionSym> debugFunction(const HighFunc &Function) const;
   std::optional<FunctionSym> debugCallee(const HighExpr &E) const;
   /// The native debug declaration of \p Function, resolved once per

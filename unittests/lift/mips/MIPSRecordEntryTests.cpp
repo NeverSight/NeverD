@@ -8,7 +8,12 @@
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/LowIR.h"
+#include "neverd/ir/med/LowToMedError.h"
+#include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
 using namespace neverd;
@@ -40,7 +45,7 @@ struct RecordFixture {
     Record->Passing = NdRecordPassing::ByValue;
     Record->SourceName = "Payload";
     Function.Addr = 0x1000;
-    Function.PrototypeDeclaration = "struct Payload entry(struct Payload)";
+    Function.ExplicitEntryDeclaration = true;
     Function.Params.emplace_back("value", Record);
     Function.ReturnType = Record;
     const auto Layout =
@@ -104,10 +109,45 @@ TEST(MIPSRecordSourceEntry, HiddenStorageIsTakenFromTheEntryArgument) {
 TEST(MIPSRecordSourceEntry,
      IncompleteOrUnboundDeclarationsRetainMachineCarriers) {
   RecordFixture F(Arch::MIPS64N32EL, 3);
-  F.Function.PrototypeDeclaration.clear();
+  F.Function.ExplicitEntryDeclaration = false;
   EXPECT_FALSE(F.project());
-  F.Function.PrototypeDeclaration = "struct Payload entry(struct Payload)";
+  F.Function.ExplicitEntryDeclaration = true;
   F.Function.ReturnType->Passing = NdRecordPassing::Unknown;
   EXPECT_FALSE(F.project());
+}
+TEST(MIPSRecordSourceEntry,
+     FloatingRecordCallDefinesItsTwoReturnRegistersOnly) {
+  for (auto A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    RecordFixture F(A, 8);
+    F.Image.MIPS->FPABI = 1;
+    auto Pair =
+        NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
+    Pair->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Pair;
+    Signature.Parameters.push_back({"input", Pair});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    std::map<va_t, SourceFunctionTypeHint> Callees{{0x2000, Signature}};
+    LowFunc Body;
+    Body.Entry = F.Function.Addr;
+    auto &Ops = Body.Blocks.emplace_back().Ops;
+    auto &Call = Ops.emplace_back();
+    Call.Addr = Body.Entry;
+    Call.Opcode = NdOp::CALL;
+    Call.addInput(NdVar::cst(0x2000, 8));
+    auto &Use = Ops.emplace_back();
+    Use.Addr = Body.Entry + 8;
+    Use.Opcode = NdOp::COPY;
+    Use.Output = NdVar::reg(mipsreg::V0, 8);
+    Use.addInput(NdVar::reg(mipsreg::w(2), 8));
+    EXPECT_NO_THROW(requireMIPSSourceVectors(Body, A, &F.Image, nullptr,
+                                             nullptr, nullptr, &Callees));
+    Use.Inputs[0] = NdVar::reg(mipsreg::w(4), 8);
+    EXPECT_THROW(requireMIPSSourceVectors(Body, A, &F.Image, nullptr, nullptr,
+                                          nullptr, &Callees),
+                 LowToMedConversionError);
+  }
 }
 } // namespace

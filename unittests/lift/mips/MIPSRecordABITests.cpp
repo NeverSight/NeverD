@@ -396,10 +396,24 @@ TEST(MIPSRecordABI, IntegerCallsKeepPartialRegisterAndStackWords) {
       }
 }
 
+TEST(MIPSRecordABI, AByteRecordResultOccupiesTheFirstAddressesOfV0) {
+  for (Arch A : Architectures) {
+    for (uint16_t Bytes : {3, 5, 6, 7, 8}) {
+      const auto Layout = integerCallArguments(A, BinaryFormat::ELF,
+                                               bytes(Bytes), {bytes(Bytes)});
+      ASSERT_TRUE(Layout && Layout->RecordResult);
+      const auto &P = *Layout->RecordResult;
+      EXPECT_EQ(P.Bytes, Bytes);
+      EXPECT_EQ(P.CarrierBytes, 8);
+      EXPECT_EQ(P.BitOffset, archLittleEndian(A) ? 0 : (8 - Bytes) * 8);
+    }
+  }
+}
+
 TEST(MIPSRecordABI, IntegerAdapterDoesNotAdmitAnotherResultOrRegisterBank) {
   for (Arch A : Architectures) {
     for (const auto &Result :
-         {bytes(3), bytes(17), NdType::makeFloat(8), NdType::makeInt(16)})
+         {bytes(17), NdType::makeFloat(8), NdType::makeInt(16)})
       EXPECT_FALSE(
           integerCallArguments(A, BinaryFormat::ELF, Result, {bytes(3)}));
     for (const auto &Parameter :

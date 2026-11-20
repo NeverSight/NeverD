@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
-#include "../MIPS/CRecordEntry.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
@@ -303,6 +302,26 @@ std::optional<FunctionSym>
 HighCWriter::debugFunction(const HighFunc &Function) const {
   const auto *Debug = functionDebugContext(Function);
   return Debug ? Debug->resolveFunction(Function.Entry) : std::nullopt;
+}
+
+std::optional<mips::CRecordEntry>
+HighCWriter::mipsRecordEntry(const HighFunc &Func, const FunctionSym &DebugFn,
+                             const TypeRef &ReturnType) const {
+  if (PortableInterface || Func.SourceTypeHint || Func.Body.empty() ||
+      !isMIPS(Opts.TheArch) || !mips::hasRecordEntryDeclaration(DebugFn))
+    return std::nullopt;
+  std::vector<mips::CEntryCarrier> Inputs;
+  for (const auto I : emittedParamIndices(Func)) {
+    const auto &P = Func.Params[I];
+    const auto Type = emittedParamType(Func, I);
+    Inputs.push_back(
+        {{P.RegOff, P.MedIndex, Type->Size}, Type->Kind, declaredAs(Type, "")});
+  }
+  return mips::cRecordEntry(Opts, functionDebugContext(Func), DebugFn,
+                            Func.Entry, functionIdentifier(Func), Inputs,
+                            {{kNoParamReg, -1, ReturnType->Size},
+                             ReturnType->Kind,
+                             declaredAs(ReturnType, "")});
 }
 
 TypeRef HighCWriter::declaredFunctionReturnType(const HighFunc &Func) const {
@@ -5005,6 +5024,10 @@ TypeRef HighCWriter::integerCallResultCarrier(const HighExpr &Call,
 bool HighCWriter::sourceRecordCallee(llvm::StringRef Name,
                                      const FunctionSym &Callee,
                                      const HighFunc *Definition) const {
+  if (isMIPS(Opts.TheArch) && mips::hasRecordEntryDeclaration(Callee) &&
+      isUserFunctionDeclaration(Callee) && Name == Callee.Name &&
+      (!Definition || !Definition->SourceTypeHint))
+    return true;
   return !Definition &&
          ((Name == Callee.Name && includesHeaderOf(Name)) ||
           libc::floatingCallArguments(Callee, Opts.TheArch, Opts.Format, Dbg));
@@ -5018,7 +5041,9 @@ TypeRef HighCWriter::recordCallResultCarrier(const HighExpr &Call,
     return {};
   const auto Contract = libc::recordCallArguments(
       Callee, Opts.TheArch, Opts.Format, Opts.libcVariant());
-  return Contract && Contract->FloatingResult ? Call.Type : nullptr;
+  return Contract && (Contract->FloatingResult || Contract->RecordResult)
+             ? Call.Type
+             : nullptr;
 }
 
 TypeRef HighCWriter::callResultType(const HighExpr &Call) const {
@@ -6496,26 +6521,12 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
   }
 
   std::string FName = functionIdentifier(Func);
-  std::optional<mips::CRecordEntry> RecordEntry;
-  if (EmitFunctionWrapper && !PortableInterface && !Func.SourceTypeHint &&
-      !Func.Body.empty() && isMIPS(Opts.TheArch) && DebugFn &&
-      mips::hasRecordEntryDeclaration(*DebugFn)) {
-    std::vector<mips::CEntryCarrier> Inputs;
-    for (const auto I : emittedParamIndices(Func)) {
-      const auto &P = Func.Params[I];
-      const auto Type = emittedParamType(Func, I);
-      Inputs.push_back({{P.RegOff, P.MedIndex, Type->Size},
-                        Type->Kind,
-                        declaredAs(Type, "")});
-    }
-    RecordEntry = mips::cRecordEntry(Opts, functionDebugContext(Func), *DebugFn,
-                                     Func.Entry, FName, Inputs,
-                                     {{kNoParamReg, -1, ReturnType->Size},
-                                      ReturnType->Kind,
-                                      declaredAs(ReturnType, "")});
-    if (RecordEntry)
-      FName = RecordEntry->BodyName;
-  }
+  const auto RecordEntry =
+      EmitFunctionWrapper && isMIPS(Opts.TheArch) && DebugFn
+          ? mipsRecordEntry(Func, *DebugFn, ReturnType)
+          : std::nullopt;
+  if (RecordEntry)
+    FName = RecordEntry->BodyName;
 
   if (EmitFunctionWrapper && Func.Entry && !PortableInterface)
     OS << "/* neverd.entry: 0x" << llvm::utohexstr(Func.Entry) << " */\n";

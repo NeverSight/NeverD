@@ -70,20 +70,41 @@ void requireMIPSSourceVectors(
     const LowFunc &Function, Arch Target, const BinaryImage *Image,
     const std::map<va_t, FloatingCallArguments> *Calls,
     const std::map<SourceCallOccurrenceKey, SourceCallTypeHint> *Sites,
-    std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets) {
+    std::optional<std::map<SourceCallOccurrenceKey, va_t>> *ConstantTargets,
+    const std::map<va_t, SourceFunctionTypeHint> *Callees) {
   const auto IsVector = [](const NdVar &V) {
     return V.isReg() && mipsreg::isVector(V.Offset);
   };
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> LocalTargets;
   auto &Targets = ConstantTargets ? *ConstantTargets : LocalTargets;
+  struct CallSignature {
+    const FloatingCallArguments *Scalars = nullptr;
+    const SourceFunctionTypeHint *Record = nullptr;
+  };
   const auto SignatureOf = [&](const LowBlock &Block,
-                               size_t Index) -> const FloatingCallArguments * {
+                               size_t Index) -> CallSignature {
     const auto &Op = Block.Ops[Index];
-    if (const auto *Site = mipsFloatingCallSite(Op, Target, Sites))
-      return Site->Signature.MIPSScalars.get();
-    if (!Calls || Calls->empty() || Op.NumInputs == 0 ||
+    if (!Op.NumInputs ||
         (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL))
-      return nullptr;
+      return {};
+    if (Sites && !Sites->empty())
+      if (const auto Key = sourceCallOccurrenceKey(Op, Target))
+        if (const auto It = Sites->find(*Key); It != Sites->end()) {
+          const auto &H = It->second;
+          if (!H.Signature.MIPSRecords) {
+            const auto *Site = mipsFloatingCallSite(Op, Target, Sites);
+            return {Site->Signature.MIPSScalars.get(), nullptr};
+          }
+          std::string Error;
+          if (H.AnalystSite != Key ||
+              H.CallKind != SourceCallTypeHint::Kind::Analyst ||
+              H.Signature.Architecture != Target ||
+              !validateSourceABI(H.Signature, Error))
+            throw LowToMedConversionError("invalid MIPS record call ABI");
+          return {nullptr, &H.Signature};
+        }
+    if ((!Calls || Calls->empty()) && (!Callees || Callees->empty()))
+      return {};
     std::optional<va_t> Address;
     if (Op.Inputs[0].isConst()) {
       Address = Op.Inputs[0].Offset;
@@ -96,16 +117,47 @@ void requireMIPSSourceVectors(
               qualifiedMIPSCallTarget(*Image, Block, Index, Found->second);
       }
     }
-    if (Address)
-      if (const auto Call = Calls->find(*Address); Call != Calls->end())
-        return &Call->second;
-    return nullptr;
+    if (Address) {
+      if (Callees)
+        if (const auto It = Callees->find(*Address);
+            It != Callees->end() && It->second.MIPSRecords) {
+          std::string Error;
+          if (It->second.Architecture != Target ||
+              !validateSourceABI(It->second, Error))
+            throw LowToMedConversionError("invalid MIPS record call ABI");
+          return {nullptr, &It->second};
+        }
+      if (Calls)
+        if (const auto Call = Calls->find(*Address); Call != Calls->end())
+          return {&Call->second, nullptr};
+    }
+    return {};
+  };
+  const auto RecordLanes = [](const SourceFunctionTypeHint &H, auto Argument,
+                              auto Result) {
+    const auto Visit = [](const SourceABIValueLocation &L, const auto &Use) {
+      if (L.Kind == SourceABICarrierKind::FloatingRegister)
+        Use(L.RegisterOffset, L.ValueBytes);
+    };
+    for (const auto &P : H.Parameters) {
+      Visit(P.Location, Argument);
+      for (const auto &Part : P.Components)
+        Visit(Part, Argument);
+    }
+    Visit(H.ReturnLocation, Result);
+    for (const auto &Part : H.ReturnComponents)
+      Visit(Part, Result);
   };
   bool HasVectors = false;
   for (const auto &Block : Function.Blocks)
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const auto &Op = Block.Ops[I];
-      if (const auto *Signature = SignatureOf(Block, I)) {
+      const auto Call = SignatureOf(Block, I);
+      if (Call.Record) {
+        const auto Observe = [&](uint64_t, uint16_t) { HasVectors = true; };
+        RecordLanes(*Call.Record, Observe, Observe);
+      }
+      if (const auto *Signature = Call.Scalars) {
         if (!floatingCallTypes(Target, BinaryFormat::ELF, *Signature))
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
@@ -165,18 +217,27 @@ void requireMIPSSourceVectors(
     for (size_t J = 0; J < Block.Ops.size(); ++J) {
       const auto &Op = Block.Ops[J];
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-        const FloatingCallArguments *Signature = SignatureOf(Block, J);
-        if (!Scalar || !Signature)
+        const auto Call = SignatureOf(Block, J);
+        const auto *Signature = Call.Scalars;
+        if (!Scalar || (!Signature && !Call.Record))
           throw LowToMedConversionError(
               "MIPS floating call ABI is not qualified");
-        for (const auto &P : Signature->Scalars) {
-          if (P.Kind != SourceABICarrierKind::FloatingRegister)
-            continue;
-          const auto Read = ABIBytes(P.Register, P.Bytes);
+        const auto ReadArgument = [&](uint64_t Reg, uint16_t Size) {
+          const auto Read = ABIBytes(Reg, Size);
           if ((T.Kills & Read).any())
             throw LowToMedConversionError("MIPS call reads undefined FP bytes");
           T.Needs |= Read & ~T.Defines;
-        }
+        };
+        Mask ResultBytes;
+        const auto DefineResult = [&](uint64_t Reg, uint16_t Size) {
+          ResultBytes |= ABIBytes(Reg, Size);
+        };
+        if (Call.Record)
+          RecordLanes(*Call.Record, ReadArgument, DefineResult);
+        else
+          for (const auto &P : Signature->Scalars)
+            if (P.Kind == SourceABICarrierKind::FloatingRegister)
+              ReadArgument(P.Register, P.Bytes);
         const auto &TRI = getTargetRegInfo(Target);
         Mask Clobbered;
         Clobbered.set();
@@ -185,15 +246,13 @@ void requireMIPSSourceVectors(
             Clobbered &= ~Bytes(NdVar::reg(mipsreg::w(R), FP32 ? 4 : 8));
         T.Defines &= ~Clobbered;
         T.Kills |= Clobbered;
-        if (Signature->ReturnKind == NdTypeKind::Float) {
+        if (Signature && Signature->ReturnKind == NdTypeKind::Float) {
           const unsigned Count = Signature->ReturnComplex ? 2 : 1;
-          for (unsigned I = 0; I < Count; ++I) {
-            const auto Result =
-                ABIBytes(TRI.FPReturnRegs[I], Signature->ReturnBytes / Count);
-            T.Defines |= Result;
-            T.Kills &= ~Result;
-          }
+          for (unsigned I = 0; I < Count; ++I)
+            DefineResult(TRI.FPReturnRegs[I], Signature->ReturnBytes / Count);
         }
+        T.Defines |= ResultBytes;
+        T.Kills &= ~ResultBytes;
       }
       for (unsigned J = 0; J != Op.NumInputs; ++J) {
         if (!IsVector(Op.Inputs[J]))
