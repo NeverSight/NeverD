@@ -646,6 +646,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     }
   llvm::SmallVector<ScratchFlow> Flow(HasCall ? (End - Start) / Word : 0);
   auto Islands = Source->Embedded;
+  auto Unreached = llvm::ArrayRef(Dispatch.UnreachedCode);
   for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
     NextPC = PC + Word;
     while (!Rows.empty() && Rows.front().CodeOffset == PC - Start) {
@@ -690,6 +691,14 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                            Word, PC, {.Jumps = true})
             .has_value();
     const auto PCSigning = pcSigningInstruction(I.Id);
+    const bool PACM =
+        I.Id == AARCH64_INS_HINT && I.Raw->alias_id == AARCH64_INS_ALIAS_PACM;
+    while (!Unreached.empty() && Unreached.front().second <= PC)
+      Unreached = Unreached.drop_front();
+    const bool OutsideCFG = !Unreached.empty() && Unreached.front().first <= PC;
+    const bool KeepEncoding =
+        OutsideCFG && !PCSigning && !PACM && independent(I);
+    const bool RecoveredCode = OutsideCFG && !Body.RecoveredData.empty();
     const auto Targets = Dispatch.BranchTargets.lookup(PC);
     const bool Stops = Jump || !Targets.empty() || I.Id == AARCH64_INS_RET ||
                        I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB ||
@@ -737,7 +746,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       continue;
     }
     if (I.Id == AARCH64_INS_BL) {
-      if (Ops.size() != 1 || Ops[0].type != AARCH64_OP_IMM)
+      if (RecoveredCode || Ops.size() != 1 || Ops[0].type != AARCH64_OP_IMM)
         return std::nullopt;
       const auto Target = Functions.find(Ops[0].imm);
       if (Target == Functions.end())
@@ -763,7 +772,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       const auto Target = va_t(Ops.back().imm);
       if (Target < Start || Target >= End) {
         const auto Tail = Functions.find(Target);
-        if (TestReg || Tail == Functions.end() ||
+        if (RecoveredCode || TestReg || Tail == Functions.end() ||
             !decodeDirectBranch(Image.Arch, InstructionMode::Default,
                                 I.Raw->bytes, Word, PC, {.Jumps = true}))
           return std::nullopt;
@@ -802,8 +811,6 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       if (Distance > PC - Start)
         return std::nullopt;
     }
-    const bool PACM =
-        I.Id == AARCH64_INS_HINT && I.Raw->alias_id == AARCH64_INS_ALIAS_PACM;
     // ADR can materialize a signing point within this same body. Its relative
     // distance survives publication, just like an internal branch. External
     // data and page-relative addresses require a different relocation owner.
@@ -822,9 +829,14 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         !coverMachOEmbeddedRead(*Source, Start, Literal->Address,
                                 Literal->Width, llvm::MachO::DICE_KIND_DATA))
       return std::nullopt;
+    // Local branches above and typed literal loads keep their displacement.
+    // Other instructions outside the CFG must keep a PC-independent word.
+    if (RecoveredCode && !KeepEncoding && !Literal)
+      return std::nullopt;
     if (!Stops)
       Fallthrough();
-    if (!SIMDData && !LocalAddress && !Literal && !independent(I))
+    if (!SIMDData && !LocalAddress && !Literal && !KeepEncoding &&
+        !independent(I))
       return std::nullopt;
     // Classic compact mode cannot describe a saved PC-signed return. A
     // frameless body without calls or spills retains a live LR instead; the
@@ -858,7 +870,8 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     // lists and FP controls. PAuth_LR words retain their signing-PC distance
     // because every instruction keeps its offset within the copied body.
     // Both the assembly and final linked words are checked against the image.
-    if (SIMDData || PCSigning || PACM || LocalAddress || Literal) {
+    if (KeepEncoding || SIMDData || PCSigning || PACM || LocalAddress ||
+        Literal) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&

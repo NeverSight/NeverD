@@ -29,6 +29,7 @@
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -178,10 +179,11 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
   const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
-  const bool MaskedTables = ScheduledTables ||
+  const bool RetainedDefault = Preamble == kRetainedDefaultOracle;
+  const bool MaskedTables = RetainedDefault || ScheduledTables ||
                             Preamble == kMaskedFragmentedOracle ||
                             Preamble == kMaskedGappedOracle;
-  const bool GappedTables = ScheduledTables ||
+  const bool GappedTables = RetainedDefault || ScheduledTables ||
                             Preamble == kGappedDispatchOracle ||
                             Preamble == kMaskedGappedOracle;
   const bool SplitTables =
@@ -197,7 +199,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
-  if (Embedded) {
+  if (Embedded && !RetainedDefault) {
     // The integrated assembler emits both instruction flags for __text.
     // Exercise the ABI's SOME-only spelling with the same linked bytes.
     auto File = llvm::MemoryBuffer::getFile(Input);
@@ -356,7 +358,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     const auto *Section = Image->getSectionFor(Island.Begin);
     ASSERT_TRUE(Section);
     EXPECT_TRUE(Section->Type & llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
-    EXPECT_FALSE(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS);
+    EXPECT_EQ(bool(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS),
+              RetainedDefault);
   }
   const auto Snapshot = Image->Raw;
   llvm::LLVMContext Context;
@@ -379,6 +382,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
   }
   auto ExpectedData = Image->MachODataInCode;
+  llvm::DenseMap<va_t, va_t> DefaultEnds;
   if (LiteralWidths) {
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);
@@ -521,6 +525,45 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       EXPECT_EQ(Records.front().Begin, Table.BaseAddr);
       EXPECT_EQ(Records.front().End, Begin);
       EXPECT_EQ(Records.back().Begin, Begin + Size);
+      if (RetainedDefault) {
+        const auto &Last =
+            *llvm::max_element(F.Blocks, [](const auto &L, const auto &R) {
+              return L.EndAddr < R.EndAddr;
+            });
+        const auto FirstData = llvm::lower_bound(
+            Image->MachODataInCode, F.Entry,
+            [](const auto &R, va_t Addr) { return R.Begin < Addr; });
+        ASSERT_NE(FirstData, Image->MachODataInCode.end());
+        ASSERT_EQ(FirstData->Begin - Last.EndAddr,
+                  kDefaultInstructions * aarch64::kInsnSize);
+        DefaultEnds.try_emplace(FirstData->Begin, Last.EndAddr);
+
+        const auto Reject = [&](const BinaryImage &Changed) {
+          auto Verified = validateMachORegisterResults(Module, Changed);
+          ASSERT_FALSE(bool(Verified));
+          llvm::consumeError(Verified.takeError());
+        };
+        auto Unanchored = *Image;
+        llvm::erase_if(Unanchored.MachODataInCode, [&](const auto &R) {
+          return R.Begin == Records.back().Begin;
+        });
+        Reject(Unanchored);
+        auto Relocated = *Image;
+        Relocated.DataPtrRelocSlots.insert(Last.EndAddr);
+        Reject(Relocated);
+        for (auto Invalid :
+             {kExposeDefaultPC, kReadDefaultCode, kBranchToDefaultData}) {
+          auto Bytes = Image->Raw;
+          writeLE<uint32_t>(Bytes.data() + Image->vaToFileOffset(Last.EndAddr),
+                            Invalid);
+          auto Relative = Reader->loadBuffer(llvm::MemoryBufferRef(
+              llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                              Bytes.size()),
+              Input));
+          ASSERT_TRUE(bool(Relative)) << llvm::toString(Relative.takeError());
+          Reject(*Relative);
+        }
+      }
       if (GappedTables)
         Gaps.push_back({Begin, Begin + Size, Records.front().Kind});
       else {
@@ -604,6 +647,17 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     testing::Test::RecordProperty(kRecoveredRecords, int(Gaps.size()));
     testing::Test::RecordProperty(kDispatchGuards, kDispatchFunctions);
     testing::Test::RecordProperty(kFragmentConflicts, Conflicts);
+    if (RetainedDefault) {
+      auto Mixed = *Image;
+      for (auto &Section : Mixed.Sections)
+        Section.Type &= ~llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+      auto Refused = validateMachORegisterResults(Module, Mixed, &Recovered);
+      ASSERT_FALSE(bool(Refused));
+      llvm::consumeError(Refused.takeError());
+      EXPECT_EQ(Recovered, Gaps);
+      ASSERT_EQ(DefaultEnds.size(), kDispatchFunctions);
+      testing::Test::RecordProperty(kDefaultBlocks, int(DefaultEnds.size()));
+    }
   }
   if (Preamble == kDispatchOracle) {
     unsigned Proved = 0;
@@ -1277,6 +1331,17 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         ASSERT_EQ(Records.size(), ExpectedData.size() * (Generation + 1));
         for (const auto &[I, R] : llvm::enumerate(Records)) {
           const auto &Source = ExpectedData[I % ExpectedData.size()];
+          if (const auto It = DefaultEnds.find(Source.Begin);
+              It != DefaultEnds.end()) {
+            const auto Size = Source.Begin - It->second;
+            const auto *Before = Image->readVA(It->second, Size);
+            const auto *After = Loaded->readVA(R.Begin - Size, Size);
+            ASSERT_TRUE(Before && After);
+            EXPECT_EQ(llvm::ArrayRef(Before, Size),
+                      llvm::ArrayRef(After, Size));
+            EXPECT_TRUE(
+                machODataInCodeRanges(Records, R.Begin - Size, Size).empty());
+          }
           ASSERT_EQ(R.End - R.Begin, Source.End - Source.Begin);
           EXPECT_EQ(R.Kind, Source.Kind);
           const auto *Old =
@@ -1842,6 +1907,12 @@ TEST(AArch64LiftedImage, MaskedGappedRelativeTablesSurviveRelifting) {
 TEST(AArch64LiftedImage, ScheduledRelativeTablesSurviveRelifting) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kScheduledDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, RetainedDefaultsSurvivePartialTableRecovery) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kRetainedDefaultOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
 }
 

@@ -2575,8 +2575,8 @@ reader checks their actual storage. The fixtures exercise both consecutive
 and gapped records and remove the mask in a negative control. With no other
 range proof, all three indirect branches remain unresolved. In a separate
 compiler control, the mask leaves an entire unreferenced default block in
-the mixed section. NeverD recovers the switch targets but cannot complete
-a partial data map across those unclassified words.
+the mixed section. The November 20 build recovered the switch targets and
+refused the partial data map across those words.
 [Masked compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367).
 [Unreferenced default block control](https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014).
 
@@ -2660,3 +2660,20 @@ On the same integrated revision the unfiltered r6 suite passed 243 of 253
 cases on each Mac. The four compact-emitter skips and six classic signed-CFI
 refusals match the previous control. The new scheduled-switch case completed
 all 288 native comparisons on each host. [Full pinned-r6 comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44765584364).
+
+### Unreached instructions next to a partially marked table
+
+Apple's two original masked-switch dylibs retain a fourth arithmetic block
+after the three reachable cases. The table has a known selector domain and
+its missing bytes lie between records of the same kind. The linked section
+also carries `S_ATTR_PURE_INSTRUCTIONS`, which identifies the instruction
+owner outside the data islands. [Mach-O section and data-in-code definitions](https://github.com/apple/darwin-xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).
+
+NeverD now combines that section declaration with the bounded reads. A
+whole uncovered interval must be word aligned and free of relocation
+slots. The register emitter retains position-independent words and verifies
+the displacement of an in-body branch or a load from typed literal data.
+Only the proved data bytes and subword padding
+acquire data-in-code records. A section declaring only
+`S_ATTR_SOME_INSTRUCTIONS`, an open-ended record repair, or an uncovered
+instruction that exposes its new PC still prevents this form of publication.
