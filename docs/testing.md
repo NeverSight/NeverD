@@ -20675,7 +20675,10 @@ writes RAX: its C holds no unknown value.
 `GoInternalABI.AByteWriteKeepsNoResultOfTheCall` writes R10's low byte after a
 call through a function value and returns R10: the lift slices R10's upper
 bytes off the old value and joins them above the byte, which reads no result,
-so the call returns none.
+so the call returns none. `GoInternalABI.AByteWriteOnlyItsByteIsReadOfKeepsNoResult`
+calls a `main.f` that writes every result register through R9, then `setg r9b;
+movzx r9d, r9b`: the masked merge's copy into R9 is gone, yet neither the call
+nor `main.f` returns a second result.
 `SourceAggregate.ARegisterReturnRecordHoldsGosNineResults` gives a record of
 two, five and nine register words its members, and one of ten none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as

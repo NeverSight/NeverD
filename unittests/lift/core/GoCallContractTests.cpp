@@ -1097,6 +1097,49 @@ TEST(GoInternalABI, AFunctionReturnsNoResultAReturnLeavesUndefined) {
   EXPECT_FALSE(Call->RegisterReturnFields);
 }
 
+TEST(GoInternalABI, AByteWriteOnlyItsByteIsReadOfKeepsNoResult) {
+  // `setg r9b` merges the byte into what R9 held, and `movzx r9d, r9b` takes
+  // only that byte back before anything reads R9 whole, so copy propagation
+  // drops the merge's copy into R9.  The merge still read the R9 a call left
+  // there, and gave the call seven results: `runtime.traceStack` raised
+  // `callers`, and through the functions that return their calls' results
+  // `tracebackPCs`, `(*unwinder).next` and `pcvalue` too.
+  //   main.f: mov rbx, [rax+8]; mov rcx, [rax+16]; mov rdi, [rax+24]
+  //           mov rsi, [rax+32]; mov r8, [rax+40]; mov r9, [rax+48]
+  //           mov rax, [rax]; ret
+  //   main.g: sub rsp, 8; call main.f; test rax, rax; setg r9b
+  //           movzx r9d, r9b; mov rax, r9; add rsp, 8; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x08};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), F);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(),
+                {0x48, 0x85, 0xC0, 0x41, 0x0F, 0x9F, 0xC1, 0x45, 0x0F, 0xB6,
+                 0xC9, 0x4C, 0x89, 0xC8, 0x48, 0x83, 0xC4, 0x08, 0xC3});
+  GoTestImage T =
+      goFunctions({{{F, "main.f"},
+                    {0x48, 0x8B, 0x58, 0x08, 0x48, 0x8B, 0x48, 0x10, 0x48, 0x8B,
+                     0x78, 0x18, 0x48, 0x8B, 0x70, 0x20, 0x4C, 0x8B, 0x40, 0x28,
+                     0x4C, 0x8B, 0x48, 0x30, 0x48, 0x8B, 0x00, 0xC3}},
+                   {{G, "main.g"}, Caller}});
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto Function = [&](va_t Entry) -> const MedFunc & {
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+    EXPECT_NE(It, R.MedFuncs.end());
+    return *It;
+  };
+  EXPECT_TRUE(Function(F).MultiReturn.empty());
+  const MedOp *Read = onlyCall(Function(G));
+  ASSERT_NE(Read, nullptr);
+  EXPECT_FALSE(Read->RegisterReturnFields);
+}
+
 TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {
   // A Go result is the whole register a return leaves: the argument the
   // caller passed in it where the path leaves it unchanged, though another

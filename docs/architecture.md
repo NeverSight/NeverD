@@ -5866,7 +5866,11 @@ returns `{zeroVal, 0}` and `{elem, 1}`. A function whose return hands back
 what a call it makes returns (`CALL g; RET`) reads those results of that call,
 until no count grows. A run of some functions alone shapes the callees it
 calls from its own calls. A read that only keeps the bytes a byte write leaves
-(`t = R[1:]; concat(t, v)` as well as `R & ~0xff | v`) reads no result.
+(`t = R[1:]; concat(t, v)` as well as `R & ~0xff | v`) reads no result, also
+where copy propagation dropped the merge's copy back into the register: `setg
+r9b; movzx r9d, r9b` in `runtime.traceStack` gave `callers` seven results, and
+through the functions returning their calls' results `tracebackPCs`,
+`(*unwinder).next` and `pcvalue` too.
 
 Each return of the function must hand back every result it has
 (`goReturnedValue`): the newest write of the whole register, its PHI, a call
