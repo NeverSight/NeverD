@@ -134,6 +134,7 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
 
   // The widths each value of a result register is read at, carried through
   // the PHIs it reaches.
+  const uint16_t Whole = getTargetRegInfo(A).FullRegWidth;
   llvm::DenseMap<ValueKey, uint16_t> ReadWidths;
   // The bytes of a value the views taken of it cover.
   llvm::DenseMap<ValueKey, uint16_t> ViewWidths;
@@ -183,6 +184,34 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
   }
   for (const MedVar &Value : Returned)
     Observe(Value, Value.Size);
+  // A narrower view's PHI is a value of its own, which a write of the
+  // whole register leaves stale: an arm64 `mov x11, #45` keeps W11's
+  // version from before a call, so the call seemed to return W11.  An arm
+  // of one is current where the whole register, at the end of the edge's
+  // block, still holds that value: the clobber of the same call, or a PHI
+  // of the whole register beside a PHI of the view.
+  std::map<ValueKey, uint32_t> ClobberSites;
+  for (const auto &[Site, Values] : Clobbers)
+    for (const MedVar &Value : Values)
+      ClobberSites.emplace(identity(Value), Site);
+  llvm::DenseMap<int, const MedBlock *> ById;
+  const auto Current = [&](int Pred, const MedVar &Input, uint64_t RegOff) {
+    if (ById.empty())
+      for (const MedBlock &Block : Func.Blocks)
+        ById.try_emplace(Block.Id, &Block);
+    const auto Block = ById.find(Pred);
+    if (Block == ById.end())
+      return false;
+    const GoReturnedValue Holds =
+        goReturnedValue(ById, *Block->second, RegOff, A);
+    if (const auto Site = ClobberSites.find(identity(Input));
+        Site != ClobberSites.end())
+      return Holds.What == GoReturnedValue::Call &&
+             Holds.Caller->CallSiteId == Site->second;
+    if (PhiDefinitions.count(identity(Input)))
+      return Holds.What == GoReturnedValue::Phi;
+    return true;
+  };
   while (!Work.empty()) {
     const ValueKey Key = Work.pop_back_val();
     const auto Found = PhiDefinitions.find(Key);
@@ -191,7 +220,8 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
     const PhiNode &Phi = *Found->second;
     const uint16_t Width = std::min(ReadWidths[Key], Phi.Output.Size);
     for (const auto &[Pred, Input] : Phi.Args)
-      Observe(Input, Width);
+      if (Phi.Output.Size >= Whole || Current(Pred, Input, Phi.Output.RegOff))
+        Observe(Input, Width);
   }
   for (const auto &[Site, Values] : Clobbers) {
     int Last = -1;

@@ -23,6 +23,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/ir/med/MedGoResults.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -1238,6 +1239,86 @@ TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {
   ASSERT_NE(At, std::string::npos) << Source;
   const std::string Body = Source.substr(At, Source.find("\n}", At) - At);
   EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+}
+
+TEST(GoInternalABI, AnARM64DirectCallReturnsEveryResultItsCallerReads) {
+  // Go's arm64 register ABI returns results in R0-R15 as amd64 does in RAX,
+  // RBX and the rest: a read of X2 after a call is its third result, in the
+  // call and in the function it calls, where AAPCS64 returns X0:X1 at most.
+  //   main.f: ldr x1, [x0, #8]; ldr x2, [x0, #16]; ldr x0, [x0]; ret
+  //   main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; bl main.f
+  //           mov x0, x2; ldp x29, x30, [sp], #16; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(F, words({0xF9400401, 0xF9400802, 0xF9400000, 0xD65F03C0}));
+  const uint32_t Call = 0x94000000u | (((F - (G + 8)) >> 2) & 0x3FFFFFFu);
+  T.writeText(G, words({0xA9BF7BFD, 0x910003FD, Call, 0xAA0203E0, 0xA8C17BFD,
+                        0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto Function = [&](va_t Entry) -> const MedFunc & {
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+    EXPECT_NE(It, R.MedFuncs.end());
+    return *It;
+  };
+  const auto ReturnsX0ToX2 = [](const std::vector<MedReturnReg> &Shape) {
+    return Shape.size() == 3 && Shape[0].RegOff == a64reg::X0 &&
+           Shape[1].RegOff == a64reg::X1 && Shape[2].RegOff == a64reg::X2 &&
+           Shape[2].Size == 8;
+  };
+  EXPECT_TRUE(ReturnsX0ToX2(Function(F).MultiReturn));
+  const MedOp *Read = onlyCall(Function(G));
+  ASSERT_NE(Read, nullptr);
+  ASSERT_TRUE(Read->RegisterReturnFields);
+  EXPECT_TRUE(ReturnsX0ToX2(*Read->RegisterReturnFields));
+}
+
+TEST(GoInternalABI, AStaleViewReadsNoResultOfTheCall) {
+  // arm64's W11 is a value of its own beside X11, which `mov x11, #45`
+  // writes whole and leaves W11's old version behind.  Where `ubfx x12,
+  // x11, #0, #8` reads the low byte after the paths join, the W11 PHI's
+  // stale arm is what the call left, which `internal/bisect.New` read as
+  // `new`'s twelfth result, raising every allocation that returns its
+  // call's results.
+  //   main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; bl main.f
+  //           cbz x0, 1f; ldrb w11, [x0]; b 2f
+  //       1:  mov x11, #45
+  //       2:  ubfx x12, x11, #0, #8; mov x0, x12
+  //           ldp x29, x30, [sp], #16; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(F, words({0xF9400000, 0xD65F03C0}));
+  const uint32_t Call = 0x94000000u | (((F - (G + 8)) >> 2) & 0x3FFFFFFu);
+  T.writeText(G, words({0xA9BF7BFD, 0x910003FD, Call, 0xB4000060, 0x3940000B,
+                        0x14000002, 0xD28005AB, 0xD3401D6C, 0xAA0C03E0,
+                        0xA8C17BFD, 0xD65F03C0}));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const MedFunc Caller = lift(T.Img, G);
+  const MedOp *Read = onlyCall(Caller);
+  ASSERT_NE(Read, nullptr);
+  EXPECT_TRUE(
+      goCallResultsRead(Caller, Arch::AArch64, {Read->CallSiteId}).empty());
 }
 
 TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {

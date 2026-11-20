@@ -20683,8 +20683,15 @@ nor `main.f` returns a second result.
 and `setg bl` over an RBX it never set, and its caller read BL alone: the
 function and the call return `{RAX: 8, RBX: 1}`, and the function's C holds no
 unknown value.
-`SourceAggregate.ARegisterReturnRecordHoldsGosNineResults` gives a record of
-two, five and nine register words its members, and one of ten none.
+`GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
+arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
+results, where AAPCS64 alone gives X0:X1.
+`GoInternalABI.AStaleViewReadsNoResultOfTheCall` lifts an arm64 caller that,
+after a call, joins `ldrb w11` with `mov x11, #45` and reads the low byte:
+the call returns nothing it reads, though the stale arm of the W11 PHI is
+what the call left.
+`SourceAggregate.ARegisterReturnRecordHoldsGosResults` gives a record of two,
+five, nine and sixteen register words its members, and one of seventeen none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.

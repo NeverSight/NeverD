@@ -60,7 +60,8 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   // whose return hands back what a call it makes returns (`CALL g; RET`)
   // reads those results of that call.
   const auto &Go = Img.ExceptionMetadata.GoModule;
-  if (Img.Arch != Arch::X64 || !Go || !Go->RegisterArguments)
+  if ((Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64) || !Go ||
+      !Go->RegisterArguments)
     return;
   const Arch A = Img.Arch;
   const llvm::ArrayRef<uint64_t> Results = goIntegerArgumentRegisters(A);

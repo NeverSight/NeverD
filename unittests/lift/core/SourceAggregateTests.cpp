@@ -67,12 +67,13 @@ TEST(SourceAggregate,
   EXPECT_FALSE(Deep);
 }
 
-TEST(SourceAggregate, ARegisterReturnRecordHoldsGosNineResults) {
-  // Go's internal ABI returns nine integer results on amd64 (RAX, RBX, RCX,
-  // RDI, RSI, R8-R11), where a platform convention returns four registers at
-  // most.  A record of five result words had no members, so every call of a
-  // Go function returning five results printed a placeholder beside a
-  // declaration that returned an integer.
+TEST(SourceAggregate, ARegisterReturnRecordHoldsGosResults) {
+  // Go's internal ABI returns sixteen integer results on arm64 (R0-R15) and
+  // nine on amd64 (RAX, RBX, RCX, RDI, RSI, R8-R11), where a platform
+  // convention returns four registers at most.  A record of five result
+  // words had no members, so every call of a Go function returning five
+  // results printed a placeholder beside a declaration that returned an
+  // integer.
   const auto Members = [](size_t Words) {
     TypeRef Record = NdType::makeStruct(
         std::vector<TypeRef>(Words, NdType::makeInt(8, false)));
@@ -82,7 +83,7 @@ TEST(SourceAggregate, ARegisterReturnRecordHoldsGosNineResults) {
     Record->RegisterReturnRecord = true;
     return sourceAggregateMembers(Record).size();
   };
-  for (const size_t Words : {size_t(2), size_t(5), size_t(9)})
+  for (const size_t Words : {size_t(2), size_t(5), size_t(9), size_t(16)})
     EXPECT_EQ(Members(Words), Words);
   EXPECT_EQ(Members(kSourceMaxRegisterReturnMembers + 1), 0u);
 }

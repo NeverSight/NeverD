@@ -15,7 +15,6 @@
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedGoResults.h"
-#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <map>
@@ -32,7 +31,8 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
   // makes enters Go code by the internal ABI, as a function value always
   // does, and stands alone; a direct call shares its callee's shape with the
   // callee's other calls (materializeGoCallResults).
-  if (TargetArch != Arch::X64 || !Image || !Image->ExceptionMetadata.GoModule ||
+  if ((TargetArch != Arch::X64 && TargetArch != Arch::AArch64) || !Image ||
+      !Image->ExceptionMetadata.GoModule ||
       !Image->ExceptionMetadata.GoModule->RegisterArguments ||
       !goCallEntersInternalABI(*Image, Func.Entry, InvalidVA, nullptr))
     return;
@@ -42,7 +42,8 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
       if (Op.Opcode == NdOp::INDIR_CALL &&
           Op.RegisterContract == CallRegisterContract::GoInternal &&
           !Op.SourceCallHint && !Op.DoesNotReturn && !Op.RegisterReturnFields &&
-          Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == x86reg::RAX)
+          Op.Output.Kind == MedVar::Reg &&
+          Op.Output.RegOff == goIntegerArgumentRegisters(TargetArch)[0])
         Sites.insert(Op.CallSiteId);
   // An indirect call's results are words: no callee shares its record, and
   // the record the pipeline extends (materializeGoCallResults) keeps them.

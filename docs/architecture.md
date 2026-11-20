@@ -5840,7 +5840,9 @@ a `bool`.
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every
-register before it (`goResultRegister`). That holds for a call that enters Go
+register before it (`goResultRegister`). arm64 returns them in R0-R15 under
+the same rules as amd64's nine, so a record holds up to sixteen; a call
+reading X2 returns three results, where AAPCS64 returns X0:X1 at most. That holds for a call that enters Go
 code by the internal ABI (`goCallEntersInternalABI`): a direct call to
 compiled Go code or to `<ABIInternal>` assembly, and an indirect call compiled
 code makes, through a function value. Go assembly also calls C through a
@@ -5878,7 +5880,12 @@ that returns that many results itself, or the argument the caller passed there
 where the path leaves it unchanged. A narrower value is no result: an 8- or
 32-bit view is an SSA value of its own, which a later write of the whole
 register leaves stale, and `lea` copy-propagated into a temporary leaves only
-a view of that temporary. Results are a prefix from RAX, so the function keeps
+a view of that temporary. For the same reason a read reaches a call through a
+view's PHI only along an edge where the whole register still holds what the
+call left: arm64's `mov x11, #45` writes X11 whole and leaves W11's version
+from before a call, which `internal/bisect.New` read through such a PHI as
+`new`'s twelfth result, and every function returning an allocation's result
+returned twelve. Results are a prefix from RAX, so the function keeps
 the results up to the first one some return leaves undefined, and the counts
 settle from above: `runtime.lock2` returns nothing, though a caller reads five
 registers past its call through a PHI no path uses. A read past that count

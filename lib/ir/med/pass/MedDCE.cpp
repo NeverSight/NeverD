@@ -396,7 +396,8 @@ void LowToMedConverter::runDce(MedFunc &Func) {
   // own, which a later write of the whole register leaves stale.  A call
   // that clobbers the register before the return leaves the call's result
   // there, which no op defines.
-  if (TargetArch == Arch::X64 && Image && Image->ExceptionMetadata.GoModule &&
+  if ((TargetArch == Arch::X64 || TargetArch == Arch::AArch64) && Image &&
+      Image->ExceptionMetadata.GoModule &&
       Image->ExceptionMetadata.GoModule->RegisterArguments &&
       isGoCode(*Image, Func.Entry)) {
     llvm::SmallVector<std::pair<const MedBlock *, int>, 8> Work;

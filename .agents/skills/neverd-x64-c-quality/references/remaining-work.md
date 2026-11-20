@@ -581,9 +581,9 @@ Still open, in order of yield:
        `reflectcall`'s dispatch passes them a placeholder.
      - A WRAPPER frame's panic check (`reflectcall`'s `callNNN`) stores
        through a register with no definition in Go 1.15-1.26 alike.
-     - Register-ABI results on arm64 (R0-R15), and floating results
-       (X0-X14) on either target, are not modelled; amd64 integer results
-       are (`modelGoCallResults`, `materializeGoCallResults`).
+     - Floating register-ABI results (amd64 X0-X14, arm64 F0-F15) are not
+       modelled; integer results are on both targets (`modelGoCallResults`,
+       `materializeGoCallResults`).
      - A narrow result a function hands back from a call it makes. Direct
        calls return each result as wide as their callers read it
        (`GoCallShape`), but the call a forwarding function returns from
