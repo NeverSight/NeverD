@@ -214,11 +214,12 @@ findTextMetadataStorage(llvm::ArrayRef<uint8_t> Binary, uint64_t Capacity,
 // the other table already fits. Keeping the existing mapping is preferable
 // when it contains an aligned gap large enough for the complete section.
 bool growTextForMetadata(std::vector<uint8_t> &Binary, Arch A,
-                         uint64_t Capacity) {
+                         uint64_t Capacity,
+                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   if (findTextMetadataStorage(Binary, Capacity))
     return false;
-  auto Grown =
-      reserveMachOHeaderStorage(Binary, A, kMetadataCommandReserve + Capacity);
+  auto Grown = reserveMachOHeaderStorage(
+      Binary, A, kMetadataCommandReserve + Capacity, RecoveredData);
   if (!Grown) {
     // A terminal TEXT segment may still extend into LINKEDIT.
     llvm::consumeError(Grown.takeError());
@@ -579,9 +580,10 @@ relocatedFrames(const std::vector<uint8_t> &Binary, const MachOEHFrameRegion &R,
 } // namespace
 
 namespace {
-llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
-                                              Arch A, llvm::StringRef Name,
-                                              uint64_t Size, bool Relro) {
+llvm::Expected<uint64_t>
+declareMachOMetadata(std::vector<uint8_t> &Binary, Arch A, llvm::StringRef Name,
+                     uint64_t Size, bool Relro,
+                     llvm::ArrayRef<MachODataInCodeRange> RecoveredData = {}) {
   using namespace llvm::MachO;
   if (Name.empty() || Name.size() > 16 || !Size ||
       Size > ::neverd::limits::backend::
@@ -593,11 +595,11 @@ llvm::Expected<uint64_t> declareMachOMetadata(std::vector<uint8_t> &Binary,
     // Only the section descriptor has to fit in the command table. Its
     // contents can use another gap or extend a terminal TEXT segment.
     const auto Original = parseMachOHeader(B.data(), B.size());
-    auto Header =
-        reserveMachOHeaderStorage(B, A, getMachOSectionSize(Original.Is64));
+    auto Header = reserveMachOHeaderStorage(
+        B, A, getMachOSectionSize(Original.Is64), RecoveredData);
     if (!Header)
       return Header.takeError();
-    growTextForMetadata(B, A, Size);
+    growTextForMetadata(B, A, Size, RecoveredData);
     Storage = findTextMetadataStorage(B, Size);
   }
   std::vector<macho_patch_detail::MachOFileRange> Segments, Sections;
@@ -882,7 +884,8 @@ llvm::Expected<bool>
 reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
                          uint64_t AdditionalEHBytes,
                          MachOUnwindFunctionCounts Additional,
-                         const MachOUnwindRelocationLimits &Limits) {
+                         const MachOUnwindRelocationLimits &Limits,
+                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   const uint64_t AdditionalFunctions = Additional.Functions;
   if (AdditionalEHBytes >
           ::neverd::limits::backend::
@@ -977,7 +980,7 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
         // Adopt checked prefix growth before placing the compact registry.
         // The growth owner rebases its TEXT-relative records, so refresh the
         // payload instead of copying the pre-growth offsets into the new map.
-        if (growTextForMetadata(Candidate, A, Capacity)) {
+        if (growTextForMetadata(Candidate, A, Capacity, RecoveredData)) {
           auto Updated = findMachOCompactUnwindRegion(Candidate);
           if (!Updated)
             return Updated.takeError();
@@ -1000,10 +1003,11 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
   if (AdditionalEHBytes) {
     auto R = findMachOEHFrameRegion(Candidate);
     if (!R) {
-      auto Declared = declareMachOTextMetadata(
+      auto Declared = declareMachOMetadata(
           Candidate, A, kFrameSection,
           llvm::alignTo(AdditionalEHBytes + sizeof(uint32_t),
-                        alignof(uint64_t)));
+                        alignof(uint64_t)),
+          false, RecoveredData);
       if (!Declared)
         return Declared.takeError();
       R = findMachOEHFrameRegion(Candidate);
@@ -1022,7 +1026,7 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch A,
           llvm::alignTo(R->AppendFileOff - R->SectionFileOff +
                             AdditionalEHBytes + sizeof(uint32_t),
                         alignof(uint64_t));
-      if (growTextForMetadata(Candidate, A, Capacity)) {
+      if (growTextForMetadata(Candidate, A, Capacity, RecoveredData)) {
         // The code VAs are stable but the old section moved in the file.
         R = findMachOEHFrameRegion(Candidate);
         if (!R)
@@ -1053,14 +1057,16 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     std::vector<uint8_t> &Binary, Arch A, uint64_t ExtraFrameBytes,
     MachOUnwindFunctionCounts Additional, bool AllowSlide,
     std::optional<MachODependencyState> &SlidDependencies,
-    uint64_t AdditionalCommandBytes) {
-  auto Reserved =
-      reserveMachOSourceUnwind(Binary, A, ExtraFrameBytes, Additional);
+    uint64_t AdditionalCommandBytes,
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
+  auto Reserved = reserveMachOSourceUnwind(Binary, A, ExtraFrameBytes,
+                                           Additional, {}, RecoveredData);
   llvm::Error UnwindError = Reserved.takeError();
   if (!UnwindError) {
     if (!AdditionalCommandBytes)
       return 0;
-    auto Space = reserveMachOHeaderStorage(Binary, A, AdditionalCommandBytes);
+    auto Space = reserveMachOHeaderStorage(Binary, A, AdditionalCommandBytes,
+                                           RecoveredData);
     if (Space)
       return 0;
     UnwindError = Space.takeError();
@@ -1109,13 +1115,17 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
   auto Before = slideMachOZeroBaseDylib(Candidate, Slide);
   if (!Before)
     return Before.takeError();
-  auto Prefix = reserveMachOHeaderStorage(Candidate, A, Slide - HeaderEnd);
+  llvm::SmallVector<MachODataInCodeRange> SlidData;
+  for (const auto &R : RecoveredData)
+    SlidData.push_back({R.Begin + Slide, R.End + Slide, R.Kind});
+  auto Prefix =
+      reserveMachOHeaderStorage(Candidate, A, Slide - HeaderEnd, SlidData);
   if (!Prefix)
     return Prefix.takeError();
   if (!*Prefix)
     return fail(kUnwindPrefix);
-  Reserved =
-      reserveMachOSourceUnwind(Candidate, A, ExtraFrameBytes, Additional);
+  Reserved = reserveMachOSourceUnwind(Candidate, A, ExtraFrameBytes, Additional,
+                                      {}, SlidData);
   if (!Reserved)
     return Reserved.takeError();
   SlidDependencies.emplace(std::move(*Before));

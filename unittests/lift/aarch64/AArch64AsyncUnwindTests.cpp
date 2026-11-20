@@ -495,39 +495,54 @@ TEST(AArch64AsyncUnwind,
     ASSERT_TRUE(llvm::equal(
         OldFrame->Dwarf->Instructions, Trampoline->Dwarf->Instructions,
         [&](const auto &A, const auto &B) { return Fields(A) == Fields(B); }));
+    unsigned AlternateWalks = 0, HandlerVisits = 0, HandlerSP = 0;
     for (const auto &Path : {Input, Output}) {
       SCOPED_TRACE(Path);
       for (llvm::StringRef Mode :
            {kRawEntryMode, kCompactEntryMode, kLanguageEntryMode}) {
         SCOPED_TRACE(Mode.str());
-        ASSERT_EQ(
-            llvm::sys::ExecuteAndWait(
-                Driver, {Driver, Path, std::to_string(0),
-                         std::to_string(Path == Input ? kOldValue : kNewValue),
-                         EntrySamples, Mode, Mode}),
-            0);
-        std::ifstream Raw(EntrySamples);
-        int Visited, Exact, MatchedSP;
-        unsigned Lookup;
-        ASSERT_TRUE(Raw >> Visited >> Exact >> MatchedSP >> Lookup);
-        EXPECT_TRUE((Raw >> std::ws).eof());
-        EXPECT_TRUE(Visited == 0 || Visited == 1);
-        EXPECT_EQ(Exact, 1);
-        EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
-        EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
-        if (Path == Output && Mode == kCompactEntryMode)
-          RecordProperty(kCompactOldEntry, Exact);
-        if (Path == Output && Mode == kLanguageEntryMode)
-          RecordProperty(kLanguageOldEntry, Exact);
-        if (Path == Output && Mode == kRawEntryMode) {
-          RecordProperty(kRawEntryWalk, 1);
-          RecordProperty(kRawEntryVisit, Visited);
-          RecordProperty(kExactEntryStep, Exact);
-          RecordProperty(kRawEntrySP, MatchedSP);
-          RecordProperty(kEntryLookupOffset, Lookup);
+        const auto Value =
+            std::to_string(Path == Input ? kOldValue : kNewValue);
+        const auto Offset = std::to_string(0);
+        llvm::SmallVector<llvm::StringRef> Args{
+            Driver, Path, Offset, Value, EntrySamples, Mode, Mode};
+        for (bool Alternate : {false, true}) {
+          SCOPED_TRACE(Alternate);
+          if (Alternate)
+            Args.push_back(kAlternateStack);
+          ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, Args), 0);
+          std::ifstream Raw(EntrySamples);
+          int Visited, Exact, MatchedSP;
+          unsigned Lookup;
+          ASSERT_TRUE(Raw >> Visited >> Exact >> MatchedSP >> Lookup);
+          EXPECT_TRUE((Raw >> std::ws).eof());
+          EXPECT_TRUE(Visited == 0 || Visited == 1);
+          EXPECT_EQ(Exact, 1);
+          EXPECT_TRUE(MatchedSP == 0 || MatchedSP == 1);
+          EXPECT_LE(Lookup, NDArm64eEntryLookupInteriorByte);
+          if (Alternate) {
+            AlternateWalks += Exact;
+            HandlerVisits += Visited;
+            HandlerSP += MatchedSP;
+          } else if (Path == Output) {
+            if (Mode == kCompactEntryMode)
+              RecordProperty(kCompactOldEntry, Exact);
+            if (Mode == kLanguageEntryMode)
+              RecordProperty(kLanguageOldEntry, Exact);
+            if (Mode == kRawEntryMode) {
+              RecordProperty(kRawEntryWalk, 1);
+              RecordProperty(kRawEntryVisit, Visited);
+              RecordProperty(kExactEntryStep, Exact);
+              RecordProperty(kRawEntrySP, MatchedSP);
+              RecordProperty(kEntryLookupOffset, Lookup);
+            }
+          }
         }
       }
     }
+    RecordProperty(kAlternateEntryWalks, AlternateWalks);
+    RecordProperty(kAlternateHandlerVisits, HandlerVisits);
+    RecordProperty(kAlternateHandlerSP, HandlerSP);
     for (auto [Path, Property] :
          {std::pair(OriginalSamples, kOriginalRows),
           std::pair(InstalledSamples, kPublishedRows)}) {

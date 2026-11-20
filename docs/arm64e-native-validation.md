@@ -2424,3 +2424,26 @@ compiler-original authenticated calls and signed exception unwinding passed.
 Explicit PAuth_LR, PACM-PC, scalar CPTA-on and checked writeback remain
 unqualified. The test repository had zero registered self-hosted runners.
 [Source revisions, image hashes and measurements](evidence/arm64e-switch-dispatch-2026-11-20.json).
+
+### Recovering missing Mach-O data-in-code records
+
+For functions with local relative switches, the arm64e publisher can recover
+a missing or incomplete `LC_DATA_IN_CODE` table. It combines machine
+instruction boundaries from the source CFG, the exact bytes read by local
+AArch64 literal loads, the finite slots read by proved switch dispatches,
+and any records already in the image. The ranges must agree on type and stay
+disjoint from live instructions. An alignment fragment that cannot contain
+one AArch64 instruction is preserved as ordinary data. A gap large enough for
+a whole aligned instruction still requires a source of evidence.
+
+Installation reconstructs these reads from the input image before consuming
+the emitted object. It carries the ranges through header growth and a
+zero-base image slide, records both the old and copied data in the published
+image, and checks their bytes and types after placement. The first publication
+therefore supplies native data-in-code records for later generations.
+
+The regression fixtures include 8-, 16- and signed 32-bit relative dispatch,
+an eight-byte literal that changes the result, and a byte table at an odd
+address adjacent to padding. One input declares only its 16-bit table. Another
+has no data records. A literal retargeted into a live instruction invalidates
+the source proof before installation.

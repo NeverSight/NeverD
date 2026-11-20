@@ -8,6 +8,7 @@
 #define NEVERD_LIB_BACKEND_CODEGEN_MACHO_MACHOLIFTEDOBJECT_H
 
 #include "neverd/backend/codegen/PatchObject.h"
+#include "neverd/loader/MachO/DataInCode.h"
 
 namespace neverd {
 /// Verify lifted code and language metadata in the installed private candidate
@@ -21,6 +22,7 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          llvm::ArrayRef<SourcePatchBinding> Bindings,
                          const std::filesystem::path &Output,
+                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData,
                          MachOLiftedObjectVerifier Verify);
 } // namespace neverd
 

@@ -2525,7 +2525,8 @@ static llvm::Expected<PatchResult> installObject(
     llvm::function_ref<llvm::Error(const CompiledImage &,
                                    llvm::ArrayRef<NativeMachOCompactRange>)>
         VerifyGenerated,
-    MachOLiftedObjectVerifier VerifyLiftedImage) {
+    MachOLiftedObjectVerifier VerifyLiftedImage,
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -2579,7 +2580,7 @@ static llvm::Expected<PatchResult> installObject(
   auto Slide = reserveMachOPublishedUnwind(
       LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
       Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-      installationCommandBytes(*Object, Original));
+      installationCommandBytes(*Object, Original), RecoveredData);
   if (!Slide)
     return Slide.takeError();
   for (auto &[Name, Binding] : Bindings)
@@ -2654,7 +2655,8 @@ static llvm::Expected<PatchResult> installObject(
                           : nullptr))
                 return Reject(std::move(E));
               if (auto E = installMachOPublishedData(Binary, Object->Image,
-                                                     Object->Embedded))
+                                                     Object->Embedded,
+                                                     RecoveredData, *Slide))
                 return Reject(std::move(E));
               if (auto E = installMachOThreadLocalExports(Binary,
                                                           Object->TLSExports))
@@ -2769,7 +2771,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         VerifyGenerated) {
   return installObject(Object, Original, Mappings, Bindings, Output,
                        PrepareReceipt, DynCode, Preparation, Dependencies,
-                       VerifyGenerated, {});
+                       VerifyGenerated, {}, {});
 }
 
 llvm::Expected<PatchResult>
@@ -2777,8 +2779,9 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          llvm::ArrayRef<SourcePatchBinding> Bindings,
                          const std::filesystem::path &Output,
+                         llvm::ArrayRef<MachODataInCodeRange> RecoveredData,
                          MachOLiftedObjectVerifier Verify) {
   return installObject(Object, Original, Mappings, Bindings, Output, {},
-                       nullptr, nullptr, {}, {}, Verify);
+                       nullptr, nullptr, {}, {}, Verify, RecoveredData);
 }
 } // namespace neverd

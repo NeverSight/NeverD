@@ -553,6 +553,11 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
+A64_LEAF_TEXT(kUnmarkedDispatchOracle, "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kPartialDispatchOracle, "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n#define NEVERD_TEST_PARTIAL_DISPATCH 1\n")
+A64_LEAF_VALUE(unsigned, kDispatchPrefixPadding, 1)
+A64_LEAF_VALUE(unsigned, kDispatchSuffixPadding, 3)
+A64_LEAF_TEXT(kRecoveredRecords, "recovered_source_data_in_code_records")
 A64_LEAF_VALUE(unsigned, kDispatchFunctions, 3)
 A64_LEAF_VALUE(unsigned, kDispatchInputs, 8)
 A64_LEAF_VALUE(unsigned, kDispatchArguments, 3)
@@ -572,6 +577,12 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 .globl \name
 \name:
 .cfi_startproc
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+ .if \width == 1
+ ldr x15, 7f
+ add x1, x1, x15
+ .endif
+#endif
  cmp w0, #3
  b.hi 9f
  adr x10, 8f
@@ -598,21 +609,39 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 9: sub x0, x1, #5
  ret
  .if \width == 1
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+7: .quad 0x7ed503237f
+#ifdef NEVERD_TEST_PARTIAL_DISPATCH
+ .byte 0x7e
+#endif
+#else
  .data_region
  .long 0xd503237f
  .byte 0x7e
  .end_data_region
  .data_region jt8
+#endif
 8: .byte (3b-1b)/4, 0, (2b-1b)/4, 0
+#if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .space 3
+#endif
  .elseif \width == 2
+#if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .data_region jt16
+#endif
 8: .short (3b-1b)/4, 0, (2b-1b)/4, 0
+#ifdef NEVERD_TEST_PARTIAL_DISPATCH
+ .end_data_region
+#endif
  .else
+#ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .data_region jt32
+#endif
 8: .long 0, 1b-3b, 2b-3b, 1b-3b
  .endif
+#ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .end_data_region
+#endif
 .cfi_endproc
 .endm
 dispatch _leaf_sum, 1
@@ -645,6 +674,10 @@ int main(int argc, char **argv) {
       for (unsigned b = 0; b < sizeof(bases)/sizeof(*bases); ++b) {
         uint64_t expected = index < sizeof(cases)/sizeof(*cases)
                                 ? bases[b] + cases[index] : bases[b] - 5;
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+        if (f == 0)
+          expected += UINT64_C(0x7ed503237f);
+#endif
         if (call(inputs[i], bases[b]) != expected)
           return 4;
       }

@@ -25,8 +25,9 @@ llvm::Error invalid() {
 
 llvm::Error installMachOPublishedData(
     std::vector<uint8_t> &Binary, const CompiledImage &Image,
-    llvm::ArrayRef<std::pair<size_t, MachODataInCodeRange>> Records) {
-  if (Records.empty())
+    llvm::ArrayRef<std::pair<size_t, MachODataInCodeRange>> Records,
+    llvm::ArrayRef<MachODataInCodeRange> Recovered, va_t Slide) {
+  if (Records.empty() && Recovered.empty())
     return llvm::Error::success();
   MachOChainedFixups Chains;
   auto State = readMachODependencyState(Binary, &Chains);
@@ -53,6 +54,8 @@ llvm::Error installMachOPublishedData(
       Chains.HeaderVA, llvm::endianness::little);
   if (!Data)
     return Data.takeError();
+  for (const auto &R : Recovered)
+    Data->push_back({R.Begin + Slide, R.End + Slide, R.Kind});
   for (const auto &[Index, R] : Records) {
     const auto &Section = Image.Sections[Index];
     Data->push_back({Section.VA + R.Begin, Section.VA + R.End, R.Kind});
