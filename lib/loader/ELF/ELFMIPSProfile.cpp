@@ -105,23 +105,24 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
     return profileError("vendor/ASE profile is not supported");
   const uint32_t ISA = Flags & EF_MIPS_ARCH;
   const unsigned Historical = ISA <= EF_MIPS_ARCH_5 ? (ISA >> 28) + 1 : 0;
+  const bool HistoricalO32 = !Wide && Historical == 3;
   const bool R6 = ISA == (Wide ? EF_MIPS_ARCH_64R6 : EF_MIPS_ARCH_32R6);
   if (Historical &&
-      (Wide != (Historical >= 3) ||
+      ((!HistoricalO32 && Wide != (Historical >= 3)) ||
        (Flags & (EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16 | EF_MIPS_NAN2008))))
     return profileError(
-        "historical ISA requires classic MIPS I/II o32 or III-V n32/n64");
+        "historical ISA requires classic MIPS I-III o32 or III-V n32/n64");
   if (!Historical && !R6 &&
       ISA != (Wide ? EF_MIPS_ARCH_64R2 : EF_MIPS_ARCH_32R2))
     return profileError(
         "requires matching ELF class and MIPS32/MIPS64 r2 or r6");
   if ((Flags & EF_MIPS_ABI) != (Wide ? 0u : EF_MIPS_ABI_O32) ||
-      (Flags & EF_MIPS_32BITMODE))
+      (!HistoricalO32 && (Flags & EF_MIPS_32BITMODE)))
     return profileError("requires ELF32/o32, ELF32/n32 or ELF64/n64 ABI");
   constexpr uint32_t KnownFlags =
       EF_MIPS_NOREORDER | EF_MIPS_PIC | EF_MIPS_CPIC | EF_MIPS_ABI2 |
-      EF_MIPS_ABI | EF_MIPS_FP64 | EF_MIPS_NAN2008 | EF_MIPS_ARCH |
-      EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
+      EF_MIPS_ABI | EF_MIPS_32BITMODE | EF_MIPS_FP64 | EF_MIPS_NAN2008 |
+      EF_MIPS_ARCH | EF_MIPS_MICROMIPS | EF_MIPS_ARCH_ASE_M16;
   if (Flags & ~KnownFlags)
     return profileError("unrecognized ELF flags");
 
@@ -287,8 +288,9 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
 
   if (GP.Value && !GP.HasScopedGP &&
       (Header.e_type == ET_EXEC || Header.e_type == ET_DYN)) {
-    const uint64_t Value =
-        N32 ? uint64_t(llvm::SignExtend64<32>(*GP.Value)) : *GP.Value;
+    const uint64_t Value = (N32 || HistoricalO32)
+                               ? uint64_t(llvm::SignExtend64<32>(*GP.Value))
+                               : *GP.Value;
     if (Flags & (EF_MIPS_PIC | EF_MIPS_CPIC))
       Profile.PICGP = Value;
     else if (Header.e_type == ET_EXEC)
@@ -339,7 +341,7 @@ readProfile(const llvm::object::ELFObjectFile<ELFT> &Object) {
                      : R6             ? 6
                      : Profile.HasMSA ? 5
                                       : 2) ||
-        Bytes[4] != (Wide ? 2 : 1))
+        (Bytes[4] != (Wide ? 2 : 1) && !(HistoricalO32 && Bytes[4] == 2)))
       return profileError("ABI flags conflict with the admitted GPR profile");
     if (Bytes[5] > (Profile.HasMSA ? 3 : 2) || Bytes[6] != 0 || Bytes[7] > 7 ||
         Read32(8) != 0 ||

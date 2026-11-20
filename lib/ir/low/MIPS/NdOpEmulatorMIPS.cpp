@@ -64,18 +64,21 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     if (Id == Intrinsic::MIPSHistoricalRetire)
       return Context.Historical->retire(Op.Addr);
     if (!knownOperandBytes(Op.Inputs[2], 0, 1) ||
-        readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Wide))
+        readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Img.Arch))
+      return false;
+    if (isMIPS64O32(Img.Arch) && !Context.HistoricalO32DoublewordEnabled &&
+        mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset))
       return false;
     const auto Timing = mips::historicalInstructionTiming(
         Op.Inputs[1].Offset, Img.MIPS->HistoricalISA,
-        Img.MIPS->hasScalarFP32ABI(Wide));
+        Img.MIPS->hasScalarFP32ABI(Img.Arch));
     return Timing &&
            Context.Historical->begin(Op.Addr, Timing->Reads, Timing->Delayed,
                                      Timing->Access, Timing->MergeSource,
                                      Timing->ForwardableLoad);
   }
   if (mips::isScalarFPControl(Id)) {
-    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Img.Arch)) ||
         !Context.ScalarFPU ||
         !Context.ScalarFPU->supportsProfile(Img.MIPS->ISARevision,
                                             Img.MIPS->HistoricalISA) ||
@@ -101,9 +104,9 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     return true;
   }
   if (mips::isScalarFPArithmetic(Id)) {
-    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Wide)) ||
+    if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Img.Arch)) ||
         !mips::scalarFPAvailable(Id, Img.MIPS->ISARevision,
-                                 Img.MIPS->hasScalarFP32ABI(Wide),
+                                 Img.MIPS->hasScalarFP32ABI(Img.Arch),
                                  Img.MIPS->HistoricalISA) ||
         !Context.ScalarFPU ||
         !Context.ScalarFPU->supportsProfile(Img.MIPS->ISARevision,

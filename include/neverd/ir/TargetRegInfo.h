@@ -105,10 +105,10 @@ struct TargetRegInfo {
   uint16_t PointerSize = 8;
   uint16_t FullRegWidth = 8;
 
-  /// Machine width of SP and indirect control transfers. N32 carries a
-  /// four-byte C pointer in an eight-byte MIPS address register.
+  /// Machine width of SP and indirect control transfers. Both n32 and MIPS III
+  /// o32 carry a four-byte C pointer in an eight-byte MIPS address register.
   uint16_t addressRegisterBytes() const {
-    return isMIPSN32(TheArch) ? FullRegWidth : PointerSize;
+    return isMIPS64(TheArch) ? FullRegWidth : PointerSize;
   }
 
   llvm::ArrayRef<uint64_t> IntParamRegs;
@@ -472,7 +472,7 @@ struct TargetRegInfo {
   bool IntegerReturnPairHighFirst = false;
 
   unsigned integerReturnWordBytes() const {
-    return isMIPS(TheArch) ? FullRegWidth : PointerSize;
+    return isMIPSN32(TheArch) ? FullRegWidth : PointerSize;
   }
   unsigned integerReturnWordOffset(unsigned Lane) const {
     return (IntegerReturnPairHighFirst ? 1 - Lane : Lane) *

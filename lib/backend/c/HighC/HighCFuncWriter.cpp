@@ -6746,7 +6746,7 @@ void HighCWriter::writeFunctionProjection(const HighFunc &Func) {
     uint64_t StorageSize = checkedStackAdd(FrameBaseOffset, UpperSize);
     collectFrameRecordMembers(Func, FrameBaseOffset, StorageSize);
     const std::string FrameBaseInit =
-        isMIPSN32(Opts.TheArch)
+        hasMIPS32BitAddressIn64BitGPR(Opts.TheArch)
             ? "const int64_t frame_base = (int64_t)(intptr_t)"
             : "const uintptr_t frame_base = (uintptr_t)";
     emitIndent(1);

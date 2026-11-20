@@ -14,6 +14,8 @@
 #include "gtest/gtest.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/TargetRegInfo.h"
+#include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/ELF/ELFLoader.h"
 #include "neverd/loader/ELF/ELFProgramMetadata.h"
@@ -86,6 +88,59 @@ TEST(MIPSN32Loader, IdentifiesELF32With64BitGPRsInBothByteOrders) {
     auto Invalid = Loader.loadBuffer(File.buffer());
     ASSERT_FALSE(bool(Invalid));
     llvm::consumeError(Invalid.takeError());
+  }
+}
+
+TEST(MIPSHistoricalLoader, MIPSIIIO32RetainsMachineAndABIWidths) {
+  for (bool Little : {false, true}) {
+    const Arch A = Little ? Arch::MIPS64O32EL : Arch::MIPS64O32;
+    for (unsigned GPR : {0u, 1u, 2u, 3u}) {
+      ELFBytes File(Little ? Arch::MIPS32EL : Arch::MIPS32);
+      File.put(36, 0x20001101, 4); // GNU-linked MIPS III ELF32/o32.
+      File.abiFlags();
+      File.Bytes[0xe2] = 3;
+      File.Bytes[0xe3] = 0;
+      File.Bytes[0xe4] = GPR; // GNU emits 1, Clang can emit 2.
+      File.Bytes[0xe5] = 1;
+      File.Bytes[0xe7] = 1;
+      std::vector<LoadCandidate> Rows;
+      ELFLoader::identify(File.buffer(), Rows);
+      ELFLoader Loader;
+      auto Image = Loader.loadBuffer(File.buffer());
+      ASSERT_EQ(Rows.size(), 1u);
+      if (GPR != 1 && GPR != 2) {
+        EXPECT_FALSE(Rows[0].Loadable);
+        ASSERT_FALSE(bool(Image));
+        llvm::consumeError(Image.takeError());
+        continue;
+      }
+      ASSERT_TRUE(Rows[0].Loadable) << Rows[0].Reason;
+      ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+      EXPECT_EQ(Rows[0].TheArch, A);
+      EXPECT_EQ(Image->Arch, A);
+      EXPECT_EQ(Image->getPointerSize(), 4u);
+      EXPECT_EQ(Image->MIPS->ABI, MIPSABI::O32);
+      EXPECT_TRUE(Image->MIPS->hasScalarFP32ABI(A));
+      EXPECT_FALSE(Image->MIPS->hasScalarFP64ABI(A));
+    }
+    ELFBytes GP(Little ? Arch::MIPS32EL : Arch::MIPS32);
+    GP.put(36, 0x20001000, 4);
+    GP.globalPointer(0xfedc8000);
+    ELFLoader Loader;
+    auto Image = Loader.loadBuffer(GP.buffer());
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    EXPECT_EQ(Image->MIPS->EntryGP, 0xfffffffffedc8000ull);
+    const auto &TRI = getTargetRegInfo(A);
+    EXPECT_EQ(TRI.addressRegisterBytes(), 8u);
+    EXPECT_EQ(TRI.integerReturnWordBytes(), 4u);
+    EXPECT_EQ(TRI.integerReturnWordOffset(0), Little ? 0u : 4u);
+    const auto Layout = TRI.integerArgumentLayout(BinaryFormat::ELF);
+    EXPECT_EQ(Layout.Registers.size(), 4u);
+    EXPECT_EQ(Layout.SlotBytes, 4u);
+    EXPECT_EQ(Layout.EntryStackBase, 16);
+    EXPECT_EQ(guaranteedEntryStackAlignment(A, BinaryFormat::ELF), 8u);
+    EXPECT_STREQ(TRI.GetRegName(mipsreg::r(8), 8), "t0");
+    EXPECT_EQ(TRI.callPreservedPrefixSize(mipsreg::r(16), 8), 4u);
   }
 }
 

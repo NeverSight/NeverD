@@ -57,23 +57,23 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
     std::array<TargetRegInfo, std::size(Targets)> Result;
     for (unsigned I = 0; I < Result.size(); ++I) {
       TargetRegInfo &Info = Result[I];
-      const bool Wide = isMIPS64(Targets[I]);
+      const bool O32 = isMIPSO32(Targets[I]);
       Info.TheArch = Targets[I];
       Info.StackPointer = mipsreg::SP;
       Info.FramePointer = mipsreg::FP;
       Info.LinkRegister = mipsreg::RA;
       Info.ProgramCounter = mipsreg::PC;
-      Info.FullRegWidth = Wide ? 8 : 4;
-      Info.PointerSize = isMIPSN32(Targets[I]) ? 4 : Info.FullRegWidth;
+      Info.FullRegWidth = isMIPS64(Targets[I]) ? 8 : 4;
+      Info.PointerSize = isMIPSN64(Targets[I]) ? 8 : 4;
       Info.MinInsnAlign = 4;
       Info.VecRegBase = mipsreg::VectorBase;
       Info.VecRegStride = Info.VecRegWidth = mipsreg::VectorBytes;
       Info.VecRegCount = mipsreg::VectorCount;
       Info.SubRegs = VectorViews;
       Info.IntParamRegs =
-          Wide ? llvm::ArrayRef(N64Parameters) : llvm::ArrayRef(O32Parameters);
-      Info.FPParamRegs = Wide ? llvm::ArrayRef(N64FPParameters)
-                              : llvm::ArrayRef(O32FPParameters);
+          O32 ? llvm::ArrayRef(O32Parameters) : llvm::ArrayRef(N64Parameters);
+      Info.FPParamRegs = O32 ? llvm::ArrayRef(O32FPParameters)
+                             : llvm::ArrayRef(N64FPParameters);
       Info.FPReturnReg = mipsreg::w(0);
       Info.FPReturnRegs = FPReturnRegisters;
       Info.FPABIRegWidth = 8;
@@ -82,9 +82,11 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
       Info.IntegerReturnPairHighFirst = !archLittleEndian(Targets[I]);
       Info.IntReturnRegs = ReturnRegisters;
       Info.CalleeSaveRegs =
-          Wide ? llvm::ArrayRef(N64Saved) : llvm::ArrayRef(O32Saved);
-      Info.GetRegName = Wide ? getMIPS64RegName : getMIPS32RegName;
-      Info.CallStackArgumentBase = Wide ? 0 : 16;
+          O32 ? llvm::ArrayRef(O32Saved) : llvm::ArrayRef(N64Saved);
+      Info.GetRegName = isMIPS64O32(Targets[I]) ? getMIPS64O32RegName
+                        : O32                   ? getMIPS32RegName
+                                                : getMIPS64RegName;
+      Info.CallStackArgumentBase = O32 ? 16 : 0;
     }
     return Result;
   }();
@@ -101,6 +103,10 @@ const TargetRegInfo &getMIPSRegInfo(Arch Target) {
     return Tables[4];
   case Arch::MIPS64N32EL:
     return Tables[5];
+  case Arch::MIPS64O32:
+    return Tables[6];
+  case Arch::MIPS64O32EL:
+    return Tables[7];
   default:
     llvm_unreachable("MIPS table requested for another architecture");
   }

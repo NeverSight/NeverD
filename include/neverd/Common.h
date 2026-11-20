@@ -342,8 +342,25 @@ constexpr bool isMIPSN32(Arch A) {
   return A == Arch::MIPS64N32 || A == Arch::MIPS64N32EL;
 }
 
+constexpr bool isMIPSN64(Arch A) {
+  return A == Arch::MIPS64 || A == Arch::MIPS64EL;
+}
+
+constexpr bool isMIPS64O32(Arch A) {
+  return A == Arch::MIPS64O32 || A == Arch::MIPS64O32EL;
+}
+
+/// ELF32 pointers held sign-extended in full-width GPRs.
+constexpr bool hasMIPS32BitAddressIn64BitGPR(Arch A) {
+  return isMIPSN32(A) || isMIPS64O32(A);
+}
+
+constexpr bool isMIPSO32(Arch A) {
+  return A == Arch::MIPS32 || A == Arch::MIPS32EL || isMIPS64O32(A);
+}
+
 constexpr bool isMIPS64(Arch A) {
-  return A == Arch::MIPS64 || A == Arch::MIPS64EL || isMIPSN32(A);
+  return isMIPSN64(A) || isMIPSN32(A) || isMIPS64O32(A);
 }
 
 constexpr bool isMIPS(Arch A) {

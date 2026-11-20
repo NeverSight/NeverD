@@ -105,10 +105,8 @@ llvm::Error loadELF(llvm::object::ELFObjectFile<ELFT> &Obj, BinaryImage &Img,
     auto Profile = elf_loader::readMIPSProfile(Obj);
     if (!Profile)
       return Profile.takeError();
-    if (Profile->ABI == MIPSABI::N32)
-      Img.Arch = ELFT::Endianness == llvm::endianness::little
-                     ? Arch::MIPS64N32EL
-                     : Arch::MIPS64N32;
+    Img.Arch =
+        Profile->architecture(ELFT::Endianness == llvm::endianness::little);
     Img.MIPS = *Profile;
     if (Profile->HasMicroMIPS || Profile->HasMIPS16)
       Img.Mode = InstructionMode::MixedMIPS;
@@ -538,8 +536,8 @@ void ELFLoader::identify(llvm::MemoryBufferRef Buffer,
       if (auto Profile = elf_loader::readMIPSProfile(**Obj); !Profile) {
         Row.Loadable = false;
         Row.Reason = llvm::toString(Profile.takeError());
-      } else if (Profile->ABI == MIPSABI::N32) {
-        Row.TheArch = Row.BigEndian ? Arch::MIPS64N32 : Arch::MIPS64N32EL;
+      } else {
+        Row.TheArch = Profile->architecture(!Row.BigEndian);
       }
     } else if (Row.BigEndian) {
       Row.Loadable = false;

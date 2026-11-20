@@ -24,6 +24,18 @@ inline constexpr auto FirstLevel = [] {
 }();
 } // namespace historical
 
+/// Doubleword integer instructions, including coprocessor moves through a GPR,
+/// require the processor's 64-bit operation mode on the R4000.
+constexpr bool historicalDoublewordGPRInstruction(uint32_t Word) {
+  using namespace historical;
+  const unsigned Op = Word >> 26;
+  if (Op == 16 || Op == 17) {
+    const unsigned RS = Word >> 21 & 31;
+    return RS == 1 || RS == 5;
+  }
+  return Op ? FirstLevel[Major][Op] == 3 : FirstLevel[Special][Word & 63] == 3;
+}
+
 constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
   using namespace historical;
   const unsigned Op = Word >> 26, RS = Word >> 21 & 31, RT = Word >> 16 & 31,

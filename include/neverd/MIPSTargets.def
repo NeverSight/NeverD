@@ -11,4 +11,6 @@ NEVERD_MIPS_TARGET(MIPS64EL, "mips64el", "mips64el-unknown-linux-gnuabi64")
 NEVERD_MIPS_TARGET(MIPS64N32, "mips64n32", "mips64-unknown-linux-gnuabin32")
 NEVERD_MIPS_TARGET(MIPS64N32EL, "mips64n32el",
                    "mips64el-unknown-linux-gnuabin32")
+NEVERD_MIPS_TARGET(MIPS64O32, "mips64o32", "mips-unknown-linux-gnu")
+NEVERD_MIPS_TARGET(MIPS64O32EL, "mips64o32el", "mipsel-unknown-linux-gnu")
 #undef NEVERD_MIPS_TARGET

@@ -28,7 +28,7 @@ struct Value {
 
 class EntryValues {
   llvm::SmallDenseMap<uint64_t, Value, 8> Registers, Temps;
-  bool N32;
+  bool WordPointers;
 
   std::optional<Value> read(const NdVar &V) const {
     if (V.isConst() && !isAddressProvenance(V.Provenance))
@@ -50,13 +50,13 @@ class EntryValues {
     if (Op.Opcode == NdOp::COPY && Op.Output.Size == Op.Inputs[0].Size)
       return A;
     if (Op.Opcode == NdOp::INT_SEXT && Op.Inputs[0].Size == 4 &&
-        Op.Output.Size == 8 && (N32 || A->Base == Origin::Scalar))
+        Op.Output.Size == 8 && (WordPointers || A->Base == Origin::Scalar))
       return Value{uint64_t(llvm::SignExtend64<32>(A->Bits)), A->Base, true};
     if (Op.NumInputs != 2)
       return std::nullopt;
     if (Op.Opcode == NdOp::SUBBYTES && Op.Inputs[0].Size == 8 &&
         Op.Output.Size == 4 && Op.Inputs[1].isConst() && !Op.Inputs[1].Offset &&
-        (N32 || A->Base == Origin::Scalar))
+        (WordPointers || A->Base == Origin::Scalar))
       return Value{uint32_t(A->Bits), A->Base, false};
     if (Op.Opcode != NdOp::INT_ADD ||
         (Op.Output.Size != 8 && Op.Output.Size != 4))
@@ -66,7 +66,7 @@ class EntryValues {
       return std::nullopt;
     const bool Relative =
         A->Base != Origin::Scalar || B->Base != Origin::Scalar;
-    if (Op.Output.Size == 4 && Relative && !N32)
+    if (Op.Output.Size == 4 && Relative && !WordPointers)
       return std::nullopt;
     const uint64_t Sum = A->Bits + B->Bits;
     return Value{Op.Output.Size == 4 ? uint32_t(Sum) : Sum,
@@ -74,10 +74,10 @@ class EntryValues {
   }
 
 public:
-  EntryValues(va_t Entry, bool N32) : N32(N32) {
-    Registers[mipsreg::T9] = {N32 ? uint64_t(llvm::SignExtend64<32>(Entry))
-                                  : Entry,
-                              Origin::Entry, N32, 8};
+  EntryValues(va_t Entry, bool WordPointers) : WordPointers(WordPointers) {
+    Registers[mipsreg::T9] = {
+        WordPointers ? uint64_t(llvm::SignExtend64<32>(Entry)) : Entry,
+        Origin::Entry, WordPointers, 8};
   }
 
   void nextInstruction() { Temps.clear(); }
@@ -114,8 +114,8 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
       !Entry.ExceptionalPreds.empty())
     return std::nullopt;
 
-  const bool N32 = isMIPSN32(Image.Arch);
-  EntryValues Values(Function.Entry, N32);
+  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  EntryValues Values(Function.Entry, WordPointers);
   size_t End = 0;
   llvm::SmallVector<std::pair<size_t, uint64_t>, 4> WordChecks;
   for (const auto &Insn : Entry.InstructionBoundaries) {
@@ -146,7 +146,7 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
         return std::nullopt;
       auto V = Values.write(Op);
       if (!V || V->Base != Origin::AdjustedEntry ||
-          V->Bits != *Image.MIPS->PICGP || (N32 && !V->SignedWord) ||
+          V->Bits != *Image.MIPS->PICGP || (WordPointers && !V->SignedWord) ||
           !Op.Output.isReg() || Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
         continue;
 

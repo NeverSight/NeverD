@@ -6952,7 +6952,7 @@ std::string HighCWriter::unknownVarUse(const HighExpr &E,
     // LLVM route reads it: AArch64 x30 and ARM LR alike (x86 has none).
     if (E.Var.Kind == MedVar::Reg && TRI.isLinkRegister(E.Var.RegOff) &&
         E.Var.Size == TRI.addressRegisterBytes())
-      return isMIPSN32(Opts.TheArch)
+      return hasMIPS32BitAddressIn64BitGPR(Opts.TheArch)
                  ? "(int64_t)(intptr_t)__builtin_return_address(0)"
                  : "(uintptr_t)__builtin_return_address(0)";
     // The platform register's entry value is the platform's state, which C
@@ -8313,7 +8313,7 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         DeclaredType->Size == 4)
       return typedText(E, "(int64_t)(int32_t)" + Name, 8, true);
     if (pointerNeedsIntegerView(DeclaredType)) {
-      if (MIPSWordParameter && isMIPSN32(Opts.TheArch))
+      if (MIPSWordParameter && hasMIPS32BitAddressIn64BitGPR(Opts.TheArch))
         return typedText(E, "(int64_t)(intptr_t)" + Name, 8, true);
       return PointerInteger("(uintptr_t)" + Name);
     }

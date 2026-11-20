@@ -39,7 +39,8 @@ constexpr bool archHasSingleInstructionMode(Arch A) { return A != Arch::ARM; }
 constexpr bool archLittleEndian(Arch A) {
   return A == Arch::X64 || A == Arch::AArch64 || A == Arch::X86 ||
          A == Arch::ARM || A == Arch::SBF || A == Arch::MIPS32EL ||
-         A == Arch::MIPS64EL || A == Arch::MIPS64N32EL;
+         A == Arch::MIPS64EL || A == Arch::MIPS64N32EL ||
+         A == Arch::MIPS64O32EL;
 }
 
 inline bool archMachOPatchSupported(Arch A) { return archCodegenSupported(A); }
@@ -82,7 +83,7 @@ syntheticEntryStackResidue(Arch A, BinaryFormat Fmt = BinaryFormat::Unknown,
 constexpr uint64_t
 guaranteedEntryStackAlignment(Arch A, BinaryFormat Fmt,
                               StackEntryKind Kind = StackEntryKind::Call) {
-  if (A == Arch::ARM || A == Arch::MIPS32 || A == Arch::MIPS32EL)
+  if (A == Arch::ARM || isMIPSO32(A))
     return 8;
   if (isMIPS64(A))
     return 16;
