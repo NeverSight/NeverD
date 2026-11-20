@@ -1113,6 +1113,110 @@ bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff) {
   return liveInReachesUse(Func, RegOff, false, false);
 }
 
+bool liveInReachesLiveUse(const MedFunc &Func, uint64_t RegOff) {
+  if (Func.Blocks.empty())
+    return true;
+  llvm::SmallVector<MedVar, 2> Seeds;
+  for (const MedOp &Op : Func.Blocks.front().Ops) {
+    if (Op.Opcode != NdOp::COPY)
+      break;
+    if (!isEntryLiveInCopy(Op, RegOff))
+      continue;
+    Seeds.push_back(Op.Output);
+    if (isRenamedEntryLiveInCopy(Op, RegOff))
+      Seeds.push_back(Op.Inputs[0]);
+  }
+  if (Seeds.empty())
+    return true;
+  auto Carries = [](const MedOp &Op) {
+    switch (Op.Opcode) {
+    case NdOp::COPY:
+    case NdOp::SUBBYTES:
+    case NdOp::INT_ZEXT:
+    case NdOp::INT_SEXT:
+    case NdOp::CONCAT:
+      return true;
+    default:
+      return false;
+    }
+  };
+  const ValueSet Reached = computeForwardValueClosure(
+      Func, Seeds, [&](const MedOp &Op, unsigned) { return Carries(Op); });
+  const TargetRegInfo &TRI = getTargetRegInfo(Seeds.front().TheArch);
+  // A push stores at the stack pointer itself; a spill to a frame slot, read
+  // back later, is a use.
+  auto Push = [&](const MedOp &Op) {
+    return Op.Opcode == NdOp::STORE && Op.NumInputs >= 2 &&
+           Op.Inputs[0].Kind == MedVar::Reg &&
+           Op.Inputs[0].RegOff == TRI.StackPointer;
+  };
+  // What may be needed before call recovery decides each call's arguments:
+  // an effect MedDCE keeps but a return, which reads the integer return
+  // register whatever the function returns, and every write of a register
+  // but a flag, which a later call may take as an argument.  A temporary or
+  // a flag is needed only where something needed reads it.
+  auto RegisterWrite = [&](const MedOp &Op) {
+    return Op.Output.Kind == MedVar::Reg &&
+           !TRI.isFlag(Op.Output.RegOff, Op.Output.Size);
+  };
+  auto Root = [&](const MedOp &Op) {
+    return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
+           Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
+           Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
+           Op.Opcode == NdOp::INTRINSIC || Op.Opcode == NdOp::BRANCH ||
+           Op.Opcode == NdOp::COND_BR || Op.Opcode == NdOp::INDIR_BR ||
+           Op.MemoryOrdering != NdMemoryOrdering::None ||
+           Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+           RegisterWrite(Op);
+  };
+  llvm::DenseMap<ValueKey, const MedOp *> OpDefs;
+  llvm::DenseMap<ValueKey, const PhiNode *> PhiDefs;
+  for (const MedBlock &Block : Func.Blocks) {
+    for (const PhiNode &Phi : Block.Phis)
+      if (Phi.Output.Id >= 0)
+        PhiDefs.try_emplace(valueKey(Phi.Output), &Phi);
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Output.Id >= 0)
+        OpDefs.try_emplace(valueKey(Op.Output), &Op);
+  }
+  ValueSet Live;
+  llvm::SmallVector<ValueKey, 32> Worklist;
+  auto MarkLive = [&](const MedVar &V) {
+    if (!V.isConst() && Live.insert(valueKey(V)).second)
+      Worklist.push_back(valueKey(V));
+  };
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode != NdOp::RETURN && Root(Op))
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          if (!(Push(Op) && I == 1))
+            MarkLive(Op.Inputs[I]);
+  while (!Worklist.empty()) {
+    const ValueKey Key = Worklist.pop_back_val();
+    if (const auto Def = OpDefs.find(Key); Def != OpDefs.end()) {
+      for (unsigned I = 0; I < Def->second->NumInputs; ++I)
+        MarkLive(Def->second->Inputs[I]);
+    } else if (const auto Phi = PhiDefs.find(Key); Phi != PhiDefs.end()) {
+      for (const auto &[Pred, Arg] : Phi->second->Args) {
+        (void)Pred;
+        MarkLive(Arg);
+      }
+    }
+  }
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops) {
+      if (Op.Opcode == NdOp::RETURN || isEntryLiveInCopy(Op, RegOff) ||
+          !(Root(Op) ||
+            (Op.Output.Id >= 0 && containsValue(Live, Op.Output))) ||
+          (Carries(Op) && !RegisterWrite(Op)))
+        continue;
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        if (containsValue(Reached, Op.Inputs[I]) && !(Push(Op) && I == 1))
+          return true;
+    }
+  return false;
+}
+
 namespace {
 
 /// Where the values of a function that come from the stack pointer point, from

@@ -549,11 +549,19 @@ Still open, in order of yield:
      - Growth elision for stack-ABI functions now runs where the growth
        block's only predecessor is the entry's check: the no-return list
        ended the false edges from `gopanic` and `throw` calls before it, and
-       `runtime_makeslice(et, len, cap)` reads its parameters. Some functions
-       still read scratch registers at their entry and are no stack-only
-       function, so their stack parameters take System V's numbering after a
-       spurious register parameter (`runtime_mallocgc`: AL, R9 and R13 reach a
-       join from two of its paths).
+       `runtime_makeslice(et, len, cap)` reads its parameters. A register
+       whose incoming value no needed operation reads, as Go's nil check
+       `testb al, (reg)` reads AL, no longer makes a function take register
+       parameters (`runtime_mallocgc(size, typ, needzero)`).
+     - A call's outgoing slot stored in an earlier block, as the compiler
+       leaves `memequal`'s second argument from a previous call, is not
+       found: the argument prints a placeholder.
+     - A tail jump to a stack-only routine passes the caller's incoming slots
+       (Windows `ctrlhandler` to `externalthreadhandler`); those arguments
+       print placeholders.
+     - On Windows, a block inside a Go function is sometimes split off as a
+       function of its own (`ensureSwept`'s 0x420515), and its call passes
+       Win64 positions, which widens the enclosing function.
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
      - ABI0 assembly in register-ABI images.

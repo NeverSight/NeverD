@@ -5946,9 +5946,16 @@ parameters from the slot past its return address (`MedFunc::
 StackArgumentsOnly`, `goStackArgumentLayout`). This applies only where the
 function reads no register at its entry but the stack, frame and link
 registers, the closure context, and arm64's g in R28
-(`goStackABIEntryRegister`). Go 1.16's register stubs (`panicIndex` takes AX
-and CX, `duffzero` DI and X0) and the trampolines the platform's code enters
-keep their registers. A call passes a callee's arguments on the stack only
+(`goStackABIEntryRegister`). A register whose incoming value no operation the
+function needs reads takes no argument either (`liveInReachesLiveUse`): a
+flag computation nothing reads, as Go's nil check `testb al, (reg)` makes, or a
+return, which reads RAX whatever the stack ABI returns. Neither does a register
+whose incoming bytes only an x86-64 partial write keeps (`sete r9b` keeps R9's
+upper bytes; `liveInOnlyFeedsScratch`). Read as arguments, they put an unused
+parameter first and moved every stack parameter one place, as in
+`runtime_mallocgc(?, size, typ, needzero)`. Go 1.16's register stubs
+(`panicIndex` takes AX and CX, `duffzero` DI and X0) and the trampolines the
+platform's code enters keep their registers. A call passes a callee's arguments on the stack only
 where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete

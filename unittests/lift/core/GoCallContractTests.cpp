@@ -862,6 +862,56 @@ TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
   EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
 }
 
+TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
+  // Registers a Go 1.16 function reads at its entry without taking an
+  // argument there.  Read as register arguments, each put an unused parameter
+  // first and moved every stack parameter one place, as in mallocgc(?, size,
+  // typ, needzero):
+  //   mallocgc's `sete r9b` keeps R9's upper bytes, which nothing reads:
+  //     mov rax, [rsp+8]; cmp rax, [rsp+16]; sete r9b; movzx eax, r9b;
+  //     mov [rsp+24], rax; ret
+  //   Go's nil check reads AL only to set flags nothing reads:
+  //     mov rbx, [rsp+8]; testb al, (rbx); mov rax, [rbx];
+  //     mov [rsp+16], rax; ret
+  //   a return reads RAX, where the stack ABI returns nothing:
+  //     mov rcx, [rsp+8]; mov [rsp+16], rcx; ret
+  struct Shape {
+    std::vector<uint8_t> Code;
+    uint32_t FrameBytes;
+    size_t Parameters;
+  };
+  const Shape Shapes[] = {
+      {{0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x3B, 0x44, 0x24, 0x10, 0x41, 0x0F,
+        0x94, 0xC1, 0x41, 0x0F, 0xB6, 0xC1, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3},
+       24,
+       2},
+      {{0x48, 0x8B, 0x5C, 0x24, 0x08, 0x84, 0x03, 0x48, 0x8B, 0x03, 0x48, 0x89,
+        0x44, 0x24, 0x10, 0xC3},
+       16,
+       1},
+      {{0x48, 0x8B, 0x4C, 0x24, 0x08, 0x48, 0x89, 0x4C, 0x24, 0x10, 0xC3},
+       16,
+       1},
+  };
+  for (const Shape &Case : Shapes) {
+    SCOPED_TRACE(Case.Code.size());
+    constexpr va_t Entry = kTextVA + 0x100;
+    GoTestImage T;
+    T.writeText(Entry, Case.Code);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Entry, kTextVA + 0x300}};
+    Module.FrameArguments = {{Entry, Case.FrameBytes}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+    const MedFunc F = lift(T.Img, Entry);
+    EXPECT_TRUE(F.StackArgumentsOnly);
+    EXPECT_EQ(F.Params.size(), Case.Parameters);
+    for (const MedVar &Param : F.Params)
+      EXPECT_EQ(Param.RegOff, kNoParamReg);
+  }
+}
+
 TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
   // Go 1.16's runtime.panicIndex: mov [rsp+8], rax; mov [rsp+16], rcx;
   // jmp runtime.goPanicIndex.  It takes x in AX and y in CX, which it stores

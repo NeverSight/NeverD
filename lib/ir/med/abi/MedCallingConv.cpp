@@ -1627,14 +1627,24 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   if (Image && !GoRegisterArguments && !GoRegisterStub &&
       !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry)) {
     // The entry's leading self-copies name every register read before the
-    // body writes it (findLiveInParamRegs).
+    // body writes it (findLiveInParamRegs).  One whose incoming value no
+    // operation the function needs reads takes no argument: a dead flag
+    // computation (Go's nil check `testb al, (reg)`), a return (the stack ABI
+    // returns nothing in a register), or, on x86-64, a partial write's merge
+    // of the bytes it keeps (`sete r9b` keeps R9's upper bytes, which Go never
+    // reads).
     Func.StackArgumentsOnly = true;
     for (const MedOp &Op : Func.Blocks.front().Ops) {
       if (Op.Opcode != NdOp::COPY)
         break;
       if (Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
           Op.Inputs[0].Id == Op.Output.Id &&
-          !goStackABIEntryRegister(TRI, Op.Output.RegOff)) {
+          !goStackABIEntryRegister(TRI, Op.Output.RegOff) &&
+          med_calling_conv_detail::liveInReachesLiveUse(Func,
+                                                        Op.Output.RegOff) &&
+          !(TheArch == Arch::X64 &&
+            med_calling_conv_detail::liveInOnlyFeedsScratch(
+                Func, Op.Output.RegOff))) {
         Func.StackArgumentsOnly = false;
         break;
       }

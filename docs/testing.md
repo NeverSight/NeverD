@@ -20627,6 +20627,11 @@ nothing is proved. The test also checks that the loader keeps `_func.args`.
 `main.add(a, b int) int` and its caller. The callee takes two stack
 parameters and no register, a register stub keeps its registers, and the
 call passes `(1, 2)`. The record's third word, the result, is no argument.
+`GoStackArguments.AValueNothingNeedsTakesNoArgument` lifts three Go 1.16
+functions that read a register at their entry without taking an argument
+there: `sete r9b`, the nil check `testb al, (rbx)`, and a return. Each is a
+stack-only function whose parameters start at the slot past its return
+address.
 `GoStackArguments.ARegisterStubTakesTheRegistersItPassesOn` builds Go 1.16's
 `panicIndex` stub, its stack-argument half and a caller, as ELF and as PE.
 The recognizer names (AX, CX), the stub's summary reads exactly those and
