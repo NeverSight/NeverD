@@ -5890,6 +5890,18 @@ return hands back, after the function's dead code is gone, so register DCE
 keeps, in Go code, the definition of each result register that reaches a
 return: a function's callers read RCX after it, and its `lea rcx, ...` stays.
 
+Each result is as wide as its callers read it, a view a caller takes of it
+included, in the widths C declares; RAX stays whole, and a result no caller
+reads, before the last, is a word (`GoCallShape`). Go returns a bool in its
+register's low byte, which `setg bl` merges into upper bytes the function
+never set: a word-wide field returned those, a trap on every call, where
+`runtime.stackScanState.getPtr` now returns `{p, v10 == v9}` as a
+`uint64_t, uint8_t` record. The packed value a call returns is laid out as
+that record (each field naturally aligned), and a register width wider than
+its field holds the field in its low bytes, which is all any reader takes. A
+result a function hands back from a call it makes stays a word at that call,
+and an indirect call's results stay words.
+
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's

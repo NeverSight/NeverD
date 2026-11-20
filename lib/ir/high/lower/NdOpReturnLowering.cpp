@@ -342,6 +342,8 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
                  goResultPosition(TargetArch, E.value().RegOff) ==
                      static_cast<int>(E.index());
         });
+    // A narrower Go result is the low bytes of the whole register.
+    const uint16_t GoWidth = getTargetRegInfo(TargetArch).FullRegWidth;
     auto Reaching = [&](uint64_t RegOff, uint16_t Size) -> ExprPtr {
       // What the register holds at the end of \p Block: its last write
       // there, or none where a call after that write may change it.  None
@@ -354,13 +356,13 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
           if (RIt->Opcode != NdOp::RETURN && RIt->Output.Kind == MedVar::Reg &&
               RIt->Output.Size > 0 && RIt->Output.RegOff == RegOff &&
               !isRegisterLowView(*RIt) &&
-              (!GoResults || RIt->Output.Size >= Size))
+              (!GoResults || RIt->Output.Size >= GoWidth))
             return ValueFromDefinition(*RIt);
           if (!callKeepsRegister(*RIt, RegOff, Size))
             return ExprPtr();
         }
         if (const PhiNode *Phi = aggregateReturnPhi(Block, RegOff);
-            Phi && (!GoResults || Phi->Output.Size >= Size))
+            Phi && (!GoResults || Phi->Output.Size >= GoWidth))
           return HighExpr::makeVar(Phi->Output);
         return std::nullopt;
       };
@@ -377,7 +379,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
         // The field still holds the register that view was taken from.
         widenRegisterLowView(Med, Entry);
         if (Entry.Size > 0 && !isEntryIdentity(Med, Entry) &&
-            (!GoResults || Entry.Size >= Size))
+            (!GoResults || Entry.Size >= GoWidth))
           return medvarToExpr(Entry);
       }
       return nullptr;

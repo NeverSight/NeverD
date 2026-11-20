@@ -14,6 +14,7 @@
 
 #include "../lower/LowToMedCallReturnDetail.h"
 
+#include "neverd/ir/NdTypes.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
@@ -106,29 +107,36 @@ int goResultPosition(Arch A, uint64_t RegOff) {
   return It == Results.end() ? -1 : static_cast<int>(It - Results.begin());
 }
 
-std::map<uint32_t, int> goCallResultsRead(const MedFunc &Func, Arch A,
-                                          const std::set<uint32_t> &Sites,
-                                          llvm::ArrayRef<MedVar> Returned) {
-  std::map<uint32_t, int> Last;
+std::map<uint32_t, GoCallShape>
+goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
+                  llvm::ArrayRef<MedVar> Returned) {
+  std::map<uint32_t, GoCallShape> Shapes;
   if (Sites.empty())
-    return Last;
+    return Shapes;
+  const uint16_t Word = getTargetRegInfo(A).PointerSize;
   for (const MedBlock &Block : Func.Blocks)
     for (const MedOp &Op : Block.Ops)
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Sites.count(Op.CallSiteId))
-        if (const int Returning = returnedLast(A, Op); Returning > 0)
-          Last[Op.CallSiteId] = Returning;
+        if (const int Returning = returnedLast(A, Op); Returning > 0) {
+          GoCallShape &Shape = Shapes[Op.CallSiteId];
+          Shape.Last = Returning;
+          for (const MedReturnReg &Field : *Op.RegisterReturnFields)
+            Shape.Widths.push_back(Field.Size);
+        }
   std::map<uint32_t, std::vector<MedVar>> Clobbers;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Sites.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
         goResultPosition(A, Clobber.Value.RegOff) > 0)
       Clobbers[Clobber.CallSiteId].push_back(Clobber.Value);
   if (Clobbers.empty())
-    return Last;
+    return Shapes;
 
   // The widths each value of a result register is read at, carried through
   // the PHIs it reaches.
   llvm::DenseMap<ValueKey, uint16_t> ReadWidths;
+  // The bytes of a value the views taken of it cover.
+  llvm::DenseMap<ValueKey, uint16_t> ViewWidths;
   llvm::DenseMap<ValueKey, const PhiNode *> PhiDefinitions;
   llvm::SmallVector<ValueKey, 16> Work;
   const auto Observe = [&](const MedVar &Value, uint16_t Bytes) {
@@ -154,8 +162,16 @@ std::map<uint32_t, int> goCallResultsRead(const MedFunc &Func, Arch A,
         PhiDefinitions.try_emplace(identity(Phi.Output), &Phi);
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const MedOp &Read = Block.Ops[I];
-      if (SelfView(Read) ||
-          lowtomed_detail::keepsUpperBytesOfWrite(Block.Ops, I) ||
+      if (SelfView(Read)) {
+        const uint64_t Offset = Read.NumInputs >= 2 && Read.Inputs[1].isConst()
+                                    ? Read.Inputs[1].ConstVal
+                                    : 0;
+        uint16_t &Covered = ViewWidths[identity(Read.Inputs[0])];
+        Covered = static_cast<uint16_t>(
+            std::max<uint64_t>(Covered, Offset + Read.Output.Size));
+        continue;
+      }
+      if (lowtomed_detail::keepsUpperBytesOfWrite(Block.Ops, I) ||
           ((Read.Opcode == NdOp::INT_XOR || Read.Opcode == NdOp::INT_SUB) &&
            Read.NumInputs == 2 && Read.Inputs[0].Kind == Read.Inputs[1].Kind &&
            Read.Inputs[0].Id == Read.Inputs[1].Id &&
@@ -177,32 +193,76 @@ std::map<uint32_t, int> goCallResultsRead(const MedFunc &Func, Arch A,
     for (const auto &[Pred, Input] : Phi.Args)
       Observe(Input, Width);
   }
-  for (const auto &[Site, Values] : Clobbers)
+  for (const auto &[Site, Values] : Clobbers) {
+    int Last = -1;
     for (const MedVar &Value : Values)
-      if (ReadWidths.count(identity(Value))) {
-        int &Position = Last[Site];
-        Position = std::max(Position, goResultPosition(A, Value.RegOff));
-      }
-  return Last;
+      if (ReadWidths.count(identity(Value)))
+        Last = std::max(Last, goResultPosition(A, Value.RegOff));
+    const auto Known = Shapes.find(Site);
+    const int Returning = Known == Shapes.end() ? 0 : Known->second.Last;
+    if (Last <= Returning)
+      continue;
+    GoCallShape &Shape = Shapes[Site];
+    if (Shape.Widths.empty())
+      Shape.Widths.push_back(Word);
+    Shape.Widths.resize(Last + 1, 0);
+    Shape.Last = Last;
+    // A result is as wide as the widest read of it or view taken of it, in
+    // the register widths C has; one no reader takes is a whole word.
+    for (const MedVar &Value : Values) {
+      const int Position = goResultPosition(A, Value.RegOff);
+      if (Position <= Returning || Position > Last)
+        continue;
+      uint16_t Bytes = 0;
+      if (const auto Read = ReadWidths.find(identity(Value));
+          Read != ReadWidths.end())
+        Bytes = Read->second;
+      if (const auto View = ViewWidths.find(identity(Value));
+          View != ViewWidths.end())
+        Bytes = std::max(Bytes, View->second);
+      Shape.Widths[Position] = std::max(Shape.Widths[Position], Bytes);
+    }
+    for (int Position = Returning + 1; Position <= Last; ++Position) {
+      uint16_t &Width = Shape.Widths[Position];
+      uint16_t Rounded = 1;
+      while (Rounded < Width && Rounded < Word)
+        Rounded *= 2;
+      Width = Width ? std::min(Rounded, Word) : Word;
+    }
+  }
+  return Shapes;
 }
 
 void defineGoCallResults(MedFunc &Func, Arch A,
-                         const std::map<uint32_t, int> &Lasts) {
+                         const std::map<uint32_t, GoCallShape> &Shapes) {
   const llvm::ArrayRef<uint64_t> Results = goIntegerArgumentRegisters(A);
-  if (Lasts.empty())
+  if (Shapes.empty())
     return;
-  const auto Wanted = [&](const MedOp &Op) -> int {
+  const uint16_t Word = getTargetRegInfo(A).PointerSize;
+  const auto Wanted = [&](const MedOp &Op) -> const GoCallShape * {
     if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
-      return 0;
-    const auto Found = Lasts.find(Op.CallSiteId);
-    if (Found == Lasts.end() || Found->second <= 0 ||
-        Found->second >= static_cast<int>(Results.size()))
-      return 0;
+      return nullptr;
+    const auto Found = Shapes.find(Op.CallSiteId);
+    if (Found == Shapes.end())
+      return nullptr;
+    const GoCallShape &Shape = Found->second;
+    if (Shape.Last <= 0 || Shape.Last >= static_cast<int>(Results.size()) ||
+        Shape.Widths.size() != static_cast<size_t>(Shape.Last) + 1 ||
+        Shape.Widths[0] != Word)
+      return nullptr;
     const int Returning = returnedLast(A, Op);
     if (Returning < 0 &&
         (Op.Output.Kind != MedVar::Reg || Op.Output.RegOff != Results[0]))
-      return 0;
-    return Returning < Found->second ? Found->second : 0;
+      return nullptr;
+    if (Returning >= Shape.Last)
+      return nullptr;
+    // The results a call returns already are words, which the packed value
+    // keeps where it has them.
+    for (int Position = 0; Position <= Returning; ++Position)
+      if ((*Op.RegisterReturnFields)[Position].Size != Word ||
+          Shape.Widths[Position] != Word)
+        return nullptr;
+    return &Shape;
   };
 
   int NextVer = 1, NextId = 1;
@@ -224,11 +284,9 @@ void defineGoCallResults(MedFunc &Func, Arch A,
   }
   std::map<uint32_t, std::vector<MedVar>> Left;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
-    if (Lasts.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
+    if (Shapes.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
         goResultPosition(A, Clobber.Value.RegOff) > 0)
       Left[Clobber.CallSiteId].push_back(Clobber.Value);
-
-  const uint16_t Word = getTargetRegInfo(A).PointerSize;
   // The positions each call now defines, and the packed values that grow.
   std::map<uint32_t, std::pair<int, int>> Defined;
   llvm::DenseMap<ValueKey, uint16_t> Widened;
@@ -238,15 +296,27 @@ void defineGoCallResults(MedFunc &Func, Arch A,
     std::vector<MedOp> Ops;
     Ops.reserve(Block.Ops.size());
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
-      const int Last = Wanted(Block.Ops[I]);
+      const GoCallShape *Wants = Wanted(Block.Ops[I]);
+      // The record of the results lays them out: each field naturally
+      // aligned, as C declares the record (multiRegisterReturnType).
+      TypeRef Record;
+      if (Wants) {
+        std::vector<TypeRef> Members;
+        for (const uint16_t Width : Wants->Widths)
+          Members.push_back(NdType::makeInt(Width, false));
+        Record = NdType::makeStruct(std::move(Members));
+        if (!Record || Record->FieldOffsets.size() != Wants->Widths.size())
+          Wants = nullptr;
+      }
       Ops.push_back(std::move(Block.Ops[I]));
-      if (!Last)
+      if (!Wants)
         continue;
+      const int Last = Wants->Last;
       MedOp &Op = Ops.back();
       const int Returning = returnedLast(A, Op);
       const bool Fresh = Returning < 0;
       const int FirstNew = Fresh ? 0 : Returning + 1;
-      const uint16_t Bytes = static_cast<uint16_t>(Word * (Last + 1));
+      const uint16_t Bytes = Record->Size;
       // The fields a call returns follow it together, before the views the
       // narrower reads take of them: a call's shape is read from that run
       // (recoverStructReturnFromCallers).  A call that returns some already
@@ -287,16 +357,18 @@ void defineGoCallResults(MedFunc &Func, Arch A,
           Fresh ? std::vector<MedReturnReg>{} : *Op.RegisterReturnFields);
       for (int Position = FirstNew; Position <= Last; ++Position) {
         const uint64_t Register = Results[Position];
-        Shape->push_back({Register, Word, false});
+        const uint16_t Width = Wants->Widths[Position];
+        Shape->push_back({Register, Width, false});
         MedVar Field;
         if (Position == 0) {
           Field = First;
         } else {
           const MedVar *Exact = nullptr;
           for (const MedVar &Value : Values)
-            if (Value.RegOff == Register && (!Exact || Value.Size == Word))
+            if (Value.RegOff == Register &&
+                (!Exact || (Value.Size == Width && Exact->Size != Width)))
               Exact = &Value;
-          if (Exact) {
+          if (Exact && Exact->Size == Width) {
             Field = *Exact;
           } else {
             Field.Kind = MedVar::Reg;
@@ -306,23 +378,26 @@ void defineGoCallResults(MedFunc &Func, Arch A,
             Field.SSAVer = NextVer++;
           }
         }
-        Field.Size = Word;
+        Field.Size = Width;
         MedOp Extract;
         Extract.Opcode = NdOp::SUBBYTES;
         Extract.Addr = Op.Addr;
         Extract.Output = Field;
         Extract.addInput(Packed);
-        Extract.addInput(MedVar::makeConst(Word * Position, Word));
+        Extract.addInput(
+            MedVar::makeConst(Record->FieldOffsets[Position], Word));
         Fields.push_back(Extract);
+        // The register at a width no reader takes past the field holds the
+        // field in its low bytes; what is above them no read observes.
         for (const MedVar &Value : Values) {
           if (Value.RegOff != Register || identity(Value) == identity(Field))
             continue;
           MedOp View;
           View.Addr = Op.Addr;
           View.Output = Value;
-          View.Opcode = Value.Size < Word   ? NdOp::SUBBYTES
-                        : Value.Size > Word ? NdOp::INT_ZEXT
-                                            : NdOp::COPY;
+          View.Opcode = Value.Size < Width   ? NdOp::SUBBYTES
+                        : Value.Size > Width ? NdOp::INT_ZEXT
+                                             : NdOp::COPY;
           View.addInput(Field);
           if (View.Opcode == NdOp::SUBBYTES)
             View.addInput(MedVar::makeConst(0, Word));

@@ -20679,6 +20679,10 @@ so the call returns none. `GoInternalABI.AByteWriteOnlyItsByteIsReadOfKeepsNoRes
 calls a `main.f` that writes every result register through R9, then `setg r9b;
 movzx r9d, r9b`: the masked merge's copy into R9 is gone, yet neither the call
 nor `main.f` returns a second result.
+`GoInternalABI.AResultIsAsWideAsItsCallersReadIt` has `main.f` return a load
+and `setg bl` over an RBX it never set, and its caller read BL alone: the
+function and the call return `{RAX: 8, RBX: 1}`, and the function's C holds no
+unknown value.
 `SourceAggregate.ARegisterReturnRecordHoldsGosNineResults` gives a record of
 two, five and nine register words its members, and one of ten none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as

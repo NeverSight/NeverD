@@ -11,12 +11,14 @@
 //===----------------------------------------------------------------------===//
 
 #include "neverd/ir/CallRegisterContract.h"
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedGoResults.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include <map>
 #include <set>
 
 namespace neverd {
@@ -42,8 +44,15 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
           !Op.SourceCallHint && !Op.DoesNotReturn && !Op.RegisterReturnFields &&
           Op.Output.Kind == MedVar::Reg && Op.Output.RegOff == x86reg::RAX)
         Sites.insert(Op.CallSiteId);
-  defineGoCallResults(Func, TargetArch,
-                      goCallResultsRead(Func, TargetArch, Sites));
+  // An indirect call's results are words: no callee shares its record, and
+  // the record the pipeline extends (materializeGoCallResults) keeps them.
+  std::map<uint32_t, GoCallShape> Shapes =
+      goCallResultsRead(Func, TargetArch, Sites);
+  const uint16_t Word = getTargetRegInfo(TargetArch).PointerSize;
+  for (auto &[Site, Shape] : Shapes)
+    for (uint16_t &Width : Shape.Widths)
+      Width = Word;
+  defineGoCallResults(Func, TargetArch, Shapes);
 }
 
 } // namespace neverd

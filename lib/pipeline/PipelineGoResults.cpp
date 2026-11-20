@@ -75,7 +75,7 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   // its indirect calls through a function value, by call site, and the last
   // result each reads.  Each function is its own.
   std::vector<std::map<uint32_t, va_t>> Calls(N);
-  std::vector<std::map<uint32_t, int>> FirstReads(N);
+  std::vector<std::map<uint32_t, GoCallShape>> FirstReads(N);
   parallelForEachWeighted(Weights, [&](auto Claim, size_t Count) {
     for (size_t I; (I = Claim()) < Count;) {
       const MedFunc &Func = Funcs[I];
@@ -129,18 +129,30 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   for (size_t I = 0; I < N; ++I)
     ByEntry.emplace(Funcs[I].Entry, I);
 
-  // The last result each function's callers read, and each indirect call's.
-  std::map<va_t, int> Callee;
-  std::map<std::pair<size_t, uint32_t>, int> Indirect;
-  const auto Raise = [&](size_t I, const std::map<uint32_t, int> &Read) {
+  // The results each function's callers read, and each indirect call's: the
+  // last, and how much of each.  A function returns as much of each result
+  // as any caller reads.
+  const uint16_t Word = getTargetRegInfo(A).PointerSize;
+  std::map<va_t, GoCallShape> Callee;
+  std::map<std::pair<size_t, uint32_t>, GoCallShape> Indirect;
+  const auto Merge = [](GoCallShape &Known, const GoCallShape &Read) {
+    if (Known.Widths.size() < Read.Widths.size())
+      Known.Widths.resize(Read.Widths.size(), 0);
+    for (size_t Position = 0; Position < Read.Widths.size(); ++Position)
+      Known.Widths[Position] =
+          std::max(Known.Widths[Position], Read.Widths[Position]);
+    if (Read.Last <= Known.Last)
+      return false;
+    Known.Last = Read.Last;
+    return true;
+  };
+  const auto Raise = [&](size_t I,
+                         const std::map<uint32_t, GoCallShape> &Read) {
     bool Grew = false;
-    for (const auto &[Site, Last] : Read) {
+    for (const auto &[Site, Shape] : Read) {
       const va_t Target = Calls[I].at(Site);
-      int &Known = Target == InvalidVA ? Indirect[{I, Site}] : Callee[Target];
-      if (Last > Known) {
-        Known = Last;
-        Grew = true;
-      }
+      Grew |= Merge(Target == InvalidVA ? Indirect[{I, Site}] : Callee[Target],
+                    Shape);
     }
     return Grew;
   };
@@ -165,7 +177,8 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   };
   for (bool Grew = true; Grew;) {
     Grew = false;
-    for (const auto &[Entry, Last] : std::map<va_t, int>(Callee)) {
+    for (const auto &[Entry, Shape] : std::map<va_t, GoCallShape>(Callee)) {
+      const int Last = Shape.Last;
       const auto Found = ByEntry.find(Entry);
       if (Found == ByEntry.end() || Last <= 0)
         continue;
@@ -191,12 +204,15 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
           const auto Site = Calls[I].find(Value.Caller->CallSiteId);
           if (Site == Calls[I].end())
             continue;
-          int &Known = Site->second == InvalidVA ? Indirect[{I, Site->first}]
-                                                 : Callee[Site->second];
-          if (Position > Known) {
-            Known = Position;
-            Grew = true;
-          }
+          // The call's result is the function's, as much of it as any of
+          // the function's callers may read: all of it.
+          GoCallShape Forwarded;
+          Forwarded.Last = Position;
+          Forwarded.Widths.assign(Position + 1, 0);
+          Forwarded.Widths[Position] = Word;
+          Grew |= Merge(Site->second == InvalidVA ? Indirect[{I, Site->first}]
+                                                  : Callee[Site->second],
+                        Forwarded);
         }
       }
       if (Values.size() != Before)
@@ -213,16 +229,20 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   // prefix from RAX, so one RAX misses leaves none.  Shrinking one function
   // can shrink a function that returns its call's results, so the counts
   // settle from above.
-  const auto CallResults = [&](size_t I, uint32_t Site) {
+  const auto ShapeOf = [&](size_t I, uint32_t Site) -> const GoCallShape * {
     const auto Found = Calls[I].find(Site);
     if (Found == Calls[I].end())
-      return 0;
+      return nullptr;
     if (Found->second == InvalidVA) {
-      const auto Last = Indirect.find({I, Site});
-      return Last == Indirect.end() ? 0 : Last->second;
+      const auto Shape = Indirect.find({I, Site});
+      return Shape == Indirect.end() ? nullptr : &Shape->second;
     }
-    const auto Last = Callee.find(Found->second);
-    return Last == Callee.end() ? 0 : Last->second;
+    const auto Shape = Callee.find(Found->second);
+    return Shape == Callee.end() ? nullptr : &Shape->second;
+  };
+  const auto CallResults = [&](size_t I, uint32_t Site) {
+    const GoCallShape *Shape = ShapeOf(I, Site);
+    return Shape ? std::max(Shape->Last, 0) : 0;
   };
   struct Definitions {
     llvm::DenseMap<ValueKey, const MedOp *> Ops;
@@ -296,15 +316,15 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   };
   for (bool Shrank = true; Shrank;) {
     Shrank = false;
-    for (auto &[Entry, Last] : Callee) {
+    for (auto &[Entry, Shape] : Callee) {
       const auto Found = ByEntry.find(Entry);
-      if (Found == ByEntry.end() || Last <= 0)
+      if (Found == ByEntry.end() || Shape.Last <= 0)
         continue;
       int Supply = -1;
-      while (Supply < Last && Supplied(Found->second, Supply + 1))
+      while (Supply < Shape.Last && Supplied(Found->second, Supply + 1))
         ++Supply;
-      if (Supply < Last) {
-        Last = std::max(Supply, 0);
+      if (Supply < Shape.Last) {
+        Shape.Last = std::max(Supply, 0);
         Shrank = true;
       }
     }
@@ -312,27 +332,42 @@ void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result) {
   Defs.clear();
   Blocks.clear();
 
+  // The shape a call returns: its results through the last, RAX whole, each
+  // other as wide as a reader takes it, or a word where none does.
+  const auto Settled = [&](const GoCallShape &Shape) {
+    GoCallShape Result;
+    Result.Last = Shape.Last;
+    for (int Position = 0; Position <= Shape.Last; ++Position) {
+      const uint16_t Width =
+          Position && static_cast<size_t>(Position) < Shape.Widths.size()
+              ? Shape.Widths[Position]
+              : 0;
+      Result.Widths.push_back(Width ? Width : Word);
+    }
+    return Result;
+  };
   // Each function's calls return what their callees do, rewritten in the
   // function alone.
   parallelForEachWeighted(Weights, [&](auto Claim, size_t Count) {
     for (size_t I; (I = Claim()) < Count;) {
-      std::map<uint32_t, int> Lasts;
+      std::map<uint32_t, GoCallShape> Shapes;
       for (const auto &[Site, Target] : Calls[I])
-        if (const int Last = CallResults(I, Site); Last > 0)
-          Lasts.emplace(Site, Last);
-      if (!Lasts.empty())
-        defineGoCallResults(Funcs[I], A, Lasts);
+        if (const GoCallShape *Shape = ShapeOf(I, Site);
+            Shape && Shape->Last > 0)
+          Shapes.emplace(Site, Settled(*Shape));
+      if (!Shapes.empty())
+        defineGoCallResults(Funcs[I], A, Shapes);
     }
   });
-  const uint16_t Word = getTargetRegInfo(A).PointerSize;
-  for (const auto &[Entry, Last] : Callee) {
+  for (const auto &[Entry, Shape] : Callee) {
     const auto Found = ByEntry.find(Entry);
-    if (Found == ByEntry.end() || Last <= 0)
+    if (Found == ByEntry.end() || Shape.Last <= 0)
       continue;
-    std::vector<MedReturnReg> Shape;
-    for (int Position = 0; Position <= Last; ++Position)
-      Shape.push_back({Results[Position], Word, false});
-    Funcs[Found->second].MultiReturn = std::move(Shape);
+    const GoCallShape Fields = Settled(Shape);
+    std::vector<MedReturnReg> Return;
+    for (int Position = 0; Position <= Fields.Last; ++Position)
+      Return.push_back({Results[Position], Fields.Widths[Position], false});
+    Funcs[Found->second].MultiReturn = std::move(Return);
   }
 }
 

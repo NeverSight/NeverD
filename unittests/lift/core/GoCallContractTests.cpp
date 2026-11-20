@@ -1140,6 +1140,61 @@ TEST(GoInternalABI, AByteWriteOnlyItsByteIsReadOfKeepsNoResult) {
   EXPECT_FALSE(Read->RegisterReturnFields);
 }
 
+TEST(GoInternalABI, AResultIsAsWideAsItsCallersReadIt) {
+  // Go returns a bool in a result register's low byte, and `setg bl` merges
+  // it into upper bytes the function never set.  Its callers read BL alone,
+  // so the result is one byte: a word-wide field returned those unknown
+  // bytes, a trap on every call.
+  //   main.f: mov rcx, rax; mov rax, [rcx]; cmp rcx, 0x10; setg bl; ret
+  //   main.g: sub rsp, 8; call main.f; movzx eax, bl; add rsp, 8; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  std::vector<uint8_t> Caller = {0x48, 0x83, 0xEC, 0x08};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), F);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(), {0x0F, 0xB6, 0xC3, 0x48, 0x83, 0xC4, 0x08, 0xC3});
+  GoTestImage T = goFunctions({{{F, "main.f"},
+                                {0x48, 0x89, 0xC1, 0x48, 0x8B, 0x01, 0x48, 0x83,
+                                 0xF9, 0x10, 0x0F, 0x9F, 0xC3, 0xC3}},
+                               {{G, "main.g"}, Caller}});
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto Function = [&](va_t Entry) -> const MedFunc & {
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+    EXPECT_NE(It, R.MedFuncs.end());
+    return *It;
+  };
+  const auto ABoolAfterAWord = [](const std::vector<MedReturnReg> &Shape) {
+    return Shape.size() == 2 && Shape[0].RegOff == x86reg::RAX &&
+           Shape[0].Size == 8 && Shape[1].RegOff == x86reg::RBX &&
+           Shape[1].Size == 1;
+  };
+  EXPECT_TRUE(ABoolAfterAWord(Function(F).MultiReturn));
+  const MedOp *Read = onlyCall(Function(G));
+  ASSERT_NE(Read, nullptr);
+  ASSERT_TRUE(Read->RegisterReturnFields);
+  EXPECT_TRUE(ABoolAfterAWord(*Read->RegisterReturnFields));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = T.Img.Arch;
+  C.Format = T.Img.Format;
+  C.Image = &T.Img;
+  ASSERT_TRUE(HighCEmitter().emit(R.HighFuncs, OS, C));
+  OS.flush();
+  size_t At = 0;
+  while ((At = Source.find(" main_f(", At)) != std::string::npos &&
+         Source.compare(Source.find('\n', At) - 2, 2, " {") != 0)
+    ++At;
+  ASSERT_NE(At, std::string::npos) << Source;
+  const std::string Body = Source.substr(At, Source.find("\n}", At) - At);
+  EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+}
+
 TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {
   // A Go result is the whole register a return leaves: the argument the
   // caller passed in it where the path leaves it unchanged, though another

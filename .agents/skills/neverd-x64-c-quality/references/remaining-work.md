@@ -584,12 +584,12 @@ Still open, in order of yield:
      - Register-ABI results on arm64 (R0-R15), and floating results
        (X0-X14) on either target, are not modelled; amd64 integer results
        are (`modelGoCallResults`, `materializeGoCallResults`).
-     - A narrow result's width. Each field is the whole register, but a
-       bool written with `setcc bl` or `mov bl, 1` merges into upper bytes
-       a return may leave undefined: `runtime.findRunnable`,
-       `stackScanState.getPtr`, `HashTrieMap.Load` and four more in Go
-       1.26 linux-amd64 print an unknown value in a return. A field as wide
-       as its callers read it (1 byte for a bool) would take the byte.
+     - A narrow result a function hands back from a call it makes. Direct
+       calls return each result as wide as their callers read it
+       (`GoCallShape`), but the call a forwarding function returns from
+       takes words, so its callee still returns the upper bytes a `setcc`
+       leaves undefined. The width would follow the forwarder's own
+       callers.
      - arm64 growth paths, which still wait on the register-ABI gate.
        The no-return list is open to the stack ABI.
      Bounds stubs are done. LowIR recognizes a stub once
