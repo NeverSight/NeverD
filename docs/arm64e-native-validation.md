@@ -2557,3 +2557,25 @@ It selects the indexed DWARF or zero-stack frameless recipe from the system
 result, including the compact language form. The caller can use `unw_step`
 on the returned cursor. The API also checks the size of the supplied
 machine context before reading its registers.
+
+The guarded-table change passed 2,658 local tests, with 54 skips across
+nine suites. The installed arm64e `/usr/bin/wc` instruction classifier
+passed a separate check. Both Mac runners completed all 250 native tests,
+including twelve automatic entry-table walks on the normal and alternate
+signal stacks. Plain `unw_step` from the handler skipped the interrupted
+entry and reported a different caller SP on both compiler originals and
+published images. Each host checked 2,016 calls on 28 strictly signed CLI
+images. Both hosts reported Apple M1 (Virtual) and an unavailable x1
+environment. [Images, compiler versions and native results](evidence/arm64e-bounded-tables-2026-11-20.json).
+
+A masked selector can also prove the table domain without a conditional
+branch. For `index & 3`, the first Mach-O record supplies a readable prefix
+to the resolver. The mask supplies the four selector values; the bounded
+reader checks their actual storage. The fixtures exercise both consecutive
+and gapped records and remove the mask in a negative control. With no other
+range proof, all three indirect branches remain unresolved. In a separate
+compiler control, the mask leaves an entire unreferenced default block in
+the mixed section. NeverD recovers the switch targets but cannot complete
+a partial data map across those unclassified words.
+[Masked compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367).
+[Unreferenced default block control](https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014).

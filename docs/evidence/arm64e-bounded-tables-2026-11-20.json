@@ -1,0 +1,431 @@
+{
+  "source": "2b77a343713b02d2471b578dab0459d5680100c5",
+  "llvm_source": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "originals_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44740300809",
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44743167539",
+  "local": {
+    "selected": 2712,
+    "passed": 2658,
+    "skipped": 54,
+    "failed": 0,
+    "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+    "library_sha256": "88d26adbb8b6665b582989cf11262211b1cbccdb6d30a827b7f16df2666f2cb3",
+    "system_text": {
+      "source": "/usr/bin/wc",
+      "text_bytes": 2612,
+      "instructions": 653,
+      "sha256": "899252e4e4fda95687563d854b629d686e53023b7baf20a499520173ce3e71c0",
+      "test": "OptionalRealBinaryWalk",
+      "result": "completed"
+    }
+  },
+  "cli": {
+    "oracle_sha256": "95e90e8c00a6e95466b593fd184fb9ac7ef94c64d86b98fcb498b891633446bb",
+    "strict_signed_images": {
+      "cli-images/macos-26-fragmented-original.dylib": {
+        "sha256": "8c3c146bfcf0dcc6377f4f287e8015a87bef4f1ddb9ef61abba45c33264c4b30",
+        "bytes": 34976,
+        "data_in_code_records": 10
+      },
+      "cli-images/macos-26-fragmented-default-1.dylib": {
+        "sha256": "d725bd92c59ff9ae6dddfdea95bc5ec4f3ef60231581f65ac193d1258fdded68",
+        "bytes": 70288,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-fragmented-default-2.dylib": {
+        "sha256": "081d7d96eb398ef6b1b639146b6765348f2181fa4073ff70103bc709cccfffea",
+        "bytes": 105904,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-fragmented-default-3.dylib": {
+        "sha256": "b32b0cde0d86951ff115d6eee3ae9c8db69551ad57039cf3772221cee75254c5",
+        "bytes": 141856,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-fragmented-no-opt-1.dylib": {
+        "sha256": "d30862302d60ba92cb68332abf324e775d234a3970fcbf3d3ab67f1b6a1f5164",
+        "bytes": 70288,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-fragmented-no-opt-2.dylib": {
+        "sha256": "d79334ff11f0a892c87273fb75c14e2204cf6aceec9bd0dbe77856dedd31fa49",
+        "bytes": 105904,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-fragmented-no-opt-3.dylib": {
+        "sha256": "44d74bf27525fc684733f70671cb8f28d42b523ad395502953b8d6e87f223aae",
+        "bytes": 141856,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-gapped-original.dylib": {
+        "sha256": "6c1c74b573c58deeaa8bf6aa1dc017910882b8ab9ee3b9d58247162b6a0ad2cd",
+        "bytes": 34944,
+        "data_in_code_records": 7
+      },
+      "cli-images/macos-26-gapped-default-1.dylib": {
+        "sha256": "3f5ea2d4ffe4e11cccc1bbe3341b90810c3ec017e3507244404f5846a19e1898",
+        "bytes": 70256,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-gapped-default-2.dylib": {
+        "sha256": "7e495fcbe497131671e2add3ca8918815ec67742c0b2871e9b2c1db0eeef432a",
+        "bytes": 105872,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-gapped-default-3.dylib": {
+        "sha256": "5a8aad44c235d82eb5eec535a32b1da300af2e6d9567a7d464bcf52788e3e6f8",
+        "bytes": 141824,
+        "data_in_code_records": 40
+      },
+      "cli-images/macos-26-gapped-no-opt-1.dylib": {
+        "sha256": "f3ca015bbfb749ee480cb00ec94e73f349c7eaa242acee6a296bf95ebb96ad7d",
+        "bytes": 70256,
+        "data_in_code_records": 20
+      },
+      "cli-images/macos-26-gapped-no-opt-2.dylib": {
+        "sha256": "e5656ab8cb43c9b0b86ac3bbb7c4a445b8617c901fe639aa4d0365df3348b5c8",
+        "bytes": 105872,
+        "data_in_code_records": 30
+      },
+      "cli-images/macos-26-gapped-no-opt-3.dylib": {
+        "sha256": "bb10800c24a8cce1c92acbc57f1f745986025d9e24955a5e2802f04925e8d11a",
+        "bytes": 141824,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-fragmented-original.dylib": {
+        "sha256": "b44ffffc36ce2ad7f5058fa072a3b28f77363c6c0a127d9181f7cac9a6ac4e77",
+        "bytes": 16992,
+        "data_in_code_records": 10
+      },
+      "cli-images/xcode-27-fragmented-default-1.dylib": {
+        "sha256": "0ec6251549faf91822a780cd37290d37628a1d628b3c76dfa92cfd9d46b94eab",
+        "bytes": 52112,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-fragmented-default-2.dylib": {
+        "sha256": "34c231a5dc331a8398a71911c67681a85d73c1c8d37d7a9e8ea5d0a1ff6442b5",
+        "bytes": 87568,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-fragmented-default-3.dylib": {
+        "sha256": "f838419e28e855b92434ba7646ab90430990986d36767bf33709a6e97bfbe867",
+        "bytes": 123392,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-fragmented-no-opt-1.dylib": {
+        "sha256": "965b144dbd2824a5a04d1a088dc1b2325243ed7820a2ca419d0582321ea2f5eb",
+        "bytes": 52112,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-fragmented-no-opt-2.dylib": {
+        "sha256": "f64b4fc4279782e459de766999b5bea31ec8cc6447201495d8422da39e2a90bd",
+        "bytes": 87568,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-fragmented-no-opt-3.dylib": {
+        "sha256": "b94f5da7092f6c7f5dce90d74071c6d4a9ddc7571201eba9905756148c868dc9",
+        "bytes": 123392,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-gapped-original.dylib": {
+        "sha256": "2a5dea7810d947db36b6a2408a8b1aadcec11fcdef8bf8eb0450d69281c1a50b",
+        "bytes": 16960,
+        "data_in_code_records": 7
+      },
+      "cli-images/xcode-27-gapped-default-1.dylib": {
+        "sha256": "eeca8db4fb29a608378eddecfd793632c81736be5111ab8743d7cf2bebcd8a16",
+        "bytes": 52080,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-gapped-default-2.dylib": {
+        "sha256": "f80af9886d7b7f5ce95ef4b1f1c0daef756f68b9bdb2c1fda554b7cece437757",
+        "bytes": 87536,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-gapped-default-3.dylib": {
+        "sha256": "ad8691f07338c7ac2741a90afd334ee2f0df853cee0b192edecb0201be5b5f48",
+        "bytes": 123360,
+        "data_in_code_records": 40
+      },
+      "cli-images/xcode-27-gapped-no-opt-1.dylib": {
+        "sha256": "f915bd067f227b818ceef5e8011c99a31b301e4997b56a2ce5e5d24ca1bd0335",
+        "bytes": 52080,
+        "data_in_code_records": 20
+      },
+      "cli-images/xcode-27-gapped-no-opt-2.dylib": {
+        "sha256": "f7e59a684d18e03a775b18e5457e16c5fd9f71df62e2383faf6ec2dd8e87f49e",
+        "bytes": 87536,
+        "data_in_code_records": 30
+      },
+      "cli-images/xcode-27-gapped-no-opt-3.dylib": {
+        "sha256": "e26c71b386ea69b41a46e0b84d45905e1b6fafa856917d4482b348593e2dde70",
+        "bytes": 123360,
+        "data_in_code_records": 40
+      }
+    },
+    "conflicting_records_rejected": {
+      "macos-26-fragmented-conflict-2": {
+        "input_sha256": "c7fdf28457d9e0a5d39766b4b37d261b10bcab91d58d3c815dd2c95696120a42",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-fragmented-conflict-3": {
+        "input_sha256": "b0d21db0dee75470fb51cd729cf6ca9969721ffcb157cc63b46c607d4d25cdc0",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-fragmented-conflict-4": {
+        "input_sha256": "7cdbbdf08606565c08cce96b910dfc7d1ebc8e049a12bd56c0c16fb06529d48b",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-2": {
+        "input_sha256": "d63bcb0092a0e5da04966b70099353bc83c8387e4b68907ec9f960f66502c4e0",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-3": {
+        "input_sha256": "f8004ed34e182b88d3f5c403ddccf059eca4deaced37820ca5d51d0b00c6e456",
+        "exit": 1,
+        "output": false
+      },
+      "macos-26-gapped-conflict-4": {
+        "input_sha256": "1ed353deb8169e3baeecd50dc94b0c8f294044685dd2fc418d73b50d250d3d6e",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-2": {
+        "input_sha256": "6defbf97c46209e1ce2073f778cfd371d450040c2ad2d72fb732240e290d9ed1",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-3": {
+        "input_sha256": "82c7622573b431a4ea4cbd00eff058322f3547cb6585cd8531c38d582c064f6c",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-fragmented-conflict-4": {
+        "input_sha256": "8b8619d26bef5caefb25dc1e82ebd0a72d45efd5d887d48c45e55811fb2c21df",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-2": {
+        "input_sha256": "37f46f756022310020cbfdb74c8e5526b137108baca67575502b4d17d43168e9",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-3": {
+        "input_sha256": "7a1fd043f4959ab3782f4772356ab66acb9ccdabb8f9798ec92967fbf5099e7e",
+        "exit": 1,
+        "output": false
+      },
+      "xcode-27-gapped-conflict-4": {
+        "input_sha256": "d0be827a9fc37ec35c7f14c22b6189a9da43d4f6c79543a893adca15c5b12bf4",
+        "exit": 1,
+        "output": false
+      }
+    }
+  },
+  "native": {
+    "macos-26": {
+      "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7.2\nBuildVersion:\t\t25G332",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)",
+      "completed_cases": 250,
+      "cli_images": 28,
+      "executed_cli_comparisons": 2016,
+      "originals": {
+        "intact": {
+          "sha256": "0ecebf18dec84195361dea9f1b93256e14b5a928f5e21527e00931bbe0c510d4",
+          "comparisons": 72
+        },
+        "fragmented": {
+          "sha256": "8c3c146bfcf0dcc6377f4f287e8015a87bef4f1ddb9ef61abba45c33264c4b30",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "6c1c74b573c58deeaa8bf6aa1dc017910882b8ab9ee3b9d58247162b6a0ad2cd",
+          "comparisons": 72
+        }
+      },
+      "switches": {
+        "FragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "GappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        }
+      },
+      "entry": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 1
+      },
+      "x1": {
+        "qualified": false,
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "qualification_sha256": "d12c3f1c03e66bafc60ab4ce19bcbd3852d6be887a096fb8307d65a2b6e8929a"
+    },
+    "xcode-27": {
+      "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)",
+      "completed_cases": 250,
+      "cli_images": 28,
+      "executed_cli_comparisons": 2016,
+      "originals": {
+        "intact": {
+          "sha256": "32d653cc5aaa1ae08d18eee649072a5a7529404eba7e21325647353a6b5018f2",
+          "comparisons": 72
+        },
+        "fragmented": {
+          "sha256": "b44ffffc36ce2ad7f5058fa072a3b28f77363c6c0a127d9181f7cac9a6ac4e77",
+          "comparisons": 72
+        },
+        "gapped": {
+          "sha256": "2a5dea7810d947db36b6a2408a8b1aadcec11fcdef8bf8eb0450d69281c1a50b",
+          "comparisons": 72
+        }
+      },
+      "switches": {
+        "FragmentedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 0,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        },
+        "GappedRelativeTablesSurviveRelifting": {
+          "recovered_source_data_in_code_records": 3,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "native_switch_comparisons": 288,
+          "executed_native_images": 4
+        }
+      },
+      "entry": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 0
+      },
+      "x1": {
+        "qualified": false,
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "qualification_sha256": "cd677237922d0519d0cd38d43beb42c39ced408a0f73146cd1c967002e189f4c"
+    }
+  },
+  "baseline": {
+    "intact": {
+      "cfg": {
+        "_leaf_sum": {
+          "blocks": 6,
+          "edges": 5
+        },
+        "_leaf_difference": {
+          "blocks": 6,
+          "edges": 5
+        },
+        "_leaf_wide": {
+          "blocks": 6,
+          "edges": 5
+        }
+      },
+      "publication_exit": 0,
+      "output": true
+    },
+    "fragmented": {
+      "cfg": {
+        "_leaf_sum": {
+          "blocks": 3,
+          "edges": 2
+        },
+        "_leaf_difference": {
+          "blocks": 3,
+          "edges": 2
+        },
+        "_leaf_wide": {
+          "blocks": 3,
+          "edges": 2
+        }
+      },
+      "publication_exit": 1,
+      "output": false
+    },
+    "gapped": {
+      "cfg": {
+        "_leaf_sum": {
+          "blocks": 3,
+          "edges": 2
+        },
+        "_leaf_difference": {
+          "blocks": 3,
+          "edges": 2
+        },
+        "_leaf_wide": {
+          "blocks": 3,
+          "edges": 2
+        }
+      },
+      "publication_exit": 1,
+      "output": false
+    }
+  }
+}

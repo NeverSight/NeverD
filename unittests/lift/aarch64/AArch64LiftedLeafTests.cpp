@@ -26,6 +26,7 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BranchEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -176,9 +177,12 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool GappedTables = Preamble == kGappedDispatchOracle;
+  const bool MaskedTables =
+      Preamble == kMaskedFragmentedOracle || Preamble == kMaskedGappedOracle;
+  const bool GappedTables =
+      Preamble == kGappedDispatchOracle || Preamble == kMaskedGappedOracle;
   const bool SplitTables =
-      Preamble == kFragmentedDispatchOracle || GappedTables;
+      Preamble == kFragmentedDispatchOracle || GappedTables || MaskedTables;
   const bool SplitLiterals = Preamble == kSplitLiteralOracle;
   const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
@@ -550,6 +554,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       } else {
         ASSERT_EQ(Rebuilt.JumpTables.size(), 1u);
         EXPECT_EQ(Rebuilt.JumpTables.front().Targets, Table.Targets);
+      }
+      if (MaskedTables) {
+        auto Bytes = Image->Raw;
+        writeLE<uint32_t>(Bytes.data() + Image->vaToFileOffset(F.Entry),
+                          aarch64::kNop);
+        auto Unbounded = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                            Bytes.size()),
+            Input));
+        ASSERT_TRUE(bool(Unbounded)) << llvm::toString(Unbounded.takeError());
+        EXPECT_TRUE(
+            CFGBuilder().build(*Unbounded, Decode, F.Entry).JumpTables.empty());
       }
       ++Conflicts;
     }
@@ -1786,6 +1802,18 @@ TEST(AArch64LiftedImage, FragmentedRelativeTablesSurviveRelifting) {
 TEST(AArch64LiftedImage, GappedRelativeTablesSurviveRelifting) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kGappedDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, MaskedFragmentedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kMaskedFragmentedOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, MaskedGappedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kMaskedGappedOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
 }
 

@@ -2017,6 +2017,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // which would otherwise latch onto the entry base as the (wrong) target base.
   bool RecoveredAArch64Compact = false;
   bool CompactOwnerCapacity = false;
+  uint32_t CompactRecordSlots = 0;
   if (!Recovered) {
     Recovered =
         tryAArch64CompactTable(Img, Rec, Info, &CandidateEvidenceBudget);
@@ -2048,8 +2049,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         const uint64_t Span = *OwnerEnd - Info.BaseAddr;
         const uint64_t Slots = 1 + (Span - Info.EntrySize) / PhysicalStride;
         if (Slots <= limits::kMaxJumpTableEntries) {
-          Info.PhysicalCapacity = static_cast<uint32_t>(Slots);
-          CompactOwnerCapacity = true;
+          // One Mach-O data-in-code record proves a readable prefix. It
+          // cannot cap independently proved mask, modulo or guard selectors.
+          if (getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize))
+            CompactRecordSlots = static_cast<uint32_t>(Slots);
+          else {
+            Info.PhysicalCapacity = static_cast<uint32_t>(Slots);
+            CompactOwnerCapacity = true;
+          }
         }
       }
     }
@@ -3490,7 +3497,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // exact LOAD/address/target proofs above authorize the layout, and the
   // empty-edge seed plus every subsequent case must prove its own selectors.
   // Do not turn this envelope into physical storage ownership or a domain.
-  uint32_t InlineRelativeReadableCapacity = 0;
+  uint32_t InlineRelativeReadableCapacity = CompactRecordSlots;
   if (CandidateProposalStageActive && ProvisionalRelativeEdgeTemplate &&
       !ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage &&
       Info.IsRelative && !Info.RelocAbsolute && Info.PhysicalCapacity == 0 &&
@@ -3810,20 +3817,12 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.IsRelative && Info.HasTargetBase
           ? getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize)
           : std::nullopt;
-  // A compact table borrows its owner's extent before the guard is known.
-  // An independent dense guard can shorten the span or cross a Mach-O record
-  // boundary when all selected bytes have compatible storage.
+  // A controlling guard can shorten a compact table's borrowed storage span.
   if (CompactOwnerCapacity && GuardFound && !Info.PreScaledIndex &&
       Info.AuthenticatedGuardBound &&
-      Info.AuthenticatedGuardBound == Info.MaxEntries) {
-    const uint32_t Bound = Info.AuthenticatedGuardBound;
-    if (Info.PhysicalCapacity > Bound ||
-        (EmbeddedTable &&
-         (!Info.EntryStride || Info.EntryStride == Info.EntrySize) &&
-         EmbeddedTable->contains(Info.BaseAddr,
-                                 uint64_t(Bound) * Info.EntrySize)))
-      Info.PhysicalCapacity = Bound;
-  }
+      Info.AuthenticatedGuardBound == Info.MaxEntries &&
+      Info.PhysicalCapacity > Info.AuthenticatedGuardBound)
+    Info.PhysicalCapacity = Info.AuthenticatedGuardBound;
   if (GuardedGroupProofContext && !FiniteJointGOTOFF && !FiniteJointAbsolute) {
     observeGroupProof("single-load-selector");
     if (!GroupHasSingleGuardedLoadAndSelector(Info))
