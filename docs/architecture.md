@@ -17847,6 +17847,10 @@ semantics. A `DecodedExecutionUnit` captures a delayed transfer and its slot,
 while normal disassembly consumes one physical instruction. Classic instructions
 occupy four bytes and compressed instructions occupy two or four. LowIR records
 byte ownership and execution order. MedIR expands predicated effects before SSA.
+A synthetic effect block retains the instruction extent for source layout.
+Register and frame proofs start at the guard when it opens the function.
+When a backedge targets the first machine instruction, SSA puts incoming
+registers in a one-time preheader and keeps the guest address on the loop header.
 `MIPSBitfield.def` owns the classic SPECIAL3 field/shuffle selectors and biases.
 The lifter validates encodings before emitting effects and reuses the explicit
 MIPS64 word-input contract; source backends do not reinterpret instruction bits.

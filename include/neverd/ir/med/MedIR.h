@@ -393,8 +393,19 @@ enum class CallingConv : uint8_t {
   MIPS_N32,
 };
 
+enum class MedBlockRole : uint8_t {
+  Machine,
+  /// Shares the guard's extent and executes only when its guard permits it.
+  PredicatedEffect,
+  /// Runs once before the machine loop header at the function's entry address.
+  EntryPreheader,
+  /// A guest branch to the entry address re-enters this machine block.
+  EntryLoopHeader,
+};
+
 struct MedBlock {
   int Id = -1;
+  MedBlockRole Role = MedBlockRole::Machine;
   /// Original half-open machine-code extent.  This survives lifting so
   /// address-based metadata (notably Windows EH regions) never has to infer a
   /// block boundary from an instruction name or from a possibly empty Op list.
@@ -406,6 +417,11 @@ struct MedBlock {
   std::vector<int> Preds;
   std::vector<ExceptionalEdge> ExceptionalSuccs;
   std::vector<ExceptionalEdge> ExceptionalPreds;
+
+  bool isFunctionEntry(va_t Address) const {
+    return Role == MedBlockRole::EntryPreheader ||
+           (Role == MedBlockRole::Machine && StartAddr == Address);
+  }
 };
 
 struct MedTypedParam {

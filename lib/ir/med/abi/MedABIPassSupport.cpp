@@ -188,8 +188,13 @@ callSetupStackStores(const AbiCallContext &C, CallSetupStackJoins *Joins,
   };
   std::function<Stores(const MedBlock &, size_t, unsigned)> Visit =
       [&](const MedBlock &B, size_t End, unsigned Depth) -> Stores {
-    const auto Root = C.Func.ModuleAnalysisRoots.lower_bound(B.StartAddr);
-    const bool Independent = Root != C.Func.ModuleAnalysisRoots.end() &&
+    // The normal entry root reaches a split loop header through its preheader.
+    const auto &Roots = C.Func.ModuleAnalysisRoots;
+    const auto Root = B.Role == MedBlockRole::EntryLoopHeader
+                          ? Roots.upper_bound(B.StartAddr)
+                          : Roots.lower_bound(B.StartAddr);
+    const bool Independent = B.Role != MedBlockRole::PredicatedEffect &&
+                             Root != Roots.end() &&
                              (*Root == B.StartAddr || *Root < B.EndAddr);
     // A root inside an unsplit block could bypass any earlier local store.
     if (Independent && *Root != B.StartAddr) {
@@ -271,13 +276,13 @@ callSetupStackStores(const AbiCallContext &C, CallSetupStackJoins *Joins,
         IncomingJoins;
     const bool JoinHere = Joins && B.Preds.size() > 1;
     if (Incomplete && Inherit &&
-        ((B.StartAddr != C.Func.Entry &&
+        ((!B.isFunctionEntry(C.Func.Entry) &&
           (Independent || !B.ExceptionalPreds.empty() || B.Preds.empty())) ||
-         (B.StartAddr == C.Func.Entry &&
+         (B.isFunctionEntry(C.Func.Entry) &&
           (!B.Preds.empty() || !B.ExceptionalPreds.empty()))))
       markIncomplete();
     if (Inherit && !Independent && B.ExceptionalPreds.empty() &&
-        !B.Preds.empty() && B.StartAddr != C.Func.Entry) {
+        !B.Preds.empty() && !B.isFunctionEntry(C.Func.Entry)) {
       bool First = true;
       std::set<int> Preds;
       for (int Id : B.Preds) {

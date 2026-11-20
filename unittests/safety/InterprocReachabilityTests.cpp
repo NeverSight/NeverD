@@ -143,6 +143,38 @@ TEST(InterprocReachability, PropagatesEntryTaintThroughDirectWrapper) {
   EXPECT_EQ(Flow->Source, "argv");
 }
 
+TEST(InterprocReachability, PredicatedCallSharesTheGuestEntryAddress) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Entry = 0x1000;
+  for (bool Effect : {false, true}) {
+    auto Main = function(Image.Entry, "main", {parameter(0, 4), parameter(1)});
+    auto Leaf = function(0x2000, "leaf");
+    Main.Blocks.resize(2);
+    Main.Blocks[0].Id = 0;
+    Main.Blocks[0].StartAddr = Main.Entry;
+    Main.Blocks[0].Succs = {1, 2};
+    Main.Blocks[1].Id = 1;
+    Main.Blocks[1].StartAddr = Main.Entry;
+    if (Effect)
+      Main.Blocks[1].Role = MedBlockRole::PredicatedEffect;
+    Main.Blocks[1].Preds = {0};
+    Main.Blocks[1].Succs = {2};
+    call(Main, Main.Entry, Leaf.Entry);
+    auto &Exit = Main.Blocks.emplace_back();
+    Exit.Id = 2;
+    Exit.StartAddr = Main.Entry + 4;
+    Exit.Preds = {0, 1};
+    ret(Main);
+    std::vector<MedFunc> Functions{Main, Leaf};
+    const auto Result = analyzeInterprocedural(
+        input(Image, Functions), SinkCatalog::defaults(), SafetyBudgets{});
+    const auto *Reach = Result.findFunction(Leaf.Entry);
+    ASSERT_NE(Reach, nullptr);
+    EXPECT_EQ(Reach->Status == ReachabilityStatus::Reachable, Effect);
+  }
+}
+
 TEST(InterprocReachability, SeedsOnlyValidatedApplicationParameterRoles) {
   BinaryImage Image;
   Image.Arch = Arch::X64;

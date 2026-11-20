@@ -422,6 +422,25 @@ TEST_P(MIPSControl, LinkIsVisibleToSlotAndSlotCannotTransferControl) {
   EXPECT_TRUE(Ops.empty());
 }
 
+TEST_P(MIPSControl, ZeroEqualityBranchesAlwaysExecuteTheirSlot) {
+  for (uint32_t Branch : {0x10000003u, 0x50000003u}) {
+    // beq[l] zero,zero,0x1010; addiu v0,zero,7; jr ra; nop; jr ra; nop
+    const auto Image =
+        image({Branch, 0x24020007, 0x03e00008, 0, 0x03e00008, 0}, GetParam());
+    const auto Func = build(Image);
+    const auto &Entry = Func.Blocks.front();
+    ASSERT_EQ(Entry.Succs.size(), 1u);
+    EXPECT_EQ(Func.Blocks[Entry.Succs.front()].StartAddr, 0x1010u);
+    ASSERT_EQ(Entry.InstructionBoundaries.size(), 1u);
+    EXPECT_TRUE(Entry.InstructionBoundaries.front().DelaySlot);
+    EXPECT_EQ(Entry.Ops.back().Opcode, NdOp::BRANCH);
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.run(Entry);
+    EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 7u);
+  }
+}
+
 TEST_P(MIPSControl, LikelyBranchAnnulsSlotBeforeSSA) {
   // beql a0,zero,0x1010; addiu v0,zero,7
   // jr ra; addiu v0,zero,9
