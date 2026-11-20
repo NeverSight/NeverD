@@ -285,6 +285,18 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
 }
 
+bool mips::isByteRecord(const TypeRef &Type) {
+  if (!isRecord(Type))
+    return false;
+  const auto Members = sourceValueMembers(Type);
+  return !Members.empty() && Members.size() == Type->Size &&
+         llvm::all_of(llvm::enumerate(Members), [](const auto &Item) {
+           const auto &M = Item.value();
+           return M.ByteOffset == Item.index() &&
+                  M.Type->Kind == NdTypeKind::Int && M.Type->Size == 1;
+         });
+}
+
 bool mips::isPackedRecordWord(
     const TypeRef &Type, llvm::ArrayRef<SourceABIValueLocation> Locations) {
   if (!isRecord(Type) || Locations.size() != 1 ||
@@ -317,6 +329,24 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
         return false;
       Scalar = Pieces[0].Location;
       return true;
+    }
+    if (mips::isByteRecord(Type)) {
+      unsigned Offset = 0;
+      for (const auto &P : Pieces) {
+        auto L = P.Location;
+        if (P.Indirect || P.Offset != Offset ||
+            (L.Kind != SourceABICarrierKind::IntegerRegister &&
+             L.Kind != SourceABICarrierKind::Stack))
+          return false;
+        if (L.Kind == SourceABICarrierKind::IntegerRegister &&
+            L.ValueBytes < P.CarrierBytes) {
+          L.CarrierBytes = P.CarrierBytes;
+          L.RegisterByteOffset = P.RegisterBitOffset / 8;
+        }
+        Components.push_back(L);
+        Offset += L.ValueBytes;
+      }
+      return Offset == Type->Size;
     }
     if (Argument && Pieces.size() == 1 && !Pieces[0].Offset &&
         !Pieces[0].RegisterBitOffset && !Pieces[0].Indirect &&

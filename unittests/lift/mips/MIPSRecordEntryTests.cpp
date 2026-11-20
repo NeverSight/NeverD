@@ -306,6 +306,50 @@ TEST(MIPSRecordABI, MixedFloatingAndIntegerFieldsKeepIndependentCallClasses) {
   }
 }
 
+TEST(MIPSRecordABI, ByteRecordsBindEachPartialRegisterOrExactStackPiece) {
+  llvm::LLVMContext Context;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Count : {3u, 9u, 15u})
+      for (unsigned Prefix : {0u, 7u, 8u}) {
+        auto ByteArray =
+            NdType::makeArray(NdType::makeInt(1, false), Count, Count);
+        auto Record = NdType::makeStruct({ByteArray});
+        Record->Passing = NdRecordPassing::ByValue;
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Record;
+        for (unsigned I = 0; I < Prefix; ++I)
+          S.Parameters.push_back({"word", NdType::makeInt(8, false)});
+        S.Parameters.push_back({"bytes", Record});
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        auto Parameters = sourceABIParameters(S);
+        const unsigned Chunks = (Count + 7) / 8;
+        ASSERT_EQ(Parameters.size(), Prefix + Chunks);
+        ASSERT_EQ(S.ReturnComponents.size(), Chunks);
+        auto *RT =
+            llvm::cast<llvm::StructType>(llvmSourceCallResultType(Context, S));
+        ASSERT_EQ(RT->getNumElements(), Chunks);
+        for (unsigned J = 0; J < Chunks; ++J) {
+          const auto &P = Parameters[Prefix + J];
+          const unsigned Bytes = std::min(8u, Count - 8 * J);
+          EXPECT_EQ(P.ByteOffset, 8 * J);
+          EXPECT_EQ(P.Location.ValueBytes, Bytes);
+          EXPECT_EQ(P.Location.CarrierBytes,
+                    Prefix + J < 8 && Bytes < 8 ? 8 : 0);
+          EXPECT_EQ(P.Location.RegisterByteOffset,
+                    Prefix + J < 8 && !archLittleEndian(A) ? 8 - Bytes : 0);
+          EXPECT_TRUE(
+              llvmMIPSRecordPieceType(Context, P, S)->isIntegerTy(Bytes * 8));
+          EXPECT_TRUE(RT->getElementType(J)->isIntegerTy(Bytes * 8));
+        }
+        auto Bad = S;
+        Bad.ReturnComponents.back().RegisterByteOffset ^= 1;
+        std::string Diagnostic;
+        EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+      }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);

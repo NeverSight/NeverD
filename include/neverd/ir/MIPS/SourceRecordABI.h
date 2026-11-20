@@ -44,6 +44,10 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
 
+/// A natural record whose complete object representation consists of byte
+/// fields.
+bool isByteRecord(const TypeRef &Type);
+
 /// A complete record whose independently addressable leaves share a single
 /// full integer argument word. The source object uses memory byte order.
 bool isPackedRecordWord(const TypeRef &Type,

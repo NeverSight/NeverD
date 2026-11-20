@@ -589,6 +589,20 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       for (const auto &P : Signature.Parameters) {
         if (P.Components.empty()) {
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
+        } else if (Signature.MIPSRecords && mips::isByteRecord(P.Type)) {
+          const auto Members = sourceValueMembers(P.Type);
+          std::vector<ExprPtr> Leaves;
+          for (const auto &L : P.Components) {
+            auto Word = medvarToExpr(Call.Inputs[++Index]);
+            for (unsigned J = 0; J < L.ValueBytes; ++J) {
+              const unsigned Lane =
+                  archLittleEndian(TargetArch) ? J : L.ValueBytes - J - 1;
+              auto Byte = sourceBitSlice(Word, Lane, 1);
+              Leaves.push_back(HighExpr::makeBitCast(
+                  std::move(Byte), Members[Leaves.size()].Type));
+            }
+          }
+          Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
         } else if (Signature.MIPSRecords &&
                    mips::isPackedRecordWord(P.Type, P.Components)) {
           const auto Word = medvarToExpr(Call.Inputs[++Index]);

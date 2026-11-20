@@ -4,7 +4,9 @@
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "../../../loader/Swift/SwiftMangledValueConstructorABI.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -27,6 +29,53 @@
 #include <set>
 
 namespace neverd {
+
+namespace {
+/// The logical result uses object-byte offsets. Gather each integer register
+/// in target byte order and preserve the call clobber in unoccupied lanes.
+void appendMIPSByteResult(
+    std::vector<MedOp> &Ops, const MedOp &Call,
+    llvm::ArrayRef<SourceABIValueLocation> Pieces, Arch Target,
+    llvm::function_ref<MedVar(uint16_t)> Temp,
+    llvm::function_ref<MedVar(uint64_t, uint16_t)> Register) {
+  const auto Emit = [&](NdOp Opcode, MedVar Out, MedVar A, MedVar B) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Addr = Call.Addr;
+    Op.Output = Out;
+    Op.addInput(A);
+    if (B.Size)
+      Op.addInput(B);
+    Ops.push_back(std::move(Op));
+    return Out;
+  };
+  unsigned ObjectOffset = 0;
+  for (const auto &P : Pieces) {
+    const unsigned Width = P.ValueBytes;
+    const auto Result =
+        Register(P.RegisterOffset, P.CarrierBytes ? P.CarrierBytes : Width);
+    MedVar Word;
+    for (unsigned I = 0; I < Width; ++I) {
+      const unsigned At =
+          ObjectOffset + (archLittleEndian(Target) ? Width - 1 - I : I);
+      auto Byte =
+          Emit(NdOp::SUBBYTES, Temp(1), Call.Output, MedVar::makeConst(At, 4));
+      Word = I ? Emit(NdOp::CONCAT, Temp(I + 1), Word, Byte) : Byte;
+    }
+    if (P.CarrierBytes) {
+      const auto Unused = P.CarrierBytes - Width;
+      const auto Suffix =
+          Emit(NdOp::SUBBYTES, Temp(Unused), Result,
+               MedVar::makeConst(P.RegisterByteOffset ? 0 : Width, 4));
+      Emit(NdOp::CONCAT, Result, P.RegisterByteOffset ? Word : Suffix,
+           P.RegisterByteOffset ? Suffix : Word);
+    } else {
+      Emit(NdOp::COPY, Result, Word, {});
+    }
+    ObjectOffset += Width;
+  }
+}
+} // namespace
 
 const SourceFunctionTypeHint *
 LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
@@ -505,6 +554,16 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Argument = Load.Output;
           Ops.push_back(std::move(Address));
           Ops.push_back(std::move(Load));
+        } else if (Signature.MIPSRecords && Location.CarrierBytes) {
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Addr = Op.Addr;
+          Extract.Output = Temporary(Location.ValueBytes);
+          Extract.addInput(ndVarToMedVar(
+              NdVar::reg(Location.RegisterOffset, Location.CarrierBytes)));
+          Extract.addInput(MedVar::makeConst(Location.RegisterByteOffset, 4));
+          Argument = Extract.Output;
+          Ops.push_back(std::move(Extract));
         } else if (TargetArch == Arch::AArch64 &&
                    Location.Kind == SourceABICarrierKind::IntegerRegister &&
                    Location.ValueBytes < 4) {
@@ -628,6 +687,14 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           ReturnOps.push_back(std::move(Field));
           ReturnOps.push_back(std::move(Store));
         }
+      } else if (Signature.MIPSRecords &&
+                 mips::isByteRecord(Signature.ReturnType)) {
+        Op.Output = Temporary(Signature.ReturnType->Size);
+        appendMIPSByteResult(ReturnOps, Op, Signature.ReturnComponents,
+                             TargetArch, Temporary,
+                             [&](uint64_t Offset, uint16_t Width) {
+                               return ndVarToMedVar(NdVar::reg(Offset, Width));
+                             });
       } else if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
         const auto Members = Signature.MIPSRecords

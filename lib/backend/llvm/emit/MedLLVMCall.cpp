@@ -48,6 +48,7 @@
 #include "llvm/IR/InlineAsm.h"
 
 #define DEBUG_TYPE "neverd-med-llvm-call"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 
@@ -1352,7 +1353,22 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
       setVar(Op.Output, MachineResult, Builder);
     } else if (Op.Output.Size && !Call->getType()->isVoidTy()) {
       llvm::Value *Value = Call;
-      if (!ReturnMembers.empty()) {
+      if (Hint.Signature.MIPSRecords &&
+          mips::isByteRecord(Hint.Signature.ReturnType)) {
+        std::vector<llvm::Value *> Bytes;
+        for (const auto &[I, P] :
+             llvm::enumerate(Hint.Signature.ReturnComponents)) {
+          auto *Word = Builder.CreateExtractValue(Call, {unsigned(I)});
+          for (unsigned J = 0; J < P.ValueBytes; ++J) {
+            const unsigned Lane =
+                archLittleEndian(TargetArch) ? J : P.ValueBytes - J - 1;
+            auto *Byte = Lane ? Builder.CreateLShr(Word, 8 * Lane) : Word;
+            Bytes.push_back(
+                Builder.CreateZExtOrTrunc(Byte, Builder.getInt8Ty()));
+          }
+        }
+        Value = Pack(Bytes, ReturnMembers, Hint.Signature.ReturnType->Size);
+      } else if (!ReturnMembers.empty()) {
         std::vector<llvm::Value *> Parts;
         std::vector<SourceAggregateMember> Members;
         const bool Floating =

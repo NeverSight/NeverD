@@ -78,6 +78,7 @@
 #include "neverd/backend/llvm/X86/LLVMX87ValueAsm.h"
 #include "neverd/backend/llvm/X86/X86AmxNative.h"
 #include "neverd/backend/llvm/X86/X86SgxNative.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/intrinsics/IntrinsicInstructionText.h"
 #include "neverd/ir/intrinsics/Intrinsics.h"
@@ -6589,8 +6590,8 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           const auto &Piece = RecordPieces[Operand];
           const bool FP =
               Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
-          Packed.Pieces.push_back({Operand++, Piece.ByteOffset,
-                                   Piece.Type->Size, FP, Piece.Type->Size});
+          Packed.Pieces.push_back(
+              {Operand++, Piece.ByteOffset, Piece.Type->Size, FP});
         }
         noteRecordValue(Parameter.Type);
         Expression += c_detail::recordCallArgument(
@@ -6618,10 +6619,15 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       }
     }
     Expression += ")";
-    if (Signature && Signature->ReturnType->Kind == NdTypeKind::Struct)
+    if (Signature && Signature->ReturnType->Kind == NdTypeKind::Struct) {
+      llvm::ArrayRef<SourceABIValueLocation> Words;
+      if (Signature->MIPSRecords && mips::isByteRecord(Signature->ReturnType))
+        Words = Signature->ReturnComponents;
       Expression = c_detail::sourceRecordValue(
           Signature->ReturnType, declarationToC(Signature->ReturnType, ""),
-          typeToCLLVM(Call.getType()), Expression);
+          typeToCLLVM(Call.getType()), Expression, Words,
+          archLittleEndian(Opts.TheArch));
+    }
     RenderingCalls.pop_back();
     return Expression;
   }

@@ -348,13 +348,18 @@ TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
       EXPECT_FALSE(sourceABICallResultType(Hint.Signature));
       // A checked declaration may bind full independent members. An incomplete
       // location or a partially defined physical word remains insufficient.
-      const bool CanBind = Type->Fields.front()->Kind != NdTypeKind::Array;
+      const bool CanBind = Type->Size <= 16;
       EXPECT_EQ(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic),
                 CanBind);
       if (CanBind) {
         EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
         EXPECT_TRUE(Hint.Signature.MIPSRecords);
         EXPECT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
+        if (mips::isByteRecord(Type)) {
+          const auto &L = Hint.Signature.ReturnComponents.front();
+          EXPECT_EQ(L.CarrierBytes, 8);
+          EXPECT_EQ(L.RegisterByteOffset, archLittleEndian(A) ? 0 : 5);
+        }
         auto Bad = Hint.Signature;
         Bad.Parameters.front().Components.front().RegisterOffset += 8;
         EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));

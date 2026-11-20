@@ -206,13 +206,36 @@ class FrameWalk {
           (A.From == Origin::Number || A.From == Origin::Stack))
         return {Origin::Number,
                 uint64_t((A.Bits == B.Bits) == (O.Opcode == NdOp::INT_EQUAL))};
-    } else if (O.Opcode == NdOp::INT_OR || O.Opcode == NdOp::INT_LEFT) {
-      if (A.From == Origin::Number && B.From == Origin::Number) {
-        uint64_t N = O.Opcode == NdOp::INT_OR ? A.Bits | B.Bits
-                     : B.Bits < 64            ? A.Bits << B.Bits
-                                              : 0;
-        return {Origin::Number, N & mask(W)};
-      }
+    } else if (O.Opcode == NdOp::INT_RIGHT || O.Opcode == NdOp::INT_LEFT) {
+      if (B.From != Origin::Number || B.Bits >= W * 8)
+        return {};
+      const bool Left = O.Opcode == NdOp::INT_LEFT;
+      if (A.From == Origin::Number)
+        return {Origin::Number,
+                (Left ? A.Bits << B.Bits : A.Bits >> B.Bits) & mask(W)};
+      if (A.external())
+        return {Origin::NonFrame};
+      if (B.Bits % 8)
+        return {};
+      const unsigned Shift = B.Bits / 8;
+      const uint64_t Known = A.knownBytes(W);
+      return Value::fromBytes(
+          Left
+              ? (Known << Shift) | Value::lanes(Shift)
+              : (Known >> Shift) | (Value::lanes(W) & ~Value::lanes(W - Shift)),
+          W);
+    } else if (O.Opcode == NdOp::INT_OR || O.Opcode == NdOp::INT_AND) {
+      const bool And = O.Opcode == NdOp::INT_AND;
+      if (A.From == Origin::Number && B.From == Origin::Number)
+        return {Origin::Number,
+                (And ? A.Bits & B.Bits : A.Bits | B.Bits) & mask(W)};
+      uint64_t Known = A.knownBytes(W) & B.knownBytes(W);
+      const auto Constant = A.From == Origin::Number ? A : B;
+      if (Constant.From == Origin::Number)
+        for (unsigned I = 0; I < W; ++I)
+          if (((Constant.Bits >> (8 * I)) & 255) == (And ? 0 : 255))
+            Known |= uint64_t(1) << I;
+      return Value::fromBytes(Known, W);
     } else {
       return {};
     }
@@ -373,6 +396,8 @@ public:
         case NdOp::INT_SUB:
         case NdOp::INT_OR:
         case NdOp::INT_LEFT:
+        case NdOp::INT_RIGHT:
+        case NdOp::INT_AND:
         case NdOp::INT_EQUAL:
         case NdOp::INT_NOTEQUAL:
           if (!O.Output.Size)
