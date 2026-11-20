@@ -232,12 +232,32 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   return std::nullopt;
 }
 
+/// Whether \p Img's stack-growth paths are modelled: every x86-64 image, and
+/// an AArch64 one whose register ABI is (GoModuleInfo::RegisterArguments).
+/// Under arm64's stack ABI the path's absence would expose stack arguments
+/// AAPCS64 places after eight register positions.
+bool goGrowthPathsModeled(const BinaryImage &Img) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && (Img.Arch == Arch::X64 ||
+                    (Img.Arch == Arch::AArch64 && Module->RegisterArguments));
+}
+
+bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return goGrowthPathsModeled(Img) &&
+         std::binary_search(Module->MorestackEntries.begin(),
+                            Module->MorestackEntries.end(), Callee) &&
+         !std::binary_search(Module->ThrowingMorestackEntries.begin(),
+                             Module->ThrowingMorestackEntries.end(), Callee);
+}
+
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  if (!Module || Img.Arch != Arch::X64 || Blocks.empty() ||
+  if (!goGrowthPathsModeled(Img) || Blocks.empty() ||
       Blocks.front().Ops.empty())
     return std::nullopt;
+  const uint64_t StackPointer = getTargetRegInfo(Img.Arch).StackPointer;
   // The entry compares the stack pointer with the goroutine's stack guard,
   // `g.stackguard0` at 16(g), and branches to the growth path.  It computes
   // nothing else, so running it again when the function restarts is the
@@ -267,7 +287,7 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
     case NdOp::STORE: {
       const std::optional<BasePlus> Slot =
           Op.NumInputs >= 2 ? Values.of(Op.Inputs[0]) : std::nullopt;
-      if (At != Phase::Spilling || !Slot || Slot->Base != x86reg::RSP ||
+      if (At != Phase::Spilling || !Slot || Slot->Base != StackPointer ||
           Slot->Offset < 8 || !Op.Inputs[1].isReg())
         return std::nullopt;
       Spills.push_back({Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
@@ -288,7 +308,7 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
     case NdOp::LOAD: {
       const std::optional<BasePlus> Slot =
           Op.NumInputs >= 1 ? Values.of(Op.Inputs[0]) : std::nullopt;
-      if (At != Phase::Reloading || !Slot || Slot->Base != x86reg::RSP)
+      if (At != Phase::Reloading || !Slot || Slot->Base != StackPointer)
         return std::nullopt;
       if (Op.Output.isReg())
         Reloads.push_back({Op.Output.Offset, Op.Output.Size, Slot->Offset});

@@ -5828,7 +5828,32 @@ that grows the stack rather than `runtime.morestackc`, which throws, and the
 entry alone must reach it. A frame larger than 4 KiB checks for underflow with
 a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
-routines take no register argument.
+routines take no register argument. arm64 paths, `ldr x16, [x28, #16]` and
+the spills a `stp` makes, qualify where the image's register ABI is modelled
+(`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
+expose stack arguments AAPCS64 places after eight register positions. A call
+to a growth routine resumes at its return address (`goCallResumesAfter`),
+though arm64's routine ends in a trap after `newstack`, so the CFG builder
+asks this before a no-return proof.
+
+Go's compiler gives a call to some runtime routines no continuation: it ends
+the calling block with the call (`BlockExit` in
+cmd/compile/internal/ssagen/ssa.go), so the instruction after the call starts
+another block or padding. They are the routines it names (`gopanic`,
+`panicwrap`, `block`, `throwinit` and the `panicmakeslice`, `panicunsafe` and
+`panicrangestate` families), the ones it reaches through `rtcall` without
+returning (`panicdivide`, `panicshift`, `panicdottypeE` and the like), and the
+bounds-check panics (`panicBounds` in Go 1.26, `panicIndex` and its family
+before). `throw` and `fatal` end the process. Their bodies need not show it:
+`gopanic` and `fatalthrow` end in a store to nil and a reachable return. The
+loader lists their entries (`GoModuleInfo::NoReturnEntries`,
+`goRuntimeNeverReturns`), and both no-return lookups answer for them
+(`isNoReturnTarget`, `NoReturnTargetIndex`), so the CFG ends a block at such a
+call instead of falling into the next one. The list waits for the register ABI
+(`GoModuleInfo::RegisterArguments`): under the stack ABI, a bounds stub such as
+Go 1.16's `panicIndex` forwards its registers to a stack-argument Go half,
+and until that layout is modelled its operands would take System V's
+positions.
 
 Results, calls through function values and interfaces, arm64 and Go code in
 images before 1.18 still follow the platform convention. So do DWARF-typed signatures, whose parameters Go's own register

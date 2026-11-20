@@ -109,6 +109,12 @@ struct GoStackGrowth {
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks);
 
+/// Whether a call to \p Callee resumes at its return address although the
+/// callee's own code never returns: Go's stack-growth routines, whose
+/// `newstack` resumes the goroutine at the call's return address once the
+/// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
+bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
+
 /// The register arguments the stack-growth path spills
 /// (GoStackGrowth::Spills).
 std::optional<std::vector<GoArgumentSpill>>

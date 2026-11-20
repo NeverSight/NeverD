@@ -540,11 +540,16 @@ Still open, in order of yield:
    registers (`goAssemblyTakesRegisterArguments`) took them to 374,902, and
    the corpus's 623 `runtime_memmove(0, 0, 0, n)` calls now pass
    `(to, from, n)`. Still open, in order of yield:
-   - Go's stack ABI: compiled code before Go 1.17, and ABI0 assembly in every
-     version. Its stack arguments print after six zero System V register
-     slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg, len)` (1,086 calls in
-     the Go 1.16 binary). Go 1.17 passes register arguments under the 1.16
-     pclntab magic, so it must be told apart first.
+   - Go's stack ABI: compiled code before Go 1.17 (arm64: 1.18), and ABI0
+     assembly in every version. Its stack arguments print after six zero
+     System V register slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg,
+     len)` (1,086 calls in the Go 1.16 binary). On Windows they fall in the
+     home space, so `runtime_printstring(void)`. arm64 pads eight register
+     slots. Bounds stubs (`panicIndex`: x in AX, y in CX) take System V's
+     positions for their registers. Once this layout is modelled, the
+     no-return list and arm64 growth paths can drop their register-ABI gate.
+     Go 1.17 passes register arguments under the 1.16 pclntab magic, so it
+     must be told apart first: its prologue compares `[r14+0x10]`.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
@@ -565,7 +570,11 @@ Still open, in order of yield:
    the index and the length (`internal/abi/bounds.go`). About 690 calls per
    binary print placeholders until that table is read.
 4. A frame larger than 4 KiB reaches its growth path from two branches and
-   keeps it, and so does the growth path of arm64 code.
+   keeps it. arm64 growth paths are left out only where the register ABI is
+   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait
+   for the stack ABI too. On the 25 Go binaries, the two together took "no
+   recovered semantics" from 357,956 to about 305,600 and the refused
+   functions from 28 to 24, with arm64 Go 1.26 down 8-40%.
 5. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
    C writer drops it because the stub's own signature is `void`.
 6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39

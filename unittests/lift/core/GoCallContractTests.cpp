@@ -20,6 +20,7 @@
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
 #include <map>
@@ -427,6 +428,47 @@ TEST(GoStackGrowth, AnEntryThatStoresIsNoStackCheck) {
   EXPECT_TRUE(hasOp(lift(Img, kTextVA + 0x100), NdOp::CALL));
 }
 
+/// Little-endian bytes of AArch64 instruction words.
+std::vector<uint8_t> words(std::initializer_list<uint32_t> Words) {
+  std::vector<uint8_t> Bytes;
+  for (const uint32_t W : Words)
+    for (unsigned I = 0; I < 4; ++I)
+      Bytes.push_back(static_cast<uint8_t>(W >> (8 * I)));
+  return Bytes;
+}
+
+TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
+  // main.f: ldr x16, [x28, #16]; cmp sp, x16; b.ls grow; add x0, x0, x1; ret
+  //   grow: stp x0, x1, [sp, #8]; mov x3, x30; bl morestack_noctxt
+  //         ldp x0, x1, [sp, #8]; b main.f
+  // The growth routine ends in a trap, as Go's does after newstack; the call
+  // resumes at its return address all the same.
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call =
+      0x94000000u | (((Morestack - (Function + 0x1C)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Function,
+              words({0xF9400B90, 0xEB3063FF, 0x54000069, 0x8B010000, 0xD65F03C0,
+                     0xA90087E0, 0xAA1E03E3, Call, 0xA94087E0, 0x17FFFFF7}));
+  T.writeText(Morestack, words({0x00000000}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_TRUE(goCallResumesAfter(T.Img, Morestack));
+  const auto Growth = goStackGrowth(T.Img, build(T.Img, Function).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  ASSERT_EQ(Growth->Spills.size(), 2u);
+  EXPECT_EQ(Growth->Spills[0].Register, a64reg::X0);
+  EXPECT_EQ(Growth->Spills[0].EntryOffset, 8);
+  EXPECT_EQ(Growth->Spills[1].Register, a64reg::X1);
+  EXPECT_TRUE(Growth->Restarts);
+  const MedFunc F = lift(T.Img, Function);
+  EXPECT_FALSE(hasOp(F, NdOp::CALL));
+  EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
+}
+
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
   // runtime.morestackc throws: a system-stack function that runs short of
   // stack never starts again, so its path stays.
@@ -560,6 +602,30 @@ TEST(GoInternalABI, X15ReadsAsZero) {
           Op.Inputs[0].ConstVal == 0)
         Zero = true;
   EXPECT_TRUE(Zero);
+}
+
+TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {
+  // main.h: test eax, eax; jz L; call runtime.gopanic; L: ret.  gopanic's
+  // body returns, as its store to nil and return do, but the compiler laid
+  // L after the call as another block, which the call never reaches.
+  constexpr va_t Panicking = kTextVA + 0x100, Gopanic = kTextVA + 0x200;
+  GoTestImage T;
+  T.writeText(Panicking, {0x85, 0xC0, 0x74, 0x05});
+  T.writeText(Panicking + 4, makeCall(Panicking + 4, Gopanic));
+  T.writeText(Panicking + 9, {0xC3});
+  T.writeText(Gopanic, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Panicking, kTextVA + 0x300}};
+  Module.NoReturnEntries = {Gopanic};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const LowFunc F = build(T.Img, Panicking);
+  for (const LowBlock &Block : F.Blocks)
+    if (Block.StartAddr <= Panicking + 4 && Panicking + 4 < Block.EndAddr)
+      for (const int Succ : Block.Succs)
+        for (const LowBlock &Next : F.Blocks)
+          if (Next.Id == Succ)
+            EXPECT_NE(Next.StartAddr, Panicking + 9);
 }
 
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {

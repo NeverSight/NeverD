@@ -338,6 +338,15 @@ void parseGoExceptions(BinaryImage &Img) {
       }
   llvm::sort(Module.MorestackEntries);
   llvm::sort(Module.ThrowingMorestackEntries);
+  // Only where Go's register ABI is modelled: under the stack ABI, a bounds
+  // stub that forwards its registers to a stack-argument Go half would take
+  // System V's positions for them until that layout is modelled.
+  if (TextBaseProven && Module.RegisterArguments)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          goRuntimeNeverReturns(G.Name))
+        Module.NoReturnEntries.push_back(G.CodeRange.Begin);
+  llvm::sort(Module.NoReturnEntries);
 
   if (!Layout.StackMapPCDataIndex) {
     Layout.StackMapPCDataIndex =
@@ -580,3 +589,44 @@ void parseGoExceptions(BinaryImage &Img) {
 }
 
 } // namespace neverd::go_loader
+
+namespace neverd {
+
+bool goRuntimeNeverReturns(std::string_view Name) {
+  constexpr std::string_view Prefix = "runtime.";
+  if (Name.substr(0, Prefix.size()) != Prefix)
+    return false;
+  const std::string_view Routine = Name.substr(Prefix.size());
+  // The bounds-check panics: Go 1.26's one (panicExtend on 32-bit targets),
+  // the earlier families, each with a Go half named goPanic..., their 32-bit
+  // panicExtend... forms, and Go 1.10's panicindex and panicslice.
+  if (Routine == "panicBounds" || Routine == "panicExtend" ||
+      Routine == "panicindex" || Routine == "panicslice")
+    return true;
+  constexpr std::string_view Kinds[] = {
+      "Index",      "IndexU",      "SliceAlen", "SliceAlenU", "SliceAcap",
+      "SliceAcapU", "SliceB",      "SliceBU",   "Slice3Alen", "Slice3AlenU",
+      "Slice3Acap", "Slice3AcapU", "Slice3B",   "Slice3BU",   "Slice3C",
+      "Slice3CU",   "SliceConvert"};
+  for (const std::string_view Family :
+       {std::string_view("panic"), std::string_view("goPanic"),
+        std::string_view("panicExtend"), std::string_view("goPanicExtend")})
+    if (Routine.substr(0, Family.size()) == Family)
+      for (const std::string_view Kind : Kinds)
+        if (Routine.substr(Family.size()) == Kind)
+          return true;
+  constexpr std::string_view Exits[] = {
+      // The calls ssagen ends a block with by name.
+      "throw", "throwinit", "gopanic", "panicwrap", "block",
+      "panicmakeslicelen", "panicmakeslicecap", "panicunsafeslicelen",
+      "panicunsafeslicenilptr", "panicunsafestringlen",
+      "panicunsafestringnilptr", "panicrangestate",
+      // The calls ssagen makes with rtcall(fn, returns=false).
+      "panicdivide", "panicshift", "panicdottypeE", "panicdottypeI",
+      "panicnildottype", "panicoverflow", "panicSimdImm",
+      // The routines that end the process.
+      "fatal", "fatalthrow", "fatalpanic"};
+  return llvm::is_contained(Exits, Routine);
+}
+
+} // namespace neverd
