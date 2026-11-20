@@ -287,6 +287,29 @@ TEST(HighCParamUsage, SharedExpressionVisitsRetainTheActuallyReadParameter) {
   EXPECT_EQ(Writer.emittedParamIndices(F), std::vector<size_t>({0}));
 }
 
+// Go's signature lists a function's parameters, not the registers they fill:
+// a string takes two, and its results are none.  The list leaves the
+// parameters as a function of no signature prints them, the ones its code
+// reads, where it once printed every register up to the last read.
+TEST(HighCParamUsage, AGoSignatureCountsNoParameterPositions) {
+  auto F = makeFunction(0);
+  F.Body.front().RetVal =
+      HighExpr::makeBinop(NdOp::INT_ADD, makeParam(0), makeParam(5));
+  RecordParametersDebug Debug;
+  Debug.Function.Addr = F.Entry;
+  Debug.Function.Name = F.Name;
+  Debug.Function.PlatformConvention = false;
+  Debug.Function.Params = {{"s", NdType::makeInt(8)}};
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  std::string Bare, Declared;
+  llvm::raw_string_ostream BareOut(Bare), DeclaredOut(Declared);
+  HighCWriter Unsigned(BareOut, Options, nullptr);
+  HighCWriter Signed(DeclaredOut, Options, &Debug);
+  EXPECT_EQ(Unsigned.emittedParamIndices(F), std::vector<size_t>({0, 5}));
+  EXPECT_EQ(Signed.emittedParamIndices(F), std::vector<size_t>({0, 5}));
+}
+
 TEST(HighCParamUsage, RepeatedCallsReuseCompleteDefaultParameterQueries) {
   std::vector<HighFunc> Functions;
   for (size_t I = 0; I != 28; ++I)

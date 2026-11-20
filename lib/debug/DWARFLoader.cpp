@@ -434,6 +434,14 @@ struct DWARFDebugContext::Impl {
   llvm::DWARFDie declaredTypeDie(llvm::DWARFDie Die) const;
   AuthenticatedReturnValueState classifyReturnValue(llvm::DWARFDie Die,
                                                     int Depth = 0) const;
+  /// What the DWARF of the Go function \p Die, entered at \p Entry, says it
+  /// returns, where Go's DWARF differs from C's: the type, null where the
+  /// DWARF does not say, and how it comes back.  None for a function of
+  /// another language, or of a Go unit built with the stack ABI, whose
+  /// results are no value C returns.
+  std::optional<std::pair<TypeRef, AuthenticatedReturnValueState>>
+  goReturnValue(llvm::DWARFDie Die, va_t Entry,
+                RecordSignatureTypes &Records) const;
   std::vector<Location> decodeLocations(llvm::DWARFDie Die,
                                         llvm::dwarf::Attribute Attr,
                                         llvm::DWARFUnit *Unit,
@@ -1322,6 +1330,69 @@ bool platformConvention(llvm::DWARFDie Die) {
          Source == llvm::dwarf::DW_LANG_ObjC_plus_plus ||
          Source == llvm::dwarf::DW_LANG_Rust;
 }
+
+/// Whether \p Die is of a Go unit.
+bool ofGoUnit(llvm::DWARFDie Die) {
+  return Die.getLanguage() == llvm::dwarf::DW_LANG_Go;
+}
+
+/// Whether the Go formal parameter \p Param is one of its function's results,
+/// which Go lists among the parameters, marked DW_AT_variable_parameter.  An
+/// out-of-line copy marks it on the abstract parameter it refers to.
+bool goResult(llvm::DWARFDie Param) {
+  return llvm::dwarf::toUnsigned(
+             Param.findRecursively(llvm::dwarf::DW_AT_variable_parameter), 0) !=
+         0;
+}
+
+/// Whether \p Die is of a Go unit compiled with the register ABI: Go's
+/// compiler records "regabi" among the flags that DW_AT_producer lists after
+/// the version and a semicolon.
+bool goRegisterABIUnit(llvm::DWARFDie Die) {
+  llvm::DWARFUnit *Unit = Die.getDwarfUnit();
+  if (!Unit)
+    return false;
+  const char *Producer = llvm::dwarf::toString(
+      Unit->getUnitDIE(false).find(llvm::dwarf::DW_AT_producer), nullptr);
+  if (!Producer)
+    return false;
+  llvm::SmallVector<llvm::StringRef, 4> Flags;
+  llvm::StringRef(Producer).split(';').second.split(Flags, ' ', -1, false);
+  return llvm::is_contained(Flags, "regabi");
+}
+
+/// Whether some piece of the Go parameter \p Param is in a register at
+/// \p Entry.  Go's register ABI passes a value of several words one word to
+/// a register; its ABI0 passes every value on the stack.
+bool goEntersInRegister(llvm::DWARFDie Param, va_t Entry) {
+  auto Locations = Param.getLocations(llvm::dwarf::DW_AT_location);
+  if (!Locations) {
+    llvm::consumeError(Locations.takeError());
+    return false;
+  }
+  llvm::DWARFUnit *Unit = Param.getDwarfUnit();
+  for (const auto &Location : *Locations) {
+    if (Location.Range &&
+        !(Location.Range->valid() && Location.Range->LowPC <= Entry &&
+          Entry < Location.Range->HighPC))
+      continue;
+    llvm::StringRef Raw(reinterpret_cast<const char *>(Location.Expr.data()),
+                        Location.Expr.size());
+    llvm::DataExtractor Data(Raw, Unit->isLittleEndian(),
+                             Unit->getAddressByteSize());
+    llvm::DWARFExpression Expression(Data, Unit->getAddressByteSize(),
+                                     Unit->getFormat());
+    for (const auto &Op : Expression) {
+      if (Op.isError())
+        break;
+      if ((Op.getCode() >= llvm::dwarf::DW_OP_reg0 &&
+           Op.getCode() <= llvm::dwarf::DW_OP_reg31) ||
+          Op.getCode() == llvm::dwarf::DW_OP_regx)
+        return true;
+    }
+  }
+  return false;
+}
 } // namespace
 
 TypeRef DWARFDebugContext::Impl::convertDwarfType(llvm::DWARFDie Die, int Depth,
@@ -1820,6 +1891,67 @@ DWARFDebugContext::Impl::classifyReturnValue(llvm::DWARFDie Die,
   }
 }
 
+std::optional<std::pair<TypeRef, AuthenticatedReturnValueState>>
+DWARFDebugContext::Impl::goReturnValue(llvm::DWARFDie Die, va_t Entry,
+                                       RecordSignatureTypes &Records) const {
+  // Go gives a function no DW_AT_type: each result is a formal parameter
+  // (goResult).  A unit built with the stack ABI returns them on the stack,
+  // as no value C returns.
+  if (!ofGoUnit(Die) || !goRegisterABIUnit(Die))
+    return std::nullopt;
+  const std::pair<TypeRef, AuthenticatedReturnValueState> Unstated;
+  // An out-of-line copy of an inlined function lists what it keeps; the
+  // abstract function it refers to lists the whole signature.
+  llvm::DWARFDie Declared = Die;
+  if (const llvm::DWARFDie Origin = Die.getAttributeValueAsReferencedDie(
+          llvm::dwarf::DW_AT_abstract_origin))
+    Declared = Origin;
+  std::vector<llvm::DWARFDie> Results;
+  for (const llvm::DWARFDie Child : Declared.children())
+    if (Child.getTag() == llvm::dwarf::DW_TAG_formal_parameter &&
+        goResult(Child))
+      Results.push_back(Child);
+  const std::string File =
+      Die.getDeclFile(llvm::DILineInfoSpecifier::FileLineInfoKind::RawValue);
+  if (llvm::StringRef(File).ends_with("<autogenerated>")) {
+    // A function the compiler generates takes its inputs in registers, but
+    // an ABI0 wrapper of one, which assembly calls, takes them on the stack
+    // and returns its results there.
+    const bool Registers =
+        llvm::any_of(Die.children(), [&](const llvm::DWARFDie &Child) {
+          return Child.getTag() == llvm::dwarf::DW_TAG_formal_parameter &&
+                 !goResult(Child) && goEntersInRegister(Child, Entry);
+        });
+    if (!Registers && !Results.empty())
+      return Unstated;
+  } else if (!llvm::StringRef(File).ends_with(".go")) {
+    // An assembly routine's DWARF lists none of its parameters or results,
+    // and the one of a routine with no declaring file none either.
+    return Unstated;
+  }
+  if (Results.empty())
+    return std::pair{
+        NdType::makeVoid(),
+        AuthenticatedReturnValueState{AuthenticatedReturnKind::NoValue, 0}};
+  // Go returns a value of several words, or several values, a word to a
+  // register, where C returns at most one.
+  if (Results.size() != 1)
+    return Unstated;
+  const llvm::DWARFDie Type = declaredTypeDie(Results.front());
+  const AuthenticatedReturnValueState State = classifyReturnValue(Type);
+  const uint8_t Word = Die.getDwarfUnit()->getAddressByteSize();
+  using Kind = AuthenticatedReturnKind;
+  if (!((State.Kind == Kind::Integer && State.Size <= Word) ||
+        (State.Kind == Kind::Pointer && State.Size == Word) ||
+        (State.Kind == Kind::FloatingPoint &&
+         (State.Size == 4 || State.Size == 8))))
+    return Unstated;
+  TypeRef Return = signatureType(Type, Records);
+  if (!Return || Return->Kind == NdTypeKind::Unknown)
+    return Unstated;
+  return std::pair{std::move(Return), State};
+}
+
 std::vector<DWARFDebugContext::Impl::Location>
 DWARFDebugContext::Impl::decodeLocations(llvm::DWARFDie Die,
                                          llvm::dwarf::Attribute Attr,
@@ -2110,7 +2242,10 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
 
   AuthenticatedReturnValueState ReturnState;
   const DeclaredTypeResolution ReturnType = resolveDeclaredType(Die);
-  if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Absent) {
+  if (auto Go = goReturnValue(Die, Addr, Records)) {
+    Sym.ReturnType = std::move(Go->first);
+    ReturnState = Go->second;
+  } else if (ReturnType.TheStatus == DeclaredTypeResolution::Status::Absent) {
     // DWARF encodes a source-level void return by omitting DW_AT_type.
     ReturnState = {AuthenticatedReturnKind::NoValue, 0};
     Sym.ReturnType = NdType::makeVoid();
@@ -2124,12 +2259,14 @@ void DWARFDebugContext::Impl::parseFunction(llvm::DWARFDie Die,
     Sym.ReturnType = std::make_shared<NdType>();
   }
   std::vector<AuthenticatedRecordParameter> EntryRecords;
+  const bool Go = ofGoUnit(Die);
   for (llvm::DWARFDie Child : Die.children()) {
     if (Child.getTag() == llvm::dwarf::DW_TAG_unspecified_parameters) {
       Sym.IsVariadic = true;
       continue;
     }
-    if (Child.getTag() != llvm::dwarf::DW_TAG_formal_parameter)
+    if (Child.getTag() != llvm::dwarf::DW_TAG_formal_parameter ||
+        (Go && goResult(Child)))
       continue;
     if (auto Record = recordParameter(Child, Addr))
       EntryRecords.push_back(std::move(*Record));

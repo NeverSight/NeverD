@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace neverd {
@@ -283,6 +284,21 @@ struct GoWriteBarrier {
 /// `moduledata` that anchors it.  A Go image needs both: the `pclntab` holds
 /// the per-function records, but the offsets inside them are relative to bases
 /// that only `moduledata` names.
+/// A pc range and the PCDATA_PanicBounds value Go 1.26's compiler gives the
+/// call to `runtime.panicBounds` it covers: which registers or constants
+/// hold the failing index and length (internal/abi/bounds.go).
+struct GoPanicBoundsRange {
+  ExceptionAddressRange Range;
+  int32_t Value = -1;
+};
+
+/// Whether the Go runtime routine \p Name (`runtime.gopanic`) never returns
+/// to its caller: Go's compiler ends the calling block with it (`BlockExit`
+/// in cmd/compile/internal/ssagen/ssa.go: the routines it names, the ones
+/// `rtcall` reaches without returning, and the bounds-check panics), or it
+/// ends the process (`throw`, `fatal`).
+bool goRuntimeNeverReturns(std::string_view Name);
+
 struct GoModuleInfo {
   /// Version implied by the `pcHeader` magic, e.g. "go1.20".
   std::string PclnTabVersion;
@@ -350,6 +366,17 @@ struct GoModuleInfo {
   /// (`runtime.morestackc`, a system-stack function called on a user stack):
   /// a growth path that calls one never restarts its function.
   std::vector<va_t> ThrowingMorestackEntries;
+  /// Entries of the runtime routines a call to which Go's compiler gives no
+  /// continuation, sorted (goRuntimeNeverReturns): the instruction after such
+  /// a call starts another block, or padding.  Their bodies need not show it:
+  /// `gopanic` and `fatalthrow` end in a store to nil and a reachable return.
+  /// Empty unless the text base is proven.
+  std::vector<va_t> NoReturnEntries;
+  /// Entry of Go 1.26's `runtime.panicBounds`, which reports every bounds
+  /// failure, or InvalidVA.
+  va_t PanicBoundsEntry = InvalidVA;
+  /// Every function's PCDATA_PanicBounds ranges, sorted by start.
+  std::vector<GoPanicBoundsRange> PanicBounds;
 };
 
 } // namespace neverd

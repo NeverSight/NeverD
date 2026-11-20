@@ -1578,6 +1578,16 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     Effect.GoArgumentReads = GPRReadWidths{};
     return Effect;
   }
+  // runtime.panicBounds takes the index and the bound each call's
+  // PCDATA_PanicBounds entry names in registers of its own (goBoundsFailureAt,
+  // and the caller's FixedCallReads); its two parameters stand for them.
+  if (Entry == Module->PanicBoundsEntry && Img.Arch == Arch::X64) {
+    GPRReadWidths Reads{};
+    addRead(Img.Arch, Reads, x86reg::RAX, 8);
+    addRead(Img.Arch, Reads, x86reg::RBX, 8);
+    Effect.GoArgumentReads = Reads;
+    return Effect;
+  }
   // A Go function takes exactly the register arguments its stack-growth
   // path spills, and the spill area above the return address holds none of
   // its stack arguments: they lie below it.

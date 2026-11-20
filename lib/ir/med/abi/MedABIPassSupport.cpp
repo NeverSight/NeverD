@@ -1776,6 +1776,42 @@ int wholeArgRegWriteInBlock(const MedBlock &Blk, int J,
   return -1;
 }
 
+bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
+                         const MedVar &Context) {
+  // The value \p V names before \p Before, past the block's copies, and the
+  // operation that defines it there, if any.
+  const auto Trace = [&](MedVar V, int Before) {
+    for (int Depth = 0;
+         Depth <= ::neverd::limits::ir::
+                      kMedABIPassSupportResolveIndirectTargetArgIdxDepthLimit;
+         ++Depth) {
+      int J = Before - 1;
+      while (J >= 0 && !(Blk.Ops[J].Output.Kind == V.Kind &&
+                         Blk.Ops[J].Output.Id == V.Id &&
+                         Blk.Ops[J].Output.SSAVer == V.SSAVer))
+        --J;
+      if (J < 0)
+        break;
+      const MedOp &Def = Blk.Ops[J];
+      // An entry live-in is its own copy.
+      if (Def.Opcode != NdOp::COPY || Def.NumInputs < 1 || Def.Inputs[0] == V)
+        return std::pair<MedVar, const MedOp *>{V, &Def};
+      V = Def.Inputs[0];
+      Before = J;
+    }
+    return std::pair<MedVar, const MedOp *>{V, nullptr};
+  };
+  const auto [Loaded, Load] = Trace(Target, CallIdx);
+  (void)Loaded;
+  if (!Load || Load->Opcode != NdOp::LOAD || Load->NumInputs < 1 ||
+      Load->MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      Load->MemoryOrdering != NdMemoryOrdering::None)
+    return false;
+  const MedVar Address =
+      Trace(Load->Inputs[0], static_cast<int>(Load - Blk.Ops.data())).first;
+  return !Address.isConst() && Address == Trace(Context, CallIdx).first;
+}
+
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,
                                 const TargetRegInfo &TRI,
                                 const IntegerArgumentLayout &Layout) {

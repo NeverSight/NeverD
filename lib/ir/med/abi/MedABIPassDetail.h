@@ -251,6 +251,13 @@ resolveIndirectTargetArgIdx(const MedBlock &Blk, int FromIdx,
                             const TargetRegInfo &TRI, const MedVar &V,
                             const IntegerArgumentLayout &Layout, int Depth = 0);
 
+/// Whether the indirect call at \p CallIdx in \p Blk, through \p Target,
+/// loads its target from the address \p Context holds, as Go calls a func
+/// value with its closure in the context register.  Both values are traced
+/// through the block's copies.
+bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
+                         const MedVar &Context);
+
 /// Physical first argument of a vfptr slot `(*(*obj + imm))`, including slot
 /// zero without an ADD. Both loads must sit in \p Blk before \p CallIdx, and
 /// the object observed by the vfptr load must still occupy the first argument

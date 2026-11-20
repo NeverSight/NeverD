@@ -540,32 +540,65 @@ Still open, in order of yield:
    registers (`goAssemblyTakesRegisterArguments`) took them to 374,902, and
    the corpus's 623 `runtime_memmove(0, 0, 0, n)` calls now pass
    `(to, from, n)`. Still open, in order of yield:
-   - Go's stack ABI: compiled code before Go 1.17, and ABI0 assembly in every
-     version. Its stack arguments print after six zero System V register
-     slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg, len)` (1,086 calls in
-     the Go 1.16 binary). Go 1.17 passes register arguments under the 1.16
-     pclntab magic, so it must be told apart first.
+   - Go's stack ABI: compiled code before Go 1.17 (arm64: 1.18), and ABI0
+     assembly in every version. Its stack arguments print after six zero
+     System V register slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg,
+     len)` (1,086 calls in the Go 1.16 binary). On Windows they fall in the
+     home space, so `runtime_printstring(void)`. arm64 pads eight register
+     slots. Bounds stubs (`panicIndex`: x in AX, y in CX) take System V's
+     positions for their registers. Once this layout is modelled, the
+     no-return list and arm64 growth paths can drop their register-ABI gate.
+     Go 1.17 passes register arguments under the 1.16 pclntab magic, so it
+     must be told apart first: its prologue compares `[r14+0x10]`.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
-   - arm64. Go's R0-R7 and F0-F7 match AAPCS64 positions, but its summaries
-     publish no entry reads, so every call there prints eight arguments.
-   - DWARF-typed signatures. They need Go's register assignment by type.
+   - arm64 calls. A Go function's parameters now come from its spills
+     (R0-R15), and exact parameters (`MedFunc::ExactRegisterParameters`) stop
+     forwarded registers from widening them. Together these took arm64 Go 1.26
+     down 55-60% and amd64 down 2-6%. A Go 1.21+ write barrier now takes no
+     register parameter either (arm64 down another 11-15%), and arm64 byte
+     spills (`strb`) name arguments too (another 22-29%). Still wide: callees
+     without a recognized growth path, such as frameless leaves, frames over
+     4 KiB, and functions that take a floating argument, whose spills are
+     vector registers.
+   - DWARF-typed signatures. Go's DWARF lists results among the parameters
+     (`DW_AT_variable_parameter`), which made every Go function `void`. The
+     loader now reads a register-ABI unit's results (`goReturnValue`): none
+     is `void`, and one of one register is the return value. The C writer no
+     longer prints a Go function a parameter for every register up to the
+     last one read. On the Go 1.26 linux-amd64 binaries with DWARF,
+     placeholders fell from 11,880 to 4,131, below the stripped build's
+     4,301. Still open: results of several words, several results,
+     parameter names and types (which need Go's register assignment by type),
+     and assembly routines, whose DWARF lists no signature.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
-2. Go's fixed registers. On register-ABI amd64 code, X15 now reads as zero
-   and calls keep R14 (`CallRegisterContract::GoInternal`). Still open:
-   - R14 (and arm64's R28) needs a name for the current goroutine. Its reads
-     are "incoming register" placeholders, about 4% of what remains.
+2. Go's fixed registers. On register-ABI amd64 code, X15 reads as zero
+   (`CallRegisterContract::GoInternal`). Still open:
+   - R14 (and arm64's R28) needs a name for the current goroutine. Ordinary
+     calls must not reuse the incoming value without evidence: runtime paths
+     can install a different g.
    - A closure's context register (RDX, arm64 R26) should become a
      parameter. Its reads are "incoming register" placeholders once the
-     growth path is gone, about 5% of what remains.
-3. Go 1.26 bounds failures call one `runtime.panicBounds`, and the call
-   site's `PCDATA_PanicBounds` entry names the registers or constants holding
-   the index and the length (`internal/abi/bounds.go`). About 690 calls per
-   binary print placeholders until that table is read.
+     growth path is gone, about 5% of what remains. A closure call
+     (`callsThroughContext`) no longer counts it as a positional argument.
+     Go code's stores of an incoming RBX or X19-X28 are no prologue saves.
+     Together these took Go 1.18-1.22 amd64 down 15-21%.
+3. Go 1.26 bounds failures call one `runtime.panicBounds`. The call site's
+   `PCDATA_PanicBounds` entry names the registers or constants holding the
+   index and the length (`internal/abi/bounds.go`), and the loader now reads
+   it (`goBoundsFailureAt`). Calls pass that index and length on x86-64, and
+   on arm64 through copies into X0 and X1. The error code (index or slice) is
+   not printed.
+   The earlier stub families (`panicIndex` with x in AX and y in CX, and
+   others) still take System V's positions.
 4. A frame larger than 4 KiB reaches its growth path from two branches and
-   keeps it, and so does the growth path of arm64 code.
+   keeps it. arm64 growth paths are left out only where the register ABI is
+   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait
+   for the stack ABI too. On the 25 Go binaries, the two together took "no
+   recovered semantics" from 357,956 to about 305,600 and the refused
+   functions from 28 to 24, with arm64 Go 1.26 down 8-40%.
 5. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
    C writer drops it because the stub's own signature is `void`.
 6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39

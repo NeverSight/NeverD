@@ -78,6 +78,10 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
 
+/// The register Go passes a func value its closure in on \p A: RDX, or R26 on
+/// arm64.  It is no positional argument.
+std::optional<uint64_t> goClosureContextRegister(Arch A);
+
 /// One register argument a function's stack-growth path spills.
 struct GoArgumentSpill {
   uint64_t Register = 0;
@@ -108,6 +112,34 @@ struct GoStackGrowth {
 /// or nullopt where the entry has no such path, or one of another shape.
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks);
+
+/// One operand of a Go bounds failure: a register's offset, or a constant.
+struct GoBoundsOperand {
+  bool Register = false;
+  uint64_t Value = 0;
+};
+
+/// The bounds failure a call to Go 1.26's `runtime.panicBounds` reports:
+/// abi.BoundsErrorCode, whether the index is signed, and the index and the
+/// length or capacity it failed against (internal/abi/bounds.go).
+struct GoBoundsFailure {
+  uint8_t Code = 0;
+  bool Signed = false;
+  GoBoundsOperand Index, Bound;
+};
+
+/// The bounds failure the call at \p CallAddr to \p Callee reports, where
+/// \p Callee is `runtime.panicBounds` and the call's PCDATA_PanicBounds value
+/// decodes to registers the routine saves (`BoundsDecode`): x86-64's by their
+/// hardware number, AArch64's R0-R15.  nullopt otherwise.
+std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
+                                                 va_t CallAddr, va_t Callee);
+
+/// Whether a call to \p Callee resumes at its return address although the
+/// callee's own code never returns: Go's stack-growth routines, whose
+/// `newstack` resumes the goroutine at the call's return address once the
+/// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
+bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
 
 /// The register arguments the stack-growth path spills
 /// (GoStackGrowth::Spills).
