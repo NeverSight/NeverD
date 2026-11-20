@@ -454,7 +454,7 @@ jobs:
         run: |
           python - <<'PYTHON'
           import os,subprocess
-          targets=['neverd', 'NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests', 'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests', 'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests', 'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests', 'NeverDAArch64DecodeValidityTests', 'NeverDSourceAnchorTests', 'NeverDTypesTests', 'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests', 'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests', 'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests', 'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests', 'NeverDMedCachedCallTargetTests', 'NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests', 'NeverDRecordCallContractTests']
+          targets=['neverd', 'NeverDMIPSTests', 'NeverDMIPSFlowTests', 'NeverDMIPSIntegerTests', 'NeverDMIPSPipelineTests', 'NeverDMIPSSDKTests', 'NeverDSourceEntryBindingTests', 'NeverDHighControlFlowTests', 'NeverDSourceCallABITests', 'NeverDAArch64AuthenticatedCallTests', 'NeverDAArch64DecodeValidityTests', 'NeverDSourceAnchorTests', 'NeverDTypesTests', 'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests', 'NeverDLLVMCValueTests', 'NeverDLLVMCIntrinsicSemanticTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests', 'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests', 'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests', 'NeverDMedCachedCallTargetTests', 'NeverDLLVMTargetInitializationTests', 'NeverDTranslationContractTests', 'NeverDHighSymSimplifyTests', 'NeverDImageAnalysisBoundaryTests', 'NeverDRelocatedFunctionEntryTests', 'NeverDNativePointerRelocationBoundaryTests', 'NeverDMachOPointerRelocationBoundaryTests', 'NeverDLLVMImportVeneerBoundaryTests', 'NeverDRelocatedLiteralTests', 'NeverDDirectTailCallMetadataTests', 'NeverDRecordCallContractTests']
           if os.environ['QUALIFICATION_SCOPE']=='frame-unix-qualification':
               targets=['neverd','NeverDMachOPointerRelocationBoundaryTests']
           elif os.environ['QUALIFICATION_SCOPE']=='crt-unix-qualification':
@@ -478,7 +478,7 @@ jobs:
                     'NeverDAArch64DecodeValidityTests',
                     'NeverDSourceAnchorTests', 'NeverDTypesTests',
                     'NeverDSessionCAPITests', 'NeverDSessionLLVMTests', 'NeverDDebugInfoTests',
-                    'NeverDLLVMCValueTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests',
+                    'NeverDLLVMCValueTests', 'NeverDLLVMCIntrinsicSemanticTests', 'NeverDNativeCallSignatureTests', 'NeverDIntegerCallArgumentsTests', 'NeverDHighCIntegerWidthTests', 'NeverDHighCParamUsageTests', 'NeverDLLVMCVectorTests',
                     'NeverDLocalTypesDebugContextTests', 'NeverDLLVMCSourcePointerTests',
                     'NeverDCallArgumentRecoveryTests', 'NeverDIndirectCallValueSourceTests', 'NeverDFunctionAdmissionTests',
                     'NeverDMedCachedCallTargetTests',
@@ -584,6 +584,12 @@ jobs:
               'RecordCallContract.FloatingRecordResultsKeepPhysicalLocals',
               'RecordCallContract.FloatingRecordResultsKeepIntegerExpressionCarriers',
           }
+          if 'NeverDLLVMCIntrinsicSemanticTests' in owners:
+              required_caller_tests = {'LLVMCFunnelShift.GuardsZeroAndModuloCountsAtIntegerWidths',
+                                       'MIPSRecordABI.LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing',
+                                       'MIPSRecordSourceEntry.HiddenResultCannotOverwriteAnyByteOfSavedLink'}
+              assert required_caller_tests <= set(actual_names)
+              assert required_caller_tests.isdisjoint(skipped), required_caller_tests.intersection(skipped)
           if 'NeverDRecordCallContractTests' in owners:
               assert record_bridge_names <= set(actual_names), 'record bridge regressions absent'
               assert not any(case.get('name') in record_bridge_names and case.find('skipped') is not None for case in cases), 'record bridge regressions skipped'
