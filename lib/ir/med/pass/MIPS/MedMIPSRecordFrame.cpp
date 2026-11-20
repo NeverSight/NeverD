@@ -249,9 +249,27 @@ class FrameWalk {
     const auto Info = CallInfo(O);
     if (!Info || Info->PrivateStart < CurrentSP || Info->PrivateStart > 0)
       return false;
-    for (unsigned I = 0; I < O.NumInputs; ++I)
+    const auto &Signature = O.SourceCallHint->Signature;
+    const bool Hidden = Signature.ReturnLocation.Kind ==
+                        SourceABICarrierKind::IndirectResultPointer;
+    for (unsigned I = 0; I < O.NumInputs - unsigned(Hidden); ++I)
       if (!read(O.Inputs[I]).external())
         return false;
+    // A declared sret writes exactly its result object. Overwriting a saved
+    // link here removes its byte identity before any subsequent reload.
+    if (Hidden) {
+      const auto Destination = read(O.Inputs[O.NumInputs - 1]);
+      if (!Destination.external()) {
+        const auto Width = Signature.ReturnType->Size;
+        if (Destination.From != Origin::Stack ||
+            int64_t(Destination.Bits) < Info->PrivateStart ||
+            !store(Destination,
+                   Info->NumericResultBytes == Width ? Value{Origin::NonFrame}
+                                                     : Value{},
+                   Width))
+          return false;
+      }
+    }
     const auto End = Memory.lower_bound(Info->PrivateStart);
     for (auto It = Memory.lower_bound(CurrentSP); It != End; ++It)
       if (!It->second.Source.external())

@@ -1066,10 +1066,17 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     };
     if (RetainResultStorage &&
         (Bits(Args.back()->getType()) !=
-             kSourceCallWordBytes * kSourceCallByteBits ||
+             Hint.Signature.ReturnLocation.ValueBytes * kSourceCallByteBits ||
          llvm::isa<llvm::UndefValue, llvm::PoisonValue>(Args.back()))) {
       Refuse(kSourceCallCarrierMissing);
       return;
+    }
+    if (RetainResultStorage && Hint.Signature.MIPSRecords) {
+      auto *Address = Args.back();
+      Types.push_back(PtrTy);
+      Values.push_back(Address->getType()->isPointerTy()
+                           ? Address
+                           : Builder.CreateIntToPtr(Address, PtrTy));
     }
     for (unsigned I = 0; I < Bindings.size(); ++I) {
       auto *Type = mapNdtype(Bindings[I].Type);

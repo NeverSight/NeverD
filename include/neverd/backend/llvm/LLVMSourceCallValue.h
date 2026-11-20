@@ -84,6 +84,9 @@ inline llvm::Type *llvmMIPSRecordPieceType(llvm::LLVMContext &Context,
 inline llvm::Type *
 llvmSourceCallResultType(llvm::LLVMContext &Context,
                          const SourceFunctionTypeHint &Hint) {
+  if (Hint.MIPSRecords &&
+      Hint.ReturnLocation.Kind == SourceABICarrierKind::IndirectResultPointer)
+    return llvm::Type::getVoidTy(Context);
   if (!Hint.MIPSRecords || Hint.ReturnComponents.empty())
     return llvmSourceCallValueType(Context, Hint.ReturnType, false);
   std::vector<llvm::Type *> Fields;

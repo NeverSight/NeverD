@@ -6427,24 +6427,33 @@ namespace {
 void checkSourceCallCarriers(const llvm::CallBase &Call,
                              const SourceFunctionTypeHint &Signature) {
   std::string Diagnostic;
+  const bool Hidden = Signature.ReturnLocation.Kind ==
+                      SourceABICarrierKind::IndirectResultPointer;
   if (!validateSourceABI(Signature, Diagnostic) ||
-      Signature.ReturnLocation.Kind ==
-          SourceABICarrierKind::IndirectResultPointer)
+      (Hidden && !Signature.MIPSRecords))
     throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
   if (Call.getType() != llvmSourceCallResultType(Call.getContext(), Signature))
     throw std::runtime_error("The call-site source result carrier changed");
   if (Signature.MIPSRecords) {
     const auto Pieces = sourceABIParameters(Signature);
     if (!Call.hasFnAttr(LLVMMIPSRecordCall) ||
-        Call.arg_size() != Pieces.size() ||
+        Call.arg_size() != Pieces.size() + unsigned(Hidden) ||
         Call.hasRetAttr(llvm::Attribute::InReg) !=
             !Signature.ReturnComponents.empty())
       throw std::runtime_error("The MIPS record call lost its ABI carriers");
+    if (Hidden) {
+      auto *Storage = Call.getParamStructRetType(0);
+      if (!Storage || !Call.getArgOperand(0)->getType()->isPointerTy() ||
+          Call.getModule()->getDataLayout().getTypeAllocSize(Storage) !=
+              Signature.ReturnType->Size ||
+          Call.getParamAlign(0) != llvm::Align(Signature.ReturnType->Alignment))
+        throw std::runtime_error(c_detail::kInvalidSourceRecordABI.str());
+    }
     for (unsigned I = 0; I < Pieces.size(); ++I)
-      if (Call.getArgOperand(I)->getType() !=
+      if (Call.getArgOperand(I + unsigned(Hidden))->getType() !=
               llvmMIPSRecordPieceType(Call.getContext(), Pieces[I],
                                       Signature) ||
-          Call.paramHasAttr(I, llvm::Attribute::InReg) !=
+          Call.paramHasAttr(I + unsigned(Hidden), llvm::Attribute::InReg) !=
               !Signature.Parameters[Pieces[I].ParameterIndex]
                    .Components.empty())
         throw std::runtime_error("A MIPS record component changed ABI class");
@@ -6570,7 +6579,10 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
     const auto RecordPieces = Signature && Signature->MIPSRecords
                                   ? sourceABIParameters(*Signature)
                                   : std::vector<SourceABIParameter>{};
-    unsigned Operand = 0;
+    const bool Hidden = Signature && Signature->MIPSRecords &&
+                        Signature->ReturnLocation.Kind ==
+                            SourceABICarrierKind::IndirectResultPointer;
+    unsigned Operand = unsigned(Hidden);
     for (unsigned I = 0; I < Count; ++I) {
       if (I)
         Expression += ", ";
@@ -6585,9 +6597,9 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
           !Signature->Parameters[I].Components.empty()) {
         const auto &Parameter = Signature->Parameters[I];
         IntegerCallParameter Packed;
-        while (Operand < RecordPieces.size() &&
-               RecordPieces[Operand].ParameterIndex == I) {
-          const auto &Piece = RecordPieces[Operand];
+        while (Operand - unsigned(Hidden) < RecordPieces.size() &&
+               RecordPieces[Operand - unsigned(Hidden)].ParameterIndex == I) {
+          const auto &Piece = RecordPieces[Operand - unsigned(Hidden)];
           const bool FP =
               Call.getArgOperand(Operand)->getType()->isFloatingPointTy();
           Packed.Pieces.push_back(
@@ -6619,7 +6631,12 @@ std::string LLVMCWriter::callExpr(const llvm::CallBase &Call, bool Statement) {
       }
     }
     Expression += ")";
-    if (Signature && Signature->ReturnType->Kind == NdTypeKind::Struct) {
+    if (Hidden) {
+      Expression = llvm::formatv(c_detail::kSourceRecordStore.data(),
+                                 declarationToC(Signature->ReturnType, ""),
+                                 valueStr(Call.getArgOperand(0)), Expression)
+                       .str();
+    } else if (Signature && Signature->ReturnType->Kind == NdTypeKind::Struct) {
       llvm::ArrayRef<SourceABIValueLocation> Words;
       if (Signature->MIPSRecords && mips::isByteRecord(Signature->ReturnType))
         Words = Signature->ReturnComponents;

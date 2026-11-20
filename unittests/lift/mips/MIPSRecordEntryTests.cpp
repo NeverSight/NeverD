@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/c/MIPS/CRecordEntry.h"
+#include "../../../lib/backend/llvm/MIPS/LLVMRecordABI.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/c/CEmitterOptions.h"
@@ -348,6 +349,44 @@ TEST(MIPSRecordABI, ByteRecordsBindEachPartialRegisterOrExactStackPiece) {
         std::string Diagnostic;
         EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
       }
+}
+
+TEST(MIPSRecordABI, HiddenResultPreservesStorageWidthAndLLVMArgumentPositions) {
+  llvm::LLVMContext Context;
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (const auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    const auto &TRI = getTargetRegInfo(A);
+    SourceFunctionTypeHint S;
+    S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    S.ReturnType = Record;
+    S.Parameters.push_back({"object", Record});
+    ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+    EXPECT_EQ(S.ReturnLocation.Kind,
+              SourceABICarrierKind::IndirectResultPointer);
+    EXPECT_EQ(S.ReturnLocation.RegisterOffset, TRI.IntParamRegs.front());
+    EXPECT_EQ(S.ReturnLocation.ValueBytes, TRI.PointerSize);
+    EXPECT_TRUE(S.ReturnComponents.empty());
+    EXPECT_TRUE(llvmSourceCallResultType(Context, S)->isVoidTy());
+    const auto Pieces = sourceABIParameters(S);
+    ASSERT_FALSE(Pieces.empty());
+    EXPECT_EQ(Pieces.front().Location.RegisterOffset, TRI.IntParamRegs[1]);
+    auto Attrs = mips::recordCallAttributes(Context, {}, S, Pieces);
+    auto *Storage =
+        llvm::dyn_cast_or_null<llvm::ArrayType>(Attrs.getParamStructRetType(0));
+    ASSERT_TRUE(Storage);
+    EXPECT_EQ(Storage->getNumElements(), 17u);
+    EXPECT_FALSE(Attrs.hasParamAttr(0, llvm::Attribute::InReg));
+    EXPECT_FALSE(Attrs.hasRetAttr(llvm::Attribute::InReg));
+    for (unsigned I = 0; I < Pieces.size(); ++I)
+      EXPECT_TRUE(Attrs.hasParamAttr(I + 1, llvm::Attribute::InReg));
+    std::string Error;
+    S.ReturnLocation.RegisterOffset = TRI.IntReturnReg;
+    EXPECT_FALSE(validateSourceABI(S, Error));
+  }
 }
 
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {

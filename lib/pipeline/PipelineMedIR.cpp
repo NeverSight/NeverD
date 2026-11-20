@@ -1171,7 +1171,11 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
         if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry, &Pieces)) {
           const auto It =
               SourceCalleeHints.emplace(LF.Entry, std::move(*Hint)).first;
-          if (Pieces.empty()) {
+          // The machine entry still receives the hidden pointer as an ordinary
+          // input. Its typed wrapper owns the caller-provided result storage.
+          if (Pieces.empty() &&
+              It->second.ReturnLocation.Kind !=
+                  SourceABICarrierKind::IndirectResultPointer) {
             SourceEntryHints.emplace(LF.Entry, It->second);
             SourceHints.emplace(LF.Entry, &It->second);
           }

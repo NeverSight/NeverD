@@ -96,7 +96,8 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
                             !sourceAArch64VectorAggregateMembers(Parameter.Type)
                                  .empty();
                    }));
-  return sourceCallRetainsResultStorage(Hint) ||
+  return (Hint.Signature.Architecture == Arch::AArch64 &&
+          sourceCallRetainsResultStorage(Hint)) ||
          (Format == BinaryFormat::MachO && NativePhysical) ||
          (Authenticated && Format == BinaryFormat::MachO &&
           (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
@@ -107,11 +108,15 @@ bool neverd::sourceCallUsesMachineABI(const SourceCallTypeHint &Hint,
 }
 
 bool neverd::sourceCallRetainsResultStorage(const SourceCallTypeHint &Hint) {
-  return (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
-          sourceCallRetainsNativeCarriers(Hint)) &&
-         Hint.Signature.Architecture == Arch::AArch64 &&
-         Hint.Signature.ReturnLocation.Kind ==
-             SourceABICarrierKind::IndirectResultPointer;
+  if (Hint.Signature.ReturnLocation.Kind !=
+      SourceABICarrierKind::IndirectResultPointer)
+    return false;
+  if (Hint.Signature.MIPSRecords)
+    return Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+           Hint.CallKind == SourceCallTypeHint::Kind::Native;
+  return Hint.Signature.Architecture == Arch::AArch64 &&
+         (Hint.CallKind == SourceCallTypeHint::Kind::Analyst ||
+          sourceCallRetainsNativeCarriers(Hint));
 }
 bool neverd::assignAnalystCallABI(SourceCallTypeHint &Hint, Arch Architecture,
                                   BinaryFormat Format, std::string &Error,

@@ -133,11 +133,15 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         if (Op.SourceCallHint && Op.SourceCallHint->Signature.MIPSRecords) {
           const auto &Signature = Op.SourceCallHint->Signature;
           const auto Pieces = sourceABIParameters(Signature);
-          if (Op.NumInputs != Pieces.size() + 1)
+          const bool Hidden = Signature.ReturnLocation.Kind ==
+                              SourceABICarrierKind::IndirectResultPointer;
+          if (Op.NumInputs != Pieces.size() + 1 + unsigned(Hidden))
             return false;
           auto &Frame = Calls[&Op];
           for (const auto &P : Pieces)
             Frame.Inputs.push_back(P.Location);
+          if (Hidden)
+            Frame.Inputs.push_back(Signature.ReturnLocation);
           // A complete scalar-only object returned by a qualified call can
           // be spilled as data after its non-frame operands are proven. A
           // pointer field or padding cannot provide that byte provenance.
@@ -150,7 +154,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             Covered += M.Type->Size;
           }
           if (Signature.ReturnType->Kind == NdTypeKind::Float ||
-              (!Signature.ReturnComponents.empty() &&
+              ((Hidden || !Signature.ReturnComponents.empty()) &&
                Covered == Signature.ReturnType->Size))
             Frame.NumericResultBytes = Signature.ReturnType->Size;
         } else if (const auto Signature =

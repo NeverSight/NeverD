@@ -11,6 +11,8 @@
 
 #include "neverd/ir/SourceABI.h"
 
+#include "llvm/IR/DerivedTypes.h"
+
 namespace neverd::mips {
 
 inline llvm::AttributeList
@@ -18,7 +20,18 @@ recordCallAttributes(llvm::LLVMContext &Context, llvm::AttributeList Attrs,
                      const SourceFunctionTypeHint &Signature,
                      llvm::ArrayRef<SourceABIParameter> Pieces) {
   Attrs = Attrs.addFnAttribute(Context, LLVMMIPSRecordCall);
-  if (!Signature.ReturnComponents.empty())
+  const bool Indirect = Signature.ReturnLocation.Kind ==
+                        SourceABICarrierKind::IndirectResultPointer;
+  if (Indirect) {
+    auto *Object = llvm::ArrayType::get(llvm::Type::getInt8Ty(Context),
+                                        Signature.ReturnType->Size);
+    Attrs = Attrs.addParamAttribute(
+        Context, 0, llvm::Attribute::getWithStructRetType(Context, Object));
+    Attrs = Attrs.addParamAttribute(
+        Context, 0,
+        llvm::Attribute::getWithAlignment(
+            Context, llvm::Align(Signature.ReturnType->Alignment)));
+  } else if (!Signature.ReturnComponents.empty())
     Attrs = Attrs.addRetAttribute(Context, llvm::Attribute::InReg);
   else if (Signature.ReturnType->Kind == NdTypeKind::Int)
     Attrs = integerResultAttributes(Context, Attrs, Signature.ReturnType->Size,
@@ -26,12 +39,14 @@ recordCallAttributes(llvm::LLVMContext &Context, llvm::AttributeList Attrs,
                                     Signature.Architecture);
   for (unsigned I = 0; I < Pieces.size(); ++I) {
     const auto &P = Pieces[I];
+    const unsigned Index = I + unsigned(Indirect);
     if (!Signature.Parameters[P.ParameterIndex].Components.empty())
-      Attrs = Attrs.addParamAttribute(Context, I, llvm::Attribute::InReg);
+      Attrs = Attrs.addParamAttribute(Context, Index, llvm::Attribute::InReg);
     else if (P.Type->Kind == NdTypeKind::Int) {
       if (P.Type->IsSigned)
-        Attrs = Attrs.addParamAttribute(Context, I, LLVMSourceSignedParameter);
-      Attrs = Attrs.addParamAttribute(Context, I,
+        Attrs =
+            Attrs.addParamAttribute(Context, Index, LLVMSourceSignedParameter);
+      Attrs = Attrs.addParamAttribute(Context, Index,
                                       P.Type->IsSigned || P.Type->Size == 4
                                           ? llvm::Attribute::SExt
                                           : llvm::Attribute::ZExt);

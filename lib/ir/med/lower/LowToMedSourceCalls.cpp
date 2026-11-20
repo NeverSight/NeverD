@@ -650,8 +650,26 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           ReturnOps.push_back(std::move(Extract));
         }
       } else if (IndirectResult && sourceCallRetainsResultStorage(*Hint)) {
-        Op.addInput(ndVarToMedVar(
-            NdVar::reg(Return.RegisterOffset, Return.ValueBytes)));
+        const auto Storage =
+            ndVarToMedVar(NdVar::reg(Return.RegisterOffset, Return.ValueBytes));
+        Op.addInput(Storage);
+        if (Signature.MIPSRecords && isMIPSO32(TargetArch)) {
+          // o32 returns its incoming hidden pointer in v0. Capture it before
+          // the call clobbers argument registers. n32 and n64 leave v0 free.
+          MedOp Save;
+          Save.Opcode = NdOp::COPY;
+          Save.Addr = Op.Addr;
+          Save.Output = Temporary(Return.ValueBytes);
+          Save.addInput(Storage);
+          MedOp Result;
+          Result.Opcode = NdOp::COPY;
+          Result.Addr = Op.Addr;
+          Result.Output =
+              ndVarToMedVar(NdVar::reg(TRI.IntReturnReg, Return.ValueBytes));
+          Result.addInput(Save.Output);
+          Ops.push_back(std::move(Save));
+          ReturnOps.push_back(std::move(Result));
+        }
       } else if (IndirectResult) {
         // Preserve the pre-call hidden pointer before SSA introduces the
         // caller-saved x8 clobber. A declared result initializes every record

@@ -310,8 +310,6 @@ bool mips::isPackedRecordWord(
 
 static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                           const mips::RecordCallPlacement &Layout) {
-  if (Layout.Arguments.ResultPointer)
-    return false;
   auto Bound = Hint;
   const auto Bind = [](const TypeRef &Type,
                        llvm::ArrayRef<SourceParameterPiece> Pieces,
@@ -367,9 +365,14 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     }
     return true;
   };
-  if (!Bind(Bound.ReturnType, Layout.Result, Bound.ReturnLocation,
-            Bound.ReturnComponents, false))
+  if (Layout.Arguments.ResultPointer) {
+    Bound.ReturnLocation = *Layout.Arguments.ResultPointer;
+    Bound.ReturnLocation.Kind = SourceABICarrierKind::IndirectResultPointer;
+    Bound.ReturnComponents.clear();
+  } else if (!Bind(Bound.ReturnType, Layout.Result, Bound.ReturnLocation,
+                   Bound.ReturnComponents, false)) {
     return false;
+  }
   for (size_t I = 0; I < Bound.Parameters.size(); ++I)
     if (!Bind(Bound.Parameters[I].Type, Layout.Arguments.Parameters[I],
               Bound.Parameters[I].Location, Bound.Parameters[I].Components,

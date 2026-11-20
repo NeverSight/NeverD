@@ -567,7 +567,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     const auto &Call = Ops[CallIdx];
     const auto &Signature = Call.SourceCallHint->Signature;
     const auto Bindings = sourceABIParameters(Signature);
-    if (sourceCallRetainsResultStorage(*Call.SourceCallHint)) {
+    const bool ResultStorage =
+        sourceCallRetainsResultStorage(*Call.SourceCallHint);
+    if (ResultStorage && !Signature.MIPSRecords) {
       if (Call.NumInputs != Bindings.size() + 2)
         return {};
       for (unsigned I = 1; I < Call.NumInputs; ++I)
@@ -581,7 +583,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                     [](const auto &P) { return !P.Components.empty(); });
     if ((!Signature.HasExplicitABI && HasComponents) ||
         Count > static_cast<size_t>(limits::kMaxBoundSourceCallArgs) ||
-        Call.NumInputs != Count + 1)
+        Call.NumInputs != Count + 1 + unsigned(ResultStorage))
       return {};
     {
       Hinted.reserve(Count);
@@ -635,6 +637,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         }
       }
     }
+    if (ResultStorage)
+      Hinted.push_back(medvarToExpr(Call.Inputs[Call.NumInputs - 1]));
     // A validated call-site declaration fixes every operand and its width.
     // A register scan can see the whole register or unrelated setup past
     // that declared list; neither may replace these bound operands.

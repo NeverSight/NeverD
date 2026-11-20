@@ -359,6 +359,46 @@ TEST(MIPSRecordSourceEntry, SinglePrecisionRecordStoresOnlyDefinedResultBytes) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, HiddenResultCannotOverwriteAnyByteOfSavedLink) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    const bool Wide = isMIPS64(A);
+    for (uint32_t Offset : {16u, 40u}) {
+      SCOPED_TRACE(Offset);
+      // Save RA at sp+56. The result at sp+40 overlaps it by one byte.
+      auto Image = image({Wide ? 0x67bdffc0u : 0x27bdffc0u,
+                          Wide ? 0xffbf0038u : 0xafbf0038u, 0x0c000800,
+                          (Wide ? 0x67a40000u : 0x27a40000u) | Offset,
+                          Wide ? 0xdfbf0038u : 0x8fbf0038u, 0x03e00008,
+                          Wide ? 0x67bd0040u : 0x27bd0040u},
+                         A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32
+                        : Wide       ? MIPSABI::N64
+                                     : MIPSABI::O32;
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Record;
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      const auto Low = build(Image);
+      if (Offset == 16)
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  }
+}
+
 TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
