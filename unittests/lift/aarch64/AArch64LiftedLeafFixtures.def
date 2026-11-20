@@ -670,6 +670,15 @@ A64_LEAF_TEXT(kScheduledDispatchOracle,
               "#define NEVERD_TEST_TABLE_GAPS 1\n"
               "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
               "#define NEVERD_TEST_SCHEDULED_DISPATCH 1\n")
+A64_LEAF_TEXT(kRetainedDefaultOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                      "#define NEVERD_TEST_TABLE_GAPS 1\n"
+                                      "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+                                      "#define NEVERD_TEST_RETAIN_DEFAULT 1\n")
+A64_LEAF_TEXT(kDefaultBlocks, "preserved_unreached_blocks")
+A64_LEAF_VALUE(unsigned, kDefaultInstructions, 2)
+A64_LEAF_VALUE(uint32_t, kExposeDefaultPC, 0x10000000)     // ADR X0, .
+A64_LEAF_VALUE(uint32_t, kReadDefaultCode, 0x18000000)     // LDR W0, .
+A64_LEAF_VALUE(uint32_t, kBranchToDefaultData, 0x14000002) // B .+8
 // MOV X9, XZR destroys the computed target before BR X9.
 A64_LEAF_VALUE(uint32_t, kClearDispatchTarget, 0xaa1f03e9)
 A64_LEAF_VALUE(unsigned, kGappedTableRecordCount, 2)
@@ -767,8 +776,21 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 2: add x0, x1, #29
  ret
 3: add x0, x1, #43
+6: ret
+#if defined(NEVERD_TEST_RETAIN_DEFAULT)
+9: .if \width == 1
+ ldr w0, 4f
+ .elseif \width == 4
+ movz x0, #0
+ .else
+ sub x0, x1, #5
+ .endif
+ .if \width == 2
+ b 6b
+ .else
  ret
-#ifndef NEVERD_TEST_MASKED_DISPATCH
+ .endif
+#elif !defined(NEVERD_TEST_MASKED_DISPATCH)
 9: sub x0, x1, #5
  ret
 #endif
@@ -780,7 +802,7 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #endif
 #else
  .data_region
- .long 0xd503237f
+4: .long 0xd503237f
  .byte 0x7e
  .end_data_region
  .data_region jt8

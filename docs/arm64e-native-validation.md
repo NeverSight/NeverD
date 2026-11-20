@@ -2575,8 +2575,8 @@ reader checks their actual storage. The fixtures exercise both consecutive
 and gapped records and remove the mask in a negative control. With no other
 range proof, all three indirect branches remain unresolved. In a separate
 compiler control, the mask leaves an entire unreferenced default block in
-the mixed section. NeverD recovers the switch targets but cannot complete
-a partial data map across those unclassified words.
+the mixed section. The November 20 build recovered the switch targets and
+refused the partial data map across those words.
 [Masked compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367).
 [Unreferenced default block control](https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014).
 
@@ -2660,3 +2660,40 @@ On the same integrated revision the unfiltered r6 suite passed 243 of 253
 cases on each Mac. The four compact-emitter skips and six classic signed-CFI
 refusals match the previous control. The new scheduled-switch case completed
 all 288 native comparisons on each host. [Full pinned-r6 comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44765584364).
+
+### Unreached instructions next to a partially marked table
+
+Apple's two original masked-switch dylibs retain a fourth arithmetic block
+after the three reachable cases. The table has a known selector domain and
+its missing bytes lie between records of the same kind. The linked section
+also carries `S_ATTR_PURE_INSTRUCTIONS`, which identifies the instruction
+owner outside the data islands. [Mach-O section and data-in-code definitions](https://github.com/apple/darwin-xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).
+
+NeverD now combines that section declaration with the bounded reads. A
+whole uncovered interval must be word aligned and free of relocation
+slots. The register emitter retains position-independent words and verifies
+the displacement of an in-body branch or a load from typed literal data.
+Only the proved data bytes and subword padding
+acquire data-in-code records. A section declaring only
+`S_ATTR_SOME_INSTRUCTIONS`, an open-ended record repair, or an uncovered
+instruction that exposes its new PC still prevents this form of publication.
+
+The Release CLI published both previously rejected Apple compiler images at
+default optimization and with `--no-opt`. Across three generations, each
+output retained the original instructions and contained 20, 30 and 40
+data-in-code records, respectively. Each LLVM build refused 24 contradictory
+or position-dependent controls and left the requested output path absent.
+
+Both Actions profiles passed all 254 tests with the source fork. On each
+profile an independent caller checked 1,008 results from the two originals
+and their twelve signed outputs. The saved signal context and Darwin's
+original unwind tables recovered both callers at twelve old-entry
+interruptions, including six on an alternate signal stack.
+[Source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44772516281).
+
+The frozen r6 build passed 244 of 254 cases on each profile. Its
+4 compact-emitter skips and 6 classic signed-return CFI failures matched
+the prior r6 baseline. The new retained-block case passed on both.
+Both virtual M1s reported that the explicit PAuth_LR, PACM-PC and CPTA-on
+hardware probes were unavailable. [Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44777564499).
+[Input hashes, full results and negative controls](evidence/arm64e-retained-defaults-2026-11-21.json).

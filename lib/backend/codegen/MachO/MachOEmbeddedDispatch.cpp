@@ -11,6 +11,7 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/EmbeddedRead.h"
+#include "neverd/loader/RelocationProvenance.h"
 #include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
@@ -18,6 +19,7 @@
 #include "llvm/BinaryFormat/MachO.h"
 
 #include <array>
+#include <iterator>
 
 namespace neverd {
 bool coverMachOEmbeddedRead(const MachOLiftedSource &Source, va_t Start,
@@ -204,10 +206,13 @@ bool coalesceReads(std::vector<MachODataInCodeRange> &Recovered) {
   return true;
 }
 
-bool completeLayout(const LowFunc &Function, const MachOLiftedSource &Source,
-                    std::vector<MachODataInCodeRange> &Recovered) {
+bool completeLayout(const BinaryImage &Image, const LowFunc &Function,
+                    const MachOLiftedSource &Source,
+                    MachOEmbeddedDispatch &Layout) {
+  auto &Recovered = Layout.Recovered;
   if (!coalesceReads(Recovered))
     return false;
+  const auto ReadCount = Recovered.size();
   llvm::SmallVector<std::pair<va_t, va_t>> Spans;
   for (const auto &B : Function.Blocks)
     Spans.emplace_back(B.StartAddr, B.EndAddr);
@@ -218,27 +223,56 @@ bool completeLayout(const LowFunc &Function, const MachOLiftedSource &Source,
   llvm::sort(Spans);
   const va_t Limit = Function.Entry + Source.Bytes.size();
   va_t Next = Function.Entry;
-  const auto AddPadding = [&](va_t End) {
+  const auto CoverGap = [&](va_t End) {
+    constexpr auto Word = aarch64::kInsnSize;
     if (Next == End)
       return true;
-    // AArch64 instructions occupy whole aligned words. Once neighboring
-    // code and reads are proved, these fragments cannot contain a separate
-    // instruction. Leave a gap containing even one whole word unresolved.
-    if (Next > End ||
-        (End - Next >= aarch64::kInsnSize &&
-         llvm::alignDown(End - aarch64::kInsnSize, aarch64::kInsnSize) >= Next))
+    if (Next > End)
       return false;
-    Recovered.push_back({Next, End, llvm::MachO::DICE_KIND_DATA});
+    if (Next % Word == 0 && End % Word == 0) {
+      Layout.UnreachedCode.emplace_back(Next, End);
+      return true;
+    }
+    // Subword padding cannot hold an instruction. A mixed gap with room for
+    // an aligned word still has no known instruction/data boundary.
+    if (End - Next >= Word && llvm::alignDown(End - Word, Word) >= Next)
+      return false;
+    if (ReadCount)
+      Recovered.push_back({Next, End, llvm::MachO::DICE_KIND_DATA});
     return true;
   };
-  const auto ReadCount = Recovered.size();
   for (const auto &[Begin, End] : Spans) {
-    if (Begin >= End || End > Limit || !AddPadding(Begin))
+    if (Begin >= End || End > Limit || !CoverGap(Begin))
       return false;
     Next = End;
   }
-  return AddPadding(Limit) &&
-         (ReadCount == Recovered.size() || coalesceReads(Recovered));
+  if (!CoverGap(Limit))
+    return false;
+  if (!ReadCount || Layout.UnreachedCode.empty())
+    return ReadCount == Recovered.size() || coalesceReads(Recovered);
+
+  // A pure instruction section supplies the code owner outside declared data
+  // islands. Use it for an unvisited interval only when every recovered read
+  // closes a hole between two original records of its own kind. An open-ended
+  // read or a SOME-only section cannot establish the rest of the layout.
+  const auto *Section = Image.getSectionFor(Function.Entry);
+  if (!Section || !(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS))
+    return false;
+  for (const auto &Read : llvm::ArrayRef(Recovered).take_front(ReadCount)) {
+    const auto Right = llvm::lower_bound(
+        Source.Embedded, Read.End,
+        [](const auto &Record, va_t End) { return Record.Begin < End; });
+    if (Right == Source.Embedded.begin() || Right == Source.Embedded.end() ||
+        Right->Begin != Read.End || Right->Kind != Read.Kind)
+      return false;
+    const auto &Left = *std::prev(Right);
+    if (Left.End != Read.Begin || Left.Kind != Read.Kind)
+      return false;
+  }
+  for (const auto &[Begin, End] : Layout.UnreachedCode)
+    if (hasRelocationProvenanceIn(Image, Begin, End))
+      return false;
+  return ReadCount == Recovered.size() || coalesceReads(Recovered);
 }
 } // namespace
 
@@ -297,9 +331,14 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       Result.BranchTargets.try_emplace(Table->InsnAddr, Table->Targets);
     }
   }
-  if (!Result.Recovered.empty() &&
-      !completeLayout(Function, Source, Result.Recovered))
-    return std::nullopt;
+  if ((!Result.Recovered.empty() || !Result.BranchTargets.empty()) &&
+      !completeLayout(Image, Function, Source, Result)) {
+    if (!Result.Recovered.empty())
+      return std::nullopt;
+    // Explicit data records need no inferred layout. The normal instruction
+    // emitter still verifies the entire body in this case.
+    Result.UnreachedCode.clear();
+  }
   return Result;
 }
 } // namespace neverd
