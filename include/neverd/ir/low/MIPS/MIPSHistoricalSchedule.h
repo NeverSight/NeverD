@@ -79,7 +79,18 @@ public:
   bool setHardwareInterrupts(uint8_t Lines) {
     if (Active || !System || Lines >= 64)
       return false;
+    if (((System->Cause >> 10) & 63) != Lines)
+      System->R30xxRecognized.reset();
     System->Cause = (System->Cause & ~0xfc00u) | uint32_t(Lines) << 10;
+    return true;
+  }
+  /// Bind the interrupt controller's sample at this physical boundary when
+  /// the R30xx Status transition admits either result. A retry sees the same
+  /// sample until retirement, exception entry, or a change to the input lines.
+  bool observeInterruptRecognition(bool Taken) {
+    if (Active || !System || System->interruptRecognition().has_value())
+      return false;
+    System->R30xxRecognized = Taken;
     return true;
   }
   bool matchesTransfer(uint64_t PC, unsigned RS, unsigned Register) const {
