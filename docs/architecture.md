@@ -5761,7 +5761,10 @@ contract Go documents beside the routine (`src/runtime/asm_amd64.s`,
 variants perform the store and keep every general-purpose register. Go 1.21
 and later `runtime.gcWriteBarrier1`-`8` keep every general-purpose register
 except arm64's R27 and the R11 or X25 they return buffer space in, which the
-call defines. Barriers are recorded only where the text base is proven.
+call defines. Barriers are recorded only where the text base is proven. A Go
+1.21+ barrier's own parameters are none (`detectCc`, exact), so its callers
+pass nothing. Read as AAPCS64, the registers its body saves would otherwise be
+eight arguments.
 
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
 there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and
@@ -5776,19 +5779,39 @@ effect is its documented one, not what its body appears to write: it writes
 its buffer register and the vector registers, and reads its store operands
 and, on amd64, R14.
 
+The same contract holds for what Go code keeps for its own caller: only the
+frame pointer and the link register. Source mode's prologue saves
+(`markCalleeSavePrologueSaves`) therefore treat Go code's store of an
+incoming RBX, R12-R15 or X19-X28 as no save. In Go, RBX is the second integer
+argument. Read as System V's callee-saved register, `runtime.throw`'s store
+of its string length into the closure it hands `systemstack` disappeared
+from the C.
+
+Go passes a func value its closure in a context register, RDX or arm64's
+R26, and it is no positional argument. MedABIPass recognizes an indirect call
+from Go code whose target is the word at the address that register holds
+(`callsThroughContext`). Compiled code does it as `mov rax, [rdx]; call rax`,
+and assembly as `mov rdx, rdi; mov rdi, [rdi]; call rdi`. Such a call is a
+closure call, and setting the register passes no argument. Read as System V's
+third argument, setting RDX made RDI and an unset RSI arguments before it.
+`systemstack` then took its caller's RSI as a parameter, and every
+`runtime_throw` call passed an unknown value for it.
+
 The contract covers x86-64 and AArch64; Go code for other targets keeps the
 platform contract. Calls from compiled code of a register-ABI amd64 image
-(usesGoRegisterArguments) keep R14 and X15 (`CallRegisterContract::GoInternal`,
-`GoInternalWriteBarrier`), whose return meaning is "Same" in abi-internal.md,
-and LowToMed defines X15 as zero at such a function's entry, so its frame
-zeroing stores zero. R14 keeps the current goroutine but has no name in the
-output yet. Calls from assembly, which may follow ABI0 and use X15 as scratch,
-from Go 1.17 and earlier code, and from arm64 code, whose R28 is the
-goroutine, keep neither. A restricted PE load skips the Go metadata and keeps
-the platform contract.
+(usesGoRegisterArguments) keep X15 zero (`CallRegisterContract::GoInternal`,
+`GoInternalWriteBarrier`), and LowToMed defines X15 as zero at such a
+function's entry, so its frame zeroing stores zero. Ordinary calls do not
+assume the goroutine in R14 is unchanged: runtime paths such as `needm`
+can install a different g. Recognized write barriers continue to preserve R14
+under their narrower GPR contract. Calls from assembly, which may follow ABI0
+and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
+the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
+platform contract.
 
 On x86-64, Go code also takes its integer arguments in Go's registers, in
-Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is
+Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11, and on arm64 R0-R15.
+The gate is
 `usesGoRegisterArguments`. Go 1.18 and later mark the functions Go assembled
 (`GoModuleInfo::RegisterArguments`, `GoModuleInfo::GoAssembly`), and code the
 toolchain compiled qualifies. So does assembly whose call summary reads a run
@@ -5809,9 +5832,18 @@ A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's
 `morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
+A byte or halfword spill may store the register's low bytes through a
+temporary (arm64 `strb w2, [sp, #24]`). Floating arguments are not modelled,
+so a path that spills a vector register names no argument list.
 The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
-place of what its calls appear to forward. The spill area is uninitialized at a
+place of what its calls appear to forward. `detectCc` takes them as its
+parameters directly (`LowToMedConverter::GoArgumentSpillReads`), so they do
+not wait for a summary: arm64's convention reads none. Such a function's
+parameters are exact (`MedFunc::ExactRegisterParameters`): call recovery
+promotes no register it passes on beyond them, which stays unknown at the call,
+and forwarder propagation raises no arity of it. Calls are bounded by the
+callee's parameters, so exact callees give exact calls on both targets. The spill area is uninitialized at a
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 
@@ -5828,12 +5860,77 @@ that grows the stack rather than `runtime.morestackc`, which throws, and the
 entry alone must reach it. A frame larger than 4 KiB checks for underflow with
 a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
-routines take no register argument.
+routines take no register argument. arm64 paths, `ldr x16, [x28, #16]` and
+the spills a `stp` makes, qualify where the image's register ABI is modelled
+(`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
+expose stack arguments AAPCS64 places after eight register positions. A call
+to a growth routine resumes at its return address (`goCallResumesAfter`),
+though arm64's routine ends in a trap after `newstack`, so the CFG builder
+asks this before a no-return proof.
+
+Go's compiler gives a call to some runtime routines no continuation: it ends
+the calling block with the call (`BlockExit` in
+cmd/compile/internal/ssagen/ssa.go), so the instruction after the call starts
+another block or padding. They are the routines it names (`gopanic`,
+`panicwrap`, `block`, `throwinit` and the `panicmakeslice`, `panicunsafe` and
+`panicrangestate` families), the ones it reaches through `rtcall` without
+returning (`panicdivide`, `panicshift`, `panicdottypeE` and the like), and the
+bounds-check panics (`panicBounds` in Go 1.26, `panicIndex` and its family
+before). `throw` and `fatal` end the process. Their bodies need not show it:
+`gopanic` and `fatalthrow` end in a store to nil and a reachable return. The
+loader lists their entries (`GoModuleInfo::NoReturnEntries`,
+`goRuntimeNeverReturns`), and both no-return lookups answer for them
+(`isNoReturnTarget`, `NoReturnTargetIndex`), so the CFG ends a block at such a
+call instead of falling into the next one. The list waits for the register ABI
+(`GoModuleInfo::RegisterArguments`): under the stack ABI, a bounds stub such as
+Go 1.16's `panicIndex` forwards its registers to a stack-argument Go half,
+and until that layout is modelled its operands would take System V's
+positions.
+
+Go 1.26 reports every bounds failure through one routine,
+`runtime.panicBounds`, which saves all the registers that could hold the index
+and asks the call's `PCDATA_PanicBounds` entry which of them, or which
+constants, the failing index and its bound are (internal/abi/bounds.go). The
+loader reads every function's table (`GoModuleInfo::PanicBounds`), and
+`goBoundsFailureAt` decodes a call's entry as `abi.BoundsDecode` does. LowToMed
+passes exactly that index and bound, the call summaries take them as the call's
+fixed reads, and the routine's own two parameters stand for them, so a call
+prints `runtime_panicBounds(i, n)` rather than the registers the routine saves.
+An arm64 call takes the registers set before it, so LowToMed copies the index
+and the bound into X0 and X1 before the call, through temporaries that keep a
+swapped pair apart. The call never returns, so nothing after it reads them.
+The routine's parameters are exact (X0, X1), and arm64's indirect-result
+recovery adds no X8 to exact parameters: Go's R8 is an ordinary argument.
 
 Results, calls through function values and interfaces, arm64 and Go code in
-images before 1.18 still follow the platform convention. So do DWARF-typed signatures, whose parameters Go's own register
-assignment would place. On the machine routes (lift, patch), a Go function's
-LLVM arguments take its Go registers as well.
+images before 1.18 still follow the platform convention. On the machine routes
+(lift, patch), a Go function's LLVM arguments take its Go registers as well.
+
+Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
+formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go
+function returned nothing, so each call's result went unread. The loader
+reads Go's results where the unit's `DW_AT_producer` records `regabi`
+(`goReturnValue`, `lib/debug/DWARFLoader.cpp`):
+
+- A function compiled from Go source with no result returns nothing.
+- One whose single result fills one register (an integer, a pointer or a
+  floating value) returns it as C would, in the same register.
+- Several results or a result of several words state nothing, since Go
+  returns them a word to a register.
+- An assembly routine states nothing: it is declared in its `.s` file, and its
+  DWARF lists no signature.
+- A generated function states nothing unless an input proves it enters in
+  registers. Otherwise it may be an ABI0 wrapper, which returns on the stack.
+
+Where the DWARF states nothing, the lift's recovery decides, as it does without
+DWARF. A unit built with the stack ABI returns no register value. Results are
+never parameters.
+
+Go's parameter list names no positions either: a string takes two registers.
+The DWARF parameters bind nothing (`bindDebugParams`), and the C writer prints
+a Go function's parameters as it prints those of a function with no signature
+(`emittedParamIndices`). It does not print one for every register up to the
+last one read.
 
 The GUI's analysis replicas restore with `call_summaries:true`: they discover
 the image's functions, warm a page of functions per idle step, solve, drop

@@ -22,6 +22,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicTermination.h"
 #include "neverd/ir/intrinsics/X86/X64Syscall.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/med/IndirectCallSlot.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -1932,6 +1933,24 @@ void recoverCallAbi(
           if (IsCall)
             break;
         }
+      // Go passes a func value its closure in a context register (RDX, arm64
+      // R26): an indirect call whose target is the word at the address that
+      // register holds (`mov rax, [rdx]; call rax`, or assembly's `mov rdx,
+      // rdi; mov rdi, [rdi]; call rdi`) calls a closure, and the register is
+      // its context, no argument.  Where the convention numbers it (Go
+      // assembly and stack-ABI code read as System V's), setting it passes
+      // no RDI or RSI before it.
+      if (CI.IsIndirect && Img && Op.NumInputs >= 1 &&
+          isGoCode(*Img, Func.Entry))
+        if (const auto Context = goClosureContextRegister(TheArch)) {
+          const int Slot = regToIntArgIdx(*Context);
+          if (Slot >= 0 && Slot < MaxArgs && FoundMask[Slot] &&
+              callsThroughContext(Blk, static_cast<int>(OI), Op.Inputs[0],
+                                  Found[Slot])) {
+            FoundMask[Slot] = false;
+            Found[Slot] = MedVar();
+          }
+        }
       const std::vector<bool> SetInBlock = FoundMask;
       // The nearest in-block register write executes after the block PHIs and
       // reaches this call even when its source is a constant.  Only slots with
@@ -2406,6 +2425,18 @@ void recoverCallAbi(
           if (!CI.IsIndirect && !FoundDefinition &&
               (FromLiveIn || V->Kind == MedVar::Param) &&
               !incomingArgumentReachesCall(Ctx, K)) {
+            *V = MedVar::makeUnspecified(V->Size, TheArch);
+            FromLiveIn = false;
+          }
+          // A function whose register parameters a contract proves takes no
+          // other: an entry value it passes on beyond them is unknown, not a
+          // forwarded parameter (MedFunc::ExactRegisterParameters).
+          if (!CI.IsIndirect && !FoundDefinition &&
+              Func.ExactRegisterParameters &&
+              (FromLiveIn || V->Kind == MedVar::Param) &&
+              llvm::none_of(Func.Params, [&](const MedVar &P) {
+                return P.RegOff == V->RegOff;
+              })) {
             *V = MedVar::makeUnspecified(V->Size, TheArch);
             FromLiveIn = false;
           }
@@ -4367,7 +4398,7 @@ void recoverCallAbi(
   // PromoteParams; add only missing register parameters.  A forwarder can
   // already have a lower-index parameter (B5B4 has x0) while higher-index
   // arguments (x1/x2) remain implicit live-ins.
-  if (!PromoteParams.empty()) {
+  if (!PromoteParams.empty() && !Func.ExactRegisterParameters) {
     std::set<int> ExistingIntArgs;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg)

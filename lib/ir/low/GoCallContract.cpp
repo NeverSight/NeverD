@@ -164,8 +164,8 @@ CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
     return CallRegisterContract::Platform;
-  // Compiled code of a register-ABI image follows the internal ABI, and so
-  // keeps R14 and X15 across its calls.
+  // Compiled code of a register-ABI image follows the internal ABI, so
+  // its x86-64 calls keep X15 zero.
   const bool Internal = usesGoRegisterArguments(Img, Caller);
   if (Callee != InvalidVA && goWriteBarrierAt(Img, Callee))
     return Internal ? CallRegisterContract::GoInternalWriteBarrier
@@ -185,7 +185,8 @@ std::optional<uint64_t> goCallResultRegister(const BinaryImage &Img,
 
 bool usesGoRegisterArguments(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && Module->RegisterArguments && Img.Arch == Arch::X64 &&
+  return Module && Module->RegisterArguments &&
+         (Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64) &&
          isGoCode(Img, Entry) && !inRanges(Module->GoAssembly, Entry);
 }
 
@@ -193,9 +194,25 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   static constexpr uint64_t X64[] = {x86reg::RAX, x86reg::RBX, x86reg::RCX,
                                      x86reg::RDI, x86reg::RSI, x86reg::R8,
                                      x86reg::R9,  x86reg::R10, x86reg::R11};
+  // arm64: R0-R15, whose first eight are AAPCS64's positions as well.
+  static constexpr uint64_t AArch64[] = {
+      a64reg::X0,  a64reg::X1,  a64reg::X2,  a64reg::X3,
+      a64reg::X4,  a64reg::X5,  a64reg::X6,  a64reg::X7,
+      a64reg::X8,  a64reg::X9,  a64reg::X10, a64reg::X11,
+      a64reg::X12, a64reg::X13, a64reg::X14, a64reg::X15};
   if (A == Arch::X64)
     return X64;
+  if (A == Arch::AArch64)
+    return AArch64;
   return {};
+}
+
+std::optional<uint64_t> goClosureContextRegister(Arch A) {
+  if (A == Arch::X64)
+    return x86reg::RDX;
+  if (A == Arch::AArch64)
+    return a64reg::X26;
+  return std::nullopt;
 }
 
 bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
@@ -232,12 +249,91 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   return std::nullopt;
 }
 
+/// Whether \p Img's stack-growth paths are modelled: every x86-64 image, and
+/// an AArch64 one whose register ABI is (GoModuleInfo::RegisterArguments).
+/// Under arm64's stack ABI the path's absence would expose stack arguments
+/// AAPCS64 places after eight register positions.
+bool goGrowthPathsModeled(const BinaryImage &Img) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && (Img.Arch == Arch::X64 ||
+                    (Img.Arch == Arch::AArch64 && Module->RegisterArguments));
+}
+
+std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
+                                                 va_t CallAddr, va_t Callee) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module || Callee == InvalidVA || Callee != Module->PanicBoundsEntry ||
+      (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64))
+    return std::nullopt;
+  const auto &Ranges = Module->PanicBounds;
+  auto It = std::upper_bound(
+      Ranges.begin(), Ranges.end(), CallAddr,
+      [](va_t A, const GoPanicBoundsRange &R) { return A < R.Range.Begin; });
+  if (It == Ranges.begin())
+    return std::nullopt;
+  --It;
+  if (CallAddr >= It->Range.End || It->Value < 0)
+    return std::nullopt;
+  // abi.BoundsDecode: the value is c * numBoundsCodes + code, where c packs
+  // whether each operand is a register, the index's signedness, and the two
+  // register numbers (0-15) or constants (0-31).
+  constexpr int NumBoundsCodes = 9;
+  GoBoundsFailure Failure;
+  Failure.Code = static_cast<uint8_t>(It->Value % NumBoundsCodes);
+  int C = It->Value / NumBoundsCodes;
+  const bool IndexIsRegister = C & 1;
+  C >>= 1;
+  const bool BoundIsRegister = C & 1;
+  C >>= 1;
+  unsigned IndexValue = 0, BoundValue = 0;
+  if (IndexIsRegister) {
+    Failure.Signed = C & 1;
+    C >>= 1;
+    IndexValue = C & 0xF;
+    C >>= 4;
+  } else {
+    IndexValue = C & 0x1F;
+    C >>= 5;
+  }
+  BoundValue = BoundIsRegister ? (C & 0xF) : (C & 0x1F);
+  // The registers panicBounds saves: x86-64's by hardware number but SP and
+  // R14, which holds g, and AArch64's R0-R15 (src/runtime/asm_amd64.s,
+  // asm_arm64.s).
+  const auto Operand = [&](bool IsRegister,
+                           unsigned Value) -> std::optional<GoBoundsOperand> {
+    if (!IsRegister)
+      return GoBoundsOperand{false, Value};
+    if (Img.Arch == Arch::AArch64)
+      return GoBoundsOperand{true, a64reg::X0 + uint64_t(Value) * 8};
+    if (Value == 4 || Value == 14)
+      return std::nullopt;
+    return GoBoundsOperand{true, x86reg::RAX + uint64_t(Value) * 8};
+  };
+  const auto Index = Operand(IndexIsRegister, IndexValue);
+  const auto Bound = Operand(BoundIsRegister, BoundValue);
+  if (!Index || !Bound)
+    return std::nullopt;
+  Failure.Index = *Index;
+  Failure.Bound = *Bound;
+  return Failure;
+}
+
+bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return goGrowthPathsModeled(Img) &&
+         std::binary_search(Module->MorestackEntries.begin(),
+                            Module->MorestackEntries.end(), Callee) &&
+         !std::binary_search(Module->ThrowingMorestackEntries.begin(),
+                             Module->ThrowingMorestackEntries.end(), Callee);
+}
+
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  if (!Module || Img.Arch != Arch::X64 || Blocks.empty() ||
+  if (!goGrowthPathsModeled(Img) || Blocks.empty() ||
       Blocks.front().Ops.empty())
     return std::nullopt;
+  const uint64_t StackPointer = getTargetRegInfo(Img.Arch).StackPointer;
   // The entry compares the stack pointer with the goroutine's stack guard,
   // `g.stackguard0` at 16(g), and branches to the growth path.  It computes
   // nothing else, so running it again when the function restarts is the
@@ -260,6 +356,9 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
   BaseTracker Values;
   std::vector<GoArgumentSpill> Spills, Reloads;
   std::map<uint64_t, std::pair<int64_t, uint16_t>> Loaded;
+  // The low bytes of a register a narrow spill stores through a temporary
+  // (arm64 `strb w2, [sp, #24]`): the register and the bytes.
+  std::map<uint64_t, std::pair<uint64_t, uint16_t>> Narrowed;
   bool Throws = false;
   enum class Phase { Spilling, Reloading, Restarted } At = Phase::Spilling;
   for (const LowOp &Op : Growth->Ops) {
@@ -267,12 +366,33 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
     case NdOp::STORE: {
       const std::optional<BasePlus> Slot =
           Op.NumInputs >= 2 ? Values.of(Op.Inputs[0]) : std::nullopt;
-      if (At != Phase::Spilling || !Slot || Slot->Base != x86reg::RSP ||
-          Slot->Offset < 8 || !Op.Inputs[1].isReg())
+      if (At != Phase::Spilling || !Slot || Slot->Base != StackPointer ||
+          Slot->Offset < 8)
         return std::nullopt;
-      Spills.push_back({Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
+      // Floating arguments (X0-X14, F0-F15) are not modelled: a path that
+      // spills one names an argument list this one would not complete.
+      if (Op.Inputs[1].isReg() &&
+          isGoGeneralRegister(Img.Arch, Op.Inputs[1].Offset)) {
+        Spills.push_back(
+            {Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
+      } else if (const auto Low = Op.Inputs[1].isTemp()
+                                      ? Narrowed.find(Op.Inputs[1].Offset)
+                                      : Narrowed.end();
+                 Low != Narrowed.end() &&
+                 isGoGeneralRegister(Img.Arch, Low->second.first)) {
+        Spills.push_back({Low->second.first, Low->second.second, Slot->Offset});
+      } else {
+        return std::nullopt;
+      }
       break;
     }
+    case NdOp::SUBBYTES:
+      if (At != Phase::Spilling || Op.NumInputs != 2 || !Op.Inputs[0].isReg() ||
+          !Op.Inputs[1].isConst() || Op.Inputs[1].Offset != 0 ||
+          !Op.Output.isTemp())
+        return std::nullopt;
+      Narrowed[Op.Output.Offset] = {Op.Inputs[0].Offset, Op.Output.Size};
+      break;
     case NdOp::CALL:
       if (At != Phase::Spilling || Op.NumInputs < 1 ||
           !Op.Inputs[0].isConst() ||
@@ -288,7 +408,7 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
     case NdOp::LOAD: {
       const std::optional<BasePlus> Slot =
           Op.NumInputs >= 1 ? Values.of(Op.Inputs[0]) : std::nullopt;
-      if (At != Phase::Reloading || !Slot || Slot->Base != x86reg::RSP)
+      if (At != Phase::Reloading || !Slot || Slot->Base != StackPointer)
         return std::nullopt;
       if (Op.Output.isReg())
         Reloads.push_back({Op.Output.Offset, Op.Output.Size, Slot->Offset});
@@ -366,7 +486,7 @@ uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
                              CallRegisterContract Contract, uint64_t RegOff,
                              uint16_t Size, std::optional<uint64_t> Result) {
   // X15 holds zero in Go's internal ABI, before a call and after it.
-  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
+  if (keepsGoZeroRegister(Contract) && TRI.TheArch == Arch::X64 &&
       RegOff >= x86reg::XMM15 && RegOff + Size <= x86reg::XMM15 + 16 && Size)
     return Size;
   const uint16_t Width = TRI.FullRegWidth;
@@ -378,10 +498,9 @@ uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
   // abi-internal.md, likewise RSP and R29 on arm64).
   if (TRI.isFrameReg(Register))
     return Size;
-  // R14 holds the current goroutine across any call.
-  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
-      Register == x86reg::R14)
-    return Size;
+  // Do not assume R14 is unchanged by an ordinary call. Runtime paths
+  // such as needm can install a different g. A recognized write barrier
+  // still preserves R14 under its narrower GPR contract below.
   if (!isGoWriteBarrierContract(Contract) ||
       !isGoGeneralRegister(TRI.TheArch, Register) ||
       (Result && Register == *Result) ||

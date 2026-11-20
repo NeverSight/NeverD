@@ -22,6 +22,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/DirectTailCall.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -370,6 +371,10 @@ bool CFGBuilder::isNoReturnCall(const InsnRecord &Rec) const {
   // What the user states of the callee decides over its name and a proof.
   if (const auto Stated = CurrentImg->userNoReturnAt(Target))
     return *Stated;
+  // Go's stack growth resumes the caller at the call's return address,
+  // though the growth routine's own code ends in a trap.
+  if (goCallResumesAfter(*CurrentImg, Target))
+    return false;
   if (libc::isNoReturnTarget(*CurrentImg, Target, NoReturnTargets))
     return true;
   // An internal callee needs a proof, which lifts it.  Padding after the call

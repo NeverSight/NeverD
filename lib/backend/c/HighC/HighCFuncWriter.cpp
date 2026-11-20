@@ -5423,7 +5423,10 @@ HighCWriter::emittedParamIndices(const HighFunc &Func) const {
   const auto Done =
       llvm::make_scope_exit([&] { ParamIndicesInProgress.erase(&Func); });
   auto Used = readParamIndices(Func);
-  if (DebugFn && !DebugFn->Params.empty()) {
+  // Only a signature of the platform's convention lists its parameters one
+  // to a position.  Go's places a value of several words in as many
+  // registers, so its list says nothing of the positions a call fills.
+  if (DebugFn && DebugFn->PlatformConvention && !DebugFn->Params.empty()) {
     bindParams(Func);
     if (ParamsPlaced) {
       // Placed by location, a parameter is one the signature describes or

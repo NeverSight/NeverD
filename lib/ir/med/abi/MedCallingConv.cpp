@@ -729,8 +729,11 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   // covers the integer registers only.  A summary the convention says lists
   // no parameters (a variadic prologue's vector count) is none the callers
   // use either.
+  // A Go function's summary is its stack-growth path's spills, exact on
+  // every target (goMorestackSpills).
   const bool FromSummary =
-      !ProtoArgs && EntryReadSummary && FromIncomingReads &&
+      !ProtoArgs && EntryReadSummary &&
+      (FromIncomingReads || GoRegisterArguments) &&
       !summaryListsNoParameters(*Convention, *EntryReadSummary,
                                 GoRegisterArguments);
   if (ProtoArgs) {
@@ -764,7 +767,9 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   // parameter even when no other instruction reads X0, so the argument list
   // is not left empty and the return has nothing to name.
   uint64_t IncomingReturnReg = 0;
+  // Exact parameters (a Go function's spills) name every argument already.
   const bool IncomingReturn = !ProtoArgs && TargetArch == Arch::AArch64 &&
+                              !(FromSummary && GoRegisterArguments) &&
                               !ParamRegs.empty() &&
                               phiHoldsUnwrittenRegister(Func, ParamRegs[0]);
   if (IncomingReturn) {
@@ -1650,6 +1655,40 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       if (auto It = CallEntryReadGPRs->find(Func.Entry);
           It != CallEntryReadGPRs->end())
         Summary = &It->second;
+    // A Go function's stack-growth path names exactly the register arguments
+    // it takes, without a summary (LowToMedConverter::GoArgumentSpillReads).
+    if (GoRegisterArguments && GoArgumentSpillReads && Convention) {
+      Summary = &*GoArgumentSpillReads;
+      Func.ExactRegisterParameters = true;
+    }
+    // A Go 1.21+ write barrier takes no register argument: it returns buffer
+    // space in R11 or X25 and keeps every other general-purpose register, so
+    // the saves its body makes read no argument (GoWriteBarrierKind::Buffer).
+    static const GPRReadWidths NoReads{};
+    const GoWriteBarrier *Barrier =
+        Image ? goWriteBarrierAt(*Image, Func.Entry) : nullptr;
+    const bool BufferBarrier =
+        Barrier && Barrier->Kind == GoWriteBarrierKind::Buffer && Convention;
+    if (BufferBarrier) {
+      Summary = &NoReads;
+      Func.ExactRegisterParameters = true;
+    }
+    // runtime.panicBounds takes the index and the bound in its first two
+    // argument registers, where each call's operands are bound
+    // (goBoundsFailureAt).
+    GPRReadWidths BoundsReads{};
+    const GoModuleInfo *GoModule = Image && Image->ExceptionMetadata.GoModule
+                                       ? &*Image->ExceptionMetadata.GoModule
+                                       : nullptr;
+    const bool BoundsRoutine =
+        GoModule && GoModule->PanicBoundsEntry == Func.Entry && Convention &&
+        (TargetArch == Arch::X64 || TargetArch == Arch::AArch64);
+    if (BoundsRoutine) {
+      for (unsigned I = 0; I < 2 && I < IntegerRegs.size(); ++I)
+        BoundsReads[IntegerRegs[I] / 8] = 8;
+      Summary = &BoundsReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home
@@ -1675,7 +1714,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         SummaryVariadicFrom = It->second;
       }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
-                         TargetArch, Convention, Summary, GoRegisterArguments);
+                         TargetArch, Convention, Summary,
+                         GoRegisterArguments || BufferBarrier || BoundsRoutine);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1778,7 +1818,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // AArch64: recover the hidden indirect-result (sret) pointer in x8 for a
   // by-value aggregate return (no-op on targets without a dedicated x8).  A
   // captured register context holds x8 as one more of its caller's registers.
-  if (!Func.Blocks.empty() &&
+  // Exact parameters already name it where it is one: Go's R8 is its ninth
+  // integer argument, and Go returns no aggregate through it.
+  if (!Func.Blocks.empty() && !Func.ExactRegisterParameters &&
       !(TheArch == Arch::AArch64 &&
         llvm::is_contained(capturedContextRegisters(Func),
                            TRI.indirectResultReg())))

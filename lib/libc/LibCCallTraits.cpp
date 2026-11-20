@@ -547,6 +547,11 @@ bool isNoReturnTarget(const BinaryImage &Img, va_t Target) {
     return *Stated;
   if (Img.functionHasBytePatch(Target))
     return false;
+  // A Go runtime routine Go's compiler gives no continuation.
+  if (const auto &Go = Img.ExceptionMetadata.GoModule;
+      Go && std::binary_search(Go->NoReturnEntries.begin(),
+                               Go->NoReturnEntries.end(), Target))
+    return true;
   const Import *Imp = Img.findImportAt(Target);
   if (Imp)
     if (isNoReturnImport(*Imp))
@@ -623,6 +628,9 @@ NoReturnTargetIndex::NoReturnTargetIndex(const BinaryImage &Img,
       if (ExportAddresses.insert(Exp.Addr).second && NoReturn(Exp.Name))
         Targets.insert(Exp.Addr);
   }
+  // The Go runtime routines Go's compiler gives no continuation.
+  if (const auto &Go = Img.ExceptionMetadata.GoModule)
+    Targets.insert(Go->NoReturnEntries.begin(), Go->NoReturnEntries.end());
   Targets.erase(InvalidVA);
 }
 

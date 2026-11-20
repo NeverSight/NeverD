@@ -7,6 +7,7 @@
 #include "GoRuntimeEHTestsDetail.h"
 #include "gtest/gtest.h"
 
+#include "neverd/libc/LibCNames.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 
@@ -304,6 +305,75 @@ TEST(GoWriteBarriers, NameEachContractTheRuntimeDocuments) {
   const GoWriteBarrier &Buffer = Module->WriteBarriers[2];
   EXPECT_EQ(Buffer.Entry, kTextVA + 0x300);
   EXPECT_EQ(Buffer.Kind, GoWriteBarrierKind::Buffer);
+}
+
+TEST(GoNoReturn, NameTheRoutinesTheCompilerEndsABlockWith) {
+  for (const char *Name :
+       {"runtime.gopanic", "runtime.throw", "runtime.panicBounds",
+        "runtime.panicSlice3AcapU", "runtime.goPanicIndex",
+        "runtime.panicExtendSliceB", "runtime.panicdivide",
+        "runtime.panicdottypeE", "runtime.fatal", "runtime.panicindex"})
+    EXPECT_TRUE(goRuntimeNeverReturns(Name)) << Name;
+  // Routines that return, or may: a check that throws only sometimes, the
+  // growth routine that starts its caller again, the exit syscall whose
+  // caller the compiler continues, and names of other packages.
+  for (const char *Name :
+       {"runtime.panicCheck1", "runtime.printstring", "runtime.morestack",
+        "runtime.exit", "runtime.Goexit", "main.throw", "runtime.panicIndexX",
+        "runtime.panic"})
+    EXPECT_FALSE(goRuntimeNeverReturns(Name)) << Name;
+}
+
+TEST(GoNoReturn, WaitForTheStackABIToBeModelled) {
+  // A Go 1.16 image passes arguments on the stack, where a bounds stub would
+  // forward its registers in System V's positions: its entries stay
+  // unlisted until that layout is modelled.
+  GoTestImage T;
+  T.installPclnTab(buildPclnTab(kGo116Magic,
+                                {makeGoCode("runtime.gopanic", kTextVA + 0x100),
+                                 makeGoCode("main.f", kTextVA + 0x200)},
+                                kTextVA + 0x300)
+                       .Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_TRUE(Module->NoReturnEntries.empty());
+}
+
+TEST(GoNoReturn, EveryLookupKnowsTheirEntries) {
+  GoTestImage T;
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.NoReturnEntries = {kTextVA + 0x100};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_TRUE(libc::isNoReturnTarget(T.Img, kTextVA + 0x100));
+  EXPECT_FALSE(libc::isNoReturnTarget(T.Img, kTextVA + 0x200));
+  const libc::NoReturnTargetIndex Index(T.Img);
+  EXPECT_TRUE(Index.contains(T.Img, kTextVA + 0x100));
+  EXPECT_FALSE(Index.contains(T.Img, kTextVA + 0x200));
+}
+
+TEST(GoPanicBounds, TheLoaderReadsEveryCallsEntry) {
+  // main.f's PCDATA_PanicBounds table gives its first five bytes, a call to
+  // runtime.panicBounds, the value abi.BoundsEncode makes of a signed index
+  // in CX against DX.
+  GoTestImage T;
+  GoFuncSpec F = makeGoCode("main.f", kTextVA + 0x100);
+  F.PCData = {std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+              PCValueTable{{{2439, 5}}}};
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {F, makeGoCode("runtime.panicBounds", kTextVA + 0x200)},
+                   kTextVA + 0x300)
+          .Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_EQ(Module->PanicBoundsEntry, kTextVA + 0x200);
+  ASSERT_EQ(Module->PanicBounds.size(), 1u);
+  EXPECT_EQ(Module->PanicBounds[0].Range.Begin, kTextVA + 0x100);
+  EXPECT_EQ(Module->PanicBounds[0].Range.End, kTextVA + 0x105);
+  EXPECT_EQ(Module->PanicBounds[0].Value, 2439);
 }
 
 TEST(GoWriteBarriers, ARM64TakesItsOwnRegisters) {
