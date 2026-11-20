@@ -246,13 +246,16 @@ TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
   const llvm::Intrinsic::ID Operations[] = {
       llvm::Intrinsic::minnum, llvm::Intrinsic::maxnum,
       llvm::Intrinsic::minimum, llvm::Intrinsic::maximum};
-  for (bool Single : {false, true})
+  const std::pair<const char *, llvm::Type *> Formats[] = {
+      {"half", B.getHalfTy()},
+      {"single", B.getFloatTy()},
+      {"wide", B.getDoubleTy()}};
+  for (const auto &[Prefix, Type] : Formats)
     for (unsigned I = 0; I < std::size(Operations); ++I) {
-      auto *Type = Single ? B.getFloatTy() : B.getDoubleTy();
       auto *Fn = llvm::Function::Create(
           llvm::FunctionType::get(Type, {Type, Type}, false),
           llvm::GlobalValue::ExternalLinkage,
-          std::string(Single ? "single" : "wide") + std::to_string(I), Module);
+          std::string(Prefix) + std::to_string(I), Module);
       B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
       B.CreateRet(B.CreateIntrinsic(Operations[I], {Type},
                                     {Fn->getArg(0), Fn->getArg(1)}));
@@ -267,8 +270,8 @@ TEST(LLVMCIntrinsicSemantics, FloatingMinMaxKeepNaNsAndSignedZeros) {
                        "double f(double a, double b) {\n"
                        "  return __builtin_elementwise_minimum(a, b) +\n"
                        "      __builtin_elementwise_maximum(a, b) +\n"
-                       "      __builtin_elementwise_minnum(a, b) +\n"
-                       "      __builtin_elementwise_maxnum(a, b);\n}\n",
+                       "      __builtin_elementwise_minimumnum(a, b) +\n"
+                       "      __builtin_elementwise_maximumnum(a, b);\n}\n",
                        {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
   Source += R"c(
@@ -280,8 +283,6 @@ static int correct(double a, double b, double got, int kind) {
     return got == expected && !!signbit(got) == !!signbit(expected);
   }
   if (a == 0 && b == 0) {
-    // LLVM minnum and maxnum allow either operand when zero signs differ.
-    if (kind < 2 && !!signbit(a) != !!signbit(b)) return got == 0;
     const int negative = maximum ? (signbit(a) && signbit(b))
                                  : (signbit(a) || signbit(b));
     return got == 0 && !!signbit(got) == negative;
@@ -291,14 +292,17 @@ static int correct(double a, double b, double got, int kind) {
 int main(void) {
   double (*wide[])(double, double) = {wide0, wide1, wide2, wide3};
   float (*single[])(float, float) = {single0, single1, single2, single3};
+  _Float16 (*half[])(_Float16, _Float16) = {half0, half1, half2, half3};
   const double values[] = {0.0, -0.0, 1.0, -1.0, INFINITY, -INFINITY,
-                           NAN, 0x1p-126, 0x1p-149, -0x1p-149};
+                           NAN, 0x1p-14, 0x1p-24, -0x1p-24,
+                           0x1p-126, 0x1p-149, -0x1p-149};
   for (unsigned i = 0; i < sizeof(values)/sizeof(values[0]); ++i)
     for (unsigned j = 0; j < sizeof(values)/sizeof(values[0]); ++j)
       for (int k = 0; k < 4; ++k) {
         const double a = values[i], b = values[j];
         if (!correct(a, b, wide[k](a, b), k)) return 1;
         if (!correct((float)a, (float)b, single[k](a, b), k)) return 2;
+        if (!correct((_Float16)a, (_Float16)b, half[k](a, b), k)) return 3;
       }
   return 0;
 }
@@ -1848,8 +1852,8 @@ int main(void) {
 }
 
 TEST(LLVMCIntrinsicSemantics, FloatingPointIntrinsicsAreCompilerBuiltins) {
-  // Each floating-point intrinsic prints as the elementwise builtin that is
-  // the same intrinsic for its operands' width: no C library header, no errno
+  // Each floating-point intrinsic prints as an elementwise builtin with
+  // the specified behavior at its operand width: no C library header, no errno
   // from a square root, and the fused multiply-add, the four minimum and
   // maximum rules and the rounding modes each keep their own.
   llvm::LLVMContext Context;
@@ -1932,8 +1936,8 @@ define double @between(double %a) {
   ASSERT_TRUE(LLVMCEmitter().emit(*Module, OS, Options));
   for (llvm::StringRef Spelling :
        {"__builtin_elementwise_fma(", "__builtin_elementwise_minimum(",
-        "__builtin_elementwise_maximum(", "__builtin_elementwise_minnum(",
-        "__builtin_elementwise_maxnum(", "__builtin_elementwise_copysign(",
+        "__builtin_elementwise_maximum(", "__builtin_elementwise_minimumnum(",
+        "__builtin_elementwise_maximumnum(", "__builtin_elementwise_copysign(",
         "__builtin_elementwise_roundeven(", "__builtin_elementwise_trunc(",
         "__builtin_elementwise_abs(", "__builtin_elementwise_sqrt(",
         "__builtin_elementwise_floor(", "__builtin_elementwise_ceil("})

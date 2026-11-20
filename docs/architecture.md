@@ -13875,8 +13875,10 @@ after range and NaN checks. Architecture-specific floating control/status
 effects remain in their existing intrinsic contracts.
 
 LLVM C spells an LLVM intrinsic one of three ways. `intrinsics_llvm_cnames.inc`
-names the compiler builtin that is the same intrinsic, which needs no C
-library header a build for another target may lack. A floating-point
+names a compiler builtin with the required semantics. For `llvm.minnum` and
+`llvm.maxnum`, the IEEE 754-2019 number builtins select the numeric operand
+when one operand is NaN and order negative zero below positive zero. These
+builtins work directly in cross-target C without a library header. A floating-point
 operation is its type-generic elementwise builtin at any width, half included
 (`__builtin_elementwise_sqrt`, which sets no errno as `sqrt` may;
 `__builtin_elementwise_fma`; `__builtin_elementwise_minimum`, which keeps a NaN

@@ -20,13 +20,8 @@
 {"llvm.bswap.i16",                 "__builtin_bswap16"},
 {"llvm.bswap.i32",                 "__builtin_bswap32"},
 {"llvm.bswap.i64",                 "__builtin_bswap64"},
-// Floating-point operations are the compiler's elementwise builtins: each is
-// exactly the LLVM intrinsic of its name for whatever width its operands
-// have, so a square root sets no errno as C's sqrt may, the four IEEE 754
-// choices of the lesser or greater of two numbers keep their own rules for a
-// NaN and for zeros of either sign (fmin and fmax leave the zeros open), and
-// a fused multiply-add rounds once. None needs a C library header, which a
-// build for another target may not have.
+// Elementwise builtins preserve the operand width, need no C library header
+// and keep square root independent of errno and multiply-add singly rounded.
 {"llvm.fabs.f16",                  "__builtin_elementwise_abs"},
 {"llvm.fabs.f32",                  "__builtin_elementwise_abs"},
 {"llvm.fabs.f64",                  "__builtin_elementwise_abs"},
@@ -63,12 +58,15 @@
 {"llvm.fma.f16",                   "__builtin_elementwise_fma"},
 {"llvm.fma.f32",                   "__builtin_elementwise_fma"},
 {"llvm.fma.f64",                   "__builtin_elementwise_fma"},
-{"llvm.minnum.f16",                "__builtin_elementwise_minnum"},
-{"llvm.minnum.f32",                "__builtin_elementwise_minnum"},
-{"llvm.minnum.f64",                "__builtin_elementwise_minnum"},
-{"llvm.maxnum.f16",                "__builtin_elementwise_maxnum"},
-{"llvm.maxnum.f32",                "__builtin_elementwise_maxnum"},
-{"llvm.maxnum.f64",                "__builtin_elementwise_maxnum"},
+// LLVM permits minnum/maxnum to refine to minimumnum/maximumnum. These
+// number operations select the numeric operand for a single NaN and order
+// -0 below +0 even on targets whose legacy minnum/maxnum ignore zero signs.
+{"llvm.minnum.f16",                "__builtin_elementwise_minimumnum"},
+{"llvm.minnum.f32",                "__builtin_elementwise_minimumnum"},
+{"llvm.minnum.f64",                "__builtin_elementwise_minimumnum"},
+{"llvm.maxnum.f16",                "__builtin_elementwise_maximumnum"},
+{"llvm.maxnum.f32",                "__builtin_elementwise_maximumnum"},
+{"llvm.maxnum.f64",                "__builtin_elementwise_maximumnum"},
 {"llvm.minimum.f16",               "__builtin_elementwise_minimum"},
 {"llvm.minimum.f32",               "__builtin_elementwise_minimum"},
 {"llvm.minimum.f64",               "__builtin_elementwise_minimum"},
