@@ -478,6 +478,54 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoStackGrowth, AnARM64ByteSpillGoesThroughATemporary) {
+  // main.g(b bool): ldr x16, [x28, #16]; cmp sp, x16; b.ls grow; ret
+  //   grow: strb w2, [sp, #24]; mov x3, x30; bl morestack_noctxt
+  //         ldrb w2, [sp, #24]; b main.g
+  // arm64 stores the byte through a temporary of W2's low byte.
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call =
+      0x94000000u | (((Morestack - (Function + 0x18)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Function,
+              words({0xF9400B90, 0xEB3063FF, 0x54000049, 0xD65F03C0, 0x390063E2,
+                     0xAA1E03E3, Call, 0x394063E2, 0x17FFFFF8}));
+  T.writeText(Morestack, words({0x00000000}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const auto Growth = goStackGrowth(T.Img, build(T.Img, Function).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  ASSERT_EQ(Growth->Spills.size(), 1u);
+  EXPECT_EQ(Growth->Spills[0].Register, a64reg::X2);
+  EXPECT_EQ(Growth->Spills[0].Size, 1u);
+  EXPECT_EQ(Growth->Spills[0].EntryOffset, 24);
+}
+
+TEST(GoStackGrowth, AFloatSpillNamesNoModelledArgumentList) {
+  // runtime.modf: cmp rsp, [r14+0x10]; jbe grow; ret
+  //   grow: movsd [rsp+8], xmm0; call morestack_noctxt
+  //         movsd xmm0, [rsp+8]; jmp runtime.modf
+  // Floating arguments are not modelled, so the spills are no argument list.
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Function, {0x49, 0x3B, 0x66, 0x10, 0x76, 0x01, 0xC3, 0xF2, 0x0F,
+                         0x11, 0x44, 0x24, 0x08});
+  T.writeText(Function + 0x0D, makeCall(Function + 0x0D, Morestack));
+  T.writeText(Function + 0x12,
+              {0xF2, 0x0F, 0x10, 0x44, 0x24, 0x08, 0xEB, 0xE6});
+  T.writeText(Morestack, {0xC3});
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_FALSE(goStackGrowth(T.Img, build(T.Img, Function).Blocks));
+  EXPECT_FALSE(lift(T.Img, Function).ExactRegisterParameters);
+}
+
 TEST(GoWriteBarriers, ABufferBarrierTakesNoRegisterArgument) {
   // runtime.gcWriteBarrier2 on arm64: stp x0, x1, [sp, #-16]!;
   // mov x25, sp; ldp x0, x1, [sp], #16; ret.  Its saves read no argument:

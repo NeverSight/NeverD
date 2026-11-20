@@ -347,6 +347,9 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
   BaseTracker Values;
   std::vector<GoArgumentSpill> Spills, Reloads;
   std::map<uint64_t, std::pair<int64_t, uint16_t>> Loaded;
+  // The low bytes of a register a narrow spill stores through a temporary
+  // (arm64 `strb w2, [sp, #24]`): the register and the bytes.
+  std::map<uint64_t, std::pair<uint64_t, uint16_t>> Narrowed;
   bool Throws = false;
   enum class Phase { Spilling, Reloading, Restarted } At = Phase::Spilling;
   for (const LowOp &Op : Growth->Ops) {
@@ -355,11 +358,32 @@ std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
       const std::optional<BasePlus> Slot =
           Op.NumInputs >= 2 ? Values.of(Op.Inputs[0]) : std::nullopt;
       if (At != Phase::Spilling || !Slot || Slot->Base != StackPointer ||
-          Slot->Offset < 8 || !Op.Inputs[1].isReg())
+          Slot->Offset < 8)
         return std::nullopt;
-      Spills.push_back({Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
+      // Floating arguments (X0-X14, F0-F15) are not modelled: a path that
+      // spills one names an argument list this one would not complete.
+      if (Op.Inputs[1].isReg() &&
+          isGoGeneralRegister(Img.Arch, Op.Inputs[1].Offset)) {
+        Spills.push_back(
+            {Op.Inputs[1].Offset, Op.Inputs[1].Size, Slot->Offset});
+      } else if (const auto Low = Op.Inputs[1].isTemp()
+                                      ? Narrowed.find(Op.Inputs[1].Offset)
+                                      : Narrowed.end();
+                 Low != Narrowed.end() &&
+                 isGoGeneralRegister(Img.Arch, Low->second.first)) {
+        Spills.push_back({Low->second.first, Low->second.second, Slot->Offset});
+      } else {
+        return std::nullopt;
+      }
       break;
     }
+    case NdOp::SUBBYTES:
+      if (At != Phase::Spilling || Op.NumInputs != 2 || !Op.Inputs[0].isReg() ||
+          !Op.Inputs[1].isConst() || Op.Inputs[1].Offset != 0 ||
+          !Op.Output.isTemp())
+        return std::nullopt;
+      Narrowed[Op.Output.Offset] = {Op.Inputs[0].Offset, Op.Output.Size};
+      break;
     case NdOp::CALL:
       if (At != Phase::Spilling || Op.NumInputs < 1 ||
           !Op.Inputs[0].isConst() ||

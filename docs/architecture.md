@@ -5814,6 +5814,9 @@ A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
 function uses into the spill area above the return address, calls the runtime's
 `morestack` and reloads them (cmd/compile/internal/amd64/ssa.go, `RegArgs`).
+A byte or halfword spill may store the register's low bytes through a
+temporary (arm64 `strb w2, [sp, #24]`). Floating arguments are not modelled,
+so a path that spills a vector register names no argument list.
 The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
 place of what its calls appear to forward. `detectCc` takes them as its
