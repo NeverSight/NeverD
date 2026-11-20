@@ -171,11 +171,12 @@ bool physicalRegister(aarch64_reg R) {
          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR;
 }
 
-// Track a full-width address through register copies to the Darwin X0 result.
-// Decoding lookahead invalidates the decoder's previous borrowed instruction.
-bool returnsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
+// A source entry can escape in X0 or in a caller-supplied output slot. Follow
+// the value through full-width copies until the straight-line return.
+bool exportsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
                     aarch64_reg AddressReg) {
   constexpr auto Word = aarch64::kInsnSize;
+  bool Stored = false;
   while (Bytes.size() >= Word) {
     DecodedInsn I{};
     if (Decode.decodeOne(Bytes.data(), Word, PC, I) != int(Word) || !I.Raw ||
@@ -184,19 +185,64 @@ bool returnsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
     const auto &D = I.Raw->detail->aarch64;
     if ((I.Id == AARCH64_INS_RET && !D.op_count) || I.Id == AARCH64_INS_RETAA ||
         I.Id == AARCH64_INS_RETAB)
-      return AddressReg == AARCH64_REG_X0;
-    const bool Copy =
-        I.Id == AARCH64_INS_MOV || (I.Id == AARCH64_INS_ORR && I.Raw->is_alias);
-    if (!Copy || D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG ||
-        D.operands[0].reg < AARCH64_REG_X0 ||
-        D.operands[0].reg > AARCH64_REG_X28 ||
-        D.operands[1].type != AARCH64_OP_REG || D.operands[1].reg != AddressReg)
+      return Stored || AddressReg == AARCH64_REG_X0;
+    if (D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG)
       return false;
-    AddressReg = D.operands[0].reg;
+    if ((I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR) &&
+        D.operands[0].reg == AddressReg &&
+        D.operands[1].type == AARCH64_OP_MEM &&
+        D.operands[1].mem.base != AddressReg &&
+        D.operands[1].mem.index != AddressReg) {
+      Stored = true;
+    } else {
+      const bool Copy = I.Id == AARCH64_INS_MOV ||
+                        (I.Id == AARCH64_INS_ORR && I.Raw->is_alias);
+      if (!Copy || D.operands[0].reg < AARCH64_REG_X0 ||
+          D.operands[0].reg > AARCH64_REG_X28 ||
+          D.operands[1].type != AARCH64_OP_REG ||
+          D.operands[1].reg != AddressReg)
+        return false;
+      AddressReg = D.operands[0].reg;
+    }
     Bytes = Bytes.drop_front(Word);
     PC += Word;
   }
   return false;
+}
+
+// The existing PACM instruction table identifies the matching signing
+// instruction and the consumer of the local signing PC in X16.
+bool movesSigningPoint(const MachOLiftedSource &Source, va_t Start, va_t PC,
+                       va_t Target, aarch64_reg Reg) {
+  constexpr auto Word = aarch64::kInsnSize;
+  if (Reg != AARCH64_REG_X16 || Target <= Start || Target % Word ||
+      !rangeInBounds(Target - Start, Word, Source.Bytes.size()) ||
+      Source.Bytes.size() - (PC - Start) < 3 * Word ||
+      !machODataInCodeRanges(Source.Embedded, Target - Word, 2 * Word)
+           .empty() ||
+      !machODataInCodeRanges(Source.Embedded, PC + Word, 2 * Word).empty())
+    return false;
+  const auto At = [&](va_t VA) {
+    return readLE<uint32_t>(Source.Bytes.data() + (VA - Start));
+  };
+  if (At(Target - Word) != kAArch64PACMEncoding ||
+      At(PC + Word) != kAArch64PACMEncoding)
+    return false;
+  enum class Modifier { PC, X15, X16 };
+  const auto Operation = [](uint32_t Bits, Modifier Expected) {
+    switch (Bits) {
+#define NEVERD_A64_PAUTH_M_CONSUMER(Encoding, Id, Mod2)                        \
+  case Encoding:                                                               \
+    if (Expected == Modifier::Mod2)                                            \
+      return aarch64PAuthMOperation(Intrinsic::Id);                            \
+    break;
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuthM.def"
+    }
+    return std::optional<AArch64PAuthLROperation>{};
+  };
+  const auto Sign = Operation(At(Target), Modifier::PC);
+  const auto Auth = Operation(At(PC + 2 * Word), Modifier::X16);
+  return Sign && Auth && Sign->Key == Auth->Key;
 }
 
 // Keep the constants and callees as actual LLVM operands. In particular a
@@ -887,22 +933,21 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
       const bool LiteralAddress =
           !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
-      // The lookahead consumes the borrowed instruction. All surviving ADR
-      // fields, including Encoding, have already been copied.
-      const bool Returned =
-          !LiteralAddress &&
-          returnsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
-                         NextPC, Ops[0].reg);
-      if (LiteralAddress ||
-          (Returned && Image.hasAuthenticatedFunctionEntryAt(Target))) {
-        Body.SourceAddresses.push_back({PC, Target});
-      } else if (RecoveredCode ||
-                 (!Dispatch.TableAddresses.contains(PC) &&
-                  (Returned || OutsideCFG || Target < Start || Target >= End ||
-                   (Target - Start) % Word != 0 ||
-                   !machODataInCodeRanges(Source->Embedded, Target, 1)
-                        .empty()))) {
+      const auto Reg = Ops[0].reg;
+      if (Reg == AARCH64_REG_XZR)
         return std::nullopt;
+      const bool Moves =
+          !OutsideCFG && (Dispatch.TableAddresses.contains(PC) ||
+                          movesSigningPoint(*Source, Start, PC, Target, Reg));
+      if (!Moves) {
+        // The lookahead consumes the borrowed instruction. The source word
+        // and destination register have already been copied.
+        if (!LiteralAddress &&
+            !(Image.hasAuthenticatedFunctionEntryAt(Target) &&
+              exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
+                             NextPC, Reg)))
+          return std::nullopt;
+        Body.SourceAddresses.push_back({PC, Target});
       }
       Fallthrough();
       OS << kInstructionWord << Encoding << '\n';

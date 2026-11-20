@@ -178,7 +178,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool OriginalAddresses = Leaves == kAddressLeaves;
+  const bool OriginalAddresses =
+      Leaves == kAddressLeaves || Leaves == kStoreEntryLeaves;
   const bool PaddedLiteral = Preamble == kPaddedLiteralOracle;
   const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
   const bool PaddedDefault = Preamble == kPaddedSplitDefaultOracle ||
@@ -423,14 +424,19 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     auto Valid =
         validateMachORegisterResults(Module, *Image, nullptr, &Addresses);
     ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
-    ASSERT_EQ(Addresses.size(), kAddressFunctions);
+    ASSERT_EQ(Addresses.size(), ExpectedEntries);
     ASSERT_EQ(ExpectedData.size(), 1u);
     const auto *Sum = Image->findSymbol(kSumSymbol);
     ASSERT_TRUE(Sum);
-    EXPECT_EQ(Addresses[0].Target, ExpectedData.front().Begin);
-    EXPECT_EQ(Addresses[1].Target, ExpectedData.front().Begin + 1);
-    EXPECT_EQ(Addresses[2].Target, Addresses[2].Instruction);
-    EXPECT_EQ(Addresses[3].Target, Sum->Addr);
+    if (Leaves == kStoreEntryLeaves) {
+      for (const auto &Site : Addresses)
+        EXPECT_EQ(Site.Target, Sum->Addr);
+    } else {
+      EXPECT_EQ(Addresses[0].Target, ExpectedData.front().Begin);
+      EXPECT_EQ(Addresses[1].Target, ExpectedData.front().Begin + 1);
+      EXPECT_EQ(Addresses[2].Target, Addresses[2].Instruction);
+      EXPECT_EQ(Addresses[3].Target, Sum->Addr);
+    }
     testing::Test::RecordProperty(kAddressFixups, int(Addresses.size()));
   }
   if (PaddedLiteral) {
@@ -2073,6 +2079,11 @@ TEST(AArch64LiftedImage, RejectsSourceADRBeyondArchitecturalReach) {
   verifyPublishedLeaves(kAddressLeaves, kAddressCaller, kAssemblyName,
                         kDistantAddresses, LeafCheck::Relifted,
                         kAddressFunctions);
+}
+
+TEST(AArch64LiftedImage, PublishedOutputParametersKeepOriginalEntryAddresses) {
+  verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName, {},
+                        LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, CompilerDataPageAndInteriorPointerAtO0) {
