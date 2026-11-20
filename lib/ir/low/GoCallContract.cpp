@@ -327,6 +327,52 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
                              Module->ThrowingMorestackEntries.end(), Callee);
 }
 
+bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && Module->StackArguments && isGoCode(Img, Entry);
+}
+
+bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
+  const Arch A = TRI.TheArch;
+  llvm::SmallVector<uint64_t, 5> Kept{TRI.StackPointer};
+  if (TRI.FramePointer)
+    Kept.push_back(TRI.FramePointer);
+  if (TRI.LinkRegister)
+    Kept.push_back(TRI.LinkRegister);
+  if (const std::optional<uint64_t> Context = goClosureContextRegister(A))
+    Kept.push_back(*Context);
+  if (A == Arch::AArch64)
+    Kept.push_back(a64reg::X28);
+  // A narrower view of one of them is that register (AArch64's SP is no
+  // general-purpose family).
+  const auto Family = gprFamilyOf(A, Register);
+  return llvm::any_of(Kept, [&](uint64_t K) {
+    return K == Register || (Family && gprFamilyOf(A, K) == Family);
+  });
+}
+
+IntegerArgumentLayout goStackArgumentLayout(Arch A) {
+  IntegerArgumentLayout Layout;
+  Layout.SlotBytes = 8;
+  Layout.CallStackBase = A == Arch::AArch64 ? 8 : 0;
+  Layout.EntryStackBase = 8;
+  return Layout;
+}
+
+std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
+                                             va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module)
+    return std::nullopt;
+  const auto &Frames = Module->FrameArguments;
+  const auto It = std::lower_bound(
+      Frames.begin(), Frames.end(), Entry,
+      [](const GoFrameArguments &F, va_t At) { return F.Entry < At; });
+  if (It == Frames.end() || It->Entry != Entry)
+    return std::nullopt;
+  return It->Bytes;
+}
+
 bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   return Module && Img.Arch == Arch::X64 &&

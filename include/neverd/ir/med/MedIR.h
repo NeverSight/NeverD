@@ -640,6 +640,10 @@ struct MedFunc {
   /// call recovery promotes no register the function passes on beyond them,
   /// and forwarder propagation raises no arity of it.
   bool ExactRegisterParameters = false;
+  /// Every argument arrives on the stack, from the word after the return
+  /// address, and no register carries one: Go code before Go's internal ABI
+  /// (goTakesStackArguments).  integerArgumentLayoutOf gives its layout.
+  bool StackArgumentsOnly = false;
 
   /// Trusted return-value evidence for consumers that need declaration
   /// semantics rather than a code-generation type.  Debug providers remain

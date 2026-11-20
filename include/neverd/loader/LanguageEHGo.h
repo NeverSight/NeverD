@@ -292,6 +292,14 @@ struct GoPanicBoundsRange {
   int32_t Value = -1;
 };
 
+/// The bytes of arguments and results a Go function's caller holds for it in
+/// its own frame, as the function's `pclntab` record gives them
+/// (`_func.args`).
+struct GoFrameArguments {
+  va_t Entry = InvalidVA;
+  uint32_t Bytes = 0;
+};
+
 /// Whether the Go runtime routine \p Name (`runtime.gopanic`) never returns
 /// to its caller: Go's compiler ends the calling block with it (`BlockExit`
 /// in cmd/compile/internal/ssagen/ssa.go: the routines it names, the ones
@@ -378,6 +386,16 @@ struct GoModuleInfo {
   /// address, the callback's index, on the stack (src/runtime/
   /// sys_windows_amd64.s).  Empty unless the text base is proven.
   std::vector<va_t> ReturnsPastCallerEntries;
+  /// Every Go function takes its arguments and returns its results on the
+  /// stack, as Go did before its internal register ABI: an arm64 image older
+  /// than Go 1.18, or an amd64 one older than Go 1.17, whose prologues load g
+  /// from thread-local storage and none compares the stack with R14 (Go 1.17
+  /// passes register arguments under the 1.16 pclntab).  False where
+  /// unproven.
+  bool StackArguments = false;
+  /// Each function's FrameArguments, sorted by entry, where the text base is
+  /// proven.  A routine whose record leaves the size unknown has none.
+  std::vector<GoFrameArguments> FrameArguments;
   /// Entry of Go 1.26's `runtime.panicBounds`, which reports every bounds
   /// failure, or InvalidVA.
   va_t PanicBoundsEntry = InvalidVA;

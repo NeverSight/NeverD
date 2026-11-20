@@ -2360,6 +2360,12 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     SignatureBodies.push_back(&F);
   for (const auto &F : OmittedCallees)
     SignatureBodies.push_back(F.get());
+  // The callees whose own recovery found every argument on the stack (Go
+  // before its internal ABI): their calls pass them there.
+  std::set<va_t> StackArgumentCallees;
+  for (const MedFunc *MF : SignatureBodies)
+    if (MF->StackArgumentsOnly)
+      StackArgumentCallees.insert(MF->Entry);
   // The memo's conversions of the omitted bodies, which keep their forwarder
   // probes.
   std::vector<OmittedCalleeMemo::Conversion *> KeptBodies(
@@ -2566,7 +2572,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                    &CalleeConsumesVaList, &FrameLocalLeafCallees,
                    &CalleeIntRegs, &VectorArgumentCallees, &PointerCallees,
                    &Result.CallPrototypeArguments.get(), &RelocationSymbols,
-                   Keys, &CalleeFPScalarBytes);
+                   Keys, &CalleeFPScalarBytes, &StackArgumentCallees);
   };
   for (MedFunc &F : Result.MedFuncs)
     recover(F);
@@ -2705,14 +2711,14 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                 OmittedCalleeMemo::ProbeRead EntryRead = Local.read(Entry);
                 std::vector<va_t> Keys;
                 MedFunc Body = KeptBody;
-                recoverCallAbi(Body, Img.Arch, AllFuncNames, &Img, &RegArity,
-                               &TotalArity, &CalleeFPArity, &CalleeFPReturnSize,
-                               &CalleeFPRegs, &CalleeHasSret, &IsVariadic,
-                               &CalleeConsumesVaList, &FrameLocalLeafCallees,
-                               &CalleeIntRegs, &VectorArgumentCallees,
-                               &PointerCallees,
-                               &Result.CallPrototypeArguments.get(),
-                               &LocalRelocations, &Keys, &CalleeFPScalarBytes);
+                recoverCallAbi(
+                    Body, Img.Arch, AllFuncNames, &Img, &RegArity, &TotalArity,
+                    &CalleeFPArity, &CalleeFPReturnSize, &CalleeFPRegs,
+                    &CalleeHasSret, &IsVariadic, &CalleeConsumesVaList,
+                    &FrameLocalLeafCallees, &CalleeIntRegs,
+                    &VectorArgumentCallees, &PointerCallees,
+                    &Result.CallPrototypeArguments.get(), &LocalRelocations,
+                    &Keys, &CalleeFPScalarBytes, &StackArgumentCallees);
                 OmittedCalleeMemo::Recovery Kept;
                 Kept.Reads = Local.reads(std::move(EntryRead), std::move(Keys));
                 Kept.EntryRegArity = valueAt(RegArity, Entry);

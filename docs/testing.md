@@ -20618,6 +20618,16 @@ RBX and RBP. Read as C, both are prologue saves. In Go code only RBP's is.
 closure call in Go assembly, where the call takes no argument, and the same
 bytes in C, where it takes RDI, RSI and RDX.
 
+`GoStackArguments.ThreadLocalProloguesProveTheStackABI` builds Go
+1.16-magic amd64 images. A thread-local g prologue proves the stack ABI.
+Go 1.17's `cmp rsp, [r14+0x10]` beside it disproves it, and with no prologue
+nothing is proved. The test also checks that the loader keeps `_func.args`.
+`AnARM64ImageBeforeGo118PassesThemOnTheStack` covers arm64.
+`GoStackArguments.ArgumentsAndTheirCallsAreOnTheStack` lifts a Go 1.16
+`main.add(a, b int) int` and its caller. The callee takes two stack
+parameters and no register, a register stub keeps its registers, and the
+call passes `(1, 2)`. The record's third word, the result, is no argument.
+
 `GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
 `runtime.callbackasm1` from a pclntab. `GoCallbacks.
 AnEntryTailCallsTheRoutineThatReturnsPastIt` builds three table entries. As

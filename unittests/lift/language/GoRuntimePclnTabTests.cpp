@@ -371,6 +371,60 @@ TEST(GoCallbacks, TheLoaderNamesTheRoutineThatReturnsPastItsCaller) {
             std::vector<va_t>{kTextVA + 0x100});
 }
 
+TEST(GoStackArguments, ThreadLocalProloguesProveTheStackABI) {
+  // Go 1.16 amd64: main.f's prologue loads g from thread-local storage,
+  // `mov rcx, fs:[-8]; cmp rsp, [rcx+0x10]`, and every function takes its
+  // arguments on the stack.  Go 1.17, under the same pclntab, compares the
+  // stack with g in R14 (`cmp rsp, [r14+0x10]`) and passes registers.
+  const std::vector<uint8_t> ThreadLocal = {0x64, 0x48, 0x8B, 0x0C, 0x25, 0xF8,
+                                            0xFF, 0xFF, 0xFF, 0x48, 0x3B, 0x61,
+                                            0x10, 0x76, 0x20, 0xC3};
+  const std::vector<uint8_t> Register = {0x49, 0x3B, 0x66, 0x10, 0x76, 0x20,
+                                         0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                                         0xCC, 0xCC, 0xCC, 0xCC};
+  for (const bool Go117 : {false, true}) {
+    SCOPED_TRACE(Go117);
+    GoTestImage T;
+    GoFuncSpec F = makeGoCode("main.f", kTextVA + 0x100);
+    F.Args = 24;
+    T.writeText(kTextVA + 0x100, ThreadLocal);
+    if (Go117)
+      T.writeText(kTextVA + 0x200, Register);
+    T.installPclnTab(buildPclnTab(kGo116Magic,
+                                  {F, makeGoCode("main.g", kTextVA + 0x200)},
+                                  kTextVA + 0x300)
+                         .Bytes);
+    parseGoExceptions(T.Img);
+    const auto &Module = T.Img.ExceptionMetadata.GoModule;
+    ASSERT_TRUE(Module.has_value());
+    EXPECT_EQ(Module->StackArguments, !Go117);
+    ASSERT_EQ(Module->FrameArguments.size(), 2u);
+    EXPECT_EQ(Module->FrameArguments[0].Entry, kTextVA + 0x100);
+    EXPECT_EQ(Module->FrameArguments[0].Bytes, 24u);
+  }
+  // Nothing proves it without a prologue that loads g.
+  GoTestImage Bare;
+  Bare.installPclnTab(buildPclnTab(kGo116Magic,
+                                   {makeGoCode("main.f", kTextVA + 0x100)},
+                                   kTextVA + 0x200)
+                          .Bytes);
+  parseGoExceptions(Bare.Img);
+  ASSERT_TRUE(Bare.Img.ExceptionMetadata.GoModule.has_value());
+  EXPECT_FALSE(Bare.Img.ExceptionMetadata.GoModule->StackArguments);
+}
+
+TEST(GoStackArguments, AnARM64ImageBeforeGo118PassesThemOnTheStack) {
+  // arm64 gained the register ABI with the Go 1.18 pclntab.
+  GoTestImage T(Arch::AArch64);
+  T.installPclnTab(buildPclnTab(kGo116Magic,
+                                {makeGoCode("main.f", kTextVA + 0x100)},
+                                kTextVA + 0x200)
+                       .Bytes);
+  parseGoExceptions(T.Img);
+  ASSERT_TRUE(T.Img.ExceptionMetadata.GoModule.has_value());
+  EXPECT_TRUE(T.Img.ExceptionMetadata.GoModule->StackArguments);
+}
+
 TEST(GoPanicBounds, TheLoaderReadsEveryCallsEntry) {
   // main.f's PCDATA_PanicBounds table gives its first five bytes, a call to
   // runtime.panicBounds, the value abi.BoundsEncode makes of a signed index

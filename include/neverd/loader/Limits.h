@@ -170,6 +170,11 @@ inline constexpr size_t kGoRuntimeDetailMaxSymbolNameLength = 4096;
 inline constexpr uint64_t kGoRuntimeDetailMaxFrameSize = 1u << 24;
 inline constexpr uint64_t kGoRuntimeDetailMaxFrameSlotOffset = 1u << 20;
 inline constexpr unsigned kGoRuntimeDetailMaxTextSections = 64;
+// lib/loader/Go/GoRuntimeEH.cpp
+/// How many bytes of an amd64 Go function's prologue are read for its stack
+/// check, which compares the stack with g: a large frame's check computes the
+/// limit with one `lea` first.
+inline constexpr unsigned kGoStackCheckPrologueBytes = 16;
 /// How far past `moduledata.text` the funcdata base is searched for.  The
 /// fields between them are a handful of segment bounds whose count has grown
 /// by a few words per release; this covers every layout since Go 1.16 with

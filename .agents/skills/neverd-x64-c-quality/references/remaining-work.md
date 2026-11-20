@@ -540,16 +540,21 @@ Still open, in order of yield:
    registers (`goAssemblyTakesRegisterArguments`) took them to 374,902, and
    the corpus's 623 `runtime_memmove(0, 0, 0, n)` calls now pass
    `(to, from, n)`. Still open, in order of yield:
-   - Go's stack ABI: compiled code before Go 1.17 (arm64: 1.18), and ABI0
-     assembly in every version. Its stack arguments print after six zero
-     System V register slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg,
-     len)` (1,086 calls in the Go 1.16 binary). On Windows they fall in the
-     home space, so `runtime_printstring(void)`. arm64 pads eight register
-     slots. Bounds stubs (`panicIndex`: x in AX, y in CX) take System V's
-     positions for their registers. Once this layout is modelled, the
-     no-return list and arm64 growth paths can drop their register-ABI gate.
-     Go 1.17 passes register arguments under the 1.16 pclntab magic, so it
-     must be told apart first: its prologue compares `[r14+0x10]`.
+   - Go's stack ABI is modelled for images the loader proves use it
+     (`GoModuleInfo::StackArguments`, Go 1.17 told apart by its R14
+     prologues). Stack-only functions take stack parameters from the slot
+     past the return address, and calls to them pass their arguments on the
+     stack (`MedFunc::StackArgumentsOnly`). The seven old binaries fell
+     9-82%, and the corpus fell 23%. Still open:
+     - Growth elision for stack-ABI functions. Their growth loop hides
+       parameters, as in `runtime_makeslice(void)`.
+     - Results, which the callee stores past its arguments and the caller
+       loads after the call.
+     - ABI0 assembly in register-ABI images.
+     - The no-return list and arm64 growth paths, which still wait on the
+       register-ABI gate.
+     - Bounds stubs (`panicIndex`: x in AX, y in CX), which still take
+       System V's positions for their registers.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.

@@ -5914,9 +5914,43 @@ swapped pair apart. The call never returns, so nothing after it reads them.
 The routine's parameters are exact (X0, X1), and arm64's indirect-result
 recovery adds no X8 to exact parameters: Go's R8 is an ordinary argument.
 
-Results, calls through function values and interfaces, arm64 and Go code in
-images before 1.18 still follow the platform convention. On the machine routes
-(lift, patch), a Go function's LLVM arguments take its Go registers as well.
+Results and calls through function values and interfaces still follow the
+platform convention. On the machine routes (lift, patch), a Go function's LLVM
+arguments take its Go registers as well.
+
+Before Go's internal ABI, every Go function takes its arguments and returns
+its results on the stack. Callers store them from the call's stack pointer
+(on arm64, the word above it, whose lowest word the callee saves its link
+register in), and the callee reads them past its return address. Read as
+System V's, the stack arguments followed six register positions
+(`runtime_throw(0, 0, 0, 0, 0, 0, msg, len)`); as Win64's, they fell in the
+home space (`runtime_throw(void)`); and as AAPCS64's, they followed eight
+register positions that the old code used as scratch.
+
+The loader proves the stack ABI before anything relies on it
+(`GoModuleInfo::StackArguments`). On arm64 that is a pclntab older than Go
+1.18. On amd64 the 1.16 pclntab covers Go 1.17's register ABI too, so the
+prologues decide: Go 1.16 and earlier load g from thread-local storage
+(`mov rcx, fs:[-8]`), and no Go 1.17 prologue's `cmp rsp, [r14+0x10]` may
+appear. It also keeps each function's `_func.args`, the bytes of its arguments
+and results (`GoModuleInfo::FrameArguments`).
+
+`detectCc` gives such a function no register parameter and numbers its stack
+parameters from the slot past its return address (`MedFunc::
+StackArgumentsOnly`, `goStackArgumentLayout`). This applies only where the
+function reads no register at its entry but the stack, frame and link
+registers, the closure context, and arm64's g in R28
+(`goStackABIEntryRegister`). Go 1.16's register stubs (`panicIndex` takes AX
+and CX, `duffzero` DI and X0) and the trampolines the platform's code enters
+keep their registers. A call passes a callee's arguments on the stack only
+where the callee's own recovery found them there (the stack-argument callees
+PipelineCallAbi collects). It takes no more words than the callee reads,
+bounded by its record, and marks the list complete
+(`MedCallInfo::ArgumentsFromPrototype`), so HighIR collection appends nothing.
+On the seven old Go binaries, placeholders fell 9-82%, and `runtime_throw`
+calls read `runtime_throw(msg, len)`. A function that keeps its stack-growth
+loop still reads its parameters through the loop's join and recovers too few
+of them.
 
 Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
 formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go

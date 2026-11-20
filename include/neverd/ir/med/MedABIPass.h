@@ -180,7 +180,8 @@ void recoverCallAbi(
     const RelocationSymbolIndex *RelocationSymbols = nullptr,
     std::vector<va_t> *SummaryKeysRead = nullptr,
     const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes =
-        nullptr);
+        nullptr,
+    const std::set<va_t> *StackArgumentCallees = nullptr);
 
 /// The integer argument layout \p Func takes its register arguments in: its
 /// own register order (MedFunc::IntegerArgumentRegisters) where it has one,

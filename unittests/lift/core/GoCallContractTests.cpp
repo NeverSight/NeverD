@@ -26,6 +26,7 @@
 #include "neverd/lift/X86/X86Regs.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -795,6 +796,65 @@ TEST(GoCallbacks, AnEntryTailCallsTheRoutineThatReturnsPastIt) {
   T.Img.ExceptionMetadata.GoModule->ReturnsPastCallerEntries = {Callback};
   ASSERT_TRUE(goCallReturnsPastCaller(T.Img, Callback));
   EXPECT_EQ(Calls(), std::pair(1u, true));
+}
+
+TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
+  // Go 1.16: main.add(a, b int) int reads its arguments past the return
+  // address and stores its result after them:
+  //   mov rax, [rsp+8]; add rax, [rsp+16]; mov [rsp+24], rax; ret
+  // and main.caller passes them from its stack pointer:
+  //   sub rsp, 0x20; mov qword [rsp], 1; mov qword [rsp+8], 2;
+  //   call main.add; mov rax, [rsp+16]; add rsp, 0x20; ret
+  // Read as System V's, stack arguments followed six register positions,
+  // as in runtime_throw(0, 0, 0, 0, 0, 0, msg, len).
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  GoTestImage T;
+  T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24, 0x10,
+                    0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+  std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                               0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                               0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.insert(Body.end(),
+              {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+  T.writeText(Caller, Body);
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Add, kTextVA + 0x300}};
+  Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  ASSERT_TRUE(goTakesStackArguments(T.Img, Add));
+
+  const MedFunc F = lift(T.Img, Add);
+  EXPECT_TRUE(F.StackArgumentsOnly);
+  ASSERT_EQ(F.Params.size(), 2u);
+  for (const MedVar &Param : F.Params)
+    EXPECT_EQ(Param.RegOff, kNoParamReg);
+  // A stub that takes its operands in registers keeps them, as Go 1.16's
+  // panicIndex takes AX and CX: mov [rsp+8], rax; mov [rsp+16], rcx; ret.
+  constexpr va_t Stub = kTextVA + 0x280;
+  T.writeText(
+      Stub, {0x48, 0x89, 0x44, 0x24, 0x08, 0x48, 0x89, 0x4C, 0x24, 0x10, 0xC3});
+  EXPECT_FALSE(lift(T.Img, Stub).StackArgumentsOnly);
+
+  // Call recovery passes the callee's arguments on the stack where its own
+  // recovery found them there.
+  // Its record's 24 bytes hold its result too, after the two it reads.
+  const std::set<va_t> StackCallees{Add};
+  std::map<va_t, int> TotalArity{{Add, static_cast<int>(F.Params.size())}};
+  MedFunc G = lift(T.Img, Caller);
+  recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
+                 nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 &StackCallees);
+  ASSERT_EQ(G.CallInfos.size(), 1u);
+  const std::vector<MedVar> &Arguments = G.CallInfos[0].Args;
+  ASSERT_EQ(Arguments.size(), 2u);
+  EXPECT_TRUE(G.CallInfos[0].ArgumentsFromPrototype);
+  EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+  EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
 }
 
 TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {

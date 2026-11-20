@@ -1031,6 +1031,8 @@ const AbiCallPolicy *abiCallPolicy(Arch A, BinaryFormat F) {
 
 IntegerArgumentLayout integerArgumentLayoutOf(const MedFunc &Func,
                                               const TargetRegInfo &TRI) {
+  if (Func.StackArgumentsOnly)
+    return goStackArgumentLayout(TRI.TheArch);
   IntegerArgumentLayout Layout =
       TRI.integerArgumentLayout(Func.CC == CallingConv::Win64);
   if (!Func.IntegerArgumentRegisters.empty())
@@ -1078,7 +1080,8 @@ void recoverCallAbi(
     const std::set<va_t> *PrototypeArgumentCallees,
     const RelocationSymbolIndex *RelocationSymbols,
     std::vector<va_t> *SummaryKeysRead,
-    const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes) {
+    const std::map<va_t, std::map<uint64_t, uint16_t>> *CalleeFPScalarBytes,
+    const std::set<va_t> *StackArgumentCallees) {
   Func.CallInfos.clear();
   bool BoundFPResult = false;
   // Every callee summary, user prototype and name the recovery reads is at a
@@ -1778,6 +1781,31 @@ void recoverCallAbi(
         CalleeArgs = 1 + Registration->ScalarStackWords;
       }
 
+      // Before Go's internal ABI a Go callee takes every argument on the
+      // stack, no more words than its record gives arguments and results,
+      // which bounds the list as a declaration does.  The callee's own
+      // recovery says it does (MedFunc::StackArgumentsOnly): a stub that
+      // takes its operands in registers, as Go 1.16's panicIndex takes AX and
+      // CX, does not.
+      std::optional<uint32_t> GoFrameBytes;
+      if (!CI.IsIndirect && !CheckedStackCall && !RegistrationObjectCall &&
+          Img && StackArgumentCallees &&
+          StackArgumentCallees->count(CI.TargetAddr))
+        GoFrameBytes = goFrameArgumentBytes(*Img, CI.TargetAddr);
+      if (GoFrameBytes) {
+        IntegerLayout = goStackArgumentLayout(TheArch);
+        IntParamRegs = IntegerLayout.Registers;
+        CalleeRegArgs = 0;
+        // The callee's own recovery counts the arguments it reads; the rest
+        // of the words its record gives are its results.
+        const int FrameWords =
+            static_cast<int>(*GoFrameBytes / IntegerLayout.SlotBytes);
+        CalleeArgs =
+            CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
+        CI.ArgumentsFromPrototype = true;
+        CI.ArgumentsInCalleeRegisterOrder = true;
+      }
+
       // Apple/Darwin AArch64 passes EVERY variadic argument on the stack
       // (unlike AAPCS64/Linux, which fills x0-x7 first).  For a known-variadic
       // libc callee (the printf/scanf family, ...) the outgoing stores at
@@ -1902,10 +1930,10 @@ void recoverCallAbi(
           IsDirectImport && Img && Convention &&
           !(Convention->ImportsMayTakeRegisterArguments &&
             Convention->ImportsMayTakeRegisterArguments(*Img));
-      const bool StackOnlyCall =
-          CheckedStackCall || (RegparmOnly && !CI.IsIndirect &&
-                               ((CalleeRegArgs == 0 && CalleeArgs > 0) ||
-                                IsRelocExtern || StackOnlyImport));
+      const bool StackOnlyCall = CheckedStackCall || GoFrameBytes ||
+                                 (RegparmOnly && !CI.IsIndirect &&
+                                  ((CalleeRegArgs == 0 && CalleeArgs > 0) ||
+                                   IsRelocExtern || StackOnlyImport));
       const bool RegArgsApply =
           !CheckedStackCall && !(RegparmOnly && CI.IsIndirect);
       // A stack-only call takes no integer register argument; its floating
