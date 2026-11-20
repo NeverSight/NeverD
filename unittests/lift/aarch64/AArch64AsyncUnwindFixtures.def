@@ -56,7 +56,8 @@ ASYNC_FRAME_TEXT(kCompactEntryMode, "raw-compact-entry")
 ASYNC_FRAME_TEXT(kLanguageEntryMode, "raw-language-entry")
 ASYNC_FRAME_TEXT(kAlternateStack, "alternate-stack")
 ASYNC_FRAME_TEXT(kAlternateEntryWalks, "native_alternate_stack_table_walks")
-ASYNC_FRAME_TEXT(kAlternateHandlerVisits, "native_alternate_handler_entry_visits")
+ASYNC_FRAME_TEXT(kAlternateHandlerVisits,
+                 "native_alternate_handler_entry_visits")
 ASYNC_FRAME_TEXT(kAlternateHandlerSP, "native_alternate_handler_sp_matches")
 ASYNC_FRAME_TEXT(kCompactOldEntry, "native_old_entry_original_compact_step")
 ASYNC_FRAME_TEXT(kLanguageOldEntry,

@@ -552,9 +552,88 @@ _leaf_difference:
 .cfi_endproc
 .subsections_via_symbols
 )asm")
+A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
+A64_LEAF_TEXT(kLiteralComparisons, "native_literal_width_comparisons")
+A64_LEAF_VALUE(unsigned, kLiteralInputs, 5)
+A64_LEAF_TEXT(kLiteralWidths, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+ cmp w0,#0
+ b.eq Lword
+ cmp w0,#1
+ b.eq Ldouble
+ ldrsw x0,LsignedData
+ ret
+Lword: ldr w0,LwordData
+ ret
+Ldouble: ldr x0,LdoubleData
+ ret
+LwordData: .long 0x8fedcba1
+LdoubleData: .quad 0x12345678abcdef01
+LsignedData: .long 0x80000005
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+ cmp w0,#0
+ b.eq Lsingle
+ cmp w0,#1
+ b.eq LfloatDouble
+ ldr q0,Lquad
+ mov x9,v0.d[1]
+ fmov x0,d0
+ eor x0,x0,x9
+ ret
+Lsingle: ldr s0,LsingleData
+ fmov w0,s0
+ ret
+LfloatDouble: ldr d0,LfloatData
+ fmov x0,d0
+ ret
+LsingleData: .long 0x7fc00021
+LfloatData: .quad 0x8000000000000000
+Lquad: .quad 0x1122334455667788,0x9abcdef012345678
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kLiteralWidthCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef uint64_t (*read_literal)(uint64_t);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  read_literal integer = (read_literal)dlsym(image, "leaf_sum");
+  read_literal vector = (read_literal)dlsym(image, "leaf_difference");
+  if (!integer || !vector)
+    return 3;
+  const uint64_t inputs[] = {0, 1, 2, UINT64_MAX, UINT64_C(1) << 32};
+  const uint64_t integers[] = {UINT64_C(0x8fedcba1), UINT64_C(0x12345678abcdef01),
+                               UINT64_C(0xffffffff80000005)};
+  const uint64_t vectors[] = {UINT64_C(0x7fc00021), UINT64_C(0x8000000000000000),
+                              UINT64_C(0x1122334455667788) ^ UINT64_C(0x9abcdef012345678)};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    uint32_t index = (uint32_t)inputs[i];
+    if (index >= 2)
+      index = 2;
+    if (integer(inputs[i]) != integers[index] || vector(inputs[i]) != vectors[index])
+      return 4;
+  }
+  return dlclose(image) != 0;
+}
+)c")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
-A64_LEAF_TEXT(kUnmarkedDispatchOracle, "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
-A64_LEAF_TEXT(kPartialDispatchOracle, "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n#define NEVERD_TEST_PARTIAL_DISPATCH 1\n")
+A64_LEAF_TEXT(kUnmarkedDispatchOracle,
+              "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kPartialDispatchOracle,
+              "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n#define "
+              "NEVERD_TEST_PARTIAL_DISPATCH 1\n")
 A64_LEAF_VALUE(unsigned, kDispatchPrefixPadding, 1)
 A64_LEAF_VALUE(unsigned, kDispatchSuffixPadding, 3)
 A64_LEAF_TEXT(kRecoveredRecords, "recovered_source_data_in_code_records")

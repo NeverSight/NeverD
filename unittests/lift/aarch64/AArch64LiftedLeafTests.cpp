@@ -176,6 +176,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  const bool LiteralWidths = Preamble == kLiteralWidthsOracle;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
   const bool Embedded = Declared || Recover;
@@ -367,6 +368,27 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
   }
   auto ExpectedData = Image->MachODataInCode;
+  if (LiteralWidths) {
+    ASSERT_TRUE(ExpectedData.empty());
+    const auto *First = Image->findSymbol(kSumSymbol);
+    const auto *Second = Image->findSymbol(kDifferenceSymbol);
+    ASSERT_TRUE(First && Second && First->Addr < Second->Addr);
+    const auto *Text = Image->getSectionFor(First->Addr);
+    ASSERT_TRUE(Text && Text->contains(Second->Addr));
+    // The source places each pool after its final RET. The expected extents
+    // come from the assembler fixture, independently of the literal decoder.
+    const auto IntegerBytes = 2 * sizeof(uint32_t) + sizeof(uint64_t);
+    const auto SIMDBytes =
+        sizeof(uint32_t) + sizeof(uint64_t) + 2 * sizeof(uint64_t);
+    const auto Limit = Text->VA + Text->Size;
+    ExpectedData = {{Second->Addr - IntegerBytes, Second->Addr,
+                     llvm::MachO::DICE_KIND_DATA},
+                    {Limit - SIMDBytes, Limit, llvm::MachO::DICE_KIND_DATA}};
+    std::vector<MachODataInCodeRange> Ranges;
+    auto Entries = validateMachORegisterResults(Module, *Image, &Ranges);
+    ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
+    EXPECT_EQ(Ranges, ExpectedData);
+  }
   if (Recover) {
     ExpectedData.clear();
     for (const auto &F : Lifted.LowFuncs) {
@@ -1085,12 +1107,12 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           llvm::toHex(llvm::SHA256::hash(Reloaded->Raw), true));
       ExecutionPaths.push_back(NextPath);
     }
-    if (Embedded) {
+    if (Embedded || LiteralWidths) {
       for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
         const auto &Records = Loaded->MachODataInCode;
-        if (Recover && !Generation) {
+        if ((Recover || LiteralWidths) && !Generation) {
           EXPECT_EQ(Records, Image->MachODataInCode);
           continue;
         }
@@ -1143,6 +1165,9 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       testing::Test::RecordProperty(kDispatchComparisons,
                                     ExecutionPaths.size() * kDispatchFunctions *
                                         kDispatchInputs * kDispatchArguments);
+    if (LiteralWidths)
+      testing::Test::RecordProperty(
+          kLiteralComparisons, ExecutionPaths.size() * kCount * kLiteralInputs);
     testing::Test::RecordProperty(kNativeImages, ExecutionPaths.size());
   }
 #else
@@ -1630,6 +1655,11 @@ TEST(AArch64LiftedImage, PartialSwitchRecordsPreserveUnalignedStorage) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kPartialDispatchOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedIntegerAndSIMDLiteralPoolsSurviveRelifting) {
+  verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
+                        kLiteralWidthsOracle, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {

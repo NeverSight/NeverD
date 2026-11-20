@@ -2447,3 +2447,9 @@ an eight-byte literal that changes the result, and a byte table at an odd
 address adjacent to padding. One input declares only its 16-bit table. Another
 has no data records. A literal retargeted into a live instruction invalidates
 the source proof before installation.
+
+A separate fixture reads six literal forms through the integer and SIMD
+register files. It compares zero-extended W, full X, sign-extended LDRSW,
+the bit pattern of a single-precision NaN, double-precision negative zero
+and both lanes of a 128-bit Q load. Repeated publication checks the original
+and copied pools against independently sized extents.
