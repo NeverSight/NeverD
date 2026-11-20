@@ -575,14 +575,12 @@ Still open, in order of yield:
        13).
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
-     - ABI0 assembly in register-ABI images. Go 1.17+ compiled code calls
-       it with stack words, as before (`mov %rax,(%rsp); ...; call
-       madvise`, which reads `[rsp+8..24]`), but only images before Go 1.17
-       take that reading. Since a syscall reads only its own arguments, a
-       wrapper's words follow no register position (`runtime_exit(2)`), but
-       its RAX still reads as a result (`v = runtime_madvise(...)`), and
-       assembly that reads no syscall keeps the platform's positions
-       (`runtime_asmcgocall(0, fn, arg)`).
+     - arm64 frames of 4 KB and more (Go's `runtime.call4096` and up, which
+       set the frame through X27) take one position-less parameter, or
+       fifteen from `call65536` up, with the stack reading or without:
+       `reflectcall`'s dispatch passes them a placeholder.
+     - A WRAPPER frame's panic check (`reflectcall`'s `callNNN`) stores
+       through a register with no definition in Go 1.15-1.26 alike.
      - A register-ABI call's results past the first. Go's internal ABI
        returns up to nine integer results in RAX, RBX, RCX, RDI, RSI and
        R8-R11 and keeps no other of them across a call, so a read of RBX

@@ -964,6 +964,23 @@ void computeFrameBounds(
 // [entry_sp+k] loads), so they must not be mistaken for fixed stack parameters.
 } // namespace
 
+namespace {
+/// Whether \p Func loads a word of its caller's frame, \p Base bytes or more
+/// past its entry stack pointer: an incoming stack argument.
+bool loadsIncomingStackWord(const MedFunc &Func, Arch A, BinaryFormat F,
+                            int64_t Base) {
+  MedEntryStackOffsets EntryOffsets(Func, A, F);
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs)
+        if (const std::optional<int64_t> Offset =
+                EntryOffsets.query(Op.Inputs[0]);
+            Offset && *Offset >= Base)
+          return true;
+  return false;
+}
+} // namespace
+
 namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
                        int64_t MaxStackOff, const BinaryImage *Image) {
@@ -1625,9 +1642,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // entry takes arguments there and keeps them (goStackABIEntryRegister): a
   // stub such as Go 1.16's panicIndex (AX and CX), duffzero (DI and X0), or
   // a trampoline the platform's code enters, as the kernel enters a signal
-  // handler.
+  // handler.  Under the internal ABI, where a call takes its arguments from
+  // the setup its caller writes (arm64), no operation reads the registers a
+  // routine passes on in a call: assembly declared <ABIInternal> that
+  // forwards X0-X2 in a tail call (`runtime.memhash` into `aeshashbody`)
+  // reads no word of its caller's frame, as ABI0 assembly does
+  // (`MOVD fn+0(FP), R3`).
+  const bool CallsHideForwarding =
+      Image && Image->ExceptionMetadata.GoModule &&
+      Image->ExceptionMetadata.GoModule->RegisterArguments && Convention &&
+      Convention->ArgumentsFromCallSetup;
   if (Image && !GoRegisterArguments && !GoFixedOperands &&
-      !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry)) {
+      !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry) &&
+      (!CallsHideForwarding ||
+       loadsIncomingStackWord(Func, TheArch, Fmt,
+                              goStackArgumentLayout(TheArch).EntryStackBase))) {
     // The entry's leading self-copies name every register read before the
     // body writes it (findLiveInParamRegs).  One whose incoming value no
     // operation the function needs reads takes no argument: a dead flag

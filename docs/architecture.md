@@ -5980,6 +5980,20 @@ Go code is read for its own recovery, where a summary would count its stack
 words after the platform's register positions (`calleesToRead`). Before,
 `runtime_futex(0, 0, 0, 0, 0, 0, addr, op, ...)` printed alone beside
 `runtime_futex(addr, op, ...)` in the image.
+Under Go's internal ABI, Go assembly keeps the stack ABI (ABI0) unless it is
+declared `<ABIInternal>`, and Go's compiler calls it so: `mov %rax,(%rsp);
+...; call madvise`, which reads `[rsp+8..24]` (`goTakesStackArguments`, the
+pclntab's `FuncFlagAsm`). `<ABIInternal>` assembly takes Go's argument
+registers and is decided first (`goAssemblyTakesRegisterArguments`). Where a
+call takes its arguments from the setup its caller writes (arm64), no
+operation reads the registers a routine passes on in a call, so an
+`<ABIInternal>` forwarder looked stack-only: `runtime.memhash` tail-calls
+`aeshashbody` with X0-X2. There a routine takes the stack reading only where
+it also loads a word of its caller's frame (`loadsIncomingStackWord`), as
+ABI0 assembly does (`MOVD fn+0(FP), R3`). A run of some functions alone runs
+call recovery where it calls Go assembly whose summary reads none of Go's
+argument registers. Read as AAPCS64, ABI0 `systemstack` made `throw` forward
+eight registers (`runtime_throw(s, 0x2B, arg2, arg3, ...)`).
 A record that gives no size, as Go assembly declared `$0` has, bounds nothing:
 the call takes the words the callee reads, as Windows' `ctrlhandler` passes
 `externalthreadhandler` its handler and the control type. A block NeverD

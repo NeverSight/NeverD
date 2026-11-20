@@ -20635,6 +20635,13 @@ call passes `(1, 2)`. The record's third word, the result, is no argument.
 record without a size: the call passes `(1, 2)` on the stack. Without any
 record, as a block split off a function's interior has, the call keeps the
 platform's reading.
+`GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
+assembly in a Go 1.18 image: alone and in the whole image, its caller passes
+`(1, 2)` on the stack, and `main.add` takes two stack parameters.
+`GoAssembly.AnARM64ForwarderIsNoABI0Assembly` lifts arm64 assembly that loads
+`[sp, #8]` and `[sp, #16]`, which takes them as its parameters, and a
+forwarder that only branches to another function, which takes no stack
+reading.
 `GoStackArguments.ARunOfTheCallerAlonePassesItsStackArguments` runs the
 pipeline over `main.add`'s caller alone and over the whole image: both pass
 `(1, 2)` on the stack.

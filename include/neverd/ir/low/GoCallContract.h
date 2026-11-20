@@ -152,7 +152,9 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
 
 /// Whether the Go function at \p Entry takes every argument and returns every
 /// result on the stack, as Go code did before its internal register ABI
-/// (GoModuleInfo::StackArguments).
+/// (GoModuleInfo::StackArguments), and as Go assembly still does under it
+/// (ABI0) unless declared `<ABIInternal>`.  detectCc tells those apart first:
+/// they take Go's argument registers (goAssemblyTakesRegisterArguments).
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry);
 
 /// Whether Go code before its internal ABI reads \p Register's incoming value

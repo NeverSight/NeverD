@@ -761,6 +761,115 @@ TEST(GoAssembly, ACallPassesItsArgumentsInGoRegisters) {
   EXPECT_EQ(Add.Params[1].RegOff, x86reg::RBX);
 }
 
+TEST(GoAssembly, ABI0AssemblyTakesItsArgumentsOnTheStack) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller in a Go 1.18
+  // image, main.add marked as assembly: Go assembly not declared
+  // <ABIInternal> keeps the stack ABI (ABI0), and Go's compiler calls it so,
+  // as it calls `runtime.madvise` (`mov %rax,(%rsp); ...; call madvise`).
+  // Read as System V, the call passed its words after six register
+  // positions, and RAX came back as a result.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                      0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+    std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                 0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                 0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.insert(Body.end(),
+                {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+    T.writeText(Caller, Body);
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{Add, kTextVA + 0x300}};
+    Module.GoAssembly = {{Add, Add + 0x10}};
+    Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] :
+         {std::pair{Add, "main.add"}, std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    EXPECT_TRUE(goTakesStackArguments(T.Img, Add));
+    EXPECT_FALSE(goTakesStackArguments(T.Img, Caller));
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    ASSERT_EQ(F->CallInfos.size(), 1u);
+    const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+    ASSERT_EQ(Arguments.size(), 2u);
+    EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+    EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+    if (Restricted)
+      continue;
+    const auto A = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Add; });
+    ASSERT_NE(A, R.MedFuncs.end());
+    EXPECT_TRUE(A->StackArgumentsOnly);
+    EXPECT_EQ(A->Params.size(), 2u);
+  }
+}
+
+TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
+  // An arm64 call takes its arguments from the setup its caller writes, so
+  // no operation of a routine reads the registers it passes on in a call.
+  // `runtime.memhash` declared <ABIInternal> tail-calls `aeshashbody` with
+  // X0-X2 and reads no word of its caller's frame; ABI0 assembly does.
+  //   main.add: ldr x0, [sp, #8]; ldr x1, [sp, #16]; add x0, x0, x1
+  //             str x0, [sp, #24]; ret
+  //   main.fwd: b main.other
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Forwarder = kTextVA + 0x140;
+  constexpr va_t Other = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(
+      Add, words({0xF94007E0, 0xF9400BE1, 0x8B010000, 0xF9000FE0, 0xD65F03C0}));
+  T.writeText(Forwarder,
+              words({0x14000000u | (((Other - Forwarder) >> 2) & 0x3FFFFFFu)}));
+  T.writeText(Other, words({0x8B010000, 0xD65F03C0}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Add, kTextVA + 0x200}};
+  Module.GoAssembly = {{Add, Other}};
+  Module.FrameArguments = {{Add, 24}, {Forwarder, 24}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  for (const auto &[Entry, Name] :
+       {std::pair{Add, "main.add"}, std::pair{Forwarder, "main.fwd"},
+        std::pair{Other, "main.other"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  const MedFunc Forwarding = lift(T.Img, Forwarder);
+  // The branch leaves for main.other, whose body is no part of main.fwd.
+  bool ReadsX1 = false;
+  for (const MedBlock &Block : Forwarding.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        ReadsX1 |= Op.Opcode == NdOp::INT_ADD &&
+                   Op.Inputs[I].Kind == MedVar::Reg &&
+                   Op.Inputs[I].RegOff == a64reg::X1;
+  ASSERT_FALSE(ReadsX1);
+  EXPECT_FALSE(Forwarding.StackArgumentsOnly);
+  const MedFunc AddFunc = lift(T.Img, Add);
+  EXPECT_TRUE(AddFunc.StackArgumentsOnly);
+  EXPECT_EQ(AddFunc.Params.size(), 2u);
+}
+
 TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {
   // Runtime calls can change g in R14; X15 is still zero across ordinary
   // compiled Go calls. Assembly callers do not get the same X15 contract.

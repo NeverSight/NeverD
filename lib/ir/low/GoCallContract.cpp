@@ -343,7 +343,9 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
 
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && Module->StackArguments && isGoCode(Img, Entry);
+  return Module && isGoCode(Img, Entry) &&
+         (Module->StackArguments ||
+          (Module->RegisterArguments && inRanges(Module->GoAssembly, Entry)));
 }
 
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
