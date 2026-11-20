@@ -1664,6 +1664,8 @@ TEST(MachOPatchSegmentInstall, HeaderSpaceFailureRollsBackTheWholeCandidate) {
 // order.
 TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
   using namespace llvm::MachO;
+  std::vector<uint8_t> Code(sizeof(kNativeABIReturnWord));
+  writeLE<uint32_t>(Code.data(), kNativeABIReturnWord);
   struct Case {
     uint32_t Padding;
     std::vector<uint32_t> Dropped;
@@ -1678,7 +1680,7 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
       {40, {LC_SOURCE_VERSION, LC_DATA_IN_CODE, LC_FUNCTION_STARTS}},
   };
   const auto Build = [](uint32_t Padding, bool Signed = false,
-                        bool HasUUID = false) {
+                        bool HasUUID = false, bool HasEmbeddedData = false) {
     MachOPatchTransactionFixture Fixture =
         makeMachOPatchTransactionFixture(/*CompactCapacity=*/0x2000);
     auto *Header = reinterpret_cast<mach_header_64 *>(Fixture.Binary.data());
@@ -1687,14 +1689,19 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     Source->cmd = LC_SOURCE_VERSION;
     Source->cmdsize = sizeof(*Source);
     End += sizeof(*Source);
-    uint32_t Payload = kTransactionLinkeditOff + kTransactionLinkeditSize - 16;
+    const uint32_t EmbeddedOffset = kTransactionLinkeditOff +
+                                    kTransactionLinkeditSize -
+                                    2 * sizeof(data_in_code_entry);
+    uint32_t Payload = EmbeddedOffset;
     for (uint32_t Command : {LC_DATA_IN_CODE, LC_FUNCTION_STARTS}) {
       auto *Data = reinterpret_cast<linkedit_data_command *>(End);
       Data->cmd = Command;
       Data->cmdsize = sizeof(*Data);
-      Data->dataoff = Payload;
-      Data->datasize = 8;
-      Payload += 8;
+      Data->datasize = Command == LC_DATA_IN_CODE && !HasEmbeddedData
+                           ? 0
+                           : sizeof(data_in_code_entry);
+      Data->dataoff = Data->datasize ? Payload : 0;
+      Payload += sizeof(data_in_code_entry);
       End += sizeof(*Data);
     }
     Header->ncmds += 3;
@@ -1722,6 +1729,13 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     const uint32_t First = sizeof(*Header) + Header->sizeofcmds + Padding;
     TextSection->offset = First;
     TextSection->addr = kImageBase + First;
+    if (HasEmbeddedData) {
+      const data_in_code_entry Literal{
+          uint32_t(First + TextSection->size - sizeof(uint32_t)),
+          sizeof(uint32_t), DICE_KIND_DATA};
+      std::memcpy(Fixture.Binary.data() + EmbeddedOffset, &Literal,
+                  sizeof(Literal));
+    }
     return Fixture;
   };
   const auto Commands = [](const std::vector<uint8_t> &Binary) {
@@ -1742,8 +1756,7 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
       const auto Before = Commands(Fixture.Binary);
       MachOPatcher Patcher;
       Patcher.setInputKind(Kind);
-      EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
-                                          {0xd6, 0x5f, 0x03, 0xc0},
+      EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary, Code,
                                           kDefaultNdTextSegment, Arch::AArch64),
                 kImageBase + kTransactionLinkeditOff);
       const auto After = Commands(Fixture.Binary);
@@ -1757,6 +1770,47 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
         EXPECT_TRUE(llvm::is_contained(After, Command));
     }
 
+  // A populated LC_DATA_IN_CODE owns live bytes. Keep its record across
+  // LINKEDIT movement, or leave the complete original image untouched.
+  const auto LiteralRecord = [](const std::vector<uint8_t> &Binary) {
+    std::optional<std::array<uint8_t, sizeof(data_in_code_entry)>> Record;
+    forEachMachOLoadCommand(
+        Binary.data(), Binary.size(),
+        [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+          if (ID != LC_DATA_IN_CODE)
+            return;
+          const auto &Table =
+              *reinterpret_cast<const linkedit_data_command *>(P);
+          if (Table.datasize == sizeof(data_in_code_entry) &&
+              rangeInBounds(Table.dataoff, Table.datasize, Binary.size())) {
+            Record.emplace();
+            std::memcpy(Record->data(), Binary.data() + Table.dataoff,
+                        Record->size());
+          }
+        });
+    return Record;
+  };
+  for (const auto Kind :
+       {RewriteInputKind::LiftedIR, RewriteInputKind::ReplacementIR,
+        RewriteInputKind::ReplacementObject}) {
+    for (const bool Fits : {true, false}) {
+      const uint32_t Padding = sizeof(segment_command_64) - 1 -
+                               (Fits ? 0 : sizeof(linkedit_data_command));
+      auto Fixture = Build(Padding, false, false, true);
+      const auto Before = Fixture.Binary;
+      const auto Old = LiteralRecord(Before);
+      ASSERT_TRUE(Old);
+      MachOPatcher Patcher;
+      Patcher.setInputKind(Kind);
+      const auto Placed = Patcher.appendExecSegment(
+          Fixture.Binary, Code, kDefaultNdTextSegment, Arch::AArch64);
+      EXPECT_EQ(Placed != 0, Fits);
+      EXPECT_EQ(LiteralRecord(Fixture.Binary), Old);
+      if (!Fits)
+        EXPECT_EQ(Fixture.Binary, Before);
+    }
+  }
+
   // Releasing all three commands leaves too little room for a segment and
   // signature. The caller can retry with another layout.
   for (auto Kind : {RewriteInputKind::LiftedIR, RewriteInputKind::ReplacementIR,
@@ -1766,9 +1820,8 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     MachOPatcher Patcher;
     Patcher.setInputKind(Kind);
     testing::internal::CaptureStderr();
-    const uint64_t Placed =
-        Patcher.appendExecSegment(Fixture.Binary, {0xd6, 0x5f, 0x03, 0xc0},
-                                  kDefaultNdTextSegment, Arch::AArch64);
+    const uint64_t Placed = Patcher.appendExecSegment(
+        Fixture.Binary, Code, kDefaultNdTextSegment, Arch::AArch64);
     const std::string Diagnostics = testing::internal::GetCapturedStderr();
     EXPECT_EQ(Placed, 0u);
     EXPECT_TRUE(Diagnostics.empty()) << Diagnostics;
@@ -1782,8 +1835,7 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
         reinterpret_cast<const mach_header_64 *>(Fixture.Binary.data());
     Fixture.Binary[sizeof(*Header) + Header->sizeofcmds + 71] = 0x5a;
     MachOPatcher Patcher;
-    EXPECT_NE(Patcher.appendExecSegment(Fixture.Binary,
-                                        {0xd6, 0x5f, 0x03, 0xc0},
+    EXPECT_NE(Patcher.appendExecSegment(Fixture.Binary, Code,
                                         kDefaultNdTextSegment, Arch::AArch64),
               0u);
     const auto After = Commands(Fixture.Binary);
@@ -1806,9 +1858,8 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
           reinterpret_cast<const segment_command_64 *>(Header + 1) + 1);
       const uint32_t First = Text->offset;
       MachOPatcher Patcher;
-      const uint64_t Placed =
-          Patcher.appendExecSegment(Fixture.Binary, {0xd6, 0x5f, 0x03, 0xc0},
-                                    kDefaultNdTextSegment, Arch::AArch64);
+      const uint64_t Placed = Patcher.appendExecSegment(
+          Fixture.Binary, Code, kDefaultNdTextSegment, Arch::AArch64);
       // A signed input also gives back its old signature's 16 bytes.
       EXPECT_EQ(Placed != 0, Padding >= (Signed ? 24u : 40u));
       if (Placed) {
@@ -1829,8 +1880,7 @@ TEST(MachOPatchSegmentInstall, TightHeaderGivesUpOnlyToolCommandsAsNeeded) {
     const auto Before = Fixture.Binary;
     MachOPatcher Patcher;
     Patcher.setInputKind(Kind);
-    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary,
-                                        {0xd6, 0x5f, 0x03, 0xc0},
+    EXPECT_EQ(Patcher.appendExecSegment(Fixture.Binary, Code,
                                         kDefaultNdTextSegment, Arch::AArch64),
               0u);
     EXPECT_EQ(Fixture.Binary, Before);
