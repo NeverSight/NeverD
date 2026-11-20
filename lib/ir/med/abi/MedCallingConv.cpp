@@ -762,7 +762,9 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
   // parameter even when no other instruction reads X0, so the argument list
   // is not left empty and the return has nothing to name.
   uint64_t IncomingReturnReg = 0;
+  // Exact parameters (a Go function's spills) name every argument already.
   const bool IncomingReturn = !ProtoArgs && TargetArch == Arch::AArch64 &&
+                              !(FromSummary && GoRegisterArguments) &&
                               !ParamRegs.empty() &&
                               phiHoldsUnwrittenRegister(Func, ParamRegs[0]);
   if (IncomingReturn) {
@@ -1650,6 +1652,18 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &*GoArgumentSpillReads;
       Func.ExactRegisterParameters = true;
     }
+    // A Go 1.21+ write barrier takes no register argument: it returns buffer
+    // space in R11 or X25 and keeps every other general-purpose register, so
+    // the saves its body makes read no argument (GoWriteBarrierKind::Buffer).
+    static const GPRReadWidths NoReads{};
+    const GoWriteBarrier *Barrier =
+        Image ? goWriteBarrierAt(*Image, Func.Entry) : nullptr;
+    const bool BufferBarrier =
+        Barrier && Barrier->Kind == GoWriteBarrierKind::Buffer && Convention;
+    if (BufferBarrier) {
+      Summary = &NoReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home
@@ -1675,7 +1689,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         SummaryVariadicFrom = It->second;
       }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
-                         TargetArch, Convention, Summary, GoRegisterArguments);
+                         TargetArch, Convention, Summary,
+                         GoRegisterArguments || BufferBarrier);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered

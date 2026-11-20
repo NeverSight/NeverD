@@ -478,6 +478,28 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoWriteBarriers, ABufferBarrierTakesNoRegisterArgument) {
+  // runtime.gcWriteBarrier2 on arm64: stp x0, x1, [sp, #-16]!;
+  // mov x25, sp; ldp x0, x1, [sp], #16; ret.  Its saves read no argument:
+  // it returns buffer space in X25 and keeps every other register.
+  constexpr va_t BarrierEntry = kTextVA + 0x200;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(BarrierEntry,
+              words({0xA9BF07E0, 0x910003F9, 0xA8C107E0, 0xD65F03C0}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA + 0x100, kTextVA + 0x500}};
+  Module.GoAssembly = {{BarrierEntry, BarrierEntry + 0x10}};
+  GoWriteBarrier Barrier;
+  Barrier.Entry = BarrierEntry;
+  Barrier.Kind = GoWriteBarrierKind::Buffer;
+  Module.WriteBarriers = {Barrier};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  const MedFunc F = lift(T.Img, BarrierEntry);
+  EXPECT_TRUE(F.Params.empty());
+  EXPECT_TRUE(F.ExactRegisterParameters);
+}
+
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
   // runtime.morestackc throws: a system-stack function that runs short of
   // stack never starts again, so its path stays.

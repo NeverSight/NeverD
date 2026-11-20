@@ -5761,7 +5761,10 @@ contract Go documents beside the routine (`src/runtime/asm_amd64.s`,
 variants perform the store and keep every general-purpose register. Go 1.21
 and later `runtime.gcWriteBarrier1`-`8` keep every general-purpose register
 except arm64's R27 and the R11 or X25 they return buffer space in, which the
-call defines. Barriers are recorded only where the text base is proven.
+call defines. Barriers are recorded only where the text base is proven. A Go
+1.21+ barrier's own parameters are none (`detectCc`, exact), so its callers
+pass nothing. Read as AAPCS64, the registers its body saves would otherwise be
+eight arguments.
 
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
 there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and

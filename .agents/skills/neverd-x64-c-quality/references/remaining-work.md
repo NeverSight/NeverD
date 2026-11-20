@@ -556,11 +556,10 @@ Still open, in order of yield:
    - arm64 calls. A Go function's parameters now come from its spills
      (R0-R15), and exact parameters (`MedFunc::ExactRegisterParameters`) stop
      forwarded registers from widening them. Together these took arm64 Go 1.26
-     down 55-60% and amd64 down 2-6%. Still wide: callees without a recognized
-     growth path, such as frameless leaves, frames over 4 KiB like
-     `mallocgc`'s, and arm64 write barriers. A Go 1.21+ arm64
-     `gcWriteBarrier2` takes no register argument, but AAPCS64 gives it
-     eight.
+     down 55-60% and amd64 down 2-6%. A Go 1.21+ write barrier now takes no
+     register parameter either (arm64 down another 11-15%). Still wide:
+     callees without a recognized growth path, such as frameless leaves and
+     frames over 4 KiB like `mallocgc`'s.
    - DWARF-typed signatures. They need Go's register assignment by type.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
