@@ -113,7 +113,8 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word,
                      NdVar::cst(Displacement, S.Width));
   if (Bytes > 1 && TimedInstructions)
     S.emitIntrinsic(Intrinsic::MIPSHistoricalAddressCheck, {}, {Address});
-  else if (Bytes > 1 && ISARevision != 6)
+  else if (Bytes > 1 && ISARevision != 6 &&
+           (!Address.isConst() || (Address.Offset & (Bytes - 1))))
     S.emitIntrinsic(Intrinsic::RequireAligned, {},
                     {S.resize(Address, 8), NdVar::scalar(Bytes, 8)});
   if (Store) {
