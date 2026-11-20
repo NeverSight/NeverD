@@ -14,6 +14,7 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSSourceVectors.h"
+#include "neverd/ir/med/MedCallingConvDetail.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -347,6 +348,37 @@ TEST(MIPSRecordSourceEntry, AlignedTailMayLeaveADeadIncomingStackSlot) {
     ASSERT_TRUE(F.project());
     F.Inputs[5].Site.MedIndex = -1;
     EXPECT_FALSE(F.project());
+  }
+}
+
+TEST(MIPSRecordSourceEntry, StackTailAlwaysOccupiesTheFirstAddressedBytes) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    RecordFixture F(A, 15);
+    const auto Entry = F.project();
+    ASSERT_TRUE(Entry);
+    EXPECT_NE(Entry->Definition.find(
+                  "__builtin_memcpy((unsigned char *)&__neverd_word4, (const "
+                  "unsigned char *)&__neverd_arg0 + 12, 3)"),
+              std::string::npos);
+    MedVar First;
+    First.Kind = MedVar::Param;
+    First.TheArch = A;
+    First.Id = 4;
+    First.RegOff = kNoParamReg;
+    MedOp Read;
+    int NextId = 42;
+    std::vector<MedOp> Prefix;
+    med_calling_conv_detail::composeStackSlots(Read, First, 4, 10, NextId,
+                                               Prefix);
+    ASSERT_EQ(Prefix.size(), 2u);
+    const bool Little = archLittleEndian(A);
+    EXPECT_EQ(Prefix[0].Inputs[0].Id, Little ? 5 : 4);
+    EXPECT_EQ(Prefix[0].Inputs[1].Id, Little ? 4 : 5);
+    EXPECT_EQ(Prefix[1].Opcode, NdOp::SUBBYTES);
+    EXPECT_EQ(Prefix[1].Inputs[0].Id, 6);
+    EXPECT_EQ(Prefix[1].Inputs[1].ConstVal, Little ? 0u : 2u);
+    EXPECT_EQ(Read.Inputs[0].Id, Little ? 43 : 42);
+    EXPECT_EQ(Read.Inputs[1].Id, Little ? 42 : 43);
   }
 }
 

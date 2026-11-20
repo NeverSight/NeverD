@@ -205,12 +205,15 @@ mips::cRecordEntry(const CEmitterOptions &Options, const DebugContext *Debug,
     // Bytes outside the declared object do not belong to the C argument.
     // The C-to-physical call may choose their value, just as a native caller
     // does.
+    // The first byte of a stack-passed record is at the lowest address
+    // of its slot on both byte orders, including a partially occupied slot.
+    const unsigned At =
+        record(T) && Stack
+            ? 0
+            : memoryOffset(Site.Bytes, Size, P.RegisterBitOffset, Little);
     OS << "    " << Input.Spelling << " " << Word << " = 0;\n"
-       << "    __builtin_memcpy("
-       << bytes(Word,
-                memoryOffset(Site.Bytes, Size, P.RegisterBitOffset, Little),
-                false)
-       << ", " << bytes(Arg, Source, true) << ", " << Size << ");\n";
+       << "    __builtin_memcpy(" << bytes(Word, At, false) << ", "
+       << bytes(Arg, Source, true) << ", " << Size << ");\n";
     Arguments.push_back(Word);
   }
   const std::string Call =

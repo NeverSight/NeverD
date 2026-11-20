@@ -15,6 +15,7 @@
 
 #include "../../../safety/StackSlotFlow.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -2257,10 +2258,19 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
                                    IntegerLayout.SlotBytes;
           if (K == 0 && Op.Opcode == NdOp::SUBBYTES && Op.NumInputs == 2 &&
               Op.Inputs[1].isConst() && Op.Inputs[1].ConstVal <= 8) {
-            Offset += static_cast<int64_t>(Op.Inputs[1].ConstVal);
             Bytes = Op.Output.Size;
+            const auto Lane = Op.Inputs[1].ConstVal;
+            if (Lane + Bytes > Old.Size) {
+              Valid = false;
+              continue;
+            }
+            Offset +=
+                archLittleEndian(TheArch) ? Lane : Old.Size - Bytes - Lane;
             Slice = true;
           }
+          if (!Slice && !archLittleEndian(TheArch) &&
+              Bytes < IntegerLayout.SlotBytes)
+            Offset += IntegerLayout.SlotBytes - Bytes;
           Index = StackParameter(Offset, Bytes);
         }
         if (Index < 0 || !Bytes) {
@@ -2282,9 +2292,11 @@ void inferMedTypes(MedFunc &Func, Arch TheArch,
         Parameter.Size = L.ValueBytes;
         std::optional<uint64_t> SliceOffset;
         uint16_t PrefixBytes = 0;
-        if (Slice)
-          SliceOffset = static_cast<uint64_t>(Offset - L.EntryStackOffset);
-        else if (Bytes != L.ValueBytes) {
+        if (Slice) {
+          const auto At = static_cast<uint64_t>(Offset - L.EntryStackOffset);
+          SliceOffset =
+              archLittleEndian(TheArch) ? At : L.ValueBytes - Bytes - At;
+        } else if (Bytes != L.ValueBytes) {
           // A narrow physical-register view may be a separate low-word SSA
           // live-in. Preserve that view for the existing source-flow proof;
           // this pass has no operation in which to insert its byte slice.
