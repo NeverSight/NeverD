@@ -5941,7 +5941,11 @@ that grows the stack rather than `runtime.morestackc`, which throws, and the
 entry alone must reach it. A frame larger than 4 KiB checks for underflow with
 a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
-routines take no register argument. arm64 paths, `ldr x16, [x28, #16]` and
+routines take no register argument, exactly (`MorestackEntries`): arm64's path
+hands them its own return address in R3, as any call does in LR, and their
+bodies' other reads save the registers of the function they restart. Read as
+AAPCS64 positions, every kept arm64 growth call passed four or more unknowns.
+arm64 paths, `ldr x16, [x28, #16]` and
 the spills a `stp` makes, qualify where the image's register ABI is modelled
 (`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
 expose stack arguments AAPCS64 places after eight register positions. A call

@@ -20686,6 +20686,9 @@ unknown value.
 `GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
 arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
 results, where AAPCS64 alone gives X0:X1.
+`GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
+`runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
+X3: alone and in the pipeline, neither takes a parameter, and both are exact.
 `GoInternalABI.AStaleViewReadsNoResultOfTheCall` lifts an arm64 caller that,
 after a call, joins `ldrb w11` with `mov x11, #45` and reads the low byte:
 the call returns nothing it reads, though the stale arm of the W11 PHI is

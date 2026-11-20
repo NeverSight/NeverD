@@ -1765,6 +1765,19 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &BoundsReads;
       Func.ExactRegisterParameters = true;
     }
+    // The stack-growth routines a prologue calls take no argument a caller
+    // passes: arm64's growth path hands them its own return address in R3,
+    // as any call does in LR, and amd64's on the stack (MorestackEntries).
+    // Read as AAPCS64 positions, every arm64 growth call passed four or more
+    // unknowns.
+    const bool GrowthRoutine =
+        GoModule && Convention &&
+        std::binary_search(GoModule->MorestackEntries.begin(),
+                           GoModule->MorestackEntries.end(), Func.Entry);
+    if (GrowthRoutine) {
+      Summary = &NoReads;
+      Func.ExactRegisterParameters = true;
+    }
     if (Func.StackArgumentsOnly) {
       Summary = &NoReads;
       Func.ExactRegisterParameters = true;
@@ -1803,8 +1816,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary,
                          GoRegisterArguments || BufferBarrier ||
-                             BoundsRoutine || Func.StackArgumentsOnly ||
-                             GoFixedOperands);
+                             BoundsRoutine || GrowthRoutine ||
+                             Func.StackArgumentsOnly || GoFixedOperands);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered

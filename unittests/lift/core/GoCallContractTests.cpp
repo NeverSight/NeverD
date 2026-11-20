@@ -490,6 +490,49 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoStackGrowth, AGrowthRoutineTakesNoArgument) {
+  // A growth path hands runtime.morestack_noctxt its own return address in
+  // R3, as a call does in LR, and the routines' other reads save registers.
+  // Read as AAPCS64 positions, every arm64 growth call passed four or more
+  // unknowns.
+  //   runtime.morestack_noctxt: mov w26, #0; b runtime.morestack
+  //   runtime.morestack: mov x16, x3; str x0, [x28, #0x50]; udf
+  // The routine reads R3 itself, which is no argument either.
+  constexpr va_t Noctxt = Morestack + 0x40;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Morestack, words({0xAA0303F0, 0xF9002B80, 0x00000000}));
+  const uint32_t Branch =
+      0x14000000u | (((Morestack - (Noctxt + 4)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Noctxt, words({0x5280001A, Branch}));
+  for (const auto &[Entry, Name] :
+       {std::pair{Morestack, "runtime.morestack"},
+        std::pair{Noctxt, "runtime.morestack_noctxt"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack, Noctxt};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_TRUE(lift(T.Img, Morestack).Params.empty());
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  for (const va_t Entry : {Morestack, Noctxt}) {
+    SCOPED_TRACE(Entry);
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+    ASSERT_NE(It, R.MedFuncs.end());
+    EXPECT_TRUE(It->Params.empty()) << It->Params.size();
+    EXPECT_TRUE(It->ExactRegisterParameters);
+  }
+}
+
 TEST(GoStackGrowth, AnARM64ByteSpillGoesThroughATemporary) {
   // main.g(b bool): ldr x16, [x28, #16]; cmp sp, x16; b.ls grow; ret
   //   grow: strb w2, [sp, #24]; mov x3, x30; bl morestack_noctxt
