@@ -48,6 +48,8 @@ MACHO_LEAF_TEXT(kSourceText,
                 "authenticated function entries")
 MACHO_LEAF_TEXT(kSourceEntry, "arm64e lifted function {0} has no complete "
                               "definition at an original entry")
+MACHO_LEAF_TEXT(kSourceAddressTarget,
+                "arm64e ADR does not preserve its source image address")
 MACHO_LEAF_TEXT(kDirectTarget,
                 "arm64e direct transfer does not preserve its installed target")
 MACHO_LEAF_TEXT(kErrorResultABI,

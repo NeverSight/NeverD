@@ -178,6 +178,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  const bool OriginalAddresses = Leaves == kAddressLeaves;
   const bool PaddedLiteral = Preamble == kPaddedLiteralOracle;
   const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
   const bool PaddedDefault = Preamble == kPaddedSplitDefaultOracle ||
@@ -197,9 +198,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
-  const bool Embedded = Declared || PaddedLiteral || Recover || SplitTables;
-  if (Declared || PaddedLiteral || PartialRecords || SplitLiterals ||
-      SplitTables)
+  const bool Embedded =
+      Declared || PaddedLiteral || Recover || SplitTables || OriginalAddresses;
+  if (Declared || PaddedLiteral || OriginalAddresses || PartialRecords ||
+      SplitLiterals || SplitTables)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
@@ -389,6 +391,21 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   }
   auto ExpectedData = Image->MachODataInCode;
   llvm::DenseMap<va_t, va_t> DefaultStartsByRecord;
+  if (OriginalAddresses) {
+    std::vector<MachOLiftedSourceAddress> Addresses;
+    auto Valid =
+        validateMachORegisterResults(Module, *Image, nullptr, &Addresses);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    ASSERT_EQ(Addresses.size(), kAddressFunctions);
+    ASSERT_EQ(ExpectedData.size(), 1u);
+    const auto *Sum = Image->findSymbol(kSumSymbol);
+    ASSERT_TRUE(Sum);
+    EXPECT_EQ(Addresses[0].Target, ExpectedData.front().Begin);
+    EXPECT_EQ(Addresses[1].Target, ExpectedData.front().Begin + 1);
+    EXPECT_EQ(Addresses[2].Target, Addresses[2].Instruction);
+    EXPECT_EQ(Addresses[3].Target, Sum->Addr);
+    testing::Test::RecordProperty(kAddressFixups, int(Addresses.size()));
+  }
   if (PaddedLiteral) {
     ASSERT_EQ(ExpectedData.size(), 1u);
     const auto Literal = ExpectedData.front();
@@ -868,6 +885,15 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
 
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
+  if (Preamble == kDistantAddresses) {
+    EXPECT_FALSE(Patcher.patch(Input, Output, Module, Image->Arch).Success);
+    EXPECT_FALSE(std::filesystem::exists(Output));
+    auto Unchanged = Reader->load(Input);
+    ASSERT_TRUE(bool(Unchanged)) << llvm::toString(Unchanged.takeError());
+    EXPECT_EQ(Unchanged->Raw, Snapshot);
+    testing::Test::RecordProperty(kDistantAddressRefused, true);
+    return;
+  }
   if (Check == LeafCheck::SigningRequirements) {
     auto Signature = macho_signature::inspect(Image->Raw);
     ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
@@ -2009,6 +2035,17 @@ TEST(AArch64LiftedImage, UnmarkedAlignmentBesidePartialSwitchTables) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kPaddedGappedDefaultOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, ADRPreservesSourceLiteralAndFunctionAddresses) {
+  verifyPublishedLeaves(kAddressLeaves, kAddressCaller, kAssemblyName, {},
+                        LeafCheck::Relifted, kAddressFunctions);
+}
+
+TEST(AArch64LiftedImage, RejectsSourceADRBeyondArchitecturalReach) {
+  verifyPublishedLeaves(kAddressLeaves, kAddressCaller, kAssemblyName,
+                        kDistantAddresses, LeafCheck::Relifted,
+                        kAddressFunctions);
 }
 
 TEST(AArch64LiftedImage, UnmarkedAlignmentAfterDeclaredLiteral) {

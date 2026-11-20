@@ -68,6 +68,7 @@ struct RegisterBody {
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
   std::vector<MachODataInCodeRange> RecoveredData;
+  llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
@@ -165,6 +166,34 @@ bool physicalRegister(aarch64_reg R) {
          (R >= AARCH64_REG_S0 && R <= AARCH64_REG_S31) || R == AARCH64_REG_FP ||
          R == AARCH64_REG_LR || R == AARCH64_REG_SP || R == AARCH64_REG_WSP ||
          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR;
+}
+
+// Track a full-width address through register copies to the Darwin X0 result.
+// Decoding lookahead invalidates the decoder's previous borrowed instruction.
+bool returnsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
+                    aarch64_reg AddressReg) {
+  constexpr auto Word = aarch64::kInsnSize;
+  while (Bytes.size() >= Word) {
+    DecodedInsn I{};
+    if (Decode.decodeOne(Bytes.data(), Word, PC, I) != int(Word) || !I.Raw ||
+        !I.Raw->detail)
+      return false;
+    const auto &D = I.Raw->detail->aarch64;
+    if ((I.Id == AARCH64_INS_RET && !D.op_count) || I.Id == AARCH64_INS_RETAA ||
+        I.Id == AARCH64_INS_RETAB)
+      return AddressReg == AARCH64_REG_X0;
+    const bool Copy =
+        I.Id == AARCH64_INS_MOV || (I.Id == AARCH64_INS_ORR && I.Raw->is_alias);
+    if (!Copy || D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG ||
+        D.operands[0].reg < AARCH64_REG_X0 ||
+        D.operands[0].reg > AARCH64_REG_X28 ||
+        D.operands[1].type != AARCH64_OP_REG || D.operands[1].reg != AddressReg)
+      return false;
+    AddressReg = D.operands[0].reg;
+    Bytes = Bytes.drop_front(Word);
+    PC += Word;
+  }
+  return false;
 }
 
 // Keep the constants and callees as actual LLVM operands. In particular a
@@ -807,22 +836,38 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       if (Distance > PC - Start)
         return std::nullopt;
     }
-    // ADR can materialize a signing point within this same body. Its relative
-    // distance survives publication, just like an internal branch. External
-    // data and page-relative addresses require a different relocation owner.
-    const bool TableAddress = Dispatch.TableAddresses.contains(PC);
-    const bool LocalAddress =
-        I.Id == AARCH64_INS_ADR && Ops.size() == 2 &&
-        Ops[0].type == AARCH64_OP_REG && physicalRegister(Ops[0].reg) &&
-        Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
-        va_t(Ops[1].imm) < End &&
-        (TableAddress || (va_t(Ops[1].imm) - Start) % Word == 0);
-    // A retained block can return the relocated PC. Its ADR has no proven
-    // use as a signing point, even with a complete map of embedded data.
-    if (LocalAddress && !TableAddress &&
-        (OutsideCFG ||
-         !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty()))
-      return std::nullopt;
+    // A table or signing point moves with this body. A pointer into declared
+    // literal storage or a returned function entry denotes the source image,
+    // including when a later publication lifts this copy again.
+    if (I.Id == AARCH64_INS_ADR) {
+      if (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
+          Ops[1].type != AARCH64_OP_IMM)
+        return std::nullopt;
+      const va_t Target = Ops[1].imm;
+      const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
+      const bool LiteralAddress =
+          !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
+      // The lookahead consumes the borrowed instruction. All surviving ADR
+      // fields, including Encoding, have already been copied.
+      const bool Returned =
+          !LiteralAddress &&
+          returnsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
+                         NextPC, Ops[0].reg);
+      if (LiteralAddress ||
+          (Returned && Image.hasAuthenticatedFunctionEntryAt(Target))) {
+        Body.SourceAddresses.push_back({PC, Target});
+      } else if (RecoveredCode ||
+                 (!Dispatch.TableAddresses.contains(PC) &&
+                  (Returned || OutsideCFG || Target < Start || Target >= End ||
+                   (Target - Start) % Word != 0 ||
+                   !machODataInCodeRanges(Source->Embedded, Target, 1)
+                        .empty()))) {
+        return std::nullopt;
+      }
+      Fallthrough();
+      OS << kInstructionWord << Encoding << '\n';
+      continue;
+    }
     const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
     if (Literal &&
         !coverMachOEmbeddedRead(*Source, Start, Literal->Address,
@@ -834,8 +879,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       return std::nullopt;
     if (!Stops)
       Fallthrough();
-    if (!SIMDData && !LocalAddress && !Literal && !KeepEncoding &&
-        !independent(I))
+    if (!SIMDData && !Literal && !KeepEncoding && !independent(I))
       return std::nullopt;
     // Classic compact mode cannot describe a saved PC-signed return. A
     // frameless body without calls or spills retains a live LR instead; the
@@ -869,8 +913,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     // lists and FP controls. PAuth_LR words retain their signing-PC distance
     // because every instruction keeps its offset within the copied body.
     // Both the assembly and final linked words are checked against the image.
-    if (KeepEncoding || SIMDData || PCSigning || PACM || LocalAddress ||
-        Literal) {
+    if (KeepEncoding || SIMDData || PCSigning || PACM || Literal) {
       OS << kInstructionWord << Encoding << '\n';
     } else if ((I.Id == AARCH64_INS_MOV || I.Id == AARCH64_INS_MOVZ) &&
                Ops.size() == 2 && Ops[0].type == AARCH64_OP_REG &&
@@ -1088,7 +1131,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
-        Body.IsForwarder || Body.HasEmbeddedData)
+        Body.IsForwarder || Body.HasEmbeddedData ||
+        !Body.SourceAddresses.empty())
       Select(F);
     if (HasVariadicCursor &&
         (F->isVarArg() || Body.MaterializesCursor || Body.LoadsStackArgument))
@@ -1150,14 +1194,17 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   return llvm::Error::success();
 }
 
-llvm::Expected<llvm::DenseSet<va_t>>
-validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
-                             std::vector<MachODataInCodeRange> *RecoveredData) {
+llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
+    llvm::Module &M, const BinaryImage &Image,
+    std::vector<MachODataInCodeRange> *RecoveredData,
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
           M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); })) {
     if (RecoveredData)
       RecoveredData->clear();
+    if (SourceAddresses)
+      SourceAddresses->clear();
     return Result;
   }
   auto Functions = definedEntries(M, Image);
@@ -1167,6 +1214,7 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   if (!Decode.init(Image))
     return invalidBody();
   std::vector<MachODataInCodeRange> VerifiedData;
+  std::vector<MachOLiftedSourceAddress> VerifiedAddresses;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!F.hasFnAttribute(kRegisterBody))
@@ -1185,10 +1233,14 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
       return invalidBody();
     if (RecoveredData)
       llvm::append_range(VerifiedData, Body->RecoveredData);
+    if (SourceAddresses)
+      llvm::append_range(VerifiedAddresses, Body->SourceAddresses);
     Result.insert(It->first);
   }
   if (RecoveredData)
     *RecoveredData = std::move(VerifiedData);
+  if (SourceAddresses)
+    *SourceAddresses = std::move(VerifiedAddresses);
   return Result;
 }
 } // namespace neverd

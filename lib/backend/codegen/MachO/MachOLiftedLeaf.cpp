@@ -25,6 +25,7 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/DwarfEH.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -739,7 +740,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
                          const llvm::DenseSet<va_t> &RegisterEntries,
-                         llvm::ArrayRef<MachODataInCodeRange> SourceData) {
+                         llvm::ArrayRef<MachODataInCodeRange> SourceData,
+                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
   dwarf_eh::ParseResult LinkedFrames;
@@ -948,6 +950,22 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             return refuse(kLeafCode);
           continue;
         }
+        if (!Addresses.empty() &&
+            Addresses.front().Instruction == Start + Offset) {
+          const auto Fixup = Addresses.front();
+          Addresses = Addresses.drop_front();
+          DecodedInsn ADR{};
+          if (Decode.decodeOne(After.data(), aarch64::kInsnSize,
+                               Owner->second + Offset,
+                               ADR) != aarch64::kInsnSize ||
+              ADR.Id != AARCH64_INS_ADR || !ADR.Raw || !ADR.Raw->detail ||
+              (readLE<uint32_t>(Before.data()) & aarch64::kRdMask) !=
+                  (readLE<uint32_t>(After.data()) & aarch64::kRdMask) ||
+              va_t(ADR.Raw->detail->aarch64.operands[1].imm) !=
+                  Fixup.Target + Slide)
+            return refuse(kSourceAddressTarget);
+          continue;
+        }
         const auto Transfer = decodeDirectBranch(
             Original.Arch, InstructionMode::Default, Before.data(),
             Before.size(), Start + Offset, {.Jumps = true, .Calls = true});
@@ -1080,6 +1098,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         }))
       return refuse(kLeafCode);
   }
+  if (!Addresses.empty())
+    return refuse(kSourceAddressTarget);
   return llvm::Error::success();
 }
 } // namespace
@@ -1098,8 +1118,9 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       llvm::verifyModule(Module))
     return refuse(kLeafModule);
   std::vector<MachODataInCodeRange> RecoveredData;
+  std::vector<MachOLiftedSourceAddress> Addresses;
   auto RegisterEntries =
-      validateMachORegisterResults(Module, Image, &RecoveredData);
+      validateMachORegisterResults(Module, Image, &RecoveredData, &Addresses);
   if (!RegisterEntries)
     return RegisterEntries.takeError();
   llvm::SmallVector<MachODataInCodeRange> Combined;
@@ -1320,11 +1341,11 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   return installMachOLiftedObject(
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
-      Image, Mappings, Bindings, Output, RecoveredData,
+      Image, Mappings, Bindings, Output, RecoveredData, Addresses,
       [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
         return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries, SourceData);
+                            *RegisterEntries, SourceData, Addresses);
       });
 }
 } // namespace neverd
