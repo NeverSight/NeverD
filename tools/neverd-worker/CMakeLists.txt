@@ -512,10 +512,10 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
       set_tests_properties(NeverDWorkerImmediatesRegister PROPERTIES TIMEOUT 120)
       add_test(NAME NeverDWorkerSourceSynthesis
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_synthesis_test.py"
-                "$<TARGET_FILE:neverd-worker>" ${_neverd_source_synthesis_args})
-      # Each fixture compiles and executes every CLI/worker source variant at
-      # O0 and O2. The full corpus takes 420s on macOS with parallel tests.
-      set_tests_properties(NeverDWorkerSourceSynthesis PROPERTIES TIMEOUT 600)
+                "$<TARGET_FILE:neverd-worker>" ${_neverd_source_synthesis_args} --jobs 3)
+      # Each fixture owns its worker and its generated C programs. Reserve
+      # the same number of CTest slots as concurrent fixture processes.
+      set_tests_properties(NeverDWorkerSourceSynthesis PROPERTIES TIMEOUT 600 PROCESSORS 3)
       add_test(NAME NeverDWorkerInterpreterRecoveryReal
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/interpreter_recovery_test.py"
                 "$<TARGET_FILE:neverd-worker>" --real ${_neverd_source_synthesis_args})

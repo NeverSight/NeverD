@@ -1379,6 +1379,68 @@ def rotating_window_corpus(width, count):
     return rows
 
 
+def shifted_window_corpus(width, count):
+    """Products of overlapping words seen through rotations and padded shifts."""
+    axes = ("(x^y)", "((x+u)^(z*w))", "((x|v)^(y&w))", "((x^z)*(u+(v|w)))")
+    positions = (0, 1 + width // 5, width - 3, 1 + width // 3)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0x75a91 + width * 1571 + case * 2203)
+        degree = (83, 151, 223, 281)[case % 4]
+        observed = min(width - 4, max(10, width * 3 // 8 + case % 3))
+        stride = max(1, (observed + 2) // (3 + case % 2))
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % (2 + case % 3)
+            zeros = stride + i % 2
+            bits = observed - zeros
+            size = bits + i % 3
+            room = width - size
+            start = 1 + rng.randrange(room - 1)
+            live = case % 16 >= 8 and i == degree // 2
+            kind = (i + case) % 3
+            if live:
+                # Place precisely one observable bit in the shift's padding.
+                source = -1 if kind == 0 else width - bits + 1
+            else:
+                source = rng.randrange(start) if kind == 0 else rng.randrange(start + 1, room + 1)
+            steps = [(kind, abs(source - start))]
+            if not live and (i + case) % 4:
+                seam = 1 + rng.randrange(room - 1)
+                steps.append((3, (seam - source) % width))
+                inner = (kind + 1) % 3
+                source = rng.randrange(seam) if inner == 0 else rng.randrange(seam + 1, room + 1)
+                steps.append((inner, abs(source - seam)))
+            word = f"ror({axes[axis]},{(positions[axis] - source) % width})"
+            for operation, shift in reversed(steps):
+                if operation == 0:
+                    word = f"({word}<<{shift})"
+                elif operation == 1:
+                    word = f"({word}>>{shift})"
+                elif operation == 2:
+                    word = f"ashr({word},{shift})"
+                else:
+                    word = f"ror({word},{shift + width})"
+            field = f"extract({word},{start},{size})"
+            noise = f"(({rng.randrange(1, 128, 2)}+v*y)^(x+u*w))"
+            if i % 3 == 0:
+                word = f"zext({field},{width})"
+            elif i % 3 == 1:
+                word = f"sext({field},{width})"
+            else:
+                word = f"concat(extract({noise},{size},{width - size}),{field})"
+            if (case + i) % 3:
+                offset = rng.randrange(-23, 24) | 1
+                weight = rng.randrange(-17, 18) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-31, 32) | 1
+            weight = (rng.randrange(-17, 18) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        scale = 3 << (width - observed)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(z^w)+(u&v)")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1508,6 +1570,12 @@ def check_semantics(expressions, results, width):
                         return value.value & ((1 << bits.value) - 1), bits.value
                     if isinstance(value, ast.Name) and value.id in values:
                         return values[value.id] & ((1 << bits.value) - 1), bits.value
+            if name == "ashr" and len(node.args) == 2:
+                value, bits = evaluated[node.args[0]]
+                count = min(evaluated[node.args[1]][0], bits - 1)
+                if value & (1 << (bits - 1)):
+                    value -= 1 << bits
+                return (value >> count) & ((1 << bits) - 1), bits
             if name in ("rol", "ror") and len(node.args) == 2:
                 value, bits = evaluated[node.args[0]]
                 count = evaluated[node.args[1]][0] % bits
@@ -1553,7 +1621,7 @@ def check_semantics(expressions, results, width):
             elif isinstance(current, ast.UnaryOp):
                 pending.append((current.operand, False))
             elif (isinstance(current, ast.Call) and isinstance(current.func, ast.Name)
-                  and current.func.id in ("concat", "rol", "ror")):
+                  and current.func.id in ("concat", "rol", "ror", "ashr")):
                 pending.extend((arg, False) for arg in reversed(current.args))
             elif (isinstance(current, ast.Call)
                   and isinstance(current.func, ast.Name)
@@ -1573,7 +1641,7 @@ def check_semantics(expressions, results, width):
     names = sorted({
         node.id for expression in [*expressions, *(r["output"] for r in results)]
         for node in ast.walk(parse(expression))
-        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror")
+        if isinstance(node, ast.Name) and node.id not in ("word", "extract", "zext", "sext", "trunc", "concat", "rol", "ror", "ashr")
     })
     assignments = [
         {name: (x if index % 2 == 0 else y)
@@ -1644,7 +1712,7 @@ def main():
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
-                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window"),
+                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1666,6 +1734,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "shifted-window": (17, 24, 32, 64, 97, 193, 257, 513),
             "rotating-window": (17, 24, 32, 64, 97, 193, 257, 513),
             "spliced-word": (17, 24, 32, 64, 97, 193, 257, 513),
             "dynamic-lane": (9, 16, 32, 65, 97, 257, 513),
@@ -1710,6 +1779,7 @@ def main():
                 "dynamic-lane": dynamic_lane_corpus,
                 "spliced-word": spliced_word_corpus,
                 "rotating-window": rotating_window_corpus,
+                "shifted-window": shifted_window_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

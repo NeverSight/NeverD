@@ -7,6 +7,7 @@
 #include "Limits.h"
 #include "SymMBADetail.h"
 
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/ScopeExit.h"
 
 #include <algorithm>
@@ -1480,6 +1481,73 @@ reduceDistributionProof(SymContext &Ctx, SymRef Before, SymRef After,
   return {Ctx.mkAdd(Left), Ctx.mkAdd(Right)};
 }
 
+// A previously factored product and its scalar neighbors can participate in
+// nested reconstruction through a shared arithmetic atom or an AND partition.
+// Check the operands of a binary AND too, since the search can split a whole
+// word into complementary masked views.
+bool hasIndependentMaskedTail(const SymContext &Ctx, SymRef E,
+                              WorkBudget &Budget, size_t Storage) {
+  if (!Budget.Residues || Ctx.op(E) != SymOp::Add)
+    return false;
+  const auto Terms = Ctx.operands(E);
+  auto Unscale = [&](SymRef T) {
+    return Ctx.op(T) == SymOp::Mul && Ctx.numOperands(T) == 2 &&
+                   Ctx.isConst(Ctx.operand(T, 0))
+               ? Ctx.operand(T, 1)
+               : T;
+  };
+  size_t Masks = 0;
+  SymRef Product;
+  for (auto T : Terms) {
+    const auto Atom = Unscale(T);
+    if (Ctx.op(Atom) == SymOp::And && Ctx.numOperands(Atom) == 2)
+      ++Masks;
+    else if (!Ctx.isConst(Atom) && !Ctx.isVar(Atom) &&
+             Ctx.op(Atom) != SymOp::Xor) {
+      if (Product || Ctx.op(Atom) != SymOp::Mul)
+        return false;
+      Product = T;
+    }
+  }
+  const size_t Slots = Terms.size() + 2 * Masks;
+  const size_t Bytes = Slots * 4 * sizeof(uint32_t);
+  if (!Masks || !Product || Bytes > Storage ||
+      !hasCompletedResidueReading(Ctx, Product, Budget, true) ||
+      !Budget.canConsume(Slots))
+    return false;
+  Budget.consume(Slots);
+  llvm::SmallDenseSet<uint32_t, 16> Neighbors;
+  for (auto T : Terms) {
+    if (T == Product)
+      continue;
+    const auto Atom = Unscale(T);
+    Neighbors.insert(Atom.index());
+    if (Ctx.op(Atom) == SymOp::And)
+      for (auto Input : Ctx.operands(Atom))
+        Neighbors.insert(Input.index());
+  }
+  size_t Left = std::min(limits::kProductCofactorMaxEdges,
+                         (Storage - Bytes) / sizeof(SymRef));
+  llvm::SmallVector<SymRef, 16> Pending{Product};
+  while (!Pending.empty()) {
+    const auto R = Pending.pop_back_val();
+    const auto Op = Ctx.op(R);
+    if (Op != SymOp::Add && Op != SymOp::Mul) {
+      if (Op == SymOp::And ||
+          (!Ctx.isConst(R) && Neighbors.contains(R.index())))
+        return false;
+      continue;
+    }
+    const auto Children = Ctx.operands(R);
+    if (Children.size() > Left || !Budget.canConsume(Children.size()))
+      return false;
+    Budget.consume(Children.size());
+    Left -= Children.size();
+    Pending.append(Children.begin(), Children.end());
+  }
+  return true;
+}
+
 } // namespace
 
 SymRef solveNestedProductCofactors(SymContext &Ctx, SymRef E,
@@ -1527,7 +1595,8 @@ SymRef solveNestedProductCofactors(SymContext &Ctx, SymRef E,
     }
     return Terms;
   };
-  if (!FrontierSize(FrontierSize, E, 0, false) || !HasProductSum)
+  if (!FrontierSize(FrontierSize, E, 0, false) || !HasProductSum ||
+      hasIndependentMaskedTail(Ctx, E, Budget, Resources.remainingBytes()))
     return E;
   ArithmeticNormalizer Normalizer(Ctx, Resources, Ctx.width(E), false, &Budget);
   auto Original = Normalizer.normalize(E);

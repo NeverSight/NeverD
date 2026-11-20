@@ -7208,13 +7208,19 @@ consecutive integers is always divisible by `j!`. The solver compares the
 two exact polynomial readings at the observed width.
 Nested affine spellings of a word are composed at the observed precision
 before grouping its factors. Polynomial arithmetic is charged at its actual
-coefficient precision. Completed polynomial groups remain factored beside
-independent scaled variables or XOR words; a shared direct factor or an AND
-partition still admits the nested reconstruction search.
+coefficient precision. A signed one-limb affine scalar can multiply a wide
+coefficient in a single pass over its limbs. Completed polynomial groups
+remain factored beside independent scaled variables or XOR words. An AND
+addend can also stay separate when its operands and the other addends are
+absent from the product's arithmetic leaves and none of those leaves is an
+AND partition.
 A product can also group different views of a word when their live low bits
 agree. An interior window starting at bit `i` has the same low bits as a
 right rotation by `i`. Constant rotations compose modulo the word width
-even when the window wraps. A variable rotation stays in the source word.
+even when the window wraps. Constant shifts translate the window only when
+every bit comes from the source. A mask can be peeled when it preserves
+every bit of the window, including both sides of a wrapped interval.
+Variable counts and observable zero or sign padding stay in the source word.
 The LLVM translator carries same-word funnel shifts as rotates in both
 directions and emits them with their modulo-width count.
 A mask or addend that changes only higher bits drops out; a mask

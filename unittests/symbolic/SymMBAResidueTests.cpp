@@ -1305,6 +1305,171 @@ TEST(SymMBAResidue, RotatedWindowsKeepTheirLastObservableBit) {
   }
 }
 
+TEST(SymMBAResidue, ShiftedWindowsKeepZeroAndSignPadding) {
+  for (unsigned Width : {7u, 65u}) {
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+    const auto Axis = Ctx.mkMul(X, Y);
+    const auto Scale = Ctx.mkConst(llvm::APInt(Width, 1).shl(Width - 5));
+    constexpr unsigned Start = 2, Size = 3;
+    for (unsigned Live : {0u, 1u, 2u, 3u}) {
+      SCOPED_TRACE(::testing::Message() << Width << " bits, padding " << Live);
+      llvm::SmallVector<SymRef, 32> Factors{Scale};
+      for (unsigned I = 0; I < 23; ++I) {
+        const unsigned Kind = I % 3;
+        const bool Padded = Live == Kind + 1 && I == 9 + Kind;
+        const unsigned Shift = !Padded     ? 1
+                               : Kind == 0 ? Start + 1
+                                           : Width - Start - Size + 1;
+        const unsigned Source =
+            Kind == 0 ? (Width + Start - Shift) % Width : Start + Shift;
+        // The clean window begins at bit Width-2 of the common product.
+        const auto R = Ctx.mkRor(
+            Axis, Ctx.mkConst(Width, (2 * Width - 2 - Source) % Width));
+        const auto Count = Ctx.mkConst(Width, Shift);
+        const auto Moved = Kind == 0   ? Ctx.mkShl(R, Count)
+                           : Kind == 1 ? Ctx.mkLShr(R, Count)
+                                       : Ctx.mkAShr(R, Count);
+        const auto Field = Ctx.mkExtract(Moved, Start, Size);
+        const auto Word =
+            I % 2 ? Ctx.mkSExt(Field, Width) : Ctx.mkZExt(Field, Width);
+        Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                    Ctx.mkMul(Ctx.mkConst(Width, 4), Word)));
+      }
+      const auto Input = Ctx.mkMul(Factors);
+      MBAOptions Opt;
+      Opt.MaxWork = 65536;
+      const auto R = simplifyMBADeep(Ctx, Input, Opt);
+      ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+      ASSERT_LT(R.Work, Opt.MaxWork);
+      if (!Live) {
+        const auto Word = Ctx.mkRor(Axis, Ctx.mkConst(Width, Width - 2));
+        llvm::SmallVector<SymRef, 32> Direct{Scale};
+        for (unsigned I = 0; I < 23; ++I)
+          Direct.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                     Ctx.mkMul(Ctx.mkConst(Width, 4), Word)));
+        const auto Reference = simplifyMBADeep(Ctx, Ctx.mkMul(Direct), Opt);
+        EXPECT_EQ(R.SizeAfter, Reference.SizeAfter);
+      }
+      if (Width == 7) {
+        SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr);
+        bool DifferentFromUnpadded = false;
+        for (unsigned A = 0; A < 128; ++A)
+          for (unsigned B = 0; B < 128; ++B) {
+            const std::array<uint64_t, 2> Args{A, B};
+            const unsigned V = (A * B) & 127;
+            const unsigned Clean = ((V << 2) | (V >> 5)) & 7;
+            unsigned Expected = 4;
+            for (unsigned I = 0; I < 23; ++I)
+              Expected *= 2 * I + 1 + 4 * Clean;
+            const unsigned Actual = Before.evalU64(Args);
+            DifferentFromUnpadded |= Actual != (Expected & 127);
+            ASSERT_EQ(After.evalU64(Args), Actual);
+          }
+        EXPECT_EQ(DifferentFromUnpadded, Live != 0);
+      } else if (solver::proofBackendAvailable(solver::ProofBackend::Z3)) {
+        solver::SymSynthVerifier Verify({}, solver::ProofBackend::Z3, 10000);
+        EXPECT_EQ(Verify(Ctx, Input, R.Expr), SynthVerification::Equivalent);
+      }
+    }
+  }
+}
+
+TEST(SymMBAResidue, LoweredWindowCarriersKeepTheirCopiedBits) {
+  constexpr unsigned Width = 9, Bits = 4;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width);
+  const auto Coefficient = Ctx.mkConst(Width, 4);
+  // The common window wraps from the top two bits to the bottom two.
+  const auto Direct = Ctx.mkRor(X, Ctx.mkConst(Width, Width - 2));
+  enum Neighbor { Exact, OtherCount, OtherWord, ZeroPadding, SignPadding };
+  for (const auto Change :
+       {Exact, OtherCount, OtherWord, ZeroPadding, SignPadding}) {
+    SCOPED_TRACE(Change);
+    llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Width, 8)};
+    for (unsigned I = 0; I < 23; ++I) {
+      const unsigned Left = 3 + I % 3, Low = Left - 2;
+      const unsigned Right = Width - Left + (I == 8 && Change == OtherCount);
+      const auto Upper = Ctx.mkShl(X, Ctx.mkConst(Width, Left));
+      const auto Lower =
+          Ctx.mkLShr(I == 8 && Change == OtherWord ? Ctx.mkNot(X) : X,
+                     Ctx.mkConst(Width, Right));
+      auto Carrier = Ctx.mkOr(Upper, Lower);
+      if (I == 8 && (Change == ZeroPadding || Change == SignPadding)) {
+        auto Wide =
+            Change == ZeroPadding ? Ctx.mkZExt(X, 16) : Ctx.mkSExt(X, 16);
+        Carrier = Ctx.mkZExt(Ctx.mkExtract(Wide, Width - 2, Bits), Width);
+      } else if (I % 2) {
+        Carrier = Ctx.mkLShr(Carrier, Ctx.mkConst(Width, Low));
+      } else {
+        auto Wide = I % 4 ? Ctx.mkSExt(Carrier, 16) : Ctx.mkZExt(Carrier, 16);
+        Carrier = Ctx.mkSExt(Ctx.mkExtract(Wide, Low, Bits), Width);
+      }
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                  Ctx.mkMul(Coefficient, Carrier)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    MBAOptions Opt;
+    Opt.MaxWork = 65536;
+    const auto R = simplifyMBADeep(Ctx, Input, Opt);
+    ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+    ASSERT_LT(R.Work, Opt.MaxWork);
+    SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr), Window(Ctx, Direct);
+    bool DiffersFromClean = false;
+    for (uint64_t V = 0; V < (1u << Width); ++V) {
+      const std::array<uint64_t, 1> Args{V};
+      const auto Word = Window.evalU64(Args);
+      uint64_t Clean = 8;
+      for (unsigned I = 0; I < 23; ++I)
+        Clean *= 2 * I + 1 + 4 * Word;
+      const auto Expected = Before.evalU64(Args);
+      DiffersFromClean |= Expected != (Clean & ((1u << Width) - 1));
+      ASSERT_EQ(After.evalU64(Args), Expected);
+    }
+    EXPECT_EQ(DiffersFromClean, Change != Exact);
+  }
+}
+
+TEST(SymMBAResidue, SignedScalarAffineProductsRetainEveryObservedLimb) {
+  constexpr unsigned Width = 141;
+  SymContext Ctx;
+  auto X = Ctx.mkVar("x", Width);
+  const auto Bit = llvm::APInt(Width, 1).shl(63);
+  const std::array<llvm::APInt, 5> Scalars = {-Bit, Bit - 1, Bit, -Bit - 1,
+                                              llvm::APInt::getAllOnes(Width)};
+  llvm::SmallVector<SymRef, 32> Factors;
+  for (unsigned I = 0; I < 29; ++I) {
+    const auto K = Ctx.mkConst(Scalars[I % Scalars.size()]);
+    auto Affine = Ctx.mkAdd(K, Ctx.mkMul(Ctx.mkConst(Width, 3), X));
+    if (I % 2)
+      Affine = Ctx.mkMul(K, Ctx.mkAdd(X, Ctx.mkOne(Width)));
+    auto Weight = Ctx.mkConst(llvm::APInt(Width, 1).shl(48 + I % 2));
+    Factors.push_back(
+        Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1), Ctx.mkMul(Weight, Affine)));
+  }
+  const auto Input = Ctx.mkMul(Factors);
+  MBAOptions Opt;
+  Opt.MaxWork = 65536;
+  const auto R = simplifyMBADeep(Ctx, Input, Opt);
+  ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+  ASSERT_LT(R.Work, Opt.MaxWork);
+  const auto One = llvm::APInt(Width, 1);
+  const std::array<llvm::APInt, 9> Values = {One - 1,
+                                             One,
+                                             One + 1,
+                                             -One,
+                                             Bit - 1,
+                                             Bit,
+                                             Bit + 1,
+                                             One.shl(64) + 37,
+                                             llvm::APInt::getSignMask(Width) -
+                                                 3};
+  for (const auto &Value : Values) {
+    std::array<llvm::APInt, 1> Args{Value};
+    EXPECT_EQ(Ctx.eval(Input, Args), Ctx.eval(R.Expr, Args));
+  }
+}
+
 TEST(SymMBAResidue, StreamsTopColumnAndRetainsLowerCofactors) {
   if (!solver::proofBackendAvailable(solver::ProofBackend::Z3))
     GTEST_SKIP() << "Z3 unavailable";

@@ -46,6 +46,102 @@ SymRef lowOperand(const SymContext &Ctx, SymRef R) {
   }
 }
 
+// Pick a word whose low bits equal this slice. Rotations move every bit.
+// A shift moves only its source interval: a window touching zero/sign
+// padding (including a window wrapped by an outer rotate) must retain it.
+SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
+                   unsigned Size, unsigned Width, WorkBudget &Budget,
+                   size_t &Storage) {
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  for (;;) {
+    const auto Op = Ctx.op(Source);
+    if (Op == SymOp::Rol || Op == SymOp::Ror) {
+      const auto Count = Ctx.operand(Source, 1);
+      if (!Ctx.isConst(Count))
+        break;
+      if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+        return {};
+      const uint64_t Shift = Ctx.constValue(Count).urem(Width);
+      Offset = (Offset + (Op == SymOp::Ror ? Shift : Width - Shift)) % Width;
+      Source = Ctx.operand(Source, 0);
+      continue;
+    }
+    // Lifting may spell a rotate as two complementary shifts of one word.
+    if (Op == SymOp::Or && Ctx.numOperands(Source) == 2) {
+      auto Left = Ctx.operand(Source, 0), Right = Ctx.operand(Source, 1);
+      if (Ctx.op(Left) == SymOp::LShr)
+        std::swap(Left, Right);
+      if (Ctx.op(Left) == SymOp::Mul && Ctx.numOperands(Left) == 2 &&
+          Ctx.op(Right) == SymOp::LShr &&
+          Ctx.operand(Left, 1) == Ctx.operand(Right, 0) &&
+          Ctx.isConst(Ctx.operand(Left, 0)) &&
+          Ctx.isConst(Ctx.operand(Right, 1))) {
+        if (!Budget.consume(2 + 2 * Words))
+          return {};
+        const auto Scale = Ctx.constValue(Ctx.operand(Left, 0));
+        const auto Shift = Ctx.constValue(Ctx.operand(Right, 1));
+        if (Scale.isPowerOf2() && Shift == Width - Scale.countr_zero()) {
+          Offset = (Offset + Shift.getZExtValue()) % Width;
+          Source = Ctx.operand(Right, 0);
+          continue;
+        }
+      }
+    }
+    if (Op == SymOp::LShr || Op == SymOp::AShr) {
+      const auto Count = Ctx.operand(Source, 1);
+      if (!Ctx.isConst(Count))
+        break;
+      if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+        return {};
+      const uint64_t Shift = Ctx.constValue(Count).getLimitedValue(Width);
+      if (Offset + Size + Shift > Width)
+        break;
+      Offset += Shift;
+      Source = Ctx.operand(Source, 0);
+      continue;
+    }
+    const bool LeftShift = Op == SymOp::Mul;
+    // Constant left shifts are canonicalized as power-of-two products.
+    // Opposite shifts may also have combined into a mask.
+    if ((!LeftShift && Op != SymOp::And) ||
+        !Ctx.isConst(Ctx.operand(Source, 0)))
+      break;
+    if (!Budget.consume(1 + (LeftShift ? Words : 3 * Words)))
+      return {};
+    const auto Literal = Ctx.constValue(Ctx.operand(Source, 0));
+    if (LeftShift) {
+      const int32_t Shift = Literal.exactLogBase2();
+      if (Shift < 0 || Offset < static_cast<unsigned>(Shift) ||
+          Offset + Size > Width)
+        break;
+      Offset -= Shift;
+    } else {
+      const auto Mask = llvm::APInt::getBitsSetWithWrap(
+          Width, Offset, (Offset + Size) % Width);
+      if (!Mask.isSubsetOf(Literal))
+        break;
+    }
+    const auto Tail = Ctx.operands(Source).drop_front();
+    if (Tail.size() == 1) {
+      Source = Tail.front();
+    } else {
+      const size_t Bytes = sizeof(SymNode) + 2 * Tail.size() * sizeof(SymRef);
+      if (Bytes > Storage ||
+          !Budget.consume(Tail.size() * (2 + std::bit_width(Tail.size()))))
+        return {};
+      Storage -= Bytes;
+      Source = Ctx.rebuild(Source, Tail);
+    }
+  }
+  if (!Offset)
+    return Source;
+  const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
+  if (Storage < Extra || !Budget.consume(2 + Words))
+    return {};
+  Storage -= Extra;
+  return Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
+}
+
 // A narrow sum, product or bitwise expression is congruent to the same
 // operation on word-sized representatives modulo its original width. Pick
 // common representatives so different high lanes can share a polynomial.
@@ -93,33 +189,20 @@ SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
       Storage -= Count * sizeof(SymRef);
       Budget.consume(Count * (2 + Words));
       Wide = Ctx.rebuild(V, Args);
-    } else if (Op == SymOp::Extract && Ctx.width(Ctx.operand(V, 0)) == Width) {
-      // Rotating the word right by the extraction offset puts this window
-      // in its low bits, including windows crossing a prior rotation seam.
-      // Compose constant counts modulo the source width; a variable count
-      // remains part of the source word.
+    } else if (Op == SymOp::Extract) {
       auto Source = Ctx.operand(V, 0);
-      uint64_t Offset = Ctx.node(V).Aux;
-      while (Ctx.op(Source) == SymOp::Rol || Ctx.op(Source) == SymOp::Ror) {
-        const auto Count = Ctx.operand(Source, 1);
-        if (!Ctx.isConst(Count))
-          break;
-        if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
-          return {};
-        const uint64_t Shift = Ctx.constValue(Count).urem(Width);
-        Offset =
-            (Offset + (Ctx.op(Source) == SymOp::Ror ? Shift : Width - Shift)) %
-            Width;
-        Source = Ctx.operand(Source, 0);
+      const auto Offset = Ctx.node(V).Aux;
+      const auto Size = Ctx.width(V);
+      if (Ctx.op(Source) == SymOp::ZExt || Ctx.op(Source) == SymOp::SExt) {
+        const auto Inner = Ctx.operand(Source, 0);
+        if (Ctx.width(Inner) == Width && Offset + Size <= Width)
+          Source = Inner;
       }
-      Wide = Source;
-      if (Offset) {
-        const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
-        if (Storage < Extra || !Budget.consume(2 + Words))
-          return {};
-        Storage -= Extra;
-        Wide = Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
-      }
+      Wide = Ctx.width(Source) == Width ? widenWindow(Ctx, Source, Offset, Size,
+                                                      Width, Budget, Storage)
+                                        : Ctx.mkZExt(V, Width);
+      if (!Wide)
+        return {};
     } else if (Ctx.isConst(V)) {
       Wide = Ctx.mkConst(Ctx.constValue(V).sext(Width));
     } else {
@@ -219,16 +302,30 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     do {
       const auto Op = Ctx.op(Word);
       if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul)) {
-        if (!Budget.consume(3 + ReadWords + ReadWords * ReadWords))
-          return false;
         const auto K = Ctx.constValue(Ctx.operand(Word, 0)).trunc(Observed);
-        if (Op == SymOp::Add)
+        // A signed one-limb multiplier needs one pass over B. In particular
+        // a negative scalar must subtract its magnitude at the observed width.
+        const bool Small = ReadWords > 1 && K.isSignedIntN(64);
+        if (!Budget.consume(3 + ReadWords +
+                            (Small ? ReadWords : ReadWords * ReadWords)))
+          return false;
+        if (Small) {
+          const bool Negative = K.isNegative();
+          const uint64_t Low = K.getSExtValue();
+          auto Product = B * (Negative ? uint64_t(0) - Low : Low);
+          if (Negative)
+            Product.negate();
+          if (Op == SymOp::Add)
+            A += Product;
+          else
+            B = std::move(Product);
+        } else if (Op == SymOp::Add) {
           A += B * K;
-        else {
+        } else {
           B *= K;
-          if (!K[0])
-            Zeros += std::min(Observed - Zeros, K.countr_zero());
         }
+        if (Op == SymOp::Mul && !K[0])
+          Zeros += std::min(Observed - Zeros, K.countr_zero());
         Word = Ctx.operand(Word, 1);
         continue;
       }
@@ -319,6 +416,17 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     Weight = Ctx.mkConst(B.sextOrTrunc(Width));
     Row.Zeros = Ctx.constValue(Weight).countr_zero();
     Row.Content = std::min(Row.Zeros, Ctx.constValue(Offset).countr_zero());
+  }
+  // An instruction combiner may leave the word shifted and replace its
+  // narrow extension with a mask. Its observable prefix has the same
+  // coordinate as an explicit extract, including any copied rotate bits.
+  const unsigned Bits = Observed - std::min(Observed, Row.Zeros);
+  if (Bits && Bits < Width &&
+      (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr) &&
+      Ctx.isConst(Ctx.operand(Word, 1))) {
+    Word = widenWindow(Ctx, Word, 0, Bits, Width, Budget, Storage);
+    if (!Word)
+      return false;
   }
   Row.Complement = Ctx.op(Word) == SymOp::Not;
   if (Row.Complement)
