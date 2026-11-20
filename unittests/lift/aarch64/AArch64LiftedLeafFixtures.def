@@ -552,6 +552,219 @@ _leaf_difference:
 .cfi_endproc
 .subsections_via_symbols
 )asm")
+A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
+A64_LEAF_TEXT(kLiteralComparisons, "native_literal_width_comparisons")
+A64_LEAF_VALUE(unsigned, kLiteralInputs, 5)
+A64_LEAF_TEXT(kLiteralWidths, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+ cmp w0,#0
+ b.eq Lword
+ cmp w0,#1
+ b.eq Ldouble
+ ldrsw x0,LsignedData
+ ret
+Lword: ldr w0,LwordData
+ ret
+Ldouble: ldr x0,LdoubleData
+ ret
+LwordData: .long 0x8fedcba1
+LdoubleData: .quad 0x12345678abcdef01
+LsignedData: .long 0x80000005
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+ cmp w0,#0
+ b.eq Lsingle
+ cmp w0,#1
+ b.eq LfloatDouble
+ ldr q0,Lquad
+ mov x9,v0.d[1]
+ fmov x0,d0
+ eor x0,x0,x9
+ ret
+Lsingle: ldr s0,LsingleData
+ fmov w0,s0
+ ret
+LfloatDouble: ldr d0,LfloatData
+ fmov x0,d0
+ ret
+LsingleData: .long 0x7fc00021
+LfloatData: .quad 0x8000000000000000
+Lquad: .quad 0x1122334455667788,0x9abcdef012345678
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kLiteralWidthCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+typedef uint64_t (*read_literal)(uint64_t);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  read_literal integer = (read_literal)dlsym(image, "leaf_sum");
+  read_literal vector = (read_literal)dlsym(image, "leaf_difference");
+  if (!integer || !vector)
+    return 3;
+  const uint64_t inputs[] = {0, 1, 2, UINT64_MAX, UINT64_C(1) << 32};
+  const uint64_t integers[] = {UINT64_C(0x8fedcba1), UINT64_C(0x12345678abcdef01),
+                               UINT64_C(0xffffffff80000005)};
+  const uint64_t vectors[] = {UINT64_C(0x7fc00021), UINT64_C(0x8000000000000000),
+                              UINT64_C(0x1122334455667788) ^ UINT64_C(0x9abcdef012345678)};
+  for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
+    uint32_t index = (uint32_t)inputs[i];
+    if (index >= 2)
+      index = 2;
+    if (integer(inputs[i]) != integers[index] || vector(inputs[i]) != vectors[index])
+      return 4;
+  }
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
+A64_LEAF_TEXT(kUnmarkedDispatchOracle,
+              "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kPartialDispatchOracle,
+              "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n#define "
+              "NEVERD_TEST_PARTIAL_DISPATCH 1\n")
+A64_LEAF_VALUE(unsigned, kDispatchPrefixPadding, 1)
+A64_LEAF_VALUE(unsigned, kDispatchSuffixPadding, 3)
+A64_LEAF_TEXT(kRecoveredRecords, "recovered_source_data_in_code_records")
+A64_LEAF_VALUE(unsigned, kDispatchFunctions, 3)
+A64_LEAF_VALUE(unsigned, kDispatchInputs, 8)
+A64_LEAF_VALUE(unsigned, kDispatchArguments, 3)
+A64_LEAF_VALUE(unsigned, kDispatchSlots, 4)
+A64_LEAF_VALUE(unsigned, kDispatchRejections, 4)
+A64_LEAF_TEXT(kDispatchComparisons, "native_switch_comparisons")
+A64_LEAF_TEXT(kDispatchGuards, "proved_embedded_dispatches")
+A64_LEAF_TEXT(kDispatchNegatives, "rejected_dispatch_variants")
+A64_LEAF_VALUE(uint32_t, kDispatchChangeCondition, 0xf)
+A64_LEAF_VALUE(uint32_t, kDispatchMoveX11, 0xd280000b) // MOVZ X11, #imm16
+A64_LEAF_VALUE(unsigned, kDispatchMoveImmShift, 5)
+A64_LEAF_VALUE(unsigned, kDispatchAnchorDistance, 3)
+A64_LEAF_TEXT(kDispatchLeaves, R"asm(
+.text
+.p2align 2
+.macro dispatch name, width
+.globl \name
+\name:
+.cfi_startproc
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+ .if \width == 1
+ ldr x15, 7f
+ add x1, x1, x15
+ .endif
+#endif
+ cmp w0, #3
+ b.hi 9f
+ adr x10, 8f
+ .if \width == 4
+ adr x11, 3f
+ ldrsw x9, [x10, w0, uxtw #2]
+ add x9, x11, x9
+ .else
+ adr x11, 1f
+ .if \width == 1
+ ldrb w9, [x10, w0, uxtw]
+ .else
+ ldrh w9, [x10, w0, uxtw #1]
+ .endif
+ add x9, x11, x9, lsl #2
+ .endif
+ br x9
+1: add x0, x1, #11
+ ret
+2: add x0, x1, #29
+ ret
+3: add x0, x1, #43
+ ret
+9: sub x0, x1, #5
+ ret
+ .if \width == 1
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+7: .quad 0x7ed503237f
+#ifdef NEVERD_TEST_PARTIAL_DISPATCH
+ .byte 0x7e
+#endif
+#else
+ .data_region
+ .long 0xd503237f
+ .byte 0x7e
+ .end_data_region
+ .data_region jt8
+#endif
+8: .byte (3b-1b)/4, 0, (2b-1b)/4, 0
+#if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
+ .space 3
+#endif
+ .elseif \width == 2
+#if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
+ .data_region jt16
+#endif
+8: .short (3b-1b)/4, 0, (2b-1b)/4, 0
+#ifdef NEVERD_TEST_PARTIAL_DISPATCH
+ .end_data_region
+#endif
+ .else
+#ifndef NEVERD_TEST_UNMARKED_DISPATCH
+ .data_region jt32
+#endif
+8: .long 0, 1b-3b, 2b-3b, 1b-3b
+ .endif
+#ifndef NEVERD_TEST_UNMARKED_DISPATCH
+ .end_data_region
+#endif
+.cfi_endproc
+.endm
+dispatch _leaf_sum, 1
+dispatch _leaf_difference, 2
+dispatch _leaf_wide, 4
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kDispatchCaller, R"c(
+#include <dlfcn.h>
+#include <stdint.h>
+
+typedef uint64_t (*dispatch)(uint64_t, uint64_t);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  const char *names[] = {"leaf_sum", "leaf_difference", "leaf_wide"};
+  const uint64_t cases[] = {43, 11, 29, 11};
+  const uint64_t inputs[] = {0, 1, 2, 3, 4, UINT32_MAX, UINT64_MAX,
+                             (UINT64_C(1) << 32) + 2};
+  const uint64_t bases[] = {0, 17, UINT64_MAX};
+  for (unsigned f = 0; f < sizeof(names)/sizeof(*names); ++f) {
+    dispatch call = (dispatch)dlsym(image, names[f]);
+    if (!call)
+      return 3;
+    for (unsigned i = 0; i < sizeof(inputs)/sizeof(*inputs); ++i) {
+      const uint32_t index = (uint32_t)inputs[i];
+      for (unsigned b = 0; b < sizeof(bases)/sizeof(*bases); ++b) {
+        uint64_t expected = index < sizeof(cases)/sizeof(*cases)
+                                ? bases[b] + cases[index] : bases[b] - 5;
+#ifdef NEVERD_TEST_UNMARKED_DISPATCH
+        if (f == 0)
+          expected += UINT64_C(0x7ed503237f);
+#endif
+        if (call(inputs[i], bases[b]) != expected)
+          return 4;
+      }
+    }
+  }
+  return dlclose(image) != 0;
+}
+)c")
 A64_LEAF_TEXT(kLeaves, R"c(
 unsigned long leaf_sum(unsigned long a, unsigned long b) { return a + b; }
 unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; }

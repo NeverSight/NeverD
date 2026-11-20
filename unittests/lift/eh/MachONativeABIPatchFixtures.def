@@ -26,6 +26,7 @@ NEVERD_NATIVE_ABI_CASE(Arm64eX1Capability, 0x8000000c)
 NEVERD_NATIVE_ABI_CASE(Arm64eX1V2, 0x8200000c)
 
 NEVERD_NATIVE_ABI_VALUE(uint32_t, kNativeABIOrdinarySubtype, 0)
+NEVERD_NATIVE_ABI_VALUE(uint32_t, kNativeABIReturnWord, 0xd65f03c0)
 NEVERD_NATIVE_ABI_VALUE(size_t, kNativeABICompactCapacity, 0x2000)
 NEVERD_NATIVE_ABI_VALUE(unsigned, kNativeABIPathBytes, 128)
 NEVERD_NATIVE_ABI_TEXT(kNativeABIInputPrefix, "neverd-macho-native-abi-input")

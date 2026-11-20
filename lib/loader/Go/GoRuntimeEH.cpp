@@ -11,6 +11,7 @@
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/DirectBranch.h"
+#include "neverd/loader/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -338,15 +339,62 @@ void parseGoExceptions(BinaryImage &Img) {
       }
   llvm::sort(Module.MorestackEntries);
   llvm::sort(Module.ThrowingMorestackEntries);
-  // Only where Go's register ABI is modelled: under the stack ABI, a bounds
-  // stub that forwards its registers to a stack-argument Go half would take
-  // System V's positions for them until that layout is modelled.
-  if (TextBaseProven && Module.RegisterArguments)
+  // Before Go's internal ABI every function takes its arguments and returns
+  // its results on the stack.  arm64 gained the ABI with the Go 1.18 pclntab;
+  // amd64 a release earlier, under the 1.16 one, so there the prologues
+  // decide: Go 1.17 compares the stack with g in R14 (`cmp rsp, [r14+0x10]`),
+  // and earlier releases load g from thread-local storage first (`mov rcx,
+  // fs:[-8]`, or gs on Darwin and Windows).
+  if (TextBaseProven && !Module.RegisterArguments &&
+      (Header->Magic == Go12Magic || Header->Magic == Go116Magic)) {
+    if (Img.Arch == Arch::AArch64) {
+      Module.StackArguments = true;
+    } else if (Img.Arch == Arch::X64) {
+      bool ThreadLocalG = false, RegisterG = false;
+      constexpr unsigned Window =
+          ::neverd::limits::loader::kGoStackCheckPrologueBytes;
+      for (const GoFunction &G : Funcs) {
+        if (G.Raw.PcSP == 0 || !G.CodeRange.isValid() ||
+            G.CodeRange.End - G.CodeRange.Begin < Window)
+          continue;
+        const uint8_t *Code = Img.readVA(G.CodeRange.Begin, Window);
+        if (!Code)
+          continue;
+        ThreadLocalG |= (Code[0] == 0x64 || Code[0] == 0x65) &&
+                        Code[1] == 0x48 && Code[2] == 0x8B && Code[3] == 0x0C &&
+                        Code[4] == 0x25;
+        for (unsigned I = 0; I + 4 <= Window; ++I)
+          RegisterG |= (Code[I] == 0x49 || Code[I] == 0x4D) &&
+                       Code[I + 1] == 0x3B && Code[I + 2] == 0x66 &&
+                       (Code[I + 3] == 0x10 || Code[I + 3] == 0x18);
+      }
+      Module.StackArguments = ThreadLocalG && !RegisterG;
+    }
+  }
+  // Only where Go's argument passing is modelled: the register ABI, and the
+  // stack ABI with its register stubs (goRegisterStubArguments).  Go 1.17's
+  // register ABI under the 1.16 pclntab is neither.
+  if (TextBaseProven && (Module.RegisterArguments || Module.StackArguments))
     for (const GoFunction &G : Funcs)
       if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
           goRuntimeNeverReturns(G.Name))
         Module.NoReturnEntries.push_back(G.CodeRange.Begin);
   llvm::sort(Module.NoReturnEntries);
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.CodeRange.isValid() && G.Raw.Args >= 0)
+        Module.FrameArguments.push_back(
+            {G.CodeRange.Begin, static_cast<uint32_t>(G.Raw.Args)});
+  llvm::sort(Module.FrameArguments,
+             [](const GoFrameArguments &A, const GoFrameArguments &B) {
+               return A.Entry < B.Entry;
+             });
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          G.Name == "runtime.callbackasm1")
+        Module.ReturnsPastCallerEntries.push_back(G.CodeRange.Begin);
+  llvm::sort(Module.ReturnsPastCallerEntries);
   // Go 1.26 reports every bounds failure through one routine and records, at
   // each call to it, which registers or constants hold the failing index and
   // length (PCDATA_PanicBounds, internal/abi/symtab.go).

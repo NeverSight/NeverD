@@ -15,18 +15,16 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/Go/GoRuntimeEH.h"
 
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <optional>
 #include <string>
 #include <vector>
-
-#include "neverd/loader/BinaryImage.h"
-
-#include <cstddef>
-#include <cstdint>
 
 namespace neverd::go_eh_test {
 
@@ -187,6 +185,8 @@ inline void appendPCValueTable(ByteBuilder &B, const PCValueTable &T) {
 struct GoFuncSpec {
   std::string Name;
   va_t EntryVA = 0;
+  /// `_func.args`: the bytes of arguments and results.
+  int32_t Args = 0;
   uint32_t DeferReturn = 0;
   uint8_t FuncID = 0;
   uint8_t Flag = 0;
@@ -224,9 +224,10 @@ struct BuiltPclnTab {
 /// \p PreGo112Record selects the older of the two `_func` shapes the Go 1.2
 /// magic covers: `nfuncdata` as a whole word, and no `deferreturn` or
 /// `funcID` at all.
-inline BuiltPclnTab buildPclnTab(uint32_t Magic, const std::vector<GoFuncSpec> &Funcs,
-                          va_t EndVA, uint8_t MinLC = 1,
-                          bool PreGo112Record = false) {
+inline BuiltPclnTab buildPclnTab(uint32_t Magic,
+                                 const std::vector<GoFuncSpec> &Funcs,
+                                 va_t EndVA, uint8_t MinLC = 1,
+                                 bool PreGo112Record = false) {
   constexpr size_t PtrSize = 8;
   const bool Is12 = Magic == kGo12Magic;
   const size_t N = Funcs.size();
@@ -353,7 +354,7 @@ inline BuiltPclnTab buildPclnTab(uint32_t Magic, const std::vector<GoFuncSpec> &
     const size_t O = Out.RecordOffsets[I];
     Out.put64(O, F.EntryVA);
     Out.put32(O + 8, static_cast<uint32_t>(NameAdjust + NameOffsets[I]));
-    Out.put32(O + 12, 0); // args
+    Out.put32(O + 12, static_cast<uint32_t>(F.Args));
     Out.put32(O + 16, F.DeferReturn);
     Out.put32(O + 20, PcSPOffsets[I] == 0
                           ? 0
@@ -405,7 +406,7 @@ buildStackMap(int32_t BitCount,
 /// below varp of the defer bitmask byte, then of the first closure slot.  The
 /// rest of the run follows that slot and the record does not count them.
 inline std::vector<uint8_t> buildContiguousDeferInfo(uint32_t DeferBits,
-                                              uint32_t Slots) {
+                                                     uint32_t Slots) {
   ByteBuilder B;
   B.varint(DeferBits);
   B.varint(Slots);
@@ -416,8 +417,9 @@ inline std::vector<uint8_t> buildContiguousDeferInfo(uint32_t DeferBits,
 /// how many closure slots the frame has, and then each of them, from the
 /// last-declared defer to the first.  The compiler was free to place them
 /// anywhere, which is why they had to be listed.
-inline std::vector<uint8_t> buildEnumeratedDeferInfo(uint32_t DeferBits,
-                                              const std::vector<uint32_t> &Slots) {
+inline std::vector<uint8_t>
+buildEnumeratedDeferInfo(uint32_t DeferBits,
+                         const std::vector<uint32_t> &Slots) {
   ByteBuilder B;
   B.varint(DeferBits);
   B.varint(static_cast<uint32_t>(Slots.size()));
@@ -461,7 +463,8 @@ buildLegacyEnumeratedDeferInfo(uint32_t MaxArgSize, uint32_t DeferBits,
 // Assertion helpers
 //===----------------------------------------------------------------------===//
 
-inline const ExceptionFunction *findRecord(const ExceptionInfo &Info, va_t EntryVA) {
+inline const ExceptionFunction *findRecord(const ExceptionInfo &Info,
+                                           va_t EntryVA) {
   for (const ExceptionFunction &F : Info.Functions)
     if (F.Go && F.Go->EntryVA == EntryVA)
       return &F;
@@ -469,7 +472,7 @@ inline const ExceptionFunction *findRecord(const ExceptionInfo &Info, va_t Entry
 }
 
 inline bool anyDiagnosticContains(const std::vector<std::string> &Diagnostics,
-                           const std::string &Needle) {
+                                  const std::string &Needle) {
   for (const std::string &D : Diagnostics)
     if (D.find(Needle) != std::string::npos)
       return true;

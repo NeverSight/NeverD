@@ -16,6 +16,7 @@
 
 #include "neverd/Common.h"
 #include "neverd/ir/CallRegisterContract.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/LowIR.h"
@@ -140,6 +141,49 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 /// `newstack` resumes the goroutine at the call's return address once the
 /// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
+
+/// Whether the Go function at \p Entry takes every argument and returns every
+/// result on the stack, as Go code did before its internal register ABI
+/// (GoModuleInfo::StackArguments).
+bool goTakesStackArguments(const BinaryImage &Img, va_t Entry);
+
+/// Whether Go code before its internal ABI reads \p Register's incoming value
+/// without taking an argument in it: the stack and frame pointers, the link
+/// register, the closure context, and arm64's goroutine register R28.  Code
+/// that reads any other register at its entry, as a register stub or a
+/// trampoline the platform's code calls does, takes arguments there.
+bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
+
+/// The layout of a Go call before Go's internal ABI, on \p A: no register,
+/// and words from the call's stack pointer (the word above it on arm64, whose
+/// lowest one the callee saves its link register in), which the callee finds
+/// past its return address.
+IntegerArgumentLayout goStackArgumentLayout(Arch A);
+
+/// The bytes of arguments and results the Go function at \p Entry takes on
+/// its caller's frame, as its `pclntab` record says (GoFrameArguments), if
+/// it says.
+std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
+                                             va_t Entry);
+
+/// Whether \p Callee drops its return address and returns to its caller's
+/// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is
+/// its caller's last act, a tail call, and never reaches the next instruction.
+bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee);
+
+/// The registers the Go stub at \p Entry takes its arguments in, in the
+/// order of the argument words it stores them into before it enters a
+/// stack-ABI routine with them: Go 1.16's bounds stubs, as `panicIndex`'s
+/// `mov [rsp+8], rax; mov [rsp+16], rcx; jmp goPanicIndex` takes AX and CX,
+/// which no platform position names.  \p Blocks, the stub's body, is one
+/// block that stores the incoming value of a general-purpose register into
+/// each word its record gives (goFrameArgumentBytes), writes no register,
+/// and ends in a tail call to a stack-ABI routine (goTakesStackArguments).
+/// None for any other body.  Its callers pass exactly these registers, bound
+/// before SSA as a prototype's operands are (FixedIntegerCallArguments).
+std::optional<FixedIntegerCallArguments>
+goRegisterStubArguments(const BinaryImage &Img, va_t Entry,
+                        llvm::ArrayRef<LowBlock> Blocks);
 
 /// The register arguments the stack-growth path spills
 /// (GoStackGrowth::Spills).

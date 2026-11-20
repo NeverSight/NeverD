@@ -1588,6 +1588,19 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
     Effect.GoArgumentReads = Reads;
     return Effect;
   }
+  // A stub reads exactly the registers it passes on as a stack-ABI
+  // routine's arguments, whatever that routine appears to read
+  // (goRegisterStubArguments).
+  if (std::optional<FixedIntegerCallArguments> Stub =
+          goRegisterStubArguments(Img, Entry, F.Blocks)) {
+    GPRReadWidths Reads{};
+    for (const FixedIntegerCallArguments::Parameter &Parameter :
+         Stub->Parameters)
+      addRead(Img.Arch, Reads, Parameter.Register, Parameter.Bytes);
+    Effect.GoArgumentReads = Reads;
+    Effect.GoStubArguments = std::move(Stub);
+    return Effect;
+  }
   // A Go function takes exactly the register arguments its stack-growth
   // path spills, and the spill area above the return address holds none of
   // its stack arguments: they lie below it.

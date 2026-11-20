@@ -76,6 +76,7 @@ public:
   std::error_code convertToErrorCode() const override;
 };
 
+struct MachODataInCodeRange;
 struct MachOUnwindFunctionCounts;
 struct MachOAuthenticatedFixup;
 
@@ -86,7 +87,8 @@ llvm::Expected<uint64_t> reserveMachOPublishedUnwind(
     std::vector<uint8_t> &Binary, Arch Architecture, uint64_t ExtraFrameBytes,
     MachOUnwindFunctionCounts Additional, bool AllowSlide,
     std::optional<MachODependencyState> &SlidDependencies,
-    uint64_t AdditionalCommandBytes = 0);
+    uint64_t AdditionalCommandBytes = 0,
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData = {});
 
 /// Translate the preferred section addresses of a position-independent dylib
 /// with image-relative chained fixups before growing its header downwards.

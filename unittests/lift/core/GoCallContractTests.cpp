@@ -24,8 +24,14 @@
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/LLVMContext.h"
+
+#include <cstring>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -758,6 +764,312 @@ TEST(GoClosureCalls, TheContextRegisterIsNoArgument) {
   EXPECT_TRUE(Arguments(GoAssembler).empty());
   // C code passes what it sets up: RDI, RSI and RDX.
   EXPECT_EQ(Arguments(CCode).size(), 3u);
+}
+
+TEST(GoCallbacks, AnEntryTailCallsTheRoutineThatReturnsPastIt) {
+  // runtime.callbackasm: call callbackasm1; call callbackasm1; call
+  // callbackasm1.  Each call leaves its entry's address, the callback's
+  // index, for callbackasm1, which returns to the entry's caller.  Read as
+  // returning calls, the 2,000 entries were one function of 2,000 calls,
+  // each after the first passing four unknown arguments.
+  BinaryImage Img = registerArgumentImage();
+  constexpr va_t Table = kTextVA + 0x600;
+  constexpr va_t Callback = kTextVA + 0x700;
+  GoTestImage T;
+  T.Img = std::move(Img);
+  std::vector<uint8_t> Entries;
+  for (va_t At = Table; At < Table + 15; At += 5) {
+    const std::vector<uint8_t> Call = makeCall(At, Callback);
+    Entries.insert(Entries.end(), Call.begin(), Call.end());
+  }
+  // A return ends the table, so that the entries read as returning calls
+  // stop there rather than in what follows.
+  Entries.push_back(0xC3);
+  T.writeText(Table, Entries);
+  T.writeText(Callback, {0xC3});
+  const auto Calls = [&] {
+    unsigned Count = 0;
+    bool Returns = false;
+    for (const LowBlock &Block : build(T.Img, Table).Blocks)
+      for (const LowOp &Op : Block.Ops) {
+        Count += Op.Opcode == NdOp::CALL;
+        Returns |= Op.Opcode == NdOp::RETURN;
+      }
+    return std::pair{Count, Returns};
+  };
+  EXPECT_EQ(Calls(), std::pair(3u, true));
+  T.Img.ExceptionMetadata.GoModule->ReturnsPastCallerEntries = {Callback};
+  ASSERT_TRUE(goCallReturnsPastCaller(T.Img, Callback));
+  EXPECT_EQ(Calls(), std::pair(1u, true));
+}
+
+TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
+  // Go 1.16: main.add(a, b int) int reads its arguments past the return
+  // address and stores its result after them:
+  //   mov rax, [rsp+8]; add rax, [rsp+16]; mov [rsp+24], rax; ret
+  // and main.caller passes them from its stack pointer:
+  //   sub rsp, 0x20; mov qword [rsp], 1; mov qword [rsp+8], 2;
+  //   call main.add; mov rax, [rsp+16]; add rsp, 0x20; ret
+  // Read as System V's, stack arguments followed six register positions,
+  // as in runtime_throw(0, 0, 0, 0, 0, 0, msg, len).
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  GoTestImage T;
+  T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24, 0x10,
+                    0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+  std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                               0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                               0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.insert(Body.end(),
+              {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+  T.writeText(Caller, Body);
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Add, kTextVA + 0x300}};
+  Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  ASSERT_TRUE(goTakesStackArguments(T.Img, Add));
+
+  const MedFunc F = lift(T.Img, Add);
+  EXPECT_TRUE(F.StackArgumentsOnly);
+  ASSERT_EQ(F.Params.size(), 2u);
+  for (const MedVar &Param : F.Params)
+    EXPECT_EQ(Param.RegOff, kNoParamReg);
+  // A stub that takes its operands in registers keeps them, as Go 1.16's
+  // panicIndex takes AX and CX: mov [rsp+8], rax; mov [rsp+16], rcx; ret.
+  constexpr va_t Stub = kTextVA + 0x280;
+  T.writeText(
+      Stub, {0x48, 0x89, 0x44, 0x24, 0x08, 0x48, 0x89, 0x4C, 0x24, 0x10, 0xC3});
+  EXPECT_FALSE(lift(T.Img, Stub).StackArgumentsOnly);
+
+  // Call recovery passes the callee's arguments on the stack where its own
+  // recovery found them there.
+  // Its record's 24 bytes hold its result too, after the two it reads.
+  const std::set<va_t> StackCallees{Add};
+  std::map<va_t, int> TotalArity{{Add, static_cast<int>(F.Params.size())}};
+  MedFunc G = lift(T.Img, Caller);
+  recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
+                 nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 &StackCallees);
+  ASSERT_EQ(G.CallInfos.size(), 1u);
+  const std::vector<MedVar> &Arguments = G.CallInfos[0].Args;
+  ASSERT_EQ(Arguments.size(), 2u);
+  EXPECT_TRUE(G.CallInfos[0].ArgumentsFromPrototype);
+  EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+  EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+}
+
+TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
+  // Go 1.16's runtime.panicIndex: mov [rsp+8], rax; mov [rsp+16], rcx;
+  // jmp runtime.goPanicIndex.  It takes x in AX and y in CX, which it stores
+  // as the stack-ABI routine's arguments.  Read as System V's, its callers
+  // passed (0, 0, 0, y); read as Win64's, only y.  A caller sets both:
+  //   mov eax, 5; mov ecx, 9; call runtime.panicIndex; ret
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    constexpr va_t Stub = kTextVA + 0x100;
+    constexpr va_t Half = kTextVA + 0x180;
+    constexpr va_t Caller = kTextVA + 0x200;
+    GoTestImage T;
+    T.Img.Format = Format;
+    std::vector<uint8_t> StubBody = {0x48, 0x89, 0x44, 0x24, 0x08,
+                                     0x48, 0x89, 0x4C, 0x24, 0x10};
+    const std::vector<uint8_t> Jump = {0xE9, 0x00, 0x00, 0x00, 0x00};
+    StubBody.insert(StubBody.end(), Jump.begin(), Jump.end());
+    const int32_t Rel = static_cast<int32_t>(Half - (Stub + StubBody.size()));
+    std::memcpy(StubBody.data() + StubBody.size() - 4, &Rel, 4);
+    T.writeText(Stub, StubBody);
+    // goPanicIndex reads its two arguments: mov rax, [rsp+8];
+    // add rax, [rsp+16]; ret.
+    T.writeText(Half, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                       0x10, 0xC3});
+    std::vector<uint8_t> CallerBody = {0xB8, 0x05, 0x00, 0x00, 0x00,
+                                       0xB9, 0x09, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call =
+        makeCall(Caller + CallerBody.size(), Stub);
+    CallerBody.insert(CallerBody.end(), Call.begin(), Call.end());
+    CallerBody.push_back(0xC3);
+    T.writeText(Caller, CallerBody);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Stub, kTextVA + 0x300}};
+    Module.FrameArguments = {{Stub, 16}, {Half, 16}, {Caller, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    // The pclntab names each routine, so the stub's jump is a tail call.
+    for (const auto &[Entry, Name] : {std::pair{Stub, "runtime.panicIndex"},
+                                      std::pair{Half, "runtime.goPanicIndex"},
+                                      std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+
+    const LowFunc StubLow = build(T.Img, Stub);
+    const std::optional<FixedIntegerCallArguments> Arguments =
+        goRegisterStubArguments(T.Img, Stub, StubLow.Blocks);
+    ASSERT_TRUE(Arguments.has_value());
+    ASSERT_EQ(Arguments->Parameters.size(), 2u);
+    EXPECT_EQ(Arguments->Parameters[0].Register, x86reg::RAX);
+    EXPECT_EQ(Arguments->Parameters[1].Register, x86reg::RCX);
+
+    // Its summary reads exactly those, whatever goPanicIndex reads, and
+    // names them for its callers.
+    const LocalRegisterEffect Effect =
+        localRegisterEffect(T.Img, CallRegisterBodyView(StubLow), nullptr,
+                            nullptr, nullptr, nullptr);
+    ASSERT_TRUE(Effect.GoStubArguments.has_value());
+    EXPECT_EQ(*Effect.GoStubArguments, *Arguments);
+    ASSERT_TRUE(Effect.GoArgumentReads.has_value());
+    GPRReadWidths Reads{};
+    Reads[x86reg::RAX / 8] = 8;
+    Reads[x86reg::RCX / 8] = 8;
+    EXPECT_EQ(*Effect.GoArgumentReads, Reads);
+
+    const MedFunc F = lift(T.Img, Stub);
+    ASSERT_EQ(F.IntegerArgumentRegisters,
+              std::vector<uint64_t>({x86reg::RAX, x86reg::RCX}));
+    ASSERT_EQ(F.Params.size(), 2u);
+    EXPECT_EQ(F.Params[0].RegOff, x86reg::RAX);
+    EXPECT_EQ(F.Params[1].RegOff, x86reg::RCX);
+    EXPECT_TRUE(F.ExactRegisterParameters);
+
+    // The caller binds both setups before SSA, in the stub's order, beside
+    // the summary that reads AX, a register no platform position names.
+    const std::map<va_t, GPRReadWidths> Summaries{{Stub, Reads}};
+    const std::map<va_t, FixedIntegerCallArguments> Fixed{{Stub, *Arguments}};
+    LowToMedConverter Converter;
+    Converter.setBinaryImage(&T.Img);
+    Converter.setCallEntryReadGPRs(&Summaries);
+    Converter.setCallEntryIntegerArguments(&Fixed);
+    MedFunc G = Converter.convert(build(T.Img, Caller), T.Img.Arch, Format);
+    std::map<va_t, int> RegArity{{Stub, 2}}, TotalArity{{Stub, 2}};
+    const std::map<va_t, std::vector<uint64_t>> IntRegs{
+        {Stub, F.IntegerArgumentRegisters}};
+    recoverCallAbi(G, T.Img.Arch, {}, &T.Img, &RegArity, &TotalArity, nullptr,
+                   nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                   &IntRegs);
+    ASSERT_EQ(G.CallInfos.size(), 1u);
+    const std::vector<MedVar> &Passed = G.CallInfos[0].Args;
+    ASSERT_EQ(Passed.size(), 2u);
+    EXPECT_TRUE(Passed[0].isConst() && Passed[0].ConstVal == 5);
+    EXPECT_TRUE(Passed[1].isConst() && Passed[1].ConstVal == 9);
+  }
+}
+
+TEST(GoStackArguments, ARunOfTheCallerAloneBindsAListedStubsRegisters) {
+  // ARegisterStubTakesTheRegistersItPassesOn's image, with panicIndex and its
+  // half listed as never returning (GoModuleInfo::NoReturnEntries).  A call
+  // into a listed routine adds no callee to the summaries, so a run of the
+  // caller alone summarized no stub, and the call passed no argument.
+  constexpr va_t Stub = kTextVA + 0x100;
+  constexpr va_t Half = kTextVA + 0x180;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    std::vector<uint8_t> StubBody = {0x48, 0x89, 0x44, 0x24, 0x08,
+                                     0x48, 0x89, 0x4C, 0x24, 0x10,
+                                     0xE9, 0x00, 0x00, 0x00, 0x00};
+    const int32_t Rel = static_cast<int32_t>(Half - (Stub + StubBody.size()));
+    std::memcpy(StubBody.data() + StubBody.size() - 4, &Rel, 4);
+    T.writeText(Stub, StubBody);
+    T.writeText(Half, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                       0x10, 0xC3});
+    std::vector<uint8_t> CallerBody = {0xB8, 0x05, 0x00, 0x00, 0x00,
+                                       0xB9, 0x09, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call =
+        makeCall(Caller + CallerBody.size(), Stub);
+    CallerBody.insert(CallerBody.end(), Call.begin(), Call.end());
+    CallerBody.push_back(0xC3);
+    T.writeText(Caller, CallerBody);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Stub, kTextVA + 0x300}};
+    Module.FrameArguments = {{Stub, 16}, {Half, 16}, {Caller, 0}};
+    Module.NoReturnEntries = {Stub, Half};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] : {std::pair{Stub, "runtime.panicIndex"},
+                                      std::pair{Half, "runtime.goPanicIndex"},
+                                      std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::map<va_t, FixedIntegerCallArguments> &Fixed =
+        R.CallEntryIntegerArguments.get();
+    const auto Operands = Fixed.find(Stub);
+    ASSERT_NE(Operands, Fixed.end());
+    ASSERT_EQ(Operands->second.Parameters.size(), 2u);
+    EXPECT_EQ(Operands->second.Parameters[0].Register, x86reg::RAX);
+    EXPECT_EQ(Operands->second.Parameters[1].Register, x86reg::RCX);
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    const MedOp *Bound = nullptr;
+    for (const MedBlock &Block : F->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Stub)
+          Bound = &Op;
+    ASSERT_NE(Bound, nullptr);
+    ASSERT_TRUE(Bound->IntegerCallSignature);
+    ASSERT_EQ(Bound->NumInputs, 3u);
+    EXPECT_TRUE(Bound->Inputs[1].isConst() && Bound->Inputs[1].ConstVal == 5);
+    EXPECT_TRUE(Bound->Inputs[2].isConst() && Bound->Inputs[2].ConstVal == 9);
+  }
+}
+
+TEST(GoStackArguments, OnlyAStubPassesItsRegistersOn) {
+  // Two routines that read registers at their entry but are no stub.
+  // memeqbody takes SI, DI, BX and AX and has no argument words:
+  //   cmp rsi, rdi; mov rax, rbx; ret
+  // A memequal shape stores and compares on two paths before it passes its
+  // registers on:
+  //   mov [rsp+8], rax; test rcx, rcx; je L; mov [rsp+16], rcx;
+  //   L: jmp half
+  constexpr va_t Body = kTextVA + 0x100;
+  constexpr va_t Equal = kTextVA + 0x140;
+  constexpr va_t Half = kTextVA + 0x180;
+  GoTestImage T;
+  T.writeText(Body, {0x48, 0x39, 0xFE, 0x48, 0x89, 0xD8, 0xC3});
+  std::vector<uint8_t> EqualBody = {0x48, 0x89, 0x44, 0x24, 0x08, 0x48, 0x85,
+                                    0xC9, 0x74, 0x05, 0x48, 0x89, 0x4C, 0x24,
+                                    0x10, 0xE9, 0x00, 0x00, 0x00, 0x00};
+  const int32_t Rel = static_cast<int32_t>(Half - (Equal + EqualBody.size()));
+  std::memcpy(EqualBody.data() + EqualBody.size() - 4, &Rel, 4);
+  T.writeText(Equal, EqualBody);
+  T.writeText(Half, {0x48, 0x8B, 0x44, 0x24, 0x08, 0xC3});
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Body, kTextVA + 0x300}};
+  Module.FrameArguments = {{Body, 0}, {Equal, 16}, {Half, 16}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  for (const auto &[Entry, Name] :
+       {std::pair{Body, "memeqbody"}, std::pair{Equal, "runtime.memequal"},
+        std::pair{Half, "runtime.half"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  for (const va_t Entry : {Body, Equal}) {
+    SCOPED_TRACE(Entry);
+    const LowFunc Low = build(T.Img, Entry);
+    EXPECT_FALSE(goRegisterStubArguments(T.Img, Entry, Low.Blocks));
+    EXPECT_FALSE(localRegisterEffect(T.Img, CallRegisterBodyView(Low), nullptr,
+                                     nullptr, nullptr, nullptr)
+                     .GoStubArguments);
+  }
 }
 
 TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {

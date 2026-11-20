@@ -540,16 +540,30 @@ Still open, in order of yield:
    registers (`goAssemblyTakesRegisterArguments`) took them to 374,902, and
    the corpus's 623 `runtime_memmove(0, 0, 0, n)` calls now pass
    `(to, from, n)`. Still open, in order of yield:
-   - Go's stack ABI: compiled code before Go 1.17 (arm64: 1.18), and ABI0
-     assembly in every version. Its stack arguments print after six zero
-     System V register slots, as in `runtime_throw(0, 0, 0, 0, 0, 0, msg,
-     len)` (1,086 calls in the Go 1.16 binary). On Windows they fall in the
-     home space, so `runtime_printstring(void)`. arm64 pads eight register
-     slots. Bounds stubs (`panicIndex`: x in AX, y in CX) take System V's
-     positions for their registers. Once this layout is modelled, the
-     no-return list and arm64 growth paths can drop their register-ABI gate.
-     Go 1.17 passes register arguments under the 1.16 pclntab magic, so it
-     must be told apart first: its prologue compares `[r14+0x10]`.
+   - Go's stack ABI is modelled for images the loader proves use it
+     (`GoModuleInfo::StackArguments`, Go 1.17 told apart by its R14
+     prologues). Stack-only functions take stack parameters from the slot
+     past the return address, and calls to them pass their arguments on the
+     stack (`MedFunc::StackArgumentsOnly`). The seven old binaries fell
+     9-82%, and the corpus fell 23%. Still open:
+     - Growth elision for stack-ABI functions now runs where the growth
+       block's only predecessor is the entry's check: the no-return list
+       ended the false edges from `gopanic` and `throw` calls before it, and
+       `runtime_makeslice(et, len, cap)` reads its parameters. Some functions
+       still read scratch registers at their entry and are no stack-only
+       function, so their stack parameters take System V's numbering after a
+       spurious register parameter (`runtime_mallocgc`: AL, R9 and R13 reach a
+       join from two of its paths).
+     - Results, which the callee stores past its arguments and the caller
+       loads after the call.
+     - ABI0 assembly in register-ABI images.
+     - arm64 growth paths, which still wait on the register-ABI gate.
+       The no-return list is open to the stack ABI.
+     Bounds stubs are done. LowIR recognizes a stub once
+     (`goRegisterStubArguments`), callers bind its registers before SSA, and
+     `panicIndex` calls pass `(x, y)` on every platform. Go assembly with a
+     register contract of its own (`memeqbody`, `aeshashbody`,
+     `indexbytebody`) still takes the platform's positions.
    - Results. RAX, RBX, RCX and the rest after a call need
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
@@ -592,17 +606,24 @@ Still open, in order of yield:
    on arm64 through copies into X0 and X1. The error code (index or slice) is
    not printed.
    The earlier stub families (`panicIndex` with x in AX and y in CX, and
-   others) still take System V's positions.
+   others) pass their registers in the stub's order
+   (`goRegisterStubArguments`).
 4. A frame larger than 4 KiB reaches its growth path from two branches and
    keeps it. arm64 growth paths are left out only where the register ABI is
-   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait
-   for the stack ABI too. On the 25 Go binaries, the two together took "no
+   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) are
+   listed under both ABIs. On the 25 Go binaries, the two together took "no
    recovered semantics" from 357,956 to about 305,600 and the refused
-   functions from 28 to 24, with arm64 Go 1.26 down 8-40%.
+   functions from 28 to 24, with arm64 Go 1.26 down 8-40%. Opening the list
+   to the stack ABI took the seven old binaries from 14,999 to 12,642.
 5. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
    C writer drops it because the stub's own signature is `void`.
 6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
    calls per binary).
+   Windows' callback table is done. `runtime.callbackasm1` returns past its
+   caller, so each entry tail-calls it (`goCallReturnsPastCaller`), which
+   took the stripped Windows binaries down about 70%. `indexbytebody` and
+   `cmpbody` take their own register contracts and still read as System V
+   (220 and 63 placeholders each).
 7. Go code on targets other than x86-64 and AArch64 still keeps the platform
    contract.
 8. Restricted PE loads skip the Go metadata.

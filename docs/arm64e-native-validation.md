@@ -2350,3 +2350,135 @@ exercised six of those skips. All six passed. The cache checks covered 3,257
 image projections and 7,981,837 authenticated slide recipes. The classifier
 matched the independent decoder on all 653 system text instructions.
 [Source, image hashes and test results](evidence/arm64e-mixed-data-system-unwind-2026-11-18.json).
+
+### Executing embedded relative switches and unwinding compact leaf entries
+
+The arm64e Mach-O publisher accepts a register-indirect switch when the source
+CFG proves the selector domain, the load reads a declared local jump table,
+and PC-relative instructions materialize both the table and the local target
+anchor. Each reachable table slot and case label must stay inside the copied
+body. Local block-address references can move with their owner. References that
+escape to another function, global or metadata preclude replacing the body.
+Installation repeats the control-flow proof using the input Mach-O.
+
+The classic linker fixture grows into a separate executable segment. The
+Xcode 27 fixture grows its existing `__TEXT` segment beyond the end of its
+declared sections. The loader now treats each file-backed `LC_DATA_IN_CODE`
+record as the storage boundary for its table in either layout. Reanalysis of
+the first Xcode 27 publication recovers the same three bounded switches.
+Bytes between records still need evidence of an owner.
+[Xcode 27 compiler input](https://github.com/gmh5225/test_mac_intel/actions/runs/44715360325).
+
+The executable fixture covers unsigned 8- and 16-bit offsets in instruction
+units and signed 32-bit byte offsets including backward targets. Its byte table
+starts at an odd address, has an unreachable tail and shares one target across
+two slots. Calls exercise all slots, the default path, high selector bits and
+64-bit arithmetic wraparound. Removing the upper guard, substituting a scalar
+for the moving anchor, targeting literal data or changing the declared slot
+width each invalidates the installation.
+
+Darwin's system unwinder can also start at the interrupted first instruction
+of a compact leaf with zero stack adjustment and no saved registers. The
+original and published signal controls verify the exact PC, incoming SP,
+callee-saved registers and two caller PCs. The forwarding branch retains the
+original compact record. For a leaf with a C++ personality and an LSDA,
+the language metadata bits in that record leave the entry register rule
+unchanged. Both linkers emitted encoding `0x52000000`. The old observer
+rejected that record on both hosts. The source fixture also exercises the
+plain compact leaf and original indexed DWARF entry.
+[Compiler-original controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44710899294).
+[Language leaf before the fix](https://github.com/gmh5225/test_mac_intel/actions/runs/44718387160).
+
+A dynamically rebased pointer literal in executable text has a separate loader
+constraint. The macOS 26 classic linker produced the rebase, and the original
+dylib run terminated with SIGBUS. The current linker on each runner rejected
+the text relocation. Both toolchains also rejected the test's 32-bit absolute
+symbol relocation in an arm64e dylib. Publication of those forms needs a
+working original and a relocation contract for the destination slot.
+[Linker and original-execution controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44708601726).
+
+Both hosted Macs passed all 244 Release cases with zero skips. Each host ran
+288 switch comparisons on the original and three signed publications from
+its own toolchain. The CLI replay used compiler originals from the classic
+and Xcode 27 linkers. Default and `--no-opt` publication each produced three
+successive generations from both originals. All passed strict code-signature
+verification. The three generations carried 8, 12 and 16 data-in-code records
+respectively.
+An independent arm64e caller checked 72 results on each of the 14 images,
+for 1,008 comparisons per host. Windows also passed its Darwin frontend
+signing checks at O0 and O2. [Native replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44719924950).
+
+On both systems a walk initialized at the interrupted PC recovered the caller
+and its caller using only the image's registered unwind tables. Starting in
+the handler skipped the old entry and yielded a different SP at the caller.
+The compact entry result covers a zero stack adjustment and an incoming
+live LR, including the variant with a personality and LSDA. A compact
+recipe describing a later stack allocation or spills requires a rule for
+the exact interrupted instruction.
+
+The local Release run passed 244 publication cases, 792 of 798 jump-table
+cases, ten code-owner cases and seven block-address replacement checks.
+Six jump-table cases skipped for compiler-shape or cross-runtime reasons.
+The hosted machines both reported Apple M1 (Virtual). Native authentication,
+compiler-original authenticated calls and signed exception unwinding passed.
+Explicit PAuth_LR, PACM-PC, scalar CPTA-on and checked writeback remain
+unqualified. The test repository had zero registered self-hosted runners.
+[Source revisions, image hashes and measurements](evidence/arm64e-switch-dispatch-2026-11-20.json).
+
+### Recovering missing Mach-O data-in-code records
+
+For functions with local relative switches, the arm64e publisher can recover
+a missing or incomplete `LC_DATA_IN_CODE` table. It combines machine
+instruction boundaries from the source CFG, the exact bytes read by local
+AArch64 literal loads, the finite slots read by proved switch dispatches,
+and any records already in the image. The ranges must agree on type and stay
+disjoint from live instructions. An alignment fragment that cannot contain
+one AArch64 instruction is preserved as ordinary data. A gap large enough for
+a whole aligned instruction still requires a source of evidence.
+
+Installation reconstructs these reads from the input image before consuming
+the emitted object. It carries the ranges through header growth and a
+zero-base image slide, records both the old and copied data in the published
+image, and checks their bytes and types after placement. The first publication
+therefore supplies native data-in-code records for later generations.
+
+The regression fixtures include 8-, 16- and signed 32-bit relative dispatch,
+an eight-byte literal that changes the result, and a byte table at an odd
+address adjacent to padding. One input declares only its 16-bit table. Another
+has no data records. A literal retargeted into a live instruction invalidates
+the source proof before installation.
+
+A separate fixture reads six literal forms through the integer and SIMD
+register files. It compares zero-extended W, full X, sign-extended LDRSW,
+the bit pattern of a single-precision NaN, double-precision negative zero
+and both lanes of a 128-bit Q load. Repeated publication checks the original
+and copied pools against independently sized extents.
+
+The macOS 26 and Xcode 27 runners each passed all 247 Release publication
+tests, plus 20 native installer cases and four default-startup cases.
+Each ran 4,032 independent return-value comparisons on 56 signed CLI inputs
+and outputs. These came from eight originals, two publication modes and
+three successive generations per mode. The original tables were absent,
+empty or partially populated. One local control clears
+`S_ATTR_PURE_INSTRUCTIONS` on a linked copy, retains
+`S_ATTR_SOME_INSTRUCTIONS`, and signs that copy before execution.
+[Hosted native run](https://github.com/gmh5225/test_mac_intel/actions/runs/44731143048).
+
+The signal tests sampled the original and published old entries with the
+handler on its regular stack and on a registered alternate stack. Starting
+Darwin libunwind at the kernel's interrupted PC recovered the incoming SP
+and both caller PCs in six alternate-stack runs per host. These covered an
+indexed FDE, a compact leaf, and a compact leaf with a personality and LSDA.
+The handler-initiated walk skipped the interrupted entry and reported a
+different SP in the caller on both systems, on both regular and alternate
+signal stacks.
+[Compiler-original alternate-stack controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44728953139).
+
+The five local Release targets accounted for 2,129 cases. Of these, 2,076
+passed and 53 had explicit skip conditions. One count-lane case reached the
+parallel timeout and passed the normal serial CTest in 24.40 seconds. A
+separate run supplied the arm64e text of `/usr/bin/wc` to the optional
+classifier test. Both hosted Apple M1 virtual machines qualified native PAC,
+authenticated calls and signed language unwinding. The strict PAuth_LR,
+PACM-PC and CPTA-on hardware checks reported unavailable.
+[Source, image hashes and per-host measurements](evidence/arm64e-inferred-data-2026-11-20.json).

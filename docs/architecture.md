@@ -5881,11 +5881,29 @@ before). `throw` and `fatal` end the process. Their bodies need not show it:
 loader lists their entries (`GoModuleInfo::NoReturnEntries`,
 `goRuntimeNeverReturns`), and both no-return lookups answer for them
 (`isNoReturnTarget`, `NoReturnTargetIndex`), so the CFG ends a block at such a
-call instead of falling into the next one. The list waits for the register ABI
-(`GoModuleInfo::RegisterArguments`): under the stack ABI, a bounds stub such as
-Go 1.16's `panicIndex` forwards its registers to a stack-argument Go half,
-and until that layout is modelled its operands would take System V's
-positions.
+call instead of falling into the next one. The loader lists them where it
+models the image's argument passing: the register ABI
+(`GoModuleInfo::RegisterArguments`), and the stack ABI with its register stubs
+(`GoModuleInfo::StackArguments`, below). Go 1.17's register ABI under the 1.16
+pclntab is neither, and stays unlisted. Under the stack ABI, a call to `throw`
+or `gopanic` read as returning fell through into whatever came next. Before a
+bounds stub's call, the registers the first call clobbers reached the stub as
+an undefined arm. Before a function's stack-growth block, the false edge gave
+the block a second predecessor, so the growth loop stayed and the function
+read its stack parameters through the loop's join, as `runtime_makeslice(void)`
+did.
+
+On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
+callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's
+address, from which `callbackasm1` computes the callback's index. The routine
+pops that address and returns to the entry's caller
+(src/runtime/sys_windows_amd64.s). The loader lists it
+(`GoModuleInfo::ReturnsPastCallerEntries`), and the CFG builder turns an
+x86-64 call to it into a tail call (`goCallReturnsPastCaller`). The table
+decompiles as `return runtime_callbackasm1(arg0, arg1, arg2, arg3)`, its four
+Win64 arguments. Read as returning calls, the entries were one function of
+2,000 calls, each after the first passing four unknown values. That was 70% of
+what a stripped Windows Go binary left unknown.
 
 Go 1.26 reports every bounds failure through one routine,
 `runtime.panicBounds`, which saves all the registers that could hold the index
@@ -5902,9 +5920,65 @@ swapped pair apart. The call never returns, so nothing after it reads them.
 The routine's parameters are exact (X0, X1), and arm64's indirect-result
 recovery adds no X8 to exact parameters: Go's R8 is an ordinary argument.
 
-Results, calls through function values and interfaces, arm64 and Go code in
-images before 1.18 still follow the platform convention. On the machine routes
-(lift, patch), a Go function's LLVM arguments take its Go registers as well.
+Results and calls through function values and interfaces still follow the
+platform convention. On the machine routes (lift, patch), a Go function's LLVM
+arguments take its Go registers as well.
+
+Before Go's internal ABI, every Go function takes its arguments and returns
+its results on the stack. Callers store them from the call's stack pointer
+(on arm64, the word above it, whose lowest word the callee saves its link
+register in), and the callee reads them past its return address. Read as
+System V's, the stack arguments followed six register positions
+(`runtime_throw(0, 0, 0, 0, 0, 0, msg, len)`); as Win64's, they fell in the
+home space (`runtime_throw(void)`); and as AAPCS64's, they followed eight
+register positions that the old code used as scratch.
+
+The loader proves the stack ABI before anything relies on it
+(`GoModuleInfo::StackArguments`). On arm64 that is a pclntab older than Go
+1.18. On amd64 the 1.16 pclntab covers Go 1.17's register ABI too, so the
+prologues decide: Go 1.16 and earlier load g from thread-local storage
+(`mov rcx, fs:[-8]`), and no Go 1.17 prologue's `cmp rsp, [r14+0x10]` may
+appear. It also keeps each function's `_func.args`, the bytes of its arguments
+and results (`GoModuleInfo::FrameArguments`).
+
+`detectCc` gives such a function no register parameter and numbers its stack
+parameters from the slot past its return address (`MedFunc::
+StackArgumentsOnly`, `goStackArgumentLayout`). This applies only where the
+function reads no register at its entry but the stack, frame and link
+registers, the closure context, and arm64's g in R28
+(`goStackABIEntryRegister`). Go 1.16's register stubs (`panicIndex` takes AX
+and CX, `duffzero` DI and X0) and the trampolines the platform's code enters
+keep their registers. A call passes a callee's arguments on the stack only
+where the callee's own recovery found them there (the stack-argument callees
+PipelineCallAbi collects). It takes no more words than the callee reads,
+bounded by its record, and marks the list complete
+(`MedCallInfo::ArgumentsFromPrototype`), so HighIR collection appends nothing.
+On the seven old Go binaries, placeholders fell 9-82%, and `runtime_throw`
+calls read `runtime_throw(msg, len)`. A function that keeps its stack-growth
+loop still reads its parameters through the loop's join and recovers too few
+of them.
+
+A register stub takes its registers in the order of the argument words it
+stores them into, and LowIR recognizes it once (`goRegisterStubArguments`).
+Its body is one block that stores the incoming value of a general-purpose
+register into each word its record gives, writes no register, and ends in a
+tail call to a stack-ABI routine. `panicIndex` takes (AX, CX), and
+`panicSlice3Alen` takes (DX, BX). The stub's register summary publishes those
+registers as its complete operands (`LocalRegisterEffect::GoStubArguments`,
+`PipelineResult::CallEntryIntegerArguments`). Each x86-64 call binds them
+before SSA, as it binds a prototype's (`bindIntegerCall`), and `detectCc`
+gives the stub the same parameters. Read by platform position, a System V
+call passed `(0, 0, 0, y)` and a Win64 call passed only `y`. An arm64 stub
+takes R0-R3, which are AAPCS64 positions, and its calls find them in the
+stub's order. Go assembly with a register contract of its own (`memeqbody`,
+`aeshashbody`, `indexbytebody`) is no stub, and its calls keep the platform's
+reading. The stubs are on the no-return list, and a call into a listed routine
+adds no callee to the summaries (`LocalRegisterEffect::NoReturnCallees`). A
+run of some functions alone, as `--func` and the GUI make, still lifts each
+listed stack-ABI routine its functions call. Where the body is a stub, its
+registers are published as its complete operands, and nothing else of the body
+enters the solve. Without that, a call to a stub that run summarized nowhere
+passed no argument, or the wrong register.
 
 Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
 formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go

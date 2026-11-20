@@ -24,6 +24,7 @@
 #define NEVERD_IR_LOW_CALLREGISTEREFFECTS_H
 
 #include "neverd/Common.h"
+#include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/low/CallRegisterBody.h"
 
 #include <array>
@@ -190,6 +191,10 @@ struct LocalRegisterEffect {
   /// its entry reads, as it takes a prototype's, in place of what its calls
   /// appear to forward.
   std::optional<GPRReadWidths> GoArgumentReads;
+  /// The registers a Go stub passes on as a stack-ABI routine's arguments,
+  /// in their order (goRegisterStubArguments): its callers bind exactly
+  /// these, as a prototype's operands.  GoArgumentReads holds their reads.
+  std::optional<FixedIntegerCallArguments> GoStubArguments;
   /// The body itself is not fully known, so neither summary exists.
   bool Incomplete = false;
   /// Control leaves for code no summary describes (an indirect tail call)

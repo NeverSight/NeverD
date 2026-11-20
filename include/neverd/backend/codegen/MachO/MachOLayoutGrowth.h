@@ -11,6 +11,7 @@
 #define NEVERD_BACKEND_CODEGEN_MACHO_MACHOLAYOUTGROWTH_H
 #include "neverd/Common.h"
 #include "neverd/backend/Limits.h"
+#include "neverd/loader/MachO/DataInCode.h"
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
@@ -24,10 +25,12 @@ llvm::Error completeMachOChainedSegmentTable(std::vector<uint8_t> &Binary,
 /// Grow the header into a PIE guard or an available prefix of a nonzero-base
 /// dylib or bundle. Original code, data and fixup slots retain their addresses.
 /// Relocate supported loader metadata transactionally and reject instruction
-/// references into the moving header.
-llvm::Expected<bool> reserveMachOHeaderStorage(std::vector<uint8_t> &Binary,
-                                               Arch Architecture,
-                                               uint64_t AdditionalCommandBytes);
+/// references into the moving header. RecoveredData contains additional
+/// immutable ranges already verified against these source addresses.
+llvm::Expected<bool> reserveMachOHeaderStorage(
+    std::vector<uint8_t> &Binary, Arch Architecture,
+    uint64_t AdditionalCommandBytes,
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData = {});
 
 /// Declare new TEXT metadata while preserving all existing section ordinals.
 llvm::Expected<uint64_t> declareMachOTextMetadata(std::vector<uint8_t> &Binary,
@@ -66,11 +69,11 @@ reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
                          uint64_t AdditionalEHBytes,
                          uint64_t AdditionalFunctions,
                          const MachOUnwindRelocationLimits &Limits = {});
-llvm::Expected<bool>
-reserveMachOSourceUnwind(std::vector<uint8_t> &Binary, Arch Architecture,
-                         uint64_t AdditionalEHBytes,
-                         MachOUnwindFunctionCounts Additional,
-                         const MachOUnwindRelocationLimits &Limits = {});
+llvm::Expected<bool> reserveMachOSourceUnwind(
+    std::vector<uint8_t> &Binary, Arch Architecture, uint64_t AdditionalEHBytes,
+    MachOUnwindFunctionCounts Additional,
+    const MachOUnwindRelocationLimits &Limits = {},
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData = {});
 
 /// Reserve from a real emitted object before new RX/RW segments can occupy the
 /// TEXT tail. Final installation still verifies the actual relocated records.

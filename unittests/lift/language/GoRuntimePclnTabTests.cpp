@@ -324,20 +324,43 @@ TEST(GoNoReturn, NameTheRoutinesTheCompilerEndsABlockWith) {
     EXPECT_FALSE(goRuntimeNeverReturns(Name)) << Name;
 }
 
-TEST(GoNoReturn, WaitForTheStackABIToBeModelled) {
-  // A Go 1.16 image passes arguments on the stack, where a bounds stub would
-  // forward its registers in System V's positions: its entries stay
-  // unlisted until that layout is modelled.
-  GoTestImage T;
-  T.installPclnTab(buildPclnTab(kGo116Magic,
-                                {makeGoCode("runtime.gopanic", kTextVA + 0x100),
-                                 makeGoCode("main.f", kTextVA + 0x200)},
-                                kTextVA + 0x300)
-                       .Bytes);
-  parseGoExceptions(T.Img);
-  const auto &Module = T.Img.ExceptionMetadata.GoModule;
-  ASSERT_TRUE(Module.has_value());
-  EXPECT_TRUE(Module->NoReturnEntries.empty());
+TEST(GoNoReturn, AreListedWhereTheImagesArgumentPassingIsKnown) {
+  // A Go 1.16 amd64 image whose prologues load g from thread-local storage
+  // passes arguments on the stack, its bounds stubs' registers in their own
+  // order (goRegisterStubArguments), so its entries are listed.  Go 1.17's
+  // `cmp rsp, [r14+0x10]` under the same pclntab is a register ABI the
+  // loader does not model, and without a prologue nothing is proved: there
+  // they stay unlisted.
+  const std::vector<uint8_t> ThreadLocal = {0x64, 0x48, 0x8B, 0x0C, 0x25, 0xF8,
+                                            0xFF, 0xFF, 0xFF, 0x48, 0x3B, 0x61,
+                                            0x10, 0x76, 0x20, 0xC3};
+  const std::vector<uint8_t> Register = {0x49, 0x3B, 0x66, 0x10, 0x76, 0x20,
+                                         0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                                         0xCC, 0xCC, 0xCC, 0xCC};
+  enum class Prologue { ThreadLocal, Go117, None };
+  for (const Prologue Kind :
+       {Prologue::ThreadLocal, Prologue::Go117, Prologue::None}) {
+    SCOPED_TRACE(static_cast<int>(Kind));
+    GoTestImage T;
+    if (Kind != Prologue::None)
+      T.writeText(kTextVA + 0x100, ThreadLocal);
+    if (Kind == Prologue::Go117)
+      T.writeText(kTextVA + 0x200, Register);
+    T.installPclnTab(
+        buildPclnTab(kGo116Magic,
+                     {makeGoCode("runtime.gopanic", kTextVA + 0x100),
+                      makeGoCode("main.f", kTextVA + 0x200)},
+                     kTextVA + 0x300)
+            .Bytes);
+    parseGoExceptions(T.Img);
+    const auto &Module = T.Img.ExceptionMetadata.GoModule;
+    ASSERT_TRUE(Module.has_value());
+    EXPECT_EQ(Module->StackArguments, Kind == Prologue::ThreadLocal);
+    if (Kind == Prologue::ThreadLocal)
+      EXPECT_EQ(Module->NoReturnEntries, std::vector<va_t>{kTextVA + 0x100});
+    else
+      EXPECT_TRUE(Module->NoReturnEntries.empty());
+  }
 }
 
 TEST(GoNoReturn, EveryLookupKnowsTheirEntries) {
@@ -351,6 +374,78 @@ TEST(GoNoReturn, EveryLookupKnowsTheirEntries) {
   const libc::NoReturnTargetIndex Index(T.Img);
   EXPECT_TRUE(Index.contains(T.Img, kTextVA + 0x100));
   EXPECT_FALSE(Index.contains(T.Img, kTextVA + 0x200));
+}
+
+TEST(GoCallbacks, TheLoaderNamesTheRoutineThatReturnsPastItsCaller) {
+  // runtime.callbackasm1 pops the return address each Windows callback
+  // entry's CALL leaves, and returns to that entry's caller
+  // (src/runtime/sys_windows_amd64.s).
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.callbackasm1", kTextVA + 0x100),
+                    makeGoCode("main.f", kTextVA + 0x200)},
+                   kTextVA + 0x300)
+          .Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_EQ(Module->ReturnsPastCallerEntries,
+            std::vector<va_t>{kTextVA + 0x100});
+}
+
+TEST(GoStackArguments, ThreadLocalProloguesProveTheStackABI) {
+  // Go 1.16 amd64: main.f's prologue loads g from thread-local storage,
+  // `mov rcx, fs:[-8]; cmp rsp, [rcx+0x10]`, and every function takes its
+  // arguments on the stack.  Go 1.17, under the same pclntab, compares the
+  // stack with g in R14 (`cmp rsp, [r14+0x10]`) and passes registers.
+  const std::vector<uint8_t> ThreadLocal = {0x64, 0x48, 0x8B, 0x0C, 0x25, 0xF8,
+                                            0xFF, 0xFF, 0xFF, 0x48, 0x3B, 0x61,
+                                            0x10, 0x76, 0x20, 0xC3};
+  const std::vector<uint8_t> Register = {0x49, 0x3B, 0x66, 0x10, 0x76, 0x20,
+                                         0xC3, 0xCC, 0xCC, 0xCC, 0xCC, 0xCC,
+                                         0xCC, 0xCC, 0xCC, 0xCC};
+  for (const bool Go117 : {false, true}) {
+    SCOPED_TRACE(Go117);
+    GoTestImage T;
+    GoFuncSpec F = makeGoCode("main.f", kTextVA + 0x100);
+    F.Args = 24;
+    T.writeText(kTextVA + 0x100, ThreadLocal);
+    if (Go117)
+      T.writeText(kTextVA + 0x200, Register);
+    T.installPclnTab(buildPclnTab(kGo116Magic,
+                                  {F, makeGoCode("main.g", kTextVA + 0x200)},
+                                  kTextVA + 0x300)
+                         .Bytes);
+    parseGoExceptions(T.Img);
+    const auto &Module = T.Img.ExceptionMetadata.GoModule;
+    ASSERT_TRUE(Module.has_value());
+    EXPECT_EQ(Module->StackArguments, !Go117);
+    ASSERT_EQ(Module->FrameArguments.size(), 2u);
+    EXPECT_EQ(Module->FrameArguments[0].Entry, kTextVA + 0x100);
+    EXPECT_EQ(Module->FrameArguments[0].Bytes, 24u);
+  }
+  // Nothing proves it without a prologue that loads g.
+  GoTestImage Bare;
+  Bare.installPclnTab(buildPclnTab(kGo116Magic,
+                                   {makeGoCode("main.f", kTextVA + 0x100)},
+                                   kTextVA + 0x200)
+                          .Bytes);
+  parseGoExceptions(Bare.Img);
+  ASSERT_TRUE(Bare.Img.ExceptionMetadata.GoModule.has_value());
+  EXPECT_FALSE(Bare.Img.ExceptionMetadata.GoModule->StackArguments);
+}
+
+TEST(GoStackArguments, AnARM64ImageBeforeGo118PassesThemOnTheStack) {
+  // arm64 gained the register ABI with the Go 1.18 pclntab.
+  GoTestImage T(Arch::AArch64);
+  T.installPclnTab(buildPclnTab(kGo116Magic,
+                                {makeGoCode("main.f", kTextVA + 0x100)},
+                                kTextVA + 0x200)
+                       .Bytes);
+  parseGoExceptions(T.Img);
+  ASSERT_TRUE(T.Img.ExceptionMetadata.GoModule.has_value());
+  EXPECT_TRUE(T.Img.ExceptionMetadata.GoModule->StackArguments);
 }
 
 TEST(GoPanicBounds, TheLoaderReadsEveryCallsEntry) {

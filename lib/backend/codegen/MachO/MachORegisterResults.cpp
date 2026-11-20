@@ -11,6 +11,9 @@
 
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 
+#include "../rewrite/BlockAddressUse.h"
+#include "MachOEmbeddedDispatch.h"
+
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
@@ -18,6 +21,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DirectBranch.h"
@@ -63,6 +67,7 @@ struct RegisterBody {
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
+  std::vector<MachODataInCodeRange> RecoveredData;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
@@ -492,10 +497,10 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
   return true;
 }
 
-std::optional<RegisterBody> registerBody(Decoder &Decode,
-                                         const BinaryImage &Image,
-                                         const Entries &Functions,
-                                         Entries::const_iterator Owner) {
+std::optional<RegisterBody>
+registerBody(Decoder &Decode, const BinaryImage &Image,
+             const Entries &Functions, Entries::const_iterator Owner,
+             const LowFunc *ControlFlow, bool Revalidate = false) {
   const va_t Start = Owner->first;
   auto Next = std::next(Owner);
   auto Source = machOLiftedSource(
@@ -562,7 +567,37 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     return std::nullopt;
   }
 
+  // Pipeline lowering borrows the established CFG. At the patch boundary the
+  // LLVM module is caller-supplied, so derive the edges from the image again.
+  std::optional<LowFunc> OriginalControl;
+  MachOEmbeddedDispatch Dispatch;
+  if (Revalidate && (Owner->second->hasFnAttribute(kRecoveredData) ||
+                     llvm::any_of(Source->Embedded, [](const auto &R) {
+                       return R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE8 ||
+                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE16 ||
+                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE32;
+                     }))) {
+    OriginalControl = CFGBuilder().build(Image, Decode, Start);
+    ControlFlow = &*OriginalControl;
+  }
+  llvm::SmallVector<MachODataInCodeRange> EffectiveData;
+  if (ControlFlow) {
+    auto Layout = machOEmbeddedDispatch(Image, Decode, *Source, *ControlFlow);
+    if (!Layout)
+      return std::nullopt;
+    Dispatch = std::move(*Layout);
+    if (!Dispatch.Recovered.empty()) {
+      llvm::append_range(EffectiveData, Source->Embedded);
+      llvm::append_range(EffectiveData, Dispatch.Recovered);
+      llvm::sort(EffectiveData, [](const auto &L, const auto &R) {
+        return L.Begin < R.Begin;
+      });
+      Source->Embedded = EffectiveData;
+    }
+  }
+
   RegisterBody Body;
+  Body.RecoveredData = std::move(Dispatch.Recovered);
   Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
   Body.HasCompactFrame =
@@ -655,7 +690,8 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
                            Word, PC, {.Jumps = true})
             .has_value();
     const auto PCSigning = pcSigningInstruction(I.Id);
-    const bool Stops = Jump || I.Id == AARCH64_INS_RET ||
+    const auto Targets = Dispatch.BranchTargets.lookup(PC);
+    const bool Stops = Jump || !Targets.empty() || I.Id == AARCH64_INS_RET ||
                        I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB ||
                        I.Id == AARCH64_INS_BRK ||
                        (PCSigning && PCSigning->Returns);
@@ -688,6 +724,18 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
       if (Index + 1 < Flow.size())
         Flow[Index + 1].Predecessors.push_back(Index);
     };
+    if (I.Id == AARCH64_INS_BR) {
+      if (Targets.empty())
+        return std::nullopt;
+      if (!Flow.empty())
+        for (const auto Target : Targets) {
+          auto &Predecessors = Flow[(Target - Start) / Word].Predecessors;
+          if (Predecessors.empty() || Predecessors.back() != Index)
+            Predecessors.push_back(Index);
+        }
+      OS << kInstructionWord << Encoding << '\n';
+      continue;
+    }
     if (I.Id == AARCH64_INS_BL) {
       if (Ops.size() != 1 || Ops[0].type != AARCH64_OP_IMM)
         return std::nullopt;
@@ -759,12 +807,14 @@ std::optional<RegisterBody> registerBody(Decoder &Decode,
     // ADR can materialize a signing point within this same body. Its relative
     // distance survives publication, just like an internal branch. External
     // data and page-relative addresses require a different relocation owner.
+    const bool TableAddress = Dispatch.TableAddresses.contains(PC);
     const bool LocalAddress =
         I.Id == AARCH64_INS_ADR && Ops.size() == 2 &&
         Ops[0].type == AARCH64_OP_REG && physicalRegister(Ops[0].reg) &&
         Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
-        va_t(Ops[1].imm) < End && (va_t(Ops[1].imm) - Start) % Word == 0;
-    if (LocalAddress &&
+        va_t(Ops[1].imm) < End &&
+        (TableAddress || (va_t(Ops[1].imm) - Start) % Word == 0);
+    if (LocalAddress && !TableAddress &&
         !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty())
       return std::nullopt;
     const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
@@ -954,7 +1004,8 @@ bool needsMachONativeStackIndex(const MedFunc &Function) {
 llvm::Error
 lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> AdmittedEntries,
-                          llvm::ArrayRef<va_t> RequiredNativeEntries) {
+                          llvm::ArrayRef<va_t> RequiredNativeEntries,
+                          llvm::ArrayRef<LowFunc> SourceFunctions) {
   llvm::DenseSet<va_t> Required(RequiredNativeEntries.begin(),
                                 RequiredNativeEntries.end());
   auto Functions = definedEntries(M, Image, Required);
@@ -988,13 +1039,22 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
             Byte);
   }
   std::map<llvm::Function *, RegisterBody> Bodies;
+  llvm::DenseMap<va_t, const LowFunc *> SourceByEntry;
+  for (const auto &F : SourceFunctions)
+    SourceByEntry.try_emplace(F.Entry, &F);
   bool HasVariadicCursor = false;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
-    if (!Admitted.contains(It->first) ||
-        llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }))
+    if (!Admitted.contains(It->first))
       continue;
-    if (auto Body = registerBody(Decode, Image, *Functions, It)) {
+    const auto *Source = SourceByEntry.lookup(It->first);
+    if (llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }) &&
+        (!Source || Source->JumpTables.empty() ||
+         !blockAddressEscape(F, [&](const auto *Owner) {
+            return Owner == &F;
+          }).empty()))
+      continue;
+    if (auto Body = registerBody(Decode, Image, *Functions, It, Source)) {
       HasVariadicCursor |= F.isVarArg() && Body->MaterializesCursor;
       Bodies.try_emplace(&F, std::move(*Body));
     }
@@ -1055,6 +1115,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     while (!F->empty())
       F->begin()->eraseFromParent();
     F->addFnAttr(kRegisterBody);
+    if (!Body.RecoveredData.empty())
+      F->addFnAttr(kRecoveredData);
     F->addFnAttr(llvm::Attribute::Naked);
     F->removeFnAttr(llvm::Attribute::AlwaysInline);
     F->addFnAttr(llvm::Attribute::NoInline);
@@ -1082,17 +1144,22 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
 }
 
 llvm::Expected<llvm::DenseSet<va_t>>
-validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
+validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
+                             std::vector<MachODataInCodeRange> *RecoveredData) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
-          M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); }))
+          M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); })) {
+    if (RecoveredData)
+      RecoveredData->clear();
     return Result;
+  }
   auto Functions = definedEntries(M, Image);
   if (!Functions)
     return Functions.takeError();
   Decoder Decode;
   if (!Decode.init(Image))
     return invalidBody();
+  std::vector<MachODataInCodeRange> VerifiedData;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!F.hasFnAttribute(kRegisterBody))
@@ -1102,13 +1169,19 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
         !llvm::isa<llvm::UnreachableInst>(F.front().back()))
       return invalidBody();
     const auto *Call = llvm::dyn_cast<llvm::CallInst>(&F.front().front());
-    auto Body = registerBody(Decode, Image, *Functions, It);
+    auto Body = registerBody(Decode, Image, *Functions, It, nullptr, true);
     if (!Call || !Body || !Call->doesNotReturn() ||
         Call->getCalledOperand() != assembly(F, *Body) ||
         !llvm::equal(Call->args(), Body->Operands))
       return invalidBody();
+    if (F.hasFnAttribute(kRecoveredData) != !Body->RecoveredData.empty())
+      return invalidBody();
+    if (RecoveredData)
+      llvm::append_range(VerifiedData, Body->RecoveredData);
     Result.insert(It->first);
   }
+  if (RecoveredData)
+    *RecoveredData = std::move(VerifiedData);
   return Result;
 }
 } // namespace neverd

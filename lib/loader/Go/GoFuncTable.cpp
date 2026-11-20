@@ -77,13 +77,15 @@ std::optional<RawFunc> decodeFunc(const ImageReader &R, const FuncLayout &L,
   }
   const va_t Rest = RecordVA + (L.EntryIsOffset ? 4 : R.pointerSize());
   std::optional<int32_t> NameOff = R.i32(Rest);
+  std::optional<int32_t> Args = R.i32(Rest + 4);
   std::optional<uint32_t> PcSP = R.u32(Rest + 12);
   std::optional<uint32_t> PCDataCount = R.u32(Rest + 24);
-  if (!NameOff || !PcSP || !PCDataCount)
+  if (!NameOff || !Args || !PcSP || !PCDataCount)
     return std::nullopt;
   if (*NameOff < 0 || *PCDataCount > MaxPCDataTables)
     return std::nullopt;
   F.NameOffset = *NameOff;
+  F.Args = *Args;
   F.PcSP = *PcSP;
   F.PCDataCount = *PCDataCount;
 
