@@ -2294,7 +2294,7 @@ from the [Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/44
 Mixed code/data sections, inputs with missing entry or machine ABI facts, and
 asynchronous language cleanup without lifetime metadata still need additional
 evidence. Platform-wide asynchronous recovery through the original tables
-alone also remains unqualified. LLVM r6 stays pinned.
+alone also remains unqualified. That source revision pinned the r6 package.
 
 ### Embedded data in published instruction sections
 
@@ -2498,3 +2498,35 @@ eight-byte records. The comparison program reads all six integer and SIMD
 literal forms and compares both halves of the vector. The test checks the
 five source records, four recovered extents and the bytes and types in three
 successive publications.
+
+The macOS 26 and Xcode 27 runners each passed all 248 Release publication
+tests. Each runner compiled its own fragmented literal fixture and checked
+40 return values on the original and three published images. A separate
+caller checked 70 return values on seven signed CLI images across default
+and no-opt publication. The record counts for successive outputs were 18,
+27 and 36 in both modes. Both CLI modes rejected two signed inputs with
+conflicting record types, one in the integer and one in the upper vector
+lane. All four refusals preserved the input bytes and signature and left the
+output path absent.
+[Hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44735565511).
+
+Both hosts reported Apple M1 (Virtual). On each, six alternate-stack walks
+using the interrupted context and original system tables recovered the
+caller stack pointer. The handler-initiated walks skipped the interrupted
+entry. The native PAuth_LR, PACM-PC and CPTA-on probes reported unavailable.
+[Source, signed image hashes and per-host results](evidence/arm64e-fragmented-literals-2026-11-20.json).
+
+Five local Release suites ran 2,130 cases, with 2,077 passes and 53 explicit
+skips. Supplying the arm64e text from `/usr/bin/wc` separately exercised
+the optional classifier check on all 653 instructions.
+
+The switch, recovered-data and fragmented-literal native suites used the
+integrated LLVM source fork at `09ff60dd1ddb17114892ee2bb32256182dedc76e`.
+Their NeverD revisions already selected r7 as the default prebuilt package.
+The repository adopted that default on November 18. [Repository package change](https://github.com/NeverSight/NeverD/pull/2409).
+
+A separate compatibility build compiled both changed implementation units
+and the regression unit against the macOS arm64 r6 SDK. It set
+`NEVERD_LLVM_PREBUILT_TAG` to `neverd-llvm-v23.0.0-r6` and supplied the
+published archive SHA-256 in `NEVERD_LLVM_PREBUILT_SHA256`. An old tag alone
+allows CMake to migrate the build to the current default. [LLVM r6 release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r6).
