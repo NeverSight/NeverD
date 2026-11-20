@@ -10,6 +10,9 @@
 #include "MIPS16ReturnAdapter.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/ir/FloatingCallArguments.h"
+#include "neverd/ir/SourceABI.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ExecutableCodeOwnerIndex.h"
@@ -20,10 +23,10 @@
 
 namespace neverd::pipeline_detail {
 
-std::map<va_t, MIPS16ReturnTransport>
-mips16ReturnTransports(const BinaryImage &Image,
-                       llvm::ArrayRef<LowFunc> Functions) {
-  std::map<va_t, MIPS16ReturnTransport> Result;
+std::map<va_t, MIPS16RuntimeTransport>
+mips16RuntimeTransports(const BinaryImage &Image,
+                        llvm::ArrayRef<LowFunc> Functions) {
+  std::map<va_t, MIPS16RuntimeTransport> Result;
   if (!isMIPS(Image.Arch) || isMIPS64(Image.Arch) || !Image.MIPS ||
       !Image.MIPS->HasMIPS16 || !Image.MIPS->hasScalarFPABI(false))
     return Result;
@@ -32,15 +35,15 @@ mips16ReturnTransports(const BinaryImage &Image,
     if (Image.instructionModeAt(Function.Entry) != InstructionMode::MIPS16) {
       // A selected helper needs the same byte proof even without a selected
       // caller. Its incoming v0/v1 words are not ordinary C parameters.
-      // Only a first instruction unit writing an FPR can match this transport;
-      // avoid decoding every classic body again during source admission.
+      // All qualified helpers start with a transfer to an FPR or save ra in s2.
       if (!Function.Blocks.empty() &&
           !Function.Blocks.front().InstructionBoundaries.empty()) {
         const auto &Block = Function.Blocks.front();
         const auto &First = Block.InstructionBoundaries.front();
         for (size_t I = First.FirstOp; I < First.FirstOp + First.OpCount; ++I)
           if (Block.Ops[I].Output.isReg() &&
-              mipsreg::isVector(Block.Ops[I].Output.Offset)) {
+              (mipsreg::isVector(Block.Ops[I].Output.Offset) ||
+               Block.Ops[I].Output.Offset == mipsreg::r(18))) {
             Entries.insert(Function.Entry);
             break;
           }
@@ -56,10 +59,21 @@ mips16ReturnTransports(const BinaryImage &Image,
     return Result;
   const ExecutableCodeOwnerIndex Owners(Image);
   const std::vector<va_t> Targets(Entries.begin(), Entries.end());
-  std::vector<std::optional<MIPS16ReturnTransport>> Proven(Targets.size());
+  std::vector<std::optional<MIPS16RuntimeTransport>> Proven(Targets.size());
   parallelForEach(Targets.size(), [&](auto Claim, size_t Count) {
-    for (size_t I; (I = Claim()) < Count;)
-      Proven[I] = proveMIPS16ReturnTransport(Image, Targets[I], &Owners);
+    for (size_t I; (I = Claim()) < Count;) {
+      if (auto Stub =
+              proveMIPS16IndirectCallTransport(Image, Targets[I], &Owners))
+        Proven[I] = MIPS16RuntimeTransport{
+            std::move(Stub->Effects), Stub->FloatingPrefix, Stub->ResultBytes,
+            Stub->ResultElements};
+      else if (auto Return =
+                   proveMIPS16ReturnTransport(Image, Targets[I], &Owners))
+        Proven[I] = MIPS16RuntimeTransport{std::move(Return->Effects),
+                                           {},
+                                           Return->ElementBytes,
+                                           Return->Elements};
+    }
   });
   for (size_t I = 0; I < Targets.size(); ++I)
     if (Proven[I])
@@ -67,15 +81,17 @@ mips16ReturnTransports(const BinaryImage &Image,
   return Result;
 }
 
-std::optional<LowFunc> projectMIPS16ReturnCalls(
+std::optional<LowFunc> projectMIPS16RuntimeCalls(
     const BinaryImage &Image, const LowFunc &Source,
-    const std::map<va_t, MIPS16ReturnTransport> &Transports) {
+    const std::map<va_t, MIPS16RuntimeTransport> &Transports,
+    const MIPS16CallSites *InputSites, MIPS16CallSites *ProjectedSites) {
   if (Transports.empty() ||
       Image.instructionModeAt(Source.Entry) != InstructionMode::MIPS16)
     return std::nullopt;
   struct Site {
     size_t Block, Boundary;
-    const MIPS16ReturnTransport *Transport;
+    const MIPS16RuntimeTransport *Transport;
+    const SourceCallTypeHint *IndirectType = nullptr;
   };
   std::vector<Site> Sites;
   for (size_t B = 0; B < Source.Blocks.size(); ++B) {
@@ -89,8 +105,43 @@ std::optional<LowFunc> projectMIPS16ReturnCalls(
           !Call.Inputs[0].isConst())
         continue;
       const auto Found = Transports.find(Call.Inputs[0].Offset);
-      if (Found != Transports.end())
-        Sites.push_back({B, I, &Found->second});
+      if (Found == Transports.end())
+        continue;
+      const auto &Stub = Found->second;
+      const SourceCallTypeHint *Hint = nullptr;
+      if (Stub.IndirectFloatingPrefix) {
+        const auto Physical = sourceCallOccurrenceKey(Call, Image.Arch);
+        if (Physical && InputSites && ProjectedSites)
+          if (auto It = InputSites->find(*Physical); It != InputSites->end())
+            Hint = &It->second;
+        std::string Diagnostic;
+        if (!Hint || Hint->CallKind != SourceCallTypeHint::Kind::Analyst ||
+            Hint->AnalystSite != Physical || !Hint->Signature.MIPSScalars ||
+            !validateSourceABI(Hint->Signature, Diagnostic))
+          throw LowToMedConversionError("MIPS16 indirect runtime call requires "
+                                        "its function-pointer prototype");
+        const auto &ABI = *Hint->Signature.MIPSScalars;
+        std::array<unsigned, 2> Prefix{};
+        unsigned Index = 0;
+        for (const auto &P : ABI.Scalars) {
+          if (P.Kind != SourceABICarrierKind::FloatingRegister)
+            continue;
+          if (Index == Prefix.size() ||
+              P.Register != mipsreg::w(12 + Index * 2))
+            throw LowToMedConversionError(
+                "Unexpected o32 floating register prefix");
+          Prefix[Index++] = P.Bytes;
+        }
+        const unsigned Elements = ABI.ReturnKind == NdTypeKind::Float
+                                      ? (ABI.ReturnComplex ? 2 : 1)
+                                      : 0;
+        if (ABI.MIPS16Parameters || Prefix != *Stub.IndirectFloatingPrefix ||
+            Stub.ResultElements != Elements ||
+            (Elements && ABI.ReturnBytes != Stub.ResultBytes * Elements))
+          throw LowToMedConversionError("Function-pointer prototype disagrees "
+                                        "with the MIPS16 runtime transfers");
+      }
+      Sites.push_back({B, I, &Stub, Hint});
     }
   }
   if (Sites.empty())
@@ -108,6 +159,10 @@ std::optional<LowFunc> projectMIPS16ReturnCalls(
     }
   for (const auto &Temporary : Source.FunctionTemporaries)
     NextTemporary = std::max(NextTemporary, Temporary.Offset + Temporary.Bytes);
+  if (ProjectedSites && InputSites &&
+      std::any_of(Sites.begin(), Sites.end(),
+                  [](const Site &S) { return S.IndirectType; }))
+    *ProjectedSites = *InputSites;
   LowFunc Projected = Source;
   size_t NextSite = 0;
   while (NextSite < Sites.size()) {
@@ -138,7 +193,8 @@ std::optional<LowFunc> projectMIPS16ReturnCalls(
       const LowOp &Call = Original.Ops[End - 1];
       std::map<std::pair<va_t, uint64_t>, uint64_t> Temporaries;
       int Seq = Call.Seq;
-      for (LowOp Op : Sites[Site++].Transport->Effects) {
+      const auto &Matched = Sites[Site++];
+      for (LowOp Op : Matched.Transport->Effects) {
         const auto Remap = [&](NdVar &Value) {
           if (!Value.isTemp())
             return;
@@ -153,13 +209,30 @@ std::optional<LowFunc> projectMIPS16ReturnCalls(
           Remap(Op.Inputs[K]);
         Op.Addr = Call.Addr;
         Op.Seq = Seq++;
+        if (Op.Opcode == NdOp::INDIR_CALL && Matched.IndirectType) {
+          auto Hint = *Matched.IndirectType;
+          ProjectedSites->erase(*Hint.AnalystSite);
+          Hint.AnalystSite = sourceCallOccurrenceKey(Op, Image.Arch);
+          if (!Hint.AnalystSite)
+            throw LowToMedConversionError(
+                "Invalid projected MIPS16 indirect call");
+          const auto Key = *Hint.AnalystSite;
+          Hint.TargetAddress = 0;
+          Hint.TargetName.clear();
+          ProjectedSites->emplace(Key, std::move(Hint));
+        }
         Block.Ops.push_back(std::move(Op));
       }
       Boundary.OpCount = Block.Ops.size() - Boundary.FirstOp;
-      Boundary.Control = LowInstructionControl::None;
-      Boundary.ControlFlags = LowInstructionControlFlag::None;
       Boundary.Immediate.reset();
-      Boundary.TargetMode = LowInstructionTargetMode::Preserve;
+      if (Matched.IndirectType) {
+        Boundary.ControlFlags |= LowInstructionControlFlag::Indirect;
+        Boundary.TargetMode = LowInstructionTargetMode::FromMIPS16TargetBit0;
+      } else {
+        Boundary.Control = LowInstructionControl::None;
+        Boundary.ControlFlags = LowInstructionControlFlag::None;
+        Boundary.TargetMode = LowInstructionTargetMode::Preserve;
+      }
     }
   }
   return Projected;

@@ -20,9 +20,11 @@
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/debug/DebugContext.h"
 #include "neverd/debug/UserPrototype.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/MIPS/MIPS16ReturnTransport.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
@@ -42,6 +44,135 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPS16Pipeline, IndirectRuntimeTransfersMatchTheCallerPrototype) {
+  const bool Little = GetParam() == Arch::MIPS32EL;
+  for (bool FP64 : {false, true})
+    for (bool Variadic : {false, true})
+      for (bool Returning : {false, true}) {
+        if (!Returning && Variadic)
+          continue; // With no FP transfers the compiler can call directly.
+        SCOPED_TRACE(::testing::Message()
+                     << Little << FP64 << Variadic << Returning);
+        mips_test::ELFBytes File(GetParam());
+        File.Bytes.resize(0x200);
+        File.put(52 + 16, File.Bytes.size(), 4);
+        File.put(52 + 20, File.Bytes.size(), 4);
+        File.abiFlags();
+        File.Bytes[0xe5] = FP64 ? 2 : 1;
+        File.Bytes[0xe7] = FP64 ? 6 : 1;
+        File.put(36, FP64 ? 0x74001200 : 0x74001000, 4);
+        File.put(24, 0x10100, 4);
+        File.put(0xec, 0x400, 4);
+        std::vector<uint32_t> Words;
+        const auto Move = [&](unsigned RS, unsigned GPR, unsigned FPR) {
+          Words.push_back(0x44000000u | RS << 21 | GPR << 16 | FPR << 11);
+        };
+        if (Returning)
+          Words.push_back(0x03e09025); // move s2,ra
+        if (!Variadic) {
+          Move(4, 4 + !Little, 12);
+          Move(FP64 ? 7 : 4, 4 + Little, FP64 ? 12 : 13);
+          Move(4, 6, 14);
+        }
+        Words.push_back(Returning ? 0x0040f809 : 0x00400008);
+        const auto Slot = Words.size();
+        Words.push_back(0x0040c825); // move t9,v0
+        if (Returning) {
+          Move(0, 2 + !Little, 0);
+          Words.push_back(0x02400008); // jr s2
+          Move(FP64 ? 3 : 0, 2 + Little, FP64 ? 0 : 1);
+        }
+        for (size_t I = 0; I < Words.size(); ++I)
+          File.put(0x100 + I * 4, Words[I], 4);
+        ELFLoader Loader;
+        auto Loaded = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+        auto &Image = *Loaded;
+        Image.Symbols.push_back(Symbol::makeFunc(0x10100, Words.size() * 4));
+        Image.MIPS->CodeModeEntries.emplace(0x10100,
+                                            InstructionMode::MIPSClassic);
+        Image.MIPS->CodeRegions.push_back({0x10100, 0x10100 + Words.size() * 4,
+                                           InstructionMode::MIPSClassic});
+        Image.MIPS->CodeModeEntries.emplace(0x10180, InstructionMode::MIPS16);
+        Image.MIPS->CodeRegions.push_back(
+            {0x10180, 0x10190, InstructionMode::MIPS16});
+        auto Stub = proveMIPS16IndirectCallTransport(Image, 0x10100);
+        ASSERT_TRUE(Stub);
+        EXPECT_EQ(Stub->FloatingPrefix[0], Variadic ? 0u : 8u);
+        EXPECT_EQ(Stub->FloatingPrefix[1], Variadic ? 0u : 4u);
+        EXPECT_EQ(Stub->ResultBytes, Returning ? 8u : 0u);
+        LowFunc Caller;
+        Caller.Entry = 0x10180;
+        auto &Block = Caller.Blocks.emplace_back();
+        Block.StartAddr = 0x10180;
+        Block.EndAddr = 0x10186;
+        auto &Call = Block.Ops.emplace_back();
+        Call.Opcode = NdOp::CALL;
+        Call.Addr = 0x10180;
+        Call.Output = NdVar::reg(mipsreg::V0, 4);
+        Call.addInput(NdVar::cst(0x10100, 4));
+        auto &Boundary = Block.InstructionBoundaries.emplace_back();
+        Boundary.Address = Call.Addr;
+        Boundary.Size = 4;
+        Boundary.OpCount = 1;
+        Boundary.Mode = InstructionMode::MIPS16;
+        Boundary.Control = LowInstructionControl::Call;
+        Boundary.ControlFlags = LowInstructionControlFlag::Call;
+        Boundary.TargetMode = LowInstructionTargetMode::MIPSClassic;
+        Boundary.Immediate = 0x10100;
+        auto Transports =
+            pipeline_detail::mips16RuntimeTransports(Image, {Caller});
+        ASSERT_EQ(Transports.size(), 1u);
+        auto Site = *sourceCallOccurrenceKey(Call, GetParam());
+        SourceCallTypeHint H;
+        H.CallKind = SourceCallTypeHint::Kind::Analyst;
+        H.AnalystSite = Site;
+        H.AnalystFixedCount = Variadic ? 1 : -1;
+        H.Signature.Parameters.push_back(
+            {"", Variadic ? NdType::makeInt(4) : NdType::makeFloat(8)});
+        H.Signature.Parameters.push_back(
+            {"", NdType::makeFloat(Variadic ? 8 : 4)});
+        H.Signature.ReturnType =
+            Returning ? NdType::makeFloat(8) : NdType::makeInt(4);
+        std::string Error;
+        ASSERT_TRUE(
+            assignAnalystCallABI(H, GetParam(), BinaryFormat::ELF, Error))
+            << Error;
+        pipeline_detail::MIPS16CallSites Sites{{Site, H}}, Mapped;
+        auto Expanded = pipeline_detail::projectMIPS16RuntimeCalls(
+            Image, Caller, Transports, &Sites, &Mapped);
+        ASSERT_TRUE(Expanded);
+        ASSERT_EQ(Mapped.size(), 1u);
+        const auto &NewSite = Mapped.begin()->first;
+        EXPECT_FALSE(NewSite.StaticTarget);
+        EXPECT_EQ(NewSite.Opcode, NdOp::INDIR_CALL);
+        EXPECT_EQ(NewSite.Instruction, Site.Instruction);
+        EXPECT_EQ(Expanded->Blocks[0].InstructionBoundaries[0].TargetMode,
+                  LowInstructionTargetMode::FromMIPS16TargetBit0);
+        EXPECT_EQ(Caller.Blocks[0].Ops.back().Opcode, NdOp::CALL);
+        EXPECT_THROW(pipeline_detail::projectMIPS16RuntimeCalls(Image, Caller,
+                                                                Transports),
+                     LowToMedConversionError);
+        auto Wrong = H;
+        Wrong.Signature.ReturnType =
+            Returning ? NdType::makeInt(4) : NdType::makeFloat(4);
+        ASSERT_TRUE(
+            assignAnalystCallABI(Wrong, GetParam(), BinaryFormat::ELF, Error))
+            << Error;
+        Sites[Site] = Wrong;
+        EXPECT_THROW(pipeline_detail::projectMIPS16RuntimeCalls(
+                         Image, Caller, Transports, &Sites, &Mapped),
+                     LowToMedConversionError);
+        File.put(0x100 + Slot * 4, 0x0060c825,
+                 4); // t9 is v1, not the function pointer.
+        auto Bad = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Bad));
+        Bad->MIPS = Image.MIPS;
+        Bad->Symbols = Image.Symbols;
+        EXPECT_FALSE(proveMIPS16IndirectCallTransport(*Bad, 0x10100));
+      }
+}
 
 TEST_P(MIPS16Pipeline, ReturnHelpersRequireExactByteTransport) {
   enum class Change {
@@ -386,10 +517,10 @@ TEST_P(MIPS16Pipeline,
                                    Op.Inputs[0].isConst() &&
                                    Op.Inputs[0].Offset == 0x101a0;
               EXPECT_EQ(OriginalCalls, Repeated ? 2u : 1u);
-              const auto Transports = pipeline_detail::mips16ReturnTransports(
+              const auto Transports = pipeline_detail::mips16RuntimeTransports(
                   *Image, Result.LowFuncs);
               EXPECT_EQ(Transports.size(), 1u);
-              const auto Projected = pipeline_detail::projectMIPS16ReturnCalls(
+              const auto Projected = pipeline_detail::projectMIPS16RuntimeCalls(
                   *Image, *Low, Transports);
               ASSERT_TRUE(Projected);
               auto BoundaryError = validateLowInstructionBoundaries(

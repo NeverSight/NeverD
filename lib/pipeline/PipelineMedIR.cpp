@@ -1166,10 +1166,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   std::map<va_t, const LowFunc *> SourceCalleeFunctions;
   for (const auto &F : Result.LowFuncs)
     SourceCalleeFunctions.emplace(F.Entry, &F);
-  const auto MIPS16Returns =
+  const auto MIPS16Runtime =
       !Opts.usesSourceDeclarations()
-          ? std::map<va_t, MIPS16ReturnTransport>{}
-          : pipeline_detail::mips16ReturnTransports(Img, Result.LowFuncs);
+          ? std::map<va_t, pipeline_detail::MIPS16RuntimeTransport>{}
+          : pipeline_detail::mips16RuntimeTransports(Img, Result.LowFuncs);
   if (Opts.usesSourceDeclarations())
     for (const auto &[Entry, Hint] : Opts.SourceCalleeTypeHints)
       SourceCalleeHints.insert_or_assign(Entry, Hint);
@@ -1260,6 +1260,8 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   };
   // A projected LowIR body must remain alive until the source stack checks.
   // Each conversion owns its slot; no worker reads another worker's MedIR.
+  std::vector<pipeline_detail::MIPS16CallSites> ProjectedMIPSSites(
+      MIPS16Runtime.empty() ? 0 : Total);
   std::vector<std::unique_ptr<LowFunc>> ProjectedFunctions(Total);
   std::vector<uint8_t> Converted(Total, 0);
   std::vector<uint8_t> PendingStackProof(Total, 0);
@@ -1293,10 +1295,9 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   auto ConvertOne = [&](LowToMedConverter &Local, size_t I) {
     Converted[I] = 0;
     PendingStackProof[I] = 0;
-    if (MIPS16Returns.contains(Result.LowFuncs[I].Entry)) {
-      ConversionErrors[I] =
-          "MIPS16 result transport uses incoming result registers, not an "
-          "ordinary source function ABI; retain the native runtime helper";
+    if (MIPS16Runtime.contains(Result.LowFuncs[I].Entry)) {
+      ConversionErrors[I] = "MIPS16 runtime helper uses a private register "
+                            "convention; retain the native helper";
       return;
     }
     try {
@@ -1310,9 +1311,17 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
       const auto Frame = Opts.SourceStackFrames.find(Result.LowFuncs[I].Entry);
       auto &Projected = ProjectedFunctions[I];
       Projected.reset();
-      if (auto Returns = pipeline_detail::projectMIPS16ReturnCalls(
-              Img, Result.LowFuncs[I], MIPS16Returns))
-        Projected = std::make_unique<LowFunc>(std::move(*Returns));
+      if (!MIPS16Runtime.empty()) {
+        auto &Mapped = ProjectedMIPSSites[I];
+        Mapped.clear();
+        const auto *Physical =
+            Sites == SourceSites.end() ? nullptr : &Sites->second;
+        if (auto Expanded = pipeline_detail::projectMIPS16RuntimeCalls(
+                Img, Result.LowFuncs[I], MIPS16Runtime, Physical, &Mapped))
+          Projected = std::make_unique<LowFunc>(std::move(*Expanded));
+        if (!Mapped.empty())
+          Local.setSourceCallSiteHints(&Mapped);
+      }
       if (!Opts.usesMachineMedIR() && Frame != Opts.SourceStackFrames.end()) {
         std::string Error;
         auto FrameSource =
