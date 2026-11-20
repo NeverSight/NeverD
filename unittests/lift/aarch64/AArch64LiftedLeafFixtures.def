@@ -655,9 +655,18 @@ int main(int argc, char **argv) {
 }
 )c")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
-A64_LEAF_TEXT(kFragmentedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
+A64_LEAF_TEXT(kFragmentedDispatchOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
 A64_LEAF_TEXT(kGappedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
                                      "#define NEVERD_TEST_TABLE_GAPS 1\n")
+A64_LEAF_TEXT(kMaskedFragmentedOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kMaskedGappedOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                   "#define NEVERD_TEST_TABLE_GAPS 1\n"
+                                   "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_VALUE(unsigned, kGappedTableRecordCount, 2)
+A64_LEAF_VALUE(unsigned, kSplitTableRecordCount, 3)
 A64_LEAF_VALUE(unsigned, kByteTableGapOffset, 1)
 A64_LEAF_VALUE(unsigned, kByteTableGapSize, 2)
 A64_LEAF_VALUE(unsigned, kHalfTableGapOffset, 3)
@@ -698,8 +707,12 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  add x1, x1, x15
  .endif
 #endif
+#ifdef NEVERD_TEST_MASKED_DISPATCH
+ and w0, w0, #3
+#else
  cmp w0, #3
  b.hi 9f
+#endif
  adr x10, 8f
  .if \width == 4
  adr x11, 3f
@@ -721,8 +734,10 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  ret
 3: add x0, x1, #43
  ret
+#ifndef NEVERD_TEST_MASKED_DISPATCH
 9: sub x0, x1, #5
  ret
+#endif
  .if \width == 1
 #ifdef NEVERD_TEST_UNMARKED_DISPATCH
 7: .quad 0x7ed503237f
@@ -828,7 +843,10 @@ int main(int argc, char **argv) {
     if (!call)
       return 3;
     for (unsigned i = 0; i < sizeof(inputs)/sizeof(*inputs); ++i) {
-      const uint32_t index = (uint32_t)inputs[i];
+      uint32_t index = (uint32_t)inputs[i];
+#ifdef NEVERD_TEST_MASKED_DISPATCH
+      index &= 3;
+#endif
       for (unsigned b = 0; b < sizeof(bases)/sizeof(*bases); ++b) {
         uint64_t expected = index < sizeof(cases)/sizeof(*cases)
                                 ? bases[b] + cases[index] : bases[b] - 5;

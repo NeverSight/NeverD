@@ -2557,3 +2557,65 @@ It selects the indexed DWARF or zero-stack frameless recipe from the system
 result, including the compact language form. The caller can use `unw_step`
 on the returned cursor. The API also checks the size of the supplied
 machine context before reading its registers.
+
+The guarded-table change passed 2,658 local tests, with 54 skips across
+nine suites. The installed arm64e `/usr/bin/wc` instruction classifier
+passed a separate check. Both Mac runners completed all 250 native tests,
+including twelve automatic entry-table walks on the normal and alternate
+signal stacks. Plain `unw_step` from the handler skipped the interrupted
+entry and reported a different caller SP on both compiler originals and
+published images. Each host checked 2,016 calls on 28 strictly signed CLI
+images. Both hosts reported Apple M1 (Virtual) and an unavailable x1
+environment. [Images, compiler versions and native results](evidence/arm64e-bounded-tables-2026-11-20.json).
+
+A masked selector can also prove the table domain without a conditional
+branch. For `index & 3`, the first Mach-O record supplies a readable prefix
+to the resolver. The mask supplies the four selector values; the bounded
+reader checks their actual storage. The fixtures exercise both consecutive
+and gapped records and remove the mask in a negative control. With no other
+range proof, all three indirect branches remain unresolved. In a separate
+compiler control, the mask leaves an entire unreferenced default block in
+the mixed section. NeverD recovers the switch targets but cannot complete
+a partial data map across those unclassified words.
+[Masked compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367).
+[Unreferenced default block control](https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014).
+
+The integrated LLVM fork completed all 252 publication tests on each of
+the two hosted Apple M1 profiles. Each host ran an independent caller on
+28 original and republished images and checked 2,016 results. Replacing a
+selected record with a conflicting kind prevented publication in all
+twelve local CLI controls. [Integrated native replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44750238073).
+
+On a compiler-original image, both systems reported compact
+`UNWIND_ARM64_MODE_FRAME` for the registered `_sigtramp` procedure,
+exposed no FDE for it, and returned zero from `unw_is_signal_frame`.
+From the handler, the system walk skipped the interrupted entry and
+reported a different caller SP. Initializing the cursor from the actual
+signal context and the entry's original registered unwind information
+recovered both caller PCs, the incoming SP and the preserved registers.
+[System trampoline measurements](https://github.com/gmh5225/test_mac_intel/actions/runs/44746453776).
+
+The test caller now keeps the same two signed frames while it repeatedly
+calls the real entry. An independent hosted comparison interleaved the old
+and revised observers on the same two strictly signed images. Both drivers
+completed 448 of 448 samples per host across original and installed
+images, including indexed DWARF, compact frameless and compact language
+entries on the regular and alternate signal stacks. Two earlier full-suite
+or focused runs recorded signal-test child terminations near the fixture's
+20-second deadline. Neither termination recurred in the interleaved sample.
+[Entry sampling comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44756188548).
+
+The pinned macOS r6 SDK predates two relevant LLVM changes. Its full
+252-case local run passed 242, skipped four tests requiring the newer
+PAuth_LR compact emitter, and refused six publications with explicit
+classic signed-return CFI. The exact six also failed on this change's
+unmodified parent. The current fork emits the implicit Darwin recipe.
+[Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8).
+
+With the revised signed caller, both hosts passed all 252 current-fork
+cases and all five focused r6 cases. The full r6 run on each host returned
+242 passes, four explicit skips and the same six CFI refusals. Both
+Apple M1 runners reported unavailable for native PAuth_LR, PACM-PC,
+scalar CPTA-on and checked ordinary-memory writeback.
+[Two-toolchain hosted qualification](https://github.com/gmh5225/test_mac_intel/actions/runs/44756052544).
+[Per-case results, image hashes and cleanup receipts](evidence/arm64e-masked-tables-2026-11-20.json).
