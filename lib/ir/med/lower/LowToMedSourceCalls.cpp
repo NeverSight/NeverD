@@ -31,6 +31,28 @@
 namespace neverd {
 
 namespace {
+/// A partial result defines one end of a physical register. The other bytes
+/// come from the call's unknown clobber. Keep that dependency visible to SSA.
+void appendPartialReturnRegister(std::vector<MedOp> &Ops, va_t Address,
+                                 MedVar Register, MedVar Value,
+                                 unsigned ByteOffset,
+                                 llvm::function_ref<MedVar(uint16_t)> Temp) {
+  MedOp Unused;
+  Unused.Opcode = NdOp::SUBBYTES;
+  Unused.Addr = Address;
+  Unused.Output = Temp(Register.Size - Value.Size);
+  Unused.addInput(Register);
+  Unused.addInput(MedVar::makeConst(ByteOffset ? 0 : Value.Size, 4));
+  MedOp Merge;
+  Merge.Opcode = NdOp::CONCAT;
+  Merge.Addr = Address;
+  Merge.Output = Register;
+  Merge.addInput(ByteOffset ? Value : Unused.Output);
+  Merge.addInput(ByteOffset ? Unused.Output : Value);
+  Ops.push_back(std::move(Unused));
+  Ops.push_back(std::move(Merge));
+}
+
 /// The logical result uses object-byte offsets. Gather each integer register
 /// in target byte order and preserve the call clobber in unoccupied lanes.
 void appendMIPSByteResult(
@@ -62,16 +84,11 @@ void appendMIPSByteResult(
           Emit(NdOp::SUBBYTES, Temp(1), Call.Output, MedVar::makeConst(At, 4));
       Word = I ? Emit(NdOp::CONCAT, Temp(I + 1), Word, Byte) : Byte;
     }
-    if (P.CarrierBytes) {
-      const auto Unused = P.CarrierBytes - Width;
-      const auto Suffix =
-          Emit(NdOp::SUBBYTES, Temp(Unused), Result,
-               MedVar::makeConst(P.RegisterByteOffset ? 0 : Width, 4));
-      Emit(NdOp::CONCAT, Result, P.RegisterByteOffset ? Word : Suffix,
-           P.RegisterByteOffset ? Suffix : Word);
-    } else {
+    if (P.CarrierBytes)
+      appendPartialReturnRegister(Ops, Call.Addr, Result, Word,
+                                  P.RegisterByteOffset, Temp);
+    else
       Emit(NdOp::COPY, Result, Word, {});
-    }
     ObjectOffset += Width;
   }
 }
@@ -597,8 +614,10 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
                       : ndVarToMedVar(NdVar::reg(Return.RegisterOffset,
                                                  Return.ValueBytes));
       std::vector<MedOp> ReturnOps;
-      const auto FloatingCarrier = [&](const SourceABIValueLocation &Location)
+      const auto ReturnCarrier = [&](const SourceABIValueLocation &Location)
           -> std::optional<std::pair<uint64_t, uint16_t>> {
+        if (Signature.MIPSRecords && Location.CarrierBytes)
+          return {{Location.RegisterOffset, Location.CarrierBytes}};
         if (Location.Kind != SourceABICarrierKind::FloatingRegister ||
             !TRI.isVectorReg(Location.RegisterOffset))
           return std::nullopt;
@@ -612,27 +631,14 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           return std::nullopt;
         return std::make_pair(Offset, Bytes);
       };
-      const auto AppendFloatingCarrier =
-          [&](MedVar Value, std::pair<uint64_t, uint16_t> Wide) {
-            // A source result, scalar or record member, defines only its low
-            // lane. Its suffix comes from this call's unknown clobber. Do not
-            // publish a narrow architectural register write: SSA would zero
-            // its upper lanes before this merge could retain their identity.
-            MedOp Upper;
-            Upper.Opcode = NdOp::SUBBYTES;
-            Upper.Addr = Op.Addr;
-            Upper.Output = Temporary(Wide.second - Value.Size);
-            Upper.addInput(ndVarToMedVar(NdVar::reg(Wide.first, Wide.second)));
-            Upper.addInput(MedVar::makeConst(Value.Size, 4));
-            MedOp Merge;
-            Merge.Opcode = NdOp::CONCAT;
-            Merge.Addr = Op.Addr;
-            Merge.Output = ndVarToMedVar(NdVar::reg(Wide.first, Wide.second));
-            Merge.addInput(Upper.Output);
-            Merge.addInput(Value);
-            ReturnOps.push_back(std::move(Upper));
-            ReturnOps.push_back(std::move(Merge));
-          };
+      const auto AppendCarrier = [&](MedVar Value,
+                                     std::pair<uint64_t, uint16_t> Wide,
+                                     unsigned ByteOffset) {
+        appendPartialReturnRegister(
+            ReturnOps, Op.Addr,
+            ndVarToMedVar(NdVar::reg(Wide.first, Wide.second)), Value,
+            ByteOffset, Temporary);
+      };
       if (NativeError) {
         // A single source operation owns both observable call results. Define
         // x21/R12 explicitly before SSA can treat its incoming value as an
@@ -721,7 +727,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
                                  : sourceAggregateMembers(Signature.ReturnType);
         for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {
           const auto &Piece = Signature.ReturnComponents[I];
-          const auto Wide = FloatingCarrier(Piece);
+          const auto Wide = ReturnCarrier(Piece);
           const bool Boolean =
               Piece.Kind == SourceABICarrierKind::BooleanRegister;
           MedOp Extract;
@@ -763,7 +769,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
             ReturnOps.push_back(std::move(Extend));
             ReturnOps.push_back(std::move(Merge));
           } else if (Wide)
-            AppendFloatingCarrier(Value, *Wide);
+            AppendCarrier(Value, *Wide, Piece.RegisterByteOffset);
         }
       } else if (Hint->CallKind ==
                  SourceCallTypeHint::Kind::SwiftBooleanProjection) {
@@ -808,8 +814,8 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Merge.addInput(Value);
         ReturnOps.push_back(std::move(Upper));
         ReturnOps.push_back(std::move(Merge));
-      } else if (const auto Wide = FloatingCarrier(Return)) {
-        AppendFloatingCarrier(Op.Output, *Wide);
+      } else if (const auto Wide = ReturnCarrier(Return)) {
+        AppendCarrier(Op.Output, *Wide, 0);
       }
       // These hints were matched to an exact imported runtime declaration by
       // the loader and passed ABI validation above. Carry its termination

@@ -325,6 +325,19 @@ bool mips::isSplitRecordScalar(const SourceParameterTypeHint &P) {
          (P.Type->Kind == NdTypeKind::Int || P.Type->Kind == NdTypeKind::Float);
 }
 
+/// A partial record word occupies the low or high end of its GPR. Retain
+/// its physical width and bit position for both argument and result consumers.
+static SourceABIValueLocation
+recordLocation(const SourceParameterPiece &Piece) {
+  auto Location = Piece.Location;
+  if (Location.Kind == SourceABICarrierKind::IntegerRegister &&
+      Location.ValueBytes < Piece.CarrierBytes) {
+    Location.CarrierBytes = Piece.CarrierBytes;
+    Location.RegisterByteOffset = Piece.RegisterBitOffset / 8;
+  }
+  return Location;
+}
+
 static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
                           const mips::RecordCallPlacement &Layout) {
   auto Bound = Hint;
@@ -369,18 +382,12 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       }
       unsigned Offset = 0;
       for (const auto &P : Pieces) {
-        auto L = P.Location;
         if (P.Indirect || P.Offset != Offset ||
-            (L.Kind != SourceABICarrierKind::IntegerRegister &&
-             L.Kind != SourceABICarrierKind::Stack))
+            (P.Location.Kind != SourceABICarrierKind::IntegerRegister &&
+             P.Location.Kind != SourceABICarrierKind::Stack))
           return false;
-        if (L.Kind == SourceABICarrierKind::IntegerRegister &&
-            L.ValueBytes < P.CarrierBytes) {
-          L.CarrierBytes = P.CarrierBytes;
-          L.RegisterByteOffset = P.RegisterBitOffset / 8;
-        }
-        Components.push_back(L);
-        Offset += L.ValueBytes;
+        Components.push_back(recordLocation(P));
+        Offset += P.Location.ValueBytes;
       }
       return Offset == Type->Size;
     }
@@ -397,9 +404,9 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       const auto &M = Members[I];
       const auto &P = Pieces[I];
       if (P.Offset != M.ByteOffset || P.Location.ValueBytes != M.Type->Size ||
-          P.RegisterBitOffset || P.Indirect)
+          P.Indirect)
         return false;
-      Components.push_back(P.Location);
+      Components.push_back(recordLocation(P));
     }
     return true;
   };

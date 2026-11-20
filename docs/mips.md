@@ -1720,7 +1720,9 @@ An untyped PIC call can observe argument-register writes that reach it,
 including its delay slot and loop backedges. A later call with a declared
 by-value record observes the pieces selected by its own signature. For example,
 a single unsigned field that fills an ABI slot occupies one argument GPR,
-including a four-byte slot on o32.
+including a four-byte slot on o32. A four-byte integer field in an eight-byte
+n32 or n64 register uses its high half on big-endian machines and its low half
+on little-endian machines when passed or returned as a record.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
 A merge load from caller-owned input can supply a record argument when both

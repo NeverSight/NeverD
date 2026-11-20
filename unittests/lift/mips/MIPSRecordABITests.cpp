@@ -328,6 +328,30 @@ TEST(MIPSRecordABI, O32ReturnsTheStorageAddressAndSplitsRecordArguments) {
   }
 }
 
+TEST(MIPSRecordABI, NarrowIntegerFieldUsesTheSameLaneInArgumentAndResult) {
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(unsigned(A));
+    const auto Value = record({NdType::makeInt(4, false)});
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Value;
+    Signature.Parameters.push_back({"value", Value});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    const auto Parameters = sourceABIParameters(Signature);
+    ASSERT_EQ(Parameters.size(), 1u);
+    ASSERT_EQ(Signature.ReturnComponents.size(), 1u);
+    EXPECT_EQ(Parameters.front().Location.RegisterOffset, mipsreg::r(4));
+    EXPECT_EQ(Signature.ReturnComponents.front().RegisterOffset, mipsreg::r(2));
+    for (const auto &Location :
+         {Parameters.front().Location, Signature.ReturnComponents.front()}) {
+      EXPECT_EQ(Location.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Location.ValueBytes, 4u);
+      EXPECT_EQ(Location.CarrierBytes, 8u);
+      EXPECT_EQ(Location.RegisterByteOffset, archLittleEndian(A) ? 0u : 4u);
+    }
+  }
+}
+
 TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
   for (Arch A : Architectures)
     for (const auto &Type :
