@@ -1,0 +1,1447 @@
+{
+  "neverd_revision": "d498e194513fc26be866115435207a76e63225f7",
+  "llvm_fork_source": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "r6_tag": "neverd-llvm-v23.0.0-r6",
+  "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "baseline_revision": "51b862e8a70768974d6917eddd319faff6668994",
+  "original_entry_before_fix": {
+    "original_entry": 16292,
+    "original_adr_target": 16292,
+    "published_body": 16384,
+    "published_adr_target": 16384
+  },
+  "stored_entry_before_fix": {
+    "arithmetic": {
+      "source": 16288,
+      "original_target": 16288,
+      "input_sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+      "exit": 1,
+      "diagnostics": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ]
+    },
+    "output": {
+      "source": 16288,
+      "original_target": 16288,
+      "input_sha256": "c81d8049d8a1778c7ef00da6fe030abc3b23470a927db9699fdad1acb0b12b1e",
+      "exit": 0,
+      "diagnostics": [],
+      "entry": 16288,
+      "placed": 16384,
+      "placed_adr_target": 16384,
+      "sha256": "2a94ce585b713a180aa173ca25739b33866633c8bacc1d45a2c38aa5c1791992"
+    }
+  },
+  "before": {
+    "literal": {
+      "input": "8020c8d35db66883bdde46a3f00a78eb9011810ff0cf35d5e272d94239ba66c7",
+      "exit": 1,
+      "published": false,
+      "diagnostics": [
+        "error: arm64e entry leaf_sum has 1 source data-in-code records and 0 installed records",
+        "error: patch failed: patch failed"
+      ]
+    },
+    "offset": {
+      "input": "50cc6218946380a10a1d002a25f11602eb205ec08c0c1b080c78c18c6b592fd3",
+      "exit": 1,
+      "published": false,
+      "diagnostics": [
+        "error: arm64e entry leaf_sum has 1 source data-in-code records and 0 installed records",
+        "error: patch failed: patch failed"
+      ]
+    },
+    "entry": {
+      "input": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f",
+      "exit": 0,
+      "published": true,
+      "diagnostics": []
+    },
+    "interior": {
+      "input": "1b339b4645034552585d40eee0942952106d758c588a77d580aa373053cd8ebd",
+      "exit": 1,
+      "published": false,
+      "diagnostics": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ]
+    },
+    "pointer": {
+      "input": "e226b27be389494b4d0d219e6bd9c16e8ef0ffdcd38e14ac925fffdfa53e3cdf",
+      "exit": 1,
+      "published": false,
+      "diagnostics": [
+        "error: source binding: data extent is not contained in original data storage",
+        "error: patch failed: patch failed"
+      ]
+    }
+  },
+  "published_images": {
+    "qualification": {
+      "byte_identical_between_producers": 30,
+      "hashes": {
+        "addresses-default-1.dylib": "787049c4be3d1c0aa6a8ad6248fed8a4da3ff380ff4a6239b1b809776f60b439",
+        "addresses-default-2.dylib": "578d311fdbb828d9d8b3cd6f36b51c982a43d57050d0b56b4132a26dd1e9a9c2",
+        "addresses-default-3.dylib": "a07d56b56fbd50616a73f8688057fecc49d8e44c7ea313d53fdf2fa91e4af516",
+        "addresses-no-opt-1.dylib": "67a4d6c1b1ff9f07979523751f0f952887db9b5fb0159f7c69cef1b808386dd4",
+        "addresses-no-opt-2.dylib": "7d9972b2a8e402abdbb6a07c3b892c10859a339150cd8056cedb806c643f5282",
+        "addresses-no-opt-3.dylib": "eda1207d62a0264b37e19b03c6c282325c63ceaf44f2bbadb6307b1bd35720d6",
+        "entry-default-1.dylib": "6b7882f0cbfa881cdb2dbaf7ae391b9d4118ab74f7a50e398212e5100ffa3f49",
+        "entry-default-2.dylib": "18460086ca7f79f29efd00a3ddcaa083bde4f3a3eaa45028e6a651bd01c956d0",
+        "entry-default-3.dylib": "80d0553123a1b123702b49aeed6ec14529e9a97076405dbaf0265881171b04c5",
+        "entry-no-opt-1.dylib": "d1800462c2a76de173399b3b674cd7c72a5d6dd0d9d750295ca307c11f4b7b2a",
+        "entry-no-opt-2.dylib": "34a7132b7d6bf3d5fc31d5938345a719adbf0120777e6f9bac0600e01e7d9e21",
+        "entry-no-opt-3.dylib": "ebd0e65df960e9e1dbbeff1d8f90e530ca981c3149944f4d6ccd59d67ba77763",
+        "literal-default-1.dylib": "8d4957571f3718b99b2af1f0d711dedc7e90af60a9da4daef7d223481f181799",
+        "literal-default-2.dylib": "8a44b39cd53f0fac7d7c2ef33c7e3be83c17e645ae16daa2a9f313e5a9e730d4",
+        "literal-default-3.dylib": "bb9bb197fa406b241fc0f6d670bb1559050c795e04f4a5c294fae9bbfedf6a34",
+        "literal-no-opt-1.dylib": "6402238a08ec6f3351daa1a1542fe9e8b2e26826c3ae29b52ea9e399546c460f",
+        "literal-no-opt-2.dylib": "75ca5395b625ba87827bd6c9750e68c9476b0ed5c72657081b2e32650daca0e9",
+        "literal-no-opt-3.dylib": "a2e67dc411954c58a83556ea8a689a30b73000d1de3b409500c8026839e1f2f5",
+        "offset-default-1.dylib": "1abce2b5d4113ac857e192efc025c6af991b740e3c7229201046cf7fa01a1193",
+        "offset-default-2.dylib": "8eac680def87a5e97bdbc080bf3bf9fce6c1bd170ee8d5106651f3c41c2ebb5e",
+        "offset-default-3.dylib": "fcc68a98f5b34ec35e513ee5aebebaa623447d525e3e7bcbdb2878c09a1f8228",
+        "offset-no-opt-1.dylib": "72af70ba0a93fb230b27b15cf5b34f62b8642a80886d374c8ccd5aaeb372cc64",
+        "offset-no-opt-2.dylib": "2a1faa3365e2482004f431fb7aa1ce232eab26382f96776f0680a375f75add45",
+        "offset-no-opt-3.dylib": "283e066fc598ed936d0bd7dac0e3550992858cb62a0bcdb30306582d8f9e171a",
+        "pointer-default-1.dylib": "83f11c33300b6ae7daf51070076804cf8326c682dbcf37a9a61e49e1fcce5547",
+        "pointer-default-2.dylib": "dd03b1b8575ebb9b2949fa69c1225edd536648b5914419c39dd138c253560555",
+        "pointer-default-3.dylib": "d0e5f12f7e5d29ca127e77dd5d86e0e31d1ea40f5fc6844b07dcecde6e0300c8",
+        "pointer-no-opt-1.dylib": "afbc3510c3a863190b03b6cfc499ebea0ff821bd0879456f74f924b9bfd76e9b",
+        "pointer-no-opt-2.dylib": "bffa774c8257c961fc406a4f20abbcabffc6ead7baa52b860cacea108bf185fb",
+        "pointer-no-opt-3.dylib": "da67ee5c52a3a82239e7d4804526cc91062cb21592433cbc85f5dbbd9f460cd8"
+      }
+    },
+    "page-qualification": {
+      "byte_identical_between_producers": 36,
+      "hashes": {
+        "page-local-O0-default-1.dylib": "0590c6b3770051a8bfaff1204231cc04f7ce6bc341a25b1aeec89b2a9c33d70e",
+        "page-local-O0-default-2.dylib": "92576cde6a3e18b0c279c9b6e5b188911d7c9efe8785ff09589ac1a8999d157c",
+        "page-local-O0-default-3.dylib": "b45b09491082ee441ffcb66f303427cbf5a411bfc30ceb8e13a9803f57e4c7dc",
+        "page-local-O0-no-opt-1.dylib": "a4617fe481bdf4a47c2371ca1b9ef6f2daa1260d7909aabd4ce28bcca6135b6f",
+        "page-local-O0-no-opt-2.dylib": "dc0314831d563e42d024f1812b994667e3854a844808f72db9f41f11e7cbfa75",
+        "page-local-O0-no-opt-3.dylib": "3aae3ee35c68374ca0527aca75fe3462ea321543ef69ebe52a10f6738c3d040e",
+        "page-local-O2-default-1.dylib": "2b729cb30ceef0dc012e94f875cde38750e1072c547450043adcbc85bc1dc8e9",
+        "page-local-O2-default-2.dylib": "34bd344c9c8493a549ed0a76114dd6e3ea3cd292cb4f1f89b00e818d788523a0",
+        "page-local-O2-default-3.dylib": "4ffcc0cb8a88b58d34cd90491ea70a994c2f0a4bb8c4eaf5ed64df330f5281a3",
+        "page-local-O2-no-opt-1.dylib": "7a9afc56dcc0193ca92896ee416773090aeb20cad91c7383d3d3ed030df0a7b1",
+        "page-local-O2-no-opt-2.dylib": "3edd2a5709330214f8f3a6ac0d925ede4f15f718fccde1163828a6647c81fba8",
+        "page-local-O2-no-opt-3.dylib": "eb82d61d109a7815f146b154786694717fd74f7f2b64674ca7821bc9f7eb3cd3",
+        "page-compiler-pages-macos-26-O0-default-1.dylib": "183dbb2251e41f62ed7d2d41e6262961a931a581c3e3316d6f796f3b4edfa196",
+        "page-compiler-pages-macos-26-O0-default-2.dylib": "1190e6541274938ae85472861ba244d01b4e03aa327c03e35425f2b040ed8148",
+        "page-compiler-pages-macos-26-O0-default-3.dylib": "fb7c191ab3c3c210dceb61bd72347f6fe32045ec64c986a8c4de9f9926d8fe80",
+        "page-compiler-pages-macos-26-O0-no-opt-1.dylib": "71dd3389e7546b976b02a69191432638707374e5168e8993a99ad812feb09379",
+        "page-compiler-pages-macos-26-O0-no-opt-2.dylib": "b8c9339eeaf686c4709f038d4031efa29516fe11209a3fcb49e01e03f805d9bb",
+        "page-compiler-pages-macos-26-O0-no-opt-3.dylib": "69449c6f93e1f8597493cb083dcaf47e69190aba8a81ff6bb1e88f3186078f5a",
+        "page-compiler-pages-macos-26-O2-default-1.dylib": "be30af92112a6a5d038a7b59574da63039a8f925f4eeaedff9605c505c7de310",
+        "page-compiler-pages-macos-26-O2-default-2.dylib": "6b120256d52761e904df397e88d090b4fbca71212b02d33edd026d368b86cc5c",
+        "page-compiler-pages-macos-26-O2-default-3.dylib": "b893ee8b16aa64084324af8d9dd5027d68a3e84ad8c44f49551cd77eb2b9e5d1",
+        "page-compiler-pages-macos-26-O2-no-opt-1.dylib": "195de856090b9d41eed401a492b256794c22dfc2e6479731dbfa823568e03cd5",
+        "page-compiler-pages-macos-26-O2-no-opt-2.dylib": "f84b5cccfb60e3e19af8d7ea4011178187da84d1db79d5a4d4374d2eb23557de",
+        "page-compiler-pages-macos-26-O2-no-opt-3.dylib": "0ea4a885ff7c98d6c25ce8ecb5211ccfd239f53769014c252ed7480106d4762c",
+        "page-compiler-pages-xcode-27-O0-default-1.dylib": "5246bfabfd691560d33d586059880f39a4a25044c9b726db3c3f96ce9bdbe32f",
+        "page-compiler-pages-xcode-27-O0-default-2.dylib": "2981310891da8922d41a0bdb890ec002ba49f49be6ecf0f34c275f3cc524f5e9",
+        "page-compiler-pages-xcode-27-O0-default-3.dylib": "8ac8d5e97c742d987d6296f374eeb93ca06347acc2d4147c211dcf1c3c2fc39d",
+        "page-compiler-pages-xcode-27-O0-no-opt-1.dylib": "c01b9d955e4c00c107e1fd0b14721ed278e78925efe806489002c74387a5fe6a",
+        "page-compiler-pages-xcode-27-O0-no-opt-2.dylib": "765f58fa8df0dea816a6bff3aefe416bc6a5f35089074efb9f49da6415a4817b",
+        "page-compiler-pages-xcode-27-O0-no-opt-3.dylib": "8963f4315d2e15586fc22fe289630868b5adb1436a1c34fd6b0f93c754ab66c0",
+        "page-compiler-pages-xcode-27-O2-default-1.dylib": "f5866a59951a88cd733e7c3d9f31c28a3cc7bd948d1f7d88542a3c267f0f11d0",
+        "page-compiler-pages-xcode-27-O2-default-2.dylib": "9c1376c1217006fd46c4eec78392a6d1f44fa31bc61df730755371ea3ecd9aa1",
+        "page-compiler-pages-xcode-27-O2-default-3.dylib": "864f02ccaa087fc54601e648aefb053fc3d07af490fba5b3f5a5a683f85e9bad",
+        "page-compiler-pages-xcode-27-O2-no-opt-1.dylib": "338d09fea9984cd9b648ba647e373516317bef85c88c2544339b87281346a5b9",
+        "page-compiler-pages-xcode-27-O2-no-opt-2.dylib": "ae804d093b43d8139ad09e9f1dfe6d97941590cc06e06d7e872bd8d92c1fff41",
+        "page-compiler-pages-xcode-27-O2-no-opt-3.dylib": "930e35f80ef1101f28b66784dd0e54e676eaf53909fb86749c720913b51623f4"
+      }
+    },
+    "store-qualification": {
+      "byte_identical_between_producers": 6,
+      "hashes": {
+        "store-default-1.dylib": "bd082136872be703090a43de8e34e062982317d627137834f393f67b0f8ed9f5",
+        "store-default-2.dylib": "d8d56b3040ca2d90416e41a6507432124eb2d1f905532f8171ca6e5ae59ab725",
+        "store-default-3.dylib": "6aa4fbc473169c3d53d96bb1c4f548a1103849795ebb9f917b855ce110919951",
+        "store-no-opt-1.dylib": "ce51e1b57f3e2ecf5906dd1785cd94237f5b6761c8b40e7a0eac12d2bed95e6c",
+        "store-no-opt-2.dylib": "7d472379085cf609bef257c519b65a856fb1803398000ae84bfc2cd8f0bd2503",
+        "store-no-opt-3.dylib": "eb26b82afcff1bc32d9104930f3d5b2c4b67eb605046c5c138b4d31f2bc58072"
+      }
+    }
+  },
+  "compiler_originals": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44795711164",
+    "compiler-pages-macos-26": {
+      "macos": "26.7.2",
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "images": {
+        "O0": {
+          "sha256": "2ff560546ed6f3574f6f84cf77386bf55a45c5259832d49001c429da654551a7",
+          "source_sha256": "7022de1a448ffd462acf872646269a77588933f9093f336ef82ecb531e1c758e",
+          "caller_sha256": "0012fca1d00233f3435229d23e72dc4b15414ea88e29640dd926ebb7f70ad158",
+          "adrp": 2,
+          "adr": 0,
+          "native_calls": 7,
+          "exit": 0
+        },
+        "O2": {
+          "sha256": "e6f5bca97f0659b438ccc95aedbd63d4e04c0c9a04a074584f6431e5e1b22791",
+          "source_sha256": "7022de1a448ffd462acf872646269a77588933f9093f336ef82ecb531e1c758e",
+          "caller_sha256": "0012fca1d00233f3435229d23e72dc4b15414ea88e29640dd926ebb7f70ad158",
+          "adrp": 2,
+          "adr": 0,
+          "native_calls": 7,
+          "exit": 0
+        }
+      }
+    },
+    "compiler-pages-xcode-27": {
+      "macos": "27.0.1",
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "images": {
+        "O0": {
+          "sha256": "3894eec4822d55bb6e2be2743011d2586a5d74527ed26f1aaaa09ddbfc3f8cec",
+          "source_sha256": "7022de1a448ffd462acf872646269a77588933f9093f336ef82ecb531e1c758e",
+          "caller_sha256": "0012fca1d00233f3435229d23e72dc4b15414ea88e29640dd926ebb7f70ad158",
+          "adrp": 2,
+          "adr": 0,
+          "native_calls": 7,
+          "exit": 0
+        },
+        "O2": {
+          "sha256": "11c806d0c4a8391faf92eb9b2d78698a773ca9829838773da028d93ef5cca535",
+          "source_sha256": "7022de1a448ffd462acf872646269a77588933f9093f336ef82ecb531e1c758e",
+          "caller_sha256": "0012fca1d00233f3435229d23e72dc4b15414ea88e29640dd926ebb7f70ad158",
+          "adrp": 2,
+          "adr": 0,
+          "native_calls": 7,
+          "exit": 0
+        }
+      }
+    },
+    "before_publication": {
+      "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+      "images": {
+        "compiler-pages-macos-26-O0": {
+          "sha256": "2ff560546ed6f3574f6f84cf77386bf55a45c5259832d49001c429da654551a7",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: arm64e lifted image has no complete native leaf contract",
+            "error: patch failed: patch failed"
+          ]
+        },
+        "compiler-pages-macos-26-O2": {
+          "sha256": "e6f5bca97f0659b438ccc95aedbd63d4e04c0c9a04a074584f6431e5e1b22791",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: source binding: data extent is not contained in original data storage",
+            "error: patch failed: patch failed"
+          ]
+        },
+        "compiler-pages-xcode-27-O0": {
+          "sha256": "3894eec4822d55bb6e2be2743011d2586a5d74527ed26f1aaaa09ddbfc3f8cec",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: arm64e lifted image has no complete native leaf contract",
+            "error: patch failed: patch failed"
+          ]
+        },
+        "compiler-pages-xcode-27-O2": {
+          "sha256": "11c806d0c4a8391faf92eb9b2d78698a773ca9829838773da028d93ef5cca535",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: arm64e lifted image has no complete native leaf contract",
+            "error: patch failed: patch failed"
+          ]
+        }
+      }
+    }
+  },
+  "registered_original_signal_controls": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44792865868",
+    "macos-15": {
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "15.8.2",
+      "classic_launch_exit": -9,
+      "status": "classic_arm64e_launch_unavailable",
+      "samples": [],
+      "x1_status": "unavailable",
+      "missing": [
+        {
+          "probe": "probe",
+          "feature": "native_pac_qualified"
+        },
+        {
+          "probe": "probe",
+          "feature": "compiler_original_call_unwind_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "native_cursor_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "explicit_pauth_lr_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "pacm_pc_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_cpta_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_checked_writeback_qualified"
+        }
+      ]
+    },
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "26.7.2",
+      "classic_launch_exit": 0,
+      "status": "passed",
+      "samples": [
+        {
+          "mode": "raw-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 1
+        },
+        {
+          "mode": "raw-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 1
+        },
+        {
+          "mode": "raw-compact-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-compact-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-language-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-language-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        }
+      ],
+      "x1_status": "unavailable",
+      "missing": [
+        {
+          "probe": "probe-cursor",
+          "feature": "explicit_pauth_lr_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "pacm_pc_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_cpta_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_checked_writeback_qualified"
+        }
+      ]
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "27.2",
+      "classic_launch_exit": 0,
+      "status": "passed",
+      "samples": [
+        {
+          "mode": "raw-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-compact-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-compact-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-language-entry",
+          "alternate_stack": false,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        },
+        {
+          "mode": "raw-language-entry",
+          "alternate_stack": true,
+          "raw_handler_visited_entry": 0,
+          "registered_table_recovered_both_callers": 1,
+          "raw_caller_sp": 0,
+          "lookup_offset": 0
+        }
+      ],
+      "x1_status": "unavailable",
+      "missing": [
+        {
+          "probe": "probe-cursor",
+          "feature": "explicit_pauth_lr_qualified"
+        },
+        {
+          "probe": "probe-cursor",
+          "feature": "pacm_pc_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_cpta_qualified"
+        },
+        {
+          "probe": "probe-cpta",
+          "feature": "x1_el0_checked_writeback_qualified"
+        }
+      ]
+    }
+  },
+  "native_matrix": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44801521879",
+    "addresses-macos-26-fork": {
+      "hardware": "Apple M1 (Virtual)",
+      "toolchain": "fork",
+      "cases": 262,
+      "passed": 262,
+      "failed": [],
+      "skipped": [],
+      "gtest_exit": 0,
+      "classic_cfi_diagnostics": [],
+      "independent_calls": 56,
+      "page_calls": 294,
+      "prior_address_control": {
+        "entry.dylib": {
+          "exit": 0,
+          "sha256": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f"
+        },
+        "entry-before.dylib": {
+          "exit": 4,
+          "sha256": "9cac2402e4d818336d4b53ba2ad76a4accc7ec2f6e86051cf6427dc7f741045f"
+        }
+      },
+      "stored_entry_controls": {
+        "store-original.dylib": {
+          "exit": 0,
+          "sha256": "c81d8049d8a1778c7ef00da6fe030abc3b23470a927db9699fdad1acb0b12b1e"
+        },
+        "store-before.dylib": {
+          "exit": 4,
+          "sha256": "2a94ce585b713a180aa173ca25739b33866633c8bacc1d45a2c38aa5c1791992"
+        },
+        "store-default-1.dylib": {
+          "exit": 0,
+          "sha256": "bd082136872be703090a43de8e34e062982317d627137834f393f67b0f8ed9f5"
+        },
+        "store-default-2.dylib": {
+          "exit": 0,
+          "sha256": "d8d56b3040ca2d90416e41a6507432124eb2d1f905532f8171ca6e5ae59ab725"
+        },
+        "store-default-3.dylib": {
+          "exit": 0,
+          "sha256": "6aa4fbc473169c3d53d96bb1c4f548a1103849795ebb9f917b855ce110919951"
+        },
+        "store-no-opt-1.dylib": {
+          "exit": 0,
+          "sha256": "ce51e1b57f3e2ecf5906dd1785cd94237f5b6761c8b40e7a0eac12d2bed95e6c"
+        },
+        "store-no-opt-2.dylib": {
+          "exit": 0,
+          "sha256": "7d472379085cf609bef257c519b65a856fb1803398000ae84bfc2cd8f0bd2503"
+        },
+        "store-no-opt-3.dylib": {
+          "exit": 0,
+          "sha256": "eb26b82afcff1bc32d9104930f3d5b2c4b67eb605046c5c138b4d31f2bc58072"
+        }
+      },
+      "properties": {
+        "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3,
+          "preserved_unreached_blocks": 3
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 2,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5,
+          "refused_unreached_pc_after_fresh_lift": true
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 5,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+          "executed_native_images": 4,
+          "published_data_in_code_records": 8,
+          "recovered_source_data_in_code_records": 1,
+          "recovered_alignment_bytes": 3
+        },
+        "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses": {
+          "verified_source_address_sites": 4,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.RejectsSourceADRBeyondArchitecturalReach": {
+          "verified_source_address_sites": 4,
+          "out_of_range_source_adr_refused": true
+        },
+        "AArch64LiftedImage.PublishedOutputParametersKeepOriginalEntryAddresses": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO0": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO2": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "xml_sha256": "2a896a3f76cc2e818f5701efe5a00f6f7ea930a7938582c7dfc6feb9d8397bfe",
+      "sha256": "205fff37b54c45ee8e7844238a4de39f4cf4abdc175faf87aa164b52d51459b1",
+      "byte_images": 7,
+      "page_images": 42
+    },
+    "addresses-macos-26-r6": {
+      "hardware": "Apple M1 (Virtual)",
+      "toolchain": "r6",
+      "cases": 262,
+      "passed": 252,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "gtest_exit": 1,
+      "classic_cfi_diagnostics": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "independent_calls": 56,
+      "page_calls": 294,
+      "prior_address_control": {
+        "entry.dylib": {
+          "exit": 0,
+          "sha256": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f"
+        },
+        "entry-before.dylib": {
+          "exit": 4,
+          "sha256": "9cac2402e4d818336d4b53ba2ad76a4accc7ec2f6e86051cf6427dc7f741045f"
+        }
+      },
+      "stored_entry_controls": {
+        "store-original.dylib": {
+          "exit": 0,
+          "sha256": "c81d8049d8a1778c7ef00da6fe030abc3b23470a927db9699fdad1acb0b12b1e"
+        },
+        "store-before.dylib": {
+          "exit": 4,
+          "sha256": "2a94ce585b713a180aa173ca25739b33866633c8bacc1d45a2c38aa5c1791992"
+        },
+        "store-default-1.dylib": {
+          "exit": 0,
+          "sha256": "81acb363cd0434c6a39cde662dc050874f61875ddda1ccd870f40df970373fd0"
+        },
+        "store-default-2.dylib": {
+          "exit": 0,
+          "sha256": "34ada2e0c6ccc299e7adfc80ce0596c4e1b0321e2f4c7b38e221352211d587c6"
+        },
+        "store-default-3.dylib": {
+          "exit": 0,
+          "sha256": "5412d2df51ac1fbb565f450875d00d1617785af4e7092cf028c468be47a1964f"
+        },
+        "store-no-opt-1.dylib": {
+          "exit": 0,
+          "sha256": "6a31d443ef450b2d9f46402a257c98800ef96a03b1b4efa86658ce5690e72a19"
+        },
+        "store-no-opt-2.dylib": {
+          "exit": 0,
+          "sha256": "549df26083855a97fb690f445b78fee9177efa99aa3adeac7efb90b81da25aff"
+        },
+        "store-no-opt-3.dylib": {
+          "exit": 0,
+          "sha256": "53b9f1aa2ddd86da064d9e7ae3051488a3154cb8cfdd3706a0eba2a819f7af58"
+        }
+      },
+      "properties": {
+        "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3,
+          "preserved_unreached_blocks": 3
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 2,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5,
+          "refused_unreached_pc_after_fresh_lift": true
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 5,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+          "executed_native_images": 4,
+          "published_data_in_code_records": 8,
+          "recovered_source_data_in_code_records": 1,
+          "recovered_alignment_bytes": 3
+        },
+        "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses": {
+          "verified_source_address_sites": 4,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.RejectsSourceADRBeyondArchitecturalReach": {
+          "verified_source_address_sites": 4,
+          "out_of_range_source_adr_refused": true
+        },
+        "AArch64LiftedImage.PublishedOutputParametersKeepOriginalEntryAddresses": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO0": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO2": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "xml_sha256": "64f44689c51073baf98b07f33cd4effa823ad62ecb1afccd786a3740d6cdfb60",
+      "sha256": "0cbc42c43e103ef4627facb2f77a06a5d69017493db80aafe7264ca9b9323bea",
+      "byte_images": 7,
+      "page_images": 42
+    },
+    "addresses-xcode-27-fork": {
+      "hardware": "Apple M1 (Virtual)",
+      "toolchain": "fork",
+      "cases": 262,
+      "passed": 262,
+      "failed": [],
+      "skipped": [],
+      "gtest_exit": 0,
+      "classic_cfi_diagnostics": [],
+      "independent_calls": 56,
+      "page_calls": 294,
+      "prior_address_control": {
+        "entry.dylib": {
+          "exit": 0,
+          "sha256": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f"
+        },
+        "entry-before.dylib": {
+          "exit": 4,
+          "sha256": "9cac2402e4d818336d4b53ba2ad76a4accc7ec2f6e86051cf6427dc7f741045f"
+        }
+      },
+      "stored_entry_controls": {
+        "store-original.dylib": {
+          "exit": 0,
+          "sha256": "c81d8049d8a1778c7ef00da6fe030abc3b23470a927db9699fdad1acb0b12b1e"
+        },
+        "store-before.dylib": {
+          "exit": 4,
+          "sha256": "2a94ce585b713a180aa173ca25739b33866633c8bacc1d45a2c38aa5c1791992"
+        },
+        "store-default-1.dylib": {
+          "exit": 0,
+          "sha256": "bd082136872be703090a43de8e34e062982317d627137834f393f67b0f8ed9f5"
+        },
+        "store-default-2.dylib": {
+          "exit": 0,
+          "sha256": "d8d56b3040ca2d90416e41a6507432124eb2d1f905532f8171ca6e5ae59ab725"
+        },
+        "store-default-3.dylib": {
+          "exit": 0,
+          "sha256": "6aa4fbc473169c3d53d96bb1c4f548a1103849795ebb9f917b855ce110919951"
+        },
+        "store-no-opt-1.dylib": {
+          "exit": 0,
+          "sha256": "ce51e1b57f3e2ecf5906dd1785cd94237f5b6761c8b40e7a0eac12d2bed95e6c"
+        },
+        "store-no-opt-2.dylib": {
+          "exit": 0,
+          "sha256": "7d472379085cf609bef257c519b65a856fb1803398000ae84bfc2cd8f0bd2503"
+        },
+        "store-no-opt-3.dylib": {
+          "exit": 0,
+          "sha256": "eb26b82afcff1bc32d9104930f3d5b2c4b67eb605046c5c138b4d31f2bc58072"
+        }
+      },
+      "properties": {
+        "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3,
+          "preserved_unreached_blocks": 3
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 2,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5,
+          "refused_unreached_pc_after_fresh_lift": true
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 5,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+          "executed_native_images": 4,
+          "published_data_in_code_records": 8,
+          "recovered_source_data_in_code_records": 1,
+          "recovered_alignment_bytes": 3
+        },
+        "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses": {
+          "verified_source_address_sites": 4,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.RejectsSourceADRBeyondArchitecturalReach": {
+          "verified_source_address_sites": 4,
+          "out_of_range_source_adr_refused": true
+        },
+        "AArch64LiftedImage.PublishedOutputParametersKeepOriginalEntryAddresses": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO0": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO2": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "xml_sha256": "67e9603666ac257c57fbf69a327cdee080186c2bbffc0482e1b418a2265642c0",
+      "sha256": "b5822652047980d15c9616665e0b6079ff7f8c9ea8c76d753cf2090bee2fcf6b",
+      "byte_images": 7,
+      "page_images": 42
+    },
+    "addresses-xcode-27-r6": {
+      "hardware": "Apple M1 (Virtual)",
+      "toolchain": "r6",
+      "cases": 262,
+      "passed": 252,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "gtest_exit": 1,
+      "classic_cfi_diagnostics": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "independent_calls": 56,
+      "page_calls": 294,
+      "prior_address_control": {
+        "entry.dylib": {
+          "exit": 0,
+          "sha256": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f"
+        },
+        "entry-before.dylib": {
+          "exit": 4,
+          "sha256": "9cac2402e4d818336d4b53ba2ad76a4accc7ec2f6e86051cf6427dc7f741045f"
+        }
+      },
+      "stored_entry_controls": {
+        "store-original.dylib": {
+          "exit": 0,
+          "sha256": "c81d8049d8a1778c7ef00da6fe030abc3b23470a927db9699fdad1acb0b12b1e"
+        },
+        "store-before.dylib": {
+          "exit": 4,
+          "sha256": "2a94ce585b713a180aa173ca25739b33866633c8bacc1d45a2c38aa5c1791992"
+        },
+        "store-default-1.dylib": {
+          "exit": 0,
+          "sha256": "81acb363cd0434c6a39cde662dc050874f61875ddda1ccd870f40df970373fd0"
+        },
+        "store-default-2.dylib": {
+          "exit": 0,
+          "sha256": "34ada2e0c6ccc299e7adfc80ce0596c4e1b0321e2f4c7b38e221352211d587c6"
+        },
+        "store-default-3.dylib": {
+          "exit": 0,
+          "sha256": "5412d2df51ac1fbb565f450875d00d1617785af4e7092cf028c468be47a1964f"
+        },
+        "store-no-opt-1.dylib": {
+          "exit": 0,
+          "sha256": "6a31d443ef450b2d9f46402a257c98800ef96a03b1b4efa86658ce5690e72a19"
+        },
+        "store-no-opt-2.dylib": {
+          "exit": 0,
+          "sha256": "549df26083855a97fb690f445b78fee9177efa99aa3adeac7efb90b81da25aff"
+        },
+        "store-no-opt-3.dylib": {
+          "exit": 0,
+          "sha256": "53b9f1aa2ddd86da064d9e7ae3051488a3154cb8cfdd3706a0eba2a819f7af58"
+        }
+      },
+      "properties": {
+        "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 40,
+          "recovered_source_data_in_code_records": 3,
+          "preserved_unreached_blocks": 3
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 2,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5,
+          "refused_unreached_pc_after_fresh_lift": true
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+          "executed_native_images": 4,
+          "native_switch_comparisons": 288,
+          "proved_embedded_dispatches": 3,
+          "rejected_fragment_kind_conflicts": 3,
+          "published_data_in_code_records": 56,
+          "recovered_source_data_in_code_records": 5,
+          "preserved_unreached_blocks": 3,
+          "recovered_alignment_bytes": 5
+        },
+        "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+          "executed_native_images": 4,
+          "published_data_in_code_records": 8,
+          "recovered_source_data_in_code_records": 1,
+          "recovered_alignment_bytes": 3
+        },
+        "AArch64LiftedImage.ADRPreservesSourceLiteralAndFunctionAddresses": {
+          "verified_source_address_sites": 4,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.RejectsSourceADRBeyondArchitecturalReach": {
+          "verified_source_address_sites": 4,
+          "out_of_range_source_adr_refused": true
+        },
+        "AArch64LiftedImage.PublishedOutputParametersKeepOriginalEntryAddresses": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO0": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "AArch64LiftedImage.CompilerDataPageAndInteriorPointerAtO2": {
+          "symbolic_data_page_operands": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "xml_sha256": "89e359aafff2a5d829bf021e49f95bbfee213e8c520983f62a670cd574566a1f",
+      "sha256": "91b2bf52924253e6c0c34ea886910baa855cd72dd131a31320190fd7ded3a404",
+      "byte_images": 7,
+      "page_images": 42
+    }
+  },
+  "self_hosted_runner_count_at_measurement": 0,
+  "publication_comparison": {
+    "signature_identifier": "Darwin ad-hoc signing derives CodeDirectory identifiers from the destination basename.",
+    "r6_cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+    "identical_signed_images_at_same_basename": 72,
+    "replay_bytes_removed_after_verification": 7384736
+  },
+  "release_inputs": {
+    "fork": {
+      "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+      "test_host_sha256": "61a2eea5d521060d8a3b1cd0a4c3910497034800a91947571e6d21dd99fbeaf3",
+      "package_sha256": "34c3d5c7b2bd58f0798e5758b0cf91d725fe6f785366cbc7fd05afb8057c60e2",
+      "byte_address_originals": {
+        "addresses": "062511999395e3c971697167e6300aa119bf9e116a14be75619918b71a62ba38",
+        "entry": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f",
+        "literal": "8020c8d35db66883bdde46a3f00a78eb9011810ff0cf35d5e272d94239ba66c7",
+        "offset": "50cc6218946380a10a1d002a25f11602eb205ec08c0c1b080c78c18c6b592fd3",
+        "pointer": "e226b27be389494b4d0d219e6bd9c16e8ef0ffdcd38e14ac925fffdfa53e3cdf"
+      },
+      "page_originals": {
+        "local-O0": "cfa1c0bac652966e38fc373d6fa1fc96129bd95848743281c1bdc4bb1948b358",
+        "local-O2": "babc87e829f928df78f75ef2035518e32440692ec31645f6d2dd0c14b3566b5b",
+        "compiler-pages-macos-26-O0": "2ff560546ed6f3574f6f84cf77386bf55a45c5259832d49001c429da654551a7",
+        "compiler-pages-macos-26-O2": "e6f5bca97f0659b438ccc95aedbd63d4e04c0c9a04a074584f6431e5e1b22791",
+        "compiler-pages-xcode-27-O0": "3894eec4822d55bb6e2be2743011d2586a5d74527ed26f1aaaa09ddbfc3f8cec",
+        "compiler-pages-xcode-27-O2": "11c806d0c4a8391faf92eb9b2d78698a773ca9829838773da028d93ef5cca535"
+      },
+      "negative_byte_cases": {
+        "far-default": {
+          "input_sha256": "a93534b58625e1922978a61e7a7d317ccddbe5da8cb260c011e17ac15a4136b9",
+          "exit": 1,
+          "diagnostics": [
+            "error: Mach-O patch object: source target is outside the signed 21-bit reach of the placed ADR",
+            "error: patch failed: patch failed"
+          ],
+          "published": false
+        },
+        "far-no-opt": {
+          "input_sha256": "a93534b58625e1922978a61e7a7d317ccddbe5da8cb260c011e17ac15a4136b9",
+          "exit": 1,
+          "diagnostics": [
+            "error: Mach-O patch object: source target is outside the signed 21-bit reach of the placed ADR",
+            "error: patch failed: patch failed"
+          ],
+          "published": false
+        },
+        "interior-default": {
+          "input_sha256": "1b339b4645034552585d40eee0942952106d758c588a77d580aa373053cd8ebd",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-no-opt": {
+          "input_sha256": "1b339b4645034552585d40eee0942952106d758c588a77d580aa373053cd8ebd",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        }
+      },
+      "negative_page_cases": {
+        "default": {
+          "sha256": "3e713269f0c38286c75939f19c7e165edfb980650ca2bd405326f550a24b6ae3",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback"
+          ]
+        },
+        "no-opt": {
+          "sha256": "3e713269f0c38286c75939f19c7e165edfb980650ca2bd405326f550a24b6ae3",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback"
+          ]
+        }
+      },
+      "negative_code_address_cases": {
+        "untyped-interior-default": {
+          "sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "untyped-interior-no-opt": {
+          "sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-arithmetic-default": {
+          "sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-arithmetic-no-opt": {
+          "sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        }
+      }
+    },
+    "r6": {
+      "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+      "test_host_sha256": "18ed811a0015319aa64fa83a0150deb3daa57c5775b973f0c003263ae65890b2",
+      "package_sha256": "897f45aed1c86f9d912df89797956195272bd6f0aa05ebb809c8136f54c93935",
+      "byte_address_originals": {
+        "addresses": "062511999395e3c971697167e6300aa119bf9e116a14be75619918b71a62ba38",
+        "entry": "ed16fae5b95e556cbf54493dd729e51fb3033f54567489c76ad45f7b0175ca8f",
+        "literal": "8020c8d35db66883bdde46a3f00a78eb9011810ff0cf35d5e272d94239ba66c7",
+        "offset": "50cc6218946380a10a1d002a25f11602eb205ec08c0c1b080c78c18c6b592fd3",
+        "pointer": "e226b27be389494b4d0d219e6bd9c16e8ef0ffdcd38e14ac925fffdfa53e3cdf"
+      },
+      "page_originals": {
+        "local-O0": "cfa1c0bac652966e38fc373d6fa1fc96129bd95848743281c1bdc4bb1948b358",
+        "local-O2": "babc87e829f928df78f75ef2035518e32440692ec31645f6d2dd0c14b3566b5b",
+        "compiler-pages-macos-26-O0": "2ff560546ed6f3574f6f84cf77386bf55a45c5259832d49001c429da654551a7",
+        "compiler-pages-macos-26-O2": "e6f5bca97f0659b438ccc95aedbd63d4e04c0c9a04a074584f6431e5e1b22791",
+        "compiler-pages-xcode-27-O0": "3894eec4822d55bb6e2be2743011d2586a5d74527ed26f1aaaa09ddbfc3f8cec",
+        "compiler-pages-xcode-27-O2": "11c806d0c4a8391faf92eb9b2d78698a773ca9829838773da028d93ef5cca535"
+      },
+      "negative_byte_cases": {
+        "far-default": {
+          "input_sha256": "a93534b58625e1922978a61e7a7d317ccddbe5da8cb260c011e17ac15a4136b9",
+          "exit": 1,
+          "diagnostics": [
+            "error: Mach-O patch object: source target is outside the signed 21-bit reach of the placed ADR",
+            "error: patch failed: patch failed"
+          ],
+          "published": false
+        },
+        "far-no-opt": {
+          "input_sha256": "a93534b58625e1922978a61e7a7d317ccddbe5da8cb260c011e17ac15a4136b9",
+          "exit": 1,
+          "diagnostics": [
+            "error: Mach-O patch object: source target is outside the signed 21-bit reach of the placed ADR",
+            "error: patch failed: patch failed"
+          ],
+          "published": false
+        },
+        "interior-default": {
+          "input_sha256": "1b339b4645034552585d40eee0942952106d758c588a77d580aa373053cd8ebd",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-no-opt": {
+          "input_sha256": "1b339b4645034552585d40eee0942952106d758c588a77d580aa373053cd8ebd",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        }
+      },
+      "negative_page_cases": {
+        "default": {
+          "sha256": "3e713269f0c38286c75939f19c7e165edfb980650ca2bd405326f550a24b6ae3",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback"
+          ]
+        },
+        "no-opt": {
+          "sha256": "3e713269f0c38286c75939f19c7e165edfb980650ca2bd405326f550a24b6ae3",
+          "exit": 1,
+          "published": false,
+          "diagnostics": [
+            "error: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: incomplete relocatable address value X0.1 escapes through a return value in _leaf_difference; refusing stale-address fallback"
+          ]
+        }
+      },
+      "negative_code_address_cases": {
+        "untyped-interior-default": {
+          "sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "untyped-interior-no-opt": {
+          "sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-arithmetic-default": {
+          "sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        },
+        "interior-arithmetic-no-opt": {
+          "sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ],
+          "published": false
+        }
+      }
+    }
+  },
+  "stored_entry_before_fix_revision": "2d3cc00a9a451c322d7a11fa2f547245676d0eac",
+  "local_release": {
+    "fork": {
+      "cases": 262,
+      "passed": 262,
+      "failed": [],
+      "skipped": [],
+      "xml_sha256": "22a41012b76f6c15527bb984ed1dd0cc093e62e649ffd260db2ca262c30eb033",
+      "focused_passed": 8,
+      "new_ctest_passed": 5
+    },
+    "r6": {
+      "cases": 262,
+      "passed": 252,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "xml_sha256": "28f01be52b29066ebaf2e11479eb19e1d10266fb341d6929e9894ef0193d338b",
+      "focused_passed": 8,
+      "new_ctest_passed": 5
+    },
+    "adjacent_macho_arm64_relocation_cases_passed": 19,
+    "aarch64_return_protection": {
+      "cases": 19,
+      "passed": 19,
+      "failed": 0,
+      "skipped": [],
+      "xml_sha256": "efd9a90722ef39e587a543342e3fa477a09e95afc26a2ee5ef69c20787e87217"
+    },
+    "jump_table": {
+      "cases": 798,
+      "passed": 792,
+      "failed": 0,
+      "skipped": [
+        "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+        "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+        "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+        "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/1"
+      ],
+      "xml_sha256": "e61e0ccd853bfcc2943c4b868991e94f1926edf3927d71e966652cc27de01ac2"
+    }
+  },
+  "remaining_function_entry_addend": {
+    "source_entry": 16288,
+    "folded_value": 16289,
+    "first_fatal": "unresolved-code-identity",
+    "post_abi_graph_sha256": "53b25532e4e0f7e918834fb81a54185bc7199fdc72cd1fee3a5e070d7097142c",
+    "source_sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e"
+  },
+  "remote_cleanup": {
+    "codex/neverd-arm64e-darwin-entry-20261121": {
+      "head": "64f8759f47ff5f494a206ae79cbba28a0f9dbb6a",
+      "remote_removed": true,
+      "local_worktree_removed": true
+    },
+    "codex/neverd-arm64e-addresses-20261121": {
+      "head": "b07115035f5767d14d5a7cd40988402ccf675e25",
+      "remote_removed": true,
+      "local_worktree_removed": true
+    },
+    "neverd-source-addresses-d498e194513f": {
+      "release_id": 453092090,
+      "release_http": 404,
+      "tag_removed": true
+    }
+  }
+}

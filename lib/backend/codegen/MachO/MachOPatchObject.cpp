@@ -17,6 +17,7 @@
 #include "neverd/backend/codegen/MachO/MachOExceptionPatch.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
+#include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/backend/codegen/PatchStorage.h"
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
@@ -2513,6 +2514,47 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   return std::move(Object->Image);
 }
 
+// Mach-O has no object relocation for a byte-relative ADR. Register lowering
+// retains its source word through MC. Once both placements are known, replace
+// only its immediate and let the installed-image verifier decode the result.
+static llvm::Error
+relocateLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
+                        va_t Slide, llvm::ArrayRef<SourcePatchMapping> Mappings,
+                        llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
+  using namespace aarch64;
+  constexpr unsigned Width =
+      branch::A64PageImmLo.Width + branch::A64PageImmHi.Width;
+  for (const auto &Fixup : Addresses) {
+    while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction)
+      Mappings = Mappings.drop_front();
+    if (Mappings.empty() || Fixup.Instruction < Mappings.front().OriginalVA)
+      return fail(kAddressSourceWord);
+    const auto &Entry = Mappings.front();
+    const auto &Sym = Object.Symbols.at(Object.Names.at(Entry.Symbol));
+    const auto &Section =
+        Object.Image.Sections[Object.Sections.at(Sym.Section)];
+    const auto Offset = Fixup.Instruction - Entry.OriginalVA;
+    const auto *Before = Original.readVA(Fixup.Instruction, kInsnSize);
+    if (!Before || !Section.IsInImage ||
+        !rangeInBounds(Offset, kInsnSize, Sym.Size))
+      return fail(kAddressSourceWord);
+    auto *After =
+        Object.Image.Bytes.data() + Section.Offset + Sym.Offset + Offset;
+    const uint32_t Word = readLE<uint32_t>(Before);
+    if ((Word & kADRP_Mask) != kADR_Op || readLE<uint32_t>(After) != Word)
+      return fail(kAddressSourceWord);
+    const va_t PC = Section.VA + Sym.Offset + Offset;
+    const int64_t Distance = Fixup.Target + Slide - PC;
+    if (!llvm::isInt<Width>(Distance))
+      return fail(kAddressReach);
+    const uint32_t Bits = Distance;
+    writeLE<uint32_t>(
+        After, (Word & kADRP_FixedBits) | ((Bits & kImmLoMask) << kImmLoShift) |
+                   (((Bits >> kImmLoWidth) & kImmHiMask) << kImmHiShift));
+  }
+  return llvm::Error::success();
+}
+
 static llvm::Expected<PatchResult> installObject(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
     llvm::ArrayRef<SourcePatchMapping> Mappings,
@@ -2526,7 +2568,8 @@ static llvm::Expected<PatchResult> installObject(
                                    llvm::ArrayRef<NativeMachOCompactRange>)>
         VerifyGenerated,
     MachOLiftedObjectVerifier VerifyLiftedImage,
-    llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
+    llvm::ArrayRef<MachODataInCodeRange> RecoveredData,
+    llvm::ArrayRef<MachOLiftedSourceAddress> AddressesToRelocate) {
   const BinaryImage &Original =
       Preparation ? Preparation->Image : OriginalInput;
   if (Original.MachOSharedCache)
@@ -2609,6 +2652,9 @@ static llvm::Expected<PatchResult> installObject(
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
+  if (auto E = relocateLiftedAddresses(*Object, Original, *Slide, Mappings,
+                                       AddressesToRelocate))
+    return E;
   if (!Object->Thunks.empty()) {
     if (!EH)
       return fail("import thunks need registered native DWARF storage");
@@ -2771,7 +2817,7 @@ llvm::Expected<PatchResult> installMachOObjectPatch(
         VerifyGenerated) {
   return installObject(Object, Original, Mappings, Bindings, Output,
                        PrepareReceipt, DynCode, Preparation, Dependencies,
-                       VerifyGenerated, {}, {});
+                       VerifyGenerated, {}, {}, {});
 }
 
 llvm::Expected<PatchResult>
@@ -2780,8 +2826,10 @@ installMachOLiftedObject(llvm::StringRef Object, const BinaryImage &Original,
                          llvm::ArrayRef<SourcePatchBinding> Bindings,
                          const std::filesystem::path &Output,
                          llvm::ArrayRef<MachODataInCodeRange> RecoveredData,
+                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses,
                          MachOLiftedObjectVerifier Verify) {
   return installObject(Object, Original, Mappings, Bindings, Output, {},
-                       nullptr, nullptr, {}, {}, Verify, RecoveredData);
+                       nullptr, nullptr, {}, {}, Verify, RecoveredData,
+                       Addresses);
 }
 } // namespace neverd
