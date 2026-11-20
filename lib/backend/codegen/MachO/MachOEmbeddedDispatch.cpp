@@ -274,9 +274,6 @@ bool completeLayout(const BinaryImage &Image, const LowFunc &Function,
     if (Left.End != Read.Begin || Left.Kind != Read.Kind)
       return false;
   }
-  for (const auto &[Begin, End] : Layout.UnreachedCode)
-    if (hasRelocationProvenanceIn(Image, Begin, End))
-      return false;
   return ReadCount == Recovered.size() || coalesceReads(Recovered);
 }
 } // namespace
@@ -346,6 +343,11 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
     Result.UnreachedCode.clear();
     Result.Recovered.clear();
   }
+  // A retained instruction has no relocation emitter of its own, including
+  // when every data record surrounding it was present in the input.
+  for (const auto &[Begin, End] : Result.UnreachedCode)
+    if (hasRelocationProvenanceIn(Image, Begin, End))
+      return std::nullopt;
   return Result;
 }
 } // namespace neverd

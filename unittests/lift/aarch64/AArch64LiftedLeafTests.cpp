@@ -588,11 +588,16 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           return R.Begin == Records.back().Begin;
         });
         Reject(Unanchored);
-        if (GappedTables || Table.EntrySize != sizeof(uint8_t)) {
+        const auto RejectFixup = [&](va_t Address) {
           auto Relocated = *Image;
-          Relocated.DataPtrRelocSlots.insert(BlockBegin);
+          Relocated.DataPtrRelocSlots.insert(Address);
           Reject(Relocated);
-        }
+        };
+        RejectFixup(BlockBegin);
+        if (PaddedDefault && Table.EntrySize == sizeof(uint16_t))
+          RejectFixup(FirstData->End);
+        if (PaddedDefault && Table.EntrySize == sizeof(uint32_t))
+          RejectFixup(BlockEnd);
         for (auto Invalid :
              {kExposeDefaultPC, kReadDefaultCode, kBranchToDefaultData}) {
           auto Bytes = Image->Raw;
