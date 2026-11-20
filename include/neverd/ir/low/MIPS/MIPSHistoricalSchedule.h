@@ -12,6 +12,7 @@
 #define NEVERD_IR_LOW_MIPS_MIPSHISTORICALSCHEDULE_H
 
 #include "neverd/ir/intrinsics/MIPS/MIPSHistoricalTiming.h"
+#include "neverd/ir/low/MIPS/MIPSHistoricalCP0.h"
 
 #include <cstdint>
 #include <optional>
@@ -40,14 +41,95 @@ public:
   /// The caller supplies the observed pipeline state. In particular, an
   /// empty snapshot is a quiescent boundary, not an inferred function entry.
   static std::optional<HistoricalSchedule>
-  fromSnapshot(unsigned HistoricalISA, HistoricalSchedulingState State) {
+  fromSnapshot(unsigned HistoricalISA, HistoricalSchedulingState State,
+               std::optional<HistoricalCP0> System = {}) {
     if (HistoricalISA < 1 || HistoricalISA > 3 ||
+        (System && !System->supportsLevel(HistoricalISA)) ||
         (State.UnreadyRegisters & 1) || State.FCSRDelay > 1 ||
         State.FCCDelay > 2 || State.HIReadDelay > 2 || State.LOReadDelay > 2 ||
         (State.ForwardableLoad & ~State.UnreadyRegisters) ||
         (State.PendingProduct && (State.UnknownHI || State.UnknownLO)))
       return std::nullopt;
-    return HistoricalSchedule(HistoricalISA, State);
+    return HistoricalSchedule(HistoricalISA, State, System);
+  }
+
+  const std::optional<HistoricalCP0> &system() const { return System; }
+
+  bool beginPhysical(uint64_t PC, uint32_t Word, bool Paired,
+                     std::optional<bool> SlotTaken = {}) {
+    const auto T = historicalInstructionTiming(Word, ISA, Paired);
+    if (!T || (System && !System->permitsIssue(Word)) ||
+        !begin(PC, T->Reads, T->Delayed, T->Access, T->MergeSource,
+               T->ForwardableLoad))
+      return false;
+    Active->Word = Word;
+    Active->SlotTaken = SlotTaken;
+    return true;
+  }
+
+  std::optional<uint32_t> physicalWord(uint64_t PC) const {
+    return Active && Active->PC == PC ? Active->Word : std::nullopt;
+  }
+  /// A board supplies levels on IP[7:2] at an instruction boundary.
+  bool setHardwareInterrupts(uint8_t Lines) {
+    if (Active || !System || Lines >= 64)
+      return false;
+    System->Cause = (System->Cause & ~0xfc00u) | uint32_t(Lines) << 10;
+    return true;
+  }
+  bool matchesTransfer(uint64_t PC, unsigned RS, unsigned Register) const {
+    return Register < 32 && Active && Active->PC == PC && Active->Word &&
+           System &&
+           (*Active->Word & 0xffe0ffffu) ==
+               (0x40000000u | RS << 21 | Register << 11);
+  }
+  bool stageCP0Write(uint64_t PC, unsigned Register, uint64_t Value,
+                     bool Doubleword) {
+    if (!matchesTransfer(PC, Doubleword ? 5 : 4, Register) ||
+        Active->Register || !System->canWrite(Register, Value, Doubleword))
+      return false;
+    Active->Register = Register;
+    Active->Value = Value;
+    return true;
+  }
+  std::optional<uint64_t> stageExceptionReturn(uint64_t PC, bool ERET) {
+    if (!System || !Active || Active->PC != PC ||
+        Active->Word != (ERET ? 0x42000018u : 0x42000010u) ||
+        !System->canUseCP0() || System->usesModeStack() == ERET ||
+        System->ExceptionReturnDelay || Active->RestoresStatus ||
+        (ERET && Active->SlotTaken))
+      return std::nullopt;
+    auto Target = ERET && (System->Status & 4) ? System->ErrorEPC
+                                               : std::optional(System->EPC);
+    if (!Target || (ERET && (*Target & 3)))
+      return std::nullopt;
+    Active->RestoresStatus = true;
+    return Target;
+  }
+  bool retiringERET(uint64_t PC) const {
+    return Active && Active->PC == PC && Active->RestoresStatus &&
+           Active->Word == 0x42000018u;
+  }
+  bool raiseSoftwareException(uint64_t PC, uint8_t Code) {
+    if (!Active || !Active->Word ||
+        (*Active->Word & 0xfc00003fu) != (Code == 8 ? 12u : 13u) ||
+        (Code != 8 && Code != 9))
+      return false;
+    return enterException(PC, Code);
+  }
+  bool enterException(uint64_t PC, uint8_t Code,
+                      std::optional<uint64_t> FaultAddress = {}) {
+    if (!System || !Active || Active->PC != PC || !Active->Word)
+      return false;
+    const auto Branch =
+        Active->SlotTaken ? std::optional(PC - 4) : std::nullopt;
+    if (!System->enterException(
+            Code, PC, Branch, FaultAddress, Active->SlotTaken.value_or(false),
+            Code == 11 ? HistoricalCP0::coprocessorOf(*Active->Word)
+                       : std::nullopt))
+      return false;
+    Active.reset();
+    return true;
   }
 
   const HistoricalSchedulingState &snapshot() const { return Current; }
@@ -110,14 +192,18 @@ public:
   bool retire(uint64_t PC) {
     if (!Active || Active->PC != PC)
       return false;
+    if (System)
+      System->retire(Active->Register, Active->Value,
+                     Active->Word && ((*Active->Word >> 21 & 31) == 5));
+    if (Active->RestoresStatus)
+      System->restoreExceptionState();
     Current = Active->Next;
     Active.reset();
     return true;
   }
 
   /// Cancel a failed attempt without consuming an instruction period. This
-  /// does not model exception entry, interrupt delivery, CP0 propagation or
-  /// reset; the caller must bind those events to an appropriate new snapshot.
+  /// leaves CP0 untouched. Use enterException to deliver a known fault.
   bool abort() {
     if (!Active)
       return false;
@@ -126,14 +212,21 @@ public:
   }
 
 private:
-  HistoricalSchedule(unsigned HistoricalISA, HistoricalSchedulingState State)
-      : ISA(HistoricalISA), Current(State) {}
+  HistoricalSchedule(unsigned HistoricalISA, HistoricalSchedulingState State,
+                     std::optional<HistoricalCP0> System)
+      : ISA(HistoricalISA), Current(State), System(System) {}
   struct Instruction {
     uint64_t PC;
     HistoricalSchedulingState Next;
+    std::optional<uint32_t> Word{};
+    std::optional<bool> SlotTaken{};
+    std::optional<unsigned> Register{};
+    uint64_t Value = 0;
+    bool RestoresStatus = false;
   };
   unsigned ISA;
   HistoricalSchedulingState Current;
+  std::optional<HistoricalCP0> System;
   std::optional<Instruction> Active;
 };
 
