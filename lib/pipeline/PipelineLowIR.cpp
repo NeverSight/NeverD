@@ -5127,6 +5127,13 @@ bool computeCallRegisterEffects(
         Effects, Volatile, /*ArgumentFamilies=*/0, {}, {}, {});
     Result.CallMayWriteGPRs = std::move(Summaries.MayWrite);
     Result.CallBodyMayWriteGPRs = std::move(Summaries.BodyMayWrite);
+    // The setup of a call gives it its arguments by position, which a
+    // storing write barrier's X2 and X3 are not: its callers bind them, in
+    // its order (LocalRegisterEffect::GoFixedArguments).
+    for (const auto &[Entry, Effect] : Effects)
+      if (Effect->GoFixedArguments)
+        Result.CallEntryIntegerArguments.mutate().try_emplace(
+            Entry, *Effect->GoFixedArguments);
     return true;
   }
   auto Family = [](uint64_t RegOff) {
@@ -5275,11 +5282,12 @@ bool computeCallRegisterEffects(
         Change(Effect->second)->StackArgs = Count;
     Result.CallFloatReturns = std::move(Prototyped.FloatReturns);
     Result.CallEntryFloatingArguments = std::move(Prototyped.FloatingArguments);
-    // A Go stub's callers bind the registers it passes on, in its order
-    // (LocalRegisterEffect::GoStubArguments).
+    // The callers of a Go stub or a storing write barrier bind its operands,
+    // in its order (LocalRegisterEffect::GoFixedArguments).
     for (const auto &[Entry, Effect] : Effects)
-      if (Effect->GoStubArguments)
-        FixedEntryIntegerArguments.try_emplace(Entry, *Effect->GoStubArguments);
+      if (Effect->GoFixedArguments)
+        FixedEntryIntegerArguments.try_emplace(Entry,
+                                               *Effect->GoFixedArguments);
     for (auto &[Entry, Stub] : ListedGoStubs)
       FixedEntryIntegerArguments.try_emplace(Entry, std::move(Stub));
     Result.CallEntryIntegerArguments = std::move(FixedEntryIntegerArguments);

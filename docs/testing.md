@@ -20658,6 +20658,11 @@ caller alone. Both publish (AX, CX) for the stub, and the caller's call binds
 lists a Go 1.18 function that grows its stack as never returning, as
 `runtime.throw` is: a run of its caller alone summarizes it as the whole run
 does, reading RAX and RBX.
+`GoWriteBarriers.AStoringBarrierTakesItsAddressAndPointer` runs the pipeline
+over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
+System V and Win64 x86-64 with Go's register ABI, as System V with the stack
+ABI, and as arm64 with X2 and X3: each call passes `(0x1000, 0x2000)`, and
+the barrier's parameters are its two registers.
 `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
 1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
 1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.

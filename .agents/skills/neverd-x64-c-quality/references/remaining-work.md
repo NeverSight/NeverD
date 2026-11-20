@@ -571,14 +571,25 @@ Still open, in order of yield:
        the listed routines (`runtime_throw` 2 arguments, as in the image,
        beside 7); on a 40-function Go 1.18 sample 20 of 29 bodies match, up
        from 18. Still apart there: `spillArgs` (12 arguments beside 1),
-       ABI0 assembly callees (`madvise` 5 beside 9, `Syscall6` 7 beside 13),
-       and the write barriers.
+       and ABI0 assembly callees (`madvise` 5 beside 9, `Syscall6` 7 beside
+       13).
      - `SYSCALL` reads all six syscall argument registers whatever the
        call, so `runtime.exit` (`exit_group(code)`) is no stack-only
        function.
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
-     - ABI0 assembly in register-ABI images.
+     - ABI0 assembly in register-ABI images. Go 1.17+ compiled code calls
+       it with stack words, as before (`mov %rax,(%rsp); ...; call
+       madvise`, which reads `[rsp+8..24]`), but only images before Go 1.17
+       take that reading, so amd64 calls print System V stack positions:
+       `runtime_exit(0, 0, 0, 0, 0, 0, 2)` in Go 1.18, 1.20 and 1.26. arm64
+       already prints `runtime_exit(2)`.
+     - A register-ABI call's results past the first. Go's internal ABI
+       returns up to nine integer results in RAX, RBX, RCX, RDI, RSI and
+       R8-R11 and keeps no other of them across a call, so a read of RBX
+       before any write after a call is the call's second result; only RAX
+       is modeled, and `call *%rdx; mov %rbx, slot` prints a placeholder for
+       an interface's data word (`errors.init`, `modulesinit`).
      - arm64 growth paths, which still wait on the register-ABI gate.
        The no-return list is open to the stack ABI.
      Bounds stubs are done. LowIR recognizes a stub once

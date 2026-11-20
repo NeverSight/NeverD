@@ -45,6 +45,14 @@ const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry);
 /// \p A: R11 or X25 for GoWriteBarrierKind::Buffer, none for Store.
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind);
 
+/// The operands of the write barrier at \p Entry where it performs the store
+/// itself (GoWriteBarrierKind::Store), in its own order: the address it writes
+/// at and the pointer it writes there (GoWriteBarrier::Destination, Value).
+/// They follow neither the platform's argument order nor Go's.  None for a
+/// Buffer barrier, which takes no argument, or for any other routine.
+std::optional<FixedIntegerCallArguments>
+goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
+
 /// The contract of a call the code at \p Caller makes to \p Callee, which is
 /// InvalidVA where the call names no fixed target.
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,

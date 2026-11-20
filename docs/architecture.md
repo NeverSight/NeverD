@@ -5764,7 +5764,16 @@ except arm64's R27 and the R11 or X25 they return buffer space in, which the
 call defines. Barriers are recorded only where the text base is proven. A Go
 1.21+ barrier's own parameters are none (`detectCc`, exact), so its callers
 pass nothing. Read as AAPCS64, the registers its body saves would otherwise be
-eight arguments.
+eight arguments. A barrier that performs the store takes the address it writes
+at and the pointer it writes there in registers of its own: RDI and RAX or the
+register its name gives (`gcWriteBarrierCX`), arm64's X2 and X3. They follow
+neither the platform's argument order nor Go's (`goWriteBarrierArguments`).
+Its calls bind exactly those two before SSA, as they bind a stub's
+(`LocalRegisterEffect::GoFixedArguments`), and `detectCc` gives the barrier
+the same parameters. Read by position, a System V call passed
+`gcWriteBarrier(slot)` without the pointer in RAX and
+`gcWriteBarrierCX(slot, 0, 0, value)`, a Win64 call `gcWriteBarrier()` and
+`gcWriteBarrierCX(value)`, and an AAPCS64 call a placeholder for X1.
 
 MedIR caches the decision on each call (`MedOp::RegisterContract`). From
 there `callClobbersRegister`, SSA's partial clobbers, sub-register merges and
@@ -5988,7 +5997,7 @@ Its body is one block that stores the incoming value of a general-purpose
 register into each word its record gives, writes no register, and ends in a
 tail call to a stack-ABI routine. `panicIndex` takes (AX, CX), and
 `panicSlice3Alen` takes (DX, BX). The stub's register summary publishes those
-registers as its complete operands (`LocalRegisterEffect::GoStubArguments`,
+registers as its complete operands (`LocalRegisterEffect::GoFixedArguments`,
 `PipelineResult::CallEntryIntegerArguments`). Each x86-64 call binds them
 before SSA, as it binds a prototype's (`bindIntegerCall`), and `detectCc`
 gives the stub the same parameters. Read by platform position, a System V
