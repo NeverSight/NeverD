@@ -211,6 +211,7 @@ std::optional<LowFunc> projectMIPS16RuntimeCalls(
         Op.Seq = Seq++;
         if (Op.Opcode == NdOp::INDIR_CALL && Matched.IndirectType) {
           auto Hint = *Matched.IndirectType;
+          Hint.MIPS16RuntimeOrigin = Hint.AnalystSite;
           ProjectedSites->erase(*Hint.AnalystSite);
           Hint.AnalystSite = sourceCallOccurrenceKey(Op, Image.Arch);
           if (!Hint.AnalystSite)

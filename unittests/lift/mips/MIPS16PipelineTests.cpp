@@ -148,6 +148,7 @@ TEST_P(MIPS16Pipeline, IndirectRuntimeTransfersMatchTheCallerPrototype) {
         EXPECT_FALSE(NewSite.StaticTarget);
         EXPECT_EQ(NewSite.Opcode, NdOp::INDIR_CALL);
         EXPECT_EQ(NewSite.Instruction, Site.Instruction);
+        EXPECT_EQ(Mapped.begin()->second.MIPS16RuntimeOrigin, Site);
         EXPECT_EQ(Expanded->Blocks[0].InstructionBoundaries[0].TargetMode,
                   LowInstructionTargetMode::FromMIPS16TargetBit0);
         EXPECT_EQ(Caller.Blocks[0].Ops.back().Opcode, NdOp::CALL);
