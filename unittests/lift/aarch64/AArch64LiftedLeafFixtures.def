@@ -510,6 +510,8 @@ unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; 
 )c")
 
 A64_LEAF_TEXT(kMixedOracle, "#define NEVERD_TEST_MIXED_DATA 1\n")
+A64_LEAF_TEXT(kPaddedLiteralOracle, "#define NEVERD_TEST_MIXED_DATA 1\n"
+                                    "#define NEVERD_TEST_LITERAL_PADDING 1\n")
 A64_LEAF_TEXT(kRegionAssembly, ".data_region")
 A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
 A64_LEAF_TEXT(kPrefixControl, "prefix-control")
@@ -527,6 +529,11 @@ _leaf_sum:
 .data_region
 Lbias:
   .long 0xd503237f
+#ifdef NEVERD_TEST_LITERAL_PADDING
+  .byte 0x5a
+.end_data_region
+  .p2align 2
+#else
 .end_data_region
 .data_region jt8
   .byte 1,2
@@ -537,6 +544,7 @@ Lbias:
 .data_region jt32
   .long 4
 .end_data_region
+#endif
 Lresume:
   add x0, x0, x1
   add x0, x0, x8
@@ -675,6 +683,22 @@ A64_LEAF_TEXT(kRetainedDefaultOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
                                       "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
                                       "#define NEVERD_TEST_RETAIN_DEFAULT 1\n")
 A64_LEAF_TEXT(kDefaultBlocks, "preserved_unreached_blocks")
+A64_LEAF_TEXT(kExposedPCInput, "exposed-pc.dylib")
+A64_LEAF_TEXT(kFreshPCRefusal, "refused_unreached_pc_after_fresh_lift")
+A64_LEAF_TEXT(kPaddedSplitDefaultOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_RETAIN_DEFAULT 1\n"
+              "#define NEVERD_TEST_PAD_DEFAULT 1\n")
+A64_LEAF_TEXT(kPaddedGappedDefaultOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_TABLE_GAPS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_RETAIN_DEFAULT 1\n"
+              "#define NEVERD_TEST_PAD_DEFAULT 1\n")
+A64_LEAF_TEXT(kAlignmentBytes, "recovered_alignment_bytes")
+A64_LEAF_VALUE(unsigned, kDefaultLeadingPadding, 3)
+A64_LEAF_VALUE(unsigned, kDefaultTrailingPadding, 2)
 A64_LEAF_VALUE(unsigned, kDefaultInstructions, 2)
 A64_LEAF_VALUE(uint32_t, kExposeDefaultPC, 0x10000000)     // ADR X0, .
 A64_LEAF_VALUE(uint32_t, kReadDefaultCode, 0x18000000)     // LDR W0, .
@@ -778,6 +802,14 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 3: add x0, x1, #43
 6: ret
 #if defined(NEVERD_TEST_RETAIN_DEFAULT)
+#ifdef NEVERD_TEST_PAD_DEFAULT
+ .if \width == 2
+ .data_region
+ .byte 0x5a
+ .end_data_region
+ .p2align 2
+ .endif
+#endif
 9: .if \width == 1
  ldr w0, 4f
  .elseif \width == 4
@@ -790,6 +822,14 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  .else
  ret
  .endif
+#ifdef NEVERD_TEST_PAD_DEFAULT
+ .if \width == 4
+ .byte 0x61, 0x62
+ .data_region
+ .short 0x6452
+ .end_data_region
+ .endif
+#endif
 #elif !defined(NEVERD_TEST_MASKED_DISPATCH)
 9: sub x0, x1, #5
  ret

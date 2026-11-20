@@ -2697,3 +2697,50 @@ the prior r6 baseline. The new retained-block case passed on both.
 Both virtual M1s reported that the explicit PAuth_LR, PACM-PC and CPTA-on
 hardware probes were unavailable. [Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44777564499).
 [Input hashes, full results and negative controls](evidence/arm64e-retained-defaults-2026-11-21.json).
+
+### Alignment bytes on either side of embedded instructions
+
+A data-in-code record can end inside an AArch64 instruction word. NeverD
+retains the partial word as data and validates each complete aligned word
+against the source section and its references. The same layout check applies
+to functions whose literal or switch reads already have complete records.
+A section declaring only `S_ATTR_SOME_INSTRUCTIONS` can publish when the
+only unclaimed bytes are too short to contain an aligned instruction.
+The publisher requires an instruction owner for an unvisited full word and
+checks the retained intervals for relocation slots with both full and partial
+record maps. An ADR from an unvisited block also needs a proven address use.
+A signed control returning its own PC previously published with a different
+address in the copy. The regression lifts the changed file afresh and checks
+that publication refuses it. Both affected controls were also refused
+with optimization disabled.
+
+Three signed switch images and a signed literal-only image previously
+failed publication. Both Release CLIs publish all four three times at
+default optimization and with `--no-opt`. The 24 signed outputs match byte
+for byte across LLVM builds. The switch outputs contain 24, 36 and 48 records
+across generations. The literal-only outputs contain 4, 6 and 8.
+Separate native regressions exercise three leading alignment bytes and two
+nonzero trailing bytes next to retained code. They verify the instruction
+bytes, both alignment ranges and all three table widths through relifting.
+A generic literal with three unmarked trailing bytes also republishes through
+three generations without any jump-table record. Each build rejected all
+24 signed negative controls without creating an output file.
+
+A separate sixteen-function compiler image exercised every combination of
+zero to three leading and trailing alignment bytes. Each producer republished
+both the complete and partial switch maps three times in both optimization
+modes. The third generation preserved all 64 retained instruction blocks
+and 416 data-in-code records in each image.
+
+Each Mac profile passed all 257 source-fork tests and checked
+1,512 independent calls to the three compiler inputs and their signed
+outputs. Each of the two new alignment regressions also checked 288
+native switch results. The original-table signal test recovered both
+callers at twelve old-entry interruptions. [Source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44786421663).
+
+The r6 run passed 247 of 257 cases on each profile, including all three new
+regressions. Its 4 compact-emitter skips and 6 classic signed-return CFI
+failures matched the retained-default control. Both virtual M1s
+reported unavailable for native PAuth_LR, PACM-PC and CPTA-on.
+[Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44786566570).
+[Input hashes, complete results and negative controls](evidence/arm64e-mixed-alignment-2026-11-21.json).
