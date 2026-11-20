@@ -6,6 +6,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MachOLiftedObject.h"
+#include "MachOPageAddress.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/analysis/LLVMPrivateFrameAccesses.h"
@@ -948,6 +949,19 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
           if (Before.take_front(aarch64::kInsnSize) !=
               After.take_front(aarch64::kInsnSize))
             return refuse(kLeafCode);
+          continue;
+        }
+        if ((readLE<uint32_t>(Before.data()) & aarch64::kADRP_Mask) ==
+            aarch64::kADRP_Op) {
+          const auto Old =
+              decodeMachOPageAddress(Decode, Before, Start + Offset);
+          const auto New =
+              decodeMachOPageAddress(Decode, After, Owner->second + Offset);
+          if (!Old || !New || New->Target != Old->Target + Slide ||
+              New->PageRegister != Old->PageRegister ||
+              New->ResultRegister != Old->ResultRegister)
+            return refuse(kDataPagePair);
+          Offset += aarch64::kInsnSize;
           continue;
         }
         if (!Addresses.empty() &&

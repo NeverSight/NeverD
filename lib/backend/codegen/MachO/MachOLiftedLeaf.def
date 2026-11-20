@@ -58,6 +58,9 @@ MACHO_LEAF_TEXT(kLeafABIFlag, "ptrauth.abi-version")
 MACHO_LEAF_TEXT(
     kDataPage,
     "arm64e lifted ADRP does not reproduce the original data page and register")
+MACHO_LEAF_TEXT(kDataPagePair,
+                "arm64e ADRP and ADD do not preserve the source data address "
+                "and registers")
 MACHO_LEAF_TEXT(kDataBinding,
                 "arm64e lifted global needs an original image data address")
 MACHO_LEAF_TEXT(kTailBranchAsm, "b ${0:c}")

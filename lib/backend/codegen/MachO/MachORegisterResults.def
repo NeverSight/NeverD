@@ -38,6 +38,9 @@ MACHO_REGISTER_TEXT(kInvalidBody,
 MACHO_REGISTER_TEXT(kLocal, "Lneverd_reg_${:uid}_")
 MACHO_REGISTER_TEXT(kCall, "bl ")
 MACHO_REGISTER_TEXT(kTail, "b ")
+MACHO_REGISTER_TEXT(kAddressPage, "adrp ")
+MACHO_REGISTER_TEXT(kPage, "@PAGE\n")
+MACHO_REGISTER_TEXT(kPageOffset, "@PAGEOFF\n")
 MACHO_REGISTER_TEXT(kInstructionWord, ".inst ")
 MACHO_REGISTER_TEXT(kEndDataRegion, ".end_data_region\n")
 #ifdef MACHO_REGISTER_REGION

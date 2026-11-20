@@ -170,7 +170,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       kCompiler,
       kTargetFlag,
       kTarget,
-      kOptimize,
+      Preamble == kPageO0 ? kUnoptimized : kOptimize,
       KeepFrame ? kKeepFrame : kOmitFrame,
       kDylib,
       kTight};
@@ -391,6 +391,33 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   }
   auto ExpectedData = Image->MachODataInCode;
   llvm::DenseMap<va_t, va_t> DefaultStartsByRecord;
+  if (Leaves == kPageLeaves) {
+    unsigned Pairs = 0;
+    for (auto Name : {kSum, kDifference}) {
+      auto *F = Module.getFunction(Name);
+      ASSERT_TRUE(F && F->hasFnAttribute(llvm::Attribute::Naked));
+      auto *Call = llvm::dyn_cast<llvm::CallInst>(&F->front().front());
+      ASSERT_TRUE(Call);
+      auto *Asm = llvm::dyn_cast<llvm::InlineAsm>(Call->getCalledOperand());
+      ASSERT_TRUE(Asm);
+      EXPECT_EQ(Asm->getAsmString().count(kPageOffsetOperand), 1u);
+      ++Pairs;
+    }
+    auto Altered = llvm::CloneModule(Module);
+    auto *F = Altered->getFunction(kSum);
+    auto &Call = llvm::cast<llvm::CallInst>(F->front().front());
+    auto Arg = llvm::find_if(Call.args(), [](auto &U) {
+      return llvm::isa<llvm::GlobalVariable>(U.get());
+    });
+    ASSERT_NE(Arg, Call.arg_end());
+    Call.setArgOperand(Arg->getOperandNo(),
+                       llvm::Constant::getNullValue(Arg->get()->getType()));
+    auto Rejected = validateMachORegisterResults(*Altered, *Image);
+    EXPECT_FALSE(bool(Rejected));
+    if (!Rejected)
+      llvm::consumeError(Rejected.takeError());
+    testing::Test::RecordProperty(kPageOperands, Pairs);
+  }
   if (OriginalAddresses) {
     std::vector<MachOLiftedSourceAddress> Addresses;
     auto Valid =
@@ -2046,6 +2073,16 @@ TEST(AArch64LiftedImage, RejectsSourceADRBeyondArchitecturalReach) {
   verifyPublishedLeaves(kAddressLeaves, kAddressCaller, kAssemblyName,
                         kDistantAddresses, LeafCheck::Relifted,
                         kAddressFunctions);
+}
+
+TEST(AArch64LiftedImage, CompilerDataPageAndInteriorPointerAtO0) {
+  verifyPublishedLeaves(kPageLeaves, kPageCaller, kSource, kPageO0,
+                        LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, CompilerDataPageAndInteriorPointerAtO2) {
+  verifyPublishedLeaves(kPageLeaves, kPageCaller, kSource, {},
+                        LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, UnmarkedAlignmentAfterDeclaredLiteral) {

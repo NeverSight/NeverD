@@ -13,6 +13,7 @@
 
 #include "../rewrite/BlockAddressUse.h"
 #include "MachOEmbeddedDispatch.h"
+#include "MachOPageAddress.h"
 
 #include "neverd/analysis/AArch64UnwindRecovery.h"
 #include "neverd/backend/RewriteSourceIdentity.h"
@@ -36,6 +37,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/IR/IRBuilder.h"
@@ -69,6 +71,7 @@ struct RegisterBody {
   bool HasSIMDData = false;
   std::vector<MachODataInCodeRange> RecoveredData;
   llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
+  bool HasDataPage = false;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
@@ -529,7 +532,9 @@ bool emitLanguageTable(const BinaryImage &Image, const ExceptionFunction &Frame,
 std::optional<RegisterBody>
 registerBody(Decoder &Decode, const BinaryImage &Image,
              const Entries &Functions, Entries::const_iterator Owner,
-             const LowFunc *ControlFlow, bool Revalidate = false) {
+             const LowFunc *ControlFlow,
+             llvm::function_ref<llvm::GlobalVariable *(va_t)> DataSymbol,
+             bool Revalidate = false) {
   const va_t Start = Owner->first;
   auto Next = std::next(Owner);
   auto Source = machOLiftedSource(
@@ -670,6 +675,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       break;
     }
   llvm::SmallVector<ScratchFlow> Flow(HasCall ? (End - Start) / Word : 0);
+  llvm::GlobalVariable *PageOffset = nullptr;
   auto Islands = Source->Embedded;
   auto Unreached = llvm::ArrayRef(Dispatch.UnreachedCode);
   for (va_t PC = Start, NextPC; PC < End; PC = NextPC) {
@@ -835,6 +841,40 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
           kAArch64PAuthLRScale;
       if (Distance > PC - Start)
         return std::nullopt;
+    }
+    if (PageOffset) {
+      // The preceding ADRP proved these physical ADD operands. Emit PAGEOFF12
+      // at its own label so CFI rows and incoming branch offsets stay intact.
+      OS << I.Raw->mnemonic << ' '
+         << cs_reg_name(Decode.getHandle(), Ops[0].reg) << kSeparator
+         << cs_reg_name(Decode.getHandle(), Ops[1].reg) << kSeparator;
+      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+      OS << kPageOffset;
+      PageOffset = nullptr;
+      Fallthrough();
+      continue;
+    }
+    if (I.Id == AARCH64_INS_ADRP) {
+      auto Pair = decodeMachOPageAddress(
+          Decode, Source->Bytes.drop_front(PC - Start), PC);
+      if (!Pair)
+        return std::nullopt;
+      const auto *Storage = Image.getSectionFor(Pair->Target);
+      if (!Storage || !Storage->isReadable() ||
+          (Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                            llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) ||
+          Pair->Target - Storage->VA >= Storage->FileSz)
+        return std::nullopt;
+      PageOffset = DataSymbol(Pair->Target);
+      if (!PageOffset)
+        return std::nullopt;
+      Body.HasDataPage = true;
+      OS << kAddressPage << cs_reg_name(Decode.getHandle(), Pair->PageRegister)
+         << kSeparator;
+      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+      OS << kPage;
+      Fallthrough();
+      continue;
     }
     // A table or signing point moves with this body. A pointer into declared
     // literal storage or a returned function entry denotes the source image,
@@ -1069,13 +1109,13 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   if (!Decode.init(Image))
     return Required.empty() ? llvm::Error::success() : invalidBody();
   llvm::DenseSet<va_t> Admitted(AdmittedEntries.begin(), AdmittedEntries.end());
+  auto *Byte = llvm::Type::getInt8Ty(M.getContext());
   for (const auto &[VA, F] : *Functions) {
     const auto *Frame = Image.ExceptionMetadata.findFunction(VA);
     if (!Admitted.contains(VA) || !Frame ||
         !canPublishMachOLanguageFrame(Image, *Frame))
       continue;
     const auto &Table = *Frame->Itanium;
-    auto *Byte = llvm::Type::getInt8Ty(M.getContext());
     if (Table.LandingPadBaseEncoding == dweh::Omit) {
       M.getOrInsertGlobal(makeNdDataSymbol(Table.LSDAVA), Byte);
       continue;
@@ -1092,6 +1132,20 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
   llvm::DenseMap<va_t, const LowFunc *> SourceByEntry;
   for (const auto &F : SourceFunctions)
     SourceByEntry.try_emplace(F.Entry, &F);
+  llvm::SmallVector<llvm::GlobalVariable *> NewData;
+  const auto DiscardUnused = llvm::scope_exit([&] {
+    for (auto *G : NewData)
+      if (G->use_empty())
+        G->eraseFromParent();
+  });
+  const auto DataSymbol = [&](va_t Target) -> llvm::GlobalVariable * {
+    const auto Name = makeNdDataSymbol(Target);
+    if (auto *Existing = M.getNamedValue(Name))
+      return llvm::dyn_cast<llvm::GlobalVariable>(Existing);
+    auto *G = M.getOrInsertGlobal(Name, Byte);
+    NewData.push_back(G);
+    return G;
+  };
   bool HasVariadicCursor = false;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
@@ -1104,7 +1158,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
             return Owner == &F;
           }).empty()))
       continue;
-    if (auto Body = registerBody(Decode, Image, *Functions, It, Source)) {
+    if (auto Body =
+            registerBody(Decode, Image, *Functions, It, Source, DataSymbol)) {
       HasVariadicCursor |= F.isVarArg() && Body->MaterializesCursor;
       Bodies.try_emplace(&F, std::move(*Body));
     }
@@ -1131,7 +1186,7 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
         Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
-        Body.IsForwarder || Body.HasEmbeddedData ||
+        Body.IsForwarder || Body.HasEmbeddedData || Body.HasDataPage ||
         !Body.SourceAddresses.empty())
       Select(F);
     if (HasVariadicCursor &&
@@ -1224,7 +1279,10 @@ llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
         !llvm::isa<llvm::UnreachableInst>(F.front().back()))
       return invalidBody();
     const auto *Call = llvm::dyn_cast<llvm::CallInst>(&F.front().front());
-    auto Body = registerBody(Decode, Image, *Functions, It, nullptr, true);
+    auto Body = registerBody(
+        Decode, Image, *Functions, It, nullptr,
+        [&](va_t Target) { return M.getNamedGlobal(makeNdDataSymbol(Target)); },
+        true);
     if (!Call || !Body || !Call->doesNotReturn() ||
         Call->getCalledOperand() != assembly(F, *Body) ||
         !llvm::equal(Call->args(), Body->Operands))
