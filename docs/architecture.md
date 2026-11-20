@@ -5778,14 +5778,15 @@ and, on amd64, R14.
 
 The contract covers x86-64 and AArch64; Go code for other targets keeps the
 platform contract. Calls from compiled code of a register-ABI amd64 image
-(usesGoRegisterArguments) keep R14 and X15 (`CallRegisterContract::GoInternal`,
-`GoInternalWriteBarrier`), whose return meaning is "Same" in abi-internal.md,
-and LowToMed defines X15 as zero at such a function's entry, so its frame
-zeroing stores zero. R14 keeps the current goroutine but has no name in the
-output yet. Calls from assembly, which may follow ABI0 and use X15 as scratch,
-from Go 1.17 and earlier code, and from arm64 code, whose R28 is the
-goroutine, keep neither. A restricted PE load skips the Go metadata and keeps
-the platform contract.
+(usesGoRegisterArguments) keep X15 zero (`CallRegisterContract::GoInternal`,
+`GoInternalWriteBarrier`), and LowToMed defines X15 as zero at such a
+function's entry, so its frame zeroing stores zero. Ordinary calls do not
+assume the goroutine in R14 is unchanged: runtime paths such as `needm`
+can install a different g. Recognized write barriers continue to preserve R14
+under their narrower GPR contract. Calls from assembly, which may follow ABI0
+and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
+the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
+platform contract.
 
 On x86-64, Go code also takes its integer arguments in Go's registers, in
 Go's order: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11. The gate is

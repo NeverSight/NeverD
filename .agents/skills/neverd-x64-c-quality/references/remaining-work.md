@@ -558,10 +558,11 @@ Still open, in order of yield:
    - DWARF-typed signatures. They need Go's register assignment by type.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
-2. Go's fixed registers. On register-ABI amd64 code, X15 now reads as zero
-   and calls keep R14 (`CallRegisterContract::GoInternal`). Still open:
-   - R14 (and arm64's R28) needs a name for the current goroutine. Its reads
-     are "incoming register" placeholders, about 4% of what remains.
+2. Go's fixed registers. On register-ABI amd64 code, X15 reads as zero
+   (`CallRegisterContract::GoInternal`). Still open:
+   - R14 (and arm64's R28) needs a name for the current goroutine. Ordinary
+     calls must not reuse the incoming value without evidence: runtime paths
+     can install a different g.
    - A closure's context register (RDX, arm64 R26) should become a
      parameter. Its reads are "incoming register" placeholders once the
      growth path is gone, about 5% of what remains.

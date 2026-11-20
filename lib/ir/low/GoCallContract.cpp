@@ -164,8 +164,8 @@ CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
     return CallRegisterContract::Platform;
-  // Compiled code of a register-ABI image follows the internal ABI, and so
-  // keeps R14 and X15 across its calls.
+  // Compiled code of a register-ABI image follows the internal ABI, so
+  // its x86-64 calls keep X15 zero.
   const bool Internal = usesGoRegisterArguments(Img, Caller);
   if (Callee != InvalidVA && goWriteBarrierAt(Img, Callee))
     return Internal ? CallRegisterContract::GoInternalWriteBarrier
@@ -386,7 +386,7 @@ uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
                              CallRegisterContract Contract, uint64_t RegOff,
                              uint16_t Size, std::optional<uint64_t> Result) {
   // X15 holds zero in Go's internal ABI, before a call and after it.
-  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
+  if (keepsGoZeroRegister(Contract) && TRI.TheArch == Arch::X64 &&
       RegOff >= x86reg::XMM15 && RegOff + Size <= x86reg::XMM15 + 16 && Size)
     return Size;
   const uint16_t Width = TRI.FullRegWidth;
@@ -398,10 +398,9 @@ uint16_t goContractKeptBytes(const TargetRegInfo &TRI,
   // abi-internal.md, likewise RSP and R29 on arm64).
   if (TRI.isFrameReg(Register))
     return Size;
-  // R14 holds the current goroutine across any call.
-  if (keepsGoFixedRegisters(Contract) && TRI.TheArch == Arch::X64 &&
-      Register == x86reg::R14)
-    return Size;
+  // Do not assume R14 is unchanged by an ordinary call. Runtime paths
+  // such as needm can install a different g. A recognized write barrier
+  // still preserves R14 under its narrower GPR contract below.
   if (!isGoWriteBarrierContract(Contract) ||
       !isGoGeneralRegister(TRI.TheArch, Register) ||
       (Result && Register == *Result) ||
