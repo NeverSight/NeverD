@@ -5960,6 +5960,12 @@ where the callee's own recovery found them there (the stack-argument callees
 PipelineCallAbi collects). It takes no more words than the callee reads,
 bounded by its record, and marks the list complete
 (`MedCallInfo::ArgumentsFromPrototype`), so HighIR collection appends nothing.
+A record that gives no size, as Go assembly declared `$0` has, bounds nothing:
+the call takes the words the callee reads, as Windows' `ctrlhandler` passes
+`externalthreadhandler` its handler and the control type. A block NeverD
+splits off a function's interior has no record at all (`goRecordsFunction`),
+and the frame it reads is its function's own, so its calls keep the
+platform's reading.
 On the seven old Go binaries, placeholders fell 9-82%, and `runtime_throw`
 calls read `runtime_throw(msg, len)`. A function that keeps its stack-growth
 loop still reads its parameters through the loop's join and recovers too few

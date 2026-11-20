@@ -1787,21 +1787,33 @@ void recoverCallAbi(
       // recovery says it does (MedFunc::StackArgumentsOnly): a stub that
       // takes its operands in registers, as Go 1.16's panicIndex takes AX and
       // CX, does not.
+      // Assembly whose record gives no size, as Windows'
+      // `externalthreadhandler` declared `$0`, takes the words its own
+      // recovery reads.  A block split off a function's interior has no
+      // record: the frame it reads is its function's own, no argument.
       std::optional<uint32_t> GoFrameBytes;
-      if (!CI.IsIndirect && !CheckedStackCall && !RegistrationObjectCall &&
-          Img && StackArgumentCallees &&
-          StackArgumentCallees->count(CI.TargetAddr))
+      const bool GoStackCallee = !CI.IsIndirect && !CheckedStackCall &&
+                                 !RegistrationObjectCall && Img &&
+                                 StackArgumentCallees &&
+                                 StackArgumentCallees->count(CI.TargetAddr);
+      if (GoStackCallee)
         GoFrameBytes = goFrameArgumentBytes(*Img, CI.TargetAddr);
-      if (GoFrameBytes) {
+      const bool GoStackCall =
+          GoStackCallee &&
+          (GoFrameBytes ||
+           (CalleeArgs >= 0 && goRecordsFunction(*Img, CI.TargetAddr)));
+      if (GoStackCall) {
         IntegerLayout = goStackArgumentLayout(TheArch);
         IntParamRegs = IntegerLayout.Registers;
         CalleeRegArgs = 0;
         // The callee's own recovery counts the arguments it reads; the rest
         // of the words its record gives are its results.
-        const int FrameWords =
-            static_cast<int>(*GoFrameBytes / IntegerLayout.SlotBytes);
-        CalleeArgs =
-            CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
+        if (GoFrameBytes) {
+          const int FrameWords =
+              static_cast<int>(*GoFrameBytes / IntegerLayout.SlotBytes);
+          CalleeArgs =
+              CalleeArgs >= 0 ? std::min(CalleeArgs, FrameWords) : FrameWords;
+        }
         CI.ArgumentsFromPrototype = true;
         CI.ArgumentsInCalleeRegisterOrder = true;
       }
@@ -1930,7 +1942,7 @@ void recoverCallAbi(
           IsDirectImport && Img && Convention &&
           !(Convention->ImportsMayTakeRegisterArguments &&
             Convention->ImportsMayTakeRegisterArguments(*Img));
-      const bool StackOnlyCall = CheckedStackCall || GoFrameBytes ||
+      const bool StackOnlyCall = CheckedStackCall || GoStackCall ||
                                  (RegparmOnly && !CI.IsIndirect &&
                                   ((CalleeRegArgs == 0 && CalleeArgs > 0) ||
                                    IsRelocExtern || StackOnlyImport));
