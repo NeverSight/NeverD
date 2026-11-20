@@ -10,7 +10,10 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/BinaryImage.h"
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -24,6 +27,8 @@ struct Value {
   Origin Base;
   bool SignedWord;
   uint16_t Size = 0;
+
+  bool operator==(const Value &) const = default;
 };
 
 class EntryValues {
@@ -68,6 +73,12 @@ class EntryValues {
         A->Base != Origin::Scalar || B->Base != Origin::Scalar;
     if (Op.Output.Size == 4 && Relative && !WordPointers)
       return std::nullopt;
+    // Adding zero preserves both the entry identity and any proven sign
+    // extension, including a DADDU used to save the incoming register.
+    if (B->Base != Origin::Scalar && Op.Inputs[0].isConst() && !A->Bits)
+      return B;
+    if (A->Base != Origin::Scalar && Op.Inputs[1].isConst() && !B->Bits)
+      return A;
     const uint64_t Sum = A->Bits + B->Bits;
     return Value{Op.Output.Size == 4 ? uint32_t(Sum) : Sum,
                  Relative ? Origin::AdjustedEntry : Origin::Scalar, false};
@@ -81,6 +92,17 @@ public:
   }
 
   void nextInstruction() { Temps.clear(); }
+
+  void intersect(const EntryValues &Other) {
+    llvm::SmallVector<uint64_t, 8> Remove;
+    for (const auto &[Reg, V] : Registers) {
+      const auto It = Other.Registers.find(Reg);
+      if (It == Other.Registers.end() || It->second != V)
+        Remove.push_back(Reg);
+    }
+    for (uint64_t Reg : Remove)
+      Registers.erase(Reg);
+  }
 
   std::optional<Value> write(const LowOp &Op) {
     auto V = result(Op);
@@ -102,6 +124,65 @@ public:
   }
 };
 
+struct BlockProof {
+  int Id;
+  llvm::SmallVector<std::pair<size_t, uint64_t>, 4> Words;
+  llvm::SmallVector<size_t, 1> Writes;
+  size_t WordsBeforeGP = 0;
+};
+
+/// Returns true when the register state reaches every ordinary successor.
+bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
+                EntryValues &Values, BlockProof &Proof) {
+  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
+  size_t End = 0;
+  for (const auto &Insn : Block.InstructionBoundaries) {
+    const bool Direct =
+        Insn.Control == LowInstructionControl::Branch && Insn.Immediate &&
+        !hasLowInstructionControlFlag(Insn.ControlFlags,
+                                      LowInstructionControlFlag::Indirect);
+    if (isMIPSCompressedMode(Insn.Mode) ||
+        (Insn.Control != LowInstructionControl::None && !Direct) ||
+        Insn.FirstOp != End || Insn.OpCount > Block.Ops.size() - End)
+      return false;
+    End += Insn.OpCount;
+    Values.nextInstruction();
+    for (size_t I = Insn.FirstOp; I < End; ++I) {
+      const LowOp &Op = Block.Ops[I];
+      if (Op.Opcode == NdOp::INTRINSIC) {
+        if (Op.NumInputs && Op.Inputs[0].isConst() &&
+            Op.Inputs[0].Offset == unsigned(Intrinsic::RequireAligned))
+          continue;
+        if (!mipsScalarLowShapeIsValid(Op, Target) ||
+            Op.Inputs[0].Offset != unsigned(Intrinsic::MIPSRequireWord))
+          return false;
+        if (auto Bits = Values.knownWord(Op.Inputs[1]))
+          Proof.Words.emplace_back(I, *Bits);
+        continue;
+      }
+      if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
+        // A branch-likely guards its slot with an earlier COND_BR. Only
+        // a final direct transfer has one register state for every edge.
+        return Direct && I + 1 == Block.Ops.size() && Op.NumInputs &&
+               Op.Inputs[0].isConst() && Op.Inputs[0].Offset == *Insn.Immediate;
+      }
+      if (!Op.Output.isReg() && !Op.Output.isTemp())
+        continue;
+      auto V = Values.write(Op);
+      if (!V || V->Base != Origin::AdjustedEntry || V->Bits != GP ||
+          (WordPointers && !V->SignedWord) || !Op.Output.isReg() ||
+          Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
+        continue;
+
+      Proof.Writes.push_back(I);
+      Proof.WordsBeforeGP = Proof.Words.size();
+    }
+    if (Direct)
+      return false;
+  }
+  return Block.hasInstructionBoundaries() && End == Block.Ops.size();
+}
+
 } // namespace
 
 std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
@@ -114,56 +195,69 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
       !Entry.ExceptionalPreds.empty())
     return std::nullopt;
 
-  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
-  EntryValues Values(Function.Entry, WordPointers);
-  size_t End = 0;
-  llvm::SmallVector<std::pair<size_t, uint64_t>, 4> WordChecks;
-  for (const auto &Insn : Entry.InstructionBoundaries) {
-    if (isMIPSCompressedMode(Insn.Mode) ||
-        Insn.Control != LowInstructionControl::None)
-      break;
-    // Every preceding write to a carrier must belong to the decoded prefix.
-    if (Insn.FirstOp != End || Insn.OpCount > Entry.Ops.size() - End)
-      return std::nullopt;
-    End += Insn.OpCount;
+  struct Incoming {
+    EntryValues Values;
+    size_t Reached = 0;
+    explicit Incoming(const EntryValues &Values) : Values(Values) {}
+  };
+  llvm::SmallDenseMap<int, Incoming, 2> Pending;
+  EntryValues Values(Function.Entry, hasMIPS32BitAddressIn64BitGPR(Image.Arch));
+  llvm::SmallVector<int, 4> Ready;
+  llvm::SmallVector<BlockProof, 4> Proofs;
+  const uint64_t GP = *Image.MIPS->PICGP;
+  const bool Complete = Function.hasCompleteLiftCoverage() &&
+                        Function.UnsafeIndirectBranchAddresses.empty();
+  bool Found = false;
+  for (int Id = 0;;) {
+    const LowBlock &Block = Function.Blocks[Id];
+    auto &Proof = Proofs.emplace_back(BlockProof{.Id = Id});
+    const bool ReachesExit = scanPrefix(Block, Image.Arch, GP, Values, Proof);
+    Found |= !Proof.Writes.empty();
     Values.nextInstruction();
-    for (size_t I = Insn.FirstOp; I < End; ++I) {
-      const LowOp &Op = Entry.Ops[I];
-      if (Op.Opcode == NdOp::INTRINSIC) {
-        if (Op.NumInputs && Op.Inputs[0].isConst() &&
-            Op.Inputs[0].Offset == unsigned(Intrinsic::RequireAligned))
+    if (ReachesExit && Complete) {
+      for (int Succ : Block.Succs) {
+        const auto &Next = Function.Blocks[Succ];
+        if (!Next.ExceptionalPreds.empty() ||
+            Function.ModuleAnalysisRoots.contains(Next.StartAddr) ||
+            Function.OrdinaryModuleAnalysisRoots.contains(Next.StartAddr))
           continue;
-        if (!mipsScalarLowShapeIsValid(Op, Image.Arch) ||
-            Op.Inputs[0].Offset != unsigned(Intrinsic::MIPSRequireWord))
-          return std::nullopt;
-        if (auto Bits = Values.knownWord(Op.Inputs[1]))
-          WordChecks.emplace_back(I, *Bits);
-        continue;
+        auto [State, First] = Pending.try_emplace(Succ, Values);
+        if (!First)
+          State->second.Values.intersect(Values);
+        // A call or an independent entry leaves an incoming edge unproved.
+        // A loop header also waits on its back edge and stays unvisited.
+        if (++State->second.Reached == Next.Preds.size())
+          Ready.push_back(Succ);
       }
-      if (!Op.Output.isReg() && !Op.Output.isTemp())
-        continue;
-      if (Op.Output.isReg() && Op.Output.Offset == mipsreg::T9)
-        return std::nullopt;
-      auto V = Values.write(Op);
-      if (!V || V->Base != Origin::AdjustedEntry ||
-          V->Bits != *Image.MIPS->PICGP || (WordPointers && !V->SignedWord) ||
-          !Op.Output.isReg() || Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
-        continue;
-
-      // Both GP setup instruction orders can leave an intermediate outside
-      // every mapped segment. Bind the completed register definition, where
-      // the ELF record independently confirms the linked address.
-      LowFunc Projected = Function;
-      auto &Ops = Projected.Blocks.front().Ops;
-      Ops[I].Inputs[0] = NdVar::address(V->Bits, 8);
-      // These guards observe only sign extension. The n32 ABI and word
-      // operations establish it at every load bias.
-      for (const auto &[Index, Bits] : WordChecks)
-        Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);
-      return Projected;
     }
+    if (Ready.empty())
+      break;
+    Id = Ready.pop_back_val();
+    auto It = Pending.find(Id);
+    Values = std::move(It->second.Values);
+    Pending.erase(It);
   }
-  return std::nullopt;
+  if (!Found)
+    return std::nullopt;
+
+  LowFunc Projected = Function;
+  llvm::SmallDenseSet<int, 4> Needed;
+  for (const auto &Proof : llvm::reverse(Proofs)) {
+    const bool Downstream = Needed.erase(Proof.Id);
+    if (!Downstream && Proof.Writes.empty())
+      continue;
+    auto &Block = Projected.Blocks[Proof.Id];
+    for (size_t I : Proof.Writes)
+      Block.Ops[I].Inputs[0] = NdVar::address(GP, 8);
+    // These n32 guards observe only sign extension. Discharge proven checks
+    // through the completed write, including those in its predecessors.
+    const size_t Count = Downstream ? Proof.Words.size() : Proof.WordsBeforeGP;
+    for (const auto &[Index, Bits] :
+         llvm::ArrayRef(Proof.Words).take_front(Count))
+      Block.Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);
+    Needed.insert_range(Block.Preds);
+  }
+  return Projected;
 }
 
 } // namespace neverd

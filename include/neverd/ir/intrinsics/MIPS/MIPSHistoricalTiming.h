@@ -69,6 +69,15 @@ historicalInstructionTiming(uint32_t Word, unsigned Level, bool PairedFPRs) {
       T.Reads = GPR(RS) | GPR(RT);
     return T;
   }
+  if (Op == 16) {
+    if (RS == 16)
+      return T; // RFE/ERET only access system state.
+    if (RS & 4)
+      T.Reads = GPR(RT);
+    else
+      T.Delayed = GPR(RT);
+    return T;
+  }
   if (Op == 17) {
     if (RS < 8) {
       if ((RS == 1 || RS == 5) && PairedFPRs && (RD & 1))

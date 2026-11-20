@@ -556,9 +556,10 @@ Still open, in order of yield:
      - A call's outgoing slot stored in an earlier block, as the compiler
        leaves `memequal`'s second argument from a previous call, is not
        found: the argument prints a placeholder.
-     - A tail jump to a stack-only routine passes the caller's incoming slots
-       (Windows `ctrlhandler` to `externalthreadhandler`); those arguments
-       print placeholders.
+     - A call to Go assembly whose record gives no size (`$0`) takes the
+       words the callee reads (`futex`, `clone`, `onosstack`, Windows'
+       `externalthreadhandler`); a block split off a function's interior has
+       no record and keeps the platform's reading.
      - On Windows, a block inside a Go function is sometimes split off as a
        function of its own (`ensureSwept`'s 0x420515), and its call passes
        Win64 positions, which widens the enclosing function.

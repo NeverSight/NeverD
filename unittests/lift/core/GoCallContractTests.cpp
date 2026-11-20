@@ -862,6 +862,63 @@ TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
   EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
 }
 
+TEST(GoStackArguments, ACalleeWithoutASizeTakesWhatItReads) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller, where
+  // main.add's pclntab record gives no argument size, as Go assembly declared
+  // `$0` (Windows' runtime.externalthreadhandler) has none.  Its own recovery
+  // still finds two stack parameters; a call read by Win64's or System V's
+  // positions passed none of the words the caller stores.  A block NeverD
+  // splits off a function's interior has no record at all, and the frame it
+  // reads is its function's own: its calls keep the platform's reading.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF})
+    for (const bool Recorded : {true, false}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format) * 2 + Recorded);
+      GoTestImage T;
+      T.Img.Format = Format;
+      T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                        0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+      std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                   0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                   0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+      const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+      Body.insert(Body.end(), Call.begin(), Call.end());
+      Body.insert(Body.end(),
+                  {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+      T.writeText(Caller, Body);
+      GoModuleInfo Module;
+      Module.StackArguments = true;
+      Module.GoCode = {{Add, kTextVA + 0x300}};
+      Module.FrameArguments = {{Caller, 0}};
+      if (Recorded)
+        Module.FrameArguments.insert(Module.FrameArguments.begin(),
+                                     {Add, std::nullopt});
+      T.Img.ExceptionMetadata.GoModule = std::move(Module);
+      ASSERT_FALSE(goFrameArgumentBytes(T.Img, Add));
+      EXPECT_EQ(goRecordsFunction(T.Img, Add), Recorded);
+
+      const MedFunc F = lift(T.Img, Add);
+      EXPECT_TRUE(F.StackArgumentsOnly);
+      ASSERT_EQ(F.Params.size(), 2u);
+      const std::set<va_t> StackCallees{Add};
+      std::map<va_t, int> TotalArity{{Add, 2}};
+      MedFunc G = lift(T.Img, Caller);
+      recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
+                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, &StackCallees);
+      ASSERT_EQ(G.CallInfos.size(), 1u);
+      EXPECT_EQ(G.CallInfos[0].ArgumentsFromPrototype, Recorded);
+      if (!Recorded)
+        continue;
+      const std::vector<MedVar> &Arguments = G.CallInfos[0].Args;
+      ASSERT_EQ(Arguments.size(), 2u);
+      EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+      EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+    }
+}
+
 TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
   // Registers a Go 1.16 function reads at its entry without taking an
   // argument there.  Read as register arguments, each put an unused parameter

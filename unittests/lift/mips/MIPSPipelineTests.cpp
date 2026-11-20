@@ -234,6 +234,80 @@ TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
         }
 }
 
+TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
+  enum class Path {
+    BothSave,
+    OneClobbers,
+    CallsOut,
+    IndependentEntry,
+    AnnulledSave
+  };
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (auto Case : {Path::BothSave, Path::OneClobbers, Path::CallsOut,
+                        Path::IndependentEntry, Path::AnnulledSave}) {
+        SCOPED_TRACE(testing::Message() << N32 << Little << int(Case));
+        mips_test::ELFBytes File(
+            N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+        File.Bytes.resize(0x180);
+        File.put(N32 ? 52 + 16 : 64 + 32, File.Bytes.size(), N32 ? 4 : 8);
+        File.put(N32 ? 52 + 20 : 64 + 40, File.Bytes.size(), N32 ? 4 : 8);
+        File.put(N32 ? 36 : 48, N32 ? 0x80000024 : 0x80000004, 4);
+        File.globalPointer(0x18100);
+        const bool Likely = Case == Path::AnnulledSave;
+        const uint32_t Save = 0x03206025; // or $12,$t9,$zero
+        // The right arm uses a full-width DADDU move, or replaces the saved
+        // value with a0. The likely branch saves only in its taken slot.
+        const uint32_t Right =
+            Case == Path::OneClobbers ? 0x00806025 : 0x0320602d;
+        const uint32_t Words[] = {
+            0x3c080001,                               // lui $8,1
+            Likely ? 0x50800006u : 0x10800006u,       // beq[l] a0,zero,right
+            Likely ? Save : 0,                        // delay slot
+            Likely ? 0 : Save,                        // left
+            Case == Path::CallsOut ? 0x0c004054u : 0, // jal 0x10150
+            0,                                        // delay slot
+            0x10000002,                               // b join
+            0,                                        // delay slot
+            Likely ? 0 : Right,                       // right
+            0x0080c825,                               // join: or t9,a0,zero
+            0x25088000,                               // addiu $8,$8,-0x8000
+            N32 ? 0x010c4021u : 0x010c402du,          // (d)addu $8,$8,$12
+            0x65028070,                               // daddiu $v0,$8,-0x7f90
+            0x03e00008,                               // jr ra
+            0};                                       // delay slot
+        for (unsigned I = 0; I != std::size(Words); ++I)
+          File.put(0x100 + 4 * I, Words[I], 4);
+        File.put(0x150, 0x00806025, 4); // or $12,$a0,$zero
+        File.put(0x154, 0x03e00008, 4); // jr ra; nop
+        ELFLoader Loader;
+        auto Image = Loader.loadBuffer(File.buffer());
+        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+        Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, sizeof(Words)));
+        Image->Symbols.push_back(Symbol::makeFunc(Image->Entry + 0x50, 12));
+        Decoder Decode;
+        ASSERT_TRUE(Decode.init(*Image));
+        auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "pic_join");
+        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+        ASSERT_GE(Low.Blocks.size(), 4u);
+        if (Case == Path::IndependentEntry)
+          Low.ModuleAnalysisRoots.insert(Image->Entry + 0x20);
+        LowToMedConverter Convert;
+        Convert.setBinaryImage(&*Image);
+        const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+        bool Bound = false;
+        for (const auto &Block : Med.Blocks)
+          for (const auto &Op : Block.Ops)
+            for (unsigned I = 0; I < Op.NumInputs; ++I) {
+              const auto &V = Op.Inputs[I];
+              Bound |= V.isConst() && V.ConstVal == 0x10170 &&
+                       isExactAddressProvenance(V.Provenance);
+            }
+        EXPECT_EQ(Bound, Case == Path::BothSave);
+      }
+}
+
 TEST(MIPSFloatingResult, ComplexResultsKeepTheirClassAndBothRegisters) {
   for (const auto Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                             Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {

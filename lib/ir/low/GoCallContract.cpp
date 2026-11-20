@@ -359,18 +359,28 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A) {
   return Layout;
 }
 
-std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
-                                             va_t Entry) {
+namespace {
+/// The record of the function the `pclntab` starts at \p Entry, if any.
+const GoFrameArguments *goFunctionRecord(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   if (!Module)
-    return std::nullopt;
+    return nullptr;
   const auto &Frames = Module->FrameArguments;
   const auto It = std::lower_bound(
       Frames.begin(), Frames.end(), Entry,
       [](const GoFrameArguments &F, va_t At) { return F.Entry < At; });
-  if (It == Frames.end() || It->Entry != Entry)
-    return std::nullopt;
-  return It->Bytes;
+  return It != Frames.end() && It->Entry == Entry ? &*It : nullptr;
+}
+} // namespace
+
+std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
+                                             va_t Entry) {
+  const GoFrameArguments *Record = goFunctionRecord(Img, Entry);
+  return Record ? Record->Bytes : std::nullopt;
+}
+
+bool goRecordsFunction(const BinaryImage &Img, va_t Entry) {
+  return goFunctionRecord(Img, Entry) != nullptr;
 }
 
 bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {

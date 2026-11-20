@@ -166,6 +166,11 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A);
 std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
                                              va_t Entry);
 
+/// Whether the `pclntab` records a function starting at \p Entry, whether
+/// or not its record gives a size (GoModuleInfo::FrameArguments): a block
+/// NeverD splits off a function's interior is no such function.
+bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
+
 /// Whether \p Callee drops its return address and returns to its caller's
 /// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is
 /// its caller's last act, a tail call, and never reaches the next instruction.

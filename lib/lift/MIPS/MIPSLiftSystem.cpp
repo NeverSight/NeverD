@@ -25,7 +25,9 @@ bool MIPSLifter::liftSystem(State &S, uint32_t Word) const {
   if (Opcode == 16 && !(Word & 0x7f8)) {
     if (const auto C = mips::cp0TransferEncoding(RS)) {
       const unsigned Key = ((Word & 7) << 5) | RD;
-      if (C->Bytes > S.Width || (!R6 && RS != 0 && RS != 4) ||
+      if (C->Bytes > S.Width ||
+          (!R6 && !(HistoricalISA == 3 && (RS == 1 || RS == 5)) && RS != 0 &&
+           RS != 4) ||
           (!HasMT && !R6 && mips::cp0RequiresMT(Key)))
         return false;
       if (C->Write)

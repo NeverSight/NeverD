@@ -36,6 +36,17 @@ constexpr bool historicalDoublewordGPRInstruction(uint32_t Word) {
   return Op ? FirstLevel[Major][Op] == 3 : FirstLevel[Special][Word & 63] == 3;
 }
 
+/// Width of an integer operation that raises the synchronous Overflow
+/// exception.
+constexpr unsigned historicalTrappingArithmeticBytes(uint32_t Word) {
+  const unsigned Major = Word >> 26, Fn = Word & 63;
+  if (Major == 8 || Major == 24)
+    return Major == 8 ? 4 : 8;
+  if (Major || (Word & 0x7c0))
+    return 0;
+  return Fn == 32 || Fn == 34 ? 4 : Fn == 44 || Fn == 46 ? 8 : 0;
+}
+
 constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
   using namespace historical;
   const unsigned Op = Word >> 26, RS = Word >> 21 & 31, RT = Word >> 16 & 31,
@@ -58,6 +69,17 @@ constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
   }
   if (Op == 1)
     return Has(RegImm, RT);
+  if (Op == 16 && Level <= 3) {
+    if (Word == 0x42000010)
+      return Level <= 2; // RFE on cores with a KU/IE stack.
+    if (Word == 0x42000018)
+      return Level >= 2; // CW4011 R4000-compatible mode and R4000.
+    const bool WordTransfer = RS == 0 || RS == 4;
+    const bool DoubleTransfer = Level == 3 && (RS == 1 || RS == 5);
+    return !(Word & 0x7ff) && (WordTransfer || DoubleTransfer) &&
+           (FS == 8 || FS == 12 || FS == 13 || FS == 14) &&
+           (!(RS & 4) || FS != 8) && (!DoubleTransfer || FS == 8 || FS == 14);
+  }
   if (Op == 19)
     return Has(Cop1X, Fn);
   if (Op != 17)

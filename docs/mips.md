@@ -33,16 +33,18 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
   normally.
-- In linked classic n32/n64 PIC and CPIC code, an ordinary entry block can
+- In linked classic n32/n64 PIC and CPIC code, the ordinary entry can
   establish GP from its incoming `$t9` and a linker displacement. Source
-  conversion binds the completed register write when it matches the image-wide
-  register-info GP. This covers the assembler's `.cpsetup` and Clang's
-  equivalent calculation in a temporary GPR. The caller's incoming GP and
-  later register writes keep their own values. Scoped GP records cannot supply
-  this proof. A full-width GOT import load retains its symbol through n32's
-  sign extension. A static GNU GOT with a single GP and no TLS can supply the
-  initial address of a writable callback object. The call reads the object's
-  current pointer.
+  conversion follows saved copies of `$t9`, including across direct branches
+  and their always-executed delay slots. At a join, every predecessor must
+  establish the same register value. Calls, annulled slots and independent
+  entries stop propagation. The completed write must match the image-wide
+  register-info GP. This covers assembler `.cpsetup` and Clang's calculation
+  in a temporary GPR. The caller's incoming GP and later register writes keep
+  their own values. Scoped GP records cannot supply this proof. A full-width
+  GOT import load retains its symbol through n32's sign extension. A static
+  GNU GOT with a single GP and no TLS can supply the initial address of a
+  writable callback object. The call reads the object's current pointer.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
@@ -1459,9 +1461,29 @@ Unbound execution, including lenient constant recovery, refuses these ordered
 operations. HighC and LLVM source reconstruction also refuse to erase the
 scheduling contract. Floating arithmetic additionally requires an executor
 that explicitly declares the historical ISA; the modern pre-R6 FPU does not
-claim R3000/R4000 exception, NaN or subnormal behavior. CP0 propagation,
-exception/interrupt entry and reset are not supplied by this scheduling owner.
-Those boundaries still require implementation and independent qualification.
+claim R3000/R4000 floating-point exception, NaN or subnormal behavior.
+
+A historical scheduling snapshot can additionally bind a processor's CP0 state.
+The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
+selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
+selector zero. The bound state supplies Status, Cause, EPC and an observed bad
+address. Cause writes change only the software interrupt bits. Accepted Status
+writes track interrupt visibility and coprocessor usability separately.
+Register updates and hazard aging occur on successful physical retirement.
+
+SYSCALL and BREAK enter the common exception handler, including inside delay
+slots. The branch occurrence and its outcome accompany an executed slot.
+R30xx shifts KU/IE into the mode stack. R4000 retains the original EPC and BD
+when EXL is already set. The CW4011 also records the branch outcome in BT.
+RFE restores the KU/IE stack. ERET selects EPC or the observed ErrorEPC and
+clears the load-linked reservation. Signed ADD/SUB and immediate forms
+deliver overflow before writeback. Aligned scalar integer loads and stores
+report address errors before accessing memory. A disabled coprocessor
+sets the CE field. Interrupts sample the observed IP and IM bits at issue
+after the corresponding write hazard. The platform can update its six
+hardware interrupt lines between physical instructions. Reset, TLB state
+and board-specific Status fields require additional platform evidence. The CW4011 conventions follow the
+[LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
 
 The timing rules are based on the
 [R3000 family manual](https://cgi.cse.unsw.edu.au/~cs3231/doc/R3000.pdf)
@@ -1479,7 +1501,7 @@ The shared availability catalog gates physical words before decoder fallbacks
 and at direct lift entry, including after decoder reuse. It does not imply that
 every architecturally available instruction has a semantic implementation.
 Trapping arithmetic, privileged operations and reservations retain the limits
-listed above. Historical III–V o32 remains unqualified; I–III scheduling has
+listed above. MIPS IV–V o32 remains unqualified; I–III scheduling has
 the explicit execution and reconstruction boundaries described above.
 
 IV admits the implemented integer and scalar COP1/COP1X slice; V additionally

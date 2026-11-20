@@ -61,21 +61,121 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         Img.MIPS->HasDSP || Img.MIPS->HasDSPR2 || Img.MIPS->HasMSA ||
         Context.FloatingPointException)
       return false;
-    if (Id == Intrinsic::MIPSHistoricalRetire)
-      return Context.Historical->retire(Op.Addr);
+    if (Id == Intrinsic::MIPSHistoricalRetire) {
+      const bool ERET = Context.Historical->retiringERET(Op.Addr);
+      if (!Context.Historical->retire(Op.Addr))
+        return false;
+      if (ERET)
+        clearMIPSReservation();
+      return true;
+    }
     if (!knownOperandBytes(Op.Inputs[2], 0, 1) ||
         readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Img.Arch))
       return false;
     if (isMIPS64O32(Img.Arch) && !Context.HistoricalO32DoublewordEnabled &&
         mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset))
       return false;
-    const auto Timing = mips::historicalInstructionTiming(
-        Op.Inputs[1].Offset, Img.MIPS->HistoricalISA,
-        Img.MIPS->hasScalarFP32ABI(Img.Arch));
-    return Timing &&
-           Context.Historical->begin(Op.Addr, Timing->Reads, Timing->Delayed,
-                                     Timing->Access, Timing->MergeSource,
-                                     Timing->ForwardableLoad);
+    std::optional<bool> Taken;
+    if (Op.NumInputs == 4) {
+      Taken = false;
+      if (Context.Historical->system() &&
+          Context.Historical->system()->tracksBranchTaken()) {
+        if (!knownOperandBytes(Op.Inputs[3], 0, 1))
+          return false;
+        const auto Value = readOperand(Op.Inputs[3]);
+        if (Value > 1)
+          return false;
+        Taken = Value != 0;
+      }
+    }
+    if (!Context.Historical->beginPhysical(Op.Addr, Op.Inputs[1].Offset,
+                                           Img.MIPS->hasScalarFP32ABI(Img.Arch),
+                                           Taken))
+      return false;
+    const auto &System = Context.Historical->system();
+    if (System && System->canTakeInterrupt()) {
+      Context.Historical->enterException(Op.Addr, 0);
+      return false;
+    }
+    if (System) {
+      const auto Cop = mips::HistoricalCP0::coprocessorOf(Op.Inputs[1].Offset);
+      if (Cop && !System->coprocessorUsable(*Cop)) {
+        Context.Historical->enterException(Op.Addr, 11);
+        return false;
+      }
+    }
+    return true;
+  }
+  if (Id == Intrinsic::MIPSHistoricalOverflow ||
+      Id == Intrinsic::MIPSHistoricalAddressCheck) {
+    auto &Schedule = Context.Historical;
+    if (!Img.MIPS || !Schedule || !Img.MIPS->HistoricalISA ||
+        Schedule->historicalISA() != Img.MIPS->HistoricalISA ||
+        !knownOperandBytes(Op.Inputs[1], 0, Op.Inputs[1].Size))
+      return false;
+    const auto Word = Schedule->physicalWord(Op.Addr);
+    if (!Word)
+      return false;
+    const auto Value = readOperand(Op.Inputs[1]);
+    if (Id == Intrinsic::MIPSHistoricalOverflow) {
+      if (!mips::historicalTrappingArithmeticBytes(*Word) || Value > 1)
+        return false;
+      if (!Value)
+        return true;
+      Schedule->enterException(Op.Addr, 12);
+    } else {
+      const unsigned Major = *Word >> 26;
+      const unsigned Bytes = Major == 33 || Major == 37 || Major == 41   ? 2
+                             : Major == 35 || Major == 39 || Major == 43 ? 4
+                             : Major == 55 || Major == 63                ? 8
+                                                                         : 0;
+      if (!Bytes)
+        return false;
+      if (!(Value & (Bytes - 1)))
+        return true;
+      const bool Store = Major == 41 || Major == 43 || Major == 63;
+      Schedule->enterException(Op.Addr, Store ? 5 : 4, Value);
+    }
+    return false;
+  }
+  if (Img.MIPS && Img.MIPS->HistoricalISA &&
+      (mips::cp0Transfer(Id) || Id == Intrinsic::MIPSHistoricalException)) {
+    auto &Schedule = Context.Historical;
+    if (!Schedule || Schedule->historicalISA() != Img.MIPS->HistoricalISA ||
+        !Schedule->system())
+      return false;
+    if (Id == Intrinsic::MIPSHistoricalException) {
+      Schedule->raiseSoftwareException(Op.Addr, Op.Inputs[1].Offset);
+      return false; // Synchronous transfer prevents retirement and later slot
+                    // effects.
+    }
+    const auto C = *mips::cp0Transfer(Id);
+    const unsigned Register = Op.Inputs[1].Offset;
+    if (!Schedule->matchesTransfer(Op.Addr, C.RS, Register))
+      return false;
+    if (C.Write)
+      return knownOperandBytes(Op.Inputs[2], 0, C.Bytes) &&
+             Schedule->stageCP0Write(Op.Addr, Register,
+                                     readOperand(Op.Inputs[2]), C.Bytes == 8);
+    auto Value = Schedule->system()->read(Register, C.Bytes == 8);
+    if (!Value)
+      return false;
+    writeOutput(Op.Output, *Value);
+    return true;
+  }
+  if (Id == Intrinsic::MIPSHistoricalRFE ||
+      Id == Intrinsic::MIPSHistoricalERET) {
+    if (!Img.MIPS || !Context.Historical || !Img.MIPS->HistoricalISA ||
+        Context.Historical->historicalISA() != Img.MIPS->HistoricalISA)
+      return false;
+    const bool ERET = Id == Intrinsic::MIPSHistoricalERET;
+    const auto Destination =
+        Context.Historical->stageExceptionReturn(Op.Addr, ERET);
+    if (!Destination)
+      return false;
+    if (ERET)
+      writeOutput(Op.Output, *Destination);
+    return true;
   }
   if (mips::isScalarFPControl(Id)) {
     if (!Img.MIPS || (!R6 && !Img.MIPS->hasScalarFPABI(Img.Arch)) ||
@@ -446,7 +546,12 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
       mips::isMSAControl(Id) || mips::isMSAFloat(Id) ||
       mips::isScalarFPArithmetic(Id) || mips::isScalarFPControl(Id) ||
       Id == Intrinsic::MIPSHistoricalBegin ||
-      Id == Intrinsic::MIPSHistoricalRetire)
+      Id == Intrinsic::MIPSHistoricalRetire ||
+      Id == Intrinsic::MIPSHistoricalException ||
+      Id == Intrinsic::MIPSHistoricalRFE ||
+      Id == Intrinsic::MIPSHistoricalERET ||
+      Id == Intrinsic::MIPSHistoricalOverflow ||
+      Id == Intrinsic::MIPSHistoricalAddressCheck)
     return false; // Explicit, single-step context required in either mode.
   if (mips::isMSADivision(Id)) {
     const auto &A = Op.Inputs[1], &B = Op.Inputs[2];
