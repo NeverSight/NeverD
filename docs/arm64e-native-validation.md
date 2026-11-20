@@ -2619,3 +2619,44 @@ Apple M1 runners reported unavailable for native PAuth_LR, PACM-PC,
 scalar CPTA-on and checked ordinary-memory writeback.
 [Two-toolchain hosted qualification](https://github.com/gmh5225/test_mac_intel/actions/runs/44756052544).
 [Per-case results, image hashes and cleanup receipts](evidence/arm64e-masked-tables-2026-11-20.json).
+
+### Uses of the table register after the load
+
+The whole-image publisher can move an arm64e relative switch whose load
+consumes the storage address before an ADR reuses that register as the
+target base. When both ADRs precede the load, their registers must coexist.
+The same proof accepts architectural NOPs between the five operations
+within one basic block. Overwriting the computed branch target invalidates
+the proof.
+
+The source CFG recovered three edges in each byte, halfword and signed-word
+switch before this change. The former publisher accepted the early-anchor
+control but refused the otherwise equivalent late-anchor image. On each
+hosted Mac, the independent caller now checked 1,872 results on 26 signed
+inputs and outputs, plus 144 results on two locally compiled originals.
+The 24 outputs cover default and no-opt publication, three generations,
+and both the LLVM source fork and prebuilt r6. Both producers rejected each
+of the six clobbered inputs and left the output path absent. The M1 profiles continued to report unavailable
+for native PAuth_LR, PACM-PC and CPTA-on.
+[Hosted scheduled switch executions](https://github.com/gmh5225/test_mac_intel/actions/runs/44758696962).
+
+The repository reported zero registered self-hosted runners on November 20.
+GitHub lists Apple M1 for its standard arm64 Mac labels and M2 for its
+arm64 xlarge labels. [Standard runner hardware](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+[Mac xlarge hardware](https://docs.github.com/en/actions/reference/runners/larger-runners).
+
+The broader local Release selection ran 1,039 cases, with 992 passes and
+47 explicit skips. After merging the current dev branch, the eight
+focused tests passed with each toolchain, and each toolchain regenerated
+its twelve published images byte for byte.
+[Image hashes, local results and runner evidence](evidence/arm64e-scheduled-tables-2026-11-20.json).
+
+Both hosted Apple M1 profiles also passed all 253 tests from the integrated
+source-fork Release publication suite, with zero skips or failures. Each
+executed 288 comparisons on the new scheduled-switch fixture and twelve
+original-table walks at signal-interrupted entries. [Complete native suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44762770209).
+
+On the same integrated revision the unfiltered r6 suite passed 243 of 253
+cases on each Mac. The four compact-emitter skips and six classic signed-CFI
+refusals match the previous control. The new scheduled-switch case completed
+all 288 native comparisons on each host. [Full pinned-r6 comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44765584364).
