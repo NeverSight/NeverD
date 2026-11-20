@@ -1243,6 +1243,11 @@ struct BinaryImage {
         Seg->Data.size() > InvalidVA - Seg->VA)
       return std::nullopt;
     const va_t MaterializedEnd = Seg->VA + Seg->Data.size();
+    // An LC_DATA_IN_CODE record owns exactly these bytes even when dyld
+    // maps them in an executable segment outside any declared section.
+    const auto Islands = machODataInCodeRanges(MachODataInCode, Addr, 1);
+    if (!Islands.empty())
+      return std::min(Islands.front().End, MaterializedEnd);
     if (const ARMCodeRegion *Region = armMappingRegionAt(Addr);
         Region && Region->Kind == ARMCodeRegionKind::Data)
       return std::min<va_t>(Region->End, MaterializedEnd);

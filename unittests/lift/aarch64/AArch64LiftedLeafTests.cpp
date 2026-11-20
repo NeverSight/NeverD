@@ -18,6 +18,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -373,6 +374,31 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     ASSERT_NE(ByteFunction, Lifted.LowFuncs.end());
     const auto &Table = ByteFunction->JumpTables.front();
     EXPECT_NE(Table.BaseAddr % aarch64::kInsnSize, 0u);
+    // A tight Mach-O can append its new body to __TEXT instead of creating
+    // a sectionless segment. Other declared sections still bound that segment.
+    auto Sectionless = *Image;
+    const auto *Section = Sectionless.getSectionFor(Table.BaseAddr);
+    ASSERT_TRUE(Section);
+    const auto TextVA = Section->VA;
+    llvm::erase_if(Sectionless.Sections,
+                   [&](const auto &S) { return S.VA == TextVA; });
+    const auto *Segment = Sectionless.getSegmentFor(Table.BaseAddr);
+    ASSERT_TRUE(Segment &&
+                Sectionless.segmentHasReadableSectionMetadata(*Segment));
+    for (const auto &R : Image->MachODataInCode) {
+      EXPECT_EQ(Sectionless.mappedObjectOwnerEnd(R.Begin), R.End);
+      EXPECT_EQ(Sectionless.mappedObjectOwnerEnd(R.End - 1), R.End);
+    }
+    EXPECT_FALSE(Sectionless.mappedObjectOwnerEnd(ByteFunction->Entry));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Sectionless));
+    for (const auto &Function : Lifted.LowFuncs) {
+      auto Recovered = CFGBuilder().build(Sectionless, Decode, Function.Entry);
+      ASSERT_EQ(Recovered.JumpTables.size(), 1u);
+      EXPECT_TRUE(Recovered.JumpTables.front().IndexDomainAuthenticated);
+      EXPECT_EQ(Recovered.JumpTables.front().Targets,
+                Function.JumpTables.front().Targets);
+    }
     const auto Entry = ByteFunction->Entry;
     const auto Guard = Image->vaToFileOffset(Entry + aarch64::kInsnSize);
     const auto Anchor = Image->vaToFileOffset(
