@@ -35,11 +35,13 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   normally.
 - In linked classic n32/n64 PIC and CPIC code, the ordinary entry can
   establish GP from its incoming `$t9` and a linker displacement. Source
-  conversion follows saved copies of `$t9`, including across direct branches
-  and their always-executed delay slots. At a join, every predecessor must
-  establish the same register value. Calls, annulled slots and independent
-  entries stop propagation. The completed write must match the image-wide
-  register-info GP. This covers assembler `.cpsetup` and Clang's calculation
+  conversion follows saved copies of `$t9` across direct branches and loops.
+  A branch-likely passes the pre-slot value on its skipped edge and the
+  updated value on its taken edge. The classic `b` alias and
+  `beql $zero,$zero` always execute their slot and have one successor.
+  Every incoming path, including loop backedges, must establish the same
+  value. Calls and independent entries end the proof. The completed write
+  must match the image-wide register-info GP. This covers assembler `.cpsetup` and Clang's calculation
   in a temporary GPR. The caller's incoming GP and later register writes keep
   their own values. Scoped GP records cannot supply this proof. A full-width
   GOT import load retains its symbol through n32's sign extension. A static

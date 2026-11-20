@@ -13,9 +13,11 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
+
+#include <algorithm>
 
 namespace neverd {
 namespace {
@@ -31,14 +33,28 @@ struct Value {
   bool operator==(const Value &) const = default;
 };
 
+using Registers = llvm::SmallDenseMap<uint64_t, Value, 8>;
+
+bool intersect(Registers &Into, const Registers &Other) {
+  llvm::SmallVector<uint64_t, 8> Remove;
+  for (const auto &[Reg, V] : Into) {
+    const auto It = Other.find(Reg);
+    if (It == Other.end() || It->second != V)
+      Remove.push_back(Reg);
+  }
+  for (uint64_t Reg : Remove)
+    Into.erase(Reg);
+  return !Remove.empty();
+}
+
 class EntryValues {
-  llvm::SmallDenseMap<uint64_t, Value, 8> Registers, Temps;
+  Registers GPRs, Temps;
   bool WordPointers;
 
   std::optional<Value> read(const NdVar &V) const {
     if (V.isConst() && !isAddressProvenance(V.Provenance))
       return Value{V.Offset, Origin::Scalar, false, V.Size};
-    const auto &Values = V.isReg() ? Registers : Temps;
+    const auto &Values = V.isReg() ? GPRs : Temps;
     auto It = Values.find(V.Offset);
     if ((!V.isReg() && !V.isTemp()) || It == Values.end() ||
         It->second.Size != V.Size)
@@ -85,28 +101,15 @@ class EntryValues {
   }
 
 public:
-  EntryValues(va_t Entry, bool WordPointers) : WordPointers(WordPointers) {
-    Registers[mipsreg::T9] = {
-        WordPointers ? uint64_t(llvm::SignExtend64<32>(Entry)) : Entry,
-        Origin::Entry, WordPointers, 8};
-  }
+  EntryValues(const Registers &Incoming, bool WordPointers)
+      : GPRs(Incoming), WordPointers(WordPointers) {}
 
+  const Registers &registers() const { return GPRs; }
   void nextInstruction() { Temps.clear(); }
-
-  void intersect(const EntryValues &Other) {
-    llvm::SmallVector<uint64_t, 8> Remove;
-    for (const auto &[Reg, V] : Registers) {
-      const auto It = Other.Registers.find(Reg);
-      if (It == Other.Registers.end() || It->second != V)
-        Remove.push_back(Reg);
-    }
-    for (uint64_t Reg : Remove)
-      Registers.erase(Reg);
-  }
 
   std::optional<Value> write(const LowOp &Op) {
     auto V = result(Op);
-    auto &Values = Op.Output.isReg() ? Registers : Temps;
+    auto &Values = Op.Output.isReg() ? GPRs : Temps;
     if (V) {
       V->Size = Op.Output.Size;
       Values[Op.Output.Offset] = *V;
@@ -125,15 +128,24 @@ public:
 };
 
 struct BlockProof {
-  int Id;
   llvm::SmallVector<std::pair<size_t, uint64_t>, 4> Words;
   llvm::SmallVector<size_t, 1> Writes;
-  size_t WordsBeforeGP = 0;
+  size_t RequiredWords = 0;
+  // Each edge records how many checks can execute before taking it.
+  llvm::SmallVector<std::pair<int, size_t>, 2> Edges;
 };
 
-/// Returns true when the register state reaches every ordinary successor.
+struct SkippedSlot {
+  va_t Resume, Taken;
+  Registers Before;
+  size_t Words;
+};
+
+/// The final register state follows the executed slot. A guarded unit also
+/// publishes the state just before its slot for the annulled edge.
 bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
-                EntryValues &Values, BlockProof &Proof) {
+                EntryValues &Values, BlockProof &Proof,
+                std::optional<SkippedSlot> &Skipped) {
   const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Target);
   size_t End = 0;
   for (const auto &Insn : Block.InstructionBoundaries) {
@@ -161,8 +173,15 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
         continue;
       }
       if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR) {
-        // A branch-likely guards its slot with an earlier COND_BR. Only
-        // a final direct transfer has one register state for every edge.
+        if (Direct && Op.Opcode == NdOp::COND_BR && Insn.DelaySlot &&
+            hasLowInstructionControlFlag(
+                Insn.ControlFlags,
+                LowInstructionControlFlag::InstructionGuard) &&
+            I + 1 == Insn.FirstOp + Insn.DelaySlot->FirstOp) {
+          Skipped.emplace(Insn.Address + Insn.Size, *Insn.Immediate,
+                          Values.registers(), Proof.Words.size());
+          continue;
+        }
         return Direct && I + 1 == Block.Ops.size() && Op.NumInputs &&
                Op.Inputs[0].isConst() && Op.Inputs[0].Offset == *Insn.Immediate;
       }
@@ -175,7 +194,7 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
         continue;
 
       Proof.Writes.push_back(I);
-      Proof.WordsBeforeGP = Proof.Words.size();
+      Proof.RequiredWords = Proof.Words.size();
     }
     if (Direct)
       return false;
@@ -191,71 +210,118 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
       Function.Blocks.empty())
     return std::nullopt;
   const LowBlock &Entry = Function.Blocks.front();
-  if (Entry.StartAddr != Function.Entry || !Entry.Preds.empty() ||
-      !Entry.ExceptionalPreds.empty())
+  if (Entry.StartAddr != Function.Entry || !Entry.ExceptionalPreds.empty())
     return std::nullopt;
 
-  struct Incoming {
-    EntryValues Values;
-    size_t Reached = 0;
-    explicit Incoming(const EntryValues &Values) : Values(Values) {}
+  struct Input {
+    Registers GPRs;
+    size_t Predecessors = 0;
+    bool Scanned = false;
+    BlockProof Proof;
   };
-  llvm::SmallDenseMap<int, Incoming, 2> Pending;
-  EntryValues Values(Function.Entry, hasMIPS32BitAddressIn64BitGPR(Image.Arch));
-  llvm::SmallVector<int, 4> Ready;
-  llvm::SmallVector<BlockProof, 4> Proofs;
+  llvm::SmallDenseMap<int, Input, 2> Inputs;
+  const bool WordPointers = hasMIPS32BitAddressIn64BitGPR(Image.Arch);
+  Inputs[0].GPRs[mipsreg::T9] = {
+      WordPointers ? uint64_t(llvm::SignExtend64<32>(Function.Entry))
+                   : Function.Entry,
+      Origin::Entry, WordPointers, 8};
   const uint64_t GP = *Image.MIPS->PICGP;
   const bool Complete = Function.hasCompleteLiftCoverage() &&
                         Function.UnsafeIndirectBranchAddresses.empty();
-  bool Found = false;
-  for (int Id = 0;;) {
+
+  // Start with the first incoming path. Later paths can only remove facts,
+  // so a changing loop carrier becomes unknown on its first disagreement.
+  llvm::SmallSetVector<int, 8> Ready;
+  Ready.insert(0);
+  while (!Ready.empty()) {
+    const int Id = Ready.pop_back_val();
+    auto &In = Inputs.find(Id)->second;
+    const bool First = !In.Scanned;
+    In.Scanned = true;
+    EntryValues Values(In.GPRs, WordPointers);
     const LowBlock &Block = Function.Blocks[Id];
-    auto &Proof = Proofs.emplace_back(BlockProof{.Id = Id});
-    const bool ReachesExit = scanPrefix(Block, Image.Arch, GP, Values, Proof);
-    Found |= !Proof.Writes.empty();
-    Values.nextInstruction();
-    if (ReachesExit && Complete) {
+    BlockProof Proof;
+    std::optional<SkippedSlot> Skipped;
+    const bool Full = scanPrefix(Block, Image.Arch, GP, Values, Proof, Skipped);
+    if (Complete && (Full || Skipped)) {
       for (int Succ : Block.Succs) {
         const auto &Next = Function.Blocks[Succ];
         if (!Next.ExceptionalPreds.empty() ||
-            Function.ModuleAnalysisRoots.contains(Next.StartAddr) ||
-            Function.OrdinaryModuleAnalysisRoots.contains(Next.StartAddr))
+            (Succ != 0 &&
+             (Function.ModuleAnalysisRoots.contains(Next.StartAddr) ||
+              Function.OrdinaryModuleAnalysisRoots.contains(Next.StartAddr))))
           continue;
-        auto [State, First] = Pending.try_emplace(Succ, Values);
-        if (!First)
-          State->second.Values.intersect(Values);
-        // A call or an independent entry leaves an incoming edge unproved.
-        // A loop header also waits on its back edge and stays unvisited.
-        if (++State->second.Reached == Next.Preds.size())
-          Ready.push_back(Succ);
+        const bool Skip = Skipped && Next.StartAddr == Skipped->Resume;
+        const bool Execute = !Skipped || Next.StartAddr == Skipped->Taken;
+        if ((Execute && !Full) || (!Skip && !Execute))
+          continue;
+        const Registers &Outgoing =
+            Execute ? Values.registers() : Skipped->Before;
+        auto [At, New] = Inputs.try_emplace(Succ);
+        auto &State = At->second;
+        bool Changed = New;
+        if (New)
+          State.GPRs = Outgoing;
+        else
+          Changed = intersect(State.GPRs, Outgoing);
+        // A branch to its own resume address still has two machine paths.
+        if (Skip && Execute)
+          Changed |= intersect(State.GPRs, Skipped->Before);
+        if (First)
+          ++State.Predecessors;
+        if (Changed)
+          Ready.insert(Succ);
+        Proof.Edges.emplace_back(Succ,
+                                 Execute ? Proof.Words.size() : Skipped->Words);
       }
     }
-    if (Ready.empty())
-      break;
-    Id = Ready.pop_back_val();
-    auto It = Pending.find(Id);
-    Values = std::move(It->second.Values);
-    Pending.erase(It);
+    Inputs.find(Id)->second.Proof = std::move(Proof);
   }
-  if (!Found)
+
+  // An opaque predecessor (for example a call or a separate entry) can
+  // arrive with every entry-derived register clobbered. No descendant can
+  // reconstruct entry provenance from a scalar alone.
+  for (const auto &[Id, State] : Inputs)
+    if (State.Predecessors != Function.Blocks[Id].Preds.size())
+      Ready.insert(Id);
+  while (!Ready.empty()) {
+    auto At = Inputs.find(Ready.pop_back_val());
+    if (At == Inputs.end())
+      continue;
+    for (const auto &[Succ, Words] : At->second.Proof.Edges)
+      Ready.insert(Succ);
+    Inputs.erase(At);
+  }
+
+  for (const auto &[Id, State] : Inputs)
+    if (!State.Proof.Writes.empty())
+      Ready.insert(Id);
+  if (Ready.empty())
     return std::nullopt;
+  // Only discharge n32 word checks preceding a proved GP write. On a
+  // skipped edge the checks in the slot belong solely to the taken path.
+  llvm::SmallDenseSet<int, 8> Needed(Ready.begin(), Ready.end());
+  while (!Ready.empty()) {
+    int Id = Ready.pop_back_val();
+    for (int Pred : Function.Blocks[Id].Preds) {
+      auto &Proof = Inputs.find(Pred)->second.Proof;
+      for (const auto &[Succ, Words] : Proof.Edges)
+        if (Succ == Id)
+          Proof.RequiredWords = std::max(Proof.RequiredWords, Words);
+      if (Needed.insert(Pred).second)
+        Ready.insert(Pred);
+    }
+  }
 
   LowFunc Projected = Function;
-  llvm::SmallDenseSet<int, 4> Needed;
-  for (const auto &Proof : llvm::reverse(Proofs)) {
-    const bool Downstream = Needed.erase(Proof.Id);
-    if (!Downstream && Proof.Writes.empty())
-      continue;
-    auto &Block = Projected.Blocks[Proof.Id];
+  for (int Id : Needed) {
+    const auto &Proof = Inputs.find(Id)->second.Proof;
+    auto &Ops = Projected.Blocks[Id].Ops;
     for (size_t I : Proof.Writes)
-      Block.Ops[I].Inputs[0] = NdVar::address(GP, 8);
-    // These n32 guards observe only sign extension. Discharge proven checks
-    // through the completed write, including those in its predecessors.
-    const size_t Count = Downstream ? Proof.Words.size() : Proof.WordsBeforeGP;
+      Ops[I].Inputs[0] = NdVar::address(GP, 8);
     for (const auto &[Index, Bits] :
-         llvm::ArrayRef(Proof.Words).take_front(Count))
-      Block.Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);
-    Needed.insert_range(Block.Preds);
+         llvm::ArrayRef(Proof.Words).take_front(Proof.RequiredWords))
+      Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);
   }
   return Projected;
 }

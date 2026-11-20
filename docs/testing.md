@@ -18230,12 +18230,21 @@ fixtures cover straight-line `.cpsetup`, a saved entry `$t9` after the original
 register is overwritten, and an optimized C conditional call. The harness
 loads each shared object at a nonzero bias, binds its import to each of two
 callees, and checks arguments, results and restored GP, SP and RA for both C
-backends at O0 and O2. The conditional fixture also checks that the early
-return skips the call and the original GOT load.
+backends at O0 and O2. The conditional fixtures check that early returns skip
+both the call and the original GOT load. Two branch-likely fixtures save or
+clobber the GP carrier in the taken slot. A third increments the argument
+only in the taken slot even though both paths resume at the same address.
+Two loops update the argument, one with a saved entry carrier and one with
+a backedge to the first machine instruction before GP setup. Two additional
+fixtures complete GP in the taken slot before a shared epilogue, or execute
+a memory barrier on the path that skips the import.
 `MIPSEntryGP` checks explicit GP writes, upper-half n32 addresses, both GP
 instruction orders, conflicting linker values and an overwritten entry `$t9`.
 Its branch fixtures distinguish agreeing saved values from conflicting paths,
-a clobbering call, independent entries and an annulled branch-likely slot.
+a clobbering call, independent entries, coincident branch-likely successors,
+and a carrier overwritten on a later loop iteration. The private-frame tests
+also vary whether a loop argument acquires a stack address at entry or on
+its backedge, and whether a later call can observe a post-call register write.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must

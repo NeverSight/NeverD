@@ -203,7 +203,7 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
     const unsigned Opcode = Major < 2 ? 9 : Major == 0x1a ? 43 : 35;
     return Encoding{immediateForm(Opcode, RX, PCRelative ? 0 : 29,
                                   Extended ? Immediate : (Half & 255) << 2),
-                    0, false, PCRelative};
+                    0, PCRelative};
   }
 #define NEVERD_MIPS16_IMMEDIATE(Major, Classic, Destination, Source, Signed)   \
   case Major:                                                                  \
@@ -231,7 +231,7 @@ MIPSLifter::mips16Encoding(const cs_insn &Instruction) const {
       return std::nullopt;
     const uint16_t Displacement =
         Extended ? Immediate : uint16_t(((Half & 0x7ff) ^ 0x400) - 0x400);
-    return Encoding{immediateForm(4, 0, 0, Displacement), 0, true};
+    return Encoding{immediateForm(4, 0, 0, Displacement)};
   }
   case 0x04: // BEQZ
   case 0x05: // BNEZ

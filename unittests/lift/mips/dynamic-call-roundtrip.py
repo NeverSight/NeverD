@@ -54,7 +54,16 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     name = profile + "-import" + ("" if form == "direct" else "-" + form)
     obj, shared = work / (name + ".o"), work / (name + ".so")
     fixture = "pic-guarded-import.c" if form == "guarded" else "pic-import.S"
-    flags = ["-DSAVED_ENTRY"] if form == "saved" else []
+    flags = {
+        "direct": [], "guarded": [], "saved": ["-DSAVED_ENTRY"],
+        "likely-taken": ["-DSAVED_ENTRY", "-DLIKELY_TAKEN"],
+        "likely-skipped": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED"],
+        "likely-join": ["-DSAVED_ENTRY", "-DLIKELY_JOIN"],
+        "loop": ["-DSAVED_ENTRY", "-DENTRY_LOOP"],
+        "entry-loop": ["-DENTRY_HEADER"],
+        "slot-setup": ["-DSLOT_SETUP"],
+        "slot-barrier": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED", "-DSLOT_BARRIER"],
+    }[form]
     command([args.clang, *original_flags, "-O2", *flags, "-c", Path(__file__).with_name(fixture),
              "-o", obj], name + "-compile")
     command([*linker, "-shared", obj, *companions, "-o", shared], name + "-link")
@@ -85,9 +94,17 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
         for value in values:
             result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, 28: entry_gp})
-            expected = ((value + 37 if variant else value ^ 37) + 1) & 0xffffffffffffffff
-            expected_calls = [(value, 37)]
-            if form == "guarded" and not value:
+            argument = value
+            if form == "loop":
+                argument = (value + (value & 3)) & 0xffffffffffffffff
+            elif form == "entry-loop":
+                argument = (value + 4) & 0xfffffffffffffffc
+            elif form == "likely-join" and value:
+                argument = (value + 1) & 0xffffffffffffffff
+            expected = ((argument + 37 if variant else argument ^ 37) + 1) & 0xffffffffffffffff
+            expected_calls = [(argument, 37)]
+            if not value and form in ("guarded", "likely-taken", "likely-skipped",
+                                      "slot-setup", "slot-barrier"):
                 expected, expected_calls = 11, []
             if (result != expected or observations != expected_calls or
                     uc.reg_read(mips.UC_MIPS_REG_GP) != entry_gp or
@@ -365,7 +382,8 @@ word probe(word value) { return target(value, 37) + 1; }
                 artifacts.write("results.json", {"complete": False, "passed": results})
                 artifacts.discard(obj, rebuilt)
         if pic and value_bits == 64:
-            for form in ("direct", "saved", "guarded"):
+            for form in ("direct", "saved", "guarded", "likely-taken", "likely-skipped",
+                         "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)

@@ -413,6 +413,8 @@ TEST_P(MicroMIPSFlow, BranchUsesHalfwordDisplacementAndRealSlotSpan) {
     for (const auto &Boundary : Block.InstructionBoundaries)
       if (Boundary.Address == 0x1000) {
         Found = true;
+        ASSERT_EQ(Block.Succs.size(), 1u);
+        EXPECT_EQ(Function.Blocks[Block.Succs.front()].StartAddr, 0x1006u);
         EXPECT_EQ(Boundary.Size, 4);
         ASSERT_TRUE(Boundary.DelaySlot);
         EXPECT_EQ(Boundary.DelaySlot->Offset, 2);

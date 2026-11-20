@@ -234,6 +234,46 @@ TEST(MIPSEntryGP, PICRequiresEntryT9AndTheLinkedGPAtTheCompletedWrite) {
         }
 }
 
+void expectPICAddress(bool N32, bool Little, llvm::ArrayRef<uint32_t> Words,
+                      bool Expected, unsigned MinBlocks = 2,
+                      std::optional<unsigned> Independent = {}) {
+  mips_test::ELFBytes File(N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
+                               : (Little ? Arch::MIPS64EL : Arch::MIPS64));
+  File.Bytes.resize(0x180);
+  File.put(N32 ? 52 + 16 : 64 + 32, File.Bytes.size(), N32 ? 4 : 8);
+  File.put(N32 ? 52 + 20 : 64 + 40, File.Bytes.size(), N32 ? 4 : 8);
+  File.put(N32 ? 36 : 48, N32 ? 0x80000024 : 0x80000004, 4);
+  File.globalPointer(0x18100);
+  for (unsigned I = 0; I != std::size(Words); ++I)
+    File.put(0x100 + 4 * I, Words[I], 4);
+  File.put(0x150, 0x00806025, 4); // or $12,$a0,$zero
+  File.put(0x154, 0x03e00008, 4); // jr ra; nop
+  ELFLoader Loader;
+  auto Image = Loader.loadBuffer(File.buffer());
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, Words.size() * 4));
+  Image->Symbols.push_back(Symbol::makeFunc(Image->Entry + 0x50, 12));
+  Decoder Decode;
+  ASSERT_TRUE(Decode.init(*Image));
+  auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "pic_join");
+  ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+  ASSERT_GE(Low.Blocks.size(), MinBlocks);
+  if (Independent)
+    Low.ModuleAnalysisRoots.insert(Image->Entry + *Independent);
+  LowToMedConverter Convert;
+  Convert.setBinaryImage(&*Image);
+  const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
+  bool Bound = false;
+  for (const auto &Block : Med.Blocks)
+    for (const auto &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I) {
+        const auto &V = Op.Inputs[I];
+        Bound |= V.isConst() && V.ConstVal == 0x10170 &&
+                 isExactAddressProvenance(V.Provenance);
+      }
+  EXPECT_EQ(Bound, Expected);
+}
+
 TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
   enum class Path {
     BothSave,
@@ -247,14 +287,6 @@ TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
       for (auto Case : {Path::BothSave, Path::OneClobbers, Path::CallsOut,
                         Path::IndependentEntry, Path::AnnulledSave}) {
         SCOPED_TRACE(testing::Message() << N32 << Little << int(Case));
-        mips_test::ELFBytes File(
-            N32 ? (Little ? Arch::MIPS32EL : Arch::MIPS32)
-                : (Little ? Arch::MIPS64EL : Arch::MIPS64));
-        File.Bytes.resize(0x180);
-        File.put(N32 ? 52 + 16 : 64 + 32, File.Bytes.size(), N32 ? 4 : 8);
-        File.put(N32 ? 52 + 20 : 64 + 40, File.Bytes.size(), N32 ? 4 : 8);
-        File.put(N32 ? 36 : 48, N32 ? 0x80000024 : 0x80000004, 4);
-        File.globalPointer(0x18100);
         const bool Likely = Case == Path::AnnulledSave;
         const uint32_t Save = 0x03206025; // or $12,$t9,$zero
         // The right arm uses a full-width DADDU move, or replaces the saved
@@ -277,34 +309,53 @@ TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
             0x65028070,                               // daddiu $v0,$8,-0x7f90
             0x03e00008,                               // jr ra
             0};                                       // delay slot
-        for (unsigned I = 0; I != std::size(Words); ++I)
-          File.put(0x100 + 4 * I, Words[I], 4);
-        File.put(0x150, 0x00806025, 4); // or $12,$a0,$zero
-        File.put(0x154, 0x03e00008, 4); // jr ra; nop
-        ELFLoader Loader;
-        auto Image = Loader.loadBuffer(File.buffer());
-        ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
-        Image->Symbols.push_back(Symbol::makeFunc(Image->Entry, sizeof(Words)));
-        Image->Symbols.push_back(Symbol::makeFunc(Image->Entry + 0x50, 12));
-        Decoder Decode;
-        ASSERT_TRUE(Decode.init(*Image));
-        auto Low = CFGBuilder().build(*Image, Decode, Image->Entry, "pic_join");
-        ASSERT_TRUE(Low.hasCompleteLiftCoverage());
-        ASSERT_GE(Low.Blocks.size(), 4u);
-        if (Case == Path::IndependentEntry)
-          Low.ModuleAnalysisRoots.insert(Image->Entry + 0x20);
-        LowToMedConverter Convert;
-        Convert.setBinaryImage(&*Image);
-        const auto Med = Convert.convert(Low, Image->Arch, BinaryFormat::ELF);
-        bool Bound = false;
-        for (const auto &Block : Med.Blocks)
-          for (const auto &Op : Block.Ops)
-            for (unsigned I = 0; I < Op.NumInputs; ++I) {
-              const auto &V = Op.Inputs[I];
-              Bound |= V.isConst() && V.ConstVal == 0x10170 &&
-                       isExactAddressProvenance(V.Provenance);
-            }
-        EXPECT_EQ(Bound, Case == Path::BothSave);
+        expectPICAddress(N32, Little, Words, Case == Path::BothSave, 4,
+                         Case == Path::IndependentEntry ? std::optional(0x20u)
+                                                        : std::nullopt);
+      }
+}
+
+TEST(MIPSEntryGP, LoopProjectionsHoldOnEveryVisit) {
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (bool AtEntry : {false, true})
+        for (bool Clobber : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << N32 << Little << AtEntry << Clobber);
+          std::vector<uint32_t> Words;
+          if (!AtEntry)
+            Words.push_back(0x03206025); // or $12,$t9,$zero
+          const unsigned Carrier = AtEntry ? 25 : 12;
+          Words.insert(Words.end(),
+                       {0x3c080001, // loop: lui $8,1
+                        0x25088000, // addiu $8,$8,-0x8000
+                        (0x01004000u | (Carrier << 16) | (N32 ? 0x21u : 0x2du)),
+                        0x65028070, // daddiu $v0,$8,-0x7f90
+                        0x1480fffb, // bne $a0,$zero,loop
+                        Clobber ? (0x00a00025u | (Carrier << 11)) : 0,
+                        0x03e00008, 0});
+          expectPICAddress(N32, Little, Words, !Clobber);
+        }
+}
+
+TEST(MIPSEntryGP, BranchLikelyToItsResumeMergesBothSlotStates) {
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (bool Clobber : {false, true}) {
+        SCOPED_TRACE(testing::Message() << N32 << Little << Clobber);
+        const uint32_t Words[] = {
+            0x03206025, // or $12,$t9,$zero
+            0x50800001, // beql $a0,$zero,resume
+            Clobber ? 0x00a06025u
+                    : 0x0320602du, // or $12,$a1,$zero / daddu $12,$t9,$zero
+            0x0080c825,            // resume: or $t9,$a0,$zero
+            0x3c080001,
+            0x25088000,
+            N32 ? 0x010c4021u : 0x010c402du,
+            0x65028070,
+            0x03e00008,
+            0};
+        expectPICAddress(N32, Little, Words, !Clobber);
       }
 }
 
@@ -1263,7 +1314,7 @@ TEST(MIPSN32Calls, PointerSpillsPreserveTheIncomingLinkAcrossCalls) {
 TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
-    for (unsigned Variant = 0; Variant != 12; ++Variant) {
+    for (unsigned Variant = 0; Variant != 17; ++Variant) {
       SCOPED_TRACE(getArchName(Target));
       SCOPED_TRACE(Variant);
       const bool Wide = isMIPS64(Target);
@@ -1300,7 +1351,28 @@ TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
         Words.push_back(Wide ? 0x03a0202du : 0x03a02021u); // a0 = sp
       else if (Variant == 6)
         Words.push_back(Wide ? 0x03a5e82fu : 0x03a5e823u); // sp -= a1
-      Words.insert(Words.end(), {0x0c004080, 0});          // jal 0x10200; nop
+      if (Variant >= 12 && Variant <= 14) {
+        // A distinct latch feeds the argument PHI. The first variant counts
+        // from the original argument, the others include SP in its seed or
+        // its update and expose the caller's frame to the callee.
+        if (Variant == 13)
+          Words.push_back(0x03a02025); // or a0,sp,zero
+        Words.insert(Words.end(),
+                     {0x30ad0003, // andi $13,a1,3
+                      0x11a00004, // header: beq $13,zero,done
+                      0,
+                      Wide ? 0x65adffffu : 0x25adffffu, // (d)addiu $13,$13,-1
+                      0x1000fffc,                       // b header
+                      Variant == 14 ? (Wide ? 0x009d202du : 0x009d2021u)
+                                    : (Wide ? 0x64840001u : 0x24840001u)});
+      }
+      Words.insert(Words.end(), {0x0c004080, 0}); // done: jal 0x10200; nop
+      if (Variant == 15 || Variant == 16) {
+        // A post-call register write reaches the callee only on the backedge.
+        Words.push_back(0x03a02025); // or a0,sp,zero
+        if (Variant == 16)
+          Words.insert(Words.end(), {0x1440fffc, 0}); // bne v0,zero,call; nop
+      }
       if (Variant == 7 || Variant == 8 || Variant == 11) {
         if (Variant == 7)
           Words.push_back(Wide ? 0x67bd0030u : 0x27bd0008u);
@@ -1364,8 +1436,9 @@ TEST(MIPSSourceReturnTargets, PrivateFrameSpillsDoNotPublishTheFrame) {
           Convert.setCallEntryArgumentCounts(&Counts);
         else if (Contract == 2)
           Convert.setCallEntryFloatingArguments(&Calls);
-        if (Contract && (Variant == 0 || Variant == 1 || Variant == 8 ||
-                         (Variant == 11 && Contract == 1)))
+        if (Contract &&
+            (Variant == 0 || Variant == 1 || Variant == 8 || Variant == 12 ||
+             Variant == 15 || (Variant == 11 && Contract == 1)))
           EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
         else
           EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),

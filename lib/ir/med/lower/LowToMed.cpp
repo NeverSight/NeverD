@@ -297,8 +297,10 @@ void splitEntryLoopHeader(MedFunc &Func) {
       Shift(Edge.BlockId);
   }
   Func.Blocks.front().Preds.push_back(0);
+  Func.Blocks.front().Role = MedBlockRole::EntryLoopHeader;
   MedBlock Entry;
   Entry.Id = 0;
+  Entry.Role = MedBlockRole::EntryPreheader;
   // The entry holds no instruction; an address would alias the header's
   // label and block lookups.
   Entry.StartAddr = InvalidVA;
