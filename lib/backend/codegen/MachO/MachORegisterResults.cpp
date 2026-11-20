@@ -817,8 +817,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
         Ops[1].type == AARCH64_OP_IMM && va_t(Ops[1].imm) >= Start &&
         va_t(Ops[1].imm) < End &&
         (TableAddress || (va_t(Ops[1].imm) - Start) % Word == 0);
+    // A retained block can return the relocated PC. Its ADR has no proven
+    // use as a signing point, even with a complete map of embedded data.
     if (LocalAddress && !TableAddress &&
-        !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty())
+        (OutsideCFG ||
+         !machODataInCodeRanges(Source->Embedded, va_t(Ops[1].imm), 1).empty()))
       return std::nullopt;
     const auto Literal = aarch64::decodeLiteralLoad(Encoding, PC);
     if (Literal &&

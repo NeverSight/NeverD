@@ -609,6 +609,32 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
               Input));
           ASSERT_TRUE(bool(Relative)) << llvm::toString(Relative.takeError());
           Reject(*Relative);
+          if (!GappedTables && Table.EntrySize == sizeof(uint8_t) &&
+              Invalid == kExposeDefaultPC) {
+            // Revalidating the old module can reject any changed assembly.
+            // The publisher must also reject the module from the changed input.
+            const auto ChangedPath = (Root / kExposedPCInput).string();
+            std::ofstream(ChangedPath, std::ios::binary)
+                .write(reinterpret_cast<const char *>(Bytes.data()),
+                       Bytes.size());
+            ASSERT_EQ(
+                llvm::sys::ExecuteAndWait(
+                    kCodesign, {kCodesign, kForceSign, kSign, kAdHocIdentity,
+                                kSignIdentifier, kRepeatIdentity, ChangedPath}),
+                0);
+            auto Signed = Reader->load(ChangedPath);
+            ASSERT_TRUE(bool(Signed)) << llvm::toString(Signed.takeError());
+            llvm::LLVMContext NewContext;
+            auto Fresh = Pipeline().run(*Signed, NewContext, Options);
+            ASSERT_TRUE(Fresh.Success && Fresh.LlvmModule) << Fresh.Error;
+            symbolizeImageAbsolutePointers(*Fresh.LlvmModule, *Signed);
+            EXPECT_FALSE(MachOPatcher()
+                             .patch(ChangedPath, Rejected, *Fresh.LlvmModule,
+                                    Signed->Arch)
+                             .Success);
+            EXPECT_FALSE(std::filesystem::exists(Rejected));
+            testing::Test::RecordProperty(kFreshPCRefusal, true);
+          }
         }
       }
       if (GappedTables)

@@ -683,6 +683,8 @@ A64_LEAF_TEXT(kRetainedDefaultOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
                                       "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
                                       "#define NEVERD_TEST_RETAIN_DEFAULT 1\n")
 A64_LEAF_TEXT(kDefaultBlocks, "preserved_unreached_blocks")
+A64_LEAF_TEXT(kExposedPCInput, "exposed-pc.dylib")
+A64_LEAF_TEXT(kFreshPCRefusal, "refused_unreached_pc_after_fresh_lift")
 A64_LEAF_TEXT(kPaddedSplitDefaultOracle,
               "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
               "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
