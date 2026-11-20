@@ -26,6 +26,12 @@ function(neverd_require_unicorn)
   set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
   set(UNICORN_ARCH "x86;arm;aarch64;mips" CACHE STRING "" FORCE)
+  # QEMU's C helpers require wrapping signed arithmetic. The pinned Unicorn
+  # build supplies -fwrapv on its Unix path, but clang-cl takes its MSVC path.
+  if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND
+     CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    string(APPEND CMAKE_C_FLAGS " /clang:-fwrapv")
+  endif()
   add_subdirectory("${CMAKE_SOURCE_DIR}/third_party/unicorn"
                    "${CMAKE_BINARY_DIR}/third_party/unicorn"
                    EXCLUDE_FROM_ALL)
