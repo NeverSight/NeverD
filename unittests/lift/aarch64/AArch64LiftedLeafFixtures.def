@@ -510,6 +510,8 @@ unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; 
 )c")
 
 A64_LEAF_TEXT(kMixedOracle, "#define NEVERD_TEST_MIXED_DATA 1\n")
+A64_LEAF_TEXT(kPaddedLiteralOracle, "#define NEVERD_TEST_MIXED_DATA 1\n"
+                                    "#define NEVERD_TEST_LITERAL_PADDING 1\n")
 A64_LEAF_TEXT(kRegionAssembly, ".data_region")
 A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
 A64_LEAF_TEXT(kPrefixControl, "prefix-control")
@@ -527,6 +529,11 @@ _leaf_sum:
 .data_region
 Lbias:
   .long 0xd503237f
+#ifdef NEVERD_TEST_LITERAL_PADDING
+  .byte 0x5a
+.end_data_region
+  .p2align 2
+#else
 .end_data_region
 .data_region jt8
   .byte 1,2
@@ -537,6 +544,7 @@ Lbias:
 .data_region jt32
   .long 4
 .end_data_region
+#endif
 Lresume:
   add x0, x0, x1
   add x0, x0, x8
@@ -686,7 +694,7 @@ A64_LEAF_TEXT(kPaddedGappedDefaultOracle,
               "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
               "#define NEVERD_TEST_RETAIN_DEFAULT 1\n"
               "#define NEVERD_TEST_PAD_DEFAULT 1\n")
-A64_LEAF_TEXT(kDefaultPadding, "recovered_default_padding_bytes")
+A64_LEAF_TEXT(kAlignmentBytes, "recovered_alignment_bytes")
 A64_LEAF_VALUE(unsigned, kDefaultLeadingPadding, 3)
 A64_LEAF_VALUE(unsigned, kDefaultTrailingPadding, 2)
 A64_LEAF_VALUE(unsigned, kDefaultInstructions, 2)

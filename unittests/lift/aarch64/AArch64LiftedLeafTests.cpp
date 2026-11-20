@@ -178,6 +178,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  const bool PaddedLiteral = Preamble == kPaddedLiteralOracle;
   const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
   const bool PaddedDefault = Preamble == kPaddedSplitDefaultOracle ||
                              Preamble == kPaddedGappedDefaultOracle;
@@ -196,8 +197,9 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
-  const bool Embedded = Declared || Recover || SplitTables;
-  if (Declared || PartialRecords || SplitLiterals || SplitTables)
+  const bool Embedded = Declared || PaddedLiteral || Recover || SplitTables;
+  if (Declared || PaddedLiteral || PartialRecords || SplitLiterals ||
+      SplitTables)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
@@ -387,6 +389,24 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   }
   auto ExpectedData = Image->MachODataInCode;
   llvm::DenseMap<va_t, va_t> DefaultStartsByRecord;
+  if (PaddedLiteral) {
+    ASSERT_EQ(ExpectedData.size(), 1u);
+    const auto Literal = ExpectedData.front();
+    ASSERT_EQ(Literal.Kind, llvm::MachO::DICE_KIND_DATA);
+    ASSERT_EQ(Literal.End - Literal.Begin, sizeof(uint32_t) + sizeof(uint8_t));
+    const MachODataInCodeRange Padding{Literal.End,
+                                       Literal.End + kDefaultLeadingPadding,
+                                       llvm::MachO::DICE_KIND_DATA};
+    std::vector<MachODataInCodeRange> Recovered;
+    auto Valid = validateMachORegisterResults(Module, *Image, &Recovered);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    ASSERT_EQ(Recovered.size(), 1u);
+    EXPECT_EQ(Recovered.front(), Padding);
+    ExpectedData.push_back(Padding);
+    testing::Test::RecordProperty(kRecoveredRecords, int(Recovered.size()));
+    testing::Test::RecordProperty(kAlignmentBytes,
+                                  int(Padding.End - Padding.Begin));
+  }
   if (LiteralWidths) {
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);
@@ -687,7 +707,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
             PaddingBytes += R.End - R.Begin;
         EXPECT_EQ(PaddingBytes,
                   kDefaultLeadingPadding + kDefaultTrailingPadding);
-        testing::Test::RecordProperty(kDefaultPadding, PaddingBytes);
+        testing::Test::RecordProperty(kAlignmentBytes, PaddingBytes);
       }
     }
   }
@@ -1356,8 +1376,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
         const auto &Records = Loaded->MachODataInCode;
-        if ((Recover || LiteralWidths || GappedTables || PaddedDefault) &&
-            !Generation) {
+        if (!Generation && ExpectedData != Image->MachODataInCode) {
           EXPECT_EQ(Records, Image->MachODataInCode);
           continue;
         }
@@ -1959,6 +1978,11 @@ TEST(AArch64LiftedImage, UnmarkedAlignmentBesidePartialSwitchTables) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kPaddedGappedDefaultOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedAlignmentAfterDeclaredLiteral) {
+  verifyPublishedLeaves(kMixedLeaves, kCaller, kAssemblyName,
+                        kPaddedLiteralOracle, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, UnmarkedIntegerAndSIMDLiteralPoolsSurviveRelifting) {
