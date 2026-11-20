@@ -107,8 +107,10 @@ bool MIPSLifter::liftMemory(State &S, uint32_t Word,
   const unsigned Register = (Word >> 16) & 31;
   const auto Displacement = uint64_t(int64_t(int16_t(Word)));
   const NdVar Address =
-      S.binary(NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read(Base),
-               NdVar::cst(Displacement, S.Width));
+      BaseOverride && BaseOverride->isConst() && !Displacement
+          ? *BaseOverride
+          : S.binary(NdOp::INT_ADD, BaseOverride ? *BaseOverride : S.read(Base),
+                     NdVar::cst(Displacement, S.Width));
   if (Bytes > 1 && TimedInstructions)
     S.emitIntrinsic(Intrinsic::MIPSHistoricalAddressCheck, {}, {Address});
   else if (Bytes > 1 && ISARevision != 6)

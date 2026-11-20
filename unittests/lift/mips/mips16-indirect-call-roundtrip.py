@@ -99,10 +99,12 @@ def run(args, artifacts):
             def compile_c(source, name, compressed):
                 c, asm, obj = (work / (name + ext) for ext in (".c", ".s", ".o"))
                 c.write_text(source)
+                artifacts.keep_source(c)
                 command([args.gcc, *flags, "-ffreestanding", "-fno-stack-protector",
                          "-O2", "-g", "-mips16" if compressed else "-mno-mips16",
                          "-S", c, "-o", asm])
                 command([args.assembler, *flags[:2], fp, endian, asm, "-o", obj])
+                artifacts.keep_source(asm)
                 artifacts.discard(c, asm)
                 return obj
             runtime, asm = work / "runtime.o", work / "runtime.s"
@@ -142,6 +144,8 @@ def run(args, artifacts):
                                                 False, entry=symbol["st_value"] & ~1)
                             obj = compile_c(source, "rebuilt", True)
                             rebuilt = link(obj, "rebuilt.elf")
+                            artifacts.write("current.json", dict(**profile, route=route,
+                                            image=digest(rebuilt), original=digest(elf)))
                             result = observe(rebuilt, little, fp64, compressed, variadic)
                             assert result == values
                             evidence.append(dict(**profile, route=route, values=result))

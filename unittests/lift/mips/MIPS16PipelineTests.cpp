@@ -28,6 +28,7 @@
 #include "neverd/ir/med/MIPS/MIPSReturnTargets.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/loader/ELF/ELFLoader.h"
+#include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/IR/IRBuilder.h"
@@ -44,6 +45,33 @@ using namespace neverd;
 namespace {
 
 class MIPS16Pipeline : public ::testing::TestWithParam<Arch> {};
+
+TEST_P(MIPS16Pipeline, LiteralWordsRequireImmutableUnrelocatedStorage) {
+  mips_test::ELFBytes F(GetParam());
+  F.put(36, 0x74001000, 4);
+  F.put(52 + 24, 5, 4); // PF_R | PF_X.
+  F.put(0x104, 0x13572468, 4);
+  F.put(0x108, 0x10101, 4); // A tagged address into the image.
+  ELFLoader Loader;
+  auto Loaded = Loader.loadBuffer(F.buffer());
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto &Image = *Loaded;
+  Section Text;
+  Text.Name = ".text";
+  Text.VA = 0x10100;
+  Text.FileOff = 0x100;
+  Text.Size = Text.FileSz = 0x20;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Image.Sections = {Text};
+  EXPECT_EQ(readMIPS16LiteralWord(Image, 0x10104), 0x13572468u);
+  EXPECT_FALSE(readMIPS16LiteralWord(Image, 0x10106));
+  EXPECT_FALSE(readMIPS16LiteralWord(Image, 0x10108));
+  Image.DataPtrRelocSlots.insert(0x10102);
+  EXPECT_FALSE(readMIPS16LiteralWord(Image, 0x10104));
+  Image.DataPtrRelocSlots.clear();
+  Image.Segments.front().Flags = Text.Flags | SegmentFlags::Writable;
+  EXPECT_FALSE(readMIPS16LiteralWord(Image, 0x10104));
+}
 
 TEST_P(MIPS16Pipeline, IndirectRuntimeTransfersMatchTheCallerPrototype) {
   const bool Little = GetParam() == Arch::MIPS32EL;

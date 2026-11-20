@@ -24,6 +24,11 @@ struct BinaryImage;
 /// Individual reads still require exact mappings, permissions and fixups.
 bool supportsImmutableImageReads(const BinaryImage &Image);
 
+/// A linked MIPS16 LWPC can address a four-byte constant inside .text.
+/// Keep mutable, relocated and pointer-valued words as memory references.
+std::optional<uint32_t> readMIPS16LiteralWord(const BinaryImage &Image,
+                                              va_t Address);
+
 /// Read one uniquely mapped immutable byte range with no pointer fixups.
 /// The caller separately proves that copying its contents preserves the use;
 /// this routine establishes neither pointer identity nor ownership/lifetime.
