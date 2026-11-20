@@ -1375,6 +1375,61 @@ TEST(SymMBAResidue, ShiftedWindowsKeepZeroAndSignPadding) {
   }
 }
 
+TEST(SymMBAResidue, LoweredWindowCarriersKeepTheirCopiedBits) {
+  constexpr unsigned Width = 9, Bits = 4;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width);
+  const auto Coefficient = Ctx.mkConst(Width, 4);
+  // The common window wraps from the top two bits to the bottom two.
+  const auto Direct = Ctx.mkRor(X, Ctx.mkConst(Width, Width - 2));
+  enum Neighbor { Exact, OtherCount, OtherWord, ZeroPadding, SignPadding };
+  for (const auto Change :
+       {Exact, OtherCount, OtherWord, ZeroPadding, SignPadding}) {
+    SCOPED_TRACE(Change);
+    llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Width, 8)};
+    for (unsigned I = 0; I < 23; ++I) {
+      const unsigned Left = 3 + I % 3, Low = Left - 2;
+      const unsigned Right = Width - Left + (I == 8 && Change == OtherCount);
+      const auto Upper = Ctx.mkShl(X, Ctx.mkConst(Width, Left));
+      const auto Lower =
+          Ctx.mkLShr(I == 8 && Change == OtherWord ? Ctx.mkNot(X) : X,
+                     Ctx.mkConst(Width, Right));
+      auto Carrier = Ctx.mkOr(Upper, Lower);
+      if (I == 8 && (Change == ZeroPadding || Change == SignPadding)) {
+        auto Wide =
+            Change == ZeroPadding ? Ctx.mkZExt(X, 16) : Ctx.mkSExt(X, 16);
+        Carrier = Ctx.mkZExt(Ctx.mkExtract(Wide, Width - 2, Bits), Width);
+      } else if (I % 2) {
+        Carrier = Ctx.mkLShr(Carrier, Ctx.mkConst(Width, Low));
+      } else {
+        auto Wide = I % 4 ? Ctx.mkSExt(Carrier, 16) : Ctx.mkZExt(Carrier, 16);
+        Carrier = Ctx.mkSExt(Ctx.mkExtract(Wide, Low, Bits), Width);
+      }
+      Factors.push_back(Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                                  Ctx.mkMul(Coefficient, Carrier)));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    MBAOptions Opt;
+    Opt.MaxWork = 65536;
+    const auto R = simplifyMBADeep(Ctx, Input, Opt);
+    ASSERT_LT(R.SizeAfter, R.SizeBefore / 2);
+    ASSERT_LT(R.Work, Opt.MaxWork);
+    SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr), Window(Ctx, Direct);
+    bool DiffersFromClean = false;
+    for (uint64_t V = 0; V < (1u << Width); ++V) {
+      const std::array<uint64_t, 1> Args{V};
+      const auto Word = Window.evalU64(Args);
+      uint64_t Clean = 8;
+      for (unsigned I = 0; I < 23; ++I)
+        Clean *= 2 * I + 1 + 4 * Word;
+      const auto Expected = Before.evalU64(Args);
+      DiffersFromClean |= Expected != (Clean & ((1u << Width) - 1));
+      ASSERT_EQ(After.evalU64(Args), Expected);
+    }
+    EXPECT_EQ(DiffersFromClean, Change != Exact);
+  }
+}
+
 TEST(SymMBAResidue, SignedScalarAffineProductsRetainEveryObservedLimb) {
   constexpr unsigned Width = 141;
   SymContext Ctx;
