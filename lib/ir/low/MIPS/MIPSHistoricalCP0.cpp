@@ -14,6 +14,13 @@ constexpr uint32_t StatusIE = 1, StatusEXL = 2, StatusERL = 4;
 constexpr uint32_t StatusIM = 0xff00, StatusBEV = 1u << 22;
 constexpr uint32_t StatusCU = 0xf0000000u, CauseBD = 1u << 31;
 constexpr uint32_t SoftwareIP = 0x300u;
+constexpr uint32_t StatusKSU = 0x18, StatusUX = 0x20, StatusSX = 0x40;
+
+std::optional<unsigned> readHazardSlot(unsigned Register) {
+  if (Register >= 12 && Register <= 14)
+    return Register - 12;
+  return Register == 30 ? std::optional(3u) : std::nullopt;
+}
 } // namespace
 
 bool HistoricalCP0::usesModeStack() const {
@@ -29,7 +36,7 @@ bool HistoricalCP0::supportsLevel(unsigned Level) const {
   case HistoricalProcessor::CW4011R4000:
     return Level == 2;
   case HistoricalProcessor::R4000:
-    return Level == 3;
+    return Level == 3 && (Status & StatusKSU) != StatusKSU;
   }
   return false;
 }
@@ -41,13 +48,21 @@ bool HistoricalCP0::canUseCP0() const {
   return Kernel || (Status & (1u << 28));
 }
 
+bool HistoricalCP0::permitsDoublewordGPRs() const {
+  if (Processor != HistoricalProcessor::R4000)
+    return false;
+  if ((Status & (StatusEXL | StatusERL)) || !(Status & StatusKSU))
+    return true;
+  return Status & ((Status & StatusKSU) == 8 ? StatusSX : StatusUX);
+}
+
 std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
                                             bool Doubleword) const {
-  if ((Register >= 12 && Register <= 14 && ReadDelay[Register - 12]) ||
-      !canUseCP0())
+  const auto Slot = readHazardSlot(Register);
+  if ((Slot && ReadDelay[*Slot]) || !canUseCP0())
     return std::nullopt;
   if (Doubleword && (Processor != HistoricalProcessor::R4000 ||
-                     (Register != 8 && Register != 14)))
+                     (Register != 8 && Register != 14 && Register != 30)))
     return std::nullopt;
   switch (Register) {
   case 8:
@@ -58,6 +73,8 @@ std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
     return Cause;
   case 14:
     return EPC;
+  case 30:
+    return Processor == HistoricalProcessor::R4000 ? ErrorEPC : std::nullopt;
   default:
     return std::nullopt;
   }
@@ -66,18 +83,30 @@ std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
 bool HistoricalCP0::canWrite(unsigned Register, uint64_t Value,
                              bool Doubleword) const {
   if (!canUseCP0() || (Doubleword && (Processor != HistoricalProcessor::R4000 ||
-                                      Register != 14)))
+                                      (Register != 14 && Register != 30))))
     return false;
   if (Register == 14)
-    return Processor != HistoricalProcessor::R30xx && !(Value & 3);
+    return Processor == HistoricalProcessor::R4000 ||
+           (Processor != HistoricalProcessor::R30xx && !(Value & 3));
+  if (Register == 30)
+    return Processor == HistoricalProcessor::R4000;
   if (Register == 13)
     return true; // Only IP[1:0] is writable.
   if (Register != 12)
     return false;
   const auto Changed = Status ^ uint32_t(Value);
-  // Keep the mode, translation, cache, diagnostic and FPU-layout state
-  // outside this transfer until their platform effects can be observed.
-  return !(Changed & ~(StatusIE | StatusIM | StatusCU));
+  uint32_t Writable = StatusIE | StatusIM | StatusCU;
+  if (Processor == HistoricalProcessor::R4000) {
+    // A kernel handler can change the saved KSU/UX/SX while an exception
+    // level stays set. F-2 excludes changing KSU while entering that level.
+    if (!(Status & StatusKSU))
+      Writable |= StatusEXL | StatusERL;
+    if ((Status & Value & (StatusEXL | StatusERL)) &&
+        !(Changed & (StatusEXL | StatusERL)) &&
+        (Value & StatusKSU) != StatusKSU)
+      Writable |= StatusKSU | StatusUX | StatusSX;
+  }
+  return !(Changed & ~Writable);
 }
 
 std::optional<unsigned> HistoricalCP0::coprocessorOf(uint32_t Word) {
@@ -98,9 +127,9 @@ bool HistoricalCP0::permitsIssue(uint32_t Word) const {
   if (const auto Cop = coprocessorOf(Word); Cop && CoprocessorDelay[*Cop])
     return false;
   const unsigned Register = Word >> 11 & 31;
-  if (Major == 16 && (RS == 0 || RS == 1) && Register >= 12 && Register <= 14 &&
-      ReadDelay[Register - 12])
-    return false;
+  if (Major == 16 && (RS == 0 || RS == 1))
+    if (const auto Slot = readHazardSlot(Register); Slot && ReadDelay[*Slot])
+      return false;
   return true;
 }
 
@@ -112,6 +141,7 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
   };
   Age(InterruptDelay);
   Age(ExceptionReturnDelay);
+  Age(ExceptionModeDelay);
   for (auto &Delay : CoprocessorDelay)
     Age(Delay);
   for (auto &Delay : ReadDelay)
@@ -120,20 +150,25 @@ void HistoricalCP0::retire(std::optional<unsigned> Register, uint64_t Value,
     return;
   const bool R4000 = Processor == HistoricalProcessor::R4000;
   const bool R30xx = Processor == HistoricalProcessor::R30xx;
-  ReadDelay[*Register - 12] = R4000 ? 2 : R30xx ? 3 : 1;
-  if (*Register == 14) {
+  ReadDelay[*readHazardSlot(*Register)] = R4000 ? 2 : R30xx ? 3 : 1;
+  if (*Register == 14 || *Register == 30) {
     ExceptionReturnDelay =
         std::max<uint8_t>(ExceptionReturnDelay, R4000 ? 2 : 1);
-    EPC = R4000 && !Doubleword ? uint64_t(int64_t(int32_t(Value))) : Value;
-    if (!R4000)
-      EPC = uint32_t(EPC);
+    const auto Address =
+        R4000 && !Doubleword ? uint64_t(int64_t(int32_t(Value))) : Value;
+    if (*Register == 30)
+      ErrorEPC = Address;
+    else
+      EPC = R4000 ? Address : uint32_t(Address);
   } else if (*Register == 12) {
     const auto Changed = Status ^ uint32_t(Value);
     Status = uint32_t(Value);
     ExceptionReturnDelay = std::max<uint8_t>(ExceptionReturnDelay, R4000   ? 3
                                                                    : R30xx ? 3
                                                                            : 1);
-    if (Changed & (StatusIE | StatusIM))
+    if (R4000 && (Changed & (StatusEXL | StatusERL)))
+      ExceptionModeDelay = 3;
+    if (Changed & (StatusIE | StatusIM | (R4000 ? StatusEXL | StatusERL : 0)))
       InterruptDelay = R4000 ? 3 : R30xx ? 2 : 1;
     for (unsigned I = 0; I < 4; ++I)
       if (Changed & (1u << (28 + I)))
@@ -166,7 +201,7 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
   if (Code != 0 && Code != 4 && Code != 5 && Code != 8 && Code != 9 &&
       Code != 10 && Code != 11 && Code != 12)
     return false;
-  if ((Code == 11) != Coprocessor.has_value() ||
+  if (ExceptionModeDelay || (Code == 11) != Coprocessor.has_value() ||
       (Coprocessor && *Coprocessor >= 4) ||
       (Code == 4 || Code == 5) != FaultAddress.has_value() ||
       (Code == 0 && !canTakeInterrupt()))

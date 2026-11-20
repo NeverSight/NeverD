@@ -1453,8 +1453,11 @@ uses 64-bit GPRs with four-byte pointers and argument words, four argument
 registers, and a 16-byte caller home area. GNU and Clang producers can declare
 a 32-bit or 64-bit GPR size in the ABI record. Both use the historical ISA
 from the ELF flags. Hard-double o32 uses paired FPRs when CPR1 is 32-bit.
-Concrete o32 doubleword GPR operations require the caller to bind
-`HistoricalO32DoublewordEnabled` for the selected processor mode.
+A bound R4000 Status register enables doubleword operations in kernel mode
+and selects SX or UX in supervisor or user mode. A prohibited doubleword
+instruction takes the reserved-instruction exception before writing its GPR.
+Without CP0, an o32 caller can bind `HistoricalO32DoublewordEnabled` for an
+independently observed execution mode.
 
 Each admitted I–III instruction carries ordered begin/retire operations in
 LowIR and MedIR. A branch and its executed delay slot retire separately; a
@@ -1482,7 +1485,11 @@ A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
 selector zero. The bound state supplies Status, Cause, EPC and an observed bad
-address. Cause writes change only the software interrupt bits. Accepted Status
+address. R4000 also exposes word and doubleword transfers of ErrorEPC. Word
+writes to either exception PC sign-extend into the 64-bit register. A handler
+can update its exception level in kernel mode and prepare the saved KSU/UX/SX
+under an active exception level. Cause writes change only the software
+interrupt bits. Accepted Status
 writes track interrupt visibility and coprocessor usability separately.
 Register updates and hazard aging occur on successful physical retirement.
 
@@ -1491,7 +1498,9 @@ slots. The branch occurrence and its outcome accompany an executed slot.
 R30xx shifts KU/IE into the mode stack. R4000 retains the original EPC and BD
 when EXL is already set. The CW4011 also records the branch outcome in BT.
 RFE restores the KU/IE stack. ERET selects EPC or the observed ErrorEPC and
-clears the load-linked reservation. Signed ADD/SUB and immediate forms
+clears the load-linked reservation. A misaligned R4000 return destination
+raises an instruction-fetch address error after ERET restores Status. Signed
+ADD/SUB and immediate forms
 deliver overflow before writeback. Aligned scalar integer loads and stores
 report address errors before accessing memory. A disabled coprocessor
 sets the CE field. Interrupts sample the observed IP and IM bits at issue

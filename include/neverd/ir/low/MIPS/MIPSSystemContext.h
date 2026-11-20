@@ -58,7 +58,8 @@ struct MIPSSystemContext {
   // unknown scheduling state, never an implicit quiescent function entry.
   std::optional<mips::HistoricalSchedule> Historical;
   /// A MIPS III o32 ELF can run in either processor mode. The caller binds
-  /// doubleword execution when the processor permits it at this boundary.
+  /// doubleword execution in the absence of a concrete R4000 CP0 snapshot.
+  /// With the snapshot, the active privilege mode owns this decision.
   bool HistoricalO32DoublewordEnabled = false;
   bool CP0Usable = false;
   bool ImplementedMT = false;

@@ -39,6 +39,11 @@ struct HistoricalCP0 {
            Processor == HistoricalProcessor::CW4011R4000;
   }
   bool canUseCP0() const;
+  /// R4000 kernel instructions can use doubleword GPRs even when KX is zero.
+  bool permitsDoublewordGPRs() const;
+  std::optional<uint64_t> returnAddress() const {
+    return !usesModeStack() && (Status & 4) ? ErrorEPC : std::optional(EPC);
+  }
   bool usesModeStack() const;
   std::optional<uint64_t> read(unsigned Register, bool Doubleword) const;
   /// Changes may only affect writable fields for which issue hazards are
@@ -56,7 +61,8 @@ struct HistoricalCP0 {
   uint8_t ExceptionReturnDelay = 0;
   uint8_t InterruptDelay = 0;
   std::array<uint8_t, 4> CoprocessorDelay{};
-  std::array<uint8_t, 3> ReadDelay{}; // Writable Status, Cause and EPC.
+  std::array<uint8_t, 4> ReadDelay{}; // Status, Cause, EPC and ErrorEPC.
+  uint8_t ExceptionModeDelay = 0;
 
 private:
   friend class HistoricalSchedule;
