@@ -135,14 +135,15 @@ stores, arithmetic and control also refuse any unknown bits they observe.
 Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
-Source recovery proves complete adjacent merge pairs in a single ordinary leaf
-block before inferring parameters. It checks the original instruction
-occurrences, the directed address relation for the target byte order, and every
-use of the first result. Only the first core's unobserved incoming destination
-may become zero; the second still consumes the first result. Both reads and
-their fault order remain. Calls, PHIs, exceptional edges, other control flow,
-observed partial results and unproved address relationships retain the original
-dependency. Multi-block and nonadjacent pairs remain outside this proof.
+Before inferring parameters, source recovery checks adjacent merge loads in a
+single block. The physical instructions must be complementary at the addresses
+required by the target byte order. Both reads retain their fault order, and
+the second consumes the first result. The first load can discard its incoming
+register bits only when every use of its result proves those bits unobservable.
+A typed record call observes its explicit operands, live register views and
+preserved register bytes. Its opcode and occurrence must match the original
+instruction. An unbound call, a PHI, an exceptional edge or a branch prevents
+the proof.
 The physical occurrence proof also accepts four-byte MIPS16e2 merge loads;
 two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
@@ -1710,6 +1711,8 @@ the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
+A merge load from caller-owned input can supply a record argument when both
+the memory bytes and the retained register bytes exclude the private frame.
 For record callers that copy an argument into a private stack buffer in a
 counted loop, the proof follows the loop's actual byte addresses and bound.
 A call with an unknown frame effect, an uninitialized private byte or an

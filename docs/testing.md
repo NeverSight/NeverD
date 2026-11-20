@@ -26363,6 +26363,18 @@ results it also poisons v0 after the callee's return delay slot, before the
 caller consumes the result. The caller must use its original result buffer;
 a callee that happens to return that address in v0 is not an ABI guarantee.
 
+Run the record roundtrip with both values of `--original-compiler`. GCC and
+Clang alternate as the callee and caller compiler. Only the reconstructed C
+uses `-fno-strict-aliasing`, as required by the plain-pointer output. The n32
+two-float return checks both fields at `-O2` in each byte order.
+The eight input patterns cover every byte alignment within an o32 word or an
+n32/n64 doubleword. Guards surround both the input and the result buffers.
+The two record-call cases in `MIPSMergeValues` check the original call occurrence
+and a partial register overwritten before or after a call. The saved-link test
+`MIPSRecordSourceEntry.MergeLoadsPreservePrivateLinkForExternalData` exercises
+a bytewise result copy and checks that a private frame address cannot escape
+through either side of a merge load.
+
 `DWARFSourceTypes.NaturalRecordGraphsKeepRootKindsAndTargetPointerWidth` and
 `DWARFSourceTypes.PartialOrOverlappingRecordsCannotBecomeCompleteValues` in
 `NeverDDebugInfoTests` use independent ELF32/64, little/big-endian DWARF bytes.

@@ -359,6 +359,70 @@ TEST(MIPSRecordSourceEntry, SinglePrecisionRecordStoresOnlyDefinedResultBytes) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, MergeLoadsPreservePrivateLinkForExternalData) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Wide = isMIPS64(A);
+    const unsigned Width = Wide ? 8 : 4;
+    const unsigned Last = Width - 1;
+    auto Result = NdType::makeStruct(
+        {NdType::makeArray(NdType::makeInt(1, false), 17, 17)});
+    Result->Passing = NdRecordPassing::ByValue;
+    enum class Input { CallerBytes, RetainedStackPointer, PrivateSpill };
+    for (auto Source : {Input::CallerBytes, Input::RetainedStackPointer,
+                        Input::PrivateSpill}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << int(Source));
+      // The argument must not expose the frame through either the retained
+      // register bytes or the loaded bytes. The result starts at sp+16, the
+      // private pointer spill at sp+48, and the saved RA at sp+56.
+      std::vector<uint32_t> Words{
+          Wide ? 0x67bdffc0u : 0x27bdffc0u, Wide ? 0xffbf0038u : 0xafbf0038u,
+          Wide ? 0xffb00028u : 0xafb00028u, 0x00808025u, // save s0; move s0,a0
+          Source == Input::RetainedStackPointer ? 0x03a02825u : 0x00002825u};
+      if (Source == Input::PrivateSpill)
+        Words.push_back(Wide ? 0xffbd0030u : 0xafbd0030u); // sd/sw sp,48(sp)
+      const unsigned Base = Source == Input::PrivateSpill ? 29 : 4;
+      const unsigned Offset = Source == Input::PrivateSpill ? 48 : 0;
+      Words.push_back((Wide ? 0x68050000u : 0x88050000u) | (Base << 21) |
+                      (Offset + (archLittleEndian(A) ? Last : 0)));
+      if (Source == Input::CallerBytes)
+        Words.push_back((Wide ? 0x6c850000u : 0x98850000u) |
+                        (archLittleEndian(A) ? 0 : Last));
+      Words.insert(Words.end(),
+                   {0x0c000800u, Wide ? 0x67a40010u : 0x27a40010u});
+      // Copy the returned object as a Clang caller does. Rechecking every
+      // byte after the hidden result pointer was seen can exhaust the budget.
+      for (uint32_t I = 0; I < Result->Size; ++I) {
+        Words.push_back(0x93a30010u + I); // lbu v1,16+i(sp)
+        Words.push_back(0xa2030000u + I); // sb v1,i(s0)
+      }
+      Words.insert(Words.end(), {Wide ? 0xdfb00028u : 0x8fb00028u,
+                                 Wide ? 0xdfbf0038u : 0x8fbf0038u, 0x03e00008u,
+                                 Wide ? 0x67bd0040u : 0x27bd0040u});
+      auto Image = image(Words, A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32
+                        : Wide       ? MIPSABI::N64
+                                     : MIPSABI::O32;
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Result;
+      Sig.Parameters.push_back({"value", NdType::makeInt(Width, false)});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      if (Source != Input::CallerBytes)
+        EXPECT_THROW(Convert.convert(build(Image), A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Convert.convert(build(Image), A, BinaryFormat::ELF));
+    }
+  }
+}
+
 TEST(MIPSRecordSourceEntry, HiddenResultCannotOverwriteAnyByteOfSavedLink) {
   auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
   auto Record = NdType::makeStruct({Bytes});

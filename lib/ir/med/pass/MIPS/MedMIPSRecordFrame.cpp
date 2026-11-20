@@ -386,10 +386,21 @@ public:
         }
         if (O.Opcode == NdOp::INTRINSIC && O.NumInputs &&
             O.Inputs[0].isConst() && O.Output.Kind == MedVar::Temp &&
-            O.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSUnpredictable) &&
             mipsScalarMedShapeIsValid(O, Target)) {
-          Values[key(O.Output)] = {};
-          continue;
+          const auto Id = static_cast<Intrinsic>(O.Inputs[0].ConstVal);
+          if (Id == Intrinsic::MIPSUnpredictable) {
+            Values[key(O.Output)] = {};
+            continue;
+          }
+          if (mergeLoad(Id)) {
+            // The untouched lanes still come from the old register. Both
+            // inputs must exclude the private frame on every alignment.
+            Values[key(O.Output)] =
+                read(O.Inputs[1]).external() && read(O.Inputs[2]).external()
+                    ? Value{Origin::NonFrame}
+                    : Value{};
+            continue;
+          }
         }
         if (O.Opcode == NdOp::INTRINSIC && O.NumInputs &&
             O.Inputs[0].isConst() && !O.Output.Size) {

@@ -16,6 +16,7 @@
 #include "neverd/ir/med/MIPS/MIPSMergeValues.h"
 #include "neverd/ir/med/MedIR.h"
 
+#include <memory>
 #include <utility>
 
 using namespace neverd;
@@ -97,6 +98,34 @@ struct Pair {
 
   MedOp &first() { return Function.Blocks[0].Ops[1]; }
   MedOp &second() { return Function.Blocks[0].Ops[3]; }
+  MedOp &addRecordCall(NdOp Opcode) {
+    LowOp Low;
+    Low.Opcode = Opcode;
+    Low.Addr = 0x1008;
+    Low.Seq = 12;
+    auto &Block = Physical.Blocks.front();
+    LowInstructionBoundary Boundary;
+    Boundary.Control = LowInstructionControl::Call;
+    Boundary.Address = Low.Addr;
+    Boundary.Size = 4;
+    Boundary.FirstOp = Block.Ops.size();
+    Boundary.OpCount = 1;
+    Block.Ops.push_back(Low);
+    Block.InstructionBoundaries.push_back(Boundary);
+
+    auto Hint = std::make_shared<SourceCallTypeHint>();
+    Hint->Signature.MIPSRecords = true;
+    MedOp Call;
+    Call.Opcode = Opcode;
+    Call.Addr = Low.Addr;
+    Call.OriginSeq = Low.Seq;
+    Call.addInput(Opcode == NdOp::CALL ? scalar(0x2000, Width)
+                                       : variable(40, Width, Target));
+    Call.SourceCallHint = std::move(Hint);
+    auto &Ops = Function.Blocks.front().Ops;
+    return *Ops.insert(Ops.end() - 1, std::move(Call));
+  }
+
   unsigned run() {
     return discardUnobservedMIPSMergeInputs(Function, Physical, Target);
   }
@@ -265,6 +294,54 @@ TEST_P(MIPSMergeValues, IntermediateObservationsAndControlKeepTheOldValue) {
     EXPECT_EQ(P.run(), 0u);
     EXPECT_FALSE(P.first().Inputs[2].isConst());
   }
+}
+
+TEST_P(MIPSMergeValues, RecordCallsRequireTheSamePhysicalOccurrence) {
+  for (NdOp Opcode : {NdOp::CALL, NdOp::INDIR_CALL}) {
+    Pair P(GetParam(), 4, false);
+    P.addRecordCall(Opcode);
+    const auto Partial = P.first().Output;
+    ASSERT_EQ(P.run(), 1u);
+    EXPECT_EQ(P.second().Inputs[2], Partial);
+    EXPECT_EQ(P.Function.Blocks.front().Ops[4].Opcode, Opcode);
+  }
+  Pair Untyped(GetParam(), 4, false);
+  Untyped.addRecordCall(NdOp::INDIR_CALL).SourceCallHint.reset();
+  EXPECT_EQ(Untyped.run(), 0u);
+  Pair WrongSequence(GetParam(), 4, false);
+  ++WrongSequence.addRecordCall(NdOp::CALL).OriginSeq;
+  EXPECT_EQ(WrongSequence.run(), 0u);
+  Pair WrongKind(GetParam(), 4, false);
+  WrongKind.addRecordCall(NdOp::CALL).Opcode = NdOp::INDIR_CALL;
+  EXPECT_EQ(WrongKind.run(), 0u);
+}
+
+TEST_P(MIPSMergeValues, RecordCallsObserveRegistersAndPreservedBytes) {
+  for (bool BeforeCall : {false, true}) {
+    Pair P(GetParam(), 4, false);
+    P.addRecordCall(NdOp::INDIR_CALL);
+    MedOp Save;
+    Save.Opcode = NdOp::COPY;
+    Save.Output = variable(50, 4, GetParam(), MedVar::Reg);
+    Save.Output.RegOff = 48;
+    Save.addInput(P.first().Output);
+    MedOp Overwrite = Save;
+    ++Overwrite.Output.SSAVer;
+    Overwrite.Inputs[0] = scalar(0, 4);
+    auto &Ops = P.Function.Blocks.front().Ops;
+    Ops.insert(Ops.end() - 2, Save);
+    Ops.insert(Ops.end() - (BeforeCall ? 2 : 1), Overwrite);
+    // Both cases return after overwriting the register. Only a call between
+    // the two writes can observe the partial result.
+    EXPECT_EQ(P.run(), BeforeCall ? 1u : 0u);
+  }
+  Pair Preserved(GetParam(), 4, false);
+  Preserved.addRecordCall(NdOp::CALL);
+  MedCallClobber Clobber;
+  Clobber.PreservedInput = Preserved.first().Output;
+  Clobber.PreservedPrefixSize = 2;
+  Preserved.Function.CallClobbers.push_back(Clobber);
+  EXPECT_EQ(Preserved.run(), 0u);
 }
 
 TEST_P(MIPSMergeValues, TransportMustKeepEveryMergeByte) {

@@ -116,6 +116,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
           (Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSRequireWord) ||
+           mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isDSPControlIntrinsic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
@@ -471,8 +472,6 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // Check all stores and calls so an escape before the RA save cannot be
   // forgotten when reachingStackValues sees the later exact store. Reloading
   // a private pointer into an argument still has to prove non-frame provenance.
-  bool UnexposedFrame = QualifiedMemory;
-  bool NativeArgumentsNonFrame = true;
   const auto FPArguments = TRI.floatingParamRegs(Format);
   const auto CheckNativeArgument = [&](const MedVar &Value) {
     if (Value.Kind != MedVar::Reg || !Value.Size)
@@ -491,36 +490,38 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         });
     return !Argument || IsNonFrame(Value);
   };
-  if (HasCalls && QualifiedMemory)
+  // Stop at the first possible escape. Continuing a failed proof can spend
+  // the shared analysis budget on each later byte of the same record result.
+  const bool UnexposedFrame = [&] {
+    if (!HasCalls || !QualifiedMemory)
+      return QualifiedMemory;
     for (const auto &Block : Function.Blocks) {
       for (const auto &Phi : Block.Phis)
-        if (NeedsNativeArguments)
-          NativeArgumentsNonFrame &= CheckNativeArgument(Phi.Output);
+        if (NeedsNativeArguments && !CheckNativeArgument(Phi.Output))
+          return false;
       for (const auto &Op : Block.Ops) {
-        if (NeedsNativeArguments) {
-          NativeArgumentsNonFrame &= CheckNativeArgument(Op.Output);
-          for (const auto &Value : Op.IntrinsicOutputs)
-            NativeArgumentsNonFrame &= CheckNativeArgument(Value);
-        }
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
-          UnexposedFrame &= PrivateFrameStore(Op) || IsNonFrame(Op.Inputs[1]);
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-          if (!Op.NumInputs) {
-            UnexposedFrame = false;
-          } else {
-            UnexposedFrame &= IsNonFrame(Op.Inputs[0]);
-            const auto Signature = Calls.find(&Op);
-            for (unsigned I = 1; I < Op.NumInputs; ++I)
-              UnexposedFrame &= NonFrameBytes(
-                  Op.Inputs[I], 0,
-                  Signature == Calls.end()
-                      ? Op.Inputs[I].Size
-                      : Signature->second.Inputs[I - 1].ValueBytes);
-          }
-        }
+        if (NeedsNativeArguments &&
+            (!CheckNativeArgument(Op.Output) ||
+             !llvm::all_of(Op.IntrinsicOutputs, CheckNativeArgument)))
+          return false;
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+            !PrivateFrameStore(Op) && !IsNonFrame(Op.Inputs[1]))
+          return false;
+        if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+          continue;
+        if (!Op.NumInputs || !IsNonFrame(Op.Inputs[0]))
+          return false;
+        const auto Signature = Calls.find(&Op);
+        for (unsigned I = 1; I < Op.NumInputs; ++I)
+          if (!NonFrameBytes(Op.Inputs[I], 0,
+                             Signature == Calls.end()
+                                 ? Op.Inputs[I].Size
+                                 : Signature->second.Inputs[I - 1].ValueBytes))
+            return false;
       }
     }
-  UnexposedFrame &= !NeedsNativeArguments || NativeArgumentsNonFrame;
+    return true;
+  }();
   const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
     if (!UnexposedFrame)
       return false;
@@ -619,12 +620,21 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           TailReturns.erase(Tail);
           continue;
         }
-        if (!Required.erase(Origin) ||
-            Op.NumInputs != SourceResultOperands + 1 ||
-            (!Prove(Op.Inputs[SourceResultOperands]) &&
-             (!SingleRecordExit ||
-              !mips::preservesRecordFrameLink(Function, Op, Target, RecordCall,
-                                              Remaining))))
+        if (!Required.erase(Origin) || Op.NumInputs != SourceResultOperands + 1)
+          return false;
+        const auto &Link = Op.Inputs[SourceResultOperands];
+        const auto RecordFrame = [&] {
+          return SingleRecordExit &&
+                 mips::preservesRecordFrameLink(Function, Op, Target,
+                                                RecordCall, Remaining);
+        };
+        // A hidden result pointer can expose selected frame bytes to the
+        // callee. Follow those bytes before spending the shared budget on a
+        // general reaching-store proof that cannot preserve this call.
+        const bool LinkPreserved = UnexposedFrame
+                                       ? Prove(Link) || RecordFrame()
+                                       : RecordFrame() || Prove(Link);
+        if (!LinkPreserved)
           return false;
       }
   return Required.empty() && TailReturns.empty() && QualifiedTails.empty();
