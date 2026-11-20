@@ -46,6 +46,83 @@ SymRef lowOperand(const SymContext &Ctx, SymRef R) {
   }
 }
 
+// Pick a word whose low bits equal this slice. Rotations move every bit.
+// A shift moves only its source interval: a window touching zero/sign
+// padding (including a window wrapped by an outer rotate) must retain it.
+SymRef widenExtract(SymContext &Ctx, SymRef Slice, unsigned Width,
+                    WorkBudget &Budget, size_t &Storage) {
+  auto Source = Ctx.operand(Slice, 0);
+  uint64_t Offset = Ctx.node(Slice).Aux;
+  const unsigned Size = Ctx.width(Slice);
+  const size_t Words = llvm::APInt::getNumWords(Width);
+  for (;;) {
+    const auto Op = Ctx.op(Source);
+    if (Op == SymOp::Rol || Op == SymOp::Ror) {
+      const auto Count = Ctx.operand(Source, 1);
+      if (!Ctx.isConst(Count))
+        break;
+      if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+        return {};
+      const uint64_t Shift = Ctx.constValue(Count).urem(Width);
+      Offset = (Offset + (Op == SymOp::Ror ? Shift : Width - Shift)) % Width;
+      Source = Ctx.operand(Source, 0);
+      continue;
+    }
+    if (Op == SymOp::LShr || Op == SymOp::AShr) {
+      const auto Count = Ctx.operand(Source, 1);
+      if (!Ctx.isConst(Count))
+        break;
+      if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
+        return {};
+      const uint64_t Shift = Ctx.constValue(Count).getLimitedValue(Width);
+      if (Offset + Size + Shift > Width)
+        break;
+      Offset += Shift;
+      Source = Ctx.operand(Source, 0);
+      continue;
+    }
+    const bool LeftShift = Op == SymOp::Mul;
+    // Constant left shifts are canonicalized as power-of-two products.
+    // Opposite shifts may also have combined into a mask.
+    if ((!LeftShift && Op != SymOp::And) ||
+        !Ctx.isConst(Ctx.operand(Source, 0)))
+      break;
+    if (!Budget.consume(1 + (LeftShift ? Words : 3 * Words)))
+      return {};
+    const auto Literal = Ctx.constValue(Ctx.operand(Source, 0));
+    if (LeftShift) {
+      const int32_t Shift = Literal.exactLogBase2();
+      if (Shift < 0 || Offset < static_cast<unsigned>(Shift) ||
+          Offset + Size > Width)
+        break;
+      Offset -= Shift;
+    } else {
+      const auto Mask = llvm::APInt::getBitsSetWithWrap(
+          Width, Offset, (Offset + Size) % Width);
+      if (!Mask.isSubsetOf(Literal))
+        break;
+    }
+    const auto Tail = Ctx.operands(Source).drop_front();
+    if (Tail.size() == 1) {
+      Source = Tail.front();
+    } else {
+      const size_t Bytes = sizeof(SymNode) + 2 * Tail.size() * sizeof(SymRef);
+      if (Bytes > Storage ||
+          !Budget.consume(Tail.size() * (2 + std::bit_width(Tail.size()))))
+        return {};
+      Storage -= Bytes;
+      Source = Ctx.rebuild(Source, Tail);
+    }
+  }
+  if (!Offset)
+    return Source;
+  const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
+  if (Storage < Extra || !Budget.consume(2 + Words))
+    return {};
+  Storage -= Extra;
+  return Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
+}
+
 // A narrow sum, product or bitwise expression is congruent to the same
 // operation on word-sized representatives modulo its original width. Pick
 // common representatives so different high lanes can share a polynomial.
@@ -94,32 +171,9 @@ SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
       Budget.consume(Count * (2 + Words));
       Wide = Ctx.rebuild(V, Args);
     } else if (Op == SymOp::Extract && Ctx.width(Ctx.operand(V, 0)) == Width) {
-      // Rotating the word right by the extraction offset puts this window
-      // in its low bits, including windows crossing a prior rotation seam.
-      // Compose constant counts modulo the source width; a variable count
-      // remains part of the source word.
-      auto Source = Ctx.operand(V, 0);
-      uint64_t Offset = Ctx.node(V).Aux;
-      while (Ctx.op(Source) == SymOp::Rol || Ctx.op(Source) == SymOp::Ror) {
-        const auto Count = Ctx.operand(Source, 1);
-        if (!Ctx.isConst(Count))
-          break;
-        if (!Budget.consume(1 + llvm::APInt::getNumWords(Ctx.width(Count))))
-          return {};
-        const uint64_t Shift = Ctx.constValue(Count).urem(Width);
-        Offset =
-            (Offset + (Ctx.op(Source) == SymOp::Ror ? Shift : Width - Shift)) %
-            Width;
-        Source = Ctx.operand(Source, 0);
-      }
-      Wide = Source;
-      if (Offset) {
-        const size_t Extra = sizeof(SymNode) + 2 * sizeof(SymRef);
-        if (Storage < Extra || !Budget.consume(2 + Words))
-          return {};
-        Storage -= Extra;
-        Wide = Ctx.mkRor(Source, Ctx.mkConst(Width, Offset));
-      }
+      Wide = widenExtract(Ctx, V, Width, Budget, Storage);
+      if (!Wide)
+        return {};
     } else if (Ctx.isConst(V)) {
       Wide = Ctx.mkConst(Ctx.constValue(V).sext(Width));
     } else {

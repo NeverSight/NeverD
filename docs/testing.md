@@ -4506,6 +4506,11 @@ at the same widths. Nested rotations move a source window across bit zero.
 Half the products retain a live bit in an extension or high piece.
 A 127-factor x64 fixture reads CH after rotating ECX and checks signed and
 unsigned byte extensions through the CLI and GUI worker source paths.
+Use `--family shifted-window --count 16` for 128 products of 83 to 281 factors.
+Each source passes through up to two shifts and an intervening rotation.
+Half the products place one observable bit in zero or sign padding. A
+163-factor x64 fixture reads CH after SHL, SHR and SAR through the CLI and
+GUI worker, with the original machine code as the execution oracle.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.

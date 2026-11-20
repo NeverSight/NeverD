@@ -7186,7 +7186,10 @@ partition still admits the nested reconstruction search.
 A product can also group different views of a word when their live low bits
 agree. An interior window starting at bit `i` has the same low bits as a
 right rotation by `i`. Constant rotations compose modulo the word width
-even when the window wraps. A variable rotation stays in the source word.
+even when the window wraps. Constant shifts translate the window only when
+every bit comes from the source. A mask can be peeled when it preserves
+every bit of the window, including both sides of a wrapped interval.
+Variable counts and observable zero or sign padding stay in the source word.
 The LLVM translator carries same-word funnel shifts as rotates in both
 directions and emits them with their modulo-width count.
 A mask or addend that changes only higher bits drops out; a mask
