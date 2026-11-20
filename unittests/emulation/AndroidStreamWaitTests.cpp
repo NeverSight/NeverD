@@ -142,7 +142,8 @@ TEST_P(AndroidStreamWait, UnknownRefillLeavesOriginalImportIncomplete) {
   auto R = run(0, 8);
   EXPECT_EQ(R.Stop, ProcessStopReason::UnsupportedService);
   EXPECT_EQ(R.Diagnostic, "socket readiness has no offline observation "
-                          "(TCP connection index 0, read readiness)");
+                          "(TCP connection index 0, read readiness), "
+                          "sent bytes 0, receive events consumed 1/1");
   EXPECT_EQ(word(R, 32) & 0xffffff, 0x636261u);
   unsigned Calls = 0;
   for (const auto &C : R.NativeCalls)
