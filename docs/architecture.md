@@ -5885,9 +5885,34 @@ The routine's parameters are exact (X0, X1), and arm64's indirect-result
 recovery adds no X8 to exact parameters: Go's R8 is an ordinary argument.
 
 Results, calls through function values and interfaces, arm64 and Go code in
-images before 1.18 still follow the platform convention. So do DWARF-typed signatures, whose parameters Go's own register
-assignment would place. On the machine routes (lift, patch), a Go function's
-LLVM arguments take its Go registers as well.
+images before 1.18 still follow the platform convention. On the machine routes
+(lift, patch), a Go function's LLVM arguments take its Go registers as well.
+
+Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
+formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go
+function returned nothing, so each call's result went unread. The loader
+reads Go's results where the unit's `DW_AT_producer` records `regabi`
+(`goReturnValue`, `lib/debug/DWARFLoader.cpp`):
+
+- A function compiled from Go source with no result returns nothing.
+- One whose single result fills one register (an integer, a pointer or a
+  floating value) returns it as C would, in the same register.
+- Several results or a result of several words state nothing, since Go
+  returns them a word to a register.
+- An assembly routine states nothing: it is declared in its `.s` file, and its
+  DWARF lists no signature.
+- A generated function states nothing unless an input proves it enters in
+  registers. Otherwise it may be an ABI0 wrapper, which returns on the stack.
+
+Where the DWARF states nothing, the lift's recovery decides, as it does without
+DWARF. A unit built with the stack ABI returns no register value. Results are
+never parameters.
+
+Go's parameter list names no positions either: a string takes two registers.
+The DWARF parameters bind nothing (`bindDebugParams`), and the C writer prints
+a Go function's parameters as it prints those of a function with no signature
+(`emittedParamIndices`). It does not print one for every register up to the
+last one read.
 
 The GUI's analysis replicas restore with `call_summaries:true`: they discover
 the image's functions, warm a page of functions per idle step, solve, drop

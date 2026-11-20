@@ -562,7 +562,16 @@ Still open, in order of yield:
      without a recognized growth path, such as frameless leaves, frames over
      4 KiB, and functions that take a floating argument, whose spills are
      vector registers.
-   - DWARF-typed signatures. They need Go's register assignment by type.
+   - DWARF-typed signatures. Go's DWARF lists results among the parameters
+     (`DW_AT_variable_parameter`), which made every Go function `void`. The
+     loader now reads a register-ABI unit's results (`goReturnValue`): none
+     is `void`, and one of one register is the return value. The C writer no
+     longer prints a Go function a parameter for every register up to the
+     last one read. On the Go 1.26 linux-amd64 binaries with DWARF,
+     placeholders fell from 11,880 to 4,131, below the stripped build's
+     4,301. Still open: results of several words, several results,
+     parameter names and types (which need Go's register assignment by type),
+     and assembly routines, whose DWARF lists no signature.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.
 2. Go's fixed registers. On register-ABI amd64 code, X15 reads as zero
