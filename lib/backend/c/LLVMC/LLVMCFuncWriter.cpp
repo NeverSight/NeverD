@@ -3756,9 +3756,10 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
-  // Both render every operand. Even a trailing load used only by a variadic
-  // occurrence must stay live when its target's declaration has fewer inputs.
-  if (Call.isInlineAsm() || Call.getMetadata("neverd.source.analyst-call"))
+  // These calls consume their physical LLVM operands. A by-value record may
+  // occupy several operands for a single declared C parameter.
+  if (Call.isInlineAsm() || Call.hasFnAttr(LLVMMIPSRecordCall) ||
+      Call.getMetadata("neverd.source.analyst-call"))
     return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {

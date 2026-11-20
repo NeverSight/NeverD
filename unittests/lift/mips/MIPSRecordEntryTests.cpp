@@ -26,6 +26,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/Regex.h"
 
 using namespace neverd;
 
@@ -455,7 +456,7 @@ TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
     bool hasInfo() const override { return true; }
   };
   for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL})
-    for (unsigned Bytes : {3u, 8u}) {
+    for (unsigned Bytes : {3u, 8u, 17u}) {
       SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Bytes);
       RecordFixture F(A, Bytes);
       Context Debug;
@@ -466,14 +467,16 @@ TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
       const auto S = mips::recordSourceABI(F.Image, Debug, Debug.Callee.Addr);
       ASSERT_TRUE(S);
       const auto Parts = sourceABIParameters(*S);
-      ASSERT_EQ(Parts.size(), 1u);
+      ASSERT_EQ(Parts.size(), (Bytes + 7) / 8);
 
       llvm::LLVMContext C;
       llvm::Module Module("record-words", C);
       Module.setDataLayout(archLittleEndian(A) ? "e-p:32:32" : "E-p:32:32");
       llvm::IRBuilder<> B(C);
-      auto *Word = B.getIntNTy(Bytes * 8);
-      auto *Type = llvm::FunctionType::get(B.getVoidTy(), {Word}, false);
+      llvm::SmallVector<llvm::Type *, 4> Words;
+      for (const auto &P : Parts)
+        Words.push_back(llvmMIPSRecordPieceType(C, P, *S));
+      auto *Type = llvm::FunctionType::get(B.getVoidTy(), Words, false);
       auto *Callee = llvm::Function::Create(
           Type, llvm::GlobalValue::ExternalLinkage, Debug.Callee.Name, Module);
       const auto Attrs = mips::recordCallAttributes(C, {}, *S, Parts);
@@ -483,8 +486,18 @@ TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
           llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
           llvm::GlobalValue::ExternalLinkage, "forward_payload", Module);
       B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Forward));
-      auto *Value = B.CreateLoad(Word, Forward->getArg(0));
-      B.CreateCall(Callee, {Value})->setAttributes(Attrs);
+      llvm::SmallVector<llvm::Value *, 4> Values;
+      for (unsigned I = 0; I < Words.size(); ++I) {
+        auto *Address = B.CreateConstGEP1_32(B.getInt8Ty(), Forward->getArg(0),
+                                             Parts[I].ByteOffset);
+        Values.push_back(B.CreateLoad(Words[I], Address,
+                                      "payload_word" + std::to_string(I)));
+      }
+      // The caller reads each word before the store. Its typed C declaration
+      // exposes a single argument, including when three loads feed that value.
+      if (Words.size() > 1)
+        B.CreateStore(B.getInt8(0), Forward->getArg(0));
+      B.CreateCall(Callee, Values)->setAttributes(Attrs);
       B.CreateRetVoid();
       std::string Text;
       llvm::raw_string_ostream Output(Text);
@@ -493,6 +506,8 @@ TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
       Output.flush();
       EXPECT_NE(Text.find("__neverd_piece0 = (uint"), std::string::npos)
           << Text;
+      if (Words.size() > 1)
+        EXPECT_TRUE(llvm::Regex("payload_word1[0-9]+ = ").match(Text)) << Text;
       EXPECT_EQ(Text.find("__neverd_piece0 = (uint64_t)(uintptr_t)"),
                 std::string::npos)
           << Text;
