@@ -69,6 +69,7 @@
 #include "neverd/lift/MIPS/MIPSRegs.h"
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/ELFOperatingSystem.h"
 #include "neverd/loader/MachO/SourceRegisterCopy.h"
 #include "neverd/loader/ObjC/ObjCClassGetterCalls.h"
 #include "neverd/loader/ReadOnlyBytes.h"
@@ -296,8 +297,10 @@ void splitEntryLoopHeader(MedFunc &Func) {
       Shift(Edge.BlockId);
   }
   Func.Blocks.front().Preds.push_back(0);
+  Func.Blocks.front().Role = MedBlockRole::EntryLoopHeader;
   MedBlock Entry;
   Entry.Id = 0;
+  Entry.Role = MedBlockRole::EntryPreheader;
   // The entry holds no instruction; an address would alias the header's
   // label and block lookups.
   Entry.StartAddr = InvalidVA;
@@ -1652,6 +1655,49 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
                                    Syscall->ArgumentRegisters[I], Size)));
           MOp.Output = ndVarToMedVar(NdVar::reg(Syscall->ResultRegister, Size));
         }
+      // A Linux x86-64 syscall the block numbers just before the call, and
+      // whose arity is verified, reads only its own argument registers, as a
+      // modeled supervisor call above does: an operand it does not read
+      // passes zero (x64SyscallOperandRead), and so does the pair the lift
+      // packed into a temporary for it alone.  A routine that makes it then
+      // reads no other register at its entry: Go's `runtime.exit` reads DI
+      // alone, which it loads from its stack argument.
+      if (Image && TheArch == Arch::X64 && LOp.Opcode == NdOp::INTRINSIC &&
+          LOp.NumInputs == 6 && LOp.Inputs[0].isConst() &&
+          static_cast<Intrinsic>(LOp.Inputs[0].Offset) ==
+              Intrinsic::X64Syscall &&
+          MOp.NumInputs == LOp.NumInputs && runsUnderLinux(*Image))
+        if (const auto Number =
+                blockRegisterConstant(LB.Ops, LowOpIndex, x86reg::RAX, 8))
+          if (const auto Count = linuxX64SyscallArgumentCount(*Number))
+            for (size_t Operand = 1; Operand + 1 < MOp.NumInputs; ++Operand) {
+              if (x64SyscallOperandRead(Operand, *Count))
+                continue;
+              const MedVar Unread = MOp.Inputs[Operand + 1];
+              MOp.Inputs[Operand + 1] = MedVar::makeConst(
+                  0, Unread.Size, ConstantAddressProvenance::Scalar);
+              if (Unread.Kind != MedVar::Temp)
+                continue;
+              const auto ReadsUnread = [&](const MedOp &Op) {
+                for (unsigned I = 0; I < Op.NumInputs; ++I)
+                  if (Op.Inputs[I].Kind == MedVar::Temp &&
+                      Op.Inputs[I].Id == Unread.Id)
+                    return true;
+                return false;
+              };
+              if (std::any_of(MB.Ops.begin(), MB.Ops.end(), ReadsUnread))
+                continue;
+              for (auto Def = MB.Ops.rbegin(); Def != MB.Ops.rend(); ++Def)
+                if (Def->Output.Kind == MedVar::Temp &&
+                    Def->Output.Id == Unread.Id) {
+                  if (Def->Opcode == NdOp::CONCAT)
+                    for (unsigned I = 0; I < Def->NumInputs; ++I)
+                      Def->Inputs[I] =
+                          MedVar::makeConst(0, Def->Inputs[I].Size,
+                                            ConstantAddressProvenance::Scalar);
+                  break;
+                }
+            }
       // An SMC or HVC #0 reads the registers of the SMC Calling Convention;
       // the lift binds its results.  Where the block sets the function
       // identifier just before the call, the call takes the arguments the
@@ -2381,6 +2427,13 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       GoArgumentSpillReads = Reads;
       if (!GoGrowth->Spills.empty())
         GoArgumentSpillBegin = GoGrowth->Spills.front().EntryOffset;
+    }
+    GoFixedArguments.reset();
+    if (Image) {
+      GoFixedArguments = goWriteBarrierArguments(*Image, Low.Entry);
+      if (!GoFixedArguments)
+        GoFixedArguments =
+            goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
     }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);

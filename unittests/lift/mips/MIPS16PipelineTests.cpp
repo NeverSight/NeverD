@@ -181,6 +181,22 @@ TEST_P(MIPS16Pipeline, IndirectRuntimeTransfersMatchTheCallerPrototype) {
         EXPECT_EQ(Expanded->Blocks[0].InstructionBoundaries[0].TargetMode,
                   LowInstructionTargetMode::FromMIPS16TargetBit0);
         EXPECT_EQ(Caller.Blocks[0].Ops.back().Opcode, NdOp::CALL);
+        if (Variadic) {
+          // A named float also travels through the integer bank on o32.
+          // The promoted double fills a2/a3 and the final word is on the stack.
+          auto Named = H;
+          Named.AnalystFixedCount = 2;
+          Named.Signature.Parameters = {{"", NdType::makeFloat(4)},
+                                        {"", NdType::makeInt(4)},
+                                        {"", NdType::makeFloat(8)},
+                                        {"", NdType::makeInt(4)}};
+          ASSERT_TRUE(
+              assignAnalystCallABI(Named, GetParam(), BinaryFormat::ELF, Error))
+              << Error;
+          const pipeline_detail::MIPS16CallSites NamedSite{{Site, Named}};
+          EXPECT_TRUE(pipeline_detail::projectMIPS16RuntimeCalls(
+              Image, Caller, Transports, &NamedSite, &Mapped));
+        }
         EXPECT_THROW(pipeline_detail::projectMIPS16RuntimeCalls(Image, Caller,
                                                                 Transports),
                      LowToMedConversionError);

@@ -1,0 +1,1257 @@
+{
+  "source": "3c7036394eb4fb00ff445914867920bf8a5e2a57",
+  "llvm_fork_source": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "r6_tag": "neverd-llvm-v23.0.0-r6",
+  "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "parent_cli": {
+    "fragmented": {
+      "source_sha256": "117c4596df7f5b75e73e5ba8d1aa1e3fd3e562415d79ce260784122c7dd46303",
+      "exit": 1,
+      "created_output": false
+    },
+    "gapped": {
+      "source_sha256": "d44d1da4537c20c652f70cc5a7ba2fd455ceb1da6fb4d5853df11ba235f1b11d",
+      "exit": 1,
+      "created_output": false
+    },
+    "literal-only": {
+      "source_sha256": "ac1ea320e5ecd420b9c016eb5858a3b270dc292268e5e2ca2bec52d8359cfc6d",
+      "exit": 1,
+      "created_output": false
+    },
+    "some": {
+      "source_sha256": "39bc5ef47991e8f995b83df4b109d3d2d747b29b5994b61fed11886f2ca890d9",
+      "exit": 1,
+      "created_output": false
+    }
+  },
+  "escaped_pc_before": {
+    "cases": {
+      "fragmented-exposed-pc-0.dylib": {
+        "sha256": "9d85a099d737dabbbb113bdbedb289dcf0de455e7abbb2bee20670f2fbd3975c",
+        "source_sha256": "4f6ae23c184302ede64453935efc3c242f569c926ce31fd2fbc4283d4db1cc21",
+        "records": 24,
+        "adr_offsets": [
+          16152,
+          16432
+        ]
+      },
+      "fragmented-exposed-pc-2.dylib": {
+        "sha256": "16ba83b8bdb7ca691c5b259cc25bfd01382fc204065ae9519dde8c8db26552e8",
+        "source_sha256": "e06358e21e9a68fe34640e946a4342f7a27495cdf1e8055d032b103b05d46e5c",
+        "records": 24,
+        "adr_offsets": [
+          16288,
+          16568
+        ]
+      }
+    },
+    "addresses": [
+      {
+        "image": "fragmented-exposed-pc-0.unexpected.dylib",
+        "output_sha256": "9d85a099d737dabbbb113bdbedb289dcf0de455e7abbb2bee20670f2fbd3975c",
+        "adr_and_ret_vas": [
+          "0x3f18",
+          "0x4030"
+        ]
+      }
+    ]
+  },
+  "toolchains": {
+    "fork": {
+      "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+      "library_sha256": "2a1ff8f1f79eab4ec703d4d6192d03cbb2fb47ab4b0cde4209e71a5876be45d6",
+      "signed_inputs_and_outputs": 21,
+      "signed_negative_inputs": 24,
+      "negative_cases": [
+        "fragmented/branch-to-data-0",
+        "fragmented/branch-to-data-1",
+        "fragmented/branch-to-data-2",
+        "fragmented/contradictory-kind",
+        "fragmented/exposed-pc-0",
+        "fragmented/exposed-pc-1",
+        "fragmented/exposed-pc-2",
+        "fragmented/open-table",
+        "fragmented/read-code-as-literal-0",
+        "fragmented/read-code-as-literal-1",
+        "fragmented/read-code-as-literal-2",
+        "fragmented/some-unclassified",
+        "gapped/branch-to-data-0",
+        "gapped/branch-to-data-1",
+        "gapped/branch-to-data-2",
+        "gapped/contradictory-kind",
+        "gapped/exposed-pc-0",
+        "gapped/exposed-pc-1",
+        "gapped/exposed-pc-2",
+        "gapped/open-table",
+        "gapped/read-code-as-literal-0",
+        "gapped/read-code-as-literal-1",
+        "gapped/read-code-as-literal-2",
+        "gapped/some-unclassified"
+      ],
+      "publication": {
+        "fragmented": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "4575772fe6a453fcb64f038b7654b75deedbbf79fb62573dc1a1e853345ed7f7"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "d11ce90daee6c2690f535818a0f5c0ac3186fc00d9ad8007cb17d7ee4bcc3e79"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "7b90a5bad0810885f33d8470a6119e9f7dfb95ea81279cd9ba87a5698d967407"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "ad01b9a0461bb8bdfb268b56d38b0e266ba6770d53901857e54fb85a9140b312"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "6e5fc6a181c297a74aced41c990217c0c834a955edfe227b56962446da7fdf12"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "13af9205105b43d078d364bcf11365c88a38a9d2bd83b7de1c0c2b716656b378"
+          }
+        },
+        "gapped": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "50857c925f35ba005f7eb7c900a575cc37497c32dc46759a4cc0adc3622bfbb5"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "be5a4164dd6d9b7acde20119dcd8c611c6ccdce22a0516b4965b48ac17e28bb9"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "fdae6a347d528b522d031f004726343b7dee703e8af0b0a10c8c23d2deb0097b"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "ec90be1ec98bb53d1f86e784754d6bd969536f17f1bcc4d15f07ba0c8c6fb7f9"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "b62c509b609ecd957afde71b6e681b1f498802032ab87bb2e81415ad57856cc9"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "b83a82edf5cbf6bcddfde66f0c4827a50d6cd60c0e6cabc1ea575694580f9d41"
+          }
+        },
+        "some": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 0,
+            "sha256": "34f8f9e876474f72feaad6a8b829c956a014024b9fe7fb1d8d5c521ac36a79d4"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 0,
+            "sha256": "777b67b9ac551736d91aa3b895e49b6a9bd881bf847cb07bc186123d3686b18d"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 0,
+            "sha256": "e5e5d3e659c81c9406c297fce0158393e84fd433aa5be8ad28aa4d60058ae70a"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 0,
+            "sha256": "5cba080af49e00c0c709fcdeabe6c647d57310243adeddb6b8bebe8588098da1"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 0,
+            "sha256": "dae632a1dee8b6cc18397be784dd5a61363377f6b8375cb11b21eed43463f724"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 0,
+            "sha256": "19246980c44817a0f96281c723ad8bc35a4957357e5aec361b635652d707a1e4"
+          }
+        }
+      },
+      "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44786421663",
+      "actions_commit": "effccbe5c6a4a65ca587ec7ecc569d8d2640a072",
+      "native": {
+        "layout-macos-26-fork": {
+          "cpu": "Apple M1 (Virtual)",
+          "cases": 257,
+          "passed": 257,
+          "failed": [],
+          "skipped": [],
+          "gtest_exit": 0,
+          "classic_cfi_diagnostics": [],
+          "independent_calls": 1512,
+          "properties": {
+            "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3
+            },
+            "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "native_automatic_original_table_entry_walks": 12,
+              "native_alternate_stack_table_walks": 6
+            },
+            "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3,
+              "preserved_unreached_blocks": 3
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 2,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5,
+              "refused_unreached_pc_after_fresh_lift": true
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 5,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+              "executed_native_images": 4,
+              "published_data_in_code_records": 8,
+              "recovered_source_data_in_code_records": 1,
+              "recovered_alignment_bytes": 3
+            }
+          },
+          "test_sha256": "b2cdf0fd9dc211598320a75a4791926b0b5ac3e215f07d33e8b623a794e48f1c",
+          "xml_sha256": "f12a7985807e53b11e3b84c1e2b7e727e158900a74eadd5da07619982591b5f5",
+          "x1": {
+            "status": "unavailable",
+            "qualified": false,
+            "missing": [
+              "explicit_pauth_lr_qualified",
+              "pacm_pc_qualified",
+              "x1_el0_cpta_qualified",
+              "x1_el0_checked_writeback_qualified"
+            ]
+          }
+        },
+        "layout-xcode-27-fork": {
+          "cpu": "Apple M1 (Virtual)",
+          "cases": 257,
+          "passed": 257,
+          "failed": [],
+          "skipped": [],
+          "gtest_exit": 0,
+          "classic_cfi_diagnostics": [],
+          "independent_calls": 1512,
+          "properties": {
+            "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3
+            },
+            "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "native_automatic_original_table_entry_walks": 12,
+              "native_alternate_stack_table_walks": 6
+            },
+            "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3,
+              "preserved_unreached_blocks": 3
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 2,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5,
+              "refused_unreached_pc_after_fresh_lift": true
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 5,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+              "executed_native_images": 4,
+              "published_data_in_code_records": 8,
+              "recovered_source_data_in_code_records": 1,
+              "recovered_alignment_bytes": 3
+            }
+          },
+          "test_sha256": "b2cdf0fd9dc211598320a75a4791926b0b5ac3e215f07d33e8b623a794e48f1c",
+          "xml_sha256": "e8db3522b9f5060548c977bc936c44f49e6125fef27c65554c3fbb68168ce00f",
+          "x1": {
+            "status": "unavailable",
+            "qualified": false,
+            "missing": [
+              "explicit_pauth_lr_qualified",
+              "pacm_pc_qualified",
+              "x1_el0_cpta_qualified",
+              "x1_el0_checked_writeback_qualified"
+            ]
+          }
+        }
+      },
+      "ci_cleanup": {
+        "tag": "neverd-mixed-alignment-fork-3c7036394eb4",
+        "release_http": 404,
+        "git_ref_http": 404,
+        "asset_bytes": 50807546,
+        "asset_sha256": "13c53bc9970dc123fc77ea72c94babfc3570ba14fe6319d0700c850bb2cd88dc",
+        "removed_runner_branch": "codex/neverd-arm64e-mixed-alignment-fork-20261121"
+      },
+      "local_focused": {
+        "targets": [
+          "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery",
+          "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+          "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables",
+          "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral"
+        ],
+        "test_sha256": "b2cdf0fd9dc211598320a75a4791926b0b5ac3e215f07d33e8b623a794e48f1c",
+        "exit": 0,
+        "cases": [
+          {
+            "name": "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery",
+            "passed": true,
+            "recovered": "3",
+            "records": "40",
+            "unreached": "3",
+            "padding": null,
+            "fresh_pc_refusal": null
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+            "passed": true,
+            "recovered": "2",
+            "records": "56",
+            "unreached": "3",
+            "padding": "5",
+            "fresh_pc_refusal": "true"
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables",
+            "passed": true,
+            "recovered": "5",
+            "records": "56",
+            "unreached": "3",
+            "padding": "5",
+            "fresh_pc_refusal": null
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral",
+            "passed": true,
+            "recovered": "1",
+            "records": "8",
+            "unreached": null,
+            "padding": "3",
+            "fresh_pc_refusal": null
+          }
+        ]
+      },
+      "four_by_four_alignment": {
+        "source_assembly_sha256": "4660f27a3840ca8aeb592b496d847f0011f77057e9b46762509669baffd0f3df",
+        "pairs": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ]
+        ],
+        "maps": {
+          "complete": {
+            "source_sha256": "127d2498eaafd457b2df16ae728619954ac55dd02761b504c154a017c450c878",
+            "source_records": 80,
+            "recovered_padding_ranges": 24,
+            "functions": 16,
+            "generations": {
+              "default1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "9fe33bf1fcbc39145d9a2fc5524f15a957b5004dd130c7224bd131d17018ed98"
+              },
+              "default2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "2c4ed9aeceda0adea012b96f1fa018c3c64fdbbf8458700102e9328af94e224b"
+              },
+              "default3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "a6ab9b6876b72ea51f22a2ffd979e5a5fdb523349f1d3431209b37162ba656b1"
+              },
+              "no-opt1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "75647202c83cc34812b0253fb3d7667d190d18fc0b74f3e15f6c2a8a206d42d2"
+              },
+              "no-opt2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "10a685611c9bd23a773760b4713dad99036da1da97646bfdfedd6974359740ca"
+              },
+              "no-opt3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "67332cdf0705774614fc20a06a8c4d52d7a053fda390f0f58f1c2561927108e8"
+              }
+            }
+          },
+          "gapped": {
+            "source_sha256": "296ccb05bba70eea5ee21b87cb12dcdf75d24ded3c0555402c99f0f683ad5e42",
+            "source_records": 64,
+            "recovered_padding_ranges": 24,
+            "functions": 16,
+            "generations": {
+              "default1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "28490296700fe796b112f2795cbc559fa1d8f0ce6d6e5e405d64082c149fdf2d"
+              },
+              "default2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "29658277533e8d34a539756067f0616a81316834f6291cc946318f441a3ee7c3"
+              },
+              "default3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "71d48f3e996f8af9f3ec7915a12def3c904c4d98306a30365c883d5166d3b943"
+              },
+              "no-opt1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "42b952d09b88eebaebda256d3a1f25206e8ad655ce22b52daf0e194311bfc747"
+              },
+              "no-opt2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "5050ac9a57637fb6c4dce0063e748ef3d7785fe163968ec9dc6cac7e5bc60059"
+              },
+              "no-opt3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "1036dae721731363ff5a5bf7fdd60a31b8c0b06b61bd99301ed3fdc2ed3aed69"
+              }
+            }
+          }
+        }
+      },
+      "fresh_pc_cli": {
+        "byte-default": {
+          "source_sha256": "4f6ae23c184302ede64453935efc3c242f569c926ce31fd2fbc4283d4db1cc21",
+          "exit": 1,
+          "created_output": false
+        },
+        "byte-no-opt": {
+          "source_sha256": "4f6ae23c184302ede64453935efc3c242f569c926ce31fd2fbc4283d4db1cc21",
+          "exit": 1,
+          "created_output": false
+        },
+        "word-default": {
+          "source_sha256": "e06358e21e9a68fe34640e946a4342f7a27495cdf1e8055d032b103b05d46e5c",
+          "exit": 1,
+          "created_output": false
+        },
+        "word-no-opt": {
+          "source_sha256": "e06358e21e9a68fe34640e946a4342f7a27495cdf1e8055d032b103b05d46e5c",
+          "exit": 1,
+          "created_output": false
+        }
+      },
+      "literal_only_cli": {
+        "original_sha256": "ac1ea320e5ecd420b9c016eb5858a3b270dc292268e5e2ca2bec52d8359cfc6d",
+        "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+        "records": 1,
+        "outputs": {
+          "default1.dylib": {
+            "records": 4,
+            "sha256": "e4901f7833e2d31b84687579e07fc9e2df8f7bc09cdf0ef317e78fa84fcb19f2"
+          },
+          "default2.dylib": {
+            "records": 6,
+            "sha256": "d4bc4ecb5a5b7510fd4f6a03850924d0639e56ce1be79214c02c1bcb1b0e972e"
+          },
+          "default3.dylib": {
+            "records": 8,
+            "sha256": "0a1d13691bff7088d4103042f311cbfa79a8701003b11c4d1c3d90706f69cdc9"
+          },
+          "no-opt1.dylib": {
+            "records": 4,
+            "sha256": "af9dbe82275ec8b6e533a83675ad6abf02ab43b25f242e9ab2c9900520b74edb"
+          },
+          "no-opt2.dylib": {
+            "records": 6,
+            "sha256": "01e5ed70f3f3c6115ee026c7c7389853a3e3985252cdf26a0da379d0a34b002e"
+          },
+          "no-opt3.dylib": {
+            "records": 8,
+            "sha256": "6f4cd63894e5413e9ffaf2c8a1139e86dadeeafba47ee0995f3f8071e7f38d95"
+          }
+        }
+      },
+      "release_build": {
+        "source": "3c7036394eb4fb00ff445914867920bf8a5e2a57",
+        "snapshot": "8c35dac4586691e66d6c6f37c8acb7c8b74534c6",
+        "rebuild_after_upstream": true,
+        "modified_library_source": "lib/ir/med/lower/LowToMed.cpp",
+        "source_sha256": "5b94464075427034d833f9f07510d0a1ae846de3a386efa443af90a5cd1ac379",
+        "object_sha256": "81d5d9c455e7ace50f9a3c558bdfafd10d117a601286a646f6b9e38f5294dc69",
+        "binary_sha256": {
+          "neverd": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+          "libneverd.dylib": "2a1ff8f1f79eab4ec703d4d6192d03cbb2fb47ab4b0cde4209e71a5876be45d6",
+          "NeverDArm64eLiftedImageTests": "b2cdf0fd9dc211598320a75a4791926b0b5ac3e215f07d33e8b623a794e48f1c"
+        }
+      }
+    },
+    "r6": {
+      "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+      "library_sha256": "cd58d1d71614e111ef1fca6b712dac07c52824fe14a3f80e394450023411a3e7",
+      "signed_inputs_and_outputs": 21,
+      "signed_negative_inputs": 24,
+      "negative_cases": [
+        "fragmented/branch-to-data-0",
+        "fragmented/branch-to-data-1",
+        "fragmented/branch-to-data-2",
+        "fragmented/contradictory-kind",
+        "fragmented/exposed-pc-0",
+        "fragmented/exposed-pc-1",
+        "fragmented/exposed-pc-2",
+        "fragmented/open-table",
+        "fragmented/read-code-as-literal-0",
+        "fragmented/read-code-as-literal-1",
+        "fragmented/read-code-as-literal-2",
+        "fragmented/some-unclassified",
+        "gapped/branch-to-data-0",
+        "gapped/branch-to-data-1",
+        "gapped/branch-to-data-2",
+        "gapped/contradictory-kind",
+        "gapped/exposed-pc-0",
+        "gapped/exposed-pc-1",
+        "gapped/exposed-pc-2",
+        "gapped/open-table",
+        "gapped/read-code-as-literal-0",
+        "gapped/read-code-as-literal-1",
+        "gapped/read-code-as-literal-2",
+        "gapped/some-unclassified"
+      ],
+      "publication": {
+        "fragmented": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "4575772fe6a453fcb64f038b7654b75deedbbf79fb62573dc1a1e853345ed7f7"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "d11ce90daee6c2690f535818a0f5c0ac3186fc00d9ad8007cb17d7ee4bcc3e79"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "7b90a5bad0810885f33d8470a6119e9f7dfb95ea81279cd9ba87a5698d967407"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "ad01b9a0461bb8bdfb268b56d38b0e266ba6770d53901857e54fb85a9140b312"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "6e5fc6a181c297a74aced41c990217c0c834a955edfe227b56962446da7fdf12"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "13af9205105b43d078d364bcf11365c88a38a9d2bd83b7de1c0c2b716656b378"
+          }
+        },
+        "gapped": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "50857c925f35ba005f7eb7c900a575cc37497c32dc46759a4cc0adc3622bfbb5"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "be5a4164dd6d9b7acde20119dcd8c611c6ccdce22a0516b4965b48ac17e28bb9"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "fdae6a347d528b522d031f004726343b7dee703e8af0b0a10c8c23d2deb0097b"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 6,
+            "sha256": "ec90be1ec98bb53d1f86e784754d6bd969536f17f1bcc4d15f07ba0c8c6fb7f9"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 9,
+            "sha256": "b62c509b609ecd957afde71b6e681b1f498802032ab87bb2e81415ad57856cc9"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 12,
+            "sha256": "b83a82edf5cbf6bcddfde66f0c4827a50d6cd60c0e6cabc1ea575694580f9d41"
+          }
+        },
+        "some": {
+          "default-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 0,
+            "sha256": "34f8f9e876474f72feaad6a8b829c956a014024b9fe7fb1d8d5c521ac36a79d4"
+          },
+          "default-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 0,
+            "sha256": "777b67b9ac551736d91aa3b895e49b6a9bd881bf847cb07bc186123d3686b18d"
+          },
+          "default-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 0,
+            "sha256": "e5e5d3e659c81c9406c297fce0158393e84fd433aa5be8ad28aa4d60058ae70a"
+          },
+          "no-opt-1": {
+            "records": 24,
+            "padding_ranges_checked": 2,
+            "unreached_blocks_checked": 0,
+            "sha256": "5cba080af49e00c0c709fcdeabe6c647d57310243adeddb6b8bebe8588098da1"
+          },
+          "no-opt-2": {
+            "records": 36,
+            "padding_ranges_checked": 3,
+            "unreached_blocks_checked": 0,
+            "sha256": "dae632a1dee8b6cc18397be784dd5a61363377f6b8375cb11b21eed43463f724"
+          },
+          "no-opt-3": {
+            "records": 48,
+            "padding_ranges_checked": 4,
+            "unreached_blocks_checked": 0,
+            "sha256": "19246980c44817a0f96281c723ad8bc35a4957357e5aec361b635652d707a1e4"
+          }
+        }
+      },
+      "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44786566570",
+      "actions_commit": "9366901198e0242f371ea55998a4841d0f958612",
+      "native": {
+        "layout-macos-26-r6": {
+          "cpu": "Apple M1 (Virtual)",
+          "cases": 257,
+          "passed": 247,
+          "failed": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "gtest_exit": 1,
+          "classic_cfi_diagnostics": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "independent_calls": 1512,
+          "properties": {
+            "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3
+            },
+            "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "native_automatic_original_table_entry_walks": 12,
+              "native_alternate_stack_table_walks": 6
+            },
+            "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3,
+              "preserved_unreached_blocks": 3
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 2,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5,
+              "refused_unreached_pc_after_fresh_lift": true
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 5,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+              "executed_native_images": 4,
+              "published_data_in_code_records": 8,
+              "recovered_source_data_in_code_records": 1,
+              "recovered_alignment_bytes": 3
+            }
+          },
+          "test_sha256": "c40d677b8eb32e611c32541655f211437ea6c5e652a92c2c59043d6cc5ced189",
+          "xml_sha256": "f06df20a90d6ea6c13d518065cc5ac8a197963f88b9e539fad6c3404e14a5cc2",
+          "x1": {
+            "status": "unavailable",
+            "qualified": false,
+            "missing": [
+              "explicit_pauth_lr_qualified",
+              "pacm_pc_qualified",
+              "x1_el0_cpta_qualified",
+              "x1_el0_checked_writeback_qualified"
+            ]
+          }
+        },
+        "layout-xcode-27-r6": {
+          "cpu": "Apple M1 (Virtual)",
+          "cases": 257,
+          "passed": 247,
+          "failed": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "gtest_exit": 1,
+          "classic_cfi_diagnostics": [
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "independent_calls": 1512,
+          "properties": {
+            "AArch64LiftedImage.ScheduledRelativeTablesSurviveRelifting": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3
+            },
+            "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+              "native_automatic_original_table_entry_walks": 12,
+              "native_alternate_stack_table_walks": 6
+            },
+            "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 40,
+              "recovered_source_data_in_code_records": 3,
+              "preserved_unreached_blocks": 3
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 2,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5,
+              "refused_unreached_pc_after_fresh_lift": true
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables": {
+              "executed_native_images": 4,
+              "native_switch_comparisons": 288,
+              "proved_embedded_dispatches": 3,
+              "rejected_fragment_kind_conflicts": 3,
+              "published_data_in_code_records": 56,
+              "recovered_source_data_in_code_records": 5,
+              "preserved_unreached_blocks": 3,
+              "recovered_alignment_bytes": 5
+            },
+            "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral": {
+              "executed_native_images": 4,
+              "published_data_in_code_records": 8,
+              "recovered_source_data_in_code_records": 1,
+              "recovered_alignment_bytes": 3
+            }
+          },
+          "test_sha256": "c40d677b8eb32e611c32541655f211437ea6c5e652a92c2c59043d6cc5ced189",
+          "xml_sha256": "ce54c5d484882d20a3cee8894575be76b2c2c84b9e580551fb495fe734a450b2",
+          "x1": {
+            "status": "unavailable",
+            "qualified": false,
+            "missing": [
+              "explicit_pauth_lr_qualified",
+              "pacm_pc_qualified",
+              "x1_el0_cpta_qualified",
+              "x1_el0_checked_writeback_qualified"
+            ]
+          }
+        }
+      },
+      "ci_cleanup": {
+        "tag": "neverd-mixed-alignment-r6-3c7036394eb4",
+        "release_http": 404,
+        "git_ref_http": 404,
+        "asset_bytes": 50674848,
+        "asset_sha256": "811717224e28b5068aaf3ad442d85d909d7106256ecd16bd41f9131ad4640f4b",
+        "removed_runner_branch": "codex/neverd-arm64e-mixed-alignment-r6-20261121"
+      },
+      "local_focused": {
+        "targets": [
+          "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery",
+          "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+          "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables",
+          "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral"
+        ],
+        "test_sha256": "c40d677b8eb32e611c32541655f211437ea6c5e652a92c2c59043d6cc5ced189",
+        "exit": 0,
+        "cases": [
+          {
+            "name": "AArch64LiftedImage.RetainedDefaultsSurvivePartialTableRecovery",
+            "passed": true,
+            "recovered": "3",
+            "records": "40",
+            "unreached": "3",
+            "padding": null,
+            "fresh_pc_refusal": null
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+            "passed": true,
+            "recovered": "2",
+            "records": "56",
+            "unreached": "3",
+            "padding": "5",
+            "fresh_pc_refusal": "true"
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentBesidePartialSwitchTables",
+            "passed": true,
+            "recovered": "5",
+            "records": "56",
+            "unreached": "3",
+            "padding": "5",
+            "fresh_pc_refusal": null
+          },
+          {
+            "name": "AArch64LiftedImage.UnmarkedAlignmentAfterDeclaredLiteral",
+            "passed": true,
+            "recovered": "1",
+            "records": "8",
+            "unreached": null,
+            "padding": "3",
+            "fresh_pc_refusal": null
+          }
+        ]
+      },
+      "four_by_four_alignment": {
+        "source_assembly_sha256": "4660f27a3840ca8aeb592b496d847f0011f77057e9b46762509669baffd0f3df",
+        "pairs": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1
+          ],
+          [
+            0,
+            2
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            1,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            2
+          ],
+          [
+            1,
+            3
+          ],
+          [
+            2,
+            0
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            2
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            3,
+            0
+          ],
+          [
+            3,
+            1
+          ],
+          [
+            3,
+            2
+          ],
+          [
+            3,
+            3
+          ]
+        ],
+        "maps": {
+          "complete": {
+            "source_sha256": "127d2498eaafd457b2df16ae728619954ac55dd02761b504c154a017c450c878",
+            "source_records": 80,
+            "recovered_padding_ranges": 24,
+            "functions": 16,
+            "generations": {
+              "default1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "9fe33bf1fcbc39145d9a2fc5524f15a957b5004dd130c7224bd131d17018ed98"
+              },
+              "default2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "2c4ed9aeceda0adea012b96f1fa018c3c64fdbbf8458700102e9328af94e224b"
+              },
+              "default3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "a6ab9b6876b72ea51f22a2ffd979e5a5fdb523349f1d3431209b37162ba656b1"
+              },
+              "no-opt1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "75647202c83cc34812b0253fb3d7667d190d18fc0b74f3e15f6c2a8a206d42d2"
+              },
+              "no-opt2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "10a685611c9bd23a773760b4713dad99036da1da97646bfdfedd6974359740ca"
+              },
+              "no-opt3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "67332cdf0705774614fc20a06a8c4d52d7a053fda390f0f58f1c2561927108e8"
+              }
+            }
+          },
+          "gapped": {
+            "source_sha256": "296ccb05bba70eea5ee21b87cb12dcdf75d24ded3c0555402c99f0f683ad5e42",
+            "source_records": 64,
+            "recovered_padding_ranges": 24,
+            "functions": 16,
+            "generations": {
+              "default1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "28490296700fe796b112f2795cbc559fa1d8f0ce6d6e5e405d64082c149fdf2d"
+              },
+              "default2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "29658277533e8d34a539756067f0616a81316834f6291cc946318f441a3ee7c3"
+              },
+              "default3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "71d48f3e996f8af9f3ec7915a12def3c904c4d98306a30365c883d5166d3b943"
+              },
+              "no-opt1": {
+                "records": 208,
+                "preserved_blocks": 32,
+                "sha256": "42b952d09b88eebaebda256d3a1f25206e8ad655ce22b52daf0e194311bfc747"
+              },
+              "no-opt2": {
+                "records": 312,
+                "preserved_blocks": 48,
+                "sha256": "5050ac9a57637fb6c4dce0063e748ef3d7785fe163968ec9dc6cac7e5bc60059"
+              },
+              "no-opt3": {
+                "records": 416,
+                "preserved_blocks": 64,
+                "sha256": "1036dae721731363ff5a5bf7fdd60a31b8c0b06b61bd99301ed3fdc2ed3aed69"
+              }
+            }
+          }
+        }
+      },
+      "fresh_pc_cli": {
+        "byte-default": {
+          "source_sha256": "4f6ae23c184302ede64453935efc3c242f569c926ce31fd2fbc4283d4db1cc21",
+          "exit": 1,
+          "created_output": false
+        },
+        "byte-no-opt": {
+          "source_sha256": "4f6ae23c184302ede64453935efc3c242f569c926ce31fd2fbc4283d4db1cc21",
+          "exit": 1,
+          "created_output": false
+        },
+        "word-default": {
+          "source_sha256": "e06358e21e9a68fe34640e946a4342f7a27495cdf1e8055d032b103b05d46e5c",
+          "exit": 1,
+          "created_output": false
+        },
+        "word-no-opt": {
+          "source_sha256": "e06358e21e9a68fe34640e946a4342f7a27495cdf1e8055d032b103b05d46e5c",
+          "exit": 1,
+          "created_output": false
+        }
+      },
+      "literal_only_cli": {
+        "original_sha256": "ac1ea320e5ecd420b9c016eb5858a3b270dc292268e5e2ca2bec52d8359cfc6d",
+        "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+        "records": 1,
+        "outputs": {
+          "default1.dylib": {
+            "records": 4,
+            "sha256": "e4901f7833e2d31b84687579e07fc9e2df8f7bc09cdf0ef317e78fa84fcb19f2"
+          },
+          "default2.dylib": {
+            "records": 6,
+            "sha256": "d4bc4ecb5a5b7510fd4f6a03850924d0639e56ce1be79214c02c1bcb1b0e972e"
+          },
+          "default3.dylib": {
+            "records": 8,
+            "sha256": "0a1d13691bff7088d4103042f311cbfa79a8701003b11c4d1c3d90706f69cdc9"
+          },
+          "no-opt1.dylib": {
+            "records": 4,
+            "sha256": "af9dbe82275ec8b6e533a83675ad6abf02ab43b25f242e9ab2c9900520b74edb"
+          },
+          "no-opt2.dylib": {
+            "records": 6,
+            "sha256": "01e5ed70f3f3c6115ee026c7c7389853a3e3985252cdf26a0da379d0a34b002e"
+          },
+          "no-opt3.dylib": {
+            "records": 8,
+            "sha256": "6f4cd63894e5413e9ffaf2c8a1139e86dadeeafba47ee0995f3f8071e7f38d95"
+          }
+        }
+      },
+      "release_build": {
+        "source": "3c7036394eb4fb00ff445914867920bf8a5e2a57",
+        "snapshot": "8c35dac4586691e66d6c6f37c8acb7c8b74534c6",
+        "rebuild_after_upstream": true,
+        "modified_library_source": "lib/ir/med/lower/LowToMed.cpp",
+        "source_sha256": "5b94464075427034d833f9f07510d0a1ae846de3a386efa443af90a5cd1ac379",
+        "object_sha256": "81d5d9c455e7ace50f9a3c558bdfafd10d117a601286a646f6b9e38f5294dc69",
+        "binary_sha256": {
+          "neverd": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+          "libneverd.dylib": "cd58d1d71614e111ef1fca6b712dac07c52824fe14a3f80e394450023411a3e7",
+          "NeverDArm64eLiftedImageTests": "c40d677b8eb32e611c32541655f211437ea6c5e652a92c2c59043d6cc5ced189"
+        }
+      }
+    }
+  },
+  "cli_byte_comparison": {
+    "signed_dispatch_images": 21,
+    "byte_identical_across_toolchains": 21,
+    "distinct_outputs": [],
+    "signed_literal_outputs": 6,
+    "byte_identical_literal_outputs": 6
+  },
+  "local_ctest": {
+    "case": "AArch64LiftedImage.UnmarkedAlignmentBesideCompleteSwitchTables",
+    "configured_seconds": 120.0,
+    "initial_observed_timeout_seconds": 165.83,
+    "single_case_repeat_passed_seconds": 2.5
+  },
+  "self_hosted": {
+    "runners": [],
+    "total_count": 0
+  },
+  "local_cleanup": {
+    "test": {
+      "files": 79,
+      "bytes": 108066753
+    },
+    "build": {
+      "files": 497,
+      "bytes": 236947704
+    }
+  }
+}

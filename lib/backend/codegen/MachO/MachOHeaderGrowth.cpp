@@ -361,8 +361,9 @@ llvm::Expected<MachODependencyState> slideMachOZeroBaseDylib(Bytes &Binary,
   return After;
 }
 
-llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
-                                               uint64_t Extra) {
+llvm::Expected<bool>
+reserveMachOHeaderStorage(Bytes &Binary, Arch A, uint64_t Extra,
+                          llvm::ArrayRef<MachODataInCodeRange> RecoveredData) {
   if (Extra > ::neverd::limits::backend::kMaxMachOHeaderGrowthBytes)
     return fail("command request exceeds checked bounds");
   MachOHeaderInfo H;
@@ -458,6 +459,11 @@ llvm::Expected<bool> reserveMachOHeaderStorage(Bytes &Binary, Arch A,
     if (!Parsed)
       return Parsed.takeError();
     Embedded = std::move(*Parsed);
+  }
+  if (!RecoveredData.empty()) {
+    llvm::append_range(Embedded, RecoveredData);
+    llvm::sort(Embedded,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
   }
   std::vector<std::pair<uint64_t, uint64_t>> Code;
   for (const auto &R : Sections) {

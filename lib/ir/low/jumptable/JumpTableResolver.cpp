@@ -67,6 +67,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/LowIntrinsicEffects.h"
+#include "neverd/loader/MachO/EmbeddedRead.h"
 #include "neverd/symbolic/SymDispatch.h"
 
 #include "llvm/Support/Debug.h"
@@ -2016,6 +2017,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // which would otherwise latch onto the entry base as the (wrong) target base.
   bool RecoveredAArch64Compact = false;
   bool CompactOwnerCapacity = false;
+  uint32_t CompactRecordSlots = 0;
   if (!Recovered) {
     Recovered =
         tryAArch64CompactTable(Img, Rec, Info, &CandidateEvidenceBudget);
@@ -2047,8 +2049,14 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
         const uint64_t Span = *OwnerEnd - Info.BaseAddr;
         const uint64_t Slots = 1 + (Span - Info.EntrySize) / PhysicalStride;
         if (Slots <= limits::kMaxJumpTableEntries) {
-          Info.PhysicalCapacity = static_cast<uint32_t>(Slots);
-          CompactOwnerCapacity = true;
+          // One Mach-O data-in-code record proves a readable prefix. It
+          // cannot cap independently proved mask, modulo or guard selectors.
+          if (getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize))
+            CompactRecordSlots = static_cast<uint32_t>(Slots);
+          else {
+            Info.PhysicalCapacity = static_cast<uint32_t>(Slots);
+            CompactOwnerCapacity = true;
+          }
         }
       }
     }
@@ -3489,7 +3497,7 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
   // exact LOAD/address/target proofs above authorize the layout, and the
   // empty-edge seed plus every subsequent case must prove its own selectors.
   // Do not turn this envelope into physical storage ownership or a domain.
-  uint32_t InlineRelativeReadableCapacity = 0;
+  uint32_t InlineRelativeReadableCapacity = CompactRecordSlots;
   if (CandidateProposalStageActive && ProvisionalRelativeEdgeTemplate &&
       !ProvisionalRelativeEdgeTemplate->AuthenticatesPhysicalStorage &&
       Info.IsRelative && !Info.RelocAbsolute && Info.PhysicalCapacity == 0 &&
@@ -3805,13 +3813,13 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       Info.AuthenticatedGuardBound = Info.MaxEntries;
     }
   }
-  // The owner capacity a compact table borrowed above only bounds storage for
-  // a selector no guard bounds.  An authenticated guard bounds every runtime
-  // coordinate, so the owner's bytes past it are adjacent data: decoding them
-  // would charge the fixed point for slots the dispatch cannot select, and the
-  // guarded domain would look like a partial subset of its storage.
+  const auto EmbeddedTable =
+      Info.IsRelative && Info.HasTargetBase
+          ? getMachOBoundedTableStorage(Img, Info.BaseAddr, Info.EntrySize)
+          : std::nullopt;
+  // A controlling guard can shorten a compact table's borrowed storage span.
   if (CompactOwnerCapacity && GuardFound && !Info.PreScaledIndex &&
-      Info.AuthenticatedGuardBound != 0 &&
+      Info.AuthenticatedGuardBound &&
       Info.AuthenticatedGuardBound == Info.MaxEntries &&
       Info.PhysicalCapacity > Info.AuthenticatedGuardBound)
     Info.PhysicalCapacity = Info.AuthenticatedGuardBound;
@@ -5243,10 +5251,15 @@ std::vector<va_t> CFGBuilder::resolveJumpTable(const BinaryImage &Img,
       if (Info.EntrySize - 1 > InvalidVA - SlotVA ||
           !Img.readVA(SlotVA, Info.EntrySize))
         return {};
-      const std::optional<va_t> OwnerEnd = Img.mappedObjectOwnerEnd(SlotVA);
-      if (!OwnerEnd || SlotVA >= *OwnerEnd ||
-          Info.EntrySize > *OwnerEnd - SlotVA)
-        return {};
+      if (EmbeddedTable) {
+        if (!EmbeddedTable->contains(SlotVA, Info.EntrySize))
+          return {};
+      } else {
+        const auto OwnerEnd = Img.mappedObjectOwnerEnd(SlotVA);
+        if (!OwnerEnd || SlotVA >= *OwnerEnd ||
+            Info.EntrySize > *OwnerEnd - SlotVA)
+          return {};
+      }
       ExactStorage.push_back(
           JumpTableStorageRange{SlotVA, Info.EntrySize, Info.EntrySize, 1});
       if (Img.CodePtrRelocSlots.count(SlotVA))

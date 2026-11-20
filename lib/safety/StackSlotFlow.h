@@ -49,6 +49,11 @@ public:
     }
   }
 
+  const MedBlock *blockById(int Id) const {
+    const auto It = Blocks.find(Id);
+    return It == Blocks.end() ? nullptr : It->second;
+  }
+
   bool hasCompleteNormalPredecessors(const MedBlock &Block) const {
     if (!UniqueBlockIds || Blocks.find(Block.Id) == Blocks.end() ||
         Blocks.at(Block.Id) != &Block || DuplicateIncomingEdges.count(Block.Id))
@@ -109,7 +114,7 @@ inline bool isAuthenticatedEntryRegisterLiveIn(const MedFunc &F,
 
   const MedBlock *Entry = nullptr;
   for (const MedBlock &Block : F.Blocks) {
-    if (Block.StartAddr != F.Entry)
+    if (!Block.isFunctionEntry(F.Entry))
       continue;
     if (Entry)
       return false;
@@ -345,7 +350,7 @@ ReachingStackValues reachingStackValues(
 
   const MedBlock *Entry = nullptr;
   for (const auto &[Id, Block] : Blocks)
-    if (Block->StartAddr == F.Entry) {
+    if (Block->isFunctionEntry(F.Entry)) {
       if (Entry)
         return Result;
       Entry = Block;

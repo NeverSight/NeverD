@@ -21,6 +21,7 @@
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/InternalNoReturn.h"
 #include "neverd/ir/low/RegistrationABI.h"
@@ -579,9 +580,16 @@ std::vector<va_t> calleesToRead(const MedFunc &F, const BinaryImage &Img,
       // missing. A complete read summary already includes zero stack demand;
       // traversing all of its descendants cannot strengthen that contract.
       // A frame borrow has a separate pointer-use proof to establish.
+      // Before Go's internal ABI, whether a Go callee takes every argument on
+      // the stack is its own recovery's to say (MedFunc::StackArgumentsOnly):
+      // a summary counts its stack words after the platform's register
+      // positions.
+      const bool GoStackCallee =
+          Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst() &&
+          goTakesStackArguments(Img, Op.Inputs[0].ConstVal);
       if (Convention && !Convention->ArgumentsFromCallSetup &&
           Convention->StackArgumentSummary && Op.CalleeStackArgs >= 0 &&
-          !FrameBorrows.count(&Op))
+          !FrameBorrows.count(&Op) && !GoStackCallee)
         continue;
       if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
         Callees.push_back(importOwnRoutine(Img,
@@ -2360,6 +2368,12 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
     SignatureBodies.push_back(&F);
   for (const auto &F : OmittedCallees)
     SignatureBodies.push_back(F.get());
+  // The callees whose own recovery found every argument on the stack (Go
+  // before its internal ABI): their calls pass them there.
+  std::set<va_t> StackArgumentCallees;
+  for (const MedFunc *MF : SignatureBodies)
+    if (MF->StackArgumentsOnly)
+      StackArgumentCallees.insert(MF->Entry);
   // The memo's conversions of the omitted bodies, which keep their forwarder
   // probes.
   std::vector<OmittedCalleeMemo::Conversion *> KeptBodies(
@@ -2566,7 +2580,7 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                    &CalleeConsumesVaList, &FrameLocalLeafCallees,
                    &CalleeIntRegs, &VectorArgumentCallees, &PointerCallees,
                    &Result.CallPrototypeArguments.get(), &RelocationSymbols,
-                   Keys, &CalleeFPScalarBytes);
+                   Keys, &CalleeFPScalarBytes, &StackArgumentCallees);
   };
   for (MedFunc &F : Result.MedFuncs)
     recover(F);
@@ -2705,14 +2719,14 @@ void recoverModuleCallAbi(const BinaryImage &Img, PipelineResult &Result,
                 OmittedCalleeMemo::ProbeRead EntryRead = Local.read(Entry);
                 std::vector<va_t> Keys;
                 MedFunc Body = KeptBody;
-                recoverCallAbi(Body, Img.Arch, AllFuncNames, &Img, &RegArity,
-                               &TotalArity, &CalleeFPArity, &CalleeFPReturnSize,
-                               &CalleeFPRegs, &CalleeHasSret, &IsVariadic,
-                               &CalleeConsumesVaList, &FrameLocalLeafCallees,
-                               &CalleeIntRegs, &VectorArgumentCallees,
-                               &PointerCallees,
-                               &Result.CallPrototypeArguments.get(),
-                               &LocalRelocations, &Keys, &CalleeFPScalarBytes);
+                recoverCallAbi(
+                    Body, Img.Arch, AllFuncNames, &Img, &RegArity, &TotalArity,
+                    &CalleeFPArity, &CalleeFPReturnSize, &CalleeFPRegs,
+                    &CalleeHasSret, &IsVariadic, &CalleeConsumesVaList,
+                    &FrameLocalLeafCallees, &CalleeIntRegs,
+                    &VectorArgumentCallees, &PointerCallees,
+                    &Result.CallPrototypeArguments.get(), &LocalRelocations,
+                    &Keys, &CalleeFPScalarBytes, &StackArgumentCallees);
                 OmittedCalleeMemo::Recovery Kept;
                 Kept.Reads = Local.reads(std::move(EntryRead), std::move(Keys));
                 Kept.EntryRegArity = valueAt(RegArity, Entry);

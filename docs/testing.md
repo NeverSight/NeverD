@@ -2845,6 +2845,9 @@ they do not qualify native execution or standalone cache reconstruction.
 `NeverDDebugInfoTests` rejects automatic container companion discovery while
 retaining explicit per-image debug-file diagnostics.
 
+`HighCPointerAddresses.AGlobalOfAnUnspellableCallbackKeepsItsAccessType`
+gives a global the debug type of a callback returning an array: the unit is
+written, the global declared with the type its load gives.
 `HighCPointerAddresses.CompilerDispatchDoesNotDependOnIncludes` checks seven
 x86 compiler-dispatch families through HighC and LLVMC, across COFF/ELF/Mach-O.
 Disabling includes must retain the required definitions; each unmodified source
@@ -18222,13 +18225,26 @@ With `--linkage pic` or `--linkage cpic`, the same harness checks the actual
 ELF flags for n32 and n64 in both byte orders. The compiled entry derives its
 GOT base from `$t9` with an unrelated incoming GP. The rebuilt code uses
 independently placed callback storage. The test calls its initializer before
-replacing it, and exercises n64 callback addresses above 4 GiB. A second
-shared-object fixture uses
-`.cpsetup` and a CALL16 import. The harness loads it at a nonzero bias, binds
-the import to each of two callees, and checks the arguments, result and
-restored GP, SP and RA. Both C backends run at O0 and O2.
+replacing it, and exercises n64 callback addresses above 4 GiB. The import
+fixtures cover straight-line `.cpsetup`, a saved entry `$t9` after the original
+register is overwritten, and an optimized C conditional call. The harness
+loads each shared object at a nonzero bias, binds its import to each of two
+callees, and checks arguments, results and restored GP, SP and RA for both C
+backends at O0 and O2. The conditional fixtures check that early returns skip
+both the call and the original GOT load. Two branch-likely fixtures save or
+clobber the GP carrier in the taken slot. A third increments the argument
+only in the taken slot even though both paths resume at the same address.
+Two loops update the argument, one with a saved entry carrier and one with
+a backedge to the first machine instruction before GP setup. Two additional
+fixtures complete GP in the taken slot before a shared epilogue, or execute
+a memory barrier on the path that skips the import.
 `MIPSEntryGP` checks explicit GP writes, upper-half n32 addresses, both GP
 instruction orders, conflicting linker values and an overwritten entry `$t9`.
+Its branch fixtures distinguish agreeing saved values from conflicting paths,
+a clobbering call, independent entries, coincident branch-likely successors,
+and a carrier overwritten on a later loop iteration. The private-frame tests
+also vary whether a loop argument acquires a stack address at entry or on
+its backedge, and whether a later call can observe a post-call register write.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
@@ -20618,6 +20634,64 @@ RBX and RBP. Read as C, both are prologue saves. In Go code only RBP's is.
 closure call in Go assembly, where the call takes no argument, and the same
 bytes in C, where it takes RDI, RSI and RDX.
 
+`GoStackArguments.ThreadLocalProloguesProveTheStackABI` builds Go
+1.16-magic amd64 images. A thread-local g prologue proves the stack ABI.
+Go 1.17's `cmp rsp, [r14+0x10]` beside it disproves it, and with no prologue
+nothing is proved. The test also checks that the loader keeps `_func.args`.
+`AnARM64ImageBeforeGo118PassesThemOnTheStack` covers arm64.
+`GoStackArguments.ArgumentsAndTheirCallsAreOnTheStack` lifts a Go 1.16
+`main.add(a, b int) int` and its caller. The callee takes two stack
+parameters and no register, a register stub keeps its registers, and the
+call passes `(1, 2)`. The record's third word, the result, is no argument.
+`GoStackArguments.ACalleeWithoutASizeTakesWhatItReads` gives `main.add` a
+record without a size: the call passes `(1, 2)` on the stack. Without any
+record, as a block split off a function's interior has, the call keeps the
+platform's reading.
+`GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
+assembly in a Go 1.18 image: alone and in the whole image, its caller passes
+`(1, 2)` on the stack, and `main.add` takes two stack parameters.
+`GoAssembly.AnARM64ForwarderIsNoABI0Assembly` lifts arm64 assembly that loads
+`[sp, #8]` and `[sp, #16]`, which takes them as its parameters, and a
+forwarder that only branches to another function, which takes no stack
+reading.
+`GoStackArguments.ARunOfTheCallerAlonePassesItsStackArguments` runs the
+pipeline over `main.add`'s caller alone and over the whole image: both pass
+`(1, 2)` on the stack.
+`GoStackArguments.AValueNothingNeedsTakesNoArgument` lifts five Go 1.16
+functions that read a register at their entry without taking an argument
+there: `sete r9b`, the nil check `testb al, (rbx)`, a return, `memmove`'s byte
+path beside a path that returns without writing RAX, and `vzeroupper`. Each is
+a stack-only function whose parameters start at the slot past its return
+address.
+`GoStackArguments.ARegisterStubTakesTheRegistersItPassesOn` builds Go 1.16's
+`panicIndex` stub, its stack-argument half and a caller, as ELF and as PE.
+The recognizer names (AX, CX), the stub's summary reads exactly those and
+names them for its callers, its parameters are AX and CX, and the caller
+binds `(5, 9)` before SSA. `OnlyAStubPassesItsRegistersOn` checks that
+`memeqbody`, which has no argument words, and a two-block `memequal` shape
+are no stubs.
+`ARunOfTheCallerAloneBindsAListedStubsRegisters` lists the stub and its half
+as never returning and runs the pipeline over the whole image and over the
+caller alone. Both publish (AX, CX) for the stub, and the caller's call binds
+`(5, 9)`. `GoRegisterArguments.ARunOfTheCallerAloneSummarizesAListedRoutine`
+lists a Go 1.18 function that grows its stack as never returning, as
+`runtime.throw` is: a run of its caller alone summarizes it as the whole run
+does, reading RAX and RBX.
+`GoWriteBarriers.AStoringBarrierTakesItsAddressAndPointer` runs the pipeline
+over a call to `runtime.gcWriteBarrierCX`, alone and in the whole image, as
+System V and Win64 x86-64 with Go's register ABI, as System V with the stack
+ABI, and as arm64 with X2 and X3: each call passes `(0x1000, 0x2000)`, and
+the barrier's parameters are its two registers.
+`GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
+1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
+1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
+
+`GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
+`runtime.callbackasm1` from a pclntab. `GoCallbacks.
+AnEntryTailCallsTheRoutineThatReturnsPastIt` builds three table entries. As
+returning calls they are one function of three calls. Once the routine is
+listed, the first call is a tail call that ends the function.
+
 `DWARFGoSignatures` loads a hand-built Go unit with a line table, so that each
 function's `DW_AT_decl_file` names Go source, an assembly file or
 `<autogenerated>`. Under a `regabi` producer, a one-register result is the
@@ -22204,6 +22278,10 @@ direct stubs and loader-bound import slots. Compile-time checks verify the
 tail expressions' word width before the provider can convert them.
 `LinuxSyscallJoinsKeepEveryPossibleRead` retains the largest possible read
 range across selectors, including an unknown alternative.
+`MedCallingConv.ASyscallTakesOnlyItsOwnArgumentsAsParameters` converts
+`mov rax, 60; syscall` to MedIR: the routine takes RDI alone, and the
+syscall's other operands are zero. A number the table does not list, and the
+same call in a FreeBSD image, keep R9 among the parameters.
 `LinuxSyscallUnusedClobbersDoNotTrap` executes both arms of an AArch64 call
 diamond: an unread clobber must not stop execution, while a read clobber must
 still reach the missing-value guard. Its test-only trap hook observes that

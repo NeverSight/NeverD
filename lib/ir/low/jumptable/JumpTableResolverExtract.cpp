@@ -790,6 +790,7 @@ void CFGBuilder::extractJumpTables(LowFunc &Func) {
       auto &Info = CachedIt->second;
       JT.BaseAddr = Info.BaseAddr;
       JT.HasBaseAddr = Info.HasBaseAddr;
+      JT.IndexDomainAuthenticated = Info.IndexDomainAuthenticated;
       JT.EntrySize = Info.EntrySize;
       JT.EntryStride =
           Info.EntryStride != 0 ? Info.EntryStride : Info.EntrySize;

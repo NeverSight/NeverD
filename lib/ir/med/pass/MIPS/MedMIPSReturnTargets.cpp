@@ -32,6 +32,51 @@
 
 namespace neverd {
 
+namespace {
+
+/// Incoming loop edges can assume the previous value of a header PHI only
+/// when every path to their predecessor has already visited the header.
+std::set<int> loopPredecessors(const MedFunc &F, const MedBlock &Header,
+                               size_t &Remaining) {
+  if (F.Blocks.size() > Remaining)
+    return {};
+  Remaining -= F.Blocks.size();
+  enum : unsigned { FromEntry = 1, FromHeader = 2 };
+  std::vector<unsigned> Reached(F.Blocks.size());
+  llvm::SmallVector<int, 8> Work;
+  auto visit = [&](int Id, unsigned Paths) {
+    if ((Reached[Id] | Paths) != Reached[Id]) {
+      Reached[Id] |= Paths;
+      Work.push_back(Id);
+    }
+  };
+  visit(0, FromEntry);
+  visit(Header.Id, FromHeader);
+  while (!Work.empty()) {
+    const int Id = Work.pop_back_val();
+    const auto &Block = F.Blocks[Id];
+    if (Block.Id != Id || Remaining < 1 + Block.Succs.size())
+      return {};
+    Remaining -= 1 + Block.Succs.size();
+    for (int Succ : Block.Succs) {
+      if (Succ < 0 || size_t(Succ) >= F.Blocks.size())
+        return {};
+      if (Succ != Header.Id)
+        visit(Succ, Reached[Id]);
+    }
+  }
+  std::set<int> Back;
+  for (int Pred : Header.Preds) {
+    if (Pred < 0 || size_t(Pred) >= Reached.size() || !Reached[Pred])
+      return {};
+    if (Reached[Pred] == FromHeader)
+      Back.insert(Pred);
+  }
+  return Back.size() != Header.Preds.size() ? Back : std::set<int>{};
+}
+
+} // namespace
+
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                 Arch Target, BinaryFormat Format,
                                 unsigned SourceResultOperands) {
@@ -99,7 +144,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
   size_t CallCount = 0;
-  bool NeedsNativeArguments = false;
+  llvm::SmallDenseMap<const MedBlock *, size_t, 4> NativePrefixes;
   struct CallFrame {
     llvm::SmallVector<SourceABIValueLocation, 8> Inputs;
     unsigned FloatingResultBytes = 0;
@@ -153,7 +198,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           if (Signature->ReturnKind == NdTypeKind::Float)
             Frame.FloatingResultBytes = Signature->ReturnBytes;
         } else {
-          NeedsNativeArguments = true;
+          NativePrefixes[&Block] = &Op - Block.Ops.data();
         }
         if (Op.IsTailCall && Calls.contains(&Op))
           QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
@@ -185,14 +230,31 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
-  std::optional<llvm::DenseMap<int, const MedBlock *>> BlocksById;
+  // A native call can observe earlier register writes. A predecessor also
+  // reaches it through its entire body, including a later loop iteration.
+  llvm::SmallVector<const MedBlock *, 8> PendingCalls;
+  if (QualifiedMemory)
+    for (const auto &Prefix : NativePrefixes)
+      PendingCalls.push_back(Prefix.first);
+  while (!PendingCalls.empty()) {
+    const MedBlock *Block = PendingCalls.pop_back_val();
+    if (Remaining < 1 + Block->Preds.size() ||
+        !Graph.hasCompleteNormalPredecessors(*Block)) {
+      QualifiedMemory = false;
+      break;
+    }
+    Remaining -= 1 + Block->Preds.size();
+    for (int Id : Block->Preds) {
+      const MedBlock *Pred = Graph.blockById(Id);
+      auto [Prefix, New] = NativePrefixes.try_emplace(Pred, Pred->Ops.size());
+      if (New)
+        PendingCalls.push_back(Pred);
+      else
+        Prefix->second = Pred->Ops.size();
+    }
+  }
   const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
                                      size_t LoadIndex) {
-    if (!BlocksById) {
-      BlocksById.emplace();
-      for (const auto &Block : Function.Blocks)
-        BlocksById->try_emplace(Block.Id, &Block);
-    }
     // An external read cannot recover this function's frame address before
     // any operation publishes it. Private stack saves are harmless here;
     // external stores and calls need a stronger memory contract. Visit every
@@ -225,15 +287,13 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             *At + Value->Size > 0)
           return false;
       }
-      if (Block->StartAddr == Function.Entry)
+      if (Block->isFunctionEntry(Function.Entry))
         ReachesEntry = true;
       else if (Block->Preds.empty())
         return false;
       for (int Id : Block->Preds) {
-        const auto Found = BlocksById->find(Id);
-        if (Found == BlocksById->end())
-          return false;
-        Pending.emplace_back(Found->second, Found->second->Ops.size());
+        const auto *Pred = Graph.blockById(Id);
+        Pending.emplace_back(Pred, Pred->Ops.size());
       }
     }
     return ReachesEntry;
@@ -243,7 +303,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   const auto &TRI = getTargetRegInfo(Target);
   using SliceKey = std::tuple<Key, unsigned, unsigned>;
   std::set<SliceKey> ProvenNonFrame;
-  std::set<SliceKey> NonFrameActive;
+  std::set<std::pair<SliceKey, bool>> NonFrameActive;
+  std::optional<Key> AssumedPhi;
+  std::map<int, std::set<int>> LoopEdges;
+  size_t Cycles = 0;
   std::function<bool(const MedVar &, unsigned, unsigned)> NonFrameBytes;
   const auto IsNonFrame = [&](const MedVar &V) {
     return NonFrameBytes(V, 0, V.Size);
@@ -254,12 +317,16 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     if (V.isConst())
       return true;
     const SliceKey K{key(V), First, Bytes};
-    if (ProvenNonFrame.count(K))
+    if (AssumedPhi == key(V) || ProvenNonFrame.count(K))
       return true;
     if (!Remaining ||
-        NonFrameActive.size() >= limits::ir::kMIPSReturnIdentityDepth ||
-        !NonFrameActive.insert(K).second)
+        NonFrameActive.size() >= limits::ir::kMIPSReturnIdentityDepth)
       return false;
+    const auto Query = std::pair(K, AssumedPhi.has_value());
+    if (!NonFrameActive.insert(Query).second) {
+      ++Cycles;
+      return false;
+    }
     --Remaining;
     const auto D = Definitions.find(V);
     bool Safe = false;
@@ -268,9 +335,28 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
       Safe = true;
     } else if (!D.Ambiguous && D.Phi &&
                Graph.hasCompleteIncoming(BlockIndices.at(D.Block), *D.Phi)) {
+      const size_t Before = Cycles;
       Safe = llvm::all_of(D.Phi->Args, [&](const auto &A) {
         return NonFrameBytes(A.second, First, Bytes);
       });
+      if (!Safe && !AssumedPhi && Cycles != Before &&
+          D.Block->Id == BlockIndices.at(D.Block)) {
+        auto [It, New] = LoopEdges.try_emplace(D.Block->Id);
+        if (New)
+          It->second = loopPredecessors(Function, *D.Block, Remaining);
+        const auto &Back = It->second;
+        // The initial value must be non-frame in full before an update may
+        // use any of its bytes, even when the original query was a slice.
+        if (!Back.empty() && llvm::all_of(D.Phi->Args, [&](const auto &A) {
+              return Back.contains(A.first) || IsNonFrame(A.second);
+            })) {
+          AssumedPhi = key(V);
+          Safe = llvm::all_of(D.Phi->Args, [&](const auto &A) {
+            return !Back.contains(A.first) || IsNonFrame(A.second);
+          });
+          AssumedPhi.reset();
+        }
+      }
     } else if (!D.Ambiguous && D.Op) {
       const auto &Op = *D.Op;
       // External memory cannot contain a pointer into this newly allocated
@@ -389,11 +475,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         break;
       }
     }
-    NonFrameActive.erase(K);
+    NonFrameActive.erase(Query);
     // A reaching-store walk can visit a later call-result spill while that
     // call's argument is still being proved. Such a recursive failure depends
     // on the active query; only completed positive proofs are reusable.
-    if (Safe)
+    if (Safe && !AssumedPhi)
       ProvenNonFrame.insert(K);
     return Safe;
   };
@@ -453,8 +539,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   // Native calls preserve the caller's allocated private frame under the
   // platform ABI even when the callee has no fixed declaration. Check every
-  // possible argument definition once: an unmodified incoming register has
-  // no address into this frame; a modified one must retain that provenance.
+  // possible argument definition that can reach a native call. Registers
+  // merged after the last call cannot expose the frame to that callee.
   // Check all stores and calls so an escape before the RA save cannot be
   // forgotten when reachingStackValues sees the later exact store. Reloading
   // a private pointer into an argument still has to prove non-frame provenance.
@@ -480,11 +566,14 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   if (HasCalls && QualifiedMemory)
     for (const auto &Block : Function.Blocks) {
-      for (const auto &Phi : Block.Phis)
-        if (NeedsNativeArguments)
+      const auto Prefix = NativePrefixes.find(&Block);
+      if (Prefix != NativePrefixes.end())
+        for (const auto &Phi : Block.Phis)
           NativeArgumentsNonFrame &= CheckNativeArgument(Phi.Output);
-      for (const auto &Op : Block.Ops) {
-        if (NeedsNativeArguments) {
+      const size_t End = Prefix == NativePrefixes.end() ? 0 : Prefix->second;
+      for (size_t OpIndex = 0; OpIndex < Block.Ops.size(); ++OpIndex) {
+        const auto &Op = Block.Ops[OpIndex];
+        if (OpIndex < End) {
           NativeArgumentsNonFrame &= CheckNativeArgument(Op.Output);
           for (const auto &Value : Op.IntrinsicOutputs)
             NativeArgumentsNonFrame &= CheckNativeArgument(Value);
@@ -507,7 +596,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         }
       }
     }
-  UnexposedFrame &= !NeedsNativeArguments || NativeArgumentsNonFrame;
+  UnexposedFrame &= NativeArgumentsNonFrame;
   const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
     if (!UnexposedFrame)
       return false;

@@ -101,11 +101,22 @@ bool isRenamedEntryLiveInCopy(const MedOp &Op, uint64_t RegOff);
 /// (MedCallingConvX86.cpp).
 bool liveInOnlyFeedsScratch(const MedFunc &Func, uint64_t ParamRegOff);
 
+/// liveInOnlyFeedsScratch where a return reads no register, as one does
+/// under Go's stack ABI: `movb (si), al` keeps RAX's upper bytes, which only
+/// memmove's return reads.
+bool liveInOnlyFeedsScratchOrReturns(const MedFunc &Func, uint64_t ParamRegOff);
+
 /// Whether \p RegOff's incoming value reaches a use other than being pushed
 /// or returned (MedCallingConvX86.cpp): a push that only reserves a stack
 /// slot stores the register without reading it as a value, and a return
 /// reads the return register whatever the function returns.
 bool liveInReachesNonPushUse(const MedFunc &Func, uint64_t RegOff);
+
+/// Whether \p RegOff's incoming value reaches an operation whose effect or
+/// result the function goes on to use, other than a push or a return
+/// (MedCallingConvX86.cpp): Go's nil check `testb al, (reg)` reads AL only to
+/// set flags nothing reads.
+bool liveInReachesLiveUse(const MedFunc &Func, uint64_t RegOff);
 
 /// Remove the store of a prologue's `push ecx` that only makes room for a local
 /// the function writes before it reads, and the register's live-in if nothing

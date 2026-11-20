@@ -107,6 +107,9 @@ int main(void) {
       "-O1",
       "-fsanitize=undefined",
       "-fsanitize-trap=undefined",
+#ifdef _WIN32
+      "--rtlib=compiler-rt",
+#endif
       Input,
       "-o",
       Output};
@@ -228,6 +231,9 @@ int main(void) {
         Optimization,
         "-fsanitize=undefined",
         "-fsanitize-trap=undefined",
+#ifdef _WIN32
+        "--rtlib=compiler-rt",
+#endif
         Input,
         "-o",
         Output};

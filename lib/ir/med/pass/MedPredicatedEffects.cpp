@@ -163,6 +163,7 @@ void LowToMedConverter::materializePredicatedEffects(MedFunc &Func,
           ExistingSkip ? *ExistingSkip : getOrCreateExit(SkipAddress);
 
       MedBlock EffectBlock;
+      EffectBlock.Role = MedBlockRole::PredicatedEffect;
       EffectBlock.StartAddr = Guard.Addr;
       EffectBlock.EndAddr = GuardBlock.EndAddr;
       EffectBlock.ExceptionalSuccs = std::move(GuardBlock.ExceptionalSuccs);

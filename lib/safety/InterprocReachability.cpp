@@ -123,7 +123,7 @@ ReachableCallInventory reachableCalls(const MedFunc &Function) {
   const MedBlock *Entry = nullptr;
   for (const auto &[Id, Block] : Blocks) {
     (void)Id;
-    if (Block->StartAddr != Function.Entry)
+    if (!Block->isFunctionEntry(Function.Entry))
       continue;
     if (Entry) {
       Result.Complete = false;

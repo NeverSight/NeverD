@@ -352,12 +352,17 @@ TEST_P(LinuxNetwork, StreamEventsKeepOrderingPartialReadsErrorsAndExplicitEOF) {
   C.ReceiveEvents = {{{}, 4, 0}, {{7, 8, 9}, 0, 3}, {{}, 11, 3}, {{10}, 0, 3}};
   const auto FD = open();
   EXPECT_EQ(call(ServiceKind::Connect, FD, Base, 16), 0u);
+  const auto Alias = call(ServiceKind::Dup, FD).value();
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, 3), uint64_t(-4));
   EXPECT_FALSE(call(ServiceKind::Read, FD, Base + 128, 3));
   const uint8_t Send[] = {1, 2, 3};
   llvm::cantFail(cpu().write(Base + 64, Send));
   EXPECT_EQ(call(ServiceKind::Write, FD, Base + 64, 3), 2u);
-  EXPECT_FALSE(call(ServiceKind::Read, FD, Base + 128, 3));
+  EXPECT_FALSE(call(ServiceKind::Read, Alias, Base + 128, 3));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 2, receive events consumed 1/4, "
+                               "receive_events[1].after_send=3");
   EXPECT_EQ(call(ServiceKind::Write, FD, Base + 66, 1), 1u);
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 128, 3), 2u);
   EXPECT_EQ(call(ServiceKind::Read, FD, Base + 130, 3), 1u);

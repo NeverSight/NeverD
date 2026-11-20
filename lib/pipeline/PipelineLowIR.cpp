@@ -5082,6 +5082,40 @@ bool computeCallRegisterEffects(
       }
     }
   }
+  // A Go stub the loader lists as never returning stays out of the
+  // discovery above (LocalRegisterEffect::NoReturnCallees), so no summary
+  // names its registers.  Its callers still bind them, in its order
+  // (goRegisterStubArguments); nothing else of its body enters the solve.
+  std::map<va_t, FixedIntegerCallArguments> ListedGoStubs;
+  if (!SummarizeAArch64Calls && Img.ExceptionMetadata.GoModule &&
+      Img.ExceptionMetadata.GoModule->StackArguments) {
+    std::set<va_t> Listed;
+    for (const auto &[Caller, Effect] : Effects)
+      for (const RegisterBlock &Block : Effect->Blocks)
+        for (const RegisterStep &Step : Block.Steps)
+          if (Step.Exits && Step.Callee != InvalidVA &&
+              !Effects.count(Step.Callee) &&
+              goTakesStackArguments(Img, Step.Callee))
+            Listed.insert(Step.Callee);
+    std::optional<Decoder> ListedDec;
+    for (const va_t Entry : Listed) {
+      const std::shared_ptr<const CallRegisterBody> Cached =
+          CFGBuilder::cachedCallRegisterBody(
+              X87Graphs, Img, Entry, &FuncEntries, &NoReturnTargets,
+              &NoReturnCallees, &AbsoluteRelocationRoots, CodeOwnerIndex);
+      LowFunc Built;
+      if (!Cached) {
+        if (!ListedDec && !ListedDec.emplace().init(Img))
+          break;
+        Built = BuildCallee(*ListedDec, Entry);
+      }
+      const CallRegisterBodyView Body =
+          Cached ? CallRegisterBodyView(*Cached) : CallRegisterBodyView(Built);
+      if (std::optional<FixedIntegerCallArguments> Stub =
+              goRegisterStubArguments(Img, Entry, Body.Blocks))
+        ListedGoStubs.emplace(Entry, std::move(*Stub));
+    }
+  }
   if (SummarizeAArch64Calls) {
     // X0-X15 are caller-saved. The x86 volatile set omits X3-X5 and X12-X15,
     // so reusing it would report a call as preserving those registers. V0-V7
@@ -5093,6 +5127,13 @@ bool computeCallRegisterEffects(
         Effects, Volatile, /*ArgumentFamilies=*/0, {}, {}, {});
     Result.CallMayWriteGPRs = std::move(Summaries.MayWrite);
     Result.CallBodyMayWriteGPRs = std::move(Summaries.BodyMayWrite);
+    // The setup of a call gives it its arguments by position, which a
+    // storing write barrier's X2 and X3 are not: its callers bind them, in
+    // its order (LocalRegisterEffect::GoFixedArguments).
+    for (const auto &[Entry, Effect] : Effects)
+      if (Effect->GoFixedArguments)
+        Result.CallEntryIntegerArguments.mutate().try_emplace(
+            Entry, *Effect->GoFixedArguments);
     return true;
   }
   auto Family = [](uint64_t RegOff) {
@@ -5241,6 +5282,14 @@ bool computeCallRegisterEffects(
         Change(Effect->second)->StackArgs = Count;
     Result.CallFloatReturns = std::move(Prototyped.FloatReturns);
     Result.CallEntryFloatingArguments = std::move(Prototyped.FloatingArguments);
+    // The callers of a Go stub or a storing write barrier bind its operands,
+    // in its order (LocalRegisterEffect::GoFixedArguments).
+    for (const auto &[Entry, Effect] : Effects)
+      if (Effect->GoFixedArguments)
+        FixedEntryIntegerArguments.try_emplace(Entry,
+                                               *Effect->GoFixedArguments);
+    for (auto &[Entry, Stub] : ListedGoStubs)
+      FixedEntryIntegerArguments.try_emplace(Entry, std::move(Stub));
     Result.CallEntryIntegerArguments = std::move(FixedEntryIntegerArguments);
     Result.CallEntryIntegerArguments.mutate().merge(
         Prototyped.IntegerArguments);

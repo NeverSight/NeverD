@@ -34,11 +34,13 @@ ASYNC_FRAME_VALUE(int, kUnavailableCode, 2)
 ASYNC_FRAME_TEXT(kOldCompanion, "old.S")
 ASYNC_FRAME_TEXT(kNewCompanion, "new.S")
 ASYNC_FRAME_TEXT(kMapping, "companion")
+ASYNC_FRAME_TEXT(kLanguageMapping, "language_companion")
 ASYNC_FRAME_TEXT(kStagesMapping, "stages")
 ASYNC_FRAME_TEXT(kExplicit, "-DNEVERD_TEST_EXPLICIT_RA")
 ASYNC_FRAME_TEXT(kOriginalRows, "original_signal_rows")
 ASYNC_FRAME_TEXT(kPublishedRows, "published_signal_rows")
 ASYNC_FRAME_TEXT(kCompanionName, "_companion")
+ASYNC_FRAME_TEXT(kLanguageCompanionName, "_language_companion")
 ASYNC_FRAME_VALUE(unsigned, kOldValue, 3)
 ASYNC_FRAME_VALUE(unsigned, kNewValue, 29)
 ASYNC_FRAME_TEXT(kDriver, "driver")
@@ -50,10 +52,22 @@ ASYNC_FRAME_TEXT(kEntryRules, "entry.rules")
 ASYNC_FRAME_TEXT(kEntrySamples, "entry.samples")
 ASYNC_FRAME_TEXT(kEntryMode, "entry")
 ASYNC_FRAME_TEXT(kRawEntryMode, "raw-entry")
+ASYNC_FRAME_TEXT(kCompactEntryMode, "raw-compact-entry")
+ASYNC_FRAME_TEXT(kLanguageEntryMode, "raw-language-entry")
+ASYNC_FRAME_TEXT(kAlternateStack, "alternate-stack")
+ASYNC_FRAME_TEXT(kAlternateEntryWalks, "native_alternate_stack_table_walks")
+ASYNC_FRAME_TEXT(kAlternateHandlerVisits,
+                 "native_alternate_handler_entry_visits")
+ASYNC_FRAME_TEXT(kAlternateHandlerSP, "native_alternate_handler_sp_matches")
+ASYNC_FRAME_TEXT(kCompactOldEntry, "native_old_entry_original_compact_step")
+ASYNC_FRAME_TEXT(kLanguageOldEntry,
+                 "native_old_entry_original_compact_lsda_step")
 ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
 ASYNC_FRAME_TEXT(kEntryLookupOffset, "native_old_entry_fde_lookup_offset")
+ASYNC_FRAME_TEXT(kAutomaticEntryWalks,
+                 "native_automatic_original_table_entry_walks")
 ASYNC_FRAME_TEXT(kExactEntryStep, "native_old_entry_original_fde_step")
 ASYNC_FRAME_TEXT(kEntrySteps, "native_old_entry_system_steps")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
@@ -399,6 +413,18 @@ _companion:
  mov w0, #3
  ret
 .cfi_endproc
+.globl _language_companion
+.p2align 2
+_language_companion:
+.cfi_startproc
+.cfi_personality 155, ___gxx_personality_v0
+.cfi_lsda 16, Lcompanion_lsda
+ mov w0, #3
+ ret
+.cfi_endproc
+.section __TEXT,__gcc_except_tab
+Lcompanion_lsda:
+ .byte 0xff, 0xff, 0x01, 0x00
 .subsections_via_symbols
 )asm")
 ASYNC_FRAME_TEXT(kReplacementCompanion, R"asm(
@@ -411,6 +437,13 @@ _companion:
  pacibsp
  mov w0, #29
  retab
+.cfi_endproc
+.globl _language_companion
+.p2align 2
+_language_companion:
+.cfi_startproc
+ mov w0, #29
+ ret
 .cfi_endproc
 .subsections_via_symbols
 )asm")
@@ -429,6 +462,8 @@ _invoke_stages:
 .cfi_def_cfa x29, 16
   str x19, [sp,#-16]!
 .cfi_offset x19,-32
+  // The callback and optional completion flag survive every authenticated call.
+  stp x0, x2, [sp,#-16]!
   mov x19,#0x5a19
   adr x2, Lreturn_site
   mov w5, #8
@@ -454,8 +489,17 @@ Lcall:
   stlr x19, [x7]
   mov x16, x0
   mov x0, x1
+Linvoke:
   blraaz x16
 Lreturn_site:
+  ldur x9, [x29,#-24]
+  cbz x9, Lfinish
+  ldar w9, [x9]
+  cbnz w9, Lfinish
+  ldur x16, [x29,#-32]
+  mov x0, xzr
+  b Linvoke
+Lfinish:
   ldur x19, [x29,#-16]
 .cfi_restore x19
   mov sp, x29
@@ -480,6 +524,7 @@ _call_outer:
 .cfi_offset x30,-8
   mov x29,sp
 .cfi_def_cfa x29,16
+  mov x6,x2
   adr x2,Louter_return
   mov w5,#8
 Lchoose_outer_sp:
@@ -495,6 +540,7 @@ Lchoose_outer_sp:
 Lno_outer_signature:
   brk #0
 Lcall_inner:
+  mov x2,x6
   bl _invoke_stages
 Louter_return:
   mov sp,x29
@@ -536,15 +582,16 @@ struct sample {
   int stack_matches;
 };
 typedef void (*entry)(struct handshake *);
-extern void call_outer(entry, struct handshake *);
+extern void call_outer(entry, struct handshake *, const _Atomic int *);
 extern uintptr_t outer_return_address(void);
 extern uintptr_t return_address(void);
 _Atomic uintptr_t stage_entry_sp, incoming_x19;
 static struct handshake state;
 static struct sample samples[stages_count];
 static pthread_t worker;
-static int entry_only, raw_entry, visits_entry, exact_entry, raw_sp;
+static int entry_only, raw_entry, compact_entry, visits_entry, exact_entry, raw_sp;
 static unsigned lookup_offset;
+static stack_t alternate_stack;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
   uintptr_t offset, depth;
@@ -628,10 +675,22 @@ static void raw_entry_walk(const ucontext_t *uc) {
   }
   raw_sp = check_raw_caller(&cursor, sp);
 
+  const uint32_t mode = compact_entry ? UNWIND_ARM64_MODE_FRAMELESS : UNWIND_ARM64_MODE_DWARF;
+  const uint32_t other = compact_entry ? UNWIND_ARM64_MODE_DWARF : UNWIND_ARM64_MODE_FRAMELESS;
   if (arm_thread_state64_get_lr(*regs) != expected_return ||
+      ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, other, &lookup_offset) ||
       ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner + NDArm64eInstructionAlignment, &lookup_offset) ||
-      !ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner, &lookup_offset) ||
+      !ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, mode, &lookup_offset) ||
       raw_pc(&cursor) != owner + lookup_offset)
+    _exit(35);
+  const unsigned explicit_offset = lookup_offset;
+  ucontext_t incomplete = *uc;
+  incomplete.uc_mcsize = 0;
+  if (ndDarwinArm64eInitInterruptedEntryCursor(&cursor, &incomplete, &lookup_offset))
+    _exit(35);
+  if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp) ||
+      !ndDarwinArm64eInitInterruptedEntryCursor(&cursor, uc, &lookup_offset) ||
+      lookup_offset != explicit_offset || raw_pc(&cursor) != owner + lookup_offset)
     _exit(35);
   for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
     unw_fpreg_t value;
@@ -651,6 +710,15 @@ static void observe(int signal, siginfo_t *info, void *context) {
   if (entry_only && (pc != owner || atomic_load(&state.done)))
     return;
   if (raw_entry) {
+    if (alternate_stack.ss_sp) {
+      const uintptr_t base = (uintptr_t)alternate_stack.ss_sp;
+      const uintptr_t handler_address = (uintptr_t)&context;
+      const uintptr_t interrupted_sp = arm_thread_state64_get_sp(*regs);
+      if (handler_address - base >= alternate_stack.ss_size ||
+          interrupted_sp - base < alternate_stack.ss_size ||
+          interrupted_sp < stack_low || interrupted_sp >= stack_high)
+        _exit(39);
+    }
     if (signal != SIGUSR1)
       _exit(38);
     raw_entry_walk(uc);
@@ -791,7 +859,13 @@ static void *interrupt_worker(void *arg) {
 }
 
 int main(int argc, char **argv) {
-  raw_entry = argc == 7 && !strcmp(argv[6], "raw-entry");
+  const int alternate = argc == 8 && !strcmp(argv[7], "alternate-stack");
+  if (alternate)
+    --argc;
+  const int language_entry = argc == 7 && !strcmp(argv[6], "raw-language-entry");
+  const char *companion_name = language_entry ? "language_companion" : "companion";
+  compact_entry = language_entry || (argc == 7 && !strcmp(argv[6], "raw-compact-entry"));
+  raw_entry = compact_entry || (argc == 7 && !strcmp(argv[6], "raw-entry"));
   entry_only = raw_entry || (argc == 7 && !strcmp(argv[6], "entry"));
   if ((!entry_only && argc != 6) || (!raw_entry && !read_rules(argv[5])))
     return 1;
@@ -799,13 +873,13 @@ int main(int argc, char **argv) {
   void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
   if (!image)
     return 2;
-  entry run = (entry)dlsym(image, "stages");
+  entry run = (entry)dlsym(image, compact_entry ? companion_name : "stages");
   if (!run)
     return 3;
   const uintptr_t public_entry = (uintptr_t)ptrauth_strip(
       run, ptrauth_key_function_pointer);
   typedef unsigned (*companion_fn)(void);
-  companion_fn companion = (companion_fn)dlsym(image, "companion");
+  companion_fn companion = (companion_fn)dlsym(image, companion_name);
   if (!companion || companion() != strtoul(argv[3], NULL, 10))
     return 9;
   owner = public_entry + strtoull(argv[2], NULL, 10);
@@ -815,20 +889,31 @@ int main(int argc, char **argv) {
   expected_return = return_address();
   expected_outer = outer_return_address();
   struct sigaction action = {.sa_sigaction = observe, .sa_flags = SA_SIGINFO};
+  if (alternate) {
+    alternate_stack.ss_size = SIGSTKSZ;
+    alternate_stack.ss_sp = malloc(alternate_stack.ss_size);
+    if (!alternate_stack.ss_sp || sigaltstack(&alternate_stack, NULL))
+      return 4;
+    action.sa_flags |= SA_ONSTACK;
+  }
   sigemptyset(&action.sa_mask);
   if (sigaction(SIGUSR1, &action, NULL))
     return 4;
   pthread_t monitor;
   if (pthread_create(&monitor, NULL, interrupt_worker, NULL))
     return 5;
-  if (entry_only) {
-    while (!atomic_load(&state.done))
-      call_outer(run, NULL);
-  } else {
-    call_outer(run, &state);
-  }
+  // Sample the real entry from one pair of signed caller frames. The saved
+  // registers, incoming SP and observed return PCs stay constant across calls.
+  call_outer(run, entry_only ? NULL : &state, entry_only ? &state.done : NULL);
   if (pthread_join(monitor, NULL))
     return 6;
+  if (alternate) {
+    // Darwin validates the registered size when disabling the alternate stack.
+    alternate_stack.ss_flags = SS_DISABLE;
+    if (sigaltstack(&alternate_stack, NULL))
+      return 4;
+    free(alternate_stack.ss_sp);
+  }
   FILE *out = fopen(argv[4], "w");
   if (!out)
     return 7;

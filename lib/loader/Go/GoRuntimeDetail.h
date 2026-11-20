@@ -270,6 +270,10 @@ struct RawFunc {
   va_t RecordVA = 0;
   uint64_t EntryOffset = 0;
   int32_t NameOffset = 0;
+  /// `_func.args`: the bytes of arguments and results the caller's frame
+  /// holds for the function, or ArgsSizeUnknown for an assembly routine
+  /// declared without them.
+  int32_t Args = 0;
   uint32_t DeferReturn = 0;
   uint32_t PcSP = 0;
   uint32_t PCDataCount = 0;

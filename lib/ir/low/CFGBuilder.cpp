@@ -3012,6 +3012,25 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
         break;
       }
 
+      // A call to a routine that returns to its caller's caller is the
+      // caller's last act, a tail call (goCallReturnsPastCaller): the next
+      // instruction is another entry the call never comes back to, as each
+      // of Go's 2,000 Windows callback entries is.
+      if (Saved.IsCall && !Saved.IsCond && !Saved.IsRet && !Saved.IsIndirect) {
+        va_t Target = InvalidVA;
+        for (const auto &Op : Saved.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+              Op.Inputs[0].isConst()) {
+            Target = Op.Inputs[0].Offset;
+            break;
+          }
+        if (Target != InvalidVA && goCallReturnsPastCaller(Img, Target)) {
+          Saved.BranchTarget = Target;
+          rewriteAsTailCall(Saved);
+          break;
+        }
+      }
+
       // An unconditional call to a no-return libc function (longjmp / abort /
       // exit / ...), direct or through the import slot the loader binds, is a
       // control-flow terminator.  At -O2 the compiler emits nothing after it,

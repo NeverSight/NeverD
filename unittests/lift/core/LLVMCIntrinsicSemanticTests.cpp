@@ -1997,8 +1997,12 @@ int main(void) {
           "_Float16 h(_Float16 a) { return __builtin_elementwise_sqrt(a); }\n",
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  const bool Windows =
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   for (llvm::StringRef Optimization : {"-O0", "-O2"})
-    compileAndCheck(Source, false, {}, Optimization, false, {}, {"-lm"});
+    compileAndCheck(Source, false, {}, Optimization, false, {},
+                    Windows ? llvm::ArrayRef<llvm::StringRef>{}
+                            : llvm::ArrayRef<llvm::StringRef>{"-lm"});
 }
 
 TEST(LLVMCIntrinsicSemantics, AnUnknownOperandOfATypeGenericBuiltinHasItsType) {
@@ -2044,8 +2048,11 @@ define float @least_of_one(float %a) {
           "float f(float a) { return __builtin_elementwise_minimum(a, a); }\n",
           {}))
     GTEST_SKIP() << "this Clang lacks the elementwise builtins the C spells";
+  const bool Windows =
+      llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows();
   compileAndCheck(Text + "\nint main(void) { return 0; }\n", false, {}, "-O1",
-                  false, {}, {"-lm"});
+                  false, {}, Windows ? llvm::ArrayRef<llvm::StringRef>{}
+                                     : llvm::ArrayRef<llvm::StringRef>{"-lm"});
 }
 
 TEST(LLVMCIntrinsicSemantics,

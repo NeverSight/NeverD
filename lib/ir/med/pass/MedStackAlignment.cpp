@@ -1410,7 +1410,7 @@ integerReturnRange(const MedFunc &Func, const LowFunc &Source,
         Block.Ops.empty() || !Block.ExceptionalPreds.empty() ||
         !Block.ExceptionalSuccs.empty() || !Blocks.insert(Block.Id).second)
       return std::nullopt;
-    if (Block.StartAddr == Func.Entry) {
+    if (Block.isFunctionEntry(Func.Entry)) {
       if (HasEntry || !Block.Preds.empty())
         return std::nullopt;
       HasEntry = true;
@@ -1474,7 +1474,7 @@ std::vector<MedVar> entryStackRealignmentRoots(const MedFunc &Func,
                                                BinaryFormat Format) {
   const MedBlock *Entry = nullptr;
   for (const auto &Block : Func.Blocks)
-    if (Block.StartAddr == Func.Entry) {
+    if (Block.isFunctionEntry(Func.Entry)) {
       if (Entry)
         return {};
       Entry = &Block;

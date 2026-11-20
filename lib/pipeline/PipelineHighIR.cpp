@@ -23,6 +23,7 @@
 #include "neverd/ir/NdTypes.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/high/MedToHigh.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/ImportCallee.h"
 #include "neverd/ir/low/SourceFrameBytes.h"
 #include "neverd/ir/low/SourceImageBytes.h"
@@ -225,7 +226,35 @@ void Pipeline::prepareSourceMedIR(const BinaryImage &Img,
           });
         });
       });
-  if (SetupArguments || HasIndirectCalls) {
+  // Before Go's internal ABI a call passes its arguments on the stack, as
+  // call recovery reads them (MedFunc::StackArgumentsOnly) and the HighIR
+  // collection does not: a run of one Go function takes them so too, as a
+  // run of the whole image does.  Under the internal ABI a call to Go
+  // assembly does that takes none of Go's argument registers (ABI0).
+  const auto &Go = Img.ExceptionMetadata.GoModule;
+  const auto ABI0Callee = [&](va_t Callee) {
+    if (!goTakesStackArguments(Img, Callee))
+      return false;
+    const auto Summary = Result.CallEntryReadGPRs.find(Callee);
+    return Summary == Result.CallEntryReadGPRs.end() ||
+           llvm::none_of(goIntegerArgumentRegisters(Img.Arch),
+                         [&](uint64_t Register) {
+                           return Summary->second[Register / 8] != 0;
+                         });
+  };
+  const bool GoStackArguments =
+      Go && (Go->StackArguments ||
+             (Go->RegisterArguments &&
+              llvm::any_of(Result.MedFuncs, [&](const MedFunc &F) {
+                return llvm::any_of(F.Blocks, [&](const MedBlock &B) {
+                  return llvm::any_of(B.Ops, [&](const MedOp &Op) {
+                    return Op.Opcode == NdOp::CALL && Op.NumInputs &&
+                           Op.Inputs[0].isConst() &&
+                           ABI0Callee(Op.Inputs[0].ConstVal);
+                  });
+                });
+              })));
+  if (SetupArguments || HasIndirectCalls || GoStackArguments) {
     recoverModuleCallAbi(Img, Result, AllFuncNames,
                          /*SourceDeclarations=*/false,
                          /*SourceParameterReads=*/true);

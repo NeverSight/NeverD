@@ -90,20 +90,19 @@ _Unwind_Reason_Code ndDarwinArm64eLiveLRPersonality(
   return Result;
 }
 
-/// Open the original indexed FDE for stack inspection at a known function
-/// entry. The kernel stopped before its first instruction, with incoming SP
-/// and live unsigned LR. Only the system unwinder interprets the frame.
-/// LookupOffset identifies the byte used for lookup in that first instruction.
-/// A false result leaves the output cursor unsuitable for use.
-static inline bool
-ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
-                                     const ucontext_t *Context, uintptr_t Entry,
-                                     unsigned *LookupOffset) {
-  if (!System || !Context || !Context->uc_mcontext || !LookupOffset || !Entry ||
-      Entry % NDArm64eInstructionAlignment)
+/// Initialize from the kernel's state before the first instruction. A null
+/// RequiredMode selects the recipe from Darwin's registered table.
+static inline bool ndDarwinArm64eInitRegisteredEntry(
+    unw_cursor_t *System, const ucontext_t *Context,
+    const uintptr_t *RequiredEntry, const uint32_t *RequiredMode,
+    unsigned *LookupOffset) {
+  if (!System || !Context || !Context->uc_mcontext ||
+      Context->uc_mcsize != sizeof(*Context->uc_mcontext) || !LookupOffset)
     return false;
   const arm_thread_state64_t *Regs = &Context->uc_mcontext->__ss;
-  if (arm_thread_state64_get_pc(*Regs) != Entry)
+  const uintptr_t Entry = arm_thread_state64_get_pc(*Regs);
+  if (!Entry || Entry % NDArm64eInstructionAlignment ||
+      (RequiredEntry && Entry != *RequiredEntry))
     return false;
   const uintptr_t SP = arm_thread_state64_get_sp(*Regs);
   const uintptr_t LR = arm_thread_state64_get_lr(*Regs);
@@ -138,12 +137,25 @@ ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
         (void *)(Entry + Offset), ptrauth_key_return_address, SP);
     unw_proc_info_t Info;
     if (unw_set_reg(System, UNW_REG_IP, IP) ||
-        unw_set_reg(System, UNW_REG_SP, SP) ||
-        unw_get_proc_info(System, &Info) || Info.start_ip != Entry ||
-        Info.end_ip <= Entry ||
-        Info.end_ip - Entry < NDArm64eInstructionAlignment ||
-        (Info.format & UNWIND_ARM64_MODE_MASK) != UNWIND_ARM64_MODE_DWARF)
+        unw_set_reg(System, UNW_REG_SP, SP) || unw_get_proc_info(System, &Info))
       return false;
+    const uint32_t Mode = Info.format & UNWIND_ARM64_MODE_MASK;
+    if (Info.start_ip != Entry || Info.end_ip <= Entry ||
+        Info.end_ip - Entry < NDArm64eInstructionAlignment ||
+        (RequiredMode && Mode != *RequiredMode) ||
+        (Mode != UNWIND_ARM64_MODE_DWARF &&
+         Mode != UNWIND_ARM64_MODE_FRAMELESS))
+      return false;
+    // The personality index and LSDA flag select language metadata. The
+    // remaining bits must describe a function start with live LR, no saved
+    // registers and no stack adjustment at the interrupted instruction.
+    if (Mode == UNWIND_ARM64_MODE_FRAMELESS) {
+      if ((Info.format & ~(UNWIND_PERSONALITY_MASK | UNWIND_HAS_LSDA)) !=
+          UNWIND_ARM64_MODE_FRAMELESS)
+        return false;
+      *LookupOffset = Offset;
+      return true;
+    }
     if (Info.unwind_info && Info.unwind_info_size) {
       *LookupOffset = Offset;
       return true;
@@ -154,6 +166,35 @@ ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
       return false;
   }
   return false;
+}
+
+/// Use the interrupted PC and the system's original table to select the entry
+/// row. On failure discard the cursor. LookupOffset is written on success.
+static inline bool ndDarwinArm64eInitInterruptedEntryCursor(
+    unw_cursor_t *System, const ucontext_t *Context, unsigned *LookupOffset) {
+  return ndDarwinArm64eInitRegisteredEntry(System, Context, NULL, NULL,
+                                           LookupOffset);
+}
+
+/// Require the original system table to have a specific recipe at Entry.
+static inline bool ndDarwinArm64eInitTableEntryCursor(unw_cursor_t *System,
+                                                      const ucontext_t *Context,
+                                                      uintptr_t Entry,
+                                                      uint32_t Mode,
+                                                      unsigned *LookupOffset) {
+  if (Mode != UNWIND_ARM64_MODE_DWARF && Mode != UNWIND_ARM64_MODE_FRAMELESS)
+    return false;
+  return ndDarwinArm64eInitRegisteredEntry(System, Context, &Entry, &Mode,
+                                           LookupOffset);
+}
+
+/// Use the original indexed FDE at an interrupted function entry.
+static inline bool
+ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
+                                     const ucontext_t *Context, uintptr_t Entry,
+                                     unsigned *LookupOffset) {
+  return ndDarwinArm64eInitTableEntryCursor(
+      System, Context, Entry, UNWIND_ARM64_MODE_DWARF, LookupOffset);
 }
 
 // Recover from the interrupted stack before changing either native consumer.

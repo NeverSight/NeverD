@@ -156,9 +156,9 @@ private:
   };
   struct ReadinessFailure {
     const char *Reason = nullptr;
-    // Static interest name and bound contract index for unknown TCP readiness.
+    // Each wait consumes its observation before any guest execution resumes.
+    const OpenSocket *TCPSocket = nullptr;
     const char *TCPInterest = nullptr;
-    size_t ConnectionIndex = 0;
     explicit operator bool() const { return Reason != nullptr; }
     std::optional<uint64_t> stop(ProcessResult &Result) const;
   };

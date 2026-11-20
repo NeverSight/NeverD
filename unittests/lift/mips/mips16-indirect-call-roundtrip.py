@@ -24,6 +24,7 @@ spec.loader.exec_module(views)
 VALUE = """typedef unsigned int u32;
 typedef unsigned long long u64;
 typedef union { u64 u; double d; } bits;
+typedef union { u32 u; float f; } fbits;
 """
 FIXED_TARGET = "double target(double value) { return value; }"
 VAR_TARGET = """
@@ -38,9 +39,31 @@ double target(unsigned which, ...) {
 """
 
 
-def caller(variadic):
-    arguments = "unsigned, ..." if variadic else "double"
-    call = "fn(which, a.d, b.d)" if variadic else "fn(a.d)"
+NAMED_FLOAT_TARGET = VALUE + """
+double target(float lead, unsigned key, ...) {
+  __builtin_va_list ap;
+  __builtin_va_start(ap, key);
+  bits value = { .d = __builtin_va_arg(ap, double) };
+  unsigned tail = __builtin_va_arg(ap, unsigned);
+  __builtin_va_end(ap);
+  fbits first = { .f = lead };
+  value.u ^= ((u64)first.u << 32) ^ tail ^ (key << 4);
+  return value.d;
+}
+"""
+
+# Source prototype, call expression, independent callee and promoted types.
+CALLS = {
+    "fixed": ("double", "fn(a.d)", FIXED_TARGET, ()),
+    "variadic": ("unsigned, ...", "fn(which, a.d, b.d)", VAR_TARGET, ("double", "double")),
+    "variadic-named-float": (
+        "float, unsigned, ...",
+        "fn(((fbits){ .u = hi }).f, which + 7u, b.d, which ^ 0x49c18265u)",
+        NAMED_FLOAT_TARGET, ("double", "unsigned")),
+}
+
+
+def caller(arguments, call):
     return VALUE + f"""
 u32 kernel(double (*fn)({arguments}), u32 hi, u32 lo, u32 which) {{
   bits a = {{ .u = ((u64)hi << 32) | lo }};
@@ -51,7 +74,7 @@ u32 kernel(double (*fn)({arguments}), u32 hi, u32 lo, u32 which) {{
 """
 
 
-def observe(path, little, fp64, compressed, variadic):
+def observe(path, little, fp64, compressed, layout):
     cpu, entry = roundtrip.emulator(path, 32, little, "kernel",
                                     cpu_model=mips.UC_CPU_MIPS32_74KF)
     cpu.reg_write(mips.UC_MIPS_REG_CP0_STATUS,
@@ -71,7 +94,12 @@ def observe(path, little, fp64, compressed, variadic):
             cpu.reg_write(mips.UC_MIPS_REG_SP, roundtrip.STACK)
             cpu.reg_write(mips.UC_MIPS_REG_RA, roundtrip.STOP)
             cpu.emu_start(entry, roundtrip.STOP + 4, count=10000)
-            high, low = (lo, hi ^ 0x13572468) if variadic and not which else (hi, lo)
+            high, low = hi, lo
+            if layout == "variadic" and not which:
+                high, low = lo, hi ^ 0x13572468
+            elif layout == "variadic-named-float":
+                high = lo ^ hi
+                low = hi ^ 0x13572468 ^ which ^ 0x49c18265 ^ ((which + 7) << 4)
             value = cpu.reg_read(mips.UC_MIPS_REG_V0)
             assert value == (low ^ (high >> 3)), (hi, lo, which, value)
             assert cpu.reg_read(mips.UC_MIPS_REG_V1) == 0x51
@@ -115,11 +143,11 @@ def run(args, artifacts):
             command([args.assembler, "-mabi=32", "-march=mips32r2", fp, endian,
                      asm, "-o", runtime])
             artifacts.discard(asm)
-            for variadic in (False, True):
-                original_caller = compile_c(caller(variadic), "caller", True)
+            for layout in args.layout or CALLS:
+                arguments, call, target_source, promoted = CALLS[layout]
+                original_caller = compile_c(caller(arguments, call), "caller", True)
                 for compressed in (False, True):
-                    callee = compile_c(VAR_TARGET if variadic else FIXED_TARGET,
-                                       "callee", compressed)
+                    callee = compile_c(target_source, "callee", compressed)
                     def link(obj, name):
                         elf = work / name
                         command([args.ld, "-m", "elf32ltsmip" if little else "elf32btsmip",
@@ -127,9 +155,9 @@ def run(args, artifacts):
                                  "-o", elf])
                         return elf
                     elf = link(original_caller, "original.elf")
-                    profile = dict(little=little, fp64=fp64, variadic=variadic,
+                    profile = dict(little=little, fp64=fp64, layout=layout, variadic=bool(promoted),
                                    compressed_target=compressed)
-                    values = observe(elf, little, fp64, compressed, variadic)
+                    values = observe(elf, little, fp64, compressed, layout)
                     evidence.append(dict(**profile, route="original", elf=digest(elf),
                                          values=values))
                     artifacts.write("observations.json", evidence)
@@ -137,16 +165,14 @@ def run(args, artifacts):
                         symbol, = ELFFile(io.BytesIO(elf.read_bytes())).get_section_by_name(
                             ".symtab").get_symbol_by_name("kernel")
                         for route in ("c", "llvmc"):
-                            declaration = ("double target(unsigned, ...);" if variadic else
-                                           "double target(double);")
-                            source = sdk.source(elf, route, declaration,
-                                                ["double", "double"] if variadic else [],
+                            declaration = f"double target({arguments});"
+                            source = sdk.source(elf, route, declaration, promoted,
                                                 False, entry=symbol["st_value"] & ~1)
                             obj = compile_c(source, "rebuilt", True)
                             rebuilt = link(obj, "rebuilt.elf")
                             artifacts.write("current.json", dict(**profile, route=route,
                                             image=digest(rebuilt), original=digest(elf)))
-                            result = observe(rebuilt, little, fp64, compressed, variadic)
+                            result = observe(rebuilt, little, fp64, compressed, layout)
                             assert result == values
                             evidence.append(dict(**profile, route=route, values=result))
                             artifacts.write("observations.json", evidence)
@@ -162,6 +188,7 @@ if __name__ == "__main__":
     for name in ("gcc", "clang", "assembler", "ld", "runtime", "output"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--sdk", type=Path)
+    parser.add_argument("--layout", action="append", choices=CALLS)
     args = parser.parse_args()
     with MIPSValidationArtifacts(args.output, "mips16-indirect-call",
                                  (args.gcc, args.clang, args.assembler, args.ld,

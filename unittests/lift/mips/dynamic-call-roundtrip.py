@@ -49,11 +49,22 @@ def rebuilt_storage(source, rebuilt_symbols, address, width, fallback):
 
 
 def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
-                 provider, companions, callbacks, little, values, results, linker):
+                 provider, companions, callbacks, little, values, results, linker, form):
     work = artifacts.work
-    name = profile + "-import"
+    name = profile + "-import" + ("" if form == "direct" else "-" + form)
     obj, shared = work / (name + ".o"), work / (name + ".so")
-    command([args.clang, *original_flags, "-c", Path(__file__).with_name("pic-import.S"),
+    fixture = "pic-guarded-import.c" if form == "guarded" else "pic-import.S"
+    flags = {
+        "direct": [], "guarded": [], "saved": ["-DSAVED_ENTRY"],
+        "likely-taken": ["-DSAVED_ENTRY", "-DLIKELY_TAKEN"],
+        "likely-skipped": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED"],
+        "likely-join": ["-DSAVED_ENTRY", "-DLIKELY_JOIN"],
+        "loop": ["-DSAVED_ENTRY", "-DENTRY_LOOP"],
+        "entry-loop": ["-DENTRY_HEADER"],
+        "slot-setup": ["-DSLOT_SETUP"],
+        "slot-barrier": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED", "-DSLOT_BARRIER"],
+    }[form]
+    command([args.clang, *original_flags, "-O2", *flags, "-c", Path(__file__).with_name(fixture),
              "-o", obj], name + "-compile")
     command([*linker, "-shared", obj, *companions, "-o", shared], name + "-link")
     artifacts.discard(obj)
@@ -64,14 +75,15 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     dyn = {entry.entry.d_tag: entry.entry.d_val
            for entry in elf.get_section_by_name(".dynamic").iter_tags()}
     syms = list(elf.get_section_by_name(".dynsym").iter_symbols())
+    types = ("STT_FUNC", "STT_NOTYPE") if form == "guarded" else ("STT_FUNC",)
     index = next(i for i, sym in enumerate(syms) if sym.name == "dispatch"
-                 and sym["st_shndx"] == "SHN_UNDEF" and sym["st_info"]["type"] == "STT_FUNC")
+                 and sym["st_shndx"] == "SHN_UNDEF" and sym["st_info"]["type"] in types)
     width = elf.elfclass // 8
     slot = dyn["DT_PLTGOT"] + width * (dyn["DT_MIPS_LOCAL_GOTNO"] + index - dyn["DT_MIPS_GOTSYM"])
     bias = 0x100200000 if width == 8 else 0x200000
     order = "little" if little else "big"
 
-    def execute(uc, entry, variant, entry_gp):
+    def execute(uc, entry, variant, entry_gp, reads=None):
         if width == 8:
             uc.ctl_set_tlb_mode(UC_TLB_VIRTUAL)
         address = callbacks[variant]
@@ -82,21 +94,34 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
         for value in values:
             result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, 28: entry_gp})
-            expected = ((value + 37 if variant else value ^ 37) + 1) & 0xffffffffffffffff
-            if (result != expected or observations != [(value, 37)] or
+            argument = value
+            if form == "loop":
+                argument = (value + (value & 3)) & 0xffffffffffffffff
+            elif form == "entry-loop":
+                argument = (value + 4) & 0xfffffffffffffffc
+            elif form == "likely-join" and value:
+                argument = (value + 1) & 0xffffffffffffffff
+            expected = ((argument + 37 if variant else argument ^ 37) + 1) & 0xffffffffffffffff
+            expected_calls = [(argument, 37)]
+            if not value and form in ("guarded", "likely-taken", "likely-skipped",
+                                      "slot-setup", "slot-barrier"):
+                expected, expected_calls = 11, []
+            if (result != expected or observations != expected_calls or
                     uc.reg_read(mips.UC_MIPS_REG_GP) != entry_gp or
                     uc.reg_read(mips.UC_MIPS_REG_RA) != STOP or uc.reg_read(mips.UC_MIPS_REG_SP) != STACK):
                 raise AssertionError(f"{name} wrong import result, arguments or saved state for {value:#x}")
             observations.clear()
+            if reads is not None:
+                if reads != [width] * len(expected_calls):
+                    raise AssertionError(f"{name} wrong native GOT loads for {value:#x}: {reads}")
+                reads.clear()
 
     for variant in range(2):
         uc, entry = emulator(shared, 64, little, "import_probe", original=provider, load_bias=bias)
         reads = []
         uc.hook_add(UC_HOOK_MEM_READ, lambda uc, access, addr, size, val, data: reads.append(size),
                     begin=bias + slot, end=bias + slot)
-        execute(uc, entry, variant, 0x486100)
-        if reads != [width] * len(values):
-            raise AssertionError(f"{name} missing native GOT pointer load")
+        execute(uc, entry, variant, 0x486100, reads)
 
     for backend in ("highc", "llvmc"):
         source = work / f"{name}-{backend}.c"
@@ -357,9 +382,10 @@ word probe(word value) { return target(value, 37) + 1; }
                 artifacts.write("results.json", {"complete": False, "passed": results})
                 artifacts.discard(obj, rebuilt)
         if pic and value_bits == 64:
-            check_import(args, artifacts, command, profile, original_flags, fixed_flags,
-                         original, companions,
-                         callbacks, little, values, results, linker)
+            for form in ("direct", "saved", "guarded", "likely-taken", "likely-skipped",
+                         "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier"):
+                check_import(args, artifacts, command, profile, original_flags, fixed_flags,
+                             original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)
     artifacts.write("results.json", {"complete": True, "passed": results})
     print(f"Passed {len(results)} dynamic MIPS source groups ({sum(r['cases'] for r in results)} executions)")

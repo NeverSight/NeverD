@@ -9,17 +9,29 @@
 #include "LinuxFiles.h"
 #include "LinuxTime.h"
 
-#include "llvm/Support/FormatVariadic.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <string>
 
 namespace neverd::emulation::linux_model {
 std::optional<uint64_t>
 LinuxFiles::ReadinessFailure::stop(ProcessResult &Result) const {
-  if (!TCPInterest)
+  if (!TCPSocket)
     return unsupported(Result, Reason);
-  const auto Message =
-      llvm::formatv("{0} (TCP connection index {1}, {2} readiness)", Reason,
-                    ConnectionIndex, TCPInterest)
-          .str();
+  std::string Message;
+  llvm::raw_string_ostream OS(Message);
+  OS << Reason << " (TCP connection index " << TCPSocket->ConnectionIndex
+     << ", " << TCPInterest << " readiness)";
+  const auto &Events = TCPSocket->Connection->ReceiveEvents;
+  if (llvm::StringRef(TCPInterest) == "read" && !Events.empty()) {
+    const auto Next = TCPSocket->ReceiveEvent;
+    OS << ", sent bytes " << TCPSocket->Sent << ", receive events consumed "
+       << Next << '/' << Events.size();
+    if (Next < Events.size())
+      OS << ", receive_events[" << Next
+         << "].after_send=" << Events[Next].AfterSend;
+  }
   return unsupported(Result, Message.c_str());
 }
 
@@ -56,8 +68,8 @@ LinuxFiles::Readiness LinuxFiles::socketReadiness(const OpenSocket &Socket,
   auto Unknown = [&](const char *Interest) {
     R.Unknown.Reason = "socket readiness has no offline observation";
     if (Socket.Connection) {
+      R.Unknown.TCPSocket = &Socket;
       R.Unknown.TCPInterest = Interest;
-      R.Unknown.ConnectionIndex = Socket.ConnectionIndex;
     }
     return R;
   };

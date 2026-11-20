@@ -63,6 +63,12 @@ bool MIPSLifter::hasDelaySlot(uint32_t Word) {
 }
 
 namespace {
+/// Classic B and compact B normalize to BEQ zero,zero. BEQL zero,zero
+/// likewise executes its slot on every visit.
+bool isZeroEqualityBranch(uint32_t Word) {
+  return (Word >> 16) == 0x1000 || (Word >> 16) == 0x5000;
+}
+
 // Keep the historical catalog out of the inlined modern/compressed path.
 LLVM_ATTRIBUTE_NOINLINE bool
 historicalEncodingAvailable(Arch Target, unsigned Revision, unsigned Level,
@@ -160,7 +166,7 @@ bool MIPSLifter::isFunctionTerminator(const cs_insn &Instruction) const {
   const uint32_t Word = Code->Word;
   if (Code->R6)
     return Word >> 26 == 50 || (Word >> 21) == (54u << 5);
-  return Code->Unconditional || Word >> 26 == 2 ||
+  return isZeroEqualityBranch(Word) || Word >> 26 == 2 ||
          (Word & 0xfc1fffff) == 8; // B / J / JR
 }
 
@@ -782,14 +788,13 @@ LowDelaySlot MIPSLifter::liftControl(const cs_insn &Head, const cs_insn *Slot,
                            (uint64_t(Word & 0x03ffffff) << Shift)),
                    S.Width);
   } else {
-    Conditional = !Code.Unconditional;
+    Conditional = !isZeroEqualityBranch(Word);
     Destination = NdVar::cst(
         Address(Next + uint64_t(int64_t(int16_t(Word)) *
                                 (isMIPSCompressedMode(Mode) ? 2 : 4))),
         S.Width);
-    if (Code.Unconditional) {
-      // Compact B shares the normalized BEQ displacement, but has no
-      // predicate or fallthrough edge.
+    if (!Conditional) {
+      // The delay slot, when present, always executes before the transfer.
     } else if ((Word >> 16) == 0x041c) {
       const auto Control = S.makeTemp(4);
       S.emitIntrinsic(Intrinsic::MIPSReadDSPControl, Control);

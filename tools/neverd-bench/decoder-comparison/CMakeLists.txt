@@ -26,7 +26,7 @@ target_link_libraries(decoder-compare PRIVATE
   "${XED_LIBRARY}" "${ICED_LIBRARY}")
 if(WIN32)
   # Rust std's native system dependencies for the MSVC static library.
-  target_link_libraries(decoder-compare PRIVATE advapi32 bcrypt ntdll userenv ws2_32)
+  target_link_libraries(decoder-compare PRIVATE advapi32 bcrypt ntdll synchronization userenv ws2_32)
 else()
   find_package(Threads REQUIRED)
   target_link_libraries(decoder-compare PRIVATE Threads::Threads ${CMAKE_DL_LIBS})

@@ -1,0 +1,397 @@
+{
+  "source": "90fdefb4b2c76e80b42bbfb36cb3ab7cec1fd2e3",
+  "base": "acc1790d2bd7ff2662c678997c1f0ea2d1bb0c44",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2435",
+  "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44719924950",
+  "compiler_original_control": "https://github.com/gmh5225/test_mac_intel/actions/runs/44710899294",
+  "modern_linker_input": "https://github.com/gmh5225/test_mac_intel/actions/runs/44715360325",
+  "compact_language_control": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44718387160",
+    "source": "ed19abfdee83522fb29ad4b28eee68e8534ac8da",
+    "macos": {
+      "macos-26": {
+        "encoding": "0x52000000",
+        "prior_observer_exit": 35,
+        "prior_dylib_sha256": "11c82d5ba71ac43455aa16099fcff8ba849830aa3556fa53e6a08a7e202ed0c1",
+        "observer_exit": 0,
+        "dylib_sha256": "f9563b6fa539402c1e72556fbed3d5a7a1affda06e2abfb140571cde6e1b3e96",
+        "sample": "0 1 0 0"
+      },
+      "xcode-27": {
+        "encoding": "0x52000000",
+        "prior_observer_exit": 35,
+        "prior_dylib_sha256": "470fe37f2d173161861f14fc8a209083ed675d1491d69e3fd6dcaf6a4ca70ef9",
+        "observer_exit": 0,
+        "dylib_sha256": "4789e80f07dcf3287d2b67d8fcbfab8f3b6b71b4e70d525614ac68a53945ef8c",
+        "sample": "0 1 0 0"
+      }
+    }
+  },
+  "modern_compiler_original": {
+    "assembly_sha256": "295d4cf5bcc296beb715382488f3f8029d3ea1ed9b3a677fa9d2fd5dc66d6d4d",
+    "dylib_sha256": "6a746eb7307e63194786354bce67507c746e85397cd6ed933ddcc95ade569c56"
+  },
+  "owner_reproduction": {
+    "exact_first_attempt_input": {
+      "input_sha256": "3642e75d89a3794466c84fa4c475e0bb74caffa9ad24a72a0d43c078ba4cf4f4",
+      "output_sha256": "cef2872626d1196e6e038cc75ca9b3ef08a6716fc2e5f7532973b941434ae759",
+      "output_bytes": 87232,
+      "exit": 0,
+      "strict_codesign_exit": 0
+    },
+    "mixed_section_with_empty_dice": {
+      "input_sha256": "3d8b903836918c53fa82c1e61624b6945fca05e0862234bab0c13d8dba3d5a4d",
+      "exit": 1,
+      "output_exists": false
+    }
+  },
+  "initial_replay": {
+    "source": "9783985d705aedcd0142fae06626a5204f7971ca",
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44714464003",
+    "failing_case": "RelativeSwitchDispatchSurvivesAutomaticRelifting",
+    "failing_host": "xcode-27",
+    "reason": "Reanalysis lost the data owner of a jump table outside sections in an extended __TEXT segment."
+  },
+  "format_control": "https://github.com/gmh5225/test_mac_intel/actions/runs/44708601726",
+  "workflow_revision": "22cdf2fa45e0cbf2979463a749dc66a32f7d1e65",
+  "tested_llvm": "integrated source fork",
+  "repository_default_llvm_prebuilt": "neverd-llvm-v23.0.0-r7",
+  "repository_self_hosted_runners": 0,
+  "forks": {
+    "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "capstone": "3ea7f5838a88c9f34328dc6d8afb2ed89a30ab62",
+    "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+  },
+  "release_host_sha256": "47a39c344e7273e5577fa1b27e35802f59b2ba7fdb57460f300c4dd7fca4a370",
+  "replay_archive_sha256": "134f0ddf9dfbd704cbab59883f48cdf676c2e3201b82904d13e2a7e671e1f1ea",
+  "cli_publication": {
+    "neverd_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+    "libneverd_sha256": "7699653b73e63ee93746ca706e7b33d6f67c837937698f36cebdc3b9244fdb99",
+    "assembly_sha256": "4f4144eb1973887d5fd5c212f23d153719aed494f50f702654243cbec8b4e669",
+    "oracle_sha256": "aa99c99a714f65e6074b28d6107ffcb8d2f77a8077c6fd5f676afec93d5a2550",
+    "images": {
+      "original.dylib": {
+        "sha256": "ac518c5bb6c43bac727f1888b9fc4a887ea5945ad5a706aefe3ef0ee5e6ec437",
+        "bytes": 35024,
+        "data_in_code_records": 4
+      },
+      "default-1.dylib": {
+        "sha256": "b089f6ecef17b53130aa4b2c812b716412f56137206c0e3004ee6b3a9ffc73c1",
+        "bytes": 70224,
+        "data_in_code_records": 8
+      },
+      "default-2.dylib": {
+        "sha256": "82325af66d0a7bdde013e0cc569569b5b402a4a8e9b21030ff18178083487b66",
+        "bytes": 105680,
+        "data_in_code_records": 12
+      },
+      "default-3.dylib": {
+        "sha256": "d78e5196e444a19bef4cae26ac569c83688c228202ff4feb34ae477915a69b8a",
+        "bytes": 141424,
+        "data_in_code_records": 16
+      },
+      "no-opt-1.dylib": {
+        "sha256": "7ca0367c8ec731ff65a8d96264e6450fb3b58a0667ec777e7ac2ef883add443c",
+        "bytes": 70224,
+        "data_in_code_records": 8
+      },
+      "no-opt-2.dylib": {
+        "sha256": "ba80276b3518214444c5df444caf4cec5016b5c17a7639151619dd6cb57a201c",
+        "bytes": 105680,
+        "data_in_code_records": 12
+      },
+      "no-opt-3.dylib": {
+        "sha256": "6ed9637caafffed160eb51b0ed390ec95e882a26781a6c706120a9b0b00e0dd1",
+        "bytes": 141424,
+        "data_in_code_records": 16
+      },
+      "xcode27-original.dylib": {
+        "sha256": "6a746eb7307e63194786354bce67507c746e85397cd6ed933ddcc95ade569c56",
+        "bytes": 16944,
+        "data_in_code_records": 4
+      },
+      "xcode27-default-1.dylib": {
+        "sha256": "4b0f8c638a5a69d6854f370108f622c37c99659d6b7b340a9dae9d620a5ff363",
+        "bytes": 51952,
+        "data_in_code_records": 8
+      },
+      "xcode27-default-2.dylib": {
+        "sha256": "611fafb3ce7248765ba1f37a08e1a293fd11d1bb678d89dff3c9f67cd562cf18",
+        "bytes": 87248,
+        "data_in_code_records": 12
+      },
+      "xcode27-default-3.dylib": {
+        "sha256": "58d74d899e1c4971eea1e9d1754553ef550e356a16e88bcca229790902cde02e",
+        "bytes": 122864,
+        "data_in_code_records": 16
+      },
+      "xcode27-no-opt-1.dylib": {
+        "sha256": "375f303f6329acf072321ae95e09177af4dc88132b500d0f885fcdc970130129",
+        "bytes": 51952,
+        "data_in_code_records": 8
+      },
+      "xcode27-no-opt-2.dylib": {
+        "sha256": "44744d096064e0d5a8521255c5c518691e1caafcce1a8ba5a136df9a23949f04",
+        "bytes": 87248,
+        "data_in_code_records": 12
+      },
+      "xcode27-no-opt-3.dylib": {
+        "sha256": "2e43b5f476daa23803496ae99fbd08fa0a8ab0953ac0902138aa557971cb0d41",
+        "bytes": 122864,
+        "data_in_code_records": 16
+      }
+    }
+  },
+  "local_release": {
+    "combined_ctest": {
+      "tests": 1042,
+      "passed": 1036,
+      "skipped": 6,
+      "junit_sha256": "12145d5594bd0f0aceba1b5f03ccc02cf623f4f16ca0d6f9104aa2ed9a114249"
+    },
+    "block_address_regressions": {
+      "tests": 7,
+      "passed": 7,
+      "skipped": 0,
+      "junit_sha256": "7ab28311eb34b7360de630a98453d10b1a564cd93468ad9f2c07bb6f06cc3256"
+    },
+    "focused": {
+      "tests": 3,
+      "passed": 3,
+      "skipped": 0,
+      "junit_sha256": "88a09a0ad14603e2d5f38e261ce75737b308ece3134bd0d90ef5a7c2587b6414"
+    },
+    "executable_code_owners": {
+      "tests": 10,
+      "passed": 10,
+      "skipped": 0,
+      "junit_sha256": "baaeb24a0eaa7fa827ed183cfb7c4026db08ef87c475fa76d34d47f7e6c30d84"
+    },
+    "NeverDJumpTableTests": {
+      "tests": 798,
+      "passed": 792,
+      "skipped": 6,
+      "skipped_cases": [
+        "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+        "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+        "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+        "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"aarch64\"",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"x86_64\""
+      ]
+    },
+    "NeverDArm64eLiftedImageTests": {
+      "tests": 244,
+      "passed": 244,
+      "skipped": 0,
+      "skipped_cases": []
+    }
+  },
+  "jobs": {
+    "windows-frontend": "success",
+    "native (macos-26)": "success",
+    "native (xcode-27)": "success"
+  },
+  "macos": {
+    "macos-26": {
+      "cli_runtime": {
+        "strictly_signed_images": 14,
+        "native_comparisons": 1008
+      },
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t26.7.2",
+        "BuildVersion:\t\t25G332"
+      ],
+      "suite": {
+        "tests": 244,
+        "passed": 244,
+        "skipped": 0,
+        "junit_sha256": "52b93570d1f78f3b3e97fde4616146c571a19ceb4dda313e67a4014784c09b28"
+      },
+      "switch": {
+        "published_data_in_code_records": 16,
+        "embedded_records_after_header_growth": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3,
+        "relift_defined_functions_0": 6,
+        "relift_defined_functions_1": 12,
+        "native_switch_comparisons": 288,
+        "proved_embedded_dispatches": 3,
+        "rejected_dispatch_variants": 4,
+        "image_sha256": {
+          "original_sha256": "f6beb3fa92cd84e49af51ef3acc22916fb2b11826590352691c8e6f42019e32e",
+          "published_sha256": "23c48b292526aea5bbbeb3765c7cfd9705411bc1dee6f52aa090e0cdcb4dbf79",
+          "republished_sha256_0": "28826a1b4bb482f38bc6b99d99ba8428f968dfc2a697e3cc4bbd8c496ac62047",
+          "republished_sha256_1": "ad9cbbc8df74943d239de2ad0d6467788a2cd361fd47b1130b6710c80167c16c"
+        }
+      },
+      "entry": {
+        "native_old_entry_system_steps": 1,
+        "native_old_entry_raw_signal_walk": 1,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_original_fde_step": 1,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 1,
+        "native_old_entry_original_compact_step": 1,
+        "native_old_entry_original_compact_lsda_step": 1
+      },
+      "native_pac": true,
+      "compiler_call_and_unwind": true,
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "a94297c76c9a890de4f68bd318c32b0d97e36d185bc26593f2e04f6fd7e51e4d",
+        "native-image/runtime.log": "dc8f85575e912dd9bb3f529a04645d4f2e80f4511459761cb508297197d43267",
+        "language-entry.json": "dec084461b521c7d899e0a01f748f62ef8bc779eabb9a41c2ca97fc957d938b6",
+        "x1/report.json": "9f29bf1fc3d1de6075b830e7071c73d6ca58776ac0f8b8fca899876b2dd96512",
+        "x1/probe/report.json": "1d18bdb90d496afa5712caae6d34705f6785b38e2ccb03107beb997ec7cbb82d",
+        "x1/probe-cursor/report.json": "3c68b4c7c23195185eb90c831b040e7fe924d526ad8186306e9eaebbe9264706",
+        "x1/probe-cpta/report.json": "1db73fb7d6606f82a76e5ce4225f4b071919ee73e55c2d5b3068002f704cb557"
+      }
+    },
+    "xcode-27": {
+      "cli_runtime": {
+        "strictly_signed_images": 14,
+        "native_comparisons": 1008
+      },
+      "hardware": "Apple M1 (Virtual)",
+      "os": [
+        "ProductName:\t\tmacOS",
+        "ProductVersion:\t\t27.0.1",
+        "BuildVersion:\t\t26A434"
+      ],
+      "suite": {
+        "tests": 244,
+        "passed": 244,
+        "skipped": 0,
+        "junit_sha256": "af4c0fb68615393e732476a4fdca5112e454c3f2606a5e0a434c6d4564fa98e7"
+      },
+      "switch": {
+        "published_data_in_code_records": 16,
+        "embedded_records_after_header_growth": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3,
+        "relift_defined_functions_0": 6,
+        "relift_defined_functions_1": 12,
+        "native_switch_comparisons": 288,
+        "proved_embedded_dispatches": 3,
+        "rejected_dispatch_variants": 4,
+        "image_sha256": {
+          "original_sha256": "0278898dfccf34009ce1e2cf22f90881f245e47e1b16cf05bdca946175c9eb43",
+          "published_sha256": "f490d8e27ea08445502c46316a0e828fdb346614b6030084eb826dc538f871ce",
+          "republished_sha256_0": "f39e68c34f319e62533563e9e9ee96a7563ffe411c9bcc31deab6ef036a404df",
+          "republished_sha256_1": "2ea4a0ef01de2f70a403ba13fe3d061838fb0242500388776274f0939a16dcc5"
+        }
+      },
+      "entry": {
+        "native_old_entry_system_steps": 1,
+        "native_old_entry_raw_signal_walk": 1,
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_original_fde_step": 1,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_old_entry_fde_lookup_offset": 0,
+        "native_old_entry_original_compact_step": 1,
+        "native_old_entry_original_compact_lsda_step": 1
+      },
+      "native_pac": true,
+      "compiler_call_and_unwind": true,
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": {
+        "native-image/qualification.json": "fcb3b3f9560d7e9f2ddc9c458a3c281d16a78df45e35d8d3528ec4f7fcdf32f5",
+        "native-image/runtime.log": "67d0f1be395e1b486f8223e2eb8af57009c5889b24aab8bb5afce2c0cf67266d",
+        "language-entry.json": "eaf5ba28d7bd0d69b28c07f26528fcf41612607b89af2327bfb209b9b0e2562e",
+        "x1/report.json": "82c8fb8f2de372bc28d114d23be98bf18d3dd70837764bf6b8439cc150a6d5c5",
+        "x1/probe/report.json": "c3cff52fede84821d9e69503070dc72b2bdc7e51b5111a48344b82d07d13d3dd",
+        "x1/probe-cursor/report.json": "fa5f020bbc9160dccbe8a55b513eb9e568fd889afd581d190efc1dd18169f940",
+        "x1/probe-cpta/report.json": "7ae2bcb865a609463a52890a8ea748521274ebe2bab9be0867cf0355381eb77a"
+      }
+    }
+  },
+  "original_controls": {
+    "macos-26": {
+      "dispatch_comparisons": 72,
+      "compact_original_system_step": true
+    },
+    "xcode-27": {
+      "dispatch_comparisons": 72,
+      "compact_original_system_step": true
+    }
+  },
+  "mach_o_linkers": {
+    "macos-26": {
+      "text-pointer-modern": {
+        "link_exit": 1,
+        "source_sha256": "9fdca40495df449d92b581b52c4c322a1eb3af541f31fb141d57f6b6fcf52960"
+      },
+      "text-pointer-classic": {
+        "link_exit": 0,
+        "source_sha256": "9fdca40495df449d92b581b52c4c322a1eb3af541f31fb141d57f6b6fcf52960",
+        "input_dylib_sha256": "5bec7f26e3db0850b871bd40e6c02f5c619fdbbe39f0d5105be4592f5b0fe474",
+        "execution": {
+          "exit": -10,
+          "output": ""
+        },
+        "dyld_fixups": "__TEXT          __text           0x00003FB0         rebase  0x00004000"
+      },
+      "absolute-symbol-fixup32": {
+        "link_exit": 1,
+        "source_sha256": "76f09552d791a46fdf6e031619f60342d4996e319b3459983016824c4edb59bc"
+      }
+    },
+    "xcode-27": {
+      "text-pointer-modern": {
+        "link_exit": 1,
+        "source_sha256": "9fdca40495df449d92b581b52c4c322a1eb3af541f31fb141d57f6b6fcf52960"
+      },
+      "text-pointer-classic": {
+        "link_exit": 1,
+        "source_sha256": "9fdca40495df449d92b581b52c4c322a1eb3af541f31fb141d57f6b6fcf52960"
+      },
+      "absolute-symbol-fixup32": {
+        "link_exit": 1,
+        "source_sha256": "76f09552d791a46fdf6e031619f60342d4996e319b3459983016824c4edb59bc"
+      }
+    }
+  }
+}

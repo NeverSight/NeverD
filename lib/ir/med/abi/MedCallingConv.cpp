@@ -969,6 +969,23 @@ void computeFrameBounds(
 // [entry_sp+k] loads), so they must not be mistaken for fixed stack parameters.
 } // namespace
 
+namespace {
+/// Whether \p Func loads a word of its caller's frame, \p Base bytes or more
+/// past its entry stack pointer: an incoming stack argument.
+bool loadsIncomingStackWord(const MedFunc &Func, Arch A, BinaryFormat F,
+                            int64_t Base) {
+  MedEntryStackOffsets EntryOffsets(Func, A, F);
+  for (const MedBlock &Block : Func.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      if (Op.Opcode == NdOp::LOAD && Op.NumInputs)
+        if (const std::optional<int64_t> Offset =
+                EntryOffsets.query(Op.Inputs[0]);
+            Offset && *Offset >= Base)
+          return true;
+  return false;
+}
+} // namespace
+
 namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
                        int64_t MaxStackOff, const BinaryImage *Image) {
@@ -981,11 +998,19 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
   const uint64_t SpOff = TRI.StackPointer;
-  const auto Layout = TRI.integerArgumentLayout(Fmt);
+  // A Go stack-ABI function's arguments are all on the stack.
+  const auto Layout = Func.StackArgumentsOnly
+                          ? goStackArgumentLayout(TargetArch)
+                          : TRI.integerArgumentLayout(Fmt);
   const auto ParamRegs = Layout.Registers;
   const int MaxRegArgs = static_cast<int>(ParamRegs.size());
   const int Slot = Layout.SlotBytes;
-  if (MaxRegArgs <= 0 || Slot <= 0)
+  if ((MaxRegArgs <= 0 && !Func.StackArgumentsOnly) || Slot <= 0)
+    return;
+  // The bound is exact there, and an empty frame reads none (MaxStackOff
+  // equals the base).
+  if (Func.StackArgumentsOnly && MaxStackOff > 0 &&
+      MaxStackOff <= Layout.EntryStackBase)
     return;
 
   // Entry coordinates include the hardware return address and, for Win64,
@@ -1609,6 +1634,66 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     Func.IntegerArgumentRegisters.assign(Go.begin(), Go.end());
     IntegerRegs = Func.IntegerArgumentRegisters;
   }
+  // A routine whose operands are fixed takes them so, and nothing else: a
+  // stub that passes registers on as a stack-ABI routine's arguments
+  // (goRegisterStubArguments), or a write barrier that performs the store
+  // itself (goWriteBarrierArguments).
+  const bool GoFixedOperands = !GoRegisterArguments && GoFixedArguments;
+  if (GoFixedOperands) {
+    Func.IntegerArgumentRegisters.clear();
+    for (const FixedIntegerCallArguments::Parameter &Parameter :
+         GoFixedArguments->Parameters)
+      Func.IntegerArgumentRegisters.push_back(Parameter.Register);
+    IntegerRegs = Func.IntegerArgumentRegisters;
+  }
+  // Before Go's internal ABI, Go code takes every argument on the stack
+  // (goTakesStackArguments).  A routine that reads another register at its
+  // entry takes arguments there and keeps them (goStackABIEntryRegister): a
+  // stub such as Go 1.16's panicIndex (AX and CX), duffzero (DI and X0), or
+  // a trampoline the platform's code enters, as the kernel enters a signal
+  // handler.  Under the internal ABI, where a call takes its arguments from
+  // the setup its caller writes (arm64), no operation reads the registers a
+  // routine passes on in a call: assembly declared <ABIInternal> that
+  // forwards X0-X2 in a tail call (`runtime.memhash` into `aeshashbody`)
+  // reads no word of its caller's frame, as ABI0 assembly does
+  // (`MOVD fn+0(FP), R3`).
+  const bool CallsHideForwarding =
+      Image && Image->ExceptionMetadata.GoModule &&
+      Image->ExceptionMetadata.GoModule->RegisterArguments && Convention &&
+      Convention->ArgumentsFromCallSetup;
+  if (Image && !GoRegisterArguments && !GoFixedOperands &&
+      !Func.Blocks.empty() && goTakesStackArguments(*Image, Func.Entry) &&
+      (!CallsHideForwarding ||
+       loadsIncomingStackWord(Func, TheArch, Fmt,
+                              goStackArgumentLayout(TheArch).EntryStackBase))) {
+    // The entry's leading self-copies name every register read before the
+    // body writes it (findLiveInParamRegs).  One whose incoming value no
+    // operation the function needs reads takes no argument: a dead flag
+    // computation (Go's nil check `testb al, (reg)`), a return (the stack ABI
+    // returns nothing in a register), or, on x86-64, a partial write's merge
+    // of the bytes it keeps (`sete r9b` keeps R9's upper bytes, which Go never
+    // reads).
+    Func.StackArgumentsOnly = true;
+    for (const MedOp &Op : Func.Blocks.front().Ops) {
+      if (Op.Opcode != NdOp::COPY)
+        break;
+      if (Op.Output.Kind == MedVar::Reg && Op.NumInputs >= 1 &&
+          Op.Inputs[0].Id == Op.Output.Id &&
+          !goStackABIEntryRegister(TRI, Op.Output.RegOff) &&
+          med_calling_conv_detail::liveInReachesLiveUse(Func,
+                                                        Op.Output.RegOff) &&
+          !(TheArch == Arch::X64 &&
+            med_calling_conv_detail::liveInOnlyFeedsScratchOrReturns(
+                Func, Op.Output.RegOff))) {
+        Func.StackArgumentsOnly = false;
+        break;
+      }
+    }
+  }
+  if (Func.StackArgumentsOnly) {
+    Func.IntegerArgumentRegisters.clear();
+    IntegerRegs = {};
+  }
   if (TheArch == Arch::X86) {
     const auto Additional =
         med_calling_conv_detail::additionalI386ParameterRegisters(Func);
@@ -1689,6 +1774,17 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       Summary = &BoundsReads;
       Func.ExactRegisterParameters = true;
     }
+    if (Func.StackArgumentsOnly) {
+      Summary = &NoReads;
+      Func.ExactRegisterParameters = true;
+    }
+    GPRReadWidths FixedReads{};
+    if (GoFixedOperands) {
+      for (uint64_t Register : IntegerRegs)
+        FixedReads[Register / 8] = 8;
+      Summary = &FixedReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home
@@ -1715,7 +1811,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
       }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary,
-                         GoRegisterArguments || BufferBarrier || BoundsRoutine);
+                         GoRegisterArguments || BufferBarrier ||
+                             BoundsRoutine || Func.StackArgumentsOnly ||
+                             GoFixedOperands);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
@@ -1728,7 +1826,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // except where it saves the vector registers (System V x86-64): past the
     // named ones, they carry the floating arguments a caller passes, each
     // promoted to double, and va_arg reads them from the area.
-    if (!Func.IsVariadic) {
+    // Go's stack ABI passes floating arguments on the stack too.
+    if (!Func.IsVariadic && !Func.StackArgumentsOnly) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
       // Where a summary gives the floating arguments each in the next
       // vector register (System V x86-64), it lists those a variadic call
@@ -1740,7 +1839,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
           !summaryListsNoParameters(*Convention, *Summary, GoRegisterArguments))
         detectSummaryVectorParams(Func, TRI, *Summary, TargetArch,
                                   TargetFormat);
-    } else if (Func.takesVectorArgumentRegisters()) {
+    } else if (Func.IsVariadic && Func.takesVectorArgumentRegisters()) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
       const auto VectorRegs = TRI.floatingParamRegs(TargetFormat);
       size_t Passed = 0;
@@ -1776,9 +1875,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
   // A Go function's spill area holds none of its stack arguments.
-  if (!Func.IsVariadic)
+  // A Go stack-ABI function reads no slot past the arguments and results its
+  // record gives (goFrameArgumentBytes).
+  const std::optional<uint32_t> GoFrameBytes =
+      Func.StackArgumentsOnly && Image
+          ? goFrameArgumentBytes(*Image, Func.Entry)
+          : std::nullopt;
+  // A routine with fixed operands takes no stack word: a register stub writes
+  // the slots it passes on itself, and a write barrier's frame is its own.
+  if (!Func.IsVariadic && !GoFixedOperands)
     med_calling_conv_detail::detectStackParams(
-        Func, TargetArch, Fmt, GoArgumentSpillBegin.value_or(0), Image);
+        Func, TargetArch, Fmt,
+        GoFrameBytes
+            ? goStackArgumentLayout(TargetArch).EntryStackBase + *GoFrameBytes
+            : GoArgumentSpillBegin.value_or(0),
+        Image);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
