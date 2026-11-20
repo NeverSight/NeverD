@@ -554,12 +554,13 @@ Still open, in order of yield:
      `modelCallStructReturn` candidates, checked against the callee body.
    - Calls through function values and interfaces.
    - arm64 calls. A Go function's parameters now come from its spills
-     (R0-R15), which took arm64 Go 1.26 down 28-34%. Callers still bind
-     AAPCS64's eight positions from the registers they set before a call, and
-     those widen a callee such as `makeslice(et, len, cap)` back to eight
-     parameters. Go callees need summary-driven publication on arm64
-     (`RegisterArgumentsFromCalleeSummary`, `SummarizedIntegerOperands` in
-     MedABIPass).
+     (R0-R15), and exact parameters (`MedFunc::ExactRegisterParameters`) stop
+     forwarded registers from widening them. Together these took arm64 Go 1.26
+     down 55-60% and amd64 down 2-6%. Still wide: callees without a recognized
+     growth path, such as frameless leaves, frames over 4 KiB like
+     `mallocgc`'s, and arm64 write barriers. A Go 1.21+ arm64
+     `gcWriteBarrier2` takes no register argument, but AAPCS64 gives it
+     eight.
    - DWARF-typed signatures. They need Go's register assignment by type.
    - The patch route's native calling convention for Go functions.
    - Floating arguments X8-X14, which call summaries do not track.

@@ -2409,6 +2409,18 @@ void recoverCallAbi(
             *V = MedVar::makeUnspecified(V->Size, TheArch);
             FromLiveIn = false;
           }
+          // A function whose register parameters a contract proves takes no
+          // other: an entry value it passes on beyond them is unknown, not a
+          // forwarded parameter (MedFunc::ExactRegisterParameters).
+          if (!CI.IsIndirect && !FoundDefinition &&
+              Func.ExactRegisterParameters &&
+              (FromLiveIn || V->Kind == MedVar::Param) &&
+              llvm::none_of(Func.Params, [&](const MedVar &P) {
+                return P.RegOff == V->RegOff;
+              })) {
+            *V = MedVar::makeUnspecified(V->Size, TheArch);
+            FromLiveIn = false;
+          }
           Found[K] = *V;
           FoundMask[K] = true;
           if (FromLiveIn) {
@@ -4367,7 +4379,7 @@ void recoverCallAbi(
   // PromoteParams; add only missing register parameters.  A forwarder can
   // already have a lower-index parameter (B5B4 has x0) while higher-index
   // arguments (x1/x2) remain implicit live-ins.
-  if (!PromoteParams.empty()) {
+  if (!PromoteParams.empty() && !Func.ExactRegisterParameters) {
     std::set<int> ExistingIntArgs;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg)

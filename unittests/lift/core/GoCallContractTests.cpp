@@ -329,6 +329,9 @@ TEST(GoRegisterArguments, AGoFunctionTakesThemInGoRegisters) {
   ASSERT_EQ(F.Params.size(), 2u);
   EXPECT_EQ(F.Params[0].RegOff, x86reg::RAX);
   EXPECT_EQ(F.Params[1].RegOff, x86reg::RBX);
+  EXPECT_TRUE(F.ExactRegisterParameters);
+  // A caller without a stack-growth path proves none.
+  EXPECT_FALSE(lift(Img, GoCaller).ExactRegisterParameters);
 
   const LocalRegisterEffect Effect = localRegisterEffect(
       Img, build(Img, GoCallee), nullptr, nullptr, nullptr, nullptr);
@@ -467,10 +470,12 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   const MedFunc F = lift(T.Img, Function);
   EXPECT_FALSE(hasOp(F, NdOp::CALL));
   EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
-  // Its parameters are the two registers the path spills, in Go's order.
+  // Its parameters are the two registers the path spills, in Go's order,
+  // and call recovery adds none to them.
   ASSERT_EQ(F.Params.size(), 2u);
   EXPECT_EQ(F.Params[0].RegOff, a64reg::X0);
   EXPECT_EQ(F.Params[1].RegOff, a64reg::X1);
+  EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {

@@ -5815,9 +5815,11 @@ The spills become the function's entry reads in the call summaries
 (`LocalRegisterEffect::GoArgumentReads`), as a prototype fixes an import's, in
 place of what its calls appear to forward. `detectCc` takes them as its
 parameters directly (`LowToMedConverter::GoArgumentSpillReads`), so they do
-not wait for a summary: arm64's convention reads none. arm64 callers still
-bind AAPCS64's eight positions from the registers they set before a call, and
-those widen a callee whose spills name fewer. The spill area is uninitialized at a
+not wait for a summary: arm64's convention reads none. Such a function's
+parameters are exact (`MedFunc::ExactRegisterParameters`): call recovery
+promotes no register it passes on beyond them, which stays unknown at the call,
+and forwarder propagation raises no arity of it. Calls are bounded by the
+callee's parameters, so exact callees give exact calls on both targets. The spill area is uninitialized at a
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 

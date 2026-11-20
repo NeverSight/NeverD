@@ -122,6 +122,9 @@ struct OmittedCalleeMemo {
     std::optional<int> EntryRegArity;
     std::optional<int> EntryTotalArity;
     std::optional<bool> EntryIsVariadic;
+    /// The body's register parameters are proven
+    /// (MedFunc::ExactRegisterParameters): forwarding raises none.
+    bool ExactRegisterParameters = false;
   };
   /// A forwarder probe of a conversion's body: what it read under each key
   /// it read (recoverCallAbi's SummaryKeysRead), the body's entry first,

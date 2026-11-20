@@ -1646,8 +1646,10 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         Summary = &It->second;
     // A Go function's stack-growth path names exactly the register arguments
     // it takes, without a summary (LowToMedConverter::GoArgumentSpillReads).
-    if (GoRegisterArguments && GoArgumentSpillReads && Convention)
+    if (GoRegisterArguments && GoArgumentSpillReads && Convention) {
       Summary = &*GoArgumentSpillReads;
+      Func.ExactRegisterParameters = true;
+    }
     // A variadic function's summary (Win64's home-slot spills) lists only the
     // named registers, which every caller passes.  Its definition reads each
     // later argument register too: the prologue spills it whole to its home

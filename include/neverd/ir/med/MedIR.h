@@ -635,6 +635,11 @@ struct MedFunc {
   /// Internal bookkeeping: Param operands already use source declaration
   /// indices, rather than generic ABI register / pointer-sized stack slots.
   bool SourceParametersBound = false;
+  /// The register parameters are exactly the ones a contract proves (a Go
+  /// function's stack-growth spills, LowToMedConverter::GoArgumentSpillReads):
+  /// call recovery promotes no register the function passes on beyond them,
+  /// and forwarder propagation raises no arity of it.
+  bool ExactRegisterParameters = false;
 
   /// Trusted return-value evidence for consumers that need declaration
   /// semantics rather than a code-generation type.  Debug providers remain

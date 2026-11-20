@@ -1723,6 +1723,7 @@ OmittedCalleeMemo::ProbeSignature probeSignature(
   Gives.FPScalarBytes = Probe.FPParamScalarBytes;
   Gives.FPReturnSize = summarizeCallee(Probe, Img).FPReturnSize;
   Gives.IntegerArgumentRegisters = Probe.IntegerArgumentRegisters;
+  Gives.ExactRegisterParameters = Body.ExactRegisterParameters;
   Gives.EntryRegArity = valueAt(CalleeRegArity, Body.Entry);
   Gives.EntryTotalArity = valueAt(CalleeTotalArity, Body.Entry);
   Gives.EntryIsVariadic = valueAt(CalleeIsVariadic, Body.Entry);
@@ -1765,13 +1766,16 @@ bool raiseForwarderSummaries(
               (CalleeIsVariadic.count(Entry) != 0 &&
                CalleeIsVariadic.at(Entry) != PreviousVariadic);
   // A forwarder takes its parameters in the order of the function it passes
-  // them to, and its callers pass them so.
-  if (!Probe.IntegerArgumentRegisters.empty() &&
+  // them to, and its callers pass them so.  A function whose register
+  // parameters a contract proves forwards none beyond them.
+  if (!Probe.ExactRegisterParameters &&
+      !Probe.IntegerArgumentRegisters.empty() &&
       CalleeIntRegs[Entry] != Probe.IntegerArgumentRegisters) {
     CalleeIntRegs[Entry] = Probe.IntegerArgumentRegisters;
     Grew = true;
   }
-  if (Probe.RegisterArity > CalleeRegArity[Entry]) {
+  if (!Probe.ExactRegisterParameters &&
+      Probe.RegisterArity > CalleeRegArity[Entry]) {
     CalleeRegArity[Entry] = Probe.RegisterArity;
     Grew = true;
   }
