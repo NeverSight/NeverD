@@ -1718,7 +1718,9 @@ the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 An untyped PIC call can observe argument-register writes that reach it,
 including its delay slot and loop backedges. A later call with a declared
-by-value record observes the pieces selected by its own signature.
+by-value record observes the pieces selected by its own signature. For example,
+a single unsigned field that fills an ABI slot occupies one argument GPR,
+including a four-byte slot on o32.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
 A merge load from caller-owned input can supply a record argument when both

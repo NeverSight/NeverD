@@ -35,6 +35,8 @@ CASES = (
     ('b15', 'struct { unsigned char x[15]; }', 15, list(range(15))),
     ('b16', 'struct { unsigned char x[16]; }', 16, list(range(16))),
     ('b17', 'struct { unsigned char x[17]; }', 17, list(range(17))),
+    ('u32', 'struct { unsigned x; }', 4, list(range(4))),
+    ('u64', 'struct { unsigned long long x; }', 8, list(range(8))),
     ('f1', 'struct { float x; }', 4, list(range(4))),
     ('f2', 'struct { float x, y; }', 8, list(range(8))),
     ('f3', 'struct { float x, y, z; }', 12, list(range(12))),
