@@ -1,0 +1,336 @@
+{
+  "source": "06f741e2313870d4fcbf1e6d98d2447aa4a3e97f",
+  "integrated_dev": "2761d2832e43a712955b2e040bd05ea211f11791",
+  "pull_request": "https://github.com/NeverSight/NeverD/pull/2438",
+  "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44735565511",
+  "actions_revision": "d454eba565fca2c0cb8c897fdef3bbadb59167c3",
+  "tested_llvm": "integrated source fork",
+  "repository_default_llvm_prebuilt": "neverd-llvm-v23.0.0-r7",
+  "package_pin_change": "https://github.com/NeverSight/NeverD/pull/2409",
+  "r6_compile_check": {
+    "release": "neverd-llvm-v23.0.0-r6",
+    "macos_arm64_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+    "published_release": "https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r6",
+    "configuration": "Release",
+    "compile_only": true,
+    "units": {
+      "lib/backend/codegen/CMakeFiles/NeverDCodeGen.dir/MachO/MachOEmbeddedDispatch.cpp.o": {
+        "bytes": 30664,
+        "sha256": "2168fe97b4d10a73f180719e4de3fa866fea70058f4a093085db35b3629deed5"
+      },
+      "lib/backend/codegen/CMakeFiles/NeverDCodeGen.dir/MachO/MachORegisterResults.cpp.o": {
+        "bytes": 165512,
+        "sha256": "c9ec93e3ac29bcf6fad8ceabec50114c0916316191df922ce2aa59d7ce1afaf0"
+      },
+      "unittests/lift/CMakeFiles/NeverDArm64eLiftedImageTests.dir/aarch64/AArch64LiftedLeafTests.cpp.o": {
+        "bytes": 1185448,
+        "sha256": "d908e7851ee0c75e8d19f01831fc9f2da5a6f3ca4e067cf4f1ac0e05591ab0bd"
+      }
+    }
+  },
+  "forks": {
+    "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "capstone": "3ea7f5838a88c9f34328dc6d8afb2ed89a30ab62",
+    "unicorn": "33415f2cf99aa3df55f038e5e84a3ce9c54f1e79"
+  },
+  "release_host_sha256": "bf327952390e3a0a4d8bed0d9c907fbab65b75646b28609424bc7aa8a5115177",
+  "dependency_snapshot_sha256": "9b3a3de07549e55cdc2596a6c47372ad2c724dca3e7bc99aaea39699b001d11e",
+  "before": {
+    "revision": "48d88dea24158d86ba9f697a484d9b556c58aa9d",
+    "assembly_sha256": "76475670350233f24cfcad5e7c3d3d51cb444f7a9febcccec24b81cfc49b9ce2",
+    "original_sha256": "aad889bc59908de38a74784b62db9a853c9a051862c8e9f9ab904bdfef2336a2",
+    "original_records": [
+      [
+        16206,
+        2,
+        1
+      ],
+      [
+        16288,
+        2,
+        1
+      ],
+      [
+        16294,
+        2,
+        1
+      ],
+      [
+        16296,
+        8,
+        1
+      ],
+      [
+        16304,
+        8,
+        1
+      ]
+    ],
+    "exit": 1,
+    "output_exists": false
+  },
+  "local": {
+    "publication_cases": 248,
+    "all_five_suites": {
+      "total": 2130,
+      "passed_after_retries": 2077,
+      "explicit_skips": 53,
+      "skipped_tests": [
+        "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+        "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+        "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+        "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"aarch64\"",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/\"x86_64\"",
+        "AArch64EntryABI.PublishSignedNativeInputs",
+        "AArch64EntryABI.RejectsOccupiedNativeInputs",
+        "AArch64OrderedMemoryNative.SIMDFamiliesExecuteBothSourcesAndLLVM",
+        "AArch64PAuthSemantics.NativeKeysAgreeWithBothCProjections",
+        "AArch64PAuthLRSemantics.NativeTwoModifierKeysAgreeWithBothCProjections",
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections",
+        "A64FastClassifyParity.OptionalRealBinaryWalk",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.AuthenticatedCallsAndSignedUnwindExecute/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.NativeDwarfLanguageCallsAndCleanup/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.RelocatedSignedLanguageFramesExecute/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedEntriesExecute/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedThreadedEntriesExecute/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishedExecutableStarts/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedIR/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedIREntriesExecute/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.PublishesGeneratedExecutable/3",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/0",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/1",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/2",
+        "AppleClang/MachOArm64eNativeObjectInstallation.GeneratedExecutableStarts/3"
+      ],
+      "serial_reruns_seconds": {}
+    },
+    "optional_system_classifier": {
+      "source": "/usr/bin/wc",
+      "text_bytes": 2612,
+      "instructions": 653,
+      "text_sha256": "899252e4e4fda95687563d854b629d686e53023b7baf20a499520173ce3e71c0",
+      "test": "OptionalRealBinaryWalk",
+      "result": "completed",
+      "temporary_files_removed": true
+    },
+    "signatures_and_record_counts": {
+      "cli-images/split-original.dylib": {
+        "sha256": "aad889bc59908de38a74784b62db9a853c9a051862c8e9f9ab904bdfef2336a2",
+        "bytes": 34992,
+        "data_in_code_records": 5
+      },
+      "cli-images/default-1.dylib": {
+        "sha256": "7e72f21e159d7d5508c8b2fa3887eec4236c425cc79bcbc810bcaa7ebcad837b",
+        "bytes": 70272,
+        "data_in_code_records": 18
+      },
+      "cli-images/default-2.dylib": {
+        "sha256": "ed958ffebfc0169ed9a8cf8b7878f7282531b5ed67d167ffe1051238f0c36858",
+        "bytes": 105856,
+        "data_in_code_records": 27
+      },
+      "cli-images/default-3.dylib": {
+        "sha256": "a12b6cbe2ca9d133d6563254c5f545ceafe1a5b5d89e0effa6e95083f1235db2",
+        "bytes": 141760,
+        "data_in_code_records": 36
+      },
+      "cli-images/no-opt-1.dylib": {
+        "sha256": "2ff498845f069068bfda70f49176382ea9f15360bffab4a25104fbf7c6622d18",
+        "bytes": 70272,
+        "data_in_code_records": 18
+      },
+      "cli-images/no-opt-2.dylib": {
+        "sha256": "193dfaff02fd9f83a388c972b24b1c0dbf5a3ac606f31364ce8664aef014bd15",
+        "bytes": 105856,
+        "data_in_code_records": 27
+      },
+      "cli-images/no-opt-3.dylib": {
+        "sha256": "5d90947dff2d408de753069aa6bca514fa0d94f0a58d3da8bed6257de1fbb917",
+        "bytes": 141760,
+        "data_in_code_records": 36
+      }
+    },
+    "rejected_conflicts": {
+      "integer-default": {
+        "input_sha256": "912f609ee9c4e25dc0aa69b9f05e7fad768484124836661b404a8ac2e8e7c57d",
+        "exit": 1,
+        "output_exists": false,
+        "input_unchanged": true
+      },
+      "integer-no-opt": {
+        "input_sha256": "912f609ee9c4e25dc0aa69b9f05e7fad768484124836661b404a8ac2e8e7c57d",
+        "exit": 1,
+        "output_exists": false,
+        "input_unchanged": true
+      },
+      "high-half-default": {
+        "input_sha256": "a8c40b2bdfea64c2542604f918ad7884651b340e5322253468bc90d10f72e7d1",
+        "exit": 1,
+        "output_exists": false,
+        "input_unchanged": true
+      },
+      "high-half-no-opt": {
+        "input_sha256": "a8c40b2bdfea64c2542604f918ad7884651b340e5322253468bc90d10f72e7d1",
+        "exit": 1,
+        "output_exists": false,
+        "input_unchanged": true
+      }
+    }
+  },
+  "native": {
+    "macos-26": {
+      "hardware": "Apple M1 (Virtual)",
+      "publication_cases": 248,
+      "fixture": {
+        "source_regular_instruction_sections": "1",
+        "discontiguous_instruction_sections": "0",
+        "separate_executable_segments": "0",
+        "original_sha256": "07c2474c505872be2317d2a033a0d5dc1f9ada26a0b3f2b7092bf33a21f60225",
+        "published_sha256": "0ebc70fae57fa45f821be51366cba05773e6024c9894f1d84ef64d73c73db186",
+        "caller_authenticated_call_sites": "10",
+        "relift_function_starts_0": "1",
+        "relift_stage_0_3F20": "accepted",
+        "relift_stage_0_3F58": "accepted",
+        "relift_stage_0_4000": "accepted",
+        "relift_stage_0_4038": "accepted",
+        "relift_defined_functions_0": "4",
+        "republished_sha256_0": "54a70799496cb1a9d4b25eb3fe3d2bc5b1efc6310afa9338f81dd69b71613d40",
+        "relift_function_starts_1": "1",
+        "relift_stage_1_3F20": "accepted",
+        "relift_stage_1_3F58": "accepted",
+        "relift_stage_1_4000": "accepted",
+        "relift_stage_1_4038": "accepted",
+        "relift_stage_1_8000": "accepted",
+        "relift_stage_1_8004": "accepted",
+        "relift_stage_1_8008": "accepted",
+        "relift_stage_1_8040": "accepted",
+        "relift_defined_functions_1": "8",
+        "republished_sha256_1": "5b6301797be6f988ddee9fa838a2bdf343ba3edf54598549002b7c4c542a0f68",
+        "published_data_in_code_records": "36",
+        "resigned_publication_generations": "3",
+        "native_literal_width_comparisons": "40",
+        "executed_native_images": "4"
+      },
+      "cli_comparisons": 70,
+      "original_table_walks": {
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_stack_table_walks": 6,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0
+      },
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      }
+    },
+    "xcode-27": {
+      "hardware": "Apple M1 (Virtual)",
+      "publication_cases": 248,
+      "fixture": {
+        "source_regular_instruction_sections": "1",
+        "discontiguous_instruction_sections": "0",
+        "separate_executable_segments": "0",
+        "original_sha256": "d0be0eb3cf1679053d98faa460ef9f15cea59845d613902c661e1f624ecf856e",
+        "published_sha256": "833768eb8d39b87e34de0cfc668fc76694371c0948fca1ce79f0ed328463883a",
+        "caller_authenticated_call_sites": "10",
+        "relift_function_starts_0": "1",
+        "relift_stage_0_328": "accepted",
+        "relift_stage_0_360": "accepted",
+        "relift_stage_0_4000": "accepted",
+        "relift_stage_0_4038": "accepted",
+        "relift_defined_functions_0": "4",
+        "republished_sha256_0": "d801854c36d632f3409dd806bfb648fc04f47e97fa7356cabdfcdf2e10f91205",
+        "relift_function_starts_1": "1",
+        "relift_stage_1_328": "accepted",
+        "relift_stage_1_360": "accepted",
+        "relift_stage_1_4000": "accepted",
+        "relift_stage_1_4038": "accepted",
+        "relift_stage_1_8000": "accepted",
+        "relift_stage_1_8004": "accepted",
+        "relift_stage_1_8008": "accepted",
+        "relift_stage_1_8040": "accepted",
+        "relift_defined_functions_1": "8",
+        "republished_sha256_1": "c25e31f456b529600cf12651151899488e32559f4108493b0eaf67cf0031a007",
+        "published_data_in_code_records": "36",
+        "resigned_publication_generations": "3",
+        "native_literal_width_comparisons": "40",
+        "executed_native_images": "4"
+      },
+      "cli_comparisons": 70,
+      "original_table_walks": {
+        "native_old_entry_presented_by_sigtramp": 0,
+        "native_old_entry_raw_caller_sp_matches": 0,
+        "native_alternate_stack_table_walks": 6,
+        "native_alternate_handler_entry_visits": 0,
+        "native_alternate_handler_sp_matches": 0
+      },
+      "x1": {
+        "status": "unavailable",
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      }
+    }
+  }
+}

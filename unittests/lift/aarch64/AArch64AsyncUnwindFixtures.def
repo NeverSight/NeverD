@@ -66,6 +66,8 @@ ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
 ASYNC_FRAME_TEXT(kEntryLookupOffset, "native_old_entry_fde_lookup_offset")
+ASYNC_FRAME_TEXT(kAutomaticEntryWalks,
+                 "native_automatic_original_table_entry_walks")
 ASYNC_FRAME_TEXT(kExactEntryStep, "native_old_entry_original_fde_step")
 ASYNC_FRAME_TEXT(kEntrySteps, "native_old_entry_system_steps")
 ASYNC_FRAME_TEXT(kOriginalRules, "original.rules")
@@ -460,6 +462,8 @@ _invoke_stages:
 .cfi_def_cfa x29, 16
   str x19, [sp,#-16]!
 .cfi_offset x19,-32
+  // The callback and optional completion flag survive every authenticated call.
+  stp x0, x2, [sp,#-16]!
   mov x19,#0x5a19
   adr x2, Lreturn_site
   mov w5, #8
@@ -485,8 +489,17 @@ Lcall:
   stlr x19, [x7]
   mov x16, x0
   mov x0, x1
+Linvoke:
   blraaz x16
 Lreturn_site:
+  ldur x9, [x29,#-24]
+  cbz x9, Lfinish
+  ldar w9, [x9]
+  cbnz w9, Lfinish
+  ldur x16, [x29,#-32]
+  mov x0, xzr
+  b Linvoke
+Lfinish:
   ldur x19, [x29,#-16]
 .cfi_restore x19
   mov sp, x29
@@ -511,6 +524,7 @@ _call_outer:
 .cfi_offset x30,-8
   mov x29,sp
 .cfi_def_cfa x29,16
+  mov x6,x2
   adr x2,Louter_return
   mov w5,#8
 Lchoose_outer_sp:
@@ -526,6 +540,7 @@ Lchoose_outer_sp:
 Lno_outer_signature:
   brk #0
 Lcall_inner:
+  mov x2,x6
   bl _invoke_stages
 Louter_return:
   mov sp,x29
@@ -567,7 +582,7 @@ struct sample {
   int stack_matches;
 };
 typedef void (*entry)(struct handshake *);
-extern void call_outer(entry, struct handshake *);
+extern void call_outer(entry, struct handshake *, const _Atomic int *);
 extern uintptr_t outer_return_address(void);
 extern uintptr_t return_address(void);
 _Atomic uintptr_t stage_entry_sp, incoming_x19;
@@ -667,6 +682,15 @@ static void raw_entry_walk(const ucontext_t *uc) {
       ndDarwinArm64eInitIndexedEntryCursor(&cursor, uc, owner + NDArm64eInstructionAlignment, &lookup_offset) ||
       !ndDarwinArm64eInitTableEntryCursor(&cursor, uc, owner, mode, &lookup_offset) ||
       raw_pc(&cursor) != owner + lookup_offset)
+    _exit(35);
+  const unsigned explicit_offset = lookup_offset;
+  ucontext_t incomplete = *uc;
+  incomplete.uc_mcsize = 0;
+  if (ndDarwinArm64eInitInterruptedEntryCursor(&cursor, &incomplete, &lookup_offset))
+    _exit(35);
+  if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp) ||
+      !ndDarwinArm64eInitInterruptedEntryCursor(&cursor, uc, &lookup_offset) ||
+      lookup_offset != explicit_offset || raw_pc(&cursor) != owner + lookup_offset)
     _exit(35);
   for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
     unw_fpreg_t value;
@@ -878,12 +902,9 @@ int main(int argc, char **argv) {
   pthread_t monitor;
   if (pthread_create(&monitor, NULL, interrupt_worker, NULL))
     return 5;
-  if (entry_only) {
-    while (!atomic_load(&state.done))
-      call_outer(run, NULL);
-  } else {
-    call_outer(run, &state);
-  }
+  // Sample the real entry from one pair of signed caller frames. The saved
+  // registers, incoming SP and observed return PCs stay constant across calls.
+  call_outer(run, entry_only ? NULL : &state, entry_only ? &state.done : NULL);
   if (pthread_join(monitor, NULL))
     return 6;
   if (alternate) {

@@ -10,13 +10,28 @@
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/MachO/EmbeddedRead.h"
+#include "neverd/loader/RelocationProvenance.h"
 #include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/MachO.h"
 
+#include <array>
+#include <iterator>
+
 namespace neverd {
+bool coverMachOEmbeddedRead(const MachOLiftedSource &Source, va_t Start,
+                            va_t Address, uint64_t Size, uint16_t Kind,
+                            std::vector<MachODataInCodeRange> *Missing) {
+  if (Address < Start || !Size ||
+      !rangeInBounds(Address - Start, Size, Source.Bytes.size()))
+    return false;
+  return coverMachODataInCodeRead(Source.Embedded, Address, Size, Kind,
+                                  Missing != nullptr, Missing);
+}
+
 namespace {
 #define MACHO_DISPATCH_VALUE(Name, Value) constexpr unsigned Name = Value;
 #include "MachOEmbeddedDispatch.def"
@@ -46,17 +61,29 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
       Block.EndAddr - Start > Source.Bytes.size())
     return std::nullopt;
 
-  va_t Next = Block.EndAddr - SequenceBytes;
+  // NOPs can pad a dispatch without changing any reaching definition. Stop
+  // at the block boundary and retain every other word in program order.
+  std::array<va_t, kDispatchInstructions> Sites;
+  va_t Cursor = Block.EndAddr;
+  for (auto &Site : llvm::reverse(Sites)) {
+    do {
+      if (Cursor - Block.StartAddr < Word)
+        return std::nullopt;
+      Cursor -= Word;
+    } while (readLE<uint32_t>(Source.Bytes.data() + (Cursor - Start)) ==
+             aarch64::kNop);
+    Site = Cursor;
+  }
+  auto Next = Sites.begin();
   DecodedInsn I{};
   const auto Read = [&]() {
-    const auto PC = Next;
-    Next += Word;
+    const va_t PC = *Next++;
     return Decode.decodeOne(Source.Bytes.data() + (PC - Start), Word, PC, I) ==
                Word &&
            I.Raw && I.Raw->detail;
   };
   const auto ADR = [&]() -> std::optional<Address> {
-    if (!Read() || I.Id != AARCH64_INS_ADR)
+    if (I.Id != AARCH64_INS_ADR)
       return std::nullopt;
     const auto &D = I.Raw->detail->aarch64;
     if (D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG ||
@@ -64,14 +91,25 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
       return std::nullopt;
     return Address{D.operands[0].reg, va_t(D.operands[1].imm), I.Addr};
   };
-  auto Storage = ADR();
-  auto Anchor = ADR();
-  if (!Storage || !Anchor || Storage->Reg == Anchor->Reg)
+  if (!Read())
     return std::nullopt;
+  auto Storage = ADR();
+  if (!Storage || !Read())
+    return std::nullopt;
+
+  // When both addresses precede the load their registers must coexist.
+  // A later anchor may reuse the storage register once the load has read it.
+  std::optional<Address> Anchor;
+  if (I.Id == AARCH64_INS_ADR) {
+    Anchor = ADR();
+    if (!Anchor || Storage->Reg == Anchor->Reg)
+      return std::nullopt;
+    if (Storage->Target != Table.BaseAddr)
+      std::swap(Storage, Anchor);
+    if (!Read())
+      return std::nullopt;
+  }
   if (Storage->Target != Table.BaseAddr)
-    std::swap(Storage, Anchor);
-  if (Storage->Target != Table.BaseAddr || Anchor->Target != Table.TargetBase ||
-      !Read())
     return std::nullopt;
 
   uint16_t Kind;
@@ -93,7 +131,13 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
   // Replacing the load's W result by its X view is the architectural zero
   // extension used by compact tables. LDRSW already defines an X register.
   const auto Offset = mapCapstoneReg(Load.operands[0].reg).Offset;
-  if (Offset == mapCapstoneReg(Anchor->Reg).Offset || !Read() ||
+  if (!Anchor) {
+    if (!Read())
+      return std::nullopt;
+    Anchor = ADR();
+  }
+  if (!Anchor || Anchor->Target != Table.TargetBase ||
+      Offset == mapCapstoneReg(Anchor->Reg).Offset || !Read() ||
       I.Id != AARCH64_INS_ADD)
     return std::nullopt;
   const auto &Add = I.Raw->detail->aarch64;
@@ -113,22 +157,6 @@ std::optional<MovingTable> movingTableAddress(Decoder &Decode,
   return MovingTable{Storage->PC, Kind};
 }
 
-// A source record is authoritative. Only an uncovered read may introduce a
-// new record; its instruction must never change the kind of a declared one.
-bool recordRead(const MachOLiftedSource &Source, va_t Start, va_t Begin,
-                va_t End, uint16_t Kind,
-                std::vector<MachODataInCodeRange> &Recovered) {
-  if (Begin < Start || End <= Begin || End - Start > Source.Bytes.size())
-    return false;
-  const auto Existing =
-      machODataInCodeRanges(Source.Embedded, Begin, End - Begin);
-  if (!Existing.empty())
-    return Existing.size() == 1 && Existing.front().Kind == Kind &&
-           Existing.front().Begin <= Begin && End <= Existing.front().End;
-  Recovered.push_back({Begin, End, Kind});
-  return true;
-}
-
 bool recordTable(const MachOLiftedSource &Source, va_t Start,
                  const JumpTable &Table, uint16_t Kind,
                  std::vector<MachODataInCodeRange> &Recovered) {
@@ -141,13 +169,15 @@ bool recordTable(const MachOLiftedSource &Source, va_t Start,
         Range.EntrySize != Table.EntrySize)
       return false;
     if (Range.EntrySize == Range.EntryStride || Range.PhysicalSlotCount == 1) {
-      if (!recordRead(Source, Start, Range.BaseAddr, *End, Kind, Recovered))
+      if (!coverMachOEmbeddedRead(Source, Start, Range.BaseAddr,
+                                  *End - Range.BaseAddr, Kind, &Recovered))
         return false;
       continue;
     }
     for (uint64_t I = 0; I < Range.PhysicalSlotCount; ++I) {
       const va_t At = Range.BaseAddr + I * Range.EntryStride;
-      if (!recordRead(Source, Start, At, At + Range.EntrySize, Kind, Recovered))
+      if (!coverMachOEmbeddedRead(Source, Start, At, Range.EntrySize, Kind,
+                                  &Recovered))
         return false;
     }
   }
@@ -176,10 +206,13 @@ bool coalesceReads(std::vector<MachODataInCodeRange> &Recovered) {
   return true;
 }
 
-bool completeLayout(const LowFunc &Function, const MachOLiftedSource &Source,
-                    std::vector<MachODataInCodeRange> &Recovered) {
+bool completeLayout(const BinaryImage &Image, const LowFunc &Function,
+                    const MachOLiftedSource &Source,
+                    MachOEmbeddedDispatch &Layout) {
+  auto &Recovered = Layout.Recovered;
   if (!coalesceReads(Recovered))
     return false;
+  const auto ReadCount = Recovered.size();
   llvm::SmallVector<std::pair<va_t, va_t>> Spans;
   for (const auto &B : Function.Blocks)
     Spans.emplace_back(B.StartAddr, B.EndAddr);
@@ -190,27 +223,58 @@ bool completeLayout(const LowFunc &Function, const MachOLiftedSource &Source,
   llvm::sort(Spans);
   const va_t Limit = Function.Entry + Source.Bytes.size();
   va_t Next = Function.Entry;
-  const auto AddPadding = [&](va_t End) {
+  const auto AddPadding = [&](va_t Begin, va_t End) {
+    if (Begin < End)
+      Recovered.push_back({Begin, End, llvm::MachO::DICE_KIND_DATA});
+  };
+  const auto CoverGap = [&](va_t End) {
+    constexpr auto Word = aarch64::kInsnSize;
     if (Next == End)
       return true;
-    // AArch64 instructions occupy whole aligned words. Once neighboring
-    // code and reads are proved, these fragments cannot contain a separate
-    // instruction. Leave a gap containing even one whole word unresolved.
-    if (Next > End ||
-        (End - Next >= aarch64::kInsnSize &&
-         llvm::alignDown(End - aarch64::kInsnSize, aarch64::kInsnSize) >= Next))
+    if (Next > End)
       return false;
-    Recovered.push_back({Next, End, llvm::MachO::DICE_KIND_DATA});
+    // Only complete aligned words could be instructions. The partial words
+    // on either side share an instruction word with an already owned span.
+    const auto WordEnd = llvm::alignDown(End, Word);
+    if (WordEnd <= Next || WordEnd - Next < Word) {
+      AddPadding(Next, End);
+      return true;
+    }
+    const auto FirstWord = llvm::alignTo(Next, Word);
+    AddPadding(Next, FirstWord);
+    Layout.UnreachedCode.emplace_back(FirstWord, WordEnd);
+    AddPadding(WordEnd, End);
     return true;
   };
-  const auto ReadCount = Recovered.size();
   for (const auto &[Begin, End] : Spans) {
-    if (Begin >= End || End > Limit || !AddPadding(Begin))
+    if (Begin >= End || End > Limit || !CoverGap(Begin))
       return false;
     Next = End;
   }
-  return AddPadding(Limit) &&
-         (ReadCount == Recovered.size() || coalesceReads(Recovered));
+  if (!CoverGap(Limit))
+    return false;
+  if (Recovered.empty() || Layout.UnreachedCode.empty())
+    return ReadCount == Recovered.size() || coalesceReads(Recovered);
+
+  // A pure instruction section supplies the code owner outside declared data
+  // islands. Use it for an unvisited interval only when every recovered read
+  // closes a hole between two original records of its own kind. An open-ended
+  // read or a SOME-only section cannot establish the rest of the layout.
+  const auto *Section = Image.getSectionFor(Function.Entry);
+  if (!Section || !(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS))
+    return false;
+  for (const auto &Read : llvm::ArrayRef(Recovered).take_front(ReadCount)) {
+    const auto Right = llvm::lower_bound(
+        Source.Embedded, Read.End,
+        [](const auto &Record, va_t End) { return Record.Begin < End; });
+    if (Right == Source.Embedded.begin() || Right == Source.Embedded.end() ||
+        Right->Begin != Read.End || Right->Kind != Read.Kind)
+      return false;
+    const auto &Left = *std::prev(Right);
+    if (Left.End != Read.Begin || Left.Kind != Read.Kind)
+      return false;
+  }
+  return ReadCount == Recovered.size() || coalesceReads(Recovered);
 }
 } // namespace
 
@@ -249,9 +313,9 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       if (Load && Load->Address >= Function.Entry &&
           rangeInBounds(Load->Address - Function.Entry, Load->Width,
                         Source.Bytes.size()) &&
-          !recordRead(Source, Function.Entry, Load->Address,
-                      Load->Address + Load->Width, llvm::MachO::DICE_KIND_DATA,
-                      Result.Recovered))
+          !coverMachOEmbeddedRead(Source, Function.Entry, Load->Address,
+                                  Load->Width, llvm::MachO::DICE_KIND_DATA,
+                                  &Result.Recovered))
         return std::nullopt;
     }
     if (Block.EndAddr < aarch64::kInsnSize)
@@ -269,9 +333,21 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
       Result.BranchTargets.try_emplace(Table->InsnAddr, Table->Targets);
     }
   }
-  if (!Result.Recovered.empty() &&
-      !completeLayout(Function, Source, Result.Recovered))
-    return std::nullopt;
+  const bool MissingReads = !Result.Recovered.empty();
+  if ((MissingReads || !Source.Embedded.empty()) &&
+      !completeLayout(Image, Function, Source, Result)) {
+    if (MissingReads)
+      return std::nullopt;
+    // Explicit data records need no inferred layout. The normal instruction
+    // emitter still verifies the entire body in this case.
+    Result.UnreachedCode.clear();
+    Result.Recovered.clear();
+  }
+  // A retained instruction has no relocation emitter of its own, including
+  // when every data record surrounding it was present in the input.
+  for (const auto &[Begin, End] : Result.UnreachedCode)
+    if (hasRelocationProvenanceIn(Image, Begin, End))
+      return std::nullopt;
   return Result;
 }
 } // namespace neverd

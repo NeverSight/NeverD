@@ -33,16 +33,20 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   upper half of the n32 address space retain their ELF32 storage identity
   when generated code is relinked. Each later register write takes effect
   normally.
-- In linked classic n32/n64 PIC and CPIC code, an ordinary entry block can
+- In linked classic n32/n64 PIC and CPIC code, the ordinary entry can
   establish GP from its incoming `$t9` and a linker displacement. Source
-  conversion binds the completed register write when it matches the image-wide
-  register-info GP. This covers the assembler's `.cpsetup` and Clang's
-  equivalent calculation in a temporary GPR. The caller's incoming GP and
-  later register writes keep their own values. Scoped GP records cannot supply
-  this proof. A full-width GOT import load retains its symbol through n32's
-  sign extension. A static GNU GOT with a single GP and no TLS can supply the
-  initial address of a writable callback object. The call reads the object's
-  current pointer.
+  conversion follows saved copies of `$t9` across direct branches and loops.
+  A branch-likely passes the pre-slot value on its skipped edge and the
+  updated value on its taken edge. The classic `b` alias and
+  `beql $zero,$zero` always execute their slot and have one successor.
+  Every incoming path, including loop backedges, must establish the same
+  value. Calls and independent entries end the proof. The completed write
+  must match the image-wide register-info GP. This covers assembler `.cpsetup` and Clang's calculation
+  in a temporary GPR. The caller's incoming GP and later register writes keep
+  their own values. Scoped GP records cannot supply this proof. A full-width
+  GOT import load retains its symbol through n32's sign extension. A static
+  GNU GOT with a single GP and no TLS can supply the initial address of a
+  writable callback object. The call reads the object's current pointer.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
@@ -520,6 +524,9 @@ requires the promoted types of its unnamed arguments. The original LowIR
 retains the direct call to the runtime stub. The
 [indirect-call roundtrip](../unittests/lift/mips/mips16-indirect-call-roundtrip.py)
 exercises both byte orders, FR=0/1 and classic/compressed targets.
+It includes a variadic call with a named float and unsigned word, followed by
+a promoted double in a2/a3 and an unsigned word on the stack. The callee
+combines all four operands into the returned double's bits.
 
 The [MIPS16 call roundtrip](../unittests/lift/mips/mips16-floating-call-roundtrip.py)
 also covers split double parameters and proven classic entry stubs, in both
@@ -1709,6 +1716,9 @@ types.
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
+An untyped PIC call can observe argument-register writes that reach it,
+including its delay slot and loop backedges. A later call with a declared
+by-value record observes the pieces selected by its own signature.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
 A merge load from caller-owned input can supply a record argument when both

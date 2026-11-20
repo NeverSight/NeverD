@@ -45,6 +45,14 @@ const GoWriteBarrier *goWriteBarrierAt(const BinaryImage &Img, va_t Entry);
 /// \p A: R11 or X25 for GoWriteBarrierKind::Buffer, none for Store.
 std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind);
 
+/// The operands of the write barrier at \p Entry where it performs the store
+/// itself (GoWriteBarrierKind::Store), in its own order: the address it writes
+/// at and the pointer it writes there (GoWriteBarrier::Destination, Value).
+/// They follow neither the platform's argument order nor Go's.  None for a
+/// Buffer barrier, which takes no argument, or for any other routine.
+std::optional<FixedIntegerCallArguments>
+goWriteBarrierArguments(const BinaryImage &Img, va_t Entry);
+
 /// The contract of a call the code at \p Caller makes to \p Callee, which is
 /// InvalidVA where the call names no fixed target.
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
@@ -144,12 +152,15 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
 
 /// Whether the Go function at \p Entry takes every argument and returns every
 /// result on the stack, as Go code did before its internal register ABI
-/// (GoModuleInfo::StackArguments).
+/// (GoModuleInfo::StackArguments), and as Go assembly still does under it
+/// (ABI0) unless declared `<ABIInternal>`.  detectCc tells those apart first:
+/// they take Go's argument registers (goAssemblyTakesRegisterArguments).
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry);
 
 /// Whether Go code before its internal ABI reads \p Register's incoming value
 /// without taking an argument in it: the stack and frame pointers, the link
-/// register, the closure context, and arm64's goroutine register R28.  Code
+/// register, the closure context, arm64's goroutine register R28, and every
+/// vector register, since floating arguments are on the stack too.  Code
 /// that reads any other register at its entry, as a register stub or a
 /// trampoline the platform's code calls does, takes arguments there.
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
@@ -165,6 +176,11 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A);
 /// it says.
 std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
                                              va_t Entry);
+
+/// Whether the `pclntab` records a function starting at \p Entry, whether
+/// or not its record gives a size (GoModuleInfo::FrameArguments): a block
+/// NeverD splits off a function's interior is no such function.
+bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
 
 /// Whether \p Callee drops its return address and returns to its caller's
 /// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is

@@ -549,14 +549,44 @@ Still open, in order of yield:
      - Growth elision for stack-ABI functions now runs where the growth
        block's only predecessor is the entry's check: the no-return list
        ended the false edges from `gopanic` and `throw` calls before it, and
-       `runtime_makeslice(et, len, cap)` reads its parameters. Some functions
-       still read scratch registers at their entry and are no stack-only
-       function, so their stack parameters take System V's numbering after a
-       spurious register parameter (`runtime_mallocgc`: AL, R9 and R13 reach a
-       join from two of its paths).
+       `runtime_makeslice(et, len, cap)` reads its parameters. A register
+       whose incoming value no needed operation reads, as Go's nil check
+       `testb al, (reg)` reads AL, no longer makes a function take register
+       parameters (`runtime_mallocgc(size, typ, needzero)`).
+     - A call's outgoing slot stored in an earlier block, as the compiler
+       leaves `memequal`'s second argument from a previous call, is not
+       found: the argument prints a placeholder.
+     - A call to Go assembly whose record gives no size (`$0`) takes the
+       words the callee reads (`futex`, `clone`, `onosstack`, Windows'
+       `externalthreadhandler`); a block split off a function's interior has
+       no record and keeps the platform's reading.
+     - On Windows, a block inside a Go function is sometimes split off as a
+       function of its own (`ensureSwept`'s 0x420515), and its call passes
+       Win64 positions, which widens the enclosing function.
+     - A run of some functions alone recovers stack-ABI calls as the whole
+       image does; on a 40-function Go 1.16 sample, 16 of 23 bodies match the
+       image's, up from 8. Still apart: parameter types the image's callers
+       give, omitted callees whose recovery stops early (`gentraceback` 14
+       words beside 10). In register-ABI images a run alone now summarizes
+       the listed routines (`runtime_throw` 2 arguments, as in the image,
+       beside 7); on a 40-function Go 1.18 sample 20 of 29 bodies match, up
+       from 18. Still apart there: `spillArgs` (12 arguments beside 1),
+       and ABI0 assembly callees (`madvise` 5 beside 9, `Syscall6` 7 beside
+       13).
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
-     - ABI0 assembly in register-ABI images.
+     - arm64 frames of 4 KB and more (Go's `runtime.call4096` and up, which
+       set the frame through X27) take one position-less parameter, or
+       fifteen from `call65536` up, with the stack reading or without:
+       `reflectcall`'s dispatch passes them a placeholder.
+     - A WRAPPER frame's panic check (`reflectcall`'s `callNNN`) stores
+       through a register with no definition in Go 1.15-1.26 alike.
+     - A register-ABI call's results past the first. Go's internal ABI
+       returns up to nine integer results in RAX, RBX, RCX, RDI, RSI and
+       R8-R11 and keeps no other of them across a call, so a read of RBX
+       before any write after a call is the call's second result; only RAX
+       is modeled, and `call *%rdx; mov %rbx, slot` prints a placeholder for
+       an interface's data word (`errors.init`, `modulesinit`).
      - arm64 growth paths, which still wait on the register-ABI gate.
        The no-return list is open to the stack ABI.
      Bounds stubs are done. LowIR recognizes a stub once

@@ -4,7 +4,8 @@
   "pull_request": "https://github.com/NeverSight/NeverD/pull/2437",
   "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44731143048",
   "controller_revision": "5bb08acd0d483280aa12c01f89262e27ac7f9763",
-  "llvm_prebuilt": "r6",
+  "tested_llvm": "integrated source fork",
+  "repository_default_llvm_prebuilt": "neverd-llvm-v23.0.0-r7",
   "forks": {
     "llvm-project": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
     "capstone": "3ea7f5838a88c9f34328dc6d8afb2ed89a30ab62",

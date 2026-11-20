@@ -5291,6 +5291,51 @@ TEST(LLVMCPointerAddresses, AtlCtorKeepsEmptyWideImageArg) {
   EXPECT_EQ(Source.find("1400464f0"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, AGlobalOfAnUnspellableCallbackKeepsItsAccessType) {
+  // A global whose debug type is a callback C cannot spell, one returning an
+  // array.  Its declaration threw out of the whole unit, as ld.so's globals
+  // did ("C callback type has no supported signature"); the object keeps the
+  // type its loads give it.
+  constexpr va_t Address = 0x1400050E0;
+  BinaryImage Img = makeImageObjectFixture(Address, std::vector<uint8_t>(8, 0),
+                                           /*Writable=*/true);
+  class Callback : public NullDebugContext {
+  public:
+    static DataObjectSym object() {
+      DataObjectSym Object{"hook", Address, 8, false};
+      Object.Type = NdType::makePtr(
+          NdType::makeFunc(NdType::makeArray(NdType::makeInt(4), 4, 16)));
+      return Object;
+    }
+    std::vector<DataObjectSym> allDataObjects() const override {
+      return {object()};
+    }
+    std::optional<DataObjectSym> resolveDataObject(va_t Addr) const override {
+      if (Addr != Address)
+        return std::nullopt;
+      return object();
+    }
+    bool hasInfo() const override { return true; }
+  } Dbg;
+  ASSERT_FALSE(hasCSpelling(Callback::object().Type));
+  HighFunc Func;
+  Func.Name = "read_hook";
+  Func.Entry = 0x140001000;
+  Func.ReturnType = NdType::makeInt(8, false);
+  returnValue(Func, HighExpr::makeLoad(HighExpr::makeConst(Address, 8),
+                                       NdType::makeInt(8, false)));
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X64;
+  Options.Format = BinaryFormat::COFF;
+  Options.Image = &Img;
+  ASSERT_TRUE(HighCEmitter().emit({Func}, OS, Options, &Dbg));
+  OS.flush();
+  EXPECT_NE(Source.find("read_hook"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("hook"), std::string::npos) << Source;
+}
+
 TEST(HighCPointerAddresses, NamedEmptyWideImageConstPrintsAddressOfObject) {
   BinaryImage Img = makeImageObjectFixture(0x1400050E0, {0, 0}, false);
   class NamedWide : public NullDebugContext {

@@ -294,10 +294,11 @@ struct GoPanicBoundsRange {
 
 /// The bytes of arguments and results a Go function's caller holds for it in
 /// its own frame, as the function's `pclntab` record gives them
-/// (`_func.args`).
+/// (`_func.args`): none where the record leaves the size unknown, as Go
+/// assembly declared without one (`$0`) does.
 struct GoFrameArguments {
   va_t Entry = InvalidVA;
-  uint32_t Bytes = 0;
+  std::optional<uint32_t> Bytes;
 };
 
 /// Whether the Go runtime routine \p Name (`runtime.gopanic`) never returns
@@ -394,7 +395,8 @@ struct GoModuleInfo {
   /// unproven.
   bool StackArguments = false;
   /// Each function's FrameArguments, sorted by entry, where the text base is
-  /// proven.  A routine whose record leaves the size unknown has none.
+  /// proven: every function the `pclntab` records, a block NeverD splits off
+  /// a function's interior none.
   std::vector<GoFrameArguments> FrameArguments;
   /// Entry of Go 1.26's `runtime.panicBounds`, which reports every bounds
   /// failure, or InvalidVA.

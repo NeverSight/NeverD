@@ -382,9 +382,12 @@ void parseGoExceptions(BinaryImage &Img) {
   llvm::sort(Module.NoReturnEntries);
   if (TextBaseProven)
     for (const GoFunction &G : Funcs)
-      if (G.CodeRange.isValid() && G.Raw.Args >= 0)
+      if (G.CodeRange.isValid())
         Module.FrameArguments.push_back(
-            {G.CodeRange.Begin, static_cast<uint32_t>(G.Raw.Args)});
+            {G.CodeRange.Begin,
+             G.Raw.Args >= 0
+                 ? std::optional<uint32_t>(static_cast<uint32_t>(G.Raw.Args))
+                 : std::nullopt});
   llvm::sort(Module.FrameArguments,
              [](const GoFrameArguments &A, const GoFrameArguments &B) {
                return A.Entry < B.Entry;

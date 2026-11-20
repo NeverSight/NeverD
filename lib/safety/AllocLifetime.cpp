@@ -2069,7 +2069,7 @@ private:
       return false;
     int EntryBlock = F.Blocks.front().Id;
     for (const MedBlock &B : F.Blocks)
-      if (B.StartAddr == F.Entry) {
+      if (B.isFunctionEntry(F.Entry)) {
         EntryBlock = B.Id;
         break;
       }

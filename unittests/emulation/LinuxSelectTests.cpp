@@ -196,6 +196,10 @@ TEST_P(LinuxSelect, MissingAndGatedReceiveInputsDoNotInventReadiness) {
   EXPECT_EQ(word(Base + 64), 8u);
   C.ReceiveEvents = {{{9}, 0, 3}};
   EXPECT_FALSE(select(4, Base + 64));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 0, receive events consumed 0/1, "
+                               "receive_events[0].after_send=3");
   const uint8_t Bytes[] = {1, 2, 3};
   require(cpu().write(Base + 128, Bytes));
   EXPECT_EQ(call(ServiceKind::SendTo, 3, Base + 128, 3), 3u);
@@ -203,6 +207,9 @@ TEST_P(LinuxSelect, MissingAndGatedReceiveInputsDoNotInventReadiness) {
   EXPECT_EQ(call(ServiceKind::Read, 3, Base + 128, 1), 1u);
   EXPECT_EQ(word(Base + 128) & 0xff, 9u);
   EXPECT_FALSE(select(4, Base + 64));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 3, receive events consumed 1/1");
   EXPECT_FALSE(select(4, 0, Base + 64)); // Acceptance budget is not readiness.
   EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
                                "(TCP connection index 0, write readiness)");

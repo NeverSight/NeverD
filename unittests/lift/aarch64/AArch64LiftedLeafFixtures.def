@@ -510,6 +510,8 @@ unsigned long leaf_difference(unsigned long a, unsigned long b) { return a - b; 
 )c")
 
 A64_LEAF_TEXT(kMixedOracle, "#define NEVERD_TEST_MIXED_DATA 1\n")
+A64_LEAF_TEXT(kPaddedLiteralOracle, "#define NEVERD_TEST_MIXED_DATA 1\n"
+                                    "#define NEVERD_TEST_LITERAL_PADDING 1\n")
 A64_LEAF_TEXT(kRegionAssembly, ".data_region")
 A64_LEAF_TEXT(kDataLinker, "-Wl,-ld_classic,-data_in_code_info")
 A64_LEAF_TEXT(kPrefixControl, "prefix-control")
@@ -527,6 +529,11 @@ _leaf_sum:
 .data_region
 Lbias:
   .long 0xd503237f
+#ifdef NEVERD_TEST_LITERAL_PADDING
+  .byte 0x5a
+.end_data_region
+  .p2align 2
+#else
 .end_data_region
 .data_region jt8
   .byte 1,2
@@ -537,6 +544,7 @@ Lbias:
 .data_region jt32
   .long 4
 .end_data_region
+#endif
 Lresume:
   add x0, x0, x1
   add x0, x0, x8
@@ -553,9 +561,17 @@ _leaf_difference:
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
+A64_LEAF_TEXT(kSplitLiteralOracle, "#define NEVERD_TEST_SPLIT_LITERALS 1\n")
 A64_LEAF_TEXT(kLiteralComparisons, "native_literal_width_comparisons")
 A64_LEAF_VALUE(unsigned, kLiteralInputs, 5)
 A64_LEAF_TEXT(kLiteralWidths, R"asm(
+#ifdef NEVERD_TEST_SPLIT_LITERALS
+#define BEGIN_LITERAL .data_region
+#define END_LITERAL .end_data_region
+#else
+#define BEGIN_LITERAL
+#define END_LITERAL
+#endif
 .text
 .p2align 2
 .globl _leaf_sum
@@ -572,7 +588,11 @@ Lword: ldr w0,LwordData
 Ldouble: ldr x0,LdoubleData
  ret
 LwordData: .long 0x8fedcba1
-LdoubleData: .quad 0x12345678abcdef01
+LdoubleData: .short 0xef01
+ BEGIN_LITERAL
+ .short 0xabcd
+ END_LITERAL
+ .long 0x12345678
 LsignedData: .long 0x80000005
 .cfi_endproc
 .globl _leaf_difference
@@ -583,9 +603,11 @@ _leaf_difference:
  cmp w0,#1
  b.eq LfloatDouble
  ldr q0,Lquad
- mov x9,v0.d[1]
+ cmp w0,#2
+ b.ne Lhigh
  fmov x0,d0
- eor x0,x0,x9
+ ret
+Lhigh: mov x0,v0.d[1]
  ret
 Lsingle: ldr s0,LsingleData
  fmov w0,s0
@@ -594,8 +616,21 @@ LfloatDouble: ldr d0,LfloatData
  fmov x0,d0
  ret
 LsingleData: .long 0x7fc00021
-LfloatData: .quad 0x8000000000000000
-Lquad: .quad 0x1122334455667788,0x9abcdef012345678
+LfloatData:
+ BEGIN_LITERAL
+ .short 0
+ END_LITERAL
+ .long 0
+ BEGIN_LITERAL
+ .short 0x8000
+ END_LITERAL
+Lquad:
+ BEGIN_LITERAL
+ .quad 0x1122334455667788
+ END_LITERAL
+ BEGIN_LITERAL
+ .quad 0x9abcdef012345678
+ END_LITERAL
 .cfi_endproc
 .subsections_via_symbols
 )asm")
@@ -617,18 +652,68 @@ int main(int argc, char **argv) {
   const uint64_t integers[] = {UINT64_C(0x8fedcba1), UINT64_C(0x12345678abcdef01),
                                UINT64_C(0xffffffff80000005)};
   const uint64_t vectors[] = {UINT64_C(0x7fc00021), UINT64_C(0x8000000000000000),
-                              UINT64_C(0x1122334455667788) ^ UINT64_C(0x9abcdef012345678)};
+                              UINT64_C(0x1122334455667788), UINT64_C(0x9abcdef012345678)};
   for (unsigned i = 0; i < sizeof(inputs) / sizeof(*inputs); ++i) {
     uint32_t index = (uint32_t)inputs[i];
-    if (index >= 2)
-      index = 2;
-    if (integer(inputs[i]) != integers[index] || vector(inputs[i]) != vectors[index])
+    if (integer(inputs[i]) != integers[index < 2 ? index : 2] ||
+        vector(inputs[i]) != vectors[index < 3 ? index : 3])
       return 4;
   }
   return dlclose(image) != 0;
 }
 )c")
 A64_LEAF_TEXT(kDispatchOracle, "#define NEVERD_TEST_EMBEDDED_DISPATCH 1\n")
+A64_LEAF_TEXT(kFragmentedDispatchOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n")
+A64_LEAF_TEXT(kGappedDispatchOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                     "#define NEVERD_TEST_TABLE_GAPS 1\n")
+A64_LEAF_TEXT(kMaskedFragmentedOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kMaskedGappedOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                   "#define NEVERD_TEST_TABLE_GAPS 1\n"
+                                   "#define NEVERD_TEST_MASKED_DISPATCH 1\n")
+A64_LEAF_TEXT(kScheduledDispatchOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_TABLE_GAPS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_SCHEDULED_DISPATCH 1\n")
+A64_LEAF_TEXT(kRetainedDefaultOracle, "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+                                      "#define NEVERD_TEST_TABLE_GAPS 1\n"
+                                      "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+                                      "#define NEVERD_TEST_RETAIN_DEFAULT 1\n")
+A64_LEAF_TEXT(kDefaultBlocks, "preserved_unreached_blocks")
+A64_LEAF_TEXT(kExposedPCInput, "exposed-pc.dylib")
+A64_LEAF_TEXT(kFreshPCRefusal, "refused_unreached_pc_after_fresh_lift")
+A64_LEAF_TEXT(kPaddedSplitDefaultOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_RETAIN_DEFAULT 1\n"
+              "#define NEVERD_TEST_PAD_DEFAULT 1\n")
+A64_LEAF_TEXT(kPaddedGappedDefaultOracle,
+              "#define NEVERD_TEST_TABLE_FRAGMENTS 1\n"
+              "#define NEVERD_TEST_TABLE_GAPS 1\n"
+              "#define NEVERD_TEST_MASKED_DISPATCH 1\n"
+              "#define NEVERD_TEST_RETAIN_DEFAULT 1\n"
+              "#define NEVERD_TEST_PAD_DEFAULT 1\n")
+A64_LEAF_TEXT(kAlignmentBytes, "recovered_alignment_bytes")
+A64_LEAF_VALUE(unsigned, kDefaultLeadingPadding, 3)
+A64_LEAF_VALUE(unsigned, kDefaultTrailingPadding, 2)
+A64_LEAF_VALUE(unsigned, kDefaultInstructions, 2)
+A64_LEAF_VALUE(uint32_t, kExposeDefaultPC, 0x10000000)     // ADR X0, .
+A64_LEAF_VALUE(uint32_t, kReadDefaultCode, 0x18000000)     // LDR W0, .
+A64_LEAF_VALUE(uint32_t, kBranchToDefaultData, 0x14000002) // B .+8
+// MOV X9, XZR destroys the computed target before BR X9.
+A64_LEAF_VALUE(uint32_t, kClearDispatchTarget, 0xaa1f03e9)
+A64_LEAF_VALUE(unsigned, kGappedTableRecordCount, 2)
+A64_LEAF_VALUE(unsigned, kSplitTableRecordCount, 3)
+A64_LEAF_VALUE(unsigned, kByteTableGapOffset, 1)
+A64_LEAF_VALUE(unsigned, kByteTableGapSize, 2)
+A64_LEAF_VALUE(unsigned, kHalfTableGapOffset, 3)
+A64_LEAF_VALUE(unsigned, kHalfTableGapSize, 1)
+A64_LEAF_VALUE(unsigned, kWordTableGapOffset, 4)
+A64_LEAF_VALUE(unsigned, kWordTableGapSize, 8)
+A64_LEAF_TEXT(kFragmentConflicts, "rejected_fragment_kind_conflicts")
 A64_LEAF_TEXT(kUnmarkedDispatchOracle,
               "#define NEVERD_TEST_UNMARKED_DISPATCH 1\n")
 A64_LEAF_TEXT(kPartialDispatchOracle,
@@ -662,8 +747,38 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  add x1, x1, x15
  .endif
 #endif
+#ifdef NEVERD_TEST_MASKED_DISPATCH
+ and w0, w0, #3
+#else
  cmp w0, #3
  b.hi 9f
+#endif
+#ifdef NEVERD_TEST_SCHEDULED_DISPATCH
+ .if \width == 2
+ adr x11, 1f
+ nop
+ adr x10, 8f
+ nop
+ ldrh w9, [x10, w0, uxtw #1]
+ nop
+ add x9, x11, x9, lsl #2
+ .else
+ adr x10, 8f
+ nop
+ .if \width == 4
+ ldrsw x9, [x10, w0, uxtw #2]
+ nop
+ adr x10, 3f
+ add x9, x10, x9
+ .else
+ ldrb w9, [x10, w0, uxtw]
+ nop
+ adr x10, 1f
+ add x9, x10, x9, lsl #2
+ .endif
+ .endif
+ nop
+#else
  adr x10, 8f
  .if \width == 4
  adr x11, 3f
@@ -678,15 +793,47 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
  .endif
  add x9, x11, x9, lsl #2
  .endif
+#endif
  br x9
 1: add x0, x1, #11
  ret
 2: add x0, x1, #29
  ret
 3: add x0, x1, #43
+6: ret
+#if defined(NEVERD_TEST_RETAIN_DEFAULT)
+#ifdef NEVERD_TEST_PAD_DEFAULT
+ .if \width == 2
+ .data_region
+ .byte 0x5a
+ .end_data_region
+ .p2align 2
+ .endif
+#endif
+9: .if \width == 1
+ ldr w0, 4f
+ .elseif \width == 4
+ movz x0, #0
+ .else
+ sub x0, x1, #5
+ .endif
+ .if \width == 2
+ b 6b
+ .else
  ret
+ .endif
+#ifdef NEVERD_TEST_PAD_DEFAULT
+ .if \width == 4
+ .byte 0x61, 0x62
+ .data_region
+ .short 0x6452
+ .end_data_region
+ .endif
+#endif
+#elif !defined(NEVERD_TEST_MASKED_DISPATCH)
 9: sub x0, x1, #5
  ret
+#endif
  .if \width == 1
 #ifdef NEVERD_TEST_UNMARKED_DISPATCH
 7: .quad 0x7ed503237f
@@ -695,12 +842,26 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #endif
 #else
  .data_region
- .long 0xd503237f
+4: .long 0xd503237f
  .byte 0x7e
  .end_data_region
  .data_region jt8
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .byte (3b-1b)/4
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt8
+#endif
+ .byte 0, (2b-1b)/4
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt8
+ .byte 0
+#else
 8: .byte (3b-1b)/4, 0, (2b-1b)/4, 0
+#endif
 #if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .space 3
 #endif
@@ -708,7 +869,22 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #if !defined(NEVERD_TEST_UNMARKED_DISPATCH) || defined(NEVERD_TEST_PARTIAL_DISPATCH)
  .data_region jt16
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .short (3b-1b)/4
+ .byte 0
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt16
+#endif
+ .byte 0
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt16
+ .short (2b-1b)/4,0
+#else
 8: .short (3b-1b)/4, 0, (2b-1b)/4, 0
+#endif
 #ifdef NEVERD_TEST_PARTIAL_DISPATCH
  .end_data_region
 #endif
@@ -716,7 +892,21 @@ A64_LEAF_TEXT(kDispatchLeaves, R"asm(
 #ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .data_region jt32
 #endif
+#ifdef NEVERD_TEST_TABLE_FRAGMENTS
+8: .long 0
+ .end_data_region
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .data_region jt32
+#endif
+ .long 1b-3b,2b-3b
+#ifndef NEVERD_TEST_TABLE_GAPS
+ .end_data_region
+#endif
+ .data_region jt32
+ .long 1b-3b
+#else
 8: .long 0, 1b-3b, 2b-3b, 1b-3b
+#endif
  .endif
 #ifndef NEVERD_TEST_UNMARKED_DISPATCH
  .end_data_region
@@ -749,7 +939,10 @@ int main(int argc, char **argv) {
     if (!call)
       return 3;
     for (unsigned i = 0; i < sizeof(inputs)/sizeof(*inputs); ++i) {
-      const uint32_t index = (uint32_t)inputs[i];
+      uint32_t index = (uint32_t)inputs[i];
+#ifdef NEVERD_TEST_MASKED_DISPATCH
+      index &= 3;
+#endif
       for (unsigned b = 0; b < sizeof(bases)/sizeof(*bases); ++b) {
         uint64_t expected = index < sizeof(cases)/sizeof(*cases)
                                 ? bases[b] + cases[index] : bases[b] - 5;

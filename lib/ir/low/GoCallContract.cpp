@@ -160,6 +160,20 @@ std::optional<uint64_t> goWriteBarrierResult(Arch A, GoWriteBarrierKind Kind) {
   return std::nullopt;
 }
 
+std::optional<FixedIntegerCallArguments>
+goWriteBarrierArguments(const BinaryImage &Img, va_t Entry) {
+  const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry);
+  if (!Barrier || Barrier->Kind != GoWriteBarrierKind::Store)
+    return std::nullopt;
+  const auto Bytes =
+      static_cast<uint16_t>(getTargetRegInfo(Img.Arch).PointerSize);
+  FixedIntegerCallArguments Arguments;
+  for (const uint64_t Register : {Barrier->Destination, Barrier->Value})
+    Arguments.Parameters.push_back(
+        {SourceABICarrierKind::IntegerRegister, Register, 0, Bytes});
+  return Arguments;
+}
+
 CallRegisterContract callRegisterContractOf(const BinaryImage &Img, va_t Caller,
                                             va_t Callee) {
   if (!isGoCode(Img, Caller))
@@ -329,11 +343,18 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
 
 bool goTakesStackArguments(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && Module->StackArguments && isGoCode(Img, Entry);
+  return Module && isGoCode(Img, Entry) &&
+         (Module->StackArguments ||
+          (Module->RegisterArguments && inRanges(Module->GoAssembly, Entry)));
 }
 
 bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register) {
   const Arch A = TRI.TheArch;
+  // The stack ABI passes floating arguments on the stack too: a vector
+  // register's incoming value is what an earlier write left there, as a
+  // legacy SSE write keeps ZMM0's upper lanes and `vzeroupper` keeps XMM.
+  if (TRI.isVectorReg(Register))
+    return true;
   llvm::SmallVector<uint64_t, 5> Kept{TRI.StackPointer};
   if (TRI.FramePointer)
     Kept.push_back(TRI.FramePointer);
@@ -359,18 +380,28 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A) {
   return Layout;
 }
 
-std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
-                                             va_t Entry) {
+namespace {
+/// The record of the function the `pclntab` starts at \p Entry, if any.
+const GoFrameArguments *goFunctionRecord(const BinaryImage &Img, va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   if (!Module)
-    return std::nullopt;
+    return nullptr;
   const auto &Frames = Module->FrameArguments;
   const auto It = std::lower_bound(
       Frames.begin(), Frames.end(), Entry,
       [](const GoFrameArguments &F, va_t At) { return F.Entry < At; });
-  if (It == Frames.end() || It->Entry != Entry)
-    return std::nullopt;
-  return It->Bytes;
+  return It != Frames.end() && It->Entry == Entry ? &*It : nullptr;
+}
+} // namespace
+
+std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
+                                             va_t Entry) {
+  const GoFrameArguments *Record = goFunctionRecord(Img, Entry);
+  return Record ? Record->Bytes : std::nullopt;
+}
+
+bool goRecordsFunction(const BinaryImage &Img, va_t Entry) {
+  return goFunctionRecord(Img, Entry) != nullptr;
 }
 
 bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {

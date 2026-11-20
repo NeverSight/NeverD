@@ -11069,6 +11069,68 @@ TEST(CallRegisterEffects, ASyscallReadsOnlyItsOwnArguments) {
     EXPECT_EQ(Unlisted[Register / 8], 8u) << Register;
 }
 
+TEST(MedCallingConv, ASyscallTakesOnlyItsOwnArgumentsAsParameters) {
+  // ASyscallReadsOnlyItsOwnArguments' body, converted to MedIR.  Linux exit
+  // (60) reads RDI alone, so the routine takes RDI and nothing else, and the
+  // syscall's other operands pass zero.  Read whole, R8:R10 and R9 gave a
+  // routine that makes a syscall every System V position up to R9, as Go's
+  // `runtime.exit` printed `runtime_exit(0, 0, 0, 0, 0, 0, 2)`.  A number the
+  // arity table does not list, or an image for another system, keeps every
+  // operand.
+  auto Lift = [](uint64_t Number, uint8_t OSABI) {
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Format = BinaryFormat::ELF;
+    Img.ELFMetadata.emplace();
+    Img.ELFMetadata->OSABI = OSABI;
+    LowFunc Low = makeOneBlockLow(0x1000, "sys", [&](auto Push) {
+      Push(NdOp::COPY, NdVar::reg(x86reg::RAX, 8), {NdVar::cst(Number, 8)});
+      Push(NdOp::CONCAT, NdVar::tmp(1, 16),
+           {NdVar::reg(x86reg::RDX, 8), NdVar::reg(x86reg::RSI, 8)});
+      Push(NdOp::CONCAT, NdVar::tmp(2, 16),
+           {NdVar::reg(x86reg::R8, 8), NdVar::reg(x86reg::R10, 8)});
+      Push(NdOp::INTRINSIC, NdVar::tmp(3, 16),
+           {NdVar::cst(static_cast<uint64_t>(Intrinsic::X64Syscall), 2),
+            NdVar::reg(x86reg::RAX, 8), NdVar::reg(x86reg::RDI, 8),
+            NdVar::tmp(1, 16), NdVar::tmp(2, 16), NdVar::reg(x86reg::R9, 8)});
+    });
+    LowToMedConverter Converter;
+    Converter.setBinaryImage(&Img);
+    return Converter.convert(Low, Arch::X64, BinaryFormat::ELF);
+  };
+  auto SyscallOf = [](const MedFunc &F) -> const MedOp * {
+    for (const MedBlock &Block : F.Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
+            Op.Inputs[0].isConst() &&
+            static_cast<Intrinsic>(Op.Inputs[0].ConstVal) ==
+                Intrinsic::X64Syscall)
+          return &Op;
+    return nullptr;
+  };
+  constexpr uint8_t SystemV = 0, FreeBSD = 9;
+  const MedFunc Exit = Lift(60, SystemV);
+  ASSERT_EQ(Exit.Params.size(), 1u);
+  EXPECT_EQ(Exit.Params[0].RegOff, x86reg::RDI);
+  const MedOp *Syscall = SyscallOf(Exit);
+  ASSERT_NE(Syscall, nullptr);
+  ASSERT_EQ(Syscall->NumInputs, 6u);
+  EXPECT_FALSE(Syscall->Inputs[2].isConst());
+  for (unsigned I = 3; I < 6; ++I)
+    EXPECT_TRUE(Syscall->Inputs[I].isConst() &&
+                Syscall->Inputs[I].ConstVal == 0)
+        << I;
+  for (const auto &[Number, OSABI] :
+       {std::pair<uint64_t, uint8_t>{0x7FFF, SystemV}, {60, FreeBSD}}) {
+    SCOPED_TRACE(Number);
+    const MedFunc Kept = Lift(Number, OSABI);
+    bool TakesR9 = false;
+    for (const MedVar &Param : Kept.Params)
+      TakesR9 |= Param.RegOff == x86reg::R9;
+    EXPECT_TRUE(TakesR9) << Kept.Params.size();
+  }
+}
+
 TEST(CallRegisterEffects, AZeroIdiomReadsNothing) {
   // `pxor xmm0, xmm0` lifts as a self-XOR.  LowToMed folds it to zero, so
   // the summary takes it as no read of XMM0 either; otherwise every caller

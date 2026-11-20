@@ -2294,7 +2294,7 @@ from the [Actions run](https://github.com/gmh5225/test_mac_intel/actions/runs/44
 Mixed code/data sections, inputs with missing entry or machine ABI facts, and
 asynchronous language cleanup without lifetime metadata still need additional
 evidence. Platform-wide asynchronous recovery through the original tables
-alone also remains unqualified. LLVM r6 stays pinned.
+alone also remains unqualified. That source revision pinned the r6 package.
 
 ### Embedded data in published instruction sections
 
@@ -2482,3 +2482,265 @@ classifier test. Both hosted Apple M1 virtual machines qualified native PAC,
 authenticated calls and signed language unwinding. The strict PAuth_LR,
 PACM-PC and CPTA-on hardware checks reported unavailable.
 [Source, image hashes and per-host measurements](evidence/arm64e-inferred-data-2026-11-20.json).
+
+### Literal loads crossing Mach-O data-in-code records
+
+An AArch64 literal load can span several consecutive records or a gap in
+the source table. The publisher walks the records intersecting the decoded
+read and keeps their original extents. It fills only the bytes within the
+read that lack a record. The installer requires complete coverage of the
+read in the resulting layout. A conflicting record kind invalidates the read,
+including a conflict confined to the high half of a vector.
+
+The signed fixture marks two bytes in the middle of a 64-bit integer, leaves
+a gap inside a double, and describes a 128-bit vector with two adjacent
+eight-byte records. The comparison program reads all six integer and SIMD
+literal forms and compares both halves of the vector. The test checks the
+five source records, four recovered extents and the bytes and types in three
+successive publications.
+
+The macOS 26 and Xcode 27 runners each passed all 248 Release publication
+tests. Each runner compiled its own fragmented literal fixture and checked
+40 return values on the original and three published images. A separate
+caller checked 70 return values on seven signed CLI images across default
+and no-opt publication. The record counts for successive outputs were 18,
+27 and 36 in both modes. Both CLI modes rejected two signed inputs with
+conflicting record types, one in the integer and one in the upper vector
+lane. All four refusals preserved the input bytes and signature and left the
+output path absent.
+[Hosted replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44735565511).
+
+Both hosts reported Apple M1 (Virtual). On each, six alternate-stack walks
+using the interrupted context and original system tables recovered the
+caller stack pointer. The handler-initiated walks skipped the interrupted
+entry. The native PAuth_LR, PACM-PC and CPTA-on probes reported unavailable.
+[Source, signed image hashes and per-host results](evidence/arm64e-fragmented-literals-2026-11-20.json).
+
+Five local Release suites ran 2,130 cases, with 2,077 passes and 53 explicit
+skips. Supplying the arm64e text from `/usr/bin/wc` separately exercised
+the optional classifier check on all 653 instructions.
+
+The switch, recovered-data and fragmented-literal native suites used the
+integrated LLVM source fork at `09ff60dd1ddb17114892ee2bb32256182dedc76e`.
+Their NeverD revisions already selected r7 as the default prebuilt package.
+The repository adopted that default on November 18. [Repository package change](https://github.com/NeverSight/NeverD/pull/2409).
+
+A separate compatibility build compiled both changed implementation units
+and the regression unit against the macOS arm64 r6 SDK. It set
+`NEVERD_LLVM_PREBUILT_TAG` to `neverd-llvm-v23.0.0-r6` and supplied the
+published archive SHA-256 in `NEVERD_LLVM_PREBUILT_SHA256`. An old tag alone
+allows CMake to migrate the build to the current default. [LLVM r6 release](https://github.com/NeverSight/llvm-project/releases/tag/neverd-llvm-v23.0.0-r6).
+
+### Relative jumps across separate data-in-code records
+
+An arm64e switch can load entries from several consecutive
+`LC_DATA_IN_CODE` records. A record boundary can fall inside a halfword.
+NeverD follows the dispatch's proven selector range and checks the actual
+bytes of each selected entry against its Mach-O kind. In an instruction
+section, the load can also establish the type of unmarked bytes between
+matching records. Outside the declared sections of a sectioned segment,
+the records must cover the whole selected read. Unbounded scans and
+physical branch probes retain their original storage limits.
+
+The compiler fixtures split byte, halfword and signed word tables.
+Their callers cover the four legal selector values, the default edge,
+32-bit truncation and unsigned argument wraparound. Each publication
+preserves the original record boundaries and adds only the three interior
+gaps present in the partially marked fixture. Reclassifying a selected
+fragment as ordinary data prevents publication.
+[Compiler-original executions](https://github.com/gmh5225/test_mac_intel/actions/runs/44740300809).
+
+At a signal interrupt on an old entry,
+`ndDarwinArm64eInitInterruptedEntryCursor` takes the handler's
+`ucontext_t` and looks up the interrupted PC in Darwin's registered tables.
+It selects the indexed DWARF or zero-stack frameless recipe from the system
+result, including the compact language form. The caller can use `unw_step`
+on the returned cursor. The API also checks the size of the supplied
+machine context before reading its registers.
+
+The guarded-table change passed 2,658 local tests, with 54 skips across
+nine suites. The installed arm64e `/usr/bin/wc` instruction classifier
+passed a separate check. Both Mac runners completed all 250 native tests,
+including twelve automatic entry-table walks on the normal and alternate
+signal stacks. Plain `unw_step` from the handler skipped the interrupted
+entry and reported a different caller SP on both compiler originals and
+published images. Each host checked 2,016 calls on 28 strictly signed CLI
+images. Both hosts reported Apple M1 (Virtual) and an unavailable x1
+environment. [Images, compiler versions and native results](evidence/arm64e-bounded-tables-2026-11-20.json).
+
+A masked selector can also prove the table domain without a conditional
+branch. For `index & 3`, the first Mach-O record supplies a readable prefix
+to the resolver. The mask supplies the four selector values; the bounded
+reader checks their actual storage. The fixtures exercise both consecutive
+and gapped records and remove the mask in a negative control. With no other
+range proof, all three indirect branches remain unresolved. In a separate
+compiler control, the mask leaves an entire unreferenced default block in
+the mixed section. The November 20 build recovered the switch targets and
+refused the partial data map across those words.
+[Masked compiler originals](https://github.com/gmh5225/test_mac_intel/actions/runs/44744375367).
+[Unreferenced default block control](https://github.com/gmh5225/test_mac_intel/actions/runs/44743854014).
+
+The integrated LLVM fork completed all 252 publication tests on each of
+the two hosted Apple M1 profiles. Each host ran an independent caller on
+28 original and republished images and checked 2,016 results. Replacing a
+selected record with a conflicting kind prevented publication in all
+twelve local CLI controls. [Integrated native replay](https://github.com/gmh5225/test_mac_intel/actions/runs/44750238073).
+
+On a compiler-original image, both systems reported compact
+`UNWIND_ARM64_MODE_FRAME` for the registered `_sigtramp` procedure,
+exposed no FDE for it, and returned zero from `unw_is_signal_frame`.
+From the handler, the system walk skipped the interrupted entry and
+reported a different caller SP. Initializing the cursor from the actual
+signal context and the entry's original registered unwind information
+recovered both caller PCs, the incoming SP and the preserved registers.
+[System trampoline measurements](https://github.com/gmh5225/test_mac_intel/actions/runs/44746453776).
+
+The test caller now keeps the same two signed frames while it repeatedly
+calls the real entry. An independent hosted comparison interleaved the old
+and revised observers on the same two strictly signed images. Both drivers
+completed 448 of 448 samples per host across original and installed
+images, including indexed DWARF, compact frameless and compact language
+entries on the regular and alternate signal stacks. Two earlier full-suite
+or focused runs recorded signal-test child terminations near the fixture's
+20-second deadline. Neither termination recurred in the interleaved sample.
+[Entry sampling comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44756188548).
+
+The pinned macOS r6 SDK predates two relevant LLVM changes. Its full
+252-case local run passed 242, skipped four tests requiring the newer
+PAuth_LR compact emitter, and refused six publications with explicit
+classic signed-return CFI. The exact six also failed on this change's
+unmodified parent. The current fork emits the implicit Darwin recipe.
+[Darwin CFI correction](https://github.com/NeverSight/llvm-project/pull/8).
+
+With the revised signed caller, both hosts passed all 252 current-fork
+cases and all five focused r6 cases. The full r6 run on each host returned
+242 passes, four explicit skips and the same six CFI refusals. Both
+Apple M1 runners reported unavailable for native PAuth_LR, PACM-PC,
+scalar CPTA-on and checked ordinary-memory writeback.
+[Two-toolchain hosted qualification](https://github.com/gmh5225/test_mac_intel/actions/runs/44756052544).
+[Per-case results, image hashes and cleanup receipts](evidence/arm64e-masked-tables-2026-11-20.json).
+
+### Uses of the table register after the load
+
+The whole-image publisher can move an arm64e relative switch whose load
+consumes the storage address before an ADR reuses that register as the
+target base. When both ADRs precede the load, their registers must coexist.
+The same proof accepts architectural NOPs between the five operations
+within one basic block. Overwriting the computed branch target invalidates
+the proof.
+
+The source CFG recovered three edges in each byte, halfword and signed-word
+switch before this change. The former publisher accepted the early-anchor
+control but refused the otherwise equivalent late-anchor image. On each
+hosted Mac, the independent caller now checked 1,872 results on 26 signed
+inputs and outputs, plus 144 results on two locally compiled originals.
+The 24 outputs cover default and no-opt publication, three generations,
+and both the LLVM source fork and prebuilt r6. Both producers rejected each
+of the six clobbered inputs and left the output path absent. The M1 profiles continued to report unavailable
+for native PAuth_LR, PACM-PC and CPTA-on.
+[Hosted scheduled switch executions](https://github.com/gmh5225/test_mac_intel/actions/runs/44758696962).
+
+The repository reported zero registered self-hosted runners on November 20.
+GitHub lists Apple M1 for its standard arm64 Mac labels and M2 for its
+arm64 xlarge labels. [Standard runner hardware](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+[Mac xlarge hardware](https://docs.github.com/en/actions/reference/runners/larger-runners).
+
+The broader local Release selection ran 1,039 cases, with 992 passes and
+47 explicit skips. After merging the current dev branch, the eight
+focused tests passed with each toolchain, and each toolchain regenerated
+its twelve published images byte for byte.
+[Image hashes, local results and runner evidence](evidence/arm64e-scheduled-tables-2026-11-20.json).
+
+Both hosted Apple M1 profiles also passed all 253 tests from the integrated
+source-fork Release publication suite, with zero skips or failures. Each
+executed 288 comparisons on the new scheduled-switch fixture and twelve
+original-table walks at signal-interrupted entries. [Complete native suite](https://github.com/gmh5225/test_mac_intel/actions/runs/44762770209).
+
+On the same integrated revision the unfiltered r6 suite passed 243 of 253
+cases on each Mac. The four compact-emitter skips and six classic signed-CFI
+refusals match the previous control. The new scheduled-switch case completed
+all 288 native comparisons on each host. [Full pinned-r6 comparison](https://github.com/gmh5225/test_mac_intel/actions/runs/44765584364).
+
+### Unreached instructions next to a partially marked table
+
+Apple's two original masked-switch dylibs retain a fourth arithmetic block
+after the three reachable cases. The table has a known selector domain and
+its missing bytes lie between records of the same kind. The linked section
+also carries `S_ATTR_PURE_INSTRUCTIONS`, which identifies the instruction
+owner outside the data islands. [Mach-O section and data-in-code definitions](https://github.com/apple/darwin-xnu/blob/main/EXTERNAL_HEADERS/mach-o/loader.h).
+
+NeverD now combines that section declaration with the bounded reads. A
+whole uncovered interval must be word aligned and free of relocation
+slots. The register emitter retains position-independent words and verifies
+the displacement of an in-body branch or a load from typed literal data.
+Only the proved data bytes and subword padding
+acquire data-in-code records. A section declaring only
+`S_ATTR_SOME_INSTRUCTIONS`, an open-ended record repair, or an uncovered
+instruction that exposes its new PC still prevents this form of publication.
+
+The Release CLI published both previously rejected Apple compiler images at
+default optimization and with `--no-opt`. Across three generations, each
+output retained the original instructions and contained 20, 30 and 40
+data-in-code records, respectively. Each LLVM build refused 24 contradictory
+or position-dependent controls and left the requested output path absent.
+
+Both Actions profiles passed all 254 tests with the source fork. On each
+profile an independent caller checked 1,008 results from the two originals
+and their twelve signed outputs. The saved signal context and Darwin's
+original unwind tables recovered both callers at twelve old-entry
+interruptions, including six on an alternate signal stack.
+[Source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44772516281).
+
+The frozen r6 build passed 244 of 254 cases on each profile. Its
+4 compact-emitter skips and 6 classic signed-return CFI failures matched
+the prior r6 baseline. The new retained-block case passed on both.
+Both virtual M1s reported that the explicit PAuth_LR, PACM-PC and CPTA-on
+hardware probes were unavailable. [Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44777564499).
+[Input hashes, full results and negative controls](evidence/arm64e-retained-defaults-2026-11-21.json).
+
+### Alignment bytes on either side of embedded instructions
+
+A data-in-code record can end inside an AArch64 instruction word. NeverD
+retains the partial word as data and validates each complete aligned word
+against the source section and its references. The same layout check applies
+to functions whose literal or switch reads already have complete records.
+A section declaring only `S_ATTR_SOME_INSTRUCTIONS` can publish when the
+only unclaimed bytes are too short to contain an aligned instruction.
+The publisher requires an instruction owner for an unvisited full word and
+checks the retained intervals for relocation slots with both full and partial
+record maps. An ADR from an unvisited block also needs a proven address use.
+A signed control returning its own PC previously published with a different
+address in the copy. The regression lifts the changed file afresh and checks
+that publication refuses it. Both affected controls were also refused
+with optimization disabled.
+
+Three signed switch images and a signed literal-only image previously
+failed publication. Both Release CLIs publish all four three times at
+default optimization and with `--no-opt`. The 24 signed outputs match byte
+for byte across LLVM builds. The switch outputs contain 24, 36 and 48 records
+across generations. The literal-only outputs contain 4, 6 and 8.
+Separate native regressions exercise three leading alignment bytes and two
+nonzero trailing bytes next to retained code. They verify the instruction
+bytes, both alignment ranges and all three table widths through relifting.
+A generic literal with three unmarked trailing bytes also republishes through
+three generations without any jump-table record. Each build rejected all
+24 signed negative controls without creating an output file.
+
+A separate sixteen-function compiler image exercised every combination of
+zero to three leading and trailing alignment bytes. Each producer republished
+both the complete and partial switch maps three times in both optimization
+modes. The third generation preserved all 64 retained instruction blocks
+and 416 data-in-code records in each image.
+
+Each Mac profile passed all 257 source-fork tests and checked
+1,512 independent calls to the three compiler inputs and their signed
+outputs. Each of the two new alignment regressions also checked 288
+native switch results. The original-table signal test recovered both
+callers at twelve old-entry interruptions. [Source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44786421663).
+
+The r6 run passed 247 of 257 cases on each profile, including all three new
+regressions. Its 4 compact-emitter skips and 6 classic signed-return CFI
+failures matched the retained-default control. Both virtual M1s
+reported unavailable for native PAuth_LR, PACM-PC and CPTA-on.
+[Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44786566570).
+[Input hashes, complete results and negative controls](evidence/arm64e-mixed-alignment-2026-11-21.json).

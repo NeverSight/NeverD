@@ -556,6 +556,120 @@ TEST(GoWriteBarriers, ABufferBarrierTakesNoRegisterArgument) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoWriteBarriers, AStoringBarrierTakesItsAddressAndPointer) {
+  // A Go 1.11-1.20 barrier takes the address it writes at and the pointer it
+  // writes there in registers of its own: RDI and the register its name gives
+  // (`runtime.gcWriteBarrierCX`), or arm64's X2 and X3.  Read by position, a
+  // System V call passed `gcWriteBarrierCX(slot, 0, 0, value)`, a Win64 call
+  // `(value)`, and an AAPCS64 call `(x0, <placeholder>, slot, value)`.
+  //   main.f: mov edi, 0x1000; mov ecx, 0x2000; call barrier; ret
+  //   barrier: mov [rdi], rcx; ret
+  //   arm64: mov x2, #0x1000; mov x3, #0x2000; bl barrier; ret
+  //          barrier: str x3, [x2]; ret
+  constexpr va_t Caller = kTextVA + 0x100;
+  constexpr va_t BarrierEntry = kTextVA + 0x200;
+  struct Shape {
+    Arch A;
+    BinaryFormat Format;
+    bool StackArguments;
+  };
+  for (const Shape &Case : {Shape{Arch::X64, BinaryFormat::ELF, false},
+                            Shape{Arch::X64, BinaryFormat::COFF, false},
+                            Shape{Arch::X64, BinaryFormat::ELF, true},
+                            Shape{Arch::AArch64, BinaryFormat::ELF, false}})
+    for (const bool Restricted : {false, true}) {
+      SCOPED_TRACE(testing::Message()
+                   << "arm64=" << (Case.A == Arch::AArch64)
+                   << " pe=" << (Case.Format == BinaryFormat::COFF) << " stack="
+                   << Case.StackArguments << " restricted=" << Restricted);
+      GoTestImage T(Case.A);
+      T.Img.Format = Case.Format;
+      GoWriteBarrier Barrier;
+      Barrier.Entry = BarrierEntry;
+      Barrier.Kind = GoWriteBarrierKind::Store;
+      if (Case.A == Arch::X64) {
+        std::vector<uint8_t> Body = {0xBF, 0x00, 0x10, 0x00, 0x00,
+                                     0xB9, 0x00, 0x20, 0x00, 0x00};
+        const std::vector<uint8_t> Call =
+            makeCall(Caller + Body.size(), BarrierEntry);
+        Body.insert(Body.end(), Call.begin(), Call.end());
+        Body.push_back(0xC3);
+        T.writeText(Caller, Body);
+        T.writeText(BarrierEntry, {0x48, 0x89, 0x0F, 0xC3});
+        Barrier.Destination = x86reg::RDI;
+        Barrier.Value = x86reg::RCX;
+      } else {
+        const uint32_t Call =
+            0x94000000u | (((BarrierEntry - (Caller + 8)) >> 2) & 0x3FFFFFFu);
+        T.writeText(Caller, words({0xD2820002, 0xD2840003, Call, 0xD65F03C0}));
+        T.writeText(BarrierEntry, words({0xF9000043, 0xD65F03C0}));
+        Barrier.Destination = a64reg::X2;
+        Barrier.Value = a64reg::X3;
+      }
+      GoModuleInfo Module;
+      Module.RegisterArguments = !Case.StackArguments;
+      Module.StackArguments = Case.StackArguments;
+      Module.GoCode = {{Caller, kTextVA + 0x300}};
+      Module.GoAssembly = {{BarrierEntry, kTextVA + 0x300}};
+      Module.WriteBarriers = {Barrier};
+      T.Img.ExceptionMetadata.GoModule = std::move(Module);
+      for (const auto &[Entry, Name] :
+           {std::pair{Caller, "main.f"},
+            std::pair{BarrierEntry, "runtime.gcWriteBarrierCX"}}) {
+        Symbol Function = Symbol::makeFunc(Entry);
+        Function.Name = Name;
+        T.Img.Symbols.push_back(std::move(Function));
+      }
+      const std::optional<FixedIntegerCallArguments> Operands =
+          goWriteBarrierArguments(T.Img, BarrierEntry);
+      ASSERT_TRUE(Operands.has_value());
+      ASSERT_EQ(Operands->Parameters.size(), 2u);
+      EXPECT_EQ(Operands->Parameters[0].Register, Barrier.Destination);
+      EXPECT_EQ(Operands->Parameters[1].Register, Barrier.Value);
+
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      if (Restricted)
+        Options.OnlyFunctionEntries = {Caller};
+      llvm::LLVMContext Context;
+      const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      const auto F = llvm::find_if(
+          R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+      ASSERT_NE(F, R.MedFuncs.end());
+      // The call binds the two registers before SSA, and a recovery of its
+      // operands, which an image with the stack ABI runs, keeps them.
+      auto IsOperand = [](const MedVar &V, uint64_t Constant,
+                          uint64_t Register) {
+        return V.isConst() ? V.ConstVal == Constant
+                           : V.Kind == MedVar::Reg && V.RegOff == Register;
+      };
+      const MedOp *Call = onlyCall(*F);
+      ASSERT_NE(Call, nullptr);
+      ASSERT_EQ(Call->NumInputs, 3u);
+      EXPECT_TRUE(IsOperand(Call->Inputs[1], 0x1000, Barrier.Destination));
+      EXPECT_TRUE(IsOperand(Call->Inputs[2], 0x2000, Barrier.Value));
+      if (!F->CallInfos.empty()) {
+        ASSERT_EQ(F->CallInfos.size(), 1u);
+        const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+        ASSERT_EQ(Arguments.size(), 2u);
+        EXPECT_TRUE(IsOperand(Arguments[0], 0x1000, Barrier.Destination));
+        EXPECT_TRUE(IsOperand(Arguments[1], 0x2000, Barrier.Value));
+      }
+      if (Restricted)
+        continue;
+      // The barrier's own parameters are the same two registers.
+      const auto B = llvm::find_if(R.MedFuncs, [&](const MedFunc &M) {
+        return M.Entry == BarrierEntry;
+      });
+      ASSERT_NE(B, R.MedFuncs.end());
+      ASSERT_EQ(B->Params.size(), 2u);
+      EXPECT_EQ(B->Params[0].RegOff, Barrier.Destination);
+      EXPECT_EQ(B->Params[1].RegOff, Barrier.Value);
+      EXPECT_TRUE(B->ExactRegisterParameters);
+    }
+}
+
 TEST(GoStackGrowth, ARoutineThatThrowsKeepsItsPath) {
   // runtime.morestackc throws: a system-stack function that runs short of
   // stack never starts again, so its path stays.
@@ -645,6 +759,115 @@ TEST(GoAssembly, ACallPassesItsArgumentsInGoRegisters) {
   ASSERT_EQ(Add.Params.size(), 2u);
   EXPECT_EQ(Add.Params[0].RegOff, x86reg::RAX);
   EXPECT_EQ(Add.Params[1].RegOff, x86reg::RBX);
+}
+
+TEST(GoAssembly, ABI0AssemblyTakesItsArgumentsOnTheStack) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller in a Go 1.18
+  // image, main.add marked as assembly: Go assembly not declared
+  // <ABIInternal> keeps the stack ABI (ABI0), and Go's compiler calls it so,
+  // as it calls `runtime.madvise` (`mov %rax,(%rsp); ...; call madvise`).
+  // Read as System V, the call passed its words after six register
+  // positions, and RAX came back as a result.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                      0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+    std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                 0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                 0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.insert(Body.end(),
+                {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+    T.writeText(Caller, Body);
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{Add, kTextVA + 0x300}};
+    Module.GoAssembly = {{Add, Add + 0x10}};
+    Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] :
+         {std::pair{Add, "main.add"}, std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    EXPECT_TRUE(goTakesStackArguments(T.Img, Add));
+    EXPECT_FALSE(goTakesStackArguments(T.Img, Caller));
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    ASSERT_EQ(F->CallInfos.size(), 1u);
+    const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+    ASSERT_EQ(Arguments.size(), 2u);
+    EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+    EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+    if (Restricted)
+      continue;
+    const auto A = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Add; });
+    ASSERT_NE(A, R.MedFuncs.end());
+    EXPECT_TRUE(A->StackArgumentsOnly);
+    EXPECT_EQ(A->Params.size(), 2u);
+  }
+}
+
+TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
+  // An arm64 call takes its arguments from the setup its caller writes, so
+  // no operation of a routine reads the registers it passes on in a call.
+  // `runtime.memhash` declared <ABIInternal> tail-calls `aeshashbody` with
+  // X0-X2 and reads no word of its caller's frame; ABI0 assembly does.
+  //   main.add: ldr x0, [sp, #8]; ldr x1, [sp, #16]; add x0, x0, x1
+  //             str x0, [sp, #24]; ret
+  //   main.fwd: b main.other
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Forwarder = kTextVA + 0x140;
+  constexpr va_t Other = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(
+      Add, words({0xF94007E0, 0xF9400BE1, 0x8B010000, 0xF9000FE0, 0xD65F03C0}));
+  T.writeText(Forwarder,
+              words({0x14000000u | (((Other - Forwarder) >> 2) & 0x3FFFFFFu)}));
+  T.writeText(Other, words({0x8B010000, 0xD65F03C0}));
+  GoModuleInfo Module;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Add, kTextVA + 0x200}};
+  Module.GoAssembly = {{Add, Other}};
+  Module.FrameArguments = {{Add, 24}, {Forwarder, 24}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  for (const auto &[Entry, Name] :
+       {std::pair{Add, "main.add"}, std::pair{Forwarder, "main.fwd"},
+        std::pair{Other, "main.other"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  const MedFunc Forwarding = lift(T.Img, Forwarder);
+  // The branch leaves for main.other, whose body is no part of main.fwd.
+  bool ReadsX1 = false;
+  for (const MedBlock &Block : Forwarding.Blocks)
+    for (const MedOp &Op : Block.Ops)
+      for (unsigned I = 0; I < Op.NumInputs; ++I)
+        ReadsX1 |= Op.Opcode == NdOp::INT_ADD &&
+                   Op.Inputs[I].Kind == MedVar::Reg &&
+                   Op.Inputs[I].RegOff == a64reg::X1;
+  ASSERT_FALSE(ReadsX1);
+  EXPECT_FALSE(Forwarding.StackArgumentsOnly);
+  const MedFunc AddFunc = lift(T.Img, Add);
+  EXPECT_TRUE(AddFunc.StackArgumentsOnly);
+  EXPECT_EQ(AddFunc.Params.size(), 2u);
 }
 
 TEST(GoInternalABI, OrdinaryCallsKeepX15ButMayChangeTheGoroutine) {
@@ -862,6 +1085,178 @@ TEST(GoStackArguments, ArgumentsAndTheirCallsAreOnTheStack) {
   EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
 }
 
+TEST(GoStackArguments, ACalleeWithoutASizeTakesWhatItReads) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller, where
+  // main.add's pclntab record gives no argument size, as Go assembly declared
+  // `$0` (Windows' runtime.externalthreadhandler) has none.  Its own recovery
+  // still finds two stack parameters; a call read by Win64's or System V's
+  // positions passed none of the words the caller stores.  A block NeverD
+  // splits off a function's interior has no record at all, and the frame it
+  // reads is its function's own: its calls keep the platform's reading.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF})
+    for (const bool Recorded : {true, false}) {
+      SCOPED_TRACE(static_cast<unsigned>(Format) * 2 + Recorded);
+      GoTestImage T;
+      T.Img.Format = Format;
+      T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                        0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+      std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                   0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                   0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+      const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+      Body.insert(Body.end(), Call.begin(), Call.end());
+      Body.insert(Body.end(),
+                  {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+      T.writeText(Caller, Body);
+      GoModuleInfo Module;
+      Module.StackArguments = true;
+      Module.GoCode = {{Add, kTextVA + 0x300}};
+      Module.FrameArguments = {{Caller, 0}};
+      if (Recorded)
+        Module.FrameArguments.insert(Module.FrameArguments.begin(),
+                                     {Add, std::nullopt});
+      T.Img.ExceptionMetadata.GoModule = std::move(Module);
+      ASSERT_FALSE(goFrameArgumentBytes(T.Img, Add));
+      EXPECT_EQ(goRecordsFunction(T.Img, Add), Recorded);
+
+      const MedFunc F = lift(T.Img, Add);
+      EXPECT_TRUE(F.StackArgumentsOnly);
+      ASSERT_EQ(F.Params.size(), 2u);
+      const std::set<va_t> StackCallees{Add};
+      std::map<va_t, int> TotalArity{{Add, 2}};
+      MedFunc G = lift(T.Img, Caller);
+      recoverCallAbi(G, T.Img.Arch, {}, &T.Img, nullptr, &TotalArity, nullptr,
+                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                     nullptr, &StackCallees);
+      ASSERT_EQ(G.CallInfos.size(), 1u);
+      EXPECT_EQ(G.CallInfos[0].ArgumentsFromPrototype, Recorded);
+      if (!Recorded)
+        continue;
+      const std::vector<MedVar> &Arguments = G.CallInfos[0].Args;
+      ASSERT_EQ(Arguments.size(), 2u);
+      EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+      EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+    }
+}
+
+TEST(GoStackArguments, ARunOfTheCallerAlonePassesItsStackArguments) {
+  // ArgumentsAndTheirCallsAreOnTheStack's main.add and its caller, run over
+  // the caller alone, as `--func` and the GUI run one function.  The call
+  // took main.add's summary, which counts its stack words after System V's
+  // six register positions: `main_add(0, 0, 0, 0, 0, 0, 1, 2)`.
+  constexpr va_t Add = kTextVA + 0x100;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    T.writeText(Add, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                      0x10, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3});
+    std::vector<uint8_t> Body = {0x48, 0x83, 0xEC, 0x20, 0x48, 0xC7, 0x04,
+                                 0x24, 0x01, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                 0x44, 0x24, 0x08, 0x02, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call = makeCall(Caller + Body.size(), Add);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.insert(Body.end(),
+                {0x48, 0x8B, 0x44, 0x24, 0x10, 0x48, 0x83, 0xC4, 0x20, 0xC3});
+    T.writeText(Caller, Body);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Add, kTextVA + 0x300}};
+    Module.FrameArguments = {{Add, 24}, {Caller, 0}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] :
+         {std::pair{Add, "main.add"}, std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    ASSERT_EQ(F->CallInfos.size(), 1u);
+    const std::vector<MedVar> &Arguments = F->CallInfos[0].Args;
+    ASSERT_EQ(Arguments.size(), 2u);
+    EXPECT_TRUE(Arguments[0].isConst() && Arguments[0].ConstVal == 1);
+    EXPECT_TRUE(Arguments[1].isConst() && Arguments[1].ConstVal == 2);
+  }
+}
+
+TEST(GoStackArguments, AValueNothingNeedsTakesNoArgument) {
+  // Registers a Go 1.16 function reads at its entry without taking an
+  // argument there.  Read as register arguments, each put an unused parameter
+  // first and moved every stack parameter one place, as in mallocgc(?, size,
+  // typ, needzero):
+  //   mallocgc's `sete r9b` keeps R9's upper bytes, which nothing reads:
+  //     mov rax, [rsp+8]; cmp rax, [rsp+16]; sete r9b; movzx eax, r9b;
+  //     mov [rsp+24], rax; ret
+  //   Go's nil check reads AL only to set flags nothing reads:
+  //     mov rbx, [rsp+8]; testb al, (rbx); mov rax, [rbx];
+  //     mov [rsp+16], rax; ret
+  //   a return reads RAX, where the stack ABI returns nothing:
+  //     mov rcx, [rsp+8]; mov [rsp+16], rcx; ret
+  //   memmove keeps RAX's upper bytes on its byte path and returns
+  //   without writing RAX on another, where only its return reads it:
+  //     mov rcx, [rsp+16]; test rcx, rcx; je L; mov rsi, [rsp+8];
+  //     mov al, [rsi]; mov [rsp+24], al; L: ret
+  //   `vzeroupper` keeps each XMM, as a register stays itself, and the stack
+  //   ABI passes no vector argument:
+  //     mov rax, [rsp+8]; vzeroupper; mov [rsp+16], rax; ret
+  struct Shape {
+    std::vector<uint8_t> Code;
+    uint32_t FrameBytes;
+    size_t Parameters;
+  };
+  const Shape Shapes[] = {
+      {{0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x3B, 0x44, 0x24, 0x10, 0x41, 0x0F,
+        0x94, 0xC1, 0x41, 0x0F, 0xB6, 0xC1, 0x48, 0x89, 0x44, 0x24, 0x18, 0xC3},
+       24,
+       2},
+      {{0x48, 0x8B, 0x5C, 0x24, 0x08, 0x84, 0x03, 0x48, 0x8B, 0x03, 0x48, 0x89,
+        0x44, 0x24, 0x10, 0xC3},
+       16,
+       1},
+      {{0x48, 0x8B, 0x4C, 0x24, 0x08, 0x48, 0x89, 0x4C, 0x24, 0x10, 0xC3},
+       16,
+       1},
+      {{0x48, 0x8B, 0x4C, 0x24, 0x10, 0x48, 0x85, 0xC9, 0x74, 0x0B, 0x48,
+        0x8B, 0x74, 0x24, 0x08, 0x8A, 0x06, 0x88, 0x44, 0x24, 0x18, 0xC3},
+       24,
+       2},
+      {{0x48, 0x8B, 0x44, 0x24, 0x08, 0xC5, 0xF8, 0x77, 0x48, 0x89, 0x44, 0x24,
+        0x10, 0xC3},
+       16,
+       1},
+  };
+  for (const Shape &Case : Shapes) {
+    SCOPED_TRACE(Case.Code.size());
+    constexpr va_t Entry = kTextVA + 0x100;
+    GoTestImage T;
+    T.writeText(Entry, Case.Code);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Entry, kTextVA + 0x300}};
+    Module.FrameArguments = {{Entry, Case.FrameBytes}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+
+    const MedFunc F = lift(T.Img, Entry);
+    EXPECT_TRUE(F.StackArgumentsOnly);
+    EXPECT_EQ(F.Params.size(), Case.Parameters);
+    for (const MedVar &Param : F.Params)
+      EXPECT_EQ(Param.RegOff, kNoParamReg);
+  }
+}
+
 TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
   // Go 1.16's runtime.panicIndex: mov [rsp+8], rax; mov [rsp+16], rcx;
   // jmp runtime.goPanicIndex.  It takes x in AX and y in CX, which it stores
@@ -920,8 +1315,8 @@ TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
     const LocalRegisterEffect Effect =
         localRegisterEffect(T.Img, CallRegisterBodyView(StubLow), nullptr,
                             nullptr, nullptr, nullptr);
-    ASSERT_TRUE(Effect.GoStubArguments.has_value());
-    EXPECT_EQ(*Effect.GoStubArguments, *Arguments);
+    ASSERT_TRUE(Effect.GoFixedArguments.has_value());
+    EXPECT_EQ(*Effect.GoFixedArguments, *Arguments);
     ASSERT_TRUE(Effect.GoArgumentReads.has_value());
     GPRReadWidths Reads{};
     Reads[x86reg::RAX / 8] = 8;
@@ -1068,7 +1463,7 @@ TEST(GoStackArguments, OnlyAStubPassesItsRegistersOn) {
     EXPECT_FALSE(goRegisterStubArguments(T.Img, Entry, Low.Blocks));
     EXPECT_FALSE(localRegisterEffect(T.Img, CallRegisterBodyView(Low), nullptr,
                                      nullptr, nullptr, nullptr)
-                     .GoStubArguments);
+                     .GoFixedArguments);
   }
 }
 
@@ -1216,6 +1611,41 @@ TEST(GoPanicBounds, AnARM64CallMovesItsOperandsIntoTheParameters) {
   EXPECT_EQ(Routine.Params[0].RegOff, a64reg::X0);
   EXPECT_EQ(Routine.Params[1].RegOff, a64reg::X1);
   EXPECT_TRUE(Routine.ExactRegisterParameters);
+}
+
+TEST(GoRegisterArguments, ARunOfTheCallerAloneSummarizesAListedRoutine) {
+  // registerArgumentImage's main.f, listed as never returning as
+  // runtime.throw is (GoModuleInfo::NoReturnEntries).  A call into a listed
+  // routine added no callee to the summaries, so a run of main.g alone had no
+  // summary of main.f, and its call took every register main.g had set in
+  // Go's order: `runtime_throw(s, n, ...)` took seven.  Its stack-growth
+  // path's spills give it exactly RAX and RBX in either run.
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    BinaryImage Img = registerArgumentImage();
+    Img.ExceptionMetadata.GoModule->NoReturnEntries = {GoCallee};
+    for (const auto &[Entry, Name] :
+         {std::pair{GoCallee, "main.f"}, std::pair{GoCaller, "main.g"},
+          std::pair{Morestack, "runtime.morestack_noctxt"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      Img.Symbols.push_back(std::move(Function));
+    }
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {GoCaller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::map<va_t, GPRReadWidths> &Reads = R.CallEntryReadGPRs.get();
+    const auto Summary = Reads.find(GoCallee);
+    ASSERT_NE(Summary, Reads.end());
+    GPRReadWidths Expected{};
+    Expected[x86reg::RAX / 8] = 8;
+    Expected[x86reg::RBX / 8] = 8;
+    EXPECT_EQ(Summary->second, Expected);
+  }
 }
 
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {

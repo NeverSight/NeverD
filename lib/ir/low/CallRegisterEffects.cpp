@@ -1554,6 +1554,17 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
                           const libc::StackProbeIndex *StackProbes);
 } // namespace
 
+namespace {
+/// Whether \p Entry is Go code of an image with Go's register ABI.  A routine
+/// the loader lists as never returning has no prototype there: only its
+/// summary gives its calls their parameters, so a call into it names it to
+/// summarize (LocalRegisterEffect::NoReturnCallees).
+bool goRegisterABIRoutine(const BinaryImage &Img, va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && Module->RegisterArguments && isGoCode(Img, Entry);
+}
+} // namespace
+
 LocalRegisterEffect
 localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
                     const libc::NoReturnTargetIndex *NoReturnTargets,
@@ -1562,8 +1573,11 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
                     const libc::StackProbeIndex *StackProbes) {
   const va_t Entry = F.Blocks.empty() ? InvalidVA : F.Blocks.front().StartAddr;
   if (Entry != InvalidVA)
-    if (const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry))
-      return goWriteBarrierEffect(Img.Arch, *Barrier);
+    if (const GoWriteBarrier *Barrier = goWriteBarrierAt(Img, Entry)) {
+      LocalRegisterEffect Effect = goWriteBarrierEffect(Img.Arch, *Barrier);
+      Effect.GoFixedArguments = goWriteBarrierArguments(Img, Entry);
+      return Effect;
+    }
   LocalRegisterEffect Effect = localRegisterEffectOfBody(
       Img, F, NoReturnTargets, FixedCallReads, ArgumentSources, StackProbes);
   if (Entry == InvalidVA || !isGoCode(Img, Entry))
@@ -1598,7 +1612,7 @@ localRegisterEffect(const BinaryImage &Img, CallRegisterBodyView F,
          Stub->Parameters)
       addRead(Img.Arch, Reads, Parameter.Register, Parameter.Bytes);
     Effect.GoArgumentReads = Reads;
-    Effect.GoStubArguments = std::move(Stub);
+    Effect.GoFixedArguments = std::move(Stub);
     return Effect;
   }
   // A Go function takes exactly the register arguments its stack-growth
@@ -1893,7 +1907,8 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
           // can observe, and an unconditional one ends this path.
           if (!EntersNoReturnFunction)
             Effect.Callees.insert(Op.Inputs[0].Offset);
-          else if (Img.userNoReturnAt(Op.Inputs[0].Offset))
+          else if (Img.userNoReturnAt(Op.Inputs[0].Offset) ||
+                   goRegisterABIRoutine(Img, Op.Inputs[0].Offset))
             Effect.NoReturnCallees.insert(Op.Inputs[0].Offset);
           Step.Callee = Op.Inputs[0].Offset;
           Step.TailCallee = true;
@@ -1925,7 +1940,8 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
           Step.VectorCount = VectorCountAt(Block, I);
           if (!NoReturnCall)
             Effect.Callees.insert(Callee);
-          else if (!EntersNoReturnFunction || Img.userNoReturnAt(Callee))
+          else if (!EntersNoReturnFunction || Img.userNoReturnAt(Callee) ||
+                   goRegisterABIRoutine(Img, Callee))
             Effect.NoReturnCallees.insert(Callee);
         }
         break;

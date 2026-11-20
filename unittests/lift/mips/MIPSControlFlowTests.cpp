@@ -463,6 +463,69 @@ TEST(MIPSRecordSourceEntry, HiddenResultCannotOverwriteAnyByteOfSavedLink) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, PICCallsOnlyObserveArgumentWritesThatReachThem) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(Target));
+    const bool Wide = isMIPS64(Target);
+    auto Record = NdType::makeStruct({NdType::makeInt(Wide ? 8 : 4, false)});
+    Record->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = NdType::makeVoid();
+    Signature.Parameters.push_back({"value", Record});
+    ASSERT_TRUE(
+        mips::assignRecordSourceABI(Signature, Target, BinaryFormat::ELF));
+    std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Signature}};
+
+    constexpr uint32_t FrameInA1 = 0x03a02825, FrameInA0 = 0x03a02025;
+    const auto Check = [&](uint32_t PICSlot, uint32_t RecordSlot,
+                           bool Private) {
+      SCOPED_TRACE(PICSlot);
+      SCOPED_TRACE(RecordSlot);
+      // The indirect call can see a1 in its delay slot. The following
+      // one-word record call reads only a0, including its own delay slot.
+      auto Image = image(
+          {Wide ? 0x67bdffe0u : 0x27bdffe0u, Wide ? 0xffbf0018u : 0xafbf001cu,
+           Wide && !isMIPSN32(Target) ? 0xdf990000u : 0x8f990000u, 0x0320f809,
+           PICSlot, FrameInA1, 0x0c000800, RecordSlot,
+           Wide ? 0xdfbf0018u : 0x8fbf001cu, 0x03e00008,
+           Wide ? 0x67bd0020u : 0x27bd0020u},
+          Target);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(Target) ? MIPSABI::N32
+                        : Wide            ? MIPSABI::N64
+                                          : MIPSABI::O32;
+      Image.MIPS->FPABI = 1;
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      if (!Private) {
+        EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                     LowToMedConversionError);
+        return;
+      }
+      const auto Med = Convert.convert(Low, Target, BinaryFormat::ELF);
+      unsigned PICCalls = 0, RecordCalls = 0;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops) {
+          PICCalls += Op.Opcode == NdOp::INDIR_CALL && !Op.SourceCallHint;
+          RecordCalls += Op.Opcode == NdOp::CALL && Op.SourceCallHint &&
+                         Op.SourceCallHint->Signature.MIPSRecords;
+        }
+      EXPECT_EQ(PICCalls, 1u);
+      EXPECT_EQ(RecordCalls, 1u);
+    };
+    constexpr uint32_t SevenInA0 = 0x24040007;
+    Check(0, SevenInA0, true);
+    Check(FrameInA1, SevenInA0, false);
+    Check(0, FrameInA0, false);
+  }
+}
+
 TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
@@ -687,6 +750,25 @@ TEST_P(MIPSControl, LinkIsVisibleToSlotAndSlotCannotTransferControl) {
   Ops.clear();
   EXPECT_THROW(Decode.liftUnitToLow(Unit, Ops), UnliftedInstruction);
   EXPECT_TRUE(Ops.empty());
+}
+
+TEST_P(MIPSControl, ZeroEqualityBranchesAlwaysExecuteTheirSlot) {
+  for (uint32_t Branch : {0x10000003u, 0x50000003u}) {
+    // beq[l] zero,zero,0x1010; addiu v0,zero,7; jr ra; nop; jr ra; nop
+    const auto Image =
+        image({Branch, 0x24020007, 0x03e00008, 0, 0x03e00008, 0}, GetParam());
+    const auto Func = build(Image);
+    const auto &Entry = Func.Blocks.front();
+    ASSERT_EQ(Entry.Succs.size(), 1u);
+    EXPECT_EQ(Func.Blocks[Entry.Succs.front()].StartAddr, 0x1010u);
+    ASSERT_EQ(Entry.InstructionBoundaries.size(), 1u);
+    EXPECT_TRUE(Entry.InstructionBoundaries.front().DelaySlot);
+    EXPECT_EQ(Entry.Ops.back().Opcode, NdOp::BRANCH);
+    NdOpEmulator Emulator(Image);
+    Emulator.setStrictMode(true);
+    Emulator.run(Entry);
+    EXPECT_EQ(Emulator.getRegister(mipsreg::V0), 7u);
+  }
 }
 
 TEST_P(MIPSControl, LikelyBranchAnnulsSlotBeforeSSA) {

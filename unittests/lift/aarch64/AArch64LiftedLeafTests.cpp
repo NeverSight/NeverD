@@ -26,8 +26,10 @@
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
 #include "neverd/support/BranchEncoding.h"
+#include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
@@ -176,17 +178,34 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool LiteralWidths = Preamble == kLiteralWidthsOracle;
+  const bool PaddedLiteral = Preamble == kPaddedLiteralOracle;
+  const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
+  const bool PaddedDefault = Preamble == kPaddedSplitDefaultOracle ||
+                             Preamble == kPaddedGappedDefaultOracle;
+  const bool RetainedDefault =
+      PaddedDefault || Preamble == kRetainedDefaultOracle;
+  const bool MaskedTables = RetainedDefault || ScheduledTables ||
+                            Preamble == kMaskedFragmentedOracle ||
+                            Preamble == kMaskedGappedOracle;
+  const bool GappedTables =
+      Preamble == kRetainedDefaultOracle ||
+      Preamble == kPaddedGappedDefaultOracle || ScheduledTables ||
+      Preamble == kGappedDispatchOracle || Preamble == kMaskedGappedOracle;
+  const bool SplitTables =
+      Preamble == kFragmentedDispatchOracle || GappedTables || MaskedTables;
+  const bool SplitLiterals = Preamble == kSplitLiteralOracle;
+  const bool LiteralWidths = Preamble == kLiteralWidthsOracle || SplitLiterals;
   const bool PartialRecords = Preamble == kPartialDispatchOracle;
   const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
-  const bool Embedded = Declared || Recover;
-  if (Declared || PartialRecords)
+  const bool Embedded = Declared || PaddedLiteral || Recover || SplitTables;
+  if (Declared || PaddedLiteral || PartialRecords || SplitLiterals ||
+      SplitTables)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
-  if (Embedded) {
+  if (Embedded && !RetainedDefault) {
     // The integrated assembler emits both instruction flags for __text.
     // Exercise the ABI's SOME-only spelling with the same linked bytes.
     auto File = llvm::MemoryBuffer::getFile(Input);
@@ -345,7 +364,8 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     const auto *Section = Image->getSectionFor(Island.Begin);
     ASSERT_TRUE(Section);
     EXPECT_TRUE(Section->Type & llvm::MachO::S_ATTR_SOME_INSTRUCTIONS);
-    EXPECT_FALSE(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS);
+    EXPECT_EQ(bool(Section->Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS),
+              RetainedDefault);
   }
   const auto Snapshot = Image->Raw;
   llvm::LLVMContext Context;
@@ -368,8 +388,26 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
   }
   auto ExpectedData = Image->MachODataInCode;
+  llvm::DenseMap<va_t, va_t> DefaultStartsByRecord;
+  if (PaddedLiteral) {
+    ASSERT_EQ(ExpectedData.size(), 1u);
+    const auto Literal = ExpectedData.front();
+    ASSERT_EQ(Literal.Kind, llvm::MachO::DICE_KIND_DATA);
+    ASSERT_EQ(Literal.End - Literal.Begin, sizeof(uint32_t) + sizeof(uint8_t));
+    const MachODataInCodeRange Padding{Literal.End,
+                                       Literal.End + kDefaultLeadingPadding,
+                                       llvm::MachO::DICE_KIND_DATA};
+    std::vector<MachODataInCodeRange> Recovered;
+    auto Valid = validateMachORegisterResults(Module, *Image, &Recovered);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    ASSERT_EQ(Recovered.size(), 1u);
+    EXPECT_EQ(Recovered.front(), Padding);
+    ExpectedData.push_back(Padding);
+    testing::Test::RecordProperty(kRecoveredRecords, int(Recovered.size()));
+    testing::Test::RecordProperty(kAlignmentBytes,
+                                  int(Padding.End - Padding.Begin));
+  }
   if (LiteralWidths) {
-    ASSERT_TRUE(ExpectedData.empty());
     const auto *First = Image->findSymbol(kSumSymbol);
     const auto *Second = Image->findSymbol(kDifferenceSymbol);
     ASSERT_TRUE(First && Second && First->Addr < Second->Addr);
@@ -381,13 +419,54 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     const auto SIMDBytes =
         sizeof(uint32_t) + sizeof(uint64_t) + 2 * sizeof(uint64_t);
     const auto Limit = Text->VA + Text->Size;
-    ExpectedData = {{Second->Addr - IntegerBytes, Second->Addr,
-                     llvm::MachO::DICE_KIND_DATA},
-                    {Limit - SIMDBytes, Limit, llvm::MachO::DICE_KIND_DATA}};
+    const auto IntPool = Second->Addr - IntegerBytes;
+    const auto VectorPool = Limit - SIMDBytes;
+    constexpr auto Data = llvm::MachO::DICE_KIND_DATA;
+    std::vector<MachODataInCodeRange> Missing;
+    if (SplitLiterals) {
+      const auto Mark = IntPool + sizeof(uint32_t) + sizeof(uint16_t);
+      const auto Tail = Mark + sizeof(uint16_t);
+      const auto Quad = Limit - 2 * sizeof(uint64_t);
+      const auto High = Limit - sizeof(uint64_t);
+      const auto Double = Quad - sizeof(uint64_t);
+      const auto Gap = Double + sizeof(uint16_t);
+      const auto GapEnd = Quad - sizeof(uint16_t);
+      const std::vector<MachODataInCodeRange> Marked{{Mark, Tail, Data},
+                                                     {Double, Gap, Data},
+                                                     {GapEnd, Quad, Data},
+                                                     {Quad, High, Data},
+                                                     {High, Limit, Data}};
+      ASSERT_EQ(Image->MachODataInCode, Marked);
+      Missing = {{IntPool, Mark, Data},
+                 {Tail, Second->Addr, Data},
+                 {VectorPool, Double, Data},
+                 {Gap, GapEnd, Data}};
+      llvm::append_range(ExpectedData, Missing);
+      llvm::sort(ExpectedData, [](const auto &L, const auto &R) {
+        return L.Begin < R.Begin;
+      });
+    } else {
+      ASSERT_TRUE(ExpectedData.empty());
+      Missing = {{IntPool, Second->Addr, Data}, {VectorPool, Limit, Data}};
+      ExpectedData = Missing;
+    }
     std::vector<MachODataInCodeRange> Ranges;
     auto Entries = validateMachORegisterResults(Module, *Image, &Ranges);
     ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
-    EXPECT_EQ(Ranges, ExpectedData);
+    EXPECT_EQ(Ranges, Missing);
+    if (SplitLiterals) {
+      // Change only the high half of the Q literal to a typed jump table.
+      // Revalidation must reject the read and leave the output ranges alone.
+      auto Conflicting = Reader->load(Input);
+      ASSERT_TRUE(bool(Conflicting)) << llvm::toString(Conflicting.takeError());
+      Conflicting->MachODataInCode.back().Kind =
+          llvm::MachO::DICE_KIND_JUMP_TABLE8;
+      auto Invalid =
+          validateMachORegisterResults(Module, *Conflicting, &Ranges);
+      ASSERT_FALSE(bool(Invalid));
+      llvm::consumeError(Invalid.takeError());
+      EXPECT_EQ(Ranges, Missing);
+    }
   }
   if (Recover) {
     ExpectedData.clear();
@@ -446,6 +525,222 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       llvm::consumeError(Rejected.takeError());
     EXPECT_EQ(Recovered, OnlyMissing);
     testing::Test::RecordProperty(kRecoveredRecords, int(Recovered.size()));
+  }
+  if (SplitTables) {
+    std::vector<MachODataInCodeRange> Gaps;
+    unsigned Conflicts = 0;
+    for (const auto &F : Lifted.LowFuncs) {
+      ASSERT_EQ(F.JumpTables.size(), 1u);
+      const auto &Table = F.JumpTables.front();
+      ASSERT_TRUE(Table.IndexDomainAuthenticated);
+      ASSERT_EQ(Table.Targets.size(), kDispatchSlots);
+      const auto [Offset, Size] =
+          Table.EntrySize == sizeof(uint8_t)
+              ? std::pair{kByteTableGapOffset, kByteTableGapSize}
+          : Table.EntrySize == sizeof(uint16_t)
+              ? std::pair{kHalfTableGapOffset, kHalfTableGapSize}
+              : std::pair{kWordTableGapOffset, kWordTableGapSize};
+      auto Records =
+          machODataInCodeRanges(Image->MachODataInCode, Table.BaseAddr,
+                                kDispatchSlots * Table.EntrySize);
+      ASSERT_EQ(Records.size(), GappedTables ? kGappedTableRecordCount
+                                             : kSplitTableRecordCount);
+      const auto Begin = Table.BaseAddr + Offset;
+      EXPECT_EQ(Records.front().Begin, Table.BaseAddr);
+      EXPECT_EQ(Records.front().End, Begin);
+      EXPECT_EQ(Records.back().Begin, Begin + Size);
+      if (RetainedDefault) {
+        const auto &Last =
+            *llvm::max_element(F.Blocks, [](const auto &L, const auto &R) {
+              return L.EndAddr < R.EndAddr;
+            });
+        const auto FirstData = llvm::lower_bound(
+            Image->MachODataInCode, F.Entry,
+            [](const auto &R, va_t Addr) { return R.Begin < Addr; });
+        ASSERT_NE(FirstData, Image->MachODataInCode.end());
+        va_t BlockBegin = Last.EndAddr;
+        va_t Anchor = FirstData->Begin;
+        const auto BlockSize = kDefaultInstructions * aarch64::kInsnSize;
+        if (PaddedDefault && Table.EntrySize == sizeof(uint16_t)) {
+          ASSERT_EQ(FirstData->Begin, BlockBegin);
+          ASSERT_EQ(FirstData->Kind, llvm::MachO::DICE_KIND_DATA);
+          BlockBegin = FirstData->End + kDefaultLeadingPadding;
+          Gaps.push_back(
+              {FirstData->End, BlockBegin, llvm::MachO::DICE_KIND_DATA});
+          Anchor = Records.front().Begin;
+        }
+        const auto BlockEnd = BlockBegin + BlockSize;
+        if (PaddedDefault && Table.EntrySize == sizeof(uint32_t)) {
+          ASSERT_EQ(Anchor - BlockEnd, kDefaultTrailingPadding);
+          Gaps.push_back({BlockEnd, Anchor, llvm::MachO::DICE_KIND_DATA});
+        } else {
+          ASSERT_EQ(Anchor, BlockEnd);
+        }
+        DefaultStartsByRecord.try_emplace(Anchor, BlockBegin);
+
+        const auto Reject = [&](const BinaryImage &Changed) {
+          auto Verified = validateMachORegisterResults(Module, Changed);
+          ASSERT_FALSE(bool(Verified));
+          llvm::consumeError(Verified.takeError());
+        };
+        auto Unanchored = *Image;
+        llvm::erase_if(Unanchored.MachODataInCode, [&](const auto &R) {
+          return R.Begin == Records.back().Begin;
+        });
+        Reject(Unanchored);
+        const auto RejectFixup = [&](va_t Address) {
+          auto Relocated = *Image;
+          Relocated.DataPtrRelocSlots.insert(Address);
+          Reject(Relocated);
+        };
+        RejectFixup(BlockBegin);
+        if (PaddedDefault && Table.EntrySize == sizeof(uint16_t))
+          RejectFixup(FirstData->End);
+        if (PaddedDefault && Table.EntrySize == sizeof(uint32_t))
+          RejectFixup(BlockEnd);
+        for (auto Invalid :
+             {kExposeDefaultPC, kReadDefaultCode, kBranchToDefaultData}) {
+          auto Bytes = Image->Raw;
+          writeLE<uint32_t>(Bytes.data() + Image->vaToFileOffset(BlockBegin),
+                            Invalid);
+          auto Relative = Reader->loadBuffer(llvm::MemoryBufferRef(
+              llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                              Bytes.size()),
+              Input));
+          ASSERT_TRUE(bool(Relative)) << llvm::toString(Relative.takeError());
+          Reject(*Relative);
+          if (!GappedTables && Table.EntrySize == sizeof(uint8_t) &&
+              Invalid == kExposeDefaultPC) {
+            // Revalidating the old module can reject any changed assembly.
+            // The publisher must also reject the module from the changed input.
+            const auto ChangedPath = (Root / kExposedPCInput).string();
+            std::ofstream(ChangedPath, std::ios::binary)
+                .write(reinterpret_cast<const char *>(Bytes.data()),
+                       Bytes.size());
+            ASSERT_EQ(
+                llvm::sys::ExecuteAndWait(
+                    kCodesign, {kCodesign, kForceSign, kSign, kAdHocIdentity,
+                                kSignIdentifier, kRepeatIdentity, ChangedPath}),
+                0);
+            auto Signed = Reader->load(ChangedPath);
+            ASSERT_TRUE(bool(Signed)) << llvm::toString(Signed.takeError());
+            llvm::LLVMContext NewContext;
+            auto Fresh = Pipeline().run(*Signed, NewContext, Options);
+            ASSERT_TRUE(Fresh.Success && Fresh.LlvmModule) << Fresh.Error;
+            symbolizeImageAbsolutePointers(*Fresh.LlvmModule, *Signed);
+            EXPECT_FALSE(MachOPatcher()
+                             .patch(ChangedPath, Rejected, *Fresh.LlvmModule,
+                                    Signed->Arch)
+                             .Success);
+            EXPECT_FALSE(std::filesystem::exists(Rejected));
+            testing::Test::RecordProperty(kFreshPCRefusal, true);
+          }
+        }
+      }
+      if (GappedTables)
+        Gaps.push_back({Begin, Begin + Size, Records.front().Kind});
+      else {
+        EXPECT_EQ(Records[1].Begin, Begin);
+        EXPECT_EQ(Records[1].End, Begin + Size);
+      }
+
+      // The first slot alone cannot certify a disagreeing record farther
+      // into the guarded domain, even when the disagreement is part of a slot.
+      auto Conflict = *Image;
+      auto It = llvm::lower_bound(
+          Conflict.MachODataInCode, Begin,
+          [](const auto &R, va_t VA) { return R.Begin < VA; });
+      if (GappedTables)
+        Conflict.MachODataInCode.insert(
+            It, {Begin, Begin + Size, llvm::MachO::DICE_KIND_DATA});
+      else
+        It->Kind = llvm::MachO::DICE_KIND_DATA;
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Conflict));
+      EXPECT_TRUE(
+          CFGBuilder().build(Conflict, Decode, F.Entry).JumpTables.empty());
+      // Outside a declared section only the actual records own bytes.
+      auto Appended = *Image;
+      const auto *Sec = Appended.getSectionFor(Table.BaseAddr);
+      ASSERT_TRUE(Sec);
+      const auto SectionVA = Sec->VA;
+      llvm::erase_if(Appended.Sections,
+                     [&](const auto &S) { return S.VA == SectionVA; });
+      const auto *Seg = Appended.getSegmentFor(Table.BaseAddr);
+      ASSERT_TRUE(Seg && Appended.segmentHasReadableSectionMetadata(*Seg));
+      auto Rebuilt = CFGBuilder().build(Appended, Decode, F.Entry);
+      if (GappedTables) {
+        EXPECT_TRUE(Rebuilt.JumpTables.empty());
+      } else {
+        ASSERT_EQ(Rebuilt.JumpTables.size(), 1u);
+        EXPECT_EQ(Rebuilt.JumpTables.front().Targets, Table.Targets);
+      }
+      if (MaskedTables) {
+        auto Bytes = Image->Raw;
+        writeLE<uint32_t>(Bytes.data() + Image->vaToFileOffset(F.Entry),
+                          aarch64::kNop);
+        auto Unbounded = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                            Bytes.size()),
+            Input));
+        ASSERT_TRUE(bool(Unbounded)) << llvm::toString(Unbounded.takeError());
+        EXPECT_TRUE(
+            CFGBuilder().build(*Unbounded, Decode, F.Entry).JumpTables.empty());
+      }
+      if (ScheduledTables) {
+        auto Bytes = Image->Raw;
+        const auto Pad = Table.InsnAddr - aarch64::kInsnSize;
+        auto *Word = Bytes.data() + Image->vaToFileOffset(Pad);
+        ASSERT_EQ(readLE<uint32_t>(Word), aarch64::kNop);
+        writeLE<uint32_t>(Word, kClearDispatchTarget);
+        auto Clobbered = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                            Bytes.size()),
+            Input));
+        ASSERT_TRUE(bool(Clobbered)) << llvm::toString(Clobbered.takeError());
+        EXPECT_TRUE(
+            CFGBuilder().build(*Clobbered, Decode, F.Entry).JumpTables.empty());
+        auto Rejected = validateMachORegisterResults(Module, *Clobbered);
+        EXPECT_FALSE(bool(Rejected));
+        if (!Rejected)
+          llvm::consumeError(Rejected.takeError());
+      }
+      ++Conflicts;
+    }
+    ASSERT_EQ(Conflicts, kDispatchFunctions);
+    llvm::sort(Gaps,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    std::vector<MachODataInCodeRange> Recovered;
+    auto Valid = validateMachORegisterResults(Module, *Image, &Recovered);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    EXPECT_EQ(Recovered, Gaps);
+    ExpectedData.insert(ExpectedData.end(), Gaps.begin(), Gaps.end());
+    llvm::sort(ExpectedData,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    testing::Test::RecordProperty(kRecoveredRecords, int(Gaps.size()));
+    testing::Test::RecordProperty(kDispatchGuards, kDispatchFunctions);
+    testing::Test::RecordProperty(kFragmentConflicts, Conflicts);
+    if (RetainedDefault) {
+      auto Mixed = *Image;
+      for (auto &Section : Mixed.Sections)
+        Section.Type &= ~llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+      auto Refused = validateMachORegisterResults(Module, Mixed, &Recovered);
+      ASSERT_FALSE(bool(Refused));
+      llvm::consumeError(Refused.takeError());
+      EXPECT_EQ(Recovered, Gaps);
+      ASSERT_EQ(DefaultStartsByRecord.size(), kDispatchFunctions);
+      testing::Test::RecordProperty(kDefaultBlocks,
+                                    int(DefaultStartsByRecord.size()));
+      if (PaddedDefault) {
+        unsigned PaddingBytes = 0;
+        for (const auto &R : Recovered)
+          if (R.Kind == llvm::MachO::DICE_KIND_DATA)
+            PaddingBytes += R.End - R.Begin;
+        EXPECT_EQ(PaddingBytes,
+                  kDefaultLeadingPadding + kDefaultTrailingPadding);
+        testing::Test::RecordProperty(kAlignmentBytes, PaddingBytes);
+      }
+    }
   }
   if (Preamble == kDispatchOracle) {
     unsigned Proved = 0;
@@ -1112,13 +1407,24 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
         const auto &Records = Loaded->MachODataInCode;
-        if ((Recover || LiteralWidths) && !Generation) {
+        if (!Generation && ExpectedData != Image->MachODataInCode) {
           EXPECT_EQ(Records, Image->MachODataInCode);
           continue;
         }
         ASSERT_EQ(Records.size(), ExpectedData.size() * (Generation + 1));
         for (const auto &[I, R] : llvm::enumerate(Records)) {
           const auto &Source = ExpectedData[I % ExpectedData.size()];
+          if (const auto It = DefaultStartsByRecord.find(Source.Begin);
+              It != DefaultStartsByRecord.end()) {
+            const auto Size = kDefaultInstructions * aarch64::kInsnSize;
+            const auto Start = R.Begin - (Source.Begin - It->second);
+            const auto *Before = Image->readVA(It->second, Size);
+            const auto *After = Loaded->readVA(Start, Size);
+            ASSERT_TRUE(Before && After);
+            EXPECT_EQ(llvm::ArrayRef(Before, Size),
+                      llvm::ArrayRef(After, Size));
+            EXPECT_TRUE(machODataInCodeRanges(Records, Start, Size).empty());
+          }
           ASSERT_EQ(R.End - R.Begin, Source.End - Source.Begin);
           EXPECT_EQ(R.Kind, Source.Kind);
           const auto *Old =
@@ -1161,7 +1467,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
-    if (Preamble == kDispatchOracle || Recover)
+    if (Preamble == kDispatchOracle || Recover || SplitTables)
       testing::Test::RecordProperty(kDispatchComparisons,
                                     ExecutionPaths.size() * kDispatchFunctions *
                                         kDispatchInputs * kDispatchArguments);
@@ -1657,9 +1963,67 @@ TEST(AArch64LiftedImage, PartialSwitchRecordsPreserveUnalignedStorage) {
                         kDispatchFunctions);
 }
 
+TEST(AArch64LiftedImage, FragmentedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kFragmentedDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, GappedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kGappedDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, MaskedFragmentedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kMaskedFragmentedOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, MaskedGappedRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kMaskedGappedOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, ScheduledRelativeTablesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kScheduledDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, RetainedDefaultsSurvivePartialTableRecovery) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kRetainedDefaultOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedAlignmentBesideCompleteSwitchTables) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kPaddedSplitDefaultOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedAlignmentBesidePartialSwitchTables) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kPaddedGappedDefaultOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedAlignmentAfterDeclaredLiteral) {
+  verifyPublishedLeaves(kMixedLeaves, kCaller, kAssemblyName,
+                        kPaddedLiteralOracle, LeafCheck::Relifted);
+}
+
 TEST(AArch64LiftedImage, UnmarkedIntegerAndSIMDLiteralPoolsSurviveRelifting) {
   verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
                         kLiteralWidthsOracle, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, FragmentedIntegerAndSIMDLiteralsSurviveRelifting) {
+  verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
+                        kSplitLiteralOracle, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {
