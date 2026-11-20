@@ -760,6 +760,43 @@ TEST(GoClosureCalls, TheContextRegisterIsNoArgument) {
   EXPECT_EQ(Arguments(CCode).size(), 3u);
 }
 
+TEST(GoCallbacks, AnEntryTailCallsTheRoutineThatReturnsPastIt) {
+  // runtime.callbackasm: call callbackasm1; call callbackasm1; call
+  // callbackasm1.  Each call leaves its entry's address, the callback's
+  // index, for callbackasm1, which returns to the entry's caller.  Read as
+  // returning calls, the 2,000 entries were one function of 2,000 calls,
+  // each after the first passing four unknown arguments.
+  BinaryImage Img = registerArgumentImage();
+  constexpr va_t Table = kTextVA + 0x600;
+  constexpr va_t Callback = kTextVA + 0x700;
+  GoTestImage T;
+  T.Img = std::move(Img);
+  std::vector<uint8_t> Entries;
+  for (va_t At = Table; At < Table + 15; At += 5) {
+    const std::vector<uint8_t> Call = makeCall(At, Callback);
+    Entries.insert(Entries.end(), Call.begin(), Call.end());
+  }
+  // A return ends the table, so that the entries read as returning calls
+  // stop there rather than in what follows.
+  Entries.push_back(0xC3);
+  T.writeText(Table, Entries);
+  T.writeText(Callback, {0xC3});
+  const auto Calls = [&] {
+    unsigned Count = 0;
+    bool Returns = false;
+    for (const LowBlock &Block : build(T.Img, Table).Blocks)
+      for (const LowOp &Op : Block.Ops) {
+        Count += Op.Opcode == NdOp::CALL;
+        Returns |= Op.Opcode == NdOp::RETURN;
+      }
+    return std::pair{Count, Returns};
+  };
+  EXPECT_EQ(Calls(), std::pair(3u, true));
+  T.Img.ExceptionMetadata.GoModule->ReturnsPastCallerEntries = {Callback};
+  ASSERT_TRUE(goCallReturnsPastCaller(T.Img, Callback));
+  EXPECT_EQ(Calls(), std::pair(1u, true));
+}
+
 TEST(GoNoReturn, ACallToGopanicHasNoContinuation) {
   // main.h: test eax, eax; jz L; call runtime.gopanic; L: ret.  gopanic's
   // body returns, as its store to nil and return do, but the compiler laid

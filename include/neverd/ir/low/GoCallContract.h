@@ -141,6 +141,11 @@ std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
 /// stack has grown (src/runtime/stack.go).  `runtime.morestackc` throws.
 bool goCallResumesAfter(const BinaryImage &Img, va_t Callee);
 
+/// Whether \p Callee drops its return address and returns to its caller's
+/// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is
+/// its caller's last act, a tail call, and never reaches the next instruction.
+bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee);
+
 /// The register arguments the stack-growth path spills
 /// (GoStackGrowth::Spills).
 std::optional<std::vector<GoArgumentSpill>>

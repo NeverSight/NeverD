@@ -603,6 +603,11 @@ Still open, in order of yield:
    C writer drops it because the stub's own signature is `void`.
 6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
    calls per binary).
+   Windows' callback table is done. `runtime.callbackasm1` returns past its
+   caller, so each entry tail-calls it (`goCallReturnsPastCaller`), which
+   took the stripped Windows binaries down about 70%. `indexbytebody` and
+   `cmpbody` take their own register contracts and still read as System V
+   (220 and 63 placeholders each).
 7. Go code on targets other than x86-64 and AArch64 still keeps the platform
    contract.
 8. Restricted PE loads skip the Go metadata.

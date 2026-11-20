@@ -5887,6 +5887,18 @@ Go 1.16's `panicIndex` forwards its registers to a stack-argument Go half,
 and until that layout is modelled its operands would take System V's
 positions.
 
+On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
+callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's
+address, from which `callbackasm1` computes the callback's index. The routine
+pops that address and returns to the entry's caller
+(src/runtime/sys_windows_amd64.s). The loader lists it
+(`GoModuleInfo::ReturnsPastCallerEntries`), and the CFG builder turns an
+x86-64 call to it into a tail call (`goCallReturnsPastCaller`). The table
+decompiles as `return runtime_callbackasm1(arg0, arg1, arg2, arg3)`, its four
+Win64 arguments. Read as returning calls, the entries were one function of
+2,000 calls, each after the first passing four unknown values. That was 70% of
+what a stripped Windows Go binary left unknown.
+
 Go 1.26 reports every bounds failure through one routine,
 `runtime.panicBounds`, which saves all the registers that could hold the index
 and asks the call's `PCDATA_PanicBounds` entry which of them, or which

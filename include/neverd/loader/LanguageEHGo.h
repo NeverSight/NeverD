@@ -372,6 +372,12 @@ struct GoModuleInfo {
   /// `gopanic` and `fatalthrow` end in a store to nil and a reachable return.
   /// Empty unless the text base is proven.
   std::vector<va_t> NoReturnEntries;
+  /// Entries of the runtime routines that drop their return address and
+  /// return to their caller's caller, sorted: Windows' `runtime.callbackasm1`,
+  /// which each of `runtime.callbackasm`'s entries calls only to leave its own
+  /// address, the callback's index, on the stack (src/runtime/
+  /// sys_windows_amd64.s).  Empty unless the text base is proven.
+  std::vector<va_t> ReturnsPastCallerEntries;
   /// Entry of Go 1.26's `runtime.panicBounds`, which reports every bounds
   /// failure, or InvalidVA.
   va_t PanicBoundsEntry = InvalidVA;

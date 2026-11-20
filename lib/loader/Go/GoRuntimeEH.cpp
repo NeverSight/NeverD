@@ -347,6 +347,12 @@ void parseGoExceptions(BinaryImage &Img) {
           goRuntimeNeverReturns(G.Name))
         Module.NoReturnEntries.push_back(G.CodeRange.Begin);
   llvm::sort(Module.NoReturnEntries);
+  if (TextBaseProven)
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          G.Name == "runtime.callbackasm1")
+        Module.ReturnsPastCallerEntries.push_back(G.CodeRange.Begin);
+  llvm::sort(Module.ReturnsPastCallerEntries);
   // Go 1.26 reports every bounds failure through one routine and records, at
   // each call to it, which registers or constants hold the failing index and
   // length (PCDATA_PanicBounds, internal/abi/symtab.go).

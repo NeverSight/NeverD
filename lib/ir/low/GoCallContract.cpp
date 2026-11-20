@@ -327,6 +327,13 @@ bool goCallResumesAfter(const BinaryImage &Img, va_t Callee) {
                              Module->ThrowingMorestackEntries.end(), Callee);
 }
 
+bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && Img.Arch == Arch::X64 &&
+         std::binary_search(Module->ReturnsPastCallerEntries.begin(),
+                            Module->ReturnsPastCallerEntries.end(), Callee);
+}
+
 std::optional<GoStackGrowth> goStackGrowth(const BinaryImage &Img,
                                            llvm::ArrayRef<LowBlock> Blocks) {
   const auto &Module = Img.ExceptionMetadata.GoModule;

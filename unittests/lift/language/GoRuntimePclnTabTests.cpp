@@ -353,6 +353,24 @@ TEST(GoNoReturn, EveryLookupKnowsTheirEntries) {
   EXPECT_FALSE(Index.contains(T.Img, kTextVA + 0x200));
 }
 
+TEST(GoCallbacks, TheLoaderNamesTheRoutineThatReturnsPastItsCaller) {
+  // runtime.callbackasm1 pops the return address each Windows callback
+  // entry's CALL leaves, and returns to that entry's caller
+  // (src/runtime/sys_windows_amd64.s).
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.callbackasm1", kTextVA + 0x100),
+                    makeGoCode("main.f", kTextVA + 0x200)},
+                   kTextVA + 0x300)
+          .Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  EXPECT_EQ(Module->ReturnsPastCallerEntries,
+            std::vector<va_t>{kTextVA + 0x100});
+}
+
 TEST(GoPanicBounds, TheLoaderReadsEveryCallsEntry) {
   // main.f's PCDATA_PanicBounds table gives its first five bytes, a call to
   // runtime.panicBounds, the value abi.BoundsEncode makes of a signed index
