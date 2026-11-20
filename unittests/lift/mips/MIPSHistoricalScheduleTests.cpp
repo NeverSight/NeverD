@@ -557,6 +557,9 @@ TEST(MIPSHistoricalScheduling,
      UnusableCoprocessorSuppliesCauseBeforeDestination) {
   for (bool Little : {false, true}) {
     auto Img = image(Little ? Arch::MIPS64EL : Arch::MIPS64, 3);
+    // The image declares COP1 register transport. Live Status.CU1 separately
+    // controls whether this particular execution may touch those registers.
+    Img.MIPS->FPABI = 1;
     MIPSSystemContext C;
     C.Historical = HistoricalSchedule::fromSnapshot(
         3, {}, HistoricalCP0{HistoricalProcessor::R4000, 0, 0, 0, {}, {}});

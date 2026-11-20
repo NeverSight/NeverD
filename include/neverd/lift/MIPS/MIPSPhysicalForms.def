@@ -14,4 +14,5 @@ NEVERD_MIPS_PHYSICAL_FORM(MoveTruePairedSingle, 7, "movt.ps")
 NEVERD_MIPS_PHYSICAL_FORM(MoveZeroPairedSingle, 8, "movz.ps")
 NEVERD_MIPS_PHYSICAL_FORM(MoveNonzeroPairedSingle, 9, "movn.ps")
 NEVERD_MIPS_PHYSICAL_FORM(AlignPairedSingle, 10, "alnv.ps")
+NEVERD_MIPS_PHYSICAL_FORM(RestoreFromException, 11, "rfe")
 #undef NEVERD_MIPS_PHYSICAL_FORM

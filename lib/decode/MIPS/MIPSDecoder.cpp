@@ -311,14 +311,21 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
   if (Len < 4)
     return false;
   const bool Little = archLittleEndian(TargetArch);
-  if (MIPSISARevision == 6 &&
-      (readTargetEndian<uint32_t>(Bytes, Little) >> 16) == 0x0410) {
-    // NAL ignores its encoded offset and writes PC+8 before its delay slot.
-    // Capstone does not expose this Release 6 encoding in either GPR width.
+  const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
+  const bool NAL = MIPSISARevision == 6 && Physical >> 16 == 0x0410;
+  const bool RFE =
+      Physical == 0x42000010 && MIPSHistoricalISA && MIPSHistoricalISA <= 2;
+  const bool ERET = Physical == 0x42000018 && MIPSHistoricalISA >= 2 &&
+                    MIPSHistoricalISA <= 3;
+  if (NAL || RFE || ERET) {
+    // Capstone omits NAL, RFE and the MIPS II implementation of ERET.
+    // All have no explicit operands; their implicit state differs.
     cs_detail *D = InsnBuf->detail;
     *InsnBuf = {};
     InsnBuf->detail = D;
-    InsnBuf->id = MIPSLifter::NoOpAndLinkID;
+    InsnBuf->id = NAL   ? MIPSLifter::NoOpAndLinkID
+                  : RFE ? MIPSLifter::RestoreFromExceptionID
+                        : unsigned(MIPS_INS_ERET);
     InsnBuf->address = Addr;
     InsnBuf->size = 4;
     std::copy_n(Bytes, 4, InsnBuf->bytes);
@@ -327,12 +334,22 @@ bool Decoder::decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr) {
                     physicalMnemonic(Handle, InsnBuf->id));
     if (Detail) {
       *D = {};
-      D->regs_read[D->regs_read_count++] = MIPS_REG_PC;
-      D->regs_write[D->regs_write_count++] = MIPS_REG_RA;
+      if (NAL) {
+        D->regs_read[D->regs_read_count++] = MIPS_REG_PC;
+        D->regs_write[D->regs_write_count++] = MIPS_REG_RA;
+      } else {
+        D->regs_read[D->regs_read_count++] = MIPS_REG_COP012;
+        D->regs_write[D->regs_write_count++] = MIPS_REG_COP012;
+        if (ERET) {
+          D->regs_read[D->regs_read_count++] = MIPS_REG_COP014;
+          if (MIPSHistoricalISA == 3)
+            D->regs_read[D->regs_read_count++] = MIPS_REG_COP030;
+          D->regs_write[D->regs_write_count++] = MIPS_REG_PC;
+        }
+      }
     }
     return true;
   }
-  const auto Physical = readTargetEndian<uint32_t>(Bytes, Little);
   if (MIPSISARevision == 6) {
     if ((Physical & 0xffc00030) == 0x46800010)
       return decodeR6FloatCompare(Bytes, Physical, Addr);
