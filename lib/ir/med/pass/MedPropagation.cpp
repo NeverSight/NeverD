@@ -555,8 +555,12 @@ void LowToMedConverter::propagate(MedFunc &Func) {
           // owner, it cannot become that owner's independently placed symbol.
           const ConstantInfo &Base =
               (A->HasAddressOrigin || A->HasAddressFragment) ? *A : *B;
-          if (Base.Provenance == ConstantAddressProvenance::CodeAddress &&
-              Result != Base.Value)
+          // ADR supplies a complete address without classifying its target.
+          // An entry established by the loader has the same identity here.
+          if (Result != Base.Value &&
+              (Base.Provenance == ConstantAddressProvenance::CodeAddress ||
+               (Base.Provenance == ConstantAddressProvenance::Address &&
+                Image->hasAuthenticatedFunctionEntryAt(Base.Value))))
             continue;
           ResultHasAddressOrigin = true;
         }
