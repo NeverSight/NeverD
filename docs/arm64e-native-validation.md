@@ -2677,3 +2677,23 @@ Only the proved data bytes and subword padding
 acquire data-in-code records. A section declaring only
 `S_ATTR_SOME_INSTRUCTIONS`, an open-ended record repair, or an uncovered
 instruction that exposes its new PC still prevents this form of publication.
+
+The Release CLI published both previously rejected Apple compiler images at
+default optimization and with `--no-opt`. Across three generations, each
+output retained the original instructions and contained 20, 30 and 40
+data-in-code records, respectively. Each LLVM build refused 24 contradictory
+or position-dependent controls and left the requested output path absent.
+
+Both Actions profiles passed all 254 tests with the source fork. On each
+profile an independent caller checked 1,008 results from the two originals
+and their twelve signed outputs. The saved signal context and Darwin's
+original unwind tables recovered both callers at twelve old-entry
+interruptions, including six on an alternate signal stack.
+[Source-fork run](https://github.com/gmh5225/test_mac_intel/actions/runs/44772516281).
+
+The frozen r6 build passed 244 of 254 cases on each profile. Its
+4 compact-emitter skips and 6 classic signed-return CFI failures matched
+the prior r6 baseline. The new retained-block case passed on both.
+Both virtual M1s reported that the explicit PAuth_LR, PACM-PC and CPTA-on
+hardware probes were unavailable. [Pinned r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44777564499).
+[Input hashes, full results and negative controls](evidence/arm64e-retained-defaults-2026-11-21.json).
