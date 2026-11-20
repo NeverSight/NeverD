@@ -20634,6 +20634,12 @@ names them for its callers, its parameters are AX and CX, and the caller
 binds `(5, 9)` before SSA. `OnlyAStubPassesItsRegistersOn` checks that
 `memeqbody`, which has no argument words, and a two-block `memequal` shape
 are no stubs.
+`ARunOfTheCallerAloneBindsAListedStubsRegisters` lists the stub and its half
+as never returning and runs the pipeline over the whole image and over the
+caller alone. Both publish (AX, CX) for the stub, and the caller's call binds
+`(5, 9)`. `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
+1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
+1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
 
 `GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
 `runtime.callbackasm1` from a pclntab. `GoCallbacks.

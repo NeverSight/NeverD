@@ -339,15 +339,6 @@ void parseGoExceptions(BinaryImage &Img) {
       }
   llvm::sort(Module.MorestackEntries);
   llvm::sort(Module.ThrowingMorestackEntries);
-  // Only where Go's register ABI is modelled: under the stack ABI, a bounds
-  // stub that forwards its registers to a stack-argument Go half would take
-  // System V's positions for them until that layout is modelled.
-  if (TextBaseProven && Module.RegisterArguments)
-    for (const GoFunction &G : Funcs)
-      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
-          goRuntimeNeverReturns(G.Name))
-        Module.NoReturnEntries.push_back(G.CodeRange.Begin);
-  llvm::sort(Module.NoReturnEntries);
   // Before Go's internal ABI every function takes its arguments and returns
   // its results on the stack.  arm64 gained the ABI with the Go 1.18 pclntab;
   // amd64 a release earlier, under the 1.16 one, so there the prologues
@@ -380,6 +371,15 @@ void parseGoExceptions(BinaryImage &Img) {
       Module.StackArguments = ThreadLocalG && !RegisterG;
     }
   }
+  // Only where Go's argument passing is modelled: the register ABI, and the
+  // stack ABI with its register stubs (goRegisterStubArguments).  Go 1.17's
+  // register ABI under the 1.16 pclntab is neither.
+  if (TextBaseProven && (Module.RegisterArguments || Module.StackArguments))
+    for (const GoFunction &G : Funcs)
+      if (G.Raw.PcSP != 0 && G.CodeRange.isValid() &&
+          goRuntimeNeverReturns(G.Name))
+        Module.NoReturnEntries.push_back(G.CodeRange.Begin);
+  llvm::sort(Module.NoReturnEntries);
   if (TextBaseProven)
     for (const GoFunction &G : Funcs)
       if (G.CodeRange.isValid() && G.Raw.Args >= 0)

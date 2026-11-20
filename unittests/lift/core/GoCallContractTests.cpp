@@ -24,6 +24,10 @@
 #include "neverd/ir/med/MedPrologueSaves.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/lift/X86/X86Regs.h"
+#include "neverd/pipeline/Pipeline.h"
+
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/IR/LLVMContext.h"
 
 #include <cstring>
 #include <map>
@@ -952,6 +956,77 @@ TEST(GoStackArguments, ARegisterStubTakesTheRegistersItPassesOn) {
     ASSERT_EQ(Passed.size(), 2u);
     EXPECT_TRUE(Passed[0].isConst() && Passed[0].ConstVal == 5);
     EXPECT_TRUE(Passed[1].isConst() && Passed[1].ConstVal == 9);
+  }
+}
+
+TEST(GoStackArguments, ARunOfTheCallerAloneBindsAListedStubsRegisters) {
+  // ARegisterStubTakesTheRegistersItPassesOn's image, with panicIndex and its
+  // half listed as never returning (GoModuleInfo::NoReturnEntries).  A call
+  // into a listed routine adds no callee to the summaries, so a run of the
+  // caller alone summarized no stub, and the call passed no argument.
+  constexpr va_t Stub = kTextVA + 0x100;
+  constexpr va_t Half = kTextVA + 0x180;
+  constexpr va_t Caller = kTextVA + 0x200;
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    GoTestImage T;
+    std::vector<uint8_t> StubBody = {0x48, 0x89, 0x44, 0x24, 0x08,
+                                     0x48, 0x89, 0x4C, 0x24, 0x10,
+                                     0xE9, 0x00, 0x00, 0x00, 0x00};
+    const int32_t Rel = static_cast<int32_t>(Half - (Stub + StubBody.size()));
+    std::memcpy(StubBody.data() + StubBody.size() - 4, &Rel, 4);
+    T.writeText(Stub, StubBody);
+    T.writeText(Half, {0x48, 0x8B, 0x44, 0x24, 0x08, 0x48, 0x03, 0x44, 0x24,
+                       0x10, 0xC3});
+    std::vector<uint8_t> CallerBody = {0xB8, 0x05, 0x00, 0x00, 0x00,
+                                       0xB9, 0x09, 0x00, 0x00, 0x00};
+    const std::vector<uint8_t> Call =
+        makeCall(Caller + CallerBody.size(), Stub);
+    CallerBody.insert(CallerBody.end(), Call.begin(), Call.end());
+    CallerBody.push_back(0xC3);
+    T.writeText(Caller, CallerBody);
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{Stub, kTextVA + 0x300}};
+    Module.FrameArguments = {{Stub, 16}, {Half, 16}, {Caller, 0}};
+    Module.NoReturnEntries = {Stub, Half};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    for (const auto &[Entry, Name] : {std::pair{Stub, "runtime.panicIndex"},
+                                      std::pair{Half, "runtime.goPanicIndex"},
+                                      std::pair{Caller, "main.f"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {Caller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::map<va_t, FixedIntegerCallArguments> &Fixed =
+        R.CallEntryIntegerArguments.get();
+    const auto Operands = Fixed.find(Stub);
+    ASSERT_NE(Operands, Fixed.end());
+    ASSERT_EQ(Operands->second.Parameters.size(), 2u);
+    EXPECT_EQ(Operands->second.Parameters[0].Register, x86reg::RAX);
+    EXPECT_EQ(Operands->second.Parameters[1].Register, x86reg::RCX);
+    const auto F = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Caller; });
+    ASSERT_NE(F, R.MedFuncs.end());
+    const MedOp *Bound = nullptr;
+    for (const MedBlock &Block : F->Blocks)
+      for (const MedOp &Op : Block.Ops)
+        if (Op.Opcode == NdOp::CALL && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() && Op.Inputs[0].ConstVal == Stub)
+          Bound = &Op;
+    ASSERT_NE(Bound, nullptr);
+    ASSERT_TRUE(Bound->IntegerCallSignature);
+    ASSERT_EQ(Bound->NumInputs, 3u);
+    EXPECT_TRUE(Bound->Inputs[1].isConst() && Bound->Inputs[1].ConstVal == 5);
+    EXPECT_TRUE(Bound->Inputs[2].isConst() && Bound->Inputs[2].ConstVal == 9);
   }
 }
 

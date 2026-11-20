@@ -546,14 +546,19 @@ Still open, in order of yield:
      past the return address, and calls to them pass their arguments on the
      stack (`MedFunc::StackArgumentsOnly`). The seven old binaries fell
      9-82%, and the corpus fell 23%. Still open:
-     - Growth elision for stack-ABI functions. Their growth loop hides
-       parameters, as in `runtime_makeslice(void)`.
+     - Growth elision for stack-ABI functions now runs where the growth
+       block's only predecessor is the entry's check: the no-return list
+       ended the false edges from `gopanic` and `throw` calls before it, and
+       `runtime_makeslice(et, len, cap)` reads its parameters. Some functions
+       still read scratch registers at their entry and are no stack-only
+       function, so their stack parameters take System V's numbering after a
+       spurious register parameter (`runtime_mallocgc`: AL, R9 and R13 reach a
+       join from two of its paths).
      - Results, which the callee stores past its arguments and the caller
        loads after the call.
      - ABI0 assembly in register-ABI images.
-     - The no-return list and arm64 growth paths, which still wait on the
-       register-ABI gate. A stub call after a `runtime.throw` call keeps an
-       undefined arm until `throw` ends its block.
+     - arm64 growth paths, which still wait on the register-ABI gate.
+       The no-return list is open to the stack ABI.
      Bounds stubs are done. LowIR recognizes a stub once
      (`goRegisterStubArguments`), callers bind its registers before SSA, and
      `panicIndex` calls pass `(x, y)` on every platform. Go assembly with a
@@ -605,10 +610,11 @@ Still open, in order of yield:
    (`goRegisterStubArguments`).
 4. A frame larger than 4 KiB reaches its growth path from two branches and
    keeps it. arm64 growth paths are left out only where the register ABI is
-   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) wait
-   for the stack ABI too. On the 25 Go binaries, the two together took "no
+   modelled. Go's no-return runtime routines (`goRuntimeNeverReturns`) are
+   listed under both ABIs. On the 25 Go binaries, the two together took "no
    recovered semantics" from 357,956 to about 305,600 and the refused
-   functions from 28 to 24, with arm64 Go 1.26 down 8-40%.
+   functions from 28 to 24, with arm64 Go 1.26 down 8-40%. Opening the list
+   to the stack ABI took the seven old binaries from 14,999 to 12,642.
 5. A 1.21+ write barrier's buffer pointer in R11 or X25 reaches HighIR, but the
    C writer drops it because the stub's own signature is `void`.
 6. `duffzero` and `duffcopy` need their own contracts (Go 1.18-1.25, up to 39
