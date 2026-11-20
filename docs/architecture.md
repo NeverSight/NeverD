@@ -6002,7 +6002,12 @@ run of some functions alone, as `--func` and the GUI make, still lifts each
 listed stack-ABI routine its functions call. Where the body is a stub, its
 registers are published as its complete operands, and nothing else of the body
 enters the solve. Without that, a call to a stub that run summarized nowhere
-passed no argument, or the wrong register.
+passed no argument, or the wrong register. In an image with the register ABI,
+a call into a listed routine names it to summarize all the same: a listed
+routine has no prototype there, and its summary alone gives its calls their
+parameters. A run of `mapassign_faststr` alone passed `runtime_throw` every
+register the caller had set, in Go's order: seven arguments beside the
+image's two.
 
 Go's DWARF gives a function no `DW_AT_type`. It lists each result among the
 formal parameters, marked `DW_AT_variable_parameter`. Read as C's, every Go

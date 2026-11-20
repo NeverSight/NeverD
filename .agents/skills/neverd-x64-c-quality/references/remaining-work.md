@@ -567,9 +567,12 @@ Still open, in order of yield:
        image does; on a 40-function Go 1.16 sample, 16 of 23 bodies match the
        image's, up from 8. Still apart: parameter types the image's callers
        give, omitted callees whose recovery stops early (`gentraceback` 14
-       words beside 10), and register-ABI images, where `throw` and the
-       write barriers, listed or contract routines, take System V positions
-       alone (`runtime_throw` 7 arguments beside 2).
+       words beside 10). In register-ABI images a run alone now summarizes
+       the listed routines (`runtime_throw` 2 arguments, as in the image,
+       beside 7); on a 40-function Go 1.18 sample 20 of 29 bodies match, up
+       from 18. Still apart there: `spillArgs` (12 arguments beside 1),
+       ABI0 assembly callees (`madvise` 5 beside 9, `Syscall6` 7 beside 13),
+       and the write barriers.
      - `SYSCALL` reads all six syscall argument registers whatever the
        call, so `runtime.exit` (`exit_group(code)`) is no stack-only
        function.

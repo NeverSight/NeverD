@@ -1390,6 +1390,41 @@ TEST(GoPanicBounds, AnARM64CallMovesItsOperandsIntoTheParameters) {
   EXPECT_TRUE(Routine.ExactRegisterParameters);
 }
 
+TEST(GoRegisterArguments, ARunOfTheCallerAloneSummarizesAListedRoutine) {
+  // registerArgumentImage's main.f, listed as never returning as
+  // runtime.throw is (GoModuleInfo::NoReturnEntries).  A call into a listed
+  // routine added no callee to the summaries, so a run of main.g alone had no
+  // summary of main.f, and its call took every register main.g had set in
+  // Go's order: `runtime_throw(s, n, ...)` took seven.  Its stack-growth
+  // path's spills give it exactly RAX and RBX in either run.
+  for (const bool Restricted : {false, true}) {
+    SCOPED_TRACE(Restricted);
+    BinaryImage Img = registerArgumentImage();
+    Img.ExceptionMetadata.GoModule->NoReturnEntries = {GoCallee};
+    for (const auto &[Entry, Name] :
+         {std::pair{GoCallee, "main.f"}, std::pair{GoCaller, "main.g"},
+          std::pair{Morestack, "runtime.morestack_noctxt"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      Img.Symbols.push_back(std::move(Function));
+    }
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    if (Restricted)
+      Options.OnlyFunctionEntries = {GoCaller};
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    const std::map<va_t, GPRReadWidths> &Reads = R.CallEntryReadGPRs.get();
+    const auto Summary = Reads.find(GoCallee);
+    ASSERT_NE(Summary, Reads.end());
+    GPRReadWidths Expected{};
+    Expected[x86reg::RAX / 8] = 8;
+    Expected[x86reg::RBX / 8] = 8;
+    EXPECT_EQ(Summary->second, Expected);
+  }
+}
+
 TEST(GoRegisterArguments, ACallPassesThemInGoRegisters) {
   const BinaryImage Img = registerArgumentImage();
   GPRReadWidths Reads{};
