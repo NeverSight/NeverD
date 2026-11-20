@@ -519,6 +519,9 @@ requires the promoted types of its unnamed arguments. The original LowIR
 retains the direct call to the runtime stub. The
 [indirect-call roundtrip](../unittests/lift/mips/mips16-indirect-call-roundtrip.py)
 exercises both byte orders, FR=0/1 and classic/compressed targets.
+It includes a variadic call with a named float and unsigned word, followed by
+a promoted double in a2/a3 and an unsigned word on the stack. The callee
+combines all four operands into the returned double's bits.
 
 The [MIPS16 call roundtrip](../unittests/lift/mips/mips16-floating-call-roundtrip.py)
 also covers split double parameters and proven classic entry stubs, in both
