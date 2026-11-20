@@ -1,0 +1,18 @@
+//===- MachOEmbeddedDispatch.def - Relative dispatch forms -----*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+#ifdef MACHO_DISPATCH_VALUE
+// Two local addresses, the table load, target addition and indirect branch.
+MACHO_DISPATCH_VALUE(kDispatchInstructions, 5)
+#undef MACHO_DISPATCH_VALUE
+#endif
+
+#ifdef MACHO_DISPATCH_LOAD
+MACHO_DISPATCH_LOAD(LDRB, DICE_KIND_JUMP_TABLE8)
+MACHO_DISPATCH_LOAD(LDRH, DICE_KIND_JUMP_TABLE16)
+MACHO_DISPATCH_LOAD(LDRSW, DICE_KIND_JUMP_TABLE32)
+#undef MACHO_DISPATCH_LOAD
+#endif

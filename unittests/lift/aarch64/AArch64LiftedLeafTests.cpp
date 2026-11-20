@@ -18,6 +18,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
@@ -173,13 +174,14 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Async = Check == LeafCheck::AsyncIndexedError;
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
-  if (Preamble == kMixedOracle)
+  const bool Embedded = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  if (Embedded)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
-  if (Preamble == kMixedOracle) {
+  if (Embedded) {
     // The integrated assembler emits both instruction flags for __text.
     // Exercise the ABI's SOME-only spelling with the same linked DICE records.
     auto File = llvm::MemoryBuffer::getFile(Input);
@@ -249,7 +251,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_FALSE(Image->isCodeAddress(Marker->Addr));
     EXPECT_FALSE(Image->hasAuthenticatedFunctionEntryAt(Marker->Addr));
   }
-  if (Preamble == kMixedOracle) {
+  if (Embedded) {
     const uint16_t Kinds[] = {llvm::MachO::DICE_KIND_DATA,
                               llvm::MachO::DICE_KIND_JUMP_TABLE8,
                               llvm::MachO::DICE_KIND_JUMP_TABLE16,
@@ -345,13 +347,127 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   symbolizeImageAbsolutePointers(Module, *Image);
   ASSERT_TRUE(Module.getModuleFlag(kArm64eAnalysisModuleFlag));
 
-  if (Preamble == kMixedOracle) {
+  if (Embedded) {
     auto *F = Module.getFunction(kSum);
     ASSERT_TRUE(F && F->hasFnAttribute(llvm::Attribute::Naked));
     const auto *Call = llvm::dyn_cast<llvm::CallInst>(&F->front().front());
     ASSERT_TRUE(Call && Call->isInlineAsm());
     const auto *Asm = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
     EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
+  }
+  if (Preamble == kDispatchOracle) {
+    unsigned Proved = 0;
+    for (const auto &Function : Lifted.LowFuncs) {
+      ASSERT_EQ(Function.JumpTables.size(), 1u);
+      const auto &Table = Function.JumpTables.front();
+      EXPECT_TRUE(Table.IndexDomainAuthenticated);
+      EXPECT_EQ(Table.Targets.size(), kDispatchSlots);
+      ++Proved;
+    }
+    ASSERT_EQ(Proved, kDispatchFunctions);
+    testing::Test::RecordProperty(kDispatchGuards, Proved);
+
+    const auto ByteFunction =
+        llvm::find_if(Lifted.LowFuncs, [](const LowFunc &F) {
+          return F.JumpTables.front().EntrySize == sizeof(uint8_t);
+        });
+    ASSERT_NE(ByteFunction, Lifted.LowFuncs.end());
+    const auto &Table = ByteFunction->JumpTables.front();
+    EXPECT_NE(Table.BaseAddr % aarch64::kInsnSize, 0u);
+    // A tight Mach-O can append its new body to __TEXT instead of creating
+    // a sectionless segment. Other declared sections still bound that segment.
+    auto Sectionless = *Image;
+    const auto *Section = Sectionless.getSectionFor(Table.BaseAddr);
+    ASSERT_TRUE(Section);
+    const auto TextVA = Section->VA;
+    llvm::erase_if(Sectionless.Sections,
+                   [&](const auto &S) { return S.VA == TextVA; });
+    const auto *Segment = Sectionless.getSegmentFor(Table.BaseAddr);
+    ASSERT_TRUE(Segment &&
+                Sectionless.segmentHasReadableSectionMetadata(*Segment));
+    for (const auto &R : Image->MachODataInCode) {
+      EXPECT_EQ(Sectionless.mappedObjectOwnerEnd(R.Begin), R.End);
+      EXPECT_EQ(Sectionless.mappedObjectOwnerEnd(R.End - 1), R.End);
+    }
+    EXPECT_FALSE(Sectionless.mappedObjectOwnerEnd(ByteFunction->Entry));
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(Sectionless));
+    for (const auto &Function : Lifted.LowFuncs) {
+      auto Recovered = CFGBuilder().build(Sectionless, Decode, Function.Entry);
+      ASSERT_EQ(Recovered.JumpTables.size(), 1u);
+      EXPECT_TRUE(Recovered.JumpTables.front().IndexDomainAuthenticated);
+      EXPECT_EQ(Recovered.JumpTables.front().Targets,
+                Function.JumpTables.front().Targets);
+    }
+    const auto Entry = ByteFunction->Entry;
+    const auto Guard = Image->vaToFileOffset(Entry + aarch64::kInsnSize);
+    const auto Anchor = Image->vaToFileOffset(
+        Table.InsnAddr - kDispatchAnchorDistance * aarch64::kInsnSize);
+    const auto FirstSlot = Image->vaToFileOffset(Table.BaseAddr);
+    const auto Reject = [&](auto Change) {
+      auto Bytes = Image->Raw;
+      Change(Bytes);
+      auto Candidate = Reader->loadBuffer(llvm::MemoryBufferRef(
+          llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                          Bytes.size()),
+          Input));
+      ASSERT_TRUE(bool(Candidate)) << llvm::toString(Candidate.takeError());
+      auto Valid = validateMachORegisterResults(Module, *Candidate);
+      EXPECT_FALSE(bool(Valid));
+      if (!Valid)
+        llvm::consumeError(Valid.takeError());
+      llvm::LLVMContext FreshContext;
+      auto Fresh = Pipeline().run(*Candidate, FreshContext, Options);
+      if (Fresh.Success && Fresh.LlvmModule)
+        if (auto *F = Fresh.LlvmModule->getFunction(kSum))
+          EXPECT_FALSE(F->hasFnAttribute(llvm::Attribute::Naked));
+    };
+    // An equality exit does not bound the index above. The old module
+    // cannot grant the candidate its original control-flow proof.
+    Reject([&](auto &B) {
+      const auto Branch = readLE<uint32_t>(B.data() + Guard);
+      writeLE<uint32_t>(B.data() + Guard, Branch & ~kDispatchChangeCondition);
+    });
+    // The scalar and ADR agree at the original VA, but only ADR follows the
+    // new body. This dylib's preferred anchor fits the single MOVZ immediate.
+    ASSERT_LE(Table.TargetBase, UINT16_MAX);
+    Reject([&](auto &B) {
+      writeLE<uint32_t>(B.data() + Anchor,
+                        kDispatchMoveX11 |
+                            (Table.TargetBase << kDispatchMoveImmShift));
+    });
+    // The first slot would now dispatch into table data, with its other
+    // slots and its selector bound unchanged.
+    const auto Literal = Image->MachODataInCode.front().Begin;
+    ASSERT_LT(Table.TargetBase, Literal);
+    const auto ToData = Literal - Table.TargetBase;
+    ASSERT_EQ(ToData % aarch64::kInsnSize, 0u);
+    ASSERT_LE(ToData / aarch64::kInsnSize, UINT8_MAX);
+    Reject([&](auto &B) { B[FirstSlot] = ToData / aarch64::kInsnSize; });
+    // The file still has exactly the same instructions and slots, but its
+    // declared entry width no longer agrees with the actual LDRB.
+    Reject([&](auto &B) {
+      unsigned ChangedKinds = 0;
+      forEachMachOLoadCommand(
+          B.data(), B.size(),
+          [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+            if (ID != llvm::MachO::LC_DATA_IN_CODE)
+              return;
+            const auto &Command =
+                *reinterpret_cast<const llvm::MachO::linkedit_data_command *>(
+                    P);
+            auto *Slots = reinterpret_cast<llvm::MachO::data_in_code_entry *>(
+                B.data() + Command.dataoff);
+            for (auto &Slot : llvm::MutableArrayRef(Slots, Command.datasize /
+                                                               sizeof(*Slots)))
+              if (Slot.kind == llvm::MachO::DICE_KIND_JUMP_TABLE8) {
+                Slot.kind = llvm::MachO::DICE_KIND_JUMP_TABLE16;
+                ++ChangedKinds;
+              }
+          });
+      EXPECT_EQ(ChangedKinds, 1u);
+    });
+    testing::Test::RecordProperty(kDispatchNegatives, kDispatchRejections);
   }
   if (Check == LeafCheck::KilledScratchResult) {
     for (const auto *Name : {kSum, kDifference}) {
@@ -899,7 +1015,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           llvm::toHex(llvm::SHA256::hash(Reloaded->Raw), true));
       ExecutionPaths.push_back(NextPath);
     }
-    if (Preamble == kMixedOracle) {
+    if (Embedded) {
       for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
@@ -951,6 +1067,10 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
+    if (Preamble == kDispatchOracle)
+      testing::Test::RecordProperty(kDispatchComparisons,
+                                    ExecutionPaths.size() * kDispatchFunctions *
+                                        kDispatchInputs * kDispatchArguments);
     testing::Test::RecordProperty(kNativeImages, ExecutionPaths.size());
   }
 #else
@@ -1420,6 +1540,12 @@ TEST(AArch64LiftedImage,
      EmbeddedLiteralAndJumpTablesSurviveAutomaticRelifting) {
   verifyPublishedLeaves(kMixedLeaves, kCaller, kAssemblyName, kMixedOracle,
                         LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, RelativeSwitchDispatchSurvivesAutomaticRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {

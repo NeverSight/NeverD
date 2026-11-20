@@ -32,6 +32,7 @@ namespace neverd {
 struct BinaryImage;
 struct CompactUnwindEntry;
 struct ExceptionFunction;
+struct LowFunc;
 struct MedFunc;
 
 /// Complete-prologue DWARF for a frameless compact recipe with saved pairs.
@@ -61,7 +62,8 @@ bool needsMachONativeStackIndex(const MedFunc &Function);
 llvm::Error
 lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> AdmittedEntries,
-                          llvm::ArrayRef<va_t> RequiredNativeEntries);
+                          llvm::ArrayRef<va_t> RequiredNativeEntries,
+                          llvm::ArrayRef<LowFunc> SourceFunctions = {});
 
 /// Check each register body and its symbolic call operands against the image
 /// before submitting its inline assembly to MC. Returns the original entries

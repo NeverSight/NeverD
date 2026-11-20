@@ -1,0 +1,11 @@
+//===- BlockAddressUse.def - Source label escape diagnostics ---*- C++ -*-===//
+//
+// NeverD Decompiler
+//
+//===----------------------------------------------------------------------===//
+
+BLOCK_ADDRESS_ESCAPE(kMetadataEscape,
+                     "a preserved source has a metadata blockaddress escape")
+BLOCK_ADDRESS_ESCAPE(kValueEscape,
+                     "a preserved source has an escaping blockaddress")
+#undef BLOCK_ADDRESS_ESCAPE
