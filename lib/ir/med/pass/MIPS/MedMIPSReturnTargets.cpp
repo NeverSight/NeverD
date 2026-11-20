@@ -9,6 +9,7 @@
 
 #include "../../../../safety/StackSlotFlow.h"
 #include "../../abi/MedABIPassDetail.h"
+#include "MedMIPSRecordFrame.h"
 
 #include "neverd/ir/Limits.h"
 #include "neverd/ir/SourceABI.h"
@@ -578,6 +579,22 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     Results.emplace(Identity, Valid);
     return Valid;
   };
+  const auto RecordCall =
+      [&](const MedOp &Call) -> std::optional<mips::RecordFrameCall> {
+    const auto It = Calls.find(&Call);
+    if (It == Calls.end() || !Call.SourceCallHint ||
+        !Call.SourceCallHint->Signature.MIPSRecords)
+      return std::nullopt;
+    if (const auto Start = CallPrivateStart(Call))
+      return mips::RecordFrameCall{*Start, It->second.FloatingResultBytes};
+    return std::nullopt;
+  };
+  const bool SingleRecordExit =
+      QualifiedMemory && Required.size() == 1 && TailReturns.empty() &&
+      llvm::any_of(Calls, [](const auto &C) {
+        return C.first->SourceCallHint &&
+               C.first->SourceCallHint->Signature.MIPSRecords;
+      });
   for (const auto &Block : Function.Blocks)
     for (const auto &Op : Block.Ops)
       if (Op.Opcode == NdOp::RETURN) {
@@ -591,7 +608,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         }
         if (!Required.erase(Origin) ||
             Op.NumInputs != SourceResultOperands + 1 ||
-            !Prove(Op.Inputs[SourceResultOperands]))
+            (!Prove(Op.Inputs[SourceResultOperands]) &&
+             (!SingleRecordExit ||
+              !mips::preservesRecordFrameLink(Function, Op, Target, RecordCall,
+                                              Remaining))))
           return false;
       }
   return Required.empty() && TailReturns.empty() && QualifiedTails.empty();

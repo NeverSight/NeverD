@@ -266,6 +266,53 @@ TEST(MIPSRecordSourceEntry, BothMachineResultWordsSurviveTheReturnDelaySlot) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, BoundedCopyMustPreserveThePrivateReturnSlot) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Variant : {0u, 1u, 2u, 3u}) {
+      SCOPED_TRACE(static_cast<unsigned>(A));
+      SCOPED_TRACE(Variant);
+      // Copy sixteen incoming bytes into a private record, pass its double
+      // fields in f12/f13, then return through the saved incoming link.
+      std::vector<uint32_t> Words{
+          0x67bdffd0, 0xffbf0028, 0x67ac0008, 0x67ad0018, 0x908e0000,
+          0x64840001, 0xa18e0000, 0x658c0001, 0x158dfffb, 0,
+          0xd7ac0008, 0xd7ad0010, 0x0c000800, 0x6406002a, 0xdfbf0028,
+          0x03e00008, 0x67bd0030};
+      if (Variant == 1)
+        Words[3] = 0x67ad0030; // Loop reaches the saved link.
+      if (Variant == 2)
+        Words[13] = 0x03a03025; // The call receives the private SP.
+      if (Variant == 3)
+        Words[3] = 0x00a06825; // Incoming a1 gives an unknown iteration count.
+      auto Image = image(Words, A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      Image.MIPS->FPABI = 1;
+      auto Pair =
+          NdType::makeStruct({NdType::makeFloat(8), NdType::makeFloat(8)});
+      Pair->Passing = NdRecordPassing::ByValue;
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Pair;
+      Sig.Parameters.push_back({"value", Pair});
+      Sig.Parameters.push_back({"tail", NdType::makeInt(8, false)});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      const auto Low = build(Image);
+      if (Variant == 0)
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+  }
+}
+
 TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
