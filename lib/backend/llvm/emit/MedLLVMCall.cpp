@@ -1118,20 +1118,20 @@ void MedLLVMEmitter::emitCallOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
         Values.push_back(Carriers[At++]);
         continue;
       }
-      const auto Members = sourceABIValueMembers(Parameter.Type);
-      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
-                                                Members.size());
-      At += Members.size();
       if (Hint.Signature.MIPSRecords) {
-        for (unsigned I = 0; I < Parts.size(); ++I) {
-          const auto &Binding = Bindings[At - Parts.size() + I];
-          auto *Type = llvmMIPSRecordPieceType(*Ctx, Binding, Hint.Signature);
-          auto *Part = Parts[I];
+        for (size_t End = At + Parameter.Components.size(); At < End; ++At) {
+          auto *Type =
+              llvmMIPSRecordPieceType(*Ctx, Bindings[At], Hint.Signature);
+          auto *Part = Carriers[At];
           Types.push_back(Type);
           Values.push_back(Type == Part->getType() ? Part : IntegerBits(Part));
         }
         continue;
       }
+      const auto Members = sourceABIValueMembers(Parameter.Type);
+      const llvm::ArrayRef<llvm::Value *> Parts(Carriers.data() + At,
+                                                Members.size());
+      At += Members.size();
       auto *Packed = Pack(Parts, Members, Parameter.Type->Size);
       if (Parameter.Type->Kind == NdTypeKind::Int) {
         Types.push_back(Packed->getType());
