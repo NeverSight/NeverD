@@ -67,6 +67,7 @@ struct RegisterBody {
   bool HasMemoryWriteback = false;
   bool HasMemoryIndex = false;
   bool HasSIMDData = false;
+  std::vector<MachODataInCodeRange> RecoveredData;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
   bool HasLanguageFrame = false;
@@ -570,20 +571,33 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   // LLVM module is caller-supplied, so derive the edges from the image again.
   std::optional<LowFunc> OriginalControl;
   MachOEmbeddedDispatch Dispatch;
-  if (!Source->Embedded.empty()) {
-    if (Revalidate && llvm::any_of(Source->Embedded, [](const auto &R) {
-          return R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE8 ||
-                 R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE16 ||
-                 R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE32;
-        })) {
-      OriginalControl = CFGBuilder().build(Image, Decode, Start);
-      ControlFlow = &*OriginalControl;
+  if (Revalidate && (Owner->second->hasFnAttribute(kRecoveredData) ||
+                     llvm::any_of(Source->Embedded, [](const auto &R) {
+                       return R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE8 ||
+                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE16 ||
+                              R.Kind == llvm::MachO::DICE_KIND_JUMP_TABLE32;
+                     }))) {
+    OriginalControl = CFGBuilder().build(Image, Decode, Start);
+    ControlFlow = &*OriginalControl;
+  }
+  llvm::SmallVector<MachODataInCodeRange> EffectiveData;
+  if (ControlFlow) {
+    auto Layout = machOEmbeddedDispatch(Image, Decode, *Source, *ControlFlow);
+    if (!Layout)
+      return std::nullopt;
+    Dispatch = std::move(*Layout);
+    if (!Dispatch.Recovered.empty()) {
+      llvm::append_range(EffectiveData, Source->Embedded);
+      llvm::append_range(EffectiveData, Dispatch.Recovered);
+      llvm::sort(EffectiveData, [](const auto &L, const auto &R) {
+        return L.Begin < R.Begin;
+      });
+      Source->Embedded = EffectiveData;
     }
-    if (ControlFlow)
-      Dispatch = machOEmbeddedDispatch(Image, Decode, *Source, *ControlFlow);
   }
 
   RegisterBody Body;
+  Body.RecoveredData = std::move(Dispatch.Recovered);
   Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
   Body.HasCompactFrame =
@@ -1025,21 +1039,20 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
             Byte);
   }
   std::map<llvm::Function *, RegisterBody> Bodies;
-  llvm::DenseMap<va_t, const LowFunc *> DispatchFunctions;
-  if (!Image.MachODataInCode.empty())
-    for (const auto &F : SourceFunctions)
-      if (!F.JumpTables.empty())
-        DispatchFunctions.try_emplace(F.Entry, &F);
+  llvm::DenseMap<va_t, const LowFunc *> SourceByEntry;
+  for (const auto &F : SourceFunctions)
+    SourceByEntry.try_emplace(F.Entry, &F);
   bool HasVariadicCursor = false;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!Admitted.contains(It->first))
       continue;
-    const auto *Source = DispatchFunctions.lookup(It->first);
+    const auto *Source = SourceByEntry.lookup(It->first);
     if (llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }) &&
-        (!Source || !blockAddressEscape(F, [&](const auto *Owner) {
-                       return Owner == &F;
-                     }).empty()))
+        (!Source || Source->JumpTables.empty() ||
+         !blockAddressEscape(F, [&](const auto *Owner) {
+            return Owner == &F;
+          }).empty()))
       continue;
     if (auto Body = registerBody(Decode, Image, *Functions, It, Source)) {
       HasVariadicCursor |= F.isVarArg() && Body->MaterializesCursor;
@@ -1102,6 +1115,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     while (!F->empty())
       F->begin()->eraseFromParent();
     F->addFnAttr(kRegisterBody);
+    if (!Body.RecoveredData.empty())
+      F->addFnAttr(kRecoveredData);
     F->addFnAttr(llvm::Attribute::Naked);
     F->removeFnAttr(llvm::Attribute::AlwaysInline);
     F->addFnAttr(llvm::Attribute::NoInline);
@@ -1129,17 +1144,22 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
 }
 
 llvm::Expected<llvm::DenseSet<va_t>>
-validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
+validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
+                             std::vector<MachODataInCodeRange> *RecoveredData) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
-          M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); }))
+          M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); })) {
+    if (RecoveredData)
+      RecoveredData->clear();
     return Result;
+  }
   auto Functions = definedEntries(M, Image);
   if (!Functions)
     return Functions.takeError();
   Decoder Decode;
   if (!Decode.init(Image))
     return invalidBody();
+  std::vector<MachODataInCodeRange> VerifiedData;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!F.hasFnAttribute(kRegisterBody))
@@ -1154,8 +1174,14 @@ validateMachORegisterResults(llvm::Module &M, const BinaryImage &Image) {
         Call->getCalledOperand() != assembly(F, *Body) ||
         !llvm::equal(Call->args(), Body->Operands))
       return invalidBody();
+    if (F.hasFnAttribute(kRecoveredData) != !Body->RecoveredData.empty())
+      return invalidBody();
+    if (RecoveredData)
+      llvm::append_range(VerifiedData, Body->RecoveredData);
     Result.insert(It->first);
   }
+  if (RecoveredData)
+    *RecoveredData = std::move(VerifiedData);
   return Result;
 }
 } // namespace neverd

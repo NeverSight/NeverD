@@ -68,8 +68,11 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
 /// Check each register body and its symbolic call operands against the image
 /// before submitting its inline assembly to MC. Returns the original entries
 /// for the separate verification of the final linked machine instructions.
-llvm::Expected<llvm::DenseSet<va_t>>
-validateMachORegisterResults(llvm::Module &Module, const BinaryImage &Image);
+/// On success RecoveredData receives sorted, independently proved source
+/// ranges absent from the image's data-in-code table.
+llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
+    llvm::Module &Module, const BinaryImage &Image,
+    std::vector<MachODataInCodeRange> *RecoveredData = nullptr);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H

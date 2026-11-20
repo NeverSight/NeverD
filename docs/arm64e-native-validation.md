@@ -2424,3 +2424,61 @@ compiler-original authenticated calls and signed exception unwinding passed.
 Explicit PAuth_LR, PACM-PC, scalar CPTA-on and checked writeback remain
 unqualified. The test repository had zero registered self-hosted runners.
 [Source revisions, image hashes and measurements](evidence/arm64e-switch-dispatch-2026-11-20.json).
+
+### Recovering missing Mach-O data-in-code records
+
+For functions with local relative switches, the arm64e publisher can recover
+a missing or incomplete `LC_DATA_IN_CODE` table. It combines machine
+instruction boundaries from the source CFG, the exact bytes read by local
+AArch64 literal loads, the finite slots read by proved switch dispatches,
+and any records already in the image. The ranges must agree on type and stay
+disjoint from live instructions. An alignment fragment that cannot contain
+one AArch64 instruction is preserved as ordinary data. A gap large enough for
+a whole aligned instruction still requires a source of evidence.
+
+Installation reconstructs these reads from the input image before consuming
+the emitted object. It carries the ranges through header growth and a
+zero-base image slide, records both the old and copied data in the published
+image, and checks their bytes and types after placement. The first publication
+therefore supplies native data-in-code records for later generations.
+
+The regression fixtures include 8-, 16- and signed 32-bit relative dispatch,
+an eight-byte literal that changes the result, and a byte table at an odd
+address adjacent to padding. One input declares only its 16-bit table. Another
+has no data records. A literal retargeted into a live instruction invalidates
+the source proof before installation.
+
+A separate fixture reads six literal forms through the integer and SIMD
+register files. It compares zero-extended W, full X, sign-extended LDRSW,
+the bit pattern of a single-precision NaN, double-precision negative zero
+and both lanes of a 128-bit Q load. Repeated publication checks the original
+and copied pools against independently sized extents.
+
+The macOS 26 and Xcode 27 runners each passed all 247 Release publication
+tests, plus 20 native installer cases and four default-startup cases.
+Each ran 4,032 independent return-value comparisons on 56 signed CLI inputs
+and outputs. These came from eight originals, two publication modes and
+three successive generations per mode. The original tables were absent,
+empty or partially populated. One local control clears
+`S_ATTR_PURE_INSTRUCTIONS` on a linked copy, retains
+`S_ATTR_SOME_INSTRUCTIONS`, and signs that copy before execution.
+[Hosted native run](https://github.com/gmh5225/test_mac_intel/actions/runs/44731143048).
+
+The signal tests sampled the original and published old entries with the
+handler on its regular stack and on a registered alternate stack. Starting
+Darwin libunwind at the kernel's interrupted PC recovered the incoming SP
+and both caller PCs in six alternate-stack runs per host. These covered an
+indexed FDE, a compact leaf, and a compact leaf with a personality and LSDA.
+The handler-initiated walk skipped the interrupted entry and reported a
+different SP in the caller on both systems, on both regular and alternate
+signal stacks.
+[Compiler-original alternate-stack controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44728953139).
+
+The five local Release targets accounted for 2,129 cases. Of these, 2,076
+passed and 53 had explicit skip conditions. One count-lane case reached the
+parallel timeout and passed the normal serial CTest in 24.40 seconds. A
+separate run supplied the arm64e text of `/usr/bin/wc` to the optional
+classifier test. Both hosted Apple M1 virtual machines qualified native PAC,
+authenticated calls and signed language unwinding. The strict PAuth_LR,
+PACM-PC and CPTA-on hardware checks reported unavailable.
+[Source, image hashes and per-host measurements](evidence/arm64e-inferred-data-2026-11-20.json).

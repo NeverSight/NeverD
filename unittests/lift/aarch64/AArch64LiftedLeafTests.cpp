@@ -25,6 +25,7 @@
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/BranchEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
 
 #include "llvm/ADT/ScopeExit.h"
@@ -174,8 +175,12 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Async = Check == LeafCheck::AsyncIndexedError;
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
-  const bool Embedded = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  if (Embedded)
+  const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
+  const bool LiteralWidths = Preamble == kLiteralWidthsOracle;
+  const bool PartialRecords = Preamble == kPartialDispatchOracle;
+  const bool Recover = Preamble == kUnmarkedDispatchOracle || PartialRecords;
+  const bool Embedded = Declared || Recover;
+  if (Declared || PartialRecords)
     Compile.push_back(kDataLinker);
   if (Async)
     Compile.push_back(kAsyncTables);
@@ -183,7 +188,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
   if (Embedded) {
     // The integrated assembler emits both instruction flags for __text.
-    // Exercise the ABI's SOME-only spelling with the same linked DICE records.
+    // Exercise the ABI's SOME-only spelling with the same linked bytes.
     auto File = llvm::MemoryBuffer::getFile(Input);
     ASSERT_TRUE(bool(File));
     auto Buffer = (*File)->getBuffer();
@@ -251,7 +256,14 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     EXPECT_FALSE(Image->isCodeAddress(Marker->Addr));
     EXPECT_FALSE(Image->hasAuthenticatedFunctionEntryAt(Marker->Addr));
   }
-  if (Embedded) {
+  if (PartialRecords) {
+    ASSERT_EQ(Image->MachODataInCode.size(), 1u);
+    ASSERT_EQ(Image->MachODataInCode.front().Kind,
+              llvm::MachO::DICE_KIND_JUMP_TABLE16);
+  } else if (Recover) {
+    ASSERT_TRUE(Image->MachODataInCode.empty());
+  }
+  if (Declared) {
     const uint16_t Kinds[] = {llvm::MachO::DICE_KIND_DATA,
                               llvm::MachO::DICE_KIND_JUMP_TABLE8,
                               llvm::MachO::DICE_KIND_JUMP_TABLE16,
@@ -354,6 +366,86 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     ASSERT_TRUE(Call && Call->isInlineAsm());
     const auto *Asm = llvm::cast<llvm::InlineAsm>(Call->getCalledOperand());
     EXPECT_TRUE(Asm->getAsmString().contains(kRegionAssembly));
+  }
+  auto ExpectedData = Image->MachODataInCode;
+  if (LiteralWidths) {
+    ASSERT_TRUE(ExpectedData.empty());
+    const auto *First = Image->findSymbol(kSumSymbol);
+    const auto *Second = Image->findSymbol(kDifferenceSymbol);
+    ASSERT_TRUE(First && Second && First->Addr < Second->Addr);
+    const auto *Text = Image->getSectionFor(First->Addr);
+    ASSERT_TRUE(Text && Text->contains(Second->Addr));
+    // The source places each pool after its final RET. The expected extents
+    // come from the assembler fixture, independently of the literal decoder.
+    const auto IntegerBytes = 2 * sizeof(uint32_t) + sizeof(uint64_t);
+    const auto SIMDBytes =
+        sizeof(uint32_t) + sizeof(uint64_t) + 2 * sizeof(uint64_t);
+    const auto Limit = Text->VA + Text->Size;
+    ExpectedData = {{Second->Addr - IntegerBytes, Second->Addr,
+                     llvm::MachO::DICE_KIND_DATA},
+                    {Limit - SIMDBytes, Limit, llvm::MachO::DICE_KIND_DATA}};
+    std::vector<MachODataInCodeRange> Ranges;
+    auto Entries = validateMachORegisterResults(Module, *Image, &Ranges);
+    ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
+    EXPECT_EQ(Ranges, ExpectedData);
+  }
+  if (Recover) {
+    ExpectedData.clear();
+    for (const auto &F : Lifted.LowFuncs) {
+      ASSERT_EQ(F.JumpTables.size(), 1u);
+      const auto &T = F.JumpTables.front();
+      ASSERT_TRUE(T.IndexDomainAuthenticated);
+      ASSERT_EQ(T.Targets.size(), kDispatchSlots);
+      uint16_t Kind = llvm::MachO::DICE_KIND_JUMP_TABLE32;
+      if (T.EntrySize == sizeof(uint8_t)) {
+        Kind = llvm::MachO::DICE_KIND_JUMP_TABLE8;
+        const auto Prefix = PartialRecords ? kDispatchPrefixPadding : 0;
+        ExpectedData.push_back({T.BaseAddr - sizeof(uint64_t) - Prefix,
+                                T.BaseAddr, llvm::MachO::DICE_KIND_DATA});
+        if (PartialRecords) {
+          const auto End = T.BaseAddr + kDispatchSlots;
+          ExpectedData.push_back(
+              {End, End + kDispatchSuffixPadding, llvm::MachO::DICE_KIND_DATA});
+        }
+      } else if (T.EntrySize == sizeof(uint16_t)) {
+        Kind = llvm::MachO::DICE_KIND_JUMP_TABLE16;
+      } else {
+        ASSERT_EQ(T.EntrySize, sizeof(uint32_t));
+      }
+      ExpectedData.push_back(
+          {T.BaseAddr, T.BaseAddr + kDispatchSlots * T.EntrySize, Kind});
+    }
+    llvm::sort(ExpectedData,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    ASSERT_EQ(ExpectedData.size(),
+              kDispatchFunctions + 1 + unsigned(PartialRecords));
+    std::vector<MachODataInCodeRange> Recovered;
+    auto Valid = validateMachORegisterResults(Module, *Image, &Recovered);
+    ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
+    auto OnlyMissing = ExpectedData;
+    llvm::erase_if(OnlyMissing, [&](const auto &R) {
+      return llvm::is_contained(Image->MachODataInCode, R);
+    });
+    EXPECT_EQ(Recovered, OnlyMissing);
+    // At the module boundary the literal target must be rediscovered. A
+    // readable instruction is not a relocatable literal when it is also live.
+    const auto *Sum = Image->findSymbol(kSumSymbol);
+    ASSERT_TRUE(Sum);
+    auto Bytes = Image->Raw;
+    auto *Word = Bytes.data() + Image->vaToFileOffset(Sum->Addr);
+    writeLE<uint32_t>(Word, readLE<uint32_t>(Word) &
+                                ~branch::A64LoadLiteralOffset.mask());
+    auto Overlap = Reader->loadBuffer(llvm::MemoryBufferRef(
+        llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                        Bytes.size()),
+        Input));
+    ASSERT_TRUE(bool(Overlap)) << llvm::toString(Overlap.takeError());
+    auto Rejected = validateMachORegisterResults(Module, *Overlap, &Recovered);
+    EXPECT_FALSE(bool(Rejected));
+    if (!Rejected)
+      llvm::consumeError(Rejected.takeError());
+    EXPECT_EQ(Recovered, OnlyMissing);
+    testing::Test::RecordProperty(kRecoveredRecords, int(Recovered.size()));
   }
   if (Preamble == kDispatchOracle) {
     unsigned Proved = 0;
@@ -1015,16 +1107,18 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           llvm::toHex(llvm::SHA256::hash(Reloaded->Raw), true));
       ExecutionPaths.push_back(NextPath);
     }
-    if (Embedded) {
+    if (Embedded || LiteralWidths) {
       for (const auto &[Generation, Path] : llvm::enumerate(ExecutionPaths)) {
         auto Loaded = Reader->load(Path);
         ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
         const auto &Records = Loaded->MachODataInCode;
-        ASSERT_EQ(Records.size(),
-                  Image->MachODataInCode.size() * (Generation + 1));
+        if ((Recover || LiteralWidths) && !Generation) {
+          EXPECT_EQ(Records, Image->MachODataInCode);
+          continue;
+        }
+        ASSERT_EQ(Records.size(), ExpectedData.size() * (Generation + 1));
         for (const auto &[I, R] : llvm::enumerate(Records)) {
-          const auto &Source =
-              Image->MachODataInCode[I % Image->MachODataInCode.size()];
+          const auto &Source = ExpectedData[I % ExpectedData.size()];
           ASSERT_EQ(R.End - R.Begin, Source.End - Source.Begin);
           EXPECT_EQ(R.Kind, Source.Kind);
           const auto *Old =
@@ -1067,10 +1161,13 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, ReorderedPath}), 0);
       testing::Test::RecordProperty(kReorderedTail, true);
     }
-    if (Preamble == kDispatchOracle)
+    if (Preamble == kDispatchOracle || Recover)
       testing::Test::RecordProperty(kDispatchComparisons,
                                     ExecutionPaths.size() * kDispatchFunctions *
                                         kDispatchInputs * kDispatchArguments);
+    if (LiteralWidths)
+      testing::Test::RecordProperty(
+          kLiteralComparisons, ExecutionPaths.size() * kCount * kLiteralInputs);
     testing::Test::RecordProperty(kNativeImages, ExecutionPaths.size());
   }
 #else
@@ -1546,6 +1643,23 @@ TEST(AArch64LiftedImage, RelativeSwitchDispatchSurvivesAutomaticRelifting) {
   verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
                         kDispatchOracle, LeafCheck::Relifted,
                         kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedLiteralsAndRelativeSwitchesSurviveRelifting) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kUnmarkedDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, PartialSwitchRecordsPreserveUnalignedStorage) {
+  verifyPublishedLeaves(kDispatchLeaves, kDispatchCaller, kAssemblyName,
+                        kPartialDispatchOracle, LeafCheck::Relifted,
+                        kDispatchFunctions);
+}
+
+TEST(AArch64LiftedImage, UnmarkedIntegerAndSIMDLiteralPoolsSurviveRelifting) {
+  verifyPublishedLeaves(kLiteralWidths, kLiteralWidthCaller, kAssemblyName,
+                        kLiteralWidthsOracle, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, SeparateInstructionSectionsSurviveAutomaticRelifting) {

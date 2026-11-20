@@ -22,11 +22,11 @@ struct LowFunc;
 struct MachOEmbeddedDispatch {
   llvm::DenseSet<va_t> TableAddresses;
   llvm::DenseMap<va_t, llvm::ArrayRef<va_t>> BranchTargets;
+  std::vector<MachODataInCodeRange> Recovered;
 };
 
-MachOEmbeddedDispatch machOEmbeddedDispatch(const BinaryImage &Image,
-                                            Decoder &Decode,
-                                            const MachOLiftedSource &Source,
-                                            const LowFunc &Function);
+std::optional<MachOEmbeddedDispatch>
+machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
+                      const MachOLiftedSource &Source, const LowFunc &Function);
 } // namespace neverd
 #endif

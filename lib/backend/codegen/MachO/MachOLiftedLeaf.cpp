@@ -738,7 +738,8 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                          llvm::ArrayRef<SourcePatchMapping> Mappings,
                          const CompiledImage &Generated, va_t Slide,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
-                         const llvm::DenseSet<va_t> &RegisterEntries) {
+                         const llvm::DenseSet<va_t> &RegisterEntries,
+                         llvm::ArrayRef<MachODataInCodeRange> SourceData) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
   dwarf_eh::ParseResult LinkedFrames;
@@ -788,13 +789,23 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
   if (Covered != Code->Size)
     return refuse(kLeafCoverage);
 
-  for (const auto &R : Original.MachODataInCode) {
-    const auto Installed = machODataInCodeRanges(
-        Layout.MachODataInCode, R.Begin + Slide, R.End - R.Begin);
+  for (const auto &R : SourceData) {
+    const auto Size = R.End - R.Begin;
+    const auto Installed =
+        machODataInCodeRanges(Layout.MachODataInCode, R.Begin + Slide, Size);
     if (Installed.size() != 1 || Installed.front().Begin != R.Begin + Slide ||
         Installed.front().End != R.End + Slide ||
         Installed.front().Kind != R.Kind)
       return refuse(kEmbeddedIdentity);
+    // Relocated source records can have explicit fixup owners. Each recovered
+    // read was proved immutable during register lowering.
+    if (machODataInCodeRanges(Original.MachODataInCode, R.Begin, Size)
+            .empty()) {
+      const auto *Before = Original.readVA(R.Begin, Size);
+      const auto *After = Layout.readVA(R.Begin + Slide, Size);
+      if (!Before || !After || std::memcmp(Before, After, Size))
+        return refuse(kEmbeddedIdentity);
+    }
   }
   Decoder Decode;
   if (!Decode.init(Original))
@@ -802,13 +813,15 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
   for (size_t I = 0; I < Mappings.size(); ++I) {
     const auto &Mapping = Mappings[I];
     const va_t Start = Mapping.OriginalVA;
-    const auto SourceBody = machOLiftedSource(
+    auto SourceBody = machOLiftedSource(
         Original, Start,
         I + 1 == Mappings.size() ? InvalidVA : Mappings[I + 1].OriginalVA);
     if (!SourceBody)
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kSourceExtent, Mapping.Symbol, Start).str());
+    SourceBody->Embedded =
+        machODataInCodeRanges(SourceData, Start, SourceBody->Bytes.size());
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
@@ -1084,6 +1097,20 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       !Module.getModuleInlineAsm().empty() || !Image.DataInCode.empty() ||
       llvm::verifyModule(Module))
     return refuse(kLeafModule);
+  std::vector<MachODataInCodeRange> RecoveredData;
+  auto RegisterEntries =
+      validateMachORegisterResults(Module, Image, &RecoveredData);
+  if (!RegisterEntries)
+    return RegisterEntries.takeError();
+  llvm::SmallVector<MachODataInCodeRange> Combined;
+  llvm::ArrayRef<MachODataInCodeRange> SourceData = Image.MachODataInCode;
+  if (!RecoveredData.empty()) {
+    llvm::append_range(Combined, SourceData);
+    llvm::append_range(Combined, RecoveredData);
+    llvm::sort(Combined,
+               [](const auto &L, const auto &R) { return L.Begin < R.Begin; });
+    SourceData = Combined;
+  }
   llvm::SmallVector<va_t> SectionEntries;
   for (const auto &S : Image.Sections) {
     if (!S.Size || !(S.Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
@@ -1093,8 +1120,7 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
         (S.Type & llvm::MachO::SECTION_TYPE) == llvm::MachO::S_SYMBOL_STUBS)
       continue;
     const auto *Segment = Image.getSegmentFor(S.VA);
-    const auto Embedded =
-        machODataInCodeRanges(Image.MachODataInCode, S.VA, S.Size);
+    const auto Embedded = machODataInCodeRanges(SourceData, S.VA, S.Size);
     if ((S.Type & llvm::MachO::SECTION_TYPE) != llvm::MachO::S_REGULAR ||
         (!(S.Type & llvm::MachO::S_ATTR_PURE_INSTRUCTIONS) &&
          Embedded.empty()) ||
@@ -1117,9 +1143,6 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   }
   if (SectionEntries.empty())
     return refuse(kSourceText);
-  auto RegisterEntries = validateMachORegisterResults(Module, Image);
-  if (!RegisterEntries)
-    return RegisterEntries.takeError();
   std::vector<SourcePatchMapping> Mappings;
   std::vector<SourcePatchBinding> Bindings;
   for (const auto &F : Module) {
@@ -1297,11 +1320,11 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
   return installMachOLiftedObject(
       llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
                       Object.ObjectData.size()),
-      Image, Mappings, Bindings, Output,
+      Image, Mappings, Bindings, Output, RecoveredData,
       [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
           llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
         return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries);
+                            *RegisterEntries, SourceData);
       });
 }
 } // namespace neverd
