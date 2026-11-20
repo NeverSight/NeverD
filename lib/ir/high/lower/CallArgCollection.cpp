@@ -593,7 +593,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                    mips::isPackedRecordWord(P.Type, P.Components)) {
           const auto Word = medvarToExpr(Call.Inputs[++Index]);
           std::vector<ExprPtr> Leaves;
-          for (const auto &M : sourceABIValueMembers(P.Type)) {
+          for (const auto &M : sourceValueMembers(P.Type)) {
             const unsigned At =
                 archLittleEndian(TargetArch)
                     ? M.ByteOffset
@@ -604,7 +604,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           Hinted.push_back(HighExpr::makeRecord(P.Type, std::move(Leaves)));
         } else {
           std::vector<ExprPtr> Leaves;
-          for (const auto &Member : sourceABIValueMembers(P.Type))
+          const auto Members = Signature.MIPSRecords
+                                   ? sourceValueMembers(P.Type)
+                                   : sourceABIValueMembers(P.Type);
+          for (const auto &Member : Members)
             Leaves.push_back(
                 sourceScalarValue(Call.Inputs[++Index], Member.Type));
           if (P.Type->Kind == NdTypeKind::Int) {

@@ -40,7 +40,11 @@ inline llvm::Type *llvmSourceCallValueType(llvm::LLVMContext &Context,
                ? llvm::Type::getFloatTy(Context)
                : llvm::Type::getDoubleTy(Context);
   case NdTypeKind::Struct: {
-    const auto Members = sourceValueMembers(Source);
+    const auto Members = sourceComplexComponentBytes(Source)
+                             ? sourceValueMembers(Source)
+                             : sourceAggregateMembers(Source);
+    if (Members.empty())
+      return nullptr;
     const bool Floating = Members.front().Type->Kind == NdTypeKind::Float ||
                           isSourceAArch64VectorType(Members.front().Type);
     auto *Element =

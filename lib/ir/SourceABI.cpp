@@ -70,13 +70,6 @@ unsigned sourceComplexComponentBytes(const TypeRef &Type) {
   return Bytes;
 }
 
-std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
-  if (const auto Bytes = sourceComplexComponentBytes(Type))
-    return {{Type->Fields[0], 0},
-            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
-  return sourceAggregateMembers(Type);
-}
-
 namespace {
 #define SOURCE_ABI_CARRIER_VALUE(Type, Name, Value) constexpr Type Name = Value;
 #define SOURCE_ABI_CARRIER_TEXT(Name, Text) constexpr char Name[] = Text;
@@ -500,7 +493,10 @@ bool equalSourceTypes(const TypeRef &Left, const TypeRef &Right) {
   return equalTypes(Left, Right, 0, Remaining);
 }
 
-std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+  if (const auto Bytes = sourceComplexComponentBytes(Type))
+    return {{Type->Fields[0], 0},
+            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
   if (!Type || Type->Kind != NdTypeKind::Struct ||
       !equalSourceTypes(Type, Type))
     return {};
@@ -528,6 +524,13 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
       Result.push_back(std::move(Member));
     }
   }
+  return Result;
+}
+
+std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
+  if (!Type || Type->Passing == NdRecordPassing::Complex)
+    return {};
+  auto Result = sourceValueMembers(Type);
   if (Result.empty())
     return {};
   if (std::any_of(Result.begin(), Result.end(), [](const auto &Member) {
@@ -667,7 +670,8 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
       Result.push_back({I, 0, P.Name, NdType::makeInt(P.Type->Size, false),
                         P.Components.front()});
     else {
-      const auto Members = sourceABIValueMembers(P.Type);
+      const auto Members = Hint.MIPSRecords ? sourceValueMembers(P.Type)
+                                            : sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)
         Result.push_back({I, Members[J].ByteOffset, P.Name, Members[J].Type,
                           P.Components[J]});

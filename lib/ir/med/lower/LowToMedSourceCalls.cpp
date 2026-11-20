@@ -630,7 +630,9 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         }
       } else if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
-        const auto Members = sourceAggregateMembers(Signature.ReturnType);
+        const auto Members = Signature.MIPSRecords
+                                 ? sourceValueMembers(Signature.ReturnType)
+                                 : sourceAggregateMembers(Signature.ReturnType);
         for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {
           const auto &Piece = Signature.ReturnComponents[I];
           const auto Wide = FloatingCarrier(Piece);

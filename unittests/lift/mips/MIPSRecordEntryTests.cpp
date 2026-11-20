@@ -269,6 +269,43 @@ TEST(MIPSRecordABI, TwoFloatsShareOneArgumentWordAndReturnInTwoFPRs) {
   }
 }
 
+TEST(MIPSRecordABI, MixedFloatingAndIntegerFieldsKeepIndependentCallClasses) {
+  llvm::LLVMContext Context;
+  auto D = NdType::makeFloat(8);
+  auto U64 = NdType::makeInt(8, false);
+  auto Mixed = NdType::makeStruct({D, U64});
+  Mixed->Passing = NdRecordPassing::ByValue;
+  EXPECT_TRUE(sourceAggregateMembers(Mixed).empty());
+  const auto Members = sourceValueMembers(Mixed);
+  ASSERT_EQ(Members.size(), 2u);
+  EXPECT_EQ(Members[0].ByteOffset, 0);
+  EXPECT_EQ(Members[1].ByteOffset, 8);
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SourceFunctionTypeHint Sig;
+    Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Sig.ReturnType = Mixed;
+    Sig.Parameters.push_back({"value", Mixed});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+    const auto Pieces = sourceABIParameters(Sig);
+    ASSERT_EQ(Pieces.size(), 2u);
+    EXPECT_TRUE(llvmMIPSRecordPieceType(Context, Pieces[0], Sig)->isDoubleTy());
+    EXPECT_TRUE(
+        llvmMIPSRecordPieceType(Context, Pieces[1], Sig)->isIntegerTy(64));
+    EXPECT_EQ(Pieces[0].Location.RegisterOffset, mipsreg::w(12));
+    EXPECT_EQ(Pieces[1].Location.RegisterOffset, mipsreg::r(5));
+    const auto *Result =
+        llvm::cast<llvm::StructType>(llvmSourceCallResultType(Context, Sig));
+    ASSERT_EQ(Result->getNumElements(), 2u);
+    EXPECT_TRUE(Result->getElementType(0)->isIntegerTy(64));
+    EXPECT_TRUE(Result->getElementType(1)->isIntegerTy(64));
+    auto Bad = Sig;
+    Bad.ReturnComponents[0] = Pieces[0].Location;
+    std::string Diagnostic;
+    EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+  }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);

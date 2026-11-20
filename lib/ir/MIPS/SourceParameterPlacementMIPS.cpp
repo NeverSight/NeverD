@@ -293,7 +293,7 @@ bool mips::isPackedRecordWord(
       Locations.front().ValueBytes != Type->Size ||
       (Type->Size != 2 && Type->Size != 4 && Type->Size != 8))
     return false;
-  return sourceABIValueMembers(Type).size() > 1;
+  return sourceValueMembers(Type).size() > 1;
 }
 
 static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
@@ -324,7 +324,7 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       Components.push_back(Pieces[0].Location);
       return true;
     }
-    const auto Members = sourceABIValueMembers(Type);
+    const auto Members = sourceValueMembers(Type);
     if (Members.empty() || Members.size() != Pieces.size())
       return false;
     for (size_t I = 0; I < Members.size(); ++I) {

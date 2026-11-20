@@ -61,7 +61,8 @@ struct SourceAggregateMember {
 /// Nested records and arrays retain their declared layout. Other mixtures fail.
 std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type);
 
-/// Members of a validated logical C value used by representation bridges.
+/// Leaf types and object byte offsets of a complete logical C value.
+/// This structural description is independent of argument and return classes.
 /// Complex values have two scalar components but retain their distinct
 /// calling class; this does not authorize ordinary record ABI placement.
 std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type);

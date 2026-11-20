@@ -864,7 +864,7 @@ ExprPtr MedToHighConverter::sourceBitSlice(const ExprPtr &Value,
     // A machine reader can observe part of a vector member (including its
     // upper word). Select the complete source member before slicing its bits;
     // record padding and slices spanning members are not source values.
-    for (const auto &Member : sourceAggregateMembers(Value->Type))
+    for (const auto &Member : sourceValueMembers(Value->Type))
       if (ByteOffset >= Member.ByteOffset &&
           ByteOffset + Bytes <= Member.ByteOffset + Member.Type->Size) {
         auto Field = HighExpr::makeBitCast(

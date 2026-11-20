@@ -27,6 +27,20 @@ enum class Origin { Unknown, Number, NonFrame, Stack, Link };
 struct Value {
   Origin From = Origin::Unknown;
   uint64_t Bits = 0;
+  // A partial FPR write or stack word can contain both proven data bytes
+  // and an unknown suffix. Bit zero describes the least significant byte.
+  uint64_t NonFrameBytes = 0;
+  static uint64_t lanes(unsigned Width) {
+    return Width >= 64 ? UINT64_MAX : (uint64_t(1) << Width) - 1;
+  }
+  uint64_t knownBytes(unsigned Width) const {
+    return external() ? lanes(Width) : NonFrameBytes & lanes(Width);
+  }
+  static Value fromBytes(uint64_t Known, unsigned Width) {
+    if (Width && Width <= 64 && (Known & lanes(Width)) == lanes(Width))
+      return {Origin::NonFrame};
+    return {Origin::Unknown, 0, Known & lanes(Width)};
+  }
   bool external() const {
     return From == Origin::Number || From == Origin::NonFrame ||
            From == Origin::Link;
@@ -76,18 +90,23 @@ class FrameWalk {
     if (Address.From != Origin::Stack || !privateBytes(At, Width))
       return {};
     Value Whole;
-    bool Intact = true, Numeric = Width <= 8, External = true;
+    bool Intact = true, Numeric = Width <= 8;
+    uint64_t Known = 0;
     uint64_t Bits = 0;
     for (unsigned I = 0; I < Width; ++I) {
       const auto It = Memory.find(At + I);
-      if (It == Memory.end())
-        return {};
+      if (It == Memory.end()) {
+        Intact = Numeric = false;
+        continue;
+      }
       const auto &B = It->second;
       const unsigned Lane = archLittleEndian(Target) ? I : Width - 1 - I;
       if (!I)
         Whole = B.Source;
       Intact &= B.Source == Whole && B.Width == Width && B.Lane == Lane;
-      External &= B.Source.external();
+      if (Lane < 64 && B.Lane < 64 &&
+          ((B.Source.knownBytes(B.Width) >> B.Lane) & 1))
+        Known |= uint64_t(1) << Lane;
       Numeric &= B.Source.From == Origin::Number && B.Lane < 8;
       if (Numeric)
         Bits |= ((B.Source.Bits >> (B.Lane * 8)) & 255) << (Lane * 8);
@@ -96,7 +115,7 @@ class FrameWalk {
       return Whole;
     if (Numeric)
       return {Origin::Number, Bits};
-    return External ? Value{Origin::NonFrame} : Value{};
+    return Value::fromBytes(Known, Width);
   }
   bool store(Value Address, Value Data, unsigned Width) {
     if (Address.external())
@@ -133,7 +152,11 @@ class FrameWalk {
       if (A.From == Origin::Stack && isMIPSN32(Target) && From == 4 && W == 8 &&
           O.Opcode == NdOp::INT_SEXT)
         return A;
-      return A.external() ? Value{Origin::NonFrame} : Value{};
+      uint64_t Known = A.knownBytes(From);
+      if (W > From && (O.Opcode == NdOp::INT_ZEXT ||
+                       (From && From <= 64 && ((Known >> (From - 1)) & 1))))
+        Known |= Value::lanes(W) & ~Value::lanes(From);
+      return Value::fromBytes(Known, W);
     }
     if (O.NumInputs != 2)
       return {};
@@ -145,7 +168,20 @@ class FrameWalk {
         return A;
       if (A.From == Origin::Number && B.Bits < 8)
         return {Origin::Number, (A.Bits >> (8 * B.Bits)) & mask(W)};
-      return A.external() ? Value{Origin::NonFrame} : Value{};
+      return B.Bits < 64
+                 ? Value::fromBytes(A.knownBytes(O.Inputs[0].Size) >> B.Bits, W)
+                 : Value{};
+    }
+    if (O.Opcode == NdOp::CONCAT && W == O.Inputs[0].Size + O.Inputs[1].Size &&
+        W <= 64 && O.Inputs[1].Size < 64) {
+      const auto Low = O.Inputs[1].Size;
+      const auto High = O.Inputs[0].Size;
+      if (W <= 8 && Low && Low < 8 && A.From == Origin::Number &&
+          B.From == Origin::Number)
+        return {Origin::Number,
+                ((A.Bits << (8 * Low)) | (B.Bits & mask(Low))) & mask(W)};
+      return Value::fromBytes((A.knownBytes(High) << Low) | B.knownBytes(Low),
+                              W);
     }
     if (W > 8 || !W)
       return {};
@@ -308,6 +344,13 @@ public:
           continue;
         }
         if (O.Opcode == NdOp::INTRINSIC && O.NumInputs &&
+            O.Inputs[0].isConst() && O.Output.Kind == MedVar::Temp &&
+            O.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSUnpredictable) &&
+            mipsScalarMedShapeIsValid(O, Target)) {
+          Values[key(O.Output)] = {};
+          continue;
+        }
+        if (O.Opcode == NdOp::INTRINSIC && O.NumInputs &&
             O.Inputs[0].isConst() && !O.Output.Size) {
           const auto Id = static_cast<Intrinsic>(O.Inputs[0].ConstVal);
           if ((Id == Intrinsic::RequireAligned && O.NumInputs == 3 &&
@@ -325,6 +368,7 @@ public:
         case NdOp::INT_SEXT:
         case NdOp::INT_ZEXT:
         case NdOp::SUBBYTES:
+        case NdOp::CONCAT:
         case NdOp::INT_ADD:
         case NdOp::INT_SUB:
         case NdOp::INT_OR:

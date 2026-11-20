@@ -1119,11 +1119,13 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
   if (!Signature.ReturnType ||
       (Signature.ReturnType->Kind != NdTypeKind::Void &&
        !scalar(Signature.ReturnType) && !PairResult && !RetainResultStorage &&
+       !Signature.MIPSRecords &&
        sourceAggregateMembers(Signature.ReturnType).empty()))
     return bad("unsupported result type");
   for (const auto &Parameter : Signature.Parameters)
     if (!scalar(Parameter.Type) &&
         !(Parameter.IndirectByValue && sourceCallRetainsNativeCarriers(Hint)) &&
+        !Signature.MIPSRecords &&
         sourceAggregateMembers(Parameter.Type).empty() &&
         !(Signature.HasExplicitABI &&
           Signature.Origin ==

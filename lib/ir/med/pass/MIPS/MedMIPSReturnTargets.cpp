@@ -102,7 +102,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   bool NeedsNativeArguments = false;
   struct CallFrame {
     llvm::SmallVector<SourceABIValueLocation, 8> Inputs;
-    unsigned FloatingResultBytes = 0;
+    unsigned NumericResultBytes = 0;
   };
   std::map<const MedOp *, CallFrame> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
@@ -138,12 +138,21 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           auto &Frame = Calls[&Op];
           for (const auto &P : Pieces)
             Frame.Inputs.push_back(P.Location);
+          // A complete scalar-only object returned by a qualified call can
+          // be spilled as data after its non-frame operands are proven. A
+          // pointer field or padding cannot provide that byte provenance.
+          const auto Members = sourceValueMembers(Signature.ReturnType);
+          unsigned Covered = 0;
+          for (const auto &M : Members) {
+            if (M.ByteOffset != Covered || (M.Type->Kind != NdTypeKind::Int &&
+                                            M.Type->Kind != NdTypeKind::Float))
+              break;
+            Covered += M.Type->Size;
+          }
           if (Signature.ReturnType->Kind == NdTypeKind::Float ||
               (!Signature.ReturnComponents.empty() &&
-               llvm::all_of(Signature.ReturnComponents, [](const auto &P) {
-                 return P.Kind == SourceABICarrierKind::FloatingRegister;
-               })))
-            Frame.FloatingResultBytes = Signature.ReturnType->Size;
+               Covered == Signature.ReturnType->Size))
+            Frame.NumericResultBytes = Signature.ReturnType->Size;
         } else if (const auto Signature =
                        boundFloatingCallArguments(Op, Target, Format)) {
           auto &Frame = Calls[&Op];
@@ -151,7 +160,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             Frame.Inputs.push_back(
                 {P.Kind, P.Register, P.StackOffset, P.Bytes});
           if (Signature->ReturnKind == NdTypeKind::Float)
-            Frame.FloatingResultBytes = Signature->ReturnBytes;
+            Frame.NumericResultBytes = Signature->ReturnBytes;
         } else {
           NeedsNativeArguments = true;
         }
@@ -355,7 +364,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // pointer-returning calls still provide no such proof.
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
-            First + Bytes <= Call->second.FloatingResultBytes) {
+            First + Bytes <= Call->second.NumericResultBytes) {
           Safe = IsNonFrame(Op.Inputs[0]);
           for (size_t I = 0; Safe && I < Call->second.Inputs.size(); ++I)
             Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
@@ -586,7 +595,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         !Call.SourceCallHint->Signature.MIPSRecords)
       return std::nullopt;
     if (const auto Start = CallPrivateStart(Call))
-      return mips::RecordFrameCall{*Start, It->second.FloatingResultBytes};
+      return mips::RecordFrameCall{*Start, It->second.NumericResultBytes};
     return std::nullopt;
   };
   const bool SingleRecordExit =
