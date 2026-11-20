@@ -183,11 +183,14 @@ TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
     Pair->Passing = NdRecordPassing::ByValue;
     for (unsigned Prefix : {0u, 7u, 8u}) {
       SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
       Sig.ReturnType = Pair;
       for (unsigned I = 0; I < Prefix; ++I)
         Sig.Parameters.push_back({"word", NdType::makeInt(8, false)});
       Sig.Parameters.push_back({"pair", Pair});
       ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      std::string Diagnostic;
+      ASSERT_TRUE(validateSourceABI(Sig, Diagnostic)) << Diagnostic;
       const auto Operands = sourceABIParameters(Sig);
       ASSERT_EQ(Operands.size(), Prefix + 2);
       for (unsigned I = 0; I < Operands.size(); ++I) {
@@ -207,6 +210,7 @@ TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
       auto PointerPair = NdType::makeStruct({Pointer, Pointer});
       PointerPair->Passing = NdRecordPassing::ByValue;
       SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
       Sig.ReturnType = NdType::makeVoid();
       Sig.Parameters.push_back({"pointer", Pointer});
       Sig.Parameters.push_back({"record", PointerPair});

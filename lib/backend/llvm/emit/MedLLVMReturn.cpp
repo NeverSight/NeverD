@@ -171,8 +171,10 @@ void MedLLVMEmitter::emitReturnOp(const MedOp &Op, llvm::IRBuilder<> &Builder,
     return;
   }
 
-  if (CurMedFunc && CurMedFunc->SourceParametersBound &&
-      CurMedFunc->SourceTypeHint && CurMedFunc->SourceTypeHint->MIPSRecords) {
+  if (CurMedFunc &&
+      (CurMedFunc->ExplicitMIPSRecordResult ||
+       (CurMedFunc->SourceParametersBound && CurMedFunc->SourceTypeHint &&
+        CurMedFunc->SourceTypeHint->MIPSRecords))) {
     // The source binder captured these result operands before SSA, including
     // a value written in the return delay slot. An ordinary JR input is not
     // a return value and never enters this path.

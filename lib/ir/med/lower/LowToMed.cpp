@@ -2036,7 +2036,23 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
         .disconnectNoReturnFallthroughs(Func);
     const auto *EntrySignature = bindSourceCalls(Func, Low, Fmt);
     const bool RecordEntry = EntrySignature && EntrySignature->MIPSRecords;
-    if (RecordEntry)
+    if (!MIPSRecordResult.empty()) {
+      Func.MultiReturn.assign(MIPSRecordResult.begin(), MIPSRecordResult.end());
+      Func.ExplicitMIPSRecordResult = true;
+      for (auto &Block : Func.Blocks)
+        for (auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::RETURN) {
+            if (Op.NumInputs != 1)
+              throw LowToMedConversionError(
+                  "A MIPS record return lost its captured jump target");
+            const auto Link = Op.Inputs[0];
+            Op.NumInputs = 0;
+            for (const auto &P : MIPSRecordResult)
+              Op.addInput(ndVarToMedVar(NdVar::reg(P.RegOff, P.Size)));
+            Op.addInput(Link);
+          }
+    }
+    if (RecordEntry || Func.ExplicitMIPSRecordResult)
       MIPSReturnsQualified = false;
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
@@ -2108,8 +2124,8 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
-    if (QualifyMIPSReturns || RecordEntry) {
-      unsigned ResultInputs = 0;
+    if (QualifyMIPSReturns || RecordEntry || Func.ExplicitMIPSRecordResult) {
+      unsigned ResultInputs = MIPSRecordResult.size();
       if (RecordEntry && EntrySignature->ReturnType->Kind != NdTypeKind::Void)
         ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
                            ? EntrySignature->ReturnComponents.size()
@@ -2119,7 +2135,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");
-      if (RecordEntry)
+      if (RecordEntry || Func.ExplicitMIPSRecordResult)
         for (auto &Block : Func.Blocks)
           for (auto &Op : Block.Ops)
             if (Op.Opcode == NdOp::RETURN)

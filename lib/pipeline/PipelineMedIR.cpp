@@ -1160,18 +1160,30 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   for (const auto &[Entry, Hint] : SourceHints)
     SourceEntryHints.emplace(Entry, *Hint);
   auto SourceCalleeHints = SourceEntryHints;
+  std::map<va_t, std::vector<MedReturnReg>> RecordResults;
   if (Opts.usesSourceDeclarations() && Img.MIPS && Dbg &&
       (Dbg->hasAuthenticatedFunctionSignatures() ||
        Dbg->hasUserFunctionDeclarations())) {
     std::set<va_t> Targets;
     for (const auto &LF : Result.LowFuncs) {
-      if (!SourceEntryHints.contains(LF.Entry))
-        if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry)) {
+      if (!SourceEntryHints.contains(LF.Entry)) {
+        std::vector<SourceParameterPiece> Pieces;
+        if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry, &Pieces)) {
           const auto It =
               SourceEntryHints.emplace(LF.Entry, std::move(*Hint)).first;
           SourceHints.emplace(LF.Entry, &It->second);
           SourceCalleeHints.emplace(LF.Entry, It->second);
+        } else if (!Pieces.empty()) {
+          auto &Registers = RecordResults[LF.Entry];
+          for (const auto &P : Pieces) {
+            const bool FP =
+                P.Location.Kind == SourceABICarrierKind::FloatingRegister;
+            Registers.push_back({P.Location.RegisterOffset,
+                                 FP ? P.Location.ValueBytes : P.CarrierBytes,
+                                 FP});
+          }
         }
+      }
       for (const auto &B : LF.Blocks)
         for (const auto &Op : B.Ops)
           if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
@@ -1327,6 +1339,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     try {
       Local.setCallSiteIntegerArguments(&VirtualArguments[I].Integers);
       Local.setCallSiteFloatingArguments(&VirtualArguments[I].Floating);
+      const auto ResultWords = RecordResults.find(Result.LowFuncs[I].Entry);
+      Local.setMIPSRecordResult(ResultWords != RecordResults.end()
+                                    ? llvm::ArrayRef(ResultWords->second)
+                                    : llvm::ArrayRef<MedReturnReg>());
       const auto Sites = SourceSites.find(Result.LowFuncs[I].Entry);
       Local.setSourceCallSiteHints(Opts.usesSourceDeclarations() &&
                                            Sites != SourceSites.end()

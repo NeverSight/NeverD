@@ -230,6 +230,42 @@ TEST(MIPSRecordSourceEntry, DelaySlotResultKeepsTheCapturedJumpTarget) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, BothMachineResultWordsSurviveTheReturnDelaySlot) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (bool CorruptLink : {false, true}) {
+      auto Image = image({CorruptLink ? 0x0080f825u : 0u, 0x64020012u,
+                          0x03e00008u, 0x64030034u},
+                         A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      const auto Low = build(Image);
+      const std::array<MedReturnReg, 2> Words{
+          {{mipsreg::V0, 8, false}, {mipsreg::V1, 8, false}}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setMIPSRecordResult(Words);
+      if (CorruptLink) {
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+        continue;
+      }
+      auto Med = Convert.convert(Low, A, BinaryFormat::ELF);
+      ASSERT_TRUE(Med.ExplicitMIPSRecordResult);
+      bool Returned = false;
+      for (const auto &Block : Med.Blocks)
+        for (const auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::RETURN) {
+            Returned = true;
+            ASSERT_EQ(Op.NumInputs, 2);
+            EXPECT_EQ(Op.Inputs[0].Size, 8);
+            EXPECT_EQ(Op.Inputs[1].Size, 8);
+          }
+      EXPECT_TRUE(Returned);
+    }
+  }
+}
+
 TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
   for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {

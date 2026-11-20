@@ -86,6 +86,9 @@ public:
   setSourceEntryTypeHints(const std::map<va_t, SourceFunctionTypeHint> *Hints) {
     SourceEntryTypeHints = Hints;
   }
+  void setMIPSRecordResult(llvm::ArrayRef<MedReturnReg> Pieces) {
+    MIPSRecordResult = Pieces;
+  }
   void setSourceCalleeTypeHints(
       const std::map<va_t, SourceFunctionTypeHint> *Hints) {
     SourceCalleeTypeHints = Hints;
@@ -472,6 +475,7 @@ private:
   const std::map<SourceCallOccurrenceKey, SourceCallTypeHint>
       *SourceCallSiteHints = nullptr;
   bool SEHSourceProjectionEnabled = false;
+  llvm::ArrayRef<MedReturnReg> MIPSRecordResult;
   const std::map<va_t, SourceFunctionTypeHint> *SourceEntryTypeHints = nullptr;
   const std::map<va_t, SourceFunctionTypeHint> *SourceCalleeTypeHints = nullptr;
   const std::map<va_t, const LowFunc *> *SourceCalleeFunctions = nullptr;

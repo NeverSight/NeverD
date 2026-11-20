@@ -285,18 +285,9 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
 }
 
-bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
-                                 Arch Architecture, BinaryFormat Format) {
-  std::vector<TypeRef> Types;
-  for (const auto &P : Hint.Parameters) {
-    if (P.TheRole != SourceParameterTypeHint::Role::Ordinary ||
-        P.IndirectByValue)
-      return false;
-    Types.push_back(P.Type);
-  }
-  const auto Layout =
-      placeRecordCall(Architecture, Format, Hint.ReturnType, Types);
-  if (!Layout || Layout->Arguments.ResultPointer)
+static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
+                          const mips::RecordCallPlacement &Layout) {
+  if (Layout.Arguments.ResultPointer)
     return false;
   auto Bound = Hint;
   const auto Bind = [](const TypeRef &Type,
@@ -328,11 +319,11 @@ bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
     }
     return true;
   };
-  if (!Bind(Bound.ReturnType, Layout->Result, Bound.ReturnLocation,
+  if (!Bind(Bound.ReturnType, Layout.Result, Bound.ReturnLocation,
             Bound.ReturnComponents))
     return false;
-  for (size_t I = 0; I < Types.size(); ++I)
-    if (!Bind(Types[I], Layout->Arguments.Parameters[I],
+  for (size_t I = 0; I < Bound.Parameters.size(); ++I)
+    if (!Bind(Bound.Parameters[I].Type, Layout.Arguments.Parameters[I],
               Bound.Parameters[I].Location, Bound.Parameters[I].Components))
       return false;
   Bound.Architecture = Architecture;
@@ -343,9 +334,26 @@ bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
   return true;
 }
 
+bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
+                                 Arch Architecture, BinaryFormat Format) {
+  std::vector<TypeRef> Types;
+  for (const auto &P : Hint.Parameters) {
+    if (P.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+        P.IndirectByValue)
+      return false;
+    Types.push_back(P.Type);
+  }
+  const auto Layout =
+      placeRecordCall(Architecture, Format, Hint.ReturnType, Types);
+  return Layout && bindRecordABI(Hint, Architecture, *Layout);
+}
+
 std::optional<SourceFunctionTypeHint>
 mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
-                      va_t Entry) {
+                      va_t Entry,
+                      std::vector<SourceParameterPiece> *ResultPieces) {
+  if (ResultPieces)
+    ResultPieces->clear();
   if (!Img.MIPS || Img.instructionModeAt(Entry) == InstructionMode::MIPS16)
     return std::nullopt;
   const auto FS = Debug.resolveFunction(Entry);
@@ -364,13 +372,22 @@ mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
                          : SourceFunctionTypeHint::OriginKind::NativeAnalysis;
   Debug.completeType(FS->ReturnType);
   Candidate.ReturnType = FS->ReturnType;
+  std::vector<TypeRef> Types;
   for (const auto &[Name, Type] : FS->Params) {
     if (!Type)
       return std::nullopt;
     Debug.completeType(Type);
     Candidate.Parameters.push_back({Name, Type});
+    Types.push_back(Type);
   }
-  return mips::assignRecordSourceABI(Candidate, Img.Arch, Img.abiFormat())
-             ? std::optional(std::move(Candidate))
-             : std::nullopt;
+  auto Layout =
+      placeRecordCall(Img.Arch, Img.abiFormat(), Candidate.ReturnType, Types);
+  if (!Layout)
+    return std::nullopt;
+  if (bindRecordABI(Candidate, Img.Arch, *Layout))
+    return Candidate;
+  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct &&
+      Layout->Result.size() == 2 && !Layout->Arguments.ResultPointer)
+    *ResultPieces = std::move(Layout->Result);
+  return std::nullopt;
 }
