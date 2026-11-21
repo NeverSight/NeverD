@@ -336,7 +336,7 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     const bool Turn = Outer == SymOp::Rol || Outer == SymOp::Ror;
     const auto Packed = Turn ? operand(A, 0) : A;
     const auto Shifts = detail::FunnelShifts::match(*this, Packed);
-    if (!Shifts || Shifts->rotatesOneWord(*this))
+    if (!Shifts || Shifts->sharesSource(*this))
       break;
     const unsigned Have = width(Packed);
     uint64_t At = Low;

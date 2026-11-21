@@ -4529,6 +4529,13 @@ tests also check overflow and inexact shifts when deriving signed ranges from
 an arithmetic right shift. Wide evaluator tests compare signed scaled
 coefficients and multiword product prefixes against full-width multiplication,
 including shared factors whose other consumers observe higher bits.
+Use `--family staggered-window --count 12` for 84 products across 32 to
+769 bits. Their 337 to 479 factors include gaps, overlapping logical shifts,
+and sums where a carry reaches the selected upper lane. The worker source
+suite exercises the same gap and overlap cases in a 239-factor x86-64 fixture.
+Wide product evaluation tests compare repeated affine factors against direct
+full-width arithmetic with the live prefix one bit below, at, and above an
+extension or concatenation boundary.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
