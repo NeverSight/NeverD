@@ -124,7 +124,7 @@ protected:
         {"profile", "kernel-events-v6"}, {"mxcsr_mask", "0xffff"},
         {"paging_address_bits", 48},     {"paged_memory", true},
         {"scheduled_events", true},      {"instructions", std::move(PCs)},
-        {"paged_debug", Debug}};
+        {"paged_debug", Debug},          {"notify_cr8_writes", true}};
     std::string Request;
     llvm::raw_string_ostream OS(Request);
     OS << llvm::formatv("{0}", llvm::json::Value(std::move(Settings)));
@@ -136,7 +136,11 @@ protected:
     const auto *Units = Manifest.getAsObject()->getArray("units");
     ASSERT_NE(Units, nullptr);
     std::vector<std::string> Symbols;
-    std::string Adapters;
+    // This fixture invokes raw paged bodies. The mixed-mode CPU consumes their
+    // completion receipt and updates the APIC before its next poll.
+    std::string Adapters =
+        "\nvoid neverd_x64_cr8_written_v1(uint64_t value, void *context) { "
+        "__builtin_trap(); }\n";
     for (const auto &I : Program) {
       if (I.Mode != X86ExecutionMode::Long64)
         continue;

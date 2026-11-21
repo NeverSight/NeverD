@@ -33,7 +33,11 @@ identified by its full linear address and execution mode. Protected and
 compatibility code use the original-byte executor; code64 uses the authenticated
 body and validator from the same paged HighC or LLVM-to-C export. Enable
 `scheduled_events` for STI and MOV SS, whose source contract requires persistent
-interruptibility state.
+interruptibility state. Select `notify_cr8_writes` when the exported
+program uses MOV CR8. The raw paged step reports the completed write to the
+mixed-mode CPU, which updates the bound APIC before polling the next event.
+The exported scheduled driver uses the producer callback. [CR8 write completion](x64-continuation-source.md#cr8-write-completion)
+
 Bind exact-type wrappers around the export's paged adapters; keep generated
 libraries and borrowed callback contexts alive through resume. Generated
 source compiles for the x64 host with Clang or NeverC. Guest code16/code32 does

@@ -829,35 +829,47 @@ TEST_F(X86ModeInterruptTest,
        AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
-  for (const auto Value : {2u, 4u, 16u})
-    for (const bool Step : {false, true}) {
-      SCOPED_TRACE(testing::Message() << "CR8=" << Value << ", TF=" << Step);
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.emplace_back(NeverC);
+  for (const auto &Compiler : Compilers)
+    for (const bool LLVM : {false, true}) {
+      SCOPED_TRACE(Compiler);
+      SCOPED_TRACE(LLVM);
       start(Mode::Long64);
-      auto &V = Machine.Core.Core;
-      V.Core.Core.Core.CR8 = 2;
-      V.Core.Core.Core.Core.GPR[0] = Value;
-      V.Core.Core.Core.Core.PC = 0x1100;
-      if (Step)
-        V.Core.Core.Core.Core.RFlags |= 0x100;
-      Machine.Debug.emplace();
-      Options.Legacy.Debug = Options.Long.DebugProfile =
-          X86InstructionDebugProfile::Watchpoints;
       add(0x1100, Mode::Long64, {0x44, 0x0f, 0x22, 0xc0});
-      ASSERT_NO_FATAL_FAILURE(
-          compileLong(false, "-O2", NEVERD_TEST_CLANG, true));
-      bindMemory();
-      X86ModeExecution Execution(*Memory, Options);
-      X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
-      Inputs.APIC.setTaskPriority(0x2f);
-      uint64_t Budget = 1;
-      auto Got =
-          llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs));
-      ASSERT_TRUE(Got.OwnerError.empty()) << Got.OwnerError;
-      EXPECT_EQ(Got.Attempts, 1u);
-      EXPECT_EQ(Got.Completions, unsigned(Value < 16));
-      EXPECT_EQ(V.Core.Core.Core.CR8, Value < 16 ? Value : 2);
-      EXPECT_EQ(Inputs.APIC.state().TPR, Value < 16 ? Value << 4 : 0x2f);
-      if (Value >= 16 || Step)
-        EXPECT_EQ(Got.DeliveredVector, Value >= 16 ? 13u : 1u);
+      ASSERT_NO_FATAL_FAILURE(compileLong(LLVM, "-O2", Compiler, true));
+      const X86ModeInstruction Write = Program.back();
+      for (const auto Value : {2u, 4u, 16u})
+        for (const bool Step : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << "CR8=" << Value << ", TF=" << Step);
+          start(Mode::Long64);
+          auto &V = Machine.Core.Core;
+          V.Core.Core.Core.CR8 = 2;
+          V.Core.Core.Core.Core.GPR[0] = Value;
+          V.Core.Core.Core.Core.PC = 0x1100;
+          if (Step)
+            V.Core.Core.Core.Core.RFlags |= 0x100;
+          Machine.Debug.emplace();
+          Options.Legacy.Debug = Options.Long.DebugProfile =
+              X86InstructionDebugProfile::Watchpoints;
+          add(Write.Address, Write.Mode, Write.Bytes);
+          Program.back() = Write;
+          bindMemory();
+          X86ModeExecution Execution(*Memory, Options);
+          X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
+          Inputs.APIC.setTaskPriority(0x2f);
+          uint64_t Budget = 1;
+          auto Got =
+              llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs));
+          ASSERT_TRUE(Got.OwnerError.empty()) << Got.OwnerError;
+          EXPECT_EQ(Got.Attempts, 1u);
+          EXPECT_EQ(Got.Completions, unsigned(Value < 16));
+          EXPECT_EQ(V.Core.Core.Core.CR8, Value < 16 ? Value : 2);
+          EXPECT_EQ(Inputs.APIC.state().TPR, Value < 16 ? Value << 4 : 0x2f);
+          if (Value >= 16 || Step)
+            EXPECT_EQ(Got.DeliveredVector, Value >= 16 ? 13u : 1u);
+        }
     }
 }
