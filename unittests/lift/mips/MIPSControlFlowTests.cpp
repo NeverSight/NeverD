@@ -680,12 +680,12 @@ TEST(MIPSRecordSourceEntry,
       SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << C.Name);
       // The conditional PIC call observes the opaque result in a0. The typed
       // call at the join observes its own record. The byte store follows both.
-      auto Image = image(
-          {0x67bdffe0, 0xffbf0018, 0x0320f809, 0, C.Branch, 0x00402025,
-           0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
-           0x0320f809, C.PICSlot, 0x0c000800, C.RecordSlot, C.Store,
-           0xdfbf0018, 0x03e00008, 0x67bd0020},
-          A);
+      auto Image =
+          image({0x67bdffe0, 0xffbf0018, 0x0320f809, 0, C.Branch, 0x00402025,
+                 0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+                 0x0320f809, C.PICSlot, 0x0c000800, C.RecordSlot, C.Store,
+                 0xdfbf0018, 0x03e00008, 0x67bd0020},
+                A);
       Image.MIPS.emplace();
       Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
       Image.MIPS->FPABI = 1;
@@ -946,6 +946,158 @@ TEST(MIPSReturnTargets, OnlyTheEqualityArmCanForwardAnOpaqueResult) {
         EXPECT_TRUE(C.Proven);
       } catch (const LowToMedConversionError &Error) {
         EXPECT_FALSE(C.Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
+    }
+}
+
+TEST(MIPSReturnTargets, JoinedGuardsAndRecheckedArgumentsUseTheActualWord) {
+  const auto Move = [](unsigned Dst, unsigned Src) {
+    return (Src << 21) | (Dst << 11) | 0x25u; // or dst,src,zero
+  };
+  struct Case {
+    const char *Name;
+    bool Proven;
+    uint32_t RightBranch = 4; // beq on the right, bne on the left
+    unsigned RightPeer = 17, RightArgument = 2, Checked = 18, Forwarded = 18;
+    uint32_t BeforeThird = 0, CheckSlot = 0;
+    bool Recheck = true;
+  };
+  const Case Cases[] = {
+      {.Name = "both paths and saved first result", .Proven = true},
+      {.Name = "different independent peers", .Proven = true, .RightPeer = 16},
+      {.Name = "fresh second result",
+       .Proven = true,
+       .Checked = 2,
+       .Forwarded = 2},
+      {.Name = "one unchecked path", .Proven = false, .RightPeer = 2},
+      {.Name = "one path forwards a frame address",
+       .Proven = false,
+       .RightArgument = 29},
+      {.Name = "one unequal path", .Proven = false, .RightBranch = 5},
+      {.Name = "third call without a check", .Proven = false, .Recheck = false},
+      {.Name = "checked register overwritten in branch slot",
+       .Proven = false,
+       .CheckSlot = Move(18, 2)},
+      {.Name = "checked second but forwarded first",
+       .Proven = false,
+       .Checked = 2},
+      {.Name = "checked first but forwarded second",
+       .Proven = false,
+       .Forwarded = 2},
+      {.Name = "volatile after second call", .Proven = false, .Checked = 4},
+      {.Name = "only the low word",
+       .Proven = false,
+       .Checked = 12,
+       .BeforeThird = 0x00126000},
+      {.Name = "frame address in the final slot",
+       .Proven = false,
+       .Forwarded = 29},
+  };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << C.Name);
+      std::vector<uint32_t> Code{0x67bdffd0,  0xffbf0028, 0xffb00000,
+                                 0xffb10008,  0xffb20010, Move(16, 4),
+                                 Move(17, 5), 0x0320f809, 0};
+      const auto Branch = [&](unsigned Opcode, unsigned LHS, unsigned RHS,
+                              uint32_t Slot) {
+        const auto I = Code.size();
+        Code.insert(Code.end(),
+                    {(Opcode << 26) | (LHS << 21) | (RHS << 16), Slot});
+        return I;
+      };
+      const auto TargetHere = [&](size_t I) { Code[I] |= Code.size() - I - 1; };
+      const auto Call = [&](uint32_t Slot) {
+        Code.insert(Code.end(),
+                    {0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+                     0x0320f809, Slot});
+      };
+      const auto Split = Branch(4, 16, 0, Move(18, 2));
+      const auto LeftExit = Branch(5, 18, 17, Move(4, 18));
+      const auto LeftJoin = Branch(4, 0, 0, 0);
+      TargetHere(Split);
+      const auto RightJoin =
+          Branch(C.RightBranch, C.RightPeer, 2, Move(4, C.RightArgument));
+      const auto RightExit = Branch(4, 0, 0, 0);
+      TargetHere(LeftJoin);
+      TargetHere(RightJoin);
+      Call(0);
+      Code.push_back(C.BeforeThird);
+      const auto LastExit = Branch(5, C.Checked, 16, C.CheckSlot);
+      if (!C.Recheck)
+        Code[LastExit] = 0;
+      Call(Move(4, C.Forwarded));
+      for (size_t I : {LeftExit, RightExit})
+        TargetHere(I);
+      if (C.Recheck)
+        TargetHere(LastExit);
+      Code.insert(Code.end(), {0xdfb00000, 0xdfb10008, 0xdfb20010, 0xdfbf0028,
+                               0x03e00008, 0x67bd0030});
+      const auto Low = build(image(Code, A));
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Low, A, BinaryFormat::ELF);
+        EXPECT_TRUE(C.Proven);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_FALSE(C.Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
+    }
+}
+
+TEST(MIPSReturnTargets, ACheckOfOnePhiOnlyQualifiesAnEqualPhi) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned UnrelatedArm : {0u, 1u, 2u, 3u}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << UnrelatedArm);
+      const auto SaveSelected = [&](unsigned Arm) {
+        return UnrelatedArm == Arm ? 0x02008825u : 0x00408825u; // s1 = s0 or v0
+      };
+      const std::vector<uint32_t> Code{
+          0x67bdffd0,
+          0xffbf0028,
+          0xffb00000,
+          0xffb10008,
+          0x00a08025, // save a1 in s0
+          0x1080000b,
+          0, // beq a0,zero,right
+          0x10a00005,
+          0, // beq a1,zero,middle
+          0x0320f809,
+          0, // left result in v0
+          0x10000008,
+          SaveSelected(1),
+          0x0320f809,
+          0, // middle result in v0
+          0x10000004,
+          SaveSelected(2),
+          0x0320f809,
+          0, // right result in v0
+          SaveSelected(3),
+          0x16300005,
+          0x00402025, // bne s1,s0,exit with move a0,v0 in the slot
+          0x3c190002,
+          isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+          0x0320f809,
+          0x6405000b, // consume v0 through a0 with a fresh a1
+          0xdfb00000,
+          0xdfb10008,
+          0xdfbf0028,
+          0x03e00008,
+          0x67bd0030};
+      const auto Low = build(image(Code, A));
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Low, A, BinaryFormat::ELF);
+        EXPECT_EQ(UnrelatedArm, 0u);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_NE(UnrelatedArm, 0u) << Error.what();
         EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
                             Error.what());
       }

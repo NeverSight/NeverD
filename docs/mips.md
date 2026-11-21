@@ -55,12 +55,16 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   stay private across calls. An untyped result passed to another opaque call
   can carry a frame address. Replacing that argument before the call, including
   in its executed delay slot, removes the earlier value from the proof.
-  On n32/n64, an ordinary full-GPR equality test can also establish the word
-  passed to the next opaque call. The call must be on the equality edge alone.
-  The other operand can be a literal or a non-frame word saved at entry in
-  an ABI-preserved register before the first call. A comparison of only the low word leaves
-  the high bits of an n32 GPR unknown. The same value on another edge or at a
-  subsequent opaque call still requires its own proof.
+  On n32/n64 a full-GPR comparison can prove that an opaque result equals
+  a literal or an independently known non-frame word. Full-width moves carry
+  this fact across basic blocks. At a join, every incoming path must qualify
+  the actual argument. A comparison after the join can also qualify two
+  registers that carry the same selected return word on every incoming edge.
+  A subsequent opaque call needs a fresh comparison.
+  It can check either the new result or an earlier result kept in an
+  ABI-preserved register. A low-word comparison leaves the upper n32 bits
+  unknown, and a call can invalidate a copy in a volatile register. Other
+  arguments that reach the same call still need their own non-frame evidence.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and

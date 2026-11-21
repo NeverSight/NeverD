@@ -18295,10 +18295,17 @@ with zero and forwards in the branch delay slot. The other compares with a
 saved parameter and forwards in the taken block. The harness runs both paths
 in the original and rebuilt binaries and checks the second import's arguments
 and the return value, including n32 inputs that differ only above bit 31.
-The private-frame tests
-also vary whether a loop argument acquires a stack address at entry or on
-its backedge, and whether a native call can observe an argument write on any
-path before a full-register overwrite.
+The joined forwarding fixture reaches the second import from two independent
+equality edges. Its three-call variants recheck either the saved first result
+or the second result. Another variant joins results from two call sites,
+compares the saved copy and forwards the selected return register. It checks
+that copy again before a third import. For every binding, both paths execute
+with matching and mismatching high halves. The harness checks the arguments
+and order of all observed calls, the restored registers and the final value against the original
+PIC and CPIC ELF on n32 and n64 in both byte orders.
+The private-frame tests also vary whether a loop argument acquires a stack
+address at entry or on its backedge, and whether a native call can observe an
+argument write on any path before a full-register overwrite.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
