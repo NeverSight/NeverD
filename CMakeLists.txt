@@ -115,9 +115,9 @@ add_subdirectory(third_party/capstone)
 # allowing Debug to honor its source-level debugging contract: no forced
 # optimization and Capstone's internal assertions enabled.  In particular,
 # MSVC's Debug runtime checks are incompatible with /O2. Apply the same flags
-# to the ordinary decoder and the static i386 iterator.
+# to the ordinary decoder and both static x86 iterators.
 include(${CMAKE_SOURCE_DIR}/cmake/NeverDCapstoneCompilerOptions.inc)
-foreach(capstone_object IN ITEMS capstone capstone_x86_iter32)
+foreach(capstone_object IN ITEMS capstone capstone_x86_iter32 capstone_x86_iter64)
     if(MSVC)
         target_compile_options(${capstone_object} PRIVATE
             "$<$<NOT:$<CONFIG:Debug>>:/O2>")
