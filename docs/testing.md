@@ -22784,7 +22784,9 @@ started. Run it for both probes in separate output directories. Use `--clang`,
 `--objcopy`, and `--readobj` to select the tools.
 `NeverDCallRegisterUnreadTests` distinguishes unconditional entry writes
 from partial, conditional, opaque and may-write summaries, including implicit
-return families and nested calls.
+return families and nested calls. Reversed block order and two calls reached
+with different surviving inputs check propagation across CFGs and call sites.
+A separate case exhausts the work budget and checks atomic proof publication.
 `Win64CallContract.RegisterQueryWindowsSourceCompilesWithItsHeaders` compiles
 both unmodified C units for the Windows x64 target with Clang's freestanding
 headers. HighC includes `<intrin.h>` for the Microsoft CPUID spelling and its

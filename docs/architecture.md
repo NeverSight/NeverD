@@ -21914,6 +21914,13 @@ through COPY/PHI transport is required. Partial-register mask chains alone do no
 justify a bridge, and settled source call arguments own their uses, rather than
 stale native argument lists.
 
+`CallRegisterUnread.cpp` tracks which incoming register families can reach
+each local read and direct call. A callee's proven entry overwrites cut off
+those families on the continuation. The interprocedural solver propagates
+new read bits through the recorded call sites until recursive components
+converge. This reuses each CFG's local observations across callee updates
+within `kCallRegisterUnreadWork`.
+
 The two C routes and LLVM share the assembly owner in `X64CallRCXNative.h`.
 Its Windows x64 SSE2 profile prevents live AVX upper halves crossing an
 under-described call. Other target intrinsics and wider caller values are

@@ -19,6 +19,11 @@ breakpoint from a post-commit trap. TPR aliases, device routing, source
 arbitration, complete environment import and both ordinary registry inputs
 remain open.
 
+Ordinary Win64 calls can again retain the previous call's physical RCX on
+large dependency graphs. The unread-register proof propagates only incoming
+families that can reach each call, within the same work limit. This
+restores call-result transport independently of the two registry stack inputs.
+
 The independent `X86LocalApicFixed` component now owns enabled fixed-message
 reception/coalescing, priority, nonconsuming selection, exact acknowledgment
 and ordinary EOI bank transitions. Arrivals preserve in-service requests;
