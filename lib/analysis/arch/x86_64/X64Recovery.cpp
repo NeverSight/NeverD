@@ -105,6 +105,7 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
         Options.X64ReturningCalls.size(), Options.ControlRegisters.size(),
         Options.ControlFrameSlots.size(), Options.EntryConstants.size(),
         Options.EntryFrameExcludedObjects.size(),
+        Options.EntryFrameLoadedObjects.size(),
         Options.EntryFrameBounds
             ? Options.EntryFrameBounds->ExcludedAddressRanges.size()
             : size_t{0}}) {
@@ -165,7 +166,8 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
        !Options.X64TerminalImports.empty()))
     return Invalid("machine regions exclude ordinary return-slot and terminal "
                    "import contracts");
-  if (!Options.EntryFrameExcludedObjects.empty() &&
+  if ((!Options.EntryFrameExcludedObjects.empty() ||
+       !Options.EntryFrameLoadedObjects.empty()) &&
       (!Options.EntryFrameBounds ||
        Options.EntryFrameBounds->Begin >= Options.EntryFrameBounds->End))
     return Invalid("entry objects require nonempty entry frame bounds");
@@ -189,6 +191,23 @@ validateRawEnvironmentDeclarations(const SpecializationOptions &Options) {
            (Register.Offset <= Location.Offset &&
             Location.Offset - Register.Offset < Register.Bytes)))
         return Invalid("entry object overlaps an entry constant binding");
+    }
+  }
+  for (size_t I = 0; I < Options.EntryFrameLoadedObjects.size(); ++I) {
+    const auto &Object = Options.EntryFrameLoadedObjects[I];
+    if (Object.PointerAddress > UINT64_MAX - 8 || Object.Begin >= Object.End ||
+        !llvm::any_of(Options.EntryFrameBounds->ExcludedAddressRanges,
+                      [&](const auto &Range) {
+                        return Range.Begin <= Object.PointerAddress &&
+                               Object.PointerAddress + 8 <= Range.End;
+                      }))
+      return Invalid("loaded entry object requires a complete excluded "
+                     "pointer field and nonempty relative bounds");
+    for (size_t J = 0; J < I; ++J) {
+      const auto &Other = Options.EntryFrameLoadedObjects[J];
+      if (Object.PointerAddress < Other.PointerAddress + 8 &&
+          Other.PointerAddress < Object.PointerAddress + 8)
+        return Invalid("loaded entry object pointer fields overlap");
     }
   }
   for (size_t I = 0; I < Options.X64MachineExits.size(); ++I) {

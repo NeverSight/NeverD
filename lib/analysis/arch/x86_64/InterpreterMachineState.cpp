@@ -520,6 +520,17 @@ addEntryDomainGuard(LowFunc &Function, uint64_t Parameter, bool StateRegisters,
       Check.emit(NdOp::INT_LESSEQUAL, ReachesObject, {ObjectFirst, Last});
       RejectIf(NdOp::BOOL_AND, ReachesFrame, ReachesObject);
     }
+    for (const auto &Object : EntryObjects->EntryFrameLoadedObjects) {
+      const auto ObjectRoot = Check.temporary();
+      Check.emit(NdOp::LOAD, ObjectRoot, {scalar(Object.PointerAddress)});
+      const auto [ObjectFirst, ObjectLast] =
+          Range(ObjectRoot, Object.Begin, Object.End);
+      const auto ReachesFrame = Check.temporary(1);
+      const auto ReachesObject = Check.temporary(1);
+      Check.emit(NdOp::INT_LESSEQUAL, ReachesFrame, {First, ObjectLast});
+      Check.emit(NdOp::INT_LESSEQUAL, ReachesObject, {ObjectFirst, Last});
+      RejectIf(NdOp::BOOL_AND, ReachesFrame, ReachesObject);
+    }
   }
   Check.emit(NdOp::COND_BR, {}, {NdVar::cst(RejectAddress, 8), Rejected});
   Finish(Guard, LowInstructionControl::Branch,
@@ -1823,7 +1834,8 @@ static llvm::Expected<InterpreterMachineRegionSource> wrapMachineRegionSource(
     return invalid("machine-region source requires authenticated exits");
   MachineRegionSourcePlan Plan;
   Plan.ArchitecturalChoices = ArchitecturalChoices;
-  if (!Expected.EntryFrameExcludedObjects.empty())
+  if (!Expected.EntryFrameExcludedObjects.empty() ||
+      !Expected.EntryFrameLoadedObjects.empty())
     Plan.EntryObjects = &Expected;
   if (SegmentedMemory)
     Plan.SegmentedMemory = &Expected;

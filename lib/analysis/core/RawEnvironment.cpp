@@ -355,6 +355,15 @@ void appendRawEnvironmentPolicy(RecoveryDigest &H,
       H.number(Object.End);
     }
   }
+  if (!O.EntryFrameLoadedObjects.empty()) {
+    H.text("entry-frame-loaded-objects-v1");
+    H.number(O.EntryFrameLoadedObjects.size());
+    for (const auto &Object : O.EntryFrameLoadedObjects) {
+      H.number(Object.PointerAddress);
+      H.number(Object.Begin);
+      H.number(Object.End);
+    }
+  }
   H.number(O.EntryFrameAlignment.has_value());
   if (O.EntryFrameAlignment) {
     H.number(O.EntryFrameAlignment->Alignment);

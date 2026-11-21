@@ -137,6 +137,9 @@ struct Projection {
   std::map<uint64_t, std::vector<uint64_t>> FrameRegisterOffsets;
   std::map<uint64_t, uint8_t> FrameBytes;
   std::map<uint64_t, uint8_t> AbsoluteBytes;
+  /// Current complete pointer words at declared entry memory fields. Guest
+  /// writes may erase these facts; no initial relation is recreated at joins.
+  std::map<uint64_t, EntryPointer> AbsoluteAffineValues;
   FrameFacts Frame;
   FrameOrigins Origins;
   ControlRelation Controls;
@@ -254,6 +257,9 @@ void seed(SymContext &Ctx, SymState &State, SymRef Root,
   // input identities used by control-state discovery.
   for (const auto &[Offset, Value] : Values.AbsoluteBytes)
     State.write(SymSpace::Memory, Offset, Ctx.mkConst(8, Value));
+  for (const auto &[Offset, Pointer] : Values.AbsoluteAffineValues)
+    State.write(SymSpace::Memory, Offset,
+                entryPointerValue(Ctx, Root, ObjectRoots, Pointer));
 }
 
 template <class Map> bool intersectMap(Map &Into, const Map &Incoming) {
@@ -450,6 +456,8 @@ bool intersect(Projection &Into, const Projection &Incoming,
   }
   Changed |= intersectMap(Into.FrameBytes, Incoming.FrameBytes);
   Changed |= intersectMap(Into.AbsoluteBytes, Incoming.AbsoluteBytes);
+  Changed |=
+      intersectMap(Into.AbsoluteAffineValues, Incoming.AbsoluteAffineValues);
   Changed |= intersectMap(Into.Frame.AffineValues, Incoming.Frame.AffineValues);
   Changed |=
       joinControls(Into.Controls, Incoming.Controls, TupleLimit, Widenings);
@@ -1105,7 +1113,8 @@ SymRef Specializer::memoryExtentsOverlap(SymContext &Ctx, SymRef Left,
   // circuits can otherwise exhaust bounded SAT search for the same footprint.
   // A retained root-plus-offset relation may already supply a shorter distance.
   // Empty object domains retain the prior query shape.
-  if (!NormalizedDistance && !Options.EntryFrameExcludedObjects.empty())
+  if (!NormalizedDistance && (!Options.EntryFrameExcludedObjects.empty() ||
+                              !Options.EntryFrameLoadedObjects.empty()))
     NormalizedDistance = Ctx.mkSub(Left, Right);
   if (NormalizedDistance)
     return Ctx.mkOr(
@@ -1231,10 +1240,12 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
 
 bool Specializer::createObjectRoots(SymContext &Ctx,
                                     std::vector<SymRef> &Roots) {
-  if (!chargeObjectWork(Options.EntryFrameExcludedObjects.size()))
+  const size_t Count = Options.EntryFrameExcludedObjects.size() +
+                       Options.EntryFrameLoadedObjects.size();
+  if (!chargeObjectWork(Count))
     return false;
-  Roots.reserve(Options.EntryFrameExcludedObjects.size());
-  for (size_t I = 0; I < Options.EntryFrameExcludedObjects.size(); ++I) {
+  Roots.reserve(Count);
+  for (size_t I = 0; I < Count; ++I) {
     Roots.push_back(Ctx.mkFreshVar(64, "entry_object"));
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
@@ -1282,6 +1293,21 @@ bool Specializer::projectObjects(SymState &State, llvm::ArrayRef<SymRef> Roots,
     if (State.context().numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "entry object projection symbolic-node budget exhausted");
+  }
+  for (const auto &Object : Options.EntryFrameLoadedObjects) {
+    if (!chargeObjectWork(1))
+      return false;
+    const auto Value = State.loadMaterialized(
+        State.context().mkConst(64, Object.PointerAddress), 8);
+    if (Value)
+      if (const auto Pointer = objectPointer(State.context(), Value, Roots))
+        Out.AbsoluteAffineValues.emplace(Object.PointerAddress, *Pointer);
+    if (Failed)
+      return false;
+    if (State.context().numNodes() > Options.MaxSymbolicNodes)
+      return fail(SpecializationStatus::BudgetExceeded,
+                  "loaded entry object projection symbolic-node budget "
+                  "exhausted");
   }
   return true;
 }
@@ -2844,7 +2870,8 @@ bool Specializer::evaluate(int Id) {
     return false;
   if (!ObjectRoots.empty() &&
       (!chargeObjectWork(Draft.Incoming.AffineRegisters.size()) ||
-       !chargeObjectWork(Draft.Incoming.Frame.AffineValues.size())))
+       !chargeObjectWork(Draft.Incoming.Frame.AffineValues.size()) ||
+       !chargeObjectWork(Draft.Incoming.AbsoluteAffineValues.size())))
     return false;
   seed(Ctx, State, FrameRoot, ObjectRoots, Draft.Incoming);
   if (!ObjectRoots.empty() && Ctx.numNodes() > Options.MaxSymbolicNodes)
@@ -2927,15 +2954,21 @@ bool Specializer::evaluate(int Id) {
   for (size_t I = 0; I < ObjectRoots.size(); ++I) {
     if (!chargeObjectWork(1))
       return false;
-    const auto &Object = Options.EntryFrameExcludedObjects[I];
+    const auto DirectCount = Options.EntryFrameExcludedObjects.size();
+    const auto [Begin, End] =
+        I < DirectCount
+            ? std::pair{Options.EntryFrameExcludedObjects[I].Begin,
+                        Options.EntryFrameExcludedObjects[I].End}
+            : std::pair{Options.EntryFrameLoadedObjects[I - DirectCount].Begin,
+                        Options.EntryFrameLoadedObjects[I - DirectCount].End};
     const auto &Bounds = *Options.EntryFrameBounds;
     IncomingPredicate = Ctx.mkAnd(
-        IncomingPredicate, detail::nonwrappingFramePredicate(
-                               Ctx, ObjectRoots[I], Object.Begin, Object.End));
-    IncomingPredicate = Ctx.mkAnd(
-        IncomingPredicate, detail::disjointFrameRangesPredicate(
-                               Ctx, FrameRoot, Bounds.Begin, Bounds.End,
-                               ObjectRoots[I], Object.Begin, Object.End));
+        IncomingPredicate,
+        detail::nonwrappingFramePredicate(Ctx, ObjectRoots[I], Begin, End));
+    IncomingPredicate = Ctx.mkAnd(IncomingPredicate,
+                                  detail::disjointFrameRangesPredicate(
+                                      Ctx, FrameRoot, Bounds.Begin, Bounds.End,
+                                      ObjectRoots[I], Begin, End));
     if (Ctx.numNodes() > Options.MaxSymbolicNodes)
       return fail(SpecializationStatus::BudgetExceeded,
                   "entry object predicate symbolic-node budget exhausted");
@@ -5470,7 +5503,7 @@ SpecializationResult Specializer::run() {
   if (!createObjectRoots(Ctx, ObjectRoots) ||
       !chargeObjectWork(ObjectRoots.size()))
     return std::move(Result);
-  for (size_t I = 0; I < ObjectRoots.size(); ++I) {
+  for (size_t I = 0; I < Options.EntryFrameExcludedObjects.size(); ++I) {
     const auto &Register = Options.EntryFrameExcludedObjects[I].Register;
     Initial.write(SymSpace::Register, Register.Offset, ObjectRoots[I]);
     AffineCandidates.insert(Register.Offset);
@@ -5509,6 +5542,22 @@ SpecializationResult Specializer::run() {
     setUnsafeOrigin(Location, false, InitialOrigins);
     for (uint16_t I = 0; I < Location.Size; ++I)
       InitialOrigins.UndefinedFlags.erase(Location.Offset + I);
+  }
+  for (size_t I = 0; I < Options.EntryFrameLoadedObjects.size(); ++I) {
+    if (!chargeObjectWork(1))
+      return std::move(Result);
+    const auto &Object = Options.EntryFrameLoadedObjects[I];
+    const auto Root = ObjectRoots[Options.EntryFrameExcludedObjects.size() + I];
+    if (!Initial.store(Ctx.mkConst(64, Object.PointerAddress), Root)) {
+      fail(SpecializationStatus::InvalidInput,
+           "loaded entry object pointer field could not be seeded");
+      return std::move(Result);
+    }
+    if (Ctx.numNodes() > Options.MaxSymbolicNodes) {
+      fail(SpecializationStatus::BudgetExceeded,
+           "loaded entry object binding symbolic-node budget exhausted");
+      return std::move(Result);
+    }
   }
   if (!Refinement.MachineExits) {
     auto Architecture = recoveryArchitecture(Options.Architecture);

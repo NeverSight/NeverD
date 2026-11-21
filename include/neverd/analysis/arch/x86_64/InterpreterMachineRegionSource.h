@@ -167,14 +167,19 @@ struct InterpreterMachineRegionSource {
 /// each other or share the frame root when their complete ranges are disjoint.
 /// This grants no accessibility or initialization and does not check other
 /// caller-owned memory premises, including absolute frame exclusions.
+/// EntryFrameLoadedObjects additionally reads each declared, nonfaulting entry
+/// pointer field before guest writes or query reservations, then guards its
+/// complete object extent. Field accessibility and its declared absolute
+/// frame exclusion remain caller-owned premises.
 ///
 /// Return statuses retain machine-source meanings: 0 is a completed region,
 /// 1 an invalid flag-profile execution, 2 an unchanged entry-domain rejection,
 /// 3 query exhaustion and 4 query mismatch. For 3/4, PC names the original
 /// unexecuted query and ExitKind is None; preceding effects remain committed.
 /// Status 1 supplies no valid continuation. Caller-owned memory premises are
-/// not inferred here. Alignment and entry objects are checked before any
-/// guest access, state write or tape reservation. This is not
+/// not inferred here. Alignment and register objects are checked before any
+/// guest access; loaded objects require their declared initial field read.
+/// All object checks precede guest writes and tape reservations. This is not
 /// ordinary ABI recovery,
 /// call composition, whole-function coverage or native-equivalence proof.
 /// Architectural undefined outputs retain LowIR's selected implementation
