@@ -3347,6 +3347,48 @@ void executeC(const std::string &Source, bool Math = false) {
   }
 }
 
+TEST(SourceABI, NestedInitializersUseTheDeclaredAnonymousMemberType) {
+  const auto Member = NdType::makeStruct({NdType::makeInt(4, false)});
+  const auto Array = NdType::makeArray(Member, 2, 8);
+  const auto Outer = NdType::makeStruct({Member, Array});
+  ASSERT_TRUE(Outer);
+  Outer->SourceName = "nested_records";
+  HighFunc Function;
+  Function.Name = "build_nested";
+  Function.Entry = 0x1000;
+  Function.ReturnType = Outer;
+  HighStmt Return;
+  Return.Kind = StmtKind::Return;
+  Return.RetVal = HighExpr::makeRecord(Outer, {HighExpr::makeConst(11, 4),
+                                               HighExpr::makeConst(22, 4),
+                                               HighExpr::makeConst(33, 4)});
+  ASSERT_EQ(Return.RetVal->Kind, ExprKind::Record);
+  Function.Body.push_back(std::move(Return));
+
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SCOPED_TRACE(getArchName(Target));
+    CEmitterOptions Options;
+    Options.TheArch = Target;
+    Options.Format = BinaryFormat::ELF;
+    std::string Source = R"(
+typedef struct nested_records {
+    struct { unsigned x; } first;
+    struct { unsigned y; } rest[2];
+} nested_records;
+)";
+    llvm::raw_string_ostream Out(Source);
+    ASSERT_TRUE(HighCEmitter().emit({Function}, Out, Options));
+    Out.flush();
+    ASSERT_NO_FATAL_FAILURE(executeC(Source + R"(
+int main(void) {
+    nested_records result = build_nested();
+    return result.first.x != 11 || result.rest[0].y != 22 ||
+           result.rest[1].y != 33;
+}
+)"));
+  }
+}
+
 TEST(SourceABI, DistinctWordRecordsCompileAndExecuteInEitherEmissionOrder) {
   const auto Word = NdType::makeInt(8, false);
   const std::vector<TypeRef> Leaves{NdType::makePtr(NdType::makeVoid()),
