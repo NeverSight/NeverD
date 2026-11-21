@@ -22,6 +22,7 @@ from check_microsoft_provider_abis import compiler_contracts, generated_compiler
 FIXTURE = Path(__file__).resolve().parents[1] / "unittests/types/fixtures/windows_provider_calls.c"
 DRIVER_FIXTURE = FIXTURE.with_name("windows_driver_provider_calls.c")
 RDBSS_FIXTURE = FIXTURE.with_name("windows_rdbss_provider_calls.cpp")
+GDIPLUS_FIXTURE = FIXTURE.with_name("windows_gdiplus_provider_calls.cpp")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -54,11 +55,16 @@ RDBSS_FUNCTIONS = {"UseRdbssRegister": "RxRegisterMinirdr",
                    "UseRdbssInitializeDispatcher": "RxInitializeDispatcher",
                    "UseRdbssInitializeTimer": "RxInitializeRxTimer",
                    "UseRdbssTearDownDispatcher": "RxTearDownDispatcher"}
+GDIPLUS_FUNCTIONS = {"UseGraphicsPath": "GdipCreatePath",
+                     "UseImageEncoderSizes": "GdipGetImageEncodersSize",
+                     "UseMetafileHeader": "GdipGetMetafileHeaderFromWmf"}
 
 
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
-    if args.rdbss:
+    if getattr(args, "gdiplus", False):
+        fixture, functions, provider_name = GDIPLUS_FIXTURE, GDIPLUS_FUNCTIONS, "GDIPlus"
+    elif args.rdbss:
         fixture, functions, provider_name = RDBSS_FIXTURE, RDBSS_FUNCTIONS, "RDBSS"
     elif args.kernel:
         fixture, functions, provider_name = DRIVER_FIXTURE, DRIVER_FUNCTIONS, "AudioPort"
@@ -89,8 +95,9 @@ def check(args: argparse.Namespace) -> dict:
         # Recovered function bodies still need the target's C library headers.
         # API calling conventions must come from the emitted declarations.
         emitted_compiler = generated_compiler(compiler, keep_sdk_headers=True)
+        cpp_fixture = fixture.suffix == ".cpp"
         original_compiler = (provider["metadata"]["cpp_header_bridge"]["arguments"]
-                             if args.rdbss else compiler)
+                             if cpp_fixture else compiler)
         libraries = []
         if args.kernel:
             # Import-only test images need no implementation of a driver API.
@@ -137,7 +144,7 @@ def check(args: argparse.Namespace) -> dict:
             archive = wdk.download(args.cache, package["file"], package["url"], package["sha256"])
             with zipfile.ZipFile(archive) as source:
                 members = {name.lower(): name for name in source.namelist()}
-                for name in LIBRARIES:
+                for name in (("gdiplus.lib",) if provider_name == "GDIPlus" else LIBRARIES):
                     member = members[f"c/um/{arch}/{name}"]
                     destination = directory / name
                     destination.write_bytes(source.read(member))
@@ -152,7 +159,7 @@ def check(args: argparse.Namespace) -> dict:
         for function, api in functions.items():
             references = f"\n__typeof__(&{api}) neverd_ucrt_abi_0 = &{api};\n"
             original_references = ('extern "C" {\n' + references + '}\n'
-                                   if args.rdbss else references)
+                                   if cpp_fixture else references)
             original = directory / (function + "-original.c")
             original.write_text('#include "' + fixture.as_posix() + '"\n' + original_references,
                                 encoding="utf-8")
@@ -212,11 +219,15 @@ def main() -> None:
                         help="check original WDK callers with synthetic import libraries")
     parser.add_argument("--rdbss", action="store_true",
                         help="check the RDBSS C++ callers (requires --kernel)")
+    parser.add_argument("--gdiplus", action="store_true",
+                        help="check flat GDI+ callers from the original Microsoft C++ headers")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()
     if args.rdbss and not args.kernel:
         parser.error("--rdbss requires --kernel")
+    if args.gdiplus and args.kernel:
+        parser.error("--gdiplus is a user-mode provider")
     args.generated = args.generated.resolve()
     args.output = args.output.resolve()
     if not check(args)["passed"]:

@@ -16,6 +16,8 @@ import subprocess
 
 import build_wdk_driver_fixtures as wdk
 from generate_microsoft_windows_types import PROVIDER_INLINE_ROUTINES, PROVIDER_PREFIXES
+import generate_microsoft_windows_types as windows
+import microsoft_gdiplus_types as gdiplus
 import microsoft_ucrt_types as ucrt
 
 
@@ -23,6 +25,7 @@ CASES = {
     # NDIS belongs to the primary kernel unit. Enumerate its original profile
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
+    "GDIPlus": (),
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
     "KernelStreaming": ("KsCreatePin", "KsAddEvent", "KsAcquireControl"),
@@ -171,7 +174,17 @@ def check(args: argparse.Namespace) -> dict:
                     if bridge and row["original_source_sha256"] != bridge["source_sha256"]:
                         raise ValueError("original C++ provider source changed")
                     row["generated_header_sha256"] = digest(header)
-                    if name == "NDIS" or name in PROVIDER_PREFIXES:
+                    if name == "GDIPlus":
+                        _, functions, invocation = gdiplus.declarations(
+                            original, bridge["arguments"], directory, windows.run)
+                        imports = bridge["import_library"]
+                        imported = gdiplus.imported_functions(functions, imports, directory, windows.run)
+                        names = tuple(gdiplus.supported(imported))
+                        row["commands"] += [invocation, imports["command"]]
+                        row.update(functions=names, inventory="original Microsoft C++ flat API",
+                                   declarations_without_import=sorted(functions.keys() - imported.keys()),
+                                   reference_parameters=sorted(imported.keys() - set(names)))
+                    elif name == "NDIS" or name in PROVIDER_PREFIXES:
                         prefixes = ("Ndis",) if name == "NDIS" else PROVIDER_PREFIXES[name]
                         names = official_names(args, compiler, original, directory,
                                                row, arch, name, prefixes)

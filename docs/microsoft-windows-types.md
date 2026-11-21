@@ -185,6 +185,19 @@ convention and zero parameters against the original C++ declaration before
 publishing a C prototype. This preserves the distinct x86 conventions of
 `WerStorePurge` and `WerUnregisterAppLocalDump`.
 
+The GDI+ flat API comes from the SDK's C++ namespace with `GDIPVER=0x0110`.
+Clang supplies the original function declarations, parameter names and enum
+values. Each flat entry must also have its compiler-emitted linker symbol in
+the pinned target's `gdiplus.lib`. Its x86 imports require the `/Gz` profile
+for `GdipGetMetafileHeaderFromWmf`. The generator checks data records for size, alignment and
+field offsets and verifies both the API functions and their callback types
+with the target compiler before and after merging. It records pointer-only
+class declarations as incomplete records. The manifest also lists the
+functions with C++ reference parameters whose compiler preconditions the C
+renderer cannot yet preserve and SDK declarations absent from the import library.
+Run `--provider GDIPlus` to repeat the API check and use
+`check_windows_provider_calls.py --gdiplus` to recompile callers from both C backends.
+
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of
 the original official headers; a missing published declaration therefore fails

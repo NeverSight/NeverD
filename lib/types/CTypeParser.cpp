@@ -2199,6 +2199,7 @@ private:
     Declared = Attributes();
     llvm::SmallVector<DeclaratorPart> Parts;
     parseDeclarator(Name, NameToken, Parts);
+    PendingConvention.reset();
     if (Failed)
       return nullptr;
     TypeExprRef Type = std::move(Base);
@@ -2214,6 +2215,10 @@ private:
         break;
       case DeclaratorPart::Kind::Function:
         // Each parameter list is freshly parsed and applied once.
+        if (pointerSize() >= 8 && !keptWide(It->Function->Convention))
+          It->Function->Convention = CallingConvention::Unspecified;
+        else if (It->Function->Variadic && calleePops(It->Function->Convention))
+          It->Function->Convention = CallingConvention::Cdecl;
         It->Function->Return = std::move(Type);
         Type = makeFunction(std::move(It->Function));
         break;
@@ -2308,6 +2313,17 @@ private:
       if (startsAttribute()) {
         if (!attributes(Declared))
           break;
+        if (PendingConvention) {
+          // A trailing convention belongs to the function nearest the
+          // declared name, including a callback or a callback factory.
+          auto Fn = llvm::find_if(Parts, [](const DeclaratorPart &Part) {
+            return Part.TheKind == DeclaratorPart::Kind::Function;
+          });
+          if (Fn != Parts.end()) {
+            Fn->Function->Convention = *PendingConvention;
+            PendingConvention.reset();
+          }
+        }
         continue;
       }
       if (accept("[")) {
@@ -2380,15 +2396,9 @@ private:
     const Attributes Outer = Declared;
     auto Restore = llvm::make_scope_exit([&] { Declared = Outer; });
     auto Function = std::make_shared<FunctionDef>();
-    const auto Convention =
-        PendingConvention ? PendingConvention : DefaultConvention;
+    Function->Convention = PendingConvention.value_or(
+        DefaultConvention.value_or(CallingConvention::Unspecified));
     PendingConvention.reset();
-    if (Convention) {
-      // A convention the target ignores, as 64-bit x86 does __stdcall, is
-      // no convention of the function's.
-      if (pointerSize() < 8 || keptWide(*Convention))
-        Function->Convention = *Convention;
-    }
     take(); // (
     if (accept(")"))
       return Function;
@@ -2400,11 +2410,6 @@ private:
     while (!Failed) {
       if (accept("...")) {
         Function->Variadic = true;
-        // Only the caller knows what a variadic call pushes: compilers take
-        // a convention whose callee pops, as phnt's NTAPI
-        // RtlInitializeSidEx, as cdecl.
-        if (calleePops(Function->Convention))
-          Function->Convention = CallingConvention::Cdecl;
         expect(")", "after '...'");
         return Function;
       }
