@@ -220,7 +220,8 @@ rejected write, native request, invalid producer, budget stop before execution,
 or preempting event emits no write notification. A reserved-bit write in the
 successful-RAM profile returns status 5.
 
-Paged exports admit audited long-mode MOV to/from CR8. After the checked
+Paged exports admit audited long-mode MOV to/from CR8 for all sixteen GPRs,
+including the ignored REX.W and 66H operand-width prefixes. After the checked
 instruction fetch, a nonzero CS selector RPL on either transfer, or a write
 with any bit above bit 3 set, raises #GP(0) at the instruction PC. The fault
 precedes register and arbitrary-flag writes. A completed transfer publishes
@@ -238,10 +239,11 @@ retain their existing contracts and do not notify; embedders using the binding
 must route subsequent CR8 writes through scheduled entry points. The embedding
 owns TPR MMIO/MSR aliases and external CPU/controller changes.
 
-Without the option, generated source and manifests retain their existing
-contents. Enabled output adds calls only at authenticated modeled CR8 writes;
-ordinary instruction cases acquire no priority comparison, polling work or
-runtime opt-in check.
+With the option disabled, paged MOV CR8 still requests native execution and
+the scheduler omits the producer bridge. The shared lifting audit also exposes
+the newly certified width-prefix forms to the existing successful-RAM
+profiles. Enabled schedulers add calls only at authenticated modeled CR8
+writes. Ordinary instruction cases use their existing polling and accounting.
 
 ### Scheduled function contexts
 

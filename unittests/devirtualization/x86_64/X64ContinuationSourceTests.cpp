@@ -2188,15 +2188,22 @@ TEST(X64Cr8WriteNotification, MetadataComesFromModeledWrites) {
 TEST(X64Cr8WriteNotification, PagedBindingAdmitsAuditedRegisterTransfers) {
   std::vector<uint8_t> Code;
   std::vector<uint64_t> Sites;
-  for (uint8_t Register = 0; Register < 16; ++Register)
-    for (const uint8_t Opcode : {0x20, 0x22}) {
-      Sites.push_back(0x1000 + Code.size());
-      Code.insert(Code.end(), {uint8_t(0x44 | (Register >> 3)), 0x0f, Opcode,
-                               uint8_t(0xc0 | (Register & 7))});
-    }
-  // A redundant REX.W is outside the lifter's arbitrary-flags certificate.
+  for (bool OperandOverride : {false, true})
+    for (const uint8_t Rex : {0x44, 0x4c})
+      for (uint8_t Register = 0; Register < 16; ++Register)
+        for (const uint8_t Opcode : {0x20, 0x22}) {
+          Sites.push_back(0x1000 + Code.size());
+          if (OperandOverride)
+            Code.push_back(0x66);
+          Code.insert(Code.end(), {uint8_t(Rex | (Register >> 3)), 0x0f, Opcode,
+                                   uint8_t(0xc0 | (Register & 7))});
+        }
+  const size_t AuditedForms = Sites.size();
+  // Neither an unaudited segment prefix nor a second REX is a width override.
   Sites.push_back(0x1000 + Code.size());
-  Code.insert(Code.end(), {0x4c, 0x0f, 0x22, 0xc0});
+  Code.insert(Code.end(), {0x2e, 0x44, 0x0f, 0x22, 0xc0});
+  Sites.push_back(0x1000 + Code.size());
+  Code.insert(Code.end(), {0x44, 0x44, 0x0f, 0x22, 0xc0});
   Sites.push_back(0x1000 + Code.size());
   Code.insert(Code.end(), {0x0f, 0x22, 0xe0}); // MOV CR4,RAX.
   const auto Image = image(Code);
@@ -2213,7 +2220,7 @@ TEST(X64Cr8WriteNotification, PagedBindingAdmitsAuditedRegisterTransfers) {
     ASSERT_EQ(Units->size(), Sites.size());
     for (unsigned I = 0; I < Sites.size(); ++I) {
       SCOPED_TRACE(Sites[I]);
-      const bool Audited = I < 32;
+      const bool Audited = I < AuditedForms;
       EXPECT_EQ((*Units)[I].RequiresNativeExecution, !Audited);
       EXPECT_EQ((*Units)[I].WritesCr8, Audited && I % 2);
       EXPECT_EQ((*Units)[I].UndefinedEffects.size(), Audited ? 6u : 0u);

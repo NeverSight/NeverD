@@ -24461,7 +24461,8 @@ HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
 retained, and unmodified exports compile separately. LLVM must reduce every
 predicate to one block returning constant zero.
 `X64Cr8WriteNotification.*` checks lowering-owned write metadata for every
-GPR in paged and paged-debug mode, default admission, and unaudited forms.
+GPR in paged and paged-debug mode, both ignored width prefixes, default
+admission, and unaudited forms.
 `PagedCompletionSurvivesPostCommitStops` folds predicates over the actual
 exported MOV bodies, entry validation and schedulers. Both C routes cover
 region and function drivers with independently supplied fetch and event-entry

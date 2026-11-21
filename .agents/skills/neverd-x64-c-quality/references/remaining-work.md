@@ -11,12 +11,13 @@ notifications, shared by both C routes and scheduled function/call views.
 Only successfully modeled writes notify, including same-value writes and the
 last budgeted instruction; the notification precedes the next poll. Imports,
 reads, rejections, native requests and preempting events do not notify. Default
-source remains unchanged. The embedding supplies the bridge and initial bank
-coherence; raw steps and unscheduled drivers retain their old contract. Paged
+paged exports retain the native CR8 boundary. The embedding supplies the bridge
+and initial bank coherence; raw steps and unscheduled drivers retain their old contract. Paged
 and paged-debug exports use the same opt-in. An authenticated register MOV
 raises #GP(0) before effects on a privilege or reserved-bit fault. A single
-paged progress receipt distinguishes execution breakpoints from post-commit
-traps and also charges the attempt. This closes paged MOV-CR8 admission and
+lifting audit covers all sixteen GPRs with the documented ignored width
+prefixes. One paged progress receipt distinguishes execution breakpoints from
+post-commit traps and also charges the attempt. This closes paged MOV-CR8 admission and
 completion. TPR aliases/device wiring, source arbitration, complete environment
 import and both ordinary registry inputs remain open.
 

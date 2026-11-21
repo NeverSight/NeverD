@@ -11,7 +11,7 @@
 // The body and entry validation below are the ones emitted by the SDK. The
 // boundary supplies staged state and explicit outcomes. Its progress reads
 // count calls as well as exposing the receipt, so double accounting is visible.
-const char PagedCr8Probes[] = R"C(
+const char PagedCr8Boundary[] = R"C(
 typedef struct {
     uint64_t progress, before_status, before_progress, after_status, fault_status;
     uint64_t saved_pc, vector, shadow;
@@ -63,7 +63,8 @@ uint64_t STEP(uint8_t *context, uint8_t *raw, uint64_t address,
         m->saved_pc = state->PC;
         return m->before_status;
     }
-    neverd_x64_state_v6 staged = *state;
+    neverd_x64_state_v6 staged;
+    __builtin_memcpy(&staged, state, sizeof(staged));
     ++m->bodies;
     status = body(&staged, m);
     if (status == 17) {
@@ -105,7 +106,9 @@ uint64_t neverd_x64_paged_event_v1(uint8_t *context, uint8_t *raw,
 #define GP_AT(PC) (memory.faults == 1 && memory.vector == 13 && \
     memory.saved_pc == (PC) && memory.progress == 1 && memory.bodies == 1 && \
     memory.receipt_reads == 1 && !memory.bad)
+)C";
 
+const char PagedCr8Probes[] = R"C(
 int proof_same_value_last_instruction(void) {
     PREPARE();
     return RUN() != 9 || budget || poll_budget != 7 || state.PC != 0x1004 ||
@@ -298,8 +301,45 @@ TEST_F(X64Cr8WriteNotificationTest, PagedCompletionSurvivesPostCommitStops) {
                         "\n#define DEBUG_CR8 " + std::to_string(Debug) +
                             "\n#define FUNCTION_CONTEXT " +
                             std::to_string(FunctionContext) + "\n" +
-                            Cr8NotificationProducer + PagedCr8Probes,
+                            Cr8NotificationProducer + PagedCr8Boundary +
+                            PagedCr8Probes,
                         (Debug ? 18u : 15u) + unsigned(FunctionContext), 0, 1,
                         /*CloseHelpers=*/true);
       }
+}
+
+TEST_F(X64Cr8WriteNotificationTest, PagedWidthPrefixesKeepExtendedRegisters) {
+  if (!neverd::test::compilerReadsCurrentIR(NEVERD_TEST_CLANG))
+    GTEST_SKIP() << "this Clang cannot read the linked LLVM's IR";
+  load({0x66, 0x4d, 0x0f, 0x22, 0xc1,   // MOV CR8,R9 with 66H and REX.W.
+        0x66, 0x45, 0x0f, 0x20, 0xc2}); // MOV R10,CR8 with 66H.
+  const char Probes[] = R"C(
+int proof_width_override_and_rex_b(uint64_t value) {
+    PREPARE();
+    state.GPR[1] = 11;
+    state.GPR[2] = 0x12345678;
+    state.GPR[9] = value & 15;
+    state.GPR[10] = ~0ULL;
+    budget = 2;
+    return RUN() != 9 || budget || state.PC != 0x100a || state.CR8 != (value & 15) ||
+           state.GPR[1] != 11 || state.GPR[2] != 0x12345678 ||
+           state.GPR[9] != (value & 15) || state.GPR[10] != (value & 15) ||
+           BAD(2,1,0,(value & 15) << 4) || memory.receipt_reads != 2;
+}
+int proof_ignored_width_preserves_reserved_bits(uint64_t value) {
+    if (value <= 15) return 0;
+    PREPARE();
+    state.GPR[9] = value;
+    return RUN() != 7 || budget || !GP_AT(0x1000) || BAD(1,0,0,0x3b);
+}
+)C";
+  const auto Selection = request(
+      R"("instructions":[4096,4101],"paged_memory":true,"scheduled_events":true,"notify_cr8_writes":true)");
+  for (bool LLVM : {false, true}) {
+    const auto [Source, Report] = source(Selection, LLVM);
+    provePredicates(
+        true, LLVM ? "paged-cr8-width-llvm" : "paged-cr8-width-high", Source,
+        std::string(Cr8NotificationProducer) + PagedCr8Boundary + Probes, 2, 0,
+        1, /*CloseHelpers=*/true);
+  }
 }
