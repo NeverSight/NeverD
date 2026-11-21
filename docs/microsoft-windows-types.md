@@ -218,6 +218,11 @@ public code import names with that SDK's declarations, checks the compiler's
 exact linker spelling, and compares the original and published compiler ABI
 before and after the merge. Ordinal-only imports carry no public name.
 
+The `ProcessStatus` profile selects `PSAPI_VERSION=1` before including the
+SDK headers and verifies those declarations against `psapi.lib`. The
+`ProcessSnapshots` profile verifies the `Pss*` routines in `processsnapshot.h`
+against the matching Kernel32 imports on each architecture.
+
 The `COMRegistration` profile reads the self-registration callbacks that
 in-process COM servers export from `olectl.h`. It preserves the 32-bit
 `HRESULT` return type and empty parameter list. A named, executable export

@@ -73,9 +73,11 @@ LEGACY_FUNCTIONS = {"UseAllJoynVersion": "alljoyn_getnumericversion",
 FLAT_FUNCTIONS = {"UseColorProfile": "GetColorProfileHeader", "UseCatalog": "CryptCATClose",
                   "UsePhysicalMonitor": "DestroyPhysicalMonitor", "UseDiagnosticSession": "DdqCloseSession",
                   "UseDeviceElement": "WSDXMLCleanupElement", "UseDataBlob": "D3D10CreateBlob",
-                  "UseProtectionDescriptor": "NCryptCloseProtectionDescriptor", "UseRoleText": "GetRoleTextW"}
+                  "UseProtectionDescriptor": "NCryptCloseProtectionDescriptor", "UseRoleText": "GetRoleTextW",
+                  "UseProcessModules": "EnumProcessModulesEx", "UseReleaseSnapshot": "PssFreeSnapshot"}
 FLAT_CALL_PROVIDERS = ("ColorManagement", "CatalogTrust", "MonitorConfiguration", "DiagnosticData",
-                       "WSDevices", "Direct3D10", "KeyProtection", "Accessibility")
+                       "WSDevices", "Direct3D10", "KeyProtection", "Accessibility", "ProcessStatus",
+                       "ProcessSnapshots")
 
 
 def check(args: argparse.Namespace) -> dict:
