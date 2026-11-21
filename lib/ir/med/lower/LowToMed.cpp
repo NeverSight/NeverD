@@ -910,20 +910,28 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
 
 MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                    BinaryFormat Fmt) {
+  return convert(SourceLow, TheArch, Fmt, nullptr);
+}
+
+MedFunc
+LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
+                           BinaryFormat Fmt,
+                           const FixedIntegerCallArguments *BoundEntry) {
   SEHLocalUnwindExitsEnabled = true;
   ModeledSEHLocalUnwindExits = false;
   try {
-    return convertFunction(SourceLow, TheArch, Fmt);
+    return convertFunction(SourceLow, TheArch, Fmt, BoundEntry);
   } catch (const LowToMedConversionError &) {
     if (!ModeledSEHLocalUnwindExits)
       throw;
   }
   SEHLocalUnwindExitsEnabled = false;
-  return convertFunction(SourceLow, TheArch, Fmt);
+  return convertFunction(SourceLow, TheArch, Fmt, BoundEntry);
 }
 
-MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
-                                           Arch TheArch, BinaryFormat Fmt) {
+MedFunc LowToMedConverter::convertFunction(
+    const LowFunc &SourceLow, Arch TheArch, BinaryFormat Fmt,
+    const FixedIntegerCallArguments *BoundEntry) {
   TargetArch = TheArch;
   TargetFormat = Fmt;
   auto Physical = Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
@@ -2447,7 +2455,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
               Bound != CallEntryIntegerArguments->end())
             GoFixedArguments = Bound->second;
     }
-    detectCc(Func, TheArch, Fmt);
+    detectCc(Func, TheArch, Fmt, BoundEntry);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");
 

@@ -44,6 +44,10 @@ class LowToMedConverter {
 public:
   MedFunc convert(const LowFunc &Low, Arch TheArch,
                   BinaryFormat Fmt = BinaryFormat::ELF);
+  /// Source-only definition contract at this exact entry, authenticated by
+  /// the caller. Ordinary machine conversion uses the three-argument form.
+  MedFunc convert(const LowFunc &Low, Arch TheArch, BinaryFormat Fmt,
+                  const FixedIntegerCallArguments *BoundEntry);
 
   /// Provide the fully loaded image while converting pipeline-owned LowIR.
   /// Constant propagation uses this immutable layout evidence to avoid
@@ -452,7 +456,8 @@ private:
                          const std::vector<I386GetPcOccurrence> &Occurrences);
   void resolveCxxContinuationExits(MedFunc &Func, const LowFunc &Low,
                                    uint16_t PointerSize);
-  void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt);
+  void detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
+                const FixedIntegerCallArguments *BoundEntry);
   void simplifyCfg(MedFunc &Func);
   /// Split an ARM instruction-local predicate guard from the effects it
   /// controls before SSA construction.  The skip and effect edges then receive
@@ -500,7 +505,8 @@ private:
   bool SEHLocalUnwindExitsEnabled = true;
   bool ModeledSEHLocalUnwindExits = false;
   MedFunc convertFunction(const LowFunc &SourceLow, Arch TheArch,
-                          BinaryFormat Fmt);
+                          BinaryFormat Fmt,
+                          const FixedIntegerCallArguments *BoundEntry);
   const LowSEHRuntimeMemory *SEHRuntimeMemory = nullptr;
   const std::map<va_t, ObjCBlockCaptureCallFields> *ObjCBlockCaptureFields =
       nullptr;
