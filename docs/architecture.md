@@ -11681,6 +11681,11 @@ HighC checks a storage address's known frame root and accumulates its signed
 offset in one bounded walk. Offset steps and alias/parent-frame rebases must
 fit without signed overflow; a zero mask is not a stack-alignment operation.
 An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Its root is the entry stack pointer, a temporary no statement assigns, or a
+callee-saved register: a register the convention does not preserve holds an
+argument or what the caller left there, never the frame (`[r9+8]` in Go code
+named the slot of another argument), while an EH funclet's EBP, R11 or X19 may
+hold its parent's frame.
 Failed proofs retain ordinary address expressions instead of inventing frame
 members, and each query observes the current aliases and frame layout.
 Typed pointer offsets and frame overlays also reject unrepresentable signed

@@ -1630,6 +1630,36 @@ TEST(HighCPointerAddresses, AddressTakenFrameSlotUsesSharedBacking) {
   EXPECT_EQ(Source.find("unknown register"), std::string::npos) << Source;
 }
 
+TEST(HighCPointerAddresses, AnIncomingRegisterIsNoFrame) {
+  // A register the convention does not preserve holds an argument or what
+  // the caller left there, never the frame.  A fallback took any register no
+  // statement assigns for the entry stack pointer, and named Go's loads
+  // through its closure context RDX `var_8` and `var_10`, and through an
+  // argument in R9 the slot of another argument: reads of frame words the
+  // function never wrote there.
+  const auto U64 = NdType::makeInt(8, false);
+  HighFunc Func;
+  Func.Name = "context_load";
+  Func.FrameSize = 24;
+  Func.ReturnType = U64;
+  MedVar Context;
+  Context.Kind = MedVar::Reg;
+  Context.Id = 7;
+  Context.Size = 8;
+  Context.TheArch = Arch::X64;
+  Context.RegOff = x86reg::RDX;
+  returnValue(Func, HighExpr::makeLoad(
+                        HighExpr::makeBinop(NdOp::INT_ADD,
+                                            HighExpr::makeVar(Context, U64),
+                                            HighExpr::makeConst(16, 8)),
+                        U64));
+  const std::string Source = emitFunctions({Func});
+  EXPECT_EQ(Source.find("var_10"), std::string::npos) << Source;
+  EXPECT_NE(Source.find("incoming register has no definition"),
+            std::string::npos)
+      << Source;
+}
+
 BinaryImage makeImageObjectFixture(va_t Addr, std::vector<uint8_t> Bytes,
                                    bool Writable) {
   BinaryImage Img;

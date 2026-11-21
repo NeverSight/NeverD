@@ -2848,6 +2848,9 @@ retaining explicit per-image debug-file diagnostics.
 `HighCPointerAddresses.AGlobalOfAnUnspellableCallbackKeepsItsAccessType`
 gives a global the debug type of a callback returning an array: the unit is
 written, the global declared with the type its load gives.
+`HighCPointerAddresses.AnIncomingRegisterIsNoFrame` loads `*(RDX + 16)` in a
+function with a frame: RDX, which the convention does not preserve, names no
+frame slot (`var_10`), and the load reads an unknown register.
 `HighCPointerAddresses.CompilerDispatchDoesNotDependOnIncludes` checks seven
 x86 compiler-dispatch families through HighC and LLVMC, across COFF/ELF/Mach-O.
 Disabling includes must retain the required definitions; each unmodified source
