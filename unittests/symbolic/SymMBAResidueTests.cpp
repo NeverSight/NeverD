@@ -1494,6 +1494,68 @@ TEST(SymMBAResidue, FunnelWindowsOnlyDiscardUnobservedSourceBits) {
   }
 }
 
+TEST(SymMBAResidue, MaskedRotationHalvesKeepBothObservedMasks) {
+  constexpr unsigned Width = 9, Cut = 2;
+  SymContext C;
+  const auto X = C.mkVar("x", Width);
+  const auto Rotate = C.mkRol(X, C.mkConst(Width, Cut));
+  enum Neighbor { Exact, LeftMask, RightMask, Count, Source };
+  for (auto Change : {Exact, LeftMask, RightMask, Count, Source}) {
+    for (auto Op : {SymOp::Or, SymOp::Xor, SymOp::Add}) {
+      SCOPED_TRACE(::testing::Message() << Change << ',' << unsigned(Op));
+      llvm::SmallVector<SymRef, 32> Factors{C.mkConst(Width, 4)},
+          Clean{Factors.front()};
+      for (unsigned I = 0; I < 23; ++I) {
+        const bool Alter = I == 3;
+        const auto Left = C.mkShl(
+            C.mkAnd(X, C.mkConst(Width, Alter && Change == LeftMask ? 3 : 7)),
+            C.mkConst(Width, Cut));
+        const auto Right =
+            C.mkAnd(C.mkConst(Width, Alter && Change == RightMask ? 2 : 3),
+                    C.mkLShr(Alter && Change == Source ? C.mkNot(X) : X,
+                             C.mkConst(Width, Width - Cut -
+                                                  (Alter && Change == Count))));
+        const auto Joined = Op == SymOp::Or    ? C.mkOr(Left, Right)
+                            : Op == SymOp::Xor ? C.mkXor(Left, Right)
+                                               : C.mkAdd(Left, Right);
+        auto Factor = [&](SymRef V) {
+          return C.mkAdd(C.mkConst(Width, 2 * I + 1),
+                         C.mkMul(C.mkConst(Width, 4), V));
+        };
+        Factors.push_back(Factor(I % 2 ? Joined : Rotate));
+        Clean.push_back(Factor(Rotate));
+      }
+      MBAOptions Opt;
+      Opt.MaxWork = 65536;
+      const auto Result = simplifyMBADeep(C, C.mkMul(Factors), Opt);
+      ASSERT_LT(Result.Work, Opt.MaxWork);
+      if (Change == Exact)
+        EXPECT_EQ(Result.SizeAfter,
+                  simplifyMBADeep(C, C.mkMul(Clean), Opt).SizeAfter);
+      SymEvalPlan Plan(C, Result.Expr);
+      bool Different = false;
+      for (uint64_t V = 0; V < (1u << Width); ++V) {
+        const uint64_t Word = (V << Cut) | (V >> (Width - Cut));
+        uint64_t Expected = 4, Reference = 4;
+        for (unsigned I = 0; I < 23; ++I) {
+          const auto High = (V & (I == 3 && Change == LeftMask ? 3 : 7)) << Cut;
+          const auto Low = (((I == 3 && Change == Source ? ~V : V) & 511) >>
+                            (Width - Cut - (I == 3 && Change == Count))) &
+                           (I == 3 && Change == RightMask ? 2 : 3);
+          const auto Joined = Op == SymOp::Or    ? High | Low
+                              : Op == SymOp::Xor ? High ^ Low
+                                                 : High + Low;
+          Expected *= 2 * I + 1 + 4 * (I % 2 ? Joined : Word);
+          Reference *= 2 * I + 1 + 4 * Word;
+        }
+        ASSERT_EQ(Plan.evalU64({V}), Expected & 511);
+        Different |= ((Expected ^ Reference) & 511) != 0;
+      }
+      EXPECT_EQ(Different, Change != Exact);
+    }
+  }
+}
+
 TEST(SymMBAResidue, DistributedFunnelTermsKeepLiveBitsAndCarries) {
   constexpr unsigned Width = 7, Bits = 3;
   SymContext Ctx;

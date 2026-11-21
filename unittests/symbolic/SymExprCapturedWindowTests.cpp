@@ -260,6 +260,29 @@ TEST(SymExpr, SignedAndMaskedJoinedWindowsKeepEveryLiveBit) {
   }
 }
 
+TEST(SymExpr, ExtractionAboveAZeroExtensionKeepsOnlyTheOtherWord) {
+  SymContext C;
+  const auto X = C.mkVar("x", 8), Y = C.mkVar("y", 3);
+  const auto Extended = C.mkZExt(Y, 8);
+  for (auto Op : {SymOp::Or, SymOp::Xor, SymOp::Add}) {
+    const auto Joined = Op == SymOp::Or    ? C.mkOr(Extended, X)
+                        : Op == SymOp::Xor ? C.mkXor(Extended, X)
+                                           : C.mkAdd(Extended, X);
+    if (Op != SymOp::Add)
+      EXPECT_EQ(C.mkExtract(Joined, 3, 4), C.mkExtract(X, 3, 4));
+    for (unsigned At : {2u, 3u}) {
+      SymEvalPlan Plan(C, C.mkExtract(Joined, At, 4));
+      for (uint64_t A = 0; A < 256; ++A)
+        for (uint64_t B = 0; B < 8; ++B) {
+          const auto Expected = Op == SymOp::Or    ? A | B
+                                : Op == SymOp::Xor ? A ^ B
+                                                   : A + B;
+          ASSERT_EQ(Plan.evalU64({A, B}), (Expected >> At) & 15);
+        }
+    }
+  }
+}
+
 TEST(SymExpr, JoinedPrefixRetainsCarriesAndSignPadding) {
   constexpr unsigned W = 6;
   SymContext C;

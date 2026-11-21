@@ -371,6 +371,16 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     const auto Packed = Turn ? operand(A, 0) : A;
     const auto Shifts = detail::FunnelShifts::match(*this, Packed);
     const auto Op = op(Packed);
+    if (!Turn && Low && (Op == SymOp::Or || Op == SymOp::Xor) &&
+        numOperands(Packed) == 2) {
+      auto L = operand(Packed, 0), H = operand(Packed, 1);
+      if (op(L) != SymOp::ZExt)
+        std::swap(L, H);
+      if (op(L) == SymOp::ZExt && width(operand(L, 0)) <= Low) {
+        A = H;
+        continue;
+      }
+    }
     const bool Multi =
         numOperands(Packed) > 2 &&
         (Op == SymOp::Add || Op == SymOp::Or || Op == SymOp::Xor);
