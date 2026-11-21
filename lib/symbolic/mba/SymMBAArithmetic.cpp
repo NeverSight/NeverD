@@ -317,19 +317,67 @@ public:
     return true;
   }
 
+  // In Z/(2^Width), low zero limbs of either coefficient also remove
+  // high limbs from both multiplicands. Only multiply the surviving prefix.
+  bool multiplyCoefficients(const llvm::APInt &A, const llvm::APInt &B,
+                            llvm::APInt &Product) {
+    if (Words > 1) {
+      if (A.getRawData()[0] == 1 && A.isOne()) {
+        if (!Resources.charge(Words))
+          return false;
+        Product = B;
+        return true;
+      }
+      if (B.getRawData()[0] == 1 && B.isOne()) {
+        if (!Resources.charge(Words))
+          return false;
+        Product = A;
+        return true;
+      }
+      // At three limbs or fewer the scans and temporary prefixes already
+      // cost as much as the full product.
+      if (Words > 3 && (!A.getRawData()[0] || !B.getRawData()[0])) {
+        const unsigned SkipA = A.countr_zero() / 64;
+        const unsigned SkipB = B.countr_zero() / 64;
+        if (!Resources.charge(2 * Words))
+          return false;
+        if (SkipA + SkipB >= Words) {
+          Product = llvm::APInt(Width, 0);
+          return true;
+        }
+        const unsigned Skip = 64 * (SkipA + SkipB);
+        const unsigned Bits = Width - Skip;
+        const size_t N = llvm::APInt::getNumWords(Bits);
+        if (!Resources.charge(N * N) ||
+            !Resources.array(3 * N, sizeof(uint64_t)))
+          return false;
+        const llvm::APInt LowA(Bits, llvm::ArrayRef(A.getRawData() + SkipA, N));
+        const llvm::APInt LowB(Bits, llvm::ArrayRef(B.getRawData() + SkipB, N));
+        Product = (LowA * LowB).zext(Width);
+        Product <<= Skip;
+        return true;
+      }
+    }
+    if (!Resources.charge(Words * Words))
+      return false;
+    Product = A * B;
+    return true;
+  }
+
   bool multiply(const Polynomial &A, const Polynomial &B, Polynomial &Out) {
     for (const auto &[AK, AC] : A) {
       for (const auto &[BK, BC] : B) {
         if (Words > std::numeric_limits<size_t>::max() / Words ||
             AK.size() > std::numeric_limits<size_t>::max() - BK.size())
           return Resources.stop();
-        if (!Resources.charge(Words * Words) ||
-            !Resources.array(Words, sizeof(uint64_t)) ||
-            !Resources.array(AK.size() + BK.size(), sizeof(Factor)))
+        llvm::APInt Coefficient;
+        if (!Resources.array(Words, sizeof(uint64_t)) ||
+            !multiplyCoefficients(AC, BC, Coefficient))
           return false;
-        llvm::APInt Coefficient = AC * BC;
         if (Coefficient.isZero())
           continue;
+        if (!Resources.array(AK.size() + BK.size(), sizeof(Factor)))
+          return false;
         Monomial Key;
         Key.reserve(AK.size() + BK.size());
         size_t I = 0, J = 0;
@@ -572,13 +620,11 @@ public:
               !Resources.array(Words, sizeof(uint64_t)))
             return nullptr;
           Monomial Key;
-          llvm::APInt Coefficient(Width, 1);
-          for (SymRef F : Factors) {
-            if (Ctx.isConst(F)) {
-              if (!Resources.charge(Words * Words))
-                return nullptr;
-              Coefficient *= Ctx.constValue(F);
-            } else if (!Key.empty() && Key.back().first == F.index()) {
+          const bool Scaled = Ctx.isConst(Factors.front());
+          llvm::APInt Coefficient =
+              Scaled ? Ctx.constValue(Factors.front()) : llvm::APInt(Width, 1);
+          for (SymRef F : Factors.drop_front(Scaled)) {
+            if (!Key.empty() && Key.back().first == F.index()) {
               ++Key.back().second;
             } else {
               Key.emplace_back(F.index(), 1);
@@ -736,14 +782,12 @@ public:
             return nullptr;
           Monomial Key;
           Key.reserve(Ctx.numOperands(R));
-          llvm::APInt Coefficient(Width, 1);
-          for (SymRef Child : Ctx.operands(R)) {
-            if (Ctx.isConst(Child)) {
-              if (Words > std::numeric_limits<size_t>::max() / Words ||
-                  !Resources.charge(Words * Words))
-                return nullptr;
-              Coefficient *= Ctx.constValue(Child);
-            } else if (!Key.empty() && Key.back().first == Child.index()) {
+          const auto Factors = Ctx.operands(R);
+          const bool Scaled = Ctx.isConst(Factors.front());
+          llvm::APInt Coefficient =
+              Scaled ? Ctx.constValue(Factors.front()) : llvm::APInt(Width, 1);
+          for (SymRef Child : Factors.drop_front(Scaled)) {
+            if (!Key.empty() && Key.back().first == Child.index()) {
               if (Key.back().second == std::numeric_limits<uint32_t>::max())
                 return nullptr;
               ++Key.back().second;
@@ -788,21 +832,25 @@ public:
           if (!Resources.charge(Words))
             return nullptr;
           if (!Coefficient.isOne()) {
-            auto Power = Coefficient;
-            size_t Exponent = Count;
-            while (Exponent) {
-              if (Words > std::numeric_limits<size_t>::max() / Words ||
-                  !Resources.charge(Words * Words) ||
-                  !Resources.array(Words, sizeof(uint64_t)))
-                return nullptr;
-              if (Exponent & 1)
-                Scale *= Power;
-              Exponent >>= 1;
-              if (Exponent) {
-                if (!Resources.charge(Words * Words) ||
+            if (Count == 1 && Scale.isOne()) {
+              Scale = Coefficient;
+            } else {
+              auto Power = Coefficient;
+              size_t Exponent = Count;
+              while (Exponent) {
+                if (Words > std::numeric_limits<size_t>::max() / Words ||
+                    !Resources.charge(Words * Words) ||
                     !Resources.array(Words, sizeof(uint64_t)))
                   return nullptr;
-                Power *= Power;
+                if (Exponent & 1)
+                  Scale *= Power;
+                Exponent >>= 1;
+                if (Exponent) {
+                  if (!Resources.charge(Words * Words) ||
+                      !Resources.array(Words, sizeof(uint64_t)))
+                    return nullptr;
+                  Power *= Power;
+                }
               }
             }
           }
