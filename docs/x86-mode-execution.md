@@ -241,6 +241,12 @@ control effects. V1 `Undefined` slots supply non-64-bit GPR0..7 upper halves;
 A transition solely between compatibility and code64 retains those extended
 registers. Neither profile infers unspecified values from the host.
 
+A fault or single-step trap from a compatibility-mode system instruction uses
+those same GPR0..7 witnesses before the 64-bit IDT owner builds its frame.
+For a reserved-bit WRMSR to IA32_MC1_CTL2 this includes the pre-fault stack
+pointer, the original instruction address and the flags with RF set. A
+retired RSM uses the complete CPU image restored from SMRAM for its trap.
+
 ## Selected external IRQ/NMI
 
 `interrupt(State, Kind, Vector)` accepts a producer-selected maskable IRQ or

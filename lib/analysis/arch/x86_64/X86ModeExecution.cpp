@@ -463,6 +463,13 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       // RSM may have restored a different address space and privilege context.
       // A post-retirement trap uses that CPU image for its entire IDT entry.
       P->Low = detail::projectNon64(S, !(Destination->controls().CR0 & 1));
+      // A compatibility system fault or trap enters the wide IDT with the
+      // same GPR witnesses as an ordinary instruction. A successful RSM
+      // switches memory owners and has already installed the full save image.
+      if (&*Destination == &Memory &&
+          (*Mode == X86ExecutionMode::Compatibility16 ||
+           *Mode == X86ExecutionMode::Compatibility32))
+        detail::publishNon64(S, P->Low, {});
       deliver(S, *Destination, *P, Result);
     }
     reportReceipts(*P, Result);

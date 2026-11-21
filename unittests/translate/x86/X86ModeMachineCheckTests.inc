@@ -71,7 +71,7 @@ TEST_F(X86ModeInterruptTest,
 
 TEST_F(X86ModeInterruptTest,
        MachineCheckMsrReadAndAcknowledgeUseOriginalInstructions) {
-  for (auto M : {Mode::Protected32, Mode::Compatibility16, Mode::Long64}) {
+  for (auto M : Modes) {
     SCOPED_TRACE(unsigned(M));
     start(M);
     auto &R = Machine.Core.Core.Core.Core.Core.Core;
@@ -80,7 +80,8 @@ TEST_F(X86ModeInterruptTest,
     Machine.MCA->Banks[1].Status = 0xb000000000000105ull;
     Machine.MCA->GlobalStatus = 7;
     Machine.MCA->CMCI = true;
-    if (M == Mode::Protected32)
+    const bool Wide = Controls.EFER & 0x400;
+    if (!Wide)
       put(0x9068, 0x40d0 | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
     add(0x1000, M, {0x0f, 0x32});
     add(0x1002, M, {0x0f, 0x30});
@@ -131,9 +132,26 @@ TEST_F(X86ModeInterruptTest,
     R.GPR[2] = 1;
     Budget = 1;
     auto Fault = llvm::cantFail(Execution.run(Machine, Program, Budget));
+    ASSERT_EQ(Fault.Status, X86LegacyExecutionStatus::EventDelivered)
+        << Fault.OwnerError;
     EXPECT_EQ(Fault.DeliveredVector, 13u);
     EXPECT_EQ(Fault.Completions, 0u);
     EXPECT_EQ(Machine.MCA->Banks[1].Control2, 0x40000005u);
+    EXPECT_EQ(R.PC, 0x40d0u);
+    const unsigned Width = Wide ? 8 : 4;
+    const unsigned SP = Wide ? 0xefd0 : 0xeff0;
+    EXPECT_EQ(uint32_t(R.GPR[4]), SP);
+    const auto Frame = bytes(*Memory);
+    EXPECT_EQ(word(Frame, SP, Width), 0u);
+    EXPECT_EQ(word(Frame, SP + Width, Width), 0x100cu);
+    EXPECT_EQ(word(Frame, SP + 2 * Width, Width), M == Mode::Long64 ? 24 : 8);
+    EXPECT_EQ(word(Frame, SP + 3 * Width, Width), 0x10202u);
+    if (Wide) {
+      EXPECT_EQ(word(Frame, SP + 4 * Width, Width), 0xf000u);
+      EXPECT_EQ(word(Frame, SP + 5 * Width, Width), 16u);
+    }
+    EXPECT_EQ(R.GPR[5] >> 32, M == Mode::Long64 ? 0xdead0005u : 0x12340005u);
+    EXPECT_EQ(R.GPR[15], 0x1111222233334444ull);
   }
 }
 
@@ -240,6 +258,65 @@ TEST_F(X86ModeInterruptTest, CmciNmiAndSmiUseTheExistingEventLatches) {
 }
 
 #if defined(__linux__) && defined(__x86_64__)
+TEST_F(X86ModeInterruptTest, InvalidCmciMsrFaultFramesMatchKvmAcrossModes) {
+  for (auto M : Modes) {
+    SCOPED_TRACE(unsigned(M));
+    X64PagedNativeCPU Native;
+    ASSERT_NO_FATAL_FAILURE(Native.initialize());
+    uint64_t Supported = 0;
+    if (Native.CPU < 0 ||
+        ioctl(Native.KVM, KVM_X86_GET_MCE_CAP_SUPPORTED, &Supported) < 0 ||
+        !(Supported & 0x400))
+      GTEST_SKIP() << "KVM CMCI unavailable";
+    uint64_t Cap = 0x402;
+    ASSERT_EQ(ioctl(Native.CPU, KVM_X86_SETUP_MCE, &Cap), 0);
+    start(M);
+    auto &R = Machine.Core.Core.Core.Core.Core.Core;
+    const bool Wide = Controls.EFER & 0x400;
+    if (!Wide)
+      put(0x9068, 0x40d0 | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
+    Machine.MCA.emplace();
+    Machine.MCA->CMCI = true;
+    Machine.MCA->Banks.resize(2);
+    R.PC = 0x100c;
+    R.GPR[0] = 0x402;
+    R.GPR[1] = 0x281;
+    R.GPR[2] = 1;
+    add(R.PC, M, {0x0f, 0x30});
+    ASSERT_NO_FATAL_FAILURE(initializeOriginal(Native));
+    kvm_regs Original{};
+    ASSERT_EQ(ioctl(Native.CPU, KVM_GET_REGS, &Original), 0);
+    Original.rax = R.GPR[0];
+    Original.rcx = R.GPR[1];
+    Original.rdx = R.GPR[2];
+    Original.rsp = 0xf000;
+    Original.rbp = M == Mode::Long64 ? R.GPR[5] : R.Undefined[5];
+    Original.r15 = R.GPR[15];
+    ASSERT_EQ(ioctl(Native.CPU, KVM_SET_REGS, &Original), 0);
+    ASSERT_EQ(ioctl(Native.CPU, KVM_RUN, 0), 0);
+    ASSERT_EQ(Native.Run->exit_reason, unsigned(KVM_EXIT_HLT));
+    ASSERT_EQ(ioctl(Native.CPU, KVM_GET_REGS, &Original), 0);
+
+    bindMemory();
+    X86ModeExecution Execution(*Memory, Options);
+    uint64_t Budget = 1;
+    auto Fault = llvm::cantFail(Execution.run(Machine, Program, Budget));
+    ASSERT_EQ(Fault.Status, X86LegacyExecutionStatus::EventDelivered)
+        << Fault.OwnerError;
+    EXPECT_EQ(Fault.DeliveredVector, 13u);
+    EXPECT_EQ(R.PC + 1, Original.rip);
+    EXPECT_EQ(uint32_t(R.GPR[4]), Original.rsp);
+    EXPECT_EQ(R.GPR[5], Original.rbp);
+    EXPECT_EQ(R.GPR[15], Original.r15);
+    const auto Image = bytes(*Memory);
+    const unsigned Size = Wide ? 48 : 16;
+    ASSERT_LE(Original.rsp, Image.size() - Size);
+    EXPECT_EQ(std::memcmp(Image.data() + Original.rsp,
+                          Native.RAM + Original.rsp, Size),
+              0);
+  }
+}
+
 TEST_F(X86ModeInterruptTest, MachineCheckInjectionAndHaltMatchKvmBanks) {
   enum Case { Deliver, Disabled, Nested, Corrected, Halted };
   for (auto Scenario : {Deliver, Disabled, Nested, Corrected, Halted}) {
