@@ -1,5 +1,15 @@
 # NeverD Daily Progress
 
+## Current snapshot — 2026-11-21T01:07:56Z
+
+- Reviewed dev: [5b37ceb1ae0f654698df23a0d18920795467f518](https://github.com/NeverSight/NeverD/commit/5b37ceb1ae0f654698df23a0d18920795467f518). GitHub compare reports 112 commits ahead of the last recorded dev commit before the preceding daily boundary, [b23569c9](https://github.com/NeverSight/NeverD/compare/b23569c92460337fc471613fd22a69b9cada5d97...5b37ceb1ae0f654698df23a0d18920795467f518), and 2,549 ahead of the source reviewed in the previous in-tree November 5 snapshot. These are ancestry counts, not source review coverage.
+- Activity since 2026-11-20T01:00:00Z: GitHub search returned 62 open ordinary issues and two open PRs at sampling, 18 PRs opened and 19 merged in the interval, and no ordinary issues created, closed or updated. The merge count includes older PRs. The previous in-tree 59 issues and zero PRs are historical, not a day-over-day comparison. Significant merged changes include MIPS reference repairs, Unicorn pin [#2434](https://github.com/NeverSight/NeverD/pull/2434), Windows fixture/link repairs [#2436](https://github.com/NeverSight/NeverD/pull/2436), arm64e addresses [#2445](https://github.com/NeverSight/NeverD/pull/2445) and the scoped MBA optimization [#2444](https://github.com/NeverSight/NeverD/pull/2444).
+- Bounded static review: inspected the changed Go calling-convention branch, the producer that sorts MorestackEntries, the empty exact-register parameter summary, and the new GoStackGrowth.AGrowthRoutineTakesNoArgument fixture source. Separately read the neighboring arm64 result-recovery commit and its added contract cases. Checked the latest Capstone pin and unchanged AArch64 operand input blob. No new defect was established in these paths, no source repair was made, and broader lowering, toolchains, consumer behavior and performance were not validated.
+- Existing CI at sampling: the latest dev SHA had no directly associated PR-triggered run surfaced by the connector. Native owner jobs for earlier dev points [8cb1e98d](https://github.com/NeverSight/NeverD/actions/runs/44833757509) and [7d1ddcf9](https://github.com/NeverSight/NeverD/actions/runs/44838403470) were still building. Do not assign their eventual results to this dev SHA. Exact-head dedicated qualification of [#2429](https://github.com/NeverSight/NeverD/actions/runs/44807907667) passed on Linux and macOS and on [Windows clang-cl](https://github.com/NeverSight/NeverD/actions/runs/44807918933). [#2432 Windows qualification](https://github.com/NeverSight/NeverD/actions/runs/44807947273) includes the signed-zero case. The packed-input caller correction remains specific to stacked [#2432](https://github.com/NeverSight/NeverD/pull/2432); the parent [#2429](https://github.com/NeverSight/NeverD/pull/2429) has not landed. Those runs do not validate an updated dev integration or native MSVC.
+- Suggested priorities: (1) collect exact-source native Go contract results before attributing end-to-end behavior or cost; (2) verify the packed-input fix and signed-zero case on their actual dev integration before closing the PR dependency; (3) independently verify the Capstone C1002 mitigation with the targeted native MSVC configuration, keeping the separate GuardAlias C1001 track distinct.
+
+Review method: static inspection and read-only GitHub checks only. No project, build, test, benchmark, repository script or manual CI was run. Earlier records follow unchanged.
+
 ## Current snapshot — 2026-11-05T01:08:30Z
 
 - Reviewed dev: [707a07f60d077bd0a8c539db713e028b19a23472](https://github.com/NeverSight/NeverD/commit/707a07f60d077bd0a8c539db713e028b19a23472), committed at **2026-11-05T00:07:39Z**. Source, file blobs and open-PR state were reread before publication.
@@ -2884,3 +2894,8 @@ them are author reports unless separately confirmed by linked workflow results.
 </details>
 
 </details>
+
+
+## Daily log — 2026-11-21T01:07:56Z
+
+Bounded static check of Go call contracts and Capstone pin context. No source changes or execution. Recorded PR-stack blockers and exact-source limits; proposed only this documentation update via a draft PR.
