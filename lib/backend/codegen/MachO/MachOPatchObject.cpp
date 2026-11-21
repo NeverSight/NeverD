@@ -23,10 +23,13 @@
 #include "neverd/backend/codegen/SourcePatchPreparation.h"
 #include "neverd/loader/FunctionDiscovery.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/loader/MachO/MachORelocations.h"
 #include "neverd/object/MachOLayout.h"
+#include "neverd/object/SectionNames.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -154,6 +157,16 @@ uint64_t installationCommandBytes(const NativeMachO &Object,
   if (Sections || HasData)
     return SegmentBytes * kRuntimeSegmentCount + sizeof(section_64) * Sections +
            sizeof(linkedit_data_command) * (1 + unsigned(NewDICE));
+  if (!NewDICE && Original.isArm64e() &&
+      Original.findSegmentByName(kDefaultNdTextSegment)) {
+    const auto *Linkedit =
+        Original.findSegmentByName(section_names::macho::LinkeditSeg);
+    if (Linkedit && Linkedit->VA) {
+      const auto *Tail = Original.getSegmentFor(Linkedit->VA - 1);
+      if (!Tail || !Tail->isExecutable())
+        return SegmentBytes + sizeof(linkedit_data_command);
+    }
+  }
   return NewDICE ? SegmentBytes + sizeof(linkedit_data_command) * 2 : 0;
 }
 
@@ -2514,16 +2527,54 @@ appendMachOObjectImage(std::vector<uint8_t> &Binary, llvm::StringRef Bytes,
   return std::move(Object->Image);
 }
 
-// Mach-O has no object relocation for a byte-relative ADR. Register lowering
-// retains its source word through MC. Once both placements are known, replace
-// only its immediate and let the installed-image verifier decode the result.
-static llvm::Error
-relocateLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
-                        va_t Slide, llvm::ArrayRef<SourcePatchMapping> Mappings,
-                        llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
+namespace {
+// Preserve instruction offsets so branches, CFI rows and exception ranges keep
+// their meaning. A distant source address uses a single integer literal load
+// from an ordinary dyld rebase. Both forms affect only the original Rd.
+struct LiftedAddressPlacement {
+  const Symbol *Owner;
+  uint64_t Offset;
+  uint32_t SourceWord;
+  uint32_t Word;
+  std::optional<uint64_t> PoolOffset;
+};
+
+struct LiftedAddressPlan {
+  std::vector<LiftedAddressPlacement> Sites;
+  size_t TextSection = 0;
+  va_t TextVA = 0;
+  std::optional<size_t> PoolSection;
+};
+
+static constexpr unsigned AddressBits =
+    branch::A64PageImmLo.Width + branch::A64PageImmHi.Width;
+
+llvm::Expected<LiftedAddressPlan>
+prepareLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
+                       va_t Base, va_t Slide,
+                       llvm::ArrayRef<SourcePatchMapping> Mappings,
+                       llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
   using namespace aarch64;
-  constexpr unsigned Width =
-      branch::A64PageImmLo.Width + branch::A64PageImmHi.Width;
+  LiftedAddressPlan Plan;
+  if (Addresses.empty())
+    return Plan;
+  Plan.Sites.reserve(Addresses.size());
+  // The lifted-image verifier accepts a single contiguous text section.
+  // place() lays code first, before any RELRO or external unwind storage.
+  const auto &Sections = Object.Image.Sections;
+  auto Text = llvm::find_if(Sections, [](const auto &S) {
+    return S.Kind == Kind::Code && S.IsAllocated && S.IsInImage;
+  });
+  if (Text == Sections.end())
+    return fail(kAddressSourceWord);
+  Plan.TextSection = size_t(Text - Sections.begin());
+  Plan.TextVA = llvm::alignTo(Base, Text->Alignment);
+  CompiledSection Pool;
+  Pool.Name = macho_arm64e_abi::kSourceAddressPool;
+  Pool.Kind = Kind::WritableData;
+  Pool.Alignment = arm64e::kPointerBytes;
+  Pool.ReadOnlyAfterFixups = true;
+  std::map<va_t, uint64_t> Slots;
   for (const auto &Fixup : Addresses) {
     while (Mappings.size() > 1 && Mappings[1].OriginalVA <= Fixup.Instruction)
       Mappings = Mappings.drop_front();
@@ -2531,29 +2582,88 @@ relocateLiftedAddresses(NativeMachO &Object, const BinaryImage &Original,
       return fail(kAddressSourceWord);
     const auto &Entry = Mappings.front();
     const auto &Sym = Object.Symbols.at(Object.Names.at(Entry.Symbol));
-    const auto &Section =
-        Object.Image.Sections[Object.Sections.at(Sym.Section)];
-    const auto Offset = Fixup.Instruction - Entry.OriginalVA;
+    const uint64_t Offset = Fixup.Instruction - Entry.OriginalVA;
     const auto *Before = Original.readVA(Fixup.Instruction, kInsnSize);
-    if (!Before || !Section.IsInImage ||
-        !rangeInBounds(Offset, kInsnSize, Sym.Size))
+    if (!Before || Object.Sections.at(Sym.Section) != Plan.TextSection ||
+        !rangeInBounds(Offset, kInsnSize, Text->Size - Sym.Offset) ||
+        Fixup.Target > InvalidVA - Slide)
       return fail(kAddressSourceWord);
-    auto *After =
-        Object.Image.Bytes.data() + Section.Offset + Sym.Offset + Offset;
     const uint32_t Word = readLE<uint32_t>(Before);
-    if ((Word & kADRP_Mask) != kADR_Op || readLE<uint32_t>(After) != Word)
+    const uint64_t At = Sym.Offset + Offset;
+    if ((Word & kADRP_Mask) != kADR_Op &&
+        machORebasedLiteralAddress(Original, Word, Fixup.Instruction) !=
+            Fixup.Target)
       return fail(kAddressSourceWord);
-    const va_t PC = Section.VA + Sym.Offset + Offset;
-    const int64_t Distance = Fixup.Target + Slide - PC;
-    if (!llvm::isInt<Width>(Distance))
-      return fail(kAddressReach);
-    const uint32_t Bits = Distance;
-    writeLE<uint32_t>(
-        After, (Word & kADRP_FixedBits) | ((Bits & kImmLoMask) << kImmLoShift) |
-                   (((Bits >> kImmLoWidth) & kImmHiMask) << kImmHiShift));
+    const va_t PC = Plan.TextVA + At;
+    const va_t Target = Fixup.Target + Slide;
+    const uint32_t Rd = Word & kRdMask;
+    auto &Site = Plan.Sites.emplace_back(
+        LiftedAddressPlacement{&Sym, At, Word, Rd, std::nullopt});
+    if (const auto Delta = addressDisplacement<AddressBits>(PC, Target)) {
+      const uint32_t Bits = *Delta;
+      Site.Word = kADR_Op | Rd | ((Bits & kImmLoMask) << kImmLoShift) |
+                  (((Bits >> kImmLoWidth) & kImmHiMask) << kImmHiShift);
+      continue;
+    }
+    if (isPointerLiteralLoad(Word)) {
+      // On a later publication dyld already owns this immutable cell.
+      const auto Old = decodeLiteralLoad(Word, Fixup.Instruction)->Address;
+      if (Old <= InvalidVA - Slide)
+        if (const auto Load = encodePointerLiteralLoad(Rd, PC, Old + Slide)) {
+          Site.Word = *Load;
+          continue;
+        }
+    }
+    const auto [It, Added] = Slots.try_emplace(Target, Pool.Size);
+    if (Added) {
+      CompiledFixupReference Ref;
+      Ref.Offset = It->second;
+      Ref.BitWidth = arm64e::kPointerBytes * CHAR_BIT;
+      Ref.IsResolved = Ref.OrdinaryPointer = true;
+      Ref.ResolvedValue = Target;
+      Pool.FixupReferences.push_back(std::move(Ref));
+      Pool.Size += arm64e::kPointerBytes;
+    }
+    Site.PoolOffset = It->second;
+  }
+  if (Pool.Size) {
+    Pool.ExternalBytes.resize(Pool.Size);
+    Plan.PoolSection = Sections.size();
+    Object.Image.Sections.push_back(std::move(Pool));
+  }
+  return Plan;
+}
+
+llvm::Error relocateLiftedAddresses(NativeMachO &Object,
+                                    const LiftedAddressPlan &Plan) {
+  using namespace aarch64;
+  if (Plan.Sites.empty())
+    return llvm::Error::success();
+  const auto &Text = Object.Image.Sections[Plan.TextSection];
+  if (Text.VA != Plan.TextVA)
+    return fail(kAddressSourceWord);
+  for (const auto &Site : Plan.Sites) {
+    // Object relocation establishes the native symbol's unwind extent.
+    auto *After = Object.Image.Bytes.data() + Text.Offset + Site.Offset;
+    if (!rangeInBounds(Site.Offset - Site.Owner->Offset, kInsnSize,
+                       Site.Owner->Size) ||
+        readLE<uint32_t>(After) != Site.SourceWord)
+      return fail(kAddressSourceWord);
+    uint32_t Word = Site.Word;
+    if (Site.PoolOffset) {
+      const va_t Slot =
+          Object.Image.Sections[*Plan.PoolSection].VA + *Site.PoolOffset;
+      const auto Load =
+          encodePointerLiteralLoad(Word, Text.VA + Site.Offset, Slot);
+      if (!Load)
+        return fail(kAddressReach);
+      Word = *Load;
+    }
+    writeLE<uint32_t>(After, Word);
   }
   return llvm::Error::success();
 }
+} // namespace
 
 static llvm::Expected<PatchResult> installObject(
     llvm::StringRef Bytes, const BinaryImage &OriginalInput,
@@ -2620,19 +2730,44 @@ static llvm::Expected<PatchResult> installObject(
       return E;
   const uint64_t ExtraEH = requiredNativeEHBytes(*Object, LayoutBytes);
   std::optional<MachODependencyState> SlidDependencies;
-  auto Slide = reserveMachOPublishedUnwind(
-      LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
-      Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
-      installationCommandBytes(*Object, Original), RecoveredData);
+  const auto Reserve = [&](uint64_t Commands) {
+    return reserveMachOPublishedUnwind(
+        LayoutBytes, Original.Arch, ExtraEH, unwindFunctionCounts(*Object),
+        Original.isArm64e() && !Preparation && !DynCode, SlidDependencies,
+        Commands, RecoveredData);
+  };
+  const auto InitialCommands = installationCommandBytes(*Object, Original);
+  auto Slide = Reserve(InitialCommands);
   if (!Slide)
     return Slide.takeError();
+  auto Base = Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
+  auto AddressPlan = prepareLiftedAddresses(*Object, Original, Base, *Slide,
+                                            Mappings, AddressesToRelocate);
+  if (!AddressPlan)
+    return AddressPlan.takeError();
+  if (AddressPlan->PoolSection) {
+    const auto Commands = installationCommandBytes(*Object, Original);
+    if (Commands > InitialCommands) {
+      // Only a distant operand calls for extra segment commands. Header
+      // growth can move both ends, so plan against the actual new layout.
+      Object->Image.Sections.pop_back();
+      LayoutBytes = Original.Raw;
+      SlidDependencies.reset();
+      Slide = Reserve(Commands);
+      if (!Slide)
+        return Slide.takeError();
+      Base = Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
+      AddressPlan = prepareLiftedAddresses(*Object, Original, Base, *Slide,
+                                           Mappings, AddressesToRelocate);
+      if (!AddressPlan)
+        return AddressPlan.takeError();
+    }
+  }
   for (auto &[Name, Binding] : Bindings)
     Binding.OriginalVA += *Slide;
-  const uint64_t Base =
-      Patcher.plannedExecSegmentVA(LayoutBytes, Original.Arch);
   const auto EH = findMachOEHFrameRegion(LayoutBytes);
   if (!Base)
-    return fail("original Mach-O has no safe placement");
+    return fail(kNoPlacement);
   auto LayoutReader = Loader::create(BinaryFormat::MachO);
   auto LayoutImage = LayoutReader->loadBuffer(llvm::MemoryBufferRef(
       llvm::StringRef(reinterpret_cast<const char *>(LayoutBytes.data()),
@@ -2652,8 +2787,7 @@ static llvm::Expected<PatchResult> installObject(
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
-  if (auto E = relocateLiftedAddresses(*Object, Original, *Slide, Mappings,
-                                       AddressesToRelocate))
+  if (auto E = relocateLiftedAddresses(*Object, *AddressPlan))
     return E;
   if (!Object->Thunks.empty()) {
     if (!EH)
@@ -2781,10 +2915,15 @@ static llvm::Expected<PatchResult> installObject(
           return E;
         // LSDA references must be read from the installed candidate, including
         // newly generated tables. This still precedes atomic publication.
-        if (VerifyLiftedImage)
+        if (VerifyLiftedImage) {
+          const auto *Pool =
+              AddressPlan->PoolSection
+                  ? &Object->Image.Sections[*AddressPlan->PoolSection]
+                  : nullptr;
           if (auto E = VerifyLiftedImage(Object->Image, Final, *Slide,
-                                         Object->Compact))
+                                         Object->Compact, Pool))
             return E;
+        }
         if (Original.isArm64e()) {
           auto After = readMachODependencyState(Final.Raw);
           if (!After)

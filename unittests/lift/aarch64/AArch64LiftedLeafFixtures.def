@@ -565,7 +565,40 @@ A64_LEAF_TEXT(kLiteralWidthsOracle, "#define NEVERD_TEST_LITERAL_WIDTHS 1\n")
 // input function. All four functions also run in each signed publication.
 A64_LEAF_VALUE(unsigned, kAddressFunctions, 4)
 A64_LEAF_TEXT(kDistantAddresses, "#define NEVERD_TEST_DISTANT_ADDRESSES 1\n")
-A64_LEAF_TEXT(kDistantAddressRefused, "out_of_range_source_adr_refused")
+A64_LEAF_TEXT(kInteriorAddresses, "#define NEVERD_TEST_INTERIOR_ADDRESSES 1\n")
+A64_LEAF_TEXT(kBlockAddresses, "#define NEVERD_TEST_BLOCK_ADDRESSES 1\n")
+A64_LEAF_VALUE(unsigned, kReturnLabelWords, 3)
+A64_LEAF_TEXT(kDistantInterior, "#define NEVERD_TEST_INTERIOR_ADDRESSES 1\n"
+                               "#define NEVERD_TEST_DISTANT_ADDRESSES 1\n")
+A64_LEAF_TEXT(kRebasedSlots, "distinct_rebased_address_slots")
+A64_LEAF_TEXT(kAddressCellsSymbol, "_address_cells")
+A64_LEAF_TEXT(kMutableCellSymbol, "_mutable_cell")
+A64_LEAF_VALUE(unsigned, kReadOnlyCellCount, 4)
+A64_LEAF_TEXT(kRebasedAddressCells, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  mov x8, x0
+Linside:
+  ret
+.cfi_endproc
+.section __DATA_CONST,__const,regular
+.p2align 3
+.globl _address_cells
+_address_cells:
+.quad Linside
+.quad _leaf_sum@AUTH(ia,0)
+.quad _puts
+.quad 0
+.data
+.p2align 3
+.globl _mutable_cell
+_mutable_cell:
+.quad Linside
+.subsections_via_symbols
+)asm")
 A64_LEAF_TEXT(kAddressFixups, "verified_source_address_sites")
 A64_LEAF_TEXT(kAddressLeaves, R"asm(
 .text
@@ -652,8 +685,17 @@ A64_LEAF_TEXT(kStoreEntryLeaves, R"asm(
 _leaf_sum:
 Lsum:
 .cfi_startproc
+#ifdef NEVERD_TEST_BLOCK_ADDRESSES
+  cbz x0, Lfinish
+  adr x8, Lfinish
+#elif defined(NEVERD_TEST_INTERIOR_ADDRESSES)
+  adr x8, Lstore
+#else
   adr x8, _leaf_sum
+#endif
+Lstore:
   str x8, [x0, #8]
+Lfinish:
   ret
 .data_region
   .byte 0x23, 0x36, 0x45, 0x52
@@ -663,11 +705,21 @@ Lsum:
 .globl _leaf_difference
 _leaf_difference:
 .cfi_startproc
+#ifdef NEVERD_TEST_BLOCK_ADDRESSES
+  adr x8, Lfinish
+#elif defined(NEVERD_TEST_INTERIOR_ADDRESSES)
+  adr x8, Lstore
+#else
   adr x8, Lsum
+#endif
   mov x9, x8
   stur x9, [x0, #-8]
   ret
 .cfi_endproc
+#ifdef NEVERD_TEST_DISTANT_ADDRESSES
+.section __TEXT,__const
+  .space (1 << 20)
+#endif
 .subsections_via_symbols
 )asm")
 A64_LEAF_TEXT(kStoreEntryCaller, R"c(
@@ -687,6 +739,12 @@ int main(int argc, char **argv) {
   if (!after || !before)
     return 3;
   uintptr_t entry = (uintptr_t)ptrauth_strip(after, ptrauth_key_function_pointer);
+#ifdef NEVERD_TEST_BLOCK_ADDRESSES
+  entry += 3 * sizeof(uint32_t);
+  after(0);
+#elif defined(NEVERD_TEST_INTERIOR_ADDRESSES)
+  entry += sizeof(uint32_t);
+#endif
   uintptr_t slots[] = {1, 2, 3};
   after(&slots[0]);
   if (slots[0] != 1 || slots[1] != entry || slots[2] != 3)

@@ -1,0 +1,211 @@
+{
+  "source_revision": "21b120ff0ddc05f709ec3ba53f6c43d4396221a0",
+  "neverd_test_base": "5e0f48baf34e9a0061fec0eeef302d110775a55c",
+  "capstone": "09ba26d9848f4ad0920ad0ef5feb512899fabe6c",
+  "llvm_target_trees": {
+    "llvm/lib/Target/AArch64": "97164346055658281900d97b5eff5c034c89c8a7",
+    "llvm/lib/MC": "64aa8f53ef69c82ea45313869e5cf7b79b4f3cc5",
+    "llvm/include/llvm/MC": "bdfd8cf0fc7f5a6e751f3536f06407e23a52d60f",
+    "llvm/lib/CodeGen/AsmPrinter": "59e694c6a4474e5b394e8a4b31941d7ed8ffe0bf",
+    "llvm/lib/Object": "2facf584a88bae4863c6d1f0ac2ffca3ffd0d923"
+  },
+  "local": {
+    "source": {
+      "exit": 0,
+      "total": 268,
+      "passed": 268,
+      "failed": [],
+      "skipped": [],
+      "executable_sha256": "2b979374d9dfc63ba70160e83ab7a28b953ce7b2eca6f016265c349c407f74f4",
+      "xml_sha256": "b4cefd3b03dbd7a8db37c9c430cf53f7f0a73fca8d85c03964377ca06c66368a"
+    },
+    "r6": {
+      "exit": 1,
+      "total": 268,
+      "passed": 258,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "executable_sha256": "992f6a8116cf33059aa17df970c9e2bbf76e6c5ecdbc25dfcc8babf4d16211f4",
+      "xml_sha256": "6de53a8090625fce9609aae7f5abc4d92a8093c9d2a92ccfe42de1c2d1fbbb8d"
+    },
+    "boundary": {
+      "exit": 0,
+      "total": 161,
+      "passed": 161,
+      "failed": [],
+      "skipped": [],
+      "executable_sha256": "00b350bc07bee6a700a79ab5305c359d458a1889a5a8604b16127e09f68697f9",
+      "xml_sha256": "a28de251fad11e7364eca4599ea20becbdf6ec9f1ef1aa25eec76cfe1ff576ab"
+    },
+    "macho_installation_and_transactions": {
+      "NeverDArm64eAnalysisTests": {
+        "passed": 38,
+        "filter": "MachOArm64eDependencies.*:MachOArm64eInstallation.*",
+        "sha256": "3fdf0b07f5d075aa76fe7d6d54000cab1c24962f2e2682ceac9fc8c9729edf41"
+      },
+      "NeverDNativeExceptionRewriteContractTests": {
+        "passed": 46,
+        "filter": "MachOPatchTransaction.*:MachOARM32Transaction.*:MachOCompactUnwindInstall.*",
+        "sha256": "949276864acde8d0b854a4a63eb37d69d6f26ec3e5f54e004f77af98c4c18ab1"
+      }
+    },
+    "r6_focused": 9
+  },
+  "cli": {
+    "dylib": 30,
+    "high_base_main": 12,
+    "malformed_refused": 2
+  },
+  "apple_sdk_pointer_controls": {
+    "os11": 4,
+    "os12": 4,
+    "os15": 4,
+    "format9": 4
+  },
+  "preserved_signed_outputs_after_cfg_check": 42,
+  "single_pool_layout_limit": [
+    {
+      "mode": "O0",
+      "exit": 1,
+      "published": false,
+      "source_sha256": "a553102d0df871b5b6c39d3ce8dfaffc8ad865d15e89aa73b6a470296e2e7dd4"
+    },
+    {
+      "mode": "O2",
+      "exit": 1,
+      "published": false,
+      "source_sha256": "a553102d0df871b5b6c39d3ce8dfaffc8ad865d15e89aa73b6a470296e2e7dd4"
+    }
+  ],
+  "hosted_source_fork": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44877832586",
+    "llvm": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "host_sha256": "2b979374d9dfc63ba70160e83ab7a28b953ce7b2eca6f016265c349c407f74f4",
+    "hosts": {
+      "macos-26": {
+        "macos": "26.7.2",
+        "hardware": "Apple M1 (Virtual)",
+        "total": 268,
+        "failed": 0,
+        "skipped": 0,
+        "x1_qualified": false,
+        "dylibs_called": 35,
+        "executables_launched": 14,
+        "xml_sha256": "65867120672cc7febe4596708bd37de7511c66f3c4332af5f679a7356b9ee8ae"
+      },
+      "xcode-27": {
+        "macos": "27.0.1",
+        "hardware": "Apple M1 (Virtual)",
+        "total": 268,
+        "failed": 0,
+        "skipped": 0,
+        "x1_qualified": false,
+        "dylibs_called": 35,
+        "executables_launched": 14,
+        "xml_sha256": "56ade9b336d772349de7e9de77c8cd071662e59fa64f9543d5e92ea6bda30358"
+      }
+    },
+    "required_properties": {
+      "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+        "verified_source_address_sites": 2,
+        "resigned_publication_generations": 3,
+        "executed_native_images": 4,
+        "published_data_in_code_records": 4
+      },
+      "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_handler_to_registered_entry_walks": 12
+      },
+      "AArch64LiftedImage.PreservesSourceAddressesBeyondADRReach": {
+        "distinct_rebased_address_slots": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.RecoversInteriorAddressesInLocalAndPeerFunctions": {
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.PublishesLocalAndPeerReferencesToABasicBlock": {
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.SharesDistantInteriorAddressAcrossFunctions": {
+        "distinct_rebased_address_slots": 1,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      }
+    }
+  },
+  "hosted_r6": {
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44877884491",
+    "llvm": "neverd-llvm-v23.0.0-r6",
+    "host_sha256": "992f6a8116cf33059aa17df970c9e2bbf76e6c5ecdbc25dfcc8babf4d16211f4",
+    "hosts": {
+      "macos-26": {
+        "macos": "26.7.2",
+        "hardware": "Apple M1 (Virtual)",
+        "total": 268,
+        "failed": 6,
+        "skipped": 4,
+        "x1_qualified": false,
+        "xml_sha256": "cd19ae78786b81a80810f1f72d8791f0982af42042689b81bfd3e7c36cc2bdb2"
+      },
+      "xcode-27": {
+        "macos": "27.0.1",
+        "hardware": "Apple M1 (Virtual)",
+        "total": 268,
+        "failed": 6,
+        "skipped": 4,
+        "x1_qualified": false,
+        "xml_sha256": "77a4c0d0d1cab0bb03129bc5901012d2a942a59f39f01f4ad35ddf25ab20da09"
+      }
+    },
+    "required_properties": {
+      "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+        "verified_source_address_sites": 2,
+        "resigned_publication_generations": 3,
+        "executed_native_images": 4,
+        "published_data_in_code_records": 4
+      },
+      "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6,
+        "native_handler_to_registered_entry_walks": 12
+      },
+      "AArch64LiftedImage.PreservesSourceAddressesBeyondADRReach": {
+        "distinct_rebased_address_slots": 4,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.RecoversInteriorAddressesInLocalAndPeerFunctions": {
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.PublishesLocalAndPeerReferencesToABasicBlock": {
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      },
+      "AArch64LiftedImage.SharesDistantInteriorAddressAcrossFunctions": {
+        "distinct_rebased_address_slots": 1,
+        "executed_native_images": 4,
+        "resigned_publication_generations": 3
+      }
+    }
+  },
+  "compiler_original_control": "https://github.com/gmh5225/test_mac_intel/actions/runs/44867024086",
+  "compiler_original_handler_start": "https://github.com/gmh5225/test_mac_intel/actions/runs/44867399599",
+  "hosted_x1_qualification": "https://github.com/gmh5225/test_mac_intel/actions/runs/44872479257"
+}
