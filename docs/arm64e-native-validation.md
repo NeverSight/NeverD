@@ -3019,3 +3019,16 @@ and on-disk bytes, the segment permissions, the relocated address and the
 extent of the copied unwind record. A former entry that now forwards to a
 separately owned function keeps its trailer as original storage. Explicit
 control-flow evidence still contributes roots.
+
+The archived Apple Clang 17 input was reproduced byte for byte. The Release
+CLI published six inputs at O0 and O2 through three generations each. All
+36 outputs passed signature, dyld and retained-byte checks. The largest
+fixture retained 1,105,988 bytes across 24 ranges. On each Darwin runner,
+a native caller exercised 35 dylibs and the system launched seven PIEs.
+Both runners passed all 273 tests with the source LLVM fork. Frozen r6
+reproduced its six signed-CFI failures and four compact PAuth_LR skips.
+Both runners reported Apple M1 (Virtual) and lacked native x1 qualification.
+
+[Source LLVM run](https://github.com/gmh5225/test_mac_intel/actions/runs/44917069820).
+[Frozen r6 run](https://github.com/gmh5225/test_mac_intel/actions/runs/44921174291).
+[Input hashes and native results](evidence/arm64e-unmarked-address-tails-2026-11-21.json).
