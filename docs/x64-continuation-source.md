@@ -228,8 +228,9 @@ precedes register and arbitrary-flag writes. A completed transfer publishes
 the six instruction-local flag choices. The driver reads the existing
 `InstructionCompleted` progress bit once and reuses the receipt for budget
 accounting. With `paged_debug`, an execution breakpoint before the write yields
-no notification. A post-write single-step trap, including a secondary stop in
-trap delivery, still yields one notification.
+no notification. A post-write single-step trap still yields one notification.
+If trap entry refuses the state or encounters a backing stop, the caller gets
+that stop together with the completed instruction receipt.
 
 The scheduler owns this notification in both C routes, including scheduled
 function contexts, checked entry views, original-CALL views and their resumption

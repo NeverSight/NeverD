@@ -247,13 +247,13 @@ int proof_breakpoint_before_write(void) {
     return RUN() != 7 || budget || memory.bodies || memory.saved_pc != 0x1000 ||
            state.CR8 != 3 || BAD(1,0,0,0x3b) || memory.receipt_reads != 1;
 }
-int proof_debug_stop_after_write(unsigned backing) {
+int proof_debug_stop_after_write(unsigned stop) {
     PREPARE();
     state.RFlags |= 0x100;
     state.GPR[0] = 6;
-    memory.after_status = backing ? 18 : 7;
+    memory.after_status = stop == 0 ? 7 : stop == 1 ? 18 : 5;
     return RUN() != memory.after_status || budget || memory.saved_pc != 0x1004 ||
-           state.PC != (backing ? 0x1004u : 0x9000u) || state.CR8 != 6 ||
+           state.PC != (stop ? 0x1004u : 0x9000u) || state.CR8 != 6 ||
            BAD(1,1,0,0x60) || memory.receipt_reads != 1;
 }
 int proof_debug_bridge_keeps_ss_shadow(void) {
