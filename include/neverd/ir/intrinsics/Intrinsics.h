@@ -549,6 +549,11 @@ enum class Intrinsic : uint16_t {
   // R28 (arm64), which Go's `getg()` reads (GoCurrentGoroutine.h).
   GoCurrentGoroutine,
 
+  // Append-only: the closure context Go's internal ABI passes a func value in
+  // RDX (x86-64) or R26 (arm64), through which a closure reads what it
+  // captured (GoCurrentGoroutine.h).
+  GoClosureContext,
+
 #define NEVERD_MIPS_MERGE_LOAD(Id, Value, ...) Id = Value,
 #define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, ...) Id = Value,
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
@@ -1496,13 +1501,15 @@ constexpr bool keepsGeneralRegisters(Intrinsic Id) {
          Id == Intrinsic::Sevl || Id == Intrinsic::A64_Clrex;
 }
 
-/// Also true for the read of the goroutine Go's internal ABI keeps in a
-/// register (GoCurrentGoroutine), which defines that register and nothing
-/// else: a call that forwards its caller's arguments past it passes them.
+/// Also true for the reads of the goroutine and the closure context Go's
+/// internal ABI keeps in registers (GoCurrentGoroutine, GoClosureContext),
+/// each of which defines that register and nothing else: a call that
+/// forwards its caller's arguments past it passes them.
 constexpr bool preservesCallSetup(Intrinsic Id) {
   return Id == Intrinsic::X87Wait || Id == Intrinsic::X87ContextExport ||
          Id == Intrinsic::X87ContextRefresh ||
-         Id == Intrinsic::GoCurrentGoroutine || keepsGeneralRegisters(Id);
+         Id == Intrinsic::GoCurrentGoroutine ||
+         Id == Intrinsic::GoClosureContext || keepsGeneralRegisters(Id);
 }
 
 /// The control or debug register (`%cr8`, `%dr7`) that a ReadCr*/WriteCr*

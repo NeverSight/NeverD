@@ -2498,6 +2498,13 @@ MedFunc LowToMedConverter::convertFunction(
         defineGoCurrentGoroutine(Func, *Goroutine);
         debugVerifyMedFunc(Func, "defineGoCurrentGoroutine");
       }
+    // A closure it compiled reads the context its caller passes in a register.
+    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+      if (const std::optional<uint64_t> Context =
+              goClosureContextRegister(TheArch)) {
+        defineGoClosureContext(Func, *Context);
+        debugVerifyMedFunc(Func, "defineGoClosureContext");
+      }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was

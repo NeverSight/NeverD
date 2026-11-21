@@ -275,6 +275,19 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
             /*hasSideEffects=*/true),
         {}, "go.g");
   }
+  // The closure context Go's internal ABI passes a func value in a register
+  // of its own: RDX or R26, which a closure reads at its entry.
+  if (IC == I::GoClosureContext) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 8 ||
+        (TargetArch != Arch::X64 && TargetArch != Arch::AArch64))
+      llvm::report_fatal_error("Go closure context of a malformed shape");
+    return Builder.CreateCall(
+        llvm::InlineAsm::get(
+            llvm::FunctionType::get(Builder.getInt64Ty(), false),
+            TargetArch == Arch::X64 ? "movq %rdx, $0" : "mov $0, x26", "=r",
+            /*hasSideEffects=*/true),
+        {}, "go.closure");
+  }
 
   llvm::Value *R = nullptr;
 

@@ -5836,9 +5836,17 @@ HighIR, drops one nothing comes to use (`intrinsicReadIsDiscardable`): the
 stack check the elided growth path leaves, or the return's transport of a
 register System V keeps. It merges or moves none, since a call may change the
 goroutine. C reads the register itself, as `getg()` does; `runtime.canpanic`
-read each `getg().m` as a trap. Calls from assembly, which may follow ABI0
-and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
-the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
+read each `getg().m` as a trap. A call through a func value passes the
+value's address in RDX (R26 on arm64, `goClosureContextRegister`), through
+which a closure reads what it captured, so the incoming value of that register
+is the closure context (`defineGoClosureContext`,
+`Intrinsic::GoClosureContext`), read the same way at the entry; a call
+clobbers the register, so no read follows one. For either register the
+incoming value is the version nothing in the function defines: where a
+function reads the register only after a call that writes it, its first SSA
+version is that call's clobber, and stays the call's. Calls from assembly, which may
+follow ABI0 and use X15 as scratch, and calls from Go 1.17 and earlier code do
+not get the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
 platform contract.
 
 On x86-64, Go code also takes its integer arguments in Go's registers, in

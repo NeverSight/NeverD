@@ -1797,6 +1797,98 @@ TEST(GoDefer, DeferReturnResumesOnTheFrame) {
   EXPECT_EQ(It->Params.size(), 1u);
 }
 
+TEST(GoInternalABI, AClosureReadsTheContextItsCallerPasses) {
+  // A call through a Go func value passes the value's address in RDX (arm64
+  // R26), through which a closure reads what it captured.  No model defined
+  // the incoming register, and each capture read printed an unknown value.
+  //   main.f.func1: mov rax, [rdx+8]; add rax, [rdx+16]; ret
+  //   (arm64)       ldr x0, [x26, #8]; ldr x1, [x26, #16]; add x0, x0, x1
+  //                 ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F, {0x48, 0x8B, 0x42, 0x08, 0x48, 0x03, 0x42, 0x10, 0xC3});
+    else
+      T.writeText(F, words({0xF9400740, 0xF9400B41, 0x8B010000, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.f.func1";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_f_func1");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoInternalABI, ARegisterReadAfterACallIsNoContext) {
+  // The context is the register's incoming value.  Where a function reads
+  // the register only after a call that writes it, the first version of it is
+  // the call's clobber, and taking that version for the incoming value
+  // defined it twice: Go 1.26's `internal/cpu.doinit` and `runtime.mapaccess2`
+  // were refused.
+  //   main.f: lea rdx, [rax+1]; ret
+  //   main.g: call main.f; mov rax, rdx; ret
+  //   (arm64) main.f: add x26, x0, #1; ret
+  //           main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; bl main.f
+  //                   mov x0, x26; ldp x29, x30, [sp], #16; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    constexpr va_t G = kTextVA + 0x180;
+    GoTestImage T(A);
+    if (A == Arch::X64) {
+      T.writeText(F, {0x48, 0x8D, 0x50, 0x01, 0xC3});
+      const auto Rel = static_cast<uint32_t>(F - (G + 5));
+      T.writeText(G, {0xE8, static_cast<uint8_t>(Rel),
+                      static_cast<uint8_t>(Rel >> 8),
+                      static_cast<uint8_t>(Rel >> 16),
+                      static_cast<uint8_t>(Rel >> 24), 0x48, 0x89, 0xD0, 0xC3});
+    } else {
+      T.writeText(F, words({0x9100041A, 0xD65F03C0}));
+      const uint32_t Call = 0x94000000u | (((F - (G + 8)) >> 2) & 0x3FFFFFFu);
+      T.writeText(G, words({0xA9BF7BFD, 0x910003FD, Call, 0xAA1A03E0,
+                            0xA8C17BFD, 0xD65F03C0}));
+    }
+    for (const auto &[Entry, Name] :
+         {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_g");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_EQ(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+  }
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

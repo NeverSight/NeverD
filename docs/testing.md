@@ -20792,6 +20792,12 @@ reads no undefined R14 and takes no parameter, and its C reads R14 and traps
 nowhere. `GoInternalABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` does
 the same with arm64's `[x28, #48]`, where the call may change R28: it reads
 the goroutine at its entry and again after the call.
+`GoInternalABI.AClosureReadsTheContextItsCallerPasses` lifts a closure that adds
+two words it loads through RDX, and its arm64 twin through R26: its C reads
+the register at the entry and traps nowhere.
+`GoInternalABI.ARegisterReadAfterACallIsNoContext` lifts `main.g`, which reads
+RDX (arm64 R26) only after a call to a function that writes it: MedIR verifies
+and the C reads no context.
 `GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
 `main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
 caller that sets all seven of Go's first argument registers: `main.g` takes
