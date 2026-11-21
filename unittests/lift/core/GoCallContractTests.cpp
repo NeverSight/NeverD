@@ -1876,6 +1876,73 @@ TEST(GoInternalABI, AnARM64DirectCallReturnsEveryResultItsCallerReads) {
   EXPECT_TRUE(ReturnsX0ToX2(*Read->RegisterReturnFields));
 }
 
+TEST(GoInternalABI, TwoARM64ResultsAreARecord) {
+  // Go returns a list of results, which C carries as a record: two arm64
+  // results in X0 and X1 are no double-word integer, as AAPCS64's pair is.
+  // As one, `runtime.makeAddrRange`, which returns its two arguments, was
+  // refused, its high word being no value the function computed.
+  //   main.f: stp x29, x30, [sp, #-16]!; mov x29, sp; cbz x0, 1f
+  //           cmp x0, x1; b.hi 1f; ldp x29, x30, [sp], #16; ret
+  //       1:  mov x1, #60; bl main.h; brk #1
+  //   main.h: ret
+  //   main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; mov x0, #1
+  //           mov x1, #2; bl main.f; add x0, x0, x1
+  //           ldp x29, x30, [sp], #16; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t H = kTextVA + 0x140;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Trap = 0x94000000u | (((H - (F + 32)) >> 2) & 0x3FFFFFFu);
+  T.writeText(F,
+              words({0xA9BF7BFD, 0x910003FD, 0xB40000A0, 0xEB01001F, 0x54000068,
+                     0xA8C17BFD, 0xD65F03C0, 0xD2800781, Trap, 0xD4200020}));
+  T.writeText(H, words({0xD65F03C0}));
+  const uint32_t Call = 0x94000000u | (((F - (G + 16)) >> 2) & 0x3FFFFFFu);
+  T.writeText(G, words({0xA9BF7BFD, 0x910003FD, 0xD2800020, 0xD2800041, Call,
+                        0x8B010000, 0xA8C17BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{H, "main.h"},
+        std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  ASSERT_EQ(It->MultiReturn.size(), 2u);
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = T.Img.Arch;
+  C.Format = T.Img.Format;
+  C.Image = &T.Img;
+  ASSERT_TRUE(HighCEmitter().emit(R.HighFuncs, OS, C));
+  OS.flush();
+  // The definition, not its declaration or main.g's call.
+  size_t At = 0;
+  while ((At = Source.find(" main_f(", At)) != std::string::npos &&
+         Source.compare(Source.find('\n', At) - 2, 2, " {") != 0)
+    ++At;
+  ASSERT_NE(At, std::string::npos) << Source;
+  const size_t Line = Source.rfind('\n', At) + 1;
+  const std::string Signature = Source.substr(Line, At - Line);
+  EXPECT_EQ(Signature.find("__int128"), std::string::npos) << Signature;
+  const std::string Body = Source.substr(At, Source.find("\n}", At) - At);
+  EXPECT_EQ(Body.find("no recovered semantics"), std::string::npos) << Body;
+  EXPECT_EQ(Body.find("has no definition"), std::string::npos) << Body;
+}
+
 TEST(GoInternalABI, AStaleViewReadsNoResultOfTheCall) {
   // arm64's W11 is a value of its own beside X11, which `mov x11, #45`
   // writes whole and leaves W11's old version behind.  Where `ubfx x12,

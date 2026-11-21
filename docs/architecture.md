@@ -5971,7 +5971,11 @@ never set: a word-wide field returned those, a trap on every call, where
 that record (each field naturally aligned), and a register width wider than
 its field holds the field in its low bytes, which is all any reader takes. A
 result a function hands back from a call it makes stays a word at that call,
-and an indirect call's results stay words.
+and an indirect call's results stay words. Two results are a record too where
+they take X0 and X1, which AAPCS64 also returns a double-word integer in: Go
+returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
+returns its two arguments, was refused, its high word being no value the
+function computed (`returnsGoResults`).
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a

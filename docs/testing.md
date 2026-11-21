@@ -20716,6 +20716,9 @@ unknown value.
 `GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
 arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
 results, where AAPCS64 alone gives X0:X1.
+`GoInternalABI.TwoARM64ResultsAreARecord` runs an arm64 `main.f` that returns
+its two arguments and a caller that reads both: `main.f` returns a record, not
+an `__int128`, and its C holds no unknown value.
 `GoArgumentComponents.CountEachScalarTheTracebackLists` loads ArgInfo tables:
 `gopark`'s five components with two bytes in one word, a string's and a
 struct's words, an offset too large for a byte, and a table that elides past
