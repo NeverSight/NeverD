@@ -106,6 +106,8 @@ struct SourceFunctionTypeHint {
   /// Logical MIPS scalars may span an o32 GPR pair. Their descriptor records
   /// the first carrier, the complete value width and the variadic boundary.
   std::shared_ptr<const FloatingCallArguments> MIPSScalars;
+  /// Complete natural C records with checked MIPS register/stack pieces.
+  bool MIPSRecords = false;
 };
 
 } // namespace neverd

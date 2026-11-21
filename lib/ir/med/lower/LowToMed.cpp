@@ -950,10 +950,11 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       Image->instructionModeAt(Low.Entry) == InstructionMode::MIPS16;
   std::optional<std::map<SourceCallOccurrenceKey, va_t>> ScalarCallTargets;
   if (isMIPS(TheArch))
-    requireMIPSSourceVectors(Low, TheArch, Image, CallEntryFloatingArguments,
-                             SourceCallHintsEnabled ? SourceCallSiteHints
-                                                    : nullptr,
-                             &ScalarCallTargets);
+    requireMIPSSourceVectors(
+        Low, TheArch, Image, CallEntryFloatingArguments,
+        SourceCallHintsEnabled ? SourceCallSiteHints : nullptr,
+        &ScalarCallTargets,
+        SourceCallHintsEnabled ? SourceCalleeTypeHints : nullptr);
   const bool QualifyMIPSReturns =
       isMIPS(TheArch) &&
       (Image
@@ -2123,7 +2124,38 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
 
     x86_registration::RegistrationRoots(Low, TheArch, Fmt)
         .disconnectNoReturnFallthroughs(Func);
-    bindSourceCalls(Func, Low, Fmt);
+    const auto *EntrySignature = bindSourceCalls(Func, Low, Fmt);
+    const bool RecordEntry = EntrySignature && EntrySignature->MIPSRecords;
+    if (!MIPSRecordResult.empty()) {
+      Func.MultiReturn.assign(MIPSRecordResult.begin(), MIPSRecordResult.end());
+      Func.ExplicitMIPSRecordResult = true;
+      for (auto &Block : Func.Blocks)
+        for (auto &Op : Block.Ops)
+          if (Op.Opcode == NdOp::RETURN) {
+            if (Op.NumInputs != 1)
+              throw LowToMedConversionError(
+                  "A MIPS record return lost its captured jump target");
+            const auto Link = Op.Inputs[0];
+            Op.NumInputs = 0;
+            for (const auto &P : MIPSRecordResult)
+              Op.addInput(ndVarToMedVar(NdVar::reg(P.RegOff, P.Size)));
+            Op.addInput(Link);
+          }
+    }
+    // The logical parameters can still fail to bind (for example when a stack
+    // argument has a mutable home). Keep the already captured result operands
+    // and their register banks for the physical entry in that case.
+    if (RecordEntry && EntrySignature->ReturnType->Kind == NdTypeKind::Struct &&
+        EntrySignature->ReturnComponents.size() == 2) {
+      Func.MultiReturn.clear();
+      for (const auto &P : EntrySignature->ReturnComponents)
+        Func.MultiReturn.push_back(
+            {P.RegisterOffset, P.ValueBytes,
+             P.Kind == SourceABICarrierKind::FloatingRegister});
+      Func.ExplicitMIPSRecordResult = true;
+    }
+    if (RecordEntry || Func.ExplicitMIPSRecordResult)
+      MIPSReturnsQualified = false;
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
@@ -2194,12 +2226,22 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
-    if (QualifyMIPSReturns) {
+    if (QualifyMIPSReturns || RecordEntry || Func.ExplicitMIPSRecordResult) {
+      unsigned ResultInputs = MIPSRecordResult.size();
+      if (RecordEntry && EntrySignature->ReturnType->Kind != NdTypeKind::Void)
+        ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
+                           ? EntrySignature->ReturnComponents.size()
+                           : 1;
       MIPSReturnsQualified =
-          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt);
+          hasMIPSSourceReturnTargets(Low, Func, TheArch, Fmt, ResultInputs);
       if (!MIPSReturnsQualified)
         throw LowToMedConversionError("MIPS source return target is not proven "
                                       "to preserve the incoming link and mode");
+      if (RecordEntry || Func.ExplicitMIPSRecordResult)
+        for (auto &Block : Func.Blocks)
+          for (auto &Op : Block.Ops)
+            if (Op.Opcode == NdOp::RETURN)
+              --Op.NumInputs;
     }
 
     // The x86 lifter's PUSHF and the ARM lifter's MRS of APSR.

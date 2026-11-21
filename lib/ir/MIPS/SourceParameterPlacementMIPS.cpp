@@ -4,16 +4,19 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// MIPS scalar locations and separate complete n32/n64 record transport.
+/// MIPS scalar and fixed natural-record transport.
 /// ELF source admission authenticates the FP profile and callable contract.
 //===----------------------------------------------------------------------===//
 
 #include "../SourceParameterPlacementDetail.h"
 
 #include "neverd/ArchSupport.h"
+#include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
+#include "neverd/loader/BinaryImage.h"
 
 #include <algorithm>
 #include <utility>
@@ -109,10 +112,15 @@ bool completeRecord(const TypeRef &Type, const TargetRegInfo &TRI) {
 
 void setCarrierWidths(std::vector<SourceParameterPiece> &Pieces,
                       const TargetRegInfo &TRI) {
-  for (auto &Piece : Pieces)
-    Piece.CarrierBytes = Piece.Location.Kind == SourceABICarrierKind::Stack
-                             ? Piece.Location.ValueBytes
-                             : TRI.FullRegWidth;
+  for (auto &Piece : Pieces) {
+    if (Piece.Location.Kind == SourceABICarrierKind::Stack)
+      Piece.CarrierBytes = Piece.Location.ValueBytes;
+    else if (Piece.Location.Kind == SourceABICarrierKind::IntegerRegister)
+      Piece.CarrierBytes = TRI.integerReturnWordBytes();
+    else
+      Piece.CarrierBytes =
+          std::max<uint16_t>(TRI.FullRegWidth, Piece.Location.ValueBytes);
+  }
 }
 } // namespace
 
@@ -152,8 +160,8 @@ std::optional<mips::RecordCallPlacement>
 mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
                       const TypeRef &ReturnType,
                       llvm::ArrayRef<TypeRef> Parameters, bool Variadic) {
-  if ((!isMIPSN32(Architecture) && !isMIPSN64(Architecture)) ||
-      Format != BinaryFormat::ELF || Variadic || !ReturnType ||
+  if (!isMIPS(Architecture) || Format != BinaryFormat::ELF || Variadic ||
+      !ReturnType ||
       (ReturnType->Kind == NdTypeKind::Void && ReturnType->Size != 0))
     return std::nullopt;
   const auto &TRI = getTargetRegInfo(Architecture);
@@ -171,11 +179,16 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
   RecordCallPlacement Result;
   ParameterCursor Cursor{TRI, TRI.integerArgumentLayout(Format), false, 0, 0,
                          true};
-  if (RecordResult && ReturnType->Size > 2 * TRI.FullRegWidth) {
+  const bool O32 = isMIPSO32(Architecture);
+  if (RecordResult && (O32 || ReturnType->Size > 2 * TRI.FullRegWidth)) {
     Result.Arguments.ResultPointer =
         SourceABIValueLocation{SourceABICarrierKind::IntegerRegister,
                                Cursor.Layout.Registers[0], 0, TRI.PointerSize};
     ++Cursor.Next;
+    Cursor.LeadingFloating = false;
+    if (O32)
+      Result.ReturnsResultPointer =
+          true; // System V MIPS ABI, Function Return Values.
   } else if (RecordResult) {
     const bool Floating =
         ReturnType->Fields.size() <= 2 &&
@@ -203,10 +216,20 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
     }
   } else if (ReturnType->Kind != NdTypeKind::Void) {
     const bool Floating = ReturnType->Kind == NdTypeKind::Float;
-    Result.Result.push_back(registerPiece(
-        Floating ? SourceABICarrierKind::FloatingRegister
-                 : SourceABICarrierKind::IntegerRegister,
-        Floating ? TRI.FPReturnReg : TRI.IntReturnReg, 0, ReturnType->Size));
+    if (O32 && !Floating && ReturnType->Size == 8) {
+      const bool Little = archLittleEndian(Architecture);
+      Result.Result.push_back(
+          registerPiece(SourceABICarrierKind::IntegerRegister, TRI.IntReturnReg,
+                        Little ? 0 : 4, 4));
+      Result.Result.push_back(
+          registerPiece(SourceABICarrierKind::IntegerRegister,
+                        TRI.IntReturnReg2, Little ? 4 : 0, 4));
+    } else {
+      Result.Result.push_back(registerPiece(
+          Floating ? SourceABICarrierKind::FloatingRegister
+                   : SourceABICarrierKind::IntegerRegister,
+          Floating ? TRI.FPReturnReg : TRI.IntReturnReg, 0, ReturnType->Size));
+    }
   }
   setCarrierWidths(Result.Result, TRI);
   bool HasRecord = RecordResult;
@@ -222,6 +245,9 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
     if (!completeRecord(Type, TRI))
       return std::nullopt;
     HasRecord = true;
+    Cursor.LeadingFloating = false;
+    if (O32 && Type->Alignment == 8)
+      Cursor.Next = (Cursor.Next + 1) & ~1u;
     size_t Field = 0;
     for (unsigned Offset = 0; Offset < Type->Size;
          Offset += Cursor.Layout.SlotBytes, ++Cursor.Next) {
@@ -240,7 +266,8 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
       while (Field < Type->Fields.size() && Type->FieldOffsets[Field] < Offset)
         ++Field;
       const bool Floating =
-          Field < Type->Fields.size() && Type->FieldOffsets[Field] == Offset &&
+          !O32 && Field < Type->Fields.size() &&
+          Type->FieldOffsets[Field] == Offset &&
           Type->Fields[Field]->Kind == NdTypeKind::Float &&
           Type->Fields[Field]->Size == Cursor.Layout.SlotBytes;
       auto Piece =
@@ -250,10 +277,120 @@ mips::placeRecordCall(Arch Architecture, BinaryFormat Format,
                                  : Cursor.Layout.Registers[Cursor.Next],
                         Offset, Bytes);
       if (!Floating && !archLittleEndian(Architecture))
-        Piece.RegisterBitOffset = (TRI.FullRegWidth - Bytes) * 8;
+        Piece.RegisterBitOffset = (Cursor.Layout.SlotBytes - Bytes) * 8;
       Pieces.push_back(Piece);
     }
     setCarrierWidths(Pieces, TRI);
   }
   return HasRecord ? std::optional(std::move(Result)) : std::nullopt;
+}
+
+static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
+                          const mips::RecordCallPlacement &Layout) {
+  if (Layout.Arguments.ResultPointer)
+    return false;
+  auto Bound = Hint;
+  const auto Bind = [](const TypeRef &Type,
+                       llvm::ArrayRef<SourceParameterPiece> Pieces,
+                       SourceABIValueLocation &Scalar,
+                       std::vector<SourceABIValueLocation> &Components) {
+    Scalar = {};
+    Components.clear();
+    if (Type->Kind == NdTypeKind::Void)
+      return Pieces.empty();
+    if (!isRecord(Type)) {
+      if (Pieces.size() != 1 || Pieces[0].Offset ||
+          Pieces[0].RegisterBitOffset ||
+          Pieces[0].Location.ValueBytes != Type->Size)
+        return false;
+      Scalar = Pieces[0].Location;
+      return true;
+    }
+    const auto Members = sourceValueMembers(Type);
+    if (Members.empty() || Members.size() != Pieces.size())
+      return false;
+    for (size_t I = 0; I < Members.size(); ++I) {
+      const auto &M = Members[I];
+      const auto &P = Pieces[I];
+      if (P.Offset != M.ByteOffset || P.Location.ValueBytes != M.Type->Size ||
+          P.RegisterBitOffset || P.Indirect)
+        return false;
+      Components.push_back(P.Location);
+    }
+    return true;
+  };
+  if (!Bind(Bound.ReturnType, Layout.Result, Bound.ReturnLocation,
+            Bound.ReturnComponents))
+    return false;
+  for (size_t I = 0; I < Bound.Parameters.size(); ++I)
+    if (!Bind(Bound.Parameters[I].Type, Layout.Arguments.Parameters[I],
+              Bound.Parameters[I].Location, Bound.Parameters[I].Components))
+      return false;
+  Bound.Architecture = Architecture;
+  Bound.HasExplicitABI = true;
+  Bound.MIPSRecords = true;
+  Bound.MIPSScalars.reset();
+  Hint = std::move(Bound);
+  return true;
+}
+
+bool mips::assignRecordSourceABI(SourceFunctionTypeHint &Hint,
+                                 Arch Architecture, BinaryFormat Format) {
+  std::vector<TypeRef> Types;
+  for (const auto &P : Hint.Parameters) {
+    if (P.TheRole != SourceParameterTypeHint::Role::Ordinary ||
+        P.IndirectByValue)
+      return false;
+    Types.push_back(P.Type);
+  }
+  const auto Layout =
+      placeRecordCall(Architecture, Format, Hint.ReturnType, Types);
+  return Layout && bindRecordABI(Hint, Architecture, *Layout);
+}
+
+std::optional<SourceFunctionTypeHint>
+mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
+                      va_t Entry,
+                      std::vector<SourceParameterPiece> *ResultPieces) {
+  if (ResultPieces)
+    ResultPieces->clear();
+  if (!Img.MIPS || Img.instructionModeAt(Entry) == InstructionMode::MIPS16)
+    return std::nullopt;
+  const auto FS = Debug.resolveFunction(Entry);
+  if (!FS || FS->Addr != Entry || !FS->PlatformConvention || FS->IsVariadic ||
+      !FS->ReturnType ||
+      (!isUserFunctionDeclaration(*FS) &&
+       !Debug.hasAuthenticatedFunctionSignatures()) ||
+      (FS->ReturnType->Kind != NdTypeKind::Struct &&
+       llvm::none_of(FS->Params, [](const auto &P) {
+         return P.second && P.second->Kind == NdTypeKind::Struct;
+       })))
+    return std::nullopt;
+  SourceFunctionTypeHint Candidate;
+  Candidate.Origin = isUserFunctionDeclaration(*FS)
+                         ? SourceFunctionTypeHint::OriginKind::ExplicitSource
+                         : SourceFunctionTypeHint::OriginKind::NativeAnalysis;
+  Debug.completeType(FS->ReturnType);
+  Candidate.ReturnType = FS->ReturnType;
+  std::vector<TypeRef> Types;
+  for (const auto &[Name, Type] : FS->Params) {
+    if (!Type)
+      return std::nullopt;
+    Debug.completeType(Type);
+    Candidate.Parameters.push_back({Name, Type});
+    Types.push_back(Type);
+  }
+  auto Layout =
+      placeRecordCall(Img.Arch, Img.abiFormat(), Candidate.ReturnType, Types);
+  if (!Layout)
+    return std::nullopt;
+  // A machine body can operate on a pointer field as integer bits and split
+  // or combine nested fields. Capture the physical result independently of
+  // whether a typed call to this entry can also bind each source leaf.
+  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct &&
+      !Layout->Arguments.ResultPointer)
+    *ResultPieces = Layout->Result;
+  if (bindRecordABI(Candidate, Img.Arch, *Layout))
+    return Candidate;
+  return std::nullopt;
 }

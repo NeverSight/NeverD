@@ -677,6 +677,9 @@ struct MedFunc {
   /// ordinary single-register / sret return paths.  Populated in the pipeline
   /// from the caller-side struct-return remodel (modelCallStructReturn).
   std::vector<MedReturnReg> MultiReturn;
+  /// Each RETURN explicitly uses the machine words of an independently placed
+  /// MIPS record in MultiReturn order. Its natural C object is rebuilt later.
+  bool ExplicitMIPSRecordResult = false;
 
   /// The function returns the whole vector its FP return register holds (a
   /// `__m128`, a NEON vector, x86-64's `{float, float}` packed in one

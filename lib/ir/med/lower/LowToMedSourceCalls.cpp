@@ -11,6 +11,7 @@
 #include "neverd/ir/low/LowScalarConstant.h"
 #include "neverd/ir/low/SourceCallOccurrence.h"
 #include "neverd/ir/med/LowToMed.h"
+#include "neverd/ir/med/LowToMedError.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/CFunctionParameterCalls.h"
 #include "neverd/loader/MachO/ImmutableNativeCalls.h"
@@ -27,8 +28,9 @@
 
 namespace neverd {
 
-void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
-                                        BinaryFormat Fmt) {
+const SourceFunctionTypeHint *
+LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
+                                   BinaryFormat Fmt) {
   // Image-independent IR clients supply explicit source contracts. Their
   // physical carriers do not depend on a container format. Runtime discovery
   // from a loaded image remains restricted to its supported Mach-O path.
@@ -41,11 +43,29 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   const auto *EntryHints =
       SourceEntryTypeHints ? SourceEntryTypeHints : SourceCalleeTypeHints;
   const bool ExplicitEntry = EntryHints && EntryHints->count(Low.Entry);
+  const bool MIPSRecords =
+      isMIPS(TargetArch) && Fmt == BinaryFormat::ELF &&
+      ((ExplicitEntry && EntryHints->at(Low.Entry).MIPSRecords) ||
+       (ExplicitSites && llvm::any_of(*SourceCallSiteHints,
+                                      [](const auto &S) {
+                                        return S.second.Signature.MIPSRecords;
+                                      })) ||
+       (SourceCalleeTypeHints && !SourceCalleeTypeHints->empty() &&
+        llvm::any_of(Low.Blocks, [&](const auto &B) {
+          return llvm::any_of(B.Ops, [&](const auto &Op) {
+            if (Op.Opcode != NdOp::CALL || !Op.NumInputs ||
+                !Op.Inputs[0].isConst())
+              return false;
+            auto It = SourceCalleeTypeHints->find(Op.Inputs[0].Offset);
+            return It != SourceCalleeTypeHints->end() && It->second.MIPSRecords;
+          });
+        })));
   if (!SourceCallHintsEnabled ||
-      (Image && !RuntimeHints && !ExplicitSites && !ExplicitEntry) ||
+      (Image && !RuntimeHints && !ExplicitSites && !ExplicitEntry &&
+       !MIPSRecords) ||
       (Image && (Image->IsRelocatable || Image->Arch != TargetArch)) ||
-      (TargetArch != Arch::AArch64 && TargetArch != Arch::X64))
-    return;
+      (TargetArch != Arch::AArch64 && TargetArch != Arch::X64 && !MIPSRecords))
+    return nullptr;
   const std::map<unsigned, ObjCReceiverTypeHint> *BlockParameters = nullptr;
   if (ObjCBlockParameterReceivers)
     if (auto It = ObjCBlockParameterReceivers->find(Low.Entry);
@@ -91,7 +111,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   if (EntryHints)
     if (auto It = EntryHints->find(Low.Entry); It != EntryHints->end()) {
       std::string Diagnostic;
-      if (It->second.Architecture == TargetArch &&
+      if ((!MIPSRecords || It->second.MIPSRecords) &&
+          It->second.Architecture == TargetArch &&
           validateSourceABI(It->second, Diagnostic))
         EntrySignature = &It->second;
     }
@@ -193,6 +214,16 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
   for (auto &Block : Func.Blocks) {
     std::vector<MedOp> Ops;
     for (auto Op : Block.Ops) {
+      std::optional<MedVar> ReturnTarget;
+      if (Op.Opcode == NdOp::RETURN && EntrySignature &&
+          EntrySignature->MIPSRecords) {
+        // JR captures its target before the delay slot. Keep that dependency
+        // live through SSA alongside the source result written in the slot.
+        if (Op.NumInputs != 1)
+          throw LowToMedConversionError(
+              "MIPS return lacks its captured target");
+        ReturnTarget = Op.Inputs[0];
+      }
       if (Op.Opcode == NdOp::RETURN && EntrySignature &&
           EntrySignature->ReturnType->Kind == NdTypeKind::Void) {
         // RET reads the architecture's conventional result register in the
@@ -238,8 +269,11 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Op.addInput(Result.Output);
         Ops.push_back(std::move(Result));
       } else if (Op.Opcode == NdOp::RETURN && EntrySignature &&
-                 EntrySignature->ReturnLocation.Kind ==
-                     SourceABICarrierKind::IntegerRegister) {
+                 (EntrySignature->ReturnLocation.Kind ==
+                      SourceABICarrierKind::IntegerRegister ||
+                  (EntrySignature->MIPSRecords &&
+                   EntrySignature->ReturnLocation.Kind ==
+                       SourceABICarrierKind::FloatingRegister))) {
         // RET itself does not read X0/RAX. Publish the declared source lane
         // before SSA so PHIs carry its low bytes without requiring unknown
         // upper bits from a narrow call result.
@@ -248,6 +282,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Op.addInput(ndVarToMedVar(
             NdVar::reg(Return.RegisterOffset, Return.ValueBytes)));
       }
+      if (ReturnTarget)
+        Op.addInput(*ReturnTarget);
       if (Op.Opcode == NdOp::RETURN && EntrySignature)
         if (const auto Error = sourceABIErrorResult(*EntrySignature)) {
           // This normally preserved register is also an observable Swift
@@ -291,11 +327,14 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Hint = SiteHint->second;
       else if (auto It = Hints.find(Op.Addr); It != Hints.end())
         Hint = It->second;
-      else if ((RuntimeHints || !Image) && SourceCalleeTypeHints &&
-               Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst()) {
+      else if ((RuntimeHints || !Image || MIPSRecords) &&
+               SourceCalleeTypeHints && Op.Opcode == NdOp::CALL &&
+               Op.Inputs[0].isConst()) {
         auto It = SourceCalleeTypeHints->find(Op.Inputs[0].ConstVal);
         if (It != SourceCalleeTypeHints->end()) {
           Hint.emplace();
+          if (MIPSRecords)
+            Hint->CallKind = SourceCallTypeHint::Kind::Native;
           Hint->Signature = It->second;
           Hint->TargetAddress = It->first;
           // The real native name is resolved by the ordinary call ABI pass.
@@ -336,7 +375,8 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           SourceCalleeFunctions->at(Hint->TargetAddress) &&
           SourceCalleeFunctions->at(Hint->TargetAddress)->Entry ==
               Hint->TargetAddress;
-      if (!Hint || Hint->Signature.Architecture != TargetArch ||
+      if (!Hint || (MIPSRecords && !Hint->Signature.MIPSRecords) ||
+          Hint->Signature.Architecture != TargetArch ||
           !validateSourceABI(Hint->Signature, Diagnostic) ||
           (Hint->Signature.ReturnLocation.Kind ==
                SourceABICarrierKind::IndirectResultPointer &&
@@ -451,10 +491,11 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           MedOp Address;
           Address.Opcode = NdOp::INT_ADD;
           Address.Addr = Op.Addr;
-          Address.Output = Temporary(8);
-          Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, 8)));
+          const auto Width = TRI.addressRegisterBytes();
+          Address.Output = Temporary(Width);
+          Address.addInput(ndVarToMedVar(NdVar::reg(TRI.StackPointer, Width)));
           Address.addInput(
-              MedVar::makeConst(Location.EntryStackOffset - *Bias, 8,
+              MedVar::makeConst(Location.EntryStackOffset - *Bias, Width,
                                 ConstantAddressProvenance::Scalar));
           MedOp Load;
           Load.Opcode = NdOp::LOAD;
@@ -589,7 +630,9 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         }
       } else if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
-        const auto Members = sourceAggregateMembers(Signature.ReturnType);
+        const auto Members = Signature.MIPSRecords
+                                 ? sourceValueMembers(Signature.ReturnType)
+                                 : sourceAggregateMembers(Signature.ReturnType);
         for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {
           const auto &Piece = Signature.ReturnComponents[I];
           const auto Wide = FloatingCarrier(Piece);
@@ -705,7 +748,7 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
       EntrySignature->ReturnLocation.Kind !=
           SourceABICarrierKind::IntegerRegister ||
       EntrySignature->ReturnLocation.ValueBytes >= 8)
-    return;
+    return EntrySignature;
   const auto Bytes = EntrySignature->ReturnLocation.ValueBytes;
   std::set<uint64_t> ReturnRegisters{
       EntrySignature->ReturnLocation.RegisterOffset};
@@ -781,5 +824,6 @@ void LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
     }
     Block.Ops = std::move(Ops);
   }
+  return EntrySignature;
 }
 } // namespace neverd

@@ -100,6 +100,8 @@ public:
       : OS(OS), Opts(Opts), Dbg(Dbg), Img(Img),
         GuardAnalysisOnlyFunctions(GuardAnalysisOnlyFunctions),
         SourceRecorder(Recorder), SourceAddresses(SourceAddresses) {
+    if (Img)
+      this->Opts.Image = Img;
     if (Img && importNamesAreCNames(Opts.Format))
       for (const Import &Imp : Img->Imports)
         if (!Imp.Name.empty())
@@ -867,6 +869,8 @@ public:
   std::string getName(const llvm::Value *V);
   std::string rawSourceName(const llvm::Value *V);
   TypeRef statedVariableType(const llvm::Value *V) const;
+  std::optional<SourceFunctionTypeHint>
+  mipsRecordDeclaration(const llvm::Function &Function) const;
   const SourceCallTypeHint *analystCallHint(const llvm::CallBase &Call) const;
   std::string sourceVariableDeclaration(const llvm::Instruction &I,
                                         llvm::StringRef Name);

@@ -25,7 +25,9 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/debug/DebugContext.h"
+#include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowScalarConstant.h"
@@ -1158,6 +1160,43 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
   for (const auto &[Entry, Hint] : SourceHints)
     SourceEntryHints.emplace(Entry, *Hint);
   auto SourceCalleeHints = SourceEntryHints;
+  std::map<va_t, std::vector<MedReturnReg>> RecordResults;
+  if (Opts.usesSourceDeclarations() && Img.MIPS && Dbg &&
+      (Dbg->hasAuthenticatedFunctionSignatures() ||
+       Dbg->hasUserFunctionDeclarations())) {
+    std::set<va_t> Targets;
+    for (const auto &LF : Result.LowFuncs) {
+      if (!SourceEntryHints.contains(LF.Entry)) {
+        std::vector<SourceParameterPiece> Pieces;
+        if (auto Hint = mips::recordSourceABI(Img, *Dbg, LF.Entry, &Pieces)) {
+          const auto It =
+              SourceCalleeHints.emplace(LF.Entry, std::move(*Hint)).first;
+          if (Pieces.empty()) {
+            SourceEntryHints.emplace(LF.Entry, It->second);
+            SourceHints.emplace(LF.Entry, &It->second);
+          }
+        }
+        if (!Pieces.empty()) {
+          auto &Registers = RecordResults[LF.Entry];
+          for (const auto &P : Pieces) {
+            const bool FP =
+                P.Location.Kind == SourceABICarrierKind::FloatingRegister;
+            Registers.push_back({P.Location.RegisterOffset,
+                                 FP ? P.Location.ValueBytes : P.CarrierBytes,
+                                 FP});
+          }
+        }
+      }
+      for (const auto &B : LF.Blocks)
+        for (const auto &Op : B.Ops)
+          if (Op.Opcode == NdOp::CALL && Op.NumInputs && Op.Inputs[0].isConst())
+            Targets.insert(Op.Inputs[0].Offset);
+    }
+    for (va_t Target : Targets)
+      if (!SourceCalleeHints.contains(Target))
+        if (auto Hint = mips::recordSourceABI(Img, *Dbg, Target))
+          SourceCalleeHints.emplace(Target, std::move(*Hint));
+  }
   auto SourceSites = Opts.usesSourceDeclarations()
                          ? Opts.SourceCallSiteHints
                          : decltype(Opts.SourceCallSiteHints){};
@@ -1303,6 +1342,10 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     try {
       Local.setCallSiteIntegerArguments(&VirtualArguments[I].Integers);
       Local.setCallSiteFloatingArguments(&VirtualArguments[I].Floating);
+      const auto ResultWords = RecordResults.find(Result.LowFuncs[I].Entry);
+      Local.setMIPSRecordResult(ResultWords != RecordResults.end()
+                                    ? llvm::ArrayRef(ResultWords->second)
+                                    : llvm::ArrayRef<MedReturnReg>());
       const auto Sites = SourceSites.find(Result.LowFuncs[I].Entry);
       Local.setSourceCallSiteHints(Opts.usesSourceDeclarations() &&
                                            Sites != SourceSites.end()

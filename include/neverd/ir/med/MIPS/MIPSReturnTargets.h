@@ -22,9 +22,11 @@ struct MedFunc;
 /// native ABI calls preserve allocated private spills outside their outgoing
 /// area. Fixed descriptors own that extent; unbound calls check every possible
 /// argument definition. Frame escapes (even before the save), partial links,
-/// unknown SP and opaque effects fail closed.
+/// unknown SP and opaque effects fail closed. A bound source entry carries
+/// its result operands before the captured jump target until this check.
 bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
-                                Arch Target, BinaryFormat Format);
+                                Arch Target, BinaryFormat Format,
+                                unsigned SourceResultOperands = 0);
 
 } // namespace neverd
 

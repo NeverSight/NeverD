@@ -16,6 +16,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/backend/LLVMSourceUnknownValue.h"
@@ -1376,14 +1377,12 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
   auto AllocIt = VarAllocs.find(Key);
   bool HasLocalDef = (AllocIt != VarAllocs.end());
 
-  // A single wide read that spans several adjacent i386 cdecl stack-argument
-  // slots — clang -O2 forwards N consecutive 4-byte arguments with one
-  // movaps/movups — resolves to the concatenation of the N parameters it
-  // covers, not a bare zero-extension of the base slot (which would drop the
-  // upper arguments).  Gated on N consecutive stack parameters actually
-  // existing, so a genuine single wide parameter is left to the normal path.
+  // An unlowered wide stack read can span adjacent ABI argument slots, as
+  // with an i386 SIMD move. n32 has four-byte pointers and eight-byte slots.
   if (V.Kind == MedVar::Param && V.RegOff == kNoParamReg && CurMedFunc) {
-    unsigned Slot = getTargetRegInfo(TargetArch).PointerSize;
+    const unsigned Slot = getTargetRegInfo(TargetArch)
+                              .integerArgumentLayout(TargetFormat)
+                              .SlotBytes;
     if (Slot > 0 && V.Size > Slot && (V.Size % Slot) == 0 &&
         V.Size / Slot <=
             ::neverd::limits::backend::
@@ -1394,7 +1393,7 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
         bool Has = false;
         for (const auto &P : CurMedFunc->Params)
           if (P.Kind == MedVar::Param && P.RegOff == kNoParamReg &&
-              P.Id == V.Id + static_cast<int>(K)) {
+              P.Id == V.Id + static_cast<int>(K) && P.Size == Slot) {
             Has = true;
             break;
           }
@@ -1411,10 +1410,10 @@ llvm::Value *MedLLVMEmitter::getVar(const MedVar &V,
           Sub.RegOff = kNoParamReg;
           Sub.TheArch = V.TheArch;
           llvm::Value *Lane = Builder.CreateZExt(getVar(Sub, Builder), WideTy);
-          if (K > 0)
-            Lane = Builder.CreateShl(
-                Lane, llvm::ConstantInt::get(WideTy, static_cast<uint64_t>(K) *
-                                                         Slot * 8));
+          const unsigned LaneIndex =
+              archLittleEndian(TargetArch) ? K : N - K - 1;
+          if (LaneIndex)
+            Lane = Builder.CreateShl(Lane, uint64_t(LaneIndex) * Slot * 8);
           Acc = Acc ? Builder.CreateOr(Acc, Lane) : Lane;
         }
         return Acc;

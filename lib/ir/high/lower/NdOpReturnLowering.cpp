@@ -326,7 +326,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // result in physical registers. A source return needs its own type hint.
   if ((!Med.SourceParametersBound || !Func.SourceTypeHint) && Func.ReturnType &&
       Func.ReturnType->Kind == NdTypeKind::Struct &&
-      Med.MultiReturn.size() >= 2 &&
+      (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&
       Func.ReturnType->Fields.size() == Med.MultiReturn.size()) {
     // Go's register results are a record because the function's callers
     // read them, and every return hands each one back
@@ -451,7 +451,16 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     std::vector<ExprPtr> Leaves;
     for (size_t I = 0; I < Med.MultiReturn.size(); ++I) {
       const MedReturnReg &Field = Med.MultiReturn[I];
-      ExprPtr Value = OverEntryPadding(Field);
+      ExprPtr Value;
+      if (Med.ExplicitMIPSRecordResult) {
+        if (CurOp.NumInputs != Med.MultiReturn.size() ||
+            CurOp.Inputs[I].Size != Field.Size)
+          throw std::runtime_error(
+              "A MIPS record return lost a bound machine word");
+        Value = medvarToExpr(CurOp.Inputs[I]);
+      } else {
+        Value = OverEntryPadding(Field);
+      }
       if (!Value)
         Value = Reaching(Field.RegOff, Field.Size);
       // A field the function never writes returns the argument its caller

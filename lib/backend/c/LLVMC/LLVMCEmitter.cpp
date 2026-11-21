@@ -87,6 +87,7 @@
 #include "neverd/backend/llvm/X86/LLVMX87NativeState.h"
 #include "neverd/debug/UserPrototype.h"
 #include "neverd/ir/IntegerCallArguments.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
@@ -2498,6 +2499,18 @@ LLVMCWriter::sourceImportCallee(const llvm::CallBase &Call) const {
   return It == SourceImportPrototypes.end() ? nullptr : &It->second;
 }
 
+std::optional<SourceFunctionTypeHint>
+LLVMCWriter::mipsRecordDeclaration(const llvm::Function &Function) const {
+  if (!Img || !Dbg || !Function.hasFnAttribute(LLVMMIPSRecordCall))
+    return std::nullopt;
+  auto Entry = rewrite_source::getOriginalVA(Function);
+  if (!Entry) {
+    llvm::consumeError(Entry.takeError());
+    return std::nullopt;
+  }
+  return *Entry ? mips::recordSourceABI(*Img, *Dbg, **Entry) : std::nullopt;
+}
+
 std::string LLVMCWriter::sourceImportDeclaration(const FunctionSym &Function,
                                                  llvm::StringRef Name) {
   const auto NotePointers = [&](const TypeRef &Type) {
@@ -2981,8 +2994,21 @@ void LLVMCWriter::writeForwardDecls(llvm::Module &Mod) {
           Pops != StdcallPops.end() && Pops->second &&
           *Pops->second == argumentSlotBytes(Fn, Params))
         OS << "__attribute__((stdcall)) ";
-    if (const auto Source = SourceImportPrototypes.find(Name);
-        Fn.isDeclaration() && Source != SourceImportPrototypes.end())
+    if (const auto Record =
+            Fn.isDeclaration() ? mipsRecordDeclaration(Fn) : std::nullopt) {
+      std::string Parameters;
+      for (const auto &P : Record->Parameters) {
+        noteRecordValue(P.Type);
+        if (!Parameters.empty())
+          Parameters += ", ";
+        Parameters += declarationToC(P.Type, "");
+      }
+      noteRecordValue(Record->ReturnType);
+      OS << declarationToC(
+          Record->ReturnType,
+          Name + "(" + (Parameters.empty() ? "void" : Parameters) + ")");
+    } else if (const auto Source = SourceImportPrototypes.find(Name);
+               Fn.isDeclaration() && Source != SourceImportPrototypes.end())
       OS << sourceImportDeclaration(Source->second, Name);
     else {
       if (Fn.hasFnAttribute(LLVMSourceBody))

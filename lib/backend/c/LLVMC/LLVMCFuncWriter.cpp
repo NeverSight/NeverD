@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../CDeferredValue.h"
+#include "../MIPS/CRecordEntry.h"
 #include "../VariadicImportStub.h"
 #include "../X86/X64DispatchFrame.h"
 #include "../X86/X86GetPcThunk.h"
@@ -10511,6 +10512,56 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
   OS.retarget(&BufOS);
 
   std::string FName = functionIdentifier(Fn);
+  std::optional<mips::CRecordEntry> RecordEntry;
+  if (EmitFunctionWrapper && !Opts.PreserveLLVMFunctionTypes &&
+      isMIPS(Opts.TheArch) && DebugFn && FunctionEntry &&
+      mips::hasRecordEntryDeclaration(*DebugFn)) {
+    const auto Physical = [&](llvm::Type *T, RecoveredParamSite Site) {
+      if (T->isSized())
+        Site.Bytes = Fn.getDataLayout().getTypeStoreSize(T);
+      const auto K = T->isIntegerTy()         ? NdTypeKind::Int
+                     : T->isPointerTy()       ? NdTypeKind::Ptr
+                     : T->isFloatingPointTy() ? NdTypeKind::Float
+                     : T->isVoidTy()          ? NdTypeKind::Void
+                                              : NdTypeKind::Struct;
+      mips::CEntryCarrier Carrier{Site, K, typeToCLLVM(T), {}};
+      if (auto *ST = llvm::dyn_cast<llvm::StructType>(T); ST && ST->isSized()) {
+        const auto &DL = Fn.getDataLayout();
+        const auto *Layout = DL.getStructLayout(ST);
+        for (unsigned I = 0; I < ST->getNumElements(); ++I) {
+          auto *E = ST->getElementType(I);
+          if (!E->isIntegerTy() && !E->isFloatingPointTy())
+            break;
+          Carrier.Fields.push_back(
+              {E->isIntegerTy() ? NdTypeKind::Int : NdTypeKind::Float,
+               unsigned(Layout->getElementOffset(I)),
+               unsigned(DL.getTypeStoreSize(E))});
+        }
+      }
+      return Carrier;
+    };
+    if (const auto Sites = parameter_sites::getParameterSites(Fn)) {
+      std::vector<mips::CEntryCarrier> Inputs;
+      for (const auto &Arg : Fn.args()) {
+        const auto &Site = (*Sites)[Arg.getArgNo()];
+        auto Carrier = Physical(Arg.getType(),
+                                {Site.RegOff, static_cast<int>(Site.MedIndex)});
+        Carrier.Unused = Arg.use_empty();
+        Inputs.push_back(std::move(Carrier));
+      }
+      RecordEntry = mips::cRecordEntry(
+          Opts, Dbg, *DebugFn, *FunctionEntry, FName, Inputs,
+          Physical(InferredVoid ? llvm::Type::getVoidTy(Fn.getContext())
+                                : Fn.getReturnType(),
+                   {}));
+      if (RecordEntry) {
+        noteRecordValue(DebugFn->ReturnType);
+        for (const auto &Parameter : DebugFn->Params)
+          noteRecordValue(Parameter.second);
+        FName = RecordEntry->BodyName;
+      }
+    }
+  }
   // A definition whose identifier is not its symbol names the symbol: a C++
   // one its demangled signature, as the C identifier keeps only its scopes
   // and name, and a start-up function the C runtime defines its own name.
@@ -10744,6 +10795,10 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
         throw std::invalid_argument(kReturnProtectionCRequiresAArch64);
       OS << llvm::formatv(kReturnProtectionCAttribute,
                           aarch64ReturnProtectionCTarget(*Protection));
+    }
+    if (RecordEntry) {
+      DefinitionDeclarations[&Fn] = RecordEntry->Declaration;
+      OS << RecordEntry->Declaration << ";\nstatic ";
     }
     OS << Signature << " {\n";
     if (Fn.hasFnAttribute("neverd.x64_dispatch_frame")) {
@@ -12274,6 +12329,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           "LLVMC EH invoke normal target has no unique emitted label");
   }
   OS << Final;
+  if (RecordEntry)
+    OS << RecordEntry->Definition;
 }
 
 } // namespace neverd

@@ -85,6 +85,8 @@ struct FunctionSym {
   /// The prototype comes from a selected platform header library, including
   /// Windows SDK/WDK headers that are rendered without a host header include.
   bool PrototypeFromHeader = false;
+  /// The analyst provided this source signature for this exact function entry.
+  bool ExplicitEntryDeclaration = false;
   /// The declaration belongs to a C library: a selected header (glibc's,
   /// bionic's, musl's, libSystem's) or a curated runtime prototype. A
   /// definition of the name in the image is a copy of the declared routine,
@@ -253,6 +255,9 @@ public:
   /// Names-only PDB/MAP providers and unauthenticated split companions remain
   /// useful identity sources but must not answer semantic return questions.
   virtual bool hasAuthenticatedFunctionSignatures() const { return false; }
+  /// Requests with local function declarations can bind source types even in
+  /// a stripped image. This grants no machine or debug authenticity.
+  virtual bool hasUserFunctionDeclarations() const { return false; }
   /// Return a declaration-quality contract for exactly one function entry.
   /// Providers must return Unknown for malformed type references, ambiguous
   /// subprogram identities, or declarations not authenticated to the loaded

@@ -1,0 +1,10 @@
+// C identifiers private to a reconstructed record entry.
+#ifndef MIPS_C_RECORD_ENTRY_TEXT
+#error "Define MIPS_C_RECORD_ENTRY_TEXT before including this file"
+#endif
+MIPS_C_RECORD_ENTRY_TEXT(BodyPrefix, "__neverd_record_body_")
+MIPS_C_RECORD_ENTRY_TEXT(ArgumentPrefix, "__neverd_arg")
+MIPS_C_RECORD_ENTRY_TEXT(WordPrefix, "__neverd_word")
+MIPS_C_RECORD_ENTRY_TEXT(ResultObject, "__neverd_result")
+MIPS_C_RECORD_ENTRY_TEXT(ResultWord, "__neverd_return_word")
+#undef MIPS_C_RECORD_ENTRY_TEXT

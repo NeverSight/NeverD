@@ -3367,6 +3367,14 @@ std::string HighCWriter::renderCallExpr(const HighExpr &E) {
         "; __builtin_memcpy(&__neverd_bits, "
         "&__neverd_result, sizeof(__neverd_result)); __neverd_bits; })";
   }
+  if (RecordCall && RecordCall->RecordResult) {
+    if (!E.Type || E.Type->Kind != NdTypeKind::Int ||
+        E.Type->Size != RecordCall->RecordResult->CarrierBytes)
+      throw std::runtime_error("MIPS record result lost its integer carrier");
+    S = c_detail::recordCallResultWord(
+        c_detail::recordCallType(Callee->ReturnType, Opts), S,
+        *RecordCall->RecordResult, Opts.TheArch);
+  }
   if (RecordCall && RecordCall->ResultPointer) {
     const unsigned Index = *RecordCall->ResultPointer;
     if (Index >= E.Operands.size() || !E.Operands[Index])

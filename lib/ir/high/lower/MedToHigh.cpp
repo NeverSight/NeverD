@@ -2040,10 +2040,11 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   // carries as the unsigned 128-bit integer HighC holds vector registers in.
   if (Med.ReturnsVectorRegister && Func.ReturnType)
     Func.ReturnType = NdType::makeInt(Func.ReturnType->Size, false);
-  if (!Med.SourceParametersBound &&
+  if (!Med.SourceParametersBound && !Med.ExplicitMIPSRecordResult &&
       integerReturnPair(Med.MultiReturn, ReturnTRI))
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
-  else if (!Med.SourceParametersBound && Med.MultiReturn.size() >= 2 &&
+  else if (!Med.SourceParametersBound &&
+           (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&
            !sourceComplexComponentBytes(Func.ReturnType))
     if (TypeRef Record = multiRegisterReturnType(Med.MultiReturn))
       Func.ReturnType = std::move(Record);

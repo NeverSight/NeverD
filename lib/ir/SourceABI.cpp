@@ -13,6 +13,7 @@
 #include "neverd/Limits.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceParameterPlacement.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
@@ -67,13 +68,6 @@ unsigned sourceComplexComponentBytes(const TypeRef &Type) {
         Type->ScalarLeaves[I].Size != Bytes || !Type->ScalarLeaves[I].Floating)
       return 0;
   return Bytes;
-}
-
-std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
-  if (const auto Bytes = sourceComplexComponentBytes(Type))
-    return {{Type->Fields[0], 0},
-            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
-  return sourceAggregateMembers(Type);
 }
 
 namespace {
@@ -462,7 +456,8 @@ bool swiftFixedShape(const SourceFunctionTypeHint &Hint, Arch Architecture) {
 
 bool equalSourceABIs(const SourceFunctionTypeHint &Left,
                      const SourceFunctionTypeHint &Right) {
-  if (bool(Left.MIPSScalars) != bool(Right.MIPSScalars) ||
+  if (Left.MIPSRecords != Right.MIPSRecords ||
+      bool(Left.MIPSScalars) != bool(Right.MIPSScalars) ||
       (Left.MIPSScalars && *Left.MIPSScalars != *Right.MIPSScalars) ||
       Left.Origin != Right.Origin || Left.Convention != Right.Convention ||
       Left.Architecture != Right.Architecture ||
@@ -498,7 +493,10 @@ bool equalSourceTypes(const TypeRef &Left, const TypeRef &Right) {
   return equalTypes(Left, Right, 0, Remaining);
 }
 
-std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
+std::vector<SourceAggregateMember> sourceValueMembers(const TypeRef &Type) {
+  if (const auto Bytes = sourceComplexComponentBytes(Type))
+    return {{Type->Fields[0], 0},
+            {Type->Fields[1], static_cast<uint16_t>(Bytes)}};
   if (!Type || Type->Kind != NdTypeKind::Struct ||
       !equalSourceTypes(Type, Type))
     return {};
@@ -526,6 +524,13 @@ std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
       Result.push_back(std::move(Member));
     }
   }
+  return Result;
+}
+
+std::vector<SourceAggregateMember> sourceAggregateMembers(const TypeRef &Type) {
+  if (!Type || Type->Passing == NdRecordPassing::Complex)
+    return {};
+  auto Result = sourceValueMembers(Type);
   if (Result.empty())
     return {};
   if (std::any_of(Result.begin(), Result.end(), [](const auto &Member) {
@@ -662,7 +667,8 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                : P.Type,
            P.Location});
     else {
-      const auto Members = sourceABIValueMembers(P.Type);
+      const auto Members = Hint.MIPSRecords ? sourceValueMembers(P.Type)
+                                            : sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)
         Result.push_back({I, Members[J].ByteOffset, P.Name, Members[J].Type,
                           P.Components[J]});
@@ -704,6 +710,20 @@ TypeRef sourceABICallResultType(const SourceFunctionTypeHint &Hint) {
 bool validateSourceABI(const SourceFunctionTypeHint &Hint,
                        std::string &Diagnostic) {
   Diagnostic.clear();
+  if (Hint.MIPSRecords) {
+    if (!isMIPS(Hint.Architecture) || Hint.MIPSScalars ||
+        !Hint.HasExplicitABI ||
+        Hint.Convention != SourceFunctionTypeHint::ConventionKind::C ||
+        (Hint.Origin != SourceFunctionTypeHint::OriginKind::ExplicitSource &&
+         Hint.Origin != SourceFunctionTypeHint::OriginKind::NativeAnalysis))
+      return fail(Diagnostic, "Invalid MIPS record declaration");
+    auto Expected = Hint;
+    return (mips::assignRecordSourceABI(Expected, Hint.Architecture,
+                                        BinaryFormat::ELF) &&
+            equalSourceABIs(Hint, Expected)) ||
+           fail(Diagnostic,
+                "MIPS record members disagree with physical carriers");
+  }
   if (Hint.MIPSScalars) {
     const auto &S = *Hint.MIPSScalars;
     if (!isMIPS(Hint.Architecture) || !Hint.HasExplicitABI ||

@@ -416,15 +416,20 @@ void composeStackSlots(MedOp &Read, MedVar First, unsigned Slot, unsigned Bytes,
     Prefix.push_back(Compose);
     return Compose.Output;
   };
-  MedVar Low = slotParam(0);
-  for (unsigned K = 1; K + 1 < Slots; ++K)
-    Low = compose(NdOp::CONCAT, Slot * (K + 1), slotParam(K), Low);
-  MedVar High = slotParam(Slots - 1);
-  if (const unsigned HighBytes = Bytes - Slot * (Slots - 1); HighBytes < Slot)
-    High = compose(NdOp::SUBBYTES, HighBytes, High, MedVar::makeConst(0, 4));
+  const bool Little = archLittleEndian(First.TheArch);
+  MedVar Prior = slotParam(0);
+  for (unsigned K = 1; K + 1 < Slots; ++K) {
+    const MedVar Next = slotParam(K);
+    Prior = compose(NdOp::CONCAT, Slot * (K + 1), Little ? Next : Prior,
+                    Little ? Prior : Next);
+  }
+  MedVar Last = slotParam(Slots - 1);
+  if (const unsigned Tail = Bytes - Slot * (Slots - 1); Tail < Slot)
+    Last = compose(NdOp::SUBBYTES, Tail, Last,
+                   MedVar::makeConst(Little ? 0 : Slot - Tail, 4));
   Read.Opcode = NdOp::CONCAT;
-  Read.Inputs[0] = High;
-  Read.Inputs[1] = Low;
+  Read.Inputs[0] = Little ? Last : Prior;
+  Read.Inputs[1] = Little ? Prior : Last;
   Read.NumInputs = 2;
 }
 
@@ -1413,7 +1418,11 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
       // An unaligned read crossing a slot end retains its physical homes.
       if (ByteOff + static_cast<int64_t>(ReadSz) > Slot)
         continue;
-      if (ByteOff == 0) {
+      // SUBBYTES counts from the least significant end of a value. A load
+      // at the lowest address reads the high bytes of a big-endian slot.
+      const int64_t LowByte =
+          archLittleEndian(TargetArch) ? ByteOff : Slot - ReadSz - ByteOff;
+      if (LowByte == 0) {
         MedVar Param;
         Param.Kind = MedVar::Param;
         Param.Id = offToIdx(SlotBase);
@@ -1434,7 +1443,7 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
         Param.TheArch = TargetArch;
         Op.Opcode = NdOp::SUBBYTES;
         Op.Inputs[0] = Param;
-        Op.Inputs[1] = MedVar::makeConst(static_cast<uint64_t>(ByteOff), 4);
+        Op.Inputs[1] = MedVar::makeConst(static_cast<uint64_t>(LowByte), 4);
         Op.NumInputs = 2;
       }
     }

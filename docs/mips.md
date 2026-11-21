@@ -1703,21 +1703,36 @@ call types, aggregate results and general saved-FPR restoration require
 additional evidence. The register assignments follow the
 [SGI n32/n64 calling convention](https://techpubs.jurassic.nl/library/manuals/2000/007-2816-005/sgi_html/ch02.html).
 
-Natural n32/n64 C record transport has a separate classifier in
-`neverd/ir/MIPS/SourceRecordABI.h`. It retains target-width pointers, direct
-double fields, nested records and arrays, partial big-endian register chunks,
-and register-to-stack splits. A hidden result pointer consumes the first
-argument position without defining a pointer return in v0. DWARF and local
-declarations preserve complete natural field graphs when available; incomplete
-layouts and unions remain display-only evidence. This classifier does not yet
-enable general record entry, call or return reconstruction in HighC/LLVMC.
-Those routes still require complete original-carrier and value-use proofs.
+Natural C record transport for o32, n32 and n64 is classified in
+`neverd/ir/MIPS/SourceRecordABI.h`. Each piece records its offset in the object,
+its register or stack slot, and its position in the carrier. On o32 every
+record result uses caller-provided storage and the callee returns its address
+in v0. Large n32/n64 results use caller-provided storage and leave v0
+unspecified. Both C emitters can build a typed entry around a recovered body
+when the machine inputs match the declared layout. The return can occupy
+one register, a pair of GPRs or FPRs, or the caller's storage. A short final
+word uses only the object's remaining bytes, including on big-endian targets.
+Direct calls and explicitly typed indirect calls retain the register bank and
+byte offset of each independently placed field. A result written in the
+return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an
+explicit local declaration or matching debug information and a complete
+by-value field layout. Unions and incomplete field graphs retain their display
+types.
 
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
+An untyped PIC call can observe argument-register writes that reach it,
+including its delay slot and loop backedges. A later call with a declared
+by-value record observes the pieces selected by its own signature. For example,
+a single unsigned field that fills an ABI slot occupies one argument GPR,
+including a four-byte slot on o32.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
+For record callers that copy an argument into a private stack buffer in a
+counted loop, the proof follows the loop's actual byte addresses and bound.
+A call with an unknown frame effect, an uninitialized private byte or an
+overlapping write to the saved link prevents this reconstruction.
 The shared call-stack proof computes that intersection using complete outgoing
 argument slots. An unknown call SP, an external store or a frame-derived call
 argument cannot obtain this exception.

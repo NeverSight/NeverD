@@ -69,22 +69,32 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
                              llvm::ArrayRef<TypeRef> Parameters) {
   if (!ReturnType)
     return std::nullopt;
+  IntegerCallArguments Result;
   std::optional<SourceParameterPlacement> Placement;
   bool MIPSRecords = false;
-  if ((isMIPSN32(A) || isMIPSN64(A)) &&
-      llvm::any_of(Parameters, [](const TypeRef &Type) {
-        return Type && Type->Kind == NdTypeKind::Struct && !Type->IsEnum;
-      })) {
-    // This adapter owns integer argument words only. Record/FP results and
-    // floating argument registers need their complete independent transport;
-    // a record layout must not authorize a different result convention.
-    if (ReturnType->Kind != NdTypeKind::Void &&
-        ReturnType->Kind != NdTypeKind::Int &&
-        ReturnType->Kind != NdTypeKind::Ptr)
-      return std::nullopt;
+  if (isMIPS(A) &&
+      ((ReturnType->Kind == NdTypeKind::Struct && !ReturnType->IsEnum) ||
+       llvm::any_of(Parameters, [](const TypeRef &T) {
+         return T && T->Kind == NdTypeKind::Struct && !T->IsEnum;
+       }))) {
     auto Record = mips::placeRecordCall(A, F, ReturnType, Parameters);
-    if (!Record || Record->Arguments.ResultPointer)
+    if (!Record || ReturnType->Kind == NdTypeKind::Float)
       return std::nullopt;
+    if (ReturnType->Kind == NdTypeKind::Struct && !ReturnType->IsEnum &&
+        !Record->ReturnsResultPointer) {
+      // An n32/n64 hidden pointer does not define v0 after the call.
+      // Only expose the direct result when its full object occupies one GPR.
+      if (Record->Arguments.ResultPointer || Record->Result.size() != 1)
+        return std::nullopt;
+      const auto &P = Record->Result.front();
+      if (P.Location.Kind != SourceABICarrierKind::IntegerRegister ||
+          P.Location.RegisterOffset != getTargetRegInfo(A).IntReturnReg ||
+          P.Offset || P.Location.ValueBytes != ReturnType->Size)
+        return std::nullopt;
+      Result.RecordResult =
+          IntegerCallArgumentPiece{0,     P.Offset,       P.Location.ValueBytes,
+                                   false, P.CarrierBytes, P.RegisterBitOffset};
+    }
     Placement = std::move(Record->Arguments);
     MIPSRecords = true;
   } else
@@ -96,18 +106,18 @@ neverd::integerCallArguments(Arch A, BinaryFormat F, const TypeRef &ReturnType,
       A == Arch::X86 ? llvm::ArrayRef<uint64_t>() : Layout.Registers;
   if (!Layout.SlotBytes)
     return std::nullopt;
-  IntegerCallArguments Result;
   std::set<unsigned> Registers;
   if (Placement->ResultPointer) {
     // Only these conventions both place the hidden pointer first and return
     // it in the ordinary integer result register. Other result transports
     // need their own adapter; an address parameter alone proves none.
-    if (F != BinaryFormat::COFF || (A != Arch::X64 && A != Arch::X86))
+    if (!(isMIPSO32(A) && F == BinaryFormat::ELF) &&
+        (F != BinaryFormat::COFF || (A != Arch::X64 && A != Arch::X86)))
       return std::nullopt;
     const auto &Pointer = *Placement->ResultPointer;
     if (Pointer.ValueBytes != getTargetRegInfo(A).PointerSize)
       return std::nullopt;
-    if (A == Arch::X64) {
+    if (A == Arch::X64 || isMIPSO32(A)) {
       if (IntegerRegisters.empty() ||
           Pointer.Kind != SourceABICarrierKind::IntegerRegister ||
           Pointer.RegisterOffset != IntegerRegisters.front())

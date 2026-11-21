@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Physical carriers of complete fixed n32/n64 natural C record signatures.
+/// Physical carriers of complete fixed o32/n32/n64 natural C record signatures.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_IR_MIPS_SOURCERECORDABI_H
@@ -17,13 +17,19 @@
 #include <optional>
 #include <vector>
 
-namespace neverd::mips {
+namespace neverd {
+struct BinaryImage;
+class DebugContext;
+
+namespace mips {
 
 struct RecordCallPlacement {
   SourceParameterPlacement Arguments;
   /// Empty for void and for a result written through Arguments.ResultPointer.
-  /// A hidden result pointer is an input; it does not define a v0 return.
+  /// The object resides in the storage described by Arguments.ResultPointer.
   std::vector<SourceParameterPiece> Result;
+  /// o32 additionally returns the storage address in v0. n32/n64 do not.
+  bool ReturnsResultPointer = false;
 };
 
 /// Classify complete by-value natural structs, including nested structs,
@@ -38,6 +44,20 @@ placeRecordCall(Arch Architecture, BinaryFormat Format,
                 const TypeRef &ReturnType, llvm::ArrayRef<TypeRef> Parameters,
                 bool Variadic = false);
 
-} // namespace neverd::mips
+/// Bind a source declaration whose components can be represented independently
+/// in the source IR. Retains the input unchanged when a carrier is unavailable.
+bool assignRecordSourceABI(SourceFunctionTypeHint &Hint, Arch Architecture,
+                           BinaryFormat Format);
+
+/// Recover a complete by-value declaration at its original ELF entry address.
+/// ResultPieces describes the machine body's actual return words even when
+/// they combine or split source members. The returned hint independently
+/// describes a call whose source leaves can be bound by the source IR.
+std::optional<SourceFunctionTypeHint>
+recordSourceABI(const BinaryImage &Image, const DebugContext &Debug, va_t Entry,
+                std::vector<SourceParameterPiece> *ResultPieces = nullptr);
+
+} // namespace mips
+} // namespace neverd
 
 #endif // NEVERD_IR_MIPS_SOURCERECORDABI_H

@@ -589,7 +589,10 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
         } else {
           std::vector<ExprPtr> Leaves;
-          for (const auto &Member : sourceABIValueMembers(P.Type))
+          const auto Members = Signature.MIPSRecords
+                                   ? sourceValueMembers(P.Type)
+                                   : sourceABIValueMembers(P.Type);
+          for (const auto &Member : Members)
             Leaves.push_back(
                 sourceScalarValue(Call.Inputs[++Index], Member.Type));
           if (P.Type->Kind == NdTypeKind::Int) {

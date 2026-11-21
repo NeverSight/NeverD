@@ -4,6 +4,7 @@ add_neverd_component_library(NeverDBackendC
   CValueAvailability.cpp
   CAnalysisDispatch.cpp
   DebugParamBinding.cpp
+  MIPS/CRecordEntry.cpp
   dialect/CDialect.cpp
   dialect/CSyntaxLexer.cpp
   dialect/CSyntaxParser.cpp
