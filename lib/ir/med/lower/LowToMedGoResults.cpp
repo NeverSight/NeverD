@@ -47,8 +47,9 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
         Sites.insert(Op.CallSiteId);
   // An indirect call's results are words: no callee shares its record, and
   // the record the pipeline extends (materializeGoCallResults) keeps them.
+  // Its floating results (X0-X14, arm64 F0-F15) follow them in the record.
   std::map<uint32_t, GoCallShape> Shapes =
-      goCallResultsRead(Func, TargetArch, Sites);
+      goCallResultsRead(Func, TargetArch, Sites, {}, /*Floats=*/true);
   const uint16_t Word = getTargetRegInfo(TargetArch).PointerSize;
   for (auto &[Site, Shape] : Shapes)
     for (uint16_t &Width : Shape.Widths)

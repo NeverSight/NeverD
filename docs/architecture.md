@@ -5944,8 +5944,15 @@ the call produces them packed, each result register the call left is defined
 from its field, in every block and through PHIs, and HighC prints the record
 (`t = ((struct nd_record_r2_u64_u64_e (*)())f)(...); t.field_1`). Modelled
 with RAX alone, an interface's data word (`call [rdx]; mov [rsp+8], rbx`)
-printed a placeholder. RDX, the closure context, is no result of such a call;
-read as System V's second result, it gave one a field. A shape other than the
+printed a placeholder. Its floating results (X0-X14, arm64 F0-F15), which Go
+numbers apart from its integer ones, follow those in the record, each a
+float32 or a float64 as its widest read takes (`GoCallShape::LastFloat`): a
+func value returning a float64 left X0 to a read of what the call clobbered.
+A record holds as many as Go returns: up to nine integer and fifteen floating
+results on amd64, sixteen of each on arm64 (`kSourceMaxRegisterReturnMembers`).
+Direct calls, whose callee returns their record, still return integer results
+alone. RDX, the closure context, is no result of such a call; read as System
+V's second result, it gave one a field. A shape other than the
 platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
 returning X0:X1 and joined it from the callee's record. An indirect call

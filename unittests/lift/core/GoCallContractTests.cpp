@@ -1968,6 +1968,51 @@ TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
+TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {
+  // Go's internal ABI returns floating results in X0-X14 (arm64 F0-F15),
+  // numbered apart from its integer ones.  A call through a func value
+  // returned only the integer ones, so a read of X0 after it read what the
+  // call clobbered.
+  //   main.g: push rbp; mov rbp, rsp; sub rsp, 16; mov [rsp], rbx
+  //           mov rdx, rax; call [rdx]; mov rcx, [rsp]; movsd [rcx], xmm0
+  //           add rsp, 16; pop rbp; ret
+  //   (arm64) stp x29, x30, [sp, #-32]!; mov x29, sp; str x1, [sp, #16]
+  //           mov x26, x0; ldr x2, [x26]; blr x2; ldr x1, [sp, #16]
+  //           str d0, [x1]; ldp x29, x30, [sp], #32; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t G = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(G, {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x10,
+                      0x48, 0x89, 0x1C, 0x24, 0x48, 0x89, 0xC2, 0xFF,
+                      0x12, 0x48, 0x8B, 0x0C, 0x24, 0xF2, 0x0F, 0x11,
+                      0x01, 0x48, 0x83, 0xC4, 0x10, 0x5D, 0xC3});
+    else
+      T.writeText(G, words({0xA9BE7BFD, 0x910003FD, 0xF9000BE1, 0xAA0003FA,
+                            0xF9400342, 0xD63F0040, 0xF9400BE1, 0xFD000020,
+                            0xA8C27BFD, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(G);
+    Function.Name = "main.g";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_g");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+    EXPECT_NE(Text.find("double"), std::string::npos) << Text;
+  }
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

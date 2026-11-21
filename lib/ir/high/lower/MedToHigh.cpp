@@ -1185,6 +1185,8 @@ void MedToHighConverter::buildExpressions(const MedFunc &Med) {
       if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) &&
           Op.Output.Size) {
         const auto Type = sourceCallResultType(Op);
+        if (!Type)
+          continue;
         if (Type->Kind == NdTypeKind::Struct)
           SourceRecordValues.emplace(varKey(Op.Output), Type);
         else if (Type->Kind == NdTypeKind::Float && Type->Size <= 8 &&

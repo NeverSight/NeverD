@@ -15,10 +15,13 @@
 #include "../lower/LowToMedCallReturnDetail.h"
 
 #include "neverd/ir/NdTypes.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/MedReturnValue.h"
+#include "neverd/lift/AArch64/AArch64Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -44,11 +47,40 @@ int returnedLast(Arch A, const MedOp &Op) {
   if (!Op.RegisterReturnFields || Op.RegisterReturnFields->empty())
     return -1;
   const auto &Fields = *Op.RegisterReturnFields;
-  for (size_t I = 0; I < Fields.size(); ++I)
-    if (Fields[I].IsFP ||
-        goResultPosition(A, Fields[I].RegOff) != static_cast<int>(I))
+  size_t Integers = 0;
+  while (Integers < Fields.size() && !Fields[Integers].IsFP) {
+    if (goResultPosition(A, Fields[Integers].RegOff) !=
+        static_cast<int>(Integers))
       return -1;
-  return static_cast<int>(Fields.size()) - 1;
+    ++Integers;
+  }
+  if (Integers == 0)
+    return -1;
+  // The floating results the record carries follow, in Go's order.
+  for (size_t I = Integers; I < Fields.size(); ++I)
+    if (!Fields[I].IsFP || goFloatResultPosition(A, Fields[I].RegOff) !=
+                               static_cast<int>(I - Integers))
+      return -1;
+  return static_cast<int>(Integers) - 1;
+}
+
+/// The register of Go's floating result at \p Position on \p A.
+uint64_t goFloatResultRegister(Arch A, int Position) {
+  return A == Arch::X64
+             ? x86reg::VectorBase + uint64_t(Position) * x86reg::VectorRegStride
+             : a64reg::V0 + uint64_t(Position) * (a64reg::V(1) - a64reg::V0);
+}
+
+/// The floating results \p Op already returns: the position of the last, or
+/// -1 (returnedLast).
+int returnedLastFloat(Arch A, const MedOp &Op) {
+  if (returnedLast(A, Op) < 0)
+    return -1;
+  int Last = -1;
+  for (const MedReturnReg &Field : *Op.RegisterReturnFields)
+    if (Field.IsFP)
+      Last = std::max(Last, goFloatResultPosition(A, Field.RegOff));
+  return Last;
 }
 
 } // namespace
@@ -107,9 +139,34 @@ int goResultPosition(Arch A, uint64_t RegOff) {
   return It == Results.end() ? -1 : static_cast<int>(It - Results.begin());
 }
 
+int goFloatResultPosition(Arch A, uint64_t RegOff) {
+  uint64_t Base = 0, Stride = 0, Count = 0;
+  if (A == Arch::X64) {
+    Base = x86reg::VectorBase;
+    Stride = x86reg::VectorRegStride;
+    Count = 15;
+  } else if (A == Arch::AArch64) {
+    Base = a64reg::V0;
+    Stride = a64reg::V(1) - a64reg::V0;
+    Count = 16;
+  } else {
+    return -1;
+  }
+  if (RegOff < Base || (RegOff - Base) % Stride != 0 ||
+      (RegOff - Base) / Stride >= Count)
+    return -1;
+  return static_cast<int>((RegOff - Base) / Stride);
+}
+
 std::map<uint32_t, GoCallShape>
 goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
-                  llvm::ArrayRef<MedVar> Returned) {
+                  llvm::ArrayRef<MedVar> Returned, bool Floats) {
+  // The result registers a reader may take past the first: Go's integer
+  // ones after RAX and, with Floats, its floating ones.
+  const auto ResultRegister = [&](uint64_t RegOff) {
+    return goResultPosition(A, RegOff) > 0 ||
+           (Floats && goFloatResultPosition(A, RegOff) >= 0);
+  };
   std::map<uint32_t, GoCallShape> Shapes;
   if (Sites.empty())
     return Shapes;
@@ -122,12 +179,17 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
           GoCallShape &Shape = Shapes[Op.CallSiteId];
           Shape.Last = Returning;
           for (const MedReturnReg &Field : *Op.RegisterReturnFields)
-            Shape.Widths.push_back(Field.Size);
+            if (!Field.IsFP)
+              Shape.Widths.push_back(Field.Size);
+          Shape.LastFloat = returnedLastFloat(A, Op);
+          for (const MedReturnReg &Field : *Op.RegisterReturnFields)
+            if (Field.IsFP)
+              Shape.FloatWidths.push_back(Field.Size);
         }
   std::map<uint32_t, std::vector<MedVar>> Clobbers;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Sites.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
-        goResultPosition(A, Clobber.Value.RegOff) > 0)
+        ResultRegister(Clobber.Value.RegOff))
       Clobbers[Clobber.CallSiteId].push_back(Clobber.Value);
   if (Clobbers.empty())
     return Shapes;
@@ -141,7 +203,7 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
   llvm::DenseMap<ValueKey, const PhiNode *> PhiDefinitions;
   llvm::SmallVector<ValueKey, 16> Work;
   const auto Observe = [&](const MedVar &Value, uint16_t Bytes) {
-    if (Value.Kind != MedVar::Reg || goResultPosition(A, Value.RegOff) <= 0)
+    if (Value.Kind != MedVar::Reg || !ResultRegister(Value.RegOff))
       return;
     const ValueKey Key = identity(Value);
     Bytes = std::min(Bytes, Value.Size);
@@ -158,8 +220,7 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
   };
   for (const MedBlock &Block : Func.Blocks) {
     for (const PhiNode &Phi : Block.Phis)
-      if (Phi.Output.Kind == MedVar::Reg &&
-          goResultPosition(A, Phi.Output.RegOff) > 0)
+      if (Phi.Output.Kind == MedVar::Reg && ResultRegister(Phi.Output.RegOff))
         PhiDefinitions.try_emplace(identity(Phi.Output), &Phi);
     for (size_t I = 0; I < Block.Ops.size(); ++I) {
       const MedOp &Read = Block.Ops[I];
@@ -224,12 +285,42 @@ goCallResultsRead(const MedFunc &Func, Arch A, const std::set<uint32_t> &Sites,
         Observe(Input, Width);
   }
   for (const auto &[Site, Values] : Clobbers) {
-    int Last = -1;
+    int Last = -1, LastFloat = -1;
     for (const MedVar &Value : Values)
-      if (ReadWidths.count(identity(Value)))
+      if (ReadWidths.count(identity(Value))) {
         Last = std::max(Last, goResultPosition(A, Value.RegOff));
+        LastFloat = std::max(LastFloat, goFloatResultPosition(A, Value.RegOff));
+      }
     const auto Known = Shapes.find(Site);
     const int Returning = Known == Shapes.end() ? 0 : Known->second.Last;
+    const int ReturningFloat =
+        Known == Shapes.end() ? -1 : Known->second.LastFloat;
+    // Go's floating results: a float32 or a float64 each, as wide as its
+    // widest read takes; one no reader takes, before the last, a float64.
+    if (Floats && LastFloat > ReturningFloat) {
+      GoCallShape &Shape = Shapes[Site];
+      if (Shape.Widths.empty())
+        Shape.Widths.push_back(Word);
+      Shape.Last = std::max(Shape.Last, 0);
+      Shape.LastFloat = LastFloat;
+      Shape.FloatWidths.resize(LastFloat + 1, 0);
+      for (const MedVar &Value : Values) {
+        const int Position = goFloatResultPosition(A, Value.RegOff);
+        if (Position <= ReturningFloat)
+          continue;
+        uint16_t Bytes = 0;
+        if (const auto Read = ReadWidths.find(identity(Value));
+            Read != ReadWidths.end())
+          Bytes = Read->second;
+        Shape.FloatWidths[Position] =
+            std::max(Shape.FloatWidths[Position], Bytes);
+      }
+      for (int Position = ReturningFloat + 1; Position <= LastFloat;
+           ++Position) {
+        uint16_t &Width = Shape.FloatWidths[Position];
+        Width = Width == 4 ? 4 : 8;
+      }
+    }
     if (Last <= Returning)
       continue;
     GoCallShape &Shape = Shapes[Site];
@@ -276,15 +367,24 @@ void defineGoCallResults(MedFunc &Func, Arch A,
     if (Found == Shapes.end())
       return nullptr;
     const GoCallShape &Shape = Found->second;
-    if (Shape.Last <= 0 || Shape.Last >= static_cast<int>(Results.size()) ||
+    const bool Floats = Shape.LastFloat >= 0;
+    if ((Shape.Last <= 0 && !Floats) || Shape.Last < 0 ||
+        Shape.Last >= static_cast<int>(Results.size()) ||
         Shape.Widths.size() != static_cast<size_t>(Shape.Last) + 1 ||
-        Shape.Widths[0] != Word)
+        Shape.Widths[0] != Word ||
+        Shape.FloatWidths.size() != static_cast<size_t>(Shape.LastFloat + 1) ||
+        Shape.Widths.size() + Shape.FloatWidths.size() >
+            kSourceMaxRegisterReturnMembers)
       return nullptr;
     const int Returning = returnedLast(A, Op);
     if (Returning < 0 &&
         (Op.Output.Kind != MedVar::Reg || Op.Output.RegOff != Results[0]))
       return nullptr;
-    if (Returning >= Shape.Last)
+    // A call that returns floating results already keeps its record: the
+    // integer ones it would take past them come first in it.
+    if (returnedLastFloat(A, Op) >= 0)
+      return nullptr;
+    if (Returning >= Shape.Last && !Floats)
       return nullptr;
     // The results a call returns already are words, which the packed value
     // keeps where it has them.
@@ -315,10 +415,12 @@ void defineGoCallResults(MedFunc &Func, Arch A,
   std::map<uint32_t, std::vector<MedVar>> Left;
   for (const MedCallClobber &Clobber : Func.CallClobbers)
     if (Shapes.count(Clobber.CallSiteId) && Clobber.Value.Kind == MedVar::Reg &&
-        goResultPosition(A, Clobber.Value.RegOff) > 0)
+        (goResultPosition(A, Clobber.Value.RegOff) > 0 ||
+         goFloatResultPosition(A, Clobber.Value.RegOff) >= 0))
       Left[Clobber.CallSiteId].push_back(Clobber.Value);
   // The positions each call now defines, and the packed values that grow.
   std::map<uint32_t, std::pair<int, int>> Defined;
+  std::map<uint32_t, int> DefinedFloat;
   llvm::DenseMap<ValueKey, uint16_t> Widened;
   for (MedBlock &Block : Func.Blocks) {
     if (llvm::none_of(Block.Ops, [&](const MedOp &Op) { return Wanted(Op); }))
@@ -334,8 +436,11 @@ void defineGoCallResults(MedFunc &Func, Arch A,
         std::vector<TypeRef> Members;
         for (const uint16_t Width : Wants->Widths)
           Members.push_back(NdType::makeInt(Width, false));
+        for (const uint16_t Width : Wants->FloatWidths)
+          Members.push_back(NdType::makeFloat(Width));
         Record = NdType::makeStruct(std::move(Members));
-        if (!Record || Record->FieldOffsets.size() != Wants->Widths.size())
+        if (!Record || Record->FieldOffsets.size() !=
+                           Wants->Widths.size() + Wants->FloatWidths.size())
           Wants = nullptr;
       }
       Ops.push_back(std::move(Block.Ops[I]));
@@ -434,6 +539,51 @@ void defineGoCallResults(MedFunc &Func, Arch A,
           Views.push_back(View);
         }
       }
+      // The floating results follow, each from its register's low bytes.
+      for (int Position = 0; Position <= Wants->LastFloat; ++Position) {
+        const uint64_t Register = goFloatResultRegister(A, Position);
+        const uint16_t Width = Wants->FloatWidths[Position];
+        Shape->push_back({Register, Width, true});
+        MedVar Field;
+        const MedVar *Exact = nullptr;
+        for (const MedVar &Value : Values)
+          if (Value.RegOff == Register && Value.Size == Width)
+            Exact = &Value;
+        if (Exact) {
+          Field = *Exact;
+        } else {
+          Field.Kind = MedVar::Reg;
+          Field.TheArch = A;
+          Field.RegOff = Register;
+          Field.Id = NextId++;
+          Field.SSAVer = NextVer++;
+        }
+        Field.Size = Width;
+        MedOp Extract;
+        Extract.Opcode = NdOp::SUBBYTES;
+        Extract.Addr = Op.Addr;
+        Extract.Output = Field;
+        Extract.addInput(Packed);
+        Extract.addInput(MedVar::makeConst(
+            Record->FieldOffsets[Wants->Widths.size() + Position], Word));
+        Fields.push_back(Extract);
+        for (const MedVar &Value : Values) {
+          if (Value.RegOff != Register || identity(Value) == identity(Field))
+            continue;
+          MedOp View;
+          View.Addr = Op.Addr;
+          View.Output = Value;
+          View.Opcode = Value.Size < Width   ? NdOp::SUBBYTES
+                        : Value.Size > Width ? NdOp::INT_ZEXT
+                                             : NdOp::COPY;
+          View.addInput(Field);
+          if (View.Opcode == NdOp::SUBBYTES)
+            View.addInput(MedVar::makeConst(0, Word));
+          Views.push_back(View);
+        }
+      }
+      if (Wants->LastFloat >= 0)
+        DefinedFloat[Site] = Wants->LastFloat;
       Op.RegisterReturnFields = std::move(Shape);
       for (MedOp &Field : Fields)
         Ops.push_back(std::move(Field));
@@ -450,6 +600,13 @@ void defineGoCallResults(MedFunc &Func, Arch A,
               Grown != Widened.end())
             O.Inputs[I].Size = Grown->second;
   llvm::erase_if(Func.CallClobbers, [&](const MedCallClobber &Clobber) {
+    if (Clobber.Value.Kind == MedVar::Reg)
+      if (const auto Floats = DefinedFloat.find(Clobber.CallSiteId);
+          Floats != DefinedFloat.end()) {
+        const int Position = goFloatResultPosition(A, Clobber.Value.RegOff);
+        if (Position >= 0 && Position <= Floats->second)
+          return true;
+      }
     const auto Range = Defined.find(Clobber.CallSiteId);
     if (Range == Defined.end() || Clobber.Value.Kind != MedVar::Reg)
       return false;
