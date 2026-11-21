@@ -15,6 +15,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 DWARF 2/3 bit-field layouts use the target byte order when converting offsets
 within a storage unit. A struct inside a union keeps its member declaration
 order in both MIPS byte orders, including fields that span bytes.
+For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
+from explicit relocation addends. The r7 prebuilt package can read these types
+after linking the object with the target linker.
 
 ## Implementation boundaries
 
