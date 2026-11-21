@@ -19,6 +19,7 @@
 #include "llvm/Support/Endian.h"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <tuple>
 #include <vector>
