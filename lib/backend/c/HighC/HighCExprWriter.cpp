@@ -68,6 +68,7 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DataSymbolBinding.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/support/BinaryEncoding.h"
@@ -9613,6 +9614,8 @@ std::optional<va_t> HighCWriter::anchoredOwner(const HighExpr &Const) const {
       !isExactAddressProvenance(Const.ConstProvenance) ||
       Const.AddressOwnerVA == InvalidVA)
     return std::nullopt;
+  if (mipsPICGPAnchor(*Opts.Image, Const.ConstVal) == Const.AddressOwnerVA)
+    return Const.AddressOwnerVA;
   const auto Anchor = Opts.Image->RodataAnchorSeg.find(Const.ConstVal);
   if (Anchor == Opts.Image->RodataAnchorSeg.end() ||
       Anchor->second != Const.AddressOwnerVA ||
@@ -9637,8 +9640,15 @@ HighCWriter::anchoredOwnerAddress(const HighExpr &Const) const {
     }
   if (!Object)
     return std::nullopt;
-  return "((uintptr_t)" + *Object + " - " +
-         std::to_string(*Owner - Const.ConstVal) + ")";
+  const bool WordGP = isMIPSN32(Opts.TheArch) &&
+                      mipsPICGPAnchor(*Opts.Image, Const.ConstVal) == *Owner;
+  const va_t VA = WordGP ? uint32_t(Const.ConstVal) : Const.ConstVal;
+  const bool Below = VA < *Owner;
+  std::string Address = "((uintptr_t)" + *Object + (Below ? " - " : " + ") +
+                        std::to_string(Below ? *Owner - VA : VA - *Owner) + ")";
+  if (WordGP)
+    return "((int64_t)(int32_t)(uintptr_t)" + Address + ")";
+  return Address;
 }
 
 HighCWriter::ImageSymbolName HighCWriter::imageSymbolName(va_t Addr) const {
