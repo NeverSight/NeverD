@@ -185,9 +185,10 @@ profile, rather than claiming that export names establish a private API's type.
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
 --neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
-fixtures, including D3DKMT, CLFS, TPM, Direct3D, DXGI and D3DCompiler calls, with the retained SDK headers
-and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
-Stream Class callers compiled from the WDK headers. Those driver fixtures use
+fixtures using retained SDK headers and pinned target import libraries. The
+callers include graphics and logging APIs, ICU, Windows SQLite, Web Services,
+Connection Manager and Bluetooth GATT. Add `--kernel` for SD Port, PortCls,
+Stream Class and USB camera callers compiled from the WDK headers. Those driver fixtures use
 synthetic import libraries whose symbols come from the original compiler,
 including x86 stack decoration; they do not execute an API implementation.
 Add `--kernel --rdbss` for original RDBSS C++ callers, including eight-argument

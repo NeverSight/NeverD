@@ -5,6 +5,8 @@
 #include <portcls.h>
 #include <sdport.h>
 #include <strmini.h>
+#include <usb.h>
+#include <usbcamdi.h>
 
 // Stable public fixture names; imported APIs retain the WDK's conventions.
 __declspec(dllexport) ULONG __cdecl
@@ -21,4 +23,10 @@ UseAudioAdapter(PDRIVER_OBJECT Driver, PDEVICE_OBJECT Device,
 __declspec(dllexport) void __cdecl UseStreamClock(HANDLE Clock,
                                                   PHW_TIME_CONTEXT Context) {
   StreamClassQueryMasterClockSync(Clock, Context);
+}
+
+__declspec(dllexport) NTSTATUS __cdecl
+UseCameraValue(HANDLE Handle, PWCHAR Name, ULONG NameLength, PVOID Data,
+               ULONG DataLength) {
+  return USBCAMD_GetRegistryKeyValue(Handle, Name, NameLength, Data, DataLength);
 }
