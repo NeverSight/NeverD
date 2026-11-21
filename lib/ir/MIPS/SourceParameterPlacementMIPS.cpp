@@ -498,9 +498,19 @@ mips::recordSourceABI(const BinaryImage &Img, const DebugContext &Debug,
   // A machine body can operate on a pointer field as integer bits and split
   // or combine nested fields. Capture the physical result independently of
   // whether a typed call to this entry can also bind each source leaf.
-  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct &&
-      !Layout->Arguments.ResultPointer)
-    *ResultPieces = Layout->Result;
+  if (ResultPieces && FS->ReturnType->Kind == NdTypeKind::Struct) {
+    if (Layout->ReturnsResultPointer) {
+      // The o32 callee also returns the hidden address in v0. Capture its
+      // reaching machine value at each return, before SSA removes the move.
+      const auto &TRI = getTargetRegInfo(Img.Arch);
+      ResultPieces->push_back(
+          registerPiece(SourceABICarrierKind::IntegerRegister, TRI.IntReturnReg,
+                        0, TRI.PointerSize));
+      setCarrierWidths(*ResultPieces, TRI);
+    } else {
+      *ResultPieces = Layout->Result;
+    }
+  }
   if (bindRecordABI(Candidate, Img.Arch, *Layout))
     return Candidate;
   return std::nullopt;

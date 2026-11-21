@@ -1777,7 +1777,9 @@ Natural C record transport for o32, n32 and n64 is classified in
 `neverd/ir/MIPS/SourceRecordABI.h`. Each piece records its offset in the object,
 its register or stack slot, and its position in the carrier. On o32 every
 record result uses caller-provided storage and the callee returns its address
-in v0. Large n32/n64 results use caller-provided storage and leave v0
+in v0. The private machine body captures v0 at the return, including when a
+callee saves the address before a loop and writes its last byte in the return
+delay slot. Large n32/n64 results use caller-provided storage and leave v0
 unspecified. A typed call passes the original result address as LLVM `sret`.
 The saved-link check accounts for every byte that the result writes into a
 private frame, including the last byte of a short final word. An o32 double or long long

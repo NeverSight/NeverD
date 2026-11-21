@@ -31,6 +31,15 @@
 using namespace neverd;
 
 namespace {
+struct RecordDebugContext final : NullDebugContext {
+  FunctionSym Callee;
+  std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
+    return Entry == Callee.Addr ? std::optional(Callee) : std::nullopt;
+  }
+  bool hasAuthenticatedFunctionSignatures() const override { return true; }
+  bool hasInfo() const override { return true; }
+};
+
 struct RecordFixture {
   BinaryImage Image;
   NullDebugContext Debug;
@@ -115,6 +124,34 @@ TEST(MIPSRecordSourceEntry, HiddenStorageIsTakenFromTheEntryArgument) {
               std::string::npos);
     F.Inputs.erase(F.Inputs.begin());
     EXPECT_FALSE(F.project());
+  }
+}
+
+TEST(MIPSRecordSourceEntry,
+     HiddenResultCapturesThePhysicalReturnWordOnlyOnO32) {
+  for (Arch A :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64O32, Arch::MIPS64O32EL,
+        Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    RecordFixture F(A, 17);
+    RecordDebugContext Debug;
+    Debug.Callee = F.Function;
+    std::vector<SourceParameterPiece> Pieces;
+    const auto S =
+        mips::recordSourceABI(F.Image, Debug, F.Function.Addr, &Pieces);
+    ASSERT_TRUE(S);
+    EXPECT_EQ(S->ReturnLocation.Kind,
+              SourceABICarrierKind::IndirectResultPointer);
+    EXPECT_EQ(S->ReturnLocation.RegisterOffset, mipsreg::A0);
+    if (isMIPSO32(A)) {
+      ASSERT_EQ(Pieces.size(), 1u);
+      EXPECT_EQ(Pieces[0].Location.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Pieces[0].Location.RegisterOffset, mipsreg::V0);
+      EXPECT_EQ(Pieces[0].Location.ValueBytes, 4u);
+      EXPECT_EQ(Pieces[0].CarrierBytes, 4u);
+    } else {
+      EXPECT_TRUE(Pieces.empty());
+    }
   }
 }
 
@@ -447,19 +484,11 @@ TEST(MIPSRecordABI, O32ScalarWordPairsAreOneCAndLLVMArgument) {
 }
 
 TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
-  struct Context final : NullDebugContext {
-    FunctionSym Callee;
-    std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
-      return Entry == Callee.Addr ? std::optional(Callee) : std::nullopt;
-    }
-    bool hasAuthenticatedFunctionSignatures() const override { return true; }
-    bool hasInfo() const override { return true; }
-  };
   for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL})
     for (unsigned Bytes : {3u, 8u, 17u}) {
       SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Bytes);
       RecordFixture F(A, Bytes);
-      Context Debug;
+      RecordDebugContext Debug;
       Debug.Callee = F.Function;
       Debug.Callee.Name = "consume_payload";
       Debug.Callee.ReturnType = NdType::makeVoid();
