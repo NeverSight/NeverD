@@ -61,15 +61,12 @@ using namespace neverd::sdk;
 /// The Windows loader calls the PE driver entry with a driver object and
 /// registry path. An exact export or image-matched PDB may name the entry
 /// shim and the direct transfer from that shim to DriverEntry.
-std::vector<va_t> neverd::sdk::windowsDriverEntries(const BinaryImage &Image,
-                                                    const DebugContext *Debug,
-                                                    DebugInfoKind Kind) {
+WindowsDriverEntryPoints neverd::sdk::windowsDriverEntries(
+    const BinaryImage &Image, const DebugContext *Debug, DebugInfoKind Kind) {
   if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
-      !Image.Entry ||
       (Image.Arch != Arch::X86 && Image.Arch != Arch::X64 &&
        Image.Arch != Arch::AArch64) ||
-      Image.DynInfo.PESubsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE ||
-      (Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL))
+      Image.DynInfo.PESubsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE)
     return {};
   const bool MatchedPDB = Kind == DebugInfoKind::PDB && Debug &&
                           static_cast<const PDBDebugContext *>(Debug)
@@ -103,14 +100,39 @@ std::vector<va_t> neverd::sdk::windowsDriverEntries(const BinaryImage &Image,
     Symbol.consume_front("_");
     return Symbol == Name || (Symbol.consume_front(Name) && Symbol == "@8");
   };
-  auto Entry = functionAt(Image.Entry);
-  if (!Entry ||
-      (!named(*Entry, "DriverEntry") && !named(*Entry, "GsDriverEntry")) ||
-      Image.functionHasBytePatch(Image.Entry) ||
+  const auto *Initialize = Image.findExport("DllInitialize");
+  const auto *Unload = Image.findExport("DllUnload");
+  auto Entry = Image.Entry ? functionAt(Image.Entry) : std::nullopt;
+  const bool Driver =
+      !(Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) &&
+      Entry &&
+      (named(*Entry, "DriverEntry") || named(*Entry, "GsDriverEntry")) &&
+      !Image.functionHasBytePatch(Image.Entry);
+  if ((!Driver && !(Initialize && Unload)) ||
       identifyImageProfile(Image).Domain != ImageDomain::Kernel)
     return {};
 
-  std::vector<va_t> Entries{Image.Entry};
+  WindowsDriverEntryPoints Entries;
+  // Windows resolves this exact, case-sensitive export pair when initializing
+  // a kernel library. A regular driver can also publish both callbacks.
+  if (Initialize && Unload && Initialize->Addr != Unload->Addr) {
+    const auto UniqueEntry = [&](const Export &E) {
+      return Image.isFunctionEntryCandidateAt(E.Addr) &&
+             !Image.functionHasBytePatch(E.Addr) &&
+             llvm::none_of(Image.Exports, [&](const Export &Other) {
+               return (Other.Name == E.Name && Other.Addr != E.Addr) ||
+                      (Other.Addr == E.Addr && !Other.Name.empty() &&
+                       Other.Name != E.Name);
+             });
+    };
+    if (UniqueEntry(*Initialize) && UniqueEntry(*Unload)) {
+      Entries.DllInitialize = Initialize->Addr;
+      Entries.DllUnload = Unload->Addr;
+    }
+  }
+  if (!Driver)
+    return Entries;
+  Entries.DriverEntries.push_back(Image.Entry);
   if (named(*Entry, "DriverEntry"))
     return Entries;
   Decoder Dec;
@@ -137,7 +159,7 @@ std::vector<va_t> neverd::sdk::windowsDriverEntries(const BinaryImage &Image,
             const auto Body = functionAt(Target);
             if (Body && named(*Body, "DriverEntry") &&
                 !Image.functionHasBytePatch(Target)) {
-              Entries.push_back(Target);
+              Entries.DriverEntries.push_back(Target);
               return false;
             }
           }

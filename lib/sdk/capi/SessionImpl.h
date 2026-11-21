@@ -1613,9 +1613,9 @@ inline std::string jsonToString(const llvm::json::Value &V) {
 }
 
 /// The image's exact, authenticated Windows driver entry contracts.
-std::vector<va_t> windowsDriverEntries(const BinaryImage &Image,
-                                       const DebugContext *Debug,
-                                       DebugInfoKind Kind);
+WindowsDriverEntryPoints windowsDriverEntries(const BinaryImage &Image,
+                                              const DebugContext *Debug,
+                                              DebugInfoKind Kind);
 
 /// PipelineRunner — self-contained binary-load-and-run for high-level
 /// C API functions that take an input path instead of a session.

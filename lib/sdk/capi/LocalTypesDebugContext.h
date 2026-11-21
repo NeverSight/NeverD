@@ -49,6 +49,14 @@
 
 namespace neverd::sdk {
 
+/// Loader callbacks identified at exact executable entries in a native
+/// Windows kernel image. An export driver has its own initialization ABI.
+struct WindowsDriverEntryPoints {
+  std::vector<va_t> DriverEntries;
+  std::optional<va_t> DllInitialize;
+  std::optional<va_t> DllUnload;
+};
+
 /// \p Type as the decompiler's types describe it: records by their name with
 /// their members' names for display, typedefs as what they name, pointers
 /// to functions as pointers.  Null for a type it cannot describe, such as a
@@ -104,7 +112,7 @@ public:
       std::string EntryType = {},
       std::optional<va_t> ProgramMain = std::nullopt,
       std::string EntryDeclaration = {},
-      std::vector<va_t> WindowsDriverEntries = {});
+      WindowsDriverEntryPoints DriverEntries = {});
   /// Takes back the members and enumerators it gave the debug information's
   /// types, and gives back those they held, so that the context made after
   /// a change to the library gives them anew.
@@ -332,8 +340,7 @@ private:
   UserFactReads *DeclarationReads = nullptr;
   std::shared_ptr<types::TypeLibrary> Types;
   std::map<va_t, std::string> Declarations;
-  std::vector<va_t> WindowsDriverEntries;
-  std::optional<FunctionSym> WindowsDriverSignature;
+  std::map<va_t, FunctionSym> WindowsDriverSignatures;
   std::vector<va_t> BoundFunctionEntries;
   void refreshBoundFunctionEntries();
   const BinaryImage *Image;

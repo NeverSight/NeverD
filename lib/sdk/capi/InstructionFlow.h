@@ -154,9 +154,8 @@ public:
   summarize(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI,
             const TargetRegInfo *StackRegisters = nullptr,
             LowInstructionUndefinedEffects *Undefined = nullptr);
-  /// References needed by the width inventory. Scalar x86 register/immediate
-  /// forms cannot access static memory and need no temporary flag arithmetic.
-  /// Every other form retains the complete LowIR reference computation.
+  /// References needed by the width inventory. Skip x86 scalar forms whose
+  /// operands prove that the single instruction cannot access a fixed address.
   llvm::SmallVector<InstructionRef, 2>
   dataAccesses(const BinaryImage &Img, Decoder &Dec, const DecodedInsn &DI);
   /// The most recent lift, borrowed until the next summarize/dataAccesses.

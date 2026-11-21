@@ -119,7 +119,7 @@ TEST(LocalTypesDebugContext, DriverContractBindsOnlyProvenEntries) {
     Function.Name = Entry == Shim ? "GsDriverEntry" : "DriverEntry";
   }
   sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header}, {},
-                                      {}, {}, {}, {Shim, Body});
+                                      {}, {}, {}, {{Shim, Body}});
   EXPECT_EQ(Context.boundFunctionEntries().vec(),
             (std::vector<va_t>{Shim, Body}));
   for (va_t Entry : {Shim, Body}) {
@@ -137,8 +137,42 @@ TEST(LocalTypesDebugContext, DriverContractBindsOnlyProvenEntries) {
   EXPECT_EQ(Edited->Params.size(), 1u);
   auto Empty = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
   sdk::LocalTypesDebugContext WithoutHeader(Names, Empty, {}, &Image, {}, {},
-                                            {}, {}, {}, {Shim, Body});
+                                            {}, {}, {}, {{Shim, Body}});
   EXPECT_TRUE(WithoutHeader.boundFunctionEntries().empty());
+}
+
+TEST(LocalTypesDebugContext, KernelLibraryCallbacksUseTheTargetWDK) {
+  using namespace neverd;
+  constexpr va_t Initialize = 0x1000, Unload = 0x2000;
+  for (auto [Architecture, Header] :
+       {std::pair{Arch::X86, types::HeaderLibrary::WindowsKernelX86},
+        std::pair{Arch::X64, types::HeaderLibrary::WindowsKernelX64},
+        std::pair{Arch::AArch64, types::HeaderLibrary::WindowsKernelARM64}}) {
+    const auto *Kernel = types::headerLibrary(Header);
+    ASSERT_NE(Kernel, nullptr);
+    auto Types = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Format = BinaryFormat::COFF;
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext C(Names, Types, {}, &Image, {Header}, {}, {},
+                                  {}, {}, {{}, Initialize, Unload});
+    EXPECT_EQ(C.boundFunctionEntries().vec(),
+              (std::vector<va_t>{Initialize, Unload}));
+    auto Init = C.resolveFunction(Initialize);
+    auto End = C.resolveFunction(Unload);
+    ASSERT_TRUE(Init && End && Init->ReturnType && End->ReturnType);
+    EXPECT_EQ(Init->ReturnType->Size, 4u);
+    EXPECT_EQ(End->ReturnType->Size, 4u);
+    ASSERT_EQ(Init->Params.size(), 1u);
+    EXPECT_EQ(Init->Params[0].first, "RegistryPath");
+    EXPECT_EQ(Init->Params[0].second->Kind, NdTypeKind::Ptr);
+    EXPECT_TRUE(End->Params.empty());
+    if (Architecture == Arch::X86)
+      EXPECT_EQ(Init->CallConv, DebugCallConv::Stdcall);
+    C.takeDeclarations({{Unload, "int changed(int context)"}});
+    EXPECT_EQ(C.resolveFunction(Unload)->Params.size(), 1u);
+  }
 }
 
 TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {

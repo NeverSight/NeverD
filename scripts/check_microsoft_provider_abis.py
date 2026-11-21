@@ -12,12 +12,14 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import build_wdk_driver_fixtures as wdk
 from generate_microsoft_windows_types import PROVIDER_INLINE_ROUTINES, PROVIDER_PREFIXES
 import generate_microsoft_windows_types as windows
 import microsoft_gdiplus_types as gdiplus
+import microsoft_flat_imports as flat
 import microsoft_ucrt_types as ucrt
 
 
@@ -26,6 +28,7 @@ CASES = {
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
     "GDIPlus": (),
+    **{provider: () for provider in (*flat.CURRENT, *flat.LEGACY)},
     **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
     "KernelStreaming": ("KsCreatePin", "KsAddEvent", "KsAcquireControl"),
@@ -82,9 +85,7 @@ def digest(path: Path) -> str:
 def compiler_contracts(ir: str, names: tuple[str, ...]) -> dict:
     # DLL storage visibility is not a calling convention or parameter ABI.
     # Keep every width, symbol, return attribute and parameter attribute.
-    contracts = ucrt.bridge_abis(ir, names)
-    return {name: (symbol, prefix.removeprefix("dllimport ").removeprefix("dso_local "), parameters)
-            for name, (symbol, prefix, parameters) in contracts.items()}
+    return ucrt.normalized_bridge_abis(ir, names)
 
 
 def generated_compiler(command: list[str], *, keep_sdk_headers: bool = False) -> list[str]:
@@ -137,6 +138,70 @@ def official_names(args: argparse.Namespace, compiler: list[str], original: Path
     return names
 
 
+def alljoyn_public_types(original, compiler, published, c_compiler, renamed, directory, row):
+    """Check callback conventions and the layouts of anonymous SDK record typedefs."""
+    command = compiler + ["-fsyntax-only", "-Xclang", "-ast-dump=json",
+                          "-Xclang", "-ast-dump-filter=alljoyn_", str(original)]
+    row["commands"].append(command)
+    dump = windows.run(command, directory / "alljoyn-types.log")
+    decoder = json.JSONDecoder()
+    records, typedefs = {}, []
+    offset = 0
+    while offset < len(dump):
+        if dump[offset].isspace():
+            offset += 1
+            continue
+        node, offset = decoder.raw_decode(dump, offset)
+        if node["kind"] == "CXXRecordDecl" and node.get("completeDefinition"):
+            records[node["id"]] = node
+        if node["kind"] == "TypedefDecl" and node["name"].startswith("alljoyn_"):
+            typedefs.append(node)
+    callbacks, fields = [], {}
+    for node in typedefs:
+        name, spelling = node["name"], node["type"]["qualType"]
+        if re.search(r"\(\*\)\(", spelling):
+            callbacks.append(name)
+        if spelling.startswith("struct ") and "*" not in spelling:
+            record, = [r for r in node["inner"] if r["kind"] == "RecordType"]
+            members = [f for f in records[record["decl"]["id"]]["inner"] if f["kind"] == "FieldDecl"]
+            if any(f.get("isBitfield") or not f.get("name") for f in members):
+                raise ValueError("unaddressable Microsoft SDK record member: " + name)
+            fields[name] = [f["name"] for f in members]
+    if not fields or not callbacks:
+        raise ValueError("AllJoyn compiler returned no public record or callback inventory")
+    aliases = [f"neverd_sdk_callback_{i}" for i in range(len(callbacks))]
+    observations = []
+    for tag, header, flags in (("original", original, compiler), ("published", published, c_compiler)):
+        names = renamed if tag == "published" else {}
+        code = []
+        for i, (typedef, alias) in enumerate(zip(callbacks, aliases)):
+            name = names.get(typedef, typedef)
+            code += [f"extern __typeof__(*({name})0) {alias};",
+                     f"__typeof__(&{alias}) neverd_ucrt_abi_{i} = &{alias};"]
+        measures = []
+        for typedef, members in fields.items():
+            name = names.get(typedef, typedef)
+            measures += [f"sizeof({name})", f"__alignof({name})"]
+            for field in members:
+                measures += [f"__builtin_offsetof({name}, {field})", f"sizeof((({name} *)0)->{field})"]
+        code.append("unsigned long long neverd_sdk_layout[] = {" + ",\n".join(measures) + "};")
+        if tag == "original":
+            code = ['extern "C" {', *code, '}']
+        source = directory / ("alljoyn-types-" + tag + ".c")
+        source.write_text(f'#include "{header.as_posix()}"\n' + "\n".join(code) + "\n", encoding="utf-8")
+        command = flags + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"]
+        row["commands"].append(command)
+        ir = windows.run(command, source.with_suffix(".log"), source.with_suffix(".ll"))
+        line = next((s for s in ir.splitlines() if s.startswith("@neverd_sdk_layout = ")), "")
+        sizes = [int(v) for v in re.findall(r"\bi64 (\d+)", line)]
+        if len(sizes) != len(measures):
+            raise ValueError("incomplete AllJoyn compiler record layout: " + tag)
+        observations.append((compiler_contracts(ir, aliases), sizes))
+    if observations[0] != observations[1]:
+        raise ValueError("AllJoyn callback ABI or record layout differs from the original SDK")
+    row.update(callback_types=callbacks, record_fields=fields, layout_measurements=observations[0][1])
+
+
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
     rows = []
@@ -168,11 +233,12 @@ def check(args: argparse.Namespace) -> dict:
                     if command[-2] != "-E":
                         raise ValueError(f"provider lacks its preprocessing command: {name}")
                     compiler = command[:-2]
-                    bridge = provider.get("metadata", {}).get("cpp_header_bridge")
+                    metadata = provider.get("metadata", {})
+                    bridge = metadata.get("sdk_import_bridge") or metadata.get("cpp_header_bridge")
                     original = Path(bridge["source"] if bridge else command[-1])
                     row["original_source_sha256"] = digest(original)
                     if bridge and row["original_source_sha256"] != bridge["source_sha256"]:
-                        raise ValueError("original C++ provider source changed")
+                        raise ValueError("original SDK/WDK provider source changed")
                     row["generated_header_sha256"] = digest(header)
                     if name == "GDIPlus":
                         _, functions, invocation = gdiplus.declarations(
@@ -184,6 +250,12 @@ def check(args: argparse.Namespace) -> dict:
                         row.update(functions=names, inventory="original Microsoft C++ flat API",
                                    declarations_without_import=sorted(functions.keys() - imported.keys()),
                                    reference_parameters=sorted(imported.keys() - set(names)))
+                    elif "sdk_import_bridge" in metadata:
+                        declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
+                        inventory = dict(bridge)
+                        names = tuple(flat.select(inventory, declared, directory, windows.run))
+                        row.update(functions=names, inventory="original SDK headers and target import library",
+                                   imports_without_declaration=inventory["imports_without_declaration"])
                     elif name == "NDIS" or name in PROVIDER_PREFIXES:
                         prefixes = ("Ndis",) if name == "NDIS" else PROVIDER_PREFIXES[name]
                         names = official_names(args, compiler, original, directory,
@@ -208,6 +280,10 @@ def check(args: argparse.Namespace) -> dict:
                     (directory / "selection.log").write_text(result.stderr, encoding="utf-8")
                     result.check_returncode()
                     row["selected_header_sha256"] = digest(selected)
+                    if name == "AllJoyn":
+                        renamed = {r["original"]: r["name"] for r in provider["import"]["renamed"]}
+                        alljoyn_public_types(original, bridge["arguments"], selected,
+                                             generated_compiler(compiler), renamed, directory, row)
                     bindings = names
                     if name == "NDIS":
                         row["contract_kind"] = "function types, including inline declarations"
@@ -225,14 +301,14 @@ def check(args: argparse.Namespace) -> dict:
                     contracts = []
                     for view, include in (("original", original), ("generated", selected)):
                         source = directory / (view + ".c")
-                        cpp = view == "original" and bridge is not None
+                        cpp = view == "original" and bridge is not None and bridge.get("language", "c++") == "c++"
                         body = 'extern "C" {\n' + references + '}\n' if cpp else references
                         source.write_text('#include "' + include.as_posix() + '"\n' + body,
                                           encoding="utf-8")
                         if view == "generated":
                             flags = generated_compiler(compiler)
                         else:
-                            flags = bridge["arguments"] if cpp else compiler
+                            flags = bridge["arguments"] if bridge else compiler
                         invocation = flags + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"]
                         row["commands"].append(invocation)
                         result = subprocess.run(invocation, capture_output=True, text=True,
@@ -252,8 +328,17 @@ def check(args: argparse.Namespace) -> dict:
                 (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n",
                                                           encoding="utf-8")
                 print(f"{arch} {name}: {'passed' if row['passed'] else 'FAILED'}", flush=True)
-    expected = set(args.provider or CASES)
-    for arch in args.architecture or ("x86", "x64", "arm64"):
+        expected = set(args.provider or CASES)
+        profiles = manifest.get("profiles", {})
+        if args.provider is None:
+            if "wdk_exports" not in profiles:
+                expected.difference_update(windows.WDK_EXPORT_PREFIXES)
+            if "flat_imports" not in profiles:
+                expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
+            if "legacy_sdk" not in profiles:
+                expected.difference_update(flat.LEGACY)
+        if arch == "x86":
+            expected.difference_update(flat.WIDE_ONLY)
         if {row["provider"] for row in rows if row["architecture"] == arch} != expected:
             raise ValueError(f"provider ABI matrix is incomplete for {arch}")
     report["passed"] = bool(rows) and all(row["passed"] for row in rows)

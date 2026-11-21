@@ -16,6 +16,8 @@ import subprocess
 import zipfile
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_flat_imports as flat
+import microsoft_ucrt_types as ucrt
 from check_microsoft_provider_abis import compiler_contracts, generated_compiler
 
 
@@ -23,6 +25,8 @@ FIXTURE = Path(__file__).resolve().parents[1] / "unittests/types/fixtures/window
 DRIVER_FIXTURE = FIXTURE.with_name("windows_driver_provider_calls.c")
 RDBSS_FIXTURE = FIXTURE.with_name("windows_rdbss_provider_calls.cpp")
 GDIPLUS_FIXTURE = FIXTURE.with_name("windows_gdiplus_provider_calls.cpp")
+LEGACY_FIXTURE = FIXTURE.with_name("windows_legacy_sdk_calls.cpp")
+FLAT_FIXTURE = FIXTURE.with_name("windows_sdk_import_calls.c")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -43,8 +47,14 @@ LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "c
 DRIVER_FUNCTIONS = {"UseSDConfig": "SdPortGetPciConfigSpace",
                     "UseAudioAdapter": "PcAddAdapterDevice",
                     "UseStreamClock": "StreamClassQueryMasterClockSync",
-                    "UseCameraValue": "USBCAMD_GetRegistryKeyValue"}
-DRIVER_IMPORTS = {"sdport.sys": ("SdPortGetPciConfigSpace",),
+                    "UseCameraValue": "USBCAMD_GetRegistryKeyValue",
+                    "UseNetworkPoll": "NdisRequestPoll",
+                    "UseRecorderLog": "imp_WppRecorderLogDelete",
+                    "UseUSBPowerClient": "UsbPm_Deregister"}
+DRIVER_IMPORTS = {"ndis.sys": ("NdisRequestPoll",),
+                  "wpprecorder.sys": ("imp_WppRecorderLogDelete",),
+                  "usbpmapi.sys": ("UsbPm_Deregister",),
+                  "sdport.sys": ("SdPortGetPciConfigSpace",),
                   "portcls.sys": ("PcAddAdapterDevice",),
                   "stream.sys": ("StreamClassQueryMasterClockSync",),
                   "usbcamd2.sys": ("USBCAMD_GetRegistryKeyValue",)}
@@ -58,12 +68,24 @@ RDBSS_FUNCTIONS = {"UseRdbssRegister": "RxRegisterMinirdr",
 GDIPLUS_FUNCTIONS = {"UseGraphicsPath": "GdipCreatePath",
                      "UseImageEncoderSizes": "GdipGetImageEncodersSize",
                      "UseMetafileHeader": "GdipGetMetafileHeaderFromWmf"}
+LEGACY_FUNCTIONS = {"UseAllJoynVersion": "alljoyn_getnumericversion",
+                    "UsePeerGroupStartup": "PeerGroupStartup", "UsePeerGraphConnect": "PeerGraphConnect"}
+FLAT_FUNCTIONS = {"UseColorProfile": "GetColorProfileHeader", "UseCatalog": "CryptCATClose",
+                  "UsePhysicalMonitor": "DestroyPhysicalMonitor", "UseDiagnosticSession": "DdqCloseSession",
+                  "UseDeviceElement": "WSDXMLCleanupElement", "UseDataBlob": "D3D10CreateBlob",
+                  "UseProtectionDescriptor": "NCryptCloseProtectionDescriptor", "UseRoleText": "GetRoleTextW"}
+FLAT_CALL_PROVIDERS = ("ColorManagement", "CatalogTrust", "MonitorConfiguration", "DiagnosticData",
+                       "WSDevices", "Direct3D10", "KeyProtection", "Accessibility")
 
 
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
     if getattr(args, "gdiplus", False):
         fixture, functions, provider_name = GDIPLUS_FIXTURE, GDIPLUS_FUNCTIONS, "GDIPlus"
+    elif getattr(args, "legacy_sdk", False):
+        fixture, functions, provider_name = LEGACY_FIXTURE, LEGACY_FUNCTIONS, "AllJoyn"
+    elif getattr(args, "sdk_imports", False):
+        fixture, functions, provider_name = FLAT_FIXTURE, FLAT_FUNCTIONS, "ColorManagement"
     elif args.rdbss:
         fixture, functions, provider_name = RDBSS_FIXTURE, RDBSS_FUNCTIONS, "RDBSS"
     elif args.kernel:
@@ -96,8 +118,9 @@ def check(args: argparse.Namespace) -> dict:
         # API calling conventions must come from the emitted declarations.
         emitted_compiler = generated_compiler(compiler, keep_sdk_headers=True)
         cpp_fixture = fixture.suffix == ".cpp"
-        original_compiler = (provider["metadata"]["cpp_header_bridge"]["arguments"]
-                             if cpp_fixture else compiler)
+        metadata = provider.get("metadata", {})
+        bridge = metadata.get("sdk_import_bridge") or metadata.get("cpp_header_bridge")
+        original_compiler = bridge["arguments"] if cpp_fixture else compiler
         libraries = []
         if args.kernel:
             # Import-only test images need no implementation of a driver API.
@@ -140,12 +163,17 @@ def check(args: argparse.Namespace) -> dict:
                     definition.with_suffix(".log")).check_returncode()
                 libraries.append(str(library))
         else:
-            package, = [p for p in manifest["target_packages"] if p["architecture"] == arch]
+            archive_inputs = flat.LEGACY_INPUTS if provider_name == "AllJoyn" else ucrt.INPUTS
+            sdk = json.loads(archive_inputs.read_text(encoding="utf-8"))["import_packages"][arch]
+            package, = [p for p in manifest["target_packages"]
+                        if p["architecture"] == arch and p["file"] == sdk["file"]]
             archive = wdk.download(args.cache, package["file"], package["url"], package["sha256"])
             with zipfile.ZipFile(archive) as source:
                 members = {name.lower(): name for name in source.namelist()}
-                for name in (("gdiplus.lib",) if provider_name == "GDIPlus" else LIBRARIES):
-                    member = members[f"c/um/{arch}/{name}"]
+                fixture_libraries = {"GDIPlus": ("gdiplus.lib",), "AllJoyn": flat.LEGACY.values(),
+                                     "ColorManagement": [flat.CURRENT[name][0] for name in FLAT_CALL_PROVIDERS]}
+                for name in fixture_libraries.get(provider_name, LIBRARIES):
+                    member = members[f"c/um/{arch}/{name.lower()}"]
                     destination = directory / name
                     destination.write_bytes(source.read(member))
                     libraries.append(str(destination))
@@ -215,19 +243,22 @@ def main() -> None:
     parser.add_argument("--neverd", required=True)
     parser.add_argument("--linker", default="lld-link")
     parser.add_argument("--dlltool", default="llvm-dlltool")
-    parser.add_argument("--kernel", action="store_true",
+    profile = parser.add_mutually_exclusive_group()
+    profile.add_argument("--kernel", action="store_true",
                         help="check original WDK callers with synthetic import libraries")
     parser.add_argument("--rdbss", action="store_true",
                         help="check the RDBSS C++ callers (requires --kernel)")
-    parser.add_argument("--gdiplus", action="store_true",
+    profile.add_argument("--gdiplus", action="store_true",
                         help="check flat GDI+ callers from the original Microsoft C++ headers")
+    profile.add_argument("--legacy-sdk", action="store_true",
+                         help="check callers against the archived Microsoft SDK headers and import libraries")
+    profile.add_argument("--sdk-imports", action="store_true",
+                         help="check color, trust, monitor, diagnostic and device service callers")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()
     if args.rdbss and not args.kernel:
         parser.error("--rdbss requires --kernel")
-    if args.gdiplus and args.kernel:
-        parser.error("--gdiplus is a user-mode provider")
     args.generated = args.generated.resolve()
     args.output = args.output.resolve()
     if not check(args)["passed"]:

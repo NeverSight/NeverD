@@ -140,6 +140,15 @@ Direct3D 11/12, DXGI and D3DCompiler likewise select their exported C functions
 with the complete record and callback dependencies. These units cover device
 and swap-chain creation, root-signature serialization, factory creation and
 shader compilation; they do not infer a COM method call from a vtable slot.
+The kernel catalog also selects the WDK's callable storage-port access
+routines, tape class, WPP recorder, USB power, entropy and network power
+dependency interfaces. The storage-port profile defines
+`DISABLE_INLINE_REGISTER_ACCESS` so the compiler sees the external routines.
+NDIS poll uses the WDK's NDIS 6.85 profile. The NDIS chimney and legacy
+Network DMA units cover older driver imports. The Network DMA header
+requires `ENABLE_LEGACY_NETDMA`. The provider ABI checker compiles each
+selected prototype against the original headers and the published catalog.
+
 RDBSS is an independent kernel unit using the official mini-redirector
 profile. The pinned `rxcontx.h` gives two different anonymous enums the same
 `RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both
@@ -197,6 +206,31 @@ functions with C++ reference parameters whose compiler preconditions the C
 renderer cannot yet preserve and SDK declarations absent from the import library.
 Run `--provider GDIPlus` to repeat the API check and use
 `check_windows_provider_calls.py --gdiplus` to recompile callers from both C backends.
+
+The SDK import profiles cover color management, catalog trust, monitor
+configuration, diagnostic data and Web Services for Devices on all three
+targets. They also cover key protection, Winsock service providers, trust
+policies, Direct3D 10, ink recognition, image helpers, OLE dialogs, XML
+cryptography, WebDAV, accessibility, input methods, interaction contexts,
+delta compression, patching and network diagnostics. The SDK supplies Host Compute, Host Network and Hypervisor Platform
+import libraries for x64 and ARM64. For each target the generator intersects
+public code import names with that SDK's declarations, checks the compiler's
+exact linker spelling, and compares the original and published compiler ABI
+before and after the merge. Ordinal-only imports carry no public name.
+
+Add `--legacy-sdk` to use the archived Microsoft 10.0.22621.3233 SDK for
+AllJoyn, Peer Networking and Peer Graph. The package identities and hashes
+are pinned in `scripts/MicrosoftLegacySDKInputs.json`. The current SDK
+profiles use Microsoft's C headers. The archived profiles use the original
+C++ headers to verify declarations with default arguments and empty parameter
+lists. Each target manifest retains the header profile, import library, and
+compiler commands. Use `check_windows_provider_calls.py --sdk-imports` and
+`check_windows_provider_calls.py --legacy-sdk` for linked HighC and LLVMC
+caller checks using the matching Microsoft libraries. The independent AllJoyn
+ABI check enumerates the callback typedefs and anonymous record typedefs in
+Microsoft's C++ headers. It compares callback calling conventions, record
+sizes and alignments, and the offsets and widths of their fields with the
+published C declarations.
 
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of

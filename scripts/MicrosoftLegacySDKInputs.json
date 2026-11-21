@@ -1,0 +1,29 @@
+{
+  "sdk_version": "10.0.22621.0",
+  "alljoyn_notice": {
+    "file": "AllJoyn-SDK-LICENSE.txt",
+    "sha256": "0d888fdaabde26fe368d91b0a06c00b2eab7bb45e240adf6b1b0b7c75b472131"
+  },
+  "headers": {
+    "file": "microsoft.windows.sdk.cpp.10.0.22621.3233.nupkg",
+    "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.22621.3233/microsoft.windows.sdk.cpp.10.0.22621.3233.nupkg",
+    "sha256": "e4efe1768ea61f4f999dbef61b09895320629f975f9ceed8290a9633e0c31623"
+  },
+  "import_packages": {
+    "x86": {
+      "file": "microsoft.windows.sdk.cpp.x86.10.0.22621.3233.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x86/10.0.22621.3233/microsoft.windows.sdk.cpp.x86.10.0.22621.3233.nupkg",
+      "sha256": "9256e5d173113b16bbba7b1e0b01452b6606040c4f1fabf1c300e706d92d9f8f"
+    },
+    "x64": {
+      "file": "microsoft.windows.sdk.cpp.x64.10.0.22621.3233.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.x64/10.0.22621.3233/microsoft.windows.sdk.cpp.x64.10.0.22621.3233.nupkg",
+      "sha256": "f8475cf8654763dd5d5db050b99788ef3ceae4436a2fba8fe4ea3b022c656e19"
+    },
+    "arm64": {
+      "file": "microsoft.windows.sdk.cpp.arm64.10.0.22621.3233.nupkg",
+      "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp.arm64/10.0.22621.3233/microsoft.windows.sdk.cpp.arm64.10.0.22621.3233.nupkg",
+      "sha256": "610ac65cd626cf45f4cff1d0d6e47dae2ddb47663ee8680fdcb7de8d045b8a19"
+    }
+  }
+}
