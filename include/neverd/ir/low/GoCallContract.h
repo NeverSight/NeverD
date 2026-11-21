@@ -232,6 +232,10 @@ bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
 /// False where the image records no function.
 bool goInsideRecordedFunction(const BinaryImage &Img, va_t Address);
 
+/// Whether \p Address lies in one of the image's Duff's device routines,
+/// `runtime.duffzero` or `runtime.duffcopy` (GoModuleInfo::DuffDevices).
+bool goDuffDeviceAt(const BinaryImage &Img, va_t Address);
+
 /// The most integer registers the Go function at \p Entry takes its
 /// arguments in, in Go's order, where the image passes them in registers:
 /// one for each scalar component its traceback lists

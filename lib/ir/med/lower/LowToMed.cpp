@@ -2198,7 +2198,9 @@ MedFunc LowToMedConverter::convertFunction(
     // Go's internal ABI enters a function with X15 zero, and its calls keep
     // it so (CallRegisterContract::GoInternal).  Assembly that takes Go's
     // argument registers follows that ABI (goAssemblyTakesRegisterArguments):
-    // `runtime.memclrNoHeapPointers` stores X15 as its zero.
+    // `runtime.memclrNoHeapPointers` stores X15 as its zero.  So does a Duff's
+    // device routine (goDuffDeviceAt), which compiled code alone calls, at
+    // whichever entry: `runtime.duffzero` stores X15 sixty-four times.
     const GPRReadWidths *OwnEntryReads = nullptr;
     if (CallEntryReadGPRs)
       if (const auto Reads = CallEntryReadGPRs->find(Low.Entry);
@@ -2206,6 +2208,8 @@ MedFunc LowToMedConverter::convertFunction(
         OwnEntryReads = &Reads->second;
     if (Image && TheArch == Arch::X64 && !Func.Blocks.empty() &&
         (usesGoRegisterArguments(*Image, Low.Entry) ||
+         (goDuffDeviceAt(*Image, Low.Entry) &&
+          Image->ExceptionMetadata.GoModule->RegisterArguments) ||
          (OwnEntryReads && goAssemblyTakesRegisterArguments(*Image, Low.Entry,
                                                             *OwnEntryReads)))) {
       MedOp Zero;

@@ -1626,6 +1626,36 @@ TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
       Found, [&](const auto &Item) { return Item.first == F + 8; }));
 }
 
+TEST(GoAssembly, ADuffsDeviceEntersWithZeroInX15) {
+  // Compiled code alone calls a Duff's device routine, at whichever entry,
+  // so under the internal ABI it enters with X15 zero: Go 1.18-1.24's
+  // `runtime.duffzero` stores X15.
+  //   runtime.duffzero: movups [rdi], xmm15; movups [rdi+16], xmm15; ret
+  constexpr va_t Zero = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Zero,
+              {0x44, 0x0F, 0x11, 0x3F, 0x44, 0x0F, 0x11, 0x7F, 0x10, 0xC3});
+  Symbol Function = Symbol::makeFunc(Zero);
+  Function.Name = "runtime.duffzero";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Zero, kTextVA + 0x300}};
+  Module.GoAssembly = {{Zero, Zero + 0x10}};
+  Module.FrameArguments = {{Zero, 0, 0}};
+  Module.DuffDevices = {{Zero, Zero + 0x10}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const std::string Text = highCBody(R, T.Img, "runtime_duffzero");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
 TEST(GoAssembly, ABIInternalAssemblyEntersWithZeroInX15) {
   // Go's internal ABI enters a function with X15 zero, and assembly that
   // takes Go's argument registers follows that ABI:

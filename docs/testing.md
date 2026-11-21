@@ -20759,6 +20759,8 @@ discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
 `main.g` begin functions, and `main.f+8` begins none.
 `GoFunctionTable.ADuffsDeviceEntryBeginsAFunction` runs it again with
 `main.f` as `runtime.duffzero`: `main.f+8` begins a function.
+`GoAssembly.ADuffsDeviceEntersWithZeroInX15` lifts a
+`runtime.duffzero` that stores X15 twice: its C stores zero and traps nowhere.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
 that jumps to its own label, which another function calls: the jump is no
 call.
