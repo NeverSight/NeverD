@@ -136,6 +136,48 @@ TEST(MIPSPhysicalDecode, SingleInstructionPathsMatchTheStreamingIterator) {
     }
 }
 
+TEST(MIPSPhysicalDecode, WordArithmeticReadsRegistersInSourceOrder) {
+  for (Arch Target : {Arch::MIPS64, Arch::MIPS64EL}) {
+    for (auto Mode :
+         {InstructionMode::MIPSClassic, InstructionMode::MicroMIPS}) {
+      Decoder Decode;
+      ASSERT_TRUE(Decode.init(Target, Mode));
+      for (bool Subtract : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << getArchName(Target) << "/"
+                                          << unsigned(Mode) << "/" << Subtract);
+        // ADDU/SUBU v0,a0,a1 and their compact ADDU16/SUBU16 encodings.
+        auto Bytes = encode({Subtract ? 0x00851023u : 0x00851021u}, Target);
+        if (Mode == InstructionMode::MicroMIPS) {
+          const uint8_t Low = Subtract ? 0x59 : 0x58;
+          Bytes = archLittleEndian(Target) ? std::vector<uint8_t>{Low, 0x05}
+                                           : std::vector<uint8_t>{0x05, Low};
+        }
+        DecodedInsn Instruction;
+        ASSERT_EQ(Decode.decodeOneForLift(Bytes.data(), Bytes.size(), 0x10000,
+                                          Instruction),
+                  Bytes.size());
+        std::vector<LowOp> Ops;
+        Decode.liftToLow(Instruction, Ops);
+        std::vector<const LowOp *> Reads;
+        const LowOp *Arithmetic = nullptr;
+        for (const auto &Op : Ops) {
+          if (Op.Opcode == NdOp::SUBBYTES)
+            Reads.push_back(&Op);
+          if (Op.Opcode == (Subtract ? NdOp::INT_SUB : NdOp::INT_ADD))
+            Arithmetic = &Op;
+        }
+        ASSERT_EQ(Reads.size(), 2u);
+        ASSERT_NE(Arithmetic, nullptr);
+        for (unsigned I = 0; I != 2; ++I) {
+          EXPECT_EQ(Reads[I]->Inputs[0], NdVar::reg(mipsreg::r(4 + I), 8));
+          EXPECT_EQ(Reads[I]->Output.Size, 4u);
+          EXPECT_EQ(Arithmetic->Inputs[I], Reads[I]->Output);
+        }
+      }
+    }
+  }
+}
+
 class MIPSInteger : public ::testing::TestWithParam<Arch> {};
 
 TEST_P(MIPSInteger, RegisterAndStackContractsAreWidthSpecific) {
