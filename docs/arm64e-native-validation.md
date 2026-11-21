@@ -2912,3 +2912,18 @@ and keeps the individual probe reports. Both the hosted and the self-hosted
 checkouts include the assembler fixture used by the signal cursor probe.
 [Hosted arm64e.x1 qualification](https://github.com/gmh5225/test_mac_intel/actions/workflows/neverd-hosted-arm64e-x1.yml).
 [Manual run on macos-15, macos-26 and xcode-27](https://github.com/gmh5225/test_mac_intel/actions/runs/44872479257).
+
+The Release CLI published five dylibs and two high-base main executables at
+both optimization settings through three generations. On each of macos-26
+and xcode-27, a separate caller loaded all 35 original and published
+dylibs and checked their values. Darwin launched all 14 original and
+published executables. Each host passed 268 source-fork tests, including
+twelve handler-start walks on the compiler and published images.
+An additional 1.1 MiB instruction section with eighteen embedded data regions
+put the trailing pool outside the first load's range. Both optimization modes
+reported the placement failure before creating an output.
+The frozen r6 build passed 258 tests on each host, with six previously
+recorded signed-CFI failures and four compact-emitter skips.
+[Source-fork execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877832586).
+[Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877884491).
+[Revision, test executables and results](evidence/arm64e-interior-address-publication-2026-11-21.json).
