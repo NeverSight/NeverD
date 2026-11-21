@@ -17,6 +17,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 #include <optional>
@@ -71,6 +72,21 @@ const LowOp *physicalMerge(const LowBlock &Block,
   return Found;
 }
 
+bool isScheduledRegisterOp(const LowOp &Op) {
+  switch (Op.Opcode) {
+  case NdOp::COPY:
+  case NdOp::SUBBYTES:
+  case NdOp::INT_SEXT:
+  case NdOp::INT_ZEXT:
+  case NdOp::INT_ADD:
+  case NdOp::INT_OR:
+  case NdOp::INT_LEFT:
+    return true;
+  default:
+    return false;
+  }
+}
+
 } // namespace
 
 unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
@@ -115,10 +131,21 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
     const auto Mode = Boundary.Mode == InstructionMode::Default
                           ? InstructionMode::MIPSClassic
                           : Boundary.Mode;
-    if (Previous && Current && PreviousEnd == Boundary.Address &&
-        PreviousMode == Mode)
-      Candidates.push_back({Previous, Current});
-    Previous = Current;
+    // Schedulers can construct other arguments between the two loads. The
+    // SSA walk below still checks every use of the partial value.
+    const bool Contiguous =
+        Previous && PreviousEnd == Boundary.Address && PreviousMode == Mode;
+    if (Current) {
+      if (Contiguous)
+        Candidates.push_back({Previous, Current});
+      Previous = Current;
+    } else if (!Contiguous || Boundary.Control != LowInstructionControl::None ||
+               Boundary.DelaySlot || !Boundary.Size || !Boundary.OpCount ||
+               !llvm::all_of(llvm::ArrayRef(Low.Ops).slice(Boundary.FirstOp,
+                                                           Boundary.OpCount),
+                             isScheduledRegisterOp)) {
+      Previous = nullptr;
+    }
     PreviousMode = Mode;
     PreviousEnd = Boundary.Address + Boundary.Size;
   }

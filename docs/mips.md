@@ -139,8 +139,9 @@ stores, arithmetic and control also refuse any unknown bits they observe.
 Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
-Before inferring parameters, source recovery checks adjacent merge loads in a
-single block. The physical instructions must be complementary at the addresses
+Before inferring parameters, source recovery checks merge-load pairs in a
+single block. Register arithmetic that constructs other call arguments may
+appear between the loads. The instructions must be complementary at the addresses
 required by the target byte order. Both reads retain their fault order, and
 the second consumes the first result. The first load can discard its incoming
 register bits only when every use of its result proves those bits unobservable.
@@ -1722,11 +1723,18 @@ by-value record observes the pieces selected by its own signature. For example,
 a single unsigned field that fills an ABI slot occupies one argument GPR,
 including a four-byte slot on o32. A four-byte integer field in an eight-byte
 n32 or n64 register uses its high half on big-endian machines and its low half
-on little-endian machines when passed or returned as a record.
+on little-endian machines when passed or returned as a record. A caller may
+sign-extend that field after the call. The saved-link analysis follows the
+field's sign byte and leaves the unused half unproven, including after an
+unaligned word load with an implementation-dependent upper word.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
 A merge load from caller-owned input can supply a record argument when both
 the memory bytes and the retained register bytes exclude the private frame.
+For a merge store into a private stack slot the analysis follows each written
+byte in target order. A write covering even one saved-link byte invalidates
+that byte's previous value. A merge store to an output pointer requires
+evidence that the stored bytes cannot expose the private frame.
 For record callers that copy an argument into a private stack buffer in a
 counted loop, the proof follows the loop's actual byte addresses and bound.
 A call with an unknown frame effect, an uninitialized private byte or an

@@ -149,6 +149,56 @@ TEST_P(MIPSMergeValues, BothOrdersDiscardOnlyTheFirstOldValue) {
   }
 }
 
+TEST_P(MIPSMergeValues, ScheduledArgumentArithmeticPreservesThePair) {
+  enum class Gap { Arithmetic, PartialValue, Load, MissingInstruction };
+  for (bool Reverse : {false, true}) {
+    for (auto G : {Gap::Arithmetic, Gap::PartialValue, Gap::Load,
+                   Gap::MissingInstruction}) {
+      Pair P(GetParam(), 4, Reverse);
+      auto &Low = P.Physical.Blocks.front();
+      auto &B = Low.InstructionBoundaries;
+      LowOp Middle;
+      Middle.Opcode = G == Gap::Load ? NdOp::LOAD : NdOp::INT_ADD;
+      Middle.Addr = 0x1004;
+      Middle.Seq = 15;
+      Middle.Output = NdVar::tmp(41, P.Bytes);
+      const unsigned InputBytes = G == Gap::Load ? P.Width : P.Bytes;
+      Middle.Inputs[0] = G == Gap::PartialValue ? NdVar::tmp(30, P.Bytes)
+                                                : NdVar::reg(48, InputBytes);
+      Middle.NumInputs = 1;
+      if (Middle.Opcode == NdOp::INT_ADD)
+        Middle.Inputs[Middle.NumInputs++] = NdVar::cst(5, P.Bytes);
+      Low.Ops[1].Addr = P.second().Addr = 0x1008;
+      B[1].Address = P.second().Addr;
+      B[1].FirstOp = 2;
+      Low.Ops.insert(Low.Ops.begin() + 1, Middle);
+      LowInstructionBoundary Between;
+      Between.Address = Middle.Addr;
+      Between.FirstOp = 1;
+      Between.OpCount = 1;
+      Between.Size = G == Gap::MissingInstruction ? 2 : 4;
+      B.insert(B.begin() + 1, Between);
+
+      MedOp GapOp;
+      GapOp.Opcode = Middle.Opcode;
+      GapOp.Addr = Middle.Addr;
+      GapOp.OriginSeq = Middle.Seq;
+      GapOp.Output = variable(41, P.Bytes, GetParam());
+      GapOp.addInput(G == Gap::PartialValue
+                         ? P.first().Output
+                         : variable(42, InputBytes, GetParam()));
+      if (Middle.Opcode == NdOp::INT_ADD)
+        GapOp.addInput(scalar(5, P.Bytes));
+      auto &Ops = P.Function.Blocks.front().Ops;
+      Ops.insert(Ops.begin() + 2, GapOp);
+      const auto Partial = P.first().Output;
+      EXPECT_EQ(P.run(), G == Gap::Arithmetic ? 1u : 0u);
+      EXPECT_EQ(P.first().Inputs[2].isConst(), G == Gap::Arithmetic);
+      EXPECT_EQ(Ops[4].Inputs[2], Partial);
+    }
+  }
+}
+
 TEST_P(MIPSMergeValues, MIPS16PairsRequireFourBytePhysicalInstructions) {
   for (bool Reverse : {false, true}) {
     Pair P(GetParam(), 4, Reverse);

@@ -143,6 +143,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::vector<MedVar> MemoryAddresses;
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
+  bool HasMergeStores = false;
   size_t CallCount = 0;
   llvm::SmallDenseMap<const MedBlock *, size_t, 4> NativePrefixes;
   struct CallFrame {
@@ -217,10 +218,17 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         if (Op.IsTailCall && Calls.contains(&Op))
           QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
       }
-      if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
-           (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
-            Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
-          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      if (Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
+          (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
+           Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) {
+        if (Op.NumInputs && Op.Inputs[0].isConst() &&
+            mips::mergeStore(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+            mipsScalarMedShapeIsValid(Op, Target))
+          HasMergeStores = true;
+        else
+          QualifiedMemory = false;
+      }
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           Op.MemoryOrdering != NdMemoryOrdering::None)
         QualifiedMemory = false;
     }
@@ -267,6 +275,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         Prefix->second = Pred->Ops.size();
     }
   }
+  // Only the byte-by-byte record walk tracks the addresses and register
+  // lanes of a merge store. The whole-slot reaching-store proof cannot.
+  const bool RecordFrameMemory = QualifiedMemory;
+  QualifiedMemory &= !HasMergeStores;
   const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
                                      size_t LoadIndex) {
     // An external read cannot recover this function's frame address before
@@ -694,7 +706,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     return std::nullopt;
   };
   const bool SingleRecordExit =
-      QualifiedMemory && Required.size() == 1 && TailReturns.empty() &&
+      RecordFrameMemory && Required.size() == 1 && TailReturns.empty() &&
       llvm::any_of(Calls, [](const auto &C) {
         return C.first->SourceCallHint &&
                C.first->SourceCallHint->Signature.MIPSRecords;

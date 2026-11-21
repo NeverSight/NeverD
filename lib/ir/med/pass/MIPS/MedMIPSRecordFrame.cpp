@@ -117,17 +117,27 @@ class FrameWalk {
       return {Origin::Number, Bits};
     return Value::fromBytes(Known, Width);
   }
-  bool store(Value Address, Value Data, unsigned Width) {
+  bool store(Value Address, Value Data, unsigned Width,
+             std::optional<MergeTransfer> Merge = std::nullopt) {
     if (Address.external())
       return Data.external();
-    const int64_t At = int64_t(Address.Bits);
-    if (Address.From != Origin::Stack || !privateBytes(At, Width) ||
-        Width > Budget)
+    if (Address.From != Origin::Stack)
       return false;
-    Budget -= Width;
-    for (unsigned I = 0; I < Width; ++I)
-      Memory[At + I] = {Data, archLittleEndian(Target) ? I : Width - 1 - I,
-                        Width};
+    const bool Little = archLittleEndian(Target);
+    int64_t At = int64_t(Address.Bits);
+    unsigned Count = Width;
+    unsigned FirstLane = 0;
+    if (Merge) {
+      const auto Access = mergeAccess(*Merge, Address.Bits, Little);
+      At = int64_t(Access.First);
+      Count = Access.Count;
+      FirstLane = Access.RegisterByte;
+    }
+    if (!privateBytes(At, Count) || Count > Budget)
+      return false;
+    Budget -= Count;
+    for (unsigned I = 0; I < Count; ++I)
+      Memory[At + I] = {Data, FirstLane + (Little ? I : Count - 1 - I), Width};
     return true;
   }
   Value compute(const MedOp &O) const {
@@ -206,24 +216,35 @@ class FrameWalk {
           (A.From == Origin::Number || A.From == Origin::Stack))
         return {Origin::Number,
                 uint64_t((A.Bits == B.Bits) == (O.Opcode == NdOp::INT_EQUAL))};
-    } else if (O.Opcode == NdOp::INT_RIGHT || O.Opcode == NdOp::INT_LEFT) {
+    } else if (O.Opcode == NdOp::INT_RIGHT || O.Opcode == NdOp::INT_LEFT ||
+               O.Opcode == NdOp::INT_ASHR) {
       if (B.From != Origin::Number || B.Bits >= W * 8)
         return {};
       const bool Left = O.Opcode == NdOp::INT_LEFT;
-      if (A.From == Origin::Number)
+      const bool Signed = O.Opcode == NdOp::INT_ASHR;
+      if (A.From == Origin::Number) {
+        const uint64_t Bits = A.Bits & mask(W);
+        if (Signed)
+          return {Origin::Number,
+                  uint64_t(llvm::SignExtend64(Bits, W * 8) >> B.Bits) &
+                      mask(W)};
         return {Origin::Number,
-                (Left ? A.Bits << B.Bits : A.Bits >> B.Bits) & mask(W)};
+                (Left ? Bits << B.Bits : Bits >> B.Bits) & mask(W)};
+      }
       if (A.external())
         return {Origin::NonFrame};
       if (B.Bits % 8)
         return {};
       const unsigned Shift = B.Bits / 8;
       const uint64_t Known = A.knownBytes(W);
-      return Value::fromBytes(
-          Left
-              ? (Known << Shift) | Value::lanes(Shift)
-              : (Known >> Shift) | (Value::lanes(W) & ~Value::lanes(W - Shift)),
-          W);
+      if (Left)
+        return Value::fromBytes((Known << Shift) | Value::lanes(Shift), W);
+      // An arithmetic shift fills from the source sign byte, which may
+      // belong to the unspecified half of a returned ABI register.
+      const bool KnownFill = !Signed || (Known & (uint64_t(1) << (W - 1)));
+      const uint64_t Fill =
+          KnownFill ? Value::lanes(W) & ~Value::lanes(W - Shift) : 0;
+      return Value::fromBytes((Known >> Shift) | Fill, W);
     } else if (O.Opcode == NdOp::INT_OR || O.Opcode == NdOp::INT_AND) {
       const bool And = O.Opcode == NdOp::INT_AND;
       if (A.From == Origin::Number && B.From == Origin::Number)
@@ -388,7 +409,10 @@ public:
             O.Inputs[0].isConst() && O.Output.Kind == MedVar::Temp &&
             mipsScalarMedShapeIsValid(O, Target)) {
           const auto Id = static_cast<Intrinsic>(O.Inputs[0].ConstVal);
-          if (Id == Intrinsic::MIPSUnpredictable) {
+          if (Id == Intrinsic::MIPSUnpredictable ||
+              Id == Intrinsic::MIPSLwrUpper) {
+            // LWR defines its low word separately. Its implementation-
+            // dependent upper word cannot establish frame provenance.
             Values[key(O.Output)] = {};
             continue;
           }
@@ -405,6 +429,13 @@ public:
         if (O.Opcode == NdOp::INTRINSIC && O.NumInputs &&
             O.Inputs[0].isConst() && !O.Output.Size) {
           const auto Id = static_cast<Intrinsic>(O.Inputs[0].ConstVal);
+          if (const auto Merge = mergeStore(Id)) {
+            if (!mipsScalarMedShapeIsValid(O, Target) ||
+                !store(read(O.Inputs[1]), read(O.Inputs[2]), Merge->Bytes,
+                       Merge))
+              return false;
+            continue;
+          }
           if ((Id == Intrinsic::RequireAligned && O.NumInputs == 3 &&
                O.Inputs[2].isConst() &&
                llvm::isPowerOf2_64(O.Inputs[2].ConstVal)) ||
@@ -426,6 +457,7 @@ public:
         case NdOp::INT_OR:
         case NdOp::INT_LEFT:
         case NdOp::INT_RIGHT:
+        case NdOp::INT_ASHR:
         case NdOp::INT_AND:
         case NdOp::INT_EQUAL:
         case NdOp::INT_NOTEQUAL:

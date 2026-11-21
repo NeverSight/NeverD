@@ -360,6 +360,109 @@ TEST(MIPSRecordSourceEntry, SinglePrecisionRecordStoresOnlyDefinedResultBytes) {
   }
 }
 
+TEST(MIPSRecordSourceEntry, SignExtendedRecordWordsUseOnlyTheDefinedHalf) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Little = archLittleEndian(A);
+    for (bool UseOtherHalf : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << UseOtherHalf);
+      // Load a four-byte input through an unaligned word pair. The call
+      // returns its record in one half of v0. Store the selected word and
+      // its sign extension through the caller's external pointer.
+      std::vector<uint32_t> Words{
+          0x67bdffe0,
+          0xffbf0018,
+          0xffb00010,
+          0x00a08025,
+          0x00001825,
+          0x88830000u + (Little ? 3u : 0u),   // lwl v1,off(a0)
+          0x98830000u + (Little ? 0u : 3u),   // lwr v1,off(a0)
+          Little ? 0x00032000u : 0x0003203cu, // sll/dsll32 a0,v1,0
+          0x0c000800,
+          0x6405002a};
+      if (Little != UseOtherHalf)
+        Words.push_back(0x0002103c); // dsll32 v0,v0,0
+      Words.insert(Words.end(),
+                   {0x0002103f, 0xfe020000, // dsra32 v0,v0,0; sd v0,0(s0)
+                    0xdfb00010, 0xdfbf0018, 0x03e00008, 0x67bd0020});
+      auto Image = image(Words, A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      auto Word = NdType::makeStruct({NdType::makeInt(4, false)});
+      Word->Passing = NdRecordPassing::ByValue;
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Word;
+      Sig.Parameters = {{"value", Word}, {"tail", NdType::makeInt(8, false)}};
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      const auto Low = build(Image);
+      if (UseOtherHalf)
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry, MergeStoresPreserveOnlyUntouchedSavedLinkBytes) {
+  enum class Destination { External, EscapingPointer, Private, SavedLink };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Width : {4u, 8u}) {
+      for (bool Left : {false, true}) {
+        for (auto D : {Destination::External, Destination::EscapingPointer,
+                       Destination::Private, Destination::SavedLink}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(A) << '/' << Width << '/' << Left << '/'
+                       << unsigned(D));
+          const bool External =
+              D == Destination::External || D == Destination::EscapingPointer;
+          const unsigned Base = External ? 16 : 29; // s0 or sp
+          const unsigned Data = D == Destination::EscapingPointer ? 29 : 2;
+          // With an aligned frame these offsets select exactly one byte.
+          // Keep the s0 spill at 8(sp) and the saved link at 24(sp).
+          const unsigned Offset = (D == Destination::SavedLink ? 24 : 16) +
+                                  (Left != archLittleEndian(A) ? Width - 1 : 0);
+          const uint32_t Opcode =
+              Width == 4 ? (Left ? 0x2a : 0x2e) : (Left ? 0x2c : 0x2d);
+          const uint32_t Store =
+              (Opcode << 26) | (Base << 21) | (Data << 16) | Offset;
+          auto Image = image({0x67bdffe0, 0xffbf0018, 0xffb00008, 0x00808025,
+                              0x0c000800, 0x6404002a, Store, 0xdfb00008,
+                              0xdfbf0018, 0x03e00008, 0x67bd0020},
+                             A);
+          Image.MIPS.emplace();
+          Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+          auto Record = NdType::makeStruct({NdType::makeInt(8, false)});
+          Record->Passing = NdRecordPassing::ByValue;
+          SourceFunctionTypeHint Sig;
+          Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+          Sig.ReturnType = Record;
+          Sig.Parameters = {{"value", Record}};
+          ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+          const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+          LowToMedConverter Convert;
+          Convert.setBinaryImage(&Image);
+          Convert.setSourceCallHintsEnabled(true);
+          Convert.setSourceCalleeTypeHints(&Targets);
+          const auto Low = build(Image);
+          if (D == Destination::External || D == Destination::Private)
+            EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
+      }
+    }
+  }
+}
+
 TEST(MIPSRecordSourceEntry, MergeLoadsPreservePrivateLinkForExternalData) {
   for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
                  Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
