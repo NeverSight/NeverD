@@ -23,6 +23,21 @@ CURRENT = {
     "HostCompute": ("computecore.lib", ("computecore",)),
     "HostNetwork": ("computenetwork.lib", ("computenetwork",)),
     "HypervisorPlatform": ("WinHvPlatform.lib", ("winhvplatform",)),
+    "KeyProtection": ("ncrypt.lib", ("ncrypt", "ncryptprotect")),
+    "SocketProviders": ("WS2_32.Lib", ("ws2spi", "sporder")),
+    "TrustPolicies": ("AdvAPI32.Lib", ("winsafer", "perflib", "appmgmt")),
+    "Direct3D10": ("d3d10.lib", ("d3d10", "d3d10effect", "d3d10shader", "d3d10misc")),
+    "InkRecognition": ("inkobjcore.lib", ("recapis",)),
+    "ImageHelpers": ("ImageHlp.Lib", ("imagehlp",)),
+    "OLEDialogs": ("OleDlg.Lib", ("oledlg",)),
+    "XMLCryptography": ("cryptxml.lib", ("cryptxml",)),
+    "DAVClient": ("davclnt.lib", ("davclnt",)),
+    "Accessibility": ("OleAcc.Lib", ("oleacc",)),
+    "InputMethod": ("Imm32.Lib", ("imm", "immdev")),
+    "InteractionContext": ("ninput.lib", ("interactioncontext",)),
+    "DeltaCompression": ("msdelta.lib", ("msdelta",)),
+    "PatchAPI": ("mspatcha.lib", ("patchapi",)),
+    "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
 

@@ -66,7 +66,10 @@ LEGACY_FUNCTIONS = {"UseAllJoynVersion": "alljoyn_getnumericversion",
                     "UsePeerGroupStartup": "PeerGroupStartup", "UsePeerGraphConnect": "PeerGraphConnect"}
 FLAT_FUNCTIONS = {"UseColorProfile": "GetColorProfileHeader", "UseCatalog": "CryptCATClose",
                   "UsePhysicalMonitor": "DestroyPhysicalMonitor", "UseDiagnosticSession": "DdqCloseSession",
-                  "UseDeviceElement": "WSDXMLCleanupElement"}
+                  "UseDeviceElement": "WSDXMLCleanupElement", "UseDataBlob": "D3D10CreateBlob",
+                  "UseProtectionDescriptor": "NCryptCloseProtectionDescriptor", "UseRoleText": "GetRoleTextW"}
+FLAT_CALL_PROVIDERS = ("ColorManagement", "CatalogTrust", "MonitorConfiguration", "DiagnosticData",
+                       "WSDevices", "Direct3D10", "KeyProtection", "Accessibility")
 
 
 def check(args: argparse.Namespace) -> dict:
@@ -162,8 +165,7 @@ def check(args: argparse.Namespace) -> dict:
             with zipfile.ZipFile(archive) as source:
                 members = {name.lower(): name for name in source.namelist()}
                 fixture_libraries = {"GDIPlus": ("gdiplus.lib",), "AllJoyn": flat.LEGACY.values(),
-                                     "ColorManagement": [library for name, (library, _) in flat.CURRENT.items()
-                                                         if name not in flat.WIDE_ONLY]}
+                                     "ColorManagement": [flat.CURRENT[name][0] for name in FLAT_CALL_PROVIDERS]}
                 for name in fixture_libraries.get(provider_name, LIBRARIES):
                     member = members[f"c/um/{arch}/{name.lower()}"]
                     destination = directory / name

@@ -200,7 +200,10 @@ Run `--provider GDIPlus` to repeat the API check and use
 
 The SDK import profiles cover color management, catalog trust, monitor
 configuration, diagnostic data and Web Services for Devices on all three
-targets. The SDK supplies Host Compute, Host Network and Hypervisor Platform
+targets. They also cover key protection, Winsock service providers, trust
+policies, Direct3D 10, ink recognition, image helpers, OLE dialogs, XML
+cryptography, WebDAV, accessibility, input methods, interaction contexts,
+delta compression, patching and network diagnostics. The SDK supplies Host Compute, Host Network and Hypervisor Platform
 import libraries for x64 and ARM64. For each target the generator intersects
 public code import names with that SDK's declarations, checks the compiler's
 exact linker spelling, and compares the original and published compiler ABI
