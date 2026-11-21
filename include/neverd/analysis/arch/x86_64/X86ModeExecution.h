@@ -42,7 +42,7 @@ namespace detail {
 struct X86ModeContinuation;
 }
 
-/// Linux KVM long-mode-capable SMM save-map profile (revision 0x20064).
+/// Linux KVM chooses save map 0x20064 or 0x20000 by CPUID long-mode capability.
 /// SMBASE selects the entry and mutable save area in the separate SMRAM bank.
 struct X86SmmState {
   uint32_t SMBase = 0x30000;

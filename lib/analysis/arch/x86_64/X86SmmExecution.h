@@ -4,21 +4,20 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Serialize the KVM64 save map and restore it from isolated system RAM.
+/// Run software SMI and original RSM against isolated system RAM.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X86SMMEXECUTION_H
 #define NEVERD_LIB_ANALYSIS_ARCH_X86_64_X86SMMEXECUTION_H
 
-#include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
+#include "X86SmmSaveMap.h"
 
-#include <array>
 #include <optional>
 
 namespace neverd::analysis::detail {
 
 struct X86RsmProgress {
-  std::optional<std::array<uint8_t, 512>> SaveArea;
+  std::optional<X86SmmSaveImage> SaveArea;
   translate::X86PAEPDPTEContinuation PDPTE;
 };
 

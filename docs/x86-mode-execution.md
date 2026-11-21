@@ -19,8 +19,8 @@ slots of the instruction's operand width. Word and dword IRET and far RET
 read the caller's compatibility frame and select the destination code width
 from its descriptor.
 
-An optional per-CPU SMM state and separate system RAM bind the KVM64 save-map
-profile. A software SGX bank binds imported SECS, TCS and EPCM pages for x64
+An optional per-CPU SMM state and separate system RAM bind the KVM save map
+selected by the processor’s long-mode capability. A software SGX bank binds imported SECS, TCS and EPCM pages for x64
 enclave threads. Machine checks, SMI, INIT, SIPI, NMI and fixed APIC arrivals
 are polled at instruction boundaries, including HLT and a zero instruction
 budget. See the

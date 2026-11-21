@@ -3,8 +3,13 @@
 ## Software SMI and RSM
 
 Bind `X86SmmState`, a debug register bank and a separate `X86PagedMemory`
-with matching processor features. This selects the 512-byte KVM64 save map,
-revision `0x20064`. SMI saves selectors, hidden segment caches, descriptor
+with matching processor features. A long-mode-capable CPU uses the 512-byte
+KVM64 save map (revision `0x20064`) even in real or protected mode. A CPU
+with CPUID long-mode support clear selects the KVM32 map (revision
+`0x20000`). The legacy map stores eight dword GPRs and separate visible
+selectors and descriptor caches. EFER and extended GPR slots follow the live
+CPU bank across firmware execution. RSM selects its layout from the processor
+capability even if firmware edits the revision word. SMI saves selectors, hidden segment caches, descriptor
 tables, integer registers, flags, control registers, DR6/DR7 and the
 interrupt shadow at SMBASE + 0xfe00. Firmware starts at SMBASE + 0x8000
 with paging disabled and uses the system RAM bank. A further SMI stays
