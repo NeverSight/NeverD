@@ -1212,11 +1212,10 @@ typedef struct neverd_x64_event_v1 {
         {"instructions", std::move(Writes)},
         {"domain",
          Request->Options.PagedMemory
-             ? "paged scheduled drivers and their call views; once "
-               "on InstructionCompleted, including same-value "
-               "writes and post-commit debug stops, before the next "
-               "poll or return; privilege or reserved-bit faults "
-               "precede completion"
+             ? "paged scheduled drivers and their call views notify once "
+               "on InstructionCompleted before the next poll or return, "
+               "including same-value writes and post-commit debug stops. "
+               "Privilege or reserved-bit faults precede completion."
              : "successful-RAM scheduled drivers and their call views; "
                "once after each completed MOV to CR8, including "
                "same-value writes, before the next poll or return"},

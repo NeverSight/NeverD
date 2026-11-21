@@ -22122,8 +22122,8 @@ EOI routing stay with the embedding. The offline QEMU bank adapter calls this ty
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
-distinction between restoration and an actual same-value write. The former
-retains TPR subpriority; the latter clears it. V6 scheduled exports can opt
+distinction between restoration and an actual same-value write. Restoration
+retains TPR subpriority. A write clears it. V6 scheduled exports can opt
 into CR8-write completion notifications. Instruction lowering records modeled
 writes while applying the shared task-priority transition. In the paged
 domain its checked body raises #GP(0) before exposing any register or flag
