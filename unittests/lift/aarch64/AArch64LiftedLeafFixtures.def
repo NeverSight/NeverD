@@ -698,6 +698,58 @@ int main(int argc, char **argv) {
   return dlclose(image) != 0;
 }
 )c")
+A64_LEAF_TEXT(kEntryOffsetLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+Lsum:
+.cfi_startproc
+  adr x8, _leaf_sum
+  add x9, x8, #1
+  mov x0, x9
+  ret
+.data_region
+  .byte 0x23, 0x36, 0x45, 0x52
+.end_data_region
+.cfi_endproc
+
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  adr x8, Lsum
+  sub x9, x8, #4
+  str x9, [x0]
+  ret
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kEntryOffsetCaller, R"c(
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <stdint.h>
+
+typedef uintptr_t (*reader)(void);
+typedef void (*writer)(uintptr_t *);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  reader read_offset = (reader)dlsym(image, "leaf_sum");
+  writer write_offset = (writer)dlsym(image, "leaf_difference");
+  if (!read_offset || !write_offset)
+    return 3;
+  uintptr_t entry = (uintptr_t)ptrauth_strip(read_offset, ptrauth_key_function_pointer);
+  uintptr_t slots[] = {1, 2, 3};
+  write_offset(&slots[1]);
+  if (read_offset() != entry + 1 || slots[1] != entry - 4 ||
+      slots[0] != 1 || slots[2] != 3)
+    return 4;
+  return dlclose(image) != 0;
+}
+)c")
 // A second, exported name lets the native caller check the static array's
 // address with dlsym. Clang still sees ordinary translation-unit-local data.
 A64_LEAF_TEXT(kPageO0, "#define NEVERD_TEST_PAGE_O0 1\n")
