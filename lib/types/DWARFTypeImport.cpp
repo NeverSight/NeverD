@@ -10,6 +10,7 @@
 #include "neverd/types/Limits.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
@@ -38,6 +39,40 @@ namespace dw = llvm::dwarf;
 std::optional<uint64_t> unsignedOf(const llvm::DWARFDie &Die,
                                    dw::Attribute Attribute) {
   return dw::toUnsigned(Die.find(Attribute));
+}
+
+/// DWARF 2/3 locates the high bit relative to a nominal storage unit. In a
+/// packed record the field can cross that unit in either target byte order.
+std::optional<uint64_t> legacyBitFieldStart(const llvm::DWARFFormValue &Offset,
+                                            uint64_t Base, uint64_t UnitBytes,
+                                            uint64_t Width, uint64_t RecordBits,
+                                            bool Little) {
+  if (UnitBytes > UINT64_MAX / 8 || Width > UnitBytes * 8 ||
+      Width > RecordBits || Base > RecordBits)
+    return std::nullopt;
+  const uint64_t Last = UnitBytes * 8 - Width;
+  const uint64_t Limit = RecordBits - Width;
+  const auto Unsigned = Offset.getAsUnsignedConstant();
+  if (Unsigned && *Unsigned <= Last) {
+    const uint64_t Delta = Little ? Last - *Unsigned : *Unsigned;
+    if (Base <= Limit && Delta <= Limit - Base)
+      return Base + Delta;
+    return std::nullopt;
+  }
+  const auto Signed = Offset.getAsSignedConstant();
+  if (!Unsigned && !Signed)
+    return std::nullopt;
+  // A signed high-bit offset can be negative on little-endian input. Widen
+  // the calculation so a crossing field cannot wrap into the enclosing record.
+  // Older Clang writes a negative displacement as its full 64-bit pattern.
+  const llvm::APInt Top =
+      Unsigned
+          ? llvm::APInt(128, *Unsigned, Offset.getForm() == dw::DW_FORM_data8)
+          : llvm::APInt(128, static_cast<uint64_t>(*Signed), true);
+  const auto Start = (Little ? llvm::APInt(128, Last) - Top : Top) + Base;
+  if (Start.ugt(Limit))
+    return std::nullopt;
+  return Start.getZExtValue();
 }
 
 bool isRecordTag(dw::Tag Tag) {
@@ -1118,24 +1153,24 @@ private:
               unsignedOf(Child, dw::DW_AT_data_bit_offset)) {
         Field.BitOffset = *Bits;
       } else if (std::optional<uint64_t> Bytes = memberBytes(Child)) {
+        if (*Bytes > Record->Size) {
+          Why = Refusal{"a member outside its record"};
+          return nullptr;
+        }
         Field.BitOffset = *Bytes * 8;
-        // DWARF 2 and 3 count a bit-field's bits from the top of the
-        // storage unit at that offset, which little-endian targets fill
-        // from the bottom.
         if (BitSize)
-          if (std::optional<uint64_t> Top =
-                  unsignedOf(Child, dw::DW_AT_bit_offset)) {
+          if (const auto Top = Child.find(dw::DW_AT_bit_offset)) {
             const uint64_t Unit =
                 unsignedOf(Child, dw::DW_AT_byte_size)
                     .value_or(Library.sizeOf(*Field.Type).value_or(0));
-            if (Unit > std::numeric_limits<uint64_t>::max() / 8 ||
-                *Top > Unit * 8 || *BitSize > Unit * 8 - *Top) {
-              Why = Refusal{"a bit-field outside its storage"};
+            const auto Start = legacyBitFieldStart(
+                *Top, Field.BitOffset, Unit, *BitSize, Record->Size * 8,
+                Child.getDwarfUnit()->isLittleEndian());
+            if (!Start) {
+              Why = Refusal{"a bit-field outside its record or storage width"};
               return nullptr;
             }
-            Field.BitOffset += Child.getDwarfUnit()->isLittleEndian()
-                                   ? Unit * 8 - *Top - *BitSize
-                                   : *Top;
+            Field.BitOffset = *Start;
           }
       } else {
         Why = Refusal{"a member at an offset DWARF computes"};
