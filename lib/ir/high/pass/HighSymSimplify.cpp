@@ -460,6 +460,63 @@ struct AvailableDefinition {
 };
 using AvailableDefinitions = std::map<LocalIdentity, AvailableDefinition>;
 
+// Bound the keys and transitive inputs actually retained. A fresh write to
+// an unread key needs no sweep, even in a long straight-line region.
+struct DefinitionState {
+  AvailableDefinitions Values;
+  std::map<LocalIdentity, size_t> Readers;
+  size_t Identities = 0;
+
+  void clear() {
+    Values.clear();
+    Readers.clear();
+    Identities = 0;
+  }
+
+  bool hasRoom(size_t Inputs) const {
+    // The region may hold this many fully populated dependency sets. Each
+    // sparse fact pays only for its key and the inputs it actually reads.
+    constexpr size_t Capacity =
+        size_t(
+            limits::ir::
+                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit) *
+        (1 + limits::ir::kHighSymSimplifyDefinitionInputsSizeLimit);
+    return 1 + Inputs <= Capacity - Identities;
+  }
+
+  void insert(const LocalIdentity &Key, AvailableDefinition Definition) {
+    Identities += 1 + Definition.Dependencies.size();
+    for (const auto &Input : Definition.Dependencies)
+      ++Readers[Input];
+    Values.emplace(Key, std::move(Definition));
+  }
+
+  AvailableDefinitions::iterator erase(AvailableDefinitions::iterator It) {
+    const auto &Inputs = It->second.Dependencies;
+    Identities -= 1 + Inputs.size();
+    for (const auto &Input : Inputs) {
+      auto Reader = Readers.find(Input);
+      if (!--Reader->second)
+        Readers.erase(Reader);
+    }
+    return Values.erase(It);
+  }
+
+  void forgetWrite(const LocalIdentity &Key) {
+    if (auto It = Values.find(Key); It != Values.end())
+      erase(It);
+    if (!Readers.contains(Key))
+      return;
+    // Dependencies are transitive, so one sweep also retires indirect reads.
+    for (auto It = Values.begin(); It != Values.end();) {
+      if (It->second.Dependencies.contains(Key))
+        It = erase(It);
+      else
+        ++It;
+    }
+  }
+};
+
 bool isScalarLocal(const ExprPtr &E) {
   return E && E->Kind == ExprKind::Var && isRewriteableNode(E) && E->Type &&
          E->Type->Kind == NdTypeKind::Int && widthFromBytes(E->Type->Size) &&
@@ -1060,6 +1117,44 @@ std::pair<sym::SymRef, bool> lowByteParityInput(sym::SymContext &Ctx,
   return {};
 }
 
+// A bitwise operation on equally placed fields can be evaluated on their
+// whole words, then narrowed once. This gives a signed sub-byte field a
+// source spelling even when the engine pushed extraction through XOR/AND/OR.
+struct SourceBitField {
+  sym::SymRef Word;
+  unsigned Low, Bits;
+};
+
+std::optional<SourceBitField> sourceBitField(sym::SymContext &Ctx,
+                                             sym::SymRef Field) {
+  const unsigned Bits = Ctx.width(Field);
+  if (Bits >= 8)
+    return std::nullopt;
+  auto Slice = [&](sym::SymRef R) -> std::optional<SourceBitField> {
+    if (Ctx.op(R) != sym::SymOp::Extract)
+      return std::nullopt;
+    const auto Word = Ctx.operand(R, 0);
+    if (Ctx.width(Word) % 8)
+      return std::nullopt;
+    return SourceBitField{Word, unsigned(Ctx.node(R).Aux), Bits};
+  };
+  const auto Op = Ctx.op(Field);
+  if (Op != sym::SymOp::Xor && Op != sym::SymOp::And && Op != sym::SymOp::Or)
+    return Slice(Field);
+  llvm::SmallVector<sym::SymRef, 4> Words;
+  const auto First = Slice(Ctx.operand(Field, 0));
+  if (!First)
+    return std::nullopt;
+  for (auto V : Ctx.operands(Field)) {
+    const auto Part = Slice(V);
+    if (!Part || Part->Low != First->Low ||
+        Ctx.width(Part->Word) != Ctx.width(First->Word))
+      return std::nullopt;
+    Words.push_back(Part->Word);
+  }
+  return SourceBitField{Ctx.rebuild(Field, Words), First->Low, Bits};
+}
+
 ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
                         bool ScalarLiterals) {
   struct WorkItem {
@@ -1086,15 +1181,10 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       continue;
     }
 
-    // A proved low-bit lookup can expose a sub-byte extract. Lower only
-    // its zero extension as one masked native-word operation: materializing
-    // the fragment as a byte would give a later sign extension wrong semantics.
-    sym::SymRef UnsignedFragment;
-    if (Ctx.op(Item.Ref) == sym::SymOp::ZExt) {
-      const auto Child = Ctx.operand(Item.Ref, 0);
-      if (Ctx.op(Child) == sym::SymOp::Extract && Ctx.width(Child) < 8)
-        UnsignedFragment = Child;
-    }
+    std::optional<SourceBitField> Field;
+    if (Ctx.op(Item.Ref) == sym::SymOp::ZExt ||
+        Ctx.op(Item.Ref) == sym::SymOp::SExt)
+      Field = sourceBitField(Ctx, Ctx.operand(Item.Ref, 0));
     // The source language stores integer fields in whole bytes. A packed
     // sign bit above a literal can be emitted directly at its carrier width.
     sym::SymRef SignWord, LowLiteral;
@@ -1130,8 +1220,12 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
           Work.push_back({SignWord, false});
         continue;
       }
-      llvm::ArrayRef<sym::SymRef> Operands =
-          Ctx.operands(UnsignedFragment ? UnsignedFragment : Item.Ref);
+      if (Field) {
+        if (!Built.contains(Field->Word.index()))
+          Work.push_back({Field->Word, false});
+        continue;
+      }
+      const auto Operands = Ctx.operands(Item.Ref);
       for (auto It = Operands.rbegin(); It != Operands.rend(); ++It)
         if (Built.find(It->index()) == Built.end())
           Work.push_back({*It, false});
@@ -1465,23 +1559,31 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
     case sym::SymOp::ZExt:
     case sym::SymOp::SExt: {
-      if (UnsignedFragment) {
-        const auto Source = Ctx.operand(UnsignedFragment, 0);
-        ExprPtr Operand = get(Source);
+      if (Field) {
+        ExprPtr Operand = get(Field->Word);
         if (!Operand)
           break;
-        const uint16_t SourceBytes = Ctx.width(Source) / 8;
-        const auto Low = Ctx.node(UnsignedFragment).Aux;
-        if (Low)
+        const unsigned SourceBits = Ctx.width(Field->Word);
+        const uint16_t SourceBytes = SourceBits / 8;
+        auto Apply = [&](NdOp Op, uint64_t Literal) {
           Operand = HighExpr::makeBinop(
-              NdOp::INT_RIGHT, Operand,
-              HighExpr::makeConst(Low, SourceBytes,
+              Op, Operand,
+              HighExpr::makeConst(Literal, SourceBytes,
                                   ConstantAddressProvenance::Scalar));
-        Operand = HighExpr::makeBinop(
-            NdOp::INT_AND, Operand,
-            HighExpr::makeConst(
-                (uint64_t(1) << Ctx.width(UnsignedFragment)) - 1, SourceBytes,
-                ConstantAddressProvenance::Scalar));
+        };
+        if (Ctx.op(Item.Ref) == sym::SymOp::SExt) {
+          const auto Padding = SourceBits - Field->Bits;
+          if (Padding > Field->Low)
+            Apply(NdOp::INT_LEFT, Padding - Field->Low);
+          Apply(NdOp::INT_ASHR, Padding);
+          // Widen the sign-filled carrier as signed when the destination is
+          // wider. The final cast preserves the extension's raw bit pattern.
+          Operand->Type = NdType::makeInt(SourceBytes, true);
+        } else {
+          if (Field->Low)
+            Apply(NdOp::INT_RIGHT, Field->Low);
+          Apply(NdOp::INT_AND, (uint64_t(1) << Field->Bits) - 1);
+        }
         Result = std::make_shared<HighExpr>();
         Result->Kind = ExprKind::Cast;
         Result->Type = Result->CastTo = NdType::makeInt(ByteSize, false);
@@ -1996,9 +2098,10 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         Weight};
   };
   auto Simplify = [&](HighStmt &S, const StatementProperties &Properties,
-                      AvailableDefinitions &Definitions) {
+                      DefinitionState &State) {
+    auto &Definitions = State.Values;
     if (Properties.ResetBefore)
-      Definitions.clear();
+      State.clear();
     const auto RetireMutable = [&] {
       // Calls and memory observations cannot change an unescaped C temporary
       // or parameter. A register, frame object, escaped local, or a definition
@@ -2014,7 +2117,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         if (Mutable(It->first) ||
             std::any_of(It->second.Dependencies.begin(),
                         It->second.Dependencies.end(), Mutable))
-          It = Definitions.erase(It);
+          It = State.erase(It);
         else
           ++It;
       }
@@ -2026,7 +2129,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     if (Properties.MutableBoundary && Properties.ReadsBeforeMutation)
       RetireMutable();
     if (Properties.ResetAfter) {
-      Definitions.clear();
+      State.clear();
       return;
     }
     // Unknown stores may touch a frame object. Kill every definition that
@@ -2040,7 +2143,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
                         It->second.Dependencies.end(),
                         [&](const auto &Key) { return StackViews.count(Key); });
         if (ReadsFrame)
-          It = Definitions.erase(It);
+          It = State.erase(It);
         else
           ++It;
       }
@@ -2049,35 +2152,25 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     if (S.Kind != StmtKind::Assign)
       return;
     if (!isScalarLocal(S.Dst)) {
-      Definitions.clear();
+      State.clear();
       return;
     }
 
     const auto Key = highSourceLocalIdentity(S.Dst->Var);
     auto Inputs = definitionInputs(S.Val, Definitions, Escaped);
-    for (auto It = Definitions.begin(); It != Definitions.end();) {
-      if (It->first == Key || It->second.Dependencies.count(Key))
-        It = Definitions.erase(It);
-      else
-        ++It;
-    }
+    State.forgetWrite(Key);
     // Keep the value assignment, never a deferred or repeated invocation.
     // Explicit writes, escapes, intrinsic outputs and scope resets still
     // retire this marker and every expression depending on it.
     if (S.Val && S.Val->Kind == ExprKind::Call &&
         S.Dst->Var.Kind == MedVar::Reg && !Escaped.count(Key) &&
-        !ExplicitOutputs.count(Key) &&
-        Definitions.size() <
-            ::neverd::limits::ir::
-                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit) {
-      Definitions.emplace(Key, AvailableDefinition{S.Dst, {}, true});
+        !ExplicitOutputs.count(Key) && State.hasRoom(0)) {
+      State.insert(Key, AvailableDefinition{S.Dst, {}, true});
       return;
     }
     if (Inputs && !Inputs->count(Key) && !Escaped.count(Key) &&
-        Definitions.size() <
-            ::neverd::limits::ir::
-                kHighSymSimplifyStatementRegionsSimplifyDefinitionsSizeLimit &&
-        S.Val && S.Val->Type && S.Val->Type->Kind == NdTypeKind::Int &&
+        State.hasRoom(Inputs->size()) && S.Val && S.Val->Type &&
+        S.Val->Type->Kind == NdTypeKind::Int &&
         widthFromBytes(S.Val->Type->Size)) {
       // Retain the assignment conversion, including its source width and
       // signedness. Later reads use the destination integer type.
@@ -2091,7 +2184,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
         Converted->Operands = {Value};
         Value = std::move(Converted);
       }
-      Definitions.emplace(Key, AvailableDefinition{Value, std::move(*Inputs)});
+      State.insert(Key, AvailableDefinition{Value, std::move(*Inputs)});
     }
   };
   std::vector<std::vector<HighStmt> *> Scopes{&Stmts};
@@ -2118,7 +2211,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     while (!Scopes.empty()) {
       auto *Scope = Scopes.back();
       Scopes.pop_back();
-      AvailableDefinitions Definitions;
+      DefinitionState Definitions;
       for (auto &S : *Scope) {
         AppendChildren(S);
         Simplify(S, Classify(S), Definitions);
@@ -2174,7 +2267,7 @@ void simplifyStatementRegions(std::vector<HighStmt> &Stmts, unsigned MaxThreads,
     Finish();
   }
   auto Process = [&](size_t Index) {
-    AvailableDefinitions Definitions;
+    DefinitionState Definitions;
     const auto &Segment = Segments[Index];
     for (size_t I = Segment.Begin; I < Segment.End; ++I)
       Simplify(*Statements[I].Stmt, Statements[I].Properties, Definitions);
