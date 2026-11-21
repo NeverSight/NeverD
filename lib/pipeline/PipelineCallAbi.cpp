@@ -1732,6 +1732,7 @@ OmittedCalleeMemo::ProbeSignature probeSignature(
   Gives.FPReturnSize = summarizeCallee(Probe, Img).FPReturnSize;
   Gives.IntegerArgumentRegisters = Probe.IntegerArgumentRegisters;
   Gives.ExactRegisterParameters = Body.ExactRegisterParameters;
+  Gives.MaxRegisterArguments = Body.MaxRegisterArguments;
   Gives.EntryRegArity = valueAt(CalleeRegArity, Body.Entry);
   Gives.EntryTotalArity = valueAt(CalleeTotalArity, Body.Entry);
   Gives.EntryIsVariadic = valueAt(CalleeIsVariadic, Body.Entry);
@@ -1782,9 +1783,12 @@ bool raiseForwarderSummaries(
     CalleeIntRegs[Entry] = Probe.IntegerArgumentRegisters;
     Grew = true;
   }
-  if (!Probe.ExactRegisterParameters &&
-      Probe.RegisterArity > CalleeRegArity[Entry]) {
-    CalleeRegArity[Entry] = Probe.RegisterArity;
+  const int RegisterArity =
+      Probe.MaxRegisterArguments >= 0
+          ? std::min(Probe.RegisterArity, Probe.MaxRegisterArguments)
+          : Probe.RegisterArity;
+  if (!Probe.ExactRegisterParameters && RegisterArity > CalleeRegArity[Entry]) {
+    CalleeRegArity[Entry] = RegisterArity;
     Grew = true;
   }
   if (!IsVariadicPublic) {

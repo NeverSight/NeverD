@@ -125,6 +125,9 @@ struct OmittedCalleeMemo {
     /// The body's register parameters are proven
     /// (MedFunc::ExactRegisterParameters): forwarding raises none.
     bool ExactRegisterParameters = false;
+    /// The most integer registers the body takes, or -1
+    /// (MedFunc::MaxRegisterArguments): forwarding raises none past them.
+    int MaxRegisterArguments = -1;
   };
   /// A forwarder probe of a conversion's body: what it read under each key
   /// it read (recoverCallAbi's SummaryKeysRead), the body's entry first,

@@ -1719,6 +1719,9 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // The position of the first variadic argument register of a function whose
   // call summary names it (VariadicFromSummary), or -1.
   int SummaryVariadicFrom = -1;
+  // Every argument of the function is a register one: its argument
+  // components fit the integer registers (goRegisterArgumentBound).
+  bool GoRegisterArgumentsOnly = false;
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
@@ -1813,6 +1816,31 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         Summary = &VariadicReads;
         SummaryVariadicFrom = It->second;
       }
+    // Compiled Go code takes no more integer registers than its traceback
+    // lists argument components (goRegisterArgumentBound): each takes one
+    // register at most, the integer ones in order.  A read past them saves a
+    // register or reads what a call left: `runtime.sigblock(exiting bool)`
+    // took RBX too.  Assembly's table follows its Go declaration, which a
+    // routine entered another way does not keep: `runtime.rt0_go()` takes
+    // argc and argv.
+    GPRReadWidths BoundedReads{};
+    const std::optional<unsigned> Bound =
+        Image && !Func.ExactRegisterParameters &&
+                usesGoRegisterArguments(*Image, Func.Entry)
+            ? goRegisterArgumentBound(*Image, Func.Entry)
+            : std::nullopt;
+    GoRegisterArgumentsOnly = Bound && *Bound <= IntegerRegs.size();
+    if (Bound && *Bound < IntegerRegs.size()) {
+      Func.MaxRegisterArguments = static_cast<int>(*Bound);
+      for (size_t K = *Bound; K < IntegerRegs.size(); ++K)
+        UsedRegs.erase(IntegerRegs[K]);
+      if (Summary) {
+        BoundedReads = *Summary;
+        for (size_t K = *Bound; K < IntegerRegs.size(); ++K)
+          BoundedReads[IntegerRegs[K] / 8] = 0;
+        Summary = &BoundedReads;
+      }
+    }
     detectRegisterParams(Func, TRI, ParamRegs, IntegerRegs, UsedRegs,
                          TargetArch, Convention, Summary,
                          GoRegisterArguments || BufferBarrier ||
@@ -1878,7 +1906,13 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // variadic function reads its overflow stack arguments through the va_arg
   // pointer walk (PHI-merged, vectorized), invisible to this load scan; those
   // are recovered from the call sites in finalizeVariadicCallees instead.
-  // A Go function's spill area holds none of its stack arguments.
+  // A Go function's spill area holds none of its stack arguments.  Where
+  // every argument is a register one, the area its record gives is all
+  // spill slots, which it fills itself before reading them across calls:
+  // `runtime.badsignal(sig, c)` stores X0 and X1 there, which read as stack
+  // arguments put eight AAPCS64 positions before them.  Go assigns an
+  // argument the stack only past the registers or as an array of more than
+  // one element.
   // A Go stack-ABI function reads no slot past the arguments and results its
   // record gives (goFrameArgumentBytes).
   const std::optional<uint32_t> GoFrameBytes =
@@ -1892,7 +1926,10 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
         Func, TargetArch, Fmt,
         GoFrameBytes
             ? goStackArgumentLayout(TargetArch).EntryStackBase + *GoFrameBytes
-            : GoArgumentSpillBegin.value_or(0),
+            : GoArgumentSpillBegin.value_or(
+                  GoRegisterArgumentsOnly
+                      ? goStackArgumentLayout(TargetArch).EntryStackBase
+                      : 0),
         Image);
   else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {

@@ -20686,6 +20686,17 @@ unknown value.
 `GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
 arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
 results, where AAPCS64 alone gives X0:X1.
+`GoArgumentComponents.CountEachScalarTheTracebackLists` loads ArgInfo tables:
+`gopark`'s five components with two bytes in one word, a string's and a
+struct's words, an offset too large for a byte, and a table that elides past
+ten, which gives no count, as a missing table does.
+`GoRegisterArguments.NoMoreRegistersThanItsArgumentsHaveScalars` runs an arm64
+`main.f` that lists two components but reads X0-X3, and a caller that sets X2
+and X3 before the call: `main.f` takes X0 and X1 alone, and the call passes two
+arguments at most. `GoRegisterArguments.TheSpillAreaHoldsNoStackArgument`
+spills X0 and X1 above the return address, calls, and reloads them: the
+function takes those two registers and no stack parameter, where it took
+eleven.
 `GoStackGrowth.AGrowthRoutineTakesNoArgument` runs arm64's
 `runtime.morestack_noctxt`, which branches to a `runtime.morestack` that reads
 X3: alone and in the pipeline, neither takes a parameter, and both are exact.

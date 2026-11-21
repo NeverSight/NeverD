@@ -1284,6 +1284,95 @@ TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {
   EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
 }
 
+TEST(GoRegisterArguments, NoMoreRegistersThanItsArgumentsHaveScalars) {
+  // A traceback lists each argument's scalar components (FUNCDATA_ArgInfo),
+  // and each takes one register at most: `sync/atomic.StorePointer(addr,
+  // val)` lists two.  Its body reads more, which AAPCS64 positions took as
+  // parameters, and every call passed unknowns for them.
+  //   main.f: str x2, [x0]; str x3, [x1]; ret
+  //   main.g: stp x29, x30, [sp, #-16]!; mov x29, sp; mov x2, #1
+  //           mov x3, #2; bl main.f; ldp x29, x30, [sp], #16; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(F, words({0xF9000002, 0xF9000023, 0xD65F03C0}));
+  const uint32_t Call = 0x94000000u | (((F - (G + 16)) >> 2) & 0x3FFFFFFu);
+  T.writeText(G, words({0xA9BF7BFD, 0x910003FD, 0xD2800022, 0xD2800043, Call,
+                        0xA8C17BFD, 0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 16, 2}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto Function = [&](va_t Entry) -> const MedFunc & {
+    const auto It = llvm::find_if(
+        R.MedFuncs, [&](const MedFunc &M) { return M.Entry == Entry; });
+    EXPECT_NE(It, R.MedFuncs.end());
+    return *It;
+  };
+  const MedFunc &Callee = Function(F);
+  EXPECT_EQ(Callee.MaxRegisterArguments, 2);
+  ASSERT_EQ(Callee.Params.size(), 2u) << Callee.Params.size();
+  EXPECT_EQ(Callee.Params[0].RegOff, a64reg::X0);
+  EXPECT_EQ(Callee.Params[1].RegOff, a64reg::X1);
+  for (const MedCallInfo &Info : Function(G).CallInfos)
+    if (Info.TargetAddr == F)
+      EXPECT_LE(Info.Args.size(), 2u);
+}
+
+TEST(GoRegisterArguments, TheSpillAreaHoldsNoStackArgument) {
+  // Where every argument is a register one, the area above the return
+  // address is all spill slots, which the function fills before it reads
+  // them across a call: `runtime.badsignal(sig, c)`.  Read as stack
+  // arguments, they put AAPCS64's eight register positions before them.
+  //   main.f: str x30, [sp, #-32]!; str x0, [sp, #40]; str x1, [sp, #48]
+  //           bl main.g; ldr x0, [sp, #40]; ldr x1, [sp, #48]
+  //           add x0, x0, x1; ldr x30, [sp], #32; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call = 0x94000000u | (((G - (F + 12)) >> 2) & 0x3FFFFFFu);
+  T.writeText(F, words({0xF81E0FFE, 0xF90017E0, 0xF9001BE1, Call, 0xF94017E0,
+                        0xF9401BE1, 0x8B010000, 0xF84207FE, 0xD65F03C0}));
+  T.writeText(G, words({0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 16, 2}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  ASSERT_EQ(It->Params.size(), 2u) << It->Params.size();
+  EXPECT_EQ(It->Params[0].RegOff, a64reg::X0);
+  EXPECT_EQ(It->Params[1].RegOff, a64reg::X1);
+}
+
 TEST(GoInternalABI, AnARM64DirectCallReturnsEveryResultItsCallerReads) {
   // Go's arm64 register ABI returns results in R0-R15 as amd64 does in RAX,
   // RBX and the rest: a read of X2 after a call is its third result, in the

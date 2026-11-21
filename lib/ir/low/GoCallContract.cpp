@@ -426,6 +426,18 @@ bool goRecordsFunction(const BinaryImage &Img, va_t Entry) {
   return goFunctionRecord(Img, Entry) != nullptr;
 }
 
+std::optional<unsigned> goRegisterArgumentBound(const BinaryImage &Img,
+                                                va_t Entry) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module || !Module->RegisterArguments ||
+      (Img.Arch != Arch::X64 && Img.Arch != Arch::AArch64))
+    return std::nullopt;
+  const GoFrameArguments *Record = goFunctionRecord(Img, Entry);
+  if (!Record || !Record->ArgumentComponents)
+    return std::nullopt;
+  return *Record->ArgumentComponents;
+}
+
 bool goCallReturnsPastCaller(const BinaryImage &Img, va_t Callee) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
   return Module && Img.Arch == Arch::X64 &&

@@ -5928,6 +5928,30 @@ callee's parameters, so exact callees give exact calls on both targets. The spil
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 
+Compiled Go code without such a path still takes no more integer registers
+than its traceback lists argument components (`FUNCDATA_ArgInfo`, Go 1.17 and
+later: `GoFrameArguments::ArgumentComponents`, `goRegisterArgumentBound`). The
+compiler lists each scalar an argument is made of, a struct's or array's fields
+each, with an offset and a size, up to ten before it elides the rest, and it
+leaves out the first parameter of a function whose symbol names type
+arguments, taking it for a generic dictionary (`EmitArgInfo`), which it is for
+a shape function and which is `p` for `type:.eq.sync/atomic.Pointer[T]`: the
+loader counts it back. Each component takes one register at most, the integer
+ones in Go's order, so no register past that count is a parameter
+(`MedFunc::MaxRegisterArguments`), whatever the body reads there or passes on:
+call recovery promotes none and forwarder propagation raises no arity past it.
+`_func.args` bounds nothing, since it packs `gopark`'s two byte arguments into
+one word. Where the components fit the integer registers, Go assigns no
+argument to the stack (it does so only past the registers or for an array of
+more than one element), so the area `_func.args` gives above the return
+address is all spill slots, which the function fills before reading them
+across calls, and none of it is a stack parameter. `sync/atomic.StorePointer`
+lists two components; its spills read as stack arguments put AAPCS64's eight
+register positions before them, eleven parameters, and every call passed nine
+unknowns. Assembly's table follows its Go declaration, which a routine entered
+another way does not keep: `runtime.rt0_go()` takes argc and argv, so
+assembly keeps the registers it reads.
+
 The stack-growth path is not part of what a function computes, and MedIR leaves
 it out (`elideGoStackGrowth`, `lib/ir/med/lower/GoStackGrowth.cpp`). `morestack`
 grows the goroutine's stack and resumes at its call's return address

@@ -199,6 +199,15 @@ std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
 /// NeverD splits off a function's interior is no such function.
 bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
 
+/// The most integer registers the Go function at \p Entry takes its
+/// arguments in, in Go's order, where the image passes them in registers:
+/// one for each scalar component its traceback lists
+/// (GoFrameArguments::ArgumentComponents), since each takes one register at
+/// most and the integer ones take the integer registers in order.  None where
+/// the image passes arguments otherwise or the table is unknown.
+std::optional<unsigned> goRegisterArgumentBound(const BinaryImage &Img,
+                                                va_t Entry);
+
 /// Whether \p Callee drops its return address and returns to its caller's
 /// caller (GoModuleInfo::ReturnsPastCallerEntries): an x86-64 call to it is
 /// its caller's last act, a tail call, and never reaches the next instruction.

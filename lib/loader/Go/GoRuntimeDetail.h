@@ -51,6 +51,22 @@ inline constexpr unsigned FuncDataOpenCodedDeferInfoPreGo116 = 5;
 inline constexpr unsigned FuncDataArgsPointerMaps = 0;
 /// `internal/abi.FUNCDATA_LocalsPointerMaps`, likewise fixed at index 1.
 inline constexpr unsigned FuncDataLocalsPointerMaps = 1;
+/// `internal/abi.FUNCDATA_ArgInfo`, Go 1.17 and later under the Go 1.16
+/// numbering: the arguments a traceback prints.  Index 5 held the open-coded
+/// defer record before Go 1.16 renumbered the array (above).
+inline constexpr unsigned FuncDataArgInfo = 5;
+/// The bytes of an ArgInfo table (`internal/abi.TraceArgs*`): each argument
+/// component is an offset and a size below TraceArgsSpecial, or
+/// TraceArgsOffsetTooLarge alone; StartAgg and EndAgg bracket a struct or
+/// array; Dotdotdot elides the rest, past TraceArgsLimit components or
+/// TraceArgsMaxDepth nested aggregates; EndSeq ends it within MaxLen bytes.
+inline constexpr uint8_t TraceArgsEndSeq = 0xFF;
+inline constexpr uint8_t TraceArgsStartAgg = 0xFE;
+inline constexpr uint8_t TraceArgsEndAgg = 0xFD;
+inline constexpr uint8_t TraceArgsDotdotdot = 0xFC;
+inline constexpr uint8_t TraceArgsOffsetTooLarge = 0xFB;
+inline constexpr uint8_t TraceArgsSpecial = 0xF0;
+inline constexpr unsigned TraceArgsMaxLen = (5 * 3 + 2) * 10 + 1;
 /// The sentinel `_func.funcdata[i]` carries when the entry is absent.
 inline constexpr uint32_t NoFuncDataOffset = 0xFFFFFFFFu;
 
@@ -433,6 +449,12 @@ std::optional<va_t> getFuncRecordAddress(const ImageReader &R,
 
 bool usesPreGo112Record(const ImageReader &R, const FuncLayout &L,
                         const PcHeader &H);
+
+/// The argument components the ArgInfo table at \p VA lists, or none where
+/// it elides some or is malformed: each scalar an argument is made of, a
+/// struct's or array's fields each, which takes one register at most under
+/// Go's internal ABI.
+std::optional<uint8_t> readArgumentComponents(const ImageReader &R, va_t VA);
 
 std::optional<va_t> getFuncDataAddress(const ImageReader &R,
                                        const FuncLayout &L, const RawFunc &F,
