@@ -571,4 +571,26 @@ TEST(GoRegisterArguments, NeedAPclntabThatMarksAssembly) {
             (std::vector<va_t>{kTextVA + 0x200, kTextVA + 0x300}));
 }
 
+TEST(GoDuffDevices, AreFoundByName) {
+  // Go's compiler enters `runtime.duffzero` and `runtime.duffcopy` at the
+  // point that zeroes or copies as many bytes as it needs.
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.duffzero", kTextVA + 0x100),
+                    makeGoCode("runtime.duffcopy", kTextVA + 0x200),
+                    makeGoCode("main.a", kTextVA + 0x300)},
+                   kTextVA + 0x400)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->DuffDevices.size(), 2u);
+  EXPECT_EQ(Module->DuffDevices[0].Begin, kTextVA + 0x100);
+  EXPECT_EQ(Module->DuffDevices[0].End, kTextVA + 0x200);
+  EXPECT_EQ(Module->DuffDevices[1].Begin, kTextVA + 0x200);
+  EXPECT_EQ(Module->DuffDevices[1].End, kTextVA + 0x300);
+}
+
 } // namespace

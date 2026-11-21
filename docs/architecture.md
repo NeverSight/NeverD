@@ -5818,7 +5818,10 @@ The contract covers x86-64 and AArch64; Go code for other targets keeps the
 platform contract. Calls from compiled code of a register-ABI amd64 image
 (usesGoRegisterArguments) keep X15 zero (`CallRegisterContract::GoInternal`,
 `GoInternalWriteBarrier`), and LowToMed defines X15 as zero at such a
-function's entry, so its frame zeroing stores zero. Ordinary calls do not
+function's entry, so its frame zeroing stores zero, and at the entry of
+assembly that takes Go's argument registers, which follows the same ABI
+(`goAssemblyTakesRegisterArguments`): `runtime.memclrNoHeapPointers` stores X15
+as its zero. Ordinary calls do not
 assume the goroutine in R14 is unchanged: runtime paths such as `needm`
 can install a different g. Recognized write barriers continue to preserve R14
 under their narrower GPR contract. Compiled code never writes that register,
@@ -5871,7 +5874,24 @@ RCX and R8, and left the byte and the length undefined in each of its SIMD
 compares. A routine that calls out reads the registers it saves for its
 callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
-(`runtime.sigtramp`): both keep the platform's positions.
+(`runtime.sigtramp`): both keep the platform's positions. Before Go 1.17 no
+amd64 Go code takes a register argument, so in such an image a routine that
+reads one is assembly, though no flag says so; there a read of RAX's low byte
+alone counts for none, since a compiled function's nil check makes one (`testb
+%al, (%rcx)`).
+
+A Go image's pclntab records every function of its Go code once its text base
+is proven (`GoModuleInfo::FrameArguments`), so an address inside one begins
+none (`goInsideRecordedFunction`): function discovery takes no entry there,
+whatever evidence names the address, and the CFG builder reads a branch there
+as no tail call (`isTailCallTarget`). `runtime.suspendG`'s jump table holds
+case labels that read as code addresses, and each `jmp` to one became a call
+into a function that started in the middle of `suspendG`; where only the
+entry went, `runtime.runGCProg`'s jump to its loop called a function nothing
+defined, and the loop was decompiled nowhere. Duff's device routines are the
+exception (`GoModuleInfo::DuffDevices`): Go's compiler calls `runtime.duffzero`
+and `runtime.duffcopy` at the point that zeroes or copies as many bytes as it
+needs, so each such point begins a routine of its own.
 
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
@@ -6014,9 +6034,11 @@ hands them its own return address in R3, as any call does in LR, and their
 bodies' other reads save the registers of the function they restart. Read as
 AAPCS64 positions, every kept arm64 growth call passed four or more unknowns.
 arm64 paths, `ldr x16, [x28, #16]` and
-the spills a `stp` makes, qualify where the image's register ABI is modelled
-(`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
-expose stack arguments AAPCS64 places after eight register positions. A call
+the spills a `stp` makes, qualify under either ABI (`goGrowthPathsModeled`):
+Go 1.17 and earlier pass arm64 arguments on the stack, which their own layout
+places (`goStackArgumentLayout`). Kept there, the path rejoined the entry
+with the link register and the goroutine a `bl morestack` left, and every
+frame's `str x30` and stack check printed a trap. A call
 to a growth routine resumes at its return address (`goCallResumesAfter`),
 though arm64's routine ends in a trap after `newstack`, so the CFG builder
 asks this before a no-return proof.

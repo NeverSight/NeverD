@@ -381,6 +381,12 @@ struct GoModuleInfo {
   /// (`runtime.morestackc`, a system-stack function called on a user stack):
   /// a growth path that calls one never restarts its function.
   std::vector<va_t> ThrowingMorestackEntries;
+  /// The code of `runtime.duffzero` and `runtime.duffcopy`, sorted: Go's
+  /// compiler calls each at the point that zeroes or copies as many bytes as
+  /// it needs (Duff's device), so each such point begins a routine of its own
+  /// though the `pclntab` records only the first.  Empty unless the text base
+  /// is proven.
+  std::vector<ExceptionAddressRange> DuffDevices;
   /// Entries of the runtime routines a call to which Go's compiler gives no
   /// continuation, sorted (goRuntimeNeverReturns): the instruction after such
   /// a call starts another block, or padding.  Their bodies need not show it:
