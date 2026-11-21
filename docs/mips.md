@@ -1838,6 +1838,8 @@ that byte's previous value. A merge store to an output pointer requires
 evidence that the stored bytes cannot expose the private frame.
 For record callers that copy an argument into a private stack buffer in a
 counted loop, the proof follows the loop's actual byte addresses and bound.
+When a declared callee writes its result into a known private stack buffer,
+the analysis checks the exact result bytes before tracing other frame uses.
 A call with an unknown frame effect, an uninitialized private byte or an
 overlapping write to the saved link prevents this reconstruction.
 The shared call-stack proof computes that intersection using complete outgoing
@@ -1847,7 +1849,9 @@ Byte provenance ignores unread upper FPR bytes; stack arguments require their
 own reaching-store proof. A validated alignment guard preserves computed stack
 addresses and reaching stores; malformed guards and opaque effects invalidate
 that evidence. This also qualifies the aligned pre-R6 floating stores used for
-outgoing overflow and variadic arguments.
+outgoing overflow and variadic arguments. A validated MIPS64 word check in
+the caller preserves bytes already stored for a typed indirect call on the
+execution path that reaches it.
 In n32, an eight-byte saved link can survive a declared call beside a four-byte
 pointer spill, including word-sized or doubleword-sized stack adjustments.
 Unknown call-stack state and writes overlapping that link slot still fail

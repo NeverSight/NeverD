@@ -19,6 +19,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/ir/low/LowScalarConstant.h"
+#include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/ir/low/SourceFrameAnalysis.h"
 #include "neverd/ir/med/MedIR.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -370,9 +371,13 @@ bool neverd::sourceCallStackArgumentsDefined(
           }
         return true;
       }
+      // A checked MIPS64 word operation can stop execution, but on the path
+      // reaching the call it has changed neither the stack nor its contents.
       if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||
-          (Op.Opcode == NdOp::INTRINSIC &&
-           !isSourceFrameObservationGuard(Op))) {
+          (Op.Opcode == NdOp::INTRINSIC && !isSourceFrameObservationGuard(Op) &&
+           !(isMIPS64(Architecture) && Op.NumInputs &&
+             Op.Inputs[0].Offset == uint64_t(Intrinsic::MIPSRequireWord) &&
+             mipsScalarLowShapeIsValid(Op, Architecture)))) {
         Written.clear();
         const auto CurrentSP = address(SP);
         Addresses.clear();

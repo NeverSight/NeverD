@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -524,6 +525,117 @@ TEST(MIPSRecordSourceEntry, MergeLoadsPreservePrivateLinkForExternalData) {
                      LowToMedConversionError);
       else
         EXPECT_NO_THROW(Convert.convert(build(Image), A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry, StackResultTracksARecordCopiedInAndOutOfTheFrame) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL}) {
+    SourceFunctionTypeHint Sig;
+    Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Sig.ReturnType = Record;
+    auto Wide = NdType::makeInt(8, false);
+    Sig.Parameters.assign(7, {"word", Wide});
+    Sig.Parameters.push_back({"bytes", Record});
+    Sig.Parameters.push_back({"tail", Wide});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+    const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+    for (uint32_t LinkOffset : {140u, 112u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << LinkOffset);
+      // GCC places the input copy at sp+116 and the hidden result at sp+96.
+      // Both counted loops use the branch delay slot to store their byte.
+      std::vector<uint32_t> Words{0x27bdff70,
+                                  0x27a80074,
+                                  0x27a90085,
+                                  0xafb00088,
+                                  0xafbf0000 | LinkOffset,
+                                  0x00a08025,
+                                  0x908a0000,
+                                  0x25080001,
+                                  0x24840001,
+                                  0x1509fffc,
+                                  0xa10affff,
+                                  0x24060002,
+                                  0x24070003};
+      for (uint32_t I = 16; I < 64; I += 4)
+        Words.push_back(0xafa00000 | I); // Subsequent scalar argument halves.
+      for (uint32_t I = 0; I < 16; I += 4) {
+        Words.push_back(0x8faa0074 + I);
+        Words.push_back(0xafaa0040 + I);
+      }
+      Words.insert(Words.end(),
+                   {0x93aa0084, 0xa3aa0050, 0xafa00058, 0xafa0005c, 0x0c000800,
+                    0x27a40060, // jal callee; addiu a0,sp,96
+                    0x27a80060, 0x27a90071, 0x02002825, 0x910a0000, 0x25080001,
+                    0x24a50001, 0x1509fffc, 0xa0aaffff, 0x8fbf0000 | LinkOffset,
+                    0x8fb00088, 0x03e00008, 0x27bd0090});
+      auto Image = image(Words, A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = MIPSABI::O32;
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      Convert.setSourceCalleeTypeHints(&Targets);
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      if (LinkOffset == 112)
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      else
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry,
+     WordGuardPreservesOutgoingStackBytesAtIndirectCall) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SourceCallTypeHint Hint;
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Hint.Signature.ReturnType = Record;
+    Hint.Signature.Parameters.assign(7, {"word", NdType::makeInt(8, false)});
+    Hint.Signature.Parameters.push_back({"bytes", Record});
+    ASSERT_TRUE(
+        mips::assignRecordSourceABI(Hint.Signature, A, BinaryFormat::ELF));
+    for (bool WholeWord : {false, true}) {
+      // After the two outgoing stores GCC uses word ADDIU to select the
+      // result buffer. The JALR delay slot writes only the record's final byte.
+      auto Image =
+          image({0x67bdffc0, WholeWord ? 0xffa00000u : 0xa3a00000u, 0xffa00008,
+                 0x27a40020, 0x0180f809, 0xa3a00010, 0x03e00008, 0x67bd0040},
+                A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      std::optional<SourceCallOccurrenceKey> Site;
+      LowOp *Check = nullptr;
+      for (auto &Block : Low.Blocks)
+        for (auto &Op : Block.Ops) {
+          if (Op.Opcode == NdOp::INDIR_CALL)
+            Site = sourceCallOccurrenceKey(Op);
+          if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+              Op.Inputs[0].isConst() &&
+              Op.Inputs[0].Offset == uint64_t(Intrinsic::MIPSRequireWord))
+            Check = &Op;
+        }
+      ASSERT_TRUE(Site);
+      ASSERT_NE(Check, nullptr);
+      std::string Error;
+      EXPECT_EQ(sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error),
+                WholeWord)
+          << Error;
+      Check->Inputs[1].Size = 4;
+      EXPECT_FALSE(
+          sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error));
     }
   }
 }
