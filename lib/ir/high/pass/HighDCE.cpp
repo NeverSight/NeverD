@@ -142,16 +142,22 @@ class PrivateFrameReads {
   // temporaries: the first register any expression names gives the target.
   void findArchitecture() {
     HighExprSet Seen;
+    llvm::SmallVector<const HighExpr *> Pending;
     walkStmts(Func->Body, [&](const HighStmt &S) {
+      if (Architecture != Arch::Unknown)
+        return;
       forEachExpr(S, [&](const ExprPtr &Root) {
-        std::vector<const HighExpr *> Pending{Root.get()};
-        while (!Pending.empty() && Architecture == Arch::Unknown) {
-          const HighExpr *E = Pending.back();
-          Pending.pop_back();
+        if (Architecture != Arch::Unknown)
+          return;
+        Pending.push_back(Root.get());
+        while (!Pending.empty()) {
+          const HighExpr *E = Pending.pop_back_val();
           if (!E || !Seen.insert(E).second)
             continue;
-          if (E->Kind == ExprKind::Var)
+          if (E->Kind == ExprKind::Var && E->Var.TheArch != Arch::Unknown) {
             Architecture = E->Var.TheArch;
+            return;
+          }
           E->forEachChildExpr(
               [&](const ExprPtr &Child) { Pending.push_back(Child.get()); });
         }
