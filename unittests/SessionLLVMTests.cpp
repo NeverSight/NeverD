@@ -105,7 +105,8 @@ TEST(WindowsDriverEntry, ExportedArm64ShimRequiresNamedExecutableTransfer) {
   Image.Exports = {{.Name = "GsDriverEntry", .Addr = Shim},
                    {.Name = "DriverEntry", .Addr = Body}};
   const auto entries = [&] {
-    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None);
+    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None)
+        .DriverEntries;
   };
   EXPECT_EQ(entries(), (std::vector<va_t>{Shim, Body}));
   Image.Exports.push_back({.Name = "AnotherEntry", .Addr = Body});
@@ -120,6 +121,45 @@ TEST(WindowsDriverEntry, ExportedArm64ShimRequiresNamedExecutableTransfer) {
   EXPECT_EQ(entries(), (std::vector<va_t>{Shim}));
   Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
   EXPECT_TRUE(entries().empty());
+}
+
+TEST(WindowsDriverEntry, KernelLibraryRequiresDistinctExecutableExports) {
+  constexpr va_t Init = 0x1000, Unload = Init + 4;
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Format = BinaryFormat::COFF;
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  Image.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_SYSTEM;
+  Segment Text;
+  Text.VA = Init;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xc0, 0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6};
+  Text.FileSz = Text.Size = Text.Data.size();
+  Image.Segments.push_back(std::move(Text));
+  Image.Exports = {{.Name = "DllInitialize", .Addr = Init},
+                   {.Name = "DllUnload", .Addr = Unload}};
+  const auto entries = [&] {
+    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None);
+  };
+  EXPECT_EQ(entries().DllInitialize, Init);
+  EXPECT_EQ(entries().DllUnload, Unload);
+  Image.DynInfo.PECharacteristics |= llvm::COFF::IMAGE_FILE_DLL;
+  EXPECT_EQ(entries().DllInitialize, Init);
+  EXPECT_TRUE(entries().DriverEntries.empty());
+  Image.Exports.push_back({.Name = "SameCode", .Addr = Init});
+  EXPECT_FALSE(entries().DllInitialize);
+  Image.Exports.pop_back();
+  Image.Exports.back().Addr = Init;
+  EXPECT_FALSE(entries().DllInitialize);
+  Image.Exports.back().Addr = Unload;
+  Image.BytePatchRanges.emplace_back(Unload, 1);
+  EXPECT_FALSE(entries().DllUnload);
+  Image.BytePatchRanges.clear();
+  Image.Exports.pop_back();
+  EXPECT_FALSE(entries().DllInitialize);
+  Image.Exports.push_back({.Name = "DllUnload", .Addr = Unload});
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+  EXPECT_FALSE(entries().DllInitialize);
 }
 
 TEST_F(SessionLLVMTest, OmittedDebugNamedRuntimeUsesItsDeclaredArity) {

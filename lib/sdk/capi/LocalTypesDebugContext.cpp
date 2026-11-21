@@ -767,17 +767,45 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     std::vector<types::HeaderLibrary> Headers,
     std::unordered_map<uint64_t, std::string> Recognized, std::string EntryType,
     std::optional<va_t> ProgramMain, std::string EntryDeclaration,
-    std::vector<va_t> WindowsDriverEntries)
+    WindowsDriverEntryPoints DriverEntries)
     : Inner(Inner), Types(std::move(Types)),
-      Declarations(std::move(Declarations)),
-      WindowsDriverEntries(std::move(WindowsDriverEntries)), Image(Image),
+      Declarations(std::move(Declarations)), Image(Image),
       Headers(std::move(Headers)), Recognized(std::move(Recognized)),
       EntryType(std::move(EntryType)),
       EntryDeclaration(std::move(EntryDeclaration)), ProgramMain(ProgramMain) {
-  if (!this->WindowsDriverEntries.empty()) {
-    WindowsDriverSignature = entryTypeSignature("PDRIVER_INITIALIZE", true);
-    if (!WindowsDriverSignature)
-      this->WindowsDriverEntries.clear();
+  if (!DriverEntries.DriverEntries.empty())
+    if (auto Signature = entryTypeSignature("PDRIVER_INITIALIZE", true))
+      for (va_t Addr : DriverEntries.DriverEntries)
+        WindowsDriverSignatures.emplace(Addr, *Signature);
+  if (DriverEntries.DllInitialize && DriverEntries.DllUnload && Image) {
+    // The export-driver lifecycle declarations are specified by the Windows
+    // loader. Resolve their NTSTATUS and PUNICODE_STRING in the matching WDK.
+    const auto Provider =
+        Image->Arch == Arch::X86   ? types::HeaderLibrary::WindowsKernelX86
+        : Image->Arch == Arch::X64 ? types::HeaderLibrary::WindowsKernelX64
+                                   : types::HeaderLibrary::WindowsKernelARM64;
+    const auto *Header = llvm::is_contained(this->Headers, Provider)
+                             ? types::headerLibrary(Provider)
+                             : nullptr;
+    if (Header) {
+      const std::string Prefix =
+          Image->Arch == Arch::X86 ? "NTSTATUS __stdcall " : "NTSTATUS ";
+      const auto Bind = [&](va_t Addr, llvm::StringRef Callable) {
+        auto Read =
+            types::parseFunctionDeclaration(Prefix + Callable.str(), *Header);
+        if (Read.ok())
+          if (auto Signature =
+                  signatureOf(*Header, *Read.Function, Read.Name)) {
+            Signature->PrototypeLibrary =
+                types::headerLibraryName(Provider).str();
+            Signature->PrototypeFromHeader = true;
+            WindowsDriverSignatures.emplace(Addr, std::move(*Signature));
+          }
+      };
+      Bind(*DriverEntries.DllInitialize,
+           "DllInitialize(PUNICODE_STRING RegistryPath)");
+      Bind(*DriverEntries.DllUnload, "DllUnload(void)");
+    }
   }
   refreshBoundFunctionEntries();
 }
@@ -787,9 +815,8 @@ void LocalTypesDebugContext::refreshBoundFunctionEntries() {
   BoundFunctionEntries.assign(InnerEntries.begin(), InnerEntries.end());
   for (const auto &Declaration : Declarations)
     BoundFunctionEntries.push_back(Declaration.first);
-  BoundFunctionEntries.insert(BoundFunctionEntries.end(),
-                              WindowsDriverEntries.begin(),
-                              WindowsDriverEntries.end());
+  for (const auto &Contract : WindowsDriverSignatures)
+    BoundFunctionEntries.push_back(Contract.first);
   llvm::sort(BoundFunctionEntries);
   BoundFunctionEntries.erase(
       std::unique(BoundFunctionEntries.begin(), BoundFunctionEntries.end()),
@@ -1581,10 +1608,10 @@ std::optional<FunctionSym> LocalTypesDebugContext::undeclared(va_t Addr) const {
         return Function;
   // video.h also declares a miniport DriverEntry. The authenticated operating
   // system entry follows DRIVER_INITIALIZE even when that header is joined.
-  if (WindowsDriverSignature &&
-      (!Known || !isUserFunctionDeclaration(*Known)) &&
-      llvm::is_contained(WindowsDriverEntries, Addr))
-    Known = WindowsDriverSignature;
+  if (!Known || !isUserFunctionDeclaration(*Known))
+    if (auto It = WindowsDriverSignatures.find(Addr);
+        It != WindowsDriverSignatures.end())
+      Known = It->second;
   // The image's entry point, as its kind's specification types it: a UEFI
   // application's (ImageHandle, SystemTable).
   if (!Known && Image && Addr == Image->Entry &&
