@@ -220,9 +220,10 @@ before and after the merge. Ordinal-only imports carry no public name.
 
 The `COMRegistration` profile reads the self-registration callbacks that
 in-process COM servers export from `olectl.h`. It preserves the 32-bit
-`HRESULT` return type and empty parameter list. The x86 target uses
-`__stdcall`. Repeat the compiler comparison with
-`--provider COMRegistration`.
+`HRESULT` return type and empty parameter list. A named, executable export
+in a Windows GUI or console DLL binds its SDK contract at that address.
+Both C views preserve x86 `__stdcall` linkage. Repeat the compiler
+comparison with `--provider COMRegistration`.
 
 Add `--legacy-sdk` to use the archived Microsoft 10.0.22621.3233 SDK for
 AllJoyn, Peer Networking and Peer Graph. The package identities and hashes

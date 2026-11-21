@@ -58,15 +58,40 @@
 using namespace neverd;
 using namespace neverd::sdk;
 
-/// The Windows loader calls the PE driver entry with a driver object and
-/// registry path. An exact export or image-matched PDB may name the entry
-/// shim and the direct transfer from that shim to DriverEntry.
-WindowsDriverEntryPoints neverd::sdk::windowsDriverEntries(
-    const BinaryImage &Image, const DebugContext *Debug, DebugInfoKind Kind) {
+/// Windows loader and COM callbacks whose image entries establish the ABI.
+/// An image-matched PDB can also identify the driver's entry shim and body.
+WindowsEntryPoints neverd::sdk::windowsEntryPoints(const BinaryImage &Image,
+                                                   const DebugContext *Debug,
+                                                   DebugInfoKind Kind) {
   if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
       (Image.Arch != Arch::X86 && Image.Arch != Arch::X64 &&
-       Image.Arch != Arch::AArch64) ||
-      Image.DynInfo.PESubsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE)
+       Image.Arch != Arch::AArch64))
+    return {};
+
+  const auto UniqueExport = [&](llvm::StringRef Name) -> std::optional<va_t> {
+    const Export *E = Image.findExport(Name);
+    if (!E || !Image.isFunctionEntryCandidateAt(E->Addr) ||
+        Image.functionHasBytePatch(E->Addr) ||
+        llvm::any_of(Image.Exports, [&](const Export &Other) {
+          return (Other.Name == Name && Other.Addr != E->Addr) ||
+                 (Other.Addr == E->Addr && !Other.Name.empty() &&
+                  Other.Name != Name);
+        }))
+      return std::nullopt;
+    return E->Addr;
+  };
+
+  WindowsEntryPoints Entries;
+  const auto Subsystem = Image.DynInfo.PESubsystem;
+  if (Subsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_GUI ||
+      Subsystem == llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI) {
+    if (Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) {
+      Entries.DllRegisterServer = UniqueExport("DllRegisterServer");
+      Entries.DllUnregisterServer = UniqueExport("DllUnregisterServer");
+    }
+    return Entries;
+  }
+  if (Subsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE)
     return {};
   const bool MatchedPDB = Kind == DebugInfoKind::PDB && Debug &&
                           static_cast<const PDBDebugContext *>(Debug)
@@ -100,8 +125,8 @@ WindowsDriverEntryPoints neverd::sdk::windowsDriverEntries(
     Symbol.consume_front("_");
     return Symbol == Name || (Symbol.consume_front(Name) && Symbol == "@8");
   };
-  const auto *Initialize = Image.findExport("DllInitialize");
-  const auto *Unload = Image.findExport("DllUnload");
+  const auto Initialize = UniqueExport("DllInitialize");
+  const auto Unload = UniqueExport("DllUnload");
   auto Entry = Image.Entry ? functionAt(Image.Entry) : std::nullopt;
   const bool Driver =
       !(Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) &&
@@ -112,23 +137,10 @@ WindowsDriverEntryPoints neverd::sdk::windowsDriverEntries(
       identifyImageProfile(Image).Domain != ImageDomain::Kernel)
     return {};
 
-  WindowsDriverEntryPoints Entries;
-  // Windows resolves this exact, case-sensitive export pair when initializing
-  // a kernel library. A regular driver can also publish both callbacks.
-  if (Initialize && Unload && Initialize->Addr != Unload->Addr) {
-    const auto UniqueEntry = [&](const Export &E) {
-      return Image.isFunctionEntryCandidateAt(E.Addr) &&
-             !Image.functionHasBytePatch(E.Addr) &&
-             llvm::none_of(Image.Exports, [&](const Export &Other) {
-               return (Other.Name == E.Name && Other.Addr != E.Addr) ||
-                      (Other.Addr == E.Addr && !Other.Name.empty() &&
-                       Other.Name != E.Name);
-             });
-    };
-    if (UniqueEntry(*Initialize) && UniqueEntry(*Unload)) {
-      Entries.DllInitialize = Initialize->Addr;
-      Entries.DllUnload = Unload->Addr;
-    }
+  // Windows resolves this export pair when initializing a kernel library.
+  if (Initialize && Unload && Initialize != Unload) {
+    Entries.DllInitialize = Initialize;
+    Entries.DllUnload = Unload;
   }
   if (!Driver)
     return Entries;
@@ -1061,7 +1073,7 @@ DebugContext *Session::decompileDebug() {
               : std::shared_ptr<types::TypeLibrary>(libraryFor(Img)),
       std::move(Declarations), &Img, std::move(Headers), SigDB.buildNameMap(),
       LocalTypeEntryType, programMain(), LocalTypeEntryDeclaration,
-      windowsDriverEntries(Img, Dbg.get(), DbgKind));
+      windowsEntryPoints(Img, Dbg.get(), DbgKind));
   LocalTypesDbg->noteDeclarationReads(&UserReads);
   return LocalTypesDbg.get();
 }

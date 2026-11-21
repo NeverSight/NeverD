@@ -2770,7 +2770,7 @@ localTypesOf(Session *S, const char *InputPath, PipelineRunner &R,
       std::make_shared<types::TypeLibrary>(*Library), std::move(Declarations),
       &R.Img, std::move(Headers), S->SigDB.buildNameMap(),
       S->LocalTypeEntryType, S->programMain(), S->LocalTypeEntryDeclaration,
-      windowsDriverEntries(R.Img, R.Dbg.get(), R.DbgKind));
+      windowsEntryPoints(R.Img, R.Dbg.get(), R.DbgKind));
 }
 
 static const char *decompileAllImpl(neverd_session_t Sess,

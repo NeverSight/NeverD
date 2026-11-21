@@ -89,6 +89,7 @@
 #include "neverd/ir/IntegerCallArguments.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/libc/LibCCallDeclaration.h"
 #include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/libc/LibCResult.h"
@@ -2902,6 +2903,25 @@ LLVMCWriter::sourceFunctionResultType(const llvm::Function &Function) const {
                           Function.hasFnAttribute(LLVMSourceSignedResult));
 }
 
+llvm::StringRef
+LLVMCWriter::definitionConvention(const llvm::Function &Fn) const {
+  if (Opts.TheArch != Arch::X86 || Fn.isDeclaration() || Fn.isVarArg())
+    return {};
+  if (Fn.getCallingConv() == llvm::CallingConv::X86_StdCall)
+    return "__attribute__((stdcall)) ";
+  // With no arguments the two stack conventions place and pop identical
+  // bytes. The exact source declaration still determines the linker spelling.
+  if (Opts.PreserveLLVMFunctionTypes || Opts.Format != BinaryFormat::COFF ||
+      Fn.getCallingConv() != llvm::CallingConv::C || !Fn.arg_empty())
+    return {};
+  const auto Signature = boundSourceDeclaration(Fn);
+  if (Signature && Signature->Params.empty() &&
+      Signature->CallConv == DebugCallConv::Stdcall &&
+      libc::hasFixedPlatformCallDeclaration(*Signature, Dbg))
+    return "__attribute__((stdcall)) ";
+  return {};
+}
+
 std::string
 LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
                                        llvm::StringRef Declarator,
@@ -2909,8 +2929,9 @@ LLVMCWriter::sourceFunctionDeclaration(const llvm::Function &Fn,
   auto *FT = Fn.getFunctionType();
   const unsigned Count =
       Params ? std::min(*Params, FT->getNumParams()) : FT->getNumParams();
-  std::string Result =
-      sourceFunctionResultType(Fn) + " " + Declarator.str() + "(";
+  std::string Result = definitionConvention(Fn).str() +
+                       sourceFunctionResultType(Fn) + " " + Declarator.str() +
+                       "(";
   if (Count == 0 && !FT->isVarArg()) {
     Result += "void";
   } else if (Count) {

@@ -105,7 +105,7 @@ TEST(WindowsDriverEntry, ExportedArm64ShimRequiresNamedExecutableTransfer) {
   Image.Exports = {{.Name = "GsDriverEntry", .Addr = Shim},
                    {.Name = "DriverEntry", .Addr = Body}};
   const auto entries = [&] {
-    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None)
+    return windowsEntryPoints(Image, nullptr, DebugInfoKind::None)
         .DriverEntries;
   };
   EXPECT_EQ(entries(), (std::vector<va_t>{Shim, Body}));
@@ -121,6 +121,40 @@ TEST(WindowsDriverEntry, ExportedArm64ShimRequiresNamedExecutableTransfer) {
   EXPECT_EQ(entries(), (std::vector<va_t>{Shim}));
   Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
   EXPECT_TRUE(entries().empty());
+}
+
+TEST(WindowsEntryPoints, COMRegistrationRequiresAnExecutableUserDLLExport) {
+  constexpr va_t Register = 0x1000, Unregister = Register + 4;
+  BinaryImage Image;
+  Image.Format = BinaryFormat::COFF;
+  Image.Arch = Arch::AArch64;
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+  Image.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  Segment Text;
+  Text.VA = Register;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  Text.Data = {0xc0, 0x03, 0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6};
+  Text.FileSz = Text.Size = Text.Data.size();
+  Image.Segments.push_back(std::move(Text));
+  Image.Exports = {{.Name = "DllRegisterServer", .Addr = Register},
+                   {.Name = "DllUnregisterServer", .Addr = Unregister}};
+  const auto entries = [&] {
+    return windowsEntryPoints(Image, nullptr, DebugInfoKind::None);
+  };
+  EXPECT_EQ(entries().DllRegisterServer, Register);
+  EXPECT_EQ(entries().DllUnregisterServer, Unregister);
+  Image.Exports.push_back({.Name = "Alias", .Addr = Register});
+  EXPECT_FALSE(entries().DllRegisterServer);
+  EXPECT_EQ(entries().DllUnregisterServer, Unregister);
+  Image.Exports.pop_back();
+  Image.BytePatchRanges.emplace_back(Unregister + 1, 1);
+  EXPECT_FALSE(entries().DllUnregisterServer);
+  Image.BytePatchRanges.clear();
+  Image.DynInfo.PECharacteristics = 0;
+  EXPECT_FALSE(entries().DllRegisterServer);
+  Image.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  EXPECT_FALSE(entries().DllRegisterServer);
 }
 
 TEST(WindowsDriverEntry, KernelLibraryRequiresDistinctExecutableExports) {
@@ -139,7 +173,7 @@ TEST(WindowsDriverEntry, KernelLibraryRequiresDistinctExecutableExports) {
   Image.Exports = {{.Name = "DllInitialize", .Addr = Init},
                    {.Name = "DllUnload", .Addr = Unload}};
   const auto entries = [&] {
-    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None);
+    return windowsEntryPoints(Image, nullptr, DebugInfoKind::None);
   };
   EXPECT_EQ(entries().DllInitialize, Init);
   EXPECT_EQ(entries().DllUnload, Unload);

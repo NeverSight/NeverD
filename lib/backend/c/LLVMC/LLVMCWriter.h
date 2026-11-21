@@ -122,6 +122,7 @@ public:
   std::optional<FunctionSym>
   boundSourceDeclaration(const llvm::Function &Fn) const;
   TypeRef boundIntegerResult(const llvm::Function &Fn) const;
+  llvm::StringRef definitionConvention(const llvm::Function &Fn) const;
   const FunctionSym *sourceImportCallee(const llvm::CallBase &Call) const;
   bool groupedFloatingCall(const llvm::CallBase &Call,
                            const FunctionSym &Function) const;
