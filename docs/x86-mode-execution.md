@@ -65,8 +65,8 @@ existing paged RETF/IRET owners can return to compatibility dispatch.
 The explicitly bound EFER bank admits RDMSR/WRMSR of ECX=C0000080h. SCE is a
 separate supplied capability; LME/NXE use the paging feature binding. LMA is
 read-only. Reserved bits and changing LME while paging is active produce #GP;
-LOCK and privilege checks follow authenticated fetch. Other MSR banks are
-explicit refusals. These checks follow [Intel SDM Volume 3A, sections 2.2.1
+LOCK and privilege checks follow authenticated fetch. Conventional MCA
+registers belong to the optional machine-check bank described below. These checks follow [Intel SDM Volume 3A, sections 2.2.1
 and 5.1.1](https://cdrdv2.intel.com/v1/dl/getContent/671190).
 
 ## Machine status and paid operand progress
@@ -290,9 +290,24 @@ correction.
 
 Original RDMSR and WRMSR instructions read and acknowledge these banks across
 code widths. This model binds a single Intel KVM CPU with conventional MCi
-registers. CMCI threshold interrupts, broadcast recovery and error generation
-in external devices require their respective controller or device state.
-[Linux KVM machine-check API](https://www.kernel.org/doc/html/v6.18/virt/kvm/api.html#kvm-x86-set-mce)
+registers. With `MCA.CMCI` enabled, MCG_CAP advertises the per-bank
+IA32_MCi_CTL2 registers. Each bank binds its writable threshold width. A bank
+with a zero width reads back zero. An injected uncorrectable-no-action record
+can signal CMCI regardless of CR4.MCE. An already formed corrected KVM record
+updates the bank without a threshold notification. A device submitting one
+corrected occurrence sets `CountCorrectedError`. The CPU then increments
+the architectural count, retains its sticky overflow bit and signals CMCI
+when the programmed threshold equals that count.
+
+`X86ModeInterrupts::LocalVectorCMCI` supplies the local APIC vector, delivery
+mode and mask from its CMCI LVT register. Fixed delivery enters the existing
+IRR, priority and EOI path. NMI and SMI delivery use the CPU's corresponding
+latches. Masking the LVT still allows the bank record to commit. An unavailable
+or invalid route retains the report and the previous bank for retry. INIT
+masks the bound LVT. Cross-CPU bank sharing and the external devices that
+generate errors require separate platform state.
+[Linux KVM machine-check injection](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/x86.c)
+[Intel SDM Volume 3B, machine-check architecture](https://cdrdv2-public.intel.com/671427/253669-sdm-vol-3b.pdf)
 
 ### Processor initialization and startup
 

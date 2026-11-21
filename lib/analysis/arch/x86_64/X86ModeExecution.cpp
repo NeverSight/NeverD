@@ -58,6 +58,33 @@ llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
 }
 
+llvm::Error routeCMCI(X86ModeInterrupts &Inputs) {
+  if (!Inputs.LocalVectorCMCI)
+    return invalid(
+        "CMCI notification requires a local APIC CMCI vector-table binding");
+  const uint32_t LVT = *Inputs.LocalVectorCMCI;
+  constexpr uint32_t Masked = 1u << 16;
+  if (LVT & ~(Masked | 0x7ffu))
+    return invalid("CMCI LVT contains unsupported interrupt-controller state");
+  switch ((LVT >> 8) & 7) {
+  case 0:
+    if (!(LVT & Masked) &&
+        Inputs.APIC.receiveFixedInterrupt(uint8_t(LVT), false, true) ==
+            X86LocalApicArrival::RejectedVector)
+      return invalid("fixed CMCI delivery requires a legal APIC vector");
+    break;
+  case 2:
+    Inputs.SMIPending |= !(LVT & Masked);
+    break;
+  case 4:
+    Inputs.NMIPending |= !(LVT & Masked);
+    break;
+  default:
+    return invalid("CMCI LVT requires fixed, SMI or NMI delivery");
+  }
+  return llvm::Error::success();
+}
+
 std::optional<bool> systemLockPrefix(llvm::ArrayRef<uint8_t> Bytes,
                                      llvm::ArrayRef<uint8_t> Opcode,
                                      bool Long64) {
@@ -772,6 +799,9 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
           }
           return Finish();
         }
+        if (*Action == X86MachineCheckAction::NotifyCMCI)
+          if (auto E = routeCMCI(*Interrupts))
+            return std::move(E);
         Interrupts->MachineCheck.reset();
         S.MCA = std::move(Next.MCA);
         if (*Action == X86MachineCheckAction::Shutdown) {

@@ -122,6 +122,8 @@ struct X86ModeInterrupts {
   std::optional<translate::X86MachineCheckReport> MachineCheck;
   bool INITPending = false;
   std::optional<uint8_t> StartupVector;
+  /// Imported local APIC CMCI LVT delivery mode, vector and mask.
+  std::optional<uint32_t> LocalVectorCMCI;
 };
 
 struct X86ModeExecutionResult : translate::X86LegacyExecutionResult {

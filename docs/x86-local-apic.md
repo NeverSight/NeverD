@@ -192,3 +192,8 @@ completed event frame suspended on backing. EOI belongs to the controller's
 caller. Original successful x64 MOV-to-CR8 writes update TPR before the next
 arbitration point, including a same-class write that clears its subpriority.
 A faulting write retains the CPU and controller priority.
+
+The optional CMCI LVT binding accepts fixed, NMI and SMI delivery. Fixed
+CMCI is an edge request in the same IRR and ISR banks. The controller's
+mask, TPR and the CPU's IF apply at their respective boundaries.
+[MCA notification and counted errors](x86-mode-execution.md#conventional-machine-checks)
