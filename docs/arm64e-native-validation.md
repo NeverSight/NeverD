@@ -2801,9 +2801,55 @@ The measured machines were virtual M1s. Explicit PAuth_LR, PACM-PC, scalar
 CPTA-on and checked writeback still lack native qualification.
 [Compiler-original system unwind and hardware probes](https://github.com/gmh5225/test_mac_intel/actions/runs/44792865868).
 
-A return of an entry address plus one still fails at MedIR code-identity
-resolution. Its post-ABI graph has already folded the entry and displacement
-to one interior address. The recorded input distinguishes this case from
-an explicitly declared literal interior. Temporary runner branches, the
+At revision `d498e194513f`, a return of an entry address plus one failed
+at MedIR code-identity resolution. Its post-ABI graph had folded the entry
+and displacement to one interior address. The recorded input distinguishes this case from an
+explicitly declared literal interior. Temporary runner branches, the
 test release and its tag were removed after the runner reports were copied.
 [Source, compiler and CLI hashes, paired controls and per-run results](evidence/arm64e-source-addresses-2026-11-21.json).
+
+### Numeric offsets from an original function entry
+
+A full-width address produced by `ADR` can name a callable entry even when
+the instruction supplies no symbol type. When the loader establishes that
+entry, MedIR keeps an addition or subtraction tied to its base. The Mach-O
+register producer follows the value through X-register moves and immediate
+`ADD` or `SUB` until it is returned or stored. The installed `ADR` still
+points at the original public entry, and the arithmetic runs on that value.
+
+The original arm64e callers checked a return of the entry plus one and an
+output slot containing the entry minus four, including its two neighbors.
+Each hosted Mac executed its own assembled inputs. Before this change,
+the CLI refused all six local and hosted images in both optimization modes,
+and standalone LLVM output omitted the function with the positive offset.
+[Original Darwin controls](https://github.com/gmh5225/test_mac_intel/actions/runs/44803804389).
+
+The two Release producers each produced 36 signed images across three
+generations. All corresponding files were byte-identical. Independent
+instruction decoding checked the original entry, result register and
+following arithmetic. Standalone optimized and unoptimized LLVM contained
+both function definitions and passed the LLVM verifier. Using the r6 LLVM
+target machine for their declared arm64 analysis triple, all four resulting
+libraries per producer also passed the local callers. All 161 image-analysis tests
+passed. Both CLIs rejected the unowned interior address without creating an
+output file.
+
+The immediate-boundary run exercised byte offsets of 0, 1, 4,095, 4,096,
+8,192 and 16,773,120, the largest shifted immediate. An independently
+compiled caller compared each returned sum and stored difference with the
+public entry and checked the two neighboring slots.
+Each Mac executed 84 calls across six originals and 36 signed outputs.
+[Native immediate-boundary checks](https://github.com/gmh5225/test_mac_intel/actions/runs/44853005936).
+
+On macos-26 and xcode-27 the source fork passed all 263 tests. Each frozen
+r6 run passed 253, skipped four compact PAuth_LR cases and reproduced the
+six existing signed-return CFI failures. Each of the four jobs executed 63
+independent calls across 42 original and published images and recovered the
+two callers at twelve old-entry signal interruptions. Both virtual M1s still
+lack native PAuth_LR, PACM-PC and CPTA-on qualification.
+[Native publication and unwind runs](https://github.com/gmh5225/test_mac_intel/actions/runs/44852419225).
+GitHub currently lists M1 for the tested standard macOS labels and M2 for
+the arm64 XLarge labels. The test repository reported zero self-hosted runners.
+[Standard runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+[Larger runner specifications](https://docs.github.com/en/actions/reference/runners/larger-runners).
+[Input hashes, IR checks and per-host results](evidence/arm64e-function-entry-offsets-2026-11-21.json).
