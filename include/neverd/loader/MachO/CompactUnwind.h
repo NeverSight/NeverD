@@ -250,6 +250,25 @@ llvm::Expected<CompactUnwindRawSection> parseCompactUnwindRaw(
 
 /// Decode the image's `__unwind_info` section.
 ParseResult parseCompactUnwind(const BinaryImage &Img);
+/// Use the image's freshly decoded FDEs while building exception metadata.
+ParseResult parseCompactUnwind(const BinaryImage &Img,
+                               llvm::ArrayRef<DwarfFDE> Frames);
+
+/// An Apple linker can place the terminal sentinel at its last indexed FDE's
+/// start. Only the FDE can supply the missing exclusive end.
+struct TerminalDwarfEntry {
+  /// Byte offset of the terminal functionOffset in __unwind_info.
+  uint64_t SentinelField;
+  uint32_t FunctionOffset;
+  uint32_t FDEOffset;
+};
+std::optional<TerminalDwarfEntry>
+findTerminalDwarfEntry(llvm::ArrayRef<uint8_t> Section);
+/// Return an image-relative exclusive end. An already loaded image can use
+/// the compact entry and FDE paired by its exception reader.
+std::optional<uint32_t>
+resolveTerminalDwarfEnd(const BinaryImage &Img, const TerminalDwarfEntry &Entry,
+                        llvm::ArrayRef<DwarfFDE> Frames = {});
 
 /// The low-24-bit payload allowed by an ARM64 encoding's mode. The linked
 /// DWARF mode includes its FDE offset; linker-input callers must additionally

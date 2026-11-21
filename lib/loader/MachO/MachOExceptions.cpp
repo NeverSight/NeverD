@@ -81,8 +81,6 @@ void attachLSDA(const BinaryImage &Img, const dwarf_eh::PointerBases &Bases,
 } // namespace
 
 void parseDarwinExceptions(BinaryImage &Img) {
-  ParseResult Compact = parseCompactUnwind(Img);
-
   dwarf_eh::FrameSection FrameSec;
   const bool HasFrames = findEHFrame(Img, FrameSec);
   const dwarf_eh::PointerBases Bases = computeBases(Img);
@@ -90,6 +88,9 @@ void parseDarwinExceptions(BinaryImage &Img) {
   dwarf_eh::ParseResult Frames;
   if (HasFrames)
     Frames = dwarf_eh::parseEHFrame(Img, FrameSec, Bases);
+  ParseResult Compact = Frames.ParseStatus == ExceptionParseStatus::Complete
+                            ? parseCompactUnwind(Img, Frames.FDEs)
+                            : parseCompactUnwind(Img);
 
   // Pointer encodings and relative data addresses have already been decoded
   // against their original bases. Normalize only the semantic code fields;

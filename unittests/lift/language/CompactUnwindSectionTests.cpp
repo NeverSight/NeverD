@@ -310,6 +310,94 @@ TEST(CompactUnwindSection, TerminalLookupByteIsNotAnArm64Instruction) {
   }
 }
 
+TEST(CompactUnwindSection, TerminalDwarfRequiresItsExactFileBackedFrame) {
+  using namespace fixture;
+  enum class Page { Regular, Single, Common, Local };
+  const uint32_t Encoding = kARM64ModeDwarf | kIndexedTerminalFDE;
+  const va_t Start = kImageBase + kIndexedTerminalStart;
+  DwarfFDE Frame;
+  Frame.InitialLocation = Start;
+  Frame.AddressRange = kIndexedTerminalSize;
+  Frame.SectionOffset = kIndexedTerminalFDE;
+  for (auto Kind : {Page::Regular, Page::Single, Page::Common, Page::Local}) {
+    SCOPED_TRACE(static_cast<unsigned>(Kind));
+    auto Img = makeImage(Arch::AArch64);
+    Img.MachOCPUSubtype = macho_loader::arm64e::kCPUSubtype;
+    Section Text;
+    Text.Name = section_names::macho::Text;
+    Text.SegmentName = section_names::macho::TextSeg;
+    Text.VA = kImageBase + kPageFixtureBegin;
+    Text.Size = Start + Frame.AddressRange - Text.VA;
+    Text.FileSz = Text.Size;
+    Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Text.Type = llvm::MachO::S_ATTR_PURE_INSTRUCTIONS;
+    Img.Sections.push_back(Text);
+    std::vector<uint8_t> Bytes;
+    if (Kind == Page::Regular || Kind == Page::Single) {
+      std::vector<RawEntry> Entries;
+      if (Kind == Page::Regular)
+        Entries.push_back({kPageFixtureBegin, kARM64ModeFrame});
+      Entries.push_back({kIndexedTerminalStart, Encoding});
+      Bytes = buildUnwindInfo(Entries, kIndexedTerminalStart);
+    } else {
+      Bytes = buildPageBoundaryInfo(Kind == Page::Common ? Encoding
+                                                         : kARM64ModeFrame);
+      putU32(Bytes, kSinglePageEndOffset, kIndexedTerminalStart);
+      if (Kind == Page::Local) {
+        Bytes.resize(Bytes.size() + sizeof(Encoding));
+        putU16(Bytes, kSingleLocalCountOffset, 1);
+        putU32(Bytes, kSingleSecondPackedOffset, kTerminalLocalPacked);
+        putU32(Bytes, kSinglePageSectionSize, Encoding);
+      }
+    }
+    EXPECT_TRUE(rawParseFails(Bytes));
+    auto Entry = findTerminalDwarfEntry(Bytes);
+    ASSERT_TRUE(Entry);
+    EXPECT_EQ(Entry->FunctionOffset, kIndexedTerminalStart);
+    EXPECT_EQ(Entry->FDEOffset, kIndexedTerminalFDE);
+    attachUnwindInfo(Img, std::move(Bytes));
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry));
+    EXPECT_EQ(resolveTerminalDwarfEnd(Img, *Entry, Frame),
+              kIndexedTerminalStart + kIndexedTerminalSize);
+    auto Parsed = parseCompactUnwind(Img, Frame);
+    ASSERT_EQ(Parsed.ParseStatus, ExceptionParseStatus::Complete);
+    ASSERT_EQ(Parsed.Entries.size(), Kind == Page::Single ? 1u : 2u);
+    EXPECT_EQ(Parsed.Entries.back().CodeRange.Begin, Start);
+    EXPECT_EQ(Parsed.Entries.back().CodeRange.End, Start + Frame.AddressRange);
+    if (Kind != Page::Single)
+      EXPECT_EQ(Parsed.Entries.front().CodeRange.End, Start);
+
+    auto Wrong = Frame;
+    ++Wrong.SectionOffset;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Wrong));
+    Wrong = Frame;
+    ++Wrong.InitialLocation;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Wrong));
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, {Frame, Wrong}));
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, {Frame, Frame}));
+    Wrong = Frame;
+    ++Wrong.AddressRange;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Wrong));
+    Wrong = Frame;
+    Wrong.ParseStatus = ExceptionParseStatus::Partial;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Wrong));
+    Img.MachOFunctionStarts = {Start + sizeof(uint32_t)};
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Frame));
+    Img.MachOFunctionStarts.clear();
+    --Img.Sections.front().FileSz;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Frame));
+    ++Img.Sections.front().FileSz;
+    Img.Segments.front().FileSz =
+        kIndexedTerminalStart + kIndexedTerminalSize - 1;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Frame));
+    Img.Segments.front().FileSz = kTextSize;
+    Img.MachOCPUSubtype = 0;
+    EXPECT_FALSE(resolveTerminalDwarfEnd(Img, *Entry, Frame));
+    EXPECT_NE(parseCompactUnwind(Img, Frame).ParseStatus,
+              ExceptionParseStatus::Complete);
+  }
+}
+
 TEST(CompactUnwindIndirect, ReadsTheFrameSizeFromThePrologue) {
   BinaryImage Img = makeImage();
   writeStackSubtract(Img, 0x100, 0x1234);

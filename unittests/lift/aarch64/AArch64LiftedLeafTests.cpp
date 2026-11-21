@@ -8,6 +8,7 @@
 
 #include "neverd/backend/c/HighC/HighCEmitter.h"
 #include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
+#include "neverd/backend/codegen/MachO/MachOCompactUnwindPatch.h"
 #include "neverd/backend/codegen/MachO/MachOLayoutGrowth.h"
 #include "neverd/backend/codegen/MachO/MachOPatch.h"
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
@@ -21,6 +22,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/object/MachOLayout.h"
@@ -214,6 +216,34 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     Compile.push_back(kAsyncTables);
   Compile.append({Source, kOut, Input});
   ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler, Compile), 0);
+  if (Leaves == kTerminalDwarfLeaves) {
+    // Preserve the Apple linker spelling on hosts which emit a full sentinel.
+    auto Reader = Loader::create(BinaryFormat::MachO);
+    auto Linked = Reader->load(Input);
+    ASSERT_TRUE(bool(Linked)) << llvm::toString(Linked.takeError());
+    const auto *Last = Linked->findSymbol(kDifferenceSymbol);
+    const auto *Section =
+        Linked->getSectionByName(section_names::macho::Unwind);
+    ASSERT_TRUE(Last && Section);
+    const auto Offset = Linked->vaToFileOffset(Section->VA);
+    ASSERT_TRUE(rangeInBounds(Offset, Section->Size, Linked->Raw.size()));
+    auto Table =
+        llvm::MutableArrayRef(Linked->Raw).slice(Offset, Section->Size);
+    if (!macho_unwind::findTerminalDwarfEntry(Table)) {
+      auto Raw = macho_unwind::parseCompactUnwindRaw(
+          Table, {.TargetArch = Linked->Arch});
+      ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+      const auto Field = Raw->Header.IndexSectionOffset +
+                         (Raw->Index.size() - 1) *
+                             sizeof(macho_unwind::CompactUnwindRawIndexEntry);
+      llvm::support::endian::write32le(Table.data() + Field,
+                                       Last->Addr - Linked->Base);
+      ASSERT_TRUE(macho_unwind::findTerminalDwarfEntry(Table));
+      std::ofstream(Input, std::ios::binary)
+          .write(reinterpret_cast<const char *>(Linked->Raw.data()),
+                 Linked->Raw.size());
+    }
+  }
   if (Embedded && !RetainedDefault) {
     // The integrated assembler emits both instruction flags for __text.
     // Exercise the ABI's SOME-only spelling with the same linked bytes.
@@ -257,6 +287,32 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   auto Reader = Loader::create(BinaryFormat::MachO);
   auto Image = Reader->load(Input);
   ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  if (Leaves == kTerminalDwarfLeaves) {
+    const auto *Symbol = Image->findSymbol(kDifferenceSymbol);
+    ASSERT_NE(Symbol, nullptr);
+    const auto *F = Image->ExceptionMetadata.findFunction(Symbol->Addr);
+    ASSERT_TRUE(F && F->Compact && F->Dwarf);
+    EXPECT_EQ(F->ParseStatus, ExceptionParseStatus::Complete);
+    EXPECT_EQ(F->Compact->DwarfFDEOffset, F->Dwarf->SectionOffset);
+    EXPECT_EQ(F->CodeRange.End, Symbol->Addr + F->Dwarf->AddressRange);
+    auto Candidate = Image->Raw;
+    auto Empty = reserveMachOSourceUnwind(Candidate, Image->Arch, 0, 0);
+    ASSERT_TRUE(bool(Empty)) << llvm::toString(Empty.takeError());
+    EXPECT_FALSE(*Empty);
+    EXPECT_EQ(Candidate, Image->Raw);
+    auto FrameOnly =
+        reserveMachOSourceUnwind(Candidate, Image->Arch, sizeof(va_t), 0);
+    ASSERT_TRUE(bool(FrameOnly)) << llvm::toString(FrameOnly.takeError());
+    auto Region = findMachOCompactUnwindRegion(Candidate);
+    ASSERT_TRUE(bool(Region)) << llvm::toString(Region.takeError());
+    ASSERT_TRUE(*Region);
+    auto Raw = macho_unwind::parseCompactUnwindRaw(
+        llvm::ArrayRef(Candidate).slice((**Region).SectionFileOff,
+                                        (**Region).SectionSize),
+        {.TargetArch = Image->Arch});
+    ASSERT_TRUE(bool(Raw)) << llvm::toString(Raw.takeError());
+    EXPECT_EQ(Raw->Index.back().FunctionOffset, F->CodeRange.End - Image->Base);
+  }
   if (Check == LeafCheck::Relifted) {
     std::vector<ExceptionAddressRange> Sections;
     for (const auto &S : Image->Sections)
@@ -1367,12 +1423,15 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       kOriginalHash, llvm::toHex(llvm::SHA256::hash(Snapshot), true));
   testing::Test::RecordProperty(
       kPublishedHash, llvm::toHex(llvm::SHA256::hash(Final->Raw), true));
-  const auto Caller = (Root / kDriverSource).string();
+  const bool CxxCaller = CallerSource == kTerminalCaller;
+  const auto Compiler = CxxCaller ? kTLSCxx : kCompiler;
+  const auto Caller =
+      (Root / (CxxCaller ? kTerminalDriver : kDriverSource)).string();
   const auto Driver = (Root / kDriver).string();
   std::ofstream(Caller) << Preamble << CallerSource;
   ASSERT_EQ(
-      llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
-                                            kOptimize, Caller, kOut, Driver}),
+      llvm::sys::ExecuteAndWait(Compiler, {Compiler, kTargetFlag, kTarget,
+                                           kOptimize, Caller, kOut, Driver}),
       0);
   auto CallerImage = Reader->load(Driver);
   ASSERT_TRUE(bool(CallerImage)) << llvm::toString(CallerImage.takeError());
@@ -2529,6 +2588,16 @@ TEST(AArch64LiftedImage, DistinguishesReturnedLiteralSlotsFromOtherRoots) {
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64LiftedImage, RepublishesSignedTerminalIndexedDwarf) {
+  verifyPublishedLeaves(kTerminalDwarfLeaves, kCaller, kAssemblyName, {},
+                        LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, SystemUnwindsRepublishedSignedCallback) {
+  verifyPublishedLeaves(kTerminalDwarfLeaves, kTerminalCaller, kAssemblyName,
+                        kTerminalCallback, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, PublishedOutputParametersKeepOriginalEntryAddresses) {
