@@ -18,6 +18,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <bit>
@@ -358,11 +359,23 @@ uint64_t SymEvalPlan::evalU64(llvm::ArrayRef<uint64_t> VarVals) {
 
 namespace {
 
-// Keep arbitrary-precision construction and cleanup out of the common native
-// evaluator's stack frame. General operators still have one semantics owner.
+// Keep the less frequent width-dependent operators off the common evaluator's
+// stack. Its caller masks the result to the declared width.
 LLVM_ATTRIBUTE_NOINLINE
-uint64_t evalU64ViaAP(const SymContext &Ctx, SymRef Node,
-                      llvm::ArrayRef<uint32_t> Args, const uint64_t *Values) {
+uint64_t evalGeneralU64(const SymContext &Ctx, SymRef Node,
+                        llvm::ArrayRef<uint32_t> Args, const uint64_t *Values) {
+  const auto Op = Ctx.op(Node);
+  if (Op == SymOp::SExt)
+    return llvm::SignExtend64(Values[Args[0]], Ctx.width(Ctx.operand(Node, 0)));
+  if (Op == SymOp::Rol || Op == SymOp::Ror) {
+    const unsigned Width = Ctx.width(Node);
+    const unsigned Count = Values[Args[1]] % Width;
+    const uint64_t Value = Values[Args[0]];
+    if (!Count)
+      return Value;
+    const unsigned Left = Op == SymOp::Rol ? Count : Width - Count;
+    return (Value << Left) | (Value >> (Width - Left));
+  }
   llvm::SmallVector<llvm::APInt, 4> APArgs;
   for (size_t K = 0; K < Args.size(); ++K)
     APArgs.emplace_back(Ctx.width(Ctx.operand(Node, K)), Values[Args[K]]);
@@ -505,11 +518,7 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
       Res = S[A[0]] >> St.Aux;
       break;
     default: {
-      // The remaining operators need width-exact or signed semantics that are
-      // stated once in evalNodeAP.  They are rare in the MBA inner loop, so
-      // reconstructing operand APInts here costs little and avoids a second,
-      // divergent copy of the semantics.
-      Res = evalU64ViaAP(Ctx, St.Node, {A, St.NumArgs}, S);
+      Res = evalGeneralU64(Ctx, St.Node, {A, St.NumArgs}, S);
       break;
     }
     }

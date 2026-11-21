@@ -1826,6 +1826,33 @@ TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
   }
 }
 
+TEST(SymExpr, NativeRotationsAndSignExtensionMatchEveryWordWidth) {
+  std::mt19937_64 Random(0xf012e);
+  for (unsigned Width = 1; Width <= 64; ++Width) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Count = Ctx.mkVar("count", 64);
+    SymEvalPlan Left(Ctx, Ctx.mkRol(X, Count)), Right(Ctx, Ctx.mkRor(X, Count));
+    SymEvalPlan Signed(Ctx, Ctx.mkSExt(X, 64));
+    const std::array<uint64_t, 7> Counts{
+        0,         Width - 1,         Width,       Width + 1,
+        2 * Width, uint64_t(1) << 63, ~uint64_t(0)};
+    for (uint64_t Amount : Counts) {
+      for (uint64_t Value : {uint64_t(0), uint64_t(1) << (Width - 1),
+                             ~uint64_t(0), uint64_t(Random())}) {
+        const llvm::APInt Word(Width, Value, false, true);
+        const std::array<uint64_t, 2> Inputs{Value, Amount};
+        EXPECT_EQ(Left.evalU64(Inputs),
+                  Word.rotl(Amount % Width).getZExtValue());
+        EXPECT_EQ(Right.evalU64(Inputs),
+                  Word.rotr(Amount % Width).getZExtValue());
+        EXPECT_EQ(Signed.evalU64(Inputs), Word.sextOrTrunc(64).getZExtValue());
+      }
+    }
+  }
+}
+
 TEST(SymExpr, U64ArithmeticShiftByZeroKeepsTheWholeWord) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", 64);
