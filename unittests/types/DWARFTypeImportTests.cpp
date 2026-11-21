@@ -292,7 +292,8 @@ TEST(DWARFTypeImportMIPS, LegacyBitOffsetsInsideUnionMembersFollowTargetOrder) {
 
 TEST(DWARFTypeImportMIPS, PackedLegacyBitFieldCrossesTheNominalWord) {
   for (const char *Name :
-       {"dwarf_mips_bitfields.mips.o", "dwarf_mips_bitfields.mipsel.o"}) {
+       {"dwarf_mips_bitfields.mips.o", "dwarf_mips_bitfields.mipsel.o",
+        "dwarf_mips_bitfields.clang18.mipsel.o"}) {
     SCOPED_TRACE(Name);
     auto Object = llvm::object::ObjectFile::createObjectFile(
         std::string(NEVERD_TYPES_FIXTURES "/") + Name);
@@ -318,7 +319,7 @@ TEST(DWARFTypeImportMIPS, PackedLegacyBitFieldCrossesTheNominalWord) {
       if (llvm::cantFail(Section.getName()) == ".debug_info")
         Info = llvm::cantFail(Section.getContents());
     ASSERT_FALSE(Info.empty());
-    std::optional<uint64_t> At;
+    std::optional<llvm::DWARFAttribute> Top;
     for (const auto &CU : Context->compile_units())
       for (auto Die : CU->getUnitDIE(false).children())
         if (Die.getTag() == llvm::dwarf::DW_TAG_structure_type &&
@@ -327,14 +328,21 @@ TEST(DWARFTypeImportMIPS, PackedLegacyBitFieldCrossesTheNominalWord) {
             if (Field.getTag() == llvm::dwarf::DW_TAG_member &&
                 llvm::StringRef(Field.getShortName()) == "value")
               for (auto Attribute : Field.attributes())
-                if (Attribute.Attr == llvm::dwarf::DW_AT_bit_offset) {
-                  ASSERT_EQ(Attribute.ByteSize, 1u);
-                  At = Attribute.Offset;
-                }
-    ASSERT_TRUE(At && *At < Info.size());
+                if (Attribute.Attr == llvm::dwarf::DW_AT_bit_offset)
+                  Top = Attribute;
+    ASSERT_TRUE(Top && Top->Offset < Info.size());
+    ASSERT_TRUE(Top->ByteSize == 1 || Top->ByteSize == 8);
+    ASSERT_LE(Top->ByteSize, Info.size() - Top->Offset);
     const auto File = Object->getBinary()->getData();
     std::string Bad = File.str();
-    Bad[(Info.data() - File.data()) + *At] = 63;
+    char *At = Bad.data() + (Info.data() - File.data()) + Top->Offset;
+    if (Top->ByteSize == 1)
+      *At = 63;
+    else
+      llvm::support::endian::write64(At, 63,
+                                     Object->getBinary()->isLittleEndian()
+                                         ? llvm::endianness::little
+                                         : llvm::endianness::big);
     auto Invalid = llvm::object::ObjectFile::createObjectFile(
         llvm::MemoryBufferRef(Bad, Name));
     ASSERT_TRUE(static_cast<bool>(Invalid))

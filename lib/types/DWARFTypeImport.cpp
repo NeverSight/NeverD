@@ -64,9 +64,11 @@ std::optional<uint64_t> legacyBitFieldStart(const llvm::DWARFFormValue &Offset,
     return std::nullopt;
   // A signed high-bit offset can be negative on little-endian input. Widen
   // the calculation so a crossing field cannot wrap into the enclosing record.
+  // Older Clang writes a negative displacement as its full 64-bit pattern.
   const llvm::APInt Top =
-      Unsigned ? llvm::APInt(128, *Unsigned)
-               : llvm::APInt(128, static_cast<uint64_t>(*Signed), true);
+      Unsigned
+          ? llvm::APInt(128, *Unsigned, Offset.getForm() == dw::DW_FORM_data8)
+          : llvm::APInt(128, static_cast<uint64_t>(*Signed), true);
   const auto Start = (Little ? llvm::APInt(128, Last) - Top : Top) + Base;
   if (Start.ugt(Limit))
     return std::nullopt;

@@ -33,3 +33,9 @@ union PackedHeader {
 
 const union PackedHeader packed_sample = {
     .fields = {0x4545454, 0x91b, 0x82}};
+
+/* Clang 18 writes the packed little-endian offset as DW_FORM_data8.
+ * Rebuild the additional fixture with clang-18 --target=mipsel-linux-gnu
+ * -mabi=32 -march=mips32r2 -EL -mno-abicalls -fno-pic -G0 -O0 -gdwarf-2
+ * -c dwarf_mips_bitfields.c -o dwarf_mips_bitfields.clang18.mipsel.o.
+ */
