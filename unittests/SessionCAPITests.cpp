@@ -5251,11 +5251,16 @@ TEST(InstructionDataAccesses, ScalarFilterAgreesWithCompleteLowIR) {
     // Independent encoded forms include scalar registers, immediate addresses,
     // absolute/RIP-relative loads, RMW, segment offsets and implicit stack and
     // string operands. The random suffix probes prefixes and rarer forms.
-    Code.Data = {0x31, 0xc0, 0x89, 0xd8, 0x83, 0xc0, 0x01, 0xb8, 0x00,
-                 0x30, 0x00, 0x00, 0x48, 0x8b, 0x05, 0x10, 0x00, 0x00,
-                 0x00, 0x83, 0x05, 0x10, 0x00, 0x00, 0x00, 0x01, 0x65,
-                 0x48, 0x8b, 0x04, 0x25, 0x88, 0x01, 0x00, 0x00, 0x50,
-                 0x58, 0xa4, 0xf3, 0xa5, 0xc3};
+    Code.Data = {0x31, 0xc0, 0x89, 0xd8, 0x83, 0xc0, 0x01, 0xb8, 0x00, 0x30,
+                 0x00, 0x00, 0x48, 0x8b, 0x05, 0x10, 0x00, 0x00, 0x00, 0x83,
+                 0x05, 0x10, 0x00, 0x00, 0x00, 0x01, 0x65, 0x48, 0x8b, 0x04,
+                 0x25, 0x88, 0x01, 0x00, 0x00, 0x50, 0x58, 0xa4, 0xf3, 0xa5,
+                 0xc3, 0x89, 0x44, 0x24, 0x10,        // mov [sp+16], eax
+                 0x83, 0x45, 0xfc, 0x01,              // add dword [bp-4], 1
+                 0x8b, 0x44, 0x8d, 0x04,              // mov eax, [bp+cx*4+4]
+                 0x64, 0x8b, 0x45, 0x08,              // mov eax, fs:[bp+8]
+                 0x67, 0x8b, 0x46, 0x04,              // address-size override
+                 0x8d, 0x05, 0x10, 0x00, 0x00, 0x00}; // lea, no data read
     uint64_t State = 0x9e3779b97f4a7c15ULL;
     for (unsigned I = 0; I != 65536; ++I) {
       State ^= State << 13;
@@ -5269,6 +5274,19 @@ TEST(InstructionDataAccesses, ScalarFilterAgreesWithCompleteLowIR) {
     ASSERT_TRUE(Decoder.init(Image));
     using Access = neverd::sdk::SessionTestAccess;
     const auto &Bytes = Image.Segments.front().Data;
+    // An absolute SIB displacement supplies the complete address in both
+    // modes. It must survive the filter with its exact four-byte width.
+    const std::array<uint8_t, 7> Absolute = {0x8b, 0x04, 0x25, 0x00,
+                                             0x30, 0x00, 0x00};
+    neverd::DecodedInsn Load;
+    ASSERT_EQ(Decoder.decodeOne(Absolute.data(), Absolute.size(), 0x1000, Load),
+              int(Absolute.size()));
+    const std::vector<std::pair<neverd_va_t, unsigned>> Expected = {
+        {0x3000, 4}};
+    EXPECT_EQ(Access::instructionDataAccesses(Image, Decoder, Load, false),
+              Expected);
+    EXPECT_EQ(Access::instructionDataAccesses(Image, Decoder, Load, true),
+              Expected);
     unsigned Decoded = 0;
     for (size_t Offset = 0; Offset < Bytes.size();) {
       neverd::DecodedInsn Insn;
