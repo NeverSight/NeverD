@@ -500,6 +500,15 @@ void SymState::clobberMemory(SymMemoryPreservation &Preservation) {
                              Ctx->width(Preservation.Base) != kMaxAddressBits ||
                              Ctx->isConst(Preservation.Base))))
     return;
+  int64_t PreviousEnd = INT64_MIN;
+  for (const auto &Range : Preservation.EarlierRanges) {
+    if (!Charge(1))
+      return;
+    if (Range.Begin >= Range.End || Range.Begin < PreviousEnd ||
+        Range.End > Preservation.Begin)
+      return;
+    PreviousEnd = Range.End;
+  }
   if (!Charge(1))
     return;
   Bank *Protected = &AbsoluteMemory;
@@ -540,12 +549,21 @@ void SymState::clobberMemory(SymMemoryPreservation &Preservation) {
   const auto Begin = static_cast<uint64_t>(Preservation.Begin);
   const auto Size = static_cast<uint64_t>(Preservation.End) - Begin;
   if (Protected)
-    for (const auto &[Offset, Byte] : Protected->Bytes)
-      if (Offset - Begin < Size) {
+    for (const auto &[Offset, Byte] : Protected->Bytes) {
+      bool Keep = Offset - Begin < Size;
+      for (const auto &Range : Preservation.EarlierRanges) {
+        if (!Charge(1))
+          return;
+        const auto EarlierBegin = static_cast<uint64_t>(Range.Begin);
+        Keep |= Offset - EarlierBegin <
+                static_cast<uint64_t>(Range.End) - EarlierBegin;
+      }
+      if (Keep) {
         if (!Charge(2))
           return;
         Saved.emplace_hint(Saved.end(), Offset, Byte);
       }
+    }
 
   // All potentially allocating preparation is complete. Only exact current
   // ByteViews survive; neither old unknown epochs nor provenance seed memory.

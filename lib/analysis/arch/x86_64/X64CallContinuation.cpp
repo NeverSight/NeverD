@@ -10,6 +10,7 @@
 #include "../../core/RecoveryDigest.h"
 #include "NativeStackControl.h"
 
+#include "neverd/analysis/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowRawCall.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -35,13 +36,24 @@ llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, "%s", Message);
 }
 
-void declaration(RecoveryDigest &H, const SpecializationX64ReturningCall &D) {
+} // namespace
+
+void appendReturningCallDeclaration(RecoveryDigest &H,
+                                    const SpecializationX64ReturningCall &D) {
   H.number(D.Version);
   H.number(D.Address);
   H.number(static_cast<unsigned>(D.Profile));
   H.number(D.OutgoingBytes);
+  // Keep valid V1 digests unchanged. Malformed V1 requests still encode their
+  // extra ranges, although admission rejects them independently.
+  if (D.Version != 1 || !D.PreservedFrameRanges.empty()) {
+    H.number(D.PreservedFrameRanges.size());
+    for (const auto &Range : D.PreservedFrameRanges) {
+      H.number(static_cast<uint64_t>(Range.Begin));
+      H.number(static_cast<uint64_t>(Range.End));
+    }
+  }
 }
-} // namespace
 
 llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
   if (O.X64ReturningCalls.empty())
@@ -55,11 +67,29 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
         "nonempty entry-frame bounds without ordinary return contracts");
   for (size_t I = 0; I < O.X64ReturningCalls.size(); ++I) {
     const auto &D = O.X64ReturningCalls[I];
-    if (D.Version != 1 || D.Address == InvalidVA ||
-        D.Profile != SpecializationX64CallProfile::ConditionalNormalReturnV1 ||
+    const bool V1 =
+        D.Version == 1 &&
+        D.Profile == SpecializationX64CallProfile::ConditionalNormalReturnV1 &&
+        D.PreservedFrameRanges.empty();
+    const bool V2 =
+        D.Version == 2 &&
+        D.Profile ==
+            SpecializationX64CallProfile::ConditionalNormalReturnFrameSpansV2 &&
+        !D.PreservedFrameRanges.empty() &&
+        D.PreservedFrameRanges.size() <=
+            limits::analysis::kX64ReturningCallPreservedFrameRangesLimit;
+    if ((!V1 && !V2) || D.Address == InvalidVA ||
         D.OutgoingBytes < kHomeBytes || D.OutgoingBytes > INT64_MAX ||
         D.OutgoingBytes % kAddressBytes)
       return invalid("invalid explicit returning-call relation");
+    int64_t PreviousEnd = O.EntryFrameBounds->Begin;
+    for (const auto &Range : D.PreservedFrameRanges) {
+      if (Range.Begin < PreviousEnd || Range.Begin >= Range.End ||
+          Range.End > O.EntryFrameBounds->End)
+        return invalid("returning-call preserved frame ranges must be "
+                       "ordered, disjoint and contained in the entry frame");
+      PreviousEnd = Range.End;
+    }
     for (size_t J = 0; J < I; ++J)
       if (D.Address == O.X64ReturningCalls[J].Address)
         return invalid("duplicate returning-call declaration");
@@ -72,8 +102,10 @@ llvm::Error validateReturningCallDeclarations(const SpecializationOptions &O) {
 
 std::array<uint64_t, 4>
 returningCallDeclarationWords(const SpecializationX64ReturningCall &D) {
-  RecoveryDigest H("neverd-x64-conditional-normal-return-v1");
-  declaration(H, D);
+  RecoveryDigest H(D.Version == 1
+                       ? "neverd-x64-conditional-normal-return-v1"
+                       : "neverd-x64-conditional-normal-return-frame-v2");
+  appendReturningCallDeclaration(H, D);
   const auto Bytes = llvm::fromHex(H.finish());
   std::array<uint64_t, 4> Words;
   for (size_t I = 0; I < Words.size(); ++I)
@@ -82,7 +114,8 @@ returningCallDeclarationWords(const SpecializationX64ReturningCall &D) {
   return Words;
 }
 
-RecoveryCallTransition returningCallTransition() {
+RecoveryCallTransition
+returningCallTransition(const SpecializationX64ReturningCall &D) {
   // This relation explicitly adopts these bytes, not an inferred callee ABI.
   // Preserve the current post-push RSP here; the consumer restores caller RSP.
   static const std::vector<symbolic::SymRegisterRange> Preserved = [] {
@@ -96,15 +129,22 @@ RecoveryCallTransition returningCallTransition() {
               [](const auto &A, const auto &B) { return A.Offset < B.Offset; });
     return Ranges;
   }();
-  return {Preserved, kArithmeticFlags, NdVar::reg(x86reg::RSP, kAddressBytes),
-          NdVar::reg(x86reg::RIP, kAddressBytes)};
+  RecoveryCallTransition Policy{Preserved,
+                                kArithmeticFlags,
+                                NdVar::reg(x86reg::RSP, kAddressBytes),
+                                NdVar::reg(x86reg::RIP, kAddressBytes),
+                                {}};
+  Policy.PreservedFrameRanges.reserve(D.PreservedFrameRanges.size());
+  for (const auto &Range : D.PreservedFrameRanges)
+    Policy.PreservedFrameRanges.push_back({Range.Begin, Range.End});
+  return Policy;
 }
 
 std::string returningCallDigest(const SpecializationReturningCall &Call) {
   RecoveryDigest H("neverd-returning-call-span-v1");
   H.number(Call.Version);
   H.number(Call.ResidualAddress);
-  declaration(H, Call.Declaration);
+  appendReturningCallDeclaration(H, Call.Declaration);
   H.variable(Call.ExpansionScratch);
   H.text(Call.OriginalOperationDigest);
   H.text(Call.ExpandedOperationDigest);
