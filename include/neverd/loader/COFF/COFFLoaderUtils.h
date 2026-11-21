@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace neverd {
 namespace coff_loader {
@@ -207,19 +208,29 @@ void parseDelayImports(const llvm::object::COFFObjectFile &Obj,
 void parseTLSDirectory(const llvm::object::COFFObjectFile &Obj,
                        BinaryImage &Img, uint64_t ImageBase);
 
+/// A file-backed linker data contribution merged into an executable PE section.
+struct LinkerDataRange {
+  va_t Begin;
+  va_t End;
+};
+
 /// Parse the PE base relocation table (.reloc) and populate
 /// Img.BaseRelocations only after the whole directory is valid. Unsupported
 /// relocation types retain their identity; malformed blocks return an error.
-/// Handles both PE32 and PE32+; restricted loads deliberately skip the table.
-llvm::Error parseBaseRelocations(const llvm::object::COFFObjectFile &Obj,
-                                 BinaryImage &Img, uint64_t ImageBase);
+/// Full and function-restricted PE32 and PE32+ loads retain this provenance.
+llvm::Error
+parseBaseRelocations(const llvm::object::COFFObjectFile &Obj, BinaryImage &Img,
+                     uint64_t ImageBase,
+                     llvm::ArrayRef<LinkerDataRange> DataGroups = {});
 
 /// Parse the PE debug directory and reduce all bounded CodeView RSDS/NB10
 /// entries to one typed build identity.  The path is retained only as a
-/// discovery hint.
+/// discovery hint. When requested, also collect the linker data ranges for
+/// classifying relocations inside a merged executable section.
 void parseDebugDirectory(const llvm::object::COFFObjectFile &Obj,
                          BinaryImage &Img,
-                         llvm::ArrayRef<uint8_t> OriginalBytes = {});
+                         llvm::ArrayRef<uint8_t> OriginalBytes = {},
+                         std::vector<LinkerDataRange> *DataGroups = nullptr);
 
 /// Parse the PE Load Configuration directory and extract security cookie
 /// and CF Guard check function RVAs.  Handles both PE32 and PE32+.

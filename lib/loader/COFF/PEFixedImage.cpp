@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <limits>
 #include <set>
 #include <system_error>
@@ -580,9 +581,10 @@ llvm::Error validateLoaderWrites(RawImage &Raw, ImportInventory &Imports,
 
 } // namespace
 
-llvm::Error coff_loader::parseBaseRelocations(const COFFObjectFile &Object,
-                                              BinaryImage &Image,
-                                              uint64_t ImageBase) {
+llvm::Error
+coff_loader::parseBaseRelocations(const COFFObjectFile &Object,
+                                  BinaryImage &Image, uint64_t ImageBase,
+                                  llvm::ArrayRef<LinkerDataRange> DataGroups) {
   if (Image.IsRelocatable)
     return llvm::Error::success();
   const auto *Directory = Object.getDataDirectory(BASE_RELOCATION_TABLE);
@@ -613,13 +615,47 @@ llvm::Error coff_loader::parseBaseRelocations(const COFFObjectFile &Object,
         "pe.relocations_word_aligned",
         "PE relocation blocks use WORD alignment (legacy linker layout); "
         "records were retained without changing the input.");
+  auto InGroup = [&](va_t Addr, uint32_t Size) {
+    auto Next =
+        std::upper_bound(DataGroups.begin(), DataGroups.end(), Addr,
+                         [](va_t Address, const LinkerDataRange &Range) {
+                           return Address < Range.Begin;
+                         });
+    if (Next == DataGroups.begin())
+      return false;
+    const auto &Group = *std::prev(Next);
+    return Addr < Group.End && Size <= Group.End - Addr;
+  };
   std::vector<AbsolutePointerRelocation> Pointers;
+  const uint32_t Width = Image.getPointerSize();
   for (const auto &R : Inventory->Entries) {
-    const uint32_t Width = Image.getPointerSize();
-    if ((Width == 8 && R.Type == IMAGE_REL_BASED_DIR64) ||
-        (Width == 4 && R.Type == IMAGE_REL_BASED_HIGHLOW))
-      if (const auto *Bytes = Image.readVA(R.Address, Width))
-        Pointers.push_back({R.Address, readPtr(Bytes, Width == 8)});
+    if (!((Width == 8 && R.Type == IMAGE_REL_BASED_DIR64) ||
+          (Width == 4 && R.Type == IMAGE_REL_BASED_HIGHLOW)))
+      continue;
+    const uint8_t *Bytes = Image.readVA(R.Address, Width);
+    if (!Bytes)
+      continue;
+    const va_t Target = readPtr(Bytes, Width == 8);
+    if (!DataGroups.empty()) {
+      const bool DataSlot = InGroup(R.Address, Width);
+      const bool DataTarget = InGroup(Target, 1);
+      // A self-pointer whose bytes straddle the end of a group has no single
+      // linker classification for both its storage and its target.
+      if (DataSlot || (DataTarget && Target != R.Address)) {
+        applyAbsolutePointerRelocation(
+            Image, decideAbsolutePointerRelocation(
+                       Image, R.Address, Target, InvalidVA, [&](va_t Addr) {
+                         auto Class =
+                             classifyPointerRelocationAddress(Image, Addr);
+                         if ((Addr == R.Address && DataSlot) ||
+                             (Addr == Target && DataTarget))
+                           Class.Executable = false;
+                         return Class;
+                       }));
+        continue;
+      }
+    }
+    Pointers.push_back({R.Address, Target});
   }
   Image.BaseRelocations = std::move(Inventory->Entries);
   recordAbsolutePointerRelocations(Image, Pointers);
