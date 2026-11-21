@@ -214,7 +214,11 @@ C++ headers to verify declarations with default arguments and empty parameter
 lists. Each target manifest retains the header profile, import library, and
 compiler commands. Use `check_windows_provider_calls.py --sdk-imports` and
 `check_windows_provider_calls.py --legacy-sdk` for linked HighC and LLVMC
-caller checks using the matching Microsoft libraries.
+caller checks using the matching Microsoft libraries. The independent AllJoyn
+ABI check enumerates the callback typedefs and anonymous record typedefs in
+Microsoft's C++ headers. It compares callback calling conventions, record
+sizes and alignments, and the offsets and widths of their fields with the
+published C declarations.
 
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of

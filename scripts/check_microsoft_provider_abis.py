@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 import build_wdk_driver_fixtures as wdk
@@ -137,6 +138,70 @@ def official_names(args: argparse.Namespace, compiler: list[str], original: Path
     return names
 
 
+def alljoyn_public_types(original, compiler, published, c_compiler, renamed, directory, row):
+    """Check callback conventions and the layouts of anonymous SDK record typedefs."""
+    command = compiler + ["-fsyntax-only", "-Xclang", "-ast-dump=json",
+                          "-Xclang", "-ast-dump-filter=alljoyn_", str(original)]
+    row["commands"].append(command)
+    dump = windows.run(command, directory / "alljoyn-types.log")
+    decoder = json.JSONDecoder()
+    records, typedefs = {}, []
+    offset = 0
+    while offset < len(dump):
+        if dump[offset].isspace():
+            offset += 1
+            continue
+        node, offset = decoder.raw_decode(dump, offset)
+        if node["kind"] == "CXXRecordDecl" and node.get("completeDefinition"):
+            records[node["id"]] = node
+        if node["kind"] == "TypedefDecl" and node["name"].startswith("alljoyn_"):
+            typedefs.append(node)
+    callbacks, fields = [], {}
+    for node in typedefs:
+        name, spelling = node["name"], node["type"]["qualType"]
+        if re.search(r"\(\*\)\(", spelling):
+            callbacks.append(name)
+        if spelling.startswith("struct ") and "*" not in spelling:
+            record, = [r for r in node["inner"] if r["kind"] == "RecordType"]
+            members = [f for f in records[record["decl"]["id"]]["inner"] if f["kind"] == "FieldDecl"]
+            if any(f.get("isBitfield") or not f.get("name") for f in members):
+                raise ValueError("unaddressable Microsoft SDK record member: " + name)
+            fields[name] = [f["name"] for f in members]
+    if not fields or not callbacks:
+        raise ValueError("AllJoyn compiler returned no public record or callback inventory")
+    aliases = [f"neverd_sdk_callback_{i}" for i in range(len(callbacks))]
+    observations = []
+    for tag, header, flags in (("original", original, compiler), ("published", published, c_compiler)):
+        names = renamed if tag == "published" else {}
+        code = []
+        for i, (typedef, alias) in enumerate(zip(callbacks, aliases)):
+            name = names.get(typedef, typedef)
+            code += [f"extern __typeof__(*({name})0) {alias};",
+                     f"__typeof__(&{alias}) neverd_ucrt_abi_{i} = &{alias};"]
+        measures = []
+        for typedef, members in fields.items():
+            name = names.get(typedef, typedef)
+            measures += [f"sizeof({name})", f"__alignof({name})"]
+            for field in members:
+                measures += [f"__builtin_offsetof({name}, {field})", f"sizeof((({name} *)0)->{field})"]
+        code.append("unsigned long long neverd_sdk_layout[] = {" + ",\n".join(measures) + "};")
+        if tag == "original":
+            code = ['extern "C" {', *code, '}']
+        source = directory / ("alljoyn-types-" + tag + ".c")
+        source.write_text(f'#include "{header.as_posix()}"\n' + "\n".join(code) + "\n", encoding="utf-8")
+        command = flags + ["-S", "-emit-llvm", "-O0", str(source), "-o", "-"]
+        row["commands"].append(command)
+        ir = windows.run(command, source.with_suffix(".log"), source.with_suffix(".ll"))
+        line = next((s for s in ir.splitlines() if s.startswith("@neverd_sdk_layout = ")), "")
+        sizes = [int(v) for v in re.findall(r"\bi64 (\d+)", line)]
+        if len(sizes) != len(measures):
+            raise ValueError("incomplete AllJoyn compiler record layout: " + tag)
+        observations.append((compiler_contracts(ir, aliases), sizes))
+    if observations[0] != observations[1]:
+        raise ValueError("AllJoyn callback ABI or record layout differs from the original SDK")
+    row.update(callback_types=callbacks, record_fields=fields, layout_measurements=observations[0][1])
+
+
 def check(args: argparse.Namespace) -> dict:
     args.output.mkdir(parents=True, exist_ok=False)
     rows = []
@@ -215,6 +280,10 @@ def check(args: argparse.Namespace) -> dict:
                     (directory / "selection.log").write_text(result.stderr, encoding="utf-8")
                     result.check_returncode()
                     row["selected_header_sha256"] = digest(selected)
+                    if name == "AllJoyn":
+                        renamed = {r["original"]: r["name"] for r in provider["import"]["renamed"]}
+                        alljoyn_public_types(original, bridge["arguments"], selected,
+                                             generated_compiler(compiler), renamed, directory, row)
                     bindings = names
                     if name == "NDIS":
                         row["contract_kind"] = "function types, including inline declarations"
