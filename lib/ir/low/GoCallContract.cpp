@@ -225,8 +225,11 @@ std::optional<FixedIntegerCallArguments>
 goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
                         const GPRReadWidths &Reads) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
+  // Before the internal ABI no Go code takes a register argument, so code
+  // that does is assembly, though the pclntab marks none before Go 1.18.
   if (!Module || Img.Arch != Arch::X64 || !isGoCode(Img, Entry) ||
-      !inRanges(Module->GoAssembly, Entry) || goWriteBarrierAt(Img, Entry) ||
+      (Module->RegisterArguments && !inRanges(Module->GoAssembly, Entry)) ||
+      goWriteBarrierAt(Img, Entry) ||
       std::binary_search(Module->MorestackEntries.begin(),
                          Module->MorestackEntries.end(), Entry) ||
       goAssemblyTakesRegisterArguments(Img, Entry, Reads))
@@ -238,9 +241,13 @@ goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
       getTargetRegInfo(Img.Arch)
           .integerArgumentLayout(Img.abiFormat())
           .Registers;
+  // There a compiled function's nil check reads RAX's low byte (`testb %al,
+  // (%rcx)`), which takes no argument.
+  const bool StackABI = !Module->RegisterArguments;
   const auto Read = [&](uint64_t Register) {
     return Register != x86reg::RSP && Register != x86reg::RBP &&
-           Reads[Register / 8] != 0;
+           Reads[Register / 8] != 0 &&
+           !(StackABI && Register == x86reg::RAX && Reads[Register / 8] == 1);
   };
   constexpr unsigned GeneralFamilies = 16;
   bool Own = false;
@@ -341,14 +348,13 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   return std::nullopt;
 }
 
-/// Whether \p Img's stack-growth paths are modelled: every x86-64 image, and
-/// an AArch64 one whose register ABI is (GoModuleInfo::RegisterArguments).
-/// Under arm64's stack ABI the path's absence would expose stack arguments
-/// AAPCS64 places after eight register positions.
+/// Whether \p Img's stack-growth paths are modelled: every x86-64 and
+/// AArch64 image, whether its Go code passes arguments in registers or on
+/// the stack (goStackArgumentLayout), as amd64 Go 1.16 and arm64 Go 1.17 and
+/// earlier do.
 bool goGrowthPathsModeled(const BinaryImage &Img) {
-  const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && (Img.Arch == Arch::X64 ||
-                    (Img.Arch == Arch::AArch64 && Module->RegisterArguments));
+  return Img.ExceptionMetadata.GoModule &&
+         (Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64);
 }
 
 std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,
@@ -480,6 +486,13 @@ std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
 
 bool goRecordsFunction(const BinaryImage &Img, va_t Entry) {
   return goFunctionRecord(Img, Entry) != nullptr;
+}
+
+bool goInsideRecordedFunction(const BinaryImage &Img, va_t Address) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && !Module->FrameArguments.empty() && isGoCode(Img, Address) &&
+         !goRecordsFunction(Img, Address) &&
+         !inRanges(Module->DuffDevices, Address);
 }
 
 std::optional<unsigned> goRegisterArgumentBound(const BinaryImage &Img,

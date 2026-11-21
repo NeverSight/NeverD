@@ -668,44 +668,72 @@ TEST_F(X86ModeExecutionTest,
   EXPECT_FALSE(Machine.Pending);
 }
 
-TEST_F(X86ModeExecutionTest, RetiredFarOwnerErrorRetiresTheOuterContinuation) {
-  resetMode();
-  Controls = {0x80010031, 0x10000, 0x20, 0x500, 2};
-  // A present call gate is valid architectural data but outside this owner's
-  // direct-code-transfer domain. It is first revealed after backing repair.
-  put(0x8018, 0x00008c0000081100ULL);
-  add(0x1000, X86ExecutionMode::Compatibility32,
-      {0xea, 0, 0x11, 0, 0, 0x18, 0});
-  const auto Bytes = RAM.Memory.front().Bytes;
-  RAM.Memory = {{0, MemoryPermission::Read | MemoryPermission::Write, 0,
-                 std::vector<uint8_t>(Bytes.begin(), Bytes.begin() + 0x8018)},
-                {0x8020, MemoryPermission::Read | MemoryPermission::Write, 0,
-                 std::vector<uint8_t>(Bytes.begin() + 0x8020, Bytes.end())}};
-  Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
-  X86ModeExecution Execution(*Memory, Options);
-  uint64_t Budget = 1;
-  auto First = Execution.run(Machine, Program, Budget);
-  ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
-  ASSERT_EQ(First->Status, X86LegacyExecutionStatus::BackingFault);
-  ASSERT_TRUE(Machine.Pending);
-  EXPECT_EQ(Budget, 0u);
-  auto Snapshot = RAM;
-  Snapshot.Memory = Memory->physicalMemory().snapshotMemoryRegions();
-  Snapshot.Memory.push_back(
-      {0x8018, MemoryPermission::Read | MemoryPermission::Write, 0,
-       std::vector<uint8_t>(Bytes.begin() + 0x8018, Bytes.begin() + 0x8020)});
-  auto Repaired = llvm::cantFail(
-      X86PagedMemory::create(Snapshot, Features, Memory->controls()));
-  X86ModeExecution Resumed(*Repaired, Options);
-  auto Done = Resumed.run(Machine, {}, Budget);
-  ASSERT_FALSE(bool(Done));
-  llvm::consumeError(Done.takeError());
-  EXPECT_FALSE(Machine.Pending);
-  EXPECT_EQ(Machine.Core.Core.Core.Core.Core.Core.PC, 0x1000u);
-  auto Again = Resumed.run(Machine, Program, Budget);
-  ASSERT_TRUE(bool(Again)) << llvm::toString(Again.takeError());
-  EXPECT_TRUE(Again->BudgetExhausted);
-  EXPECT_EQ(Again->Attempts, 0u);
+TEST_F(X86ModeExecutionTest,
+       FarTransfersRetireTheirContinuationAfterDescriptorRepair) {
+  for (const bool ThroughCallGate : {false, true}) {
+    SCOPED_TRACE(ThroughCallGate);
+    resetMode();
+    auto Mode = X86ExecutionMode::Protected32;
+    if (ThroughCallGate) {
+      Mode = X86ExecutionMode::Compatibility32;
+      Controls = {0x80010031, 0x10000, 0x20, 0x500, 2};
+      // The cached CS still selects compatibility32. The gate loads code64.
+      put(0x8008, 0x00af9b000000ffffULL);
+      put(0x8018, 0x00008c0000081100ULL);
+    } else {
+      // An available 32-bit TSS is first revealed after backing repair.
+      // This invocation supplied no task-switch binding.
+      put(0x8018, 0x00008900b0000067ULL);
+    }
+    add(0x1000, Mode, {0xea, 0, 0x11, 0, 0, 0x18, 0});
+    const auto Bytes = RAM.Memory.front().Bytes;
+    RAM.Memory = {{0, MemoryPermission::Read | MemoryPermission::Write, 0,
+                   std::vector<uint8_t>(Bytes.begin(), Bytes.begin() + 0x8018)},
+                  {0x8020, MemoryPermission::Read | MemoryPermission::Write, 0,
+                   std::vector<uint8_t>(Bytes.begin() + 0x8020, Bytes.end())}};
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    X86ModeExecution Execution(*Memory, Options);
+    uint64_t Budget = 1;
+    auto First = Execution.run(Machine, Program, Budget);
+    ASSERT_TRUE(bool(First)) << llvm::toString(First.takeError());
+    ASSERT_EQ(First->Status, X86LegacyExecutionStatus::BackingFault);
+    ASSERT_TRUE(Machine.Pending);
+    EXPECT_EQ(First->Attempts, 1u);
+    EXPECT_EQ(First->Completions, 0u);
+    EXPECT_EQ(Budget, 0u);
+    auto Snapshot = RAM;
+    Snapshot.Memory = Memory->physicalMemory().snapshotMemoryRegions();
+    Snapshot.Memory.push_back(
+        {0x8018, MemoryPermission::Read | MemoryPermission::Write, 0,
+         std::vector<uint8_t>(Bytes.begin() + 0x8018, Bytes.begin() + 0x8020)});
+    auto Repaired = llvm::cantFail(
+        X86PagedMemory::create(Snapshot, Features, Memory->controls()));
+    X86ModeExecution Resumed(*Repaired, Options);
+    auto Done = Resumed.run(Machine, {}, Budget);
+    const auto &R = Machine.Core.Core.Core.Core.Core.Core;
+    if (ThroughCallGate) {
+      ASSERT_TRUE(bool(Done)) << llvm::toString(Done.takeError());
+      EXPECT_EQ(Done->Status, X86LegacyExecutionStatus::Completed);
+      EXPECT_EQ(Done->Attempts, 0u);
+      EXPECT_EQ(Done->Completions, 1u);
+      EXPECT_EQ(llvm::cantFail(Resumed.mode(Machine)),
+                X86ExecutionMode::Long64);
+      EXPECT_EQ(R.PC, 0x1100u);
+      EXPECT_EQ(R.GPR[4], 0xf000u);
+    } else {
+      ASSERT_FALSE(bool(Done));
+      EXPECT_NE(llvm::toString(Done.takeError())
+                    .find("task-switch requires ordered TSS"),
+                std::string::npos);
+      EXPECT_EQ(R.PC, 0x1000u);
+      EXPECT_EQ(llvm::cantFail(Resumed.mode(Machine)), Mode);
+    }
+    EXPECT_FALSE(Machine.Pending);
+    auto Again = Resumed.run(Machine, Program, Budget);
+    ASSERT_TRUE(bool(Again)) << llvm::toString(Again.takeError());
+    EXPECT_TRUE(Again->BudgetExhausted);
+    EXPECT_EQ(Again->Attempts, 0u);
+  }
 }
 
 TEST_F(X86ModeExecutionTest, LongBodiesOwnShadowsAndIgnoreLegacyCodeBounds) {

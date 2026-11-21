@@ -310,6 +310,10 @@ bool CFGBuilder::isTailCallTarget(va_t Target,
     return true;
   if (CurrentImg && !CurrentImg->isFunctionEntryCandidateAt(Target))
     return false;
+  // A Go function's interior begins none (goInsideRecordedFunction): a jump
+  // to a jump-table case label stays inside the function.
+  if (CurrentImg && goInsideRecordedFunction(*CurrentImg, Target))
+    return false;
   // A selected-function run may omit other function symbols from its work
   // set. An explicit transfer to such a symbol still names a tail callee.
   // Symbol identity alone must not stop ordinary fallthrough exploration:
