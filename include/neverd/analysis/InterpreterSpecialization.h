@@ -250,6 +250,17 @@ struct SpecializationEntryObject {
   int64_t End = 0;
 };
 
+/// An entry memory word that contains a symbolic object pointer. The complete
+/// eight-byte source field is an explicit input relation, not an immutable
+/// read or an address observed during one execution. Its object extent must
+/// be nonwrapping and disjoint from the declared entry frame. The source field
+/// itself must lie in a declared absolute frame exclusion.
+struct SpecializationEntryLoadedObject {
+  va_t PointerAddress = 0;
+  int64_t Begin = 0;
+  int64_t End = 0;
+};
+
 enum class SpecializationUndefinedModel : uint8_t {
   SelectedLowIR,
   /// Checked raw x64 regions only. Complete scalar sidecars supply independent
@@ -395,6 +406,10 @@ struct SpecializationOptions {
   /// overlapping EntryConstants. Machine-region source checks these complete
   /// ranges before guest effects; ordinary source/native consumers refuse.
   std::vector<SpecializationEntryObject> EntryFrameExcludedObjects;
+  /// Explicit raw-domain pointer relations at fixed entry memory addresses.
+  /// The pointer contents remain symbolic and may be overwritten by guest
+  /// code; only their initial object bounds and frame separation are assumed.
+  std::vector<SpecializationEntryLoadedObject> EntryFrameLoadedObjects;
   /// Optional congruence domain for the entry frame root. Requires explicit
   /// machine state and an RSP FrameBaseRegister. Raw residual consumers enforce
   /// it; machine source rejects other roots before guest effects. Native proof
@@ -527,7 +542,7 @@ struct SpecializationOptions {
   bool hasRawEnvironment() const {
     return !X64CodeRegions.empty() || !X64ImportBindings.empty() ||
            !X64MachineExits.empty() || !EntryFrameExcludedObjects.empty() ||
-           !X64ReturningCalls.empty() ||
+           !EntryFrameLoadedObjects.empty() || !X64ReturningCalls.empty() ||
            UndefinedModel != SpecializationUndefinedModel::SelectedLowIR;
   }
 
