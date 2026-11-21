@@ -448,7 +448,12 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError("GDI+ requires the original target SDK import library")
         cpp_bridge = gdiplus.prepare(source, arguments, directory, gdiplus_imports, run)
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
-    preprocessed = directory / (name + ".h")
+    # Under MS include lookup an enclosing .c or .cpp file participates in
+    # quoted header resolution. RDBSS includes tdi.h, which would read the
+    # preceding provider's TDI.h on a case-insensitive volume.
+    declarations = directory / "declarations"
+    declarations.mkdir(exist_ok=True)
+    preprocessed = declarations / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
     if name == "RDBSS":
@@ -521,8 +526,10 @@ def merge_providers(base: str, primary: Path, output: Path,
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None and not flat_units:
         return []
-    directory = output / (base + "-providers")
-    directory.mkdir(exist_ok=True)
+    # Older generations placed named headers directly inside -providers.
+    # Keep original compiler inputs outside that search location on retries.
+    directory = output / (base + "-providers") / "work"
+    directory.mkdir(parents=True, exist_ok=True)
     units = []
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     for name, headers, defines, prototypes in providers:

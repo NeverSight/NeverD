@@ -125,7 +125,7 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
                              "-fms-compatibility-version=19.44", "-x", "c++", "-std=c++17"]
         specifications.append((old["import_packages"][architecture], groups, sdk_c, sdk_cpp, "c++",
                                ("winsock2", "windows")))
-    directory = output / "WindowsUser-providers"
+    directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
     units, packages = [], []
     for record, groups, compiler, original, language, common_headers in specifications:
