@@ -1616,6 +1616,37 @@ TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
       Found, [&](const auto &Item) { return Item.first == F + 8; }));
 }
 
+TEST(GoAssembly, ABIInternalAssemblyEntersWithZeroInX15) {
+  // Go's internal ABI enters a function with X15 zero, and assembly that
+  // takes Go's argument registers follows that ABI:
+  // `runtime.memclrNoHeapPointers` clears memory with `movdqu %xmm15, (%rdi)`.
+  //   main.clr: movdqu [rax], xmm15; mov [rax+16], rbx; ret
+  constexpr va_t Clr = kTextVA + 0x100;
+  GoTestImage T;
+  T.writeText(Clr,
+              {0xF3, 0x44, 0x0F, 0x7F, 0x38, 0x48, 0x89, 0x58, 0x10, 0xC3});
+  Symbol Function = Symbol::makeFunc(Clr);
+  Function.Name = "main.clr";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{Clr, kTextVA + 0x300}};
+  Module.GoAssembly = {{Clr, Clr + 0x10}};
+  Module.FrameArguments = {{Clr, 16, std::nullopt}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(parameterRegisters(R, Clr),
+            (std::vector<uint64_t>{x86reg::RAX, x86reg::RBX}));
+  const std::string Text = highCBody(R, T.Img, "main_clr");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

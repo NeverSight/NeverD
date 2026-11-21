@@ -20746,6 +20746,9 @@ and RBX, and the call passes 1, 4, 3 and 2.
 `GoStackGrowth.AnARM64StackABIPathRestartsTheFunction` lifts a Go 1.16 arm64
 function whose growth path spills nothing: the path is recognised, restarts
 the function, and leaves no call or conditional branch.
+`GoAssembly.ABIInternalAssemblyEntersWithZeroInX15` lifts assembly that takes
+RAX and RBX and stores X15 through RAX: it takes the two registers, and its C
+stores zero and traps nowhere.
 `GoFunctionTable.CodeInsideARecordedFunctionBeginsNone` runs function
 discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
 `main.g` begin functions, and `main.f+8` begins none.

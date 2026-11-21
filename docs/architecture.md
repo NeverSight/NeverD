@@ -5818,7 +5818,10 @@ The contract covers x86-64 and AArch64; Go code for other targets keeps the
 platform contract. Calls from compiled code of a register-ABI amd64 image
 (usesGoRegisterArguments) keep X15 zero (`CallRegisterContract::GoInternal`,
 `GoInternalWriteBarrier`), and LowToMed defines X15 as zero at such a
-function's entry, so its frame zeroing stores zero. Ordinary calls do not
+function's entry, so its frame zeroing stores zero, and at the entry of
+assembly that takes Go's argument registers, which follows the same ABI
+(`goAssemblyTakesRegisterArguments`): `runtime.memclrNoHeapPointers` stores X15
+as its zero. Ordinary calls do not
 assume the goroutine in R14 is unchanged: runtime paths such as `needm`
 can install a different g. Recognized write barriers continue to preserve R14
 under their narrower GPR contract. Compiled code never writes that register,
