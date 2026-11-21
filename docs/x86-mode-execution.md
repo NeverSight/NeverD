@@ -6,7 +6,9 @@ retains CPL0 and the old code cache until the first protected CS load, including
 when the visible selector has a nonzero RPL. Protected task gates and nested
 IRET publish TR, LDTR, the incoming register image and each loaded segment.
 During a backing stop the continuation identifies the original instruction or
-accepted event even when the incoming task has already replaced EIP.
+accepted event even when the incoming task has already replaced EIP. Once
+the incoming task is installed, its continuation owns the remaining descriptor
+loads and completes the original instruction once.
 
 Compatibility CALL and JMP can load a 16-byte IA-32e call gate. A privilege
 change reads the incoming full-width stack pointer from the TSS and pushes the

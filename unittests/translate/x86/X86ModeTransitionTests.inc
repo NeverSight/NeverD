@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// {description} over the mixed-mode CPU bank.
+/// Task switches, virtual-8086 frames and far transfers across code widths.
 //===----------------------------------------------------------------------===//
 
 TEST_F(X86ModeInterruptTest, TaskGateAndNestedIretPublishBothTaskBanks) {
@@ -94,9 +94,10 @@ TEST_F(X86ModeInterruptTest,
     bindMemory();
     X86ModeExecution Execution(*Memory, Options);
     uint64_t Budget = 1;
-    auto Stop = llvm::cantFail(
-        External ? Execution.interrupt(Machine, X86EventKind::NMI, 2)
-                 : Execution.run(Machine, Program, Budget));
+    auto Stopped = External ? Execution.interrupt(Machine, X86EventKind::NMI, 2)
+                            : Execution.run(Machine, Program, Budget);
+    ASSERT_TRUE(bool(Stopped)) << llvm::toString(Stopped.takeError());
+    const auto &Stop = *Stopped;
     ASSERT_EQ(Stop.Status, X86LegacyExecutionStatus::BackingFault)
         << Stop.OwnerError;
     ASSERT_TRUE(Machine.Pending);
@@ -120,7 +121,9 @@ TEST_F(X86ModeInterruptTest,
               GuestMemoryAccessStatus::Completed);
     X86ModeExecution Resumed(*Memory, Options);
     Budget = 0;
-    auto Done = llvm::cantFail(Resumed.run(Machine, {}, Budget));
+    auto Continued = Resumed.run(Machine, {}, Budget);
+    ASSERT_TRUE(bool(Continued)) << llvm::toString(Continued.takeError());
+    const auto &Done = *Continued;
     EXPECT_EQ(Done.Attempts, 0u);
     EXPECT_EQ(Done.Completions, unsigned(!External));
     EXPECT_FALSE(Done.EventAccepted);

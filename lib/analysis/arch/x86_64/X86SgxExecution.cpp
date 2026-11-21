@@ -49,22 +49,34 @@ void restoreBases(X64ContinuationStateV6 &V, const Saved &T) {
   V.Unusable = (V.Unusable & ~0x30u) | T.Unusable;
 }
 
-uint32_t exitInfo(const X64ContinuationEventV1 &E) {
-  if (E.Kind == X86EventKind::Interrupt || E.Kind == X86EventKind::NMI)
-    return 0;
-  switch (E.Vector) {
-  case 0:
-  case 1:
-  case 3:
-  case 5:
-  case 6:
-  case 16:
-  case 17:
-  case 19:
-    return 0x80000000u | ((E.Vector == 3 ? 6u : 3u) << 8) | E.Vector;
-  default:
-    return 0;
+uint32_t saveExitInfo(uint8_t *GPR, bool ExInfo,
+                      const X64ContinuationEventV1 &E) {
+  const bool Exception =
+      E.Kind != X86EventKind::Interrupt && E.Kind != X86EventKind::NMI;
+  if (ExInfo && Exception &&
+      (E.Vector == 13 || (E.Vector == 14 && (E.ErrorCode & 4)))) {
+    le::write64le(GPR - 16, E.Vector == 14 ? E.FaultAddress : 0);
+    le::write32le(GPR - 8, E.ErrorCode);
+    le::write32le(GPR - 4, 0);
+    return 0x80000300u | E.Vector;
   }
+  if (Exception)
+    switch (E.Vector) {
+    case 0:
+    case 1:
+    case 3:
+    case 5:
+    case 6:
+    case 16:
+    case 17:
+    case 19:
+      return 0x80000000u | ((E.Vector == 3 ? 6u : 3u) << 8) | E.Vector;
+    default:
+      break;
+    }
+  if (ExInfo)
+    std::fill_n(GPR - 16, 16, 0);
+  return 0;
 }
 
 } // namespace
@@ -263,9 +275,9 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   const uint64_t FramePages = le::read32le(SECS + 16);
   if (le::read64le(SECS + 56) != 3)
     return Fault(13);
-  if (!FramePages || le::read32le(SECS + 20) || (Attributes & ~uint64_t(7)))
-    return invalid(
-        "software SGX1 requires initialized SSA geometry and MISCSELECT=0");
+  const auto MiscSelect = le::read32le(SECS + 20);
+  if (!FramePages || (MiscSelect & ~1u) || (Attributes & ~uint64_t(7)))
+    return invalid("unsupported initialized SECS attributes or SSA geometry");
   if (!std::has_single_bit(Enclave.Size) || Enclave.Size < 2 * PageSize ||
       (Enclave.Base & (Enclave.Size - 1)) || !Enclave.contains(TCSLinear))
     return invalid("TCS disagrees with the imported SECS address range");
@@ -407,7 +419,9 @@ llvm::Error X86SgxExecution::asynchronousExit(X64ContinuationStateV6 &V,
   le::write64le(GPR + IpOffset, Event.SavedPC);
   le::write64le(GPR + FSOffset, R.FSBase);
   le::write64le(GPR + GSOffset, R.GSBase);
-  le::write32le(GPR + ExitInfoOffset, exitInfo(Event));
+  const auto &Secs = EPC.EPC.at(EPC.Active->SECS);
+  const bool ExInfo = le::read32le(Secs.Bytes.data() + 20) & 1;
+  le::write32le(GPR + ExitInfoOffset, saveExitInfo(GPR, ExInfo, Event));
   std::copy(EPC.X87->begin(), EPC.X87->end(), FX);
   le::write32le(FX + 24, V.Core.Core.Core.MXCSR);
   for (unsigned I = 0; I != 16; ++I)

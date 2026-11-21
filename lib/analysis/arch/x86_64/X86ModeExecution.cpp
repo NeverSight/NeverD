@@ -204,6 +204,10 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
   if (S.RetainedRealCS &&
       (!(M.controls().CR0 & 1) || VM86 || (V.Core.CS.Attributes & 0x2000)))
     return invalid("pre-PE code cache requires protected non-64-bit execution");
+  if (S.SMM && O.Legacy.ControlRegisters &&
+      (O.Legacy.ControlRegisters->OtherCR4Features &
+       ~kX86LegacyOtherCR4FeatureMask))
+    return invalid("SMM requires paging feature bits at their paging owner");
   if ((VM86 && ((M.controls().EFER & 0x400) ||
                 O.Legacy.Virtual8086 != X86LegacyVM86Profile::IntelVME)) ||
       (R.RFlags & ~uint64_t(0x3f7fd7)) || !(R.RFlags & 2) ||
@@ -377,7 +381,7 @@ X86ModeExecution::systemManagementInterrupt(X86ModeState &S) {
   }
   if (auto Error = admit(S, Options, NormalMemory))
     return std::move(Error);
-  return detail::enterX86Smm(S, NormalMemory, *SMRAM);
+  return detail::enterX86Smm(S, NormalMemory, *SMRAM, Options);
 }
 
 llvm::Expected<X86ExecutionMode>

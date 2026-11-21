@@ -135,18 +135,32 @@ void restore(const Image &B, X86ModeState &S, X86PagingState &C) {
   S.SMM->EnteredInsideNMI = S.SMM->Active = false;
 }
 
+bool supportsControlFeatures(const X86PagingFeatures &Features,
+                             const X86ModeExecutionOptions &Options,
+                             uint64_t CR4, uint64_t EFER) {
+  const uint32_t Other = Options.Legacy.ControlRegisters
+                             ? Options.Legacy.ControlRegisters->OtherCR4Features
+                             : 0;
+  return !(CR4 & ~uint64_t(x86SupportedCR4(Features, Other))) &&
+         !(EFER & ~x86SupportedEFER(Features, Options.EFERSystemCall));
+}
+
 llvm::Error invalid(const char *Message) {
   return llvm::createStringError(llvm::errc::invalid_argument, Message);
 }
 } // namespace
 
 llvm::Expected<X86ModeExecutionResult>
-enterX86Smm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM) {
+enterX86Smm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
+            const X86ModeExecutionOptions &Options) {
   if (!S.Debug || !Normal.features().LongMode ||
       (Normal.controls().CR4 & (uint64_t{1} << 23)))
     return invalid("KVM64 SMM requires the debug bank, long-mode capability "
                    "and non-CET state");
   auto C = Normal.controls();
+  if (!supportsControlFeatures(Normal.features(), Options, C.CR4, C.EFER))
+    return invalid("SMI requires the interrupted CR4 and EFER features to be "
+                   "bound to the processor");
   C.CR0 &= ~uint64_t(0x8000000d);
   C.CR4 = C.EFER = 0;
   C.RFlags = 2;
@@ -246,15 +260,10 @@ executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
     R.Status = Status::Shutdown;
     return R;
   };
-  const uint64_t AllowedEFER = uint64_t(Options.EFERSystemCall) |
-                               (Normal.features().LongMode ? 0x500u : 0u) |
-                               (Normal.features().NX ? 0x800u : 0u);
-  const uint32_t Other = Options.Legacy.ControlRegisters
-                             ? Options.Legacy.ControlRegisters->OtherCR4Features
-                             : 0;
   if ((C.CR0 >> 32) || ((C.CR0 & 0x20000000) && !(C.CR0 & 0x40000000)) ||
-      (C.CR4 & ~uint64_t(x86SupportedCR4(Normal.features(), Other))) ||
-      (le::read64le(Progress.SaveArea->data() + 0xd0) & ~AllowedEFER) ||
+      !supportsControlFeatures(
+          Normal.features(), Options, C.CR4,
+          le::read64le(Progress.SaveArea->data() + 0xd0)) ||
       (C.CR3 >> Normal.features().PhysicalAddressBits) ||
       ((C.CR4 & (1u << 17)) && !(C.EFER & 0x400)) || (Next.Debug->DR6 >> 32) ||
       (Next.Debug->DR7 >> 32))

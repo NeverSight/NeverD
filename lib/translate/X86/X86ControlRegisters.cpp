@@ -24,6 +24,11 @@ uint32_t x86SupportedCR4(const X86PagingFeatures &F, uint32_t Other) {
          (uint32_t(F.PKS) << 24);
 }
 
+uint64_t x86SupportedEFER(const X86PagingFeatures &F, bool SystemCall) {
+  return uint64_t(SystemCall) | (F.LongMode ? LME | LMA : 0) |
+         (uint64_t(F.NX) << 11);
+}
+
 X86PagingControlWrite
 planX86PagingControlWrite(const X86PagingState &Old, const X86PagingFeatures &F,
                           uint32_t Other, unsigned Control, uint64_t Value,

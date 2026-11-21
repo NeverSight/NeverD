@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// {description} over the mixed-mode CPU bank.
+/// Firmware-edited SMM save images, RSM faults and original KVM state.
 //===----------------------------------------------------------------------===//
 
 TEST_F(X86ModeInterruptTest, SmiUsesPrivateRAMAndRsmHonorsFirmwareEdits) {

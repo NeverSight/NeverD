@@ -24,7 +24,8 @@ struct X86RsmProgress {
 
 llvm::Expected<X86ModeExecutionResult>
 enterX86Smm(X86ModeState &State, translate::X86PagedMemory &Normal,
-            translate::X86PagedMemory &SMRAM);
+            translate::X86PagedMemory &SMRAM,
+            const X86ModeExecutionOptions &Options);
 llvm::Expected<X86ModeExecutionResult>
 executeX86Rsm(X86ModeState &State, translate::X86PagedMemory &Normal,
               translate::X86PagedMemory &SMRAM, llvm::ArrayRef<uint8_t> Bytes,

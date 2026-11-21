@@ -150,7 +150,11 @@ EPC reads all ones and discards writes.
 
 The x64 software transfer profile consumes original EENTER, ERESUME and EEXIT
 instructions against an initialized imported SECS and opt-out TCS. The bound
-processor uses XCR0=3, the enclave uses XFRM=3 and MISCSELECT=0. The XSAVE
+processor uses XCR0=3, the enclave uses XFRM=3 and optionally requests exception information with MISCSELECT.EXINFO. For a
+user page fault the private SSA retains the exact faulting address and error
+code. For a general-protection fault it retains the error code and a zero
+address. The outside handler receives CR2 with its page offset cleared on
+page faults. The XSAVE
 area is at the beginning of the SSA frame and the GPR area is at its end.
 Their EPC translations are cached independently when the frame spans multiple
 pages. AEX writes the interrupted registers, flags and PC to that frame,

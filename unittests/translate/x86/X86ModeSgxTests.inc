@@ -21,12 +21,15 @@ TEST_F(X86ModeInterruptTest,
                                                     {0x8e, 0xe0},
                                                     {0xcc},
                                                     {0xf1},
+                                                    {0xf4},
                                                     {0x89, 0x06}}) {
         SCOPED_TRACE(testing::Message()
                      << Compiler << " llvm=" << LLVM
                      << ", instruction length=" << FaultBytes.size());
         const bool PageFault =
             !FaultBytes.empty() && FaultBytes.front() == 0x89;
+        const bool GPFault = !FaultBytes.empty() && FaultBytes.front() == 0xf4;
+        const bool ErrorCode = PageFault || GPFault;
         start(Mode::Long64);
         Machine.SMM.emplace();
         Machine.Debug.emplace();
@@ -50,7 +53,9 @@ TEST_F(X86ModeInterruptTest,
         R.GPR[6] = Base + 0x1027;
         R.GPR[9] = 0x1122334455667788ULL;
         R.ZMM[2][0] = 0xab;
-        Controls.CR4 |= 0x200;
+        constexpr uint32_t OSFXSR = 1u << 9;
+        Controls.CR4 |= OSFXSR;
+        Options.Legacy.ControlRegisters->OtherCR4Features |= OSFXSR;
         put(0x8030, 0x00affb000000ffffULL);
         put(0x8038, 0x00cff3000000ffffULL);
         put(0x10000, 0x11007);
@@ -59,9 +64,10 @@ TEST_F(X86ModeInterruptTest,
         put(0x9060, 0x1100 | (uint64_t(24) << 16) | (uint64_t(0x8e) << 40));
         put(0x9400, 0x1100 | (uint64_t(24) << 16) | (uint64_t(0x8e) << 40));
         Options.Long.IretAccessOrder = X64PagedIretAccessOrder::FlagsFirst;
+        put(0x90d0, 0x1100 | (uint64_t(24) << 16) | (uint64_t(0x8e) << 40));
         put(0x90e0, 0x1100 | (uint64_t(24) << 16) | (uint64_t(0x8e) << 40));
         uint64_t HandlerPC = 0x1100;
-        if (PageFault)
+        if (ErrorCode)
           HandlerPC = add(HandlerPC, Mode::Long64, {0x48, 0x83, 0xc4, 8});
         add(HandlerPC, Mode::Long64, {0x48, 0xcf});
         ASSERT_NO_FATAL_FAILURE(compileLong(LLVM, "-O2", Compiler));
@@ -93,6 +99,7 @@ TEST_F(X86ModeInterruptTest,
         Field(Secs, 0, 0x4000, 8);
         Field(Secs, 8, Base, 8);
         Field(Secs, 16, LLVM ? 2 : 1, 4);
+        Field(Secs, 20, LLVM ? 1 : 0, 4);
         Field(Secs, 48, 5, 8);
         Field(Secs, 56, 3, 8);
         Field(Tcs, 16, 0x2000, 8);
@@ -127,6 +134,7 @@ TEST_F(X86ModeInterruptTest,
         Program.insert(Program.end(), Handlers.begin(), Handlers.end());
         add(0x1000, Mode::Long64, Enclu);
         add(0x1800, Mode::Long64, Enclu);
+        std::fill_n(SSA.Bytes.end() - 184 - 16, 16, 0xae);
         auto LastSSA = SSA;
         LastSSA.Physical = LastSSA.Linear = Base + 0x3000;
         auto Enclaves = llvm::cantFail(
@@ -171,14 +179,15 @@ TEST_F(X86ModeInterruptTest,
         ASSERT_EQ(Event.Status, X86LegacyExecutionStatus::EventDelivered);
         EXPECT_EQ(Event.DeliveredVector, FaultBytes.empty() ? 64u
                                          : PageFault        ? 14u
+                                         : GPFault          ? 13u
                                                             : 6u);
         EXPECT_EQ(Event.Completions, 0u);
         EXPECT_EQ(R.PC, 0x1100u);
         const auto OutsideFrame = bytes(*Memory);
-        EXPECT_EQ(word(OutsideFrame, R.GPR[4] + (PageFault ? 24 : 16), 8) &
+        EXPECT_EQ(word(OutsideFrame, R.GPR[4] + (ErrorCode ? 24 : 16), 8) &
                       0x10000,
                   0u);
-        EXPECT_EQ(bool(word(OutsideFrame, R.GPR[4] + (PageFault ? 24 : 16), 8) &
+        EXPECT_EQ(bool(word(OutsideFrame, R.GPR[4] + (ErrorCode ? 24 : 16), 8) &
                        0x100),
                   OutsideTF);
         if (PageFault) {
@@ -193,21 +202,57 @@ TEST_F(X86ModeInterruptTest,
         EXPECT_EQ((*Memory->sgxMemory()->x87())[32], 0u);
         EXPECT_EQ(R.FSBase, 0x73000u);
         ASSERT_FALSE(Memory->sgxMemory()->active());
-        Budget = PageFault ? 3 : 2;
+        Budget = ErrorCode ? 3 : 2;
         auto Resume = llvm::cantFail(Execution.run(Machine, Program, Budget));
         ASSERT_TRUE(Resume.OwnerError.empty()) << Resume.OwnerError;
-        ASSERT_EQ(Resume.Completions, PageFault ? 3u : 2u);
+        ASSERT_EQ(Resume.Completions, ErrorCode ? 3u : 2u);
         ASSERT_TRUE(Memory->sgxMemory()->active());
         EXPECT_EQ(R.PC, Base + EntryOffset);
         EXPECT_EQ(bool(R.RFlags & 0x10000), !FaultBytes.empty());
         EXPECT_EQ(R.GPR[9], 0x1122334455667788ULL);
         EXPECT_EQ(R.ZMM[2][0], 0xabu);
         EXPECT_EQ((*Memory->sgxMemory()->x87())[32], 0x13u);
+        const uint64_t GprArea = Base + (LLVM ? 0x4000 : 0x3000) - 184;
+        std::vector<uint8_t> SavedMisc(16), ExitInfo(4);
+        ASSERT_EQ(llvm::cantFail(
+                      Memory->load({GprArea - 16, MemoryAccessKind::Read, 3},
+                                   SavedMisc))
+                      .Status,
+                  X86PageWalkStatus::Completed);
+        ASSERT_EQ(llvm::cantFail(
+                      Memory->load({GprArea + 160, MemoryAccessKind::Read, 3},
+                                   ExitInfo))
+                      .Status,
+                  X86PageWalkStatus::Completed);
+        if (LLVM && ErrorCode) {
+          EXPECT_EQ(word(ExitInfo, 0, 4),
+                    PageFault ? 0x8000030eu : 0x8000030du);
+          EXPECT_EQ(word(SavedMisc, 0, 8), PageFault ? Base + 0x1027 : 0u);
+          EXPECT_EQ(word(SavedMisc, 8, 4), PageFault ? 0x8007u : 0u);
+          EXPECT_EQ(word(SavedMisc, 12, 4), 0u);
+        } else {
+          EXPECT_EQ(word(ExitInfo, 0, 4),
+                    !FaultBytes.empty() && !ErrorCode ? 0x80000306u : 0u);
+          EXPECT_EQ(SavedMisc, std::vector<uint8_t>(
+                                   16, LLVM && FaultBytes.empty() ? 0 : 0xae));
+        }
         if (!FaultBytes.empty())
           continue;
         X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
         Inputs.SMIPending = true;
         Budget = 0;
+        auto Unbound = Options;
+        Unbound.Legacy.ControlRegisters->OtherCR4Features &= ~OSFXSR;
+        X86ModeExecution Incomplete(*Memory, Unbound, *System);
+        auto Refused = Incomplete.run(Machine, Program, Budget, Inputs);
+        ASSERT_FALSE(Refused);
+        EXPECT_NE(llvm::toString(Refused.takeError()).find("interrupted CR4"),
+                  std::string::npos);
+        EXPECT_TRUE(Inputs.SMIPending);
+        EXPECT_TRUE(Memory->sgxMemory()->active());
+        EXPECT_FALSE(Machine.SMM->Active);
+        EXPECT_EQ(R.PC, Base + EntryOffset);
+        EXPECT_EQ(bytes(*System), SMRAM.Memory.front().Bytes);
         ASSERT_TRUE(
             llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs))
                 .EventAccepted);

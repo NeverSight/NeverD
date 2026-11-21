@@ -22,6 +22,8 @@ inline constexpr uint32_t kX86CR0StoredMask = 0xe005003f;
 uint32_t x86SupportedCR4(const X86PagingFeatures &Features,
                          uint32_t OtherFeatures);
 
+uint64_t x86SupportedEFER(const X86PagingFeatures &Features, bool SystemCall);
+
 struct X86PagingControlWrite {
   X86PagingState Controls;
   std::optional<X86MemoryException> Exception;

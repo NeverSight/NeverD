@@ -8,7 +8,9 @@ revision `0x20064`. SMI saves selectors, hidden segment caches, descriptor
 tables, integer registers, flags, control registers, DR6/DR7 and the
 interrupt shadow at SMBASE + 0xfe00. Firmware starts at SMBASE + 0x8000
 with paging disabled and uses the system RAM bank. A further SMI stays
-latched while firmware is active.
+latched while firmware is active. The interrupted CR4 and EFER must fit the
+processor feature binding. A missing feature leaves the SMI pending, the
+SMRAM image intact and any interrupted enclave on its current thread.
 
 Original RSM fetches in the current execution mode and consumes the mutable
 save image. Firmware edits therefore affect the resumed CPU. A legacy PAE

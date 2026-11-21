@@ -25,6 +25,7 @@
 #include "neverd/ir/X86/X86DebugRules.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
 #include "neverd/lift/X86/X86DebugRegisterEncoding.h"
+#include "neverd/translate/X86/X86ControlRegisters.h"
 #include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/Support/Errc.h"
@@ -251,11 +252,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
         (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
                     Scalar->Operation == Op::Bound)))
       return invalid("instruction requires a separate mixed-mode state owner");
-    const auto &F = Memory.features();
-    const uint64_t AllowedEFER = uint64_t(Options.Non64Mode->EFERSystemCall) |
-                                 (uint64_t(F.LongMode) << 8) |
-                                 (uint64_t(F.LongMode) << 10) |
-                                 (uint64_t(F.NX) << 11);
+    const auto AllowedEFER =
+        x86SupportedEFER(Memory.features(), Options.Non64Mode->EFERSystemCall);
     if (MSR && ((Memory.controls().EFER & ~AllowedEFER) ||
                 State.Core.GPR[1] != 0xc0000080))
       return invalid("MSR access requires a bound Intel EFER bank");
@@ -688,10 +686,10 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     } else {
       const uint64_t Value =
           uint64_t(Next.GPR[0]) | (uint64_t(Next.GPR[2]) << 32);
-      const auto &F = Memory.features();
-      const uint64_t Allowed = uint64_t(Options.Non64Mode->EFERSystemCall) |
-                               (uint64_t(F.LongMode) << 8) | 0x400 |
-                               (uint64_t(F.NX) << 11);
+      // WRMSR ignores the read-only LMA operand bit.
+      const auto Allowed = x86SupportedEFER(Memory.features(),
+                                            Options.Non64Mode->EFERSystemCall) |
+                           0x400;
       if ((Value & ~Allowed) || ((NextControls.CR0 & 0x80000000) &&
                                  ((Value ^ NextControls.EFER) & 0x100)))
         R.Exception = X86MemoryException{13, 0, {}};

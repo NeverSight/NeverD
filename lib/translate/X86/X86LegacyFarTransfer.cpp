@@ -60,7 +60,12 @@ public:
     Journal.emplace(S, M, O, Bytes, detail::X86LegacyTransferKind::Far,
                     bool(S.EFlags & 0x20000) || bool(O.Non64Mode));
     execute(F, NextIP);
-    Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
+    // A task switch retains the selected descriptor and the original opcode.
+    // Its incoming register bank can already be installed at a backing stop.
+    if (detail::legacyTaskInstructionPending(S))
+      S.PendingTransfer.reset();
+    else
+      Journal->finish(Failure ? X86PageWalkStatus::Completed : R.Status);
     if (Failure)
       return std::move(*Failure);
     return std::move(R);
