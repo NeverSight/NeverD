@@ -152,6 +152,11 @@ unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
     return fortifiedChkFixedCount(Core);
   }
 
+  // Library-specific formatters may put the capacity before the buffer or
+  // return an allocated string. Their exact prefix owns its argument order.
+  if (auto Kinds = irregularVarArgFixedKinds(Name); !Kinds.empty())
+    return Kinds.size();
+
   // The *printf / *scanf families: the fixed-parameter count follows from the
   // name suffix (covers printf, fprintf, snprintf, the wide w* forms, and
   // platform variants like _snprintf / swprintf).
@@ -176,8 +181,7 @@ unsigned varArgFixedCount(std::string_view Name, LibCVariant Variant) {
     return 2;
   }
 
-  // Irregular variadic functions with no printf/scanf suffix.
-  return irregularVarArgFixedKinds(Name).size();
+  return 0;
 }
 
 VarArgFixedParamKind varArgFixedParamKind(std::string_view Name, unsigned Index,
@@ -197,6 +201,8 @@ VarArgFixedParamKind varArgFixedParamKind(std::string_view Name, unsigned Index,
     if (const auto Kinds = variant_rows::variadic(Name, Variant))
       return Index < Kinds->size() ? (*Kinds)[Index]
                                    : VarArgFixedParamKind::Unknown;
+  if (auto Kinds = irregularVarArgFixedKinds(Name); !Kinds.empty())
+    return Index < Kinds.size() ? Kinds[Index] : VarArgFixedParamKind::Unknown;
   const unsigned FixedCount = varArgFixedCount(Name, Variant);
   if (Index >= FixedCount)
     return VarArgFixedParamKind::Unknown;
@@ -248,12 +254,7 @@ VarArgFixedParamKind varArgFixedParamKind(std::string_view Name, unsigned Index,
     }
   }
 
-  // The irregular registry lists every fixed parameter its declaration names,
-  // and no optional tail argument.
-  const llvm::ArrayRef<VarArgFixedParamKind> Irregular =
-      irregularVarArgFixedKinds(Name);
-  return Index < Irregular.size() ? Irregular[Index]
-                                  : VarArgFixedParamKind::Unknown;
+  return VarArgFixedParamKind::Unknown;
 }
 
 bool isVaListConsumer(std::string_view Name) {

@@ -113,7 +113,7 @@ producer still consumes the accepted IRQ exactly once. A deferred/unaccepted
 event leaves these banks unchanged. This component does not choose a global
 event, execute a handler, wake a halted CPU or advance PC.
 
-The successful-RAM scheduler's opt-in
+The successful-RAM and paged V6 schedulers' opt-in
 [`notify_cr8_writes` binding](x64-continuation-source.md#cr8-write-completion)
 provides the missing completed-write notification. Its bridge receives the
 already admitted CR8 value and existing producer context. A producer can apply
@@ -124,10 +124,10 @@ scheduled path; raw instruction functions and unscheduled drivers do not notify.
 The bridge runs on same-value writes too, before the next priority query, and
 never on a read or rejected/preempted write.
 
-The successful-RAM source profile still excludes TPR aliases, and the paged
-source leaves MOV CR8 at a native boundary. External TPR/CPU changes, device
-routing and full paged privilege/fault admission require their own binding.
-The local bank model and completion callback do not supply those environments.
+For an opted-in paged transfer the instruction body raises #GP(0) on invalid
+privilege or reserved source bits. The scheduler uses the completion receipt
+from the paged CPU so that a subsequent debug trap preserves a completed
+write. The embedding owns external TPR/CPU changes and MMIO/MSR device routing.
 
 All queries visit at most the fixed eight-word banks they need. Acknowledgment
 and EOI touch only the selected word after bounded priority checks. Reception
@@ -181,3 +181,19 @@ with the corresponding ordinary-bank transitions visible in
 [Linux KVM LAPIC](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
 and [QEMU APIC](https://github.com/qemu/qemu/blob/v10.2.0/hw/intc/apic.c).
 Their external virtualization/device routing is not incorporated into this model.
+
+## Mixed-mode instruction boundaries
+
+Passing `X86ModeInterrupts` to `X86ModeExecution::run` polls latched SMI,
+NMI and fixed-interrupt inputs before the next fresh instruction. A masked
+higher-priority input remains pending while an eligible lower-priority input
+can run. An accepted vector moves from IRR to ISR once, including a partially
+completed event frame suspended on backing. EOI belongs to the controller's
+caller. Original successful x64 MOV-to-CR8 writes update TPR before the next
+arbitration point, including a same-class write that clears its subpriority.
+A faulting write retains the CPU and controller priority.
+
+The optional CMCI LVT binding accepts fixed, NMI and SMI delivery. Fixed
+CMCI is an edge request in the same IRR and ISR banks. The controller's
+mask, TPR and the CPU's IF apply at their respective boundaries.
+[MCA notification and counted errors](x86-mode-execution.md#conventional-machine-checks)

@@ -589,16 +589,17 @@ TEST(MIPSRecordSourceEntry, PICCallsOnlyObserveArgumentWritesThatReachThem) {
     std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Signature}};
 
     constexpr uint32_t FrameInA1 = 0x03a02825, FrameInA0 = 0x03a02025;
-    const auto Check = [&](uint32_t PICSlot, uint32_t RecordSlot,
-                           bool Private) {
+    const auto Check = [&](uint32_t BeforePIC, uint32_t PICSlot,
+                           uint32_t RecordSlot, bool Private) {
+      SCOPED_TRACE(BeforePIC);
       SCOPED_TRACE(PICSlot);
       SCOPED_TRACE(RecordSlot);
       // The indirect call can see a1 in its delay slot. The following
       // one-word record call reads only a0, including its own delay slot.
       auto Image = image(
           {Wide ? 0x67bdffe0u : 0x27bdffe0u, Wide ? 0xffbf0018u : 0xafbf001cu,
-           Wide && !isMIPSN32(Target) ? 0xdf990000u : 0x8f990000u, 0x0320f809,
-           PICSlot, FrameInA1, 0x0c000800, RecordSlot,
+           BeforePIC, Wide && !isMIPSN32(Target) ? 0xdf990000u : 0x8f990000u,
+           0x0320f809, PICSlot, FrameInA1, 0x0c000800, RecordSlot,
            Wide ? 0xdfbf0018u : 0x8fbf001cu, 0x03e00008,
            Wide ? 0x67bd0020u : 0x27bd0020u},
           Target);
@@ -630,9 +631,13 @@ TEST(MIPSRecordSourceEntry, PICCallsOnlyObserveArgumentWritesThatReachThem) {
       EXPECT_EQ(RecordCalls, 1u);
     };
     constexpr uint32_t SevenInA0 = 0x24040007;
-    Check(0, SevenInA0, true);
-    Check(FrameInA1, SevenInA0, false);
-    Check(0, FrameInA0, false);
+    constexpr uint32_t ElevenInA1 = 0x2405000b;
+    Check(0, 0, SevenInA0, true);
+    Check(0, FrameInA1, SevenInA0, false);
+    Check(0, 0, FrameInA0, false);
+    // Only a value that survives the PIC delay slot can expose the frame.
+    Check(FrameInA1, ElevenInA1, SevenInA0, true);
+    Check(FrameInA1, 0, SevenInA0, false);
   }
 }
 
@@ -699,6 +704,76 @@ TEST(MIPSReturnTargets, NativeCallsRequireAnUnexposedAllocatedReturnSlot) {
       }
     }
   }
+}
+
+TEST(MIPSReturnTargets, NativeCallsObserveOnlyReachingArgumentWrites) {
+  for (Arch Target : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                      Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool OverwriteLeft : {false, true})
+      for (bool OverwriteRight : {false, true})
+        for (bool EarlyCall : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << getArchName(Target) << OverwriteLeft << OverwriteRight
+                       << EarlyCall);
+          const bool Wide = isMIPS64(Target);
+          // Both arms must replace the frame pointer before any native call
+          // can see it in a0. The right arm sets a0 in the branch delay slot
+          // of an ordinary jump to the common call.
+          const uint32_t Words[] = {
+              Wide ? 0x67bdffe0u : 0x27bdffe0u,
+              Wide ? 0xffbf0018u : 0xafbf001cu,
+              0x03a02025, // or a0,sp,zero
+              EarlyCall ? 0x0320f809u : 0,
+              0, // jalr t9; nop
+              0x10a00004,
+              0, // beq a1,zero,right; nop
+              OverwriteLeft ? 0x24040013u : 0,
+              0x10000003,
+              0, // b join; nop
+              0x10000001,
+              OverwriteRight ? 0x24040017u : 0,
+              0x3c190002, // join: fetch the external callee
+              Wide && !isMIPSN32(Target) ? 0xdf390000u : 0x8f390000u,
+              0x0320f809,
+              0x2405000b, // jalr t9; addiu a1,zero,11
+              Wide ? 0xdfbf0018u : 0x8fbf001cu,
+              0x03e00008,
+              Wide ? 0x67bd0020u : 0x27bd0020u};
+          auto Image = image(Words, Target);
+          auto Low = build(Image);
+          ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+          LowToMedConverter Convert;
+          if (OverwriteLeft && OverwriteRight && !EarlyCall)
+            EXPECT_NO_THROW(Convert.convert(Low, Target, BinaryFormat::ELF));
+          else
+            EXPECT_THROW(Convert.convert(Low, Target, BinaryFormat::ELF),
+                         LowToMedConversionError);
+        }
+}
+
+TEST(MIPSReturnTargets, UnboundResultReachesTheNextCallUntilOverwritten) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool Replace : {false, true}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << Replace);
+      const uint32_t Words[] = {
+          0x67bdffe0, 0xffbf0018, // save ra at sp+24
+          0x0320f809, 0,          // jalr t9; nop
+          0x00402025,             // or a0,v0,zero
+          0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+          0x0320f809, Replace ? 0x24040013u : 0u, // jalr t9; delay slot
+          0xdfbf0018, 0x03e00008,
+          0x67bd0020};
+      auto Image = image(Words, A);
+      auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      if (Replace)
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
 }
 
 TEST_P(MIPSControl, ReusedExecutionUnitClearsAnOldSlotAndFailedHead) {

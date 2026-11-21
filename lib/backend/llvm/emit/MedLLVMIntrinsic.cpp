@@ -262,6 +262,20 @@ llvm::Value *MedLLVMEmitter::emitIntrinsic(const MedOp &Op,
   if (const SyscallConvention *Syscall = modeledSyscallConvention(IC))
     return emitLinuxSyscall(Op, *Syscall, Builder);
 
+  // The goroutine Go's internal ABI keeps in a register of its own: R14 or
+  // R28, which the code reads where getg() does.
+  if (IC == I::GoCurrentGoroutine) {
+    if (Op.NumInputs != 1 || Op.Output.Size != 8 ||
+        (TargetArch != Arch::X64 && TargetArch != Arch::AArch64))
+      llvm::report_fatal_error("Go goroutine read of a malformed shape");
+    return Builder.CreateCall(
+        llvm::InlineAsm::get(
+            llvm::FunctionType::get(Builder.getInt64Ty(), false),
+            TargetArch == Arch::X64 ? "movq %r14, $0" : "mov $0, x28", "=r",
+            /*hasSideEffects=*/true),
+        {}, "go.g");
+  }
+
   llvm::Value *R = nullptr;
 
   switch (TargetArch) {

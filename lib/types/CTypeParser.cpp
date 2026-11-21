@@ -146,7 +146,7 @@ public:
       // its invocation, which must be copied before expansion can grow Tokens.
       Token &Next = Tokens.emplace_back();
       token(Next);
-      if (Next.Kind == TokenKind::Word)
+      if (Next.Kind == TokenKind::Word && !Macros.empty())
         if (auto Found = Macros.find(Next.Text); Found != Macros.end()) {
           const Token Invocation = Next;
           Tokens.pop_back();
@@ -914,7 +914,7 @@ private:
            constWord(T.Text) || T.Text == "_Noreturn" ||
            T.Text == "DECLSPEC_NORETURN" || volatileWord(T.Text) ||
            T.Text == "typename" || conventionWord(T.Text) ||
-           ignoredWord(T.Text) || startsAttribute(Ahead);
+           ignoredWord(T.Text);
   }
 
   uint32_t pointerSize() const { return pointerBytes(Library.dataModel()); }
@@ -1366,8 +1366,8 @@ private:
       }
       if (!Spec.Type && !AnyWord &&
           (isPunct("::") ||
-           (T.Kind == TokenKind::Word && !reservedWord(T.Text) &&
-            T.Text != "typename" && (isPunct("::", 1) || isPunct("<", 1))))) {
+           (T.Kind == TokenKind::Word && (isPunct("::", 1) || isPunct("<", 1)) &&
+            T.Text != "typename" && !reservedWord(T.Text)))) {
         const std::string Name = typeName();
         if (Failed)
           return false;
@@ -1413,8 +1413,9 @@ private:
                  W == "noreturn") {
         take();
         Spec.NoReturn = true;
-      } else if (conventionWord(W)) {
-        PendingConvention = conventionWord(take().Text);
+      } else if (const auto Convention = conventionWord(W)) {
+        PendingConvention = Convention;
+        take();
       } else if (startsAttribute()) {
         Attributes Read;
         if (!attributes(Read))
@@ -2110,10 +2111,13 @@ private:
         Def->Underlying = Underlying;
         Declared.Enum = std::move(Def);
         defineType(std::move(Declared));
+        // A fixed underlying type completes an opaque C23 or C++ enum.
+        // Include it in the declaration inventory when reading rendered C.
+        if (Fixed)
+          note(Result.Types, NotedTypes, Name);
       }
       return makeNamed(Name, TypeKind::Enum);
     }
-    (void)Fixed;
     Defines = true;
     auto Def = std::make_shared<EnumDef>();
     Def->Underlying = Underlying;
@@ -2195,6 +2199,7 @@ private:
     Declared = Attributes();
     llvm::SmallVector<DeclaratorPart> Parts;
     parseDeclarator(Name, NameToken, Parts);
+    PendingConvention.reset();
     if (Failed)
       return nullptr;
     TypeExprRef Type = std::move(Base);
@@ -2210,6 +2215,10 @@ private:
         break;
       case DeclaratorPart::Kind::Function:
         // Each parameter list is freshly parsed and applied once.
+        if (pointerSize() >= 8 && !keptWide(It->Function->Convention))
+          It->Function->Convention = CallingConvention::Unspecified;
+        else if (It->Function->Variadic && calleePops(It->Function->Convention))
+          It->Function->Convention = CallingConvention::Cdecl;
         It->Function->Return = std::move(Type);
         Type = makeFunction(std::move(It->Function));
         break;
@@ -2252,8 +2261,8 @@ private:
           P.Bytes = 4;
         else if (W == "__ptr64")
           P.Bytes = 8;
-        else if (conventionWord(W))
-          PendingConvention = conventionWord(W);
+        else if (const auto Convention = conventionWord(W))
+          PendingConvention = Convention;
         else if (!ignoredWord(W))
           break;
         take();
@@ -2304,6 +2313,17 @@ private:
       if (startsAttribute()) {
         if (!attributes(Declared))
           break;
+        if (PendingConvention) {
+          // A trailing convention belongs to the function nearest the
+          // declared name, including a callback or a callback factory.
+          auto Fn = llvm::find_if(Parts, [](const DeclaratorPart &Part) {
+            return Part.TheKind == DeclaratorPart::Kind::Function;
+          });
+          if (Fn != Parts.end()) {
+            Fn->Function->Convention = *PendingConvention;
+            PendingConvention.reset();
+          }
+        }
         continue;
       }
       if (accept("[")) {
@@ -2376,15 +2396,9 @@ private:
     const Attributes Outer = Declared;
     auto Restore = llvm::make_scope_exit([&] { Declared = Outer; });
     auto Function = std::make_shared<FunctionDef>();
-    const auto Convention =
-        PendingConvention ? PendingConvention : DefaultConvention;
+    Function->Convention = PendingConvention.value_or(
+        DefaultConvention.value_or(CallingConvention::Unspecified));
     PendingConvention.reset();
-    if (Convention) {
-      // A convention the target ignores, as 64-bit x86 does __stdcall, is
-      // no convention of the function's.
-      if (pointerSize() < 8 || keptWide(*Convention))
-        Function->Convention = *Convention;
-    }
     take(); // (
     if (accept(")"))
       return Function;
@@ -2396,11 +2410,6 @@ private:
     while (!Failed) {
       if (accept("...")) {
         Function->Variadic = true;
-        // Only the caller knows what a variadic call pushes: compilers take
-        // a convention whose callee pops, as phnt's NTAPI
-        // RtlInitializeSidEx, as cdecl.
-        if (calleePops(Function->Convention))
-          Function->Convention = CallingConvention::Cdecl;
         expect(")", "after '...'");
         return Function;
       }

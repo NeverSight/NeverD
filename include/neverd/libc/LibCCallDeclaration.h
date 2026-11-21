@@ -28,7 +28,7 @@ hasFixedPlatformCallDeclaration(const FunctionSym &Function,
       Function.CallConv == DebugCallConv::Thiscall)
     return false;
   if (Function.PrototypeFromHeader || Function.PrototypeFromCLibrary ||
-      Function.PrototypeLibrary == UserPrototypeLibrary)
+      isUserFunctionDeclaration(Function))
     return true;
   // Names alone and missing native return contracts establish no complete
   // declaration. The caller must resolve the exact entry in this image.

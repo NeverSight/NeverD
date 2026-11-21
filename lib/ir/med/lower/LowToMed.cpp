@@ -19,6 +19,7 @@
 #include "../X86/RegistrationRoots.h"
 #include "../X86/RegistrationSEH4PhysicalFrame.h"
 #include "ComputedBranchScalars.h"
+#include "GoCurrentGoroutine.h"
 #include "GoStackGrowth.h"
 #include "MIPS/PICGlobalPointer.h"
 
@@ -2442,6 +2443,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       if (!GoFixedArguments)
         GoFixedArguments =
             goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
+      // Go assembly that takes registers of its own takes those its callers
+      // bind (goEntryRegisterOperands).
+      if (!GoFixedArguments && CallEntryReadGPRs && CallEntryIntegerArguments)
+        if (const auto Reads = CallEntryReadGPRs->find(Low.Entry);
+            Reads != CallEntryReadGPRs->end() &&
+            goEntryRegisterOperands(*Image, Low.Entry, Reads->second))
+          if (const auto Bound = CallEntryIntegerArguments->find(Low.Entry);
+              Bound != CallEntryIntegerArguments->end())
+            GoFixedArguments = Bound->second;
     }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);
@@ -2465,6 +2475,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       runDce(Func);
       debugVerifyMedFunc(Func, "runDce");
     }
+
+    // Compiled Go code reads the goroutine its ABI keeps in a register.
+    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+      if (const std::optional<uint64_t> Goroutine =
+              goRoutineRegister(TheArch)) {
+        defineGoCurrentGoroutine(Func, *Goroutine);
+        debugVerifyMedFunc(Func, "defineGoCurrentGoroutine");
+      }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was

@@ -110,12 +110,10 @@ and 110,592 actual exported-C observations. The adjacent SMM regression adds
 55,296 complete native state pairs. LLVM code64/x32 and the NeverC frontend
 also retain an original site above 4 GiB without truncation.
 
-The local host has no SGX capability or device. These tests stop before
-ENCLU and execute zero enclave instructions. Successful EENTER/ERESUME/EEXIT,
-SSA/AEX behavior and native enclave/runtime integration are therefore not
-qualified here. A software enclave model, complete legacy i386 dispatcher and
-general fault/asynchronous-event execution remain separate work; this profile
-does not make them disappear.
+The local host exposes no SGX device. The native compiler tests stop before
+ENCLU and execute zero enclave instructions. Their results cover state
+transport up to the transfer site. The software enclave tests below exercise
+EENTER, ERESUME, EEXIT and AEX against imported EPC state.
 
 ## Actions runner discovery (2026-11-09)
 
@@ -130,10 +128,77 @@ The [retained evidence](evidence/x86-sgx-runner-discovery-2026-11-09.json)
 records exact image versions, source commit and raw CPUID/report hashes.
 The workflow's successful status means capability discovery completed. Exactly
 zero enclave instructions executed, so EENTER/ERESUME/EEXIT/AEX remain
-unqualified. The Linux enclave test route still needs an SGX/EPC-enabled host
-with an accessible driver and an actual enclave execution oracle. The software
-EPCM/SSA/AEX model remains separate implementation work.
+unqualified. On November 20 the Linux runner also built the upstream v6.18
+SGX harness and its enclave image. With SGX1, an EPC section and access to
+`/dev/sgx_enclave`, the workflow executes `enclave.unclobbered_vdso` and
+`enclave.pte_permissions`, retaining the results of entry/exit and fault/resume.
+All three hosted runners reported zero EPC sections and the Linux runner
+executed zero native test cases. [Run and artifact digests](evidence/x86-sgx-runner-discovery-2026-11-20.json)
 
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the
 [Intel SDM index](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+## Software SGX1 enclave execution
+
+`X86SgxMemory` imports EPC pages, EPCM permissions and ownership, and the
+logical processor's x87 state. Binding this bank to `X86PagedMemory` keeps
+private bytes out of ordinary RAM. Normal paging checks precede EPCM checks.
+A fetch crossing the enclave boundary raises #GP. An EPCM violation raises
+#PF with the SGX error bit. For this processor profile, non-enclave access to
+EPC reads all ones and discards writes.
+
+The x64 software transfer profile consumes original EENTER, ERESUME and EEXIT
+instructions against an initialized imported SECS and TCS. The processor
+binds XCR0=3 or 7. The enclave selects x87/SSE or x87/SSE/AVX with XFRM
+and optionally requests exception information with MISCSELECT.EXINFO. For a
+user page fault the private SSA retains the exact faulting address and error
+code. For a general-protection fault it retains the error code and a zero
+address. The outside handler receives CR2 with its page offset cleared on
+page faults. The XSAVE area is at the beginning of the SSA frame and the GPR
+area is at its end.
+Their EPC translations are cached independently when the frame spans multiple
+pages. AEX writes the interrupted registers, flags and PC to that frame,
+installs the outside register image, and dispatches the original event using
+the AEP as the saved return address. An inhibited arrival leaves the enclave
+running. IRETQ to the AEP and ERESUME restore the SSA contents. The outside interrupt frame clears RF.
+The saved SSA uses the RF value belonging to the original event. With AVX
+selected, AEX saves the upper YMM halves in the standard XSAVE layout and
+clears them in the outside image. ERESUME loads or initializes each selected
+vector component and loads MXCSR from the frame even when XSTATE_BV is zero.
+
+A routed INIT performs AEX before the CPU enters its reset or wait-for-SIPI
+state. Enclave pages, their ownership and the interrupted SSA survive INIT.
+A machine-check exception performs AEX before the vector-18 frame is built.
+It disables subsequent ENCLU instructions until a platform reset. This
+processor profile also disables SGX after a guest clears enabled MCi_CTL bits.
+[Intel SGX and MCA](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
+A debug enclave can opt in through TCS.FLAGS.DBGOPTIN. Instruction and data
+breakpoints then observe enclave code and data. The opt-out path suppresses
+instruction matches inside the enclave and data matches against its address
+range. Opt-in EENTER with TF set takes a single-step trap at the enclave
+entry point. Opt-in INT1 and INT3 save the faulting instruction PC to the SSA.
+A plain ERESUME preserves an outside TF on opt-in and resumes the interrupted
+instruction. The saved SSA flags clear TF for both entry types.
+
+The CPU binding enumerates AEX notification and EDECCSSA independently. A
+thread that requests notification in the interrupted SSA byte at GPR offset
+167 enters its notification handler through ERESUME. The CPU validates the
+next SSA slot, keeps the interrupted slot and CSSA, and enters at TCS.OENTRY
+with the outside register image. EDECCSSA validates the preceding slot before
+committing its decrement and making that slot the destination for future AEX.
+[Intel SGX enclave operation, EDECCSSA, ERESUME and debugging](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
+The exception-handler regression executes the original `DIV ECX` through
+both C emitters and x64 Clang/NeverC. A divide fault writes vector 0 and its
+original PC, dividend and marker register to the first SSA slot. EENTER on
+the same TCS reaches the nested handler at CSSA=1. It writes 7 to the saved
+RCX, exits, and ERESUME retries the original instruction with 84/7 = 12.
+Two successive faults exercise slot reuse. Intel's signed x64 simulation
+enclave produces the same register, retry and quotient observations on the
+designated runner. [Independent Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
+
+Enclave construction and cryptographic leaves require platform state beyond
+this imported-thread profile. CET, XSTATE components beyond AVX and physical
+SGX qualification remain open.

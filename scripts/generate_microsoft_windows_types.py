@@ -21,6 +21,7 @@ from typing import NamedTuple
 import xml.etree.ElementTree as ET
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_gdiplus_types as gdiplus
 import microsoft_rdbss_types as rdbss
 import microsoft_ucrt_types as ucrt
 
@@ -75,11 +76,15 @@ ISOLATED_PROVIDERS = {
         Provider("SmartCard", ("ntddk", "smclib")),
         Provider("SDPort", ("ntddk", "sdport")),
         Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
+        Provider("USBCamera", ("ntddk", "minwindef", "ks", "strmini", "usb", "usbcamdi")),
         Provider("AudioPort", ("ntddk", "portcls")),
         Provider("GraphicsKernel", ("ntddk", "dispmprt")),
         Provider("RDBSS", ("rxprocs", "mrx"), ("MINIRDR__NAME=neverd_rdbss",)),
     ),
     "WindowsUser": (
+        Provider("WindowsSQLite", ("winsqlite/winsqlite3",)),
+        Provider("ICU", ("icu",)),
+        Provider("WebServices", ("windows", "webservices")),
         Provider("WinHTTP", ("winsock2", "winhttp")),
         Provider("HTTPServer", ("winsock2", "windows", "http")),
         Provider("Esent", ("winsock2", "windows", "esent")),
@@ -108,6 +113,8 @@ ISOLATED_PROVIDERS = {
         Provider("PropertyVariants", ("windows", "propvarutil")),
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
+        Provider("BluetoothGATT", ("windows", "bluetoothleapis")),
+        Provider("ConnectionManager", ("windows", "wcmapi")),
         Provider("GraphicsThunk", ("windows", "d3dkmthk")),
         Provider("Direct3D11", ("windows", "d3d11"), (), (
             "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
@@ -146,6 +153,31 @@ ISOLATED_PROVIDERS = {
             "SetLogArchiveMode", "SetLogArchiveTail", "TerminateLogArchive", "TerminateReadLog",
             "TruncateLog", "ValidateLog", "WriteLogRestartArea")),
         Provider("TPM", ("windows", "tbs")),
+        Provider("DHCPServer", ("winsock2", "windows", "dhcpsapi")),
+        Provider("ODBC", ("windows", "sql", "sqlext", "sqlucode")),
+        Provider("MediaFoundation", ("windows", "mfapi", "mfobjects", "mfidl")),
+        Provider("TraceData", ("windows", "tdh")),
+        Provider("JavaScriptRuntime", ("stdbool", "windows", "jsrt")),
+        Provider("RightsManagement", ("windows", "msdrm")),
+        Provider("DirectoryService", ("windows", "ntdsapi")),
+        Provider("XmlLite", ("windows", "xmllite")),
+        Provider("UIAutomation", ("windows", "uiautomationcore", "uiautomationcoreapi")),
+        Provider("WinInet", ("winsock2", "windows", "wininet", "winineti")),
+        Provider("RoutingTable", ("winsock2", "windows", "rtmv2")),
+        Provider("WinSNMP", ("windows", "winsnmp")),
+        Provider("AudioCompression", ("windows", "mmsystem", "mmreg", "msacm")),
+        Provider("CloudFiles", ("windows", "cfapi")),
+        Provider("PeerDistribution", ("windows", "peerdist")),
+        Provider("InteractionContext", ("windows", "interactioncontext")),
+        Provider("DistributedRouting", ("winsock2", "windows", "drt")),
+        Provider("ProjectedFileSystem", ("windows", "projectedfslib")),
+        Provider("ISCSI", ("winsock2", "windows", "iscsierr", "iscsidsc")),
+        Provider("ClusterResources", ("windows", "clusapi", "resapi")),
+        Provider("VideoForWindows", ("windows", "vfw")),
+        Provider("Fax", ("windows", "winfax"), ("WIN32=1",)),
+        Provider("WindowsErrorReporting", ("windows", "werapi")),
+        Provider("Magnification", ("windows", "magnification")),
+        Provider("GDIPlus", ("windows", "objidl", "ddraw"), ("GDIPVER=0x0110",)),
     ),
 }
 TARGETS = {
@@ -162,6 +194,11 @@ def run(command: list[str], log: Path, output: Path | None = None) -> str:
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
                                 stderr=errors, timeout=wdk.LIMITS["command_timeout"])
     if result.returncode:
+        # The types CLI writes structured rejection diagnostics to stdout.
+        # Preserve them before raising, alongside any compiler diagnostics.
+        if result.stdout:
+            with log.open("a", encoding="utf-8") as errors:
+                errors.write(result.stdout)
         raise ValueError(f"command failed ({result.returncode}); see {log}")
     if output:
         output.write_text(result.stdout, encoding="utf-8")
@@ -230,44 +267,160 @@ def verify_layouts(original: str, generated: str,
     return len(selected)
 
 
+# Each isolated unit also includes the compiler or SDK prerequisites. Only
+# these API families belong to the provider that brought that unit in.
+PROVIDER_PREFIXES = {
+    "DHCPServer": ("Dhcp",),
+    "ODBC": ("SQL", "ODBC"),
+    "MediaFoundation": ("MF", "CreatePropertyStore"),
+    "TraceData": ("Tdh",),
+    "JavaScriptRuntime": ("Js",),
+    "RightsManagement": ("DRM",),
+    "DirectoryService": ("Ds",),
+    "XmlLite": ("CreateXml",),
+    "UIAutomation": (
+        "Uia", "DockPattern_", "ExpandCollapsePattern_", "GridPattern_", "InvokePattern_",
+        "ItemContainerPattern_", "LegacyIAccessiblePattern_", "MultipleViewPattern_",
+        "RangeValuePattern_", "ScrollItemPattern_", "ScrollPattern_",
+        "SelectionItemPattern_", "SynchronizedInputPattern_", "TextPattern_",
+        "TextRange_", "TogglePattern_", "TransformPattern_", "ValuePattern_",
+        "VirtualizedItemPattern_", "WindowPattern_",
+    ),
+    "WinInet": (
+        "AppCache", "UrlCache", "Internet", "Http", "FindFirstUrlCache", "FindNextUrlCache",
+        "FindCloseUrlCache", "CreateUrlCache", "CommitUrlCache", "DeleteUrlCache",
+        "GetUrlCache", "SetUrlCache", "RetrieveUrlCache", "UnlockUrlCache",
+        "FreeUrlCache", "IncrementUrlCache",
+    ),
+    "RoutingTable": ("Rtm",),
+    "WinSNMP": ("Snmp",),
+    "AudioCompression": ("acm",),
+    "CloudFiles": ("Cf",),
+    "PeerDistribution": ("PeerDist",),
+    "InteractionContext": (
+        "CreateInteractionContext", "DestroyInteractionContext",
+        "RegisterOutputCallbackInteractionContext", "ProcessInertiaInteractionContext",
+        "BufferPointerPacketsInteractionContext",
+        "ProcessBufferedPacketsInteractionContext",
+        "ProcessPointerFramesInteractionContext", "SetInteraction", "GetInteraction",
+        "AddPointer", "RemovePointer", "StopInteraction",
+    ),
+    "DistributedRouting": ("Drt",),
+    "ProjectedFileSystem": ("Prj",),
+    "ISCSI": (
+        "AddIScsi", "RemoveIScsi", "GetIScsi", "ReportIScsi", "ReportActiveIScsi",
+        "SetIScsi", "SendScsi", "SetupPersistentIScsi", "LoginIScsi", "LogoutIScsi",
+        "RefreshIScsi", "AddISNS", "RemoveISNS", "RefreshISNS", "SetISNS",
+    ),
+    "ClusterResources": (
+        "ResUtil", "ClusWorker", "ClusAddCluster", "ClusRemoveCluster", "ClusGetCluster",
+        "ClusterReg", "OpenClusterCryptProvider", "CloseClusterCryptProvider",
+        "ClusterEncrypt", "ClusterDecrypt",
+    ),
+    "VideoForWindows": (
+        "AVI", "DrawDib", "EditStream", "ICClose", "ICCompress", "ICDecompress", "ICDraw",
+        "ICGet", "ICImage", "ICInfo", "ICInstall", "ICLocate", "ICOpen", "ICRemove",
+        "ICSendMessage", "MCIWnd", "capCreate", "capGet",
+    ),
+    "Fax": ("Fax",),
+    "WindowsErrorReporting": ("Wer",),
+    "Magnification": ("Mag",),
+    "WindowsSQLite": ("sqlite3_",),
+    "ICU": ("u", "UCNV_"),
+    "WebServices": ("Ws",),
+}
+
+
+# These function bodies are SDK inline wrappers. Their callers link to other
+# routines. Keep them out of the external prototypes for these DLLs.
+PROVIDER_INLINE_ROUTINES = {
+    "ClusterResources": {"ResUtilGetMultiSzValue"},
+    "VideoForWindows": {"ICDecompressEx", "ICDecompressExBegin",
+                        "ICDecompressExQuery", "ICDrawSuggestFormat"},
+}
+
+
+# The SDK uses an empty C parameter list for these no-argument C++ exports.
+# Authenticate every redeclaration against the target SDK before using (void).
+CPP_NOARG_PROVIDERS = {
+    "DXGI": {"DXGIDeclareAdapterRemovalSupport": "HRESULT WINAPI"},
+    "ODBC": {"ODBCGetTryWaitValue": "DWORD WINAPI"},
+    "MediaFoundation": {
+        "MFGetSystemTime": "MFTIME WINAPI", "MFLockPlatform": "HRESULT WINAPI",
+        "MFShutdown": "HRESULT WINAPI", "MFUnlockDXGIDeviceManager": "HRESULT WINAPI",
+        "MFUnlockPlatform": "HRESULT WINAPI", "MFUnregisterPlatformFromMMCSS": "HRESULT WINAPI",
+    },
+    "RightsManagement": {"DRMRepair": "HRESULT WINAPI"},
+    "WinInet": {
+        "InternetClearAllPerSiteCookieDecisions": "BOOL WINAPI",
+        "UrlCacheReloadSettings": "DWORD WINAPI", "UrlCacheServer": "DWORD WINAPI",
+    },
+    "UIAutomation": {"UiaClientsAreListening": "BOOL WINAPI", "UiaDisconnectAllProviders": "HRESULT WINAPI"},
+    "ISCSI": {"SetupPersistentIScsiDevices": "ISDSC_STATUS WINAPI",
+              "SetupPersistentIScsiVolumes": "ISDSC_STATUS WINAPI"},
+    "WindowsErrorReporting": {
+        "WerUnregisterAppLocalDump": "HRESULT WINAPI", "WerStorePurge": "HRESULT __cdecl",
+    },
+    "Magnification": {"MagInitialize": "BOOL WINAPI", "MagUninitialize": "BOOL WINAPI"},
+}
+
+
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
-                     metadata: dict | None = None, convention: str = "") -> dict:
+                     metadata: dict | None = None, convention: str = "",
+                     gdiplus_imports: dict | None = None) -> dict:
     """Validate and select a whole provider before it can enter the merge."""
     bridge_commands = []
-    if name == "DXGI":
-        # The SDK writes () for this documented no-argument C++ API. In C
-        # that spelling has no prototype. Authenticate the complete C++ type
-        # before supplying its compatible C (void) redeclaration.
+    noargs = CPP_NOARG_PROVIDERS.get(name)
+    if noargs:
         original = source.read_text(encoding="utf-8")
-        proof = directory / "DXGI-noargs.cpp"
-        proof.write_text(original + '\nstatic_assert(__is_same(\n'
-                         '    decltype(&DXGIDeclareAdapterRemovalSupport),\n'
-                         '    HRESULT (WINAPI *)(void)));\n', encoding="utf-8")
+        proof = directory / (name + "-noargs.cpp")
+        checks = "".join(f"typedef {spec} neverd_{symbol}_prototype(void);\n"
+                         f"static_assert(__is_same(decltype(&{symbol}), "
+                         f"neverd_{symbol}_prototype *));\n"
+                         for symbol, spec in noargs.items())
+        proof.write_text(original + "\n" + checks, encoding="utf-8")
         invocation = arguments + ["-x", "c++", "-std=c++17", "-fsyntax-only", str(proof)]
-        run(invocation, directory / "DXGI-noargs.log")
-        source.write_text(original + '\nHRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);\n',
-                          encoding="utf-8")
+        run(invocation, directory / (name + "-noargs.log"))
+        declarations = "".join(f"{spec} {symbol}(void);\n"
+                               for symbol, spec in noargs.items())
+        source.write_text(original + "\n" + declarations, encoding="utf-8")
         bridge_commands.append(invocation)
-        metadata = dict(metadata or {}, cpp_parameter_bridge={
-            "function": "DXGIDeclareAdapterRemovalSupport",
-            "source": str(proof), "sha256": wdk.digest(proof),
-            "documentation": "https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport"})
+        evidence = {"functions": list(noargs), "source": str(proof), "sha256": wdk.digest(proof)}
+        if name == "DXGI":
+            evidence.update(function="DXGIDeclareAdapterRemovalSupport",
+                            documentation="https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport")
+        metadata = dict(metadata or {}, cpp_parameter_bridge=evidence)
+    cpp_bridge = None
+    if name == "GDIPlus":
+        if gdiplus_imports is None:
+            raise ValueError("GDI+ requires the original target SDK import library")
+        cpp_bridge = gdiplus.prepare(source, arguments, directory, gdiplus_imports, run)
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
-    cpp_bridge = (rdbss.prepare(source, preprocessed, arguments, directory, run)
-                  if name == "RDBSS" else None)
+    if name == "RDBSS":
+        cpp_bridge = rdbss.prepare(source, preprocessed, arguments, directory, run)
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
     if cpp_bridge is not None:
-        rdbss.verify_abis(cpp_bridge, preprocessed, arguments, directory,
-                          parsed["prototypes"], run)
+        verifier = gdiplus if name == "GDIPlus" else rdbss
+        verifier.verify_abis(cpp_bridge, preprocessed, arguments, directory,
+                             parsed["prototypes"], run)
+        if name == "GDIPlus":
+            prototypes = cpp_bridge["verified_functions"]
         bridge_commands += cpp_bridge["commands"]
         metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
     commands = [command, *bridge_commands]
+    if name in PROVIDER_PREFIXES:
+        prefixes = PROVIDER_PREFIXES[name]
+        prototypes = tuple(sorted(symbol for symbol in parsed["prototypes"]
+                                  if symbol.startswith(prefixes) and
+                                  symbol not in PROVIDER_INLINE_ROUTINES.get(name, ())))
+        if not prototypes:
+            raise ValueError(f"official headers declare no {name} functions")
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)
@@ -285,8 +438,10 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError(f"official prototype selection failed for {name}")
         preprocessed.write_text(selected["source"], encoding="utf-8")
         commands.append(selection)
-    layout_arguments = cpp_bridge["arguments"] if cpp_bridge else arguments
-    layout_source = cpp_bridge["source"] if cpp_bridge else str(source)
+    # GDI+ certifies its C record names against the original C++ namespace
+    # before using those C names for the subsequent merge layout checks.
+    layout_arguments = cpp_bridge["arguments"] if name == "RDBSS" else arguments
+    layout_source = cpp_bridge["source"] if name == "RDBSS" else str(source)
     layouts = run(layout_arguments + dump + [layout_source],
                   directory / (name + ".official-clang.log"),
                   directory / (name + ".official-layouts.log"))
@@ -302,7 +457,7 @@ def merge_providers(base: str, primary: Path, output: Path,
                     model: str, primary_layouts: str,
                     runtime: dict | None = None,
                     compatibility: dict | None = None,
-                    convention: str = "") -> list[dict]:
+                    convention: str = "", gdiplus_imports: dict | None = None) -> list[dict]:
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None:
         return []
@@ -316,7 +471,7 @@ def merge_providers(base: str, primary: Path, output: Path,
         source.write_text(include_headers(headers), encoding="utf-8")
         units.append(prepare_provider(name, source, provider_arguments, directory,
                                       neverd, model, headers, defines, prototypes,
-                                      convention=convention))
+                                      convention=convention, gdiplus_imports=gdiplus_imports))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
                                       directory, neverd, model,
@@ -359,7 +514,7 @@ def merge_providers(base: str, primary: Path, output: Path,
                 raise ValueError("official provider provenance does not match its input")
             bridge = unit["metadata"].get("cpp_header_bridge")
             if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
-                raise ValueError("imported RDBSS routines lack an original C++ ABI proof")
+                raise ValueError(f"imported {unit['name']} routines lack an original C++ ABI proof")
             if bridge:
                 # Recheck the actual published declarations after parsing,
                 # renaming and merging; a correct preprocessed bridge alone
@@ -377,8 +532,9 @@ def merge_providers(base: str, primary: Path, output: Path,
                 selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
                 run(selection, published / "selection.log")
                 proof = dict(bridge, commands=[])
-                rdbss.verify_abis(proof, selected, common, published,
-                                  bridge["verified_functions"], run)
+                verifier = gdiplus if unit["name"] == "GDIPlus" else rdbss
+                verifier.verify_abis(proof, selected, common, published,
+                                     bridge["verified_functions"], run)
                 bridge["published_abi"] = proof
                 unit["commands"] += [selection, *proof["commands"]]
             renamed = {entry["original"]: entry["name"] for entry in report["renamed"]}
@@ -605,9 +761,14 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             target_packages = runtime["target_packages"]
             if ucrt_compatibility:
                 compatibility = ucrt.prepare_compatibility(runtime, output, cache)
+        gdiplus_imports = None
+        if base == "WindowsUser":
+            gdiplus_imports = gdiplus.import_library(output, cache, architecture, readobj)
+            if gdiplus_imports["package"] not in target_packages:
+                target_packages.append(gdiplus_imports["package"])
         providers = merge_providers(base, generated, output, arguments, common,
                                      neverd, model, original_layouts, runtime, compatibility,
-                                     convention)
+                                     convention, gdiplus_imports)
         final = checked_types(neverd, generated, output / (name + ".final.log"), model)
         built.append({"name": name, "sha256": wdk.digest(generated),
                       "types": len(final["types"]),
@@ -626,7 +787,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                      for name, url, digest in inventory["DOWNLOAD"]] + runtime_packages,
         "target_packages": target_packages,
         "profiles": dict({"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
-                         rdbss=wdk.digest(Path(rdbss.__file__))),
+                         rdbss=wdk.digest(Path(rdbss.__file__)),
+                         gdiplus=wdk.digest(Path(gdiplus.__file__))),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}
                      for path in sorted(licenses.iterdir())],

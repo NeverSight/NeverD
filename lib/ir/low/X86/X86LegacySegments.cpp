@@ -19,10 +19,21 @@ namespace neverd {
 
 llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
                                           const X86LegacySegmentCache &C,
-                                          bool Virtual8086) {
+                                          bool Virtual8086, bool RealAddress) {
   if (!x86SegmentRegisterName(unsigned(Segment)))
     return llvm::createStringError(llvm::errc::invalid_argument,
                                    "invalid legacy segment register");
+  if (C.RetainedRealCS && (Segment != X86SegmentRegister::CS || Virtual8086 ||
+                           RealAddress || C.Unusable))
+    return llvm::createStringError(llvm::errc::invalid_argument,
+                                   "invalid retained pre-PE code cache");
+  if (RealAddress || C.RetainedRealCS) {
+    if (Virtual8086 || (C.Attributes & 0x2f00) || ((C.Attributes & 12) == 4))
+      return llvm::createStringError(
+          llvm::errc::not_supported,
+          "real-address operands require an expand-up cache");
+    return llvm::Error::success();
+  }
   if (Virtual8086) {
     if (C.Unusable || C.Base != uint32_t(C.Selector) << 4 ||
         C.Limit != UINT16_MAX || C.Attributes != 0xf3)
@@ -53,7 +64,8 @@ llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
 llvm::Expected<X86LegacySegmentResult>
 checkX86LegacySegmentAccess(const X86LegacySegmentCache &C,
                             const X86LegacySegmentAccess &A) {
-  if (auto Error = validateX86LegacySegmentCache(A.Segment, C, A.Virtual8086))
+  if (auto Error = validateX86LegacySegmentCache(A.Segment, C, A.Virtual8086,
+                                                 A.RealAddress))
     return std::move(Error);
   if (!A.Bytes ||
       (A.Kind != X86SegmentAccessKind::Read &&
@@ -73,8 +85,10 @@ checkX86LegacySegmentAccess(const X86LegacySegmentCache &C,
   };
   const bool Code = C.Attributes & 8, ReadWrite = C.Attributes & 2;
   if (C.Unusable ||
-      (A.Kind == X86SegmentAccessKind::Write && (Code || !ReadWrite)) ||
-      (A.Kind == X86SegmentAccessKind::Read && Code && !ReadWrite))
+      (!A.RealAddress && A.Kind == X86SegmentAccessKind::Write &&
+       (Code || !ReadWrite)) ||
+      (!A.RealAddress && A.Kind == X86SegmentAccessKind::Read && Code &&
+       !ReadWrite))
     return Fault();
   const uint64_t End = uint64_t(A.Offset) + A.Bytes - 1;
   if (!Code && (C.Attributes & 4)) {

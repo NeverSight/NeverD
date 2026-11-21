@@ -4760,6 +4760,14 @@ queries, without a dependency on UI adapters. Private Session LLVM tests
 compile their actual type/debug owners and sidecar helper
 directly; the shared SDK keeps its existing public C boundary.
 
+The session supplies the call-argument pass with the sorted entries whose
+calling conventions are bound to an address. These include explicit function
+declarations. For a Windows native driver, an exact named PE export or an
+image-matched PDB can identify `DriverEntry` at the PE entry or a
+`GsDriverEntry` shim with a direct call or tail branch to that exact symbol. The session uses the joined kernel header’s
+`PDRIVER_INITIALIZE` contract for those entries. Editing a declaration
+invalidates cached call arities. Editing the image rebuilds the entry evidence.
+
 The decompiler reads the local types through `LocalTypesDebugContext`
 (`lib/sdk/capi`), which wraps the program's debug context whenever the
 program has local types. The local types are the authority on the program's
@@ -5813,7 +5821,19 @@ platform contract. Calls from compiled code of a register-ABI amd64 image
 function's entry, so its frame zeroing stores zero. Ordinary calls do not
 assume the goroutine in R14 is unchanged: runtime paths such as `needm`
 can install a different g. Recognized write barriers continue to preserve R14
-under their narrower GPR contract. Calls from assembly, which may follow ABI0
+under their narrower GPR contract. Compiled code never writes that register,
+which holds the current goroutine wherever the code reads it ("R14 | Current
+goroutine | Same | Same" in abi-internal.md, R28 on arm64), so LowToMed gives
+each read the goroutine the register holds (`defineGoCurrentGoroutine`,
+`Intrinsic::GoCurrentGoroutine`): the incoming value, read after the entry's
+copies that name the parameters, and what each call leaves, read just after
+the call, wherever something reads them. The read keeps a call's argument
+setup (`preservesCallSetup`), and dead code elimination, at MedIR and at
+HighIR, drops one nothing comes to use (`intrinsicReadIsDiscardable`): the
+stack check the elided growth path leaves, or the return's transport of a
+register System V keeps. It merges or moves none, since a call may change the
+goroutine. C reads the register itself, as `getg()` does; `runtime.canpanic`
+read each `getg().m` as a trap. Calls from assembly, which may follow ABI0
 and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
 the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
 platform contract.
@@ -5836,6 +5856,30 @@ order. System V reads a summary that reads one byte of RAX as a variadic
 prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
+
+Assembly with no Go declaration of its own, whose record gives no argument
+word, takes its operands in registers of its own where it reads at entry one
+the platform passes no argument in: `internal/bytealg`'s `indexbytebody<>`
+takes the data in SI, its length in BX, the byte it seeks in AL and the
+address of its result in R8, which its callers set before they enter it.
+Where its body is complete and calls nothing, it takes each general-purpose
+register it reads but the stack and frame pointers, in the platform's
+argument order, then Go's, then the others' (`goEntryRegisterOperands`), and
+its callers bind them before SSA, as a prototype's operands
+(`CallEntryIntegerArguments`). System V's positions gave it RDI, RSI, RDX,
+RCX and R8, and left the byte and the length undefined in each of its SIMD
+compares. A routine that calls out reads the registers it saves for its
+callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
+the platform's code enters reads its arguments where the platform passes them
+(`runtime.sigtramp`): both keep the platform's positions.
+
+Go code has no System V variadic prologue, which reads AL, the count of
+vector registers its caller set, before it writes RAX, and stores the
+argument registers from the first variadic one through R9 into consecutive
+words that read no parameter: Go passes a variadic argument as a slice, and
+RAX is its first argument register. `findRegisterSaveAreaSpills` skips Go
+code, so `runtime.spillArgs`, which stores RAX and then R8 and R9 in a row,
+reads both.
 
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
@@ -21885,6 +21929,18 @@ through COPY/PHI transport is required. Partial-register mask chains alone do no
 justify a bridge, and settled source call arguments own their uses, rather than
 stale native argument lists.
 
+`CallRegisterUnread.cpp` tracks which incoming register families can reach
+each local read and direct call. A callee's proven entry overwrites cut off
+those families on the continuation. The interprocedural solver propagates
+new read bits through the recorded call sites until recursive components
+converge. This reuses each CFG's local observations across callee updates
+within `kCallRegisterUnreadWork`.
+
+The LLVM emitter resolves an isolated code address by checking which function
+symbols start or end at that address. Repeated requests for that address
+reuse the result. A second distinct address builds the module's full index.
+Both paths use the image's entry admission rules and symbol order for aliases.
+
 The two C routes and LLVM share the assembly owner in `X64CallRCXNative.h`.
 Its Windows x64 SSE2 profile prevents live AVX upper halves crossing an
 under-described call. Other target intrinsics and wider caller values are
@@ -22093,16 +22149,16 @@ EOI routing stay with the embedding. The offline QEMU bank adapter calls this ty
 constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
-distinction between restoration and an actual same-value write. The former
-retains TPR subpriority; the latter clears it. Privilege/fault handling and
-device wiring remain with the embedding. The successful-RAM scheduler can
-explicitly opt into CR8-write completion notifications. Instruction lowering
-records modeled writes while lowering the authoritative task-priority
-transition; the shared scheduler calls the producer bridge only on that
-instruction's successful exit, including same-value writes. This requires no
-re-decoding, default-source change or ordinary-case runtime check. The embedding
-supplies the bridge and coherent initial banks. Paged MOV CR8 and TPR aliases
-retain their previous boundaries. The fixed PPR tie policy retains TPR
+distinction between restoration and an actual same-value write. Restoration
+retains TPR subpriority. A write clears it. V6 scheduled exports can opt
+into CR8-write completion notifications. Instruction lowering records modeled
+writes while applying the shared task-priority transition. In the paged
+domain its checked body raises #GP(0) before exposing any register or flag
+effect. The paged scheduler shares one completion receipt with budget
+accounting, preserving notification across post-commit debug delivery. The
+successful-RAM scheduler uses the modeled instruction's successful exit.
+The embedding supplies the bridge, coherent initial banks and TPR alias
+routing. The fixed PPR tie policy retains TPR
 subpriority as QEMU/KVM do, rather than inferring a
 model-specific choice for arbitrary hardware.
 

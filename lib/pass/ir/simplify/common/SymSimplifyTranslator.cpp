@@ -164,9 +164,18 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       }
     }
   }
-  if (const unsigned Bits = shiftedSignedWidth(*I)) {
-    Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
-    Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
+  // An arithmetic right shift by K has at most Width-K signed bits,
+  // whatever produced its input. Exactness and child poison are checked
+  // separately before the translator can use the resulting value.
+  if (I->getOpcode() == llvm::Instruction::AShr) {
+    const auto *Shift = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
+    if (Shift && Shift->getValue().ult(Width)) {
+      const unsigned Bits = Width - Shift->getZExtValue();
+      Result.SignedMin =
+          llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
+      Result.SignedMax =
+          llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
+    }
     return Result;
   }
   const bool Product = I->getOpcode() == llvm::Instruction::Mul;

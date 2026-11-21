@@ -4073,7 +4073,7 @@ ImportPrototypeArguments importPrototypeArguments(
   // library's name that a library of the program's own exports.
   auto UserArguments = [&](const std::optional<FunctionSym> &Function)
       -> std::optional<Arguments> {
-    if (!Function || Function->PrototypeLibrary != UserPrototypeLibrary)
+    if (!Function || !isUserFunctionDeclaration(*Function))
       return std::nullopt;
     std::optional<Arguments> Result = SignatureArguments(*Function);
     if (Result && !Result->Floats.empty())
@@ -4268,7 +4268,7 @@ ImportPrototypeArguments importPrototypeArguments(
                   *Function, Img.Arch, Img.abiFormat())) {
             Result.IntegerArguments.emplace(Addr, std::move(*Integer));
             Result.PrototypeDeclared.insert(Addr);
-            if (Function->PrototypeLibrary == UserPrototypeLibrary)
+            if (isUserFunctionDeclaration(*Function))
               Result.UserDeclared.insert(Addr);
           }
       // So are those a platform registry authenticates, each with its width
@@ -4310,7 +4310,7 @@ ImportPrototypeArguments importPrototypeArguments(
                                    : InstructionMode::Default)) {
             Result.FloatingArguments.emplace(Addr, std::move(*Floating));
             Result.PrototypeDeclared.insert(Addr);
-            if (Function->PrototypeLibrary == UserPrototypeLibrary)
+            if (isUserFunctionDeclaration(*Function))
               Result.UserDeclared.insert(Addr);
             if (Convention->ArgumentsFromCallSetup &&
                 !Convention->RegparmOnlyForInternalCalls)
@@ -4339,12 +4339,14 @@ ImportPrototypeArguments importPrototypeArguments(
         Routine = DecoratedArguments(Addr);
     } else {
       // Both scalar and floating calls use the same exact native declaration.
-      // Private targets need the same authenticated contract as exports.
-      // A stripped internal target has neither contract.
+      // An internal call needs an authenticated native signature or a
+      // declaration explicitly bound to this address.
       if (!Dbg)
         return;
       const bool IsExported = Exported(Addr);
-      if (!IsExported && !Dbg->hasAuthenticatedFunctionSignatures())
+      const auto BoundEntries = Dbg->boundFunctionEntries();
+      if (!IsExported && !Dbg->hasAuthenticatedFunctionSignatures() &&
+          !std::binary_search(BoundEntries.begin(), BoundEntries.end(), Addr))
         return;
       const auto Function = Dbg->resolveFunction(Addr);
       if (!Function)
@@ -4365,7 +4367,7 @@ ImportPrototypeArguments importPrototypeArguments(
         }
         if (PrototypeOwnsArguments) {
           Result.PrototypeDeclared.insert(Addr);
-          if (Function->PrototypeLibrary == UserPrototypeLibrary)
+          if (isUserFunctionDeclaration(*Function))
             Result.UserDeclared.insert(Addr);
           if (RegisterArguments && Img.Arch != Arch::X64)
             return;
@@ -4544,6 +4546,11 @@ std::shared_ptr<const ImageImportCounts> imageImportArguments(
       Addresses.push_back(Slot);
     for (const Export &Exp : Img.Exports)
       Addresses.push_back(Exp.Addr);
+    if (Dbg) {
+      const auto BoundEntries = Dbg->boundFunctionEntries();
+      Addresses.insert(Addresses.end(), BoundEntries.begin(),
+                       BoundEntries.end());
+    }
     const auto *Convention = callArgumentConvention(Img.Arch, Img.abiFormat());
     ImportPrototypeArguments Prototyped = importPrototypeArguments(
         Img, {}, {}, /*StackArguments=*/true, Dbg,
@@ -5306,6 +5313,21 @@ bool computeCallRegisterEffects(
     if (Effect->RegisterLeaf)
       Result.CallRegisterLeaves.mutate().emplace(Entry, Effect->RegisterLeaf);
   Result.CallEntryReadGPRs = std::move(Summaries.EntryReads);
+  // Go assembly that takes its arguments in registers of its own takes those
+  // it reads, which its callers bind in its order (goEntryRegisterOperands).
+  // Only a complete body that calls nothing reads no register but as an
+  // operand: a routine that calls out saves the registers its callee may
+  // change (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`).
+  if (Img.ExceptionMetadata.GoModule)
+    for (const auto &[Entry, Reads] : Result.CallEntryReadGPRs.get())
+      if (const auto Effect = Effects.find(Entry);
+          Effect != Effects.end() && !Effect->second->Unknown &&
+          !Effect->second->Incomplete && Effect->second->Callees.empty() &&
+          Effect->second->NoReturnCallees.empty())
+        if (std::optional<FixedIntegerCallArguments> Operands =
+                goEntryRegisterOperands(Img, Entry, Reads))
+          Result.CallEntryIntegerArguments.mutate().try_emplace(
+              Entry, std::move(*Operands));
   Result.CallUnreadGPRs = std::move(Summaries.Unread);
   Result.CallEntryStackArgs = std::move(Summaries.EntryStackArgs);
   Result.CallVariadicFrom = std::move(Summaries.VariadicFrom);

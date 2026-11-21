@@ -27,6 +27,12 @@ def run(gui):
             "queries": [], "actions": [{"id": "inspect", "title": "Inspect",
                                          "context": "none", "context_menu": True}],
         }), encoding="utf-8")
+        if os.name == "posix":
+            launcher = directory / "neverd-gui-link"
+            launcher.symlink_to(Path(gui).resolve())
+            result = subprocess.run([launcher, "--smoke-test"], env=env,
+                                    capture_output=True, timeout=10)
+            assert result.returncode == 0, (result.returncode, result.stderr)
         for spelling in ("--plugin", "--process-plugin", "--plugin="):
             args = ([spelling + str(manifest)] if spelling.endswith("=")
                     else [spelling, str(manifest)])

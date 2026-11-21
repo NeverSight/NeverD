@@ -29,6 +29,10 @@ struct X86LegacySegmentCache {
   /// Independent of Selector: a usable zero selector can survive entering
   /// protected mode without reloading the hidden cache.
   bool Unusable = true;
+  /// PE was enabled while this CS remained loaded from real address mode.
+  /// Its visible selector does not establish a new privilege level.
+  bool RetainedRealCS = false;
+  bool operator==(const X86LegacySegmentCache &) const = default;
 };
 
 enum class X86SegmentAccessKind : uint8_t { Read, Write, Execute };
@@ -47,6 +51,8 @@ struct X86LegacySegmentAccess {
   std::optional<X86FullSegmentLimitChoice> FullLimitChoice;
   /// The live EFLAGS.VM mode, never inferred from cached attributes.
   bool Virtual8086 = false;
+  /// PE=0 uses the actual cached segment limit and paragraph reloads.
+  bool RealAddress = false;
 };
 
 struct X86LegacySegmentResult {
@@ -60,15 +66,25 @@ struct X86LegacySegmentResult {
 /// instruction that installs the cache, not to each subsequent operand.
 llvm::Error validateX86LegacySegmentCache(X86SegmentRegister Segment,
                                           const X86LegacySegmentCache &Cache,
-                                          bool Virtual8086 = false);
+                                          bool Virtual8086 = false,
+                                          bool RealAddress = false);
 
 /// Canonical VM86 hidden state shared by task, IRET and selector loads.
 inline X86LegacySegmentCache x86VM86SegmentCache(uint16_t Selector) {
   return {uint32_t(Selector) << 4, UINT16_MAX, Selector, 0xf3, false};
 }
 
-/// Protected or explicitly selected VM86 operands. Long/real mode is not
-/// inferred from cache bits. Checks the whole offset extent before base
+/// Reload a real-address selector while retaining its hidden limit and flags.
+inline void x86ReloadRealSegment(X86LegacySegmentCache &Cache,
+                                 uint16_t Selector) {
+  Cache.Selector = Selector;
+  Cache.Base = uint32_t(Selector) << 4;
+  Cache.Unusable = false;
+  Cache.RetainedRealCS = false;
+}
+
+/// Protected, real-address or explicitly selected VM86 operands. Long/real mode
+/// is not inferred from cache bits. Checks the whole offset extent before base
 /// addition; successful linear addition wraps modulo 2^32. The memory owner
 /// must preserve that wrap across all operand bytes as well.
 llvm::Expected<X86LegacySegmentResult>

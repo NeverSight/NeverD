@@ -193,10 +193,10 @@ qualify a full Windows execution environment.
 
 ### CR8 write completion
 
-Set `"notify_cr8_writes": true` together with `"scheduled_events": true` and
-`"event_delivery": true` to bind completed MOV-to-CR8 instructions to the
-existing event producer. This option supports the successful-RAM V6 profile;
-paged memory rejects it. The exported C declares a bridge supplied at link time:
+Set `"notify_cr8_writes": true` and `"scheduled_events": true` in a V6 export.
+Select `"event_delivery": true` for successful RAM or `"paged_memory": true`
+for checked fetches and architectural faults. The embedding supplies this
+bridge at link time.
 
 ```c
 void neverd_x64_cr8_written_v1(uint64_t value, void *context);
@@ -217,23 +217,34 @@ the instruction's range and privilege checks. The embedding must first bind
 coherent CPU/controller state and must serialize changes with event selection
 and acknowledgment. Imports and CR8 reads never clear TPR subpriority. A
 rejected write, native request, invalid producer, budget stop before execution,
-or preempting event emits no write notification. Invalid CR8 writes retain the
-successful-RAM profile's status-5 refusal; this option does not implement #GP
-fault delivery.
+or preempting event emits no write notification. A reserved-bit write in the
+successful-RAM profile returns status 5.
+
+Paged exports admit audited long-mode MOV to/from CR8 for all sixteen GPRs,
+including the ignored REX.W and 66H operand-width prefixes. After the checked
+instruction fetch, a nonzero CS selector RPL on either transfer, or a write
+with any bit above bit 3 set, raises #GP(0) at the instruction PC. The fault
+precedes register and arbitrary-flag writes. A completed transfer publishes
+the six instruction-local flag choices. The driver reads the existing
+`InstructionCompleted` progress bit once and reuses the receipt for budget
+accounting. With `paged_debug`, an execution breakpoint before the write yields
+no notification. A post-write single-step trap still yields one notification.
+If trap entry refuses the state or encounters a backing stop, the caller gets
+that stop together with the completed instruction receipt.
 
 The scheduler owns this notification in both C routes, including scheduled
 function contexts, checked entry views, original-CALL views and their resumption
 helpers. The manifest's `cr8_write_notification` object lists the symbol and
 selected write addresses. Raw instruction functions and unscheduled drivers
 retain their existing contracts and do not notify; embedders using the binding
-must route subsequent CR8 writes through scheduled entry points. TPR MMIO/MSR
-aliases, external CPU/controller changes and paged MOV-CR8 fault semantics remain
-outside this binding.
+must route subsequent CR8 writes through scheduled entry points. The embedding
+owns TPR MMIO/MSR aliases and external CPU/controller changes.
 
-Without the option, generated source and manifests retain their existing
-contents. Enabled output adds calls only at authenticated modeled CR8 writes;
-ordinary instruction cases acquire no priority comparison, polling work or
-runtime opt-in check.
+With the option disabled, paged MOV CR8 still requests native execution and
+the scheduler omits the producer bridge. The shared lifting audit also exposes
+the newly certified width-prefix forms to the existing successful-RAM
+profiles. Enabled schedulers add calls only at authenticated modeled CR8
+writes. Ordinary instruction cases use their existing polling and accounting.
 
 ### Scheduled function contexts
 

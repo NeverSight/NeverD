@@ -404,8 +404,8 @@ bool PipelineRunner::load(const char *InputPath, std::string &Err,
     return false;
   }
   applyDebugInfo(Img, Found);
-  if (Found)
-    Dbg = std::move(Found.Context);
+  DbgKind = Found.Kind;
+  Dbg = std::move(Found.Context);
   return true;
 }
 

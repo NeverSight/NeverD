@@ -74,7 +74,10 @@ struct X86LegacyEventContinuation {
   bool SoftwareCompleted = false;
   llvm::SmallVector<Access> CompletedAccesses;
   bool CR2Written = false;
-  bool SegmentsWritten = false;
+  bool CSWritten = false;
+  bool SSWritten = false;
+  uint8_t DataSegmentsWritten = 0;
+  bool TaskStateWritten = false;
   std::optional<std::array<uint64_t, 4>> DebugAddresses;
 };
 
@@ -240,6 +243,7 @@ struct X86Non64ModeBinding {
   uint64_t LDTRBase = 0;
   std::array<uint64_t, 4> DebugAddresses{};
   bool EFERSystemCall = false;
+  uint64_t TRBase = 0;
   bool operator==(const X86Non64ModeBinding &) const = default;
 };
 
@@ -437,6 +441,13 @@ enum class X86LegacyExecutionStatus : uint8_t {
   ModeUnavailable,
 };
 
+/// A compatibility call gate may install a target and TSS stack wider than
+/// the outgoing non-64-bit execution view. Apply these at instruction commit.
+struct X86WideFarTransfer {
+  uint64_t PC;
+  std::optional<uint64_t> StackPointer;
+};
+
 struct X86LegacyExecutionResult {
   X86LegacyExecutionStatus Status = X86LegacyExecutionStatus::Completed;
   /// Newly reported attempt for this invocation. An already charged retained
@@ -462,11 +473,21 @@ struct X86LegacyExecutionResult {
   bool CR2Written = false;
   bool CSWritten = false;
   bool SSWritten = false;
+  std::optional<X86WideFarTransfer> WideFarTransfer;
+  /// ES/DS/FS/GS bits indexed by X86SegmentRegister. An unusable cache
+  /// publishes its selector and unusable bit, retaining its hidden base.
+  uint8_t DataSegmentsWritten = 0;
+  /// Incoming task image, including TR, LDTR and partly loaded segments.
+  bool TaskStateWritten = false;
   std::optional<X86LegacySegmentWrite> SegmentWritten;
   /// A completed non64 MOV to DR0..3 clears that full address bank's high
   /// half, including when the low dword is unchanged. Reads and GD do not.
   std::optional<uint8_t> DebugAddressWritten;
 };
+
+/// Whether a legacy instruction owns unfinished accesses, including an
+/// incoming task's descriptor loads. Event-owned task work is separate.
+bool x86LegacyInstructionPending(const X86LegacyExecutionState &State);
 
 /// Authenticate a complete instruction extent with the executor's own byte
 /// grammar. This performs no accesses and binds no runtime state or profiles.

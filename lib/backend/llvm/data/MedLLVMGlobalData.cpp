@@ -25,6 +25,7 @@
 #include "neverd/debug/DebugContext.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 #include "neverd/loader/StringLiteralSymbols.h"
 #include "neverd/loader/SymbolDecoration.h"
 #include "neverd/object/SectionNames.h"
@@ -354,6 +355,15 @@ llvm::Constant *MedLLVMEmitter::tryResolveOwnedGlobalData(uint64_t Addr,
   // `__ImageBase`.
   if (OwnerVA == Img->Base && Img->PEHeaderBytes)
     return tryResolveImageHeaderData(Addr, OwnerVA);
+
+  if (mipsPICGPAnchor(*Img, Addr) == OwnerVA) {
+    if (auto *GOT = tryResolveGlobalData(OwnerVA, Img->getPointerSize()))
+      return llvm::ConstantExpr::getGetElementPtr(
+          llvm::Type::getInt8Ty(*Ctx), GOT,
+          llvm::ConstantInt::get(sizeToType(Img->getPointerSize()),
+                                 Addr - OwnerVA));
+    return nullptr;
+  }
 
   // A linked AArch64 page can start before its first mapped byte. Its
   // original-image address is still complete, including through an owned

@@ -515,27 +515,6 @@ TEST_F(X86ModeInterruptTest, UnboundLegacyOwnerDoesNotPublishTheTrialBank) {
   }
 }
 
-TEST_F(X86ModeInterruptTest, TaskPolicyCannotBypassCompleteBankOwnership) {
-  for (auto M : {Mode::Protected16, Mode::Protected32}) {
-    start(M);
-    Machine.Halted = true;
-    Machine.Debug.emplace();
-    Options.Legacy.Debug = X86InstructionDebugProfile::Watchpoints;
-    Options.Long.DebugProfile = X86InstructionDebugProfile::Watchpoints;
-    Options.Legacy.Tasks.emplace();
-    put(0x9010, (uint64_t(48) << 16) | (uint64_t(0x85) << 40));
-    bindMemory();
-    const auto Before = Machine;
-    const auto BeforeBytes = bytes(*Memory);
-    X86ModeExecution Execution(*Memory, Options);
-    auto Got = Execution.interrupt(Machine, X86EventKind::NMI, 2);
-    ASSERT_FALSE(bool(Got));
-    const auto Error = llvm::toString(Got.takeError());
-    EXPECT_NE(Error.find("task-state"), std::string::npos) << Error;
-    unchanged(Before, Controls, BeforeBytes);
-  }
-}
-
 TEST_F(X86ModeInterruptTest, ShutdownIsTerminalUntilExplicitReset) {
   for (auto M : Modes) {
     SCOPED_TRACE(unsigned(M));
@@ -789,3 +768,108 @@ TEST_F(X86ModeInterruptTest, OriginalIRETUnblocksASecondNMIWithoutHostChanges) {
   RecordProperty("original_mode_rewrites", 0);
 }
 #endif
+
+TEST_F(X86ModeInterruptTest,
+       LatchedEventsAcknowledgeOnlyTheOriginalAcceptedInput) {
+  for (auto M : Modes) {
+    SCOPED_TRACE(unsigned(M));
+    start(M);
+    Machine.Halted = true;
+    Machine.Core.Core.NMIBlocked = 1;
+    const unsigned Width = Controls.EFER & 0x400 ? 16 : 8;
+    const auto Hole = 0x9000 + 64 * Width;
+    const auto Original = RAM.Memory.front().Bytes;
+    RAM.Memory.front().Bytes.resize(Hole);
+    RAM.Memory.push_back({Hole + Width,
+                          MemoryPermission::Read | MemoryPermission::Write,
+                          0,
+                          {Original.begin() + Hole + Width, Original.end()}});
+    bindMemory();
+    X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0), true};
+    ASSERT_EQ(Inputs.APIC.receiveFixedInterrupt(64, true, true),
+              X86LocalApicArrival::Queued);
+    uint64_t Budget = 0;
+    auto First = llvm::cantFail(
+        X86ModeExecution(*Memory, Options).run(Machine, {}, Budget, Inputs));
+    ASSERT_EQ(First.Status, X86LegacyExecutionStatus::BackingFault);
+    EXPECT_TRUE(First.EventAccepted);
+    EXPECT_TRUE(Inputs.NMIPending);
+    EXPECT_EQ(Inputs.APIC.state().IRR[2], 0u);
+    EXPECT_EQ(Inputs.APIC.state().ISR[2], 1u);
+    ASSERT_TRUE(Machine.Pending);
+    auto Snapshot = RAM;
+    Snapshot.Memory = Memory->physicalMemory().snapshotMemoryRegions();
+    Snapshot.Memory.push_back(
+        {Hole,
+         MemoryPermission::Read | MemoryPermission::Write,
+         0,
+         {Original.begin() + Hole, Original.begin() + Hole + Width}});
+    auto Repaired = llvm::cantFail(
+        X86PagedMemory::create(Snapshot, Features, Memory->controls()));
+    auto Done = llvm::cantFail(
+        X86ModeExecution(*Repaired, Options).run(Machine, {}, Budget, Inputs));
+    EXPECT_EQ(Done.Status, X86LegacyExecutionStatus::EventDelivered);
+    EXPECT_EQ(Done.DeliveredVector, 64);
+    EXPECT_FALSE(Done.EventAccepted);
+    EXPECT_TRUE(Inputs.NMIPending);
+    ASSERT_FALSE(Machine.Pending);
+    auto EOI = Inputs.APIC.endOfInterrupt();
+    ASSERT_TRUE(EOI);
+    EXPECT_EQ(EOI->Vector, 64);
+    EXPECT_TRUE(EOI->Broadcast);
+    Machine.Core.Core.NMIBlocked = 0;
+    auto NMI = llvm::cantFail(
+        X86ModeExecution(*Repaired, Options).run(Machine, {}, Budget, Inputs));
+    EXPECT_EQ(NMI.DeliveredVector, 2);
+    EXPECT_FALSE(Inputs.NMIPending);
+  }
+}
+
+TEST_F(X86ModeInterruptTest,
+       AuthenticatedCr8WriteSynchronizesTprBeforeTheNextEvent) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.emplace_back(NeverC);
+  for (const auto &Compiler : Compilers)
+    for (const bool LLVM : {false, true}) {
+      SCOPED_TRACE(Compiler);
+      SCOPED_TRACE(LLVM);
+      start(Mode::Long64);
+      add(0x1100, Mode::Long64, {0x44, 0x0f, 0x22, 0xc0});
+      ASSERT_NO_FATAL_FAILURE(compileLong(LLVM, "-O2", Compiler, true));
+      const X86ModeInstruction Write = Program.back();
+      for (const auto Value : {2u, 4u, 16u})
+        for (const bool Step : {false, true}) {
+          SCOPED_TRACE(testing::Message()
+                       << "CR8=" << Value << ", TF=" << Step);
+          start(Mode::Long64);
+          auto &V = Machine.Core.Core;
+          V.Core.Core.Core.CR8 = 2;
+          V.Core.Core.Core.Core.GPR[0] = Value;
+          V.Core.Core.Core.Core.PC = 0x1100;
+          if (Step)
+            V.Core.Core.Core.Core.RFlags |= 0x100;
+          Machine.Debug.emplace();
+          Options.Legacy.Debug = Options.Long.DebugProfile =
+              X86InstructionDebugProfile::Watchpoints;
+          add(Write.Address, Write.Mode, Write.Bytes);
+          Program.back() = Write;
+          bindMemory();
+          X86ModeExecution Execution(*Memory, Options);
+          X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
+          Inputs.APIC.setTaskPriority(0x2f);
+          uint64_t Budget = 1;
+          auto Got =
+              llvm::cantFail(Execution.run(Machine, Program, Budget, Inputs));
+          ASSERT_TRUE(Got.OwnerError.empty()) << Got.OwnerError;
+          EXPECT_EQ(Got.Attempts, 1u);
+          EXPECT_EQ(Got.Completions, unsigned(Value < 16));
+          EXPECT_EQ(V.Core.Core.Core.CR8, Value < 16 ? Value : 2);
+          EXPECT_EQ(Inputs.APIC.state().TPR, Value < 16 ? Value << 4 : 0x2f);
+          if (Value >= 16 || Step)
+            EXPECT_EQ(Got.DeliveredVector, Value >= 16 ? 13u : 1u);
+        }
+    }
+}

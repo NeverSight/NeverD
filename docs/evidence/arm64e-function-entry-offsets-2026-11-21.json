@@ -1,0 +1,1033 @@
+{
+  "neverd_revision": "efda67fae38f37fc135261319f909cf09858c44a",
+  "base_dev": "697c435a6efb84f70350e58b459279bd2ef27d5f",
+  "llvm_fork": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+  "r6_tag": "neverd-llvm-v23.0.0-r6",
+  "r6_archive_sha256": "ffada4ba7a77b9394d02665dc1893f378a82f076af0ea057157d9cbfaab40fad",
+  "compiler_original_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44803804389",
+  "inputs": {
+    "local-arithmetic": {
+      "kind": "arithmetic",
+      "path": "arithmetic.dylib",
+      "sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e"
+    },
+    "local-offset-values": {
+      "kind": "offset-values",
+      "path": "offset-values.dylib",
+      "sha256": "f2cff6fa9fb9941943a3a19dd1a5a17e7c1a413aa1a2cc4f0e9d3f8bad7bac09"
+    },
+    "macos-26-arithmetic": {
+      "kind": "arithmetic",
+      "path": "original-evidence/original-offsets-macos-26/arithmetic.dylib",
+      "sha256": "7b4069578dca93bb9fbc202710ed09af5d1c25134b3c2175bfcecef4ddfa06a6",
+      "macos": "26.7.2",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)"
+    },
+    "macos-26-offset-values": {
+      "kind": "offset-values",
+      "path": "original-evidence/original-offsets-macos-26/offset-values.dylib",
+      "sha256": "912fdfd76273c7059f90a1f87b20fcdbb4bf06e06b8723bf89df3c1fff6f4958",
+      "macos": "26.7.2",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "hardware": "Apple M1 (Virtual)"
+    },
+    "xcode-27-arithmetic": {
+      "kind": "arithmetic",
+      "path": "original-evidence/original-offsets-xcode-27/arithmetic.dylib",
+      "sha256": "5669f00c5c034612610244be43b82682e45c64a4aa8cf7faa939216476d29e57",
+      "macos": "27.0.1",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)"
+    },
+    "xcode-27-offset-values": {
+      "kind": "offset-values",
+      "path": "original-evidence/original-offsets-xcode-27/offset-values.dylib",
+      "sha256": "ad7eb37ce220707045a45d1febca5c4b1a2f4b051a574e5b1dda64d450665417",
+      "macos": "27.0.1",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "hardware": "Apple M1 (Virtual)"
+    }
+  },
+  "pre_fix_cli": {
+    "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44803804389",
+    "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+    "rejected": {
+      "local-arithmetic-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "local-arithmetic-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "local-offset-values-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "local-offset-values-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "macos-26-arithmetic-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "macos-26-arithmetic-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "macos-26-offset-values-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "macos-26-offset-values-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "xcode-27-arithmetic-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "xcode-27-arithmetic-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "xcode-27-offset-values-default": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "xcode-27-offset-values-no-opt": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+        "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ]
+    }
+  },
+  "pre_fix_standalone_lift": {
+    "optimized": {
+      "exit": 0,
+      "output": true,
+      "diagnostics": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "omission": "; neverd.not-lifted: _leaf_sum at 0x3FA0: llvm-emission-failed; med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+    },
+    "no-opt": {
+      "exit": 0,
+      "output": true,
+      "diagnostics": [
+        "error: med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+      ],
+      "omission": "; neverd.not-lifted: _leaf_sum at 0x3FA0: llvm-emission-failed; med_llvm_emitter: relocatable code-address value X0 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+    }
+  },
+  "post_abi_failure": {
+    "record": "first-fatal",
+    "branch": "unresolved-code-identity",
+    "function": "_leaf_sum",
+    "entry": 16288,
+    "address": {
+      "kind": 0,
+      "arch": 1,
+      "rename": -1,
+      "id": 3,
+      "ssa": 0,
+      "size": 8,
+      "provenance": 0,
+      "owner": 18446744073709551615,
+      "register": 0
+    },
+    "image_arch": 1,
+    "image_format": 2,
+    "image_bits": 1,
+    "image_relocatable": 0,
+    "image_base": 0,
+    "raw_size": 34960,
+    "require_code_role": 0,
+    "unique_code": 1,
+    "has_common_target": 1,
+    "common_target": 16289,
+    "saw_code": 1,
+    "saw_non_code": 0,
+    "saw_null": 0,
+    "saw_unresolved": 0,
+    "saw_conflict": 0,
+    "saw_block_identity": 0,
+    "saw_non_block_identity": 1,
+    "saw_owner_conflict": 0,
+    "saw_unmaterializable_code": 1,
+    "saw_explicit": 1,
+    "saw_code_dependency": 0,
+    "saw_function_identity": 0,
+    "saw_lifted_code_identity": 0,
+    "saw_strong_code_provenance": 0,
+    "saw_unsafe_code_dependency": 0,
+    "all_function_entries": 0,
+    "saw_runtime_value": 0
+  },
+  "same_signed_output_sha256": {
+    "local-arithmetic-default-1.dylib": "02315f13328203c673f9aef4388c2f803b729b31038f6711f95f6f6d031d3f26",
+    "local-arithmetic-default-2.dylib": "997d5f6a0e784c8d8065461c5985c2b0a62d1105d74d43ff8b237e1cc7409367",
+    "local-arithmetic-default-3.dylib": "739b5454550ded1f22a0c4b6bcabd6c610e8145e3e628cf1ca9fef825b3c29f3",
+    "local-arithmetic-no-opt-1.dylib": "4c3678d86d1143b6b7e1fa7b243ec94ccdcb7f2e55a6c46c1ade34ac25a6a998",
+    "local-arithmetic-no-opt-2.dylib": "6f96603922f2ec495d6caaf31b55ba18fa05929df5b8672dc362b2bfda20db1e",
+    "local-arithmetic-no-opt-3.dylib": "8bfe4bbf0c4001f3f43a7e7a812838d541e7b1480336d87f1dcc5d77c137f051",
+    "local-offset-values-default-1.dylib": "23ce8b6a8cbb3c39b0a5fa3b87c9d4654074868426571125e56d9f1e54305fc5",
+    "local-offset-values-default-2.dylib": "1b79c007f650c2642c3b9d66d4104cc6c88d19ba31469f2c231dae81681791dc",
+    "local-offset-values-default-3.dylib": "8fe796c4bb9f4d1de1aab3b340fecac8d08a3772d287919c85c18904bc74560f",
+    "local-offset-values-no-opt-1.dylib": "b96b4dcc262dbf491208bf0bb80d8e4159256e084f40791c401f86d18e66f0e5",
+    "local-offset-values-no-opt-2.dylib": "63b69d7baf4383d65f8df64784e89b764ae7f0bce8c0a518d602e0b095c4b837",
+    "local-offset-values-no-opt-3.dylib": "c09cd5a65eb3ce027259703a5977d1bd9a3051a05c5408f95c58e6a2a517af4c",
+    "macos-26-arithmetic-default-1.dylib": "961a69b6f95bae60c9844c229969ae5af18d0a0c875cf693ab72a3e533cbe5af",
+    "macos-26-arithmetic-default-2.dylib": "7fc11315b742b3b7cd37d40f6cb8b58acab8031d14615f1eeb61db731dc99719",
+    "macos-26-arithmetic-default-3.dylib": "f121ace747c8777d6eb879b329ce942f4f3f484916721546ee972f3819c90ac3",
+    "macos-26-arithmetic-no-opt-1.dylib": "7f435a36d61c10afeb960ac20106730b44c5f176996b2b752166dd31d8a05739",
+    "macos-26-arithmetic-no-opt-2.dylib": "14f22d420bbc0398cdddd9bfffe6ba57c72e76406b251ae9f3e0e829b761d601",
+    "macos-26-arithmetic-no-opt-3.dylib": "499e71e09bdaa882c456c3d756c8ab44a5861974a958be712ea5bb121912b25d",
+    "macos-26-offset-values-default-1.dylib": "627210d610bca59712849a3e2dd81b2a683d4e8c443020fb0a73f3cc423928b8",
+    "macos-26-offset-values-default-2.dylib": "f6ad8c576c2e3375e048db7cd6845dbab90951ff9da61648e1a2e38e90ca65d3",
+    "macos-26-offset-values-default-3.dylib": "5f13441dd823ff5b9fc477f6e97256701b41a97f82f1a4655ab7935758a568fc",
+    "macos-26-offset-values-no-opt-1.dylib": "a8dd4603d8286fc9be7526644df34a8885b43364d87dd427511401fedad5f4a1",
+    "macos-26-offset-values-no-opt-2.dylib": "f1c2446028cc216c43c05769eb82135926b1a71e14fee50fd3672e67c80c1212",
+    "macos-26-offset-values-no-opt-3.dylib": "6205acfb400ecd65970ecefe85750d82329d68f99004387c7431fe32badb84f1",
+    "xcode-27-arithmetic-default-1.dylib": "5511d538e9b72eae9804eb6d6ff434cdeaa7d15f314d552f0540410f56745fbf",
+    "xcode-27-arithmetic-default-2.dylib": "340200ead31b7385b9d4f9fdd7fa83920273b7a29ec04c0d5ab035984fc3e5bf",
+    "xcode-27-arithmetic-default-3.dylib": "08ef7b4de630b3afe0c1b7395f963e17cdf9c13f6b647012ef42f3f9b2056f06",
+    "xcode-27-arithmetic-no-opt-1.dylib": "3edefab1da19d5b44213bebbd770cafd8fda96a2aad0b6e656271e633a06903c",
+    "xcode-27-arithmetic-no-opt-2.dylib": "6b7ed01ff1feb9c3352ae086698e67d998210746a4c4ed5c94f898ebb249275f",
+    "xcode-27-arithmetic-no-opt-3.dylib": "e3ed8b9b0fe1fad8dc9d9db2f0b1f85281a77198f7bbb648c7b97a754b6b63c6",
+    "xcode-27-offset-values-default-1.dylib": "1f443faeae1a026759640af8ebf787ccb8bdaf6b0df3c5781fc3318ab8fd4cf1",
+    "xcode-27-offset-values-default-2.dylib": "d20c1106989a7da3cafc1f908ef6b3af759d9e3f09ddc94b92541b44fa88a6f2",
+    "xcode-27-offset-values-default-3.dylib": "b891d94f8b1cda625c39b645670236fff60a0d8732dc0e37eb3c8ff7aba02f9b",
+    "xcode-27-offset-values-no-opt-1.dylib": "cb30fe83ae0128611261efbdcf23ba63ca39920bf5d65b4a28508e24a7f9cf15",
+    "xcode-27-offset-values-no-opt-2.dylib": "c1b16cb26736adf633478dfdfd9ff957cb16594cfd70d5268a3f575d4eeafe30",
+    "xcode-27-offset-values-no-opt-3.dylib": "9e7a7a3eb0be9e54212d6472796abac961dbce152b4ffbd96b1e03631af09c50"
+  },
+  "image_analysis_suite": {
+    "total": 161,
+    "passed": 161,
+    "failed": [],
+    "skipped": [],
+    "xml_sha256": "a8ff5f55dadb2b8b08ca97aed6e7c506ed31b59e2908630dbd47165a168bf416"
+  },
+  "local_release": {
+    "fork": {
+      "cli_sha256": "890b2151e46176a5a47f53ece26555d654b57086dbe6a95b55ea81330e54481e",
+      "loaded_library_sha256": "3668e586e712854f94ca8d3a1f432ac03f6357a6ab02f2b9ffa0a943c0b83423",
+      "host_sha256": "c08a5dc070457bff6d69667d09d36e865ba8f4da369fbd0032b5a5e6d5cef92d",
+      "package_sha256": "25a31b00064dbcd074ee00d7666fe71465057f3a91fb147abe0e4bcf4875ffed",
+      "images_verified": 36,
+      "unowned_interior_controls": {
+        "default": {
+          "source_sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ]
+        },
+        "no-opt": {
+          "source_sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ]
+        }
+      },
+      "standalone": {
+        "arithmetic": {
+          "source_sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "med_sha256": "dde0adb4184a6f7a49aee26a12bfe0909b2c718a032ff5c7c3d31aba3d3b3b26",
+          "entry_arithmetic": [
+            "INT_ADD X0 0x3FA0 0x1"
+          ],
+          "standalone_llvm": {
+            "default": {
+              "sha256": "36d0334cae1ade6dfb0933fc76cb52a3771e99a91316e6b3fe158d5a0d25427f",
+              "verified": true,
+              "lifted_functions": 2
+            },
+            "no-opt": {
+              "sha256": "c0d0d10d430c9dbf07afdb372762200b22bb9e91f420a4c4d31033f31cf1f631",
+              "verified": true,
+              "lifted_functions": 2
+            }
+          }
+        },
+        "offset-values": {
+          "source_sha256": "f2cff6fa9fb9941943a3a19dd1a5a17e7c1a413aa1a2cc4f0e9d3f8bad7bac09",
+          "med_sha256": "5e62327b34e0e94ae8d179854198ed0e85c9a93adaec525029e36a39231f37e3",
+          "entry_arithmetic": [
+            "INT_ADD X9 0x3F94 0x1"
+          ],
+          "standalone_llvm": {
+            "default": {
+              "sha256": "86f218bd211fbe8acfbc3f6197f923d48d163a6e344ad13aff79547c525f3eb8",
+              "verified": true,
+              "lifted_functions": 2
+            },
+            "no-opt": {
+              "sha256": "53a4ad01e35facbeaf66db63c83047310b57607844b8ad0c18ce6b28fe58bb04",
+              "verified": true,
+              "lifted_functions": 2
+            }
+          }
+        }
+      },
+      "analysis_target_execution": {
+        "arithmetic-default": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "36d0334cae1ade6dfb0933fc76cb52a3771e99a91316e6b3fe158d5a0d25427f",
+          "object_sha256": "1a6e02168fe0a7bc25904a2b88148febac92b328ffbae66104d4a1877402bb3e",
+          "linked_image_sha256": "b34470dbc0ae12e3344a34417fa2dc0805405dcdd049eb408f86db04e45ae490",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "arithmetic-no-opt": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "c0d0d10d430c9dbf07afdb372762200b22bb9e91f420a4c4d31033f31cf1f631",
+          "object_sha256": "1a6e02168fe0a7bc25904a2b88148febac92b328ffbae66104d4a1877402bb3e",
+          "linked_image_sha256": "b34470dbc0ae12e3344a34417fa2dc0805405dcdd049eb408f86db04e45ae490",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "offset-values-default": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "86f218bd211fbe8acfbc3f6197f923d48d163a6e344ad13aff79547c525f3eb8",
+          "object_sha256": "cea44086d2ed344e6c7a556f6fe8dd24f2e17abbe4b38c0c1ef84925726825d8",
+          "linked_image_sha256": "a5f39cadd76a362474a072c738d52d50e4d5f1b18418a9e6b38f5e2fa5003d52",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "offset-values-no-opt": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "53a4ad01e35facbeaf66db63c83047310b57607844b8ad0c18ce6b28fe58bb04",
+          "object_sha256": "cea44086d2ed344e6c7a556f6fe8dd24f2e17abbe4b38c0c1ef84925726825d8",
+          "linked_image_sha256": "a5f39cadd76a362474a072c738d52d50e4d5f1b18418a9e6b38f5e2fa5003d52",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        }
+      },
+      "suite": {
+        "total": 263,
+        "passed": 263,
+        "failed": [],
+        "skipped": [],
+        "xml_sha256": "aab85613767550b4dd606b3ea5971cfab2e740e88a4ba9f4226179cff508d3fa"
+      }
+    },
+    "r6": {
+      "cli_sha256": "dd91553d7d4e59e721d233e2f55a7458a4cb103b2eaf33496f8aeff4d7c522ca",
+      "loaded_library_sha256": "aef7313fd327b363cf82f97bf658be5dd6d6066680cc144d34e11b97040c102c",
+      "host_sha256": "4fc8521cdf885a77ed345c695aa3d7f709aef82a4d8d44f4fc266ed5cd755a22",
+      "package_sha256": "02ceac36e900282b6d10d29a936793bf92f7addcef7d7836b38201f9c5588c22",
+      "images_verified": 36,
+      "unowned_interior_controls": {
+        "default": {
+          "source_sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ]
+        },
+        "no-opt": {
+          "source_sha256": "2b8dd4f70db738dc1df08e0568fe47333934dabf3c2b71b036a0b861790b2c30",
+          "exit": 1,
+          "diagnostics": [
+            "error: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback",
+            "error: patch failed: LLVM emission failed: med_llvm_emitter: relocatable code-address value 0x3FA4 in _leaf_sum has no unique lifted code identity; refusing stale-address fallback"
+          ]
+        }
+      },
+      "standalone": {
+        "arithmetic": {
+          "source_sha256": "f2049160656b4bddec5c0fd7c8a31516816c5196aac8f04b1ee6da407353da9e",
+          "med_sha256": "dde0adb4184a6f7a49aee26a12bfe0909b2c718a032ff5c7c3d31aba3d3b3b26",
+          "entry_arithmetic": [
+            "INT_ADD X0 0x3FA0 0x1"
+          ],
+          "standalone_llvm": {
+            "default": {
+              "sha256": "36d0334cae1ade6dfb0933fc76cb52a3771e99a91316e6b3fe158d5a0d25427f",
+              "verified": true,
+              "lifted_functions": 2
+            },
+            "no-opt": {
+              "sha256": "c0d0d10d430c9dbf07afdb372762200b22bb9e91f420a4c4d31033f31cf1f631",
+              "verified": true,
+              "lifted_functions": 2
+            }
+          }
+        },
+        "offset-values": {
+          "source_sha256": "f2cff6fa9fb9941943a3a19dd1a5a17e7c1a413aa1a2cc4f0e9d3f8bad7bac09",
+          "med_sha256": "5e62327b34e0e94ae8d179854198ed0e85c9a93adaec525029e36a39231f37e3",
+          "entry_arithmetic": [
+            "INT_ADD X9 0x3F94 0x1"
+          ],
+          "standalone_llvm": {
+            "default": {
+              "sha256": "86f218bd211fbe8acfbc3f6197f923d48d163a6e344ad13aff79547c525f3eb8",
+              "verified": true,
+              "lifted_functions": 2
+            },
+            "no-opt": {
+              "sha256": "53a4ad01e35facbeaf66db63c83047310b57607844b8ad0c18ce6b28fe58bb04",
+              "verified": true,
+              "lifted_functions": 2
+            }
+          }
+        }
+      },
+      "analysis_target_execution": {
+        "arithmetic-default": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "36d0334cae1ade6dfb0933fc76cb52a3771e99a91316e6b3fe158d5a0d25427f",
+          "object_sha256": "1a6e02168fe0a7bc25904a2b88148febac92b328ffbae66104d4a1877402bb3e",
+          "linked_image_sha256": "be476e4dffda5a448dd8019e1f3edab1db673833173c58740875662167726157",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "arithmetic-no-opt": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "c0d0d10d430c9dbf07afdb372762200b22bb9e91f420a4c4d31033f31cf1f631",
+          "object_sha256": "1a6e02168fe0a7bc25904a2b88148febac92b328ffbae66104d4a1877402bb3e",
+          "linked_image_sha256": "be476e4dffda5a448dd8019e1f3edab1db673833173c58740875662167726157",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "offset-values-default": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "86f218bd211fbe8acfbc3f6197f923d48d163a6e344ad13aff79547c525f3eb8",
+          "object_sha256": "cea44086d2ed344e6c7a556f6fe8dd24f2e17abbe4b38c0c1ef84925726825d8",
+          "linked_image_sha256": "d0a5fd8a5f718fd2ca1494532b79d62be1f51b688360148dfdc225b5d65c8987",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        },
+        "offset-values-no-opt": {
+          "declared_triple": "arm64-apple-macos14.0",
+          "ir_sha256": "53a4ad01e35facbeaf66db63c83047310b57607844b8ad0c18ce6b28fe58bb04",
+          "object_sha256": "cea44086d2ed344e6c7a556f6fe8dd24f2e17abbe4b38c0c1ef84925726825d8",
+          "linked_image_sha256": "d0a5fd8a5f718fd2ca1494532b79d62be1f51b688360148dfdc225b5d65c8987",
+          "defined": [
+            "_leaf_difference",
+            "_leaf_sum"
+          ],
+          "caller_exit": 0
+        }
+      },
+      "suite": {
+        "total": 263,
+        "passed": 253,
+        "failed": [
+          "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+          "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+          "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+          "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+          "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+          "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+        ],
+        "skipped": [
+          "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+          "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+          "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+        ],
+        "xml_sha256": "9663394f3c341279b8de490ee3338e75e0a551c359bc88373427b0d26b318e83"
+      }
+    }
+  },
+  "native_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44852419225",
+  "native_jobs": {
+    "entry-offsets-macos-26-fork": {
+      "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+      "tool": "fork",
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "26.7.2",
+      "test_host_sha256": "c08a5dc070457bff6d69667d09d36e865ba8f4da369fbd0032b5a5e6d5cef92d",
+      "xml_sha256": "43cf28e1c3cb3c1eaec4f147d3139eb50539a2f1976bf1dc79dad63358a61876",
+      "exit": 0,
+      "cases": 263,
+      "passed": 263,
+      "failed": [],
+      "skipped": [],
+      "cfi_diagnostics": [],
+      "independent_calls": 63,
+      "runtime_properties": {
+        "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "28cc3bb2f91554d9a910ba28630573ef879558c083358ed73609c8dccf1fcb82",
+      "signed_images": 42
+    },
+    "entry-offsets-macos-26-r6": {
+      "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+      "tool": "r6",
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "26.7.2",
+      "test_host_sha256": "4fc8521cdf885a77ed345c695aa3d7f709aef82a4d8d44f4fc266ed5cd755a22",
+      "xml_sha256": "be2d941e63d77945684f106d80c6daece68ae89b1f2a610927949f1e0036f830",
+      "exit": 1,
+      "cases": 263,
+      "passed": 253,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "cfi_diagnostics": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "independent_calls": 63,
+      "runtime_properties": {
+        "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "1513fa39c73277551cb34fe3c259bad942df68b0b9cd02164dfabef13c6e679a",
+      "signed_images": 42
+    },
+    "entry-offsets-xcode-27-fork": {
+      "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+      "tool": "fork",
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "27.0.1",
+      "test_host_sha256": "c08a5dc070457bff6d69667d09d36e865ba8f4da369fbd0032b5a5e6d5cef92d",
+      "xml_sha256": "ff878decf8b2aa06a708fdc797cf3812136175c90517dc0e1006895005b05ba3",
+      "exit": 0,
+      "cases": 263,
+      "passed": 263,
+      "failed": [],
+      "skipped": [],
+      "cfi_diagnostics": [],
+      "independent_calls": 63,
+      "runtime_properties": {
+        "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "c47c30d0db9b2276bd3ee39c7750a11bae96edf7a3a38f051fddb87354fb5297",
+      "signed_images": 42
+    },
+    "entry-offsets-xcode-27-r6": {
+      "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+      "tool": "r6",
+      "hardware": "Apple M1 (Virtual)",
+      "macos": "27.0.1",
+      "test_host_sha256": "4fc8521cdf885a77ed345c695aa3d7f709aef82a4d8d44f4fc266ed5cd755a22",
+      "xml_sha256": "c1018b86c86ccd3c78bacccde5b243507d84b44cca6446c56bb793fa12d39ddb",
+      "exit": 1,
+      "cases": 263,
+      "passed": 253,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "cfi_diagnostics": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "independent_calls": 63,
+      "runtime_properties": {
+        "AArch64LiftedImage.PublishedEntryOffsetsPreserveTheOriginalBase": {
+          "verified_source_address_sites": 2,
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4,
+          "published_data_in_code_records": 4
+        },
+        "AArch64AsyncUnwind.PublishedFrameRecoversCallerAtFiveSignalInterruptions": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        }
+      },
+      "x1": {
+        "status": "unavailable",
+        "native_arm64e_x1_environment_qualified": false,
+        "missing": [
+          {
+            "probe": "probe-cursor",
+            "feature": "explicit_pauth_lr_qualified"
+          },
+          {
+            "probe": "probe-cursor",
+            "feature": "pacm_pc_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_cpta_qualified"
+          },
+          {
+            "probe": "probe-cpta",
+            "feature": "x1_el0_checked_writeback_qualified"
+          }
+        ]
+      },
+      "report_sha256": "1356e7a864411058ab68cfac4623b555d943350d411968949865847e40646f58",
+      "signed_images": 42
+    }
+  },
+  "temporary_resources": {
+    "helper_head": "1c87ae0a8811d6b0e2ebf8407238944d0c7e5a82",
+    "branch_removed": true,
+    "local_helper_removed": true,
+    "release_id": 453364092,
+    "release_http": 404,
+    "tag_removed": true,
+    "remote_release_bytes": 103270016,
+    "temporary_checkout_bytes_trimmed": 171194768
+  },
+  "self_hosted_inventory": {
+    "labels": [],
+    "total_count": 0
+  },
+  "analysis_target_controls": {
+    "prior": {
+      "arithmetic-optimized": {
+        "declared_triple": "arm64-apple-macos14.0",
+        "ir_sha256": "44a638addf5781efcf9654a8f4d86ba9507db42238f255385c88d01e38bd2579",
+        "object_sha256": "a537ab5d9aac692d596c8808db439ef94d24074894dcd49214f30cbe77087495",
+        "linked_image_sha256": "7ec1a14ee555d22d4dc4c05793b48aa372c42b777a9ee9ed62e2c0456334d2a7",
+        "defined": [
+          "_leaf_difference"
+        ],
+        "caller_exit": 3
+      },
+      "arithmetic-no-opt": {
+        "declared_triple": "arm64-apple-macos14.0",
+        "ir_sha256": "db7faf4ed03f992b2f9a16ee168931878bc7f989a36956589f9ee76a1da8c24b",
+        "object_sha256": "a537ab5d9aac692d596c8808db439ef94d24074894dcd49214f30cbe77087495",
+        "linked_image_sha256": "7ec1a14ee555d22d4dc4c05793b48aa372c42b777a9ee9ed62e2c0456334d2a7",
+        "defined": [
+          "_leaf_difference"
+        ],
+        "caller_exit": 3
+      }
+    },
+    "object_producer_sha256": "b941dc9a97d5c8cd8d20a5a1b2fbfce85ffc4b6139f856f6b663a552e79d3ebb",
+    "llvm_package": "neverd-llvm-v23.0.0-r6"
+  },
+  "first_corrected_site": {
+    "exit": 0,
+    "MedIR": [
+      "INT_ADD X0 0x3FA0 0x1"
+    ],
+    "diagnostic": [],
+    "site": {
+      "leaf_sum": {
+        "entry": 16288,
+        "target": 16288,
+        "pc": 16384,
+        "forwarders": 1,
+        "destination": 8
+      }
+    },
+    "bytes": 70096,
+    "sha256": "c968bc35a0aaf0b78417cb5050aebb5160a056af352dcd6e1b94e2a694635fc4"
+  },
+  "adjacent_regressions": {
+    "NeverDJumpTableTests": {
+      "total": 798,
+      "passed": 792,
+      "skipped": [
+        "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+        "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+        "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+        "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0",
+        "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/1"
+      ],
+      "xml_sha256": "3bcea1259cb386e0ab0c616a7e7d4c7ab09d89f349c73b8c567f5ecb81c57b26"
+    },
+    "NeverDAArch64ReturnProtectionTests": {
+      "total": 19,
+      "passed": 19,
+      "skipped": [],
+      "xml_sha256": "6e20bf454c4496e81385b6bb9befa0a2131f7f81cb283f9f87a9ac1559077805"
+    }
+  },
+  "dev_candidate": {
+    "base": "fad4c85477e4451f71d9a52f5d6cd1fb8d27bd6b",
+    "nonoverlapping_files": true
+  },
+  "immediate_boundaries": {
+    "native": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44853005936",
+      "native_reports": {
+        "immediate-edges-macos-26": {
+          "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+          "runner": "GitHub Actions 1000048314",
+          "os": "26.7.2",
+          "cpu": "Apple M1 (Virtual)",
+          "asset_sha256": "cd4d9e9e40b0a9fd2671c7bbfe2ddbbaa83d5704acb8bd2f6e4e095ee4ffb590",
+          "calls": 84,
+          "signed_displacements": [
+            0,
+            1,
+            4095,
+            4096,
+            8192,
+            16773120
+          ],
+          "images": 42,
+          "report_sha256": "00cb0a6aa038a66badd4ca2497461f3101d3598f30be71bf247ad055cc21b87c"
+        },
+        "immediate-edges-xcode-27": {
+          "revision": "efda67fae38f37fc135261319f909cf09858c44a",
+          "runner": "GitHub Actions 1000048315",
+          "os": "27.0.1",
+          "cpu": "Apple M1 (Virtual)",
+          "asset_sha256": "cd4d9e9e40b0a9fd2671c7bbfe2ddbbaa83d5704acb8bd2f6e4e095ee4ffb590",
+          "calls": 84,
+          "signed_displacements": [
+            0,
+            1,
+            4095,
+            4096,
+            8192,
+            16773120
+          ],
+          "images": 42,
+          "report_sha256": "c5ffb6ed756d880c0200d381703186dae42be7a756398235944ddc6d9c0f0ce2"
+        }
+      },
+      "cross_producer_outputs": 36,
+      "originals": 6
+    },
+    "cases": {
+      "identity": {
+        "bytes": 0,
+        "original": "eac44631f95e9f114e17594bfd796c2c4c2ab20231dc9b24a38b5769e237b0a9",
+        "paired_output_sha256": {
+          "default-1.dylib": "c50fa1f7ef6104099862914b80878b7389090717011888e30b5e4ba855f5f9ef",
+          "default-2.dylib": "a896650224a65f3c0b500bed2e70a26354bc835ead9c0ed4de5654bb47f5de9a",
+          "default-3.dylib": "8a378062f3ed91e514e979b737004861aed45fea4812c02a4edfb53595b742a4",
+          "no-opt-1.dylib": "284271c1ae3bf46ea92a7562ee084d8fc4c6d27ef1d619bc4f83dea0275af2d1",
+          "no-opt-2.dylib": "c757aef53034a76b74af2814b26cbc21808aff17e49815918e5273b322f2aec7",
+          "no-opt-3.dylib": "0e9ec2488e63583f9738f6b98bbcf269273ed9d03c34657a9fa0c0efef1e68ce"
+        }
+      },
+      "one": {
+        "bytes": 1,
+        "original": "9e09d9a99113fd7b101eb2a999fae6bb5ed8dc3140b5b0de3ee0ebcab016fa1b",
+        "paired_output_sha256": {
+          "default-1.dylib": "a51dd3eecba975660a91a85d7e1dfefc73f33b8d839c924f8223b9f941e4792b",
+          "default-2.dylib": "9e90377521c8951ad90ea71ad7eb542422d7b8e406548e0c43f85a7de4f7e855",
+          "default-3.dylib": "00d1f6df2ce0c4de361730edcf1ce68b4d43b52c8e5639de4b91c66cf3582a63",
+          "no-opt-1.dylib": "40dc87466180658140614f28b0ebc54b9f6216b6d775a4f85070aa1b273b476f",
+          "no-opt-2.dylib": "72b20b0462db9897ce5efbf62170e874fd71eae990b28227b55de156feb7cd8f",
+          "no-opt-3.dylib": "e9925360cc728320adec646fdb4f124f1f2b296ea4eaa47b4770df160e365887"
+        }
+      },
+      "last-byte": {
+        "bytes": 4095,
+        "original": "ac667628842157a813b180989769ddee2f8d7e47c18daf7608d7d150a4a23d2a",
+        "paired_output_sha256": {
+          "default-1.dylib": "058c049b5792e36a5792cc1542f5e27f6c28f93d87a30765375b1a7f37a91a33",
+          "default-2.dylib": "858df903654068358debda561dcdd253d2949e52374f6daeba7e62e984bdcfde",
+          "default-3.dylib": "6ced1dcb7bcddb90536f39061b534b4cf8a4a2496a78314c83ddb3953a10f048",
+          "no-opt-1.dylib": "844d0a97cf948d47c280db8f16797491cf398c5191ab2093aa2d85f893ef43c6",
+          "no-opt-2.dylib": "b511b90cb0f25c1d5aaaa263ba93a3e20a92296196270cdd27198cd9dbea4d13",
+          "no-opt-3.dylib": "f7b3728586d22e258d549be311f17b4670dfecb58c8d8103fa0707e27509e40e"
+        }
+      },
+      "page": {
+        "bytes": 4096,
+        "original": "e958e1030f79bab7d85aeb60f0520093d3dcf3561abea3ba421fa78fa8e9bf50",
+        "paired_output_sha256": {
+          "default-1.dylib": "8556b18aba7bc64a0bc8a8ed18a241ccb7d8d6813136c28f54ad7de23eab5b86",
+          "default-2.dylib": "ddfc0dbfed48ac13fdc38664a9b3dde2d0fe9fb212ce90d233561a6eaa0ad225",
+          "default-3.dylib": "def30b52f2506c72d97491ed27e3fe93f6e534f3b19b9e4ba54e5cbb2c64dc8d",
+          "no-opt-1.dylib": "e772b49f18444253cb20d4920452d4aba225e1e9292907b5beda29071c1ed67f",
+          "no-opt-2.dylib": "cd20ffadc84894b92777b9ab8841f244bccb500836e1159a4a71319dccc285af",
+          "no-opt-3.dylib": "07f88364f6b877940c93b0ea40310004c6f153a5e4d855c1221b19bfa6adb09d"
+        }
+      },
+      "two-pages": {
+        "bytes": 8192,
+        "original": "b26f2c6b1efcecf3274981931c9d1d77b4620ff797a6bafdead90d8b1b1b625b",
+        "paired_output_sha256": {
+          "default-1.dylib": "6668423ecce29d56052ba0a30f46058311c4642c1cfb314d20ef802fe4457d6a",
+          "default-2.dylib": "87309f3130ae4f5e9fd6c5d39c25162a5df5fc13772f4ef20c05225bd88bc0db",
+          "default-3.dylib": "f982b9bd14152f16b5ad9d5aecebd6db69bb4caa7b49ed19054352cc0a4f1e60",
+          "no-opt-1.dylib": "3219d78d231a22532185484628faacf442ea21ee058adae10ba78f291c95852f",
+          "no-opt-2.dylib": "6cae78a744578a69f40995d5e6bf2ba1072d7b61e793b945e3af23a22caeac8d",
+          "no-opt-3.dylib": "c951155fcb9dd7f26f0e852e52d462bc4d01a9f61eefe769e924858450ada228"
+        }
+      },
+      "last-page": {
+        "bytes": 16773120,
+        "original": "b3c1e45d268906da7a82db7ac9d56f6c3e9d4ce8b2be76fc871aeb708d8b6859",
+        "paired_output_sha256": {
+          "default-1.dylib": "99588fbdf0ade4f9d8190015eff108ef3b03305d7ee444f6ca2388df015ea0d5",
+          "default-2.dylib": "f2f4ea6dc01e50c109f514f6cbae96b460314113fb5834cd774f6eda988813f4",
+          "default-3.dylib": "75aaf64a9bfeb6470af74a63eedfdfda5edcf4125cd8680ee284362ac6ccd053",
+          "no-opt-1.dylib": "2092579172aff7568fd0a62a0a523dca1098b5f6aea1cd27cfa8f46cd46feb73",
+          "no-opt-2.dylib": "6bcf27aee8fa8203e89a731155824847a15216e040ac30848095894619a0930c",
+          "no-opt-3.dylib": "2f4b633ee1ba670a5a4211ffc474b93dab8475dc4653e8045ccccc86defbe981"
+        }
+      }
+    },
+    "largest_shifted_third_publication": {
+      "leaf_sum": {
+        "public": 16276,
+        "base": 16276,
+        "site": 49176,
+        "arithmetic": 2441084169,
+        "hops": 3
+      },
+      "leaf_difference": {
+        "public": 16296,
+        "base": 16276,
+        "site": 49196,
+        "arithmetic": 3514825993,
+        "hops": 3
+      }
+    },
+    "temporary_resources": {
+      "branch_removed": true,
+      "asset_removed": true,
+      "asset_sha256": "cd4d9e9e40b0a9fd2671c7bbfe2ddbbaa83d5704acb8bd2f6e4e095ee4ffb590",
+      "asset_bytes": 70017
+    }
+  },
+  "representative_source": {
+    "sha256": "f2cff6fa9fb9941943a3a19dd1a5a17e7c1a413aa1a2cc4f0e9d3f8bad7bac09",
+    "instructions": {
+      "leaf_sum": {
+        "entry": 16276,
+        "base": 16276,
+        "site": 16276,
+        "register": 8,
+        "following_words": [
+          2432697609,
+          2852717536,
+          3596551104
+        ]
+      },
+      "leaf_difference": {
+        "entry": 16296,
+        "base": 16276,
+        "site": 16296,
+        "register": 8,
+        "following_words": [
+          3506442505,
+          4177526793,
+          3596551104
+        ]
+      }
+    }
+  },
+  "representative_placed_sites": {
+    "local-offset-values-default-1.dylib": {
+      "leaf_sum": {
+        "entry": 16276,
+        "base": 16276,
+        "site": 16384,
+        "register": 8,
+        "following_words": [
+          2432697609,
+          2852717536,
+          3596551104
+        ]
+      },
+      "leaf_difference": {
+        "entry": 16296,
+        "base": 16276,
+        "site": 16404,
+        "register": 8,
+        "following_words": [
+          3506442505,
+          4177526793,
+          3596551104
+        ]
+      }
+    },
+    "local-offset-values-default-2.dylib": {
+      "leaf_sum": {
+        "entry": 16276,
+        "base": 16276,
+        "site": 32776,
+        "register": 8,
+        "following_words": [
+          2432697609,
+          2852717536,
+          3596551104
+        ]
+      },
+      "leaf_difference": {
+        "entry": 16296,
+        "base": 16276,
+        "site": 32796,
+        "register": 8,
+        "following_words": [
+          3506442505,
+          4177526793,
+          3596551104
+        ]
+      }
+    },
+    "local-offset-values-default-3.dylib": {
+      "leaf_sum": {
+        "entry": 16276,
+        "base": 16276,
+        "site": 49176,
+        "register": 8,
+        "following_words": [
+          2432697609,
+          2852717536,
+          3596551104
+        ]
+      },
+      "leaf_difference": {
+        "entry": 16296,
+        "base": 16276,
+        "site": 49196,
+        "register": 8,
+        "following_words": [
+          3506442505,
+          4177526793,
+          3596551104
+        ]
+      }
+    }
+  }
+}

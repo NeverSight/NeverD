@@ -12,13 +12,16 @@
 
 #include "neverd/sdk/NeverDCAPILocalTypes.h"
 
+#include "InstructionFlow.h"
 #include "JSONText.h"
 #include "SessionImpl.h"
 
 #include "neverd/debug/DWARFLoader.h"
 #include "neverd/debug/PDBLoader.h"
 #include "neverd/loader/ELF/ELFOperatingSystem.h"
+#include "neverd/loader/ImageProfile.h"
 #include "neverd/loader/MachO/DarwinOperatingSystem.h"
+#include "neverd/sdk/Limits.h"
 #include "neverd/support/FilePath.h"
 #include "neverd/support/ProjectFiles.h"
 #include "neverd/support/ProjectWriteLock.h"
@@ -54,6 +57,99 @@
 
 using namespace neverd;
 using namespace neverd::sdk;
+
+/// The Windows loader calls the PE driver entry with a driver object and
+/// registry path. An exact export or image-matched PDB may name the entry
+/// shim and the direct transfer from that shim to DriverEntry.
+std::vector<va_t> neverd::sdk::windowsDriverEntries(const BinaryImage &Image,
+                                                    const DebugContext *Debug,
+                                                    DebugInfoKind Kind) {
+  if (Image.Format != BinaryFormat::COFF || Image.IsRelocatable ||
+      !Image.Entry ||
+      (Image.Arch != Arch::X86 && Image.Arch != Arch::X64 &&
+       Image.Arch != Arch::AArch64) ||
+      Image.DynInfo.PESubsystem != llvm::COFF::IMAGE_SUBSYSTEM_NATIVE ||
+      (Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL))
+    return {};
+  const bool MatchedPDB = Kind == DebugInfoKind::PDB && Debug &&
+                          static_cast<const PDBDebugContext *>(Debug)
+                              ->hasAuthenticatedImageIdentity();
+  if (!MatchedPDB && Image.Exports.empty())
+    return {};
+  const auto functionAt = [&](va_t Addr) -> std::optional<FunctionSym> {
+    if (!Image.isFunctionEntryCandidateAt(Addr))
+      return std::nullopt;
+    if (MatchedPDB)
+      if (auto Func = Debug->resolveFunction(Addr); Func && Func->Addr == Addr)
+        return Func;
+    const auto *Export = Image.findExportAt(Addr);
+    if (!Export || Export->Name.empty())
+      return std::nullopt;
+    for (const auto &Other : Image.Exports)
+      if (Other.Addr == Addr && !Other.Name.empty() &&
+          Other.Name != Export->Name)
+        return std::nullopt;
+    FunctionSym Func;
+    Func.Addr = Addr;
+    Func.Name = Export->Name;
+    return Func;
+  };
+  const auto named = [&](const FunctionSym &Func, llvm::StringRef Name) {
+    if (Func.Name == Name)
+      return true;
+    if (Image.Arch != Arch::X86)
+      return false;
+    llvm::StringRef Symbol = Func.Name;
+    Symbol.consume_front("_");
+    return Symbol == Name || (Symbol.consume_front(Name) && Symbol == "@8");
+  };
+  auto Entry = functionAt(Image.Entry);
+  if (!Entry ||
+      (!named(*Entry, "DriverEntry") && !named(*Entry, "GsDriverEntry")) ||
+      Image.functionHasBytePatch(Image.Entry) ||
+      identifyImageProfile(Image).Domain != ImageDomain::Kernel)
+    return {};
+
+  std::vector<va_t> Entries{Image.Entry};
+  if (named(*Entry, "DriverEntry"))
+    return Entries;
+  Decoder Dec;
+  if (!Dec.init(Image))
+    return Entries;
+  const va_t NextEntry = Image.nextKnownFunctionEntryAfter(Image.Entry);
+  uint64_t Span = Entry->Size;
+  if (NextEntry != InvalidVA && (!Span || NextEntry - Image.Entry < Span))
+    Span = NextEntry - Image.Entry;
+  std::vector<LowOp> Ops;
+  decodeNativeRange(
+      Image, Dec, Image.Entry, Span, kWindowsDriverEntryInstructions,
+      [&](const DecodedInsn &Insn, const uint8_t *, int) {
+        Ops.clear();
+        try {
+          Dec.liftToLow(Insn, Ops);
+        } catch (const UnliftedInstruction &) {
+          return false;
+        }
+        for (const LowOp &Op : Ops) {
+          if ((Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::BRANCH) &&
+              Op.NumInputs && Op.Inputs[0].isConst()) {
+            const va_t Target = Op.Inputs[0].Offset;
+            const auto Body = functionAt(Target);
+            if (Body && named(*Body, "DriverEntry") &&
+                !Image.functionHasBytePatch(Target)) {
+              Entries.push_back(Target);
+              return false;
+            }
+          }
+          if (Op.Opcode == NdOp::BRANCH || Op.Opcode == NdOp::COND_BR ||
+              Op.Opcode == NdOp::INDIR_BR || Op.Opcode == NdOp::INDIR_CALL ||
+              Op.Opcode == NdOp::RETURN)
+            return false;
+        }
+        return !Dec.isFunctionTerminator(Insn);
+      });
+  return Entries;
+}
 
 namespace {
 
@@ -942,7 +1038,8 @@ DebugContext *Session::decompileDebug() {
       Library ? std::make_shared<types::TypeLibrary>(*Library)
               : std::shared_ptr<types::TypeLibrary>(libraryFor(Img)),
       std::move(Declarations), &Img, std::move(Headers), SigDB.buildNameMap(),
-      LocalTypeEntryType, programMain(), LocalTypeEntryDeclaration);
+      LocalTypeEntryType, programMain(), LocalTypeEntryDeclaration,
+      windowsDriverEntries(Img, Dbg.get(), DbgKind));
   LocalTypesDbg->noteDeclarationReads(&UserReads);
   return LocalTypesDbg.get();
 }

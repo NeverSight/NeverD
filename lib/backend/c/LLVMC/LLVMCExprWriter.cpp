@@ -537,19 +537,23 @@ std::optional<va_t> LLVMCWriter::imageDataVA(const llvm::Value *V) const {
                                  GEP->getPointerAddressSpace())
                            : 64,
                     0);
+    // A GEP adds in the target's index width. The high bit of an ELF32
+    // displacement from image base zero is still part of its 32-bit VA.
+    const auto AddOffset = [&](uint64_t Delta) -> va_t {
+      const unsigned Bits = Off.getBitWidth();
+      const uint64_t Mask = Bits >= 64 ? UINT64_MAX : (uint64_t{1} << Bits) - 1;
+      return (*Base & ~Mask) | ((*Base + Delta) & Mask);
+    };
     if (CurMod && GEP->accumulateConstantOffset(CurMod->getDataLayout(), Off) &&
         Off.isSignedIntN(64))
-      return static_cast<va_t>(static_cast<int64_t>(*Base) +
-                               Off.getSExtValue());
+      return AddOffset(Off.getSExtValue());
     if (GEP->getNumOperands() == 2) {
       if (auto *CI = llvm::dyn_cast<llvm::ConstantInt>(GEP->getOperand(1)))
-        return static_cast<va_t>(static_cast<int64_t>(*Base) +
-                                 CI->getSExtValue());
+        return AddOffset(CI->getSExtValue());
       if (auto Imm = foldImmediate(GEP->getOperand(1))) {
-        uint64_t Off = 0;
-        if (!llvm::StringRef(*Imm).getAsInteger(0, Off))
-          return static_cast<va_t>(static_cast<int64_t>(*Base) +
-                                   static_cast<int64_t>(Off));
+        uint64_t Delta = 0;
+        if (!llvm::StringRef(*Imm).getAsInteger(0, Delta))
+          return AddOffset(Delta);
       }
     }
     return std::nullopt;
@@ -1835,7 +1839,9 @@ bool LLVMCWriter::readCrossesItsStore(const llvm::LoadInst &Load) const {
       Known != ReadCrossesItsStore.end())
     return Known->second;
   auto Decide = [&] {
-    if (!Load.isSimple() || !Load.getFunction())
+    // Original-image reads can be volatile. Their captured value still
+    // belongs to the read before an intervening write.
+    if (Load.isAtomic() || !Load.getFunction())
       return false;
     const auto At = peelPointerOffset(Load.getPointerOperand());
     // A local's bytes have their own rule (slotReadAtUses).
@@ -3402,8 +3408,11 @@ std::string LLVMCWriter::indirectCalleeStr(const llvm::Value *Callee,
   const auto *SlotLI = llvm::dyn_cast<llvm::LoadInst>(V);
   if (!SlotLI)
     return {};
+  const uint64_t PtrSize =
+      Img ? Img->getPointerSize() : llvmAccessSize(Callee->getType());
+  if (!SlotLI->isSimple() || llvmAccessSize(SlotLI->getType()) != PtrSize)
+    return {};
   Mark(SlotLI);
-  const uint16_t PtrSize = Img && Img->Bits == Bitness::Bits32 ? 4u : 8u;
   // A slot a typed record names prints as its member, which the call reads:
   // a UEFI protocol's SystemTable->ConOut->OutputString, t->boot->reset.
   if (const std::optional<TypedAccess> Member = typedLoadAccess(*SlotLI);
@@ -3475,7 +3484,10 @@ std::string LLVMCWriter::indirectCalleeStr(const llvm::Value *Callee,
   } else
     return {};
   const auto *VtblLI = llvm::dyn_cast<llvm::LoadInst>(Vtbl);
-  if (!VtblLI)
+  // The two C pointer dereferences must read the original widths. A spilled
+  // n32 GPR holds eight bytes, even when its low word carries a pointer.
+  if (!VtblLI || !VtblLI->isSimple() ||
+      llvmAccessSize(VtblLI->getType()) != PtrSize)
     return {};
   Mark(VtblLI);
   const llvm::Value *Obj = PeelCast(VtblLI->getPointerOperand(),

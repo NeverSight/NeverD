@@ -129,7 +129,8 @@ public:
   CWriter &operator=(const CWriter &) = delete;
 
   std::string builtin(Builtin Type) const;
-  std::string declare(const TypeExpr &Type, std::string Declarator) const;
+  std::string declare(const TypeExpr &Type, std::string Declarator,
+                      const TypeExpr *InlineBase = nullptr) const;
 
   void definition(const LocalType &Type, std::string &Out);
   void forwardDeclaration(const LocalType &Type, std::string &Out) const;
@@ -301,8 +302,10 @@ std::string CWriter::builtin(Builtin Type) const {
   return Info.Keywords;
 }
 
-std::string CWriter::declare(const TypeExpr &Type,
-                             std::string Declarator) const {
+std::string CWriter::declare(const TypeExpr &Type, std::string Declarator,
+                             const TypeExpr *InlineBase) const {
+  if (&Type == InlineBase)
+    return Declarator;
   const auto spaced = [&](std::string Base) {
     return Declarator.empty() ? Base : Base + " " + Declarator;
   };
@@ -376,13 +379,13 @@ std::string CWriter::declare(const TypeExpr &Type,
       }
       Inner = "(" + Inner + ")";
     }
-    return declare(Pointee, Inner);
+    return declare(Pointee, std::move(Inner), InlineBase);
   }
   case TypeExprKind::Array: {
     const std::string Bound = Type.Count ? std::to_string(*Type.Count) : "";
     if (!Type.Element)
       return spaced(builtin(Builtin::UChar)) + "[" + Bound + "]";
-    return declare(*Type.Element, Declarator + "[" + Bound + "]");
+    return declare(*Type.Element, Declarator + "[" + Bound + "]", InlineBase);
   }
   case TypeExprKind::Function: {
     if (!Type.Function)
@@ -756,12 +759,14 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
       EndBit = Field.BitOffset + Size * 8;
     }
 
-    // An anonymous type is defined in place, an array of it too.
+    // A pointer to an unnamed type still needs its definition. Let the
+    // ordinary C declarator retain pointer qualifiers and array precedence.
     const TypeExpr *Element = Field.Type.get();
-    std::string Bounds;
-    while (Element->Kind == TypeExprKind::Array && Element->Element) {
-      Bounds +=
-          "[" + (Element->Count ? std::to_string(*Element->Count) : "") + "]";
+    bool Indirect = false;
+    while ((Element->Kind == TypeExprKind::Array ||
+            Element->Kind == TypeExprKind::Pointer) &&
+           Element->Element) {
+      Indirect |= Element->Kind == TypeExprKind::Pointer;
       Element = Element->Element.get();
     }
     if (Element->Kind == TypeExprKind::Record && Element->Record) {
@@ -775,11 +780,13 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
       line(Indent, qualifiers(*Element) + keyword(Inner),
            Field.Name.empty() ? offset(Bit / 8) : "", Out);
       line(Indent, "{", "", Out);
-      body(Inner, InnerPack, Indent + 4, Bit, /*Outer=*/false, Out);
+      body(Inner, InnerPack, Indent + 4, Indirect ? 0 : Bit, /*Outer=*/false,
+           Out);
       if (Field.Name.empty())
         line(Indent, "};", "", Out);
       else
-        line(Indent, "} " + Name + Bounds + ";", offset(Bit / 8), Out);
+        line(Indent, "} " + declare(*Field.Type, Name, Element) + ";",
+             offset(Bit / 8), Out);
       if (InnerPack != Pack)
         Out += "#pragma pack(pop)\n";
       continue;
@@ -788,7 +795,8 @@ void CWriter::body(const RecordDef &Record, uint32_t Pack, unsigned Indent,
       line(Indent, qualifiers(*Element) + enumHead(*Element->Enum), "", Out);
       line(Indent, "{", "", Out);
       enumerators(*Element->Enum, Indent + 4, Out);
-      line(Indent, "} " + Name + Bounds + ";", offset(Bit / 8), Out);
+      line(Indent, "} " + declare(*Field.Type, Name, Element) + ";",
+           offset(Bit / 8), Out);
       continue;
     }
     std::string Code = declare(*Field.Type, Name);

@@ -221,6 +221,54 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   return {};
 }
 
+std::optional<FixedIntegerCallArguments>
+goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
+                        const GPRReadWidths &Reads) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  if (!Module || Img.Arch != Arch::X64 || !isGoCode(Img, Entry) ||
+      !inRanges(Module->GoAssembly, Entry) || goWriteBarrierAt(Img, Entry) ||
+      std::binary_search(Module->MorestackEntries.begin(),
+                         Module->MorestackEntries.end(), Entry) ||
+      goAssemblyTakesRegisterArguments(Img, Entry, Reads))
+    return std::nullopt;
+  if (const std::optional<uint32_t> Bytes = goFrameArgumentBytes(Img, Entry);
+      Bytes && *Bytes != 0)
+    return std::nullopt;
+  const llvm::ArrayRef<uint64_t> Platform =
+      getTargetRegInfo(Img.Arch)
+          .integerArgumentLayout(Img.abiFormat())
+          .Registers;
+  const auto Read = [&](uint64_t Register) {
+    return Register != x86reg::RSP && Register != x86reg::RBP &&
+           Reads[Register / 8] != 0;
+  };
+  constexpr unsigned GeneralFamilies = 16;
+  bool Own = false;
+  for (unsigned Family = 0; Family < GeneralFamilies; ++Family)
+    if (const uint64_t Register = uint64_t(Family) * 8;
+        Read(Register) && !llvm::is_contained(Platform, Register))
+      Own = true;
+  if (!Own)
+    return std::nullopt;
+  FixedIntegerCallArguments Arguments;
+  const auto Add = [&](uint64_t Register) {
+    if (Read(Register) &&
+        llvm::none_of(Arguments.Parameters,
+                      [&](const FixedIntegerCallArguments::Parameter &P) {
+                        return P.Register == Register;
+                      }))
+      Arguments.Parameters.push_back({SourceABICarrierKind::IntegerRegister,
+                                      Register, 0, sizeof(uint64_t)});
+  };
+  for (const uint64_t Register : Platform)
+    Add(Register);
+  for (const uint64_t Register : goIntegerArgumentRegisters(Img.Arch))
+    Add(Register);
+  for (unsigned Family = 0; Family < GeneralFamilies; ++Family)
+    Add(uint64_t(Family) * 8);
+  return Arguments;
+}
+
 bool goCallEntersInternalABI(const BinaryImage &Img, va_t Caller, va_t Callee,
                              const GPRReadWidths *CalleeReads) {
   if (Callee == InvalidVA)
@@ -248,6 +296,14 @@ std::optional<uint64_t> goClosureContextRegister(Arch A) {
     return x86reg::RDX;
   if (A == Arch::AArch64)
     return a64reg::X26;
+  return std::nullopt;
+}
+
+std::optional<uint64_t> goRoutineRegister(Arch A) {
+  if (A == Arch::X64)
+    return x86reg::R14;
+  if (A == Arch::AArch64)
+    return a64reg::X28;
   return std::nullopt;
 }
 

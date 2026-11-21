@@ -82,6 +82,7 @@ add_neverd_component_library(NeverDIRMed
   lower/ARM/LowToMedARM.cpp
   lower/MIPS/PICGlobalPointer.cpp
   lower/LowToMedCallReturnFP.cpp
+  lower/GoCurrentGoroutine.cpp
   lower/GoStackGrowth.cpp
   lower/LowToMedCallReturnStruct.cpp
   lower/LowToMedGoResults.cpp

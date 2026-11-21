@@ -119,6 +119,9 @@ public:
   /// One declaration per imported symbol, admitted only when every printed
   /// call has the header's complete scalar or HFA operand layout.
   void prepareSourceImportPrototypes(llvm::Module &Mod);
+  std::optional<FunctionSym>
+  boundSourceDeclaration(const llvm::Function &Fn) const;
+  TypeRef boundIntegerResult(const llvm::Function &Fn) const;
   const FunctionSym *sourceImportCallee(const llvm::CallBase &Call) const;
   bool groupedFloatingCall(const llvm::CallBase &Call,
                            const FunctionSym &Function) const;
@@ -793,6 +796,7 @@ public:
   bool edgePrintsPhiCopy(const llvm::BasicBlock *From,
                          const llvm::BasicBlock *To);
   std::string resolveImportCalleeName(const llvm::Value *Callee) const;
+  const llvm::LoadInst *n32ExtendedCalleeLoad(const llvm::Value *Callee) const;
   /// resolveImportCalleeName before UserImportIdentifiers renames it.
   std::string importCalleeCName(const llvm::Value *Callee) const;
   bool isImportCalleeOnlyLoad(const llvm::LoadInst *LI) const;

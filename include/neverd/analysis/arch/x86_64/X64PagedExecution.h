@@ -106,6 +106,8 @@ struct X64PagedExecutionResult {
   /// A completed instruction remains complete if its subsequent #DB entry
   /// fails. Software INT requires successful entry; intermediate REP is false.
   bool InstructionCompleted = false;
+  /// Issued at an authenticated MOV-to-CR8 commit, even for same-value writes.
+  bool CR8Written = false;
   /// This call continued a previously fetched instruction. Attempted reports
   /// only a new charge; completion/fault can occur without another charge.
   bool InstructionResumed = false;

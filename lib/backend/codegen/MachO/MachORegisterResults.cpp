@@ -172,7 +172,8 @@ bool physicalRegister(aarch64_reg R) {
 }
 
 // A source entry can escape in X0 or in a caller-supplied output slot. Follow
-// the value through full-width copies until the straight-line return.
+// the value through full-width copies and offsets until the straight-line
+// return.
 bool exportsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
                     aarch64_reg AddressReg) {
   constexpr auto Word = aarch64::kInsnSize;
@@ -186,18 +187,24 @@ bool exportsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
     if ((I.Id == AARCH64_INS_RET && !D.op_count) || I.Id == AARCH64_INS_RETAA ||
         I.Id == AARCH64_INS_RETAB)
       return Stored || AddressReg == AARCH64_REG_X0;
-    if (D.op_count != 2 || D.operands[0].type != AARCH64_OP_REG)
+    if (!D.op_count || D.operands[0].type != AARCH64_OP_REG)
       return false;
-    if ((I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR) &&
+    if (D.op_count == 2 &&
+        (I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR) &&
         D.operands[0].reg == AddressReg &&
         D.operands[1].type == AARCH64_OP_MEM &&
         D.operands[1].mem.base != AddressReg &&
         D.operands[1].mem.index != AddressReg) {
       Stored = true;
     } else {
-      const bool Copy = I.Id == AARCH64_INS_MOV ||
-                        (I.Id == AARCH64_INS_ORR && I.Raw->is_alias);
-      if (!Copy || D.operands[0].reg < AARCH64_REG_X0 ||
+      const bool Copy =
+          D.op_count == 2 && (I.Id == AARCH64_INS_MOV ||
+                              (I.Id == AARCH64_INS_ORR && I.Raw->is_alias));
+      const bool Offset =
+          D.op_count == 3 &&
+          (I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) &&
+          D.operands[2].type == AARCH64_OP_IMM;
+      if ((!Copy && !Offset) || D.operands[0].reg < AARCH64_REG_X0 ||
           D.operands[0].reg > AARCH64_REG_X28 ||
           D.operands[1].type != AARCH64_OP_REG ||
           D.operands[1].reg != AddressReg)

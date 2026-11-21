@@ -168,6 +168,36 @@ types; unrelated compiler intrinsics are not compiled as replacement builtins.
 The generated side also omits the WDK's default calling-convention option;
 published declarations must retain their own conventions, so a lost x86
 `__stdcall` cannot be hidden by compiling both sides with that default.
+The WDK USB camera and SDK Bluetooth GATT and Windows Connection Manager
+checks compare the selected functions with their original compiler ABI.
+The Windows SQLite, ICU and Web Services checks enumerate their C APIs from
+the pinned SDK header for each target. The published type closure is compiled
+independently on x86, x64 and ARM64 and compared to that original profile.
+
+The same per-target check covers the selected exports for DHCP Server, ODBC,
+Media Foundation, TDH, JavaScript Runtime, Rights Management, Directory
+Services, XmlLite, UI Automation, WinINet, routing tables, WinSNMP, audio
+compression, Cloud Files, Peer Distribution, Interaction Context, distributed
+routing, Projected File System, iSCSI, cluster resources, Video for Windows,
+Fax, Windows Error Reporting and Magnification. For SDK declarations written
+with an empty C parameter list, the generator checks the return type, calling
+convention and zero parameters against the original C++ declaration before
+publishing a C prototype. This preserves the distinct x86 conventions of
+`WerStorePurge` and `WerUnregisterAppLocalDump`.
+
+The GDI+ flat API comes from the SDK's C++ namespace with `GDIPVER=0x0110`.
+Clang supplies the original function declarations, parameter names and enum
+values. Each flat entry must also have its compiler-emitted linker symbol in
+the pinned target's `gdiplus.lib`. Its x86 imports require the `/Gz` profile
+for `GdipGetMetafileHeaderFromWmf`. The generator checks data records for size, alignment and
+field offsets and verifies both the API functions and their callback types
+with the target compiler before and after merging. It records pointer-only
+class declarations as incomplete records. The manifest also lists the
+functions with C++ reference parameters whose compiler preconditions the C
+renderer cannot yet preserve and SDK declarations absent from the import library.
+Run `--provider GDIPlus` to repeat the API check and use
+`check_windows_provider_calls.py --gdiplus` to recompile callers from both C backends.
+
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of
 the original official headers; a missing published declaration therefore fails
@@ -179,9 +209,10 @@ profile, rather than claiming that export names establish a private API's type.
 `scripts/check_windows_provider_calls.py --generated /path/to/microsoft-windows
 --cache /path/to/package-cache --output /path/to/call-results
 --neverd build-release/bin/neverd` builds import-only ETW, PathCch and WinRT
-fixtures, including D3DKMT, CLFS, TPM, Direct3D, DXGI and D3DCompiler calls, with the retained SDK headers
-and pinned target import libraries. Add `--kernel` for SD Port, PortCls and
-Stream Class callers compiled from the WDK headers. Those driver fixtures use
+fixtures using retained SDK headers and pinned target import libraries. The
+callers include graphics and logging APIs, ICU, Windows SQLite, Web Services,
+Connection Manager and Bluetooth GATT. Add `--kernel` for SD Port, PortCls,
+Stream Class and USB camera callers compiled from the WDK headers. Those driver fixtures use
 synthetic import libraries whose symbols come from the original compiler,
 including x86 stack decoration; they do not execute an API implementation.
 Add `--kernel --rdbss` for original RDBSS C++ callers, including eight-argument

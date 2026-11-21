@@ -1826,6 +1826,33 @@ TEST(SymExpr, NativeNormalizedResultsRetainWidthBoundaries) {
   }
 }
 
+TEST(SymExpr, NativeRotationsAndSignExtensionMatchEveryWordWidth) {
+  std::mt19937_64 Random(0xf012e);
+  for (unsigned Width = 1; Width <= 64; ++Width) {
+    SCOPED_TRACE(Width);
+    SymContext Ctx;
+    const auto X = Ctx.mkVar("x", Width);
+    const auto Count = Ctx.mkVar("count", 64);
+    SymEvalPlan Left(Ctx, Ctx.mkRol(X, Count)), Right(Ctx, Ctx.mkRor(X, Count));
+    SymEvalPlan Signed(Ctx, Ctx.mkSExt(X, 64));
+    const std::array<uint64_t, 7> Counts{
+        0,         Width - 1,         Width,       Width + 1,
+        2 * Width, uint64_t(1) << 63, ~uint64_t(0)};
+    for (uint64_t Amount : Counts) {
+      for (uint64_t Value : {uint64_t(0), uint64_t(1) << (Width - 1),
+                             ~uint64_t(0), uint64_t(Random())}) {
+        const llvm::APInt Word(Width, Value, false, true);
+        const std::array<uint64_t, 2> Inputs{Value, Amount};
+        EXPECT_EQ(Left.evalU64(Inputs),
+                  Word.rotl(Amount % Width).getZExtValue());
+        EXPECT_EQ(Right.evalU64(Inputs),
+                  Word.rotr(Amount % Width).getZExtValue());
+        EXPECT_EQ(Signed.evalU64(Inputs), Word.sextOrTrunc(64).getZExtValue());
+      }
+    }
+  }
+}
+
 TEST(SymExpr, U64ArithmeticShiftByZeroKeepsTheWholeWord) {
   SymContext Ctx;
   SymRef X = Ctx.mkVar("x", 64);
@@ -2251,10 +2278,39 @@ TEST(SymExpr, NativeProductsKeepAllInputsAfterModularOverflow) {
   }
 }
 
+TEST(SymExpr, WideSignedCoefficientsKeepTheirSignAcrossWordBoundaries) {
+  std::mt19937_64 Random(0x5731436f656666);
+  for (unsigned Width : {65u, 129u, 257u, 513u}) {
+    SCOPED_TRACE(Width);
+    SymContext C;
+    const auto X = C.mkVar("x", Width);
+    llvm::SmallVector<uint64_t, 9> Words(llvm::APInt::getNumWords(Width));
+    for (auto &Word : Words)
+      Word = Random();
+    const llvm::APInt Input(Width, Words);
+    for (const auto &Magnitude :
+         {llvm::APInt(Width, 5), llvm::APInt(Width, UINT64_MAX >> 1),
+          llvm::APInt::getOneBitSet(Width, 63) + 1,
+          llvm::APInt::getOneBitSet(Width, 64) + 3}) {
+      for (unsigned Shift : {0u, 1u, 63u, 64u, Width - 1}) {
+        for (const auto &Coefficient :
+             {Magnitude.shl(Shift), (-Magnitude).shl(Shift)}) {
+          SymEvalPlan Plan(C, C.mkMul(C.mkConst(Coefficient), X));
+          EXPECT_EQ(Plan.eval({Input}), Coefficient * Input);
+          EXPECT_EQ(Plan.eval({~Input}), Coefficient * ~Input);
+        }
+      }
+    }
+  }
+}
+
 TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
   std::mt19937_64 Random(0x7072656669786573);
   for (unsigned Width : {65u, 128u, 257u, 513u})
-    for (unsigned Bits : {1u, 7u, 32u, 63u, 64u, 65u}) {
+    for (unsigned Bits :
+         {1u, 7u, 32u, 63u, 64u, 65u, 127u, 128u, 129u, 171u, 193u, 257u}) {
+      if (Bits > Width)
+        continue;
       SCOPED_TRACE(Width);
       SCOPED_TRACE(Bits);
       SymContext C;

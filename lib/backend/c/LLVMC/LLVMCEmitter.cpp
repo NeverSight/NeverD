@@ -2356,7 +2356,9 @@ std::string LLVMCWriter::boundImportCallee(const llvm::CallBase &Call) const {
       llvm::isa<llvm::InlineAsm>(Call.getCalledOperand()))
     return {};
   const llvm::Value *Slot = Call.getCalledOperand()->stripPointerCasts();
-  if (const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Slot))
+  if (const auto *Load = n32ExtendedCalleeLoad(Slot))
+    Slot = Load;
+  else if (const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Slot))
     Slot = Cast->getOperand(0);
   const auto *Symbol = llvm::dyn_cast<llvm::GlobalVariable>(Slot);
   const bool CalledSymbol =
@@ -2376,6 +2378,62 @@ std::string LLVMCWriter::boundImportCallee(const llvm::CallBase &Call) const {
        (!Img->ImportStorageSlots.count(*SlotVA) && !OwnRoutineSlot())))
     return {};
   return resolveImportCalleeName(Call.getCalledOperand());
+}
+
+std::optional<FunctionSym>
+LLVMCWriter::boundSourceDeclaration(const llvm::Function &Fn) const {
+  if (!Dbg || Dbg->boundFunctionEntries().empty())
+    return std::nullopt;
+  auto Entry = rewrite_source::getOriginalVA(Fn);
+  if (!Entry) {
+    llvm::consumeError(Entry.takeError());
+    return std::nullopt;
+  }
+  if (!*Entry || !llvm::binary_search(Dbg->boundFunctionEntries(), **Entry))
+    return std::nullopt;
+  return Dbg->resolveFunction(static_cast<va_t>(**Entry));
+}
+
+/// A narrowed call result can still supply these observations of its machine
+/// word. Address escapes, full-width stores and comparisons remain wide.
+static bool readsOnlyLowBits(const llvm::User &User, unsigned Bits) {
+  if (const auto *Trunc = llvm::dyn_cast<llvm::TruncInst>(&User))
+    return Trunc->getDestTy()->getIntegerBitWidth() <= Bits;
+  const auto *And = llvm::dyn_cast<llvm::BinaryOperator>(&User);
+  if (!And || And->getOpcode() != llvm::Instruction::And)
+    return false;
+  for (const llvm::Value *Operand : And->operands())
+    if (const auto *Mask = llvm::dyn_cast<llvm::ConstantInt>(Operand))
+      if (Mask->getValue().getActiveBits() <= Bits)
+        return true;
+  return false;
+}
+
+TypeRef LLVMCWriter::boundIntegerResult(const llvm::Function &Fn) const {
+  if (Opts.PreserveLLVMFunctionTypes || Opts.Format != BinaryFormat::COFF ||
+      Fn.isDeclaration() || !Fn.getReturnType()->isIntegerTy())
+    return {};
+  const auto Signature = boundSourceDeclaration(Fn);
+  if (!Signature || !Signature->ReturnType ||
+      Signature->ReturnType->Kind != NdTypeKind::Int ||
+      !libc::fixedIntegerCallArguments(*Signature, Opts.TheArch, Opts.Format,
+                                       Dbg) ||
+      Signature->Params.size() != Fn.arg_size())
+    return {};
+  const auto &Result = Signature->ReturnType;
+  const unsigned Bits = Result->Size * 8;
+  if (Bits > Fn.getReturnType()->getIntegerBitWidth())
+    return {};
+  if (Bits < Fn.getReturnType()->getIntegerBitWidth())
+    for (const llvm::Use &Use : Fn.uses()) {
+      const auto *Call = llvm::dyn_cast<llvm::CallBase>(Use.getUser());
+      if (!Call || !Call->isCallee(&Use) ||
+          !llvm::all_of(Call->users(), [=](const llvm::User *User) {
+            return readsOnlyLowBits(*User, Bits);
+          }))
+        return {};
+    }
+  return Result;
 }
 
 void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
@@ -2410,14 +2468,19 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
             Direct ? functionIdentifier(*Direct) : boundImportCallee(*Call);
         if (Name.empty() || Rejected.count(Name))
           continue;
-        const auto Source = Dbg->resolvePrototype(
-            Direct ? cNameOfGlobal(Direct->getName(), true)
-                   : importCalleeCName(Call->getCalledOperand()));
+        // A declaration for an omitted local body can share its name with an
+        // unrelated system-header routine. Its bound entry owns the call.
+        auto Source = Direct ? boundSourceDeclaration(*Direct) : std::nullopt;
+        if (!Source)
+          Source = Dbg->resolvePrototype(
+              Direct ? cNameOfGlobal(Direct->getName(), true)
+                     : importCalleeCName(Call->getCalledOperand()));
         // A selected C library header can know routines absent from the
         // compact builtin registry. Its exact scalar ABI is the same source
         // contract used for other imported prototypes; keep the carrier
         // checks below before replacing a machine declaration or argument.
-        if (!Source || Source->PrototypeLibrary.empty())
+        if (!Source || (Source->PrototypeLibrary.empty() &&
+                        !Source->ExplicitEntryDeclaration))
           continue;
         bool Fits =
             Source->PlatformConvention &&
@@ -2465,8 +2528,8 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
                                      Source->ParamEntryLocations.empty() &&
                                      !Layout->ResultPointer &&
                                      Layout->Positions == Layout->Registers;
-        if (Source->PrototypeLibrary == UserPrototypeLibrary && !Floating &&
-            !FixedInteger && !ScalarRegisters)
+        if (isUserFunctionDeclaration(*Source) && !Floating && !FixedInteger &&
+            !ScalarRegisters)
           continue;
         Fits &=
             (Floating || (Layout && Layout->Positions == Parameters.size())) &&
@@ -2502,13 +2565,23 @@ void LLVMCWriter::prepareSourceImportPrototypes(llvm::Module &Mod) {
                                              Call->getType()->isPointerTy());
         // A local declaration does not prove the upper bits of a wider
         // machine result. Keep that result's carrier when it remains live.
-        if (Fits && Source->PrototypeLibrary == UserPrototypeLibrary &&
+        if (Fits && isUserFunctionDeclaration(*Source) &&
             (Source->ReturnType->Kind == NdTypeKind::Int ||
              (Source->ReturnType->Kind == NdTypeKind::Struct &&
               Source->ReturnType->IsEnum)) &&
             Mod.getDataLayout().getTypeStoreSize(Call->getType()) >
                 Source->ReturnType->Size)
-          Fits = !valueFeedsPrintedUse(Call);
+          Fits = !valueFeedsPrintedUse(Call) ||
+                 llvm::all_of(Call->users(), [&](const llvm::User *User) {
+                   if (readsOnlyLowBits(*User, Source->ReturnType->Size * 8))
+                     return true;
+                   // A direct return forwards only the enclosing definition's
+                   // declared bits if its own consumers pass the same check.
+                   const auto *Ret = llvm::dyn_cast<llvm::ReturnInst>(User);
+                   const TypeRef Return =
+                       Ret ? boundIntegerResult(Fn) : TypeRef{};
+                   return Return && Return->Size <= Source->ReturnType->Size;
+                 });
         if (Fits)
           SourceImportPrototypes.insert_or_assign(Name, *Source);
         else {
@@ -2853,6 +2926,8 @@ std::string LLVMCWriter::sourceScalarType(llvm::Type *T, bool Signed) const {
 
 std::string
 LLVMCWriter::sourceFunctionResultType(const llvm::Function &Function) const {
+  if (const TypeRef Bound = boundIntegerResult(Function))
+    return typeToC(NdType::makeInt(Bound->Size, Bound->IsSigned));
   if (const auto Complex = readLLVMSourceComplexResult(
           Function.getReturnType(), Function.getAttributes()))
     return typeToC(Complex);

@@ -173,14 +173,8 @@ private:
   }
 
   void pageFault(uint32_t Reason) {
-    const bool FetchBit =
-        Execute && ((S.CR4 & SMEP) || ((S.CR4 & PAE) && (S.EFER & NXE)));
     Result.Status = X86PageWalkStatus::Exception;
-    Result.Exception =
-        X86MemoryException{14,
-                           Reason | (Write ? 2u : 0u) | (UserAccess ? 4u : 0u) |
-                               (FetchBit ? 16u : 0u),
-                           A.Address};
+    Result.Exception = x86PageFault(Reason, S, A);
   }
 
   bool reserved(uint64_t E, unsigned Level, bool IsLarge) const {
@@ -215,6 +209,17 @@ private:
 };
 
 } // namespace
+
+X86MemoryException x86PageFault(uint32_t Reason, const X86PagingState &S,
+                                const X86LinearAccess &A) {
+  const bool Fetch = A.Kind == MemoryAccessKind::Execute &&
+                     ((S.CR4 & SMEP) || ((S.CR4 & PAE) && (S.EFER & NXE)));
+  const bool UserAccess = A.CPL == 3 && !A.ImplicitSupervisor;
+  return {14,
+          Reason | (A.Kind == MemoryAccessKind::Write ? 2u : 0u) |
+              (UserAccess ? 4u : 0u) | (Fetch ? 16u : 0u),
+          A.Address};
+}
 
 llvm::Error validateX86PagingState(const X86PagingFeatures &F,
                                    const X86PagingState &S) {

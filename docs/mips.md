@@ -40,13 +40,21 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   updated value on its taken edge. The classic `b` alias and
   `beql $zero,$zero` always execute their slot and have one successor.
   Every incoming path, including loop backedges, must establish the same
-  value. Calls and independent entries end the proof. The completed write
-  must match the image-wide register-info GP. This covers assembler `.cpsetup` and Clang's calculation
-  in a temporary GPR. The caller's incoming GP and later register writes keep
-  their own values. Scoped GP records cannot supply this proof. A full-width
+  value. After an ordinary n32/n64 call, a saved entry value survives in a
+  register the ABI preserves. The call's executed delay slot participates in
+  that proof. An independent entry ends it. The completed write must match
+  the image-wide register-info GP. This covers assembler `.cpsetup` and
+  Clang's calculation in a temporary GPR. The caller's incoming GP and later
+  register writes keep their own values. A GP used as data is relative to the
+  linked GOT even when its value lies outside the mapped image. A full-width
   GOT import load retains its symbol through n32's sign extension. A static
   GNU GOT with a single GP and no TLS can supply the initial address of a
   writable callback object. The call reads the object's current pointer.
+  Scoped GP records cannot supply the image-wide GP proof.
+- When the incoming return address is saved only on the stack, its slot must
+  stay private across calls. An untyped result passed to another opaque call
+  can carry a frame address. Replacing that argument before the call, including
+  in its executed delay slot, removes the earlier value from the proof.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and

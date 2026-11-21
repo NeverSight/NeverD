@@ -85,6 +85,10 @@ public:
     Valid = either(Valid, both(Trap, member(Vector, kX86TrapVectors)));
     Valid = either(Valid, both(Abort, member(Vector, kX86AbortVectors)));
     Valid = either(Valid, both(Fault, member(Vector, kX86FaultVectors)));
+    if constexpr (Writer::FaultableMemory) {
+      if (W.permitsEnclaveBreakpointFault())
+        Valid = either(Valid, both(Fault, eq(Vector, k(3))));
+    }
     W.rejectIf(eq(Valid, NdVar::scalar(0, 1)));
     for (auto Offset :
          {offsetof(Event, STIBlocked), offsetof(Event, SSBlocked),
@@ -163,10 +167,10 @@ public:
         choose(either(Software, DebugAccess), masked(Flags, ~uint64_t{0x10000}),
                choose(either(Fault, Repeated),
                       op(NdOp::INT_OR, {Flags, k(0x10000)}), Flags));
-    W.beginEvent(NMI);
+    const auto FrameFlags = W.beginEvent(NMI, SavedFlags);
     X64ContinuationEvents<Writer>(W, Base::AddressBits,
                                   Base::DescriptorCanonicality)
-        .interrupt(Vector, SavedPC, SavedFlags, op(NdOp::INT_ZEXT, {HasError}),
+        .interrupt(Vector, SavedPC, FrameFlags, op(NdOp::INT_ZEXT, {HasError}),
                    Error, op(NdOp::INT_ZEXT, {Software}),
                    op(NdOp::INT_ZEXT, {NMI}), op(NdOp::INT_ZEXT, {PageFault}),
                    FaultAddress);

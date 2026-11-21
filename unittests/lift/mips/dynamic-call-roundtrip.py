@@ -15,7 +15,7 @@ from itertools import product
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
-from roundtrip import STACK, STOP, emulator, invoke, map_image, mips
+from roundtrip import STACK, STOP, emulator, invoke, map_image, mips, word_value
 from unicorn import UC_HOOK_CODE, UC_HOOK_MEM_READ, UC_TLB_VIRTUAL, UcError
 from mips_validation_artifacts import MIPSValidationArtifacts
 
@@ -54,6 +54,9 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     name = profile + "-import" + ("" if form == "direct" else "-" + form)
     obj, shared = work / (name + ".o"), work / (name + ".so")
     fixture = "pic-guarded-import.c" if form == "guarded" else "pic-import.S"
+    chain = form.startswith("chain")
+    if chain:
+        fixture = "pic-import-chain.c" if form == "chain-compiled" else "pic-import-chain.S"
     flags = {
         "direct": [], "guarded": [], "saved": ["-DSAVED_ENTRY"],
         "likely-taken": ["-DSAVED_ENTRY", "-DLIKELY_TAKEN"],
@@ -63,10 +66,14 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         "entry-loop": ["-DENTRY_HEADER"],
         "slot-setup": ["-DSLOT_SETUP"],
         "slot-barrier": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED", "-DSLOT_BARRIER"],
+        "chain": [], "chain-compiled": [], "chain-overwrite": ["-DREPLACE_ARGUMENT"], "chain-spill": ["-DSPILL_GP"],
     }[form]
     command([args.clang, *original_flags, "-O2", *flags, "-c", Path(__file__).with_name(fixture),
              "-o", obj], name + "-compile")
-    command([*linker, "-shared", obj, *companions, "-o", shared], name + "-link")
+    high_link = (profile.startswith("n32-") and args.linkage == "cpic" and
+                 form in ("chain", "chain-spill"))
+    placement = ["-Ttext=0x81010000"] if high_link else []
+    command([*linker, "-shared", *placement, obj, *companions, "-o", shared], name + "-link")
     artifacts.discard(obj)
     elf = ELFFile(io.BytesIO(shared.read_bytes()))
     flags = 4 if args.linkage == "cpic" else 6
@@ -75,25 +82,50 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     dyn = {entry.entry.d_tag: entry.entry.d_val
            for entry in elf.get_section_by_name(".dynamic").iter_tags()}
     syms = list(elf.get_section_by_name(".dynsym").iter_symbols())
-    types = ("STT_FUNC", "STT_NOTYPE") if form == "guarded" else ("STT_FUNC",)
-    index = next(i for i, sym in enumerate(syms) if sym.name == "dispatch"
-                 and sym["st_shndx"] == "SHN_UNDEF" and sym["st_info"]["type"] in types)
+    types = ("STT_FUNC", "STT_NOTYPE") if fixture.endswith(".c") else ("STT_FUNC",)
     width = elf.elfclass // 8
-    slot = dyn["DT_PLTGOT"] + width * (dyn["DT_MIPS_LOCAL_GOTNO"] + index - dyn["DT_MIPS_GOTSYM"])
+    imports = ("dispatch", "transform") if chain else ("dispatch",)
+    slots = []
+    for symbol in imports:
+        index = next(i for i, sym in enumerate(syms) if sym.name == symbol
+                     and sym["st_shndx"] == "SHN_UNDEF" and sym["st_info"]["type"] in types)
+        slots.append(dyn["DT_PLTGOT"] + width * (dyn["DT_MIPS_LOCAL_GOTNO"] + index - dyn["DT_MIPS_GOTSYM"]))
+    bindings = list(product(range(len(callbacks)), repeat=len(imports)))
     bias = 0x100200000 if width == 8 else 0x200000
+    if high_link:
+        bias = 0xffffffff80210000 - 0x81010000
+    elif form == "chain-spill" and width == 4:
+        bias = 0xffffffff80200000
     order = "little" if little else "big"
+    got = dyn["DT_PLTGOT"]
+    linked_gp = symbols(shared)["_gp"]["st_value"]
 
-    def execute(uc, entry, variant, entry_gp, reads=None):
-        if width == 8:
+    def execute(uc, entry, binding, entry_gp, storage, watched, got_storage):
+        if bias > 0xffffffff:
             uc.ctl_set_tlb_mode(UC_TLB_VIRTUAL)
-        address = callbacks[variant]
-        uc.mem_write(bias + slot, address.to_bytes(width, order))
+        for address, variant in zip(storage, binding):
+            uc.mem_write(address, callbacks[variant].to_bytes(width, order))
+        reads = []
+        for index in watched:
+            uc.hook_add(UC_HOOK_MEM_READ, lambda cpu, access, addr, size, val, data: reads.append((addr, size)),
+                        begin=storage[index], end=storage[index])
         observations = []
+        rebind = form == "chain-spill"
         def visit(cpu, pc, size, data):
-            observations.append((cpu.reg_read(mips.UC_MIPS_REG_A0), cpu.reg_read(mips.UC_MIPS_REG_A1)))
-        uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
+            observed = (pc, cpu.reg_read(mips.UC_MIPS_REG_A0), cpu.reg_read(mips.UC_MIPS_REG_A1))
+            if form == "chain-spill" and not observations:
+                observed += (cpu.reg_read(mips.UC_MIPS_REG_A2),)
+                if rebind:
+                    cpu.mem_write(storage[1], callbacks[binding[1]].to_bytes(width, order))
+            observations.append(observed)
+        for address in set(callbacks):
+            uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
+        saved = {16: 0x6789ab, 17: 0x321fed, 28: entry_gp}
         for value in values:
-            result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, 28: entry_gp})
+            if rebind:
+                # The second call must observe a GOT update made by the first.
+                uc.mem_write(storage[1], callbacks[1 - binding[1]].to_bytes(width, order))
+            result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, **saved})
             argument = value
             if form == "loop":
                 argument = (value + (value & 3)) & 0xffffffffffffffff
@@ -101,59 +133,86 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                 argument = (value + 4) & 0xfffffffffffffffc
             elif form == "likely-join" and value:
                 argument = (value + 1) & 0xffffffffffffffff
-            expected = ((argument + 37 if variant else argument ^ 37) + 1) & 0xffffffffffffffff
-            expected_calls = [(argument, 37)]
+            first = (argument + 37 if binding[0] else argument ^ 37) & 0xffffffffffffffff
+            expected_calls = [(callbacks[binding[0]], argument, 37)]
+            if form == "chain-spill":
+                address = got_storage + linked_gp - got
+                if width == 4:
+                    address = word_value(address)
+                expected_calls[0] += (address & 0xffffffffffffffff,)
+            last = first
+            if chain:
+                argument = first
+                if form == "chain-overwrite":
+                    argument = 19
+                elif form == "chain-compiled":
+                    argument = value
+                expected_calls.append((callbacks[binding[1]], argument, 11))
+                last = argument + 11 if binding[1] else argument ^ 11
+            expected = (last + 1) & 0xffffffffffffffff
             if not value and form in ("guarded", "likely-taken", "likely-skipped",
                                       "slot-setup", "slot-barrier"):
                 expected, expected_calls = 11, []
             if (result != expected or observations != expected_calls or
-                    uc.reg_read(mips.UC_MIPS_REG_GP) != entry_gp or
+                    any(uc.reg_read(getattr(mips, f"UC_MIPS_REG_{reg}")) != initial for reg, initial in saved.items()) or
                     uc.reg_read(mips.UC_MIPS_REG_RA) != STOP or uc.reg_read(mips.UC_MIPS_REG_SP) != STACK):
-                raise AssertionError(f"{name} wrong import result, arguments or saved state for {value:#x}")
+                raise AssertionError(f"{name} wrong import result, arguments or saved state for {value:#x}: "
+                                     f"{result:#x}, calls {observations}, expected {expected:#x}, {expected_calls}")
             observations.clear()
-            if reads is not None:
-                if reads != [width] * len(expected_calls):
-                    raise AssertionError(f"{name} wrong native GOT loads for {value:#x}: {reads}")
-                reads.clear()
+            if reads != [(storage[i], width) for i in watched if i < len(expected_calls)]:
+                raise AssertionError(f"{name} wrong GOT loads for {value:#x}: {reads}")
+            reads.clear()
 
-    for variant in range(2):
+    for binding in bindings:
         uc, entry = emulator(shared, 64, little, "import_probe", original=provider, load_bias=bias)
-        reads = []
-        uc.hook_add(UC_HOOK_MEM_READ, lambda uc, access, addr, size, val, data: reads.append(size),
-                    begin=bias + slot, end=bias + slot)
-        execute(uc, entry, variant, 0x486100, reads)
+        execute(uc, entry, binding, 0x486100, [bias + slot for slot in slots], range(len(slots)), bias + got)
 
-    for backend in ("highc", "llvmc"):
+    routes = [("highc", []), ("llvmc", ["--llvm"])]
+    if profile.startswith("n32-") and form in ("chain", "chain-spill"):
+        routes.append(("llvmc-unoptimized", ["--llvm", "--llvm-opt=O0"]))
+    for backend, options in routes:
         source = work / f"{name}-{backend}.c"
-        command([args.neverd, "decompile", "--func=import_probe", *(["--llvm"] if backend == "llvmc" else []),
+        command([args.neverd, "decompile", "--func=import_probe", *options,
                  shared, "-o", source], name + "-" + backend)
         artifacts.keep_source(source)
+        source_text = source.read_text()
         for optimization in (0, 2):
             build = f"{name}-{backend}-O{optimization}"
             obj = work / (build + ".o")
             command([args.clang, *fixed_flags, f"-O{optimization}", "-c", source, "-o", obj], build + "-compile")
             external = {k for k, sym in symbols(obj).items() if sym["st_shndx"] == "SHN_UNDEF"}
-            if "dispatch" not in external:
-                raise AssertionError(f"{build} lost the ELF function import")
+            missing = set(imports) - external
+            dynamic = {"transform"} if form == "chain-spill" else set()
+            if missing != dynamic:
+                raise AssertionError(f"{build} expected dynamic slots {sorted(dynamic)}, got {sorted(missing)}")
             backing = []
-            for symbol in external - {"dispatch"}:
+            for symbol in external - set(imports):
                 match = re.fullmatch(r"(?:unk|off)_([0-9A-Fa-f]+)", symbol)
                 if not match:
                     raise AssertionError(f"{build} unexpected external {symbol}")
-                backing.append(f"--defsym={symbol}={bias + int(match[1], 16)}")
+                backing.append(f"--defsym={symbol}={(bias + int(match[1], 16)) % (1 << (8 * width))}")
             hashes = []
-            for variant, address in enumerate(callbacks):
-                rebuilt = work / f"{build}-{variant}.elf"
+            for index, binding in enumerate(bindings):
+                rebuilt = work / f"{build}-{index}.elf"
+                resolved = [f"--defsym={symbol}={callbacks[variant]}" for symbol, variant in zip(imports, binding)
+                            if symbol in external]
                 command([*linker, "-e", "import_probe", "-Ttext=0x18000", *backing,
-                         f"--defsym=dispatch={address}", obj, "-o", rebuilt], f"{build}-link-{variant}")
+                         *resolved, obj, "-o", rebuilt], f"{build}-link-{index}")
                 uc, entry = emulator(rebuilt, 64, little, "import_probe", original=provider)
                 map_image(uc, elf, set(), bias)
-                execute(uc, entry, variant, symbols(rebuilt)["_gp"]["st_value"])
+                rebuilt_symbols = symbols(rebuilt)
+                storage = [rebuilt_storage(source_text, rebuilt_symbols, slot, width, bias + slot)
+                           if symbol in missing else bias + slot for slot, symbol in zip(slots, imports)]
+                got_storage = bias + got
+                if form == "chain-spill":
+                    got_storage = rebuilt_storage(source_text, rebuilt_symbols, got, width, got_storage)
+                execute(uc, entry, binding, rebuilt_symbols["_gp"]["st_value"], storage,
+                        [i for i, symbol in enumerate(imports) if symbol in missing], got_storage)
                 hashes.append(hashlib.sha256(rebuilt.read_bytes()).hexdigest())
                 artifacts.discard(rebuilt)
             artifacts.discard(obj)
             results.append({"profile": name, "backend": backend, "optimization": optimization,
-                            "cases": 2 * len(values), "load_bias": bias,
+                            "cases": len(bindings) * len(values), "load_bias": bias,
                             "original_sha256": hashlib.sha256(shared.read_bytes()).hexdigest(),
                             "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                             "rebuilt_sha256": hashes})
@@ -383,7 +442,8 @@ word probe(word value) { return target(value, 37) + 1; }
                 artifacts.discard(obj, rebuilt)
         if pic and value_bits == 64:
             for form in ("direct", "saved", "guarded", "likely-taken", "likely-skipped",
-                         "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier"):
+                         "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier",
+                         "chain", "chain-compiled", "chain-overwrite", "chain-spill"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)

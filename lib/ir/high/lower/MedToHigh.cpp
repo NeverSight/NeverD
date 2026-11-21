@@ -38,6 +38,7 @@
 #include "neverd/ir/med/AArch64/AArch64SVEState.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedPrologueSaves.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/X86/I386PicAddress.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/LanguageRuntime.h"
@@ -92,18 +93,6 @@ TypeRef multiRegisterReturnType(const std::vector<MedReturnReg> &Fields) {
                                  : NdType::makeInt(Field.Size, false));
   }
   return registerReturnType(std::move(Members));
-}
-
-/// Whether \p Fields are the platform's integer return pair (RAX:RDX, X0:X1),
-/// which C returns as a double-word integer.  Every other shape is a record
-/// (multiRegisterReturnType), at a call and in the function it calls alike:
-/// Go's register ABI returns RAX:RBX.
-bool integerReturnPair(const std::vector<MedReturnReg> &Fields,
-                       const TargetRegInfo &TRI) {
-  return Fields.size() == 2 && !Fields[0].IsFP && !Fields[1].IsFP &&
-         Fields[0].RegOff == TRI.IntReturnReg &&
-         Fields[1].RegOff == TRI.IntReturnReg2 &&
-         Fields[0].Size == TRI.PointerSize && Fields[1].Size == TRI.PointerSize;
 }
 
 // Temporary, opt-in observation of the actual source-recovery conversion.
@@ -398,8 +387,8 @@ TypeRef MedToHighConverter::sourceCallResultType(const MedOp &Op) const {
                    [](const auto &Field) { return Field.IsFP; }))
     return multiRegisterReturnType(*Op.RegisterReturnFields);
   if (Op.RegisterReturnFields &&
-      !integerReturnPair(*Op.RegisterReturnFields,
-                         getTargetRegInfo(TargetArch)))
+      !isWholeIntegerReturnPair(*Op.RegisterReturnFields,
+                                getTargetRegInfo(TargetArch)))
     if (TypeRef Record = multiRegisterReturnType(*Op.RegisterReturnFields))
       return Record;
   if (Op.ScalarCallSignature && !Op.ScalarCallSignature->ReturnBytes &&
@@ -2041,7 +2030,7 @@ HighFunc MedToHighConverter::convertOnce(const MedFunc &Med, Arch TheArch) {
   if (Med.ReturnsVectorRegister && Func.ReturnType)
     Func.ReturnType = NdType::makeInt(Func.ReturnType->Size, false);
   if (!Med.SourceParametersBound && !Med.ExplicitMIPSRecordResult &&
-      integerReturnPair(Med.MultiReturn, ReturnTRI))
+      isWholeIntegerReturnPair(Med.MultiReturn, ReturnTRI))
     Func.ReturnType = NdType::makeInt(2 * ReturnTRI.PointerSize);
   else if (!Med.SourceParametersBound &&
            (Med.ExplicitMIPSRecordResult || Med.MultiReturn.size() >= 2) &&

@@ -13,6 +13,49 @@
 
 using namespace neverd::types;
 
+TEST(TypeRender, AnonymousPointeesRetainTheirDefinitionAndDeclarator) {
+  TypeLibrary Library(DataModel::LLP64);
+  ASSERT_TRUE(
+      parseCTypes(
+          "struct Options { unsigned count; struct { long code; } *values; "
+          "union { int i; char c; } *const choices[2]; "
+          "enum { Enabled = 1 } (*flags)[3]; };",
+          Library)
+          .ok());
+  const auto *Options = Library.find("Options");
+  ASSERT_NE(Options, nullptr);
+  const auto Text = renderType(Library, *Options, {});
+  EXPECT_EQ(Text.find("/* anonymous */"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("} *values;"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("} *const choices[2];"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("} (*flags)[3];"), std::string::npos) << Text;
+  TypeLibrary Restored(DataModel::LLP64);
+  ASSERT_TRUE(parseCTypes(Text, Restored).ok()) << Text;
+  const auto *Read = Restored.find("Options");
+  ASSERT_TRUE(Read && Read->Record);
+  EXPECT_EQ(Read->Record->Size, Options->Record->Size);
+}
+
+TEST(TypeRender, InlinePointeesDefineTheirValueDependenciesFirst) {
+  TypeLibrary Library(DataModel::LLP64);
+  ASSERT_TRUE(parseCTypes("struct Options; "
+                          "typedef struct Detail { long code; } Detail; "
+                          "struct Unused { int field; }; "
+                          "struct Options { struct { Detail item; } **items; "
+                          "struct Unused *opaque; };",
+                          Library)
+                  .ok());
+  const auto *Options = Library.find("Options");
+  ASSERT_NE(Options, nullptr);
+  const std::string Text = renderTypes(Library, {Options}, {});
+  TypeLibrary Restored(DataModel::LLP64);
+  ASSERT_TRUE(parseCTypes(Text, Restored).ok()) << Text;
+  const auto *Read = Restored.find("Detail");
+  ASSERT_TRUE(Read && Read->Record && Read->Record->Defined) << Text;
+  const auto *Opaque = Restored.find("Unused");
+  ASSERT_TRUE(Opaque && Opaque->Record && !Opaque->Record->Defined) << Text;
+}
+
 TEST(TypeRender, ForeignWidthPointersAreAddressesInOtherLanguages) {
   for (const auto Model : {DataModel::ILP32, DataModel::LLP64}) {
     TypeLibrary Library(Model);

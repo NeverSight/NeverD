@@ -766,12 +766,35 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     std::map<va_t, std::string> Declarations, const BinaryImage *Image,
     std::vector<types::HeaderLibrary> Headers,
     std::unordered_map<uint64_t, std::string> Recognized, std::string EntryType,
-    std::optional<va_t> ProgramMain, std::string EntryDeclaration)
+    std::optional<va_t> ProgramMain, std::string EntryDeclaration,
+    std::vector<va_t> WindowsDriverEntries)
     : Inner(Inner), Types(std::move(Types)),
-      Declarations(std::move(Declarations)), Image(Image),
+      Declarations(std::move(Declarations)),
+      WindowsDriverEntries(std::move(WindowsDriverEntries)), Image(Image),
       Headers(std::move(Headers)), Recognized(std::move(Recognized)),
       EntryType(std::move(EntryType)),
-      EntryDeclaration(std::move(EntryDeclaration)), ProgramMain(ProgramMain) {}
+      EntryDeclaration(std::move(EntryDeclaration)), ProgramMain(ProgramMain) {
+  if (!this->WindowsDriverEntries.empty()) {
+    WindowsDriverSignature = entryTypeSignature("PDRIVER_INITIALIZE", true);
+    if (!WindowsDriverSignature)
+      this->WindowsDriverEntries.clear();
+  }
+  refreshBoundFunctionEntries();
+}
+
+void LocalTypesDebugContext::refreshBoundFunctionEntries() {
+  const auto InnerEntries = Inner.boundFunctionEntries();
+  BoundFunctionEntries.assign(InnerEntries.begin(), InnerEntries.end());
+  for (const auto &Declaration : Declarations)
+    BoundFunctionEntries.push_back(Declaration.first);
+  BoundFunctionEntries.insert(BoundFunctionEntries.end(),
+                              WindowsDriverEntries.begin(),
+                              WindowsDriverEntries.end());
+  llvm::sort(BoundFunctionEntries);
+  BoundFunctionEntries.erase(
+      std::unique(BoundFunctionEntries.begin(), BoundFunctionEntries.end()),
+      BoundFunctionEntries.end());
+}
 
 LocalTypesDebugContext::~LocalTypesDebugContext() {
   std::lock_guard<std::mutex> Guard(Mutex);
@@ -806,6 +829,8 @@ bool LocalTypesDebugContext::takeDeclarations(
       llvm::any_of(Changed, [&](va_t Entry) { return hidesPrototype(Entry); });
   std::lock_guard<std::mutex> Guard(Mutex);
   Declarations = std::move(Next);
+  if (!Changed.empty())
+    refreshBoundFunctionEntries();
   for (const va_t Entry : Changed)
     DeclaredSignatures.erase(Entry);
   return Hides;
@@ -1397,8 +1422,26 @@ std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
       Signature->PrototypeDeclaration = EntryDeclaration;
     return Signature;
   }
-  // A typedef of a pointer to a function, as UEFI's EFI_IMAGE_ENTRY_POINT.
-  const types::LocalType *Type = Types->find(EntryType);
+  return entryTypeSignature(EntryType);
+}
+
+std::optional<FunctionSym>
+LocalTypesDebugContext::entryTypeSignature(llvm::StringRef TypeName,
+                                           bool RequireHeader) const {
+  const types::TypeLibrary *Source = Types.get();
+  llvm::StringRef Provider;
+  for (const types::HeaderLibrary Library : Headers)
+    if (const types::TypeLibrary *Header = types::headerLibrary(Library);
+        Header && Header->find(TypeName)) {
+      Provider = types::headerLibraryName(Library);
+      if (RequireHeader)
+        Source = Header;
+      break;
+    }
+  if (RequireHeader && Provider.empty())
+    return std::nullopt;
+  // EFI_IMAGE_ENTRY_POINT and PDRIVER_INITIALIZE both name function pointers.
+  const types::LocalType *Type = Source->find(TypeName);
   if (!Type || Type->Kind != types::TypeKind::Typedef || !Type->Target ||
       Type->Target->Kind != types::TypeExprKind::Pointer ||
       !Type->Target->Element)
@@ -1406,7 +1449,7 @@ std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
   const auto &Pointee = *Type->Target->Element;
   const types::FunctionDef *Function = Pointee.Function.get();
   if (Pointee.Kind == types::TypeExprKind::Named) {
-    const types::LocalType *Named = Types->resolve(Pointee.Name);
+    const types::LocalType *Named = Source->resolve(Pointee.Name);
     Function = Named && Named->Kind == types::TypeKind::Function
                    ? Named->Function.get()
                    : nullptr;
@@ -1415,15 +1458,11 @@ std::optional<FunctionSym> LocalTypesDebugContext::entrySignature() const {
   if (!Function)
     return std::nullopt;
   std::optional<FunctionSym> Signature =
-      signatureOf(*Types, *Function, std::string());
+      signatureOf(*Source, *Function, std::string());
   if (!Signature)
     return Signature;
-  for (const types::HeaderLibrary Library : Headers)
-    if (const types::TypeLibrary *Header = types::headerLibrary(Library);
-        Header && Header->find(EntryType)) {
-      Signature->PrototypeLibrary = types::headerLibraryName(Library).str();
-      break;
-    }
+  Signature->PrototypeLibrary = Provider.str();
+  Signature->PrototypeFromHeader = RequireHeader;
   return Signature;
 }
 
@@ -1540,6 +1579,12 @@ std::optional<FunctionSym> LocalTypesDebugContext::undeclared(va_t Addr) const {
       if (const std::optional<FunctionSym> Other = resolvePrototype(Names[I]);
           Other && !passesAlike(*Known, *Other))
         return Function;
+  // video.h also declares a miniport DriverEntry. The authenticated operating
+  // system entry follows DRIVER_INITIALIZE even when that header is joined.
+  if (WindowsDriverSignature &&
+      (!Known || !isUserFunctionDeclaration(*Known)) &&
+      llvm::is_contained(WindowsDriverEntries, Addr))
+    Known = WindowsDriverSignature;
   // The image's entry point, as its kind's specification types it: a UEFI
   // application's (ImageHandle, SystemTable).
   if (!Known && Image && Addr == Image->Entry &&

@@ -22,6 +22,7 @@
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/med/MIPS/MIPSIntrinsicShapes.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 
 #include "llvm/ADT/DenseSet.h"
 
@@ -103,8 +104,9 @@ bool MedLLVMEmitter::resolveMaterializableDataAddress(const MedVar &V,
     if (OwnerSeg && OwnerSeg->isReadable()) {
       const uint64_t Begin = OwnerSec ? OwnerSec->VA : OwnerSeg->VA;
       const uint64_t Size = OwnerSec ? OwnerSec->Size : OwnerSeg->Size;
-      HasOwnedRoute = Size <= InvalidVA - Begin && Cur.ConstVal >= Begin &&
-                      Cur.ConstVal <= Begin + Size;
+      HasOwnedRoute = (Size <= InvalidVA - Begin && Cur.ConstVal >= Begin &&
+                       Cur.ConstVal <= Begin + Size) ||
+                      mipsPICGPAnchor(*Img, Cur.ConstVal) == Cur.AddressOwnerVA;
     }
   }
   if ((Cur.Provenance != ConstantAddressProvenance::DataAddress &&

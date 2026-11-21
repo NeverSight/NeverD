@@ -50,6 +50,23 @@ TEST(VarArgFixedCount, PrintfFamily3Fixed) {
   EXPECT_EQ(varArgFixedCount("swprintf", LibCVariant::GNU), 3u);
 }
 
+TEST(VarArgFixedCount, SQLiteFormattersFollowTheirDeclaredOrder) {
+  for (auto Variant : {LibCVariant::GNU, LibCVariant::Windows}) {
+    EXPECT_EQ(varArgFixedCount("sqlite3_mprintf", Variant), 1u);
+    EXPECT_EQ(varArgFixedCount("sqlite3_snprintf", Variant), 3u);
+    EXPECT_EQ(varArgFixedParamKind("sqlite3_snprintf", 0, Variant),
+              VarArgFixedParamKind::Integer);
+    EXPECT_EQ(varArgFixedParamKind("sqlite3_snprintf", 1, Variant),
+              VarArgFixedParamKind::Pointer);
+    EXPECT_EQ(varArgFixedParamKind("sqlite3_snprintf", 2, Variant),
+              VarArgFixedParamKind::Pointer);
+    for (auto Name : {"sqlite3_vmprintf", "sqlite3_vsnprintf"}) {
+      EXPECT_TRUE(isVaListConsumer(Name));
+      EXPECT_EQ(varArgFixedCount(Name, Variant), 0u);
+    }
+  }
+}
+
 TEST(VarArgFixedCount, UCRTCommonConsumersKeepTheirVaListArgument) {
   for (const auto *Routine :
        {"__stdio_common_vfprintf", "__stdio_common_vfscanf",
@@ -741,6 +758,18 @@ TEST(LibCPrototype, WindowsRuntimeNamesStayInPE) {
   }
   EXPECT_FALSE(libcArityForSymbol("_lock", LibCVariant::GNU).has_value());
   EXPECT_FALSE(libcArityForSymbol("terminate", LibCVariant::GNU).has_value());
+}
+
+TEST(LibCPrototype, WindowsSecurityCookieStartupTakesNoEntryRegisters) {
+  const auto *Prototype =
+      libcPrototype("__security_init_cookie", BinaryFormat::COFF);
+  ASSERT_NE(Prototype, nullptr);
+  EXPECT_EQ(Prototype->ParamCount, 0u);
+  EXPECT_FALSE(Prototype->Variadic);
+  EXPECT_FALSE(Prototype->Winapi);
+  EXPECT_EQ(libcResult("__security_init_cookie", LibCVariant::Windows),
+            LibCResult::Void);
+  EXPECT_FALSE(libcPrototype("security_init_cookie", BinaryFormat::COFF));
 }
 
 TEST(LibCPrototype, WindowsLongJumpHasTwoParametersAndNoResult) {

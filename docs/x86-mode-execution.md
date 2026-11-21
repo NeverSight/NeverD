@@ -1,4 +1,31 @@
-# Continuous protected, compatibility and 64-bit execution
+# Continuous x86 machine execution
+
+The mixed-mode CPU also executes real-address firmware and virtual-8086
+threads. In real-address mode CS.D selects the instruction width. Enabling PE
+retains CPL0 and the old code cache until the first protected CS load, including
+when the visible selector has a nonzero RPL. Protected task gates and nested
+IRET publish TR, LDTR, the incoming register image and each loaded segment.
+During a backing stop the continuation identifies the original instruction or
+accepted event even when the incoming task has already replaced EIP. Once
+the incoming task is installed, its continuation owns the remaining descriptor
+loads and completes the original instruction once.
+
+Compatibility CALL and JMP can load a 16-byte IA-32e call gate. A privilege
+change reads the incoming full-width stack pointer from the TSS and pushes the
+old SS, ESP, CS and return address in eight-byte slots. The stack and branch
+target can reside in the upper canonical half. A direct compatibility CALL to
+long code uses the flat ESP address and pushes CS and the return offset in
+slots of the instruction's operand width. Word and dword IRET and far RET
+read the caller's compatibility frame and select the destination code width
+from its descriptor.
+
+An optional per-CPU SMM state and separate system RAM bind the KVM save map
+selected by the processor’s long-mode capability. A software SGX bank binds imported SECS, TCS and EPCM pages for x64
+enclave threads. Machine checks, SMI, INIT, SIPI, NMI and fixed APIC arrivals
+are polled at instruction boundaries, including HLT and a zero instruction
+budget. See the
+[SMM execution profile](x86-smm-return.md), [SGX execution profile](x86-sgx-transfer.md)
+and [local APIC delivery](x86-local-apic.md).
 
 `analysis::X86ModeExecution` retains one full-width `X86ModeState` while the
 original instructions change CR0, CR3, CR4, EFER and CS. A program entry is
@@ -6,7 +33,11 @@ identified by its full linear address and execution mode. Protected and
 compatibility code use the original-byte executor; code64 uses the authenticated
 body and validator from the same paged HighC or LLVM-to-C export. Enable
 `scheduled_events` for STI and MOV SS, whose source contract requires persistent
-interruptibility state.
+interruptibility state. Select `notify_cr8_writes` when the exported
+program uses MOV CR8. The raw paged step reports the completed write to the
+mixed-mode CPU, which updates the bound APIC before polling the next event.
+The exported scheduled driver uses the producer callback. [CR8 write completion](x64-continuation-source.md#cr8-write-completion)
+
 Bind exact-type wrappers around the export's paged adapters; keep generated
 libraries and borrowed callback contexts alive through resume. Generated
 source compiles for the x64 host with Clang or NeverC. Guest code16/code32 does
@@ -21,13 +52,12 @@ explicitly; no host CPU state is inferred.
 ## State and transition ownership
 
 The complete V7 register, segment, descriptor-table, CR2 and SYSENTER banks,
-plus debug state, STI/SS/halt and terminal shutdown state, belong to
-`X86ModeState`. The non-64-bit
-executor receives a temporary low-width view. Explicit write receipts publish
-CR2, addressed DR0..3, CS/SS and data-segment changes; unchanged low halves never
-prove that a full-width write did not occur. Full GDTR/LDTR addresses remain available to
-compatibility far transfers and selector loads. Full DR addresses remain
-available to instruction/event comparators. Upper halves cannot alias a low-32-bit watchpoint address.
+plus debug state, STI/SS interrupt shadows, halt and shutdown, belong to
+`X86ModeState`. The non-64-bit executor receives a temporary low-width view.
+It reports writes to CR2, DR0..3, CS/SS, data segments and task state. The
+mixed-mode owner uses those receipts to publish full-width values even when
+the low bits compare equal. Compatibility transfers use full GDTR, LDTR and
+TSS addresses. Instruction and event comparators receive full DR addresses.
 
 `planX86PagingControlWrite` owns CR0/CR3/CR4 transition checks. Its consumer
 validates the destination domain and performs any legacy PAE PDPTE reload
@@ -39,15 +69,32 @@ existing paged RETF/IRET owners can return to compatibility dispatch.
 The explicitly bound EFER bank admits RDMSR/WRMSR of ECX=C0000080h. SCE is a
 separate supplied capability; LME/NXE use the paging feature binding. LMA is
 read-only. Reserved bits and changing LME while paging is active produce #GP;
-LOCK and privilege checks follow authenticated fetch. Other MSR banks are
-explicit refusals. These checks follow [Intel SDM Volume 3A, sections 2.2.1
+LOCK and privilege checks follow authenticated fetch. Conventional MCA
+registers belong to the optional machine-check bank described below. These checks follow [Intel SDM Volume 3A, sections 2.2.1
 and 5.1.1](https://cdrdv2.intel.com/v1/dl/getContent/671190).
+
+## Intel fast system calls
+
+Binding `Legacy.FastSystem` to `IntelSEP` enables original SYSENTER and
+SYSEXIT instructions and guest reads and writes of the three SYSENTER MSRs.
+SYSENTER from compatibility code installs the full MSR instruction and stack
+pointers and selects CPL0 code64. Protected and virtual-8086 callers enter
+CPL0 protected32. Real-address SYSENTER raises #GP. SYSEXIT selects CPL3 and
+uses EDX and ECX for the compatibility or protected destination. An effective
+REX.W in code64 selects the complete RDX and RCX and a code64 destination.
+
+These instructions install fixed segment caches without reading the GDT or
+the destination stack. A single-step trap is delivered after the new RIP, RSP,
+CS, SS and flags commit. When EIP or ESP is written by WRMSR, the modeled
+Intel CPU checks its maximum linear-address width, including when its current
+page tables use four levels. The protected guest and compatibility guest use
+x64 NeverC or Clang for compiled host bodies. [Intel SYSENTER and SYSEXIT](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf)
 
 ## Machine status and paid operand progress
 
-SMSW, LMSW and CLTS reuse the shared scalar owner in protected16/32 and
-compatibility16/32. LMSW reads a fixed word, retains PE and changes only
-CR0.MP/EM/TS. CLTS clears only TS. Full CR0 publishes before post-instruction
+SMSW, LMSW and CLTS reuse the shared scalar owner. LMSW reads a word and
+updates CR0.MP/EM/TS. It can set PE in real mode and preserves PE once set.
+CLTS clears TS. Full CR0 publishes before post-instruction
 #DB, while CR3, CR4, EFER/LMA and active or inactive PDPTE banks stay unchanged.
 These operations do not perform a MOV-CR reload. Dword SMSW requires the
 explicit `Legacy.MachineStatus = FullCR0` choice for its undefined high word.
@@ -183,8 +230,8 @@ admission; unavailable native capability skips at the caller before observation.
 All eight new groups pass again per SDK, counted separately from the full
 qualification. The software recovery/admission groups remain independent of
 those native checks. No production code changes between these two commits.
-Other mode-aware owners, software SMM/SGX and physical SGX remain open; the
-production LLVM pin stays r6 and NeverC remains host/source x64.
+At that checkpoint the production LLVM pin was r6. The software SMM and SGX
+profiles at the beginning of this document describe the current implementation.
 
 ## Events and retained progress
 
@@ -215,6 +262,12 @@ control effects. V1 `Undefined` slots supply non-64-bit GPR0..7 upper halves;
 A transition solely between compatibility and code64 retains those extended
 registers. Neither profile infers unspecified values from the host.
 
+A fault or single-step trap from a compatibility-mode system instruction uses
+those same GPR0..7 witnesses before the 64-bit IDT owner builds its frame.
+For a reserved-bit WRMSR to IA32_MC1_CTL2 this includes the pre-fault stack
+pointer, the original instruction address and the flags with RF set. A
+retired RSM uses the complete CPU image restored from SMRAM for its trap.
+
 ## Selected external IRQ/NMI
 
 `interrupt(State, Kind, Vector)` accepts a producer-selected maskable IRQ or
@@ -239,27 +292,69 @@ its entire continuation, including secondary exceptions and owner refusals.
 Resume it with `run` and zero instruction budget after repairing physical
 backing. Pending paid or unpaid instructions and event work reject a new IRQ
 or NMI before effects. The continuation authenticates the complete bank and
-uses frozen options. Shutdown is persistent and cannot be woken by IRQ/NMI;
-the embedding must supply explicitly reset state. Task-transfer options are
-refused here until the mixed-mode owner can publish the complete task bank.
+uses frozen options. A CPU in shutdown accepts INIT when startup state is
+bound. The embedding can also supply a reset machine. A protected-mode IDT task gate
+uses the bound task-switch policy and preserves the incoming task bank across
+a backing stop.
 
-The producer still owns arrival timing, priority/APIC/PIC arbitration and CR8
-policy. This API does not implement SMI, INIT, reset or machine-check production.
-The mode owner's state and method are internal C++ interfaces; existing SDK
-wire layouts and host-x64 NeverC targets are unchanged.
+Callers supply arrival timing. `run` with an `X86ModeInterrupts` bank arbitrates
+latched machine checks, SMI, INIT, SIPI, NMI and fixed local APIC vectors.
+`interrupt` accepts an already selected IRQ or NMI. The embedding supplies
+error records, controller arrivals and startup signals.
 
-## Admitted scope and evidence
+### Conventional machine checks
 
-The non-64-bit boundary deliberately admits the existing ordinary scalar,
-stack, selector transfer, direct far-JMP, machine-status, control/debug-register
-and EFER forms whose state ownership is complete here. Port/string/MPX, legacy returns,
-task/system selectors, descriptor queries, fast-system entry,
-call gates and VM86 require their separate mode-aware integration. Real/unreal
-mode, software SMM/SGX and unbound asynchronous producers remain open. A
-missing instruction binding is an explicit result; unsupported semantics never
-become a NOP.
+Bind `X86ModeState::MCA` to the virtual CPU's banks and optional global control
+register. At an instruction boundary `X86ModeInterrupts::MachineCheck` carries
+one bank number, MCi_STATUS, MCi_ADDR, MCi_MISC and MCG_STATUS. A signaled
+uncorrected error enters vector 18 ahead of SMI, NMI and fixed interrupts,
+including with IF clear or the CPU halted. A second signaled error while MCIP
+is set, or a signaled error with CR4.MCE clear, enters shutdown. Corrected
+records and nonsignaling uncorrected records update the bound banks. An
+existing uncorrected record has priority over a corrected record. Disabled
+reporting consumes the input once. Malformed reports remain available for
+correction.
 
-The regression stream performs protected32 → compatibility32 → code64 →
+Original RDMSR and WRMSR instructions read and acknowledge these banks across
+code widths. This model binds a single Intel KVM CPU with conventional MCi
+registers. With `MCA.CMCI` enabled, MCG_CAP advertises the per-bank
+IA32_MCi_CTL2 registers. Each bank binds its writable threshold width. A bank
+with a zero width reads back zero. An injected uncorrectable-no-action record
+can signal CMCI regardless of CR4.MCE. An already formed corrected KVM record
+updates the bank without a threshold notification. A device submitting one
+corrected occurrence sets `CountCorrectedError`. The CPU then increments
+the architectural count, retains its sticky overflow bit and signals CMCI
+when the programmed threshold equals that count.
+
+`X86ModeInterrupts::LocalVectorCMCI` supplies the local APIC vector, delivery
+mode and mask from its CMCI LVT register. Fixed delivery enters the existing
+IRR, priority and EOI path. NMI and SMI delivery use the CPU's corresponding
+latches. Masking the LVT still allows the bank record to commit. An unavailable
+or invalid route retains the report and the previous bank for retry. INIT
+masks the bound LVT. Cross-CPU bank sharing and the external devices that
+generate errors require separate platform state.
+[Linux KVM machine-check injection](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/x86.c)
+[Intel SDM Volume 3B, machine-check architecture](https://cdrdv2-public.intel.com/671427/253669-sdm-vol-3b.pdf)
+
+### Processor initialization and startup
+
+Bind `X86ModeState::Startup` with CPUID.01H:EAX and the logical processor's
+bootstrap role. A routed INIT clears the register and local interrupt state,
+preserves the CR0 cache-disable bits, and installs real-address CS with base
+0xffff0000 and IP 0xfff0. DR0–DR7 return to their initial values. The x87
+and vector banks, SYSENTER MSRs, STAR, KernelGSBase and machine-check records
+survive INIT. An application processor waits with its instruction budget
+intact until a SIPI selects CS.base = vector × 4096 and IP = 0. A running
+processor discards a SIPI. SMM latches INIT until RSM. When INIT interrupts
+an enclave, the CPU first saves the interrupted thread to its SSA. Startup
+keeps that enclave's EPC pages and ownership available for a later ERESUME.
+This profile accepts one logical processor outside VMX operation.
+[Linux KVM INIT and SIPI](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
+[Intel SGX section 40.9](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
+## Earlier qualification records
+
+The November 11 regression stream performs protected32 → compatibility32 → code64 →
 compatibility32 → protected32 with original WRMSR/MOV-CR/far-JMP/RETFQ bytes.
 The source matrix uses both emitters, both x64 compilers and O0/O2. Its native
 counterpart writes SREGS once at initialization and runs uninterrupted to HLT;

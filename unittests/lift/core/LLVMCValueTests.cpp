@@ -4731,10 +4731,10 @@ int main(void) {
     for (llvm::StringRef Level : {"-O0", "-O2"})
       // Execute the actual emitted C. Its scalar widths fit the host even
       // when the general wide-integer fixture's 129-bit probe does not.
-      source_call_execution_test::compileAndRun(
-          Prelude + Source + Harness,
-          {Level, "-fsanitize=undefined", "-fsanitize-trap=all",
-           "-Werror=uninitialized"});
+      source_call_execution_test::compileAndRun(Prelude + Source + Harness,
+                                                {Level, "-fsanitize=undefined",
+                                                 "-fsanitize-trap=all",
+                                                 "-Werror=uninitialized"});
   }
 }
 
@@ -5095,6 +5095,54 @@ int main(void) {
 }
 )c";
   compileAndRun(withRuntimeMocks(Source), "-O0");
+}
+
+TEST(LLVMCValues, N32ImportNameRequiresTheCapturedWordToReachTheCall) {
+  using namespace neverd;
+  for (bool Little : {false, true})
+    for (bool Volatile : {false, true})
+      for (bool Replace : {false, true}) {
+        SCOPED_TRACE(testing::Message() << Little << Volatile << Replace);
+        llvm::LLVMContext Context;
+        llvm::Module Module("captured_word", Context);
+        Module.setDataLayout(Little ? "e-p:32:32" : "E-p:32:32");
+        llvm::IRBuilder<> B(Context);
+        auto *Storage = new llvm::GlobalVariable(
+            Module, B.getInt8Ty(), false, llvm::GlobalValue::ExternalLinkage,
+            nullptr, "__nd_data_0");
+        auto *Signature = llvm::FunctionType::get(B.getInt64Ty(), {}, false);
+        auto *Fn = llvm::Function::Create(Signature,
+                                          llvm::GlobalValue::ExternalLinkage,
+                                          "observe_slot", Module);
+        B.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+        auto *Slot =
+            B.CreateGEP(B.getInt8Ty(), Storage, B.getInt32(0x81002000));
+        auto *Word = B.CreateLoad(B.getInt32Ty(), Slot);
+        Word->setVolatile(Volatile);
+        auto *Target =
+            B.CreateIntToPtr(B.CreateSExt(Word, B.getInt64Ty()), B.getPtrTy());
+        if (Replace)
+          B.CreateStore(B.getInt32(0), Slot);
+        B.CreateRet(B.CreateCall(Signature, Target));
+        BinaryImage Image;
+        Image.Arch = Little ? Arch::MIPS64N32EL : Arch::MIPS64N32;
+        Image.Bits = Bitness::Bits32;
+        Image.Format = BinaryFormat::ELF;
+        Import Entry;
+        Entry.Name = "dispatch";
+        Entry.IATAddr = 0x81002000;
+        Image.Imports.push_back(Entry);
+        CEmitterOptions Options;
+        Options.TheArch = Image.Arch;
+        Options.Format = Image.Format;
+        std::string Source;
+        llvm::raw_string_ostream Out(Source);
+        ASSERT_TRUE(LLVMCEmitter().emit(Module, Out, Options, nullptr, &Image));
+        const bool Named =
+            Source.find("return dispatch(") != std::string::npos ||
+            Source.find("= dispatch(") != std::string::npos;
+        EXPECT_EQ(Named, !Replace) << Source;
+      }
 }
 
 TEST(LLVMCValues, RuntimeVariadicFramePointersTakeTheirDeclaredPointee) {

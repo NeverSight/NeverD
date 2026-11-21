@@ -4519,6 +4519,16 @@ the original machine code are checked against the same full-width oracle.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.
+Use `--family funnel-window --count 18` for 144 products of 107 to 321
+factors. The sampled bits come from two independently shifted words joined by
+OR, XOR or addition. Half the products read one bit from the other word.
+The 197-factor x64 source fixture exercises both C renderers through the CLI
+and the workbench worker. Constructor tests exhaust both six-bit source words
+across overlapping, wrapping and multi-factor windows. The byte-domain guard
+tests also check overflow and inexact shifts when deriving signed ranges from
+an arithmetic right shift. Wide evaluator tests compare signed scaled
+coefficients and multiword product prefixes against full-width multiplication,
+including shared factors whose other consumers observe higher bits.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -18249,9 +18259,20 @@ a memory barrier on the path that skips the import.
 instruction orders, conflicting linker values and an overwritten entry `$t9`.
 Its branch fixtures distinguish agreeing saved values from conflicting paths,
 a clobbering call, independent entries, coincident branch-likely successors,
-and a carrier overwritten on a later loop iteration. The private-frame tests
+and a carrier overwritten on a later loop iteration. Two-import fixtures
+rebuild GP from a callee-saved copy of the entry register after the first
+call. Each GOT cell has two independent bindings. The harness checks the load
+order and width, both argument lists, the final result and preserved registers.
+One fixture forwards the first result. Another replaces it in the second
+call's delay slot. A third spills GP, passes its full register value and
+reloads the next GOT binding after the first callback changes it. Its n32
+runtime address sets the pointer's sign bit. The n32 CPIC samples also link
+their code and GOT above 2 GiB before moving them. Both the default and
+unoptimized LLVM source routes exercise the explicit n32 word extension.
+The private-frame tests
 also vary whether a loop argument acquires a stack address at entry or on
-its backedge, and whether a later call can observe a post-call register write.
+its backedge, and whether a native call can observe an argument write on any
+path before a full-register overwrite.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
@@ -18299,9 +18320,11 @@ takes 455 seconds on macOS, and the 72-variant entry-join case takes 428 seconds
 `NeverDWin64CallContractTests` allows 900 seconds for a matrix measured at
 575 seconds. Individual compiler and executable invocations retain their
 30-second limits.
-`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus,
-which takes 420 seconds on the same host. These are aggregate test budgets,
-not changes to the semantic assertions or production pipeline limits.
+`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus.
+CTest reserves six slots for independent fixtures on hosts with at least six
+available processors and three slots on smaller hosts. Each fixture builds
+and executes all six generated C outputs at O0 and O2 when Clang and the CLI
+are available.
 `CSourcePresentation.IndexedRelocationsPreserveStringStorageProofs` compares
 indexed range queries with individual-byte provenance across ELF, PE and Mach-O,
 including unsorted and duplicate fixups, invalid import slots and a relocation
@@ -20709,6 +20732,21 @@ five, nine and sixteen register words its members, and one of seventeen none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.
+`GoAssembly.AHelperTakesTheRegistersItReads` runs a Go 1.18 image whose
+compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
+which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
+and RBX, and the call passes 1, 4, 3 and 2.
+`GoInternalABI.TheGoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
+function that loads `[r14+0x30]` before and after a call to a function that
+writes no register: one read of the goroutine at its entry serves both, it
+reads no undefined R14 and takes no parameter, and its C reads R14 and traps
+nowhere. `GoInternalABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` does
+the same with arm64's `[x28, #48]`, where the call may change R28: it reads
+the goroutine at its entry and again after the call.
+`GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
+`main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
+caller that sets all seven of Go's first argument registers: `main.g` takes
+RAX through R9, and the call passes all seven.
 `GoAssembly.AnARM64ForwarderIsNoABI0Assembly` lifts arm64 assembly that loads
 `[sp, #8]` and `[sp, #16]`, which takes them as its parameters, and a
 forwarder that only branches to another function, which takes no stack
@@ -22757,7 +22795,9 @@ started. Run it for both probes in separate output directories. Use `--clang`,
 `--objcopy`, and `--readobj` to select the tools.
 `NeverDCallRegisterUnreadTests` distinguishes unconditional entry writes
 from partial, conditional, opaque and may-write summaries, including implicit
-return families and nested calls.
+return families and nested calls. Reversed block order and two calls reached
+with different surviving inputs check propagation across CFGs and call sites.
+A separate case exhausts the work budget and checks atomic proof publication.
 `Win64CallContract.RegisterQueryWindowsSourceCompilesWithItsHeaders` compiles
 both unmodified C units for the Windows x64 target with Clang's freestanding
 headers. HighC includes `<intrin.h>` for the Microsoft CPUID spelling and its
@@ -24433,9 +24473,16 @@ helper. The proof copy explicitly inlines the scheduler and call wrappers when
 HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
 retained, and unmodified exports compile separately. LLVM must reduce every
 predicate to one block returning constant zero.
-`X64Cr8WriteNotification.MetadataComesFromModeledWrites` checks lowering-owned
-write metadata, including the unchanged paged native boundary. These checks do
-not qualify a live device environment or paged MOV-CR8 fault delivery.
+`X64Cr8WriteNotification.*` checks lowering-owned write metadata for every
+GPR in paged and paged-debug mode, both ignored width prefixes, default
+admission, and unaudited forms.
+`PagedCompletionSurvivesPostCommitStops` folds predicates over the actual
+exported MOV bodies, entry validation and schedulers. Both C routes cover
+region and function drivers with independently supplied fetch and event-entry
+outcomes. The predicates check #GP requests before effects, all legal and
+reserved source values, conforming CPL, arbitrary flags, same-value writes,
+preemption, replay and one progress read per step. Debug cases check the same
+exception exit on both sides of a write and a backing stop after commit.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.

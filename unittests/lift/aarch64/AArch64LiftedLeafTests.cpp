@@ -178,8 +178,9 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   const bool Indexed = Check == LeafCheck::IndexedError || Async;
   const bool ScratchFrame = Check == LeafCheck::FrameScratchResult;
   const bool Declared = Preamble == kMixedOracle || Preamble == kDispatchOracle;
-  const bool OriginalAddresses =
-      Leaves == kAddressLeaves || Leaves == kStoreEntryLeaves;
+  const bool EntryAddresses =
+      Leaves == kStoreEntryLeaves || Leaves == kEntryOffsetLeaves;
+  const bool OriginalAddresses = Leaves == kAddressLeaves || EntryAddresses;
   const bool PaddedLiteral = Preamble == kPaddedLiteralOracle;
   const bool ScheduledTables = Preamble == kScheduledDispatchOracle;
   const bool PaddedDefault = Preamble == kPaddedSplitDefaultOracle ||
@@ -428,7 +429,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     ASSERT_EQ(ExpectedData.size(), 1u);
     const auto *Sum = Image->findSymbol(kSumSymbol);
     ASSERT_TRUE(Sum);
-    if (Leaves == kStoreEntryLeaves) {
+    if (EntryAddresses) {
       for (const auto &Site : Addresses)
         EXPECT_EQ(Site.Target, Sum->Addr);
     } else {
@@ -2084,6 +2085,11 @@ TEST(AArch64LiftedImage, RejectsSourceADRBeyondArchitecturalReach) {
 TEST(AArch64LiftedImage, PublishedOutputParametersKeepOriginalEntryAddresses) {
   verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName, {},
                         LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, PublishedEntryOffsetsPreserveTheOriginalBase) {
+  verifyPublishedLeaves(kEntryOffsetLeaves, kEntryOffsetCaller, kAssemblyName,
+                        {}, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, CompilerDataPageAndInteriorPointerAtO0) {

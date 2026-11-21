@@ -84,6 +84,11 @@ struct X86MemoryException {
   std::optional<uint64_t> CR2;
 };
 
+/// Encode a page fault from its cause and the current access. The instruction
+/// fetch bit depends on SMEP or PAE with EFER.NXE even for an EPCM violation.
+X86MemoryException x86PageFault(uint32_t Reason, const X86PagingState &State,
+                                const X86LinearAccess &Access);
+
 enum class X86PageWalkStatus : uint8_t {
   Completed,
   Exception,

@@ -19,8 +19,10 @@
 #include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/X64ContinuationExport.h"
+#include "neverd/translate/X86/X86WatchpointObservation.h"
 
 #include "llvm/Support/DynamicLibrary.h"
+#include "llvm/Support/Endian.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -1011,7 +1013,14 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X64PagedDebugFunctionTests.inc"
 #include "X86ModeExecutionTests.inc"
 #include "X86ModeInterruptTests.inc"
+#include "X86ModeMachineCheckTests.inc"
 #include "X86ModeSegmentTests.inc"
+#include "X86ModeSgxNotificationTests.inc"
+#include "X86ModeSgxTests.inc"
+#include "X86ModeSmmTests.inc"
+#include "X86ModeStartupTests.inc"
+#include "X86ModeSysenterTests.inc"
+#include "X86ModeTransitionTests.inc"
 
 // Native comparisons extend the selector fixture above.
 #include "X86ModeSegmentNativeTests.inc"

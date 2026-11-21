@@ -23,6 +23,55 @@ namespace neverd::analysis::detail {
 
 enum class X64TaskPriorityOperation { Read, Write };
 
+struct X64TaskPriorityAccess {
+  X64TaskPriorityOperation Operation;
+  uint8_t GPR;
+  bool Locked;
+};
+
+inline std::optional<X64TaskPriorityAccess>
+decodeX64TaskPriority(llvm::ArrayRef<uint8_t> Bytes) {
+  if (Bytes.size() < 4 || Bytes[Bytes.size() - 3] != 0x0f)
+    return std::nullopt;
+  const auto Opcode = Bytes[Bytes.size() - 2], ModRM = Bytes.back();
+  if ((Opcode != 0x20 && Opcode != 0x22) || (ModRM & 0x38))
+    return std::nullopt;
+  uint8_t Rex = 0;
+  bool Locked = false;
+  for (auto Byte : Bytes.drop_back(3)) {
+    if ((Byte & 0xf0) == 0x40) {
+      Rex = Byte;
+      continue;
+    }
+    Rex = 0;
+    switch (Byte) {
+    case 0xf0:
+      Locked = true;
+      break;
+    case 0xf2:
+    case 0xf3:
+      Locked = false;
+      break;
+    case 0x26:
+    case 0x2e:
+    case 0x36:
+    case 0x3e:
+    case 0x64:
+    case 0x65:
+    case 0x66:
+    case 0x67:
+      break;
+    default:
+      return std::nullopt;
+    }
+  }
+  if (!(Rex & 4))
+    return std::nullopt;
+  return X64TaskPriorityAccess{Opcode == 0x22 ? X64TaskPriorityOperation::Write
+                                              : X64TaskPriorityOperation::Read,
+                               uint8_t((ModRM & 7) | ((Rex & 1) << 3)), Locked};
+}
+
 inline std::optional<X64TaskPriorityOperation>
 taskPriorityOperation(const LowOp &Op) {
   if (Op.Opcode != NdOp::INTRINSIC ||

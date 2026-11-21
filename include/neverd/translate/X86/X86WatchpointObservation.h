@@ -55,13 +55,21 @@ private:
     const auto Kind = Access.Kind == MemoryAccessKind::Write
                           ? X86WatchpointAccess::Write
                           : X86WatchpointAccess::Read;
+    auto Enables = Self.Debug->DR7;
+    if (const auto *EPC = Self.Memory.sgxMemory();
+        EPC && EPC->suppressesEnclaveDebug())
+      for (unsigned I = 0; I != Self.Debug->DR.size(); ++I) {
+        const uint64_t Address =
+            Self.WideAddresses ? (*Self.WideAddresses)[I] : Self.Debug->DR[I];
+        if (EPC->active()->contains(Address))
+          Enables &= ~(uint64_t{3} << (I * 2));
+      }
     if (Self.WideAddresses) {
       if (!Access.Wrap32) {
-        Self.Matches |= x86DataBreakpoints(*Self.WideAddresses, Self.Debug->DR7,
+        Self.Matches |= x86DataBreakpoints(*Self.WideAddresses, Enables,
                                            Access.Address, Bytes, Kind);
         return;
       }
-      auto Enables = Self.Debug->DR7;
       for (unsigned I = 0; I != 4; ++I)
         if ((*Self.WideAddresses)[I] >> 32)
           Enables &= ~(uint64_t{3} << (I * 2));
@@ -69,10 +77,8 @@ private:
                                          Word(Access.Address), Bytes, Kind);
       return;
     }
-    Self.Matches |= x86DataBreakpoints(
-        Self.Debug->DR, Self.Debug->DR7, Word(Access.Address), Bytes,
-        Access.Kind == MemoryAccessKind::Write ? X86WatchpointAccess::Write
-                                               : X86WatchpointAccess::Read);
+    Self.Matches |= x86DataBreakpoints(Self.Debug->DR, Enables,
+                                       Word(Access.Address), Bytes, Kind);
   }
   X86PagedMemory &Memory;
   X86InstructionDebugState<Word> *Debug;

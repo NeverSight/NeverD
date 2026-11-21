@@ -169,7 +169,9 @@ struct Spill {
 /// caller passes exactly the variadic arguments it sets.  The vector argument
 /// registers spilled in the block a test of AL alone branches around are the
 /// save area's too, which \p SavesVectors reports: a caller passes the vector
-/// arguments AL counts.
+/// arguments AL counts.  Go code has no such prologue: Go passes a variadic
+/// argument as a slice, and RAX is its first argument register, which
+/// `runtime.spillArgs` stores with R8 and R9 into consecutive words.
 std::set<std::pair<size_t, size_t>>
 findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
                            const std::map<int, size_t> &IndexOfId,
@@ -177,7 +179,7 @@ findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
   std::set<std::pair<size_t, size_t>> Spills;
   SavesVectors = false;
   if (Img.Arch != Arch::X64 || Img.abiFormat() == BinaryFormat::COFF ||
-      F.Blocks.empty())
+      F.Blocks.empty() || isGoCode(Img, F.Blocks.front().StartAddr))
     return Spills;
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const llvm::ArrayRef<uint64_t> Registers =
@@ -1044,16 +1046,27 @@ struct BlockScalarFacts {
   using Fact = std::pair<uint16_t, uint64_t>;
   using RegisterFacts = std::map<uint64_t, Fact>;
   std::map<size_t, unsigned> SelectedArms;
+  llvm::SmallVector<size_t, 1> CpuidLeafZero;
   RegisterFacts Registers;
 };
+
+bool isX86CpuidQuery(const LowOp &Op) {
+  return Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 3 &&
+         Op.Inputs[0].isConst() && Op.Inputs[0].Size == sizeof(Intrinsic) &&
+         Op.Inputs[0].Offset == static_cast<uint64_t>(Intrinsic::Cpuid) &&
+         Op.Inputs[1] == NdVar::reg(x86reg::RAX, 4) &&
+         Op.Inputs[2] == NdVar::reg(x86reg::RCX, 4);
+}
 
 BlockScalarFacts
 blockScalarFacts(const BinaryImage &Img, const LowBlock &Block, bool KeepExit,
                  BlockScalarFacts::RegisterFacts Incoming = {}) {
   BlockScalarFacts Facts;
+  const bool X86 = Img.Arch == Arch::X64 || Img.Arch == Arch::X86;
   if (!KeepExit &&
-      std::none_of(Block.Ops.begin(), Block.Ops.end(),
-                   [](const LowOp &O) { return O.Opcode == NdOp::SELECT; }))
+      std::none_of(Block.Ops.begin(), Block.Ops.end(), [&](const LowOp &O) {
+        return O.Opcode == NdOp::SELECT || (X86 && isX86CpuidQuery(O));
+      }))
     return Facts;
   auto &Registers = Facts.Registers;
   Registers = std::move(Incoming);
@@ -1105,6 +1118,11 @@ blockScalarFacts(const BinaryImage &Img, const LowBlock &Block, bool KeepExit,
           Facts.SelectedArms[I] = *C ? 1 : 2;
           Result = Value(O.Inputs[Facts.SelectedArms[I]]);
         }
+      } else if (!KeepExit && X86 && isX86CpuidQuery(O)) {
+        // Intel SDM, CPUID leaf 0 returns the maximum basic leaf and vendor ID.
+        // The block-local proof cannot cross a call or an unknown EAX write.
+        if (Value(O.Inputs[1]) == uint64_t{0})
+          Facts.CpuidLeafZero.push_back(I);
       } else
         Result = lowScalarConstantResult(O, Value);
     }
@@ -1490,7 +1508,8 @@ bool isPlainStep(const RegisterStep &Step) {
   return Step.Callee == InvalidVA && !Step.TailCallee &&
          !Step.UnknownTailCall && !Step.VectorCopy && !Step.UnknownCall &&
          Step.ImportCallee == InvalidVA && Step.ArgumentsFrom == InvalidVA &&
-         !Step.Exits && !Step.FixedArguments && !Step.FixedTailCall;
+         !Step.Exits && !Step.FixedArguments && !Step.FixedTailCall &&
+         !Step.CpuidIgnoresSubleaf;
 }
 } // namespace
 
@@ -1716,6 +1735,7 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
         unreadSyscallArguments(Img, Block);
     const auto ScalarFacts = blockScalarFacts(Img, Block, false);
     const auto &SelectedArms = ScalarFacts.SelectedArms;
+    auto CpuidLeafZero = ScalarFacts.CpuidLeafZero.begin();
     auto ControlOf = [&](size_t OpIndex) {
       for (const LowInstructionBoundary &Boundary : Block.InstructionBoundaries)
         if (OpIndex >= Boundary.FirstOp &&
@@ -1744,6 +1764,11 @@ localRegisterEffectOfBody(const BinaryImage &Img, CallRegisterBodyView F,
       // Home-spill refinement below addresses steps by their LowIR index.
       // Keep an empty step for ignored operations until joinPlainSteps.
       RegisterStep &Step = Out.Steps.emplace_back();
+      if (CpuidLeafZero != ScalarFacts.CpuidLeafZero.end() &&
+          *CpuidLeafZero == I) {
+        Step.CpuidIgnoresSubleaf = true;
+        ++CpuidLeafZero;
+      }
       if (const auto Arm = SelectedArms.find(I);
           Arm != SelectedArms.end() && Op.Output.isReg() &&
           Op.Output == Op.Inputs[Arm->second])
@@ -2069,7 +2094,10 @@ GPRReadWidths entryLiveWidths(const LocalRegisterEffect &F,
       for (size_t I = 0; I < Live.size(); ++I)
         if (Step.LowWrites[I] && Live[I] <= Step.LowWrites[I])
           Live[I] = 0;
+      const uint8_t Subleaf = Live[x86reg::RCX / 8];
       joinReads(Live, Step.Reads);
+      if (Step.CpuidIgnoresSubleaf)
+        Live[x86reg::RCX / 8] = Subleaf;
       if (Step.VectorCopy)
         Live[Step.VectorCopy->second] =
             std::max(Live[Step.VectorCopy->second], Copied);

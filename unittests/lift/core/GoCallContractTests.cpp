@@ -871,6 +871,137 @@ TEST(GoAssembly, ABI0AssemblyTakesItsArgumentsOnTheStack) {
   }
 }
 
+/// The parameters of the function at \p Entry in \p R, by register.
+std::vector<uint64_t> parameterRegisters(const PipelineResult &R, va_t Entry) {
+  std::vector<uint64_t> Registers;
+  for (const MedFunc &M : R.MedFuncs)
+    if (M.Entry == Entry)
+      for (const MedVar &Parameter : M.Params)
+        Registers.push_back(Parameter.RegOff);
+  return Registers;
+}
+
+/// The constant arguments of the only call the function at \p Entry in \p R
+/// makes, ~0 for any other operand, or none where it makes another number of
+/// calls.
+std::vector<uint64_t> constantArguments(const PipelineResult &R, va_t Entry) {
+  std::vector<uint64_t> Constants;
+  const MedOp *Call = nullptr;
+  for (const MedFunc &M : R.MedFuncs)
+    if (M.Entry == Entry)
+      for (const MedBlock &Block : M.Blocks)
+        for (const MedOp &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL) {
+            if (Call)
+              return {};
+            Call = &Op;
+          }
+  if (!Call)
+    return {};
+  for (unsigned I = 1; I < Call->NumInputs; ++I)
+    Constants.push_back(Call->Inputs[I].isConst() ? Call->Inputs[I].ConstVal
+                                                  : ~0ull);
+  return Constants;
+}
+
+TEST(GoAssembly, AHelperTakesTheRegistersItReads) {
+  // Go assembly with no Go declaration of its own takes its operands where
+  // its callers set them, as internal/bytealg's indexbytebody<> takes SI,
+  // BX, AL and R8.  System V's positions made them RDI, RSI, RDX, RCX and
+  // R8, and left the RAX and RBX it reads undefined.
+  //   main.f: mov esi, 1; mov ebx, 2; mov eax, 3; mov r8d, 4; call h; ret
+  //   h:      lea rax, [rax+rbx]; add rax, rsi; mov [r8], rax; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t H = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body = {0xBE, 1, 0, 0, 0,    0xBB, 2, 0, 0, 0, 0xB8,
+                               3,    0, 0, 0, 0x41, 0xB8, 4, 0, 0, 0};
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), H);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  T.writeText(
+      H, {0x48, 0x8D, 0x04, 0x18, 0x48, 0x01, 0xF0, 0x49, 0x89, 0x00, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{H, "main.h"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.GoAssembly = {{H, H + 0x10}};
+  Module.FrameArguments = {{F, 0, 0}, {H, std::nullopt, std::nullopt}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  // In the platform's order, then Go's.
+  using namespace x86reg;
+  EXPECT_EQ(parameterRegisters(R, H),
+            (std::vector<uint64_t>{RSI, R8, RAX, RBX}));
+  EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{1, 4, 3, 2}));
+}
+
+TEST(GoRegisterArguments, RegistersStoredInARowAreNoVariadicSaveArea) {
+  // System V reads RAX before a write as a variadic prologue's vector count,
+  // and the argument registers it then stores into consecutive words, from
+  // some position through R9, as the save area, which a caller fills only
+  // as far as it passes arguments.  In Go, RAX is the first argument:
+  // `runtime.spillArgs` stores R8 and R9 in a row, and took neither.
+  //   main.g: mov [rdi], rax; mov [rdi+8], r8; mov [rdi+16], r9; ret
+  //   main.f: mov eax, 1; ... mov r9d, 7; call main.g; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body;
+  const uint8_t Moves[][2] = {{0, 0xB8}, {0, 0xBB},    {0, 0xB9},   {0, 0xBF},
+                              {0, 0xBE}, {0x41, 0xB8}, {0x41, 0xB9}};
+  uint8_t Value = 1;
+  for (const auto &Move : Moves) {
+    if (Move[0])
+      Body.push_back(Move[0]);
+    Body.insert(Body.end(), {Move[1], Value++, 0, 0, 0});
+  }
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), G);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  T.writeText(G, {0x48, 0x89, 0x07, 0x4C, 0x89, 0x47, 0x08, 0x4C, 0x89, 0x4F,
+                  0x10, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 56, 7}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  using namespace x86reg;
+  EXPECT_EQ(parameterRegisters(R, G),
+            (std::vector<uint64_t>{RAX, RBX, RCX, RDI, RSI, R8, R9}));
+  // The call passes all seven; the ones main.g never reads are zero.
+  const std::vector<uint64_t> Arguments = constantArguments(R, F);
+  ASSERT_EQ(Arguments.size(), 7u);
+  EXPECT_EQ(Arguments[0], 1u);
+  EXPECT_EQ(Arguments[3], 4u);
+  EXPECT_EQ(Arguments[5], 6u);
+  EXPECT_EQ(Arguments[6], 7u);
+}
+
 TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
   // An arm64 call takes its arguments from the setup its caller writes, so
   // no operation of a routine reads the registers it passes on in a call.
@@ -1237,6 +1368,145 @@ TEST(GoInternalABI, AResultIsAsWideAsItsCallersReadIt) {
   ASSERT_NE(At, std::string::npos) << Source;
   const std::string Body = Source.substr(At, Source.find("\n}", At) - At);
   EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
+}
+
+/// The C the pipeline \p R gives the function \p Name of \p Img: its body, from
+/// its signature on.
+std::string highCBody(const PipelineResult &R, const BinaryImage &Img,
+                      const std::string &Name) {
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = Img.Arch;
+  C.Format = Img.Format;
+  C.Image = &Img;
+  if (!HighCEmitter().emit(R.HighFuncs, OS, C))
+    return {};
+  OS.flush();
+  size_t At = 0;
+  while ((At = Source.find(" " + Name + "(", At)) != std::string::npos &&
+         Source.compare(Source.find('\n', At) - 2, 2, " {") != 0)
+    ++At;
+  if (At == std::string::npos)
+    return {};
+  return Source.substr(At, Source.find("\n}", At) - At);
+}
+
+/// How many reads of the current goroutine the function at \p Entry in \p R
+/// makes, and whether it reads a version of the goroutine register that no
+/// operation defines: the incoming value, or what a call left there.
+std::pair<unsigned, bool> goroutineReads(const PipelineResult &R, va_t Entry,
+                                         uint64_t Register) {
+  unsigned Reads = 0;
+  bool Undefined = false;
+  for (const MedFunc &M : R.MedFuncs) {
+    if (M.Entry != Entry)
+      continue;
+    std::set<std::pair<int, int>> Defined;
+    for (const MedBlock &Block : M.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        Defined.insert({Phi.Output.Id, Phi.Output.SSAVer});
+      for (const MedOp &Op : Block.Ops)
+        Defined.insert({Op.Output.Id, Op.Output.SSAVer});
+    }
+    for (const MedBlock &Block : M.Blocks)
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].ConstVal ==
+                static_cast<uint64_t>(Intrinsic::GoCurrentGoroutine))
+          ++Reads;
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          Undefined |= Op.Inputs[I].Kind == MedVar::Reg &&
+                       Op.Inputs[I].RegOff == Register &&
+                       !Defined.count({Op.Inputs[I].Id, Op.Inputs[I].SSAVer});
+      }
+  }
+  return {Reads, Undefined};
+}
+
+TEST(GoInternalABI, TheGoroutineRegisterHoldsTheCurrentGoroutine) {
+  // Go's internal ABI keeps the current goroutine in R14, which compiled
+  // code never writes and reads as getg(): at the entry, and after a call,
+  // which may have changed it (`needm` installs another).  It had no
+  // definition, so `runtime.canpanic` read every `getg().m` as a trap.
+  //   main.f: mov rcx, [r14+0x30]; call main.g; mov rax, [r14+0x30];
+  //           add rax, rcx; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body = {0x49, 0x8B, 0x4E, 0x30};
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), G);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.insert(Body.end(), {0x49, 0x8B, 0x46, 0x30, 0x48, 0x01, 0xC8, 0xC3});
+  T.writeText(F, Body);
+  T.writeText(G, {0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  // main.g writes no register, so the call keeps R14 and the read at the
+  // entry serves both loads.
+  EXPECT_EQ(goroutineReads(R, F, x86reg::R14),
+            (std::pair<unsigned, bool>{1, false}));
+  EXPECT_TRUE(parameterRegisters(R, F).empty());
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("%%r14"), std::string::npos) << Text;
+}
+
+TEST(GoInternalABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
+  // arm64 keeps the goroutine in R28, which no summary tracks, so the call
+  // may change it: one read at the entry and one after the call.
+  //   main.f: ldr x1, [x28, #48]; str x30, [sp, #-32]!; str x1, [sp, #8]
+  //           bl main.g; ldr x0, [x28, #48]; ldr x1, [sp, #8]
+  //           add x0, x0, x1; ldr x30, [sp], #32; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call = 0x94000000u | (((G - (F + 12)) >> 2) & 0x3FFFFFFu);
+  T.writeText(F, words({0xF9401B81, 0xF81E0FFE, 0xF90007E1, Call, 0xF9401B80,
+                        0xF94007E1, 0x8B010000, 0xF84207FE, 0xD65F03C0}));
+  T.writeText(G, words({0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(goroutineReads(R, F, a64reg::X28),
+            (std::pair<unsigned, bool>{2, false}));
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("x28"), std::string::npos) << Text;
 }
 
 TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {

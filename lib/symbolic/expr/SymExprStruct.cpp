@@ -16,6 +16,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymFunnel.h"
 #include "SymExprCompare.h"
 
 #include "neverd/symbolic/Limits.h"
@@ -326,6 +327,44 @@ void SymContext::retainLowWordProjection(SymRef Source, uint32_t Width,
 
 SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
   assert(Width > 0 && Low + Width <= width(A) && "extract out of range");
+
+  // A field contained in one side of a two-word funnel need not retain
+  // the other word. Fold rotations on either side of the extraction so
+  // repeated fields share a source even when their packing offsets differ.
+  for (;;) {
+    const auto Outer = op(A);
+    const bool Turn = Outer == SymOp::Rol || Outer == SymOp::Ror;
+    const auto Packed = Turn ? operand(A, 0) : A;
+    const auto Shifts = detail::FunnelShifts::match(*this, Packed);
+    if (!Shifts || Shifts->rotatesOneWord(*this))
+      break;
+    const unsigned Have = width(Packed);
+    uint64_t At = Low;
+    if (Turn) {
+      const auto Count = operand(A, 1);
+      if (!isConst(Count))
+        break;
+      const auto By = constValue(Count).urem(Have);
+      At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
+    }
+    const auto Selected = Shifts->project(*this, At, Width);
+    if (!Selected)
+      break;
+    A = Selected->Word;
+    Low = Selected->Offset;
+    const auto Motion = op(A);
+    if ((Motion == SymOp::Rol || Motion == SymOp::Ror) &&
+        isConst(operand(A, 1))) {
+      const auto By = constValue(operand(A, 1)).urem(Have);
+      At = (uint64_t(Low) + (Motion == SymOp::Ror ? By : Have - By)) % Have;
+      A = operand(A, 0);
+      Low = At;
+      if (At + Width > Have) {
+        A = mkRor(A, mkConst(Have, At));
+        Low = 0;
+      }
+    }
+  }
 
   if (Low == 0 && Width == width(A))
     return A;
