@@ -71,11 +71,18 @@ order in both MIPS byte orders, including fields that span bytes.
   arguments that reach the same call still need their own non-frame evidence.
   Loop backedges carry equality only when it holds on entry and after every
   iteration. Repeated executions of one call can return different words.
-  An aligned doubleword spill and reload can carry the same value through
-  the allocated frame. A partial or possibly aliasing write breaks that
-  identity. After a narrow write to an initialized spill, a new full-width
-  comparison can qualify the changed word. Before a call with unknown stack
-  argument extent, each live opaque spill must be checked or fully overwritten.
+  Aligned doubleword copies through several allocated stack slots keep the
+  sampled value. On both byte orders, two 32-bit stores can reconstruct a
+  doubleword in memory. Two word loads can reconstruct it in a GPR when each
+  half occupies its original bit positions. A signed high word is usable
+  after shifting it left by 32. A signed low word must first have its upper
+  bits cleared. A guard can precede or follow this reconstruction.
+  Swapped, duplicated or mixed halves cannot establish equality with the
+  original result. A fresh full-width guard can qualify the actual assembled
+  value, including one changed by a narrow write. A store through an
+  unresolved frame alias invalidates the sampled identities in memory.
+  Before an open call, every exposed stack cell containing opaque bits must
+  itself be checked or have those bits overwritten. This includes fragments kept in separate cells.
   The call invalidates those slot identities. An earlier sample in a preserved
   register can be checked again. A call with a known argument extent can
   preserve a spill outside its outgoing area when the frame stays private.
