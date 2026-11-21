@@ -107,6 +107,11 @@ set(CAPSTONE_X86_SUPPORT       ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_ARM_SUPPORT        ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_AARCH64_SUPPORT    ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_MIPS_SUPPORT       ON  CACHE BOOL "" FORCE)
+# In the static Linux Clang decoder, most MIPS mnemonics skip alias lookup.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(CAPSTONE_MIPS_PRECHECK_PRINTED_ALIAS ON)
+endif()
 add_subdirectory(third_party/capstone)
 
 # Capstone's decode DFA is the single hottest dependency in the front end, so
@@ -114,24 +119,22 @@ add_subdirectory(third_party/capstone)
 # representative decode throughput in Release and RelWithDebInfo builds while
 # allowing Debug to honor its source-level debugging contract: no forced
 # optimization and Capstone's internal assertions enabled.  In particular,
-# MSVC's Debug runtime checks are incompatible with /O2.  The options apply to
-# the capstone OBJECT target so they flow through its static and shared
-# libraries.  Use RelWithDebInfo when both symbols and decode performance
-# matter.
-if(TARGET capstone)
-    include(${CMAKE_SOURCE_DIR}/cmake/NeverDCapstoneCompilerOptions.inc)
+# MSVC's Debug runtime checks are incompatible with /O2. Apply the same flags
+# to the ordinary decoder and both static x86 iterators.
+include(${CMAKE_SOURCE_DIR}/cmake/NeverDCapstoneCompilerOptions.inc)
+foreach(capstone_object IN ITEMS capstone capstone_x86_iter32 capstone_x86_iter64)
     if(MSVC)
-        target_compile_options(capstone PRIVATE
+        target_compile_options(${capstone_object} PRIVATE
             "$<$<NOT:$<CONFIG:Debug>>:/O2>")
     else()
-        target_compile_options(capstone PRIVATE
+        target_compile_options(${capstone_object} PRIVATE
             "$<$<NOT:$<CONFIG:Debug>>:-O3;-fomit-frame-pointer>"
             # glibc/clang 21 treat strchr(const char*) as returning const char*.
             "$<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:${NEVERD_CAPSTONE_CLANG_QUALIFIERS}>")
     endif()
-    target_compile_definitions(capstone PRIVATE
+    target_compile_definitions(${capstone_object} PRIVATE
         "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
-endif()
+endforeach()
 
 # --- NeverD CMake helpers (mirrors LLVM's AddLLVM.cmake) ---
 # Source files and literal test data are UTF-8 on every host. MSVC otherwise

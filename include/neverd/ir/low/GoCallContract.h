@@ -226,11 +226,20 @@ bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
 /// than at its start.  The table records every function of the image's Go
 /// code once its text base is proven (GoModuleInfo::FrameArguments), so such
 /// an address begins none, and a branch to it is no tail call: a jump-table
-/// case label (`runtime.suspendG`'s), which reads as a code address.  Duff's
-/// device routines are the exception (GoModuleInfo::DuffDevices), entered at
-/// the point that zeroes or copies as many bytes as their caller needs.
-/// False where the image records no function.
+/// case label (`runtime.suspendG`'s), which reads as a code address.  A call
+/// into a routine that runs in its caller's place runs its body there
+/// instead (goInlinedRoutineBody).  False where the image records no
+/// function.
 bool goInsideRecordedFunction(const BinaryImage &Img, va_t Address);
+
+/// Whether \p Address lies in one of the image's Duff's device routines,
+/// `runtime.duffzero` or `runtime.duffcopy` (GoModuleInfo::DuffDevices).
+bool goDuffDeviceAt(const BinaryImage &Img, va_t Address);
+
+/// Whether \p Address lies in a Go routine that runs in its caller's place
+/// (goInlinedRoutineBody): a Duff's device routine (goDuffDeviceAt) or a
+/// register argument transfer (GoModuleInfo::RegisterArgumentTransfers).
+bool goInlinedRoutineAt(const BinaryImage &Img, va_t Address);
 
 /// The most integer registers the Go function at \p Entry takes its
 /// arguments in, in Go's order, where the image passes them in registers:

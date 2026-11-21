@@ -52,6 +52,7 @@
 #include "llvm/Transforms/Utils/Local.h"
 
 #include <climits>
+#include <iterator>
 #include <tuple>
 
 namespace neverd {
@@ -597,10 +598,13 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
                           const ExceptionFunction &Frame,
                           const dwarf_eh::ParseResult &Generated,
                           const DwarfFDE *NewFrame, va_t Start,
-                          const NativeMachOCompactRange &Range, va_t Slide) {
+                          const NativeMachOCompactRange &Range, va_t Slide,
+                          uint64_t RetainedBytes) {
+  const auto CodeSize = Range.EndVA - Range.BeginVA;
   const bool Language = Frame.Itanium.has_value();
   if (!Frame.Dwarf || !NewFrame || Frame.Dwarf->InitialLocation != Start ||
-      Frame.Dwarf->AddressRange != Range.EndVA - Range.BeginVA ||
+      Frame.Dwarf->AddressRange < RetainedBytes ||
+      Frame.Dwarf->AddressRange - RetainedBytes != CodeSize ||
       Frame.Dwarf->ParseStatus != ExceptionParseStatus::Complete ||
       (Frame.Compact->NativeEncoding & macho_unwind::kDwarfSectionOffsetMask) !=
           Frame.Dwarf->SectionOffset ||
@@ -612,8 +616,7 @@ bool sameIndexedLinkFrame(const BinaryImage &Original,
       (!Language && Old->Augmentation != kCompilerFrameAugmentation &&
        Old->Augmentation != kBKeyFrameAugmentation) ||
       Old->ParseStatus != ExceptionParseStatus::Complete ||
-      (!Language && NewFrame->LSDAVA) ||
-      NewFrame->AddressRange != Frame.Dwarf->AddressRange ||
+      (!Language && NewFrame->LSDAVA) || NewFrame->AddressRange != CodeSize ||
       NewFrame->ParseStatus != ExceptionParseStatus::Complete)
     return false;
   const auto New = llvm::lower_bound(
@@ -737,14 +740,30 @@ bool sameFramelessSpillFrame(const ExceptionFunction &Original,
                         Frame->Instructions);
 }
 
-llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
-                         llvm::ArrayRef<SourcePatchMapping> Mappings,
-                         const CompiledImage &Generated, va_t Slide,
-                         llvm::ArrayRef<NativeMachOCompactRange> Ranges,
-                         const llvm::DenseSet<va_t> &RegisterEntries,
-                         llvm::ArrayRef<MachODataInCodeRange> SourceData,
-                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses,
-                         const CompiledSection *AddressPool) {
+// Compare on-disk bytes as well as the loaded view: dyld can normalize pointer
+// slots in a segment buffer. An opaque suffix keeps its original permissions.
+std::pair<llvm::ArrayRef<uint8_t>, SegmentFlags>
+retainedFileMapping(const BinaryImage &Image, va_t Start, uint64_t Size) {
+  const auto *Segment = Image.getSegmentFor(Start);
+  if (!Segment || !Segment->isExecutable() || Segment->isWritable() ||
+      !rangeInBounds(Start - Segment->VA, Size, Segment->FileSz))
+    return {};
+  const uint64_t Offset = Image.vaToFileOffset(Start);
+  if (!rangeInBounds(Offset, Size, Image.Raw.size()))
+    return {};
+  return {llvm::ArrayRef(Image.Raw).slice(Offset, Size), Segment->Flags};
+}
+
+llvm::Error
+verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
+             llvm::ArrayRef<SourcePatchMapping> Mappings,
+             const CompiledImage &Generated, va_t Slide,
+             llvm::ArrayRef<NativeMachOCompactRange> Ranges,
+             const llvm::DenseSet<va_t> &RegisterEntries,
+             const llvm::DenseMap<va_t, ExceptionAddressRange> &RetainedTails,
+             llvm::ArrayRef<MachODataInCodeRange> SourceData,
+             llvm::ArrayRef<MachOLiftedSourceAddress> Addresses,
+             const CompiledSection *AddressPool) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
   dwarf_eh::ParseResult LinkedFrames;
@@ -829,10 +848,35 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
       return llvm::createStringError(
           llvm::errc::not_supported,
           llvm::formatv(kSourceExtent, Mapping.Symbol, Start).str());
+    if (auto It = RetainedTails.find(Start); It != RetainedTails.end()) {
+      const auto Tail = It->second;
+      if (Tail.End - Start != SourceBody->Bytes.size())
+        return refuse(kRetainedAddressTail);
+      const auto *After = Layout.readVA(Tail.Begin + Slide, Tail.size());
+      const auto Before = SourceBody->Bytes.drop_front(Tail.Begin - Start);
+      const auto File = retainedFileMapping(Original, Tail.Begin, Tail.size());
+      if (!After || File.first.empty() ||
+          File !=
+              retainedFileMapping(Layout, Tail.Begin + Slide, Tail.size()) ||
+          std::memcmp(Before.data(), After, Before.size()) ||
+          !machODataInCodeRanges(Layout.MachODataInCode, Tail.Begin + Slide,
+                                 Tail.size())
+               .empty())
+        return refuse(kRetainedAddressTail);
+      SourceBody->Bytes = SourceBody->Bytes.take_front(Tail.Begin - Start);
+    }
     SourceBody->Embedded =
         machODataInCodeRanges(SourceData, Start, SourceBody->Bytes.size());
     const auto Source = SourceBody->Bytes;
     const va_t End = Start + Source.size();
+    const bool Expanded = !Addresses.empty() &&
+                          Addresses.front().Instruction < End &&
+                          Addresses.front().Form == MachOAddressForm::Expanded;
+    const auto Split = Expanded ? Addresses.front().Instruction - Start
+                                : uint64_t(Source.size());
+    const auto InstalledOffset = [=](uint64_t Offset) {
+      return Offset > Split ? Offset + aarch64::kInsnSize : Offset;
+    };
     const auto *Frame = Original.ExceptionMetadata.findFunction(Start);
     const auto Owner = Generated.SymbolAddrs.find(Mapping.Symbol);
     if (Owner == Generated.SymbolAddrs.end())
@@ -857,8 +901,9 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                         SourceBody->Embedded.size(), PublishedData.size())
               .str());
     for (auto [Old, New] : llvm::zip_equal(SourceBody->Embedded, PublishedData))
-      if (New.Begin - Owner->second != Old.Begin - Start ||
-          New.End - Owner->second != Old.End - Start || New.Kind != Old.Kind)
+      if (New.Begin - Owner->second != InstalledOffset(Old.Begin - Start) ||
+          New.End - Owner->second != InstalledOffset(Old.End - Start) ||
+          New.Kind != Old.Kind)
         return refuse(kEmbeddedIdentity);
     if (!SourceBody->Embedded.empty() && !RegisterEntries.contains(Start))
       return refuse(kEmbeddedIdentity);
@@ -900,7 +945,7 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         return refuse(kLeafFrame);
       continue;
     }
-    if (Source.size() != Emitted.size())
+    if (InstalledOffset(Source.size()) != Emitted.size())
       return llvm::createStringError(llvm::errc::not_supported,
                                      llvm::formatv(kBodyExtent, Mapping.Symbol,
                                                    Source.size(),
@@ -924,9 +969,9 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
         return refuse(kLeafFrame);
     } else if (Indexed) {
       if ((SourceEncoding & ~DwarfFields) != macho_unwind::kARM64ModeDwarf ||
-          !sameIndexedLinkFrame(Original, *Frame, LinkedFrames,
-                                FDEs.lookup(Owner->second), Start,
-                                *Range.mapped(), Slide))
+          !sameIndexedLinkFrame(
+              Original, *Frame, LinkedFrames, FDEs.lookup(Owner->second), Start,
+              *Range.mapped(), Slide, RetainedTails.lookup(Start).size()))
         return refuse(kLeafFrame);
     } else {
       const bool Language = Frame->Itanium.has_value();
@@ -940,15 +985,14 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     }
 
     if (RegisterEntries.contains(Start)) {
-      // The register lowering emits one instruction at each original offset.
-      // A local branch therefore has the same displacement. Calls cross entry
-      // boundaries and must resolve to the new symbol after final placement.
+      // Branches keep their original displacements. An expanded address shifts
+      // only a straight-line suffix. Calls must resolve to their placed entry.
       if (!Indexed && (FDEs.count(Owner->second) || Frame->Dwarf))
         return refuse(kLeafFrame);
       for (size_t Offset = 0; Offset < Source.size();
            Offset += aarch64::kInsnSize) {
         auto Before = Source.drop_front(Offset);
-        auto After = Emitted.drop_front(Offset);
+        auto After = Emitted.drop_front(InstalledOffset(Offset));
         if (!machODataInCodeRanges(SourceBody->Embedded, Start + Offset,
                                    aarch64::kInsnSize)
                  .empty()) {
@@ -957,25 +1001,31 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             return refuse(kLeafCode);
           continue;
         }
-        if ((readLE<uint32_t>(Before.data()) & aarch64::kADRP_Mask) ==
-            aarch64::kADRP_Op) {
-          const auto Old =
-              decodeMachOPageAddress(Decode, Before, Start + Offset);
-          const auto New =
-              decodeMachOPageAddress(Decode, After, Owner->second + Offset);
-          if (!Old || !New || New->Target != Old->Target + Slide ||
-              New->PageRegister != Old->PageRegister ||
-              New->ResultRegister != Old->ResultRegister)
-            return refuse(kDataPagePair);
-          Offset += aarch64::kInsnSize;
-          continue;
-        }
         if (!Addresses.empty() &&
             Addresses.front().Instruction == Start + Offset) {
           const auto Fixup = Addresses.front();
           Addresses = Addresses.drop_front();
           const auto Word = readLE<uint32_t>(After.data());
-          const auto PC = Owner->second + Offset;
+          const auto PC = Owner->second + InstalledOffset(Offset);
+          if (Fixup.Form != MachOAddressForm::Single) {
+            const auto New = decodeMachOPageAddress(Decode, After, PC);
+            if (!New || New->Target != Fixup.Target + Slide ||
+                (Word & aarch64::kRdMask) !=
+                    (readLE<uint32_t>(Before.data()) & aarch64::kRdMask))
+              return refuse(kSourceAddressTarget);
+            if (Fixup.Form == MachOAddressForm::PagePair) {
+              const auto Old =
+                  decodeMachOPageAddress(Decode, Before, Start + Offset);
+              if (!Old || Old->Target != Fixup.Target ||
+                  New->PageRegister != Old->PageRegister ||
+                  New->ResultRegister != Old->ResultRegister)
+                return refuse(kDataPagePair);
+              Offset += aarch64::kInsnSize;
+            } else if (New->PageRegister != New->ResultRegister) {
+              return refuse(kSourceAddressTarget);
+            }
+            continue;
+          }
           auto Target = machORebasedLiteralAddress(Layout, Word, PC);
           if (!Target) {
             DecodedInsn ADR{};
@@ -989,6 +1039,19 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                   (Word & aarch64::kRdMask) ||
               *Target != Fixup.Target + Slide)
             return refuse(kSourceAddressTarget);
+          continue;
+        }
+        if ((readLE<uint32_t>(Before.data()) & aarch64::kADRP_Mask) ==
+            aarch64::kADRP_Op) {
+          const auto Old =
+              decodeMachOPageAddress(Decode, Before, Start + Offset);
+          const auto New = decodeMachOPageAddress(
+              Decode, After, Owner->second + InstalledOffset(Offset));
+          if (!Old || !New || New->Target != Old->Target + Slide ||
+              New->PageRegister != Old->PageRegister ||
+              New->ResultRegister != Old->ResultRegister)
+            return refuse(kDataPagePair);
+          Offset += aarch64::kInsnSize;
           continue;
         }
         const auto Transfer = decodeDirectBranch(
@@ -1127,6 +1190,145 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
     return refuse(kSourceAddressTarget);
   return llvm::Error::success();
 }
+
+// The extra word shifts the straight-line suffix as a unit. No branch may
+// enter the second half of the new pair, and there must be no frame or LSDA
+// transition whose PC would acquire a different meaning.
+bool canWidenSourceAddress(Decoder &Decode, const BinaryImage &Image,
+                           va_t Start, va_t Next, va_t Site,
+                           llvm::ArrayRef<MachODataInCodeRange> SourceData,
+                           ExceptionAddressRange TailStorage) {
+  constexpr auto Word = aarch64::kInsnSize;
+  const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
+  if (!Frame || !Frame->Compact || Frame->Dwarf || Frame->Itanium)
+    return false;
+  const auto Mode = Frame->Compact->NativeEncoding;
+  if (Mode != macho_unwind::kARM64ModeFrameless &&
+      Mode != macho_unwind::kARM64ModeFrame)
+    return false;
+  auto Source = machOLiftedSource(Image, Start, Next);
+  if (!Source || Source->ForwardTarget)
+    return false;
+  if (TailStorage.isValid())
+    Source->Bytes = Source->Bytes.take_front(TailStorage.Begin - Start);
+  const auto End = Start + Source->Bytes.size();
+  const auto Embedded =
+      machODataInCodeRanges(SourceData, Start, Source->Bytes.size());
+  const auto CodeEnd = Embedded.empty() ? End : Embedded.front().Begin;
+  va_t Tail = CodeEnd;
+  for (const auto &R : Embedded) {
+    if (R.Begin != Tail)
+      return false;
+    Tail = R.End;
+  }
+  if (Tail != End || CodeEnd - Start < 2 * Word || CodeEnd % Word ||
+      Site < Start || Site >= CodeEnd - Word)
+    return false;
+  const bool Signed = readLE<uint32_t>(Source->Bytes.data()) ==
+                      static_cast<uint32_t>(SigningHint::PACIBSP);
+  const auto *Return = Source->Bytes.data() + (CodeEnd - Start) - Word;
+  if (Signed) {
+    DecodedInsn I{};
+    if (Decode.decodeOne(Return, Word, CodeEnd - Word, I) != int(Word) ||
+        I.Id != AARCH64_INS_RETAB)
+      return false;
+  } else if (readLE<uint32_t>(Return) != kReturnToLR) {
+    return false;
+  }
+  FrameBody Body{Signed ? Word : 0, size_t(CodeEnd - Start - Word)};
+  if (Mode == macho_unwind::kARM64ModeFrame) {
+    const auto Code = Source->Bytes.take_front(CodeEnd - Start);
+    auto Bounds = signedFrameBody(Code, kPushFrame, kPopFrame);
+    if (!Bounds)
+      Bounds = signedFrameBody(Code, kAllocateFrame, kDeallocateFrame);
+    if (!Bounds)
+      return false;
+    Body = *Bounds;
+  }
+  if (Site - Start < Body.Begin || Site - Start >= Body.End)
+    return false;
+  for (va_t PC = Start + Body.Begin; PC < Start + Body.End; PC += Word) {
+    if (PC == Site)
+      continue;
+    DecodedInsn I{};
+    if (Decode.decodeOne(Source->Bytes.data() + (PC - Start), Word, PC, I) !=
+            int(Word) ||
+        !I.Raw || !I.Raw->detail || !isPositionIndependentLeafInstruction(I))
+      return false;
+  }
+  return true;
+}
+
+bool widenSourceAddresses(
+    llvm::Module &M, const BinaryImage &Image,
+    llvm::ArrayRef<SourcePatchMapping> Mappings, llvm::ArrayRef<va_t> PoolSites,
+    llvm::MutableArrayRef<MachOLiftedSourceAddress> Sites,
+    llvm::ArrayRef<MachODataInCodeRange> SourceData,
+    const llvm::DenseMap<va_t, ExceptionAddressRange> &RetainedTails) {
+  Decoder Decode;
+  if (!Decode.init(Image))
+    return false;
+  bool Changed = false;
+  for (auto &Site : Sites) {
+    if (Site.Form != MachOAddressForm::Single ||
+        !llvm::binary_search(PoolSites, Site.Instruction))
+      continue;
+    const auto Next = llvm::upper_bound(
+        Mappings, Site.Instruction,
+        [](va_t VA, const auto &Mapping) { return VA < Mapping.OriginalVA; });
+    const auto &Owner = *std::prev(Next);
+    if (!canWidenSourceAddress(Decode, Image, Owner.OriginalVA,
+                               Next == Mappings.end() ? InvalidVA
+                                                      : Next->OriginalVA,
+                               Site.Instruction, SourceData,
+                               RetainedTails.lookup(Owner.OriginalVA)))
+      continue;
+    // Register bodies and their single inline-assembly call were validated
+    // before cloning M. The installer checks both words before replacing them.
+    auto &F = *M.getFunction(Owner.Symbol);
+    auto &Call = llvm::cast<llvm::CallInst>(F.front().front());
+    auto *Asm = llvm::cast<llvm::InlineAsm>(Call.getCalledOperand());
+    auto Text = Asm->getAsmString().str();
+    Text.insert(Site.AssemblyOffset, kAddressPrefix);
+    Call.setCalledOperand(llvm::InlineAsm::get(
+        Asm->getFunctionType(), Text, Asm->getConstraintString(),
+        Asm->hasSideEffects(), Asm->isAlignStack(), Asm->getDialect(),
+        Asm->canThrow()));
+    Site.Form = MachOAddressForm::Expanded;
+    Changed = true;
+  }
+  return Changed;
+}
+
+// A CFI row or language range may require the address use to stay one word.
+// Move its whole function near the trailing pool, keeping all in-body offsets
+// intact. The installer rechecks every call, unwind range and address there.
+bool placeLiteralUsersLast(llvm::Module &M,
+                           llvm::ArrayRef<SourcePatchMapping> Mappings,
+                           llvm::ArrayRef<va_t> Sites) {
+  llvm::DenseSet<llvm::Function *> Users;
+  for (va_t PC : Sites) {
+    while (Mappings.size() > 1 && Mappings[1].OriginalVA <= PC)
+      Mappings = Mappings.drop_front();
+    Users.insert(M.getFunction(Mappings.front().Symbol));
+  }
+  llvm::SmallVector<llvm::Function *> Ordered;
+  bool Changed = false;
+  for (auto &F : M) {
+    if (F.isDeclaration())
+      continue;
+    if (Users.contains(&F))
+      Ordered.push_back(&F);
+    else if (!Ordered.empty())
+      Changed = true;
+  }
+  if (Changed) {
+    auto &Functions = M.getFunctionList();
+    for (auto *F : Ordered)
+      Functions.splice(Functions.end(), Functions, F->getIterator());
+  }
+  return Changed;
+}
 } // namespace
 
 llvm::Expected<PatchResult>
@@ -1144,8 +1346,9 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
     return refuse(kLeafModule);
   std::vector<MachODataInCodeRange> RecoveredData;
   std::vector<MachOLiftedSourceAddress> Addresses;
-  auto RegisterEntries =
-      validateMachORegisterResults(Module, Image, &RecoveredData, &Addresses);
+  llvm::DenseMap<va_t, ExceptionAddressRange> RetainedTails;
+  auto RegisterEntries = validateMachORegisterResults(
+      Module, Image, &RecoveredData, &Addresses, &RetainedTails);
   if (!RegisterEntries)
     return RegisterEntries.takeError();
   llvm::SmallVector<MachODataInCodeRange> Combined;
@@ -1359,20 +1562,51 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
       llvm::DCEPass().run(F, Analyses);
     }
   }
-  auto Object = Codegen().compile(*Candidate, Image.Arch, Image.Format, *Triple,
-                                  ObjectConsumer::FinalImageInstaller);
-  if (!Object.Success)
-    return refuse(kLeafCode);
-  return installMachOLiftedObject(
-      llvm::StringRef(reinterpret_cast<const char *>(Object.ObjectData.data()),
-                      Object.ObjectData.size()),
-      Image, Mappings, Bindings, Output, RecoveredData, Addresses,
-      [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
-          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
-          const CompiledSection *AddressPool) {
-        return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries, SourceData, Addresses,
-                            AddressPool);
-      });
+  const auto Publish = [&]() -> llvm::Expected<PatchResult> {
+    // LLVM's emission passes mutate their module. Keep the verified assembly
+    // and its byte offsets intact while a one-word site can require a retry.
+    const bool MayRetry = llvm::any_of(Addresses, [](const auto &Site) {
+      return Site.Form == MachOAddressForm::Single;
+    });
+    auto Copy = MayRetry ? llvm::CloneModule(*Candidate) : nullptr;
+    auto Object =
+        Codegen().compile(Copy ? *Copy : *Candidate, Image.Arch, Image.Format,
+                          *Triple, ObjectConsumer::FinalImageInstaller);
+    if (!Object.Success)
+      return refuse(kLeafCode);
+    return installMachOLiftedObject(
+        llvm::StringRef(
+            reinterpret_cast<const char *>(Object.ObjectData.data()),
+            Object.ObjectData.size()),
+        Image, Mappings, Bindings, Output, RecoveredData, Addresses,
+        [&](const CompiledImage &Generated, const BinaryImage &Layout,
+            va_t Slide, llvm::ArrayRef<NativeMachOCompactRange> Ranges,
+            const CompiledSection *AddressPool) {
+          return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
+                              *RegisterEntries, RetainedTails, SourceData,
+                              Addresses, AddressPool);
+        });
+  };
+  bool Reordered = false;
+  for (;;) {
+    auto Result = Publish();
+    if (Result)
+      return Result;
+    auto Error = Result.takeError();
+    if (!Error.isA<MachOLiteralPoolOutOfRange>())
+      return Error;
+    std::vector<va_t> Sites;
+    llvm::handleAllErrors(std::move(Error), [&](MachOLiteralPoolOutOfRange &E) {
+      Sites = std::move(E.Instructions);
+    });
+    if (widenSourceAddresses(*Candidate, Image, Mappings, Sites, Addresses,
+                             SourceData, RetainedTails))
+      continue;
+    if (!Reordered && placeLiteralUsersLast(*Candidate, Mappings, Sites)) {
+      Reordered = true;
+      continue;
+    }
+    return llvm::make_error<MachOLiteralPoolOutOfRange>(Sites);
+  }
 }
 } // namespace neverd

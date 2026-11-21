@@ -328,6 +328,56 @@ TEST(MIPSRecordABI, O32ReturnsTheStorageAddressAndSplitsRecordArguments) {
   }
 }
 
+TEST(MIPSRecordABI, NarrowIntegerFieldUsesTheSameLaneInArgumentAndResult) {
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(unsigned(A));
+    const auto Value = record({NdType::makeInt(4, false)});
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Value;
+    Signature.Parameters.push_back({"value", Value});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    const auto Parameters = sourceABIParameters(Signature);
+    ASSERT_EQ(Parameters.size(), 1u);
+    ASSERT_EQ(Signature.ReturnComponents.size(), 1u);
+    EXPECT_EQ(Parameters.front().Location.RegisterOffset, mipsreg::r(4));
+    EXPECT_EQ(Signature.ReturnComponents.front().RegisterOffset, mipsreg::r(2));
+    for (const auto &Location :
+         {Parameters.front().Location, Signature.ReturnComponents.front()}) {
+      EXPECT_EQ(Location.Kind, SourceABICarrierKind::IntegerRegister);
+      EXPECT_EQ(Location.ValueBytes, 4u);
+      EXPECT_EQ(Location.CarrierBytes, 8u);
+      EXPECT_EQ(Location.RegisterByteOffset, archLittleEndian(A) ? 0u : 4u);
+    }
+  }
+}
+
+TEST(MIPSRecordABI, CheckedBindingsDistinguishEmptyAndInvalidDeclarations) {
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(unsigned(A));
+    const auto Value = record({NdType::makeInt(8, false)});
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Value;
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    std::vector<SourceABIParameter> Parameters;
+    EXPECT_TRUE(sourceABIParameters(Signature, Parameters));
+    EXPECT_TRUE(Parameters.empty());
+
+    Signature.Parameters.push_back({"value", Value});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    ASSERT_TRUE(sourceABIParameters(Signature, Parameters));
+    ASSERT_EQ(Parameters.size(), 1u);
+    EXPECT_EQ(Parameters.front().Location.RegisterOffset, mipsreg::A0);
+    ASSERT_EQ(Signature.Parameters.front().Components.size(), 1u);
+    Signature.Parameters.front().Components.front().RegisterOffset =
+        mipsreg::RA;
+    EXPECT_FALSE(sourceABIParameters(Signature, Parameters));
+    EXPECT_TRUE(Parameters.empty());
+    EXPECT_TRUE(sourceABIParameters(Signature).empty());
+  }
+}
+
 TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
   for (Arch A : Architectures)
     for (const auto &Type :
@@ -346,21 +396,24 @@ TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
       EXPECT_FALSE(validateSourceABI(Hint.Signature, Diagnostic));
       EXPECT_TRUE(sourceABIParameters(Hint.Signature).empty());
       EXPECT_FALSE(sourceABICallResultType(Hint.Signature));
-      // A checked declaration may bind full independent members. An incomplete
-      // location or a partially defined physical word remains insufficient.
-      const bool CanBind = Type->Fields.front()->Kind != NdTypeKind::Array;
-      EXPECT_EQ(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic),
-                CanBind);
-      if (CanBind) {
-        EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
-        EXPECT_TRUE(Hint.Signature.MIPSRecords);
-        EXPECT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
-        auto Bad = Hint.Signature;
-        Bad.Parameters.front().Components.front().RegisterOffset += 8;
-        EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+      ASSERT_TRUE(assignAnalystCallABI(Hint, A, BinaryFormat::ELF, Diagnostic));
+      EXPECT_TRUE(validateSourceABI(Hint.Signature, Diagnostic));
+      EXPECT_TRUE(Hint.Signature.MIPSRecords);
+      if (Type->Size > 16) {
+        EXPECT_EQ(Hint.Signature.ReturnLocation.Kind,
+                  SourceABICarrierKind::IndirectResultPointer);
+        EXPECT_TRUE(Hint.Signature.ReturnComponents.empty());
       } else {
-        EXPECT_FALSE(Diagnostic.empty());
+        ASSERT_EQ(Hint.Signature.ReturnComponents.size(), Type->Fields.size());
+        if (mips::isByteRecord(Type)) {
+          const auto &L = Hint.Signature.ReturnComponents.front();
+          EXPECT_EQ(L.CarrierBytes, 8);
+          EXPECT_EQ(L.RegisterByteOffset, archLittleEndian(A) ? 0 : 5);
+        }
       }
+      auto Bad = Hint.Signature;
+      Bad.Parameters.front().Components.front().RegisterOffset += 8;
+      EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
     }
 }
 

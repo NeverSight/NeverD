@@ -18,9 +18,11 @@
 #include "HighEntryStackOffsets.h"
 #include "VariadicStackArguments.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -434,6 +436,41 @@ unsigned MedToHighConverter::importFixedArgCount(size_t CallIdx,
              : 0;
 }
 
+ExprPtr
+MedToHighConverter::sourceRecordFromWords(const SourceParameterTypeHint &P,
+                                          llvm::ArrayRef<MedVar> Inputs) {
+  const bool Little = archLittleEndian(TargetArch);
+  const unsigned Slot = P.Components.front().ValueBytes;
+  llvm::SmallVector<ExprPtr, 4> Words;
+  for (const auto &Input : Inputs)
+    Words.push_back(medvarToExpr(Input));
+  std::vector<ExprPtr> Fields;
+  for (const auto &Member : sourceValueMembers(P.Type)) {
+    ExprPtr Bits;
+    unsigned Copied = 0;
+    while (Copied < Member.Type->Size) {
+      const unsigned Offset = Member.ByteOffset + Copied;
+      const unsigned Index = Offset / Slot;
+      const unsigned InWord = Offset % Slot;
+      const unsigned Width = P.Components[Index].ValueBytes;
+      const unsigned Count =
+          std::min<unsigned>(Member.Type->Size - Copied, Width - InWord);
+      const unsigned At = Little ? InWord : Width - InWord - Count;
+      auto Part = sourceBitSlice(Words[Index], At, Count);
+      if (Bits) {
+        Bits = Little ? HighExpr::makeBinop(NdOp::CONCAT, Part, Bits)
+                      : HighExpr::makeBinop(NdOp::CONCAT, Bits, Part);
+        Bits->Type = NdType::makeInt(Copied + Count, false);
+      } else {
+        Bits = std::move(Part);
+      }
+      Copied += Count;
+    }
+    Fields.push_back(HighExpr::makeBitCast(std::move(Bits), Member.Type));
+  }
+  return HighExpr::makeRecord(P.Type, std::move(Fields));
+}
+
 std::vector<ExprPtr>
 MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                     va_t ResolvedSlot) {
@@ -565,7 +602,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
     const auto &Call = Ops[CallIdx];
     const auto &Signature = Call.SourceCallHint->Signature;
     const auto Bindings = sourceABIParameters(Signature);
-    if (sourceCallRetainsResultStorage(*Call.SourceCallHint)) {
+    const bool ResultStorage =
+        sourceCallRetainsResultStorage(*Call.SourceCallHint);
+    if (ResultStorage && !Signature.MIPSRecords) {
       if (Call.NumInputs != Bindings.size() + 2)
         return {};
       for (unsigned I = 1; I < Call.NumInputs; ++I)
@@ -579,7 +618,7 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                     [](const auto &P) { return !P.Components.empty(); });
     if ((!Signature.HasExplicitABI && HasComponents) ||
         Count > static_cast<size_t>(limits::kMaxBoundSourceCallArgs) ||
-        Call.NumInputs != Count + 1)
+        Call.NumInputs != Count + 1 + unsigned(ResultStorage))
       return {};
     {
       Hinted.reserve(Count);
@@ -587,6 +626,21 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
       for (const auto &P : Signature.Parameters) {
         if (P.Components.empty()) {
           Hinted.push_back(medvarToExpr(Call.Inputs[++Index]));
+        } else if (Signature.MIPSRecords && mips::isSplitRecordScalar(P)) {
+          auto First = medvarToExpr(Call.Inputs[++Index]);
+          auto Second = medvarToExpr(Call.Inputs[++Index]);
+          if (archLittleEndian(TargetArch))
+            std::swap(First, Second);
+          auto Bits = HighExpr::makeBinop(NdOp::CONCAT, std::move(First),
+                                          std::move(Second));
+          Bits->Type = NdType::makeInt(8, false);
+          Hinted.push_back(HighExpr::makeBitCast(std::move(Bits), P.Type));
+        } else if (Signature.MIPSRecords &&
+                   mips::usesIntegerRecordWords(TargetArch, P)) {
+          Hinted.push_back(sourceRecordFromWords(
+              P, llvm::ArrayRef(Call.Inputs)
+                     .slice(Index + 1, P.Components.size())));
+          Index += P.Components.size();
         } else {
           std::vector<ExprPtr> Leaves;
           const auto Members = Signature.MIPSRecords
@@ -606,6 +660,8 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
         }
       }
     }
+    if (ResultStorage)
+      Hinted.push_back(medvarToExpr(Call.Inputs[Call.NumInputs - 1]));
     // A validated call-site declaration fixes every operand and its width.
     // A register scan can see the whole register or unrelated setup past
     // that declared list; neither may replace these bound operands.

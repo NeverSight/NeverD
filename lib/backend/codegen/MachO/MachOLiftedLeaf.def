@@ -23,6 +23,7 @@
 
 MACHO_LEAF_TEXT(kLeafModule,
                 "arm64e lifted image has no complete native leaf contract")
+MACHO_LEAF_TEXT(kAddressPrefix, "nop\n")
 MACHO_LEAF_TEXT(
     kLeafCoverage,
     "arm64e lifted entries do not cover the original authenticated functions")
@@ -30,6 +31,8 @@ MACHO_LEAF_TEXT(kLeafCode, "arm64e generated instructions do not reproduce the "
                            "original position-independent leaf")
 MACHO_LEAF_TEXT(kLeafFrame, "arm64e lifted leaf requires a matching native "
                             "frame record and unwind encoding")
+MACHO_LEAF_TEXT(kRetainedAddressTail,
+                "arm64e publication changed the original addressed tail")
 MACHO_LEAF_TEXT(kBodyExtent,
                 "arm64e entry {0} has {1} source bytes and {2} emitted bytes")
 MACHO_LEAF_TEXT(kGeneratedCoverage,

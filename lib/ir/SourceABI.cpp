@@ -10,6 +10,7 @@
 
 #include "MIPS/SourceScalarResult.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/FloatingCallArguments.h"
 #include "neverd/ir/Limits.h"
@@ -81,7 +82,9 @@ bool sameLocation(const SourceABIValueLocation &Left,
          Left.RegisterOffset == Right.RegisterOffset &&
          Left.EntryStackOffset == Right.EntryStackOffset &&
          Left.ValueBytes == Right.ValueBytes &&
-         Left.ExtendTo32Bits == Right.ExtendTo32Bits;
+         Left.ExtendTo32Bits == Right.ExtendTo32Bits &&
+         Left.CarrierBytes == Right.CarrierBytes &&
+         Left.RegisterByteOffset == Right.RegisterByteOffset;
 }
 
 bool equalTypes(const TypeRef &Left, const TypeRef &Right, unsigned Depth,
@@ -652,10 +655,17 @@ bool hasSwiftErrorResult(const SourceFunctionTypeHint &Hint) {
 
 std::vector<SourceABIParameter>
 sourceABIParameters(const SourceFunctionTypeHint &Hint) {
+  std::vector<SourceABIParameter> Result;
+  sourceABIParameters(Hint, Result);
+  return Result;
+}
+
+bool sourceABIParameters(const SourceFunctionTypeHint &Hint,
+                         std::vector<SourceABIParameter> &Result) {
+  Result.clear();
   std::string Error;
   if (!validateSourceABI(Hint, Error))
-    return {};
-  std::vector<SourceABIParameter> Result;
+    return false;
   for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
     const auto &P = Hint.Parameters[I];
     if (P.Components.empty())
@@ -666,7 +676,21 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                ? P.Type->Pointee
                : P.Type,
            P.Location});
-    else {
+    else if (Hint.MIPSRecords && mips::isSplitRecordScalar(P)) {
+      const bool Little = archLittleEndian(Hint.Architecture);
+      for (unsigned Word = 0; Word < 2; ++Word)
+        Result.push_back(
+            {I, static_cast<uint16_t>((Little ? Word : 1 - Word) * 4), P.Name,
+             NdType::makeInt(4, false), P.Components[Word]});
+    } else if (Hint.MIPSRecords &&
+               mips::usesIntegerRecordWords(Hint.Architecture, P)) {
+      uint16_t Offset = 0;
+      for (const auto &L : P.Components) {
+        Result.push_back(
+            {I, Offset, P.Name, NdType::makeInt(L.ValueBytes, false), L});
+        Offset += L.ValueBytes;
+      }
+    } else {
       const auto Members = Hint.MIPSRecords ? sourceValueMembers(P.Type)
                                             : sourceABIValueMembers(P.Type);
       for (size_t J = 0; J < Members.size(); ++J)
@@ -674,7 +698,7 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                           P.Components[J]});
     }
   }
-  return Result;
+  return true;
 }
 
 std::vector<SourceAggregateMember> sourceABIValueMembers(const TypeRef &Type) {

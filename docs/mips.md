@@ -55,6 +55,26 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   stay private across calls. An untyped result passed to another opaque call
   can carry a frame address. Replacing that argument before the call, including
   in its executed delay slot, removes the earlier value from the proof.
+  On n32/n64 a full-GPR comparison can prove that an opaque result equals
+  a literal or an independently known non-frame word. Full-width moves carry
+  this fact across basic blocks. At a join, every incoming path must qualify
+  the actual argument. A comparison after the join can also qualify two
+  registers that carry the same selected return word on every incoming edge.
+  A subsequent opaque call needs a fresh comparison.
+  It can check either the new result or an earlier result kept in an
+  ABI-preserved register. A low-word comparison leaves the upper n32 bits
+  unknown, and a call can invalidate a copy in a volatile register. Other
+  arguments that reach the same call still need their own non-frame evidence.
+  Loop backedges carry equality only when it holds on entry and after every
+  iteration. Repeated executions of one call can return different words.
+  An aligned doubleword spill and reload can carry the same value through
+  the allocated frame. A partial or possibly aliasing write breaks that
+  identity. After a narrow write to an initialized spill, a new full-width
+  comparison can qualify the changed word. Before a call with unknown stack
+  argument extent, each live opaque spill must be checked or fully overwritten.
+  The call invalidates those slot identities. An earlier sample in a preserved
+  register can be checked again. A call with a known argument extent can
+  preserve a spill outside its outgoing area when the frame stays private.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
@@ -147,14 +167,16 @@ stores, arithmetic and control also refuse any unknown bits they observe.
 Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
-Source recovery proves complete adjacent merge pairs in a single ordinary leaf
-block before inferring parameters. It checks the original instruction
-occurrences, the directed address relation for the target byte order, and every
-use of the first result. Only the first core's unobserved incoming destination
-may become zero; the second still consumes the first result. Both reads and
-their fault order remain. Calls, PHIs, exceptional edges, other control flow,
-observed partial results and unproved address relationships retain the original
-dependency. Multi-block and nonadjacent pairs remain outside this proof.
+Before inferring parameters, source recovery checks merge-load pairs in a
+single block. Register arithmetic that constructs other call arguments may
+appear between the loads. The instructions must be complementary at the addresses
+required by the target byte order. Both reads retain their fault order, and
+the second consumes the first result. The first load can discard its incoming
+register bits only when every use of its result proves those bits unobservable.
+A typed record call observes its explicit operands, live register views and
+preserved register bytes. Its opcode and occurrence must match the original
+instruction. An unbound call, a PHI, an exceptional edge or a branch prevents
+the proof.
 The physical occurrence proof also accepts four-byte MIPS16e2 merge loads;
 two-byte slots and unproved instruction modes remain excluded.
 Concrete LowIR transport and source parameter inference have separate validation
@@ -1716,7 +1738,21 @@ Natural C record transport for o32, n32 and n64 is classified in
 its register or stack slot, and its position in the carrier. On o32 every
 record result uses caller-provided storage and the callee returns its address
 in v0. Large n32/n64 results use caller-provided storage and leave v0
-unspecified. Both C emitters can build a typed entry around a recovered body
+unspecified. A typed call passes the original result address as LLVM `sret`.
+The saved-link check accounts for every byte that the result writes into a
+private frame, including the last byte of a short final word. An o32 double or long long
+alongside a record uses an aligned pair of physical words. Both C backends
+recombine the words in target order for the single typed argument. An o32
+record can also split a field across argument registers and stack words. Its
+LLVM call includes the unused alignment word when the flattened record needs
+eight-byte alignment after an odd number of slots. An n32 record word retains
+all 64 data bits when the source pointer width is 32. LLVMC handles the
+nonstandard integer funnel shifts that LLVM creates when packing byte fields.
+A by-value parameter keeps every physical operand live through C emission.
+An indirect call may use its caller’s frame for a hidden result when its
+address derives from the authenticated incoming stack register.
+Both C emitters can build
+a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final
 word uses only the object's remaining bytes, including on big-endian targets.
@@ -1731,12 +1767,25 @@ A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 An untyped PIC call can observe argument-register writes that reach it,
-including its delay slot and loop backedges. A later call with a declared
-by-value record observes the pieces selected by its own signature. For example,
+including its delay slot and loop backedges. On n32 and n64, a full-register
+equality guard can qualify a forwarded result on that edge. A later call with a
+declared by-value record still checks the pieces selected by its own signature.
+A store after either call must preserve every byte of the saved link. For example,
 a single unsigned field that fills an ABI slot occupies one argument GPR,
-including a four-byte slot on o32.
+including a four-byte slot on o32. A four-byte integer field in an eight-byte
+n32 or n64 register uses its high half on big-endian machines and its low half
+on little-endian machines when passed or returned as a record. A caller may
+sign-extend that field after the call. The saved-link analysis follows the
+field's sign byte and leaves the unused half unproven, including after an
+unaligned word load with an implementation-dependent upper word.
 Saving the incoming frame pointer or another frame address does not expose
 the frame when every byte of that spill remains private at every call.
+A merge load from caller-owned input can supply a record argument when both
+the memory bytes and the retained register bytes exclude the private frame.
+For a merge store into a private stack slot the analysis follows each written
+byte in target order. A write covering even one saved-link byte invalidates
+that byte's previous value. A merge store to an output pointer requires
+evidence that the stored bytes cannot expose the private frame.
 For record callers that copy an argument into a private stack buffer in a
 counted loop, the proof follows the loop's actual byte addresses and bound.
 A call with an unknown frame effect, an uninitialized private byte or an

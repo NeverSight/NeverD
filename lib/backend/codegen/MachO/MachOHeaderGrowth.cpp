@@ -9,6 +9,7 @@
 
 #include "MachODependencyState.h"
 #include "MachOExportLayout.h"
+#include "MachOPageAddress.h"
 #include "MachOStrictLayout.h"
 
 #include "neverd/backend/Limits.h"
@@ -16,13 +17,17 @@
 #include "neverd/loader/MachO/CompactUnwind.h"
 #include "neverd/loader/MachO/DataInCode.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
+#include "neverd/support/AArch64Literal.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/LEB128.h"
 
 #include <capstone/capstone.h>
+#include <optional>
 #include <set>
+
 namespace neverd {
 namespace {
 using namespace llvm::MachO;
@@ -115,6 +120,57 @@ void uleb(Bytes &B, uint64_t V) {
   auto N = llvm::encodeULEB128(V, T);
   B.insert(B.end(), T, T + N);
 }
+// Follow a Darwin scratch page through straight-line code until a fresh
+// definition kills it or a return through LR ends its lifetime. A second use,
+// an unknown transfer or a data boundary leaves its meaning unresolved.
+bool leavesPageUnused(Decoder &Decode, aarch64_reg Page,
+                      llvm::ArrayRef<uint8_t> Bytes, va_t PC) {
+  if (Page < AARCH64_REG_X8 || Page > AARCH64_REG_X17)
+    return false;
+  const auto IsPage = [&](aarch64_reg Reg) {
+    return Reg == Page || Reg == AARCH64_REG_W0 + (Page - AARCH64_REG_X0);
+  };
+  constexpr auto Word = aarch64::kInsnSize;
+  for (; Bytes.size() >= Word; Bytes = Bytes.drop_front(Word), PC += Word) {
+    if (readLE<uint32_t>(Bytes.data()) == aarch64::kNop)
+      continue;
+    DecodedInsn I{};
+    if (Decode.decodeOne(Bytes.data(), Word, PC, I) != int(Word) || !I.Raw ||
+        !I.Raw->detail)
+      return false;
+    const auto &D = I.Raw->detail->aarch64;
+    const auto Ops = llvm::ArrayRef(D.operands, D.op_count);
+    if (I.Id == AARCH64_INS_RETAA || I.Id == AARCH64_INS_RETAB)
+      return true;
+    if (I.Id == AARCH64_INS_RET)
+      return Ops.empty() || (Ops.size() == 1 && Ops[0].type == AARCH64_OP_REG &&
+                             Ops[0].reg == AARCH64_REG_LR);
+    if (I.Id == AARCH64_INS_ADR || I.Id == AARCH64_INS_ADRP ||
+        I.Id == AARCH64_INS_MOVZ || I.Id == AARCH64_INS_MOVN ||
+        (I.Id == AARCH64_INS_MOV && Ops.size() == 2 &&
+         Ops[1].type == AARCH64_OP_IMM)) {
+      if (!Ops.empty() && Ops[0].type == AARCH64_OP_REG && IsPage(Ops[0].reg))
+        return true;
+      continue;
+    }
+    switch (I.Id) {
+#define MACHO_REGISTER_ALU(Name) case AARCH64_INS_##Name:
+#define MACHO_REGISTER_MEMORY(Name) case AARCH64_INS_##Name:
+#include "MachORegisterResults.def"
+      break;
+    default:
+      return false;
+    }
+    if (llvm::any_of(Ops, [&](const auto &Op) {
+          return (Op.type == AARCH64_OP_REG && IsPage(Op.reg)) ||
+                 (Op.type == AARCH64_OP_MEM &&
+                  (IsPage(Op.mem.base) || IsPage(Op.mem.index)));
+        }))
+      return false;
+  }
+  return false;
+}
+
 // Original instruction addresses and bytes remain stable. Header-relative
 // arithmetic has no complete producer relocation evidence in linked images;
 // reject it rather than rewriting only the first instruction of a computation.
@@ -125,7 +181,8 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
     return llvm::Error::success();
   const uint64_t Off = S.offset + Shift;
   if (A == Arch::AArch64) {
-    constexpr uint64_t Word = sizeof(uint32_t);
+    constexpr auto Word = aarch64::kInsnSize;
+    std::optional<Decoder> Decode;
     for (uint64_t I = 0, Next; I < S.size; I = Next) {
       const auto PC = S.addr + I;
       if (!Data.empty() && Data.front().Begin == PC) {
@@ -141,29 +198,30 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
       Next = I + Word;
       auto *P = B.data() + Off + I;
       const auto W = readLE<uint32_t>(P);
-      if ((W & 0x1f000000) != 0x10000000)
+      auto Address = aarch64::decodePCRelativeAddress(W, PC);
+      if (!Address)
         continue;
-      const bool Page = W & 0x80000000;
-      const int64_t Imm =
-          llvm::SignExtend64<21>(((W >> 29) & 3) | (((W >> 5) & 0x7ffff) << 2));
-      const uint64_t Target =
-          Page ? (PC & ~uint64_t(4095)) + Imm * 4096 : PC + Imm;
-      uint64_t Exact = Target;
-      if (Page && Target == (Old & ~uint64_t(4095))) {
-        if (I + 8 > S.size ||
-            !machODataInCodeRanges(Data, PC + sizeof(uint32_t),
-                                   sizeof(uint32_t))
-                 .empty())
-          return fail("unresolved header-page ADRP");
-        const auto Next = readLE<uint32_t>(P + 4), Reg = W & 31;
-        if ((Next & 0xffc00000) != 0x91000000 || (Next & 31) != Reg ||
-            ((Next >> 5) & 31) != Reg)
-          return fail("header-page ADRP needs a proven consuming ADD");
-        Exact += (Next >> 10) & 4095;
+      if ((W & aarch64::kADRP_Mask) == aarch64::kADRP_Op &&
+          *Address == (Old & aarch64::kPageMask)) {
+        const uint64_t CodeBytes =
+            (Data.empty() ? S.size : Data.front().Begin - S.addr) - I;
+        if (CodeBytes < 2 * Word)
+          return fail(kUnresolvedHeaderPage);
+        if (!Decode && !Decode.emplace().init(A))
+          return fail(kHeaderDecoder);
+        auto Pair = decodeMachOPageAddress(*Decode, {P, 2 * Word}, PC);
+        if (!Pair)
+          return fail(kHeaderPageConsumer);
+        if (Pair->ResultRegister != Pair->PageRegister &&
+            !leavesPageUnused(*Decode, Pair->PageRegister,
+                              {P + 2 * Word, CodeBytes - 2 * Word},
+                              PC + 2 * Word))
+          return fail(kHeaderPageLive);
+        Address = Pair->Target;
       }
-      if (Exact < Old || Exact - Old >= HeaderEnd)
+      if (*Address < Old || *Address - Old >= HeaderEnd)
         continue;
-      return fail("code computes an address in the relocated Mach header");
+      return fail(kCodeInHeader);
     }
     return llvm::Error::success();
   }
@@ -171,7 +229,7 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
     return fail(kMixedCoverage);
   csh H = 0;
   if (cs_open(CS_ARCH_X86, CS_MODE_64, &H) != CS_ERR_OK)
-    return fail("instruction decoder unavailable");
+    return fail(kHeaderDecoder);
   auto Close = llvm::scope_exit([&] { cs_close(&H); });
   cs_option(H, CS_OPT_DETAIL, CS_OPT_ON);
   auto *I = cs_malloc(H);
@@ -196,7 +254,7 @@ llvm::Error headerReferences(Bytes &B, const section_64 &S, uint64_t Old,
       const uint64_t Target = PC + Op.mem.disp;
       if (Target < Old || Target - Old >= HeaderEnd)
         continue;
-      return fail("code computes an address in the relocated Mach header");
+      return fail(kCodeInHeader);
     }
   }
   return llvm::Error::success();

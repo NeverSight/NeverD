@@ -192,9 +192,75 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
       });
 }
 
+// Factors on the same evaluation slot read exactly the same value X. If
+// any three weights multiply to zero in the observed ring, the group is
+// A + B*X + C*X^2 for every X. Only group three or more distinct
+// singleton rows: the two multiplies in Horner evaluation then save work.
+size_t groupQuadraticFactors(llvm::MutableArrayRef<uint32_t> Slots,
+                             llvm::SmallVectorImpl<uint64_t> &Words,
+                             llvm::MutableArrayRef<uint8_t> Uses,
+                             unsigned Bits) {
+  const unsigned N = llvm::APInt::getNumWords(Bits);
+  const size_t Stride = 1 + 2 * size_t(N);
+  const unsigned MinZeros = llvm::divideCeil(Bits, 3u);
+  auto Eligible = [&](size_t I) {
+    const auto *Row = Words.data() + I * Stride;
+    return Row[0] == 1 && llvm::APInt::tcLSB(Row + 1 + N, N) >= MinZeros;
+  };
+  llvm::fill(Uses, 0);
+  bool CanGroup = false;
+  for (auto [I, Slot] : llvm::enumerate(Slots.drop_front()))
+    if (Uses[Slot] < 3 && Eligible(I))
+      CanGroup |= ++Uses[Slot] == 3;
+  if (!CanGroup)
+    return Slots.size();
+
+  struct Quadratic {
+    uint32_t Slot;
+    llvm::APInt Constant, Linear, Square;
+  };
+  llvm::DenseMap<uint32_t, unsigned> Index;
+  llvm::SmallVector<Quadratic, 4> Groups;
+  size_t Kept = 0;
+  for (auto [I, Slot] : llvm::enumerate(Slots.drop_front())) {
+    const auto Row = llvm::ArrayRef(Words).slice(I * Stride, Stride);
+    if (Uses[Slot] < 3 || !Eligible(I)) {
+      if (Kept != I) {
+        Slots[Kept + 1] = Slot;
+        llvm::copy(Row, Words.begin() + Kept * Stride);
+      }
+      ++Kept;
+      continue;
+    }
+    llvm::APInt A(Bits, Row.slice(1, N)), B(Bits, Row.take_back(N));
+    const auto [It, New] = Index.try_emplace(Slot, Groups.size());
+    if (New) {
+      Groups.push_back(
+          {Slot, std::move(A), std::move(B), llvm::APInt(Bits, 0)});
+    } else {
+      auto &G = Groups[It->second];
+      G.Square = G.Square * A + G.Linear * B;
+      G.Linear = G.Linear * A + G.Constant * B;
+      G.Constant *= A;
+    }
+  }
+  Words.resize(Kept * Stride);
+  for (const auto &G : Groups) {
+    Slots[++Kept] = G.Slot;
+    // A zero repeat marks a quadratic row. Ordinary rows retain their
+    // original multiplicity and variable lookups retain their original order.
+    Words.push_back(G.Square.isZero() ? 1 : 0);
+    Words.append(G.Constant.getRawData(), G.Constant.getRawData() + N);
+    Words.append(G.Linear.getRawData(), G.Linear.getRawData() + N);
+    if (!G.Square.isZero())
+      Words.append(G.Square.getRawData(), G.Square.getRawData() + N);
+  }
+  return Kept + 1;
+}
+
 // In C * product(A + B*x) only the low W-ctz(C) bits of each factor
 // can reach the result. Lower each literal affine chain once in that ring.
-// The sample loop still multiplies every original factor at every point.
+// Each surviving source is still evaluated independently at every assignment.
 template <typename Step, typename SlotMap>
 size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
                             llvm::MutableArrayRef<Step> Steps,
@@ -269,6 +335,7 @@ size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
     Words.append(A.getRawData(), A.getRawData() + N);
     Words.append(B.getRawData(), B.getRawData() + N);
   }
+  Slots = Slots.take_front(groupQuadraticFactors(Slots, Words, Uses, Bits));
   Steps.back().NumArgs = Slots.size();
   Steps.back().Aux = Bits;
   // Consumers outside a factor still need their complete inputs. Every
@@ -843,13 +910,19 @@ llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
     }
     const auto Repeat = Coefficients.front();
     Coefficients = Coefficients.drop_front();
-    llvm::APInt::tcMultiply(Factor, Raw, Coefficients.data() + N, N);
+    if (Repeat) {
+      llvm::APInt::tcMultiply(Factor, Raw, Coefficients.data() + N, N);
+    } else {
+      llvm::APInt::tcMultiply(Next, Raw, Coefficients.data() + 2 * N, N);
+      llvm::APInt::tcAdd(Next, Coefficients.data() + N, 0, N);
+      llvm::APInt::tcMultiply(Factor, Raw, Next, N);
+    }
     llvm::APInt::tcAdd(Factor, Coefficients.data(), 0, N);
-    for (size_t K = 0; K < Repeat; ++K) {
+    for (uint64_t K = 0, Count = Repeat ? Repeat : 1; K < Count; ++K) {
       llvm::APInt::tcMultiply(Next, Product, Factor, N);
       std::swap(Product, Next);
     }
-    Coefficients = Coefficients.drop_front(2 * N);
+    Coefficients = Coefficients.drop_front((Repeat ? 2 : 3) * N);
   }
   const auto &Scale = Values[Sources.front()];
   return Scale * llvm::APInt(Bits, llvm::ArrayRef(Product, N))

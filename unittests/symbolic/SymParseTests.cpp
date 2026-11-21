@@ -92,6 +92,23 @@ TEST(SymParse, SubtractionIsAdditionOfANegatedTerm) {
   EXPECT_EQ(parse(Ctx, "a + (a << 1)"), parse(Ctx, "3 * a"));
 }
 
+TEST(SymParse, WideDecimalLiteralsAccumulateAtTheirDeclaredWidth) {
+  SymContext C;
+  for (size_t Digits : {19u, 20u, 37u, 38u, 39u, 310u, 617u}) {
+    std::string Text;
+    for (size_t I = 0; I < Digits; ++I)
+      Text += char('9' - I % 10);
+    const llvm::APInt Exact(4 * Digits, Text, 10);
+    for (unsigned W : {1u, 17u, 64u, 65u, 257u, 1025u}) {
+      const auto Spelling =
+          std::string(21, '0') + Text + "#" + std::to_string(W);
+      const auto Expected = Exact.zextOrTrunc(W);
+      EXPECT_EQ(parse(C, Spelling), C.mkConst(Expected));
+      EXPECT_EQ(parse(C, "-" + Spelling), C.mkConst(-Expected));
+    }
+  }
+}
+
 TEST(SymParse, LongProductsAvoidRetainingEveryPrefix) {
   for (unsigned Width : {8u, 16u, 64u, 257u}) {
     SCOPED_TRACE(Width);

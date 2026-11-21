@@ -387,6 +387,14 @@ struct GoModuleInfo {
   /// though the `pclntab` records only the first.  Empty unless the text base
   /// is proven.
   std::vector<ExceptionAddressRange> DuffDevices;
+  /// The code of `runtime.spillArgs` and `runtime.unspillArgs`, sorted: they
+  /// store every argument register into the internal/abi.RegArgs that R12
+  /// (arm64 R20) points at and load them back, for reflection's call helpers
+  /// (`runtime.callNNN`), which load a call's arguments with the one and
+  /// store its results with the other.  Each is straight-line code a call
+  /// runs in its caller's place (goInlinedRoutineAt).  Empty unless the text
+  /// base is proven.
+  std::vector<ExceptionAddressRange> RegisterArgumentTransfers;
   /// Entries of the runtime routines a call to which Go's compiler gives no
   /// continuation, sorted (goRuntimeNeverReturns): the instruction after such
   /// a call starts another block, or padding.  Their bodies need not show it:

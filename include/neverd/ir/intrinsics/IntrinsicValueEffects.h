@@ -77,6 +77,7 @@ constexpr bool intrinsicWritesOnlyItsOutput(Intrinsic Id) {
   case Intrinsic::A64_GetFPSR:
   case Intrinsic::A64_GetFPCR:
   case Intrinsic::GoCurrentGoroutine:
+  case Intrinsic::GoClosureContext:
     return true;
   default:
     return false;
@@ -84,11 +85,12 @@ constexpr bool intrinsicWritesOnlyItsOutput(Intrinsic Id) {
 }
 
 /// Intrinsics whose read changes nothing, so dead code elimination may drop
-/// an unused one: the read of the goroutine Go's internal ABI keeps in a
-/// register (GoCurrentGoroutine.h).  Reading a system register can have an
-/// effect of its own (a FIFO's), so no such read is one.
+/// an unused one: the reads of the goroutine and the closure context Go's
+/// internal ABI keeps in registers (GoCurrentGoroutine.h).  Reading a system
+/// register can have an effect of its own (a FIFO's), so no such read is one.
 constexpr bool intrinsicReadIsDiscardable(Intrinsic Id) {
-  return Id == Intrinsic::GoCurrentGoroutine;
+  return Id == Intrinsic::GoCurrentGoroutine ||
+         Id == Intrinsic::GoClosureContext;
 }
 
 /// An unused nontrapping EFLAGS image may disappear, and so may an unused read

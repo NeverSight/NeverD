@@ -13,9 +13,10 @@ SOURCE_ABI_TYPE_VALUE(kSourceAArch64Vector128Bytes, 16)
 SOURCE_ABI_TYPE_VALUE(kSourceAArch64MaxHVAMembers, 4)
 // The most registers a call returns a record of results in: Go's internal
 // ABI returns sixteen integer results on arm64 (R0-R15) and nine on amd64
-// (RAX, RBX, RCX, RDI, RSI, R8-R11), where a platform convention returns
+// (RAX, RBX, RCX, RDI, RSI, R8-R11), and its floating results in as many as
+// sixteen more (F0-F15, amd64 X0-X14), where a platform convention returns
 // four at most.
-SOURCE_ABI_TYPE_VALUE(kSourceMaxRegisterReturnMembers, 16)
+SOURCE_ABI_TYPE_VALUE(kSourceMaxRegisterReturnMembers, 32)
 SOURCE_ABI_TYPE_TEXT(kSourceAArch64Vector64CType,
                      "uint8_t __attribute__((vector_size(8)))")
 SOURCE_ABI_TYPE_TEXT(kSourceAArch64Vector128CType,

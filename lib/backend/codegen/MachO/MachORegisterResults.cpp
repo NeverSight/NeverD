@@ -23,6 +23,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64WritebackMemory.h"
+#include "neverd/ir/low/AArch64AddressResult.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/loader/BinaryImage.h"
@@ -37,6 +38,7 @@
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
@@ -74,6 +76,7 @@ struct RegisterBody {
   std::vector<MachODataInCodeRange> RecoveredData;
   llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
   llvm::SmallVector<va_t, 0> SourcePointerSlots;
+  std::optional<ExceptionAddressRange> RetainedTail;
   bool HasDataPage = false;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
@@ -174,50 +177,73 @@ bool physicalRegister(aarch64_reg R) {
          R == AARCH64_REG_XZR || R == AARCH64_REG_WZR;
 }
 
-// A source entry can escape in X0 or in a caller-supplied output slot. Follow
-// the value through full-width copies and offsets until the straight-line
-// return.
-bool exportsAddress(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC,
-                    aarch64_reg AddressReg) {
+// A returned address does not specify the size or type of its referent. When
+// the entry CFG ends in a return before the linker's bound, the intervening
+// suffix can stay in its original executable mapping, including callable code.
+std::optional<ExceptionAddressRange>
+addressedReturnTail(Decoder &Decode, const BinaryImage &Image,
+                    const MachOLiftedSource &Source, const LowFunc &Function) {
   constexpr auto Word = aarch64::kInsnSize;
-  bool Stored = false;
-  while (Bytes.size() >= Word) {
-    DecodedInsn I{};
-    if (Decode.decodeOne(Bytes.data(), Word, PC, I) != int(Word) || !I.Raw ||
-        !I.Raw->detail)
-      return false;
-    const auto &D = I.Raw->detail->aarch64;
-    if ((I.Id == AARCH64_INS_RET && !D.op_count) || I.Id == AARCH64_INS_RETAA ||
-        I.Id == AARCH64_INS_RETAB)
-      return Stored || AddressReg == AARCH64_REG_X0;
-    if (!D.op_count || D.operands[0].type != AARCH64_OP_REG)
-      return false;
-    if (D.op_count == 2 &&
-        (I.Id == AARCH64_INS_STR || I.Id == AARCH64_INS_STUR) &&
-        D.operands[0].reg == AddressReg &&
-        D.operands[1].type == AARCH64_OP_MEM &&
-        D.operands[1].mem.base != AddressReg &&
-        D.operands[1].mem.index != AddressReg) {
-      Stored = true;
-    } else {
-      const bool Copy =
-          D.op_count == 2 && (I.Id == AARCH64_INS_MOV ||
-                              (I.Id == AARCH64_INS_ORR && I.Raw->is_alias));
-      const bool Offset =
-          D.op_count == 3 &&
-          (I.Id == AARCH64_INS_ADD || I.Id == AARCH64_INS_SUB) &&
-          D.operands[2].type == AARCH64_OP_IMM;
-      if ((!Copy && !Offset) || D.operands[0].reg < AARCH64_REG_X0 ||
-          D.operands[0].reg > AARCH64_REG_X28 ||
-          D.operands[1].type != AARCH64_OP_REG ||
-          D.operands[1].reg != AddressReg)
-        return false;
-      AddressReg = D.operands[0].reg;
-    }
-    Bytes = Bytes.drop_front(Word);
-    PC += Word;
+  if (Function.AnalysisOnly || Function.Blocks.empty())
+    return std::nullopt;
+  const va_t Start = Function.Entry;
+  const va_t Limit = Start + Source.Bytes.size();
+  va_t CodeEnd = Start;
+  for (const auto &B : Function.Blocks) {
+    if (B.StartAddr < Start || B.EndAddr <= B.StartAddr || B.EndAddr > Limit)
+      return std::nullopt;
+    CodeEnd = std::max(CodeEnd, B.EndAddr);
   }
-  return false;
+  const ExceptionAddressRange Tail{CodeEnd, Limit};
+  if (!Tail.isValid() || CodeEnd - Start < Word)
+    return std::nullopt;
+  // A partial CFG ending at an undecodable word or an unresolved jump cannot
+  // describe the boundary. Check the actual last instruction in the prefix.
+  DecodedInsn Last{};
+  if (Decode.decodeOne(Source.Bytes.data() + (CodeEnd - Start - Word), Word,
+                       CodeEnd - Word, Last) != int(Word) ||
+      !Last.Raw || !Last.Raw->detail || !isAArch64LinkRegisterReturn(Last))
+    return std::nullopt;
+  const auto Code = Source.Bytes.take_front(CodeEnd - Start);
+  for (const auto &Block : Function.Blocks) {
+    for (const auto &I : Block.InstructionBoundaries) {
+      if (I.Address < Block.StartAddr || I.Size != Word ||
+          !rangeInBounds(I.Address - Block.StartAddr, Word,
+                         Block.EndAddr - Block.StartAddr))
+        return std::nullopt;
+      const auto Bytes = Code.drop_front(I.Address - Start);
+      const auto Encoding = readLE<uint32_t>(Bytes.data());
+      auto Target = aarch64::decodePCRelativeAddress(Encoding, I.Address);
+      if (!Target)
+        Target = machORebasedLiteralAddress(Image, Encoding, I.Address);
+      if (!Target)
+        continue;
+      aarch64_reg Reg;
+      size_t Width = Word;
+      if ((Encoding & aarch64::kADRP_Mask) == aarch64::kADRP_Op) {
+        const auto Pair = decodeMachOPageAddress(Decode, Bytes, I.Address);
+        if (!Pair)
+          continue;
+        Target = Pair->Target;
+        Reg = Pair->ResultRegister;
+        Width += Word;
+      } else {
+        if (!Tail.contains(*Target))
+          continue;
+        DecodedInsn Producer{};
+        if (Decode.decodeOne(Bytes.data(), Word, I.Address, Producer) !=
+                int(Word) ||
+            !Producer.Raw || !Producer.Raw->detail)
+          continue;
+        Reg = Producer.Raw->detail->aarch64.operands[0].reg;
+      }
+      if (Tail.contains(*Target) &&
+          darwinAddressValueEscapes(Decode, Code, Start, I.Address + Width,
+                                    Reg))
+        return Tail;
+    }
+  }
+  return std::nullopt;
 }
 
 // The existing PACM instruction table identifies the matching signing
@@ -611,7 +637,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     Body.Constraints += kEffects;
     return Body;
   }
-  const va_t End = Start + Source->Bytes.size();
+  va_t End = Start + Source->Bytes.size();
   const size_t Word = aarch64::kInsnSize;
   const auto *Frame = Image.ExceptionMetadata.findFunction(Start);
   if (!Frame || !Frame->Compact ||
@@ -662,6 +688,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   std::optional<LowFunc> OriginalControl;
   MachOEmbeddedDispatch Dispatch;
   if (Revalidate && (Owner->second->hasFnAttribute(kRecoveredData) ||
+                     Owner->second->hasFnAttribute(kRetainedTail) ||
                      !Source->Embedded.empty())) {
     OriginalControl = CFGBuilder().build(Image, Decode, Start);
     ControlFlow = &*OriginalControl;
@@ -683,6 +710,20 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   }
 
   RegisterBody Body;
+  if (ControlFlow && Source->Embedded.empty()) {
+    Body.RetainedTail =
+        addressedReturnTail(Decode, Image, *Source, *ControlFlow);
+    if (Body.RetainedTail) {
+      End = Body.RetainedTail->Begin;
+      if ((PAuthLR && *Compact.ReturnAddressSigningOffset >= End - Start) ||
+          (Frame->Itanium &&
+           llvm::any_of(Frame->Itanium->CallSites, [&](const auto &Site) {
+             return Site.GuardedRange.End > End || Site.LandingPadVA >= End;
+           })))
+        return std::nullopt;
+      Source->Bytes = Source->Bytes.take_front(End - Start);
+    }
+  }
   Body.RecoveredData = std::move(Dispatch.Recovered);
   Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
@@ -910,45 +951,53 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       Fallthrough();
       continue;
     }
+    // A page pair can materialize an original instruction or embedded byte.
+    // Keep the ADD as a distinct instruction, including its result register.
+    std::optional<MachOPageAddress> NumericPage;
     if (I.Id == AARCH64_INS_ADRP) {
       auto Pair = decodeMachOPageAddress(
           Decode, Source->Bytes.drop_front(PC - Start), PC);
       if (!Pair)
         return std::nullopt;
       const auto *Storage = Image.getSectionFor(Pair->Target);
-      if (!Storage || !Storage->isReadable() ||
-          (Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
-                            llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) ||
-          Pair->Target - Storage->VA >= Storage->FileSz)
-        return std::nullopt;
-      PageOffset = DataSymbol(Pair->Target);
-      if (!PageOffset)
-        return std::nullopt;
-      Body.HasDataPage = true;
-      OS << kAddressPage << cs_reg_name(Decode.getHandle(), Pair->PageRegister)
-         << kSeparator;
-      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
-      OS << kPage;
-      Fallthrough();
-      continue;
+      if (Storage && Storage->isReadable() &&
+          !(Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                             llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) &&
+          Pair->Target - Storage->VA < Storage->FileSz) {
+        PageOffset = DataSymbol(Pair->Target);
+        if (!PageOffset)
+          return std::nullopt;
+        Body.HasDataPage = true;
+        OS << kAddressPage
+           << cs_reg_name(Decode.getHandle(), Pair->PageRegister) << kSeparator;
+        emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+        OS << kPage;
+        Fallthrough();
+        continue;
+      }
+      NumericPage = Pair;
     }
     // A table or signing point moves with this body. An exported numeric
     // address denotes original storage even when lifting a published copy.
     const auto Rebased = aarch64::isPointerLiteralLoad(Encoding)
                              ? machORebasedLiteralAddress(Image, Encoding, PC)
                              : std::nullopt;
-    if (I.Id == AARCH64_INS_ADR || Rebased) {
-      if (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
-          (!Rebased && Ops[1].type != AARCH64_OP_IMM))
+    if (NumericPage || I.Id == AARCH64_INS_ADR || Rebased) {
+      if (!NumericPage && (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
+                           (!Rebased && Ops[1].type != AARCH64_OP_IMM)))
         return std::nullopt;
-      const va_t Target = Rebased ? *Rebased : va_t(Ops[1].imm);
+      const va_t Target = NumericPage ? NumericPage->Target
+                          : Rebased   ? *Rebased
+                                      : va_t(Ops[1].imm);
       const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
       const bool LiteralAddress =
-          !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
-      const auto Reg = Ops[0].reg;
+          (!Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA) ||
+          coverMachOEmbeddedRead(*Source, Start, Target, 1,
+                                 llvm::MachO::DICE_KIND_DATA);
+      const auto Reg = NumericPage ? NumericPage->ResultRegister : Ops[0].reg;
       if (Reg == AARCH64_REG_XZR)
         return std::nullopt;
-      const bool Moves = !Rebased && !OutsideCFG &&
+      const bool Moves = !NumericPage && !Rebased && !OutsideCFG &&
                          (Dispatch.TableAddresses.contains(PC) ||
                           movesSigningPoint(*Source, Start, PC, Target, Reg));
       if (!Moves) {
@@ -960,15 +1009,19 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
             // identifies the storage, but gives no evidence of a value use.
             if (OutsideCFG)
               return std::nullopt;
-            const auto Owner = machOInteriorAddressOwner(Image, Target);
+            const auto Owner = machOInteriorByteOwner(Image, Target);
             if (!Owner || !Functions.contains(*Owner))
               return std::nullopt;
           }
-          if (!exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
-                              NextPC, Reg))
+          const va_t Use = NumericPage ? NextPC + Word : NextPC;
+          if (!darwinAddressValueEscapes(Decode, Source->Bytes, Start, Use,
+                                         Reg))
             return std::nullopt;
         }
-        Body.SourceAddresses.push_back({PC, Target});
+        Body.SourceAddresses.push_back({PC, Target,
+                                        NumericPage ? MachOAddressForm::PagePair
+                                                    : MachOAddressForm::Single,
+                                        OS.tell()});
         if (Rebased)
           Body.SourcePointerSlots.push_back(
               aarch64::decodeLiteralLoad(Encoding, PC)->Address);
@@ -1342,6 +1395,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     F->addFnAttr(kRegisterBody);
     if (!Body.RecoveredData.empty())
       F->addFnAttr(kRecoveredData);
+    if (Body.RetainedTail)
+      F->addFnAttr(kRetainedTail);
     F->addFnAttr(llvm::Attribute::Naked);
     F->removeFnAttr(llvm::Attribute::AlwaysInline);
     F->addFnAttr(llvm::Attribute::NoInline);
@@ -1376,7 +1431,8 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
 llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
     llvm::Module &M, const BinaryImage &Image,
     std::vector<MachODataInCodeRange> *RecoveredData,
-    std::vector<MachOLiftedSourceAddress> *SourceAddresses) {
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses,
+    llvm::DenseMap<va_t, ExceptionAddressRange> *RetainedTails) {
   llvm::DenseSet<va_t> Result;
   if (!llvm::any_of(
           M, [](const auto &F) { return F.hasFnAttribute(kRegisterBody); })) {
@@ -1384,6 +1440,8 @@ llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
       RecoveredData->clear();
     if (SourceAddresses)
       SourceAddresses->clear();
+    if (RetainedTails)
+      RetainedTails->clear();
     return Result;
   }
   auto Functions = definedEntries(M, Image);
@@ -1394,6 +1452,7 @@ llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
     return invalidBody();
   std::vector<MachODataInCodeRange> VerifiedData;
   std::vector<MachOLiftedSourceAddress> VerifiedAddresses;
+  llvm::DenseMap<va_t, ExceptionAddressRange> VerifiedTails;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!F.hasFnAttribute(kRegisterBody))
@@ -1411,18 +1470,31 @@ llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
         Call->getCalledOperand() != assembly(F, *Body) ||
         !llvm::equal(Call->args(), Body->Operands))
       return invalidBody();
-    if (F.hasFnAttribute(kRecoveredData) != !Body->RecoveredData.empty())
+    if (F.hasFnAttribute(kRecoveredData) != !Body->RecoveredData.empty() ||
+        F.hasFnAttribute(kRetainedTail) != Body->RetainedTail.has_value())
       return invalidBody();
     if (RecoveredData)
       llvm::append_range(VerifiedData, Body->RecoveredData);
     if (SourceAddresses)
       llvm::append_range(VerifiedAddresses, Body->SourceAddresses);
+    if (RetainedTails && Body->RetainedTail)
+      VerifiedTails.try_emplace(It->first, *Body->RetainedTail);
     Result.insert(It->first);
   }
   if (RecoveredData)
     *RecoveredData = std::move(VerifiedData);
   if (SourceAddresses)
     *SourceAddresses = std::move(VerifiedAddresses);
+  if (RetainedTails)
+    *RetainedTails = std::move(VerifiedTails);
   return Result;
+}
+
+llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
+    llvm::Module &M, const BinaryImage &Image,
+    std::vector<MachODataInCodeRange> *RecoveredData,
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses) {
+  return validateMachORegisterResults(M, Image, RecoveredData, SourceAddresses,
+                                      nullptr);
 }
 } // namespace neverd

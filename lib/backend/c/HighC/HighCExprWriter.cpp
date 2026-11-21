@@ -7855,8 +7855,16 @@ HighCWriter::frameDisplacement(const HighExpr &E, bool RequireKnownRoot) const {
       }
       // Incoming SP sometimes survives as an unassigned SSA 0 temp after
       // prologue lowering. Treat it as the frame so `sp+k` can name a slot.
+      // A register the convention does not preserve holds an argument or
+      // what the caller left there, never this frame: Go passes arguments
+      // and its closure context in such registers, and `[r9+8]` named the
+      // slot of another argument.  A callee-saved one may hold the parent's
+      // frame, as an EH funclet's EBP, R11 or X19 does.
       if (Acc != 0 && CurrentFunc->FrameSize > 0 && Cur->Var.SSAVer == 0 &&
           Cur->Var.RenameTag < 0 && Cur->Var.Kind != MedVar::Param &&
+          (Cur->Var.Kind != MedVar::Reg ||
+           getTargetRegInfo(Opts.TheArch)
+               .isCallPreserved(Cur->Var.RegOff, Cur->Var.Size, Opts.Format)) &&
           !Analysis.AssignedVars.count(varName(Cur->Var)))
         return Acc;
     }

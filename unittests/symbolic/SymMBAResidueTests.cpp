@@ -1494,6 +1494,68 @@ TEST(SymMBAResidue, FunnelWindowsOnlyDiscardUnobservedSourceBits) {
   }
 }
 
+TEST(SymMBAResidue, MaskedRotationHalvesKeepBothObservedMasks) {
+  constexpr unsigned Width = 9, Cut = 2;
+  SymContext C;
+  const auto X = C.mkVar("x", Width);
+  const auto Rotate = C.mkRol(X, C.mkConst(Width, Cut));
+  enum Neighbor { Exact, LeftMask, RightMask, Count, Source };
+  for (auto Change : {Exact, LeftMask, RightMask, Count, Source}) {
+    for (auto Op : {SymOp::Or, SymOp::Xor, SymOp::Add}) {
+      SCOPED_TRACE(::testing::Message() << Change << ',' << unsigned(Op));
+      llvm::SmallVector<SymRef, 32> Factors{C.mkConst(Width, 4)},
+          Clean{Factors.front()};
+      for (unsigned I = 0; I < 23; ++I) {
+        const bool Alter = I == 3;
+        const auto Left = C.mkShl(
+            C.mkAnd(X, C.mkConst(Width, Alter && Change == LeftMask ? 3 : 7)),
+            C.mkConst(Width, Cut));
+        const auto Right =
+            C.mkAnd(C.mkConst(Width, Alter && Change == RightMask ? 2 : 3),
+                    C.mkLShr(Alter && Change == Source ? C.mkNot(X) : X,
+                             C.mkConst(Width, Width - Cut -
+                                                  (Alter && Change == Count))));
+        const auto Joined = Op == SymOp::Or    ? C.mkOr(Left, Right)
+                            : Op == SymOp::Xor ? C.mkXor(Left, Right)
+                                               : C.mkAdd(Left, Right);
+        auto Factor = [&](SymRef V) {
+          return C.mkAdd(C.mkConst(Width, 2 * I + 1),
+                         C.mkMul(C.mkConst(Width, 4), V));
+        };
+        Factors.push_back(Factor(I % 2 ? Joined : Rotate));
+        Clean.push_back(Factor(Rotate));
+      }
+      MBAOptions Opt;
+      Opt.MaxWork = 65536;
+      const auto Result = simplifyMBADeep(C, C.mkMul(Factors), Opt);
+      ASSERT_LT(Result.Work, Opt.MaxWork);
+      if (Change == Exact)
+        EXPECT_EQ(Result.SizeAfter,
+                  simplifyMBADeep(C, C.mkMul(Clean), Opt).SizeAfter);
+      SymEvalPlan Plan(C, Result.Expr);
+      bool Different = false;
+      for (uint64_t V = 0; V < (1u << Width); ++V) {
+        const uint64_t Word = (V << Cut) | (V >> (Width - Cut));
+        uint64_t Expected = 4, Reference = 4;
+        for (unsigned I = 0; I < 23; ++I) {
+          const auto High = (V & (I == 3 && Change == LeftMask ? 3 : 7)) << Cut;
+          const auto Low = (((I == 3 && Change == Source ? ~V : V) & 511) >>
+                            (Width - Cut - (I == 3 && Change == Count))) &
+                           (I == 3 && Change == RightMask ? 2 : 3);
+          const auto Joined = Op == SymOp::Or    ? High | Low
+                              : Op == SymOp::Xor ? High ^ Low
+                                                 : High + Low;
+          Expected *= 2 * I + 1 + 4 * (I % 2 ? Joined : Word);
+          Reference *= 2 * I + 1 + 4 * Word;
+        }
+        ASSERT_EQ(Plan.evalU64({V}), Expected & 511);
+        Different |= ((Expected ^ Reference) & 511) != 0;
+      }
+      EXPECT_EQ(Different, Change != Exact);
+    }
+  }
+}
+
 TEST(SymMBAResidue, DistributedFunnelTermsKeepLiveBitsAndCarries) {
   constexpr unsigned Width = 7, Bits = 3;
   SymContext Ctx;
@@ -1640,3 +1702,81 @@ TEST(SymMBAResidue, ProvesColumnCofactorsWithMultipleOrMissingPartners) {
 }
 
 } // namespace
+
+TEST(SymMBAResidue, ProjectedCoefficientsPreservePartialLimbsAndComplements) {
+  constexpr unsigned Width = 257;
+  const llvm::APInt One(Width, 1), Sign64 = One.shl(63);
+  for (unsigned Precision : {191u, 192u, 193u, 257u}) {
+    for (unsigned Shift : {63u, 64u, 65u}) {
+      SymContext C;
+      const auto X = C.mkVar("x", Width);
+      const auto Scale = One.shl(Width - Precision);
+      llvm::SmallVector<SymRef, 32> Factors{C.mkConst(Scale)};
+      const std::array<llvm::APInt, 6> Multipliers{
+          -One, Sign64 - 1, -Sign64, -Sign64 - 1, Sign64 + 1, One};
+      std::array<llvm::APInt, 6> Values{
+          One - 1, One, -One, Sign64 + 3, One.shl(129) - 7, -One.shl(223) + 13};
+      std::array<llvm::APInt, 6> Expected;
+      Expected.fill(Scale);
+      for (unsigned I = 0; I < 29; ++I) {
+        const auto Word = I % 3 ? X : C.mkNot(X);
+        auto K = Multipliers[I % Multipliers.size()];
+        if (Precision < Width && I % 2)
+          K += One.shl(Precision);
+        const auto Offset = I % 2 ? One.shl(127) - 2 * I - 1 : -One - 2 * I;
+        const auto Weight = (I % 2 ? -One : One) * (2 * I + 1);
+        const auto B = Weight.shl(Shift + I % 2);
+        const auto Inner =
+            C.mkAdd(C.mkConst(Width, 3), C.mkMul(C.mkConst(K), Word));
+        Factors.push_back(
+            C.mkAdd(C.mkConst(Offset), C.mkMul(C.mkConst(B), Inner)));
+        for (size_t J = 0; J < Values.size(); ++J) {
+          const auto V = I % 3 ? Values[J] : ~Values[J];
+          Expected[J] *= Offset + B * (K * V + 3);
+        }
+      }
+      MBAOptions Options;
+      Options.MaxWork = 65536;
+      const auto Result = simplifyMBADeep(C, C.mkMul(Factors), Options);
+      SCOPED_TRACE(::testing::Message() << Precision << ',' << Shift);
+      ASSERT_LT(Result.SizeAfter, Result.SizeBefore / 2);
+      EXPECT_LT(Result.Work, Options.MaxWork);
+      for (size_t J = 0; J < Values.size(); ++J)
+        EXPECT_EQ(C.eval(Result.Expr, {Values[J]}), Expected[J]);
+    }
+  }
+}
+
+TEST(SymMBAResidue, LongScaledProductsRetainEveryIndependentFactor) {
+  constexpr unsigned Width = 97, Precision = 29, Shift = 10;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto Scale = llvm::APInt::getOneBitSet(Width, Width - Precision);
+  for (unsigned Degree : {511u, 512u, 563u}) {
+    llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
+    for (unsigned I = 0; I < Degree; ++I) {
+      const auto Weight = C.mkConst(llvm::APInt(Width, 2 * I + 3).shl(Shift));
+      Factors.push_back(
+          C.mkAdd(C.mkConst(Width, 2 * I + 1), C.mkMul(Weight, I % 2 ? X : Y)));
+    }
+    MBAOptions Opts;
+    Opts.MaxWork = 65536;
+    const auto Product = C.mkMul(Factors);
+    const auto Result = simplifyMBADeep(C, Product, Opts);
+    ASSERT_LT(Result.SizeAfter, 64u);
+    EXPECT_LT(Result.Work, Opts.MaxWork);
+    for (unsigned A : {0u, 1u, 547u, 0xffffu})
+      for (unsigned B : {0u, 3u, 925u, 0xffffffu}) {
+        auto Expected = Scale;
+        for (unsigned I = 0; I < Degree; ++I)
+          Expected *=
+              llvm::APInt(Width, 2 * I + 1) +
+              llvm::APInt(Width, 2 * I + 3).shl(Shift) * (I % 2 ? A : B);
+        EXPECT_EQ(
+            C.eval(Result.Expr, {llvm::APInt(Width, A), llvm::APInt(Width, B)}),
+            Expected);
+      }
+    Opts.MaxWork = 8;
+    EXPECT_EQ(simplifyMBADeep(C, Product, Opts).Expr, Product);
+  }
+}

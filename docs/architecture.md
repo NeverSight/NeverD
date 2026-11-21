@@ -5113,6 +5113,13 @@ reaches the dispatcher's cases when the dispatcher's entry is only a guess.
 A relocation run ends at the next table anchor among its own slots; an anchor
 past it names another object, aligned however its owner is
 (`boundCodePtrRunByNextAnchor`).
+The scan of read-only data for code pointers (`scanDataFuncPointers`) reads no
+ELF relocation table (SHT_REL, SHT_RELA, SHT_RELR, SHT_CREL and Android's): a
+RELATIVE record's addend repeats the code address its slot receives, which
+that slot's relocation already records, and read as a pointer it made a
+boundary guess of every relocated code label. Each case label of a Go PIE's
+jump table in `.data.rel.ro` so looked like a function entry, and the resolver
+refused the table as one of function pointers.
 MinGW's runtime defines a `__imp_X` variable for each function it supplies
 in place of an import (__MINGW_IMP_SYMBOL), initialized to that function, and
 calls through it. Such a variable of an x86 or x64 image's symbol table that
@@ -5835,10 +5842,23 @@ setup (`preservesCallSetup`), and dead code elimination, at MedIR and at
 HighIR, drops one nothing comes to use (`intrinsicReadIsDiscardable`): the
 stack check the elided growth path leaves, or the return's transport of a
 register System V keeps. It merges or moves none, since a call may change the
-goroutine. C reads the register itself, as `getg()` does; `runtime.canpanic`
-read each `getg().m` as a trap. Calls from assembly, which may follow ABI0
-and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
-the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
+goroutine. Every arm64 Go function reads R28 so, before the internal ABI too:
+Go has kept the arm64 goroutine there since its port, where x86-64 kept it in
+thread-local storage until R14 took it. C reads the register itself, as `getg()` does; `runtime.canpanic`
+read each `getg().m` as a trap. A call through a func value passes the
+value's address in RDX (R26 on arm64, `goClosureContextRegister`), through
+which a closure reads what it captured, so the incoming value of that register
+is the closure context (`defineGoClosureContext`,
+`Intrinsic::GoClosureContext`), read the same way at the entry; a call
+clobbers the register, so no read follows one. Go code before the internal
+ABI that takes no register argument (`MedFunc::StackArgumentsOnly`) reads its
+context the same way; a stub that takes registers, as Go 1.16's
+`panicSliceAlen` takes CX and DX, reads those instead. For either register the
+incoming value is the version nothing in the function defines: where a
+function reads the register only after a call that writes it, its first SSA
+version is that call's clobber, and stays the call's. Calls from assembly, which may
+follow ABI0 and use X15 as scratch, and calls from Go 1.17 and earlier code do
+not get the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
 platform contract.
 
 On x86-64, Go code also takes its integer arguments in Go's registers, in
@@ -5888,10 +5908,24 @@ as no tail call (`isTailCallTarget`). `runtime.suspendG`'s jump table holds
 case labels that read as code addresses, and each `jmp` to one became a call
 into a function that started in the middle of `suspendG`; where only the
 entry went, `runtime.runGCProg`'s jump to its loop called a function nothing
-defined, and the loop was decompiled nowhere. Duff's device routines are the
-exception (`GoModuleInfo::DuffDevices`): Go's compiler calls `runtime.duffzero`
-and `runtime.duffcopy` at the point that zeroes or copies as many bytes as it
-needs, so each such point begins a routine of its own.
+defined, and the loop was decompiled nowhere. Go's compiler calls
+`runtime.duffzero` and `runtime.duffcopy` (`GoModuleInfo::DuffDevices`) at the
+point that zeroes or copies as many bytes as it needs, and expects the call to
+change only the registers that straight-line body writes: the CFG builder
+lifts such a call as the body from that point to its return
+(`goInlinedRoutineBody`, `CFGBuilder::rewriteGoInlinedRoutineCall`), so the
+point begins no function, and the caller keeps every other register. As
+functions, the points chained into one another, and a caller's read of RAX
+after the call was unknown. Under the internal ABI a routine enters with X15
+zero, since compiled code alone calls it (`goDuffDeviceAt`):
+`runtime.duffzero` stores X15 sixty-four times. Reflection's call helpers
+(`runtime.callNNN`) call `runtime.unspillArgs` and `runtime.spillArgs`
+(`GoModuleInfo::RegisterArgumentTransfers`), which load every argument
+register from the internal/abi.RegArgs R12 (arm64 R20) points at and store
+them back, the same way (`goInlinedRoutineAt`): between the two a helper calls
+a func value, which enters Go code by the internal ABI, so its stores read
+what the call returns (`modelGoCallResults`). As calls, each of a Go image's
+27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
 
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
@@ -5909,16 +5943,26 @@ the same rules as amd64's nine, so a record holds up to sixteen; a call
 reading X2 returns three results, where AAPCS64 returns X0:X1 at most. That holds for a call that enters Go
 code by the internal ABI (`goCallEntersInternalABI`): a direct call to
 compiled Go code or to `<ABIInternal>` assembly, and an indirect call compiled
-code makes, through a function value. Go assembly also calls C through a
-pointer, which returns in the platform's registers: darwin's
-`runtime.syscall6` calls libc and reads RDX after. An indirect call returns
+code makes, through a function value. So does a call Go assembly makes through
+a func value, which loads its target from the address in the closure context
+register (`callsThroughContext`): a func value names compiled code or an ABI
+wrapper of assembly. Go assembly also calls C through a pointer, which returns
+in the platform's registers: darwin's `runtime.syscall6` calls libc and reads
+RDX after. An indirect call returns
 every result up to the last register its caller reads (`modelGoCallResults`):
 the call produces them packed, each result register the call left is defined
 from its field, in every block and through PHIs, and HighC prints the record
 (`t = ((struct nd_record_r2_u64_u64_e (*)())f)(...); t.field_1`). Modelled
 with RAX alone, an interface's data word (`call [rdx]; mov [rsp+8], rbx`)
-printed a placeholder. RDX, the closure context, is no result of such a call;
-read as System V's second result, it gave one a field. A shape other than the
+printed a placeholder. Its floating results (X0-X14, arm64 F0-F15), which Go
+numbers apart from its integer ones, follow those in the record, each a
+float32 or a float64 as its widest read takes (`GoCallShape::LastFloat`): a
+func value returning a float64 left X0 to a read of what the call clobbered.
+A record holds as many as Go returns: up to nine integer and fifteen floating
+results on amd64, sixteen of each on arm64 (`kSourceMaxRegisterReturnMembers`).
+Direct calls, whose callee returns their record, still return integer results
+alone. RDX, the closure context, is no result of such a call; read as System
+V's second result, it gave one a field. A shape other than the
 platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
 returning X0:X1 and joined it from the callee's record. An indirect call
@@ -5971,7 +6015,11 @@ never set: a word-wide field returned those, a trap on every call, where
 that record (each field naturally aligned), and a register width wider than
 its field holds the field in its low bytes, which is all any reader takes. A
 result a function hands back from a call it makes stays a word at that call,
-and an indirect call's results stay words.
+and an indirect call's results stay words. Two results are a record too where
+they take X0 and X1, which AAPCS64 also returns a double-word integer in: Go
+returns a list of values, and as one `__int128` `runtime.makeAddrRange`, which
+returns its two arguments, was refused, its high word being no value the
+function computed (`returnsGoResults`).
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
@@ -6067,6 +6115,17 @@ an undefined arm. Before a function's stack-growth block, the false edge gave
 the block a second predecessor, so the growth loop stayed and the function
 read its stack parameters through the loop's join, as `runtime_makeslice(void)`
 did.
+
+Go's runtime resumes a frame that deferred at its `deferreturn` call
+(`runtime._func.deferreturn`, `GoFunctionEH::DeferReturnOffset`) on the frame's
+own stack pointer: recovery restores the frame's SP, from which the code there
+reloads the named results and returns. Where no branch or exceptional edge
+reaches that block, as with open-coded defers, which register no call site,
+SSA enters it as a root with the SP the function's pcsp table reaches
+(`GoFunctionEH::FrameSize`), as an SEH handler root takes its establisher
+frame. Entered with the function's own entry SP, the reloads read the caller's
+frame, and arm64's `main.namedResultRewrite` took a stack argument no caller
+passed.
 
 On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
 callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's
@@ -7371,7 +7430,9 @@ precision. Each group is evaluated in Horner form and the groups are
 multiplied together, including when their input words overlap. A degree
 can drop again when its falling factorial vanishes because the product of `j`
 consecutive integers is always divisible by `j!`. The solver compares the
-two exact polynomial readings at the observed width.
+two exact polynomial readings at the observed width. Long scaled products can
+reuse this truncated reading after the low-word residue proof declines,
+within the same work allowance.
 Nested affine spellings of a word are composed at the observed precision
 before grouping its factors. Polynomial arithmetic is charged at its actual
 coefficient precision. A signed one-limb affine scalar can multiply a wide
@@ -7387,8 +7448,17 @@ even when the window wraps. Constant shifts translate the window only when
 every bit comes from the source. A mask can be peeled when it preserves
 every bit of the window, including both sides of a wrapped interval.
 Variable counts and observable zero or sign padding stay in the source word.
+A sum, OR or XOR can also supply a field from one right shift when every
+other term is zero below the end of that field. This condition accounts for
+carries into the field from lower bits of a sum.
+Masked complementary shifts of the same word can share a rotation when both
+halves retain every observed bit. High IR emits packed fields smaller than
+a byte in a whole-byte carrier, including signed fields assembled from
+several extracts. The original field width determines the sign position.
 The LLVM translator carries same-word funnel shifts as rotates in both
-directions and emits them with their modulo-width count.
+directions and emits them with their modulo-width count. LLVM arguments,
+constants and opaque calls contribute zero removable instructions when
+queried as region roots.
 A mask or addend that changes only higher bits drops out; a mask
 that changes even one live bit stays. If every weight has at least `s` low
 zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
@@ -11646,6 +11716,11 @@ HighC checks a storage address's known frame root and accumulates its signed
 offset in one bounded walk. Offset steps and alias/parent-frame rebases must
 fit without signed overflow; a zero mask is not a stack-alignment operation.
 An unassigned SSA-0 display heuristic still cannot authorize storage access.
+Its root is the entry stack pointer, a temporary no statement assigns, or a
+callee-saved register: a register the convention does not preserve holds an
+argument or what the caller left there, never the frame (`[r9+8]` in Go code
+named the slot of another argument), while an EH funclet's EBP, R11 or X19 may
+hold its parent's frame.
 Failed proofs retain ordinary address expressions instead of inventing frame
 members, and each query observes the current aliases and frame layout.
 Typed pointer offsets and frame overlays also reject unrepresentable signed
@@ -14166,14 +14241,20 @@ registers of the kernel's handler (`LinuxSyscallArguments.def`, which
 system call tables and handler prototypes, for x86-64, AArch64 and ARM EABI,
 where a 64-bit argument takes an even-aligned register pair); the rest are
 no parameters of a wrapper, and the C writers pass them as 0. x86-64 passes
-RDX:RSI and R8:R10 as one operand each, read whole once either half is
-(`x64SyscallOperandRead`). LowToMed gives the intrinsic zero for each operand
-the call does not read, and the pair the lift packed for that operand alone
-reads no register either. A routine that makes the call then takes none of
+RDX:RSI and R8:R10 as one operand each (`x64SyscallOperandRead`). LowToMed
+gives the intrinsic zero for each operand the call does not read, the pair the
+lift packed for that operand alone reads no register either, and a pair whose
+high half the call does not read passes zero there
+(`x64SyscallPairHighRead`): munmap reads RSI but not RDX, and as a pair read
+whole a wrapper took RDX as a third parameter. A routine that makes the call then takes none of
 them at its entry: read whole, R8:R10 and R9 gave Go's `runtime.exit`
 every System V position up to R9 (`runtime_exit(0, 0, 0, 0, 0, 0, 2)`), and
 Go's stack-ABI routines no stack-only reading. A number the table does not
-list keeps every argument register.
+list keeps every argument register. An OR of two constants sets the number
+too (`blockRegisterConstant`): arm64's `orr x8, xzr, #0x7c`, which Go's
+assembler emits for a bitmask constant MOVZ could also encode and for which
+Capstone names no MOV alias, lifts as an OR of the zero register and the
+immediate, and `runtime.osyield` took X0-X5 while it set no constant.
 
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
@@ -14183,9 +14264,16 @@ after range and NaN checks. Architecture-specific floating control/status
 effects remain in their existing intrinsic contracts.
 
 LLVM C spells an LLVM intrinsic one of three ways. `intrinsics_llvm_cnames.inc`
-names the compiler builtin that is the same intrinsic, which needs no C
-library header a build for another target may lack. A floating-point
-operation is its type-generic elementwise builtin at any width, half included
+names a compiler builtin with the required semantics. For `llvm.minnum` and
+`llvm.maxnum`, the IEEE 754-2019 number builtins select the numeric operand
+when one operand is NaN and order negative zero below positive zero. These
+builtins work directly in cross-target C without a library header. Scalar
+`llvm.roundeven` uses the elementwise builtin where the target supports it.
+For baseline Windows x86, the UCRT supplies C99 `remainder`. Subtracting the
+remainder modulo one rounds to the nearest integer with ties to even in every
+rounding mode. The helper preserves the sign of zero and handles infinities
+and NaNs before the subtraction. Other floating-point operations use their
+type-generic elementwise builtins at any supported width, half included
 (`__builtin_elementwise_sqrt`, which sets no errno as `sqrt` may;
 `__builtin_elementwise_fma`; `__builtin_elementwise_minimum`, which keeps a NaN
 and orders the zeros where `fmin` leaves the zeros open), so a floating-point
@@ -17452,6 +17540,10 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+A wide product can combine three or more distinct affine factors that each
+occur once and read the same input slot. When each weight has at least
+`ceil(P/3)` low zero bits, cubic and higher terms vanish at precision `P`.
+The plan evaluates the resulting quadratic at every original assignment.
 The evaluator lowers constant and variable leaves on their first worklist
 visit. Native inputs are loaded before the operator loop, in the original
 lookup order; shared inputs are still read once and unused inputs are omitted.
@@ -17464,9 +17556,10 @@ Affine prefix inference stores completed value/known-mask facts by exact node
 and queried precision in a dense cache. Facts are copied before recursion;
 bucket growth is fully charged before allocation, and incomplete queries are
 never cached. Partial known bits still cannot stand in for constant prefixes.
-Textual coefficients that fit in 64 bits use one native integer parse; the
-constant builder still owns width truncation and zero extension, and larger
-literals retain arbitrary-precision parsing.
+Decimal literals are read in groups of up to 19 digits. Longer literals
+accumulate modulo the declared width, using a native limb for widths up to
+64 bits. Binary and hexadecimal literals use a native parse when they fit
+in one limb and an arbitrary-width parse for larger values.
 Region candidates are independently proved over the completed abstraction,
 then instantiated with that abstraction's hidden-input mapping. The identity
 holds for arbitrary independent inputs, so restoring related sources cannot

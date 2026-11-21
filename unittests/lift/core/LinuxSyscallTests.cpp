@@ -59,9 +59,14 @@ TEST(LinuxSyscallArguments, CountTheKernelHandlersRegisters) {
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::ARM, 194), 4u);     // ftruncate64
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::ARM, 192), 6u);     // mmap2
   EXPECT_EQ(linuxSyscallArgumentCount(Arch::X64, 100000), std::nullopt);
-  // RDX:RSI and R8:R10 are read whole once either half is.
-  EXPECT_EQ(neverd::x64SyscallRegistersRead(2), 3u);
-  EXPECT_EQ(neverd::x64SyscallRegistersRead(4), 5u);
+  // LowToMed passes zero in the half of RDX:RSI or R8:R10 a call does not
+  // read, so a call reads exactly its own argument registers.
+  EXPECT_EQ(neverd::x64SyscallRegistersRead(2), 2u);
+  EXPECT_EQ(neverd::x64SyscallRegistersRead(4), 4u);
+  EXPECT_FALSE(neverd::x64SyscallPairHighRead(2, 2));
+  EXPECT_TRUE(neverd::x64SyscallPairHighRead(2, 3));
+  EXPECT_FALSE(neverd::x64SyscallPairHighRead(3, 4));
+  EXPECT_TRUE(neverd::x64SyscallPairHighRead(3, 5));
 }
 
 // Linux 7.2 at 8d3ae59288f1e7d58d76558a6ee96d533bc5019f.

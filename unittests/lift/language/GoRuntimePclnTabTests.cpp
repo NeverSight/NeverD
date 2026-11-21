@@ -593,4 +593,27 @@ TEST(GoDuffDevices, AreFoundByName) {
   EXPECT_EQ(Module->DuffDevices[1].End, kTextVA + 0x300);
 }
 
+TEST(GoRegisterArgumentTransfers, AreFoundByName) {
+  // Reflection's call helpers load a call's arguments with
+  // `runtime.unspillArgs` and store its results with `runtime.spillArgs`.
+  GoTestImage T;
+  T.installPclnTab(
+      buildPclnTab(kGo116Magic,
+                   {makeGoCode("runtime.unspillArgs", kTextVA + 0x100),
+                    makeGoCode("runtime.spillArgs", kTextVA + 0x180),
+                    makeGoCode("main.a", kTextVA + 0x300)},
+                   kTextVA + 0x400)
+          .Bytes);
+  parseGoExceptions(T.Img);
+
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->RegisterArgumentTransfers.size(), 2u);
+  EXPECT_EQ(Module->RegisterArgumentTransfers[0].Begin, kTextVA + 0x100);
+  EXPECT_EQ(Module->RegisterArgumentTransfers[0].End, kTextVA + 0x180);
+  EXPECT_EQ(Module->RegisterArgumentTransfers[1].Begin, kTextVA + 0x180);
+  EXPECT_EQ(Module->RegisterArgumentTransfers[1].End, kTextVA + 0x300);
+  EXPECT_TRUE(Module->DuffDevices.empty());
+}
+
 } // namespace

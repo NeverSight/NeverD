@@ -40,9 +40,11 @@ namespace neverd::c_detail {
 /// Copy each logical member once between complete C value representations.
 /// The validated source layout owns the offsets. Padding never becomes an
 /// integer value, including when a C record result uses raw LLVM word fields.
-inline std::string sourceRecordValue(const TypeRef &Record,
-                                     llvm::StringRef From, llvm::StringRef To,
-                                     llvm::StringRef Expression) {
+inline std::string
+sourceRecordValue(const TypeRef &Record, llvm::StringRef From,
+                  llvm::StringRef To, llvm::StringRef Expression,
+                  llvm::ArrayRef<SourceABIValueLocation> WordResult = {},
+                  bool LittleEndian = true) {
   const auto Temporary = [&](llvm::StringRef Stem) {
     std::string Name = Stem.str();
     while (From.contains(Name) || To.contains(Name) ||
@@ -53,10 +55,24 @@ inline std::string sourceRecordValue(const TypeRef &Record,
   const auto Destination = Temporary(kSourceRecordDestination);
   const auto Source = Temporary(kSourceRecordSource);
   std::string Copies;
-  for (const auto &Member : sourceValueMembers(Record))
-    Copies += llvm::formatv(kSourceRecordFieldCopy.data(), Member.ByteOffset,
-                            Member.Type->Size, Destination, Source)
-                  .str();
+  if (WordResult.empty()) {
+    for (const auto &Member : sourceValueMembers(Record))
+      Copies += llvm::formatv(kSourceRecordFieldCopy.data(), Member.ByteOffset,
+                              Member.Type->Size, Destination, Source)
+                    .str();
+  } else {
+    // A three-byte LLVM integer typically occupies four bytes of C storage.
+    // Copy into its numeric low bytes in the literal LLVM result structure.
+    const auto Copy =
+        LittleEndian ? kSourceRecordWordFieldLE : kSourceRecordWordFieldBE;
+    unsigned Offset = 0;
+    for (const auto &[I, Piece] : llvm::enumerate(WordResult)) {
+      Copies += llvm::formatv(Copy.data(), Destination, I, Source, Offset,
+                              Piece.ValueBytes)
+                    .str();
+      Offset += Piece.ValueBytes;
+    }
+  }
   return llvm::formatv(kSourceRecordValue.data(), To, From, Expression, Copies,
                        Destination, Source)
       .str();

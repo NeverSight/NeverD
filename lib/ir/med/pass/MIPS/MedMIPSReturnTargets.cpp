@@ -9,6 +9,7 @@
 
 #include "../../../../safety/StackSlotFlow.h"
 #include "../../abi/MedABIPassDetail.h"
+#include "MedMIPSGuardedCalls.h"
 #include "MedMIPSRecordFrame.h"
 
 #include "neverd/ir/Limits.h"
@@ -77,15 +78,13 @@ std::set<int> loopPredecessors(const MedFunc &F, const MedBlock &Header,
   return Back.size() != Header.Preds.size() ? Back : std::set<int>{};
 }
 
-using NativeCallSites =
-    llvm::SmallDenseMap<const MedBlock *, llvm::SmallVector<size_t, 1>, 4>;
-
 /// Follow the physical arguments observed at each unbound call back to their
 /// reaching writes. At a join any successor may observe an incoming value.
 bool nativeArgumentsAreNonFrame(
-    const NativeCallSites &NativeCalls, const TargetRegInfo &TRI,
-    BinaryFormat Format, const safety::detail::ExactPhiGraph &Graph,
-    size_t &Remaining, llvm::function_ref<bool(const MedVar &)> IsNonFrame) {
+    const mips::NativeCallSites &NativeCalls, const mips::GuardedCalls &Guarded,
+    const TargetRegInfo &TRI, BinaryFormat Format,
+    const safety::detail::ExactPhiGraph &Graph, size_t &Remaining,
+    llvm::function_ref<bool(const MedVar &)> IsNonFrame) {
   if (NativeCalls.empty())
     return true;
   // One bit per physical argument register, at most eight GPRs and eight
@@ -145,7 +144,10 @@ bool nativeArgumentsAreNonFrame(
                    })))
         return false;
       if (!Sites.empty() && I == Sites.back()) {
-        Live = All;
+        const auto It = Guarded.Arguments.find(&Op);
+        const uint32_t Safe =
+            It == Guarded.Arguments.end() ? 0 : It->second.Registers;
+        Live = Before | (All & ~Safe);
         Sites = Sites.drop_back();
       } else {
         Live = Before;
@@ -238,11 +240,12 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::vector<MedVar> MemoryAddresses;
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
+  bool HasMergeStores = false;
   size_t CallCount = 0;
-  NativeCallSites NativeCalls;
+  mips::NativeCallSites NativeCalls;
   struct CallFrame {
     llvm::SmallVector<SourceABIValueLocation, 8> Inputs;
-    unsigned FloatingResultBytes = 0;
+    unsigned NumericResultBytes = 0;
   };
   std::map<const MedOp *, CallFrame> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
@@ -256,6 +259,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
           (Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSRequireWord) ||
+           mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isDSPControlIntrinsic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
@@ -273,17 +277,30 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         if (Op.SourceCallHint && Op.SourceCallHint->Signature.MIPSRecords) {
           const auto &Signature = Op.SourceCallHint->Signature;
           const auto Pieces = sourceABIParameters(Signature);
-          if (Op.NumInputs != Pieces.size() + 1)
+          const bool Hidden = Signature.ReturnLocation.Kind ==
+                              SourceABICarrierKind::IndirectResultPointer;
+          if (Op.NumInputs != Pieces.size() + 1 + unsigned(Hidden))
             return false;
           auto &Frame = Calls[&Op];
           for (const auto &P : Pieces)
             Frame.Inputs.push_back(P.Location);
+          if (Hidden)
+            Frame.Inputs.push_back(Signature.ReturnLocation);
+          // A complete scalar-only object returned by a qualified call can
+          // be spilled as data after its non-frame operands are proven. A
+          // pointer field or padding cannot provide that byte provenance.
+          const auto Members = sourceValueMembers(Signature.ReturnType);
+          unsigned Covered = 0;
+          for (const auto &M : Members) {
+            if (M.ByteOffset != Covered || (M.Type->Kind != NdTypeKind::Int &&
+                                            M.Type->Kind != NdTypeKind::Float))
+              break;
+            Covered += M.Type->Size;
+          }
           if (Signature.ReturnType->Kind == NdTypeKind::Float ||
-              (!Signature.ReturnComponents.empty() &&
-               llvm::all_of(Signature.ReturnComponents, [](const auto &P) {
-                 return P.Kind == SourceABICarrierKind::FloatingRegister;
-               })))
-            Frame.FloatingResultBytes = Signature.ReturnType->Size;
+              ((Hidden || !Signature.ReturnComponents.empty()) &&
+               Covered == Signature.ReturnType->Size))
+            Frame.NumericResultBytes = Signature.ReturnType->Size;
         } else if (const auto Signature =
                        boundFloatingCallArguments(Op, Target, Format)) {
           auto &Frame = Calls[&Op];
@@ -291,27 +308,49 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             Frame.Inputs.push_back(
                 {P.Kind, P.Register, P.StackOffset, P.Bytes});
           if (Signature->ReturnKind == NdTypeKind::Float)
-            Frame.FloatingResultBytes = Signature->ReturnBytes;
+            Frame.NumericResultBytes = Signature->ReturnBytes;
         } else {
           NativeCalls[&Block].push_back(&Op - Block.Ops.data());
         }
         if (Op.IsTailCall && Calls.contains(&Op))
           QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
       }
-      if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
-           (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
-            Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
-          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      if (Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
+          (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
+           Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) {
+        if (Op.NumInputs && Op.Inputs[0].isConst() &&
+            mips::mergeStore(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+            mipsScalarMedShapeIsValid(Op, Target))
+          HasMergeStores = true;
+        else
+          QualifiedMemory = false;
+      }
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           Op.MemoryOrdering != NdMemoryOrdering::None)
         QualifiedMemory = false;
     }
   }
   const bool HasCalls = CallCount != 0;
-  const auto CallSP = HasCalls && QualifiedMemory
-                          ? sourceCallStackPointers(Function, Target, Remaining)
-                          : std::map<const MedOp *, MedVar>{};
+  const auto &TRI = getTargetRegInfo(Target);
+  std::map<int, MedVar> BlockSP;
+  const auto CallSP =
+      HasCalls && QualifiedMemory
+          ? sourceCallStackPointers(Function, Target, Remaining, BlockSP)
+          : std::map<const MedOp *, MedVar>{};
   for (const auto &[Call, SP] : CallSP)
     MemoryAddresses.push_back(SP);
+  // One static call can produce and consume different words on a loop edge.
+  const bool MayForward =
+      (isMIPSN32(Target) || isMIPSN64(Target)) && !NativeCalls.empty();
+  if (MayForward && QualifiedMemory && !HasMergeStores) {
+    for (const auto &Entry : BlockSP)
+      MemoryAddresses.push_back(Entry.second);
+    for (const auto &B : Function.Blocks)
+      for (const auto &Op : B.Ops)
+        if (Op.Output.Kind == MedVar::Reg &&
+            Op.Output.RegOff == TRI.StackPointer)
+          MemoryAddresses.push_back(Op.Output);
+  }
   std::map<Key, std::optional<int64_t>> Offsets;
   if (QualifiedMemory) {
     const auto Values =
@@ -325,6 +364,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
+  // Only the byte-by-byte record walk tracks the addresses and register
+  // lanes of a merge store. The whole-slot reaching-store proof cannot.
+  const bool RecordFrameMemory = QualifiedMemory;
+  QualifiedMemory &= !HasMergeStores;
   const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
                                      size_t LoadIndex) {
     // An external read cannot recover this function's frame address before
@@ -372,7 +415,6 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   std::map<Key, bool> Results;
   std::set<Key> Active;
-  const auto &TRI = getTargetRegInfo(Target);
   using SliceKey = std::tuple<Key, unsigned, unsigned>;
   std::set<SliceKey> ProvenNonFrame;
   std::set<std::pair<SliceKey, bool>> NonFrameActive;
@@ -513,7 +555,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // pointer-returning calls still provide no such proof.
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
-            First + Bytes <= Call->second.FloatingResultBytes) {
+            First + Bytes <= Call->second.NumericResultBytes) {
           Safe = IsNonFrame(Op.Inputs[0]);
           for (size_t I = 0; Safe && I < Call->second.Inputs.size(); ++I)
             Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
@@ -589,15 +631,20 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // the saved-link proof, but require a complete argument extent before
   // admitting pointer spills. An unknown or open variadic call can read more
   // stack arguments than the ABI's minimum outgoing area.
+  const auto ClosedPrivateStart =
+      [&](const MedOp &Call) -> std::optional<int64_t> {
+    if (!Calls.contains(&Call) &&
+        (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
+         Call.CalleeVariadicRegisterFrom >= 0))
+      return std::nullopt;
+    return CallPrivateStart(Call);
+  };
   std::optional<int64_t> SharedPrivateStart;
   if (CallSP.size() == CallCount)
     for (const auto &Entry : CallSP) {
       const auto &Call = *Entry.first;
-      const auto Start = CallPrivateStart(Call);
-      if (!Start ||
-          (!Calls.contains(&Call) &&
-           (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
-            Call.CalleeVariadicRegisterFrom >= 0))) {
+      const auto Start = ClosedPrivateStart(Call);
+      if (!Start) {
         SharedPrivateStart.reset();
         break;
       }
@@ -616,36 +663,53 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // Check all stores and calls so an escape before the RA save cannot be
   // forgotten when reachingStackValues sees the later exact store. Reloading
   // a private pointer into an argument still has to prove non-frame provenance.
-  bool UnexposedFrame = QualifiedMemory;
-  if (HasCalls && QualifiedMemory)
-    for (const auto &Block : Function.Blocks) {
+  const auto FrameIsUnexposed = [&](const mips::GuardedCalls &Guarded) {
+    for (const auto &Block : Function.Blocks)
       for (const auto &Op : Block.Ops) {
-        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2)
-          UnexposedFrame &= PrivateFrameStore(Op) || IsNonFrame(Op.Inputs[1]);
-        if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
-          if (!Op.NumInputs) {
-            UnexposedFrame = false;
-          } else {
-            UnexposedFrame &= IsNonFrame(Op.Inputs[0]);
-            const auto Signature = Calls.find(&Op);
-            for (unsigned I = 1; I < Op.NumInputs; ++I)
-              UnexposedFrame &= NonFrameBytes(
-                  Op.Inputs[I], 0,
-                  Signature == Calls.end()
-                      ? Op.Inputs[I].Size
-                      : Signature->second.Inputs[I - 1].ValueBytes);
+        if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
+            !PrivateFrameStore(Op) && !Guarded.Spills.contains(&Op) &&
+            !IsNonFrame(Op.Inputs[1]))
+          return false;
+        if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
+          continue;
+        if (!Op.NumInputs || !IsNonFrame(Op.Inputs[0]))
+          return false;
+        const auto Signature = Calls.find(&Op);
+        for (unsigned I = 1; I < Op.NumInputs; ++I) {
+          const auto &Arg = Op.Inputs[I];
+          const auto Bytes = Signature == Calls.end()
+                                 ? Arg.Size
+                                 : Signature->second.Inputs[I - 1].ValueBytes;
+          if (!NonFrameBytes(Arg, 0, Bytes)) {
+            const auto It = Guarded.Arguments.find(&Op);
+            if (It == Guarded.Arguments.end() ||
+                !llvm::is_contained(It->second.Inputs, I))
+              return false;
           }
         }
       }
+    return nativeArgumentsAreNonFrame(NativeCalls, Guarded, TRI, Format, Graph,
+                                      Remaining, IsNonFrame);
+  };
+  // Register-only returns never need a frame exposure proof. Cache it for
+  // functions that restore the incoming link from more than one stack load.
+  std::optional<bool> UnexposedFrame;
+  const auto FrameIsPrivate = [&] {
+    if (!UnexposedFrame) {
+      UnexposedFrame = !HasCalls || FrameIsUnexposed(mips::GuardedCalls{});
+      if (!*UnexposedFrame && MayForward && QualifiedMemory) {
+        const auto BlockEntrySP = [&](int Id) -> std::optional<int64_t> {
+          const auto It = BlockSP.find(Id);
+          return It == BlockSP.end() ? std::nullopt : Offset(It->second);
+        };
+        const auto Guarded = mips::guardedResultArguments(
+            Function, NativeCalls, TRI, Format, Graph, Definitions,
+            {Offset, BlockEntrySP, ClosedPrivateStart}, Remaining, IsNonFrame);
+        if (!Guarded.Arguments.empty() || !Guarded.Spills.empty())
+          UnexposedFrame = FrameIsUnexposed(Guarded);
+      }
     }
-  UnexposedFrame = UnexposedFrame &&
-                   nativeArgumentsAreNonFrame(NativeCalls, TRI, Format, Graph,
-                                              Remaining, IsNonFrame);
-  const auto PreservesCall = [&](const MedOp &Call, int64_t At, uint16_t Size) {
-    if (!UnexposedFrame)
-      return false;
-    const auto Start = CallPrivateStart(Call);
-    return Start && At >= *Start && At + Size <= 0;
+    return *UnexposedFrame;
   };
   const uint16_t LinkBytes = isMIPS64(Target) ? 8 : 4;
   std::function<bool(const MedVar &)> Prove = [&](const MedVar &Value) {
@@ -671,21 +735,21 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                            [&](const auto &Arg) { return Prove(Arg.second); });
     } else if (!Definition.Ambiguous && Definition.Op) {
       const auto &Op = *Definition.Op;
-      const auto Zero = [&](unsigned I) {
-        return Op.Inputs[I].isConst() && Op.Inputs[I].ConstVal == 0;
-      };
-      if (Op.Opcode == NdOp::COPY && Op.NumInputs == 1)
-        Valid = Prove(Op.Inputs[0]);
-      else if ((Op.Opcode == NdOp::INT_ADD || Op.Opcode == NdOp::INT_OR ||
-                Op.Opcode == NdOp::INT_XOR) &&
-               Op.NumInputs == 2)
-        Valid = (Zero(0) && Prove(Op.Inputs[1])) ||
-                (Zero(1) && Prove(Op.Inputs[0]));
+      if (const auto *Source = mips::copiedWord(Op))
+        Valid = Prove(*Source);
       else if (Op.Opcode == NdOp::LOAD && Op.NumInputs == 1 &&
                QualifiedMemory) {
         const auto At = Offset(Op.Inputs[0]);
         if (At && *At <= -int64_t(LinkBytes) &&
             *At >= -limits::ir::kSourceFrameAnalysisMaxFrame) {
+          const bool Private = FrameIsPrivate();
+          const auto PreservesCall = [&](const MedOp &Call, int64_t At,
+                                         uint16_t Size) {
+            if (!Private)
+              return false;
+            const auto Start = CallPrivateStart(Call);
+            return Start && At >= *Start && At + Size <= 0;
+          };
           const auto Reaching = safety::detail::reachingStackValues(
               Function, Definition.Block->Id,
               int(&Op - Definition.Block->Ops.data()), *At, LinkBytes, Offset,
@@ -697,8 +761,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
               // slot merely because one of those private stores contains FP
               // or SP. Exact writes, overlaps and each call's outgoing area
               // are still checked by this walk and PreservesCall.
-              [](const MedVar &) { return true; }, true,
-              HasCalls && !UnexposedFrame, PreservesCall);
+              [](const MedVar &) { return true; }, true, HasCalls && !Private,
+              PreservesCall);
           // Exact stores and complete calls must preserve this private slot.
           // Escaped frame addresses, overlap and unresolved writes reject it.
           Valid = Reaching.Complete && Reaching.Reachable &&
@@ -719,11 +783,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         !Call.SourceCallHint->Signature.MIPSRecords)
       return std::nullopt;
     if (const auto Start = CallPrivateStart(Call))
-      return mips::RecordFrameCall{*Start, It->second.FloatingResultBytes};
+      return mips::RecordFrameCall{*Start, It->second.NumericResultBytes};
     return std::nullopt;
   };
   const bool SingleRecordExit =
-      QualifiedMemory && Required.size() == 1 && TailReturns.empty() &&
+      RecordFrameMemory && Required.size() == 1 && TailReturns.empty() &&
       llvm::any_of(Calls, [](const auto &C) {
         return C.first->SourceCallHint &&
                C.first->SourceCallHint->Signature.MIPSRecords;
@@ -739,12 +803,23 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           TailReturns.erase(Tail);
           continue;
         }
-        if (!Required.erase(Origin) ||
-            Op.NumInputs != SourceResultOperands + 1 ||
-            (!Prove(Op.Inputs[SourceResultOperands]) &&
-             (!SingleRecordExit ||
-              !mips::preservesRecordFrameLink(Function, Op, Target, RecordCall,
-                                              Remaining))))
+        if (!Required.erase(Origin) || Op.NumInputs != SourceResultOperands + 1)
+          return false;
+        const auto &Link = Op.Inputs[SourceResultOperands];
+        const auto RecordFrame = [&] {
+          return SingleRecordExit &&
+                 mips::preservesRecordFrameLink(Function, Op, Target,
+                                                RecordCall, Remaining);
+        };
+        // A hidden result pointer can expose selected frame bytes to the
+        // callee. Follow those bytes before spending the shared budget on a
+        // general reaching-store proof that cannot preserve this call.
+        const bool CheckRecordFirst =
+            SingleRecordExit && (!QualifiedMemory || !FrameIsPrivate());
+        const bool LinkPreserved = CheckRecordFirst
+                                       ? RecordFrame() || Prove(Link)
+                                       : Prove(Link) || RecordFrame();
+        if (!LinkPreserved)
           return false;
       }
   return Required.empty() && TailReturns.empty() && QualifiedTails.empty();

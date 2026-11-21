@@ -10,11 +10,15 @@
 import_probe:
   daddiu $sp,$sp,-48
   sd $16,8($sp)
-#ifdef REPLACE_ARGUMENT
+#if defined(REPLACE_ARGUMENT) || defined(GUARD_ZERO) || defined(GUARD_MATCH)
   sd $ra,24($sp)
 #else
   sd $17,24($sp)
   or $17,$ra,$zero
+#endif
+#ifdef GUARD_MATCH
+  sd $18,32($sp)
+  or $18,$5,$zero
 #endif
   or $16,$25,$zero
   .cpsetup $25,16,import_probe
@@ -29,7 +33,19 @@ import_probe:
 #endif
   jalr $25
   daddiu $5,$zero,37
+#ifdef GUARD_ZERO
+  bne $2,$zero,.Lresult
   or $4,$2,$zero
+#elif defined(GUARD_MATCH)
+  beq $2,$18,.Lforward
+  nop
+  b .Lresult
+  nop
+.Lforward:
+  or $4,$2,$zero
+#else
+  or $4,$2,$zero
+#endif
 #ifdef SPILL_GP
   ld $gp,32($sp)
 #else
@@ -53,10 +69,14 @@ import_probe:
 #else
   nop
 #endif
+.Lresult:
   daddiu $2,$2,1
   .cpreturn
   ld $16,8($sp)
-#ifdef REPLACE_ARGUMENT
+#ifdef GUARD_MATCH
+  ld $18,32($sp)
+#endif
+#if defined(REPLACE_ARGUMENT) || defined(GUARD_ZERO) || defined(GUARD_MATCH)
   ld $ra,24($sp)
 #else
   or $ra,$17,$zero

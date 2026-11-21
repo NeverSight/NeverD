@@ -10,6 +10,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../abi/MedABIPassDetail.h"
+
 #include "neverd/ir/CallRegisterContract.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/GoCallContract.h"
@@ -21,6 +23,24 @@
 #include <set>
 
 namespace neverd {
+
+namespace {
+/// Whether the indirect call at \p CallIdx in \p Block calls a func value:
+/// it loads its target from the address in the closure context register
+/// \p Context, as the block last sets that register (callsThroughContext).
+bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
+                           uint64_t Context) {
+  for (size_t J = CallIdx; J-- > 0;) {
+    const MedVar &Out = Block.Ops[J].Output;
+    if (Out.Kind != MedVar::Reg || Out.RegOff != Context)
+      continue;
+    return Out.Size >= 8 &&
+           callsThroughContext(Block, static_cast<int>(CallIdx),
+                               Block.Ops[CallIdx].Inputs[0], Out);
+  }
+  return false;
+}
+} // namespace
 
 void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
   // Go's internal ABI (src/cmd/compile/abi-internal.md) returns a call's
@@ -34,21 +54,36 @@ void LowToMedConverter::modelGoCallResults(MedFunc &Func) {
   if ((TargetArch != Arch::X64 && TargetArch != Arch::AArch64) || !Image ||
       !Image->ExceptionMetadata.GoModule ||
       !Image->ExceptionMetadata.GoModule->RegisterArguments ||
-      !goCallEntersInternalABI(*Image, Func.Entry, InvalidVA, nullptr))
+      !isGoCode(*Image, Func.Entry))
     return;
+  // Go assembly's call through a func value enters Go code by the internal
+  // ABI too, as a func value names compiled code or an ABI wrapper of
+  // assembly: reflection's call helpers (`runtime.callNNN`) call it so and
+  // store every result register after.  Assembly also calls C through a
+  // pointer (darwin's `runtime.syscall6`), which returns in the platform's
+  // registers, so only a call that loads its target from the closure
+  // context register's address counts (callsThroughFuncValue).
+  const bool Compiled =
+      goCallEntersInternalABI(*Image, Func.Entry, InvalidVA, nullptr);
+  const std::optional<uint64_t> Context = goClosureContextRegister(TargetArch);
   std::set<uint32_t> Sites;
   for (const MedBlock &Block : Func.Blocks)
-    for (const MedOp &Op : Block.Ops)
-      if (Op.Opcode == NdOp::INDIR_CALL &&
-          Op.RegisterContract == CallRegisterContract::GoInternal &&
-          !Op.SourceCallHint && !Op.DoesNotReturn && !Op.RegisterReturnFields &&
-          Op.Output.Kind == MedVar::Reg &&
-          Op.Output.RegOff == goIntegerArgumentRegisters(TargetArch)[0])
+    for (size_t I = 0; I < Block.Ops.size(); ++I) {
+      const MedOp &Op = Block.Ops[I];
+      if (Op.Opcode != NdOp::INDIR_CALL || Op.NumInputs < 1 ||
+          Op.SourceCallHint || Op.DoesNotReturn || Op.RegisterReturnFields ||
+          Op.Output.Kind != MedVar::Reg ||
+          Op.Output.RegOff != goIntegerArgumentRegisters(TargetArch)[0])
+        continue;
+      if (Compiled ? Op.RegisterContract == CallRegisterContract::GoInternal
+                   : Context && callsThroughFuncValue(Block, I, *Context))
         Sites.insert(Op.CallSiteId);
+    }
   // An indirect call's results are words: no callee shares its record, and
   // the record the pipeline extends (materializeGoCallResults) keeps them.
+  // Its floating results (X0-X14, arm64 F0-F15) follow them in the record.
   std::map<uint32_t, GoCallShape> Shapes =
-      goCallResultsRead(Func, TargetArch, Sites);
+      goCallResultsRead(Func, TargetArch, Sites, {}, /*Floats=*/true);
   const uint16_t Word = getTargetRegInfo(TargetArch).PointerSize;
   for (auto &[Site, Shape] : Shapes)
     for (uint16_t &Width : Shape.Widths)

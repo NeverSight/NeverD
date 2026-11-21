@@ -139,6 +139,20 @@ def official_names(args: argparse.Namespace, compiler: list[str], original: Path
     return names
 
 
+def named_records(node):
+    """The record types a typedef names.  Clang 22 and later put the
+    RecordType directly under the typedef; earlier versions wrap it in an
+    ElaboratedType."""
+    found, pending = [], list(node.get("inner", []))
+    while pending:
+        inner = pending.pop(0)
+        if inner["kind"] == "RecordType":
+            found.append(inner)
+        elif inner["kind"] == "ElaboratedType":
+            pending.extend(inner.get("inner", []))
+    return found
+
+
 def alljoyn_public_types(original, compiler, published, c_compiler, renamed, directory, row):
     """Check callback conventions and the layouts of anonymous SDK record typedefs."""
     command = compiler + ["-fsyntax-only", "-Xclang", "-ast-dump=json",
@@ -163,7 +177,7 @@ def alljoyn_public_types(original, compiler, published, c_compiler, renamed, dir
         if re.search(r"\(\*\)\(", spelling):
             callbacks.append(name)
         if spelling.startswith("struct ") and "*" not in spelling:
-            record, = [r for r in node["inner"] if r["kind"] == "RecordType"]
+            record, = named_records(node)
             members = [f for f in records[record["decl"]["id"]]["inner"] if f["kind"] == "FieldDecl"]
             if any(f.get("isBitfield") or not f.get("name") for f in members):
                 raise ValueError("unaddressable Microsoft SDK record member: " + name)

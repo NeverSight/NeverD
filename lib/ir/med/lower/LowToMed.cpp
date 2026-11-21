@@ -1668,9 +1668,11 @@ MedFunc LowToMedConverter::convertFunction(
       // whose arity is verified, reads only its own argument registers, as a
       // modeled supervisor call above does: an operand it does not read
       // passes zero (x64SyscallOperandRead), and so does the pair the lift
-      // packed into a temporary for it alone.  A routine that makes it then
-      // reads no other register at its entry: Go's `runtime.exit` reads DI
-      // alone, which it loads from its stack argument.
+      // packed into a temporary for it alone, or the half of that pair it
+      // does not read (x64SyscallPairHighRead): munmap reads RSI but not RDX.
+      // A routine that makes it then reads no other register at its entry:
+      // Go's `runtime.exit` reads DI alone, which it loads from its stack
+      // argument.
       if (Image && TheArch == Arch::X64 && LOp.Opcode == NdOp::INTRINSIC &&
           LOp.NumInputs == 6 && LOp.Inputs[0].isConst() &&
           static_cast<Intrinsic>(LOp.Inputs[0].Offset) ==
@@ -1680,8 +1682,31 @@ MedFunc LowToMedConverter::convertFunction(
                 blockRegisterConstant(LB.Ops, LowOpIndex, x86reg::RAX, 8))
           if (const auto Count = linuxX64SyscallArgumentCount(*Number))
             for (size_t Operand = 1; Operand + 1 < MOp.NumInputs; ++Operand) {
-              if (x64SyscallOperandRead(Operand, *Count))
+              if (x64SyscallOperandRead(Operand, *Count)) {
+                const MedVar &Pair = MOp.Inputs[Operand + 1];
+                if (x64SyscallPairHighRead(Operand, *Count) ||
+                    Pair.Kind != MedVar::Temp)
+                  continue;
+                const auto ReadsPair = [&](const MedOp &Op) {
+                  for (unsigned I = 0; I < Op.NumInputs; ++I)
+                    if (Op.Inputs[I].Kind == MedVar::Temp &&
+                        Op.Inputs[I].Id == Pair.Id)
+                      return true;
+                  return false;
+                };
+                if (std::any_of(MB.Ops.begin(), MB.Ops.end(), ReadsPair))
+                  continue;
+                for (auto Def = MB.Ops.rbegin(); Def != MB.Ops.rend(); ++Def)
+                  if (Def->Output.Kind == MedVar::Temp &&
+                      Def->Output.Id == Pair.Id) {
+                    if (Def->Opcode == NdOp::CONCAT && Def->NumInputs == 2)
+                      Def->Inputs[0] =
+                          MedVar::makeConst(0, Def->Inputs[0].Size,
+                                            ConstantAddressProvenance::Scalar);
+                    break;
+                  }
                 continue;
+              }
               const MedVar Unread = MOp.Inputs[Operand + 1];
               MOp.Inputs[Operand + 1] = MedVar::makeConst(
                   0, Unread.Size, ConstantAddressProvenance::Scalar);
@@ -2133,7 +2158,9 @@ MedFunc LowToMedConverter::convertFunction(
 
     x86_registration::RegistrationRoots(Low, TheArch, Fmt)
         .disconnectNoReturnFallthroughs(Func);
-    const auto *EntrySignature = bindSourceCalls(Func, Low, Fmt);
+    bool BoundMIPSRecordCall = false;
+    const auto *EntrySignature =
+        bindSourceCalls(Func, Low, Fmt, BoundMIPSRecordCall);
     const bool RecordEntry = EntrySignature && EntrySignature->MIPSRecords;
     if (!MIPSRecordResult.empty()) {
       Func.MultiReturn.assign(MIPSRecordResult.begin(), MIPSRecordResult.end());
@@ -2163,8 +2190,12 @@ MedFunc LowToMedConverter::convertFunction(
              P.Kind == SourceABICarrierKind::FloatingRegister});
       Func.ExplicitMIPSRecordResult = true;
     }
-    if (RecordEntry || Func.ExplicitMIPSRecordResult)
-      MIPSReturnsQualified = false;
+    // A typed record can expose a private result buffer even in an image
+    // whose ELF header carries no floating-point ABI metadata.
+    const bool RequireMIPSReturnProof = QualifyMIPSReturns || RecordEntry ||
+                                        Func.ExplicitMIPSRecordResult ||
+                                        BoundMIPSRecordCall;
+    MIPSReturnsQualified = !RequireMIPSReturnProof;
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
@@ -2198,7 +2229,9 @@ MedFunc LowToMedConverter::convertFunction(
     // Go's internal ABI enters a function with X15 zero, and its calls keep
     // it so (CallRegisterContract::GoInternal).  Assembly that takes Go's
     // argument registers follows that ABI (goAssemblyTakesRegisterArguments):
-    // `runtime.memclrNoHeapPointers` stores X15 as its zero.
+    // `runtime.memclrNoHeapPointers` stores X15 as its zero.  So does a Duff's
+    // device routine (goDuffDeviceAt), which compiled code alone calls, at
+    // whichever entry: `runtime.duffzero` stores X15 sixty-four times.
     const GPRReadWidths *OwnEntryReads = nullptr;
     if (CallEntryReadGPRs)
       if (const auto Reads = CallEntryReadGPRs->find(Low.Entry);
@@ -2206,6 +2239,8 @@ MedFunc LowToMedConverter::convertFunction(
         OwnEntryReads = &Reads->second;
     if (Image && TheArch == Arch::X64 && !Func.Blocks.empty() &&
         (usesGoRegisterArguments(*Image, Low.Entry) ||
+         (goDuffDeviceAt(*Image, Low.Entry) &&
+          Image->ExceptionMetadata.GoModule->RegisterArguments) ||
          (OwnEntryReads && goAssemblyTakesRegisterArguments(*Image, Low.Entry,
                                                             *OwnEntryReads)))) {
       MedOp Zero;
@@ -2244,7 +2279,7 @@ MedFunc LowToMedConverter::convertFunction(
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
-    if (QualifyMIPSReturns || RecordEntry || Func.ExplicitMIPSRecordResult) {
+    if (RequireMIPSReturnProof) {
       unsigned ResultInputs = MIPSRecordResult.size();
       if (RecordEntry && EntrySignature->ReturnType->Kind != NdTypeKind::Void)
         ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
@@ -2487,12 +2522,27 @@ MedFunc LowToMedConverter::convertFunction(
       debugVerifyMedFunc(Func, "runDce");
     }
 
-    // Compiled Go code reads the goroutine its ABI keeps in a register.
-    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+    // Compiled Go code reads the goroutine its ABI keeps in a register.  On
+    // arm64 every Go function does, before the internal ABI too: Go has kept
+    // the goroutine in R28 since its arm64 port, where x86-64 kept it in
+    // thread-local storage until R14 took it.
+    if (Image && (usesGoRegisterArguments(*Image, Low.Entry) ||
+                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry))))
       if (const std::optional<uint64_t> Goroutine =
               goRoutineRegister(TheArch)) {
         defineGoCurrentGoroutine(Func, *Goroutine);
         debugVerifyMedFunc(Func, "defineGoCurrentGoroutine");
+      }
+    // A closure it compiled reads the context its caller passes in a
+    // register, as does Go code before its internal ABI that takes no
+    // register argument (MedFunc::StackArgumentsOnly): a stub that takes some,
+    // as Go 1.16's panicSliceAlen takes CX and DX, reads those instead.
+    if (Image &&
+        (Func.StackArgumentsOnly || usesGoRegisterArguments(*Image, Low.Entry)))
+      if (const std::optional<uint64_t> Context =
+              goClosureContextRegister(TheArch)) {
+        defineGoClosureContext(Func, *Context);
+        debugVerifyMedFunc(Func, "defineGoClosureContext");
       }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and

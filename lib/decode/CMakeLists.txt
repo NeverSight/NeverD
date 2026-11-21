@@ -25,6 +25,13 @@ add_neverd_component_library(NeverDDecode
 target_include_directories(NeverDDecode PRIVATE
   "$<TARGET_PROPERTY:capstone_static,SOURCE_DIR>/arch/X86")
 
+# Resolve the ordinary x86 text fallback in the first static archive pass.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # Resolve both fallback and i386 before the amd64 member brings in its helpers.
+  target_link_options(NeverDDecode INTERFACE
+    "LINKER:--undefined=X86_disasmIter" "LINKER:--undefined=X86_disasmIter32")
+endif()
+
 # AArch64/AArch64Decoder.cpp contains the native operand decode hot path. Keep
 # it explicitly optimized in non-Debug configurations, but let Debug retain the
 # toolchain's unoptimized flags for reliable stepping, local inspection, and

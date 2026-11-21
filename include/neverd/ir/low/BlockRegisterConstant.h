@@ -86,6 +86,15 @@ blockRegisterConstant(const std::vector<LowOp> &Ops, size_t End,
     if (!Op.Output.isReg() || Op.Output.Offset >= Offset + Size ||
         Offset >= Op.Output.Offset + Op.Output.Size)
       continue;
+    // An OR of two constants is their value: `orr x8, xzr, #0x7c`, which Go's
+    // assembler emits for a bitmask constant MOVZ could also encode, and for
+    // which Capstone names no MOV alias.
+    if (Op.Opcode == NdOp::INT_OR && Op.NumInputs == 2 &&
+        Op.Output.Offset == Offset && Op.Output.Size == Size &&
+        Op.Inputs[0].isConst() && Op.Inputs[1].isConst()) {
+      const uint64_t Value = Op.Inputs[0].Offset | Op.Inputs[1].Offset;
+      return Size >= 8 ? Value : Value & ((uint64_t{1} << (8 * Size)) - 1);
+    }
     if (Op.Output.Offset != Offset || Op.Output.Size != Size ||
         Op.NumInputs != 1)
       return std::nullopt;

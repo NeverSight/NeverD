@@ -5,7 +5,8 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Read the goroutine register of Go's internal ABI as the goroutine it holds.
+/// Read the goroutine and closure context registers of Go's internal ABI as
+/// the values they hold.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -28,6 +29,15 @@ struct MedFunc;
 /// reads become such a read: one after the entry's copies, and one just after
 /// the call.  Dead code elimination drops one nothing comes to use.
 void defineGoCurrentGoroutine(MedFunc &Func, uint64_t Register);
+
+/// Give the incoming value of the closure context register \p Register in
+/// \p Func, a function in SSA form that Go's compiler compiled for its
+/// internal ABI, the context its caller passed (Intrinsic::GoClosureContext):
+/// a call through a func value passes the value's address there ("RDX |
+/// Closure context pointer" in abi-internal.md, R26 on arm64), and a closure
+/// reads what it captured through it.  A call clobbers the register, so only
+/// the read at the entry reads the context.
+void defineGoClosureContext(MedFunc &Func, uint64_t Register);
 } // namespace neverd
 
 #endif // NEVERD_LIB_IR_MED_LOWER_GOCURRENTGOROUTINE_H

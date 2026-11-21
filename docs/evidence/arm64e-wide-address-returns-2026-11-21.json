@@ -1,0 +1,812 @@
+{
+  "source_revision": "e827b5ba7eaeab6cf9b53120c1c0d1c76f40e90f",
+  "tested_base": "9670b3546b7558ea14085e4583a3480bf98b2a49",
+  "target_dev_at_pr": "89a098c2b7e53667c3fbf4e88e209d820af0be3f",
+  "dependencies": {
+    "capstone": "5086dcd111161f146736f23cd2e6e2adede04a55",
+    "source_llvm": "09ff60dd1ddb17114892ee2bb32256182dedc76e",
+    "llvm_gitlink": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+    "frozen_llvm": "neverd-llvm-v23.0.0-r6",
+    "matching_llvm_trees": {
+      "llvm/lib/Target/AArch64": "97164346055658281900d97b5eff5c034c89c8a7",
+      "llvm/lib/MC": "64aa8f53ef69c82ea45313869e5cf7b79b4f3cc5",
+      "llvm/include/llvm/MC": "bdfd8cf0fc7f5a6e751f3536f06407e23a52d60f",
+      "llvm/lib/Object": "2facf584a88bae4863c6d1f0ac2ffca3ffd0d923",
+      "llvm/lib/CodeGen/AsmPrinter": "59e694c6a4474e5b394e8a4b31941d7ed8ffe0bf"
+    },
+    "dev_merge_surface": {
+      "tested_base": "9670b3546b7558ea14085e4583a3480bf98b2a49",
+      "dev": "89a098c2b7e53667c3fbf4e88e209d820af0be3f",
+      "old_capstone": "5086dcd111161f146736f23cd2e6e2adede04a55",
+      "current_capstone": "68120b496a66ebf73a0b88247146a21620d86a63",
+      "identical_capstone_paths": {
+        "arch/AArch64": "6a928ae1c2c9836501dafe7c2d73b93e1859d141",
+        "include": "2a8e30bfba5862a6b84a16cb267009c86f68658f",
+        "cs.c": "7b069255e17ae1d5fc4c77106c4abb17f5d21dca",
+        "cs_priv.h": "84e1c748e22e6dd7a3710274e318ac92013531e4",
+        "MCInst.h": "e040910904a2669db7a7446b7d6b64e6ec8d5922"
+      },
+      "neverd_changed_paths": [
+        "CMakeLists.txt",
+        "docs/architecture.md",
+        "docs/mips.md",
+        "docs/testing.md",
+        "include/neverd/ir/low/BlockRegisterConstant.h",
+        "include/neverd/ir/low/CFGBuilder.h",
+        "include/neverd/ir/low/GoCallContract.h",
+        "include/neverd/ir/low/GoDuffDevice.h",
+        "lib/ir/low/CFGBuilder.cpp",
+        "lib/ir/low/CFGBuilderInsn.cpp",
+        "lib/ir/low/CMakeLists.txt",
+        "lib/ir/low/GoCallContract.cpp",
+        "lib/ir/low/GoDuffDevice.cpp",
+        "lib/ir/med/lower/LowToMed.cpp",
+        "lib/ir/med/pass/MIPS/MedMIPSReturnTargets.cpp",
+        "lib/ir/med/pass/MedSSA.cpp",
+        "third_party/capstone",
+        "unittests/lift/core/GoCallContractTests.cpp",
+        "unittests/lift/mips/MIPSControlFlowTests.cpp",
+        "unittests/lift/mips/dynamic-call-roundtrip.py",
+        "unittests/lift/mips/pic-import-chain.S"
+      ],
+      "previous_audit_dev": "4284d35ef0d773a71eb9522cf0778a71ab1fc06a",
+      "merge_tree_at_push": "18fd20d0ba773f123c22832489f43e6d660b4c62"
+    }
+  },
+  "hosted_x1_during_integration": {
+    "createdAt": "2026-11-21T07:40:55Z",
+    "databaseId": 44881362422,
+    "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44881362422",
+    "runners": {
+      "macos-15": {
+        "source_revision": "54046f3b0db6f3f1c9e5b63b566357ea7a770386",
+        "status": "unavailable",
+        "qualified": false,
+        "missing": [
+          "native_pac_qualified",
+          "compiler_original_call_unwind_qualified",
+          "native_cursor_qualified",
+          "explicit_pauth_lr_qualified",
+          "pacm_pc_qualified",
+          "x1_el0_cpta_qualified",
+          "x1_el0_checked_writeback_qualified"
+        ]
+      },
+      "macos-26": {
+        "source_revision": "54046f3b0db6f3f1c9e5b63b566357ea7a770386",
+        "status": "unavailable",
+        "qualified": false,
+        "missing": [
+          "explicit_pauth_lr_qualified",
+          "pacm_pc_qualified",
+          "x1_el0_cpta_qualified",
+          "x1_el0_checked_writeback_qualified"
+        ]
+      },
+      "xcode-27": {
+        "source_revision": "54046f3b0db6f3f1c9e5b63b566357ea7a770386",
+        "status": "unavailable",
+        "qualified": false,
+        "missing": [
+          "explicit_pauth_lr_qualified",
+          "pacm_pc_qualified",
+          "x1_el0_cpta_qualified",
+          "x1_el0_checked_writeback_qualified"
+        ]
+      }
+    }
+  },
+  "local": {
+    "release": {
+      "exit": 0,
+      "total": 271,
+      "passed": 271,
+      "failed": [],
+      "skipped": [],
+      "executable_sha256": "68e059d8c3aec20f12be9303ebebdc5e4cb67cf4d691c9fb4a4675ab14b88143",
+      "xml_sha256": "b5a7fecac2e10b6e19896ced9d142302cd1fd14cb4e3383e37fcadfb05795dab"
+    },
+    "r6": {
+      "exit": 1,
+      "total": 271,
+      "passed": 261,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "executable_sha256": "597a76c0ab5091cdcf11febb40cf094043714dd897d852120a7ffdbf9924d1ff",
+      "xml_sha256": "c5e4ab6b1169bb8cd7b81b36d35f55db804722ad31876636086baa0204a6d3d4"
+    },
+    "r6_focused": 12,
+    "image_analysis_boundaries": {
+      "exit": 0,
+      "total": 161,
+      "passed": 161,
+      "failed": [],
+      "skipped": [],
+      "executable_sha256": "552f5a7cfabfc00cfa5fb4f696b2a4b7e574ddf49c8eaf334d8adc901c32cd43",
+      "xml_sha256": "ea68aaec15c54af5ed8eafe08a0c6c6d6b69ddabcbc65ad630089538f1087921"
+    },
+    "macho_installation_and_transactions": {
+      "NeverDArm64eAnalysisTests": {
+        "passed": 40,
+        "filter": "MachOArm64eDependencies.*:MachOArm64eInstallation.*",
+        "sha256": "abe8ac640f830ca23e9455dc02d19f0ab202dd63cf3c27966aca1d1dcb289cd2"
+      },
+      "NeverDNativeExceptionRewriteContractTests": {
+        "passed": 46,
+        "filter": "MachOPatchTransaction.*:MachOARM32Transaction.*:MachOCompactUnwindInstall.*",
+        "sha256": "9712000bd482dda6fcd90facf592d6cc3d77683f1406d8fae8b2e3f4ad960184"
+      }
+    },
+    "arm64_discovery": {
+      "existing_aarch64_discovery_tests": 32,
+      "owned_marker_with_and_without_direct_BL": {
+        "passed": 1,
+        "variants": 2
+      },
+      "suite_sha256": "5091bd2d529b25ec80926f0abe330d831c686244879f3dd18d9266df2526222b",
+      "xml_sha256": "4afd7812431880d5c5bad52607b703bc82a6166f3900e8523e81578805b9076f"
+    },
+    "native_object_deployment_matrix": {
+      "compiler": "/opt/homebrew/opt/llvm@22/bin/clang",
+      "exit": 0,
+      "cases": 16,
+      "failed_or_skipped": []
+    },
+    "byte_and_page_encodings": {
+      "valid_instruction_words": 134217728,
+      "rejected_outside_domain": 10,
+      "source_sha256": "dad96ce00e923564891ae6ebbce59dba499b7a8801175a5ee05827bb03f3ae0e"
+    }
+  },
+  "linker_comparison": {
+    "xcode27_capture": "https://github.com/gmh5225/test_mac_intel/actions/runs/44888632663",
+    "first_hosted_run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44887857104",
+    "first_run_profiles": {
+      "suite": {
+        "run": 44887857104,
+        "hosts": {
+          "macos-26": {
+            "failed": [],
+            "xml_sha256": "143c4a235811689d6e1f0edee131ea7c23510b51f30249f15dc41ab13e11deda",
+            "total": 271
+          },
+          "xcode-27": {
+            "failed": [
+              "AArch64LiftedImage.KeepsOldFrameSaveInsideItsForwardingEntry",
+              "AArch64LiftedImage.RepublishesAddressReturnsBeyondLiteralPoolReach"
+            ],
+            "xml_sha256": "cb6ded463def681046addde19607eafac64c134a6c6d9f4cccb959eb4457a59f",
+            "total": 271
+          }
+        }
+      },
+      "suite-r6": {
+        "run": 44887981444,
+        "hosts": {
+          "macos-26": {
+            "failed": [
+              "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+              "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+              "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+              "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+              "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+              "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+            ],
+            "xml_sha256": "0811c0b03005f22b9f9b09ba1e9006ce4c4e09181d78d877121ffbc569996280",
+            "total": 271
+          },
+          "xcode-27": {
+            "failed": [
+              "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+              "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+              "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+              "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+              "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+              "AArch64LiftedImage.KeepsOldFrameSaveInsideItsForwardingEntry",
+              "AArch64LiftedImage.RepublishesAddressReturnsBeyondLiteralPoolReach",
+              "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+            ],
+            "xml_sha256": "b968591639b4e9c9cf43486195d88ba2856f881e5ff15d5e498d0de83cd6dcfa",
+            "total": 271
+          }
+        }
+      }
+    },
+    "xcode27_apple_linked": {
+      "wide.o": {
+        "bytes": 1108104,
+        "header": [
+          4277009103,
+          16777228,
+          2147483650,
+          1,
+          5,
+          376,
+          8192
+        ],
+        "sha256": "aee36f1f4eba1433001b60368fb93f24b97f444847d79cabe48e7dd8b7edc8aa"
+      },
+      "wide.dylib": {
+        "bytes": 1117600,
+        "header": [
+          4277009103,
+          16777228,
+          2147483650,
+          6,
+          14,
+          664,
+          1048709
+        ],
+        "sha256": "93648e2ef89a846ffcbc388e48a2d16a1262009a8ac80a92edd502c4995d19d7"
+      },
+      "framed.o": {
+        "bytes": 808,
+        "header": [
+          4277009103,
+          16777228,
+          2147483650,
+          1,
+          5,
+          456,
+          0
+        ],
+        "sha256": "36f51a1216ee35ac77474a7230946332d35fa64b141db5b4c29040f96c5d01a9"
+      },
+      "framed": {
+        "bytes": 16928,
+        "header": [
+          4277009103,
+          16777228,
+          2164260866,
+          2,
+          16,
+          824,
+          2097285
+        ],
+        "sha256": "8eac275a6e6ee68112db7b96802e2a5185b6a38fae8e3ea8dd9f8a65844f95d4"
+      },
+      "toolchain": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Applications/Xcode_27.1.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+      "OS": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0.1\nBuildVersion:\t\t26A434\n"
+    },
+    "republication": {
+      "xcode27/framed O0": {
+        "source": "8eac275a6e6ee68112db7b96802e2a5185b6a38fae8e3ea8dd9f8a65844f95d4",
+        "publications": [
+          "562601e07ffa58c994005508096a7a8bd941e309faf8ae15acdcef9faf47cb9c",
+          "b2b33db2ce0b56f0b5fc65b57cfb7673d614949b5f8d9d31ab817482a4f24f06",
+          "c5600b8599f904ebad171a2239f4254b0e690c795f140dd0155d1878832af2da"
+        ]
+      },
+      "xcode27/framed O2": {
+        "source": "8eac275a6e6ee68112db7b96802e2a5185b6a38fae8e3ea8dd9f8a65844f95d4",
+        "publications": [
+          "17216af2ef7c5beda495c037ad89d9bbb7f06cf93afed0165455aab3122ac8ab",
+          "82db7ec485391acea7e8daec072bb522ae653f6096afcef0e39b2d4427e6ff6b",
+          "531b2726be921d4361de72018e0bf23234d101d6f6810ed0773eb2b487f05c1a"
+        ]
+      },
+      "xcode27/wide.dylib O0": {
+        "source": "93648e2ef89a846ffcbc388e48a2d16a1262009a8ac80a92edd502c4995d19d7",
+        "publications": [
+          "df32fe265e945b92ac2b71e3ccbdbced7171b2c23c8e928fd07e15c3ea299de9",
+          "65518dad4c976e08a95bba1ebb4a9169b99319e66a7ae23b71b27d6d5fec7373",
+          "45d0f1b070e021d1e20ea67baa98acb0061b88bc0ad282526ca845b8c4c8ccd0"
+        ]
+      },
+      "xcode27/wide.dylib O2": {
+        "source": "93648e2ef89a846ffcbc388e48a2d16a1262009a8ac80a92edd502c4995d19d7",
+        "publications": [
+          "df32fe265e945b92ac2b71e3ccbdbced7171b2c23c8e928fd07e15c3ea299de9",
+          "65518dad4c976e08a95bba1ebb4a9169b99319e66a7ae23b71b27d6d5fec7373",
+          "45d0f1b070e021d1e20ea67baa98acb0061b88bc0ad282526ca845b8c4c8ccd0"
+        ]
+      },
+      "alternate/atoms O0": {
+        "source": "70ee9dd549e3c43b174cda913735e05e30865bdc1ac081f965ca286d4cbb979d",
+        "publications": [
+          "ea76836d9445f5c0d62bbad176a61de62347455fde09773a8db769ea5d55455b",
+          "9c13c33d50dc2db15f255c9d324930a573c32931e99b4bab1f10b61b8d4b3a28",
+          "c2c3889bbb1b899466ec846e043b8378fffb205ac0c0e4bf94b36db67c33fc6b"
+        ]
+      },
+      "alternate/atoms O2": {
+        "source": "70ee9dd549e3c43b174cda913735e05e30865bdc1ac081f965ca286d4cbb979d",
+        "publications": [
+          "0d3d8f4c1e0baaa5a863af72d958aa9fa184d2e11783f93d0fde013287273668",
+          "5f48e9372c6e81e23f0c7ca008a3d06088f50b01c49003e2e016d9135bfbfb4e",
+          "dbbd9eb22b091d27065c79f3caf4e288bfb49dbdcd3b589eef70726b85d6ce6f"
+        ]
+      },
+      "classic/framed O0": {
+        "source": "5c1f5cc5418cc426ed9defffacdab83aa60d62d77d4d3fb40d65e23fde258ef1",
+        "publications": [
+          "03cdcab6ed775ae1cb6b46ddffc112279b4980496188ef8ffe9f54019cd41a08",
+          "9d649fd63351e2beecc5ef63a18039e45f07453072e95ebcb062881b7af0bba3",
+          "0747031d20fa9c3404391e2d5c448e999b421963d2763bdeb4416b7c52294ff6"
+        ]
+      },
+      "classic/framed O2": {
+        "source": "5c1f5cc5418cc426ed9defffacdab83aa60d62d77d4d3fb40d65e23fde258ef1",
+        "publications": [
+          "fc6a1c5d0c0fbf25c5a109ae861afd8c5afd56683a8fb0d983b8fd7a1e182add",
+          "e291622b0ca6b6a8ffe5dfd8a867ddee4601555183387ae0ceb8db004e9fe7b0",
+          "a39242021989d4165d953811114082b4e4959cf403f9665de288af14025c1720"
+        ]
+      },
+      "classic/wide.dylib O0": {
+        "source": "d8ea18bcac2f437692c2823433175e08f5bbd42edda9e871d3bb904bcadf4e1e",
+        "publications": [
+          "f0c7fde4b982ac9441c394926f3c3248b52c2001c6beeceabf70555e19d689c9",
+          "7524425919e80211caf3b384cce9d445b04ea1bde8fa360474fac6bdfb97a5a2",
+          "489848bab08f03f3ee214b300729e0f5629388f7106d3ad83a3fdc24a89c0a7b"
+        ]
+      },
+      "classic/wide.dylib O2": {
+        "source": "d8ea18bcac2f437692c2823433175e08f5bbd42edda9e871d3bb904bcadf4e1e",
+        "publications": [
+          "f0c7fde4b982ac9441c394926f3c3248b52c2001c6beeceabf70555e19d689c9",
+          "7524425919e80211caf3b384cce9d445b04ea1bde8fa360474fac6bdfb97a5a2",
+          "489848bab08f03f3ee214b300729e0f5629388f7106d3ad83a3fdc24a89c0a7b"
+        ]
+      }
+    },
+    "emitted_object_commands": {
+      "": [
+        "0x80000002",
+        [
+          "0x19",
+          "0x2",
+          "0xb"
+        ]
+      ],
+      "15.0": [
+        "0x80000002",
+        [
+          "0x19",
+          "0x32",
+          "0x2",
+          "0xb"
+        ]
+      ]
+    },
+    "independent_header_instructions": {
+      "kPageToX8": {
+        "asm": "adrp x8, 0",
+        "word": "0x90000008"
+      },
+      "kTextFromX8": {
+        "asm": "add x0,x8,#0x800",
+        "word": "0x91200100"
+      },
+      "kHeaderFromX8": {
+        "asm": "add x0,x8,#0",
+        "word": "0x91000100"
+      },
+      "kReturnLR": {
+        "asm": "ret",
+        "word": "0xd65f03c0"
+      },
+      "kReturnX8": {
+        "asm": "ret x8",
+        "word": "0xd65f0100"
+      },
+      "kReturnAA": {
+        "asm": "retaa",
+        "word": "0xd65f0bff"
+      },
+      "kReturnAB": {
+        "asm": "retab",
+        "word": "0xd65f0fff"
+      },
+      "kReadWordFromX0": {
+        "asm": "ldr w0,[x0]",
+        "word": "0xb9400000"
+      },
+      "kReadHeaderViaX8": {
+        "asm": "ldr x0,[x8]",
+        "word": "0xf9400100"
+      },
+      "kClearPageX8": {
+        "asm": "movz x8,#0",
+        "word": "0xd2800008"
+      },
+      "kCopyPageW8": {
+        "asm": "mov w0,w8",
+        "word": "0x2a0803e0"
+      }
+    },
+    "rejected_malformed_sentinel": {
+      "input_sha256": "8a430c8c483999ab1fb50c6914f1033f0c0cf5a55926d82c9cd7fa789755a672",
+      "exit": 1,
+      "published": false,
+      "diagnostic": "error: malformed __unwind_info: compressed entry lies outside its page range"
+    },
+    "unmarked_address_only_regions": {
+      "input_sha256": "6b42fe4067403df90569723d6b8bbf30b3b6307645adaddd8b894e8e903b8cd7",
+      "exit": 1,
+      "published": false,
+      "diagnostics": [
+        "error: arm64e entry wide_frame has 28 source bytes and 20 emitted bytes",
+        "error: patch failed: patch failed"
+      ]
+    }
+  },
+  "cli": {
+    "modes": [
+      "O0",
+      "O2"
+    ],
+    "consecutive_publications": 3,
+    "published_outputs": 72,
+    "profiles": {
+      "adr": {
+        "lib": {
+          "original_sha256": "5e4afe1a5f760f8550be8c25aac81432920b8e0940296956193934c5b83eab4c",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "25a9e9f3bf5b7bd0d550c4bbbd145f66810e6f5d843912822c22ced84d4b9956",
+            "O0-2": "34c21f25a6cbff3b5cc2d66a363e342dabe11c1d898d410e3f2e9608aa0738e3",
+            "O0-3": "eec419d76bc89c9b6b19e997afb2250dab74b031b80256c8f02d14e79cd4242e",
+            "O2-1": "03eec1727ab9fd03e2899d2c1870df8cb21878266c71237ea08570b935f8384a",
+            "O2-2": "bc1f5fdfbb21292e5cb5e482bc4e5ab674ea46c3aabd9c82dadd79343494f392",
+            "O2-3": "cff1476c46da4547031f28541f4a40e5e4a8818b3e9661e50e297a9b08962d0e"
+          }
+        },
+        "main": {
+          "original_sha256": "0f8845b67b8929c404bf3e1ca517e681b549c2f9ac2865899856ed0ded4e0c8a",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "ef95013e132a5f265669d9769f0689ffeb67e4e91926358d83a271d070adcb2d",
+            "O0-2": "ddba89195feb026e196683c3ffd91ade5c184c7659d5d936579f40dfc7b441cf",
+            "O0-3": "ea774ade60365afd29d1327930e304133161f760739fe9fbaa54d09bb5da070e",
+            "O2-1": "137650e5c8d83a51f39abb89a8338cfbee3127f535b759338fbbfd923913b2e1",
+            "O2-2": "97cfd73c3644a1414edf8351e112cd4f2284ec39846445433ac8851789d4214a",
+            "O2-3": "047415fd07fe0dce7eded764c619d6e59369793c8099af247b5ef121a4b21be0"
+          }
+        }
+      },
+      "page-pair": {
+        "lib": {
+          "original_sha256": "7d88e7634f03f8d2dc1c83cc5cf4911b0aa9dcc472fae5090d06a8d66f8fdd1c",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "18a7645dad97910ca54ddbe9cdc0ffa7cb09d36719db19907293389085fa42f2",
+            "O0-2": "4b340dd2856b3256ee59b883309a32c5ed9a4b1cd8081e9d6274d7fd8634f11c",
+            "O0-3": "237c757f27c413101f61cf441edb43e5989c596b121cdee9fda9c07e6d129b9d",
+            "O2-1": "6be32766dddde32f0561169fd959e95ef9c349e7d9fc34b2bdc6569625c8ee6f",
+            "O2-2": "681d4d9043d464e9d501456f5f80fa3b28f82e0b1243c1827c2fad3bf1afb6a9",
+            "O2-3": "81c0504860ac9b03374a09b6952bcc7ef6771afccfd081a6c7823b15a4dc7312"
+          }
+        },
+        "main": {
+          "original_sha256": "7368aaaa48544663b82594aadb9c04ddf84cfc23d309e45083952d71e86ec430",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "ff8fdce0d0fc334affbd6afe7f2581f060954bb34eff883ca0c165c9ce2e3dc4",
+            "O0-2": "a5e6f846bbe64bf87961710eb3c3b06182f6e335e910e9e1089d05e3514ee33b",
+            "O0-3": "872b3f4db9d138d1c84e27641413a250745a2b8aa050aa347c47ddca24b726f7",
+            "O2-1": "270a3026ee48ec001b77083d7ddf30f3691ef9abe264cfe953b6d1f698894bd2",
+            "O2-2": "d3a61f63cf65e1cafa39d9b3c2a10e56b69974558cf67be7780a22689036092b",
+            "O2-3": "b43310f1e31df569e040ea7d2d2ce940437f94db886842cbe5f8e2ed728b9a76"
+          }
+        }
+      },
+      "page-register": {
+        "lib": {
+          "original_sha256": "8f7ce4c2f09fc486c79835305c9481fd138379ac8f08aaac3f313b351c8a7553",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "26543a72867f1031d0c6ead794b47c9ba20bc368882a72daf6f5fb69b07b2cf4",
+            "O0-2": "447b4d3f0bfdc7e729a345dc4c72266ceb518f028585d044dc249f11d32b5104",
+            "O0-3": "3aeda89bd90aef75d3b040ca5eb20b0189998af30c4ff834369735dde6cc4f45",
+            "O2-1": "95aff99a62aa76cc4a0d560dc48d9c4772d291efa403a78f31e0cfbb0804bd64",
+            "O2-2": "d2a1c2d01066c7f25bf62614fdc1eab5814a722995e0ac9a22ac3c4d2b1c41a2",
+            "O2-3": "25d66db5da5ea9e13a1467995824c8b318c1e07aef743bed92be9f179f0b6071"
+          }
+        },
+        "main": {
+          "original_sha256": "4c78d1de9dd8fa56a36fb467faf6232874eefe5427961c9c4fa1937d7ce22a35",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "148397f9c79bfc529e8ac893695078b825382fbf762eb412639762c06fd3cb7b",
+            "O0-2": "0c3f62a349a142aecd1a6e3b7761f9007f1b40dea524eea62fb1b6b71d8ffd8e",
+            "O0-3": "ca2fcc0b56162189a107325bfdff83081b30e21a4dac3f307b4cc21f8cf8b08d",
+            "O2-1": "91806696237f9b2ce69b00d46b5d9867ddfa6a87506e67358684b00b8c1b227b",
+            "O2-2": "6768b9e8324c8e93f633f2347d34b191dc793fb8bc6f4d9235dc7bd27c672308",
+            "O2-3": "c17f70a0827ff21d224b9ccff389d9b78554d78998832e2d4a44cb75e6cec8e1"
+          }
+        }
+      },
+      "prefix": {
+        "lib": {
+          "original_sha256": "f8c2d18d2b016514a908b0a144c34afee2510f43c9beee930876c3c9a2c04bab",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "ae3893b40c261280b7c212abf068b826b1718a900f46460aa78af02094380694",
+            "O0-2": "1d7cd4a472d3932f219ddb2a802bb7a692b8bd5c79df402043b004851d6897d0",
+            "O0-3": "a093f71827441bc7d1f633e70164280899a3bc133cd8bd10e220549409a6cac7",
+            "O2-1": "c82abf6530546a78f5679b0ec6bfa5ab60f3264a808e18bbcbfd2d45a58035e0",
+            "O2-2": "346bc16c029cfd014fc63498816c05971eefd750eca76a8345cccfb1b38089a7",
+            "O2-3": "7dcec702bbbca31c956982f0b3b9a6a4a9a266ad5c335a65f8ec09ac0e4ae2ed"
+          }
+        },
+        "main": {
+          "original_sha256": "c811a2a5fb4e45b2576b5d20ef11d484eede8bcd25121564703ef996522f61e3",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "9a5004b81625f86fce1dac9bdd292cf1e6459378272c7899767844433bedacd7",
+            "O0-2": "1d83d816011fd00f7a7c8a63db6dd1a5eb5fbbfd7eeec70d613cd516a36b3ccc",
+            "O0-3": "fd8ebc6bcb8f63996ec77a5650f95c4d4870747ba56f7c83ff232c27161e8ab5",
+            "O2-1": "9c37ebcd8aefce7440315ad880d37b65c3ff5ff3e8fda4a9757973fab7c8355c",
+            "O2-2": "ba652e3c9d1494a3cab5d53c6c615b56e808cd091b72d8adbc3a3d3fb5ff019e",
+            "O2-3": "aaf83e0f5e45f247486f532b390d0aa5f9b7b6228fdbbb51e3645c2e32a40aaa"
+          }
+        }
+      },
+      "signed": {
+        "lib": {
+          "original_sha256": "2496ca58ba77c419400e4b28cc7339a6aeff3b67abf0d1ba7d28d181be8a8588",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "a3e9125e661f06e76eb68c111f8e14678330e7eef67086cdd76ea0260b5fe66a",
+            "O0-2": "5fcd96fa584dcb0fb4031d690f14fc2e09f9470bf53b1d2055c2995340e2da05",
+            "O0-3": "d51ee0364539d780c4c52304c33a8df2da3f641ca5fc4fc22a204e318eda49eb",
+            "O2-1": "7fc6c47d30914cfb2a5fbc2669c68d85c73052f4330bbb537d7f0380fc4c5c58",
+            "O2-2": "b420aaa5bc2b7ef84ab53ff414f5eeefb7507ffe068c946930235a21c3411507",
+            "O2-3": "bf45e7cd533bedd0a4e360a8452c70e7687c6700ea824f62fa375e7978ffc1c1"
+          }
+        },
+        "main": {
+          "original_sha256": "e1e84b2ac6ac25ad42f62cf99b5c02a85bb3bb6a5680f7dbf8b90dd53121c1d5",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "d6da3898fd8ff289954d5448fc07546abfd2ee5200d70a9294a20657decf4716",
+            "O0-2": "c7415efd1a144782d618dfe0dbb221c54de3ce9700e6c6ca52eb40c5ed190b01",
+            "O0-3": "d676ac09d2feaa627009877dc43483cb43591a9f41efcebf1dbe955de45dafb8",
+            "O2-1": "71bfd8d958bb826e710c056bd1adf9d1c1adaaf8db6ca56e2bdd8701b908b229",
+            "O2-2": "2ecbcb1a6cafa614cc9d1e11ad5847457906d5cf595e13df97ab759c75c14474",
+            "O2-3": "209698ba58fc4773cb9f8f32832c593b37f5d9fba10d5c686ee0add46a602c67"
+          }
+        }
+      },
+      "frame": {
+        "lib": {
+          "original_sha256": "07e5db308d9a05fcecaa791b875f8d7689a7d0ed63795433639ca49a85897d6e",
+          "functions_verified_per_output": 19,
+          "generated_sha256": {
+            "O0-1": "c957b7d21b333c13bd2c4ca5552deeb1a84d69636e143244977bddde01d5f4f6",
+            "O0-2": "e4a54f8b6845a7ada3864b867b8e998edc4812bae8a8182db3b9de6e4e94591a",
+            "O0-3": "399432181b04e2c00c36f8d08c5ea8ef5ba879239396d10a138d7bf4a88b07b3",
+            "O2-1": "ab16578e237b6dc7cbdde583e198eca78e750f94e0190a559f4eb6e462a2dabd",
+            "O2-2": "345689659d2434c70b550e9a21d1a2ceb46a4982253c2eab35a2167de437622d",
+            "O2-3": "679883952fd7a486b7a7c7e81f0d4031cce7e015b4f0cf92c4a2d654cc287606"
+          }
+        },
+        "main": {
+          "original_sha256": "2af05311ba0055f91562b20037c05af848a4d9163e5c219806e588bd678446a9",
+          "functions_verified_per_output": 20,
+          "generated_sha256": {
+            "O0-1": "22cc0f5272024bd7a4965657bbc8c6478c20761dc0b772f6e62eac2d1a3650cd",
+            "O0-2": "555b5ffd062a53a72d817047b983ef17ede3261d5f7cdb9bf3929f28687ef8df",
+            "O0-3": "1c0c334ecb56dd7afd229d1df440576fae63f99d8bd6f589b578474337a1bd41",
+            "O2-1": "1a505cbfb1650c11b07451da36ace7f1f7fb1d36fb6c434a032e636ac332dc46",
+            "O2-2": "eb302ff89d2d0191ffcde9f679e0c46d353ed9bfac464be8211e1696d2fa3b2c",
+            "O2-3": "8a8045a85a53aa329fecea7a5b2f3c8ff8cd9ae0a4e2be73c813e1c86a4f0cd2"
+          }
+        }
+      }
+    },
+    "mismatched_page_register": {
+      "O0": {
+        "exit": 1,
+        "published": false,
+        "reason": "error: arm64e entry first has 12 source bytes and 8 emitted bytes"
+      },
+      "O2": {
+        "exit": 1,
+        "published": false,
+        "reason": "error: arm64e entry first has 12 source bytes and 8 emitted bytes"
+      }
+    },
+    "second_word_declared_as_data": {
+      "O0": {
+        "exit": 1,
+        "published": false,
+        "reason": "error: arm64e entry first has 1 source data-in-code records and 0 installed records"
+      },
+      "O2": {
+        "exit": 1,
+        "published": false,
+        "reason": "error: arm64e entry first has 1 source data-in-code records and 0 installed records"
+      }
+    }
+  },
+  "hosted": {
+    "suite": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44893316681",
+      "hosts": {
+        "macos-26": {
+          "total": 271,
+          "exit": 0,
+          "neverd": "e827b5ba7eaeab6cf9b53120c1c0d1c76f40e90f",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "26.7.2",
+          "failed": [],
+          "skipped": [],
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "forwarded_save_executions": 4,
+          "xml_sha256": "eb43a7124df9b77f8c87786d84b870f5d49f200af5b54170f0dd5b848412770d",
+          "pie_binaries_executed": 49,
+          "dylibs_called": 49
+        },
+        "xcode-27": {
+          "total": 271,
+          "exit": 0,
+          "neverd": "e827b5ba7eaeab6cf9b53120c1c0d1c76f40e90f",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "27.0.1",
+          "failed": [],
+          "skipped": [],
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "forwarded_save_executions": 4,
+          "xml_sha256": "3299a7cff0a5288f526e978a1bda49262fb33b834f729af31dbfa33c7b4308c3",
+          "pie_binaries_executed": 49,
+          "dylibs_called": 49
+        }
+      }
+    },
+    "suite-r6": {
+      "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44893359488",
+      "hosts": {
+        "macos-26": {
+          "total": 271,
+          "exit": 1,
+          "neverd": "e827b5ba7eaeab6cf9b53120c1c0d1c76f40e90f",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "26.7.2",
+          "failed": [
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "forwarded_save_executions": 4,
+          "xml_sha256": "d93d5b0263febff945bf1f8bd1849504fc9447ff3111dadbebfd46d80b9dc8b6"
+        },
+        "xcode-27": {
+          "total": 271,
+          "exit": 1,
+          "neverd": "e827b5ba7eaeab6cf9b53120c1c0d1c76f40e90f",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "27.0.1",
+          "failed": [
+            "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+            "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+            "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+            "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+            "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+            "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+          ],
+          "skipped": [
+            "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+            "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+            "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+          ],
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "forwarded_save_executions": 4,
+          "xml_sha256": "f4c4a6f818c9540654261bc99de226fbbe63bf485b9ea11a5acff7fc183b66ef"
+        }
+      }
+    }
+  }
+}

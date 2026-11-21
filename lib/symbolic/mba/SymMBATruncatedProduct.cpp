@@ -99,25 +99,15 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
         return Ctx.op(V) == SymOp::LShr || Ctx.op(V) == SymOp::AShr;
       };
       auto Terms = Ctx.operands(Source);
-      SymRef Shifted;
-      if (Terms.size() == 2) {
-        if (RightShift(Terms[0]))
-          Shifted = Terms[0];
-        else if (RightShift(Terms[1]))
-          Shifted = Terms[1];
-      } else if (Op == SymOp::Add && Ctx.isConst(Terms.front())) {
-        if (!Budget.consume(Terms.size()))
-          return {};
-        for (auto T : Terms)
-          if (RightShift(T)) {
-            Shifted = T;
-            break;
-          }
-      }
-      if (Shifted && llvm::all_of(Terms, [&](SymRef V) {
-            return V == Shifted || hasZeroPrefix(Ctx, V, End, Words, Budget);
-          })) {
-        Source = Shifted;
+      if (Terms.size() > 2 && !Budget.consume(Terms.size()))
+        return {};
+      auto Shifted = llvm::find_if(Terms, RightShift);
+      auto Zero = [&](SymRef V) {
+        return hasZeroPrefix(Ctx, V, End, Words, Budget);
+      };
+      if (Shifted != Terms.end() && std::all_of(Terms.begin(), Shifted, Zero) &&
+          std::all_of(Shifted + 1, Terms.end(), Zero)) {
+        Source = *Shifted;
         continue;
       }
       if (Budget.exhausted())
@@ -251,6 +241,50 @@ SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
   return Widened.lookup(Low.index());
 }
 
+// Lowering can mask both sides of a rotation to the bits used by a factor.
+// The logical right shift fills exactly the bottom Cut bits. The two halves
+// are disjoint, so a sum, OR and XOR yield the same observed prefix.
+SymRef maskedRotatePrefix(SymContext &Ctx, SymRef Word, unsigned Bits,
+                          WorkBudget &Budget, size_t &Storage) {
+  const auto Op = Ctx.op(Word);
+  if ((Op != SymOp::Or && Op != SymOp::Xor && Op != SymOp::Add) ||
+      Ctx.numOperands(Word) != 2)
+    return Word;
+  auto High = Ctx.operand(Word, 0), Low = Ctx.operand(Word, 1);
+  if (Ctx.op(High) != SymOp::Mul)
+    std::swap(High, Low);
+  if (Ctx.op(High) != SymOp::Mul || Ctx.numOperands(High) != 2 ||
+      !Ctx.isConst(Ctx.operand(High, 0)) || Ctx.op(Low) != SymOp::And ||
+      Ctx.numOperands(Low) != 2 || !Ctx.isConst(Ctx.operand(Low, 0)))
+    return Word;
+  const auto Left = Ctx.operand(High, 1), Right = Ctx.operand(Low, 1);
+  if (Ctx.op(Left) != SymOp::And || !Ctx.isConst(Ctx.operand(Left, 0)) ||
+      Ctx.op(Right) != SymOp::LShr || !Ctx.isConst(Ctx.operand(Right, 1)))
+    return Word;
+  const auto Base = Ctx.operand(Right, 0);
+  const auto Tail = Ctx.operands(Left).drop_front();
+  const unsigned Width = Ctx.width(Word);
+  if (!Budget.consume(4 * llvm::APInt::getNumWords(Width) + Tail.size()))
+    return {};
+  if (Tail.size() == 1
+          ? Tail.front() != Base
+          : Ctx.op(Base) != SymOp::And || Tail != Ctx.operands(Base))
+    return Word;
+  const int32_t Cut = Ctx.constValue(Ctx.operand(High, 0)).exactLogBase2();
+  const auto Shift = Ctx.operand(Right, 1);
+  if (Cut <= 0 || unsigned(Cut) >= Bits ||
+      Ctx.constWords(Shift).front() != Width - unsigned(Cut) ||
+      Ctx.constValue(Ctx.operand(Left, 0)).countr_one() <
+          Bits - unsigned(Cut) ||
+      Ctx.constValue(Ctx.operand(Low, 0)).countr_one() < unsigned(Cut))
+    return Word;
+  const size_t Bytes = sizeof(SymNode) + 2 * sizeof(SymRef);
+  if (Bytes > Storage)
+    return {};
+  Storage -= Bytes;
+  return Ctx.mkRor(Base, Shift);
+}
+
 bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
                              WorkBudget &Budget, size_t &Storage,
                              llvm::DenseMap<uint32_t, SymRef> &Widened) {
@@ -343,32 +377,54 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     do {
       const auto Op = Ctx.op(Word);
       if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul)) {
-        const auto K = llvm::APInt(
-            Observed,
-            Ctx.constWords(Ctx.operand(Word, 0)).take_front(ReadWords));
-        // A signed one-limb multiplier needs one pass over B. In particular
-        // a negative scalar must subtract its magnitude at the observed width.
-        const bool Small = ReadWords > 1 && K.isSignedIntN(64);
-        if (!Budget.consume(3 + ReadWords +
-                            (Small ? ReadWords : ReadWords * ReadWords)))
-          return false;
+        const auto Digits =
+            Ctx.constWords(Ctx.operand(Word, 0)).take_front(ReadWords);
+        const uint64_t Low = Digits.front();
+        const uint64_t Fill = uint64_t(0) - (Low >> 63);
+        // Only the observed prefix determines whether a signed multiplier
+        // fits one limb. The last stored limb may extend past that prefix.
+        const bool Small =
+            ReadWords > 1 &&
+            ((Digits.back() ^ Fill) << ((64 - Observed % 64) % 64)) == 0 &&
+            llvm::all_of(Digits.drop_front().drop_back(),
+                         [&](uint64_t V) { return V == Fill; });
         if (Small) {
-          const bool Negative = K.isNegative();
-          const uint64_t Low = K.getSExtValue();
-          auto Product = B * (Negative ? uint64_t(0) - Low : Low);
-          if (Negative)
-            Product.negate();
-          if (Op == SymOp::Add)
-            A += Product;
-          else
-            B = std::move(Product);
-        } else if (Op == SymOp::Add) {
-          A += B * K;
+          const uint64_t Magnitude = Fill ? uint64_t(0) - Low : Low;
+          if (!Budget.consume(1 + ReadWords + (Magnitude != 1 ? ReadWords : 0)))
+            return false;
+          if (Op == SymOp::Mul) {
+            if (Magnitude != 1)
+              B *= Magnitude;
+            if (Fill)
+              B.negate();
+          } else if (Magnitude == 1) {
+            if (Fill)
+              A -= B;
+            else
+              A += B;
+          } else {
+            const auto Product = B * Magnitude;
+            if (Fill)
+              A -= Product;
+            else
+              A += Product;
+          }
+          if (Op == SymOp::Mul && !(Low & 1))
+            Zeros += Low ? std::min(Observed - Zeros,
+                                    unsigned(std::countr_zero(Low)))
+                         : Observed - Zeros;
         } else {
-          B *= K;
+          if (!Budget.consume(3 + ReadWords + ReadWords * ReadWords))
+            return false;
+          const llvm::APInt K(Observed, Digits);
+          if (Op == SymOp::Add)
+            A += B * K;
+          else {
+            B *= K;
+            if (!(Low & 1))
+              Zeros += std::min(Observed - Zeros, K.countr_zero());
+          }
         }
-        if (Op == SymOp::Mul && !K[0])
-          Zeros += std::min(Observed - Zeros, K.countr_zero());
         Word = Ctx.operand(Word, 1);
         continue;
       }
@@ -464,13 +520,55 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
   // An instruction combiner may leave the word shifted and replace its
   // narrow extension with a mask. Its observable prefix has the same
   // coordinate as an explicit extract, including any copied rotate bits.
+  // Constant left rotations use the same right-rotated representative.
   const unsigned Bits = Observed - std::min(Observed, Row.Zeros);
   if (Bits && Bits < Width &&
-      (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr) &&
+      (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr ||
+       Ctx.op(Word) == SymOp::Rol) &&
       Ctx.isConst(Ctx.operand(Word, 1))) {
     Word = widenWindow(Ctx, Word, 0, Bits, Width, Budget, Storage);
     if (!Word)
       return false;
+  }
+  if (Bits && Bits < Width) {
+    Word = maskedRotatePrefix(Ctx, Word, Bits, Budget, Storage);
+    if (!Word)
+      return false;
+  }
+  // Rotations permute bits. If lowering distributed the same rotation
+  // through a bitwise field, its unrotated operands are one coordinate.
+  const auto Op = Ctx.op(Word);
+  if ((Op == SymOp::Or || Op == SymOp::And || Op == SymOp::Xor) &&
+      Ctx.op(Ctx.operand(Word, 0)) == SymOp::Ror) {
+    const auto Parts = Ctx.operands(Word);
+    const auto Count = Ctx.operand(Parts.front(), 1);
+    if (!Budget.consume(Parts.size()))
+      return false;
+    if (llvm::all_of(Parts, [&](SymRef P) {
+          return Ctx.op(P) == SymOp::Ror && Ctx.operand(P, 1) == Count;
+        })) {
+      const size_t Extra = 2 * sizeof(SymNode) + 4 * sizeof(SymRef);
+      if (Storage < Extra)
+        return false;
+      const size_t MaxEdges = (Storage - Extra) / (4 * sizeof(SymRef));
+      size_t Edges = 0;
+      for (const auto P : Parts) {
+        const auto Source = Ctx.operand(P, 0);
+        const size_t N = Ctx.op(Source) == Op ? Ctx.numOperands(Source) : 1;
+        if (N > MaxEdges - Edges)
+          return false;
+        Edges += N;
+      }
+      const size_t Work = 2 + std::bit_width(Edges);
+      if (Edges > Budget.available() / Work)
+        return false;
+      Budget.consume(Edges * Work);
+      Storage -= Extra + Edges * 4 * sizeof(SymRef);
+      llvm::SmallVector<SymRef, 4> Sources;
+      for (const auto P : Parts)
+        Sources.push_back(Ctx.operand(P, 0));
+      Word = Ctx.mkRor(Ctx.rebuild(Word, Sources), Count);
+    }
   }
   Row.Complement = Ctx.op(Word) == SymOp::Not;
   if (Row.Complement)
@@ -536,6 +634,67 @@ SymRef emitTruncatedPolynomial(SymContext &Ctx, SymRef Word, SymRef Scale,
   return V;
 }
 
+// Multiply affine factors modulo 2^Precision. The coefficient of x^k is
+// divided by 2^(k*Shift) and only needs the remaining low limbs. The two
+// rows are disjoint, so a partial product can accumulate into its destination
+// without allocating an APInt for each multiplication and truncated operand.
+void multiplyProjectedFactors(
+    SymContext &Ctx, llvm::ArrayRef<Factor> Group, unsigned Precision,
+    unsigned Shift, size_t Degree,
+    llvm::SmallVectorImpl<llvm::APInt> &Coefficients) {
+  const unsigned W = llvm::APInt::getNumWords(Precision);
+  llvm::SmallVector<size_t, 8> Offsets{0};
+  for (size_t K = 0; K <= Degree; ++K)
+    Offsets.push_back(Offsets.back() +
+                      llvm::APInt::getNumWords(Precision - K * Shift));
+  llvm::SmallVector<uint64_t, 32> Rows(2 * Offsets.back(), 0);
+  auto *Previous = Rows.data(), *Next = Previous + Offsets.back();
+  Previous[0] = 1;
+  const unsigned BW = llvm::APInt::getNumWords(Precision - Shift);
+  llvm::SmallVector<uint64_t, 8> Quotient(BW);
+  for (size_t J = 0; J < Group.size(); ++J) {
+    const auto &F = Group[J];
+    auto A = Ctx.constWords(F.Offset).take_front(W);
+    auto B = Ctx.constWords(F.Weight).take_front(W);
+    llvm::APInt ComplementOffset, ComplementWeight;
+    if (F.Complement) {
+      ComplementWeight = llvm::APInt(Precision, B);
+      ComplementOffset = llvm::APInt(Precision, A) - ComplementWeight;
+      ComplementWeight.negate();
+      A = {ComplementOffset.getRawData(), W};
+      B = {ComplementWeight.getRawData(), W};
+    }
+    // Digits beyond P-k*s cannot flow into a retained prefix. Read the
+    // immutable offset in place and shift only the live digits of the weight.
+    const unsigned Whole = Shift / 64, Part = Shift % 64;
+    for (unsigned I = 0; I < BW; ++I) {
+      Quotient[I] = B[I + Whole] >> Part;
+      if (Part && I + Whole + 1 < W)
+        Quotient[I] |= B[I + Whole + 1] << (64 - Part);
+    }
+    for (size_t K = 0; K <= std::min(Degree, J + 1); ++K) {
+      const unsigned N = Offsets[K + 1] - Offsets[K];
+      auto *Dst = Next + Offsets[K];
+      for (unsigned I = 0; I < N; ++I) {
+        // Higher digits cannot reach this coefficient. Overwrite on the
+        // first digit, then add directly to the unfilled high end.
+        llvm::APInt::tcMultiplyPart(Dst + I, Previous + Offsets[K], A[I], 0,
+                                    N - I, N - I, I != 0);
+        if (K)
+          llvm::APInt::tcMultiplyPart(Dst + I, Previous + Offsets[K - 1],
+                                      Quotient[I], 0, N - I, N - I, true);
+      }
+    }
+    std::swap(Next, Previous);
+  }
+  for (size_t K = 0; K <= Degree; ++K) {
+    const auto Bits = Precision - K * Shift;
+    llvm::APInt C(Bits, llvm::ArrayRef(Previous + Offsets[K],
+                                       Offsets[K + 1] - Offsets[K]));
+    Coefficients.push_back(C.zextOrTrunc(Precision).shl(K * Shift));
+  }
+}
+
 SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
                            unsigned Precision, SymRef Scale, WorkBudget &Budget,
                            size_t &Storage) {
@@ -564,13 +723,20 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
   // 2^s. Keep its quotient at P-k*s bits if that saves word arithmetic.
   if (W > 1 && Degree && MinimumZeros &&
       llvm::APInt::getNumWords(Precision - Degree * MinimumZeros) < W) {
-    size_t PerFactor = 2 + 3 * W + W * W;
+    // A low N-limb product visits N*(N+1)/2 digit pairs. Degree zero
+    // has one product; every higher coefficient accumulates two.
+    size_t PerFactor = 2 + llvm::APInt::getNumWords(Precision - MinimumZeros) +
+                       W * (W + 1) / 2;
     for (size_t K = 1; K <= Degree; ++K) {
       const size_t KW = llvm::APInt::getNumWords(Precision - K * MinimumZeros);
-      PerFactor = llvm::SaturatingAdd(PerFactor, 3 + 4 * KW + 2 * KW * KW);
+      PerFactor = llvm::SaturatingAdd(PerFactor, 2 + 2 * KW + KW * (KW + 1));
     }
+    const size_t Complements =
+        llvm::count_if(Group, [](const Factor &F) { return F.Complement; });
     const size_t Projected = llvm::SaturatingMultiplyAdd(
-        Used, PerFactor, llvm::SaturatingMultiply(Degree, 2 + 2 * W));
+        Used, PerFactor + 1,
+        llvm::SaturatingMultiplyAdd(
+            Complements, 3 * W, llvm::SaturatingMultiply(Degree, 2 + 2 * W)));
     if (Projected < Work) {
       Work = Projected;
       Shift = MinimumZeros;
@@ -582,33 +748,26 @@ SymRef buildTruncatedGroup(SymContext &Ctx, llvm::ArrayRef<Factor> Group,
   Storage -= (Degree + 1) * Bytes;
   llvm::SmallVector<llvm::APInt, 8> Coefficients;
   Coefficients.reserve(Degree + 1);
-  for (size_t K = 0; K <= Degree; ++K)
-    Coefficients.emplace_back(Precision - K * Shift, 0);
-  Coefficients[0] = 1;
-  for (size_t J = 0; J < Used; ++J) {
-    const auto &F = Group[J];
-    auto A = Ctx.constValue(F.Offset).zextOrTrunc(Precision);
-    auto B = Ctx.constValue(F.Weight).zextOrTrunc(Precision);
-    if (F.Complement) {
-      A -= B;
-      B.negate();
-    }
-    if (Shift) {
-      B.lshrInPlace(Shift);
-      for (size_t K = std::min(Degree, J + 1); K != 0; --K) {
-        const auto P = Coefficients[K].getBitWidth();
-        Coefficients[K] = A.trunc(P) * Coefficients[K] +
-                          B.trunc(P) * Coefficients[K - 1].trunc(P);
+  if (Shift) {
+    multiplyProjectedFactors(Ctx, Group, Precision, Shift, Degree,
+                             Coefficients);
+  } else {
+    for (size_t K = 0; K <= Degree; ++K)
+      Coefficients.emplace_back(Precision, 0);
+    Coefficients[0] = 1;
+    for (size_t J = 0; J < Used; ++J) {
+      const auto &F = Group[J];
+      auto A = llvm::APInt(Precision, Ctx.constWords(F.Offset).take_front(W));
+      auto B = llvm::APInt(Precision, Ctx.constWords(F.Weight).take_front(W));
+      if (F.Complement) {
+        A -= B;
+        B.negate();
       }
-    } else {
       for (size_t K = std::min(Degree, J + 1); K != 0; --K)
         Coefficients[K] = A * Coefficients[K] + B * Coefficients[K - 1];
+      Coefficients[0] *= A;
     }
-    Coefficients[0] *= A;
   }
-  if (Shift)
-    for (size_t K = 1; K <= Degree; ++K)
-      Coefficients[K] = Coefficients[K].sext(Precision).shl(K * Shift);
   return emitTruncatedPolynomial(Ctx, Group.front().Word, Scale, Coefficients,
                                  Bytes, Budget, Storage);
 }
