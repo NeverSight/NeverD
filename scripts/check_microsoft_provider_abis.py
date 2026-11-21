@@ -51,6 +51,7 @@ CASES = {
               "RxTearDownDispatcher"),
     "EventTracing": ("EventRegister", "EventWriteTransfer", "EventUnregister"),
     "Path": ("PathCchCombineEx", "PathCchCanonicalizeEx"),
+    "COMRegistration": ("DllRegisterServer", "DllUnregisterServer"),
     "WinRTStrings": ("WindowsCreateString", "WindowsDeleteString", "RoInitialize"),
     "RPCProxy": ("NdrDllGetClassObject", "MesDecodeBufferHandleCreate"),
     "Credentials": ("CredReadW", "CredWriteW"),
@@ -331,6 +332,8 @@ def check(args: argparse.Namespace) -> dict:
         expected = set(args.provider or CASES)
         profiles = manifest.get("profiles", {})
         if args.provider is None:
+            if "com_registration" not in profiles:
+                expected.discard("COMRegistration")
             if "wdk_exports" not in profiles:
                 expected.difference_update(windows.WDK_EXPORT_PREFIXES)
             if "flat_imports" not in profiles:

@@ -175,6 +175,46 @@ TEST(LocalTypesDebugContext, KernelLibraryCallbacksUseTheTargetWDK) {
   }
 }
 
+TEST(LocalTypesDebugContext, COMRegistrationUsesTheTargetUserABI) {
+  using namespace neverd;
+  constexpr va_t Register = 0x1000, Unregister = 0x2000;
+  for (auto [Architecture, Header] :
+       {std::pair{Arch::X86, types::HeaderLibrary::WindowsUserX86},
+        std::pair{Arch::X64, types::HeaderLibrary::WindowsUserX64},
+        std::pair{Arch::AArch64, types::HeaderLibrary::WindowsUserARM64}}) {
+    auto Library =
+        std::make_shared<types::TypeLibrary>(types::headerLibraryModel(Header));
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Format = BinaryFormat::COFF;
+    NamesOnlyDebugContext Names;
+    sdk::WindowsEntryPoints Entries;
+    Entries.DllRegisterServer = Register;
+    Entries.DllUnregisterServer = Unregister;
+    sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header},
+                                        {}, {}, {}, {}, Entries);
+    for (va_t Entry : {Register, Unregister}) {
+      auto Function = Context.resolveFunction(Entry);
+      ASSERT_TRUE(Function && Function->ReturnType);
+      EXPECT_EQ(Function->ReturnType->Size, 4u);
+      EXPECT_EQ(Function->ReturnType->SourceName, "HRESULT");
+      EXPECT_NE(Function->PrototypeDeclaration.find("HRESULT"),
+                std::string::npos);
+      EXPECT_NE(Function->PrototypeDeclaration.find(Function->Name),
+                std::string::npos);
+      EXPECT_TRUE(Function->Params.empty());
+      EXPECT_TRUE(Function->PrototypeFromHeader);
+      if (Architecture == Arch::X86)
+        EXPECT_EQ(Function->CallConv, DebugCallConv::Stdcall);
+    }
+    Context.takeDeclarations({{Register, "int changed(int context)"}});
+    EXPECT_EQ(Context.resolveFunction(Register)->Params.size(), 1u);
+    sdk::LocalTypesDebugContext WithoutUserHeader(Names, Library, {}, &Image,
+                                                  {}, {}, {}, {}, {}, Entries);
+    EXPECT_TRUE(WithoutUserHeader.boundFunctionEntries().empty());
+  }
+}
+
 TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {
   using namespace neverd;
   auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LP64);
