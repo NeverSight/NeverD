@@ -11,6 +11,7 @@
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
+#include "neverd/libc/LibCFixedIntegerArguments.h"
 #include "neverd/libc/LibCFloatingArguments.h"
 #include "neverd/types/TypeParse.h"
 
@@ -72,6 +73,72 @@ TEST(DebugContext, NoReturnQueryUsesTheProvidersValidatedPrototype) {
   ASSERT_TRUE(Context.resolvePrototypeABI("stop"));
   EXPECT_TRUE(Context.resolvePrototypeABI("stop")->NoReturn);
   EXPECT_FALSE(Context.resolvePrototypeABI("missing"));
+}
+
+TEST(LocalTypesDebugContext,
+     AddressBoundDeclarationsFollowEditsInNamesOnlyCode) {
+  using namespace neverd;
+  constexpr va_t First = 0x1000, Second = 0x2000, Unstated = 0x3000;
+  NamesOnlyDebugContext Names;
+  auto Library = std::make_shared<types::TypeLibrary>(types::DataModel::LLP64);
+  sdk::LocalTypesDebugContext Context(
+      Names, Library, {{Second, "int initialize(void *object, void *path)"}});
+  EXPECT_EQ(Context.boundFunctionEntries().vec(), (std::vector<va_t>{Second}));
+  const auto Declaration = Context.resolveFunction(Second);
+  ASSERT_TRUE(Declaration);
+  ASSERT_TRUE(Declaration->ExplicitEntryDeclaration);
+  ASSERT_EQ(Declaration->Params.size(), 2u);
+  EXPECT_TRUE(libc::fixedIntegerCallArguments(*Declaration, Arch::AArch64,
+                                              BinaryFormat::COFF, &Context));
+  EXPECT_FALSE(Context.hasAuthenticatedFunctionSignatures());
+  Context.takeDeclarations({{First, "int consume(void *packet)"}});
+  EXPECT_EQ(Context.boundFunctionEntries().vec(), (std::vector<va_t>{First}));
+  if (auto Untyped = Context.resolveFunction(Unstated))
+    EXPECT_FALSE(libc::fixedIntegerCallArguments(*Untyped, Arch::AArch64,
+                                                 BinaryFormat::COFF, &Context));
+  Context.takeDeclarations({});
+  EXPECT_TRUE(Context.boundFunctionEntries().empty());
+}
+
+TEST(LocalTypesDebugContext, DriverContractBindsOnlyProvenEntries) {
+  using namespace neverd;
+  constexpr va_t Shim = 0x1000, Body = 0x2000, Other = 0x3000;
+  const auto Header = types::HeaderLibrary::WindowsKernelARM64;
+  const auto *Kernel = types::headerLibrary(Header);
+  ASSERT_NE(Kernel, nullptr);
+  auto Library = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
+  types::mergeHeaderTypes(*Library, *Kernel);
+  BinaryImage Image;
+  Image.Format = BinaryFormat::COFF;
+  Image.Arch = Arch::AArch64;
+  Image.Entry = Shim;
+  NamesOnlyDebugContext Names;
+  for (va_t Entry : {Shim, Body, Other}) {
+    auto &Function = Names.Functions[Entry];
+    Function.Addr = Entry;
+    Function.Name = Entry == Shim ? "GsDriverEntry" : "DriverEntry";
+  }
+  sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header}, {},
+                                      {}, {}, {}, {Shim, Body});
+  EXPECT_EQ(Context.boundFunctionEntries().vec(),
+            (std::vector<va_t>{Shim, Body}));
+  for (va_t Entry : {Shim, Body}) {
+    const auto Function = Context.resolveFunction(Entry);
+    ASSERT_TRUE(Function);
+    ASSERT_EQ(Function->Params.size(), 2u);
+    EXPECT_EQ(Function->Params[0].first, "DriverObject");
+    EXPECT_EQ(Function->Params[1].first, "RegistryPath");
+    EXPECT_TRUE(libc::fixedIntegerCallArguments(*Function, Image.Arch,
+                                                Image.Format, &Context));
+  }
+  Context.takeDeclarations({{Body, "int DriverEntry(void *context)"}});
+  const auto Edited = Context.resolveFunction(Body);
+  ASSERT_TRUE(Edited);
+  EXPECT_EQ(Edited->Params.size(), 1u);
+  auto Empty = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
+  sdk::LocalTypesDebugContext WithoutHeader(Names, Empty, {}, &Image, {}, {},
+                                            {}, {}, {}, {Shim, Body});
+  EXPECT_TRUE(WithoutHeader.boundFunctionEntries().empty());
 }
 
 TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {

@@ -391,6 +391,10 @@ public:
   resolvePrototypeABI(llvm::StringRef Name) const {
     return resolvePrototype(Name);
   }
+
+  /// Sorted exact entries with an address-bound user or platform declaration.
+  /// A name-only symbol elsewhere in the image supplies no call contract.
+  virtual llvm::ArrayRef<va_t> boundFunctionEntries() const { return {}; }
 };
 
 class NullDebugContext : public DebugContext {

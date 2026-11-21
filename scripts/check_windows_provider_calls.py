@@ -32,15 +32,21 @@ FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombine
              "UseDXGIFactory": "CreateDXGIFactory2",
              "UseAdapterRemovalSupport": "DXGIDeclareAdapterRemovalSupport",
              "UseShaderCompile": "D3DCompile", "UseShaderCompile2": "D3DCompile2",
-             "UseShaderBlob": "D3DCreateBlob"}
+             "UseShaderBlob": "D3DCreateBlob",
+             "UseIcuLower": "u_tolower", "UseSQLiteCompare": "sqlite3_strnicmp",
+             "UseWebHeap": "WsFreeHeap", "UseConnectionMemory": "WcmFreeMemory",
+             "UseGattServices": "BluetoothGATTGetServices"}
 LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "clfsw32.lib", "tbs.lib",
-             "d3d11.lib", "d3d12.lib", "dxgi.lib", "d3dcompiler.lib")
+             "d3d11.lib", "d3d12.lib", "dxgi.lib", "d3dcompiler.lib", "icu.lib",
+             "winsqlite3.lib", "webservices.lib", "wcmapi.lib", "bluetoothapis.lib")
 DRIVER_FUNCTIONS = {"UseSDConfig": "SdPortGetPciConfigSpace",
                     "UseAudioAdapter": "PcAddAdapterDevice",
-                    "UseStreamClock": "StreamClassQueryMasterClockSync"}
+                    "UseStreamClock": "StreamClassQueryMasterClockSync",
+                    "UseCameraValue": "USBCAMD_GetRegistryKeyValue"}
 DRIVER_IMPORTS = {"sdport.sys": ("SdPortGetPciConfigSpace",),
                   "portcls.sys": ("PcAddAdapterDevice",),
-                  "stream.sys": ("StreamClassQueryMasterClockSync",)}
+                  "stream.sys": ("StreamClassQueryMasterClockSync",),
+                  "usbcamd2.sys": ("USBCAMD_GetRegistryKeyValue",)}
 RDBSS_FUNCTIONS = {"UseRdbssRegister": "RxRegisterMinirdr",
                    "UseRdbssStart": "RxStartMinirdr",
                    "UseRdbssUnregister": "RxpUnregisterMinirdr",

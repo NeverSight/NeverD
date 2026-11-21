@@ -727,6 +727,9 @@ inline constexpr int kMaxSwiftSymbolicTypeReferenceOffset =
 // lib/sdk/capi/ObjCSynchronizedSource.h
 inline constexpr int kMaxSynchronizedSourceTokenBytes = 128;
 
+// lib/sdk/capi/NeverDCAPILocalTypes.cpp
+inline constexpr unsigned kWindowsDriverEntryInstructions = 64;
+
 // lib/sdk/capi/ProgramMain.cpp
 inline constexpr unsigned kProgramMainEntryInstructions = 64;
 

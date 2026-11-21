@@ -73,6 +73,9 @@ windowsAPIPrototype(std::string_view Name, std::string_view Return,
 /// Header-owned records and callback typedefs retain their source types:
 /// equal integer widths alone do not make function-pointer types compatible.
 inline constexpr auto kWindowsCRTPrototypes = std::to_array<LibCPrototype>({
+    // vcruntime.h and the WDK km/crt/process.h declare the /GS startup
+    // routine as void __cdecl __security_init_cookie(void).
+    windowsCRTPrototype("__security_init_cookie", "void", {}),
     // MSVC's scalar/array allocation and unsized release on 32-bit x86.
     // Exact decorated names distinguish these one-argument cdecl overloads
     // from sized, aligned, placement and nothrow variants.

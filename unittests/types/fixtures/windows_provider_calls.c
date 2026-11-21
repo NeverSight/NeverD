@@ -2,6 +2,7 @@
 #include <windows.h>
 
 // The provider headers require Windows' base declarations first.
+#include <bluetoothleapis.h>
 #include <clfsw32.h>
 #include <d3d11.h>
 #include <d3d12.h>
@@ -9,8 +10,12 @@
 #include <d3dkmthk.h>
 #include <dxgi1_6.h>
 #include <evntprov.h>
+#include <icu.h>
 #include <pathcch.h>
 #include <tbs.h>
+#include <wcmapi.h>
+#include <webservices.h>
+#include <winsqlite/winsqlite3.h>
 #include <winstring.h>
 
 // The provider authenticates the SDK's exact C++ type before this compatible
@@ -114,4 +119,25 @@ __declspec(dllexport) HRESULT UseShaderBlob(SIZE_T Size, ID3DBlob **Blob) {
 
 __declspec(dllexport) HRESULT UseAdapterRemovalSupport(void) {
   return DXGIDeclareAdapterRemovalSupport();
+}
+
+__declspec(dllexport) UChar32 UseIcuLower(UChar32 Value) {
+  return u_tolower(Value);
+}
+
+__declspec(dllexport) int UseSQLiteCompare(const char *Left, const char *Right,
+                                           int Count) {
+  return sqlite3_strnicmp(Left, Right, Count);
+}
+
+__declspec(dllexport) void UseWebHeap(WS_HEAP *Heap) { WsFreeHeap(Heap); }
+
+__declspec(dllexport) void UseConnectionMemory(void *Memory) {
+  WcmFreeMemory(Memory);
+}
+
+__declspec(dllexport) HRESULT UseGattServices(HANDLE Device, USHORT Count,
+                                              PBTH_LE_GATT_SERVICE Services,
+                                              USHORT *Actual, ULONG Flags) {
+  return BluetoothGATTGetServices(Device, Count, Services, Actual, Flags);
 }

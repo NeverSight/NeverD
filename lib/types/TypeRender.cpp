@@ -511,10 +511,17 @@ void valueDependencies(const TypeExpr &Type, std::vector<std::string> &Names) {
   case TypeExprKind::Named:
     Names.push_back(Type.Name);
     return;
-  case TypeExprKind::Pointer:
-    if (Type.Element && Type.Element->Kind == TypeExprKind::Array)
-      valueDependencies(*Type.Element, Names);
+  case TypeExprKind::Pointer: {
+    // An inline pointee's definition occurs in this declarator. Its own
+    // by-value fields must already be complete, even behind several pointers.
+    const TypeExpr *Pointee = Type.Element.get();
+    while (Pointee && Pointee->Kind == TypeExprKind::Pointer)
+      Pointee = Pointee->Element.get();
+    if (Pointee && (Pointee->Kind == TypeExprKind::Array ||
+                    Pointee->Kind == TypeExprKind::Record))
+      valueDependencies(*Pointee, Names);
     return;
+  }
   case TypeExprKind::Array:
     if (Type.Element)
       valueDependencies(*Type.Element, Names);

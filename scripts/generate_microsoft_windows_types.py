@@ -75,11 +75,15 @@ ISOLATED_PROVIDERS = {
         Provider("SmartCard", ("ntddk", "smclib")),
         Provider("SDPort", ("ntddk", "sdport")),
         Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
+        Provider("USBCamera", ("ntddk", "minwindef", "ks", "strmini", "usb", "usbcamdi")),
         Provider("AudioPort", ("ntddk", "portcls")),
         Provider("GraphicsKernel", ("ntddk", "dispmprt")),
         Provider("RDBSS", ("rxprocs", "mrx"), ("MINIRDR__NAME=neverd_rdbss",)),
     ),
     "WindowsUser": (
+        Provider("WindowsSQLite", ("winsqlite/winsqlite3",)),
+        Provider("ICU", ("icu",)),
+        Provider("WebServices", ("windows", "webservices")),
         Provider("WinHTTP", ("winsock2", "winhttp")),
         Provider("HTTPServer", ("winsock2", "windows", "http")),
         Provider("Esent", ("winsock2", "windows", "esent")),
@@ -108,6 +112,8 @@ ISOLATED_PROVIDERS = {
         Provider("PropertyVariants", ("windows", "propvarutil")),
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
+        Provider("BluetoothGATT", ("windows", "bluetoothleapis")),
+        Provider("ConnectionManager", ("windows", "wcmapi")),
         Provider("GraphicsThunk", ("windows", "d3dkmthk")),
         Provider("Direct3D11", ("windows", "d3d11"), (), (
             "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
@@ -146,6 +152,30 @@ ISOLATED_PROVIDERS = {
             "SetLogArchiveMode", "SetLogArchiveTail", "TerminateLogArchive", "TerminateReadLog",
             "TruncateLog", "ValidateLog", "WriteLogRestartArea")),
         Provider("TPM", ("windows", "tbs")),
+        Provider("DHCPServer", ("winsock2", "windows", "dhcpsapi")),
+        Provider("ODBC", ("windows", "sql", "sqlext", "sqlucode")),
+        Provider("MediaFoundation", ("windows", "mfapi", "mfobjects", "mfidl")),
+        Provider("TraceData", ("windows", "tdh")),
+        Provider("JavaScriptRuntime", ("stdbool", "windows", "jsrt")),
+        Provider("RightsManagement", ("windows", "msdrm")),
+        Provider("DirectoryService", ("windows", "ntdsapi")),
+        Provider("XmlLite", ("windows", "xmllite")),
+        Provider("UIAutomation", ("windows", "uiautomationcore", "uiautomationcoreapi")),
+        Provider("WinInet", ("winsock2", "windows", "wininet", "winineti")),
+        Provider("RoutingTable", ("winsock2", "windows", "rtmv2")),
+        Provider("WinSNMP", ("windows", "winsnmp")),
+        Provider("AudioCompression", ("windows", "mmsystem", "mmreg", "msacm")),
+        Provider("CloudFiles", ("windows", "cfapi")),
+        Provider("PeerDistribution", ("windows", "peerdist")),
+        Provider("InteractionContext", ("windows", "interactioncontext")),
+        Provider("DistributedRouting", ("winsock2", "windows", "drt")),
+        Provider("ProjectedFileSystem", ("windows", "projectedfslib")),
+        Provider("ISCSI", ("winsock2", "windows", "iscsierr", "iscsidsc")),
+        Provider("ClusterResources", ("windows", "clusapi", "resapi")),
+        Provider("VideoForWindows", ("windows", "vfw")),
+        Provider("Fax", ("windows", "winfax"), ("WIN32=1",)),
+        Provider("WindowsErrorReporting", ("windows", "werapi")),
+        Provider("Magnification", ("windows", "magnification")),
     ),
 }
 TARGETS = {
@@ -162,6 +192,11 @@ def run(command: list[str], log: Path, output: Path | None = None) -> str:
         result = subprocess.run(command, text=True, stdout=subprocess.PIPE,
                                 stderr=errors, timeout=wdk.LIMITS["command_timeout"])
     if result.returncode:
+        # The types CLI writes structured rejection diagnostics to stdout.
+        # Preserve them before raising, alongside any compiler diagnostics.
+        if result.stdout:
+            with log.open("a", encoding="utf-8") as errors:
+                errors.write(result.stdout)
         raise ValueError(f"command failed ({result.returncode}); see {log}")
     if output:
         output.write_text(result.stdout, encoding="utf-8")
@@ -230,29 +265,129 @@ def verify_layouts(original: str, generated: str,
     return len(selected)
 
 
+# Each isolated unit also includes the compiler or SDK prerequisites. Only
+# these API families belong to the provider that brought that unit in.
+PROVIDER_PREFIXES = {
+    "DHCPServer": ("Dhcp",),
+    "ODBC": ("SQL", "ODBC"),
+    "MediaFoundation": ("MF", "CreatePropertyStore"),
+    "TraceData": ("Tdh",),
+    "JavaScriptRuntime": ("Js",),
+    "RightsManagement": ("DRM",),
+    "DirectoryService": ("Ds",),
+    "XmlLite": ("CreateXml",),
+    "UIAutomation": (
+        "Uia", "DockPattern_", "ExpandCollapsePattern_", "GridPattern_", "InvokePattern_",
+        "ItemContainerPattern_", "LegacyIAccessiblePattern_", "MultipleViewPattern_",
+        "RangeValuePattern_", "ScrollItemPattern_", "ScrollPattern_",
+        "SelectionItemPattern_", "SynchronizedInputPattern_", "TextPattern_",
+        "TextRange_", "TogglePattern_", "TransformPattern_", "ValuePattern_",
+        "VirtualizedItemPattern_", "WindowPattern_",
+    ),
+    "WinInet": (
+        "AppCache", "UrlCache", "Internet", "Http", "FindFirstUrlCache", "FindNextUrlCache",
+        "FindCloseUrlCache", "CreateUrlCache", "CommitUrlCache", "DeleteUrlCache",
+        "GetUrlCache", "SetUrlCache", "RetrieveUrlCache", "UnlockUrlCache",
+        "FreeUrlCache", "IncrementUrlCache",
+    ),
+    "RoutingTable": ("Rtm",),
+    "WinSNMP": ("Snmp",),
+    "AudioCompression": ("acm",),
+    "CloudFiles": ("Cf",),
+    "PeerDistribution": ("PeerDist",),
+    "InteractionContext": (
+        "CreateInteractionContext", "DestroyInteractionContext",
+        "RegisterOutputCallbackInteractionContext", "ProcessInertiaInteractionContext",
+        "BufferPointerPacketsInteractionContext",
+        "ProcessBufferedPacketsInteractionContext",
+        "ProcessPointerFramesInteractionContext", "SetInteraction", "GetInteraction",
+        "AddPointer", "RemovePointer", "StopInteraction",
+    ),
+    "DistributedRouting": ("Drt",),
+    "ProjectedFileSystem": ("Prj",),
+    "ISCSI": (
+        "AddIScsi", "RemoveIScsi", "GetIScsi", "ReportIScsi", "ReportActiveIScsi",
+        "SetIScsi", "SendScsi", "SetupPersistentIScsi", "LoginIScsi", "LogoutIScsi",
+        "RefreshIScsi", "AddISNS", "RemoveISNS", "RefreshISNS", "SetISNS",
+    ),
+    "ClusterResources": (
+        "ResUtil", "ClusWorker", "ClusAddCluster", "ClusRemoveCluster", "ClusGetCluster",
+        "ClusterReg", "OpenClusterCryptProvider", "CloseClusterCryptProvider",
+        "ClusterEncrypt", "ClusterDecrypt",
+    ),
+    "VideoForWindows": (
+        "AVI", "DrawDib", "EditStream", "ICClose", "ICCompress", "ICDecompress", "ICDraw",
+        "ICGet", "ICImage", "ICInfo", "ICInstall", "ICLocate", "ICOpen", "ICRemove",
+        "ICSendMessage", "MCIWnd", "capCreate", "capGet",
+    ),
+    "Fax": ("Fax",),
+    "WindowsErrorReporting": ("Wer",),
+    "Magnification": ("Mag",),
+    "WindowsSQLite": ("sqlite3_",),
+    "ICU": ("u", "UCNV_"),
+    "WebServices": ("Ws",),
+}
+
+
+# These function bodies are SDK inline wrappers. Their callers link to other
+# routines. Keep them out of the external prototypes for these DLLs.
+PROVIDER_INLINE_ROUTINES = {
+    "ClusterResources": {"ResUtilGetMultiSzValue"},
+    "VideoForWindows": {"ICDecompressEx", "ICDecompressExBegin",
+                        "ICDecompressExQuery", "ICDrawSuggestFormat"},
+}
+
+
+# The SDK uses an empty C parameter list for these no-argument C++ exports.
+# Authenticate every redeclaration against the target SDK before using (void).
+CPP_NOARG_PROVIDERS = {
+    "DXGI": {"DXGIDeclareAdapterRemovalSupport": "HRESULT WINAPI"},
+    "ODBC": {"ODBCGetTryWaitValue": "DWORD WINAPI"},
+    "MediaFoundation": {
+        "MFGetSystemTime": "MFTIME WINAPI", "MFLockPlatform": "HRESULT WINAPI",
+        "MFShutdown": "HRESULT WINAPI", "MFUnlockDXGIDeviceManager": "HRESULT WINAPI",
+        "MFUnlockPlatform": "HRESULT WINAPI", "MFUnregisterPlatformFromMMCSS": "HRESULT WINAPI",
+    },
+    "RightsManagement": {"DRMRepair": "HRESULT WINAPI"},
+    "WinInet": {
+        "InternetClearAllPerSiteCookieDecisions": "BOOL WINAPI",
+        "UrlCacheReloadSettings": "DWORD WINAPI", "UrlCacheServer": "DWORD WINAPI",
+    },
+    "UIAutomation": {"UiaClientsAreListening": "BOOL WINAPI", "UiaDisconnectAllProviders": "HRESULT WINAPI"},
+    "ISCSI": {"SetupPersistentIScsiDevices": "ISDSC_STATUS WINAPI",
+              "SetupPersistentIScsiVolumes": "ISDSC_STATUS WINAPI"},
+    "WindowsErrorReporting": {
+        "WerUnregisterAppLocalDump": "HRESULT WINAPI", "WerStorePurge": "HRESULT __cdecl",
+    },
+    "Magnification": {"MagInitialize": "BOOL WINAPI", "MagUninitialize": "BOOL WINAPI"},
+}
+
+
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
                      metadata: dict | None = None, convention: str = "") -> dict:
     """Validate and select a whole provider before it can enter the merge."""
     bridge_commands = []
-    if name == "DXGI":
-        # The SDK writes () for this documented no-argument C++ API. In C
-        # that spelling has no prototype. Authenticate the complete C++ type
-        # before supplying its compatible C (void) redeclaration.
+    noargs = CPP_NOARG_PROVIDERS.get(name)
+    if noargs:
         original = source.read_text(encoding="utf-8")
-        proof = directory / "DXGI-noargs.cpp"
-        proof.write_text(original + '\nstatic_assert(__is_same(\n'
-                         '    decltype(&DXGIDeclareAdapterRemovalSupport),\n'
-                         '    HRESULT (WINAPI *)(void)));\n', encoding="utf-8")
+        proof = directory / (name + "-noargs.cpp")
+        checks = "".join(f"typedef {spec} neverd_{symbol}_prototype(void);\n"
+                         f"static_assert(__is_same(decltype(&{symbol}), "
+                         f"neverd_{symbol}_prototype *));\n"
+                         for symbol, spec in noargs.items())
+        proof.write_text(original + "\n" + checks, encoding="utf-8")
         invocation = arguments + ["-x", "c++", "-std=c++17", "-fsyntax-only", str(proof)]
-        run(invocation, directory / "DXGI-noargs.log")
-        source.write_text(original + '\nHRESULT WINAPI DXGIDeclareAdapterRemovalSupport(void);\n',
-                          encoding="utf-8")
+        run(invocation, directory / (name + "-noargs.log"))
+        declarations = "".join(f"{spec} {symbol}(void);\n"
+                               for symbol, spec in noargs.items())
+        source.write_text(original + "\n" + declarations, encoding="utf-8")
         bridge_commands.append(invocation)
-        metadata = dict(metadata or {}, cpp_parameter_bridge={
-            "function": "DXGIDeclareAdapterRemovalSupport",
-            "source": str(proof), "sha256": wdk.digest(proof),
-            "documentation": "https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport"})
+        evidence = {"functions": list(noargs), "source": str(proof), "sha256": wdk.digest(proof)}
+        if name == "DXGI":
+            evidence.update(function="DXGIDeclareAdapterRemovalSupport",
+                            documentation="https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport")
+        metadata = dict(metadata or {}, cpp_parameter_bridge=evidence)
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
@@ -268,6 +403,13 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
     commands = [command, *bridge_commands]
+    if name in PROVIDER_PREFIXES:
+        prefixes = PROVIDER_PREFIXES[name]
+        prototypes = tuple(sorted(symbol for symbol in parsed["prototypes"]
+                                  if symbol.startswith(prefixes) and
+                                  symbol not in PROVIDER_INLINE_ROUTINES.get(name, ())))
+        if not prototypes:
+            raise ValueError(f"official headers declare no {name} functions")
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)

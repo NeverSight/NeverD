@@ -2343,6 +2343,19 @@ TEST(TypeParse, ReportsAProblemOnceInATypedefOfARecord) {
   EXPECT_EQ(Result.Problems[1].Message, "'HANDLE' names no type");
 }
 
+TEST(TypeParse, FixedEnumDeclarationSurvivesTheTypeInventoryRoundTrip) {
+  TypeLibrary Original(DataModel::LLP64);
+  ASSERT_TRUE(parseCTypes("typedef enum {} PropertyId;", Original).ok());
+  TypeLibrary Recovered(DataModel::LLP64);
+  const auto Result = parseCTypes(renderTypes(Original, {}, {}), Recovered);
+  ASSERT_TRUE(Result.ok());
+  EXPECT_EQ(Result.Types, (std::vector<std::string>{"PropertyId"}));
+  const auto *Type = Recovered.find("PropertyId");
+  ASSERT_TRUE(Type && Type->Enum);
+  EXPECT_EQ(Type->Enum->Underlying, Builtin::Int);
+  EXPECT_TRUE(Type->Enum->Values.empty());
+}
+
 TEST(TypeParse, ReadsCpp) {
   ParseOptions Options;
   Options.Lang = Language::Cpp;

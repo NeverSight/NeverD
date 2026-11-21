@@ -17,6 +17,21 @@
 
 namespace neverd {
 
+/// The second carrier of a proven integer pair. AAPCS64 lists X1 in its
+/// result bank without treating every scalar return as a read of X1.
+inline uint64_t secondIntegerResultRegister(const TargetRegInfo &TRI) {
+  return TRI.IntReturnRegs.size() > 1 ? TRI.IntReturnRegs[1]
+                                      : TRI.IntReturnReg2;
+}
+
+inline bool isWholeIntegerReturnPair(llvm::ArrayRef<MedReturnReg> Fields,
+                                     const TargetRegInfo &TRI) {
+  const uint64_t Second = secondIntegerResultRegister(TRI);
+  return Second && Fields.size() == 2 && !Fields[0].IsFP && !Fields[1].IsFP &&
+         Fields[0].RegOff == TRI.IntReturnReg && Fields[1].RegOff == Second &&
+         Fields[0].Size == TRI.PointerSize && Fields[1].Size == TRI.PointerSize;
+}
+
 /// The whole register's join supplies an aggregate return field. Narrow
 /// read views may coexist in any order, but do not replace the other bytes.
 /// The caller checks the field width and incoming definitions separately.
