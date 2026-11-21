@@ -818,10 +818,14 @@ LocalTypesDebugContext::LocalTypesDebugContext(
       Bind(*WindowsEntries.DllUnload, "DllUnload(void)");
     }
   }
-  const auto BindCOMExport = [&](std::optional<va_t> Entry,
-                                 llvm::StringRef Name) {
-    if (!Entry || !Image)
-      return;
+  const bool LoaderEntry =
+      Image && !this->EntryDeclaration.empty() &&
+      (Image->Arch == Arch::X86 || Image->Arch == Arch::X64 ||
+       Image->Arch == Arch::AArch64) &&
+      Image->isFunctionEntryCandidateAt(Image->Entry) &&
+      !Image->functionHasBytePatch(Image->Entry);
+  if (Image && (LoaderEntry || WindowsEntries.DllRegisterServer ||
+                WindowsEntries.DllUnregisterServer)) {
     const auto Provider =
         Image->Arch == Arch::X86   ? types::HeaderLibrary::WindowsUserX86
         : Image->Arch == Arch::X64 ? types::HeaderLibrary::WindowsUserX64
@@ -829,24 +833,33 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     const auto *Header = llvm::is_contained(this->Headers, Provider)
                              ? types::headerLibrary(Provider)
                              : nullptr;
-    if (!Header)
-      return;
-    if (auto Function = Header->prototypes().lookup(Name)) {
-      BindSignature(*Entry, Provider, *Header, std::move(Function), Name);
-      return;
+    if (Header) {
+      const auto BindDeclaration = [&](va_t Entry,
+                                       llvm::StringRef Declaration) {
+        const auto Read = types::parseFunctionDeclaration(Declaration, *Header);
+        if (Read.ok())
+          BindSignature(Entry, Provider, *Header, Read.Function, Read.Name);
+      };
+      const auto BindCOMExport = [&](std::optional<va_t> Entry,
+                                     llvm::StringRef Name) {
+        if (!Entry)
+          return;
+        if (auto Function = Header->prototypes().lookup(Name)) {
+          BindSignature(*Entry, Provider, *Header, std::move(Function), Name);
+          return;
+        }
+        // olectl.h specifies STDAPI and no parameters for both callbacks.
+        const auto Prefix =
+            Image->Arch == Arch::X86 ? "HRESULT __stdcall " : "HRESULT ";
+        BindDeclaration(*Entry, Prefix + Name.str() + "(void)");
+      };
+      BindCOMExport(WindowsEntries.DllRegisterServer, "DllRegisterServer");
+      BindCOMExport(WindowsEntries.DllUnregisterServer, "DllUnregisterServer");
+      // The PE loader calls the optional entry itself, whatever its name.
+      if (LoaderEntry)
+        BindDeclaration(Image->Entry, this->EntryDeclaration);
     }
-    // olectl.h specifies STDAPI and no parameters for both self-registration
-    // callbacks. Older bundled user headers provide HRESULT without these
-    // declarations. Resolve the published contract in that target's types.
-    const auto Prefix =
-        Image->Arch == Arch::X86 ? "HRESULT __stdcall " : "HRESULT ";
-    auto Read = types::parseFunctionDeclaration(Prefix + Name.str() + "(void)",
-                                                *Header);
-    if (Read.ok())
-      BindSignature(*Entry, Provider, *Header, Read.Function, Read.Name);
-  };
-  BindCOMExport(WindowsEntries.DllRegisterServer, "DllRegisterServer");
-  BindCOMExport(WindowsEntries.DllUnregisterServer, "DllUnregisterServer");
+  }
   refreshBoundFunctionEntries();
 }
 
