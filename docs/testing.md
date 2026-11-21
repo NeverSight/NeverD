@@ -20769,6 +20769,9 @@ function there, `main.g` makes no call and stores twice, and its C holds no
 unknown value.
 `GoAssembly.ADuffsDeviceEntersWithZeroInX15` lifts a
 `runtime.duffzero` that stores X15 twice: its C stores zero and traps nowhere.
+`GoSyscall.AnOrrMovedNumberBoundsTheArguments` lifts an arm64
+`runtime.osyield` that sets its number with `orr x8, xzr, #0x7c` before `svc
+#0`: sched_yield reads no argument, and the routine takes none.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
 that jumps to its own label, which another function calls: the jump is no
 call.

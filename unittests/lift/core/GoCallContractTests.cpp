@@ -31,6 +31,7 @@
 #include "neverd/pipeline/Pipeline.h"
 
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -1707,6 +1708,38 @@ TEST(GoAssembly, ABIInternalAssemblyEntersWithZeroInX15) {
   const std::string Text = highCBody(R, T.Img, "main_clr");
   ASSERT_FALSE(Text.empty());
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoSyscall, AnOrrMovedNumberBoundsTheArguments) {
+  // Go's assembler moves a bitmask constant with ORR: `runtime.osyield` sets
+  // its system call number with `orr x8, xzr, #0x7c`, for which Capstone names
+  // no MOV alias, MOVZ being able to encode the value.  Lifted as an OR of two
+  // operands, the number was no constant the block set, so sched_yield read
+  // X0-X5 and every caller passed six unknown arguments.
+  //   runtime.osyield: orr x8, xzr, #0x7c; svc #0; ret
+  constexpr va_t F = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.Img.ELFMetadata.emplace();
+  T.Img.ELFMetadata->OSABI = llvm::ELF::ELFOSABI_NONE;
+  T.writeText(F, words({0xB27E13E8, 0xD4000001, 0xD65F03C0}));
+  Symbol Function = Symbol::makeFunc(F);
+  Function.Name = "runtime.osyield";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.GoAssembly = {{F, F + 0x10}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_TRUE(It->Params.empty()) << It->Params.size();
 }
 
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {

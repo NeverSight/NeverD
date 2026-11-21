@@ -14184,7 +14184,11 @@ reads no register either. A routine that makes the call then takes none of
 them at its entry: read whole, R8:R10 and R9 gave Go's `runtime.exit`
 every System V position up to R9 (`runtime_exit(0, 0, 0, 0, 0, 0, 2)`), and
 Go's stack-ABI routines no stack-only reading. A number the table does not
-list keeps every argument register.
+list keeps every argument register. An OR of two constants sets the number
+too (`blockRegisterConstant`): arm64's `orr x8, xzr, #0x7c`, which Go's
+assembler emits for a bitmask constant MOVZ could also encode and for which
+Capstone names no MOV alias, lifts as an OR of the zero register and the
+immediate, and `runtime.osyield` took X0-X5 while it set no constant.
 
 `ir/FloatConversion.h` owns the result policy for scalar float-to-integer
 operations: saturation for the non-x86 path and x86 indefinite results for
