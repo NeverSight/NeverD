@@ -18276,6 +18276,12 @@ reloads the next GOT binding after the first callback changes it. Its n32
 runtime address sets the pointer's sign bit. The n32 CPIC samples also link
 their code and GOT above 2 GiB before moving them. Both the default and
 unoptimized LLVM source routes exercise the explicit n32 word extension.
+Two more fixtures save the link only on the stack and pass the first opaque
+result unchanged to the next import on an equality edge. One compares it
+with zero and forwards in the branch delay slot. The other compares with a
+saved parameter and forwards in the taken block. The harness runs both paths
+in the original and rebuilt binaries and checks the second import's arguments
+and the return value, including n32 inputs that differ only above bit 31.
 The private-frame tests
 also vary whether a loop argument acquires a stack address at entry or on
 its backedge, and whether a native call can observe an argument write on any

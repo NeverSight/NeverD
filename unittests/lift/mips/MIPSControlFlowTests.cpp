@@ -23,6 +23,7 @@
 #include "llvm/Support/Error.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 using namespace neverd;
@@ -515,6 +516,107 @@ TEST(MIPSReturnTargets, UnboundResultReachesTheNextCallUntilOverwritten) {
       else
         EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
                      LowToMedConversionError);
+    }
+}
+
+TEST(MIPSReturnTargets, OnlyTheEqualityArmCanForwardAnOpaqueResult) {
+  constexpr uint32_t SaveInput = 0x00808025;  // or s0,a0,zero
+  constexpr uint32_t SetLiteral = 0x640c0025; // daddiu t0,zero,37
+  constexpr uint32_t Forward = 0x00402025;    // or a0,v0,zero
+  struct Case {
+    const char *Name;
+    bool Proven;
+    uint32_t Before = 0, After = 0; // writes either side of the producer
+    unsigned LHS = 2, RHS = 0;
+    bool BEQ = false, CallOnTaken = false, Bypass = false;
+    uint32_t CallSlot = 0;
+    std::optional<uint32_t> ThirdCallSlot;
+  };
+  const Case Cases[] = {
+      {.Name = "zero", .Proven = true},
+      {.Name = "saved input",
+       .Proven = true,
+       .Before = SaveInput,
+       .LHS = 16,
+       .RHS = 2,
+       .BEQ = true,
+       .CallOnTaken = true},
+      {.Name = "fresh literal", .Proven = true, .After = SetLiteral, .RHS = 12},
+      {.Name = "stale literal",
+       .Proven = false,
+       .Before = SetLiteral,
+       .RHS = 12},
+      {.Name = "unequal arm", .Proven = false, .BEQ = true},
+      {.Name = "volatile input", .Proven = false, .RHS = 4},
+      {.Name = "saved too late",
+       .Proven = false,
+       .After = SaveInput,
+       .RHS = 16},
+      {.Name = "frame address",
+       .Proven = false,
+       .Before = 0x03a08025,
+       .RHS = 16},
+      {.Name = "low word",
+       .Proven = false,
+       .After = 0x00026000,
+       .LHS = 12}, // sll t0,v0,0
+      {.Name = "bypass edge", .Proven = false, .Bypass = true},
+      {.Name = "frame in call slot",
+       .Proven = false,
+       .CallSlot = 0x03a02025}, // or a0,sp,zero
+      {.Name = "another frame argument",
+       .Proven = false,
+       .CallSlot = 0x03a02825},
+      {.Name = "another forwarded argument",
+       .Proven = true,
+       .CallSlot = 0x00402825},
+      {.Name = "later unguarded use", .Proven = false, .ThirdCallSlot = 0},
+      {.Name = "later overwrite", .Proven = true, .ThirdCallSlot = 0x64040013},
+  };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << C.Name);
+      std::vector<uint32_t> Code{
+          0x67bdffe0, 0xffbf0018, 0xffb00010,           // save ra and s0
+          C.Before,   0x0320f809, 0,          C.After}; // first jalr t9
+      const unsigned Bypass = Code.size();
+      if (C.Bypass)
+        Code.insert(Code.end(), {0x14e00000, Forward}); // bnez a3,call
+      const unsigned Compare = Code.size();
+      Code.push_back(((C.BEQ ? 4u : 5u) << 26) | (C.LHS << 21) | (C.RHS << 16));
+      Code.push_back(C.CallOnTaken ? 0 : Forward);
+      if (C.CallOnTaken)
+        Code.insert(Code.end(), {0x10000000, 0}); // other arm skips the call
+      const unsigned CallBlock = Code.size();
+      if (C.CallOnTaken)
+        Code.push_back(Forward);
+      const auto Call = [&](uint32_t Slot) {
+        Code.insert(Code.end(),
+                    {0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+                     0x0320f809, Slot});
+      };
+      Call(C.CallSlot);
+      if (C.ThirdCallSlot)
+        Call(*C.ThirdCallSlot);
+      const unsigned Exit = Code.size();
+      Code[Compare] |= (C.CallOnTaken ? CallBlock : Exit) - Compare - 1;
+      if (C.CallOnTaken)
+        Code[Compare + 2] |= Exit - (Compare + 2) - 1;
+      if (C.Bypass)
+        Code[Bypass] |= CallBlock - Bypass - 1;
+      Code.insert(Code.end(), {0xdfb00010, 0xdfbf0018, 0x03e00008, 0x67bd0020});
+      const auto Low = build(image(Code, A));
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Low, A, BinaryFormat::ELF);
+        EXPECT_TRUE(C.Proven);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_FALSE(C.Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
     }
 }
 
