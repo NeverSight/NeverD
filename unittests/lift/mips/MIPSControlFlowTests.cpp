@@ -13,6 +13,7 @@
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
+#include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/NdOpEmulator.h"
@@ -585,6 +586,56 @@ TEST(MIPSRecordSourceEntry, StackResultTracksARecordCopiedInAndOutOfTheFrame) {
                      LowToMedConversionError);
       else
         EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+    }
+  }
+}
+
+TEST(MIPSRecordSourceEntry,
+     WordGuardPreservesOutgoingStackBytesAtIndirectCall) {
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    SourceCallTypeHint Hint;
+    Hint.Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Hint.Signature.ReturnType = Record;
+    Hint.Signature.Parameters.assign(7, {"word", NdType::makeInt(8, false)});
+    Hint.Signature.Parameters.push_back({"bytes", Record});
+    ASSERT_TRUE(
+        mips::assignRecordSourceABI(Hint.Signature, A, BinaryFormat::ELF));
+    for (bool WholeWord : {false, true}) {
+      // After the two outgoing stores GCC uses word ADDIU to select the
+      // result buffer. The JALR delay slot writes only the record's final byte.
+      auto Image =
+          image({0x67bdffc0, WholeWord ? 0xffa00000u : 0xa3a00000u, 0xffa00008,
+                 0x27a40020, 0x0180f809, 0xa3a00010, 0x03e00008, 0x67bd0040},
+                A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      std::optional<SourceCallOccurrenceKey> Site;
+      LowOp *Check = nullptr;
+      for (auto &Block : Low.Blocks)
+        for (auto &Op : Block.Ops) {
+          if (Op.Opcode == NdOp::INDIR_CALL)
+            Site = sourceCallOccurrenceKey(Op);
+          if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 2 &&
+              Op.Inputs[0].isConst() &&
+              Op.Inputs[0].Offset == uint64_t(Intrinsic::MIPSRequireWord))
+            Check = &Op;
+        }
+      ASSERT_TRUE(Site);
+      ASSERT_NE(Check, nullptr);
+      std::string Error;
+      EXPECT_EQ(sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error),
+                WholeWord)
+          << Error;
+      Check->Inputs[1].Size = 4;
+      EXPECT_FALSE(
+          sourceCallStackArgumentsDefined(Low, Hint, *Site, A, 0, Error));
     }
   }
 }
