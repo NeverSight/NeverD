@@ -1430,6 +1430,119 @@ TEST(SymMBAResidue, LoweredWindowCarriersKeepTheirCopiedBits) {
   }
 }
 
+TEST(SymMBAResidue, FunnelWindowsOnlyDiscardUnobservedSourceBits) {
+  constexpr unsigned Width = 7, Bits = 3;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  const auto Common = Ctx.mkRor(X, Ctx.mkConst(Width, Width - 2));
+  enum Variation { Exact, CrossSeam, Overlap, SignedRight, VariableRight };
+  MBAOptions Opt;
+  Opt.MaxWork = 65536;
+  for (const auto Change :
+       {Exact, CrossSeam, Overlap, SignedRight, VariableRight}) {
+    SCOPED_TRACE(Change);
+    llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Width, 4)};
+    llvm::SmallVector<SymRef, 32> Direct{Factors.front()};
+    for (unsigned I = 0; I < 23; ++I) {
+      const bool Upper = I % 2 == 0;
+      const unsigned Cut = 3 + I % 2;
+      const unsigned At =
+          Upper ? Cut - (I == 8 && Change == CrossSeam) : Cut - Bits;
+      const auto Rot =
+          Ctx.mkRor(X, Ctx.mkConst(Width, (Width - 2 + Cut - At) % Width));
+      const auto Other = Ctx.mkAdd(Y, Ctx.mkConst(Width, I));
+      const auto Left = Ctx.mkShl(Upper ? Rot : Other, Ctx.mkConst(Width, Cut));
+      const auto Source = Upper ? Other : Rot;
+      const auto Shift =
+          I == 8 && Change == VariableRight
+              ? Y
+              : Ctx.mkConst(Width, Width - Cut - (I == 8 && Change == Overlap));
+      const auto Right = I == 8 && Change == SignedRight
+                             ? Ctx.mkAShr(Source, Shift)
+                             : Ctx.mkLShr(Source, Shift);
+      const auto Pair = I % 3 == 0   ? Ctx.mkAdd(Left, Right)
+                        : I % 3 == 1 ? Ctx.mkOr(Left, Right)
+                                     : Ctx.mkXor(Left, Right);
+      const auto Field = Ctx.mkExtract(Pair, At, Bits);
+      const auto Word =
+          I % 2 ? Ctx.mkZExt(Field, Width) : Ctx.mkSExt(Field, Width);
+      auto Factor = [&](SymRef V) {
+        return Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                         Ctx.mkMul(Ctx.mkConst(Width, 4), V));
+      };
+      Factors.push_back(Factor(Word));
+      Direct.push_back(Factor(Common));
+    }
+    const auto Input = Ctx.mkMul(Factors);
+    const auto R = simplifyMBADeep(Ctx, Input, Opt);
+    EXPECT_LT(R.Work, Opt.MaxWork);
+    if (Change == Exact)
+      EXPECT_EQ(R.SizeAfter,
+                simplifyMBADeep(Ctx, Ctx.mkMul(Direct), Opt).SizeAfter);
+    SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr),
+        Clean(Ctx, Ctx.mkMul(Direct));
+    bool SawOtherBit = false;
+    for (uint64_t A = 0; A < (1u << Width); ++A)
+      for (uint64_t B = 0; B < (1u << Width); ++B) {
+        const std::array<uint64_t, 2> Args{A, B};
+        const auto Expected = Before.evalU64(Args);
+        // The direct product reads only X, so give it that binding.
+        SawOtherBit |= Expected != Clean.evalU64({A});
+        ASSERT_EQ(After.evalU64(Args), Expected);
+      }
+    EXPECT_EQ(SawOtherBit, Change != Exact);
+  }
+}
+
+TEST(SymMBAResidue, DistributedFunnelTermsKeepLiveBitsAndCarries) {
+  constexpr unsigned Width = 7, Bits = 3;
+  SymContext Ctx;
+  const auto X = Ctx.mkVar("x", Width), Y = Ctx.mkVar("y", Width);
+  for (unsigned Change : {0u, 1u, 2u}) {
+    SCOPED_TRACE(Change);
+    llvm::SmallVector<SymRef, 32> Factors{Ctx.mkConst(Width, 4)},
+        Direct{Factors.front()};
+    for (unsigned I = 0; I < 19; ++I) {
+      const unsigned At = 1 + I % 2, End = At + Bits;
+      const auto Rot = Ctx.mkRol(X, Ctx.mkConst(Width, At + 1));
+      const auto Data = I % 2 ? Ctx.mkAShr(Rot, Ctx.mkOne(Width))
+                              : Ctx.mkLShr(Rot, Ctx.mkOne(Width));
+      const bool Changed = I == 9;
+      const auto Scale =
+          Ctx.mkConst(Width, 1u << (End - (Changed && Change == 1)));
+      const auto Offset =
+          Ctx.mkConst(Width, (3u << End) + (Changed && Change == 2));
+      const auto Other = Ctx.mkAdd(Offset, Ctx.mkMul(Scale, Y));
+      const auto Join = I % 3 == 0   ? Ctx.mkAdd(Data, Other)
+                        : I % 3 == 1 ? Ctx.mkXor(Data, Other)
+                                     : Ctx.mkOr(Data, Other);
+      const auto Field = Ctx.mkZExt(Ctx.mkExtract(Join, At, Bits), Width);
+      auto Factor = [&](SymRef V) {
+        return Ctx.mkAdd(Ctx.mkConst(Width, 2 * I + 1),
+                         Ctx.mkMul(Ctx.mkConst(Width, 4), V));
+      };
+      Factors.push_back(Factor(Field));
+      Direct.push_back(Factor(X));
+    }
+    const auto Input = Ctx.mkMul(Factors), Clean = Ctx.mkMul(Direct);
+    MBAOptions Opt;
+    Opt.MaxWork = 65536;
+    const auto R = simplifyMBADeep(Ctx, Input, Opt);
+    if (Change == 0)
+      EXPECT_EQ(R.SizeAfter, simplifyMBADeep(Ctx, Clean, Opt).SizeAfter);
+    SymEvalPlan Before(Ctx, Input), After(Ctx, R.Expr), Unchanged(Ctx, Clean);
+    bool SawDifference = false;
+    for (uint64_t A = 0; A < (1u << Width); ++A)
+      for (uint64_t B = 0; B < (1u << Width); ++B) {
+        const std::array<uint64_t, 2> Args{A, B};
+        const auto Expected = Before.evalU64(Args);
+        ASSERT_EQ(After.evalU64(Args), Expected);
+        SawDifference |= Expected != Unchanged.evalU64(Args);
+      }
+    EXPECT_EQ(SawDifference, Change != 0);
+  }
+}
+
 TEST(SymMBAResidue, SignedScalarAffineProductsRetainEveryObservedLimb) {
   constexpr unsigned Width = 141;
   SymContext Ctx;

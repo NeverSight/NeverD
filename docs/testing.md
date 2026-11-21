@@ -4519,6 +4519,14 @@ the original machine code are checked against the same full-width oracle.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.
+Use `--family funnel-window --count 18` for 144 products of 107 to 321
+factors. The sampled bits come from two independently shifted words joined by
+OR, XOR or addition. Half the products read one bit from the other word.
+The 197-factor x64 source fixture exercises both C renderers through the CLI
+and the workbench worker. Constructor tests exhaust both six-bit source words
+across overlapping, wrapping and multi-factor windows. The byte-domain guard
+tests also check overflow and inexact shifts when deriving signed ranges from
+an arithmetic right shift.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent

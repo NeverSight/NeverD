@@ -156,3 +156,50 @@ TEST(SymExpr, WideningAQuotientSliceRetainsItsProvedZeroPadding) {
       EXPECT_EQ(C.eval(Truncated, {V}), V.trunc(Bits).zext(Width));
   }
 }
+
+TEST(SymExpr, TwoWordFunnelSlicesMatchOriginalBitOperations) {
+  constexpr unsigned W = 6, Cut = 3, Bits = 3;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  const auto Count = llvm::APInt::getOneBitSet(73, 67) + 3;
+  const auto TurnedX = C.mkRor(X, C.mkConst(Count));
+  for (unsigned Form = 0; Form != 3; ++Form) {
+    const auto High =
+        C.mkShl(Form == 2 ? C.mkMul(TurnedX, Y) : TurnedX, C.mkConst(W, Cut));
+    const unsigned Right = W - Cut - (Form == 1);
+    const auto Low = C.mkLShr(Y, C.mkConst(W, Right));
+    for (const auto Op : {SymOp::Or, SymOp::Xor, SymOp::Add}) {
+      const auto Join = Op == SymOp::Or    ? C.mkOr(High, Low)
+                        : Op == SymOp::Xor ? C.mkXor(High, Low)
+                                           : C.mkAdd(High, Low);
+      if (Form == 0) {
+        EXPECT_EQ(C.mkExtract(Join, 0, Bits), C.mkExtract(Y, Right, Bits));
+        EXPECT_EQ(
+            C.mkExtract(Join, Cut, Bits),
+            C.mkExtract(C.mkRor(X, C.mkConst(W, Count.urem(W))), 0, Bits));
+      }
+      for (unsigned Turn : {0u, 1u, W - 1}) {
+        const auto Packed = C.mkRol(Join, C.mkConst(W, Turn));
+        for (unsigned At = 0; At + Bits <= W; ++At) {
+          SCOPED_TRACE(::testing::Message() << Form << ',' << unsigned(Op)
+                                            << ',' << Turn << ',' << At);
+          SymEvalPlan Field(C, C.mkExtract(Packed, At, Bits));
+          for (unsigned A = 0; A < (1u << W); ++A) {
+            const auto Rot = llvm::APInt(W, A).rotr(Count.urem(W));
+            for (unsigned B = 0; B < (1u << W); ++B) {
+              const llvm::APInt Other(W, B);
+              const auto H = (Form == 2 ? Rot * Other : Rot).shl(Cut);
+              const auto L = Other.lshr(Right);
+              const auto Word = Op == SymOp::Or    ? H | L
+                                : Op == SymOp::Xor ? H ^ L
+                                                   : H + L;
+              const std::array<llvm::APInt, 2> Inputs{llvm::APInt(W, A), Other};
+              ASSERT_EQ(Field.eval(Inputs).getZExtValue(),
+                        Word.rotl(Turn).extractBitsAsZExtValue(Bits, At));
+            }
+          }
+        }
+      }
+    }
+  }
+}

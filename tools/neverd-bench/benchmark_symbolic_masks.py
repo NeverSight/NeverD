@@ -1441,6 +1441,59 @@ def shifted_window_corpus(width, count):
     return rows
 
 
+def funnel_window_corpus(width, count):
+    """Products sampling either side of a two-word funnel or one bit across its seam."""
+    axes = ("(x^y)", "((x+y)^(z&w))", "((x|u)^(y&v))")
+    positions = (0, width - 3, 1 + width // 4)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0xf312 + 77 * width + 1063 * case)
+        degree = (107, 167, 229, 293, 321, 191)[case % 6]
+        observed = min(width - 4, max(8, width // 3 + case % 3))
+        stride = (observed + 2) // (3 + case % 2)
+        factors = []
+        for i in range(degree):
+            axis = (i + case) % (2 + case % 2)
+            zeros = stride + i % 2
+            bits = observed - zeros
+            size = bits + i % 2
+            upper = (i + case) % 2 == 0
+            cut = rng.randrange(size + 2, width - size - 1)
+            if case % 18 >= 9 and i == degree // 2:
+                start = cut - 1 if upper else cut - bits + 1
+            elif upper:
+                start = rng.randrange(cut, width - size + 1)
+            else:
+                start = rng.randrange(cut - size + 1)
+            turn = (positions[axis] - (width - cut + start)) % width
+            selected = f"ror({axes[axis]},{turn})"
+            other = f"(({rng.randrange(1, 65000, 2)}+u*z)^(w+y*v))"
+            high, low = (selected, other) if upper else (other, selected)
+            join = ("+", "^", "|")[(case + i) % 3]
+            packed = f"(({high}<<{cut}){join}({low}>>{width - cut}))"
+            if i % 4 == 1:
+                dest = rng.randrange(width - size + 1)
+                packed = f"ror({packed},{(start - dest) % width})"
+                start = dest
+            field = f"extract({packed},{start},{size})"
+            if i % 3 == 0:
+                word = f"sext({field},{width})"
+            elif i % 3 == 1:
+                word = f"zext({field},{width})"
+            else:
+                word = f"concat(extract({other},{size},{width - size}),{field})"
+            if i % 3:
+                offset = rng.randrange(-21, 22) | 1
+                weight = rng.randrange(-9, 10) | 1
+                word = f"({offset}+({weight})*{word})"
+            offset = rng.randrange(-29, 30) | 1
+            weight = (rng.randrange(-15, 16) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        scale = 3 << (width - observed)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1712,7 +1765,8 @@ def main():
                  "residue-power", "residue-quotient", "residue-subgroup",
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
-                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window"),
+                 "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
+                 "funnel-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1734,6 +1788,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "funnel-window": (19, 24, 32, 64, 97, 193, 257, 513),
             "shifted-window": (17, 24, 32, 64, 97, 193, 257, 513),
             "rotating-window": (17, 24, 32, 64, 97, 193, 257, 513),
             "spliced-word": (17, 24, 32, 64, 97, 193, 257, 513),
@@ -1780,6 +1835,7 @@ def main():
                 "spliced-word": spliced_word_corpus,
                 "rotating-window": rotating_window_corpus,
                 "shifted-window": shifted_window_corpus,
+                "funnel-window": funnel_window_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]
