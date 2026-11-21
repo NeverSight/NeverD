@@ -100,7 +100,7 @@ TEST_F(X64Cr8WriteNotificationTest, RejectsUnsupportedBindingsAtomically) {
          request(
              R"("instructions":[4096],"event_delivery":true,"notify_cr8_writes":true)"),
          request(
-             R"("instructions":[4096],"paged_memory":true,"scheduled_events":true,"notify_cr8_writes":true)")}) {
+             R"("instructions":[4096],"paged_memory":true,"notify_cr8_writes":true)")}) {
       const char *Report = "old";
       EXPECT_EQ(neverd_x64_continuation_source_v1(Session, Bad.data(),
                                                   Bad.size(), LLVM, &Report),
@@ -111,7 +111,7 @@ TEST_F(X64Cr8WriteNotificationTest, RejectsUnsupportedBindingsAtomically) {
     }
 }
 
-const char Cr8NotificationProbes[] = R"C(
+const char Cr8NotificationProducer[] = R"C(
 /* Independent TPR oracle: import/read retain the byte, every completed write
  * replaces all eight bits. Peek tests coherence before selecting an event. */
 typedef struct {
@@ -142,13 +142,16 @@ static neverd_x64_state_v6 seed(void) {
     s.TR=(neverd_x64_segment){0,103,48,0x8b};
     s.STAR=0x0023001000000000ULL;return s;
 }
+#define EVENTS &shadows,&poll_budget,peek_event,accept_event,&events
+#define BAD(P,W,A,T) (events.polls!=(P)||events.writes!=(W)||events.acks!=(A)|| \
+                     events.tpr!=(T)||events.bad)
+)C";
+
+const char Cr8NotificationProbes[] = R"C(
 #define PREPARE() neverd_x64_state_v6 state=seed(); \
     neverd_x64_interruptibility_v1 shadows={0}; \
     uint64_t budget=1,poll_budget=8;producer events={0,0,0,0,0,0x3b,0}
-#define EVENTS &shadows,&poll_budget,peek_event,accept_event,&events
 #define RUN() neverd_x64_continue_events_v6(&state,&budget,EVENTS)
-#define BAD(P,W,A,T) (events.polls!=(P)||events.writes!=(W)||events.acks!=(A)|| \
-                     events.tpr!=(T)||events.bad)
 int proof_same_value_last_budget(void) {
     PREPARE();return RUN()!=9||budget||poll_budget!=7||state.PC!=0x1004||
         state.CR8!=3||BAD(1,1,0,0x30);
@@ -304,8 +307,8 @@ TEST_F(X64Cr8WriteNotificationTest, ProvesCompletionAndCallComposition) {
                       std::string("cr8-notification-") +
                           (LLVM ? "llvm-" : "high-") + Dispatch,
                       Source,
-                      std::string(Cr8NotificationProbes) +
-                          Cr8NotificationCallProbes,
+                      std::string(Cr8NotificationProducer) +
+                          Cr8NotificationProbes + Cr8NotificationCallProbes,
                       23, 0x4000, 4, /*CloseHelpers=*/true,
                       /*InlineEventControllers=*/true);
     }

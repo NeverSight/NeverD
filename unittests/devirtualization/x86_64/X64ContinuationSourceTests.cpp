@@ -2185,6 +2185,42 @@ TEST(X64Cr8WriteNotification, MetadataComesFromModeledWrites) {
   }
 }
 
+TEST(X64Cr8WriteNotification, PagedBindingAdmitsAuditedRegisterTransfers) {
+  std::vector<uint8_t> Code;
+  std::vector<uint64_t> Sites;
+  for (uint8_t Register = 0; Register < 16; ++Register)
+    for (const uint8_t Opcode : {0x20, 0x22}) {
+      Sites.push_back(0x1000 + Code.size());
+      Code.insert(Code.end(), {uint8_t(0x44 | (Register >> 3)), 0x0f, Opcode,
+                               uint8_t(0xc0 | (Register & 7))});
+    }
+  // A redundant REX.W is outside the lifter's arbitrary-flags certificate.
+  Sites.push_back(0x1000 + Code.size());
+  Code.insert(Code.end(), {0x4c, 0x0f, 0x22, 0xc0});
+  Sites.push_back(0x1000 + Code.size());
+  Code.insert(Code.end(), {0x0f, 0x22, 0xe0}); // MOV CR4,RAX.
+  const auto Image = image(Code);
+  X64ContinuationSourceOptions Options;
+  Options.Profile = X64ContinuationProfile::KernelEventsNoFaultV6;
+  Options.MXCSRMask = 0xffbf;
+  Options.PagingAddressBits = 48;
+  Options.PagedMemory = Options.ScheduledEvents = Options.NotifyCr8Writes =
+      true;
+  for (bool Debug : {false, true}) {
+    Options.PagedDebug = Debug;
+    auto Units = buildX64ContinuationSource(Image, Sites, Options);
+    ASSERT_TRUE(bool(Units)) << llvm::toString(Units.takeError());
+    ASSERT_EQ(Units->size(), Sites.size());
+    for (unsigned I = 0; I < Sites.size(); ++I) {
+      SCOPED_TRACE(Sites[I]);
+      const bool Audited = I < 32;
+      EXPECT_EQ((*Units)[I].RequiresNativeExecution, !Audited);
+      EXPECT_EQ((*Units)[I].WritesCr8, Audited && I % 2);
+      EXPECT_EQ((*Units)[I].UndefinedEffects.size(), Audited ? 6u : 0u);
+    }
+  }
+}
+
 TEST_F(X64ContinuationSourceTest, TaskPriorityRetainsInvalidWrites) {
   run({0x44, 0x0f, 0x20, 0xc0, 0x44, 0x0f, 0x22, 0xc1}, {0x1000, 0x1004}, R"C(
 int main(void) {

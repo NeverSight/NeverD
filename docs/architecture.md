@@ -22123,15 +22123,15 @@ constant initializer/validator instead of duplicating priority rules in Python.
 See the [local APIC contract](x86-local-apic.md).
 Its CR8 read/write methods and paired CPU/APIC import check preserve the
 distinction between restoration and an actual same-value write. The former
-retains TPR subpriority; the latter clears it. Privilege/fault handling and
-device wiring remain with the embedding. The successful-RAM scheduler can
-explicitly opt into CR8-write completion notifications. Instruction lowering
-records modeled writes while lowering the authoritative task-priority
-transition; the shared scheduler calls the producer bridge only on that
-instruction's successful exit, including same-value writes. This requires no
-re-decoding, default-source change or ordinary-case runtime check. The embedding
-supplies the bridge and coherent initial banks. Paged MOV CR8 and TPR aliases
-retain their previous boundaries. The fixed PPR tie policy retains TPR
+retains TPR subpriority; the latter clears it. V6 scheduled exports can opt
+into CR8-write completion notifications. Instruction lowering records modeled
+writes while applying the shared task-priority transition. In the paged
+domain its checked body raises #GP(0) before exposing any register or flag
+effect. The paged scheduler shares one completion receipt with budget
+accounting, preserving notification across post-commit debug delivery. The
+successful-RAM scheduler uses the modeled instruction's successful exit.
+The embedding supplies the bridge, coherent initial banks and TPR alias
+routing. The fixed PPR tie policy retains TPR
 subpriority as QEMU/KVM do, rather than inferring a
 model-specific choice for arbitrary hardware.
 
