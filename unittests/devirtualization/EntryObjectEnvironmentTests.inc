@@ -85,6 +85,46 @@ TEST_F(PEFixedImageTest, EntryLoadedObjectBindsAChangingMemoryPointer) {
   }
 }
 
+TEST_F(PEFixedImageTest, EntryLoadedObjectSurvivesAConditionalCall) {
+  // mov rax,[0x51000028]; mov rsi,rax; call rcx;
+  // mov [rsi+0x68],rdx; ret
+  const std::vector<uint8_t> Code = {0x48, 0xa1, 0x28, 0,    0,    0x51, 0,
+                                     0,    0,    0,    0x48, 0x89, 0xc6, 0xff,
+                                     0xd1, 0x48, 0x89, 0x56, 0x68, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = returningCallOptions(Base + 0x100d, Base + 0x1013);
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  O.ProveStoreFrameSeparation = true;
+  const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  ASSERT_TRUE(R.complete()) << R.Diagnostic;
+  ASSERT_EQ(R.ReturningCalls.size(), 1U);
+  auto Missing = O;
+  Missing.EntryFrameLoadedObjects.clear();
+  const auto Refused =
+      specializeBinaryInterpreter(*Loaded, Base + 0x1000, Missing);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
+TEST_F(PEFixedImageTest, EntryLoadedObjectForgetsOverwrittenPointerField) {
+  // mov [0x51000028],rdx; jmp next; mov rax,[0x51000028];
+  // mov [rax+0x68],rdx; ret
+  const std::vector<uint8_t> Code = {
+      0x48, 0x89, 0x14, 0x25, 0x28, 0, 0, 0x51, 0xeb, 0,    0x48, 0xa1, 0x28,
+      0,    0,    0x51, 0,    0,    0, 0, 0x48, 0x89, 0x50, 0x68, 0xc3};
+  auto Loaded = load(machineExitFixture(Code));
+  ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
+  auto O = entryObjectOptions();
+  O.EntryFrameExcludedObjects.clear();
+  O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
+  O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
+  const auto Refused = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
+  EXPECT_FALSE(Refused.complete());
+  EXPECT_TRUE(Refused.Residual.Blocks.empty());
+}
+
 std::vector<uint8_t> entryObjectCode() {
   return {0x48, 0x89, 0x64, 0x24, 0xf0, // mov [rsp-16],rsp
           0x48, 0x89, 0x4c, 0x24, 0xe8, // mov [rsp-24],rcx
