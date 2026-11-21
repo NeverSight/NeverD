@@ -70,6 +70,12 @@ def qmp(stream, command, **arguments):
             return reply['return']
 
 
+def read_words(stream, address, count):
+    text = qmp(stream, 'human-monitor-command',
+               **{'command-line': f'xp /{count}wx 0x{address:x}'})
+    return [int(word, 16) for word in re.findall(r'0x([0-9a-fA-F]{8})\b', text)]
+
+
 def run_machine(executable, rom):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -95,10 +101,14 @@ def run_machine(executable, rom):
                         qmp(stream, 'qmp_capabilities')
                         qmp(stream, 'cont')
                         while time.monotonic() < deadline:
-                            text = qmp(stream, 'human-monitor-command',
-                                       **{'command-line': 'xp /5wx 0x1000'})
-                            words = [int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{8})\b', text)]
-                            if len(words) == 5 and words[-1] == READY:
+                            if read_words(stream, 0x1010, 1) == [READY]:
+                                # A monitor dump reads words sequentially while
+                                # the guest runs. Observe completion first, then
+                                # freeze the VM before reading CP0's saved words.
+                                qmp(stream, 'stop')
+                                words = read_words(stream, 0x1000, 5)
+                                if len(words) != 5 or words[-1] != READY:
+                                    raise RuntimeError(f'incomplete register dump: {words}')
                                 return words[:-1]
                             time.sleep(0.01)
                         registers = qmp(stream, 'human-monitor-command',
