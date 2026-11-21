@@ -18,6 +18,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
@@ -611,11 +612,19 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
 
   // Reject structurally ineligible roots before they can delimit another
   // function's body. Every evidence source uses the image's same policy.
+  // A Go image's pclntab records every function of its Go code once its text
+  // base is proven (GoModuleInfo::FrameArguments), so code inside one begins
+  // none: `runtime.suspendG`'s jump table holds case labels that a scan for
+  // code pointers finds.
+  const auto InsideGoFunction = [&](va_t Addr) {
+    return goInsideRecordedFunction(Img, Addr);
+  };
   std::erase_if(Entries, [&](va_t Addr) {
-    return !Img.isFunctionEntryCandidateAt(Addr);
+    return !Img.isFunctionEntryCandidateAt(Addr) || InsideGoFunction(Addr);
   });
   llvm::erase_if(Results, [&](const auto &R) {
-    return !Img.isFunctionEntryCandidateAt(R.first);
+    return !Img.isFunctionEntryCandidateAt(R.first) ||
+           InsideGoFunction(R.first);
   });
 
   if (RegistrationPointerRoles)
@@ -1078,6 +1087,11 @@ FuncDetector::detectImpl(const BinaryImage &Img, Decoder &Dec,
       llvm::erase_if(
           Results, [&](const auto &R) { return Interior.count(R.first) != 0; });
   }
+
+  // No evidence found later begins a function inside a Go function either:
+  // the code-named targets above include a jump table's case labels.
+  llvm::erase_if(Results,
+                 [&](const auto &R) { return InsideGoFunction(R.first); });
 
   std::sort(Results.begin(), Results.end());
   func_detect_detail::checkCancellation(Cancellation);

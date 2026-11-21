@@ -50,6 +50,10 @@ struct Symbol;
 /// callee signatures for either source of call arguments, identically in
 /// selected-function recovery and cache warmup.
 bool needsCallSignatureRecovery(const CallArgumentConvention *Convention);
+/// Scalar call contracts from the image-wide inventory, including functions
+/// with no calls in the selection. A run without that inventory uses its own.
+const std::map<va_t, FixedIntegerCallArguments> &
+imageIntegerCallArguments(const PipelineResult &Result);
 namespace detail {
 class AbsoluteRelocationRootIndex;
 } // namespace detail

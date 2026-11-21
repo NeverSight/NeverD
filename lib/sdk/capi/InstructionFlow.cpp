@@ -372,9 +372,14 @@ InstructionFlowScratch::dataAccesses(const BinaryImage &Img, Decoder &Dec,
                                      const DecodedInsn &DI) {
   if ((Img.Arch == Arch::X86 || Img.Arch == Arch::X64) && Dec.detailEnabled() &&
       Dec.textEnabled() && DI.Raw && DI.Raw->detail) {
-    // These scalar families have no implicit memory operand. Their ordinary
-    // register/immediate forms may materialize addresses, but cannot read or
-    // write one. Do not generalize this to string, stack or system families.
+    // LEA computes an address without accessing memory.
+    if (DI.Id == X86_INS_LEA) {
+      Ops.clear();
+      return {};
+    }
+    // These scalar families access memory only through an explicit operand.
+    // A plain [SP/BP + displacement] has an unknown base when lifted as a
+    // single instruction. It cannot supply an image address to this scan.
     bool ExplicitMemoryOnly = false;
     switch (DI.Id) {
     case X86_INS_MOV:
@@ -419,9 +424,26 @@ InstructionFlowScratch::dataAccesses(const BinaryImage &Img, Decoder &Dec,
         X86.op_count <= std::size(X86.operands) &&
         llvm::all_of(llvm::ArrayRef(X86.operands, X86.op_count),
                      [](const cs_x86_op &Op) {
-                       return Op.type == X86_OP_REG || Op.type == X86_OP_IMM;
-                     }))
+                       if (Op.type != X86_OP_MEM)
+                         return Op.type == X86_OP_REG || Op.type == X86_OP_IMM;
+                       if (Op.mem.segment != X86_REG_INVALID ||
+                           Op.mem.index != X86_REG_INVALID)
+                         return false;
+                       switch (Op.mem.base) {
+                       case X86_REG_SP:
+                       case X86_REG_ESP:
+                       case X86_REG_RSP:
+                       case X86_REG_BP:
+                       case X86_REG_EBP:
+                       case X86_REG_RBP:
+                         return true;
+                       default:
+                         return false;
+                       }
+                     })) {
+      Ops.clear();
       return {};
+    }
   }
   return summarize(Img, Dec, DI).Refs;
 }
@@ -681,11 +703,11 @@ namespace {
 /// direct jumps reach from \p Entry, short of another function's entry in
 /// \p Entries, in address order.  32-bit ARM, whose jumps can change the
 /// instruction set, reads up to the first terminator instead.
-std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
-                              InstructionFlowScratch &Scratch, va_t Entry,
-                              llvm::ArrayRef<va_t> Entries,
-                              const std::function<bool()> &Stop,
-                              FunctionDecodeStatus &Status) {
+std::vector<va_t> unsizedBody(
+    const BinaryImage &Img, Decoder &Dec, InstructionFlowScratch &Scratch,
+    va_t Entry, llvm::ArrayRef<va_t> Entries, const std::function<bool()> &Stop,
+    FunctionDecodeStatus &Status,
+    llvm::function_ref<void(llvm::ArrayRef<InstructionRef>)> VisitRefs = {}) {
   const auto OtherEntry = [&](va_t Address) {
     return Address != Entry &&
            std::binary_search(Entries.begin(), Entries.end(), Address);
@@ -708,6 +730,11 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
           Terminated = Dec.isFunctionTerminator(DI);
           if (FollowsJumps || isMIPS(Img.Arch)) {
             const InstructionFlow Flow = Scratch.summarize(Img, Dec, DI);
+            if (VisitRefs) {
+              VisitRefs(Flow.Refs);
+              ++Status.Instructions;
+              Status.Bytes += DI.Size;
+            }
             Status.Incomplete |=
                 Flow.Kind == UnliftedFlow || Flow.Kind == "ijump";
             if (FollowsJumps && (Flow.Kind == "jump" || Flow.Kind == "cjump") &&
@@ -729,6 +756,8 @@ std::vector<va_t> unsizedBody(const BinaryImage &Img, Decoder &Dec,
   }
   Status.Incomplete |= !Pending.empty();
   Status.Stopped = Stop && Stop();
+  if (VisitRefs)
+    return {};
   return {Body.begin(), Body.end()};
 }
 
@@ -739,6 +768,7 @@ using OutlyingChunks = std::map<va_t, std::vector<ExceptionAddressRange>>;
 bool decodeExtents(
     const BinaryImage &Img, llvm::ArrayRef<std::pair<va_t, uint64_t>> Extents,
     llvm::ArrayRef<va_t> Entries,
+    llvm::function_ref<void(size_t, llvm::ArrayRef<InstructionRef>)> VisitRefs,
     llvm::function_ref<void(size_t Index, Decoder &, const DecodedInsn &,
                             InstructionFlowScratch &)>
         Visit,
@@ -794,6 +824,12 @@ bool decodeExtents(
       };
       if (Size > 0) {
         ReadRange(Entry, Size, Size);
+      } else if (VisitRefs && !Entries.empty() &&
+                 (Img.Arch == Arch::X86 || Img.Arch == Arch::X64)) {
+        // Each visited x86 row already has an independent LowIR lift. Widths
+        // are order-independent and x86 has neither delay slots nor IT state.
+        unsizedBody(Img, Local, Scratch, Entry, Entries, Stop, Report,
+                    [&](auto Refs) { VisitRefs(Index, Refs); });
       } else {
         for (const va_t Address :
              unsizedBody(Img, Local, Scratch, Entry, Entries, Stop, Report)) {
@@ -841,7 +877,7 @@ bool decodeFunctions(
   Extents.reserve(Page.Functions.size());
   for (const FuncInfo *F : Page.Functions)
     Extents.emplace_back(F->Entry, F->Size);
-  return decodeExtents(Img, Extents, *Page.Entries, Visit, Stop, Status,
+  return decodeExtents(Img, Extents, *Page.Entries, {}, Visit, Stop, Status,
                        NoReturnTargets);
 }
 
@@ -935,7 +971,7 @@ bool decodeFunctionReferences(
     S.DirectOnly = DirectOnly;
   };
   return decodeExtents(
-      Img, Extents, *Page.Entries,
+      Img, Extents, *Page.Entries, {},
       [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
           InstructionFlowScratch &Scratch) {
         auto &S = Sweeps[Index];
@@ -1248,14 +1284,16 @@ DataAccessScan::update(const BinaryImage &Img,
     Read.insert(Read.end(), Added.begin(), Added.end());
   // Each extent's accesses, which only the thread decoding it writes.
   std::vector<std::vector<std::pair<va_t, unsigned>>> Slots(Read.size());
+  const auto Collect = [&](size_t Index, llvm::ArrayRef<InstructionRef> Refs) {
+    for (const InstructionRef &Ref : Refs)
+      if (isDataAccess(Ref))
+        Slots[Index].emplace_back(Ref.To, Ref.Bytes);
+  };
   if (!Read.empty() &&
-      !decodeExtents(Img, Read, NextEntries,
+      !decodeExtents(Img, Read, NextEntries, Collect,
                      [&](size_t Index, Decoder &Dec, const DecodedInsn &DI,
                          InstructionFlowScratch &Scratch) {
-                       for (const InstructionRef &Ref :
-                            Scratch.dataAccesses(Img, Dec, DI))
-                         if (isDataAccess(Ref))
-                           Slots[Index].emplace_back(Ref.To, Ref.Bytes);
+                       Collect(Index, Scratch.dataAccesses(Img, Dec, DI));
                      })) {
     clear();
     return std::nullopt;

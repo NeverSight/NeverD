@@ -31,6 +31,15 @@ struct MachOLiftedSource {
 std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
                                                    va_t Start, va_t NextEntry);
 
+/// Original function which owns an aligned interior address as storage.
+/// After publication the old entry may forward while its bytes remain mapped.
+std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
+                                              va_t VA);
+
+/// Target of an integer literal load from a dyld-rebased, immutable slot.
+std::optional<va_t> machORebasedLiteralAddress(const BinaryImage &Image,
+                                               uint32_t Word, va_t PC);
+
 } // namespace neverd
 
 #endif // NEVERD_LOADER_MACHO_FUNCTIONBODY_H

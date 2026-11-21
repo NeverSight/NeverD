@@ -712,15 +712,14 @@ void detectRegisterParams(MedFunc &Func, const TargetRegInfo &TRI,
                           llvm::ArrayRef<uint64_t> IntegerRegs,
                           std::set<uint64_t> UsedParamRegs, Arch TargetArch,
                           const CallArgumentConvention *Convention,
-                          const GPRReadWidths *EntryReadSummary = nullptr,
-                          bool GoRegisterArguments = false) {
+                          const GPRReadWidths *EntryReadSummary,
+                          bool GoRegisterArguments,
+                          std::optional<size_t> ProtoArgs) {
   // A routine with a platform prototype (a documented WDK routine) takes
   // exactly its declared parameters, however its body forwards registers to
   // other calls.
-  const std::optional<size_t> ProtoArgs =
-      Convention && Convention->PrototypeArgCount
-          ? Convention->PrototypeArgCount(Func.Name)
-          : std::nullopt;
+  if (!ProtoArgs && Convention && Convention->PrototypeArgCount)
+    ProtoArgs = Convention->PrototypeArgCount(Func.Name);
   const bool FromIncomingReads =
       Convention && Convention->ParametersFromIncomingReads;
   // Every caller passes the register arguments this function's call-graph
@@ -1578,8 +1577,8 @@ void detectIndirectResultParam(MedFunc &Func, const MedBlock &Entry,
 // detectCc -- main dispatcher
 //===----------------------------------------------------------------------===//
 
-void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
-                                 BinaryFormat Fmt) {
+void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
+                                 const FixedIntegerCallArguments *BoundEntry) {
   const auto &TRI = getTargetRegInfo(TheArch);
   const CallArgumentConvention *Convention =
       callArgumentConvention(TheArch, Fmt);
@@ -1731,6 +1730,21 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
   // Every argument of the function is a register one: its argument
   // components fit the integer registers (goRegisterArgumentBound).
   bool GoRegisterArgumentsOnly = false;
+  std::optional<size_t> BoundRegisters;
+  if (BoundEntry && SourceCallHintsEnabled && TargetArch == Arch::AArch64 &&
+      Fmt == BinaryFormat::COFF) {
+    const auto &Parameters = BoundEntry->Parameters;
+    if (Parameters.size() <= IntegerRegs.size() &&
+        llvm::all_of(llvm::enumerate(Parameters), [&](const auto &Item) {
+          const auto &P = Item.value();
+          return P.Kind == SourceABICarrierKind::IntegerRegister &&
+                 P.Register == IntegerRegs[Item.index()] && P.Bytes &&
+                 P.Bytes <= TRI.FullRegWidth;
+        })) {
+      BoundRegisters = Parameters.size();
+      Func.ExactRegisterParameters = true;
+    }
+  }
   if (!Func.Blocks.empty()) {
     const auto &Entry = Func.Blocks[0];
     auto UsedRegs = findLiveInParamRegs(Entry, ParamRegs);
@@ -1854,13 +1868,15 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
                          TargetArch, Convention, Summary,
                          GoRegisterArguments || BufferBarrier ||
                              BoundsRoutine || GrowthRoutine ||
-                             Func.StackArgumentsOnly || GoFixedOperands);
+                             Func.StackArgumentsOnly || GoFixedOperands,
+                         BoundRegisters);
 
     // Detect a variadic prologue (register save area + va_start) so the FP save
     // area is not mistaken for FP parameters and the overflow area is recovered
     // specially once all call sites are known (Pipeline
     // finalizeVariadicCallees).
-    detectVariadic(Func, TRI, TargetArch, Fmt);
+    if (!BoundRegisters)
+      detectVariadic(Func, TRI, TargetArch, Fmt);
 
     // Recover floating/vector parameters in their target's register bank.
     // A variadic function's FP register save area is not its parameter list,
@@ -1868,7 +1884,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
     // named ones, they carry the floating arguments a caller passes, each
     // promoted to double, and va_arg reads them from the area.
     // Go's stack ABI passes floating arguments on the stack too.
-    if (!Func.IsVariadic && !Func.StackArgumentsOnly) {
+    if (!BoundRegisters && !Func.IsVariadic && !Func.StackArgumentsOnly) {
       detectFPParams(Func, Entry, TRI, RegVarMap, TargetArch, TargetFormat);
       // Where a summary gives the floating arguments each in the next
       // vector register (System V x86-64), it lists those a variadic call
@@ -1930,7 +1946,7 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch,
           : std::nullopt;
   // A routine with fixed operands takes no stack word: a register stub writes
   // the slots it passes on itself, and a write barrier's frame is its own.
-  if (!Func.IsVariadic && !GoFixedOperands)
+  if (!Func.IsVariadic && !GoFixedOperands && !BoundRegisters)
     med_calling_conv_detail::detectStackParams(
         Func, TargetArch, Fmt,
         GoFrameBytes

@@ -910,20 +910,28 @@ void LowToMedConverter::applyCallRegisterEffect(MedBlock &Block, MedOp &MOp,
 
 MedFunc LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
                                    BinaryFormat Fmt) {
+  return convert(SourceLow, TheArch, Fmt, nullptr);
+}
+
+MedFunc
+LowToMedConverter::convert(const LowFunc &SourceLow, Arch TheArch,
+                           BinaryFormat Fmt,
+                           const FixedIntegerCallArguments *BoundEntry) {
   SEHLocalUnwindExitsEnabled = true;
   ModeledSEHLocalUnwindExits = false;
   try {
-    return convertFunction(SourceLow, TheArch, Fmt);
+    return convertFunction(SourceLow, TheArch, Fmt, BoundEntry);
   } catch (const LowToMedConversionError &) {
     if (!ModeledSEHLocalUnwindExits)
       throw;
   }
   SEHLocalUnwindExitsEnabled = false;
-  return convertFunction(SourceLow, TheArch, Fmt);
+  return convertFunction(SourceLow, TheArch, Fmt, BoundEntry);
 }
 
-MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
-                                           Arch TheArch, BinaryFormat Fmt) {
+MedFunc LowToMedConverter::convertFunction(
+    const LowFunc &SourceLow, Arch TheArch, BinaryFormat Fmt,
+    const FixedIntegerCallArguments *BoundEntry) {
   TargetArch = TheArch;
   TargetFormat = Fmt;
   auto Physical = Image && TheArch == Arch::X86 && Fmt == BinaryFormat::COFF
@@ -2188,9 +2196,18 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
     if (GoGrowth && GoGrowth->Restarts)
       elideGoStackGrowth(Func, GoGrowth->GrowthStart);
     // Go's internal ABI enters a function with X15 zero, and its calls keep
-    // it so (CallRegisterContract::GoInternal).
+    // it so (CallRegisterContract::GoInternal).  Assembly that takes Go's
+    // argument registers follows that ABI (goAssemblyTakesRegisterArguments):
+    // `runtime.memclrNoHeapPointers` stores X15 as its zero.
+    const GPRReadWidths *OwnEntryReads = nullptr;
+    if (CallEntryReadGPRs)
+      if (const auto Reads = CallEntryReadGPRs->find(Low.Entry);
+          Reads != CallEntryReadGPRs->end())
+        OwnEntryReads = &Reads->second;
     if (Image && TheArch == Arch::X64 && !Func.Blocks.empty() &&
-        usesGoRegisterArguments(*Image, Low.Entry)) {
+        (usesGoRegisterArguments(*Image, Low.Entry) ||
+         (OwnEntryReads && goAssemblyTakesRegisterArguments(*Image, Low.Entry,
+                                                            *OwnEntryReads)))) {
       MedOp Zero;
       Zero.Opcode = NdOp::COPY;
       Zero.Addr = Func.Blocks.front().StartAddr;
@@ -2447,7 +2464,7 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
               Bound != CallEntryIntegerArguments->end())
             GoFixedArguments = Bound->second;
     }
-    detectCc(Func, TheArch, Fmt);
+    detectCc(Func, TheArch, Fmt, BoundEntry);
     completeX86RegistrationEntryParameters(Func);
     debugVerifyMedFunc(Func, "detectCc");
 

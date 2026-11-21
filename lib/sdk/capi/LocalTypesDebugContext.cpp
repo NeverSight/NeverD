@@ -767,17 +767,98 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     std::vector<types::HeaderLibrary> Headers,
     std::unordered_map<uint64_t, std::string> Recognized, std::string EntryType,
     std::optional<va_t> ProgramMain, std::string EntryDeclaration,
-    std::vector<va_t> WindowsDriverEntries)
+    WindowsEntryPoints WindowsEntries)
     : Inner(Inner), Types(std::move(Types)),
-      Declarations(std::move(Declarations)),
-      WindowsDriverEntries(std::move(WindowsDriverEntries)), Image(Image),
+      Declarations(std::move(Declarations)), Image(Image),
       Headers(std::move(Headers)), Recognized(std::move(Recognized)),
       EntryType(std::move(EntryType)),
       EntryDeclaration(std::move(EntryDeclaration)), ProgramMain(ProgramMain) {
-  if (!this->WindowsDriverEntries.empty()) {
-    WindowsDriverSignature = entryTypeSignature("PDRIVER_INITIALIZE", true);
-    if (!WindowsDriverSignature)
-      this->WindowsDriverEntries.clear();
+  if (!WindowsEntries.DriverEntries.empty())
+    if (auto Signature = entryTypeSignature("PDRIVER_INITIALIZE", true))
+      for (va_t Addr : WindowsEntries.DriverEntries)
+        WindowsEntrySignatures.emplace(Addr, *Signature);
+  const auto BindSignature =
+      [&](va_t Entry, types::HeaderLibrary Provider,
+          const types::TypeLibrary &Header,
+          std::shared_ptr<const types::FunctionDef> Function,
+          llvm::StringRef Name) {
+        if (auto Signature = signatureOf(Header, *Function, Name)) {
+          types::RenderOptions Options;
+          Options.Spelling = types::headerLibrarySpelling(Provider);
+          Signature->PrototypeDeclaration = types::spellType(
+              Header, *types::makeFunction(std::move(Function)), Name.str(),
+              Options);
+          Signature->PrototypeLibrary =
+              types::headerLibraryName(Provider).str();
+          Signature->PrototypeFromHeader = true;
+          WindowsEntrySignatures.emplace(Entry, std::move(*Signature));
+        }
+      };
+  if (WindowsEntries.DllInitialize && WindowsEntries.DllUnload && Image) {
+    // The export-driver lifecycle declarations are specified by the Windows
+    // loader. Resolve their NTSTATUS and PUNICODE_STRING in the matching WDK.
+    const auto Provider =
+        Image->Arch == Arch::X86   ? types::HeaderLibrary::WindowsKernelX86
+        : Image->Arch == Arch::X64 ? types::HeaderLibrary::WindowsKernelX64
+                                   : types::HeaderLibrary::WindowsKernelARM64;
+    const auto *Header = llvm::is_contained(this->Headers, Provider)
+                             ? types::headerLibrary(Provider)
+                             : nullptr;
+    if (Header) {
+      const std::string Prefix =
+          Image->Arch == Arch::X86 ? "NTSTATUS __stdcall " : "NTSTATUS ";
+      const auto Bind = [&](va_t Addr, llvm::StringRef Callable) {
+        auto Read =
+            types::parseFunctionDeclaration(Prefix + Callable.str(), *Header);
+        if (Read.ok())
+          BindSignature(Addr, Provider, *Header, Read.Function, Read.Name);
+      };
+      Bind(*WindowsEntries.DllInitialize,
+           "DllInitialize(PUNICODE_STRING RegistryPath)");
+      Bind(*WindowsEntries.DllUnload, "DllUnload(void)");
+    }
+  }
+  const bool LoaderEntry =
+      Image && !this->EntryDeclaration.empty() &&
+      (Image->Arch == Arch::X86 || Image->Arch == Arch::X64 ||
+       Image->Arch == Arch::AArch64) &&
+      Image->isFunctionEntryCandidateAt(Image->Entry) &&
+      !Image->functionHasBytePatch(Image->Entry);
+  if (Image && (LoaderEntry || WindowsEntries.DllRegisterServer ||
+                WindowsEntries.DllUnregisterServer)) {
+    const auto Provider =
+        Image->Arch == Arch::X86   ? types::HeaderLibrary::WindowsUserX86
+        : Image->Arch == Arch::X64 ? types::HeaderLibrary::WindowsUserX64
+                                   : types::HeaderLibrary::WindowsUserARM64;
+    const auto *Header = llvm::is_contained(this->Headers, Provider)
+                             ? types::headerLibrary(Provider)
+                             : nullptr;
+    if (Header) {
+      const auto BindDeclaration = [&](va_t Entry,
+                                       llvm::StringRef Declaration) {
+        const auto Read = types::parseFunctionDeclaration(Declaration, *Header);
+        if (Read.ok())
+          BindSignature(Entry, Provider, *Header, Read.Function, Read.Name);
+      };
+      const auto BindCOMExport = [&](std::optional<va_t> Entry,
+                                     llvm::StringRef Name) {
+        if (!Entry)
+          return;
+        if (auto Function = Header->prototypes().lookup(Name)) {
+          BindSignature(*Entry, Provider, *Header, std::move(Function), Name);
+          return;
+        }
+        // olectl.h specifies STDAPI and no parameters for both callbacks.
+        const auto Prefix =
+            Image->Arch == Arch::X86 ? "HRESULT __stdcall " : "HRESULT ";
+        BindDeclaration(*Entry, Prefix + Name.str() + "(void)");
+      };
+      BindCOMExport(WindowsEntries.DllRegisterServer, "DllRegisterServer");
+      BindCOMExport(WindowsEntries.DllUnregisterServer, "DllUnregisterServer");
+      // The PE loader calls the optional entry itself, whatever its name.
+      if (LoaderEntry)
+        BindDeclaration(Image->Entry, this->EntryDeclaration);
+    }
   }
   refreshBoundFunctionEntries();
 }
@@ -787,9 +868,8 @@ void LocalTypesDebugContext::refreshBoundFunctionEntries() {
   BoundFunctionEntries.assign(InnerEntries.begin(), InnerEntries.end());
   for (const auto &Declaration : Declarations)
     BoundFunctionEntries.push_back(Declaration.first);
-  BoundFunctionEntries.insert(BoundFunctionEntries.end(),
-                              WindowsDriverEntries.begin(),
-                              WindowsDriverEntries.end());
+  for (const auto &Contract : WindowsEntrySignatures)
+    BoundFunctionEntries.push_back(Contract.first);
   llvm::sort(BoundFunctionEntries);
   BoundFunctionEntries.erase(
       std::unique(BoundFunctionEntries.begin(), BoundFunctionEntries.end()),
@@ -1581,10 +1661,10 @@ std::optional<FunctionSym> LocalTypesDebugContext::undeclared(va_t Addr) const {
         return Function;
   // video.h also declares a miniport DriverEntry. The authenticated operating
   // system entry follows DRIVER_INITIALIZE even when that header is joined.
-  if (WindowsDriverSignature &&
-      (!Known || !isUserFunctionDeclaration(*Known)) &&
-      llvm::is_contained(WindowsDriverEntries, Addr))
-    Known = WindowsDriverSignature;
+  if (!Known || !isUserFunctionDeclaration(*Known))
+    if (auto It = WindowsEntrySignatures.find(Addr);
+        It != WindowsEntrySignatures.end())
+      Known = It->second;
   // The image's entry point, as its kind's specification types it: a UEFI
   // application's (ImageHandle, SystemTable).
   if (!Known && Image && Addr == Image->Entry &&

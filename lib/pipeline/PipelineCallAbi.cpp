@@ -98,6 +98,13 @@ void copyCallSignatureFacts(const PipelineResult &Source,
 #undef COPY_SIGNATURE_FACT
 }
 
+const std::map<va_t, FixedIntegerCallArguments> &
+imageIntegerCallArguments(const PipelineResult &Result) {
+  return Result.OmittedCalleeIntegerArguments
+             ? *Result.OmittedCalleeIntegerArguments
+             : Result.CallEntryIntegerArguments.get();
+}
+
 namespace {
 /// The entries callee lifts know: the function symbols of \p Img that are
 /// not boundary guesses, and the entries \p Result was told of.
@@ -120,13 +127,6 @@ omittedCalleeArgumentCounts(const PipelineResult &Result) {
   return Result.OmittedCalleeArgumentCounts
              ? *Result.OmittedCalleeArgumentCounts
              : Result.CallEntryArgumentCounts;
-}
-
-const std::map<va_t, FixedIntegerCallArguments> &
-omittedCalleeIntegerArguments(const PipelineResult &Result) {
-  return Result.OmittedCalleeIntegerArguments
-             ? *Result.OmittedCalleeIntegerArguments
-             : Result.CallEntryIntegerArguments.get();
 }
 
 const std::map<va_t, FloatingCallArguments> &
@@ -178,7 +178,7 @@ OmittedCalleeMemo::readAt(const PipelineResult &Result, va_t Key) {
   const std::map<va_t, int> &Counts = omittedCalleeArgumentCounts(Result);
   if (const auto It = Counts.find(Key); It != Counts.end())
     Read.ArgumentCount = It->second;
-  const auto &Integer = omittedCalleeIntegerArguments(Result);
+  const auto &Integer = imageIntegerCallArguments(Result);
   if (const auto It = Integer.find(Key); It != Integer.end())
     Read.IntegerArguments = It->second;
   const auto &Floating = omittedCalleeFloatingArguments(Result);
@@ -200,7 +200,7 @@ bool OmittedCalleeMemo::Conversion::readsHold(
   const auto &StackArgs = omittedCalleeStackArgs(Result);
   const auto &StackSlots = omittedCalleeStackSlots(Result);
   const auto &Counts = omittedCalleeArgumentCounts(Result);
-  const auto &Integer = omittedCalleeIntegerArguments(Result);
+  const auto &Integer = imageIntegerCallArguments(Result);
   const auto &Floating = omittedCalleeFloatingArguments(Result);
   const auto &Variadic = omittedCalleeVariadicArguments(Result);
   return std::all_of(Reads.begin(), Reads.end(), [&](const SummaryRead &Read) {
@@ -986,7 +986,7 @@ private:
       Converter.setCallEntryArgumentCounts(
           &omittedCalleeArgumentCounts(Result));
       Converter.setCallEntryIntegerArguments(
-          &omittedCalleeIntegerArguments(Result));
+          &imageIntegerCallArguments(Result));
       Converter.setCallEntryFloatingArguments(
           &omittedCalleeFloatingArguments(Result));
       Converter.setCallEntryVariadicArguments(

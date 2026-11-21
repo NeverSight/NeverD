@@ -273,6 +273,13 @@ libraries below supply only declarations absent from the official inputs,
 without replacing official types or prototypes. See
 [local Microsoft type libraries](docs/microsoft-windows-types.md).
 
+The optional archived SDK profile reads the AllJoyn C declarations shipped
+in Microsoft Windows SDK 10.0.22621.3233. These headers carry the AllSeen
+Alliance copyright and permission notice. The generator verifies the original
+notice in every selected AllJoyn header and copies it to
+`licenses/AllJoyn-SDK-LICENSE.txt` beside the generated libraries. The pinned
+package and notice hashes are in `scripts/MicrosoftLegacySDKInputs.json`.
+
 `lib/types/headers/WindowsKernelX64.h` and `WindowsKernelX86.h` hold the
 types and prototypes that `<ntifs.h>`, `<ntddk.h>`, `<wdm.h>` and the NDIS,
 storage, USB, HID, filter and NETIO provider headers declare for

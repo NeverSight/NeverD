@@ -16,8 +16,12 @@
 #include "neverd/loader/ReadOnlyBytes.h"
 #include "neverd/object/PELayout.h"
 
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/MathExtras.h"
+
+#include <cstring>
 
 namespace neverd {
 namespace {
@@ -29,6 +33,91 @@ llvm::Expected<BinaryImage> load(const std::string &Bytes, bool Restricted) {
   if (Restricted)
     Loader.restrictFunctions({0x401000});
   return Loader.loadBuffer(llvm::MemoryBufferRef(Bytes, "header-fixture.exe"));
+}
+
+// Three HIGHLOW fields in the same executable section: code naming a literal,
+// code naming the entry, and a CRT initializer slot naming that same entry.
+TEST(PEHeaderMapping, LinkerGroupsClassifyMergedDataRelocations) {
+  constexpr uint32_t PGUSignature = 0x50475500, LTCG = 0x4c544347;
+  enum Variant {
+    PGU,
+    LinkTime,
+    Overlap,
+    CrossesSection,
+    Truncated,
+    Conflict,
+    Unknown
+  };
+  for (Variant V :
+       {PGU, LinkTime, Overlap, CrossesSection, Truncated, Conflict, Unknown}) {
+    SCOPED_TRACE(V);
+    auto Fixture = test::peImageBaseWalker(IMAGE_FILE_MACHINE_I386, false);
+    auto *Data = reinterpret_cast<uint8_t *>(Fixture.Bytes.data());
+    auto PE = locatePEHeaders(Data, Fixture.Bytes.size());
+    auto *Sections = reinterpret_cast<coff_section *>(PE.SectionTable);
+    Sections[1].VirtualSize = 0x200;
+    const auto Text = Sections[0].PointerToRawData;
+    const auto Reloc = Sections[1].PointerToRawData;
+    const va_t Entry = Fixture.Entry, Literal = Entry + 0x28,
+               Callback = Entry + 0x30;
+    writeLE<uint32_t>(Data + Text + 3, Literal);
+    writeLE<uint32_t>(Data + Text + 0x0c, Entry);
+    writeLE<uint32_t>(Data + Text + 0x30, Entry);
+    writeLE<uint16_t>(Data + Reloc + 12,
+                      (IMAGE_REL_BASED_HIGHLOW << 12) | 0x30);
+    constexpr size_t Table = 0x40, Payload = 0x80;
+    auto &Record = *reinterpret_cast<debug_directory *>(Data + Reloc + Table);
+    setPEDataDirectory(PE, DEBUG_DIRECTORY, Sections[1].VirtualAddress + Table,
+                       sizeof(Record));
+    Record.Type = IMAGE_DEBUG_TYPE_POGO;
+    Record.AddressOfRawData = Sections[1].VirtualAddress + Payload;
+    Record.PointerToRawData = Reloc + Payload;
+    auto *Groups = Data + Reloc + Payload;
+    writeLE<uint32_t>(Groups, V == Unknown    ? 0xffffffff
+                              : V == LinkTime ? LTCG
+                                              : PGUSignature);
+    size_t At = sizeof(uint32_t);
+    const auto Add = [&](uint32_t RVA, uint32_t Size, llvm::StringRef Name) {
+      writeLE<uint32_t>(Groups + At, RVA);
+      writeLE<uint32_t>(Groups + At + 4, Size);
+      std::memcpy(Groups + At + 8, Name.data(), Name.size());
+      At += 8 + llvm::alignTo(Name.size() + 1, 4);
+    };
+    // The table's order is independent of address order.
+    Add(0x1030, 4, ".CRT$XCU");
+    Add(0x1000, V == Overlap ? 0x30 : 0x20, ".text$mn");
+    Add(0x1028, 8, ".rdata$zz");
+    if (V == CrossesSection)
+      Add(0x1038, 16, ".rdata$x");
+    Record.SizeOfData = V == Truncated ? At - 1 : At;
+    if (V == Conflict) {
+      auto *Second =
+          reinterpret_cast<debug_directory *>(Data + Reloc + Table) + 1;
+      *Second = Record;
+      Second->SizeOfData = sizeof(uint32_t);
+      setPEDataDirectory(PE, DEBUG_DIRECTORY,
+                         Sections[1].VirtualAddress + Table,
+                         2 * sizeof(Record));
+    }
+
+    for (bool Restricted : {false, true}) {
+      auto Image = load(Fixture.Bytes, Restricted);
+      ASSERT_TRUE(static_cast<bool>(Image))
+          << llvm::toString(Image.takeError());
+      ASSERT_TRUE(Image->CodeAddressRelocOperands.count(Entry + 0x0c));
+      EXPECT_TRUE(Image->CodeRefTargets.count(Entry));
+      const bool Valid = V == PGU || V == LinkTime;
+      EXPECT_EQ(Image->CodeRefTargets.count(Literal), !Valid);
+      EXPECT_EQ(Image->DataAddressRelocOperands.count(Entry + 3), Valid);
+      EXPECT_EQ(Image->CodePtrRelocSlots.count(Callback), Valid);
+      EXPECT_EQ(Image->CodeAddressRelocOperands.count(Callback), !Valid);
+      EXPECT_EQ(llvm::any_of(Image->LoadDiagnostics,
+                             [](const LoadDiagnostic &D) {
+                               return D.Code == "pe.linker_data_groups";
+                             }),
+                !Valid && V != Unknown);
+    }
+  }
 }
 
 TEST(PEHeaderMapping, OriginalHeadersAreReadableInFullAndRestrictedImages) {
