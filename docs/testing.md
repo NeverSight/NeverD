@@ -20772,6 +20772,9 @@ unknown value.
 `GoSyscall.AnOrrMovedNumberBoundsTheArguments` lifts an arm64
 `runtime.osyield` that sets its number with `orr x8, xzr, #0x7c` before `svc
 #0`: sched_yield reads no argument, and the routine takes none.
+`GoDefer.DeferReturnResumesOnTheFrame` lifts an arm64 `main.f` whose
+`deferreturn` block, which no edge reaches, reloads its result from its frame:
+`main.f` takes the one argument its record gives, not the caller's frame.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
 that jumps to its own label, which another function calls: the jump is no
 call.
