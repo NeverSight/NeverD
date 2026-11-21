@@ -293,16 +293,14 @@ struct Session {
   /// The addresses whose user names and declarations what the pipeline and the
   /// emitters have made since the last result read.
   UserFactReads UserReads;
-  /// After the user's declarations change: the decompiler reads them anew,
-  /// and only what it made of them goes.  Analysis reads them only through
-  /// the prototypes they hide or give back; what it read of prototypes then
-  /// goes too.  The context stays, with what it read of the library and the
-  /// image, which no declaration changes.
+  /// A changed entry declaration can change its callers' argument reads even
+  /// when it hid no named prototype. Keep the image indexes and call graph.
   void declarationsChanged() {
-    if (!LocalTypesDbg)
+    if (LocalTypesDbg)
+      LocalTypesDbg->takeDeclarations(functionDeclarations());
+    else
       dropLocalTypesDebug();
-    else if (LocalTypesDbg->takeDeclarations(functionDeclarations()))
-      AnalysisCache.forgetPrototypes();
+    AnalysisCache.forgetPrototypes();
     clearPipelineResult();
   }
   /// The program's local types, read when first asked for; null with the
@@ -1614,11 +1612,17 @@ inline std::string jsonToString(const llvm::json::Value &V) {
   return Buf;
 }
 
+/// The image's exact, authenticated Windows driver entry contracts.
+std::vector<va_t> windowsDriverEntries(const BinaryImage &Image,
+                                       const DebugContext *Debug,
+                                       DebugInfoKind Kind);
+
 /// PipelineRunner — self-contained binary-load-and-run for high-level
 /// C API functions that take an input path instead of a session.
 struct PipelineRunner {
   BinaryImage Img;
   DebugInfoRequest DbgRequest;
+  DebugInfoKind DbgKind = DebugInfoKind::None;
   std::unique_ptr<DebugContext> Dbg;
   llvm::LLVMContext LLVMCtx;
   PipelineResult Result;

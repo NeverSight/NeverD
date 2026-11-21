@@ -4760,6 +4760,14 @@ queries, without a dependency on UI adapters. Private Session LLVM tests
 compile their actual type/debug owners and sidecar helper
 directly; the shared SDK keeps its existing public C boundary.
 
+The session supplies the call-argument pass with the sorted entries whose
+calling conventions are bound to an address. These include explicit function
+declarations. For a Windows native driver, an exact named PE export or an
+image-matched PDB can identify `DriverEntry` at the PE entry or a
+`GsDriverEntry` shim with a direct call or tail branch to that exact symbol. The session uses the joined kernel header’s
+`PDRIVER_INITIALIZE` contract for those entries. Editing a declaration
+invalidates cached call arities. Editing the image rebuilds the entry evidence.
+
 The decompiler reads the local types through `LocalTypesDebugContext`
 (`lib/sdk/capi`), which wraps the program's debug context whenever the
 program has local types. The local types are the authority on the program's

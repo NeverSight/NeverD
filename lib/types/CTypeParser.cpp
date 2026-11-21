@@ -2110,10 +2110,13 @@ private:
         Def->Underlying = Underlying;
         Declared.Enum = std::move(Def);
         defineType(std::move(Declared));
+        // A fixed underlying type completes an opaque C23 or C++ enum.
+        // Include it in the declaration inventory when reading rendered C.
+        if (Fixed)
+          note(Result.Types, NotedTypes, Name);
       }
       return makeNamed(Name, TypeKind::Enum);
     }
-    (void)Fixed;
     Defines = true;
     auto Def = std::make_shared<EnumDef>();
     Def->Underlying = Underlying;

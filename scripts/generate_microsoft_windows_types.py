@@ -75,11 +75,15 @@ ISOLATED_PROVIDERS = {
         Provider("SmartCard", ("ntddk", "smclib")),
         Provider("SDPort", ("ntddk", "sdport")),
         Provider("StreamClass", ("ntddk", "minwindef", "ks", "strmini")),
+        Provider("USBCamera", ("ntddk", "minwindef", "ks", "strmini", "usb", "usbcamdi")),
         Provider("AudioPort", ("ntddk", "portcls")),
         Provider("GraphicsKernel", ("ntddk", "dispmprt")),
         Provider("RDBSS", ("rxprocs", "mrx"), ("MINIRDR__NAME=neverd_rdbss",)),
     ),
     "WindowsUser": (
+        Provider("WindowsSQLite", ("winsqlite/winsqlite3",)),
+        Provider("ICU", ("icu",)),
+        Provider("WebServices", ("windows", "webservices")),
         Provider("WinHTTP", ("winsock2", "winhttp")),
         Provider("HTTPServer", ("winsock2", "windows", "http")),
         Provider("Esent", ("winsock2", "windows", "esent")),
@@ -108,6 +112,8 @@ ISOLATED_PROVIDERS = {
         Provider("PropertyVariants", ("windows", "propvarutil")),
         Provider("PerformanceData", ("windows", "pdh", "pdhmsg")),
         Provider("Biometrics", ("windows", "winbio")),
+        Provider("BluetoothGATT", ("windows", "bluetoothleapis")),
+        Provider("ConnectionManager", ("windows", "wcmapi")),
         Provider("GraphicsThunk", ("windows", "d3dkmthk")),
         Provider("Direct3D11", ("windows", "d3d11"), (), (
             "D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain")),
@@ -230,6 +236,15 @@ def verify_layouts(original: str, generated: str,
     return len(selected)
 
 
+# Each isolated unit also includes the compiler or SDK prerequisites. Only
+# these API families belong to the provider that brought that unit in.
+PROVIDER_PREFIXES = {
+    "WindowsSQLite": ("sqlite3_",),
+    "ICU": ("u", "UCNV_"),
+    "WebServices": ("Ws",),
+}
+
+
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
                      metadata: dict | None = None, convention: str = "") -> dict:
@@ -268,6 +283,12 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
     commands = [command, *bridge_commands]
+    if name in PROVIDER_PREFIXES:
+        prefixes = PROVIDER_PREFIXES[name]
+        prototypes = tuple(sorted(symbol for symbol in parsed["prototypes"]
+                                  if symbol.startswith(prefixes)))
+        if not prototypes:
+            raise ValueError(f"official headers declare no {name} functions")
     if prototypes:
         original = directory / (name + ".pre.h")
         preprocessed.replace(original)

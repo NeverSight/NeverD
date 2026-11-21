@@ -168,6 +168,12 @@ types; unrelated compiler intrinsics are not compiled as replacement builtins.
 The generated side also omits the WDK's default calling-convention option;
 published declarations must retain their own conventions, so a lost x86
 `__stdcall` cannot be hidden by compiling both sides with that default.
+The WDK USB camera and SDK Bluetooth GATT and Windows Connection Manager
+checks compare the selected functions with their original compiler ABI.
+The Windows SQLite, ICU and Web Services checks enumerate their C APIs from
+the pinned SDK header for each target. The published type closure is compiled
+independently on x86, x64 and ARM64 and compared to that original profile.
+
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of
 the original official headers; a missing published declaration therefore fails
