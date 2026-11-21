@@ -325,6 +325,69 @@ int main(void) {
   }
 }
 
+TEST(AAPCS64CallContract, WindowsBoundSourceDefinitionsKeepDeclaredRegisters) {
+  class Bound final : public NullDebugContext {
+  public:
+    llvm::ArrayRef<va_t> boundFunctionEntries() const override {
+      static constexpr va_t Entries[] = {Text, Plt};
+      return Entries;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
+      if (Entry != Text && Entry != Plt)
+        return std::nullopt;
+      FunctionSym S;
+      S.Name = Entry == Text ? "setup" : "unload";
+      S.Addr = Entry;
+      S.PlatformConvention = S.ExplicitEntryDeclaration = true;
+      S.ReturnType = NdType::makeInt(4, true);
+      if (Entry == Text)
+        S.Params.emplace_back("context", NdType::makePtr(NdType::makeVoid()));
+      return S;
+    }
+    bool hasInfo() const override { return true; }
+  } Debug;
+  const va_t Helper = Plt + 0x20;
+  BinaryImage Image = makeImage(
+      {{Text, {0x528000E0u, Ret}}, // mov w0, #7
+       {Plt, {PushFrame, SetFrame, 0x94000006u, PopFrame, Ret}},
+       {Helper, {0x91000400u, Ret}}}, // add x0, x0, #1
+      {{Text, "setup"}, {Plt, "unload"}, {Helper, "consume_word"}}, {});
+  Image.Format = BinaryFormat::COFF;
+  for (auto [LLVM, Source] : {std::pair{false, true}, std::pair{true, true},
+                              std::pair{true, false}}) {
+    llvm::LLVMContext Context;
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    Options.LiftMode = LLVM;
+    Options.SourceProjection = LLVM && Source;
+    Options.OnlyFunctionEntries = {Text, Plt, Helper};
+    const auto Result = Pipeline().run(Image, Context, Options, &Debug);
+    ASSERT_TRUE(Result.Success) << Result.Error;
+    ASSERT_EQ(Result.MedFuncs.size(), 3u);
+    for (const auto &Function : Result.MedFuncs) {
+      if (Function.Entry == Helper) {
+        EXPECT_FALSE(Function.ExactRegisterParameters);
+        EXPECT_EQ(Function.Params.size(), 1u);
+      } else {
+        EXPECT_EQ(Function.ExactRegisterParameters, Source);
+        const size_t Declared = Function.Entry == Text ? 1 : 0;
+        const size_t Observed = Function.Entry == Text ? 0 : 1;
+        EXPECT_EQ(Function.Params.size(), Source ? Declared : Observed);
+      }
+    }
+    const auto Unload = llvm::find_if(
+        Result.MedFuncs, [&](const auto &F) { return F.Entry == Plt; });
+    ASSERT_NE(Unload, Result.MedFuncs.end());
+    // The helper actually reads x0. Its value is unspecified by the unload
+    // contract and must never turn into zero or a new public parameter.
+    ASSERT_EQ(Unload->CallInfos.size(), 1u);
+    const auto &CallArgs = Unload->CallInfos.front().Args;
+    ASSERT_EQ(CallArgs.size(), 1u);
+    EXPECT_EQ(CallArgs.front().Kind,
+              Source ? MedVar::Unspecified : MedVar::Param);
+  }
+}
+
 TEST(AAPCS64CallContract, BoundWindowsResultsKeepFullWidthObservations) {
   class Bound final : public NullDebugContext {
   public:

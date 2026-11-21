@@ -4529,6 +4529,13 @@ tests also check overflow and inexact shifts when deriving signed ranges from
 an arithmetic right shift. Wide evaluator tests compare signed scaled
 coefficients and multiword product prefixes against full-width multiplication,
 including shared factors whose other consumers observe higher bits.
+Use `--family staggered-window --count 12` for 84 products across 32 to
+769 bits. Their 337 to 479 factors include gaps, overlapping logical shifts,
+and sums where a carry reaches the selected upper lane. The worker source
+suite exercises the same gap and overlap cases in a 239-factor x86-64 fixture.
+Wide product evaluation tests compare repeated affine factors against direct
+full-width arithmetic with the live prefix one bit below, at, and above an
+extension or concatenation boundary.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -18269,6 +18276,12 @@ reloads the next GOT binding after the first callback changes it. Its n32
 runtime address sets the pointer's sign bit. The n32 CPIC samples also link
 their code and GOT above 2 GiB before moving them. Both the default and
 unoptimized LLVM source routes exercise the explicit n32 word extension.
+Two more fixtures save the link only on the stack and pass the first opaque
+result unchanged to the next import on an equality edge. One compares it
+with zero and forwards in the branch delay slot. The other compares with a
+saved parameter and forwards in the taken block. The harness runs both paths
+in the original and rebuilt binaries and checks the second import's arguments
+and the return value, including n32 inputs that differ only above bit 31.
 The private-frame tests
 also vary whether a loop argument acquires a stack address at entry or on
 its backedge, and whether a native call can observe an argument write on any
@@ -20709,6 +20722,9 @@ unknown value.
 `GoInternalABI.AnARM64DirectCallReturnsEveryResultItsCallerReads` runs an
 arm64 `main.f` that loads X0-X2 and a caller that reads X2: both return three
 results, where AAPCS64 alone gives X0:X1.
+`GoInternalABI.TwoARM64ResultsAreARecord` runs an arm64 `main.f` that returns
+its two arguments and a caller that reads both: `main.f` returns a record, not
+an `__int128`, and its C holds no unknown value.
 `GoArgumentComponents.CountEachScalarTheTracebackLists` loads ArgInfo tables:
 `gopark`'s five components with two bytes in one word, a string's and a
 struct's words, an offset too large for a byte, and a table that elides past
@@ -20735,7 +20751,30 @@ assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `GoAssembly.AHelperTakesTheRegistersItReads` runs a Go 1.18 image whose
 compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
 which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
-and RBX, and the call passes 1, 4, 3 and 2.
+and RBX, and the call passes 1, 4, 3 and 2. It runs again as a Go 1.16 image,
+which passes Go code's arguments on the stack and marks no assembly, where
+`main.h` declares `$0-0` as `cmpbody<>` does.
+`GoStackGrowth.AnARM64StackABIPathRestartsTheFunction` lifts a Go 1.16 arm64
+function whose growth path spills nothing: the path is recognised, restarts
+the function, and leaves no call or conditional branch.
+`GoAssembly.ABIInternalAssemblyEntersWithZeroInX15` lifts assembly that takes
+RAX and RBX and stores X15 through RAX: it takes the two registers, and its C
+stores zero and traps nowhere.
+`GoFunctionTable.CodeInsideARecordedFunctionBeginsNone` runs function
+discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
+`main.g` begin functions, and `main.f+8` begins none.
+`GoFunctionTable.ACallIntoADuffsDeviceRunsItsBody` lifts a `main.g` that calls
+`runtime.duffzero+4` with RBX live across the call: discovery begins no
+function there, `main.g` makes no call and stores twice, and its C holds no
+unknown value.
+`GoAssembly.ADuffsDeviceEntersWithZeroInX15` lifts a
+`runtime.duffzero` that stores X15 twice: its C stores zero and traps nowhere.
+`GoSyscall.AnOrrMovedNumberBoundsTheArguments` lifts an arm64
+`runtime.osyield` that sets its number with `orr x8, xzr, #0x7c` before `svc
+#0`: sched_yield reads no argument, and the routine takes none.
+`GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
+that jumps to its own label, which another function calls: the jump is no
+call.
 `GoInternalABI.TheGoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
 function that loads `[r14+0x30]` before and after a call to a function that
 writes no register: one read of the goroutine at its entry serves both, it
@@ -20782,6 +20821,8 @@ the barrier's parameters are its two registers.
 `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
 1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
 1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
+`GoDuffDevices.AreFoundByName` loads a pclntab with `runtime.duffzero`,
+`runtime.duffcopy` and `main.a`: the first two are listed with their code.
 
 `GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
 `runtime.callbackasm1` from a pclntab. `GoCallbacks.

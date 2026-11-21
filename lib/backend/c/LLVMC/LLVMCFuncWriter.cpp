@@ -10754,6 +10754,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           Fn.hasFnAttribute(mips::NoMSAMarker));
       SignatureOS << mipsModeAttribute(Fn, /*HasBody=*/true);
     }
+    const llvm::StringRef Convention = definitionConvention(Fn);
+    SignatureOS << Convention;
     // Return pointers may contain callback or array declarators. Attach the
     // whole function name/parameter list at the shared declarator boundary;
     // concatenating an abstract type and a name loses the C grouping.
@@ -10783,6 +10785,8 @@ void LLVMCWriter::renderFunctionProjection(llvm::Function &Fn) {
           DeclaratorOS << declarationToC(
               Ty, Name.empty() ? "arg" + std::to_string(Index) : Name);
         }
+    if (ParamIdx == 0 && !Convention.empty())
+      DeclaratorOS << "void";
     if (Fn.isVarArg() && ParamIdx != 0) {
       if (ParamIdx > 0)
         DeclaratorOS << ", ";

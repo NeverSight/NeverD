@@ -18,6 +18,28 @@ def member(name, architecture="x86", kind="code", module="api-ms-win-crt-test.dl
 
 
 class MicrosoftUCRTTypes(unittest.TestCase):
+    def test_bridge_binding_indices_require_one_declaration_per_requested_slot(self):
+        binding = "@neverd_ucrt_abi_0 = global ptr @first, align 8\n"
+        ir = binding + "@neverd_ucrt_abi_10 = global ptr @last, align 8\n"
+        ir += "declare void @first()\ndeclare i32 @last(i32)\n"
+        self.assertEqual(ucrt.bridge_abis(ir, ["first"]), {"first": ("@first", "void", "")})
+        for invalid in (ir + binding, ir.replace(binding, "")):
+            with self.assertRaisesRegex(ValueError, "unique compiler ABI"):
+                ucrt.bridge_abis(invalid, ["first"])
+
+    def test_module_imports_preserve_linkage_and_skip_ordinal_only_members(self):
+        module = "example.dll"
+        native = member("Public", "arm64", module=module.upper())
+        ordinal = member("Ordinal", "arm64", module=module).replace(
+            "Name type: exportas\nExport name: Ordinal\n", "Name type: ordinal\n")
+        text = native + ordinal + member("EC", "arm64", module=module).replace(
+            "COFF-import-file-ARM64", "COFF-import-file-ARM64EC")
+        text += member("Foreign", "arm64") + member("Data", "arm64", "data", module)
+        self.assertEqual(ucrt.module_import_symbols(text, "arm64", module),
+                         {"Public": {"_DifferentLinkerSymbol", "__imp__DifferentLinkerSymbol"}})
+        with self.assertRaisesRegex(ValueError, "export name"):
+            ucrt.module_import_symbols(native.replace("Export name: Public\n", ""), "arm64", module)
+
     def test_compiler_abi_keeps_calling_convention_and_extension_attributes(self):
         ir = ('@neverd_ucrt_abi_0 = global ptr @"\\01_routine@4", align 4\n'
               'declare x86_stdcallcc zeroext i1 @"\\01_routine@4"(ptr noundef) #2\n')

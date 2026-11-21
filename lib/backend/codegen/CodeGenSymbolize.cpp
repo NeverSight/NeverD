@@ -9,6 +9,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "CodeGenSymbolize.h"
+
 #include "neverd/backend/codegen/CodeGen.h"
 #include "neverd/loader/BinaryImage.h"
 
@@ -31,6 +33,12 @@ namespace {
 #define CODEGEN_SYMBOLIZE_TEXT(Name, Value) constexpr char Name[] = Value;
 #include "CodeGenSymbolize.def"
 } // namespace
+
+void declareOriginalPointerMirror(llvm::GlobalVariable &Mirror) {
+  Mirror.setInitializer(nullptr);
+  Mirror.setLinkage(llvm::GlobalValue::ExternalLinkage);
+  Mirror.setDSOLocal(true);
+}
 
 void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
   llvm::Type *I8 = llvm::Type::getInt8Ty(Mod.getContext());
@@ -60,9 +68,7 @@ void symbolizeImageAbsolutePointers(llvm::Module &Mod, const BinaryImage &Img) {
       continue;
     if (!Img.getSegmentFor(*RunStart))
       continue; // original run not in image -> keep the self-contained mirror
-    GV.setInitializer(nullptr);
-    GV.setLinkage(llvm::GlobalValue::ExternalLinkage);
-    GV.setDSOLocal(true);
+    declareOriginalPointerMirror(GV);
   }
 
   auto getOrCreateDataGlobal = [&](va_t VA) -> llvm::GlobalVariable * {

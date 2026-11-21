@@ -3,6 +3,7 @@
 from pathlib import Path
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,31 @@ import check_microsoft_provider_abis as provider
 
 
 class MicrosoftProviderABIs(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("clang"), "requires the Clang frontend")
+    def test_original_callback_and_anonymous_record_contract_survive_publication(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            original, published = root / "original.h", root / "published.h"
+            sdk = ("typedef void (__stdcall *alljoyn_hook)(unsigned char);\n"
+                   "typedef struct { int flags; alljoyn_hook handler; } alljoyn_table;\n")
+            original.write_text(sdk)
+            flags = ["clang", "--target=i686-pc-windows-msvc", "-ffreestanding"]
+
+            def check(text):
+                published.write_text(text)
+                row = {"commands": []}
+                provider.alljoyn_public_types(original, flags + ["-x", "c++"], published,
+                                              flags, {}, root, row)
+                return row
+
+            row = check(sdk)
+            self.assertEqual(row["record_fields"], {"alljoyn_table": ["flags", "handler"]})
+            self.assertEqual(row["callback_types"], ["alljoyn_hook"])
+            for broken in (sdk.replace("__stdcall", "__cdecl"),
+                           sdk.replace("int flags; alljoyn_hook handler;", "alljoyn_hook handler; int flags;")):
+                with self.assertRaisesRegex(ValueError, "callback ABI or record layout"):
+                    check(broken)
+
     def test_generated_declarations_do_not_inherit_the_wdk_default_calling_convention(self):
         compiler = ['clang', '--target=i686-pc-windows-msvc', '-I', 'wdk',
                     '-ivfsoverlay', 'headers.json', '-Xclang', '-fdefault-calling-conv=stdcall',

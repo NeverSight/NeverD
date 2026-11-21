@@ -65,8 +65,8 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> RequiredNativeEntries,
                           llvm::ArrayRef<LowFunc> SourceFunctions = {});
 
-/// An ADR whose operand denotes an address in the original image. The
-/// instruction and target use the input image's preferred addresses.
+/// An ADR or immutable rebased literal load that produces a source address.
+/// Instruction and target use the input image's preferred addresses.
 struct MachOLiftedSourceAddress {
   va_t Instruction;
   va_t Target;
@@ -77,7 +77,7 @@ struct MachOLiftedSourceAddress {
 /// for the separate verification of the final linked machine instructions.
 /// On success RecoveredData receives sorted, independently proved source
 /// ranges absent from the image's data-in-code table. SourceAddresses receives
-/// the sorted ADR sites that require a source-relative fixup after placement.
+/// the sorted instruction sites that materialize original image addresses.
 llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
     llvm::Module &Module, const BinaryImage &Image,
     std::vector<MachODataInCodeRange> *RecoveredData = nullptr,

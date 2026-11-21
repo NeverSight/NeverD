@@ -13,11 +13,11 @@
 #endif
 
 MACHO_OBJECT_TEXT(kAddressSourceWord,
-                  "lifted source ADR differs from its emitted instruction or "
+                  "lifted source address differs from its emitted instruction or "
                   "function extent")
 MACHO_OBJECT_TEXT(kAddressReach,
-                  "source target is outside the signed 21-bit reach of the "
-                  "placed ADR")
+                  "source address literal pool is out of instruction range")
+MACHO_OBJECT_TEXT(kNoPlacement, "original Mach-O has no safe placement")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,
                   "classic arm64e requires implicit signed-return CFI; "
                   "use a compatible native object producer or fixed LLVM fork")

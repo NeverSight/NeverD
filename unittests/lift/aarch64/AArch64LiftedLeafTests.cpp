@@ -21,10 +21,12 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/Loader.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/pipeline/Pipeline.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BranchEncoding.h"
 #include "neverd/support/ISAEncoding.h"
 #include "neverd/support/TargetCodegenInfo.h"
@@ -39,6 +41,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Operator.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
@@ -49,10 +52,12 @@
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <utility>
 
@@ -372,6 +377,30 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
               RetainedDefault);
   }
   const auto Snapshot = Image->Raw;
+  if (Preamble == kInteriorAddresses) {
+    const auto *Peer = Image->findSymbol(kDifferenceSymbol);
+    ASSERT_TRUE(Peer);
+    llvm::LLVMContext SelectedContext;
+    PipelineOptions Selected;
+    Selected.LiftMode = true;
+    Selected.NoOpt = true;
+    Selected.EmitDumpOutput = false;
+    Selected.OnlyFunctionEntries.insert(Peer->Addr);
+    auto Unit = Pipeline().run(*Image, SelectedContext, Selected);
+    ASSERT_TRUE(Unit.Success && Unit.LlvmModule) << Unit.Error;
+    auto *Caller = Unit.LlvmModule->getFunction(kDifference);
+    auto *Owner = Unit.LlvmModule->getFunction(kSum);
+    ASSERT_TRUE(Caller && !Caller->isDeclaration());
+    ASSERT_TRUE(Owner && Owner->isDeclaration());
+    EXPECT_TRUE(llvm::any_of(Owner->users(), [](const llvm::User *User) {
+      const auto *GEP = llvm::dyn_cast<llvm::GEPOperator>(User);
+      if (!GEP || !GEP->getSourceElementType()->isIntegerTy(CHAR_BIT) ||
+          GEP->getNumIndices() != 1)
+        return false;
+      const auto *Index = llvm::dyn_cast<llvm::ConstantInt>(GEP->getOperand(1));
+      return Index && Index->equalsInt(aarch64::kInsnSize);
+    }));
+  }
   llvm::LLVMContext Context;
   PipelineOptions Options;
   Options.PatchMode = true;
@@ -420,8 +449,12 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
       llvm::consumeError(Rejected.takeError());
     testing::Test::RecordProperty(kPageOperands, Pairs);
   }
+  std::vector<MachOLiftedSourceAddress> Addresses;
+  const unsigned InteriorWords =
+      Preamble == kBlockAddresses
+          ? kReturnLabelWords
+          : Preamble == kInteriorAddresses || Preamble == kDistantInterior;
   if (OriginalAddresses) {
-    std::vector<MachOLiftedSourceAddress> Addresses;
     auto Valid =
         validateMachORegisterResults(Module, *Image, nullptr, &Addresses);
     ASSERT_TRUE(bool(Valid)) << llvm::toString(Valid.takeError());
@@ -431,12 +464,52 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
     ASSERT_TRUE(Sum);
     if (EntryAddresses) {
       for (const auto &Site : Addresses)
-        EXPECT_EQ(Site.Target, Sum->Addr);
+        EXPECT_EQ(Site.Target, Sum->Addr + InteriorWords * aarch64::kInsnSize);
     } else {
       EXPECT_EQ(Addresses[0].Target, ExpectedData.front().Begin);
       EXPECT_EQ(Addresses[1].Target, ExpectedData.front().Begin + 1);
       EXPECT_EQ(Addresses[2].Target, Addresses[2].Instruction);
       EXPECT_EQ(Addresses[3].Target, Sum->Addr);
+    }
+    if (InteriorWords) {
+      const auto *Peer = Image->findSymbol(kDifferenceSymbol);
+      ASSERT_TRUE(Peer);
+      EXPECT_EQ(
+          machOInteriorAddressOwner(*Image, Sum->Addr + aarch64::kInsnSize),
+          Sum->Addr);
+      EXPECT_FALSE(machOInteriorAddressOwner(*Image, Sum->Addr + 1));
+      EXPECT_FALSE(
+          machOInteriorAddressOwner(*Image, ExpectedData.front().Begin));
+      EXPECT_EQ(
+          machOInteriorAddressOwner(*Image, Peer->Addr + aarch64::kInsnSize),
+          Peer->Addr);
+    }
+    if (Preamble == kBlockAddresses) {
+      const llvm::MachO::linkedit_data_command *Starts = nullptr;
+      forEachMachOLoadCommand(
+          Image->Raw.data(), Image->Raw.size(),
+          [&](const uint8_t *P, uint32_t ID, uint32_t, bool) {
+            if (ID == llvm::MachO::LC_FUNCTION_STARTS)
+              Starts =
+                  reinterpret_cast<const llvm::MachO::linkedit_data_command *>(
+                      P);
+          });
+      ASSERT_TRUE(Starts && Starts->datasize);
+      // A coalesced compact row alone cannot distinguish these two owners.
+      // Misalign the starts, then independently damage their zero padding.
+      for (auto At :
+           {Starts->dataoff, Starts->dataoff + Starts->datasize - 1}) {
+        auto Bytes = Image->Raw;
+        Bytes[At] ^= 1;
+        auto Invalid = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::StringRef(reinterpret_cast<const char *>(Bytes.data()),
+                            Bytes.size()),
+            Input));
+        ASSERT_TRUE(bool(Invalid)) << llvm::toString(Invalid.takeError());
+        EXPECT_TRUE(Invalid->MachOFunctionStarts.empty());
+        EXPECT_FALSE(machOInteriorAddressOwner(*Invalid,
+                                               Sum->Addr + aarch64::kInsnSize));
+      }
     }
     testing::Test::RecordProperty(kAddressFixups, int(Addresses.size()));
   }
@@ -919,15 +992,6 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
 
   MachOPatcher Patcher;
   Patcher.setImageContext(&*Image);
-  if (Preamble == kDistantAddresses) {
-    EXPECT_FALSE(Patcher.patch(Input, Output, Module, Image->Arch).Success);
-    EXPECT_FALSE(std::filesystem::exists(Output));
-    auto Unchanged = Reader->load(Input);
-    ASSERT_TRUE(bool(Unchanged)) << llvm::toString(Unchanged.takeError());
-    EXPECT_EQ(Unchanged->Raw, Snapshot);
-    testing::Test::RecordProperty(kDistantAddressRefused, true);
-    return;
-  }
   if (Check == LeafCheck::SigningRequirements) {
     auto Signature = macho_signature::inspect(Image->Raw);
     ASSERT_TRUE(bool(Signature)) << llvm::toString(Signature.takeError());
@@ -1214,6 +1278,31 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
   ASSERT_TRUE(bool(Final)) << llvm::toString(Final.takeError());
   EXPECT_TRUE(Final->isArm64e());
   EXPECT_NE(Final->Raw, Snapshot);
+  if (Preamble == kDistantAddresses || Preamble == kDistantInterior) {
+    std::set<va_t> Slots;
+    for (const auto &Entry : Installed.PatchedFunctions) {
+      const auto Original = llvm::find_if(Addresses, [&](const auto &Site) {
+        return Site.Instruction == Entry.OriginalVA;
+      });
+      ASSERT_NE(Original, Addresses.end());
+      const auto *Bytes = Final->readVA(Entry.OwnerVA, aarch64::kInsnSize);
+      ASSERT_TRUE(Bytes);
+      const auto Word = readLE<uint32_t>(Bytes);
+      ASSERT_TRUE(aarch64::isPointerLiteralLoad(Word));
+      const va_t Slot =
+          aarch64::decodeLiteralLoad(Word, Entry.OwnerVA)->Address;
+      EXPECT_TRUE(Final->readOnlyAfterRelocations(Slot, sizeof(va_t)));
+      EXPECT_TRUE(Final->MachOResolvedChainedPointerSlots.contains(Slot));
+      EXPECT_FALSE(Final->MachOAuthenticatedPointers.contains(Slot));
+      const auto *Target = Final->readVA(Slot, sizeof(va_t));
+      ASSERT_TRUE(Target);
+      EXPECT_EQ(readLE<va_t>(Target),
+                Original->Target + Installed.OriginalSectionSlide);
+      Slots.insert(Slot);
+    }
+    EXPECT_EQ(Slots.size(), InteriorWords ? 1u : ExpectedEntries);
+    testing::Test::RecordProperty(kRebasedSlots, int(Slots.size()));
+  }
   for (const auto &Entry : Installed.PatchedFunctions) {
     EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
     EXPECT_TRUE(Final->ExceptionMetadata.findFunction(Entry.OwnerVA));
@@ -1448,6 +1537,19 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
         EXPECT_NE(Entry.OwnerVA, Entry.OriginalVA);
       auto Reloaded = Reader->load(NextPath);
       ASSERT_TRUE(bool(Reloaded)) << llvm::toString(Reloaded.takeError());
+      if (Preamble == kDistantAddresses || Preamble == kDistantInterior) {
+        const auto &Slots = Previous->MachOResolvedChainedPointerSlots;
+        ASSERT_FALSE(Slots.empty());
+        EXPECT_EQ(Reloaded->MachOResolvedChainedPointerSlots.size(),
+                  Slots.size());
+        for (va_t Slot : Slots) {
+          const va_t Relocated = Slot + Repeated.OriginalSectionSlide;
+          EXPECT_TRUE(
+              Reloaded->MachOResolvedChainedPointerSlots.contains(Relocated));
+          EXPECT_TRUE(
+              Reloaded->readOnlyAfterRelocations(Relocated, sizeof(va_t)));
+        }
+      }
       auto After = macho_signature::inspect(Reloaded->Raw);
       ASSERT_TRUE(bool(After)) << llvm::toString(After.takeError());
       auto Validation = macho_signature::validateTransactionallyAdHocResigned(
@@ -2076,15 +2178,91 @@ TEST(AArch64LiftedImage, ADRPreservesSourceLiteralAndFunctionAddresses) {
                         LeafCheck::Relifted, kAddressFunctions);
 }
 
-TEST(AArch64LiftedImage, RejectsSourceADRBeyondArchitecturalReach) {
+TEST(AArch64LiftedImage, RebasedLiteralChecksBothSignedDisplacementLimits) {
+  constexpr int64_t Scale = branch::A64InstructionBytes;
+  constexpr int64_t Reach =
+      (int64_t{1} << (branch::A64LoadLiteralOffset.Width - 1)) * Scale;
+  constexpr va_t PC = Reach * 2;
+  for (uint32_t Reg = 0; Reg <= aarch64::kRdMask; ++Reg) {
+    for (const auto Delta :
+         {-Reach, -Scale, int64_t{0}, Scale, Reach - Scale}) {
+      auto Word = aarch64::encodePointerLiteralLoad(Reg, PC, PC + Delta);
+      ASSERT_TRUE(Word);
+      EXPECT_EQ(*Word & aarch64::kRdMask, Reg);
+      ASSERT_TRUE(aarch64::isPointerLiteralLoad(*Word));
+      EXPECT_EQ(aarch64::decodeLiteralLoad(*Word, PC)->Address, PC + Delta);
+    }
+  }
+  for (const auto Delta : {-Reach - Scale, int64_t{-1}, int64_t{1}, Reach})
+    EXPECT_FALSE(aarch64::encodePointerLiteralLoad(0, PC, PC + Delta));
+  EXPECT_FALSE(aarch64::encodePointerLiteralLoad(aarch64::kRdMask + 1, PC, PC));
+  const va_t High = InvalidVA - Scale + 1;
+  EXPECT_FALSE(aarch64::encodePointerLiteralLoad(0, 0, High));
+  EXPECT_FALSE(aarch64::encodePointerLiteralLoad(0, High, 0));
+}
+
+TEST(AArch64LiftedImage, PreservesSourceAddressesBeyondADRReach) {
   verifyPublishedLeaves(kAddressLeaves, kAddressCaller, kAssemblyName,
                         kDistantAddresses, LeafCheck::Relifted,
                         kAddressFunctions);
 }
 
+TEST(AArch64LiftedImage, RecognizesOnlyImmutableLocalLiteralRebases) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kAssemblyName).string();
+  const auto Input = (Root / kOriginal).string();
+  std::ofstream(Source) << kRebasedAddressCells;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
+                                      {kCompiler, kTargetFlag, kTarget, kDylib,
+                                       kDataLinker, Source, kOut, Input}),
+            0);
+  auto Image = Loader::create(BinaryFormat::MachO)->load(Input);
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto *Entry = Image->findSymbol(kSumSymbol);
+  const auto *Cells = Image->findSymbol(kAddressCellsSymbol);
+  const auto *Mutable = Image->findSymbol(kMutableCellSymbol);
+  ASSERT_TRUE(Entry && Cells && Mutable);
+  const va_t Target = Entry->Addr + aarch64::kInsnSize;
+  const auto Pointer = Image->getPointerSize();
+  const auto Check = [&](va_t Slot, std::optional<va_t> Expected) {
+    const auto Load = aarch64::encodePointerLiteralLoad(0, Entry->Addr, Slot);
+    ASSERT_TRUE(Load);
+    EXPECT_EQ(machORebasedLiteralAddress(*Image, *Load, Entry->Addr), Expected);
+  };
+  Check(Cells->Addr, Target);
+  EXPECT_TRUE(
+      Image->MachOAuthenticatedPointers.contains(Cells->Addr + Pointer));
+  for (unsigned I = 1; I < kReadOnlyCellCount; ++I)
+    Check(Cells->Addr + I * Pointer, std::nullopt);
+  EXPECT_TRUE(Image->MachOResolvedChainedPointerSlots.contains(Mutable->Addr));
+  Check(Mutable->Addr, std::nullopt);
+#else
+  GTEST_SKIP();
+#endif
+}
+
 TEST(AArch64LiftedImage, PublishedOutputParametersKeepOriginalEntryAddresses) {
   verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName, {},
                         LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, RecoversInteriorAddressesInLocalAndPeerFunctions) {
+  verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName,
+                        kInteriorAddresses, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, PublishesLocalAndPeerReferencesToABasicBlock) {
+  verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName,
+                        kBlockAddresses, LeafCheck::Relifted);
+}
+
+TEST(AArch64LiftedImage, SharesDistantInteriorAddressAcrossFunctions) {
+  verifyPublishedLeaves(kStoreEntryLeaves, kStoreEntryCaller, kAssemblyName,
+                        kDistantInterior, LeafCheck::Relifted);
 }
 
 TEST(AArch64LiftedImage, PublishedEntryOffsetsPreserveTheOriginalBase) {

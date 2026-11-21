@@ -8,6 +8,8 @@
 
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/DirectBranch.h"
+#include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/ISAEncoding.h"
 
 #include "llvm/ADT/STLExtras.h"
@@ -16,6 +18,60 @@
 #include <algorithm>
 
 namespace neverd {
+std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
+                                              va_t VA) {
+  constexpr auto Word = aarch64::kInsnSize;
+  if (!Image.isArm64e() || VA % Word ||
+      !Image.hasExecutableCodeOwnerRange(VA, Word))
+    return std::nullopt;
+  const auto *Frame = Image.ExceptionMetadata.findFunction(VA);
+  const auto *Segment = Image.getSegmentFor(VA);
+  if (!Frame || (!Frame->Compact && !Frame->Dwarf) || !Segment ||
+      !Segment->isExecutable() || Segment->isWritable() ||
+      !rangeInBounds(VA - Frame->CodeRange.Begin, Word,
+                     Frame->CodeRange.size()) ||
+      !rangeInBounds(VA - Segment->VA, Word, Segment->FileSz))
+    return std::nullopt;
+  const auto Data = Image.DataInCode.lower_bound(VA);
+  if (Data != Image.DataInCode.end() && *Data - VA < Word)
+    return std::nullopt;
+  if (Frame->Dwarf && (VA < Frame->Dwarf->InitialLocation ||
+                       !rangeInBounds(VA - Frame->Dwarf->InitialLocation, Word,
+                                      Frame->Dwarf->AddressRange)))
+    return std::nullopt;
+  // Darwin may coalesce several adjacent functions' compact unwind rows.
+  // The linker's starts still delimit the original storage for each one.
+  if (Image.MachOFunctionStarts.empty() && !Frame->Dwarf)
+    return std::nullopt;
+  const auto Next = llvm::upper_bound(Image.MachOFunctionStarts, VA);
+  va_t Owner = Frame->CodeRange.Begin;
+  if (Frame->Compact &&
+      (Frame->Compact->NativeEncoding & macho_unwind::kIsNotFunctionStart)) {
+    if (Next == Image.MachOFunctionStarts.begin())
+      return std::nullopt;
+    Owner = *std::prev(Next);
+  } else if (Next != Image.MachOFunctionStarts.begin()) {
+    Owner = std::max(Owner, *std::prev(Next));
+  }
+  if (Owner >= VA || Image.getSectionFor(Owner) != Image.getSectionFor(VA) ||
+      Image.getSegmentFor(Owner) != Segment)
+    return std::nullopt;
+  return Owner;
+}
+
+std::optional<va_t> machORebasedLiteralAddress(const BinaryImage &Image,
+                                               uint32_t Word, va_t PC) {
+  if (!aarch64::isPointerLiteralLoad(Word))
+    return std::nullopt;
+  const va_t Slot = aarch64::decodeLiteralLoad(Word, PC)->Address;
+  if (Image.MachOChainedFixupsAmbiguous ||
+      !Image.MachOResolvedChainedPointerSlots.contains(Slot) ||
+      !Image.readOnlyAfterRelocations(Slot, sizeof(va_t)))
+    return std::nullopt;
+  const auto *Bytes = Image.readVA(Slot, sizeof(va_t));
+  return Bytes ? std::optional<va_t>(readLE<va_t>(Bytes)) : std::nullopt;
+}
+
 std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
                                                    va_t Start, va_t NextEntry) {
   constexpr auto Word = aarch64::kInsnSize;

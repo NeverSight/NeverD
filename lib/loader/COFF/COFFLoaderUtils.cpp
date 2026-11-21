@@ -20,6 +20,8 @@
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/CVDebugRecord.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Endian.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
@@ -1364,8 +1366,100 @@ void parseTLSDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
                           << " callbacks\n");
 }
 
+namespace {
+
+/// Decode the PGU and LTCG linker group tables. A group names an input
+/// contribution even after the linker folds it into a larger output section.
+/// Validate the complete table before using any individual group's name.
+bool collectLinkerDataRanges(
+    llvm::ArrayRef<uint8_t> Bytes,
+    llvm::ArrayRef<detail::RawBackedSectionRange> Sections,
+    const BinaryImage &Img, std::vector<LinkerDataRange> &DataGroups) {
+  using llvm::support::endian::read32le;
+  if (Bytes.size() < sizeof(uint32_t))
+    return false;
+  constexpr uint32_t PGU = 0x50475500, LTCG = 0x4C544347;
+  const uint32_t Signature = read32le(Bytes.data());
+  if (Signature != PGU && Signature != LTCG)
+    return true;
+  Bytes = Bytes.drop_front(sizeof(uint32_t));
+  struct Group {
+    uint32_t RVA;
+    uint32_t Size;
+    bool Data;
+  };
+  std::vector<Group> Groups;
+  while (!Bytes.empty()) {
+    constexpr size_t HeaderSize = 2 * sizeof(uint32_t);
+    if (Bytes.size() <= HeaderSize)
+      return false;
+    const uint32_t RVA = read32le(Bytes.data());
+    const uint32_t Size = read32le(Bytes.data() + sizeof(uint32_t));
+    llvm::StringRef Names(
+        reinterpret_cast<const char *>(Bytes.data() + HeaderSize),
+        Bytes.size() - HeaderSize);
+    const size_t Nul = Names.find('\0');
+    if (Nul == llvm::StringRef::npos)
+      return false;
+    const size_t NameBytes = llvm::alignTo(Nul + 1, sizeof(uint32_t));
+    if (NameBytes > Names.size())
+      return false;
+    llvm::StringRef Name = Names.take_front(Nul);
+    Bytes = Bytes.drop_front(HeaderSize + NameBytes);
+    if (Size == 0)
+      continue;
+    if (Name.empty() || static_cast<uint64_t>(RVA) + Size > (uint64_t{1} << 32))
+      return false;
+    Groups.push_back({RVA, Size,
+                      Name == ".rdata" || Name.starts_with(".rdata$") ||
+                          Name.starts_with(".CRT$X") || Name == ".gfids"});
+  }
+  llvm::sort(Groups,
+             [](const Group &A, const Group &B) { return A.RVA < B.RVA; });
+  // The directory reader has already checked each section's virtual and file
+  // extents. Walk the groups and their unique virtual owners in address order.
+  std::vector<detail::RawBackedSectionRange> Owners(Sections.begin(),
+                                                    Sections.end());
+  llvm::erase_if(Owners, [](const auto &S) { return S.VirtualSize == 0; });
+  llvm::sort(Owners,
+             [](const auto &A, const auto &B) { return A.RVA < B.RVA; });
+  auto VirtualEnd = [](const auto &S) {
+    return uint64_t(S.RVA) + S.VirtualSize;
+  };
+  for (size_t I = 1; I < Owners.size(); ++I)
+    if (VirtualEnd(Owners[I - 1]) > Owners[I].RVA)
+      return false;
+  auto Owner = Owners.begin();
+  uint64_t PreviousEnd = 0;
+  for (const Group &G : Groups) {
+    if (G.RVA < PreviousEnd)
+      return false;
+    PreviousEnd = uint64_t(G.RVA) + G.Size;
+    while (Owner != Owners.end() && VirtualEnd(*Owner) <= G.RVA)
+      ++Owner;
+    if (Owner == Owners.end() || G.RVA < Owner->RVA ||
+        PreviousEnd > VirtualEnd(*Owner))
+      return false;
+    if (!G.Data)
+      continue;
+    if (PreviousEnd > InvalidVA - Img.Base)
+      return false;
+    const va_t Begin = Img.Base + G.RVA;
+    if (!Img.hasExecutableCodeOwnerAt(Begin))
+      continue;
+    if (PreviousEnd - Owner->RVA > Owner->RawSize)
+      return false;
+    DataGroups.push_back({Begin, Img.Base + PreviousEnd});
+  }
+  return true;
+}
+} // namespace
+
 void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
-                         llvm::ArrayRef<uint8_t> OriginalBytes) {
+                         llvm::ArrayRef<uint8_t> OriginalBytes,
+                         std::vector<LinkerDataRange> *DataGroups) {
+  if (DataGroups)
+    DataGroups->clear();
   Img.DynInfo.PDBPath.clear();
   Img.DynInfo.CodeViewPDBIdentityState = PDBIdentityState::Absent;
   Img.DynInfo.CodeViewPDBIdentity.reset();
@@ -1415,26 +1509,31 @@ void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
   const size_t NumEntries =
       DirectoryBytes.size() / sizeof(llvm::object::debug_directory);
 
+  std::optional<llvm::ArrayRef<uint8_t>> LinkerPayload;
+  bool BadLinkerPayload = false;
   for (size_t I = 0; I < NumEntries; ++I) {
     llvm::object::debug_directory DbgEntry;
     std::memcpy(&DbgEntry, DirectoryBytes.data() + I * sizeof(DbgEntry),
                 sizeof(DbgEntry));
-    if (DbgEntry.Type != llvm::COFF::IMAGE_DEBUG_TYPE_CODEVIEW)
+    const bool Linker = DbgEntry.Type == llvm::COFF::IMAGE_DEBUG_TYPE_POGO;
+    if (DbgEntry.Type != llvm::COFF::IMAGE_DEBUG_TYPE_CODEVIEW &&
+        !(Linker && DataGroups))
       continue;
-
-    const uint32_t DataRVA = DbgEntry.AddressOfRawData;
-    const uint32_t FileOffset = DbgEntry.PointerToRawData;
-    const uint32_t DataSize = DbgEntry.SizeOfData;
-    if (DataSize == 0 || (DataRVA == 0 && FileOffset == 0)) {
-      Registry.observeMalformed();
-      continue;
-    }
-
-    auto Payload = detail::resolveCodeViewPayload(FileBytes, Sections, DataRVA,
-                                                  FileOffset, DataSize);
+    auto Payload = detail::resolveCodeViewPayload(
+        FileBytes, Sections, DbgEntry.AddressOfRawData,
+        DbgEntry.PointerToRawData, DbgEntry.SizeOfData);
     if (!Payload) {
       llvm::consumeError(Payload.takeError());
-      Registry.observeMalformed();
+      if (Linker)
+        BadLinkerPayload = true;
+      else
+        Registry.observeMalformed();
+      continue;
+    }
+    if (Linker) {
+      if (LinkerPayload && *LinkerPayload != *Payload)
+        BadLinkerPayload = true;
+      LinkerPayload = *Payload;
       continue;
     }
 
@@ -1447,6 +1546,15 @@ void parseDebugDirectory(const COFFObjectFile &Obj, BinaryImage &Img,
     Registry.observe(*Record);
   }
 
+  if (DataGroups &&
+      (BadLinkerPayload ||
+       (LinkerPayload && !collectLinkerDataRanges(*LinkerPayload, Sections, Img,
+                                                  *DataGroups)))) {
+    DataGroups->clear();
+    Img.addLoadDiagnostic("pe.linker_data_groups",
+                          "Malformed or conflicting PE linker group metadata; "
+                          "section permissions retained for base relocations.");
+  }
   Publish();
   LLVM_DEBUG(llvm::dbgs() << "coff: CodeView PDB identity state = "
                           << static_cast<unsigned>(

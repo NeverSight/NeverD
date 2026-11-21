@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace neverd;
@@ -33,6 +34,10 @@ using namespace neverd;
 class PointerContext final : public NullDebugContext {
 public:
   std::map<va_t, FunctionSym> Functions;
+  std::vector<va_t> BoundEntries;
+  llvm::ArrayRef<va_t> boundFunctionEntries() const override {
+    return BoundEntries;
+  }
   std::optional<FunctionSym> resolveFunction(va_t Address) const override {
     const auto It = Functions.find(Address);
     return It == Functions.end() ? std::nullopt : std::optional(It->second);
@@ -128,6 +133,47 @@ TEST(LLVMCSourcePointers, ComplexResultIdentitySurvivesCallsAndSerialization) {
         source_call_execution_test::compileAndRun(Source, {Optimization});
     }
   }
+}
+
+TEST(LLVMCSourcePointers, AddressBoundZeroArgumentStdcallKeepsItsLinkage) {
+  constexpr va_t Entry = 0x2000;
+  llvm::LLVMContext Context;
+  llvm::Module Module("entry-convention", Context);
+  Module.setDataLayout("e-p:32:32");
+  llvm::IRBuilder<> Builder(Context);
+  auto *Type = llvm::FunctionType::get(Builder.getInt32Ty(), {}, false);
+  auto *Fn = llvm::Function::Create(Type, llvm::GlobalValue::ExternalLinkage,
+                                    "server_callback", Module);
+  rewrite_source::setOriginalVA(*Fn, Entry);
+  Builder.SetInsertPoint(llvm::BasicBlock::Create(Context, "entry", Fn));
+  Builder.CreateRet(Builder.getInt32(1));
+  PointerContext Debug;
+  auto &Source = Debug.Functions[Entry];
+  Source.Addr = Entry;
+  Source.Name = "server_callback";
+  Source.CallConv = DebugCallConv::Stdcall;
+  Source.ReturnType = NdType::makeInt(4, true);
+  Source.PrototypeFromHeader = true;
+  CEmitterOptions Options;
+  Options.TheArch = Arch::X86;
+  Options.Format = BinaryFormat::COFF;
+  const auto render = [&] {
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    EXPECT_TRUE(LLVMCEmitter().emit(Module, OS, Options, &Debug));
+    return Text;
+  };
+  const std::string Attribute = "__attribute__((stdcall))";
+  EXPECT_EQ(render().find(Attribute), std::string::npos);
+  Debug.BoundEntries = {Entry};
+  const auto Typed = render();
+  EXPECT_NE(Typed.find(Attribute + " int32_t server_callback(void)"),
+            std::string::npos)
+      << Typed;
+  Options.PreserveLLVMFunctionTypes = true;
+  EXPECT_EQ(render().find(Attribute), std::string::npos);
+  Fn->setCallingConv(llvm::CallingConv::X86_StdCall);
+  EXPECT_NE(render().find(Attribute), std::string::npos);
 }
 
 TEST(LLVMCSourcePointers, HeaderCallbackCastsKeepNestedPointeesAndQualifiers) {

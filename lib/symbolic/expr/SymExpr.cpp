@@ -255,6 +255,15 @@ llvm::APInt SymContext::constValue(SymRef R) const {
   return WideConsts[N.Aux];
 }
 
+llvm::ArrayRef<uint64_t> SymContext::constWords(SymRef R) const {
+  const auto &N = node(R);
+  assert(N.Op == SymOp::Const && "constWords on a non-constant");
+  if (N.Width <= 64)
+    return {&N.Aux, 1};
+  const auto &Value = WideConsts[N.Aux];
+  return {Value.getRawData(), Value.getNumWords()};
+}
+
 std::optional<llvm::APInt> SymContext::asConst(SymRef R) const {
   if (!isConst(R))
     return std::nullopt;

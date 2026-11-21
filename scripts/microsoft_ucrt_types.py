@@ -160,14 +160,41 @@ def bridge_abis(ir: str, names=CPP_FUNCTIONS) -> dict:
                              r'\(((?:[^()\n]|\([^()\n]*\))*)\)', ir):
         prefix, symbol, parameters = match.groups()
         declarations[symbol] = (prefix, parameters)
+    bindings = {}
+    for index, symbol in re.findall(r'(?m)^@neverd_ucrt_abi_(\d+)'
+                                    r' = [^\n]*?global ptr (@(?:"[^"\n]+"|[\w.$-]+)),', ir):
+        bindings[index] = symbol if index not in bindings else None
     result = {}
     for index, name in enumerate(names):
-        binding = re.findall(r'(?m)^@neverd_ucrt_abi_' + str(index) +
-                             r' = [^\n]*?global ptr (@(?:"[^"\n]+"|[\w.$-]+)),', ir)
-        if len(binding) != 1 or binding[0] not in declarations:
+        binding = bindings.get(str(index))
+        if binding not in declarations:
             raise ValueError(f"UCRT bridge has no unique compiler ABI: {name}")
-        result[name] = (binding[0], *declarations[binding[0]])
+        result[name] = (binding, *declarations[binding])
     return result
+
+
+def normalized_bridge_abis(ir, names):
+    """Ignore DLL visibility while retaining symbol, convention, widths and parameter attributes."""
+    return {name: (symbol, prefix.removeprefix("dllimport ").removeprefix("dso_local "), parameters)
+            for name, (symbol, prefix, parameters) in bridge_abis(ir, names).items()}
+
+
+def module_import_symbols(text, architecture, module):
+    """Read public code names and exact linker spellings from native COFF import members."""
+    imports = {}
+    for block in re.split(r"(?m)^File: ", text)[1:]:
+        if block.splitlines()[0].strip().lower() != module:
+            continue
+        fields = dict(re.findall(r"(?m)^([^:\n]+): (.*)$", block))
+        if fields.get("Format") != IMPORT_FORMATS[architecture] or fields.get("Type") != "code":
+            continue
+        if fields.get("Name type") == "ordinal":
+            continue
+        name = fields.get("Export name")
+        if not name:
+            raise ValueError("Microsoft import member has no export name")
+        imports.setdefault(name, set()).update(re.findall(r"(?m)^Symbol: (\S+)$", block))
+    return imports
 
 
 def import_names(text: str, architecture: str) -> list[dict]:

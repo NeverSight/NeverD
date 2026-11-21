@@ -192,6 +192,103 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
       });
 }
 
+// In C * product(A + B*x) only the low W-ctz(C) bits of each factor
+// can reach the result. Lower each literal affine chain once in that ring.
+// The sample loop still multiplies every original factor at every point.
+template <typename Step, typename SlotMap>
+size_t prepareAffineFactors(const SymContext &Ctx, SymRef Root,
+                            llvm::MutableArrayRef<Step> Steps,
+                            llvm::MutableArrayRef<uint32_t> Args,
+                            const SlotMap &Slot,
+                            llvm::SmallVectorImpl<uint64_t> &Words) {
+  const auto Factors = Ctx.operands(Root);
+  const auto Width = Ctx.width(Root);
+  if (Factors.size() < 3 || !Ctx.isConst(Factors.front()) ||
+      Ctx.op(Factors[1]) != SymOp::Add)
+    return Steps.size();
+  const unsigned Bits = Width - Ctx.constValue(Factors.front()).countr_zero();
+  if (Bits <= 64 || Bits == Width)
+    return Steps.size();
+
+  // The ordinary DAG already shares identical factors. Allocate one row
+  // per distinct affine factor and retain its multiplicity in the product.
+  size_t Unique = 0;
+  SymRef Previous;
+  for (auto F : Factors.drop_front()) {
+    if (F == Previous)
+      continue;
+    if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2 ||
+        !Ctx.isConst(Ctx.operand(F, 0)))
+      return Steps.size();
+    Previous = F;
+    ++Unique;
+  }
+  // Stop peeling at a shared coordinate: its original slot computes it
+  // once even when long affine chains feed many different factors.
+  llvm::SmallVector<uint8_t, 64> Uses(Slot.size());
+  for (const auto I : Args)
+    Uses[I] = std::min<unsigned>(2, Uses[I] + 1);
+  const auto N = llvm::APInt::getNumWords(Bits);
+  auto Slots = Args.slice(Steps.back().FirstArg, Unique + 1);
+  Slots.front() = Slot.find(Factors.front().index())->second - 1;
+  Words.reserve((1 + 2 * size_t(N)) * Unique);
+  size_t Out = 1;
+  for (size_t I = 1; I < Factors.size();) {
+    auto F = Factors[I];
+    const auto First = I++;
+    while (I < Factors.size() && Factors[I] == F)
+      ++I;
+    Words.push_back(I - First);
+    llvm::APInt A(Bits, 0), B(Bits, 1);
+    do {
+      const auto Op = Ctx.op(F);
+      const auto Children = Ctx.operands(F);
+      if ((Op == SymOp::Add || Op == SymOp::Mul) && Children.size() == 2 &&
+          Ctx.isConst(Children.front())) {
+        llvm::APInt K(Bits, Ctx.constWords(Children.front()).take_front(N));
+        if (Op == SymOp::Mul)
+          B *= K;
+        else
+          A += B * K;
+        F = Children.back();
+        continue;
+      }
+      if ((Op == SymOp::Concat || Op == SymOp::ZExt || Op == SymOp::SExt) &&
+          Ctx.width(Children.back()) >= Bits - B.countr_zero()) {
+        F = Children.back();
+        continue;
+      }
+      if (Op == SymOp::Extract && Ctx.node(F).Aux == 0 &&
+          Ctx.width(F) >= Bits - B.countr_zero()) {
+        F = Children.front();
+        continue;
+      }
+      break;
+    } while (Uses[Slot.find(F.index())->second - 1] == 1);
+    Slots[Out++] = Slot.find(F.index())->second - 1;
+    Words.append(A.getRawData(), A.getRawData() + N);
+    Words.append(B.getRawData(), B.getRawData() + N);
+  }
+  Steps.back().NumArgs = Slots.size();
+  Steps.back().Aux = Bits;
+  // Consumers outside a factor still need their complete inputs. Every
+  // variable lookup retains its original position, including discarded lanes.
+  llvm::fill(Uses, 0);
+  for (auto I : Slots)
+    Uses[I] = 1;
+  for (const auto &St : llvm::reverse(Steps.drop_back()))
+    if (Uses[St.OutputSlot])
+      for (auto I : Args.slice(St.FirstArg, St.NumArgs))
+        Uses[I] = 1;
+  const auto RootStep = Steps.back();
+  size_t Count = 0;
+  for (const auto &St : Steps.drop_back())
+    if (St.Op == SymOp::Var || Uses[St.OutputSlot])
+      Steps[Count++] = St;
+  Steps[Count++] = RootStep;
+  return Count;
+}
+
 } // namespace
 
 bool SymContext::fitsU64(SymRef R) const {
@@ -303,9 +400,9 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
   Vars.erase(std::unique(Vars.begin(), Vars.end()), Vars.end());
 
   if (FitsU64) {
-    ScratchU64.resize(NextSlot);
+    PlanWords.resize(NextSlot);
     for (const auto &[Slot, Node] : ConstantSlots)
-      ScratchU64[Slot] = Ctx.node(Node).Aux;
+      PlanWords[Slot] = Ctx.node(Node).Aux;
   } else {
     NativeState = NativePreparation::Done;
     // A scaled wide product observes only a prefix of each remaining factor.
@@ -313,6 +410,10 @@ SymEvalPlan::SymEvalPlan(const SymContext &Ctx, SymRef Root)
     // the lowest result bit of a comparison, division or right shift.
     prepareWidePrefixes(Ctx, Root, RootSlot, NextSlot,
                         llvm::MutableArrayRef<Step>(Steps), ArgSlots);
+    if (Ctx.op(Root) == SymOp::Mul)
+      Steps.resize(prepareAffineFactors(Ctx, Root,
+                                        llvm::MutableArrayRef<Step>(Steps),
+                                        ArgSlots, Slot, PlanWords));
   }
 }
 
@@ -346,7 +447,7 @@ LLVM_ATTRIBUTE_NOINLINE void SymEvalPlan::prepareNativeReuse() {
     // on any one path. If it cannot hide a literal, no alias is possible.
     // A possible alias still needs the complete, shared-use demand analysis.
     if (AvailableZeros >= NeededZeros) {
-      Steps.resize(prepareNativeResidues(Ctx, Root, RootSlot, ScratchU64.size(),
+      Steps.resize(prepareNativeResidues(Ctx, Root, RootSlot, PlanWords.size(),
                                          llvm::MutableArrayRef<Step>(Steps),
                                          ArgSlots));
       return;
@@ -399,7 +500,7 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
   };
 
   const uint32_t *Args = ArgSlots.data();
-  uint64_t *S = ScratchU64.data();
+  uint64_t *S = PlanWords.data();
 
   for (const Step &St : llvm::ArrayRef<Step>(Steps).take_front(Vars.size()))
     S[St.OutputSlot] = mask(Lookup(static_cast<uint32_t>(St.Aux)), St.Width);
@@ -528,7 +629,7 @@ SymEvalPlan::evalU64With(llvm::function_ref<uint64_t(uint32_t)> Lookup) {
     S[I] = mask(Res, W);
   }
 
-  return ScratchU64[RootSlot];
+  return PlanWords[RootSlot];
 }
 
 llvm::APInt SymEvalPlan::eval(llvm::ArrayRef<llvm::APInt> VarVals) {
@@ -721,6 +822,40 @@ llvm::APInt multiplyLowWords(llvm::ArrayRef<llvm::APInt> Values,
   }
   return llvm::APInt(Bits, llvm::ArrayRef(Product, Words));
 }
+// Evaluate the literal affine factors directly in their common modulus.
+// All three products use disjoint buffers, including arbitrary partial limbs.
+llvm::APInt evaluateAffineFactors(llvm::ArrayRef<llvm::APInt> Values,
+                                  llvm::ArrayRef<uint32_t> Sources,
+                                  llvm::ArrayRef<uint64_t> Coefficients,
+                                  unsigned Bits) {
+  const unsigned N = llvm::APInt::getNumWords(Bits);
+  llvm::SmallVector<uint64_t, 32> Storage(4 * size_t(N), 0);
+  auto *Product = Storage.data(), *Next = Product + N;
+  auto *Factor = Next + N, *Padded = Factor + N;
+  Product[0] = 1;
+  for (auto I : Sources.drop_front()) {
+    const auto &X = Values[I];
+    const auto *Raw = X.getRawData();
+    if (X.getNumWords() < N) {
+      std::copy_n(Raw, X.getNumWords(), Padded);
+      std::fill(Padded + X.getNumWords(), Padded + N, 0);
+      Raw = Padded;
+    }
+    const auto Repeat = Coefficients.front();
+    Coefficients = Coefficients.drop_front();
+    llvm::APInt::tcMultiply(Factor, Raw, Coefficients.data() + N, N);
+    llvm::APInt::tcAdd(Factor, Coefficients.data(), 0, N);
+    for (size_t K = 0; K < Repeat; ++K) {
+      llvm::APInt::tcMultiply(Next, Product, Factor, N);
+      std::swap(Product, Next);
+    }
+    Coefficients = Coefficients.drop_front(2 * N);
+  }
+  const auto &Scale = Values[Sources.front()];
+  return Scale * llvm::APInt(Bits, llvm::ArrayRef(Product, N))
+                     .zext(Scale.getBitWidth());
+}
+
 } // namespace
 
 llvm::APInt SymEvalPlan::evalWith(
@@ -742,7 +877,8 @@ llvm::APInt SymEvalPlan::evalWith(
       if (St.Width <= 64 && preservesLowBits(St.Op))
         ScratchAP[St.OutputSlot] = llvm::APInt(St.Width, 0);
   }
-  for (const Step &St : Steps) {
+  const bool AffineProduct = !FitsU64 && !PlanWords.empty();
+  for (const Step &St : llvm::ArrayRef(Steps).drop_back(AffineProduct)) {
     const auto I = St.OutputSlot;
     const uint32_t *A = ArgSlots.data() + St.FirstArg;
 
@@ -815,6 +951,12 @@ llvm::APInt SymEvalPlan::evalWith(
         [&](size_t K) -> const llvm::APInt & { return ScratchAP[A[K]]; });
   }
 
+  if (AffineProduct) {
+    const auto &St = Steps.back();
+    return evaluateAffineFactors(
+        ScratchAP, llvm::ArrayRef(ArgSlots).slice(St.FirstArg, St.NumArgs),
+        PlanWords, St.Aux);
+  }
   return ScratchAP[RootSlot];
 }
 

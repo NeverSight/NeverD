@@ -1021,9 +1021,19 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
       continue;
     va_t RawAddr = ImageBase + RVA;
     const Segment *TargetSeg = Img.getSegmentFor(RawAddr);
-    va_t Addr = TargetSeg && TargetSeg->isExecutable()
-                    ? normalizeCodeAddress(RawAddr, Img.Arch, Img.Mode)
-                    : RawAddr;
+    va_t Addr = RawAddr;
+    if (TargetSeg && TargetSeg->isExecutable()) {
+      bool Forwarded = false;
+      if (auto Err = I->isForwarder(Forwarded))
+        return std::move(Err);
+      const va_t CodeAddr = normalizeCodeAddress(RawAddr, Img.Arch, Img.Mode);
+      if (Forwarded)
+        // A merged .edata section can be executable. The export names a
+        // forwarder string, so entry recovery must not assign it a code ABI.
+        Img.DataInCode.insert(CodeAddr);
+      else
+        Addr = CodeAddr;
+    }
 
     Export Exp;
     Exp.Name = Name.str();
@@ -1037,15 +1047,20 @@ COFFLoader::loadBuffer(llvm::MemoryBufferRef Buffer) {
   coff_loader::parseDelayImports(Obj, Img);
 
   Progress.check();
-  // --- Base Relocation Table (.reloc) ---
-  Progress.report("parse", 0, 1, "PE/COFF base relocations");
-  if (auto Error = coff_loader::parseBaseRelocations(Obj, Img, ImageBase))
-    return std::move(Error);
+  // CodeView identifies the PDB. Linker contributions distinguish an address
+  // of read-only data from an address of code on the same executable page.
+  std::vector<coff_loader::LinkerDataRange> DataGroups;
+  const auto *Relocations =
+      Obj.getDataDirectory(llvm::COFF::BASE_RELOCATION_TABLE);
+  coff_loader::parseDebugDirectory(
+      Obj, Img, llvm::arrayRefFromStringRef(Buffer.getBuffer()),
+      Relocations && Relocations->Size ? &DataGroups : nullptr);
 
   Progress.check();
-  // --- Debug Directory (PDB path) ---
-  coff_loader::parseDebugDirectory(
-      Obj, Img, llvm::arrayRefFromStringRef(Buffer.getBuffer()));
+  Progress.report("parse", 0, 1, "PE/COFF base relocations");
+  if (auto Error =
+          coff_loader::parseBaseRelocations(Obj, Img, ImageBase, DataGroups))
+    return std::move(Error);
 
   // Named definitions own their entries before unwind discovery supplies
   // ranges. Otherwise .pdata creates an anonymous duplicate for every typed

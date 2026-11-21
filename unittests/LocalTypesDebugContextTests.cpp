@@ -119,7 +119,7 @@ TEST(LocalTypesDebugContext, DriverContractBindsOnlyProvenEntries) {
     Function.Name = Entry == Shim ? "GsDriverEntry" : "DriverEntry";
   }
   sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header}, {},
-                                      {}, {}, {}, {Shim, Body});
+                                      {}, {}, {}, {{Shim, Body}});
   EXPECT_EQ(Context.boundFunctionEntries().vec(),
             (std::vector<va_t>{Shim, Body}));
   for (va_t Entry : {Shim, Body}) {
@@ -137,8 +137,132 @@ TEST(LocalTypesDebugContext, DriverContractBindsOnlyProvenEntries) {
   EXPECT_EQ(Edited->Params.size(), 1u);
   auto Empty = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
   sdk::LocalTypesDebugContext WithoutHeader(Names, Empty, {}, &Image, {}, {},
-                                            {}, {}, {}, {Shim, Body});
+                                            {}, {}, {}, {{Shim, Body}});
   EXPECT_TRUE(WithoutHeader.boundFunctionEntries().empty());
+}
+
+TEST(LocalTypesDebugContext, KernelLibraryCallbacksUseTheTargetWDK) {
+  using namespace neverd;
+  constexpr va_t Initialize = 0x1000, Unload = 0x2000;
+  for (auto [Architecture, Header] :
+       {std::pair{Arch::X86, types::HeaderLibrary::WindowsKernelX86},
+        std::pair{Arch::X64, types::HeaderLibrary::WindowsKernelX64},
+        std::pair{Arch::AArch64, types::HeaderLibrary::WindowsKernelARM64}}) {
+    const auto *Kernel = types::headerLibrary(Header);
+    ASSERT_NE(Kernel, nullptr);
+    auto Types = std::make_shared<types::TypeLibrary>(Kernel->dataModel());
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Format = BinaryFormat::COFF;
+    NamesOnlyDebugContext Names;
+    sdk::LocalTypesDebugContext C(Names, Types, {}, &Image, {Header}, {}, {},
+                                  {}, {}, {{}, Initialize, Unload});
+    EXPECT_EQ(C.boundFunctionEntries().vec(),
+              (std::vector<va_t>{Initialize, Unload}));
+    auto Init = C.resolveFunction(Initialize);
+    auto End = C.resolveFunction(Unload);
+    ASSERT_TRUE(Init && End && Init->ReturnType && End->ReturnType);
+    EXPECT_EQ(Init->ReturnType->Size, 4u);
+    EXPECT_EQ(End->ReturnType->Size, 4u);
+    ASSERT_EQ(Init->Params.size(), 1u);
+    EXPECT_EQ(Init->Params[0].first, "RegistryPath");
+    EXPECT_EQ(Init->Params[0].second->Kind, NdTypeKind::Ptr);
+    EXPECT_TRUE(End->Params.empty());
+    if (Architecture == Arch::X86)
+      EXPECT_EQ(Init->CallConv, DebugCallConv::Stdcall);
+    C.takeDeclarations({{Unload, "int changed(int context)"}});
+    EXPECT_EQ(C.resolveFunction(Unload)->Params.size(), 1u);
+  }
+}
+
+TEST(LocalTypesDebugContext, COMRegistrationUsesTheTargetUserABI) {
+  using namespace neverd;
+  constexpr va_t Register = 0x1000, Unregister = 0x2000;
+  for (auto [Architecture, Header] :
+       {std::pair{Arch::X86, types::HeaderLibrary::WindowsUserX86},
+        std::pair{Arch::X64, types::HeaderLibrary::WindowsUserX64},
+        std::pair{Arch::AArch64, types::HeaderLibrary::WindowsUserARM64}}) {
+    auto Library =
+        std::make_shared<types::TypeLibrary>(types::headerLibraryModel(Header));
+    BinaryImage Image;
+    Image.Arch = Architecture;
+    Image.Format = BinaryFormat::COFF;
+    NamesOnlyDebugContext Names;
+    sdk::WindowsEntryPoints Entries;
+    Entries.DllRegisterServer = Register;
+    Entries.DllUnregisterServer = Unregister;
+    sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header},
+                                        {}, {}, {}, {}, Entries);
+    for (va_t Entry : {Register, Unregister}) {
+      auto Function = Context.resolveFunction(Entry);
+      ASSERT_TRUE(Function && Function->ReturnType);
+      EXPECT_EQ(Function->ReturnType->Size, 4u);
+      EXPECT_EQ(Function->ReturnType->SourceName, "HRESULT");
+      EXPECT_NE(Function->PrototypeDeclaration.find("HRESULT"),
+                std::string::npos);
+      EXPECT_NE(Function->PrototypeDeclaration.find(Function->Name),
+                std::string::npos);
+      EXPECT_TRUE(Function->Params.empty());
+      EXPECT_TRUE(Function->PrototypeFromHeader);
+      if (Architecture == Arch::X86)
+        EXPECT_EQ(Function->CallConv, DebugCallConv::Stdcall);
+    }
+    Context.takeDeclarations({{Register, "int changed(int context)"}});
+    EXPECT_EQ(Context.resolveFunction(Register)->Params.size(), 1u);
+    sdk::LocalTypesDebugContext WithoutUserHeader(Names, Library, {}, &Image,
+                                                  {}, {}, {}, {}, {}, Entries);
+    EXPECT_TRUE(WithoutUserHeader.boundFunctionEntries().empty());
+  }
+}
+
+TEST(LocalTypesDebugContext,
+     ExecutableDLLEntryBindsTheLoaderResultAndArguments) {
+  using namespace neverd;
+  const std::string Declaration = "BOOL __stdcall DllEntryPoint(HINSTANCE "
+                                  "module, DWORD reason, LPVOID reserved)";
+  for (auto [Architecture, Header] :
+       {std::pair{Arch::X86, types::HeaderLibrary::WindowsUserX86},
+        std::pair{Arch::X64, types::HeaderLibrary::WindowsUserX64},
+        std::pair{Arch::AArch64, types::HeaderLibrary::WindowsUserARM64}}) {
+    SCOPED_TRACE(unsigned(Architecture));
+    auto Library =
+        std::make_shared<types::TypeLibrary>(types::headerLibraryModel(Header));
+    BinaryImage Image;
+    Image.Format = BinaryFormat::COFF;
+    Image.Arch = Architecture;
+    Image.Entry = 0x1000;
+    Segment Code;
+    Code.VA = Image.Entry;
+    Code.Size = 4;
+    Code.Data.resize(Code.Size);
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Image.Segments.push_back(std::move(Code));
+    NamesOnlyDebugContext Names;
+    Names.Functions[Image.Entry].Addr = Image.Entry;
+    Names.Functions[Image.Entry].Name = "custom_entry";
+    sdk::LocalTypesDebugContext Context(Names, Library, {}, &Image, {Header},
+                                        {}, {}, {}, Declaration);
+    EXPECT_EQ(Context.boundFunctionEntries().vec(),
+              (std::vector<va_t>{Image.Entry}));
+    const auto Function = Context.resolveFunction(Image.Entry);
+    ASSERT_TRUE(Function && Function->ReturnType);
+    EXPECT_EQ(Function->Name, "custom_entry");
+    EXPECT_TRUE(Function->PrototypeFromHeader);
+    EXPECT_EQ(Function->ReturnType->Size, 4u);
+    ASSERT_EQ(Function->Params.size(), 3u);
+    EXPECT_EQ(Function->Params[0].second->Size,
+              Architecture == Arch::X86 ? 4u : 8u);
+    EXPECT_EQ(Function->Params[1].second->Size, 4u);
+    EXPECT_EQ(Function->Params[2].second->Size,
+              Function->Params[0].second->Size);
+    Context.takeDeclarations({{Image.Entry, "int changed(void)"}});
+    EXPECT_TRUE(Context.resolveFunction(Image.Entry)->Params.empty());
+
+    Image.Segments.front().Flags = SegmentFlags::Readable;
+    sdk::LocalTypesDebugContext Data(Names, Library, {}, &Image, {Header}, {},
+                                     {}, {}, Declaration);
+    EXPECT_TRUE(Data.boundFunctionEntries().empty());
+  }
 }
 
 TEST(LocalTypesDebugContext, ComplexPrototypesKeepTheirCallingClass) {

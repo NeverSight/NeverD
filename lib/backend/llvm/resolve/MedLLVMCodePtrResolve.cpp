@@ -28,6 +28,7 @@
 #include "neverd/ir/med/MedCallLeftovers.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/Diagnostic.h"
@@ -208,36 +209,38 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedCodeAddress(va_t Address) {
 }
 
 llvm::Constant *MedLLVMEmitter::resolveLiftedFunctionInterior(va_t Address) {
-  // The offset fallback is justified by COFF function extents. Other
-  // formats require an exact lifted block identity for an interior target.
-  if (!Mod || !Ctx || TargetFormat != BinaryFormat::COFF ||
-      EmittedFuncCodeRanges.empty())
+  if (!Mod || !Ctx)
     return nullptr;
   std::optional<va_t> BestEntry;
-  va_t BestSpan = ~va_t{0};
-  for (const auto &[Entry, Ranges] : EmittedFuncCodeRanges)
-    for (const auto &[Begin, End] : Ranges) {
-      if (Address < Begin || Address >= End)
-        continue;
-      const va_t Span = End - Begin;
-      if (!BestEntry || Span < BestSpan ||
-          (Span == BestSpan && Entry > *BestEntry)) {
-        BestEntry = Entry;
-        BestSpan = Span;
+  if (Img && Img->isArm64e()) {
+    BestEntry = machOInteriorAddressOwner(*Img, Address);
+  } else if (TargetFormat == BinaryFormat::COFF &&
+             !EmittedFuncCodeRanges.empty()) {
+    va_t BestSpan = ~va_t{0};
+    for (const auto &[Entry, Ranges] : EmittedFuncCodeRanges)
+      for (const auto &[Begin, End] : Ranges) {
+        if (Address < Begin || Address >= End)
+          continue;
+        const va_t Span = End - Begin;
+        if (!BestEntry || Span < BestSpan ||
+            (Span == BestSpan && Entry > *BestEntry)) {
+          BestEntry = Entry;
+          BestSpan = Span;
+        }
       }
-    }
-  if (!BestEntry && Img) {
-    for (const auto &Rec : Img->COFFPDataRecords) {
-      const va_t Begin = Img->Base + Rec.BeginRVA;
-      const va_t End = Img->Base + Rec.EndRVA;
-      if (Address < Begin || Address >= End ||
-          !Img->hasKnownFunctionEntryAt(Begin))
-        continue;
-      const va_t Span = End - Begin;
-      if (!BestEntry || Span < BestSpan ||
-          (Span == BestSpan && Begin > *BestEntry)) {
-        BestEntry = Begin;
-        BestSpan = Span;
+    if (!BestEntry && Img) {
+      for (const auto &Rec : Img->COFFPDataRecords) {
+        const va_t Begin = Img->Base + Rec.BeginRVA;
+        const va_t End = Img->Base + Rec.EndRVA;
+        if (Address < Begin || Address >= End ||
+            !Img->hasKnownFunctionEntryAt(Begin))
+          continue;
+        const va_t Span = End - Begin;
+        if (!BestEntry || Span < BestSpan ||
+            (Span == BestSpan && Begin > *BestEntry)) {
+          BestEntry = Begin;
+          BestSpan = Span;
+        }
       }
     }
   }

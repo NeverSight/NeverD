@@ -181,6 +181,13 @@ TEST(SourceAggregate, SourceNamesAreSpelledAsC) {
   EXPECT_EQ(typeToC(Size), "size_t");
   Size->SourceName = "unsigned int";
   EXPECT_EQ(typeToC(Size), "unsigned int");
+  auto HResult = NdType::makeInt(sizeof(int32_t), true);
+  HResult->SourceName = "HRESULT";
+  EXPECT_EQ(typeToC(HResult, /*SourceNames=*/true), "HRESULT");
+  const auto PortableHResult = typeToC(HResult);
+  EXPECT_NE(PortableHResult.find("sizeof(long)"), std::string::npos);
+  EXPECT_NE(PortableHResult.find("int32_t"), std::string::npos);
+  EXPECT_EQ(typeToC(NdType::makePtr(HResult)), PortableHResult + "*");
   auto Vector = NdType::makeInt(16, false);
   Vector->SourceName = "uint8_t __attribute__((vector_size(16)))";
   EXPECT_EQ(typeToC(Vector), Vector->SourceName);

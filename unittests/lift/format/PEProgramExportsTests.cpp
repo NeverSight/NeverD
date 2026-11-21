@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 #include "gtest/gtest.h"
 
+#include "neverd/loader/COFF/COFFLoader.h"
 #include "neverd/loader/COFF/PEProgramExports.h"
 
 #include "llvm/Object/COFF.h"
@@ -132,6 +133,24 @@ TEST_F(PEProgramExportsTest, RetainsAliasesHolesForwardersAndZeroFilledData) {
   EXPECT_EQ(R->Entries[3].Kind, PEExportKind::Forwarder);
   EXPECT_EQ(R->Entries[3].Forwarder, ForwarderName);
 }
+TEST_F(PEProgramExportsTest, ForwardersInExecutableSectionsAreData) {
+  for (uint64_t Section : {Sections, Sections + sizeof(coff_section)})
+    put32(Section + offsetof(coff_section, Characteristics),
+          IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE);
+  // A normal LLD link can place the export strings beside executable bytes.
+  // The original RVA stays available to the export inventory in this case.
+  auto Buffer = llvm::StringRef(reinterpret_cast<const char *>(File.data()),
+                                File.size());
+  auto Image = COFFLoader().loadBuffer({Buffer, ModuleName});
+  ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+  const auto *Forward = Image->findExport(ForwardName);
+  ASSERT_NE(Forward, nullptr);
+  EXPECT_EQ(Forward->Addr, Image->Base + ExportRVA + ForwarderOffset);
+  EXPECT_TRUE(Image->isCodeAddress(Forward->Addr));
+  EXPECT_FALSE(Image->isFunctionEntryCandidateAt(Forward->Addr));
+  EXPECT_TRUE(Image->isFunctionEntryCandidateAt(Image->Base + CodeRVA));
+}
+
 TEST_F(PEProgramExportsTest, DecodesPE32WithoutUsingPE32PlusOffsets) {
   build<pe32_header>(PE32Header::PE32);
   auto R = readPEProgramExports(File);

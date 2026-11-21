@@ -18,6 +18,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             scripts
+            unittests/lift/aarch64
             unittests/lift/format
             include/neverd/runtime
             include/neverd/ir/intrinsics/AArch64

@@ -62,6 +62,7 @@ ASYNC_FRAME_TEXT(kAlternateHandlerSP, "native_alternate_handler_sp_matches")
 ASYNC_FRAME_TEXT(kCompactOldEntry, "native_old_entry_original_compact_step")
 ASYNC_FRAME_TEXT(kLanguageOldEntry,
                  "native_old_entry_original_compact_lsda_step")
+ASYNC_FRAME_TEXT(kDirectHandlerEntryWalks, "native_handler_to_registered_entry_walks")
 ASYNC_FRAME_TEXT(kRawEntryWalk, "native_old_entry_raw_signal_walk")
 ASYNC_FRAME_TEXT(kRawEntryVisit, "native_old_entry_presented_by_sigtramp")
 ASYNC_FRAME_TEXT(kRawEntrySP, "native_old_entry_raw_caller_sp_matches")
@@ -591,6 +592,7 @@ static struct sample samples[stages_count];
 static pthread_t worker;
 static int entry_only, raw_entry, compact_entry, visits_entry, exact_entry, raw_sp;
 static unsigned lookup_offset;
+static int direct_entry;
 static stack_t alternate_stack;
 static uintptr_t expected_return, expected_outer, owner, stack_low, stack_high;
 struct stack_rule {
@@ -661,7 +663,7 @@ static int check_raw_caller(unw_cursor_t *cursor, uintptr_t sp) {
 // Both walks use Darwin libunwind and the loaded image's registered tables.
 // The first starts in the handler. The second starts at the exact interrupted
 // PC, independently of whether this system exposes it when leaving _sigtramp.
-static void raw_entry_walk(const ucontext_t *uc) {
+static void raw_entry_walk(const siginfo_t *signal_info, const ucontext_t *uc) {
   const arm_thread_state64_t *regs = &uc->uc_mcontext->__ss;
   unw_cursor_t cursor;
   const uintptr_t sp = arm_thread_state64_get_sp(*regs);
@@ -701,6 +703,27 @@ static void raw_entry_walk(const ucontext_t *uc) {
   if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp))
     _exit(37);
   exact_entry = 1;
+
+  uintptr_t low = stack_low, high = stack_high;
+  if (alternate_stack.ss_sp) {
+    low = (uintptr_t)alternate_stack.ss_sp;
+    high = low + alternate_stack.ss_size;
+  }
+  unsigned direct_offset;
+  if (ndDarwinArm64eWalkHandlerEntry(&cursor, signal_info, low,
+                                     (uintptr_t)signal_info, &direct_offset) ||
+      !ndDarwinArm64eWalkHandlerEntry(&cursor, signal_info, low, high, &direct_offset) ||
+      direct_offset != explicit_offset || raw_pc(&cursor) != owner + direct_offset)
+    _exit(40);
+  for (unsigned i = 0; i < NDArm64ePreservedDCount; ++i) {
+    unw_fpreg_t value;
+    if (unw_get_fpreg(&cursor, UNW_ARM64_D8 + i, &value) ||
+        memcmp(&value, &uc->uc_mcontext->__ns.__v[NDArm64eFirstPreservedD + i], sizeof(value)))
+      _exit(41);
+  }
+  if (unw_step(&cursor) <= 0 || !check_raw_caller(&cursor, sp))
+    _exit(42);
+  direct_entry = 1;
 }
 
 static void observe(int signal, siginfo_t *info, void *context) {
@@ -721,7 +744,7 @@ static void observe(int signal, siginfo_t *info, void *context) {
     }
     if (signal != SIGUSR1)
       _exit(38);
-    raw_entry_walk(uc);
+    raw_entry_walk(info, uc);
     atomic_store(&state.done, 1);
     return;
   }
@@ -918,7 +941,7 @@ int main(int argc, char **argv) {
   if (!out)
     return 7;
   if (raw_entry) {
-    fprintf(out, "%d %d %d %u\n", visits_entry, exact_entry, raw_sp, lookup_offset);
+    fprintf(out, "%d %d %d %u %d\n", visits_entry, exact_entry, raw_sp, lookup_offset, direct_entry);
     return fclose(out) || dlclose(image);
   }
   for (int i = 0; i < (entry_only ? 1 : stages_count); ++i) {

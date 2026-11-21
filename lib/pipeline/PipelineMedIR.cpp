@@ -1336,6 +1336,12 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
     }
     Result.MedFuncs[I] = std::move(Fallback);
   };
+  const auto BoundEntries = Opts.usesSourceDeclarations() && Dbg &&
+                                    Img.Arch == Arch::AArch64 &&
+                                    Img.abiFormat() == BinaryFormat::COFF
+                                ? Dbg->boundFunctionEntries()
+                                : llvm::ArrayRef<va_t>{};
+  const auto &BoundArguments = imageIntegerCallArguments(Result);
   auto ConvertOne = [&](LowToMedConverter &Local, size_t I) {
     Converted[I] = 0;
     PendingStackProof[I] = 0;
@@ -1379,9 +1385,14 @@ void Pipeline::buildMedIR(const BinaryImage &Img, const PipelineOptions &Opts,
           throw std::runtime_error(Error);
         Projected = std::make_unique<LowFunc>(std::move(*FrameSource));
       }
+      const auto &Low = Projected ? *Projected : Result.LowFuncs[I];
+      const FixedIntegerCallArguments *BoundEntry = nullptr;
+      if (llvm::binary_search(BoundEntries, Low.Entry))
+        if (auto It = BoundArguments.find(Low.Entry);
+            It != BoundArguments.end())
+          BoundEntry = &It->second;
       Result.MedFuncs[I] =
-          Local.convert(Projected ? *Projected : Result.LowFuncs[I], Img.Arch,
-                        Img.abiFormat());
+          Local.convert(Low, Img.Arch, Img.abiFormat(), BoundEntry);
       Result.MedFuncs[I].AnalystStackFrame =
           !Opts.usesMachineMedIR() && Frame != Opts.SourceStackFrames.end();
       auto &MF = Result.MedFuncs[I];

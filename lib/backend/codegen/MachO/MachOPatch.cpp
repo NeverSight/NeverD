@@ -29,6 +29,7 @@
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/loader/MachO/MachOARM32Mode.h"
+#include "neverd/loader/MachO/MachOArm64e.h"
 #include "neverd/loader/MachO/MachOLoader.h"
 #include "neverd/loader/MachO/MachOLoaderUtils.h"
 #include "neverd/object/MachOLayout.h"
@@ -1400,27 +1401,57 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
     return 0;
   bool SegmentNameConflict = false;
   bool ExistingRelro = false;
+  const bool RepeatedText =
+      InputKind == RewriteInputKind::ReplacementObject && !WritableOffset &&
+      !Runtime && TargetArch == Arch::AArch64 &&
+      SegStr == kDefaultNdTextSegment &&
+      macho_loader::arm64e::isSubtype(
+          reinterpret_cast<const mach_header *>(Binary.data())->cpusubtype);
+  std::set<std::string> TextNames;
+  std::string AdjacentText;
+  const auto CanExtend = [&](const MachOSegFields &S) {
+    return S.InitProt == (VM_PROT_READ | VM_PROT_EXECUTE) &&
+           S.MaxProt == S.InitProt && S.VMSize == S.FileSize &&
+           S.VMAddr <= Layout.LinkeditVA &&
+           S.VMSize == Layout.LinkeditVA - S.VMAddr &&
+           S.FileOff <= Layout.LinkeditFileOff &&
+           S.FileSize == Layout.LinkeditFileOff - S.FileOff;
+  };
   forEachMachOLoadCommand(
       Binary.data(), Binary.size(),
       [&](const uint8_t *Command, uint32_t ID, uint32_t, bool Is64) {
-        if (ID == getMachOSegmentCmdID(Is64)) {
-          const auto Flags =
-              Is64
-                  ? reinterpret_cast<const segment_command_64 *>(Command)->flags
-                  : reinterpret_cast<const segment_command *>(Command)->flags;
-          ExistingRelro |= (Flags & SG_READ_ONLY) != 0;
+        if (ID != getMachOSegmentCmdID(Is64))
+          return;
+        const auto Flags =
+            Is64 ? reinterpret_cast<const segment_command_64 *>(Command)->flags
+                 : reinterpret_cast<const segment_command *>(Command)->flags;
+        ExistingRelro |= (Flags & SG_READ_ONLY) != 0;
+        const auto S = readMachOSegment(Command, Is64);
+        const auto Name = readMachOName(S.SegName);
+        SegmentNameConflict |= Name == SegStr ||
+                               (WritableOffset && Name == kPatchDataSegment) ||
+                               (RelroSize && Name == kPatchConstSegment);
+        if (RepeatedText &&
+            llvm::StringRef(Name).starts_with(kDefaultNdTextSegment)) {
+          TextNames.insert(Name);
+          if (CanExtend(S) && (Name == SegStr || !S.NSects))
+            AdjacentText = Name;
         }
-        if (ID == getMachOSegmentCmdID(Is64) &&
-            (readMachOName(readMachOSegment(Command, Is64).SegName) == SegStr ||
-             (WritableOffset &&
-              readMachOName(readMachOSegment(Command, Is64).SegName) ==
-                  kPatchDataSegment) ||
-             (RelroSize &&
-              readMachOName(readMachOSegment(Command, Is64).SegName) ==
-                  kPatchConstSegment)))
-          SegmentNameConflict = true;
       });
 
+  // A previous RELRO pool can separate our RX segment from __LINKEDIT.
+  // Keep that mapping intact and add a distinct RX command. Subsequent
+  // code-only publications can extend the new adjacent segment in place.
+  if (RepeatedText && SegmentNameConflict && AdjacentText != SegStr)
+    for (unsigned Ordinal = 1;; ++Ordinal) {
+      SegStr = std::string(kDefaultNdTextSegment) + llvm::utohexstr(Ordinal);
+      if (SegStr == AdjacentText)
+        break;
+      if (!TextNames.contains(SegStr)) {
+        SegmentNameConflict = false;
+        break;
+      }
+    }
   if (RelroSize && ExistingRelro &&
       reinterpret_cast<const mach_header *>(Binary.data())->filetype ==
           MH_EXECUTE)
@@ -1636,13 +1667,7 @@ uint64_t MachOPatcher::appendExecSegmentImpl(
         continue;
       auto SF = readMachOSegment(Binary.data() + Command.Off, Is64);
       if ((SegmentNameConflict && readMachOName(SF.SegName) != SegStr) ||
-          SF.InitProt != (VM_PROT_READ | VM_PROT_EXECUTE) ||
-          SF.MaxProt != (VM_PROT_READ | VM_PROT_EXECUTE) ||
-          SF.VMSize > UINT64_MAX - SF.VMAddr ||
-          SF.FileSize > UINT64_MAX - SF.FileOff ||
-          SF.VMAddr + SF.VMSize != Layout.LinkeditVA ||
-          SF.FileOff + SF.FileSize != Layout.LinkeditFileOff ||
-          SF.VMSize != SF.FileSize)
+          !CanExtend(SF))
         continue;
       if (ExtendCommand)
         return 0;

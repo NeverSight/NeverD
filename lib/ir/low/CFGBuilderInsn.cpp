@@ -23,6 +23,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/DirectTailCall.h"
 #include "neverd/ir/low/GoCallContract.h"
+#include "neverd/ir/low/GoDuffDevice.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -310,6 +311,10 @@ bool CFGBuilder::isTailCallTarget(va_t Target,
     return true;
   if (CurrentImg && !CurrentImg->isFunctionEntryCandidateAt(Target))
     return false;
+  // A Go function's interior begins none (goInsideRecordedFunction): a jump
+  // to a jump-table case label stays inside the function.
+  if (CurrentImg && goInsideRecordedFunction(*CurrentImg, Target))
+    return false;
   // A selected-function run may omit other function symbols from its work
   // set. An explicit transfer to such a symbol still names a tail callee.
   // Symbol identity alone must not stop ordinary fallthrough exploration:
@@ -509,6 +514,43 @@ void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {
   Rec.Immediate = Target;
   Rec.BranchTarget = InvalidVA;
   CallTargets.insert(Target);
+}
+
+void CFGBuilder::rewriteGoDuffDeviceCall(const BinaryImage &Img,
+                                         InsnRecord &Rec, va_t Next) {
+  const va_t Target = *Rec.Immediate;
+  if (!goDuffDeviceAt(Img, Target))
+    return;
+  if (GoDuffDeviceBodiesImage != &Img) {
+    GoDuffDeviceBodies.clear();
+    GoDuffDeviceBodiesImage = &Img;
+  }
+  auto Found = GoDuffDeviceBodies.find(Target);
+  if (Found == GoDuffDeviceBodies.end())
+    Found =
+        GoDuffDeviceBodies.emplace(Target, goDuffDeviceBody(Img, Target)).first;
+  if (!Found->second)
+    return;
+  std::vector<LowOp> Ops;
+  // arm64's BL leaves the return address in the link register, which the
+  // body's RET reads; x86's CALL pushes what its RET pops, which stays out.
+  const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
+  if (!TRI.CallPushesReturnAddress && TRI.LinkRegister) {
+    LowOp Link;
+    Link.Opcode = NdOp::COPY;
+    Link.Output = NdVar::reg(TRI.LinkRegister, TRI.PointerSize);
+    Link.addInput(NdVar::cst(Next, TRI.PointerSize));
+    Ops.push_back(Link);
+  }
+  Ops.insert(Ops.end(), Found->second->begin(), Found->second->end());
+  for (size_t I = 0; I < Ops.size(); ++I) {
+    Ops[I].Addr = Rec.Addr;
+    Ops[I].Seq = static_cast<int>(I);
+  }
+  Rec.Ops = std::move(Ops);
+  Rec.IsCall = false;
+  Rec.Immediate.reset();
+  CallTargets.erase(Target);
 }
 
 void CFGBuilder::rewriteOwnInteriorCall(const BinaryImage &Img, InsnRecord &Rec,

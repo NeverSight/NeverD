@@ -55,6 +55,12 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   stay private across calls. An untyped result passed to another opaque call
   can carry a frame address. Replacing that argument before the call, including
   in its executed delay slot, removes the earlier value from the proof.
+  On n32/n64, an ordinary full-GPR equality test can also establish the word
+  passed to the next opaque call. The call must be on the equality edge alone.
+  The other operand can be a literal or a non-frame word saved at entry in
+  an ABI-preserved register before the first call. A comparison of only the low word leaves
+  the high bits of an n32 GPR unknown. The same value on another edge or at a
+  subsequent opaque call still requires its own proof.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
@@ -1747,8 +1753,10 @@ A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.
 An untyped PIC call can observe argument-register writes that reach it,
-including its delay slot and loop backedges. A later call with a declared
-by-value record observes the pieces selected by its own signature. For example,
+including its delay slot and loop backedges. On n32 and n64, a full-register
+equality guard can qualify a forwarded result on that edge. A later call with a
+declared by-value record still checks the pieces selected by its own signature.
+A store after either call must preserve every byte of the saved link. For example,
 a single unsigned field that fills an ABI slot occupies one argument GPR,
 including a four-byte slot on o32. A four-byte integer field in an eight-byte
 n32 or n64 register uses its high half on big-endian machines and its low half

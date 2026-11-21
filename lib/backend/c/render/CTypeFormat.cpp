@@ -27,6 +27,7 @@
 #include "neverd/support/BinaryEncoding.h"
 #include "neverd/support/StringScan.h"
 #include "neverd/types/LocalTypes.h"
+#include "neverd/types/TypeRender.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -901,6 +902,20 @@ std::string typeToC(const TypeRef &Ty, bool SourceNames) {
   case NdTypeKind::Void:
     return "void";
   case NdTypeKind::Int:
+    if (!SourceNames && Ty->SourceName == "HRESULT" && Ty->IsSigned &&
+        Ty->Size == sizeof(int32_t)) {
+      // The SDK typedef is signed long on Windows. Standalone C also
+      // compiles on LP64, where long would change the return and pointee ABI.
+      static const std::string Spelling = [] {
+        types::RenderOptions Options;
+        Options.Spelling = types::BuiltinSpelling::Portable;
+        Options.PrototypeIntegerIdentity = true;
+        return types::spellType(types::TypeLibrary(types::DataModel::LLP64),
+                                *types::makeBuiltin(types::Builtin::Long), {},
+                                Options);
+      }();
+      return Spelling;
+    }
     if (!Ty->SourceName.empty())
       return SourceNames ? Ty->SourceName : sourceNameToC(Ty->SourceName);
     if (Ty->IsSigned) {

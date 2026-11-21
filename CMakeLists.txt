@@ -114,24 +114,22 @@ add_subdirectory(third_party/capstone)
 # representative decode throughput in Release and RelWithDebInfo builds while
 # allowing Debug to honor its source-level debugging contract: no forced
 # optimization and Capstone's internal assertions enabled.  In particular,
-# MSVC's Debug runtime checks are incompatible with /O2.  The options apply to
-# the capstone OBJECT target so they flow through its static and shared
-# libraries.  Use RelWithDebInfo when both symbols and decode performance
-# matter.
-if(TARGET capstone)
-    include(${CMAKE_SOURCE_DIR}/cmake/NeverDCapstoneCompilerOptions.inc)
+# MSVC's Debug runtime checks are incompatible with /O2. Apply the same flags
+# to the ordinary decoder and the static i386 iterator.
+include(${CMAKE_SOURCE_DIR}/cmake/NeverDCapstoneCompilerOptions.inc)
+foreach(capstone_object IN ITEMS capstone capstone_x86_iter32)
     if(MSVC)
-        target_compile_options(capstone PRIVATE
+        target_compile_options(${capstone_object} PRIVATE
             "$<$<NOT:$<CONFIG:Debug>>:/O2>")
     else()
-        target_compile_options(capstone PRIVATE
+        target_compile_options(${capstone_object} PRIVATE
             "$<$<NOT:$<CONFIG:Debug>>:-O3;-fomit-frame-pointer>"
             # glibc/clang 21 treat strchr(const char*) as returning const char*.
             "$<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:${NEVERD_CAPSTONE_CLANG_QUALIFIERS}>")
     endif()
-    target_compile_definitions(capstone PRIVATE
+    target_compile_definitions(${capstone_object} PRIVATE
         "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
-endif()
+endforeach()
 
 # --- NeverD CMake helpers (mirrors LLVM's AddLLVM.cmake) ---
 # Source files and literal test data are UTF-8 on every host. MSVC otherwise

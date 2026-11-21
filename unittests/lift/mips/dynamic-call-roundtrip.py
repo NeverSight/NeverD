@@ -57,6 +57,8 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
     chain = form.startswith("chain")
     if chain:
         fixture = "pic-import-chain.c" if form == "chain-compiled" else "pic-import-chain.S"
+    if form == "chain-guard-zero":
+        values = [*values, 37, (-37) & 0xffffffffffffffff]
     flags = {
         "direct": [], "guarded": [], "saved": ["-DSAVED_ENTRY"],
         "likely-taken": ["-DSAVED_ENTRY", "-DLIKELY_TAKEN"],
@@ -66,6 +68,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
         "entry-loop": ["-DENTRY_HEADER"],
         "slot-setup": ["-DSLOT_SETUP"],
         "slot-barrier": ["-DSAVED_ENTRY", "-DLIKELY_SKIPPED", "-DSLOT_BARRIER"],
+        "chain-guard-zero": ["-DGUARD_ZERO"], "chain-guard-match": ["-DGUARD_MATCH"],
         "chain": [], "chain-compiled": [], "chain-overwrite": ["-DREPLACE_ARGUMENT"], "chain-spill": ["-DSPILL_GP"],
     }[form]
     command([args.clang, *original_flags, "-O2", *flags, "-c", Path(__file__).with_name(fixture),
@@ -120,12 +123,13 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             observations.append(observed)
         for address in set(callbacks):
             uc.hook_add(UC_HOOK_CODE, visit, begin=address, end=address)
-        saved = {16: 0x6789ab, 17: 0x321fed, 28: entry_gp}
+        saved = {16: 0x6789ab, 17: 0x321fed, 18: 0x789abc, 28: entry_gp}
+        guarded_chain = form in ("chain-guard-zero", "chain-guard-match")
+        guard_outcomes = set()
         for value in values:
             if rebind:
                 # The second call must observe a GOT update made by the first.
                 uc.mem_write(storage[1], callbacks[1 - binding[1]].to_bytes(width, order))
-            result, _ = invoke(uc, entry, 64, little, [value], initial_registers={25: entry, **saved})
             argument = value
             if form == "loop":
                 argument = (value + (value & 3)) & 0xffffffffffffffff
@@ -134,6 +138,11 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
             elif form == "likely-join" and value:
                 argument = (value + 1) & 0xffffffffffffffff
             first = (argument + 37 if binding[0] else argument ^ 37) & 0xffffffffffffffff
+            arguments = [value]
+            if form == "chain-guard-match":
+                # The two words can agree below bit 32 and differ above it on n32 too.
+                arguments.append(first ^ ((value & 1) << 32))
+            result, _ = invoke(uc, entry, 64, little, arguments, initial_registers={25: entry, **saved})
             expected_calls = [(callbacks[binding[0]], argument, 37)]
             if form == "chain-spill":
                 address = got_storage + linked_gp - got
@@ -141,7 +150,9 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                     address = word_value(address)
                 expected_calls[0] += (address & 0xffffffffffffffff,)
             last = first
-            if chain:
+            forward = ((form != "chain-guard-zero" or first == 0) and
+                       (form != "chain-guard-match" or first == arguments[1]))
+            if chain and forward:
                 argument = first
                 if form == "chain-overwrite":
                     argument = 19
@@ -158,10 +169,14 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                     uc.reg_read(mips.UC_MIPS_REG_RA) != STOP or uc.reg_read(mips.UC_MIPS_REG_SP) != STACK):
                 raise AssertionError(f"{name} wrong import result, arguments or saved state for {value:#x}: "
                                      f"{result:#x}, calls {observations}, expected {expected:#x}, {expected_calls}")
+            if guarded_chain:
+                guard_outcomes.add(len(observations) == 2)
             observations.clear()
             if reads != [(storage[i], width) for i in watched if i < len(expected_calls)]:
                 raise AssertionError(f"{name} wrong GOT loads for {value:#x}: {reads}")
             reads.clear()
+        if guarded_chain and guard_outcomes != {False, True}:
+            raise AssertionError(f"{name} did not exercise both branch outcomes for {binding}")
 
     for binding in bindings:
         uc, entry = emulator(shared, 64, little, "import_probe", original=provider, load_bias=bias)
@@ -443,7 +458,8 @@ word probe(word value) { return target(value, 37) + 1; }
         if pic and value_bits == 64:
             for form in ("direct", "saved", "guarded", "likely-taken", "likely-skipped",
                          "likely-join", "loop", "entry-loop", "slot-setup", "slot-barrier",
-                         "chain", "chain-compiled", "chain-overwrite", "chain-spill"):
+                         "chain", "chain-compiled", "chain-overwrite", "chain-spill",
+                         "chain-guard-zero", "chain-guard-match"):
                 check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                              original, companions, callbacks, little, values, results, linker, form)
         artifacts.discard(original, *companions)
