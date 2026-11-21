@@ -1684,3 +1684,37 @@ TEST(SymMBAResidue, ProjectedCoefficientsPreservePartialLimbsAndComplements) {
     }
   }
 }
+
+TEST(SymMBAResidue, LongScaledProductsRetainEveryIndependentFactor) {
+  constexpr unsigned Width = 97, Precision = 29, Shift = 10;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  const auto Scale = llvm::APInt::getOneBitSet(Width, Width - Precision);
+  for (unsigned Degree : {511u, 512u, 563u}) {
+    llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
+    for (unsigned I = 0; I < Degree; ++I) {
+      const auto Weight = C.mkConst(llvm::APInt(Width, 2 * I + 3).shl(Shift));
+      Factors.push_back(
+          C.mkAdd(C.mkConst(Width, 2 * I + 1), C.mkMul(Weight, I % 2 ? X : Y)));
+    }
+    MBAOptions Opts;
+    Opts.MaxWork = 65536;
+    const auto Product = C.mkMul(Factors);
+    const auto Result = simplifyMBADeep(C, Product, Opts);
+    ASSERT_LT(Result.SizeAfter, 64u);
+    EXPECT_LT(Result.Work, Opts.MaxWork);
+    for (unsigned A : {0u, 1u, 547u, 0xffffu})
+      for (unsigned B : {0u, 3u, 925u, 0xffffffu}) {
+        auto Expected = Scale;
+        for (unsigned I = 0; I < Degree; ++I)
+          Expected *=
+              llvm::APInt(Width, 2 * I + 1) +
+              llvm::APInt(Width, 2 * I + 3).shl(Shift) * (I % 2 ? A : B);
+        EXPECT_EQ(
+            C.eval(Result.Expr, {llvm::APInt(Width, A), llvm::APInt(Width, B)}),
+            Expected);
+      }
+    Opts.MaxWork = 8;
+    EXPECT_EQ(simplifyMBADeep(C, Product, Opts).Expr, Product);
+  }
+}
