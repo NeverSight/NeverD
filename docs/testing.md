@@ -17080,7 +17080,10 @@ installing records authenticate their function entries and aligned ESP
 coordinates; fixed EBP slots and native rewrite authority remain separate.
 `FunctionDiscoveryAlignment.RawDataPointerCandidatesRemainGuesses` checks
 COFF, ELF and Mach-O across x86, x64, ARM32 and ARM64, including existing
-symbols, relocation-slot order and later confirmation. Run these with
+symbols, relocation-slot order and later confirmation.
+`FunctionDiscoveryAlignment.ELFRelocationRecordsHoldNoFunctionPointers` scans an
+ELF image whose RELA record's addend is a function's address: the record names
+no function, while the same words in a PROGBITS section do. Run these with
 `NeverDImageAnalysisBoundaryTests` and the registration suites.
 `CxxSharedEntryOwnsItsProvenReturningFallthrough` checks short/wide physical
 entry calls with exact instruction-boundary guesses, stated/exported roots,

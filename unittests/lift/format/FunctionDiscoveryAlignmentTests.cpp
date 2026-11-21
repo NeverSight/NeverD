@@ -21,6 +21,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/BinaryFormat/ELF.h"
 
 #include <algorithm>
 #include <array>
@@ -1006,6 +1007,55 @@ TEST(FunctionDiscoveryAlignment, PointersToStringLiteralsInCodeAreNoFunctions) {
 
   ASSERT_EQ(Img.Symbols.size(), 1u);
   EXPECT_EQ(Img.Symbols.front().Addr, 0x1010u);
+}
+
+// An ELF relocation table is the loader's input, not data the program reads.
+// A RELATIVE record's addend repeats the code address its slot receives, so
+// read as a pointer it made a boundary guess of every relocated code label:
+// in a Go PIE, each case label of a jump table in `.data.rel.ro`, which the
+// resolver then refused as a table of function pointers.  The same words in
+// a PROGBITS section still name a function.
+TEST(FunctionDiscoveryAlignment, ELFRelocationRecordsHoldNoFunctionPointers) {
+  for (const uint32_t Type :
+       {uint32_t(llvm::ELF::SHT_RELA), uint32_t(llvm::ELF::SHT_PROGBITS)}) {
+    SCOPED_TRACE(Type);
+    BinaryImage Img;
+    Img.Arch = Arch::X64;
+    Img.Bits = Bitness::Bits64;
+    Img.Format = BinaryFormat::ELF;
+    std::vector<uint8_t> Code(0x20, x86::kInt3);
+    // push rbp; mov rbp, rsp; pop rbp; ret
+    const std::array<uint8_t, 6> Function = {0x55, 0x48, 0x89,
+                                             0xe5, 0x5d, 0xc3};
+    std::copy(Function.begin(), Function.end(), Code.begin() + 0x10);
+    Img.Segments.push_back(executableSegment(0x1000, Code));
+    // r_offset, r_info (R_X86_64_RELATIVE), r_addend.
+    Segment Data;
+    Data.VA = 0x2000;
+    Data.Size = 24;
+    Data.Flags = SegmentFlags::Readable;
+    Data.Data.resize(24);
+    writeLE<uint64_t>(Data.Data.data(), 0x3000);
+    writeLE<uint64_t>(Data.Data.data() + 8, llvm::ELF::R_X86_64_RELATIVE);
+    writeLE<uint64_t>(Data.Data.data() + 16, 0x1010);
+    Img.Segments.push_back(Data);
+    Section Sec;
+    Sec.Name = Type == llvm::ELF::SHT_RELA ? ".rela" : ".rodata";
+    Sec.VA = Data.VA;
+    Sec.Size = Data.Size;
+    Sec.Flags = Data.Flags;
+    Sec.Type = Type;
+    Img.Sections.push_back(Sec);
+
+    scanDataFuncPointers(Img);
+
+    if (Type == llvm::ELF::SHT_RELA) {
+      EXPECT_TRUE(Img.Symbols.empty());
+    } else {
+      ASSERT_EQ(Img.Symbols.size(), 1u);
+      EXPECT_EQ(Img.Symbols.front().Addr, 0x1010u);
+    }
+  }
 }
 
 TEST(FunctionDiscoveryAlignment, DataPointersRejectMisalignedAArch64Entries) {

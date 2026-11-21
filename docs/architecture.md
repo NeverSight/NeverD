@@ -5113,6 +5113,13 @@ reaches the dispatcher's cases when the dispatcher's entry is only a guess.
 A relocation run ends at the next table anchor among its own slots; an anchor
 past it names another object, aligned however its owner is
 (`boundCodePtrRunByNextAnchor`).
+The scan of read-only data for code pointers (`scanDataFuncPointers`) reads no
+ELF relocation table (SHT_REL, SHT_RELA, SHT_RELR, SHT_CREL and Android's): a
+RELATIVE record's addend repeats the code address its slot receives, which
+that slot's relocation already records, and read as a pointer it made a
+boundary guess of every relocated code label. Each case label of a Go PIE's
+jump table in `.data.rel.ro` so looked like a function entry, and the resolver
+refused the table as one of function pointers.
 MinGW's runtime defines a `__imp_X` variable for each function it supplies
 in place of an import (__MINGW_IMP_SYMBOL), initialized to that function, and
 calls through it. Such a variable of an x86 or x64 image's symbol table that

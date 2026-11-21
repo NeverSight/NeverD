@@ -18,6 +18,7 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -722,9 +723,23 @@ void scanDataFuncPointers(BinaryImage &Img, const LoadProgress &Progress) {
     }
   };
 
+  // An ELF relocation table is input to the loader, not storage the program
+  // reads. A RELATIVE record's addend repeats the value its slot receives,
+  // and that slot already carries the relocation evidence (CodePtrRelocSlots).
+  // Reading the record as an unrelocated word would make a boundary guess of
+  // every relocated code label, such as each case label of a PIE jump table.
+  const auto IsELFRelocationTable = [&](const Section &Sec) {
+    using namespace llvm::ELF;
+    return Img.isELF() &&
+           (Sec.Type == SHT_REL || Sec.Type == SHT_RELA ||
+            Sec.Type == SHT_RELR || Sec.Type == SHT_CREL ||
+            Sec.Type == SHT_ANDROID_REL || Sec.Type == SHT_ANDROID_RELA ||
+            Sec.Type == SHT_ANDROID_RELR);
+  };
   for (const Section &Sec : Img.Sections)
     if (!Sec.isDebugInfo() && Sec.Size != 0 && Sec.isReadable() &&
-        !Sec.isWritable() && !Img.isCodeAddress(Sec.VA))
+        !Sec.isWritable() && !Img.isCodeAddress(Sec.VA) &&
+        !IsELFRelocationTable(Sec))
       ScanRange(Img.getSegmentFor(Sec.VA), Sec.VA, Sec.Size);
   for (const Segment &Seg : Img.Segments) {
     Progress.check();
