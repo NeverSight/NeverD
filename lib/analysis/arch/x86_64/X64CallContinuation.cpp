@@ -118,7 +118,7 @@ std::string returningCallDigest(const SpecializationReturningCall &Call) {
   H.bytes(I.NativeBytes);
   H.number(I.Ops.size());
   for (const auto &Op : I.Ops)
-    H.operation(Op);
+    H.operation(Op, std::size(Op.Inputs));
   H.text(lowPreservedStateDigest(I.PreservedState));
   H.number(static_cast<unsigned>(I.UndefinedEffects.Coverage));
   H.number(I.UndefinedEffects.OpCount);
@@ -212,8 +212,9 @@ llvm::Error validateReturningCalls(const SpecializationResult &Result,
         auto Op = Span[I];
         Op.Addr = Call.Original.Origin.Address;
         Op.Seq = static_cast<int>(I);
-        Actual.operation(Op);
-        Expected.operation(Expanded->Ops[I]);
+        Actual.operation(Op, std::size(Op.Inputs));
+        Expected.operation(Expanded->Ops[I],
+                           std::size(Expanded->Ops[I].Inputs));
       }
       if (Actual.finish() != Expected.finish())
         return invalid("returning call does not retain its exact invocation");
