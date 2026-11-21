@@ -7449,11 +7449,18 @@ every bit comes from the source. A mask can be peeled when it preserves
 every bit of the window, including both sides of a wrapped interval.
 Variable counts and observable zero or sign padding stay in the source word.
 A sum, OR or XOR can also supply a field from one right shift when every
-other term is zero below the end of that field. This condition accounts for
-carries into the field from lower bits of a sum.
+other term is zero below the end of that field. For OR and XOR, a mask
+only needs to be zero inside the field. A sum can carry from lower bits.
+A scaled neighbor can also carry through a zero bit of its multiplier.
 Masked complementary shifts of the same word can share a rotation when both
-halves retain every observed bit. High IR emits packed fields smaller than
-a byte in a whole-byte carrier, including signed fields assembled from
+halves retain every observed bit. When a byte is extracted from a sum whose
+width is not a multiple of eight, High IR carries the low bits in an unsigned
+native word. Concatenation and zero extension explicitly mask fields whose
+padding becomes observable.
+The LLVM translator uses the value range of a constant logical right shift
+to justify no-wrap arithmetic and checks the shift's own flags separately.
+High IR emits packed fields smaller than a byte in a whole-byte carrier,
+including signed fields assembled from
 several extracts. The original field width determines the sign position.
 The LLVM translator carries same-word funnel shifts as rotates in both
 directions and emits them with their modulo-width count. LLVM arguments,
@@ -17541,9 +17548,10 @@ Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
 A wide product can combine three or more distinct affine factors that each
-occur once and read the same input slot. When each weight has at least
-`ceil(P/3)` low zero bits, cubic and higher terms vanish at precision `P`.
-The plan evaluates the resulting quadratic at every original assignment.
+occur once and read the same input slot. A shared literal scale can expose
+that common input. When each weight has at least `ceil(P/4)` low zero bits,
+terms of degree four and above vanish at precision `P`. The plan evaluates
+the surviving coefficients in Horner form at every original assignment.
 The evaluator lowers constant and variable leaves on their first worklist
 visit. Native inputs are loaded before the operator loop, in the original
 lookup order; shared inputs are still read once and unused inputs are omitted.

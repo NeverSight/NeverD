@@ -4566,6 +4566,15 @@ Additional regressions combine a masked product with a compound arithmetic
 summand and recover a quadratic product beside twelve independently weighted
 inputs within a fixed work allowance.
 
+Use `--family masked-window --count 8` for 24 products at 1537, 2049 and
+3073 bits, with 607 to 811 factors each. The masks have set bits both above
+and below each extracted field. Boundary cases leave one live bit inside
+the field or add a low neighbor that can carry into it. Four x86 fixtures
+rotate the joined word before reading a byte. They execute both emitted C
+views against the original 139–173-factor products at Clang O0 and O2.
+`LogicalShiftBoundsMatchDefinedByteAdditions` checks no-wrap and exact
+shift flags against all byte input pairs, including shift-by-width.
+
 Dominant-prefix regressions add degree-511–514 products with disturbed factors
 and multiple residual multipliers. Complete-word APInt oracles cover 8–257 bits,
 both selector branches and residual zero/even values; exact and one-short work
