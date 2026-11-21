@@ -21,9 +21,10 @@ add_neverd_component_library(NeverDDecode
   Lift
 )
 
-# The private x86 scan interface belongs to our statically linked Capstone fork.
+# The static Capstone fork supplies the private single-instruction adapters.
 target_include_directories(NeverDDecode PRIVATE
-  "$<TARGET_PROPERTY:capstone_static,SOURCE_DIR>/arch/X86")
+  "$<TARGET_PROPERTY:capstone_static,SOURCE_DIR>/arch/X86"
+  "$<TARGET_PROPERTY:capstone_static,SOURCE_DIR>/arch/Mips")
 
 # Resolve the ordinary x86 text fallback in the first static archive pass.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

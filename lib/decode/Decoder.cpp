@@ -12,6 +12,7 @@
 #include "neverd/decode/Decoder.h"
 
 #include "DecoderDetail.h"
+#include "MipsSingle.h"
 #include "X86ScanAdapter.h"
 
 #include "neverd/ArchSupport.h"
@@ -215,7 +216,9 @@ bool Decoder::initWithMIPSRevision(Arch TheArch, InstructionMode Mode,
   CurrentMode = Mode;
   MIPSISARevision = Revision;
   MIPSHistoricalISA = Historical;
-  MIPSNeedsDecodeGuard = NewMIPS && (Revision == 6 || Historical);
+  MIPSNeedsDecodeGuard =
+      NewMIPS && (Revision == 6 || Historical ||
+                  (Revision == 5 && Mode == InstructionMode::MicroMIPS));
   MIPSInvalidAddressBits = mipsInvalidAddressBits(TheArch, Mode);
   Detail = true;
   Text = true;
@@ -236,7 +239,8 @@ void Decoder::configureFor(const BinaryImage &Img) {
     MIPS->setDSPEnabled(Img.MIPS && Img.MIPS->HasDSP,
                         Img.MIPS && Img.MIPS->HasDSPR2);
     MIPSNeedsDecodeGuard =
-        MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64();
+        MIPSISARevision == 6 || MIPSHistoricalISA || MIPS->hasClassicDSP64() ||
+        (MIPSISARevision == 5 && CurrentMode == InstructionMode::MicroMIPS);
     MIPS->setMSAEnabled(Img.MIPS && Img.MIPS->HasMSA && MIPSISARevision == 5);
     MIPS->setScalarFPEnabled(Img.MIPS && Img.MIPS->hasScalarFPABI(Img.Arch),
                              Img.MIPS && Img.MIPS->hasScalarFP32ABI(Img.Arch));
@@ -321,14 +325,6 @@ bool Decoder::beginDecode(DecodedInsn &Out) {
   return advanceAArch64DecodeGeneration();
 }
 
-bool Decoder::decodeArchitectureFallback(const uint8_t *Bytes, size_t Len,
-                                         va_t Addr) {
-  if (X86)
-    return decodePrefixedX86Fence(Bytes, Len, Addr) ||
-           decodeX86MpxFallback(Bytes, Len, Addr);
-  return MIPS && decodeMIPSASE(Bytes, Len, Addr);
-}
-
 namespace {
 // The historical selector table must not expand every common decode entry.
 LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
@@ -343,34 +339,41 @@ LLVM_ATTRIBUTE_NOINLINE bool historicalMIPSWordAvailable(const uint8_t *Bytes,
 } // namespace
 
 LLVM_ATTRIBUTE_ALWAYS_INLINE bool
-Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
+Decoder::decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   InsnBuf->illegal = false;
-  // Admission fixes whether this profile needs physical preprocessing. Keep
-  // historical checks off ordinary MIPS and unrelated architecture decoders.
-  if (MIPSNeedsDecodeGuard) {
-    if (MIPSHistoricalISA) {
-      if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch,
-                                       MIPSHistoricalISA))
-        return false;
-    } else if (MIPSISARevision != 6) {
-      // Only the admitted classic DSP64 profile reaches this branch. Its
-      // legacy packed forms otherwise pay for a failed physical decode
-      // before decoding their equivalent operand template.
-      if (const auto Decoded = decodeMIPSDSP64(Bytes, Len, Addr))
-        return *Decoded;
-    } else {
-      if (CurrentMode == InstructionMode::MicroMIPS)
-        return decodeMicroMIPSRelease6(Bytes, Len, Addr);
-      if (Len >= 4) {
-        const auto Word =
-            readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
-        if ((Word & 0xffc0003c) == 0x4600001c)
-          return decodeR6FloatCompare(Bytes, Word, Addr);
-        // The physical decoder aliases paired LL/SC to an offset form and
-        // swaps the n64 SC operands. Own SPECIAL3 before public decoding.
-        if ((Word & 0xfc00002e) == 0x7c000026)
-          return decodeMIPSReservation(Bytes, Word, Addr);
-      }
+  const uint8_t *Code = Bytes;
+  size_t Remaining = Len;
+  uint64_t PC = Addr;
+  const bool Decoded =
+      X86 && Text ? X86_disasmIterText(Handle, &Code, &Remaining, &PC, InsnBuf)
+                  : cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf);
+  return Decoded || (X86 && (decodePrefixedX86Fence(Bytes, Len, Addr) ||
+                             decodeX86MpxFallback(Bytes, Len, Addr)));
+}
+
+LLVM_ATTRIBUTE_NOINLINE bool Decoder::decodeMIPSProfile(const uint8_t *Bytes,
+                                                        size_t Len, va_t Addr) {
+  if (MIPSHistoricalISA) {
+    if (!historicalMIPSWordAvailable(Bytes, Len, TargetArch, MIPSHistoricalISA))
+      return false;
+  } else if (MIPS->hasClassicDSP64() && MIPSISARevision != 6) {
+    // Only the admitted classic DSP64 profile reaches this branch. Its
+    // legacy packed forms otherwise pay for a failed physical decode
+    // before decoding their equivalent operand template.
+    if (const auto Decoded = decodeMIPSDSP64(Bytes, Len, Addr))
+      return *Decoded;
+  } else if (MIPSISARevision == 6) {
+    if (CurrentMode == InstructionMode::MicroMIPS)
+      return decodeMicroMIPSRelease6(Bytes, Len, Addr);
+    if (Len >= 4) {
+      const auto Word =
+          readTargetEndian<uint32_t>(Bytes, archLittleEndian(TargetArch));
+      if ((Word & 0xffc0003c) == 0x4600001c)
+        return decodeR6FloatCompare(Bytes, Word, Addr);
+      // The physical decoder aliases paired LL/SC to an offset form and
+      // swaps the n64 SC operands. Own SPECIAL3 before public decoding.
+      if ((Word & 0xfc00002e) == 0x7c000026)
+        return decodeMIPSReservation(Bytes, Word, Addr);
     }
   }
   // POOL32S vector forms have no microMIPS entries in Capstone. Avoid a
@@ -380,25 +383,42 @@ Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
       Len >= 4 && (Bytes[archLittleEndian(TargetArch) ? 1 : 0] >> 2) == 0x16;
   if (VectorPool && decodeMIPSASE(Bytes, Len, Addr))
     return true;
-  const uint8_t *Code = Bytes;
-  size_t Remaining = Len;
-  uint64_t PC = Addr;
-  if (Text && X86) {
-    if (X86_disasmIterText(Handle, &Code, &Remaining, &PC, InsnBuf))
-      return true;
-  } else if (cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf)) {
-    return true;
+  return Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) ||
+         (!VectorPool && decodeMIPSASE(Bytes, Len, Addr));
+}
+
+int Decoder::decodeMIPSOne(const uint8_t *Bytes, size_t Len, va_t Addr,
+                           DecodedInsn &Out) {
+  Out.AArch64Prefix.reset();
+  Out.AArch64Occurrence.reset();
+  Out.MIPSForbiddenFollower.reset();
+  if (Addr & MIPSInvalidAddressBits)
+    return 0;
+  InsnBuf->illegal = false;
+  if (MIPSNeedsDecodeGuard) {
+    if (!decodeMIPSProfile(Bytes, Len, Addr))
+      return 0;
+  } else if (!Mips_disasmOne(Handle, Bytes, Len, Addr, InsnBuf) &&
+             !decodeMIPSASE(Bytes, Len, Addr)) {
+    return 0;
   }
-  return !VectorPool && decodeArchitectureFallback(Bytes, Len, Addr);
+  Out.Addr = InsnBuf->address;
+  Out.Size = InsnBuf->size;
+  Out.Id = InsnBuf->id;
+  Out.Raw = InsnBuf;
+  if (MIPSISARevision == 6 && CurrentMode != InstructionMode::MicroMIPS)
+    Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
+        {Bytes, Len}, archLittleEndian(TargetArch));
+  return Out.Size;
 }
 
 int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
                        DecodedInsn &Out) {
+  if (MIPS)
+    return decodeMIPSOne(Bytes, Len, Addr, Out);
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (Addr & MIPSInvalidAddressBits)
-    return 0;
-  if (!decodePhysical(Bytes, Len, Addr))
+  if (!decodeOtherPhysical(Bytes, Len, Addr))
     return 0;
 
   fixupDecodedInsn(InsnBuf);
@@ -407,9 +427,6 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  if (MIPSISARevision == 6 && CurrentMode != InstructionMode::MicroMIPS)
-    Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
-        {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   // The lift path and CFG classification read the mnemonic (when they need it
@@ -422,17 +439,19 @@ int Decoder::decodeOne(const uint8_t *Bytes, size_t Len, va_t Addr,
 
 int Decoder::decodeOneForLift(const uint8_t *Bytes, size_t Len, va_t Addr,
                               DecodedInsn &Out) {
+  if (MIPS)
+    return decodeMIPSOne(Bytes, Len, Addr, Out);
   return AArch64 ? decodeAArch64ForLift(Bytes, Len, Addr, Out)
                  : decodeOne(Bytes, Len, Addr, Out);
 }
 
 int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
                             DecodedInsn &Out) {
+  if (MIPS)
+    return decodeMIPSOne(Bytes, Len, Addr, Out);
   if (!beginDecode(Out) || !Handle || !InsnBuf)
     return 0;
-  if (Addr & MIPSInvalidAddressBits)
-    return 0;
-  if (!decodePhysical(Bytes, Len, Addr))
+  if (!decodeOtherPhysical(Bytes, Len, Addr))
     return 0;
 
   if (X86)
@@ -441,9 +460,6 @@ int Decoder::decodeOneLight(const uint8_t *Bytes, size_t Len, va_t Addr,
   Out.Size = static_cast<uint16_t>(InsnBuf->size);
   Out.Id = InsnBuf->id;
   Out.Raw = InsnBuf;
-  if (MIPSISARevision == 6 && CurrentMode != InstructionMode::MicroMIPS)
-    Out.MIPSForbiddenFollower = MIPSLifter::r6ForbiddenFollower(
-        {Bytes, Len}, archLittleEndian(TargetArch));
   if (AArch64)
     recordAArch64Decode(Bytes, Len, Out, Detail && Text, true);
   return Out.Size;

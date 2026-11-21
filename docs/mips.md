@@ -15,6 +15,9 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 DWARF 2/3 bit-field layouts use the target byte order when converting offsets
 within a storage unit. A struct inside a union keeps its member declaration
 order in both MIPS byte orders, including fields that span bytes.
+For unlinked n32 ELF objects, the LLVM source build reads debug string offsets
+from explicit relocation addends. The r7 prebuilt package can read these types
+after linking the object with the target linker.
 
 ## Implementation boundaries
 
@@ -1881,6 +1884,11 @@ Capstone's retained but unpopulated operand allocation. MIPS lifting uses the
 physical bytes, so discovery does not need to enable operand detail merely to
 avoid a stale operand count. Repeated SDK requests and poisoned detail counts
 exercise this boundary separately from instruction semantics.
+
+Single-instruction MIPS decoding uses the static Capstone entry for classic and
+compressed profiles. The streaming iterator supplies the operand and text
+reference. Historical admission, Release 6 forbidden followers and NeverD ASE
+adapters still run at their profile boundaries.
 
 The baseline for decoder measurements is
 bcef8d07e1, with matched Release compiler and dependency inputs except for
