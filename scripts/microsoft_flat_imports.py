@@ -41,6 +41,11 @@ CURRENT = {
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
     "ProcessStatus": ("psapi.lib", ("psapi",)),
     "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
+    "InternetControlMessage": ("iphlpapi.lib", ("iphlpapi", "icmpapi")),
+    "TransactionManager": ("ktmw32.lib", ("ktmw32",)),
+    "SNMPUtilities": ("SnmpAPI.Lib", ("snmp",)),
+    "WebAuthentication": ("webauthn.lib", ("webauthn",)),
+    "SensorUtilities": ("SensorsUtils.lib", ("sensorsdef", "sensorsutils")),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
 
@@ -120,7 +125,7 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
                              "-fms-compatibility-version=19.44", "-x", "c++", "-std=c++17"]
         specifications.append((old["import_packages"][architecture], groups, sdk_c, sdk_cpp, "c++",
                                ("winsock2", "windows")))
-    directory = output / "WindowsUser-providers"
+    directory = output / "sdk-import-sources"
     directory.mkdir(parents=True, exist_ok=True)
     units, packages = [], []
     for record, groups, compiler, original, language, common_headers in specifications:
@@ -134,16 +139,26 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
             identity = {"module": Path(library).stem.lower() + ".dll", "file": str(path),
                         "architecture": architecture, "sha256": wdk.digest(path),
                         "command": [readobj, "--coff-imports", str(path)]}
+            # SensorsUtils.lib carries short imports for the versioned system DLL.
+            if name == "SensorUtilities":
+                identity["module"] = "sensorsutilsv2.dll"
+            # Both SDK libraries decorate their unannotated x86 APIs as stdcall.
+            # Keep the original compiler and the declaration reader on that
+            # target convention. verify_abis checks every selected object symbol.
+            stdcall = architecture == "x86" and name in ("TransactionManager", "SensorUtilities")
+            defaults = ["-Xclang", "-fdefault-calling-conv=stdcall"] if stdcall else []
             source = directory / (name + "-sdk.c")
             headers = common_headers + headers
             # The SDK maps the default PSAPI profile to Kernel32's K32*
             # exports. Version 1 declares the routines exported by PSAPI.dll.
             prelude = "#define PSAPI_VERSION 1\n" if name == "ProcessStatus" else ""
             source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
-            scope = {"import_prefix": "Pss"} if name == "ProcessSnapshots" else {}
-            units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
+            prefixes = {"ProcessSnapshots": "Pss", "InternetControlMessage": "Icmp"}
+            scope = {"import_prefix": prefixes[name]} if name in prefixes else {}
+            units.append({"name": name, "source": source, "compiler": compiler + defaults,
+                          "headers": headers, "default_calling_convention": "__stdcall" if stdcall else "",
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
-                                     "arguments": original, "language": language,
+                                     "arguments": original + defaults, "language": language,
                                      "import_library": identity, "commands": [], **scope}})
     return units, packages
 

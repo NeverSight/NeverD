@@ -216,6 +216,21 @@ def run(command: list[str], log: Path, output: Path | None = None) -> str:
     return result.stdout
 
 
+def prototype_selection_command(command: list[str], routines, response: Path) -> list[str]:
+    """Pass an oversized SDK selection through the types CLI's LLVM response reader."""
+    selectors = ["--import-prototype=" + routine for routine in routines]
+    direct = command + selectors
+    units = len(subprocess.list2cmdline(direct).encode("utf-16-le")) // 2 + 1
+    if units <= wdk.LIMITS["windows_command_line_units"]:
+        return direct
+    # A C identifier is one token in both LLVM's GNU and Windows readers.
+    # Keep path arguments on the command line so the host quotes them normally.
+    if any(re.search(r"""[\s'"\\\x00]""", selector) for selector in selectors):
+        raise ValueError("invalid C routine name in Microsoft prototype selection")
+    response.write_text("\n".join(selectors) + "\n", encoding="utf-8")
+    return command + ["@" + str(response.resolve())]
+
+
 def checked_types(neverd: str, source: Path, log: Path,
                   model: str = "LLP64") -> dict:
     result = json.loads(run([neverd, "types", "--data-model", model,
@@ -370,6 +385,8 @@ PROVIDER_INLINE_ROUTINES = {
 # The SDK uses an empty C parameter list for these no-argument C++ exports.
 # Authenticate every redeclaration against the target SDK before using (void).
 CPP_NOARG_PROVIDERS = {
+    "SNMPUtilities": {"SnmpSvcGetUptime": "DWORD __stdcall"},
+    "WebAuthentication": {"WebAuthNGetApiVersionNumber": "DWORD WINAPI"},
     "DXGI": {"DXGIDeclareAdapterRemovalSupport": "HRESULT WINAPI"},
     "ODBC": {"ODBCGetTryWaitValue": "DWORD WINAPI"},
     "MediaFoundation": {
@@ -412,7 +429,13 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         run(invocation, directory / (name + "-noargs.log"))
         declarations = "".join(f"{spec} {symbol}(void);\n"
                                for symbol, spec in noargs.items())
+        if flat_proof is not None:
+            flat_proof["original_source"] = str(source)
+            flat_proof["original_source_sha256"] = wdk.digest(source)
+            source = directory / (name + "-checked.c")
         source.write_text(original + "\n" + declarations, encoding="utf-8")
+        if flat_proof is not None:
+            flat_proof.update(source=str(source), source_sha256=wdk.digest(source))
         bridge_commands.append(invocation)
         evidence = {"functions": list(noargs), "source": str(proof), "sha256": wdk.digest(proof)}
         if name == "DXGI":
@@ -425,7 +448,12 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError("GDI+ requires the original target SDK import library")
         cpp_bridge = gdiplus.prepare(source, arguments, directory, gdiplus_imports, run)
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
-    preprocessed = directory / (name + ".h")
+    # Under MS include lookup an enclosing .c or .cpp file participates in
+    # quoted header resolution. RDBSS includes tdi.h, which would read the
+    # preceding provider's TDI.h on a case-insensitive volume.
+    declarations = directory / "declarations"
+    declarations.mkdir(exist_ok=True)
+    preprocessed = declarations / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
     if name == "RDBSS":
@@ -461,7 +489,7 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
                      "--declare", str(empty), "--declare", str(original),
                      "--merge-prototypes", "--all", "--prototypes", "--spelling", "windows",
                      "--no-offsets", "--json"]
-        selection += ["--import-prototype=" + routine for routine in prototypes]
+        selection = prototype_selection_command(selection, prototypes, directory / (name + ".rsp"))
         selected = json.loads(run(selection, directory / (name + ".select.log")))
         if (selected.get("error") or selected.get("problems") or
                 set(selected.get("prototypes", [])) != set(prototypes)):
@@ -498,8 +526,10 @@ def merge_providers(base: str, primary: Path, output: Path,
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None and not flat_units:
         return []
-    directory = output / (base + "-providers")
-    directory.mkdir(exist_ok=True)
+    # Older generations placed named headers directly inside -providers.
+    # Keep original compiler inputs outside that search location on retries.
+    directory = output / (base + "-providers") / "work"
+    directory.mkdir(parents=True, exist_ok=True)
     units = []
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     for name, headers, defines, prototypes in providers:
@@ -512,6 +542,7 @@ def merge_providers(base: str, primary: Path, output: Path,
     for profile in flat_units:
         units.append(prepare_provider(profile["name"], profile["source"], profile["compiler"],
                                       directory, neverd, model, profile["headers"],
+                                      convention=profile["default_calling_convention"],
                                       flat_proof=profile["bridge"]))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
@@ -572,7 +603,8 @@ def merge_providers(base: str, primary: Path, output: Path,
                              "--declare", str(temporary), "--merge-prototypes",
                              "--all", "--prototypes", "--spelling", "windows",
                              "--no-offsets", "-o", str(selected)]
-                selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
+                selection = prototype_selection_command(selection, bridge["verified_functions"],
+                                                        published / "selection.rsp")
                 run(selection, published / "selection.log")
                 proof = dict(bridge, commands=[])
                 verifier = flat if flat_bridge else (

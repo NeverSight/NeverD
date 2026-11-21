@@ -274,7 +274,8 @@ def check(args: argparse.Namespace) -> dict:
                                  "--declare", str(header), "--merge-prototypes",
                                  "--all", "--prototypes", "--no-offsets",
                                  "-o", str(selected)]
-                    selection += ["--import-prototype=" + symbol for symbol in names]
+                    selection = windows.prototype_selection_command(selection, names,
+                                                                    directory / "selection.rsp")
                     row["commands"].append(selection)
                     result = subprocess.run(selection, capture_output=True, text=True,
                                             timeout=args.timeout)
