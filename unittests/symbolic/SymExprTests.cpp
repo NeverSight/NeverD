@@ -2426,18 +2426,23 @@ TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
   }
 }
 
-TEST(SymExpr, QuadraticEvaluationGroupsOnlyVanishingCubicTerms) {
+TEST(SymExpr, AffineEvaluationGroupsOnlyVanishingHigherPowers) {
   constexpr unsigned W = 513;
   SymContext C;
   const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
   std::mt19937_64 Random(0x63478);
+  // Some offsets share an even multiple of the same variable. Other rows
+  // have distinct weights or retain a complete, repeated factor.
+  auto Magnitude = [](unsigned I) { return 2 * (I < 8 ? I % 2 : I) + 1; };
   for (unsigned Bits : {65u, 127u, 129u, 207u, 257u}) {
+    const unsigned Fourth = (Bits + 3) / 4;
     const unsigned Third = (Bits + 2) / 3;
     const auto Scale = llvm::APInt(W, 3).shl(W - Bits);
-    for (unsigned Shift : {Third - 1, Third, (Bits + 1) / 2}) {
+    for (unsigned Shift :
+         {Fourth - 1, Fourth, Third - 1, Third, (Bits + 1) / 2}) {
       llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
       for (unsigned I = 0; I < 12; ++I) {
-        const auto B = (-llvm::APInt(W, 2 * I + 1)).shl(I == 8 ? 0 : Shift);
+        const auto B = (-llvm::APInt(W, Magnitude(I))).shl(I == 8 ? 0 : Shift);
         const auto F = C.mkAdd(C.mkConst(W, 2 * I + 1),
                                C.mkMul(C.mkConst(B), I % 2 ? X : Y));
         Factors.push_back(F);
@@ -2456,7 +2461,7 @@ TEST(SymExpr, QuadraticEvaluationGroupsOnlyVanishingCubicTerms) {
         auto Expected = Scale;
         for (unsigned I = 0; I < 12; ++I) {
           auto Term =
-              (Inputs[I % 2 ? 0 : 1] * (2 * I + 1)).shl(I == 8 ? 0 : Shift);
+              (Inputs[I % 2 ? 0 : 1] * Magnitude(I)).shl(I == 8 ? 0 : Shift);
           Term = llvm::APInt(W, 2 * I + 1) - Term;
           Expected *= Term;
           if (I == 5)
