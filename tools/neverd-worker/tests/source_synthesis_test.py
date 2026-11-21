@@ -578,6 +578,12 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "funnel-perturbation-joined-137":
+            # Five distinct affine factors need five coefficient products and
+            # four joins. High C can spell the bit-window shifts as 2^k * x.
+            literals = re.findall(r"\b(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\s*\*", code)
+            shifts = sum(int(lit, 0).bit_count() == 1 for lit in literals)
+            assert code.count("*") - shifts <= 9 and code.count("*") <= 14, text
         elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")):
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):

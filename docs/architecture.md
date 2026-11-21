@@ -7434,6 +7434,10 @@ Variable counts and observable zero or sign padding stay in the source word.
 A sum, OR or XOR can also supply a field from one right shift when every
 other term is zero below the end of that field. This condition accounts for
 carries into the field from lower bits of a sum.
+Masked complementary shifts of the same word can share a rotation when both
+halves retain every observed bit. High IR emits packed fields smaller than
+a byte in a whole-byte carrier, including signed fields assembled from
+several extracts. The original field width determines the sign position.
 The LLVM translator carries same-word funnel shifts as rotates in both
 directions and emits them with their modulo-width count.
 A mask or addend that changes only higher bits drops out; a mask

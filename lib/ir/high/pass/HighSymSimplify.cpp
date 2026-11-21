@@ -1130,23 +1130,48 @@ std::optional<SourceBitField> sourceBitField(sym::SymContext &Ctx,
   const unsigned Bits = Ctx.width(Field);
   if (Bits >= 8)
     return std::nullopt;
-  auto Slice = [&](sym::SymRef R) -> std::optional<SourceBitField> {
-    if (Ctx.op(R) != sym::SymOp::Extract)
+  auto Piece = [&](sym::SymRef R) -> std::optional<SourceBitField> {
+    const auto Op = Ctx.op(R);
+    if (Op == sym::SymOp::Extract) {
+      const auto Word = Ctx.operand(R, 0);
+      if (Ctx.width(Word) % 8 == 0)
+        return SourceBitField{Word, unsigned(Ctx.node(R).Aux), Bits};
       return std::nullopt;
-    const auto Word = Ctx.operand(R, 0);
-    if (Ctx.width(Word) % 8)
+    }
+    const bool Packed = Op == sym::SymOp::Concat && Ctx.numOperands(R) == 2 &&
+                        Ctx.isConst(Ctx.operand(R, 1));
+    if (Op != sym::SymOp::ZExt && !Packed)
       return std::nullopt;
-    return SourceBitField{Word, unsigned(Ctx.node(R).Aux), Bits};
+    // An extension or packed literal strictly reduces the field width on
+    // descent. Assemble its low bits using only whole-byte operations.
+    auto Part = sourceBitField(Ctx, Ctx.operand(R, 0));
+    if (!Part)
+      return std::nullopt;
+    auto Word = Part->Word;
+    const auto W = Ctx.width(Word);
+    if (Part->Low)
+      Word = Ctx.mkLShr(Word, Ctx.mkConst(W, Part->Low));
+    if (Packed) {
+      const auto Low = Ctx.operand(R, 1);
+      Word = Ctx.mkShl(Word, Ctx.mkConst(W, Ctx.width(Low)));
+      Word = Ctx.mkOr(Word, Ctx.mkConst(Ctx.constValue(Low).zext(W)));
+    } else {
+      Word = Ctx.mkAnd(Word,
+                       Ctx.mkConst(llvm::APInt::getLowBitsSet(W, Part->Bits)));
+    }
+    return SourceBitField{Word, 0, Bits};
   };
   const auto Op = Ctx.op(Field);
   if (Op != sym::SymOp::Xor && Op != sym::SymOp::And && Op != sym::SymOp::Or)
-    return Slice(Field);
+    return Piece(Field);
   llvm::SmallVector<sym::SymRef, 4> Words;
-  const auto First = Slice(Ctx.operand(Field, 0));
+  llvm::SmallVector<sym::SymRef, 4> Terms(Ctx.operands(Field));
+  const auto First = Piece(Terms.front());
   if (!First)
     return std::nullopt;
-  for (auto V : Ctx.operands(Field)) {
-    const auto Part = Slice(V);
+  Words.push_back(First->Word);
+  for (auto V : llvm::drop_begin(Terms)) {
+    const auto Part = Piece(V);
     if (!Part || Part->Low != First->Low ||
         Ctx.width(Part->Word) != Ctx.width(First->Word))
       return std::nullopt;
@@ -1185,9 +1210,9 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     if (Ctx.op(Item.Ref) == sym::SymOp::ZExt ||
         Ctx.op(Item.Ref) == sym::SymOp::SExt)
       Field = sourceBitField(Ctx, Ctx.operand(Item.Ref, 0));
-    // The source language stores integer fields in whole bytes. A packed
-    // sign bit above a literal can be emitted directly at its carrier width.
-    sym::SymRef SignWord, LowLiteral;
+    // The source language stores integer fields in whole bytes. Lift a packed
+    // high field above a literal into that whole-byte carrier before shifting.
+    sym::SymRef PackedHigh, LowLiteral;
     if (Ctx.op(Item.Ref) == sym::SymOp::Concat &&
         Ctx.numOperands(Item.Ref) == 2) {
       const auto High = Ctx.operand(Item.Ref, 0),
@@ -1195,7 +1220,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       if (Ctx.op(High) == sym::SymOp::Extract && Ctx.node(High).Aux == 0 &&
           Ctx.width(High) == 1 && Ctx.isConst(Low) &&
           Ctx.width(Ctx.operand(High, 0)) == Ctx.width(Item.Ref)) {
-        SignWord = Ctx.operand(High, 0);
+        PackedHigh = Ctx.operand(High, 0);
+        LowLiteral = Low;
+      } else if (Ctx.isConst(Low) && Ctx.width(High) < 8 &&
+                 Ctx.width(Item.Ref) % 8 == 0) {
+        PackedHigh = Ctx.mkZExt(High, Ctx.width(Item.Ref));
         LowLiteral = Low;
       }
     }
@@ -1215,9 +1244,9 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
           Work.push_back({Parity->second.first, false});
         continue;
       }
-      if (SignWord) {
-        if (!Built.contains(SignWord.index()))
-          Work.push_back({SignWord, false});
+      if (PackedHigh) {
+        if (!Built.contains(PackedHigh.index()))
+          Work.push_back({PackedHigh, false});
         continue;
       }
       if (Field) {
@@ -1605,14 +1634,15 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       break;
     }
     case sym::SymOp::Concat: {
-      if (SignWord) {
-        const auto Source = get(SignWord);
+      if (PackedHigh) {
+        const auto Source = get(PackedHigh);
         const auto Literal =
             literalExpr(Ctx.constValue(LowLiteral).zext(NodeWidth), ByteSize,
                         ScalarLiterals);
         if (Source && Literal) {
-          const auto Shift = HighExpr::makeConst(
-              NodeWidth - 1, ByteSize, ConstantAddressProvenance::Scalar);
+          const auto Shift =
+              HighExpr::makeConst(Ctx.width(LowLiteral), ByteSize,
+                                  ConstantAddressProvenance::Scalar);
           const auto High = HighExpr::makeBinop(NdOp::INT_LEFT, Source, Shift);
           Result = HighExpr::makeBinop(NdOp::INT_OR, High, Literal);
         }
