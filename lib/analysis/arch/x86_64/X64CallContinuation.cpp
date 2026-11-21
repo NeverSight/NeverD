@@ -12,7 +12,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/LowRawCall.h"
-#include "neverd/lift/X86Regs.h"
+#include "neverd/lift/X86/X86Regs.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
