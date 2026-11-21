@@ -51,73 +51,47 @@ static bool isLocalExpr(const HighExpr &E) {
 // Expression cycle detection and breaking
 //===----------------------------------------------------------------------===//
 
-// Returns whether a cycle was broken.
-static bool breakExprCycles(ExprPtr &Root, HighExprSet &KnownAcyclic) {
-  bool Broken = false;
-  struct Frame {
-    ExprPtr *Slot = nullptr;
-    size_t NextOperand = 0;
-    bool Entered = false;
-  };
-
-  std::vector<Frame> Work{{&Root, 0, false}};
-  HighExprSet Path;
-  while (!Work.empty()) {
-    Frame &Current = Work.back();
-    if (!*Current.Slot) {
-      Work.pop_back();
-      continue;
-    }
-
-    HighExpr *Expr = Current.Slot->get();
-    if (!Current.Entered) {
-      if (KnownAcyclic.count(Expr)) {
-        Work.pop_back();
-        continue;
-      }
-      if (!Path.insert(Expr).second) {
-        *Current.Slot = HighExpr::makeConst(0, 8);
-        Broken = true;
-        Work.pop_back();
-        continue;
-      }
-      Current.Entered = true;
-    }
-
-    ExprPtr *Child = nullptr;
-    if (Current.NextOperand < Expr->Operands.size())
-      Child = &Expr->Operands[Current.NextOperand++];
-    else if (Expr->IndirectTarget &&
-             Current.NextOperand == Expr->Operands.size()) {
-      ++Current.NextOperand;
-      Child = &Expr->IndirectTarget;
-    }
-    if (Child) {
-      ExprPtr &Operand = *Child;
-      if (!Operand || KnownAcyclic.count(Operand.get()))
-        continue;
-      if (Path.count(Operand.get())) {
-        Operand = HighExpr::makeConst(0, 8);
-        Broken = true;
-        continue;
-      }
-      Work.push_back({&Operand, 0, false});
-      continue;
-    }
-
-    Path.erase(Expr);
-    KnownAcyclic.insert(Expr);
-    Work.pop_back();
-  }
-  return Broken;
-}
-
-// Returns whether a cycle was broken.
+// The active path and worklist drain after each root. Keep their storage for
+// the next statement. A leaf cannot close a cycle or contain a back edge.
 static bool breakStmtCycles(std::vector<HighStmt> &Stmts) {
-  HighExprSet Safe;
+  struct Frame {
+    HighExpr *Expr;
+    size_t NextOperand = 0;
+  };
+  llvm::SmallVector<Frame> Work;
+  HighExprSet Path, Safe;
   bool Broken = false;
+  const auto enter = [&](ExprPtr &Slot) {
+    HighExpr *Expr = Slot.get();
+    if (!Expr || (Expr->Operands.empty() && !Expr->IndirectTarget) ||
+        Safe.count(Expr))
+      return;
+    if (!Path.insert(Expr).second) {
+      Slot = HighExpr::makeConst(0, 8);
+      Broken = true;
+      return;
+    }
+    Work.push_back({Expr});
+  };
   walkStmts(Stmts, [&](HighStmt &S) {
-    forEachExpr(S, [&](ExprPtr &EP) { Broken |= breakExprCycles(EP, Safe); });
+    forEachExpr(S, [&](ExprPtr &Root) {
+      enter(Root);
+      while (!Work.empty()) {
+        Frame &Current = Work.back();
+        HighExpr *Expr = Current.Expr;
+        if (Current.NextOperand < Expr->Operands.size()) {
+          enter(Expr->Operands[Current.NextOperand++]);
+        } else if (Current.NextOperand == Expr->Operands.size() &&
+                   Expr->IndirectTarget) {
+          ++Current.NextOperand;
+          enter(Expr->IndirectTarget);
+        } else {
+          Path.erase(Expr);
+          Safe.insert(Expr);
+          Work.pop_back();
+        }
+      }
+    });
   });
   return Broken;
 }
@@ -312,7 +286,9 @@ static void collectLiveRefs(const std::vector<HighStmt> &Stmts, VarKeySet &Live,
   // Keep definition-to-expression edges instead of expanding every definition
   // into a separate set of all the variables below its RHS. Reachability on
   // this combined variable/expression graph visits a shared live node once.
-  VarKeyMap<std::vector<const HighExpr *>> Definitions;
+  // A scalar SSA name usually has one definition. Joined PHI copies retain
+  // all their incoming definitions, including repeated expression roots.
+  VarKeyMap<llvm::SmallVector<const HighExpr *, 1>> Definitions;
   std::vector<const HighExpr *> Expressions;
   walkStmts(Stmts, [&](const HighStmt &S) {
     if (Effects.removable(S)) {

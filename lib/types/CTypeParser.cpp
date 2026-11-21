@@ -146,7 +146,7 @@ public:
       // its invocation, which must be copied before expansion can grow Tokens.
       Token &Next = Tokens.emplace_back();
       token(Next);
-      if (Next.Kind == TokenKind::Word)
+      if (Next.Kind == TokenKind::Word && !Macros.empty())
         if (auto Found = Macros.find(Next.Text); Found != Macros.end()) {
           const Token Invocation = Next;
           Tokens.pop_back();
@@ -914,7 +914,7 @@ private:
            constWord(T.Text) || T.Text == "_Noreturn" ||
            T.Text == "DECLSPEC_NORETURN" || volatileWord(T.Text) ||
            T.Text == "typename" || conventionWord(T.Text) ||
-           ignoredWord(T.Text) || startsAttribute(Ahead);
+           ignoredWord(T.Text);
   }
 
   uint32_t pointerSize() const { return pointerBytes(Library.dataModel()); }
@@ -1366,8 +1366,8 @@ private:
       }
       if (!Spec.Type && !AnyWord &&
           (isPunct("::") ||
-           (T.Kind == TokenKind::Word && !reservedWord(T.Text) &&
-            T.Text != "typename" && (isPunct("::", 1) || isPunct("<", 1))))) {
+           (T.Kind == TokenKind::Word && (isPunct("::", 1) || isPunct("<", 1)) &&
+            T.Text != "typename" && !reservedWord(T.Text)))) {
         const std::string Name = typeName();
         if (Failed)
           return false;
@@ -1413,8 +1413,9 @@ private:
                  W == "noreturn") {
         take();
         Spec.NoReturn = true;
-      } else if (conventionWord(W)) {
-        PendingConvention = conventionWord(take().Text);
+      } else if (const auto Convention = conventionWord(W)) {
+        PendingConvention = Convention;
+        take();
       } else if (startsAttribute()) {
         Attributes Read;
         if (!attributes(Read))
@@ -2255,8 +2256,8 @@ private:
           P.Bytes = 4;
         else if (W == "__ptr64")
           P.Bytes = 8;
-        else if (conventionWord(W))
-          PendingConvention = conventionWord(W);
+        else if (const auto Convention = conventionWord(W))
+          PendingConvention = Convention;
         else if (!ignoredWord(W))
           break;
         take();
