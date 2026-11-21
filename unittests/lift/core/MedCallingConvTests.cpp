@@ -11067,6 +11067,18 @@ TEST(CallRegisterEffects, ASyscallReadsOnlyItsOwnArguments) {
   for (uint64_t Register : {x86reg::RDI, x86reg::RSI, x86reg::RDX, x86reg::R10,
                             x86reg::R8, x86reg::R9})
     EXPECT_EQ(Unlisted[Register / 8], 8u) << Register;
+  // munmap (11) reads RSI but not RDX, and rt_sigaction (13) R10 but not R8:
+  // a pair's half the call ignores is no read either.
+  const GPRReadWidths Munmap = Reads(11);
+  for (uint64_t Register : {x86reg::RDI, x86reg::RSI})
+    EXPECT_EQ(Munmap[Register / 8], 8u) << Register;
+  for (uint64_t Register : {x86reg::RDX, x86reg::R10, x86reg::R8, x86reg::R9})
+    EXPECT_EQ(Munmap[Register / 8], 0u) << Register;
+  const GPRReadWidths Sigaction = Reads(13);
+  for (uint64_t Register : {x86reg::RDI, x86reg::RSI, x86reg::RDX, x86reg::R10})
+    EXPECT_EQ(Sigaction[Register / 8], 8u) << Register;
+  for (uint64_t Register : {x86reg::R8, x86reg::R9})
+    EXPECT_EQ(Sigaction[Register / 8], 0u) << Register;
 }
 
 TEST(MedCallingConv, ASyscallTakesOnlyItsOwnArgumentsAsParameters) {
@@ -11120,6 +11132,12 @@ TEST(MedCallingConv, ASyscallTakesOnlyItsOwnArgumentsAsParameters) {
     EXPECT_TRUE(Syscall->Inputs[I].isConst() &&
                 Syscall->Inputs[I].ConstVal == 0)
         << I;
+  // munmap (11) takes RDI and RSI, not RDX, which its pair also carries: the
+  // routine took a third parameter.
+  const MedFunc Munmap = Lift(11, SystemV);
+  ASSERT_EQ(Munmap.Params.size(), 2u);
+  EXPECT_EQ(Munmap.Params[0].RegOff, x86reg::RDI);
+  EXPECT_EQ(Munmap.Params[1].RegOff, x86reg::RSI);
   for (const auto &[Number, OSABI] :
        {std::pair<uint64_t, uint8_t>{0x7FFF, SystemV}, {60, FreeBSD}}) {
     SCOPED_TRACE(Number);

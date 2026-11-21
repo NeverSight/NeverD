@@ -56,11 +56,27 @@ constexpr bool x64SyscallOperandRead(size_t Operand, unsigned Count) {
   }
 }
 
+/// Whether a Linux x86-64 syscall of \p Count arguments reads the high half
+/// of pair operand \p Operand of its intrinsic (x64SyscallOperandRead): RDX
+/// of RDX:RSI, its third argument, and R8 of R8:R10, its fifth.  LowToMed
+/// passes zero in a half it does not read.
+constexpr bool x64SyscallPairHighRead(size_t Operand, unsigned Count) {
+  switch (Operand) {
+  case 2:
+    return Count >= 3;
+  case 3:
+    return Count >= 5;
+  default:
+    return true;
+  }
+}
+
 /// How many of kLinuxX64SyscallArgumentRegisters, from the first, a syscall
-/// of \p Count arguments reads through the operands that carry them
-/// (x64SyscallOperandRead).
+/// of \p Count arguments reads: exactly its own, since LowToMed passes zero
+/// in an operand, or a pair's half, it does not read (x64SyscallOperandRead,
+/// x64SyscallPairHighRead).
 constexpr unsigned x64SyscallRegistersRead(unsigned Count) {
-  return Count == 0 ? 0 : Count == 1 ? 1 : Count <= 3 ? 3 : Count <= 5 ? 5 : 6;
+  return Count < 6 ? Count : 6;
 }
 
 } // namespace neverd

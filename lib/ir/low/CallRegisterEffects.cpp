@@ -455,8 +455,8 @@ unreadSyscallArguments(const BinaryImage &Img, const LowBlock &Block) {
         Number ? linuxX64SyscallArgumentCount(*Number) : std::nullopt;
     if (!Count || *Count >= std::size(kLinuxX64SyscallArgumentRegisters))
       continue;
-    // The lift passes RDX:RSI and R8:R10 as one operand each, which the call
-    // reads whole once it reads either half.
+    // The lift passes RDX:RSI and R8:R10 as one operand each, and LowToMed
+    // passes zero in an operand, or a pair's half, the call does not read.
     const llvm::ArrayRef<uint64_t> Rest =
         llvm::ArrayRef(kLinuxX64SyscallArgumentRegisters)
             .drop_front(x64SyscallRegistersRead(*Count));

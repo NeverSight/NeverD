@@ -1668,9 +1668,11 @@ MedFunc LowToMedConverter::convertFunction(
       // whose arity is verified, reads only its own argument registers, as a
       // modeled supervisor call above does: an operand it does not read
       // passes zero (x64SyscallOperandRead), and so does the pair the lift
-      // packed into a temporary for it alone.  A routine that makes it then
-      // reads no other register at its entry: Go's `runtime.exit` reads DI
-      // alone, which it loads from its stack argument.
+      // packed into a temporary for it alone, or the half of that pair it
+      // does not read (x64SyscallPairHighRead): munmap reads RSI but not RDX.
+      // A routine that makes it then reads no other register at its entry:
+      // Go's `runtime.exit` reads DI alone, which it loads from its stack
+      // argument.
       if (Image && TheArch == Arch::X64 && LOp.Opcode == NdOp::INTRINSIC &&
           LOp.NumInputs == 6 && LOp.Inputs[0].isConst() &&
           static_cast<Intrinsic>(LOp.Inputs[0].Offset) ==
@@ -1680,8 +1682,31 @@ MedFunc LowToMedConverter::convertFunction(
                 blockRegisterConstant(LB.Ops, LowOpIndex, x86reg::RAX, 8))
           if (const auto Count = linuxX64SyscallArgumentCount(*Number))
             for (size_t Operand = 1; Operand + 1 < MOp.NumInputs; ++Operand) {
-              if (x64SyscallOperandRead(Operand, *Count))
+              if (x64SyscallOperandRead(Operand, *Count)) {
+                const MedVar &Pair = MOp.Inputs[Operand + 1];
+                if (x64SyscallPairHighRead(Operand, *Count) ||
+                    Pair.Kind != MedVar::Temp)
+                  continue;
+                const auto ReadsPair = [&](const MedOp &Op) {
+                  for (unsigned I = 0; I < Op.NumInputs; ++I)
+                    if (Op.Inputs[I].Kind == MedVar::Temp &&
+                        Op.Inputs[I].Id == Pair.Id)
+                      return true;
+                  return false;
+                };
+                if (std::any_of(MB.Ops.begin(), MB.Ops.end(), ReadsPair))
+                  continue;
+                for (auto Def = MB.Ops.rbegin(); Def != MB.Ops.rend(); ++Def)
+                  if (Def->Output.Kind == MedVar::Temp &&
+                      Def->Output.Id == Pair.Id) {
+                    if (Def->Opcode == NdOp::CONCAT && Def->NumInputs == 2)
+                      Def->Inputs[0] =
+                          MedVar::makeConst(0, Def->Inputs[0].Size,
+                                            ConstantAddressProvenance::Scalar);
+                    break;
+                  }
                 continue;
+              }
               const MedVar Unread = MOp.Inputs[Operand + 1];
               MOp.Inputs[Operand + 1] = MedVar::makeConst(
                   0, Unread.Size, ConstantAddressProvenance::Scalar);
