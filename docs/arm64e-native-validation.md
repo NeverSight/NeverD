@@ -2989,8 +2989,8 @@ The two Xcode 27 inputs captured before the fix passed three consecutive
 publications per optimization level. The Apple Clang 17 modern-linker
 control with an empty terminal unwind interval still reports the malformed
 range. A separate address-only input from that linker omits every embedded
-data record. Its returning address does not establish the size of the
-unread trailing bytes, and publication reports the unverified function extent.
+data record. At that revision, both optimization levels reported an
+unverified 28-byte source extent for a 20-byte generated body.
 
 [Source-fork native execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893316681).
 [Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893359488).
@@ -2999,3 +2999,23 @@ unread trailing bytes, and publication reports the unverified function extent.
 During this run GitHub listed M1 for the standard macOS arm64 profiles and M2 for XLarge. The three hosted qualification reports record the features that each guest exposed.
 [Standard macOS runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 [Larger macOS runners](https://docs.github.com/en/actions/reference/runners/larger-runners).
+
+
+### Returned addresses in text without embedded-data records
+
+For a function that returns an address inside its own trailing bytes, the
+linker and unwind bounds delimit the original storage. The entry CFG supplies
+the last reachable instruction. When that instruction is a return and the
+address survives to X0 or an output slot, the publisher copies the reachable
+prefix and leaves the suffix in its original executable mapping. The suffix
+can contain bytes, instructions, or both. Its address alone supplies neither
+a read width nor a data-in-code record.
+
+The address can come from an `ADR`, a page/address pair with a separate
+destination register, or a dyld-rebased literal slot. Full-width moves and
+direct branches to a shared return preserve the address. A W-register
+overwrite clobbers its X-register alias. Each publication checks the mapped
+and on-disk bytes, the segment permissions, the relocated address and the
+extent of the copied unwind record. A former entry that now forwards to a
+separately owned function keeps its trailer as original storage. Explicit
+control-flow evidence still contributes roots.
