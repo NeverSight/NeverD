@@ -29,6 +29,7 @@
 #include "neverd/ir/med/X86/X86RepAddresses.h"
 #include "neverd/ir/med/X86/X87ControlWord.h"
 #include "neverd/loader/ELF/MIPSCodeMode.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 #include "neverd/support/Diagnostic.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -687,6 +688,10 @@ llvm::Value *MedLLVMEmitter::materializeDataRelationConstant(
   llvm::Constant *Global = OwnerVA != InvalidVA
                                ? tryResolveOwnedGlobalData(Val, OwnerVA, Size)
                                : tryResolveGlobalData(Val, Size);
+  if (Global && isMIPSN32(TargetArch) && Size == 8 && OwnerVA != InvalidVA &&
+      mipsPICGPAnchor(*Img, Val) == OwnerVA)
+    return Builder.CreateSExt(Builder.CreatePtrToInt(Global, sizeToType(4)),
+                              sizeToType(8), "gp");
   if (Global)
     return Builder.CreatePtrToInt(Global, sizeToType(Size), "gdatarel");
 
