@@ -4526,7 +4526,9 @@ The 197-factor x64 source fixture exercises both C renderers through the CLI
 and the workbench worker. Constructor tests exhaust both six-bit source words
 across overlapping, wrapping and multi-factor windows. The byte-domain guard
 tests also check overflow and inexact shifts when deriving signed ranges from
-an arithmetic right shift.
+an arithmetic right shift. Wide evaluator tests compare signed scaled
+coefficients and multiword product prefixes against full-width multiplication,
+including shared factors whose other consumers observe higher bits.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent

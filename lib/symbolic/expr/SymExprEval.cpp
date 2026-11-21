@@ -181,8 +181,10 @@ prepareWidePrefixes(const SymContext &Ctx, SymRef Root, uint32_t RootSlot,
           St.Width = Demand;
         if (Zeros && Demand > 64) {
           const unsigned FactorBits = Demand - std::min(Demand - 1, Zeros);
-          if (FactorBits <= 64) {
-            St.Aux = ~uint64_t(0) >> (64 - FactorBits);
+          if (FactorBits <= 64 ||
+              (St.NumArgs > 2 && llvm::APInt::getNumWords(FactorBits) <
+                                     llvm::APInt::getNumWords(St.Width))) {
+            St.Aux = FactorBits;
             std::swap(ArgSlots[St.FirstArg],
                       ArgSlots[St.FirstArg + Coefficient]);
           }
@@ -565,6 +567,26 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
     return;
   }
   case SymOp::Mul: {
+    // A small signed coefficient times a power of two needs only one
+    // word multiply. Restore its sign and shift in the original modulus.
+    if (W > 64 && NumArgs == 2 && Ctx.isConst(Ctx.operand(R, 0))) {
+      const auto &Scale = Arg(0);
+      const unsigned Shift = Scale.countr_zero();
+      if (Shift < W && Scale.getSignificantBits() - Shift <= 64) {
+        const unsigned Bits = std::min(64u, W - Shift);
+        uint64_t Multiplier = Scale.extractBitsAsZExtValue(Bits, Shift);
+        const bool Negative = Scale.isNegative();
+        if (Negative)
+          Multiplier = -uint64_t(llvm::SignExtend64(Multiplier, Bits));
+        Result = Arg(1);
+        if (Multiplier != 1)
+          Result *= Multiplier;
+        if (Negative)
+          Result.negate();
+        Result <<= Shift;
+        return;
+      }
+    }
     Start(1);
     for (size_t I = 1; I < NumArgs && !Result.isZero(); ++I)
       Result *= Arg(I);
@@ -683,6 +705,22 @@ void evalNodeAPImpl(const SymContext &Ctx, SymRef R, size_t NumArgs,
   }
   llvm_unreachable("unhandled SymOp in evalNodeAP");
 }
+
+// tcMultiply writes the low words into a disjoint destination. Alternating
+// the buffers avoids allocating a full-width APInt for each factor.
+llvm::APInt multiplyLowWords(llvm::ArrayRef<llvm::APInt> Values,
+                             llvm::ArrayRef<uint32_t> Factors, unsigned Bits) {
+  const unsigned Words = llvm::APInt::getNumWords(Bits);
+  llvm::SmallVector<uint64_t, 16> Storage(2 * size_t(Words));
+  auto *Product = Storage.data();
+  auto *Next = Product + Words;
+  std::copy_n(Values[Factors.front()].getRawData(), Words, Product);
+  for (auto Slot : Factors.drop_front()) {
+    llvm::APInt::tcMultiply(Next, Product, Values[Slot].getRawData(), Words);
+    std::swap(Product, Next);
+  }
+  return llvm::APInt(Bits, llvm::ArrayRef(Product, Words));
+}
 } // namespace
 
 llvm::APInt SymEvalPlan::evalWith(
@@ -752,15 +790,20 @@ llvm::APInt SymEvalPlan::evalWith(
     }
 
     if (St.Op == SymOp::Mul && St.Aux) {
-      // All nonconstant factors are observed modulo the prepared mask.
-      // Multiplying their prefixes first is exact in that ring. Restoring
-      // the original coefficient then needs just one wide multiplication,
-      // and preserves every output bit any parent can observe.
-      uint64_t Product = ScratchAP[A[1]].getRawData()[0];
-      for (size_t K = 2; K < St.NumArgs; ++K)
-        Product *= ScratchAP[A[K]].getRawData()[0];
+      // Evaluate the remaining factors in their common low-bit modulus.
+      // Only the coefficient needs its original width to restore the result.
+      const unsigned Bits = St.Aux;
       ScratchAP[I] = ScratchAP[A[0]];
-      ScratchAP[I] *= Product & St.Aux;
+      if (Bits <= 64) {
+        uint64_t Product = ScratchAP[A[1]].getRawData()[0];
+        for (size_t K = 2; K < St.NumArgs; ++K)
+          Product *= ScratchAP[A[K]].getRawData()[0];
+        ScratchAP[I] *= Product & (~uint64_t(0) >> (64 - Bits));
+      } else {
+        const auto Prefix =
+            multiplyLowWords(ScratchAP, {A + 1, St.NumArgs - 1}, Bits);
+        ScratchAP[I] *= Prefix.zext(St.Width);
+      }
       continue;
     }
 
