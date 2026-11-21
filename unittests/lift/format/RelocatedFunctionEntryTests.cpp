@@ -667,6 +667,44 @@ TEST(RelocatedFunctionEntries,
   }
 }
 
+TEST(RelocatedFunctionEntries, PointAndTableQueriesAgreeOnEntriesAndEnds) {
+  for (bool Adjacent : {false, true}) {
+    for (bool EndFirst : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << Adjacent << ':' << EndFirst);
+      auto Img = pointerImage(Arch::X64, BinaryFormat::COFF);
+      const auto named = [&](va_t Entry, const char *Name) {
+        auto Sym = Symbol::makeFunc(Entry, 8);
+        Sym.Name = Name;
+        Img.Symbols.push_back(std::move(Sym));
+      };
+      named(0x1038, "preceding");
+      named(0x1040, "first_alias");
+      named(0x1040, "last_alias");
+      if (Adjacent)
+        named(0x1048, "adjacent");
+      auto *Bytes = Img.Segments[1].Data.data();
+      writeLE<uint64_t>(Bytes, EndFirst ? 0x1048 : 0x1040);
+      writeLE<uint64_t>(Bytes + 8, EndFirst ? 0x1040 : 0x1048);
+      Img.CodePtrRelocSlots.insert(0x2008);
+      llvm::LLVMContext Context;
+      auto Module =
+          MedLLVMEmitter().emit({pointerSource(Img)}, Context, "function-ends",
+                                Img.Arch, {}, &Img, Img.Format);
+      ASSERT_NE(Module, nullptr);
+      EXPECT_FALSE(llvm::verifyModule(*Module));
+      EXPECT_NE(Module->getFunction("last_alias"), nullptr);
+      EXPECT_EQ(Module->getFunction("first_alias"), nullptr);
+      EXPECT_EQ(Module->getFunction("preceding"), nullptr);
+      EXPECT_EQ(Module->getFunction("adjacent") != nullptr, Adjacent);
+      std::string IR;
+      llvm::raw_string_ostream OS(IR);
+      Module->print(OS, nullptr);
+      EXPECT_EQ(IR.find("ptr @last_alias, i64 8") != std::string::npos,
+                !Adjacent);
+    }
+  }
+}
+
 BinaryImage guardedImage(Arch Target, unsigned Extra = 0) {
   auto Img = pointerImage(Target, BinaryFormat::COFF);
   if (Target == Arch::X86 || Target == Arch::X64) {

@@ -22784,7 +22784,9 @@ started. Run it for both probes in separate output directories. Use `--clang`,
 `--objcopy`, and `--readobj` to select the tools.
 `NeverDCallRegisterUnreadTests` distinguishes unconditional entry writes
 from partial, conditional, opaque and may-write summaries, including implicit
-return families and nested calls.
+return families and nested calls. Reversed block order and two calls reached
+with different surviving inputs check propagation across CFGs and call sites.
+A separate case exhausts the work budget and checks atomic proof publication.
 `Win64CallContract.RegisterQueryWindowsSourceCompilesWithItsHeaders` compiles
 both unmodified C units for the Windows x64 target with Clang's freestanding
 headers. HighC includes `<intrin.h>` for the Microsoft CPUID spelling and its
@@ -24460,9 +24462,16 @@ helper. The proof copy explicitly inlines the scheduler and call wrappers when
 HighC IRET exceeds the ordinary optimizer threshold; every body and guard is
 retained, and unmodified exports compile separately. LLVM must reduce every
 predicate to one block returning constant zero.
-`X64Cr8WriteNotification.MetadataComesFromModeledWrites` checks lowering-owned
-write metadata, including the unchanged paged native boundary. These checks do
-not qualify a live device environment or paged MOV-CR8 fault delivery.
+`X64Cr8WriteNotification.*` checks lowering-owned write metadata for every
+GPR in paged and paged-debug mode, both ignored width prefixes, default
+admission, and unaudited forms.
+`PagedCompletionSurvivesPostCommitStops` folds predicates over the actual
+exported MOV bodies, entry validation and schedulers. Both C routes cover
+region and function drivers with independently supplied fetch and event-entry
+outcomes. The predicates check #GP requests before effects, all legal and
+reserved source values, conforming CPL, arbitrary flags, same-value writes,
+preemption, replay and one progress read per step. Debug cases check the same
+exception exit on both sides of a write and a backing stop after commit.
 
 `X64ScheduledFunctionContextTest.*` checks scheduled activation admission,
 disabled source/manifest identity and O0/O2 compilation in both C routes.

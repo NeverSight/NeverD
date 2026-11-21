@@ -35,27 +35,38 @@ inline void record(X86Lifter::LiftState &S) {
 
 inline bool form(const cs_insn *Insn, Arch Target) {
   if (!Insn || !Insn->detail || Target != Arch::X64 ||
-      Insn->id != X86_INS_MOV || (Insn->size != 3 && Insn->size != 4))
+      Insn->id != X86_INS_MOV || Insn->size < 3 || Insn->size > 5)
     return false;
   const auto &X = Insn->detail->x86;
-  const unsigned Prefix = Insn->size == 4 ? 1 : 0;
-  const uint8_t Rex = Prefix ? Insn->bytes[0] : 0;
+  const unsigned Prefix = Insn->size - 3;
+  const bool OperandOverride = Prefix == 2;
+  if (Insn->bytes[Prefix] != 0x0f ||
+      (OperandOverride && Insn->bytes[0] != 0x66))
+    return false;
+  const uint8_t Rex = Prefix ? Insn->bytes[Prefix - 1] : 0;
   const uint8_t Opcode = Insn->bytes[Prefix + 1];
   const uint8_t ModRM = Insn->bytes[Prefix + 2];
   const bool Debug = Opcode == 0x21 || Opcode == 0x23;
   const bool Read = Opcode == 0x20 || Opcode == 0x21;
   const unsigned Index = ((ModRM >> 3) & 7) + ((Rex & 4) ? 8 : 0);
-  const bool ValidRex = Debug ? Rex >= 0x40 && Rex <= 0x49 && !(Rex & 6)
-                              : Rex >= 0x40 && Rex <= 0x45 && !(Rex & 2);
+  const bool Cr8 = !Debug && Index == 8;
+  // Intel SDM Vol. 2B, MOV to/from Control Registers. REX.W and 66H
+  // leave the 64-bit CR8 operand width unchanged. Keep the original REX
+  // for the decoder agreement and the REX.B general-register identity.
+  const uint8_t CheckedRex = Cr8 ? Rex & ~8 : Rex;
+  const bool ValidRex =
+      Debug ? Rex >= 0x40 && Rex <= 0x49 && !(Rex & 6)
+            : CheckedRex >= 0x40 && CheckedRex <= 0x45 && !(Rex & 2);
   // DR4/DR5 aliases depend on CR4.DE and retain their native boundary.
   const bool ValidIndex = Debug ? Index < 4 || Index == 6 || Index == 7
                                 : supportsControlIndex(Index);
-  if ((Prefix && !ValidRex) || Insn->bytes[Prefix] != 0x0f ||
+  if ((Prefix && !ValidRex) || (OperandOverride && !Cr8) ||
       (Opcode != 0x20 && Opcode != 0x22 && !Debug) || (ModRM >> 6) != 3 ||
       !ValidIndex || X.op_count != 2 || X.modrm != ModRM ||
       X.encoding.modrm_offset != Prefix + 2 || X.opcode[0] != 0x0f ||
       X.opcode[1] != Opcode || X.opcode[2] || X.opcode[3] || X.rex != Rex ||
-      X.prefix[0] || X.prefix[1] || X.prefix[2] || X.prefix[3] ||
+      X.prefix[0] || X.prefix[1] ||
+      X.prefix[2] != (OperandOverride ? 0x66 : 0) || X.prefix[3] ||
       X.addr_size != 8 || X.sib || X.disp || X.encoding.disp_size ||
       X.encoding.disp_offset || X.encoding.imm_size || X.encoding.imm_offset ||
       X.avx_sae || X.avx_rm != X86_AVX_RM_INVALID ||

@@ -528,8 +528,8 @@ struct X64ContinuationSourceOptions {
   /// External producers still own interrupt-controller selection and priority.
   bool ScheduledEvents = false;
   /// Notify the producer after each successful modeled MOV to CR8, including
-  /// same-value writes. Only the successful-RAM V6 scheduler supports this;
-  /// direct instruction calls and unscheduled drivers do not notify. The
+  /// same-value writes. A paged V6 scheduler uses the runtime's instruction
+  /// completion bit. Direct calls and unscheduled drivers do not notify. The
   /// embedding supplies neverd_x64_cr8_written_v1(value, producer_context).
   bool NotifyCr8Writes = false;
   uint64_t MaxInstructions = limits::analysis::kX64ContinuationMaxInstructions;
@@ -565,8 +565,8 @@ struct X64ContinuationInstructionSource {
   bool IsSti = false;
   /// Successful MOV SS starts an inhibition window in the paged scheduler.
   bool IsMovSS = false;
-  /// The modeled body owns a CR8 write. Only its Continue exit certifies that
-  /// the write completed; reads, rejected writes and native requests do not.
+  /// The modeled body owns a CR8 write. Successful-RAM drivers use Continue;
+  /// paged drivers use InstructionCompleted, including a subsequent debug trap.
   bool WritesCr8 = false;
   SourceFunctionTypeHint SourceABI;
   /// The arbitrary-value slot order and original instruction-local timing.
