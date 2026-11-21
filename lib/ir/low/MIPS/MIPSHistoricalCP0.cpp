@@ -91,9 +91,16 @@ std::optional<uint64_t> HistoricalCP0::read(unsigned Register,
   if ((Slot && ReadDelay[*Slot]) || !canUseCP0())
     return std::nullopt;
   if (Doubleword && (Processor != HistoricalProcessor::R4000 ||
-                     (Register != 8 && Register != 14 && Register != 30)))
+                     (Register != 4 && Register != 8 && Register != 10 &&
+                      Register != 14 && Register != 20 && Register != 30)))
     return std::nullopt;
   switch (Register) {
+  case 4:
+    return Context;
+  case 10:
+    return EntryHi;
+  case 20:
+    return Processor == HistoricalProcessor::R4000 ? XContext : std::nullopt;
   case 8:
     return BadVAddr;
   case 12:
@@ -302,13 +309,60 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
                                    std::optional<uint64_t> FaultAddress,
                                    bool Taken,
                                    std::optional<unsigned> Coprocessor) {
-  if (Code != 0 && Code != 4 && Code != 5 && Code != 8 && Code != 9 &&
-      Code != 10 && Code != 11 && Code != 12 &&
-      (Code != 13 || Processor == HistoricalProcessor::R30xx))
+  if (Code >= 1 && Code <= 3)
+    return false;
+  return commitException(Code, PC, Branch, FaultAddress, Taken, Coprocessor,
+                         false);
+}
+
+bool HistoricalCP0::enterTranslationFault(HistoricalAddressResult Fault,
+                                          HistoricalMemoryAccess Access,
+                                          uint8_t ASID, uint64_t PC,
+                                          std::optional<uint64_t> Branch,
+                                          uint64_t Address) {
+  const bool R3000 = Processor == HistoricalProcessor::R30xx;
+  if ((!R3000 && Processor != HistoricalProcessor::R4000) ||
+      Fault == HistoricalAddressResult::Mapped)
+    return false;
+  const bool Store = Access == HistoricalMemoryAccess::Store;
+  if (Fault == HistoricalAddressResult::AddressError)
+    return enterException(Store ? 5 : 4, PC, Branch, Address);
+  if (Fault == HistoricalAddressResult::Modified && !Store)
+    return false;
+  const uint8_t Code = Fault == HistoricalAddressResult::Modified ? 1
+                       : Store                                    ? 3
+                                                                  : 2;
+  const bool Refill = Fault == HistoricalAddressResult::Refill &&
+                      (R3000 ? Address < 0x80000000u : !(Status & StatusEXL));
+  if (!commitException(Code, PC, Branch, Address, false, {}, Refill))
+    return false;
+  if (R3000) {
+    EntryHi = (Address & 0xfffff000u) | (uint32_t(ASID) << 6);
+    if (Context)
+      Context = (*Context & 0xffe00000u) | ((Address >> 10) & 0x1ffffcu);
+  } else {
+    EntryHi = (Address & UINT64_C(0xc00000ffffffe000)) | ASID;
+    if (Context)
+      Context = (*Context & ~UINT64_C(0x7fffff)) | ((Address >> 9) & 0x7ffff0);
+    if (XContext)
+      XContext = (*XContext & ~UINT64_C(0x1ffffffff)) |
+                 ((Address >> 62) << 31) | ((Address >> 9) & 0x7ffffff0);
+  }
+  return true;
+}
+
+bool HistoricalCP0::commitException(uint8_t Code, uint64_t PC,
+                                    std::optional<uint64_t> Branch,
+                                    std::optional<uint64_t> FaultAddress,
+                                    bool Taken,
+                                    std::optional<unsigned> Coprocessor,
+                                    bool Refill) {
+  if (Code > 5 && Code != 8 && Code != 9 && Code != 10 && Code != 11 &&
+      Code != 12 && (Code != 13 || Processor == HistoricalProcessor::R30xx))
     return false;
   if (ExceptionModeDelay || (Code == 11) != Coprocessor.has_value() ||
       (Coprocessor && *Coprocessor >= 4) ||
-      (Code == 4 || Code == 5) != FaultAddress.has_value() ||
+      (Code >= 1 && Code <= 5) != FaultAddress.has_value() ||
       (Code == 0 && !canTakeInterrupt()))
     return false;
   // A fault never retires the victim.
@@ -335,7 +389,9 @@ bool HistoricalCP0::enterException(uint8_t Code, uint64_t PC,
     Status |= StatusEXL;
   const auto Base = BEV ? 0xbfc00000u : 0x80000000u;
   const auto Offset = (BEV ? (usesModeStack() ? 0x100u : 0x200u) : 0u) +
-                      (usesModeStack() ? 0x80u : 0x180u);
+                      (Refill            ? 0u
+                       : usesModeStack() ? 0x80u
+                                         : 0x180u);
   const auto Vector = Base + Offset;
   ExceptionVector = Processor == HistoricalProcessor::R4000
                         ? uint64_t(int64_t(int32_t(Vector)))

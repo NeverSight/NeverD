@@ -100,6 +100,21 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
                                            Img.MIPS->hasScalarFP32ABI(Img.Arch),
                                            Taken))
       return false;
+    if (Context.HistoricalMMU) {
+      const auto PA = Context.Historical->translate(
+          *Context.HistoricalMMU, Op.Addr, Op.Addr,
+          mips::HistoricalMemoryAccess::Fetch);
+      if (!PA || loadMemory(*PA, 4) != Op.Inputs[1].Offset) {
+        Context.Historical->abort();
+        return false;
+      }
+      // Only scalar integer transfers below consume a translated address.
+      const unsigned Major = Op.Inputs[1].Offset >> 26;
+      if (Major >= 32 && !mips::integerMemoryAccess(Major)) {
+        Context.Historical->abort();
+        return false;
+      }
+    }
     if (System && System->canTakeInterrupt()) {
       Context.Historical->enterException(Op.Addr, 0);
       return false;
@@ -138,17 +153,31 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         return true;
       Schedule->enterException(Op.Addr, Trap ? 13 : 12);
     } else {
-      const unsigned Major = *Word >> 26;
-      const unsigned Bytes = Major == 33 || Major == 37 || Major == 41   ? 2
-                             : Major == 35 || Major == 39 || Major == 43 ? 4
-                             : Major == 55 || Major == 63                ? 8
-                                                                         : 0;
-      if (!Bytes)
+      const auto Transfer = mips::integerMemoryAccess(*Word >> 26);
+      if (!Transfer || (Transfer->Wide && !Wide))
         return false;
-      if (!(Value & (Bytes - 1)))
-        return true;
-      const bool Store = Major == 41 || Major == 43 || Major == 63;
-      Schedule->enterException(Op.Addr, Store ? 5 : 4, Value);
+      const bool Store = Transfer->Store;
+      if (Value & (Transfer->Bytes - 1)) {
+        Schedule->enterException(Op.Addr, Store ? 5 : 4, Value);
+        return false;
+      }
+      uint64_t Address = Value;
+      if (Context.HistoricalMMU) {
+        const auto PA =
+            Schedule->translate(*Context.HistoricalMMU, Op.Addr, Value,
+                                Store ? mips::HistoricalMemoryAccess::Store
+                                      : mips::HistoricalMemoryAccess::Load);
+        if (!PA)
+          return false;
+        Address = *PA;
+      }
+      if (Op.Output.Size)
+        writeOutput(Op.Output, Address);
+      else if (Address != Value) {
+        Schedule->abort();
+        return false; // A legacy alignment-only operation cannot publish a PA.
+      }
+      return true;
     }
     return false;
   }

@@ -1558,8 +1558,34 @@ code 13 and the appropriate EPC and BD before the instruction retires. A
 false predicate completes normally. A disabled coprocessor
 sets the CE field. Interrupts sample the observed IP and IM bits at issue
 after the corresponding write hazard. The platform can update its six
-hardware interrupt lines between physical instructions. Reset, TLB state
-and board-specific Status fields require additional platform evidence. The CW4011 conventions follow the
+hardware interrupt lines between physical instructions. A recorded issue PC can
+bind that sample to an instruction or an executed delay slot. A failed issue
+preserves the sample for retry.
+
+A cold-reset snapshot for R30xx or R4000 supplies the unspecified register
+values. The first physical instruction must come from the uncached boot ROM
+at physical address `0x1fc00000`. A bound MMU snapshot checks guest
+instruction fetches against physical bytes. Aligned and byte scalar integer
+transfers translate through a complete 64-entry R3000A or 48-entry R4000
+table. R4000 compatibility translations support even and odd pages, global
+pairs and variable page sizes. Misses, invalid entries, and writes to clean
+pages update the fault state before retirement. Optional Context and XContext
+samples preserve the board's page-table base. Extended R4000 address regions,
+TLB management instructions, reverse-endian user data, cache-isolation data
+accesses and CW4011 MMU
+behavior need additional processor-specific evidence.
+
+The hardware regressions compare a little-endian DECstation 5000/133 load
+with its console instruction, EPC, fault address and exception fields. The SGI
+IP12 and IP20 PROM reports identify the vector and access direction. Their
+tests use representative load/store instructions and constructed TLB contents.
+These captures do not time reset release, a TLB write, or the external IRQ
+edge against the instruction clock.
+[DECstation R3000A console](https://mail-index.netbsd.org/port-pmax/2011/04/21/msg000100.html),
+[SGI IP12 console](https://mail-index.netbsd.org/port-sgimips/2018/08/26/msg000766.html),
+[SGI IP20 R4000 console](https://mail-index.netbsd.org/netbsd-bugs/2018/08/13/msg058468.html).
+
+The CW4011 integration is described in the
 [LSI L64364 ATMizer II manual, chapter 4](https://www.ic72.com/pdf_file/l/123798.pdf).
 
 The timing rules are based on the

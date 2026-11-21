@@ -11,6 +11,7 @@
 #define NEVERD_IR_LOW_MIPS_MIPSSYSTEMCONTEXT_H
 
 #include "neverd/ir/low/MIPS/MIPSHistoricalSchedule.h"
+#include "neverd/ir/low/MIPS/MIPSHistoricalTLB.h"
 
 #include <cstdint>
 #include <optional>
@@ -57,6 +58,9 @@ struct MIPSSystemContext {
   // Retained for the issuing processor across blocks and calls. Absence is
   // unknown scheduling state, never an implicit quiescent function entry.
   std::optional<mips::HistoricalSchedule> Historical;
+  /// Optional complete, caller-owned MMU snapshot. With it, scalar memory
+  /// transfers address the emulator's physical memory backing.
+  const mips::HistoricalTLB *HistoricalMMU = nullptr;
   /// A MIPS III o32 ELF can run in either processor mode. The caller binds
   /// doubleword execution in the absence of a concrete R4000 CP0 snapshot.
   /// With the snapshot, the active privilege mode owns this decision.

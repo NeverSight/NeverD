@@ -7,6 +7,8 @@
 #ifndef NEVERD_IR_LOW_MIPS_MIPSHISTORICALCP0_H
 #define NEVERD_IR_LOW_MIPS_MIPSHISTORICALCP0_H
 
+#include "neverd/ir/low/MIPS/MIPSHistoricalTLB.h"
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -76,9 +78,18 @@ struct HistoricalCP0 {
   /// In issue order. InterruptDelay counts the active entries on R30xx.
   std::array<R30xxInterruptVisibility, 2> R30xxInterrupts{};
   std::optional<bool> R30xxRecognized{};
+  std::optional<uint64_t> EntryHi{}, Context{}, XContext{};
 
 private:
   friend class HistoricalSchedule;
+  bool enterTranslationFault(HistoricalAddressResult Fault,
+                             HistoricalMemoryAccess Access, uint8_t ASID,
+                             uint64_t PC, std::optional<uint64_t> Branch,
+                             uint64_t Address);
+  bool commitException(uint8_t Code, uint64_t PC,
+                       std::optional<uint64_t> Branch,
+                       std::optional<uint64_t> FaultAddress, bool Taken,
+                       std::optional<unsigned> Coprocessor, bool Refill);
   std::optional<bool> pendingR30xxInterrupt() const;
   void propagateR30xxInterrupts(uint16_t Before, uint16_t After);
   void restoreR30xxInterruptEnable();

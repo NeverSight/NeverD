@@ -980,6 +980,249 @@ TEST(MIPSHistoricalScheduling,
   }
 }
 
+// These board consoles report fault state, not the prior TLB contents. A
+// complete constructed table gives the observed exception a reproducible cause.
+// Only the DECstation trace also identifies the exact faulting instruction.
+TEST(MIPSHistoricalScheduling, GuestTLBExceptionsMatchHardwareConsoleFields) {
+  struct Capture {
+    Arch Target;
+    unsigned Level;
+    uint64_t PC;
+    uint32_t Address, Word, BeforeStatus, CauseIP, Status, Code;
+  };
+  for (const auto &T :
+       {Capture{Arch::MIPS32EL, 1, 0x80125a3c, 0xff00, 0x8c830000, 0x20080005,
+                0, 0x20080014, 2}, // DECstation 5000/133.
+        Capture{Arch::MIPS32, 1, 0x803742b4, 0, 0x8c830000, 0x8001, 0, 0x8004,
+                2}, // SGI IP12, read.
+        Capture{Arch::MIPS64, 3, UINT64_C(0xffffffffbfc394ec), 0, 0xac830000,
+                0x20004001, 0x8000, 0x20004003, 3}}) { // SGI IP20, write.
+    auto Img = image(T.Target, T.Level);
+    Segment Code;
+    Code.VA = T.PC & 0x1fffffffu;
+    for (unsigned I = 0; I < 4; ++I)
+      Code.Data.push_back(T.Word >>
+                          (8 * (archLittleEndian(T.Target) ? I : 3 - I)));
+    Code.Size = Code.FileSz = Code.Data.size();
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Img.Segments.push_back(std::move(Code));
+    std::vector<HistoricalTLBEntry> Entries(T.Level == 1 ? 64 : 48);
+    for (unsigned I = 0; I < Entries.size(); ++I)
+      Entries[I].Hi = 0x1000000 + (I << 13);
+    const HistoricalTLB MMU{Entries, 7};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &MMU;
+    const auto Model =
+        T.Level == 1 ? HistoricalProcessor::R30xx : HistoricalProcessor::R4000;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        T.Level, {}, HistoricalCP0{Model, T.BeforeStatus, 0, 0x88, {}, {}});
+    ASSERT_TRUE(C.Historical);
+    ASSERT_TRUE(C.Historical->setHardwareInterrupts(T.CauseIP >> 10, T.PC));
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, T.Address);
+    E.setRegister(mipsreg::V1, 0x78);
+    EXPECT_FALSE(execute(lift(Img, T.PC, {T.Word}), E, C));
+    ASSERT_FALSE(C.Historical->hasActiveInstruction());
+    const auto &CPU = *C.Historical->system();
+    EXPECT_EQ(CPU.EPC, T.PC);
+    EXPECT_EQ(CPU.Status, T.Status);
+    EXPECT_EQ((CPU.Cause >> 2) & 31, T.Code);
+    EXPECT_EQ(CPU.Cause & 0x8000ff00u, T.CauseIP);
+    EXPECT_EQ(CPU.BadVAddr, T.Address);
+    EXPECT_EQ(CPU.ExceptionVector, T.Level == 1 ? UINT64_C(0x80000000)
+                                                : UINT64_C(0xffffffff80000000));
+    EXPECT_EQ(E.getRegister(mipsreg::V1), 0x78u);
+  }
+}
+
+TEST(MIPSHistoricalScheduling,
+     TLBMatchPermissionsAndPairedPagesAreIndependent) {
+  for (bool R3000 : {false, true}) {
+    HistoricalCP0 CPU{R3000 ? HistoricalProcessor::R30xx
+                            : HistoricalProcessor::R4000,
+                      0,
+                      0,
+                      0,
+                      {},
+                      {}};
+    std::vector<HistoricalTLBEntry> Entries(R3000 ? 64 : 48);
+    for (unsigned I = 0; I < Entries.size(); ++I)
+      Entries[I].Hi = 0x1000000 + (I << 13);
+    auto &E = Entries.front();
+    E = R3000 ? HistoricalTLBEntry{0x412c0, 0x54320200, 0, 0}
+              : HistoricalTLBEntry{0x4000b, 0x100002, 0x200006, 0x6000};
+    HistoricalTLB Table{Entries, 11};
+    const auto Check = [&](uint64_t VA, HistoricalMemoryAccess A,
+                           HistoricalAddressResult Kind, uint64_t PA = 0) {
+      const auto T = Table.translate(CPU, VA, A);
+      ASSERT_TRUE(T);
+      EXPECT_EQ(T->Result, Kind);
+      EXPECT_EQ(T->Physical, PA);
+    };
+    Check(0x41180, HistoricalMemoryAccess::Load,
+          HistoricalAddressResult::Mapped, R3000 ? 0x54320180u : 0x4001180u);
+    Check(0x41180, HistoricalMemoryAccess::Store,
+          HistoricalAddressResult::Modified);
+    if (!R3000)
+      Check(0x44020, HistoricalMemoryAccess::Store,
+            HistoricalAddressResult::Mapped, 0x8000020u);
+    Table.ASID = 3;
+    Check(0x41180, HistoricalMemoryAccess::Load,
+          HistoricalAddressResult::Refill);
+    if (R3000)
+      E.Lo0 = 0x100;
+    else
+      E.Lo0 = E.Lo1 = 1;
+    Check(0x41180, HistoricalMemoryAccess::Fetch,
+          HistoricalAddressResult::Invalid);
+    Entries[1] = E;
+    EXPECT_FALSE(Table.translate(CPU, 0x41180, HistoricalMemoryAccess::Load));
+    Table.Entries = Table.Entries.first(3);
+    EXPECT_FALSE(Table.translate(CPU, 0x41180, HistoricalMemoryAccess::Load));
+  }
+}
+
+TEST(MIPSHistoricalScheduling, RefillDuringEXLPreservesTheInterruptedEPC) {
+  std::array<HistoricalTLBEntry, 48> Entries{};
+  for (unsigned I = 0; I < Entries.size(); ++I)
+    Entries[I].Hi = 0x10000000u + (I << 13);
+  HistoricalTLB MMU{Entries, 0x55};
+  for (unsigned EXL : {0u, 2u}) {
+    HistoricalCP0 CPU{
+        HistoricalProcessor::R4000, EXL | (1u << 22), 0, 0xdead0, {}, {}};
+    CPU.Context = UINT64_C(0x1234000000800000);
+    CPU.XContext = UINT64_C(0xf000000200000000);
+    auto S = HistoricalSchedule::fromSnapshot(3, {}, CPU);
+    ASSERT_TRUE(S);
+    ASSERT_TRUE(S->beginPhysical(0x1004, 0x8c820000, false, false));
+    EXPECT_FALSE(
+        S->translate(MMU, 0x1004, 0x01234ab8, HistoricalMemoryAccess::Load));
+    const auto &After = *S->system();
+    EXPECT_EQ(After.EPC, EXL ? 0xdead0u : 0x1000u);
+    EXPECT_EQ(After.Cause, EXL ? 8u : 0x80000008u);
+    EXPECT_EQ(After.BadVAddr, 0x01234ab8u);
+    EXPECT_EQ(After.read(10, true), 0x01234055u);
+    EXPECT_EQ(After.read(4, true), UINT64_C(0x12340000008091a0));
+    EXPECT_EQ(After.read(20, true), UINT64_C(0xf0000002000091a0));
+    EXPECT_EQ(After.ExceptionVector, EXL ? UINT64_C(0xffffffffbfc00380)
+                                         : UINT64_C(0xffffffffbfc00200));
+  }
+  HistoricalCP0 User{HistoricalProcessor::R4000, (1u << 25) | 16, 0, 0, {}, {}};
+  EXPECT_FALSE(MMU.translate(User, 0x1200, HistoricalMemoryAccess::Load));
+  ASSERT_TRUE(MMU.translate(User, 0x1200, HistoricalMemoryAccess::Fetch));
+  User.Status = 1u << 21;
+  EXPECT_FALSE(MMU.translate(User, 0x1200, HistoricalMemoryAccess::Fetch));
+}
+
+TEST(MIPSHistoricalScheduling, TranslatedLoadAndStoreReachThePhysicalFrame) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Wide = isMIPS64(A);
+    const uint64_t PC = Wide ? UINT64_C(0xffffffff80001000) : 0x80001000;
+    auto Img = image(A, Wide ? 3 : 1);
+    const uint32_t Load = 0x8c820000, Store = 0xac850004;
+    Segment Code;
+    Code.VA = 0x1000;
+    for (uint32_t W : {Load, Store})
+      for (unsigned I = 0; I < 4; ++I)
+        Code.Data.push_back(W >> (8 * (archLittleEndian(A) ? I : 3 - I)));
+    Code.Size = Code.FileSz = Code.Data.size();
+    Code.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+    Img.Segments.push_back(std::move(Code));
+    Segment Frame;
+    Frame.VA = 0x9000;
+    Frame.Data = {0x12, 0x34, 0x56, 0x78, 0, 0, 0, 0};
+    Frame.Size = Frame.FileSz = Frame.Data.size();
+    Frame.Flags = SegmentFlags::Readable | SegmentFlags::Writable;
+    Img.Segments.push_back(std::move(Frame));
+    std::vector<HistoricalTLBEntry> Entries(Wide ? 48 : 64);
+    for (unsigned I = 0; I < Entries.size(); ++I)
+      Entries[I].Hi = 0x1000000 + (I << 13);
+    Entries[0] = Wide ? HistoricalTLBEntry{0x40007, 9u << 6 | 6, 0, 0}
+                      : HistoricalTLBEntry{0x40000 | 7u << 6, 0x9600, 0, 0};
+    const HistoricalTLB Table{Entries, 7};
+    MIPSSystemContext C;
+    C.HistoricalMMU = &Table;
+    C.Historical = HistoricalSchedule::fromSnapshot(
+        Wide ? 3 : 1, {},
+        HistoricalCP0{Wide ? HistoricalProcessor::R4000
+                           : HistoricalProcessor::R30xx,
+                      0,
+                      0,
+                      0,
+                      {},
+                      {}});
+    NdOpEmulator E(Img);
+    E.setStrictMode(true);
+    E.setRegister(mipsreg::A0, 0x40000);
+    E.setRegister(mipsreg::A1, 0x76543210);
+    ASSERT_TRUE(execute(lift(Img, PC, {Load}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0),
+              archLittleEndian(A) ? 0x78563412u : 0x12345678u);
+    ASSERT_TRUE(execute(lift(Img, PC + 4, {Store}), E, C));
+    E.setRegister(mipsreg::A0, 0x40004);
+    ASSERT_TRUE(execute(lift(Img, PC, {Load}), E, C));
+    EXPECT_EQ(E.getRegister(mipsreg::V0), 0x76543210u);
+  }
+}
+
+TEST(MIPSHistoricalScheduling, BoardLineSampleStaysAtTheObservedIssuePC) {
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const bool Wide = isMIPS64(A);
+    auto S = HistoricalSchedule::fromSnapshot(
+        Wide ? 3 : 1, {},
+        HistoricalCP0{Wide ? HistoricalProcessor::R4000
+                           : HistoricalProcessor::R30xx,
+                      0x401,
+                      0,
+                      0,
+                      {},
+                      {}});
+    ASSERT_TRUE(S);
+    ASSERT_TRUE(S->setHardwareInterrupts(1, 0x1204));
+    EXPECT_FALSE(S->setHardwareInterrupts(0, 0x1208));
+    EXPECT_FALSE(S->beginPhysical(0x1208, 0, false));
+    EXPECT_FALSE(S->enterFetchAddressError(0x1205));
+    EXPECT_EQ(S->system()->Cause, 0x400u);
+    ASSERT_TRUE(S->beginPhysical(0x1204, 0, false, true));
+    ASSERT_TRUE(S->abort());
+    EXPECT_FALSE(S->beginPhysical(0x1200, 0, false));
+    ASSERT_TRUE(S->beginPhysical(0x1204, 0, false, true));
+    ASSERT_TRUE(S->enterException(0x1204, 0));
+    EXPECT_EQ(S->system()->EPC, 0x1200u);
+    EXPECT_EQ(S->system()->Cause, 0x80000400u);
+    EXPECT_TRUE(S->setHardwareInterrupts(0, *S->system()->ExceptionVector));
+  }
+}
+
+TEST(MIPSHistoricalScheduling, ColdResetRequiresObservedUnknownRegisters) {
+  for (auto P : {HistoricalProcessor::R30xx, HistoricalProcessor::R4000}) {
+    const bool R3000 = P == HistoricalProcessor::R30xx;
+    constexpr uint32_t BEV = 1u << 22;
+    HistoricalCP0 Sample{P, BEV | (R3000 ? 0u : 4u), 0x100, 0x88, {}, {}};
+    auto S = HistoricalSchedule::fromColdReset(Sample);
+    ASSERT_TRUE(S);
+    EXPECT_EQ(S->system()->Cause, 0x100u);
+    EXPECT_EQ(S->system()->EPC, 0x88u);
+    EXPECT_EQ(S->system()->ExceptionVector,
+              R3000 ? UINT64_C(0xbfc00000) : UINT64_C(0xffffffffbfc00000));
+    const uint64_t PC = *S->system()->ExceptionVector;
+    const HistoricalTLB UnknownTable{{}, 0};
+    EXPECT_FALSE(S->beginPhysical(PC + 4, 0, false));
+    EXPECT_FALSE(S->beginPhysical(PC, 0, false, false));
+    ASSERT_TRUE(S->beginPhysical(PC, 0, false));
+    EXPECT_EQ(S->translate(UnknownTable, PC, PC, HistoricalMemoryAccess::Fetch),
+              UINT64_C(0x1fc00000));
+    ASSERT_TRUE(S->abort());
+    EXPECT_FALSE(S->beginPhysical(PC + 4, 0, false));
+    ASSERT_TRUE(S->beginPhysical(PC, 0, false));
+    ASSERT_TRUE(S->retire(PC));
+    EXPECT_TRUE(S->beginPhysical(PC + 4, 0, false));
+    Sample.Status ^= BEV;
+    EXPECT_FALSE(HistoricalSchedule::fromColdReset(Sample));
+  }
+}
+
 void data(BinaryImage &Img) {
   Segment S;
   S.VA = 0x2000;
