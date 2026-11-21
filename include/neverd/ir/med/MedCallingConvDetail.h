@@ -75,9 +75,11 @@ void composeStackSlots(MedOp &Read, MedVar First, unsigned Slot, unsigned Bytes,
 
 ValueKey valueKey(const MedVar &V);
 /// Internal register-ABI stack recovery, including a bounded variadic prefix.
+/// A validated MIPS record ABI supplies the bounds of address-taken objects.
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
                        int64_t MaxStackOff = 0,
-                       const BinaryImage *Image = nullptr);
+                       const BinaryImage *Image = nullptr,
+                       const SourceFunctionTypeHint *RecordABI = nullptr);
 void detectCdeclStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Format,
                             const BinaryImage *Image = nullptr);
 bool containsValue(const ValueSet &Values, const MedVar &V);
