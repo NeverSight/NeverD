@@ -192,17 +192,22 @@ MaskedArithmeticBounds maskedArithmeticBounds(const llvm::Value *V,
       }
     }
   }
-  // An arithmetic right shift by K has at most Width-K signed bits,
-  // whatever produced its input. Exactness and child poison are checked
-  // separately before the translator can use the resulting value.
-  if (I->getOpcode() == llvm::Instruction::AShr) {
+  // A nonzero logical shift clears the sign bit. An arithmetic shift
+  // leaves at most Width-K signed bits. Child poison and exactness are
+  // checked separately before translating the region.
+  if (I->getOpcode() == llvm::Instruction::AShr ||
+      I->getOpcode() == llvm::Instruction::LShr) {
     const auto *Shift = llvm::dyn_cast<llvm::ConstantInt>(I->getOperand(1));
-    if (Shift && Shift->getValue().ult(Width)) {
-      const unsigned Bits = Width - Shift->getZExtValue();
-      Result.SignedMin =
-          llvm::APInt::getSignedMinValue(Bits).sextOrTrunc(Width);
-      Result.SignedMax =
-          llvm::APInt::getSignedMaxValue(Bits).sextOrTrunc(Width);
+    if (!Shift || Shift->isZero() || !Shift->getValue().ult(Width))
+      return Result;
+    const unsigned Bits = Width - Shift->getZExtValue();
+    if (I->getOpcode() == llvm::Instruction::LShr) {
+      Result.UnsignedMax = llvm::APInt::getLowBitsSet(Width, Bits);
+      Result.SignedMin.clearAllBits();
+      Result.SignedMax = Result.UnsignedMax;
+    } else {
+      Result.SignedMin = llvm::APInt::getSignedMinValue(Bits).sext(Width);
+      Result.SignedMax = llvm::APInt::getSignedMaxValue(Bits).sext(Width);
     }
     return Result;
   }
