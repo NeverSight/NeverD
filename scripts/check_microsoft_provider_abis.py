@@ -15,7 +15,7 @@ from pathlib import Path
 import subprocess
 
 import build_wdk_driver_fixtures as wdk
-from generate_microsoft_windows_types import PROVIDER_PREFIXES
+from generate_microsoft_windows_types import PROVIDER_INLINE_ROUTINES, PROVIDER_PREFIXES
 import microsoft_ucrt_types as ucrt
 
 
@@ -126,7 +126,9 @@ def official_names(args: argparse.Namespace, compiler: list[str], original: Path
     parsed = json.loads(result.stdout)
     if parsed["problems"]:
         raise ValueError(f"official {provider} declarations were refused")
-    names = tuple(sorted(name for name in parsed["prototypes"] if name.startswith(prefixes)))
+    names = tuple(sorted(name for name in parsed["prototypes"]
+                         if name.startswith(prefixes) and
+                         name not in PROVIDER_INLINE_ROUTINES.get(provider, ())))
     if not names:
         raise ValueError(f"official {provider} profile declares no functions")
     return names

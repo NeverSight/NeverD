@@ -174,6 +174,17 @@ The Windows SQLite, ICU and Web Services checks enumerate their C APIs from
 the pinned SDK header for each target. The published type closure is compiled
 independently on x86, x64 and ARM64 and compared to that original profile.
 
+The same per-target check covers the selected exports for DHCP Server, ODBC,
+Media Foundation, TDH, JavaScript Runtime, Rights Management, Directory
+Services, XmlLite, UI Automation, WinINet, routing tables, WinSNMP, audio
+compression, Cloud Files, Peer Distribution, Interaction Context, distributed
+routing, Projected File System, iSCSI, cluster resources, Video for Windows,
+Fax, Windows Error Reporting and Magnification. For SDK declarations written
+with an empty C parameter list, the generator checks the return type, calling
+convention and zero parameters against the original C++ declaration before
+publishing a C prototype. This preserves the distinct x86 conventions of
+`WerStorePurge` and `WerUnregisterAppLocalDump`.
+
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of
 the original official headers; a missing published declaration therefore fails
