@@ -812,15 +812,31 @@ LocalTypesDebugContext::LocalTypesDebugContext(
   }
   const auto BindCOMExport = [&](std::optional<va_t> Entry,
                                  llvm::StringRef Name) {
-    if (!Entry)
+    if (!Entry || !Image)
       return;
-    for (const auto Provider : this->Headers)
-      if (const auto *Header = types::headerLibrary(Provider))
-        if (const auto *Function = Header->findPrototype(Name)) {
-          BindSignature(*Entry, Provider,
-                        signatureOf(*Header, *Function, Name));
-          return;
-        }
+    const auto Provider =
+        Image->Arch == Arch::X86   ? types::HeaderLibrary::WindowsUserX86
+        : Image->Arch == Arch::X64 ? types::HeaderLibrary::WindowsUserX64
+                                   : types::HeaderLibrary::WindowsUserARM64;
+    const auto *Header = llvm::is_contained(this->Headers, Provider)
+                             ? types::headerLibrary(Provider)
+                             : nullptr;
+    if (!Header)
+      return;
+    if (const auto *Function = Header->findPrototype(Name)) {
+      BindSignature(*Entry, Provider, signatureOf(*Header, *Function, Name));
+      return;
+    }
+    // olectl.h specifies STDAPI and no parameters for both self-registration
+    // callbacks. Older bundled user headers provide HRESULT without these
+    // declarations. Resolve the published contract in that target's types.
+    const auto Prefix =
+        Image->Arch == Arch::X86 ? "HRESULT __stdcall " : "HRESULT ";
+    auto Read = types::parseFunctionDeclaration(Prefix + Name.str() + "(void)",
+                                                *Header);
+    if (Read.ok())
+      BindSignature(*Entry, Provider,
+                    signatureOf(*Header, *Read.Function, Read.Name));
   };
   BindCOMExport(WindowsEntries.DllRegisterServer, "DllRegisterServer");
   BindCOMExport(WindowsEntries.DllUnregisterServer, "DllUnregisterServer");

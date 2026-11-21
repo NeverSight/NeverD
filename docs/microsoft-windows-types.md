@@ -222,7 +222,9 @@ The `COMRegistration` profile reads the self-registration callbacks that
 in-process COM servers export from `olectl.h`. It preserves the 32-bit
 `HRESULT` return type and empty parameter list. A named, executable export
 in a Windows GUI or console DLL binds its SDK contract at that address.
-Both C views preserve x86 `__stdcall` linkage. Repeat the compiler
+Both C views preserve x86 `__stdcall` linkage. Bundled user headers that
+only declare `HRESULT` use the published `STDAPI(void)` callback contract
+for the same authenticated exports. Repeat the compiler
 comparison with `--provider COMRegistration`.
 
 Add `--legacy-sdk` to use the archived Microsoft 10.0.22621.3233 SDK for
