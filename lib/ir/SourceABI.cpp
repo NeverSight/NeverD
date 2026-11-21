@@ -655,10 +655,17 @@ bool hasSwiftErrorResult(const SourceFunctionTypeHint &Hint) {
 
 std::vector<SourceABIParameter>
 sourceABIParameters(const SourceFunctionTypeHint &Hint) {
+  std::vector<SourceABIParameter> Result;
+  sourceABIParameters(Hint, Result);
+  return Result;
+}
+
+bool sourceABIParameters(const SourceFunctionTypeHint &Hint,
+                         std::vector<SourceABIParameter> &Result) {
+  Result.clear();
   std::string Error;
   if (!validateSourceABI(Hint, Error))
-    return {};
-  std::vector<SourceABIParameter> Result;
+    return false;
   for (size_t I = 0; I < Hint.Parameters.size(); ++I) {
     const auto &P = Hint.Parameters[I];
     if (P.Components.empty())
@@ -691,7 +698,7 @@ sourceABIParameters(const SourceFunctionTypeHint &Hint) {
                           P.Components[J]});
     }
   }
-  return Result;
+  return true;
 }
 
 std::vector<SourceAggregateMember> sourceABIValueMembers(const TypeRef &Type) {

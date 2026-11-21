@@ -432,7 +432,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
             equalSourceABIs(Hint->Signature, Found->second.Signature))
           Hint->SwiftOpaqueValue = Found->second.SwiftOpaqueValue;
       }
-      std::string Diagnostic;
+      std::vector<SourceABIParameter> Parameters;
       const bool NativeError =
           Hint && isNativeSwiftErrorSourceCall(*Hint, TargetArch) &&
           Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst() &&
@@ -444,7 +444,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
               Hint->TargetAddress;
       if (!Hint || (MIPSRecords && !Hint->Signature.MIPSRecords) ||
           Hint->Signature.Architecture != TargetArch ||
-          !validateSourceABI(Hint->Signature, Diagnostic) ||
+          !sourceABIParameters(Hint->Signature, Parameters) ||
           (Hint->Signature.ReturnLocation.Kind ==
                SourceABICarrierKind::IndirectResultPointer &&
            !sourceCallRetainsResultStorage(*Hint) &&
@@ -485,7 +485,6 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         continue;
       }
       const auto &Signature = Hint->Signature;
-      const auto Parameters = sourceABIParameters(Signature);
       const bool HasStack =
           std::any_of(Parameters.begin(), Parameters.end(),
                       [](const SourceABIParameter &P) {

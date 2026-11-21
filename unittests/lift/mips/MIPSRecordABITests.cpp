@@ -352,6 +352,32 @@ TEST(MIPSRecordABI, NarrowIntegerFieldUsesTheSameLaneInArgumentAndResult) {
   }
 }
 
+TEST(MIPSRecordABI, CheckedBindingsDistinguishEmptyAndInvalidDeclarations) {
+  for (Arch A : Architectures) {
+    SCOPED_TRACE(unsigned(A));
+    const auto Value = record({NdType::makeInt(8, false)});
+    SourceFunctionTypeHint Signature;
+    Signature.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Signature.ReturnType = Value;
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    std::vector<SourceABIParameter> Parameters;
+    EXPECT_TRUE(sourceABIParameters(Signature, Parameters));
+    EXPECT_TRUE(Parameters.empty());
+
+    Signature.Parameters.push_back({"value", Value});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Signature, A, BinaryFormat::ELF));
+    ASSERT_TRUE(sourceABIParameters(Signature, Parameters));
+    ASSERT_EQ(Parameters.size(), 1u);
+    EXPECT_EQ(Parameters.front().Location.RegisterOffset, mipsreg::A0);
+    ASSERT_EQ(Signature.Parameters.front().Components.size(), 1u);
+    Signature.Parameters.front().Components.front().RegisterOffset =
+        mipsreg::RA;
+    EXPECT_FALSE(sourceABIParameters(Signature, Parameters));
+    EXPECT_TRUE(Parameters.empty());
+    EXPECT_TRUE(sourceABIParameters(Signature).empty());
+  }
+}
+
 TEST(MIPSRecordABI, NaturalLayoutAloneDoesNotAuthorizeSourceCalls) {
   for (Arch A : Architectures)
     for (const auto &Type :

@@ -291,16 +291,9 @@ unsigned mips::alignedO32ArgumentSlot(unsigned Next, const TypeRef &Type) {
   return AlignPair ? (Next + 1u) & ~1u : Next;
 }
 
-bool mips::usesIntegerRecordWords(Arch Architecture,
-                                  const SourceParameterTypeHint &P) {
-  return isRecord(P.Type) && (isMIPSO32(Architecture) || isByteRecord(P.Type) ||
-                              isPackedRecordWord(P.Type, P.Components));
-}
-
-bool mips::isByteRecord(const TypeRef &Type) {
-  if (!isRecord(Type))
-    return false;
-  const auto Members = sourceValueMembers(Type);
+namespace {
+bool hasByteFields(const TypeRef &Type,
+                   llvm::ArrayRef<SourceAggregateMember> Members) {
   return !Members.empty() && Members.size() == Type->Size &&
          llvm::all_of(llvm::enumerate(Members), [](const auto &Item) {
            const auto &M = Item.value();
@@ -309,15 +302,36 @@ bool mips::isByteRecord(const TypeRef &Type) {
          });
 }
 
+bool fieldsShareIntegerWord(const TypeRef &Type,
+                            llvm::ArrayRef<SourceABIValueLocation> Locations,
+                            llvm::ArrayRef<SourceAggregateMember> Members) {
+  return Members.size() > 1 && Locations.size() == 1 &&
+         (Locations.front().Kind == SourceABICarrierKind::IntegerRegister ||
+          Locations.front().Kind == SourceABICarrierKind::Stack) &&
+         Locations.front().ValueBytes == Type->Size &&
+         (Type->Size == 2 || Type->Size == 4 || Type->Size == 8);
+}
+} // namespace
+
+bool mips::usesIntegerRecordWords(Arch Architecture,
+                                  const SourceParameterTypeHint &P) {
+  if (!isRecord(P.Type))
+    return false;
+  if (isMIPSO32(Architecture))
+    return true;
+  const auto Members = sourceValueMembers(P.Type);
+  return hasByteFields(P.Type, Members) ||
+         fieldsShareIntegerWord(P.Type, P.Components, Members);
+}
+
+bool mips::isByteRecord(const TypeRef &Type) {
+  return isRecord(Type) && hasByteFields(Type, sourceValueMembers(Type));
+}
+
 bool mips::isPackedRecordWord(
     const TypeRef &Type, llvm::ArrayRef<SourceABIValueLocation> Locations) {
-  if (!isRecord(Type) || Locations.size() != 1 ||
-      (Locations.front().Kind != SourceABICarrierKind::IntegerRegister &&
-       Locations.front().Kind != SourceABICarrierKind::Stack) ||
-      Locations.front().ValueBytes != Type->Size ||
-      (Type->Size != 2 && Type->Size != 4 && Type->Size != 8))
-    return false;
-  return sourceValueMembers(Type).size() > 1;
+  return isRecord(Type) &&
+         fieldsShareIntegerWord(Type, Locations, sourceValueMembers(Type));
 }
 
 bool mips::isSplitRecordScalar(const SourceParameterTypeHint &P) {
@@ -372,9 +386,10 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
       Scalar = Pieces[0].Location;
       return true;
     }
-    if (mips::isByteRecord(Type) || (Argument && isMIPSO32(Architecture))) {
+    // Flatten the record once for the byte, packed-word and member checks.
+    const auto Members = sourceValueMembers(Type);
+    if (hasByteFields(Type, Members) || (Argument && isMIPSO32(Architecture))) {
       if (Argument && isMIPSO32(Architecture)) {
-        const auto Members = sourceValueMembers(Type);
         if (Members.empty() || llvm::any_of(Members, [](const auto &M) {
               return M.Type->Size > 8;
             }))
@@ -393,11 +408,10 @@ static bool bindRecordABI(SourceFunctionTypeHint &Hint, Arch Architecture,
     }
     if (Argument && Pieces.size() == 1 && !Pieces[0].Offset &&
         !Pieces[0].RegisterBitOffset && !Pieces[0].Indirect &&
-        mips::isPackedRecordWord(Type, Pieces[0].Location)) {
+        fieldsShareIntegerWord(Type, Pieces[0].Location, Members)) {
       Components.push_back(Pieces[0].Location);
       return true;
     }
-    const auto Members = sourceValueMembers(Type);
     if (Members.empty() || Members.size() != Pieces.size())
       return false;
     for (size_t I = 0; I < Members.size(); ++I) {
