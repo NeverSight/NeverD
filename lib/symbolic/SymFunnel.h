@@ -10,6 +10,7 @@
 #include "neverd/symbolic/SymExpr.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <optional>
 #include <utility>
@@ -20,6 +21,19 @@ struct WordWindow {
   SymRef Word;
   uint64_t Offset;
 };
+
+// Bits outside a bitwise field cannot flow into it. Read only the limbs
+// intersecting [Begin, End), masking off the bits below the first position.
+inline bool zeroBitWindow(llvm::ArrayRef<uint64_t> Words, unsigned Begin,
+                          unsigned End) {
+  const unsigned First = Begin / 64, Last = (End - 1) / 64;
+  const uint64_t Head = Words[First] & (~uint64_t(0) << (Begin % 64));
+  if (Head)
+    return 64 * uint64_t(First) + std::countr_zero(Head) >= End;
+  return First == Last ||
+         llvm::APInt::tcLSB(Words.data() + First + 1, Last - First) >=
+             End - 64 * (First + 1);
+}
 
 // Constant logical and arithmetic shift counts are normalized to [1, Width).
 // Keep the shifted word when any selected bit comes from its padding.
@@ -65,6 +79,9 @@ struct FunnelShifts {
     const auto Digits = Ctx.constWords(Ctx.operand(High, 0));
     const unsigned Cut = llvm::APInt::tcLSB(Digits.data(), Digits.size());
     if (At + Size <= Cut)
+      return projectRightShift(Ctx, Right, At, Size);
+    if (Cut < At && Join != SymOp::Add && Ctx.op(High) == SymOp::And &&
+        At + Size <= Width && zeroBitWindow(Digits, At, At + Size))
       return projectRightShift(Ctx, Right, At, Size);
     if (Ctx.op(Right) == SymOp::AShr)
       return std::nullopt;

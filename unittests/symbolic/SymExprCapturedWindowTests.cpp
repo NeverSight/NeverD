@@ -320,3 +320,45 @@ TEST(SymExpr, JoinedPrefixRetainsCarriesAndSignPadding) {
     }
   }
 }
+
+TEST(SymExpr, InteriorMaskedWindowsKeepCarriesAndOverlap) {
+  constexpr unsigned W = 193;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W), Z = C.mkVar("z", W);
+  const auto Shift = C.mkLShr(X, C.mkConst(W, 7));
+  for (unsigned At : {17u, 63u, 64u, 71u}) {
+    for (unsigned Size : {1u, 64u, 73u}) {
+      SCOPED_TRACE(::testing::Message() << At << ',' << Size);
+      auto Mask = ~llvm::APInt::getBitsSet(W, At, At + Size);
+      const auto Good = C.mkAnd(C.mkConst(Mask), Y);
+      const auto Noise = C.mkAnd(C.mkConst(W, 1), Z);
+      const auto Expected = C.mkExtract(X, At + 7, Size);
+      EXPECT_EQ(C.mkExtract(C.mkXor(Good, Shift), At, Size), Expected);
+      EXPECT_EQ(C.mkExtract(C.mkOr({Noise, Good, Shift}), At, Size), Expected);
+
+      // A carry from bit At-1 can change the first selected bit.
+      const auto Below = llvm::APInt::getLowBitsSet(W, At);
+      std::array<llvm::APInt, 3> Inputs{Below.shl(7), llvm::APInt(W, 1),
+                                        llvm::APInt(W, 0)};
+      auto Sum = C.mkExtract(C.mkAdd({Noise, Good, Shift}), At, Size);
+      EXPECT_EQ(C.eval(Sum, Inputs), llvm::APInt(Size, 1));
+
+      Mask.setBit(At + Size - 1);
+      Inputs[0].clearAllBits();
+      Inputs[1] = llvm::APInt::getAllOnes(W);
+      const auto Live = C.mkAnd(C.mkConst(Mask), Y);
+      EXPECT_EQ(C.eval(C.mkExtract(C.mkXor(Shift, Live), At, Size), Inputs),
+                llvm::APInt::getSignMask(Size));
+      EXPECT_EQ(
+          C.eval(C.mkExtract(C.mkOr({Noise, Shift, Live}), At, Size), Inputs),
+          llvm::APInt::getSignMask(Size));
+
+      // An interior hole in a multiplier does not imply a hole in its product.
+      const auto Scaled = C.mkMul(C.mkConst(Mask), Y);
+      Inputs[1] = llvm::APInt::getOneBitSet(W, At);
+      EXPECT_EQ(
+          C.eval(C.mkExtract(C.mkOr({Scaled, Shift, Noise}), At, Size), Inputs),
+          (Mask * Inputs[1]).extractBits(Size, At));
+    }
+  }
+}
