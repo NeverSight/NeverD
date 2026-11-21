@@ -1,6 +1,7 @@
 """Qualify flat Windows APIs from the matching Microsoft SDK headers and COFF import libraries."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -46,6 +47,24 @@ def package(cache, record):
     return wdk.download(cache, record["file"], record["url"], record["sha256"])
 
 
+def alljoyn_notice(headers, output, record):
+    notices = set()
+    for header in headers.glob("*.h"):
+        blocks = [block for block in re.findall(rb"/\*.*?\*/", header.read_bytes(), re.DOTALL)
+                  if b"Copyright AllSeen Alliance." in block]
+        if len(blocks) != 1:
+            raise ValueError("missing or ambiguous original AllJoyn notice in " + header.name)
+        notices.add(blocks[0])
+    if len(notices) != 1:
+        raise ValueError("archived Microsoft AllJoyn headers have inconsistent notices")
+    notice = notices.pop()
+    if hashlib.sha256(notice).hexdigest() != record["sha256"]:
+        raise ValueError("original AllJoyn notice differs from the pinned SDK")
+    path = output / record["file"]
+    path.write_bytes(notice)
+    return path
+
+
 def legacy_headers(root, cache):
     legacy = json.loads(LEGACY_INPUTS.read_text(encoding="utf-8"))
     runtime = json.loads(ucrt.INPUTS.read_text(encoding="utf-8"))
@@ -61,7 +80,8 @@ def legacy_headers(root, cache):
                        encoding="utf-8")
     return {"includes": includes, "vc": kit / runtime["vc_include"], "overlay": overlay,
             "packages": [legacy["headers"], runtime["vc_headers"]],
-            "vc_notice": package(cache, runtime["vc_license"])}
+            "notices": [package(cache, runtime["vc_license"]),
+                        alljoyn_notice(includes / "um/alljoyn_c", root, legacy["alljoyn_notice"])]}
 
 
 def read_symbols(inputs, directory, run):

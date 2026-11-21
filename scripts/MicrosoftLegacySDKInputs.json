@@ -1,5 +1,9 @@
 {
   "sdk_version": "10.0.22621.0",
+  "alljoyn_notice": {
+    "file": "AllJoyn-SDK-LICENSE.txt",
+    "sha256": "0d888fdaabde26fe368d91b0a06c00b2eab7bb45e240adf6b1b0b7c75b472131"
+  },
   "headers": {
     "file": "microsoft.windows.sdk.cpp.10.0.22621.3233.nupkg",
     "url": "https://api.nuget.org/v3-flatcontainer/microsoft.windows.sdk.cpp/10.0.22621.3233/microsoft.windows.sdk.cpp.10.0.22621.3233.nupkg",

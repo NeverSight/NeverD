@@ -250,7 +250,7 @@ def check(args: argparse.Namespace) -> dict:
                         row.update(functions=names, inventory="original Microsoft C++ flat API",
                                    declarations_without_import=sorted(functions.keys() - imported.keys()),
                                    reference_parameters=sorted(imported.keys() - set(names)))
-                    elif name in flat.CURRENT or name in flat.LEGACY:
+                    elif "sdk_import_bridge" in metadata:
                         declared = official_names(args, compiler, original, directory, row, arch, name, ("",))
                         inventory = dict(bridge)
                         names = tuple(flat.select(inventory, declared, directory, windows.run))
@@ -332,7 +332,7 @@ def check(args: argparse.Namespace) -> dict:
         profiles = manifest.get("profiles", {})
         if args.provider is None:
             if "flat_imports" not in profiles:
-                expected.difference_update(flat.CURRENT)
+                expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
             if "legacy_sdk" not in profiles:
                 expected.difference_update(flat.LEGACY)
         if arch == "x86":

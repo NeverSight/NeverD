@@ -169,7 +169,6 @@ ISOLATED_PROVIDERS = {
         Provider("AudioCompression", ("windows", "mmsystem", "mmreg", "msacm")),
         Provider("CloudFiles", ("windows", "cfapi")),
         Provider("PeerDistribution", ("windows", "peerdist")),
-        Provider("InteractionContext", ("windows", "interactioncontext")),
         Provider("DistributedRouting", ("winsock2", "windows", "drt")),
         Provider("ProjectedFileSystem", ("windows", "projectedfslib")),
         Provider("ISCSI", ("winsock2", "windows", "iscsierr", "iscsidsc")),
@@ -418,7 +417,7 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
     commands = [command, *bridge_commands]
-    if name in PROVIDER_PREFIXES:
+    if flat_proof is None and name in PROVIDER_PREFIXES:
         prefixes = PROVIDER_PREFIXES[name]
         prototypes = tuple(sorted(symbol for symbol in parsed["prototypes"]
                                   if symbol.startswith(prefixes) and
@@ -797,8 +796,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             if legacy_profile:
                 runtime_packages.extend(item for item in legacy_profile["packages"]
                                         if item not in runtime_packages)
-                notice = legacy_profile["vc_notice"]
-                shutil.copy2(notice, licenses / notice.name)
+                for notice in legacy_profile["notices"]:
+                    shutil.copy2(notice, licenses / notice.name)
         providers = merge_providers(base, generated, output, arguments, common,
                                      neverd, model, original_layouts, runtime, compatibility,
                                      convention, gdiplus_imports, flat_units)
