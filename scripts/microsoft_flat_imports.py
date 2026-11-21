@@ -39,6 +39,8 @@ CURRENT = {
     "DeltaCompression": ("msdelta.lib", ("msdelta",)),
     "PatchAPI": ("mspatcha.lib", ("patchapi",)),
     "NetworkDiagnostics": ("ndfapi.lib", ("ndfapi",)),
+    "ProcessStatus": ("psapi.lib", ("psapi",)),
+    "ProcessSnapshots": ("kernel32.Lib", ("processsnapshot",)),
 }
 LEGACY = {"AllJoyn": "MSAJApi.lib", "PeerNetworking": "p2p.lib", "PeerGraph": "p2pgraph.lib"}
 
@@ -134,20 +136,25 @@ def source_units(output, cache, architecture, readobj, primary, legacy):
                         "command": [readobj, "--coff-imports", str(path)]}
             source = directory / (name + "-sdk.c")
             headers = common_headers + headers
-            source.write_text("".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
+            # The SDK maps the default PSAPI profile to Kernel32's K32*
+            # exports. Version 1 declares the routines exported by PSAPI.dll.
+            prelude = "#define PSAPI_VERSION 1\n" if name == "ProcessStatus" else ""
+            source.write_text(prelude + "".join(f"#include <{h}.h>\n" for h in headers), encoding="utf-8")
+            scope = {"import_prefix": "Pss"} if name == "ProcessSnapshots" else {}
             units.append({"name": name, "source": source, "compiler": compiler, "headers": headers,
                           "bridge": {"source": str(source), "source_sha256": wdk.digest(source),
                                      "arguments": original, "language": language,
-                                     "import_library": identity, "commands": []}})
+                                     "import_library": identity, "commands": [], **scope}})
     return units, packages
 
 
 def select(proof, declared, directory, run):
     symbols = read_symbols(proof["import_library"], directory, run)
-    names = sorted(symbols.keys() & set(declared))
+    eligible = {name for name in symbols if name.startswith(proof.get("import_prefix", ""))}
+    names = sorted(eligible & set(declared))
     if not names:
         raise ValueError("Microsoft SDK headers and import library share no named API")
-    proof.update(projected_functions=names, imports_without_declaration=sorted(symbols.keys()-set(names)))
+    proof.update(projected_functions=names, imports_without_declaration=sorted(eligible-set(names)))
     return names
 
 

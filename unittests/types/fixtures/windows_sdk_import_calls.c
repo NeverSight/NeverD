@@ -9,6 +9,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#define PSAPI_VERSION 1
 #include <winsock2.h>
 #include <windows.h>
 
@@ -19,6 +20,8 @@
 #include <ncryptprotect.h>
 #include <oleacc.h>
 #include <physicalmonitorenumerationapi.h>
+#include <processsnapshot.h>
+#include <psapi.h>
 #include <wsdapi.h>
 
 __declspec(dllexport) BOOL __cdecl UseColorProfile(HPROFILE Profile,
@@ -54,4 +57,13 @@ UseProtectionDescriptor(NCRYPT_DESCRIPTOR_HANDLE Descriptor) {
 
 __declspec(dllexport) UINT __cdecl UseRoleText(DWORD Role, LPWSTR Text, UINT Length) {
   return GetRoleTextW(Role, Text, Length);
+}
+
+__declspec(dllexport) BOOL __cdecl UseProcessModules(
+    HANDLE Process, HMODULE *Modules, DWORD Bytes, LPDWORD Needed, DWORD Filter) {
+  return EnumProcessModulesEx(Process, Modules, Bytes, Needed, Filter);
+}
+
+__declspec(dllexport) DWORD __cdecl UseReleaseSnapshot(HANDLE Process, HPSS Snapshot) {
+  return PssFreeSnapshot(Process, Snapshot);
 }
