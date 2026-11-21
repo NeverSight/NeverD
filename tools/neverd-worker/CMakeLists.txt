@@ -510,12 +510,20 @@ if(BUILD_TESTING OR NEVERD_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/immediates_register_test.py"
                 "$<TARGET_FILE:neverd-worker>" ${_neverd_source_synthesis_args})
       set_tests_properties(NeverDWorkerImmediatesRegister PROPERTIES TIMEOUT 120)
+      # Independent fixtures each run one compiler or decompiler at a time.
+      # Reserve the same number of CTest slots as active fixture processes.
+      include(ProcessorCount)
+      ProcessorCount(_neverd_source_synthesis_cpus)
+      if(_neverd_source_synthesis_cpus GREATER_EQUAL 6)
+        set(_neverd_source_synthesis_jobs 6)
+      else()
+        set(_neverd_source_synthesis_jobs 3)
+      endif()
       add_test(NAME NeverDWorkerSourceSynthesis
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/source_synthesis_test.py"
-                "$<TARGET_FILE:neverd-worker>" ${_neverd_source_synthesis_args} --jobs 3)
-      # Each fixture owns its worker and its generated C programs. Reserve
-      # the same number of CTest slots as concurrent fixture processes.
-      set_tests_properties(NeverDWorkerSourceSynthesis PROPERTIES TIMEOUT 600 PROCESSORS 3)
+                "$<TARGET_FILE:neverd-worker>" ${_neverd_source_synthesis_args} --jobs ${_neverd_source_synthesis_jobs})
+      set_tests_properties(NeverDWorkerSourceSynthesis PROPERTIES
+        TIMEOUT 600 PROCESSORS ${_neverd_source_synthesis_jobs})
       add_test(NAME NeverDWorkerInterpreterRecoveryReal
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/interpreter_recovery_test.py"
                 "$<TARGET_FILE:neverd-worker>" --real ${_neverd_source_synthesis_args})

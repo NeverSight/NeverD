@@ -4519,6 +4519,16 @@ the original machine code are checked against the same full-width oracle.
 The LLVM pass also checks sign extension lowered to an exact right shift,
 signed and unsigned factor bounds, and neighboring shifts or coefficients
 that can produce poison.
+Use `--family funnel-window --count 18` for 144 products of 107 to 321
+factors. The sampled bits come from two independently shifted words joined by
+OR, XOR or addition. Half the products read one bit from the other word.
+The 197-factor x64 source fixture exercises both C renderers through the CLI
+and the workbench worker. Constructor tests exhaust both six-bit source words
+across overlapping, wrapping and multi-factor windows. The byte-domain guard
+tests also check overflow and inexact shifts when deriving signed ranges from
+an arithmetic right shift. Wide evaluator tests compare signed scaled
+coefficients and multiword product prefixes against full-width multiplication,
+including shared factors whose other consumers observe higher bits.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -18299,9 +18309,11 @@ takes 455 seconds on macOS, and the 72-variant entry-join case takes 428 seconds
 `NeverDWin64CallContractTests` allows 900 seconds for a matrix measured at
 575 seconds. Individual compiler and executable invocations retain their
 30-second limits.
-`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus,
-which takes 420 seconds on the same host. These are aggregate test budgets,
-not changes to the semantic assertions or production pipeline limits.
+`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus.
+CTest reserves six slots for independent fixtures on hosts with at least six
+available processors and three slots on smaller hosts. Each fixture builds
+and executes all six generated C outputs at O0 and O2 when Clang and the CLI
+are available.
 `CSourcePresentation.IndexedRelocationsPreserveStringStorageProofs` compares
 indexed range queries with individual-byte provenance across ELF, PE and Mach-O,
 including unsorted and duplicate fixups, invalid import slots and a relocation

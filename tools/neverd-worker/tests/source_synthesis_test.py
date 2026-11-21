@@ -316,7 +316,7 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
-                          rotated_bytes=False, shifted_bytes=False):
+                          rotated_bytes=False, shifted_bytes=False, funnel_bytes=False):
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -328,10 +328,10 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
-        if rotated_bytes or shifted_bytes:
+        if rotated_bytes or shifted_bytes or funnel_bytes:
             # Choose the source of CH, including a window wrapping past bit 31.
             source_bit = (0, 5, 29)[i % 3]
-            distance = 1 + (i // 3) % 7 if shifted_bytes else 0
+            distance = 1 + (i // 3) % 7 if shifted_bytes or funnel_bytes else 0
             left_shift = i % 3 == 0
             start = 8 - distance if left_shift else 8 + distance
             left = (start - source_bit) % 32
@@ -341,7 +341,17 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 else:
                     code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
                 value = f"(({value}<<{left})|({value}>>{32-left}))"
-            if shifted_bytes:
+            if funnel_bytes:
+                # A different register supplies the other half of the funnel.
+                # CH lies entirely within ECX's shifted bits.
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("41c1e8" if left_shift else "41c1e0") + bytes([32 - distance])
+                code += bytes.fromhex("c1e1" if left_shift else "c1e9") + bytes([distance])
+                join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
+                code += bytes.fromhex(join)
+                other = f"((z+{offset}U){'>>' if left_shift else '<<'}{32-distance})"
+                value = f"(({value}{'<<' if left_shift else '>>'}{distance}){symbol}{other})"
+            elif shifted_bytes:
                 opcode = ("c1e1", "c1e9", "c1f9")[i % 3]  # shl, shr, sar ecx
                 code += bytes.fromhex(opcode) + bytes([distance])
                 # CH is wholly in the copied interval, also for SAR.
@@ -533,7 +543,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
-        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-")):
+        elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")):
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
             assert code.count("*") < int(kind.rsplit("-", 1)[1]) // 2, text
@@ -593,7 +603,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                 enhanced_shape(enhanced)
                 if representation == "source":
                     code = source_operations(ordinary)
-                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
+                    if kind.startswith(("residue-", "multiple-residual-", "carry-product-", "carry-cofactor-", "power-group-", "high-perturbation-", "mixed-perturbation-", "truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")) or kind in ("affine-residue-neighbor", "prefix-residue-neighbor", "coarse-residue-neighbor", "distributed-residue-neighbor"):
                         assert "*" in code, ordinary
                     elif kind == "masked":
                         assert code.count("^") >= 3, ordinary
@@ -705,6 +715,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-197", *high_perturbation_elf(
+                197, shift_base=6, affine_depth=1, observed=14, funnel_bytes=True)),
             ("shifted-perturbation-163", *high_perturbation_elf(
                 163, shift_base=6, affine_depth=1, observed=14, shifted_bytes=True)),
             ("rotated-perturbation-127", *high_perturbation_elf(

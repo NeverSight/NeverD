@@ -717,6 +717,43 @@ TEST(SymSimplifyGuard, NestedMaskedBoundsPreserveHiddenPoisonAndWideDomains) {
   }
 }
 
+TEST(SymSimplifyGuard, SignedShiftBoundsRespectOverflowAndExactness) {
+  llvm::LLVMContext C;
+  llvm::Module M("shift_bounds", C);
+  auto *Ty = llvm::Type::getInt8Ty(C);
+  for (unsigned Shift : {1u, 3u, 7u}) {
+    for (int Offset : {-114, -64, 1, 64, 114}) {
+      for (bool Exact : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << Shift << ',' << Offset << ',' << Exact);
+        auto *F =
+            llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", &M);
+        llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+        auto Sum = [&] {
+          auto *Shifted =
+              IR.CreateAShr(F->getArg(0), IR.getInt8(Shift), "", Exact);
+          return IR.CreateNSWAdd(Shifted, IR.getInt8(Offset));
+        };
+        auto *Root = IR.CreateXor(Sum(), Sum());
+        IR.CreateRet(Root);
+        bool Defined = true;
+        for (unsigned X = 0; X < 256; ++X) {
+          llvm::APInt Word(8, X);
+          const int Result = Word.ashr(Shift).getSExtValue() + Offset;
+          Defined &= (!Exact || Word.countr_zero() >= Shift) &&
+                     Result >= -128 && Result <= 127;
+        }
+        auto Value = SymSimplifyPass::constantValueOf(Root);
+        EXPECT_EQ(Value.has_value(), Defined) << printFunction(*F);
+        if (Value)
+          EXPECT_TRUE(Value->isZero());
+      }
+    }
+  }
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, MaskedMultiplyAdmissionMatchesExhaustiveByteDomains) {
   llvm::LLVMContext C;
   llvm::Module M("masked_mul_domains", C);

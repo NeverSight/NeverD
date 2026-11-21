@@ -10,6 +10,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../SymFunnel.h"
 #include "SymMBADetail.h"
 
 #include "llvm/ADT/DenseMap.h"
@@ -46,6 +47,22 @@ SymRef lowOperand(const SymContext &Ctx, SymRef R) {
   }
 }
 
+// A compiler can distribute a shift into a sum of scaled words. Each
+// multiple of 2^End is still zero throughout the observed low prefix.
+bool hasZeroPrefix(const SymContext &Ctx, SymRef Term, unsigned End,
+                   size_t Words, WorkBudget &Budget) {
+  auto Test = [&](SymRef V) {
+    if (Ctx.op(V) == SymOp::Mul || Ctx.op(V) == SymOp::And)
+      V = Ctx.operand(V, 0);
+    return Ctx.isConst(V) && Budget.consume(1 + Words) &&
+           Ctx.constValue(V).countr_zero() >= End;
+  };
+  if (Ctx.op(Term) != SymOp::Add)
+    return Test(Term);
+  const auto Addends = Ctx.operands(Term);
+  return Budget.consume(Addends.size()) && llvm::all_of(Addends, Test);
+}
+
 // Pick a word whose low bits equal this slice. Rotations move every bit.
 // A shift moves only its source interval: a window touching zero/sign
 // padding (including a window wrapped by an outer rotate) must retain it.
@@ -66,26 +83,45 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
       Source = Ctx.operand(Source, 0);
       continue;
     }
-    // Lifting may spell a rotate as two complementary shifts of one word.
-    if (Op == SymOp::Or && Ctx.numOperands(Source) == 2) {
-      auto Left = Ctx.operand(Source, 0), Right = Ctx.operand(Source, 1);
-      if (Ctx.op(Left) == SymOp::LShr)
-        std::swap(Left, Right);
-      if (Ctx.op(Left) == SymOp::Mul && Ctx.numOperands(Left) == 2 &&
-          Ctx.op(Right) == SymOp::LShr &&
-          Ctx.operand(Left, 1) == Ctx.operand(Right, 0) &&
-          Ctx.isConst(Ctx.operand(Left, 0)) &&
-          Ctx.isConst(Ctx.operand(Right, 1))) {
-        if (!Budget.consume(2 + 2 * Words))
-          return {};
-        const auto Scale = Ctx.constValue(Ctx.operand(Left, 0));
-        const auto Shift = Ctx.constValue(Ctx.operand(Right, 1));
-        if (Scale.isPowerOf2() && Shift == Width - Scale.countr_zero()) {
-          Offset = (Offset + Shift.getZExtValue()) % Width;
-          Source = Ctx.operand(Right, 0);
-          continue;
-        }
+    const uint64_t End = Offset + Size;
+    const bool Join = Op == SymOp::Or || Op == SymOp::Xor || Op == SymOp::Add;
+    if (const auto Shifts = FunnelShifts::match(Ctx, Source)) {
+      if (!Budget.consume(2 + 2 * Words))
+        return {};
+      if (const auto Window = Shifts->project(Ctx, Offset, Size)) {
+        Source = Window->Word;
+        Offset = Window->Offset;
+        continue;
       }
+    }
+    if (Join && End <= Width) {
+      auto RightShift = [&](SymRef V) {
+        return Ctx.op(V) == SymOp::LShr || Ctx.op(V) == SymOp::AShr;
+      };
+      auto Terms = Ctx.operands(Source);
+      SymRef Shifted;
+      if (Terms.size() == 2) {
+        if (RightShift(Terms[0]))
+          Shifted = Terms[0];
+        else if (RightShift(Terms[1]))
+          Shifted = Terms[1];
+      } else if (Op == SymOp::Add && Ctx.isConst(Terms.front())) {
+        if (!Budget.consume(Terms.size()))
+          return {};
+        for (auto T : Terms)
+          if (RightShift(T)) {
+            Shifted = T;
+            break;
+          }
+      }
+      if (Shifted && llvm::all_of(Terms, [&](SymRef V) {
+            return V == Shifted || hasZeroPrefix(Ctx, V, End, Words, Budget);
+          })) {
+        Source = Shifted;
+        continue;
+      }
+      if (Budget.exhausted())
+        return {};
     }
     if (Op == SymOp::LShr || Op == SymOp::AShr) {
       const auto Count = Ctx.operand(Source, 1);
@@ -110,6 +146,8 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
       return {};
     const auto Literal = Ctx.constValue(Ctx.operand(Source, 0));
     if (LeftShift) {
+      if (End <= Literal.countr_zero())
+        return Ctx.mkZero(Width);
       const int32_t Shift = Literal.exactLogBase2();
       if (Shift < 0 || Offset < static_cast<unsigned>(Shift) ||
           Offset + Size > Width)
