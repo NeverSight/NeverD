@@ -21,6 +21,7 @@ from typing import NamedTuple
 import xml.etree.ElementTree as ET
 
 import build_wdk_driver_fixtures as wdk
+import microsoft_gdiplus_types as gdiplus
 import microsoft_rdbss_types as rdbss
 import microsoft_ucrt_types as ucrt
 
@@ -176,6 +177,7 @@ ISOLATED_PROVIDERS = {
         Provider("Fax", ("windows", "winfax"), ("WIN32=1",)),
         Provider("WindowsErrorReporting", ("windows", "werapi")),
         Provider("Magnification", ("windows", "magnification")),
+        Provider("GDIPlus", ("windows", "objidl", "ddraw"), ("GDIPVER=0x0110",)),
     ),
 }
 TARGETS = {
@@ -365,7 +367,8 @@ CPP_NOARG_PROVIDERS = {
 
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
-                     metadata: dict | None = None, convention: str = "") -> dict:
+                     metadata: dict | None = None, convention: str = "",
+                     gdiplus_imports: dict | None = None) -> dict:
     """Validate and select a whole provider before it can enter the merge."""
     bridge_commands = []
     noargs = CPP_NOARG_PROVIDERS.get(name)
@@ -388,17 +391,25 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             evidence.update(function="DXGIDeclareAdapterRemovalSupport",
                             documentation="https://learn.microsoft.com/windows/win32/api/dxgi1_6/nf-dxgi1_6-dxgideclareadapterremovalsupport")
         metadata = dict(metadata or {}, cpp_parameter_bridge=evidence)
+    cpp_bridge = None
+    if name == "GDIPlus":
+        if gdiplus_imports is None:
+            raise ValueError("GDI+ requires the original target SDK import library")
+        cpp_bridge = gdiplus.prepare(source, arguments, directory, gdiplus_imports, run)
     dump = ["-fsyntax-only", "-Xclang", "-fdump-record-layouts-complete"]
     preprocessed = directory / (name + ".h")
     command = arguments + ["-E", str(source)]
     run(command, directory / (name + ".pre.log"), preprocessed)
-    cpp_bridge = (rdbss.prepare(source, preprocessed, arguments, directory, run)
-                  if name == "RDBSS" else None)
+    if name == "RDBSS":
+        cpp_bridge = rdbss.prepare(source, preprocessed, arguments, directory, run)
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
     if cpp_bridge is not None:
-        rdbss.verify_abis(cpp_bridge, preprocessed, arguments, directory,
-                          parsed["prototypes"], run)
+        verifier = gdiplus if name == "GDIPlus" else rdbss
+        verifier.verify_abis(cpp_bridge, preprocessed, arguments, directory,
+                             parsed["prototypes"], run)
+        if name == "GDIPlus":
+            prototypes = cpp_bridge["verified_functions"]
         bridge_commands += cpp_bridge["commands"]
         metadata = dict(metadata or {}, cpp_header_bridge=cpp_bridge)
     input_hash = wdk.digest(preprocessed)
@@ -427,8 +438,10 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
             raise ValueError(f"official prototype selection failed for {name}")
         preprocessed.write_text(selected["source"], encoding="utf-8")
         commands.append(selection)
-    layout_arguments = cpp_bridge["arguments"] if cpp_bridge else arguments
-    layout_source = cpp_bridge["source"] if cpp_bridge else str(source)
+    # GDI+ certifies its C record names against the original C++ namespace
+    # before using those C names for the subsequent merge layout checks.
+    layout_arguments = cpp_bridge["arguments"] if name == "RDBSS" else arguments
+    layout_source = cpp_bridge["source"] if name == "RDBSS" else str(source)
     layouts = run(layout_arguments + dump + [layout_source],
                   directory / (name + ".official-clang.log"),
                   directory / (name + ".official-layouts.log"))
@@ -444,7 +457,7 @@ def merge_providers(base: str, primary: Path, output: Path,
                     model: str, primary_layouts: str,
                     runtime: dict | None = None,
                     compatibility: dict | None = None,
-                    convention: str = "") -> list[dict]:
+                    convention: str = "", gdiplus_imports: dict | None = None) -> list[dict]:
     providers = ISOLATED_PROVIDERS.get(base, ())
     if not providers and runtime is None:
         return []
@@ -458,7 +471,7 @@ def merge_providers(base: str, primary: Path, output: Path,
         source.write_text(include_headers(headers), encoding="utf-8")
         units.append(prepare_provider(name, source, provider_arguments, directory,
                                       neverd, model, headers, defines, prototypes,
-                                      convention=convention))
+                                      convention=convention, gdiplus_imports=gdiplus_imports))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
                                       directory, neverd, model,
@@ -501,7 +514,7 @@ def merge_providers(base: str, primary: Path, output: Path,
                 raise ValueError("official provider provenance does not match its input")
             bridge = unit["metadata"].get("cpp_header_bridge")
             if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
-                raise ValueError("imported RDBSS routines lack an original C++ ABI proof")
+                raise ValueError(f"imported {unit['name']} routines lack an original C++ ABI proof")
             if bridge:
                 # Recheck the actual published declarations after parsing,
                 # renaming and merging; a correct preprocessed bridge alone
@@ -519,8 +532,9 @@ def merge_providers(base: str, primary: Path, output: Path,
                 selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
                 run(selection, published / "selection.log")
                 proof = dict(bridge, commands=[])
-                rdbss.verify_abis(proof, selected, common, published,
-                                  bridge["verified_functions"], run)
+                verifier = gdiplus if unit["name"] == "GDIPlus" else rdbss
+                verifier.verify_abis(proof, selected, common, published,
+                                     bridge["verified_functions"], run)
                 bridge["published_abi"] = proof
                 unit["commands"] += [selection, *proof["commands"]]
             renamed = {entry["original"]: entry["name"] for entry in report["renamed"]}
@@ -747,9 +761,14 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             target_packages = runtime["target_packages"]
             if ucrt_compatibility:
                 compatibility = ucrt.prepare_compatibility(runtime, output, cache)
+        gdiplus_imports = None
+        if base == "WindowsUser":
+            gdiplus_imports = gdiplus.import_library(output, cache, architecture, readobj)
+            if gdiplus_imports["package"] not in target_packages:
+                target_packages.append(gdiplus_imports["package"])
         providers = merge_providers(base, generated, output, arguments, common,
                                      neverd, model, original_layouts, runtime, compatibility,
-                                     convention)
+                                     convention, gdiplus_imports)
         final = checked_types(neverd, generated, output / (name + ".final.log"), model)
         built.append({"name": name, "sha256": wdk.digest(generated),
                       "types": len(final["types"]),
@@ -768,7 +787,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
                      for name, url, digest in inventory["DOWNLOAD"]] + runtime_packages,
         "target_packages": target_packages,
         "profiles": dict({"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
-                         rdbss=wdk.digest(Path(rdbss.__file__))),
+                         rdbss=wdk.digest(Path(rdbss.__file__)),
+                         gdiplus=wdk.digest(Path(gdiplus.__file__))),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}
                      for path in sorted(licenses.iterdir())],

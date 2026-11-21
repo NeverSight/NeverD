@@ -1871,6 +1871,47 @@ TEST(TypeParse, ASourceUnitPreservesItsDefaultCallingConvention) {
   }
 }
 
+TEST(TypeParse, TrailingConventionBelongsToTheDeclaredFunction) {
+  const char *Source = R"(
+    typedef int (*Abort)(void *) __attribute__((stdcall));
+    int Next(int);
+    int (*Factory(int))(void *) __attribute__((stdcall));
+    int Use(int (*cb)(void *) __attribute__((stdcall))) __attribute__((fastcall));
+    int Variadic(int, ...) __attribute__((stdcall));
+  )";
+  for (auto Model : {DataModel::ILP32, DataModel::LLP64}) {
+    auto Library = parsed(Source, {}, Model, RecordABI::Microsoft);
+    auto Expected = [Model](CallingConvention Convention) {
+      return Model == DataModel::ILP32 ? Convention
+                                       : CallingConvention::Unspecified;
+    };
+    const auto *Callback = Library.find("Abort");
+    const auto *Factory = Library.findPrototype("Factory");
+    const auto *Use = Library.findPrototype("Use");
+    ASSERT_TRUE(Callback && Callback->Target && Callback->Target->Element &&
+                Callback->Target->Element->Function);
+    ASSERT_TRUE(Factory && Factory->Return && Factory->Return->Element &&
+                Factory->Return->Element->Function);
+    ASSERT_TRUE(Use && Use->Params.size() == 1 &&
+                Use->Params[0].Type->Element &&
+                Use->Params[0].Type->Element->Function);
+    ASSERT_NE(Library.findPrototype("Next"), nullptr);
+    ASSERT_NE(Library.findPrototype("Variadic"), nullptr);
+    EXPECT_EQ(Callback->Target->Element->Function->Convention,
+              Expected(CallingConvention::Stdcall));
+    EXPECT_EQ(Factory->Convention, Expected(CallingConvention::Stdcall));
+    EXPECT_EQ(Factory->Return->Element->Function->Convention,
+              CallingConvention::Unspecified);
+    EXPECT_EQ(Use->Convention, Expected(CallingConvention::Fastcall));
+    EXPECT_EQ(Use->Params[0].Type->Element->Function->Convention,
+              Expected(CallingConvention::Stdcall));
+    EXPECT_EQ(Library.findPrototype("Next")->Convention,
+              CallingConvention::Unspecified);
+    EXPECT_EQ(Library.findPrototype("Variadic")->Convention,
+              Expected(CallingConvention::Cdecl));
+  }
+}
+
 TEST(TypeParse, AVariadicRoutineIsCdeclWhateverItsConvention) {
   // phnt declares RtlInitializeSidEx NTAPI: only its caller knows what a
   // call pushes, so compilers take a convention whose callee pops as cdecl.
