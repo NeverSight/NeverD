@@ -150,7 +150,8 @@ EPC reads all ones and discards writes.
 
 The x64 software transfer profile consumes original EENTER, ERESUME and EEXIT
 instructions against an initialized imported SECS and opt-out TCS. The bound
-processor uses XCR0=3, the enclave uses XFRM=3 and optionally requests exception information with MISCSELECT.EXINFO. For a
+processor binds XCR0=3 or 7. The enclave selects x87/SSE or x87/SSE/AVX
+with XFRM, and optionally requests exception information with MISCSELECT.EXINFO. For a
 user page fault the private SSA retains the exact faulting address and error
 code. For a general-protection fault it retains the error code and a zero
 address. The outside handler receives CR2 with its page offset cleared on
@@ -161,8 +162,11 @@ pages. AEX writes the interrupted registers, flags and PC to that frame,
 installs the outside register image, and dispatches the original event using
 the AEP as the saved return address. An inhibited arrival leaves the enclave
 running. IRETQ to the AEP and ERESUME restore the SSA contents. The outside interrupt frame clears RF.
-The saved SSA uses the RF value belonging to the original event.
+The saved SSA uses the RF value belonging to the original event. With AVX
+selected, AEX saves the upper YMM halves in the standard XSAVE layout and
+clears them in the outside image. ERESUME loads or initializes each selected
+vector component and loads MXCSR from the frame even when XSTATE_BV is zero.
 
 Enclave construction and cryptographic leaves require platform state beyond
-this imported-thread profile. Debug opt-in, AEX notification, CET, additional
-XSTATE components and physical SGX qualification remain open.
+this imported-thread profile. Debug opt-in, AEX notification, CET, XSTATE components beyond AVX and
+physical SGX qualification remain open.

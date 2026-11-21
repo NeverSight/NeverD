@@ -574,7 +574,8 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   }
   if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed &&
       Memory.sgxMemory() && Memory.sgxMemory()->active()) {
-    auto Denied = detail::X86SgxExecution::illegalInstruction(Bytes, Address);
+    auto Denied = detail::X86SgxExecution::illegalInstruction(
+        Bytes, Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
     if (*Denied) {

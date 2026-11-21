@@ -4,7 +4,7 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// SGX1 x64, one logical processor, initialized SECS and x87/SSE SSA frames.
+/// x64 enclave transfers over an initialized SECS and standard SSA frames.
 /// Layout and transfer rules follow Intel SDM vol. 3D, chapters 38, 40 and 41.
 //===----------------------------------------------------------------------===//
 
@@ -82,8 +82,11 @@ uint32_t saveExitInfo(uint8_t *GPR, bool ExInfo,
 } // namespace
 
 llvm::Expected<bool>
-X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes,
-                                    uint64_t PC) {
+X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
+                                    const X86SgxMemory &Memory) {
+  if (!Memory.Running)
+    return invalid("enclave instruction admission requires a running thread");
+  const uint64_t XFRM = Memory.Running->XFRM;
   Decoder D;
   if (!D.init(Arch::X64))
     return invalid("software enclave instruction decoder unavailable");
@@ -92,6 +95,29 @@ X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes,
       I.Size != Bytes.size())
     return invalid(
         "software enclave requires an exact original instruction extent");
+  const auto &Detail = *I.Raw->detail;
+  const auto &X = Detail.x86;
+  const auto Groups = llvm::ArrayRef(Detail.groups, Detail.groups_count);
+  for (const auto Group : Groups) {
+    if (Group == X86_GRP_AVX512)
+      return true;
+    if (!(XFRM & 4) && (Group == X86_GRP_AVX || Group == X86_GRP_AVX2 ||
+                        Group == X86_GRP_F16C || Group == X86_GRP_FMA))
+      return true;
+  }
+  // Vector AES and polynomial multiply encodings can lack an AVX group.
+  // Scalar BMI instructions also use VEX and do not require vector state.
+  if (X.opcode[0] == 0xc4 || X.opcode[0] == 0xc5 || X.opcode[0] == 0x62)
+    for (const auto &Operand : llvm::ArrayRef(X.operands, X.op_count)) {
+      const auto Reg = Operand.type == X86_OP_REG   ? Operand.reg
+                       : Operand.type == X86_OP_MEM ? Operand.mem.index
+                                                    : X86_REG_INVALID;
+      if (Reg >= X86_REG_K0 && Reg <= X86_REG_K7)
+        return true;
+      if (Reg >= X86_REG_XMM0 && Reg <= X86_REG_ZMM31 &&
+          (X.opcode[0] == 0x62 || !(XFRM & 4)))
+        return true;
+    }
   switch (I.Id) {
   case X86_INS_CPUID:
   case X86_INS_GETSEC:
@@ -273,7 +299,9 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if (!(Attributes & 1) || !(Attributes & 4) || !(C.CR4 & 0x200))
     return Fault(13);
   const uint64_t FramePages = le::read32le(SECS + 16);
-  if (le::read64le(SECS + 56) != 3)
+  const auto XFRM = le::read64le(SECS + 56);
+  if ((XFRM & 3) != 3 || (XFRM & ~EPC.xcr0()) ||
+      (XFRM != 3 && !(C.CR4 & (1u << 18))))
     return Fault(13);
   const auto MiscSelect = le::read32le(SECS + 20);
   if (!FramePages || (MiscSelect & ~1u) || (Attributes & ~uint64_t(7)))
@@ -346,9 +374,9 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if (!canonical(Target, Bits) || !canonical(FS, Bits) || !canonical(GS, Bits))
     return Fault(13);
   if (Resume &&
-      ((le::read64le(FX + 512) & ~uint64_t(3)) ||
+      ((le::read64le(FX + 512) & ~XFRM) ||
        std::any_of(FX + 520, FX + 576, [](uint8_t B) { return B != 0; }) ||
-       ((le::read64le(FX + 512) & 2) && (le::read32le(FX + 24) & ~MXCSRMask))))
+       (le::read32le(FX + 24) & ~MXCSRMask)))
     return Fault(13);
   EPC.Running = X86SgxMemory::Thread{
       TCSPhysical,
@@ -356,10 +384,12 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
       XSavePhysical,
       GprPage->Physical,
       AEP,
+      XFRM,
       {R.FSBase, V.FS.Limit, V.FS.Selector, V.FS.Attributes},
       {R.GSBase, V.GS.Limit, V.GS.Selector, V.GS.Attributes},
       uint8_t(V.Unusable & 0x30),
-      bool(R.RFlags & 0x100)};
+      bool(R.RFlags & 0x100),
+      bool(C.CR4 & (1u << 18))};
   if (Resume) {
     for (unsigned I = 0; I != 16; ++I)
       R.GPR[I] = le::read64le(GPR + I * 8);
@@ -374,12 +404,18 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
       EPC.X87->fill(0);
       le::write16le(EPC.X87->data(), 0x37f);
     }
-    V.Core.Core.Core.MXCSR = XStateBV & 2 ? le::read32le(FX + 24) : 0x1f80;
-    for (unsigned I = 0; I != 16; ++I)
-      if (XStateBV & 2)
-        std::copy_n(FX + 160 + I * 16, 16, R.ZMM[I]);
-      else
-        std::fill_n(R.ZMM[I], 16, 0);
+    // Standard XRSTOR loads MXCSR even when SSE is in its initial state.
+    V.Core.Core.Core.MXCSR = le::read32le(FX + 24);
+    for (unsigned Part = 0; Part != (XFRM & 4 ? 2u : 1u); ++Part) {
+      const auto Offset = Part ? 576 : 160;
+      for (unsigned I = 0; I != 16; ++I) {
+        auto *Dst = R.ZMM[I] + Part * 16;
+        if (XStateBV & (2u << Part))
+          std::copy_n(FX + Offset + I * 16, 16, Dst);
+        else
+          std::fill_n(Dst, 16, 0);
+      }
+    }
     le::write32le(Thread + 24, CSSA - 1);
   } else {
     le::write64le(GPR + UserSPOffset, R.GPR[4]);
@@ -424,9 +460,12 @@ llvm::Error X86SgxExecution::asynchronousExit(X64ContinuationStateV6 &V,
   le::write32le(GPR + ExitInfoOffset, saveExitInfo(GPR, ExInfo, Event));
   std::copy(EPC.X87->begin(), EPC.X87->end(), FX);
   le::write32le(FX + 24, V.Core.Core.Core.MXCSR);
-  for (unsigned I = 0; I != 16; ++I)
+  for (unsigned I = 0; I != 16; ++I) {
     std::copy_n(R.ZMM[I], 16, FX + 160 + I * 16);
-  le::write64le(FX + 512, 3);
+    if (T.XFRM & 4)
+      std::copy_n(R.ZMM[I] + 16, 16, FX + 576 + I * 16);
+  }
+  le::write64le(FX + 512, T.XFRM);
   std::fill_n(FX + 520, 16, 0);
   const bool Exception =
       Event.Kind != X86EventKind::Interrupt && Event.Kind != X86EventKind::NMI;
@@ -437,7 +476,7 @@ llvm::Error X86SgxExecution::asynchronousExit(X64ContinuationStateV6 &V,
     le::write16le(EPC.X87->data() + 2, 0x8081);
   V.Core.Core.Core.MXCSR = Exception && Event.Vector == 19 ? 0x1f01 : 0x1fb0;
   for (unsigned I = 0; I != 16; ++I)
-    std::fill_n(R.ZMM[I], 16, 0);
+    std::fill_n(R.ZMM[I], T.XFRM & 4 ? 32u : 16u, 0);
   std::fill(std::begin(R.GPR), std::end(R.GPR), 0);
   R.GPR[0] = 3;
   R.GPR[1] = T.AEP;

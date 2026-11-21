@@ -19,8 +19,9 @@ struct X86SgxInstructionProgress {
 
 class X86SgxExecution {
 public:
-  static llvm::Expected<bool> illegalInstruction(llvm::ArrayRef<uint8_t> Bytes,
-                                                 uint64_t PC);
+  static llvm::Expected<bool>
+  illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
+                     const translate::X86SgxMemory &Memory);
   static llvm::Expected<X86ModeExecutionResult>
   instruction(X86ModeState &State, translate::X86PagedMemory &Memory,
               bool Fetched, llvm::ArrayRef<uint8_t> Original, bool Illegal,

@@ -509,8 +509,8 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   bool Illegal = false;
   if (Memory.sgxMemory() && Memory.sgxMemory()->active() &&
       (!Binding.Body || !Binding.Validate)) {
-    auto Denied = detail::X86SgxExecution::illegalInstruction(Binding.Bytes,
-                                                              Binding.Address);
+    auto Denied = detail::X86SgxExecution::illegalInstruction(
+        Binding.Bytes, Binding.Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
     Illegal = *Denied;

@@ -7,7 +7,56 @@
 /// Original x64 entry, IRQ, IRETQ, ERESUME and enclave-selected EEXIT target.
 //===----------------------------------------------------------------------===//
 
-TEST_F(X86ModeInterruptTest,
+class X86ModeSgxTest : public X86ModeInterruptTest {
+protected:
+  static void field(X86SgxPage &Page, unsigned At, uint64_t Value,
+                    unsigned Size) {
+    for (unsigned I = 0; I != Size; ++I)
+      Page.Bytes[At + I] = Value >> (8 * I);
+  }
+
+  void checkInitialResume(const X86SgxPage &Secs, X86SgxPage Tcs,
+                          const X86SgxPage &Code, X86SgxPage SSA,
+                          X86SgxPage LastSSA,
+                          const std::array<uint8_t, 160> &X87, bool MultiPage,
+                          bool AVX) {
+    field(Tcs, 24, 1, 4);
+    auto &GPR = MultiPage ? LastSSA : SSA;
+    field(GPR, 4096 - 184 + 136, Code.Linear, 8);
+    for (uint32_t MXCSR : {0x3f80u, 0x10000u}) {
+      SCOPED_TRACE(MXCSR);
+      field(SSA, 24, MXCSR, 4);
+      auto Enclave =
+          llvm::cantFail(X86SgxMemory::create({Secs, Tcs, Code, SSA, LastSSA}));
+      llvm::cantFail(Enclave->bindX87(X87, 7));
+      auto Mem = llvm::cantFail(X86PagedMemory::createWithSgx(
+          RAM, Features, Controls, std::move(Enclave)));
+      auto State = Machine;
+      auto &CPU = State.Core.Core.Core.Core.Core;
+      CPU.Core.GPR[0] = 3;
+      CPU.Core.RFlags &= ~uint64_t(0x100);
+      X86ModeExecution Execution(*Mem, Options);
+      uint64_t Budget = 1;
+      auto Step = Execution.run(State, Program, Budget);
+      ASSERT_TRUE(Step) << llvm::toString(Step.takeError());
+      ASSERT_TRUE(Step->OwnerError.empty()) << Step->OwnerError;
+      if (MXCSR & ~Options.MXCSRMask) {
+        EXPECT_EQ(Step->Completions, 0u);
+        EXPECT_EQ(Step->DeliveredVector, 13u);
+        EXPECT_FALSE(Mem->sgxMemory()->active());
+        continue;
+      }
+      ASSERT_EQ(Step->Completions, 1u);
+      ASSERT_TRUE(Mem->sgxMemory()->active());
+      EXPECT_EQ(CPU.MXCSR, MXCSR);
+      EXPECT_EQ(CPU.Core.ZMM[2][0], 0u);
+      EXPECT_EQ(CPU.Core.ZMM[2][16], AVX ? 0u : 0xc7u);
+      EXPECT_EQ(CPU.Core.ZMM[2][32], 0x59u);
+    }
+  }
+};
+
+TEST_F(X86ModeSgxTest,
        SoftwareEnclaveResumesFromSSAAfterIRQAndInstructionFaults) {
   if (!hasCrossTargetClang())
     GTEST_SKIP() << "No test Clang";
@@ -22,6 +71,7 @@ TEST_F(X86ModeInterruptTest,
                                                     {0xcc},
                                                     {0xf1},
                                                     {0xf4},
+                                                    {0xc5, 0xf8, 0x77},
                                                     {0x89, 0x06}}) {
         SCOPED_TRACE(testing::Message()
                      << Compiler << " llvm=" << LLVM
@@ -30,6 +80,10 @@ TEST_F(X86ModeInterruptTest,
             !FaultBytes.empty() && FaultBytes.front() == 0x89;
         const bool GPFault = !FaultBytes.empty() && FaultBytes.front() == 0xf4;
         const bool ErrorCode = PageFault || GPFault;
+        const bool AVX =
+            LLVM && (FaultBytes.empty() || FaultBytes.front() != 0xc5);
+        const uint64_t XFRM = AVX ? 7 : 3;
+        const uint64_t EnclaveXCR0 = LLVM ? XFRM : 7;
         start(Mode::Long64);
         Machine.SMM.emplace();
         Machine.Debug.emplace();
@@ -53,9 +107,11 @@ TEST_F(X86ModeInterruptTest,
         R.GPR[6] = Base + 0x1027;
         R.GPR[9] = 0x1122334455667788ULL;
         R.ZMM[2][0] = 0xab;
-        constexpr uint32_t OSFXSR = 1u << 9;
-        Controls.CR4 |= OSFXSR;
-        Options.Legacy.ControlRegisters->OtherCR4Features |= OSFXSR;
+        R.ZMM[2][16] = 0xc7;
+        R.ZMM[2][32] = 0x59;
+        constexpr uint32_t OSFXSR = 1u << 9, OSXSave = 1u << 18;
+        Controls.CR4 |= OSFXSR | (LLVM ? OSXSave : 0);
+        Options.Legacy.ControlRegisters->OtherCR4Features |= OSFXSR | OSXSave;
         put(0x8030, 0x00affb000000ffffULL);
         put(0x8038, 0x00cff3000000ffffULL);
         put(0x10000, 0x11007);
@@ -91,24 +147,19 @@ TEST_F(X86ModeInterruptTest,
                        .OwnerSECS = Root,
                        .Permissions =
                            MemoryPermission::Read | MemoryPermission::Write};
-        const auto Field = [](X86SgxPage &Page, unsigned At, uint64_t Value,
-                              unsigned Size) {
-          for (unsigned I = 0; I != Size; ++I)
-            Page.Bytes[At + I] = Value >> (8 * I);
-        };
-        Field(Secs, 0, 0x4000, 8);
-        Field(Secs, 8, Base, 8);
-        Field(Secs, 16, LLVM ? 2 : 1, 4);
-        Field(Secs, 20, LLVM ? 1 : 0, 4);
-        Field(Secs, 48, 5, 8);
-        Field(Secs, 56, 3, 8);
-        Field(Tcs, 16, 0x2000, 8);
-        Field(Tcs, 28, 1, 4);
+        field(Secs, 0, 0x4000, 8);
+        field(Secs, 8, Base, 8);
+        field(Secs, 16, LLVM ? 2 : 1, 4);
+        field(Secs, 20, LLVM ? 1 : 0, 4);
+        field(Secs, 48, 5, 8);
+        field(Secs, 56, XFRM, 8);
+        field(Tcs, 16, 0x2000, 8);
+        field(Tcs, 28, 1, 4);
         const auto EntryOffset = FaultBytes.empty() ? 0x1000u : 0x100du;
-        Field(Tcs, 32, EntryOffset, 8);
-        Field(Tcs, 48, 0x3000, 8);
-        Field(Tcs, 64, UINT32_MAX, 4);
-        Field(Tcs, 68, UINT32_MAX, 4);
+        field(Tcs, 32, EntryOffset, 8);
+        field(Tcs, 48, 0x3000, 8);
+        field(Tcs, 64, UINT32_MAX, 4);
+        field(Tcs, 68, UINT32_MAX, 4);
         const std::vector<uint8_t> Enclu{0x0f, 1, 0xd7};
         std::copy(Program[0].Bytes.begin(), Program[0].Bytes.end(),
                   Code.Bytes.begin());
@@ -143,7 +194,10 @@ TEST_F(X86ModeInterruptTest,
         X87[0] = 0x7f;
         X87[1] = 3;
         X87[32] = 0x13;
-        llvm::cantFail(Enclaves->bindX87(X87, 3));
+        if (FaultBytes.empty())
+          ASSERT_NO_FATAL_FAILURE(checkInitialResume(Secs, Tcs, Code, SSA,
+                                                     LastSSA, X87, LLVM, AVX));
+        llvm::cantFail(Enclaves->bindX87(X87, 7));
         Memory = llvm::cantFail(X86PagedMemory::createWithSgx(
             RAM, Features, Controls, std::move(Enclaves)));
         auto SMRAM = RAM;
@@ -164,6 +218,7 @@ TEST_F(X86ModeInterruptTest,
         EXPECT_EQ(R.FSBase, Base + 0x3000);
         EXPECT_FALSE(R.RFlags & 0x100);
         EXPECT_EQ(R.GPR[1], 0x1003u);
+        EXPECT_EQ(Memory->sgxMemory()->xcr0(), EnclaveXCR0);
         Machine.SSBlocked = true;
         auto Deferred = llvm::cantFail(
             Execution.interrupt(Machine, X86EventKind::Interrupt, 64));
@@ -199,6 +254,9 @@ TEST_F(X86ModeInterruptTest,
         EXPECT_EQ(R.GPR[3], Base);
         EXPECT_EQ(R.GPR[9], 0u);
         EXPECT_EQ(R.ZMM[2][0], 0u);
+        EXPECT_EQ(R.ZMM[2][16], AVX ? 0u : 0xc7u);
+        EXPECT_EQ(R.ZMM[2][32], 0x59u);
+        EXPECT_EQ(Memory->sgxMemory()->xcr0(), 7u);
         EXPECT_EQ((*Memory->sgxMemory()->x87())[32], 0u);
         EXPECT_EQ(R.FSBase, 0x73000u);
         ASSERT_FALSE(Memory->sgxMemory()->active());
@@ -211,6 +269,9 @@ TEST_F(X86ModeInterruptTest,
         EXPECT_EQ(bool(R.RFlags & 0x10000), !FaultBytes.empty());
         EXPECT_EQ(R.GPR[9], 0x1122334455667788ULL);
         EXPECT_EQ(R.ZMM[2][0], 0xabu);
+        EXPECT_EQ(R.ZMM[2][16], 0xc7u);
+        EXPECT_EQ(R.ZMM[2][32], 0x59u);
+        EXPECT_EQ(Memory->sgxMemory()->xcr0(), EnclaveXCR0);
         EXPECT_EQ((*Memory->sgxMemory()->x87())[32], 0x13u);
         const uint64_t GprArea = Base + (LLVM ? 0x4000 : 0x3000) - 184;
         std::vector<uint8_t> SavedMisc(16), ExitInfo(4);
@@ -283,5 +344,6 @@ TEST_F(X86ModeInterruptTest,
         EXPECT_EQ(R.GPR[1], 0x1800u);
         EXPECT_EQ(R.FSBase, 0x73000u);
         EXPECT_EQ(R.GSBase, 0x74000u);
+        EXPECT_EQ(Memory->sgxMemory()->xcr0(), 7u);
       }
 }

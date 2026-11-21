@@ -66,11 +66,14 @@ public:
   llvm::Error validateBacking(const GuestState &RAM,
                               const X86PagingFeatures &Features) const;
   /// Bind the legacy x87 area of a standard 64-bit XSAVE image. The live CPU
-  /// bank owns XMM and MXCSR. Software SGX1 transfers require this explicit
-  /// x87 state and XFRM=3. Keep the bank with its logical processor.
+  /// bank owns MXCSR and the vector registers. The outside XCR0 selects
+  /// x87/SSE (3) or x87/SSE/AVX (7). Entry can enable a subset for the enclave.
   llvm::Error bindX87(std::array<uint8_t, 160> Image, uint64_t XCR0);
   const std::optional<std::array<uint8_t, 160>> &x87() const { return X87; }
   const std::optional<X86SgxEnclave> &active() const { return Active; }
+  uint64_t xcr0() const {
+    return Running && Running->SwitchXCR0 ? Running->XFRM : OutsideXCR0;
+  }
   llvm::Error bindActive(std::optional<X86SgxEnclave> Enclave);
   bool hasRunningThread() const { return Running.has_value(); }
   uint64_t generation() const { return Generation; }
@@ -94,13 +97,14 @@ private:
     uint16_t Selector, Attributes;
   };
   struct Thread {
-    uint64_t TCS, TCSLinear, XSavePage, GprPage, AEP;
+    uint64_t TCS, TCSLinear, XSavePage, GprPage, AEP, XFRM;
     SavedSegment FS, GS;
     uint8_t Unusable;
-    bool OutsideTF;
+    bool OutsideTF, SwitchXCR0;
   };
   std::optional<Thread> Running;
   std::optional<std::array<uint8_t, 160>> X87;
+  uint64_t OutsideXCR0 = 0;
   uint64_t Generation = 0;
 };
 

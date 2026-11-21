@@ -43,9 +43,11 @@ X86SgxMemory::create(std::vector<X86SgxPage> Pages,
 
 llvm::Error X86SgxMemory::bindX87(std::array<uint8_t, 160> Image,
                                   uint64_t Value) {
-  if (Running || Value != 3)
-    return invalid("SGX1 x87/SSE import requires an idle CPU and XCR0=3");
+  if (Running || (Value != 3 && Value != 7))
+    return invalid(
+        "software SGX x87 import requires an idle CPU and XCR0=3 or 7");
   X87 = Image;
+  OutsideXCR0 = Value;
   ++Generation;
   return llvm::Error::success();
 }
