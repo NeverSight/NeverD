@@ -8761,10 +8761,31 @@ LLVMCWriter::resolveImportCalleeName(const llvm::Value *Callee) const {
   return Name;
 }
 
+const llvm::LoadInst *
+LLVMCWriter::n32ExtendedCalleeLoad(const llvm::Value *Callee) const {
+  if (!isMIPSN32(Opts.TheArch))
+    return nullptr;
+  const auto *ToPointer =
+      llvm::dyn_cast<llvm::IntToPtrInst>(Callee->stripPointerCasts());
+  if (!ToPointer || llvmAccessSize(ToPointer->getType()) != 4)
+    return nullptr;
+  // At O0 the LW is still signed into a 64-bit GPR before the call consumes
+  // the low 32 bits as a pointer. Keep the identity of that exact load.
+  const auto *Extend = llvm::dyn_cast<llvm::SExtInst>(ToPointer->getOperand(0));
+  if (!Extend || !Extend->getSrcTy()->isIntegerTy(32) ||
+      !Extend->getDestTy()->isIntegerTy(64))
+    return nullptr;
+  const auto *Load = llvm::dyn_cast<llvm::LoadInst>(Extend->getOperand(0));
+  return Load && !Load->isAtomic() && !readCrossesItsStore(*Load) ? Load
+                                                                  : nullptr;
+}
+
 std::string LLVMCWriter::importCalleeCName(const llvm::Value *Callee) const {
   if (!Callee)
     return {};
   const llvm::Value *Op = Callee->stripPointerCasts();
+  if (const auto *Load = n32ExtendedCalleeLoad(Callee))
+    Op = Load;
   // A call to a symbol the module declares as data, such as an import its
   // GOT mirror names, calls that import.
   if (const auto *GV = llvm::dyn_cast<llvm::GlobalVariable>(Op);

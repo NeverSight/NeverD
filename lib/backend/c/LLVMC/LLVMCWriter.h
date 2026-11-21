@@ -788,6 +788,7 @@ public:
   bool edgePrintsPhiCopy(const llvm::BasicBlock *From,
                          const llvm::BasicBlock *To);
   std::string resolveImportCalleeName(const llvm::Value *Callee) const;
+  const llvm::LoadInst *n32ExtendedCalleeLoad(const llvm::Value *Callee) const;
   /// resolveImportCalleeName before UserImportIdentifiers renames it.
   std::string importCalleeCName(const llvm::Value *Callee) const;
   bool isImportCalleeOnlyLoad(const llvm::LoadInst *LI) const;

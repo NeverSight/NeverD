@@ -127,6 +127,31 @@ TEST(MedCachedCallTarget, N32RecoversOnlyACompleteSignExtendedPointerLoad) {
     }
 }
 
+TEST(MedCachedCallTarget, N32ExtendsTheLinkedSlotBeforeApplyingItsOffset) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (auto Provenance : {ConstantAddressProvenance::DataAddress,
+                            ConstantAddressProvenance::AddressFragment}) {
+      MedBlock B;
+      B.Ops = {
+          op(NdOp::INT_SEXT, value(1),
+             {MedVar::makeConst(0x80001000, 4, Provenance)}),
+          op(NdOp::INT_ADD, value(2), {value(1), MedVar::makeConst(12, 8)}),
+          op(NdOp::LOAD, value(3, 4), {value(2)}),
+          op(NdOp::INT_SEXT, value(4), {value(3, 4)})};
+      auto Slot = resolveMedCallTarget(B, B.Ops.size(), value(4), nullptr, A);
+      if (isMIPSN32(A) &&
+          Provenance == ConstantAddressProvenance::DataAddress) {
+        ASSERT_TRUE(Slot);
+        EXPECT_TRUE(Slot->ThroughSlot);
+        EXPECT_EQ(Slot->Address, 0x8000100cu);
+        EXPECT_EQ(Slot->LoadIndex, 2u);
+      } else {
+        EXPECT_FALSE(Slot);
+      }
+    }
+}
+
 TEST(MedCachedCallTarget, ImmutableReferencesRetainTheRuntimeImportLoad) {
   for (const Arch Architecture :
        {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64})

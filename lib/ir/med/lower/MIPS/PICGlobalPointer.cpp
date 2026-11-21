@@ -6,9 +6,10 @@
 
 #include "PICGlobalPointer.h"
 
+#include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/MIPS/MIPSIntrinsicShapes.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
-#include "neverd/loader/BinaryImage.h"
+#include "neverd/loader/ELF/MIPSGPAnchor.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
@@ -107,6 +108,22 @@ public:
   const Registers &registers() const { return GPRs; }
   void nextInstruction() { Temps.clear(); }
 
+  bool resumeCall(Arch Target, va_t Resume) {
+    const auto Link = read(NdVar::reg(mipsreg::RA, 8));
+    if (!Link || Link->Base != Origin::Scalar || Link->Bits != Resume)
+      return false;
+    const auto &TRI = getTargetRegInfo(Target);
+    bool HasEntry = false;
+    for (auto It = GPRs.begin(); It != GPRs.end();) {
+      const auto Reg = It++;
+      if (TRI.isCallPreserved(Reg->first, Reg->second.Size, BinaryFormat::ELF))
+        HasEntry |= Reg->second.Base != Origin::Scalar;
+      else
+        GPRs.erase(Reg);
+    }
+    return HasEntry;
+  }
+
   std::optional<Value> write(const LowOp &Op) {
     auto V = result(Op);
     auto &Values = Op.Output.isReg() ? GPRs : Temps;
@@ -153,14 +170,31 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
         Insn.Control == LowInstructionControl::Branch && Insn.Immediate &&
         !hasLowInstructionControlFlag(Insn.ControlFlags,
                                       LowInstructionControlFlag::Indirect);
+    const bool Call =
+        Insn.Control == LowInstructionControl::Call &&
+        (isMIPSN32(Target) || isMIPSN64(Target)) &&
+        !hasLowInstructionControlFlag(Insn.ControlFlags,
+                                      LowInstructionControlFlag::NoReturn);
     if (isMIPSCompressedMode(Insn.Mode) ||
-        (Insn.Control != LowInstructionControl::None && !Direct) ||
+        (Insn.Control != LowInstructionControl::None && !Direct && !Call) ||
         Insn.FirstOp != End || Insn.OpCount > Block.Ops.size() - End)
       return false;
     End += Insn.OpCount;
+    if (Call &&
+        (!Insn.OpCount || (Block.Ops[End - 1].Opcode != NdOp::CALL &&
+                           Block.Ops[End - 1].Opcode != NdOp::INDIR_CALL)))
+      return false;
     Values.nextInstruction();
+    bool WritesLink = false;
     for (size_t I = Insn.FirstOp; I < End; ++I) {
       const LowOp &Op = Block.Ops[I];
+      if (Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL) {
+        // The link write and the executed delay slot precede the transfer.
+        if (!Call || !WritesLink || I + 1 != End ||
+            !Values.resumeCall(Target, Insn.Address + Insn.Size))
+          return false;
+        continue;
+      }
       if (Op.Opcode == NdOp::INTRINSIC) {
         if (Op.NumInputs && Op.Inputs[0].isConst() &&
             Op.Inputs[0].Offset == unsigned(Intrinsic::RequireAligned))
@@ -188,6 +222,10 @@ bool scanPrefix(const LowBlock &Block, Arch Target, uint64_t GP,
       if (!Op.Output.isReg() && !Op.Output.isTemp())
         continue;
       auto V = Values.write(Op);
+      if (Call && Op.Output.isReg() && Op.Output.Offset == mipsreg::RA &&
+          Op.Output.Size == 8 &&
+          (!Insn.DelaySlot || I < Insn.FirstOp + Insn.DelaySlot->FirstOp))
+        WritesLink = true;
       if (!V || V->Base != Origin::AdjustedEntry || V->Bits != GP ||
           (WordPointers && !V->SignedWord) || !Op.Output.isReg() ||
           Op.Output.Size != 8 || Op.Opcode != NdOp::COPY)
@@ -278,7 +316,7 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
     Inputs.find(Id)->second.Proof = std::move(Proof);
   }
 
-  // An opaque predecessor (for example a call or a separate entry) can
+  // An opaque predecessor (for example a separate entry) can
   // arrive with every entry-derived register clobbered. No descendant can
   // reconstruct entry provenance from a scalar alone.
   for (const auto &[Id, State] : Inputs)
@@ -314,11 +352,14 @@ std::optional<LowFunc> projectMIPSPICGlobalPointer(const LowFunc &Function,
   }
 
   LowFunc Projected = Function;
+  const auto Anchor = mipsPICGPAnchor(Image, GP);
+  const NdVar LinkedGP =
+      Anchor ? NdVar::dataAddress(GP, 8, *Anchor) : NdVar::address(GP, 8);
   for (int Id : Needed) {
     const auto &Proof = Inputs.find(Id)->second.Proof;
     auto &Ops = Projected.Blocks[Id].Ops;
     for (size_t I : Proof.Writes)
-      Ops[I].Inputs[0] = NdVar::address(GP, 8);
+      Ops[I].Inputs[0] = LinkedGP;
     for (const auto &[Index, Bits] :
          llvm::ArrayRef(Proof.Words).take_front(Proof.RequiredWords))
       Ops[Index].Inputs[1] = NdVar::scalar(Bits, 8);

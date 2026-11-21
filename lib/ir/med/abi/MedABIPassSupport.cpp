@@ -34,6 +34,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -410,7 +411,8 @@ static bool sameAddressValue(const MedVar &A, const MedVar &B) {
 // the same conversion result. Invalid widths and conflicting definitions fail.
 static std::optional<ReducedAddress>
 reduceAddr(const MedBlock &Blk, const MedVar &V, size_t *Remaining = nullptr,
-           std::optional<size_t> Before = std::nullopt) {
+           std::optional<size_t> Before = std::nullopt,
+           Arch Architecture = Arch::Unknown) {
   if (V.Size == 0 || V.Size > 8)
     return std::nullopt;
   const auto Operations =
@@ -444,6 +446,20 @@ reduceAddr(const MedBlock &Blk, const MedVar &V, size_t *Remaining = nullptr,
     case NdOp::COPY:
       if (Def->NumInputs == 1 && Def->Inputs[0].Size == Cur.Size)
         Next = &Def->Inputs[0];
+      break;
+    case NdOp::INT_SEXT:
+      // n32 propagates a high ELF32 slot as a complete four-byte address.
+      // Evaluate its actual extension in the GPR before adding any offset.
+      if (hasMIPS32BitAddressIn64BitGPR(Architecture) && Cur.Size == 8 &&
+          Def->NumInputs == 1 && Def->Inputs[0].Size == 4 &&
+          Def->Inputs[0].isConst() &&
+          isExactAddressProvenance(Def->Inputs[0].Provenance)) {
+        const auto &Word = Def->Inputs[0];
+        Result.Base =
+            MedVar::makeConst(llvm::SignExtend64<32>(Word.ConstVal), Cur.Size,
+                              Word.Provenance, Word.AddressOwnerVA);
+        return Result;
+      }
       break;
     case NdOp::SUBBYTES:
       if (Def->NumInputs == 2 && Def->Inputs[0].Size == Cur.Size &&
@@ -742,7 +758,7 @@ resolveMedCallTargetImpl(const MedBlock &Block, size_t Before,
       continue;
     }
     const auto Address =
-        reduceAddr(Block, Def.Inputs[0], WorkRemaining, Before);
+        reduceAddr(Block, Def.Inputs[0], WorkRemaining, Before, Architecture);
     if (Address && Address->Base.isConst()) {
       llvm::APInt Slot(Address->Offset.getBitWidth(), Address->Base.ConstVal,
                        false, true);
