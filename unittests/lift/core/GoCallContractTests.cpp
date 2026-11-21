@@ -871,6 +871,82 @@ TEST(GoAssembly, ABI0AssemblyTakesItsArgumentsOnTheStack) {
   }
 }
 
+/// The parameters of the function at \p Entry in \p R, by register.
+std::vector<uint64_t> parameterRegisters(const PipelineResult &R, va_t Entry) {
+  std::vector<uint64_t> Registers;
+  for (const MedFunc &M : R.MedFuncs)
+    if (M.Entry == Entry)
+      for (const MedVar &Parameter : M.Params)
+        Registers.push_back(Parameter.RegOff);
+  return Registers;
+}
+
+/// The constant arguments of the only call the function at \p Entry in \p R
+/// makes, ~0 for any other operand, or none where it makes another number of
+/// calls.
+std::vector<uint64_t> constantArguments(const PipelineResult &R, va_t Entry) {
+  std::vector<uint64_t> Constants;
+  const MedOp *Call = nullptr;
+  for (const MedFunc &M : R.MedFuncs)
+    if (M.Entry == Entry)
+      for (const MedBlock &Block : M.Blocks)
+        for (const MedOp &Op : Block.Ops)
+          if (Op.Opcode == NdOp::CALL) {
+            if (Call)
+              return {};
+            Call = &Op;
+          }
+  if (!Call)
+    return {};
+  for (unsigned I = 1; I < Call->NumInputs; ++I)
+    Constants.push_back(Call->Inputs[I].isConst() ? Call->Inputs[I].ConstVal
+                                                  : ~0ull);
+  return Constants;
+}
+
+TEST(GoAssembly, AHelperTakesTheRegistersItReads) {
+  // Go assembly with no Go declaration of its own takes its operands where
+  // its callers set them, as internal/bytealg's indexbytebody<> takes SI,
+  // BX, AL and R8.  System V's positions made them RDI, RSI, RDX, RCX and
+  // R8, and left the RAX and RBX it reads undefined.
+  //   main.f: mov esi, 1; mov ebx, 2; mov eax, 3; mov r8d, 4; call h; ret
+  //   h:      lea rax, [rax+rbx]; add rax, rsi; mov [r8], rax; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t H = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body = {0xBE, 1, 0, 0, 0,    0xBB, 2, 0, 0, 0, 0xB8,
+                               3,    0, 0, 0, 0x41, 0xB8, 4, 0, 0, 0};
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), H);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  T.writeText(
+      H, {0x48, 0x8D, 0x04, 0x18, 0x48, 0x01, 0xF0, 0x49, 0x89, 0x00, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{H, "main.h"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.GoAssembly = {{H, H + 0x10}};
+  Module.FrameArguments = {{F, 0, 0}, {H, std::nullopt, std::nullopt}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  // In the platform's order, then Go's.
+  using namespace x86reg;
+  EXPECT_EQ(parameterRegisters(R, H),
+            (std::vector<uint64_t>{RSI, R8, RAX, RBX}));
+  EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{1, 4, 3, 2}));
+}
+
 TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
   // An arm64 call takes its arguments from the setup its caller writes, so
   // no operation of a routine reads the registers it passes on in a call.

@@ -2436,6 +2436,15 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       if (!GoFixedArguments)
         GoFixedArguments =
             goRegisterStubArguments(*Image, Low.Entry, Low.Blocks);
+      // Go assembly that takes registers of its own takes those its callers
+      // bind (goEntryRegisterOperands).
+      if (!GoFixedArguments && CallEntryReadGPRs && CallEntryIntegerArguments)
+        if (const auto Reads = CallEntryReadGPRs->find(Low.Entry);
+            Reads != CallEntryReadGPRs->end() &&
+            goEntryRegisterOperands(*Image, Low.Entry, Reads->second))
+          if (const auto Bound = CallEntryIntegerArguments->find(Low.Entry);
+              Bound != CallEntryIntegerArguments->end())
+            GoFixedArguments = Bound->second;
     }
     detectCc(Func, TheArch, Fmt);
     completeX86RegistrationEntryParameters(Func);

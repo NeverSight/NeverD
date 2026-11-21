@@ -20709,6 +20709,10 @@ five, nine and sixteen register words its members, and one of seventeen none.
 `GoAssembly.ABI0AssemblyTakesItsArgumentsOnTheStack` marks `main.add` as
 assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `(1, 2)` on the stack, and `main.add` takes two stack parameters.
+`GoAssembly.AHelperTakesTheRegistersItReads` runs a Go 1.18 image whose
+compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
+which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
+and RBX, and the call passes 1, 4, 3 and 2.
 `GoAssembly.AnARM64ForwarderIsNoABI0Assembly` lifts arm64 assembly that loads
 `[sp, #8]` and `[sp, #16]`, which takes them as its parameters, and a
 forwarder that only branches to another function, which takes no stack

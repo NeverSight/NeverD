@@ -87,6 +87,24 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
 
+/// The registers x86-64 Go assembly at \p Entry takes its arguments in where
+/// neither of Go's ABIs nor the platform's convention passes them: assembly
+/// that declares no argument word (goFrameArgumentBytes) and takes no Go
+/// registers (goAssemblyTakesRegisterArguments), whose summary \p Reads
+/// shows it reading at entry a general-purpose register the platform passes
+/// no argument in.  `indexbytebody<>` takes the data in SI, its length in BX,
+/// the byte it seeks in AL and the address of its result in R8
+/// (src/internal/bytealg/indexbyte_amd64.s), and its callers set them before
+/// they enter it.  Each register it reads, but the stack and frame pointers,
+/// in the platform's argument order, then Go's, then the others' in theirs.
+/// None for any other routine: assembly the platform's code enters, as the
+/// kernel enters `runtime.sigtramp`, reads its arguments where the platform
+/// passes them.  Its callers bind them before SSA as a prototype's operands
+/// are (FixedIntegerCallArguments).
+std::optional<FixedIntegerCallArguments>
+goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
+                        const GPRReadWidths &Reads);
+
 /// Whether a call the code at \p Caller makes to \p Callee (InvalidVA for an
 /// indirect call) enters Go code by Go's internal ABI, which returns its
 /// results in Go's registers (goResultRegister): a direct call to compiled Go

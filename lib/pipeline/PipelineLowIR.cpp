@@ -5306,6 +5306,21 @@ bool computeCallRegisterEffects(
     if (Effect->RegisterLeaf)
       Result.CallRegisterLeaves.mutate().emplace(Entry, Effect->RegisterLeaf);
   Result.CallEntryReadGPRs = std::move(Summaries.EntryReads);
+  // Go assembly that takes its arguments in registers of its own takes those
+  // it reads, which its callers bind in its order (goEntryRegisterOperands).
+  // Only a complete body that calls nothing reads no register but as an
+  // operand: a routine that calls out saves the registers its callee may
+  // change (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`).
+  if (Img.ExceptionMetadata.GoModule)
+    for (const auto &[Entry, Reads] : Result.CallEntryReadGPRs.get())
+      if (const auto Effect = Effects.find(Entry);
+          Effect != Effects.end() && !Effect->second->Unknown &&
+          !Effect->second->Incomplete && Effect->second->Callees.empty() &&
+          Effect->second->NoReturnCallees.empty())
+        if (std::optional<FixedIntegerCallArguments> Operands =
+                goEntryRegisterOperands(Img, Entry, Reads))
+          Result.CallEntryIntegerArguments.mutate().try_emplace(
+              Entry, std::move(*Operands));
   Result.CallUnreadGPRs = std::move(Summaries.Unread);
   Result.CallEntryStackArgs = std::move(Summaries.EntryStackArgs);
   Result.CallVariadicFrom = std::move(Summaries.VariadicFrom);

@@ -5837,6 +5837,22 @@ prologue's vector count, which lists no parameters; a Go summary always lists
 them (`summaryListsNoParameters`), since a Go function's first argument may be
 a `bool`.
 
+Assembly with no Go declaration of its own, whose record gives no argument
+word, takes its operands in registers of its own where it reads at entry one
+the platform passes no argument in: `internal/bytealg`'s `indexbytebody<>`
+takes the data in SI, its length in BX, the byte it seeks in AL and the
+address of its result in R8, which its callers set before they enter it.
+Where its body is complete and calls nothing, it takes each general-purpose
+register it reads but the stack and frame pointers, in the platform's
+argument order, then Go's, then the others' (`goEntryRegisterOperands`), and
+its callers bind them before SSA, as a prototype's operands
+(`CallEntryIntegerArguments`). System V's positions gave it RDI, RSI, RDX,
+RCX and R8, and left the byte and the length undefined in each of its SIMD
+compares. A routine that calls out reads the registers it saves for its
+callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
+the platform's code enters reads its arguments where the platform passes them
+(`runtime.sigtramp`): both keep the platform's positions.
+
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every
