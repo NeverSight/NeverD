@@ -462,4 +462,257 @@ TEST(RawEnvironmentRequirement, OrdinaryOperationsKeepTheirExecution) {
 
 #include "ArchitecturalValueRequirementTests.inc"
 
+constexpr auto CallRequirement = Intrinsic::RawReturningCallV1;
+
+LowOp rawCall() {
+  return makeLowRawReturningCall({1, 2, 3, 4}, NdVar::tmp(1024, 8), 0x100, 0);
+}
+
+std::vector<LowOp> malformedCalls() {
+  auto Result = malformedMarkers();
+  for (auto &Op : Result) {
+    Op.Inputs[0].Offset = (Op.Inputs[0].Offset & ~uint64_t{UINT16_MAX}) |
+                          static_cast<uint64_t>(CallRequirement);
+    Op.Inputs[5] = NdVar::tmp(1024, 8);
+  }
+  auto Extra = rawCall();
+  Extra.X87ImportArguments = 1;
+  Result.push_back(Extra);
+  Extra = rawCall();
+  Extra.Inputs[5].Size = 4;
+  Result.push_back(Extra);
+  return Result;
+}
+
+TEST(RawReturningCall, CompleteShapeAndConservativeRefusalAreSeparate) {
+  EXPECT_TRUE(lowRawReturningCallShapeIsValid(rawCall()));
+  EXPECT_FALSE(isLowRawEnvironmentRequirement(rawCall()));
+  EXPECT_TRUE(isLowRawAnalysisOperation(rawCall()));
+  for (const auto &Bad : malformedCalls())
+    EXPECT_TRUE(isLowRawAnalysisOperation(Bad));
+  auto Bad = rawCall();
+  Bad.ConsumesX87Argument = true;
+  EXPECT_FALSE(lowRawReturningCallShapeIsValid(Bad));
+  Bad = rawCall();
+  Bad.Inputs[0].Offset |= uint64_t{1} << 32;
+  EXPECT_FALSE(lowRawReturningCallShapeIsValid(Bad));
+  EXPECT_TRUE(isLowRawAnalysisOperation(Bad));
+}
+
+TEST(RawReturningCall, MetadataCannotDescribeARuntimeHelper) {
+  EXPECT_TRUE(isSideeffectIntrinsic(CallRequirement));
+  EXPECT_STREQ(intrinsicName(CallRequirement), "raw_returning_call_v1");
+  EXPECT_EQ(intrinsicFromName("raw_returning_call_v1"), CallRequirement);
+  EXPECT_EQ(intrinsicCName(CallRequirement), nullptr);
+  EXPECT_EQ(intrinsicAsmMnemonic(CallRequirement), nullptr);
+  EXPECT_EQ(intrinsicOutputCount(CallRequirement), 0u);
+  EXPECT_FALSE(isUnconditionalTrapIntrinsic(CallRequirement));
+}
+
+TEST(RawReturningCall, ConcreteModesRefuseBeforeApproximation) {
+  auto Ops = malformedCalls();
+  Ops.push_back(rawCall());
+  for (bool Strict : {false, true})
+    for (const auto &Op : Ops) {
+      BinaryImage Image;
+      NdOpEmulator Emulator(Image);
+      Emulator.setStrictMode(Strict);
+      Emulator.setRegister(0, 17);
+      EXPECT_FALSE(Emulator.step(Op));
+      EXPECT_EQ(Emulator.getRegister(0), 17u);
+      EXPECT_EQ(Emulator.skips().ApproximatedOps, 0u);
+      EXPECT_EQ(Emulator.run(std::vector<LowOp>{Op, copy()}), 0u);
+      EXPECT_EQ(Emulator.getRegister(0), 17u);
+    }
+}
+
+TEST(RawReturningCall, SymbolicStepAndRunCannotApproximateDomain) {
+  auto Ops = malformedCalls();
+  Ops.push_back(rawCall());
+  for (const auto &Op : Ops) {
+    SymContext Ctx;
+    SymState State(Ctx);
+    State.write(SymSpace::Register, 0, Ctx.mkConst(64, 17));
+    SymExec Exec(Ctx, State);
+    EXPECT_THROW(Exec.step(Op), std::invalid_argument);
+    auto Value = Ctx.asConst(State.read(SymSpace::Register, 0, 8));
+    ASSERT_TRUE(Value.has_value());
+    EXPECT_EQ(Value->getZExtValue(), 17u);
+    EXPECT_EQ(Exec.unmodelledCount(), 0u);
+    EXPECT_EQ(Exec.opaqueOperationCount(), 0u);
+    EXPECT_THROW(Exec.run(std::vector<LowOp>{Op, copy()}),
+                 std::invalid_argument);
+    Value = Ctx.asConst(State.read(SymSpace::Register, 0, 8));
+    ASSERT_TRUE(Value.has_value());
+    EXPECT_EQ(Value->getZExtValue(), 17u);
+  }
+}
+
+TEST(RawReturningCall, LowToMedRefusesBeforeBestEffortConversion) {
+  auto Ops = malformedCalls();
+  Ops.push_back(rawCall());
+  for (const auto &Op : Ops)
+    EXPECT_THROW(LowToMedConverter().convert(function(Op), Arch::X64),
+                 LowToMedConversionError);
+}
+
+TEST(RawReturningCall, DirectLLVMRefusesIncludingWideIdAliases) {
+  for (uint64_t Id : {uint64_t(CallRequirement),
+                      uint64_t(CallRequirement) + (uint64_t{1} << 32)}) {
+    MedFunc F;
+    F.Entry = 0x100;
+    F.Name = "raw_environment_guard";
+    F.CC = CallingConv::SysV_AMD64;
+    F.ReturnType = NdType::makeVoid();
+    MedBlock B;
+    B.Id = 0;
+    B.StartAddr = F.Entry;
+    B.EndAddr = F.Entry + 2;
+    MedOp Op;
+    Op.Opcode = NdOp::INTRINSIC;
+    Op.Addr = F.Entry;
+    Op.addInput(MedVar::makeConst(Id, 8));
+    for (unsigned I = 1; I != 5; ++I)
+      Op.addInput(MedVar::makeConst(rawCall().Inputs[I].Offset, 8));
+    B.Ops.push_back(Op);
+    Op = {};
+    Op.Opcode = NdOp::RETURN;
+    Op.Addr = F.Entry + 1;
+    B.Ops.push_back(Op);
+    F.Blocks.push_back(B);
+    for (unsigned Shape = 0; Shape != 6; ++Shape) {
+      auto Altered = F;
+      auto &Marker = Altered.Blocks.front().Ops.front();
+      if (Shape == 1)
+        Marker.NumInputs = 0;
+      else if (Shape == 2)
+        Marker.Inputs.front().Kind = MedVar::Reg;
+      else if (Shape == 3)
+        Marker.NumInputs = 255;
+      else if (Shape >= 4) {
+        Marker.Inputs.clear();
+        Marker.NumInputs = Shape == 4 ? 0 : 5;
+        EXPECT_FALSE(isMedRawEnvironmentRequirement(Marker));
+      }
+      const char *Error = Shape < 4 ? "raw environment requirement"
+                                    : "invalid intrinsic ID shape";
+      for (bool Masked : {false, true})
+        EXPECT_DEATH(
+            {
+              llvm::LLVMContext Ctx;
+              const std::vector<char> Mask{0};
+              (void)MedLLVMEmitter().emit({Altered}, Ctx, F.Name, Arch::X64, {},
+                                          nullptr, BinaryFormat::ELF, false,
+                                          Masked ? &Mask : nullptr);
+            },
+            Error);
+    }
+  }
+}
+
+TEST(RawReturningCall, DirectCRenderingRefusesAllTargetDispatches) {
+  for (auto A : {Arch::X86, Arch::X64, Arch::ARM, Arch::AArch64}) {
+    bool HasIntrinsics = false;
+    EXPECT_THROW(renderIntrinsicCall(CallRequirement, A, {}, 0, HasIntrinsics),
+                 std::invalid_argument);
+    EXPECT_FALSE(HasIntrinsics);
+    EXPECT_THROW(MultiOutputRender{}(A, CallRequirement, {}, {}, {}, {}),
+                 std::invalid_argument);
+  }
+}
+
+TEST(RawReturningCall, DirectHighCRefusesBeforePublishingSource) {
+  for (unsigned Placement = 0; Placement != 4; ++Placement) {
+    HighFunc F;
+    F.Entry = 0x100;
+    F.Name = "raw_environment_guard";
+    F.ReturnType = NdType::makeVoid();
+    HighStmt Invoke;
+    Invoke.Kind = StmtKind::ExprStmt;
+    Invoke.Val = std::make_shared<HighExpr>();
+    Invoke.Val->Kind = ExprKind::Call;
+    Invoke.Val->Type = NdType::makeVoid();
+    Invoke.Val->IntrinsicId = CallRequirement;
+    if (Placement == 1) {
+      HighStmt Branch;
+      Branch.Kind = StmtKind::If;
+      Branch.Cond = HighExpr::makeConst(0, 1);
+      Branch.Body.push_back(Invoke);
+      F.Body.push_back(Branch);
+    } else if (Placement == 2) {
+      HighStmt Try;
+      Try.Kind = StmtKind::SEHTry;
+      Try.EHClauses.resize(1);
+      Try.EHClauses.front().FilterValue = Invoke.Val;
+      Try.EHClauseBodies.resize(1);
+      F.Body.push_back(Try);
+    } else if (Placement == 3) {
+      auto Outer = HighExpr::makeConst(0, 8);
+      Outer->Operands.push_back(Invoke.Val);
+      Invoke.Val = Outer; // Malformed hidden child must still retain refusal.
+      F.Body.push_back(Invoke);
+    } else
+      F.Body.push_back(Invoke);
+    std::string Text;
+    llvm::raw_string_ostream OS(Text);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::X64;
+    EXPECT_THROW(HighCEmitter().emit({F}, OS, Options), std::invalid_argument);
+    EXPECT_TRUE(Text.empty());
+  }
+}
+
+TEST(RawReturningCall, CopiedAndUnreachableEventsRefuseWithoutEntryMarker) {
+  auto Ordinary = function(copy());
+  std::vector<LowIRUndefinedInstruction> Records;
+  for (const auto &B : Ordinary.Blocks)
+    for (const auto &Boundary : B.InstructionBoundaries) {
+      LowIRUndefinedInstruction R;
+      R.BlockId = B.Id;
+      R.Boundary = Boundary;
+      R.Effects.Coverage = LowUndefinedCoverage::Complete;
+      R.Effects.OpCount = Boundary.OpCount;
+      R.Effects.OperationDigest =
+          lowUndefinedOperationDigest(llvm::ArrayRef<LowOp>(B.Ops).slice(
+              Boundary.FirstOp, Boundary.OpCount));
+      Records.push_back(R);
+    }
+  LowIRIndependenceContract Contract;
+  Contract.ReturnRegisters = {{0, 8}};
+  ASSERT_TRUE(
+      checkLowIRUndefinedIndependence(Ordinary, Records, Contract).proved());
+  auto Raw = Ordinary;
+  auto Unreachable = function(rawCall()).Blocks.front();
+  Unreachable.Id = 1;
+  Unreachable.StartAddr += 0x1000;
+  Unreachable.EndAddr += 0x1000;
+  for (auto &Op : Unreachable.Ops)
+    Op.Addr += 0x1000;
+  for (auto &B : Unreachable.InstructionBoundaries)
+    B.Address += 0x1000;
+  Raw.Blocks.push_back(Unreachable);
+  const auto Copied = Raw;
+  EXPECT_FALSE(hasLowRawEnvironmentRequirement(Copied));
+  EXPECT_TRUE(hasLowRawAnalysisOperation(Copied));
+  const auto Proof = checkLowIRUndefinedIndependence(Copied, Records, Contract);
+  EXPECT_EQ(Proof.Status, LowIRIndependenceStatus::Unsupported);
+  EXPECT_FALSE(Proof.Certificate);
+  for (bool Original : {false, true}) {
+    const auto P = checkLowIRRefinement(Original ? Copied : Ordinary, Records,
+                                        Original ? Ordinary : Copied, Contract);
+    EXPECT_EQ(P.Status, LowIRRefinementStatus::Unsupported);
+    EXPECT_FALSE(P.Certificate);
+  }
+  auto Source = wrapInterpreterMachineStateX64(Copied);
+  EXPECT_FALSE(bool(Source));
+  if (!Source)
+    llvm::consumeError(Source.takeError());
+  auto Model = modelInterpreterMachineStateX64(
+      Copied, InterpreterMachineStateProfile::UserX64NoFaultV1);
+  EXPECT_FALSE(bool(Model));
+  if (!Model)
+    llvm::consumeError(Model.takeError());
+  EXPECT_THROW(LowToMedConverter().convert(Copied, Arch::X64),
+               LowToMedConversionError);
+}
 } // namespace

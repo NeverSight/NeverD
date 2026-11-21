@@ -30,6 +30,11 @@ inline bool isMedArchitecturalValue(const MedOp &Op) {
          isArchitecturalValueId(Op.Inputs.front().ConstVal);
 }
 
+inline bool isMedRawAnalysisOperation(const MedOp &Op) {
+  return Op.Opcode == NdOp::INTRINSIC && !Op.Inputs.empty() &&
+         isRawAnalysisIntrinsicId(Op.Inputs.front().ConstVal);
+}
+
 } // namespace neverd
 
 #endif // NEVERD_IR_MED_MEDRAWENVIRONMENT_H

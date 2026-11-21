@@ -558,7 +558,7 @@ void NdOpEmulator::clobberVolatileRegisters() {
 bool NdOpEmulator::step(const LowOp &Op) { return stepImpl(Op, {}); }
 
 bool NdOpEmulator::stepImpl(const LowOp &Op, llvm::ArrayRef<LowOp> Following) {
-  if (isLowRawEnvironmentRequirement(Op) || isLowArchitecturalValue(Op))
+  if (isLowRawAnalysisOperation(Op) || isLowArchitecturalValue(Op))
     return false;
   if (X87ContextKnown && Op.Output.isReg() &&
       ((Op.Output.Size == 10 && Op.Output.Offset >= x86reg::ST0 &&

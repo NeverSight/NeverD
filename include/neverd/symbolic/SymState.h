@@ -176,6 +176,35 @@ struct SymMemoryPreservation {
   SymMemoryPreservationStatus Status = SymMemoryPreservationStatus::Invalid;
 };
 
+enum class SymRegisterPreservationStatus : uint8_t {
+  Invalid,
+  Applied,
+  BudgetExceeded,
+};
+
+/// Bounded forgetting of registers and all temporaries. Preserved ranges must
+/// be nonempty, sorted, disjoint and nonwrapping. Unlike memory preservation,
+/// unread retained register bytes still denote their prior inputs and are
+/// materialized before replacing the default epoch. Shared sibling identities
+/// remain intact. No memory, segment binding or historical origin is changed.
+///
+/// Work counts one request, each descriptor, two new epochs, each current or
+/// shared-cache byte retired, and three units per retained byte (lookup,
+/// staging and publication). Missing bytes reserve at most one new expression
+/// each, even when the context already has a canonical entry input. All work,
+/// node allowance and replacement storage are prepared before materialization.
+/// Invalid input or exhaustion changes neither state nor context. MaxNewNodes
+/// is an additional allowance, not a total context limit; NodesCreated reports
+/// actual growth. This primitive supplies no architectural call contract.
+struct SymRegisterPreservation {
+  llvm::ArrayRef<SymRegisterRange> Ranges;
+  uint64_t MaxWork = 0;
+  uint64_t MaxNewNodes = 0;
+  uint64_t WorkUsed = 0;
+  uint64_t NodesCreated = 0;
+  SymRegisterPreservationStatus Status = SymRegisterPreservationStatus::Invalid;
+};
+
 /// The state is a regular value: copying one is what forking a path is, so it
 /// has to sit in a container and be assigned like anything else.  A copy is a
 /// full machine-state fork. Scalar-only queries can omit memory banks and
@@ -391,6 +420,9 @@ public:
   /// Forget the registers a call is allowed to overwrite, keeping the ones it
   /// is not.  Passing an empty list forgets all of them.
   void clobberRegistersExcept(llvm::ArrayRef<SymRegisterRange> PreservedRanges);
+
+  /// Bounded variant; inspect Control.Status before using the post-state.
+  void clobberRegistersExcept(SymRegisterPreservation &Control);
 
   /// Continue \p Other as part of this state when the two hold the same value
   /// in every location, and report whether they did.

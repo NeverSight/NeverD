@@ -33,6 +33,8 @@ const char *intrinsicName(Intrinsic Id) {
     return "raw_environment_requirement_v1";
   if (Id == Intrinsic::ArchitecturalValueV1)
     return "architectural_value_v1";
+  if (Id == Intrinsic::RawReturningCallV1)
+    return "raw_returning_call_v1";
   if (auto *CName = intrinsicCName(Id))
     return CName;
   if (auto *Asm = intrinsicAsmMnemonic(Id))
@@ -159,6 +161,7 @@ struct SideEffectTable {
     SIDEEFFECT(Intrinsic::Syscall);
     SIDEEFFECT(Intrinsic::RawEnvironmentRequirementV1);
     SIDEEFFECT(Intrinsic::ArchitecturalValueV1);
+    SIDEEFFECT(Intrinsic::RawReturningCallV1);
 #include "neverd/ir/intrinsics/AArch64/intrinsics_aarch64_sideeffect.inc"
 #include "neverd/ir/intrinsics/ARM/intrinsics_arm_sideeffect.inc"
 #include "neverd/ir/intrinsics/X86/intrinsics_x86_sideeffect.inc"
@@ -234,6 +237,8 @@ Intrinsic intrinsicFromName(const char *Name) {
     return Intrinsic::RawEnvironmentRequirementV1;
   if (std::strcmp(Name, "architectural_value_v1") == 0)
     return Intrinsic::ArchitecturalValueV1;
+  if (std::strcmp(Name, "raw_returning_call_v1") == 0)
+    return Intrinsic::RawReturningCallV1;
   for (size_t I = 0; I < kCount; ++I) {
     auto IId = static_cast<Intrinsic>(I);
     if (auto *C = intrinsicCName(IId))
