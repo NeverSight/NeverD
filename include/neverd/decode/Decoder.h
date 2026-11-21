@@ -353,8 +353,10 @@ private:
   bool advanceAArch64DecodeGeneration();
   static uint64_t nextAArch64DecodeIdentity();
 
-  /// Apply the active architecture's fallback when Capstone rejects bytes.
-  bool decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr);
+  bool decodeOtherPhysical(const uint8_t *Bytes, size_t Len, va_t Addr);
+  bool decodeMIPSProfile(const uint8_t *Bytes, size_t Len, va_t Addr);
+  int decodeMIPSOne(const uint8_t *Bytes, size_t Len, va_t Addr,
+                    DecodedInsn &Out);
   bool decodeMIPSEquivalent(const uint8_t *Bytes, uint32_t Classic, va_t Addr,
                             bool HalfwordBranch = false);
   bool decodeR6FloatCompare(const uint8_t *Bytes, uint32_t Classic, va_t Addr);
@@ -368,7 +370,6 @@ private:
   std::optional<bool> decodeMIPSDSP64(const uint8_t *Bytes, size_t Len,
                                       va_t Addr);
   bool decodeMIPSASE(const uint8_t *Bytes, size_t Len, va_t Addr);
-  bool decodeArchitectureFallback(const uint8_t *Bytes, size_t Len, va_t Addr);
 
   /// Decode AArch64 with its native path and full Capstone fallback.
   int decodeAArch64ForLift(const uint8_t *Bytes, size_t Len, va_t Addr,

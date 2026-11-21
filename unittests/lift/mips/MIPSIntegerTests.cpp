@@ -42,6 +42,100 @@ std::vector<uint8_t> encode(llvm::ArrayRef<uint32_t> Words, Arch Target) {
   return Result;
 }
 
+TEST(MIPSPhysicalDecode, SingleInstructionPathsMatchTheStreamingIterator) {
+  using Method = int (Decoder::*)(const uint8_t *, size_t, va_t, DecodedInsn &);
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (auto Mode : {InstructionMode::MIPSClassic, InstructionMode::MIPS16,
+                      InstructionMode::MicroMIPS}) {
+      SCOPED_TRACE(::testing::Message()
+                   << unsigned(A) << "/" << unsigned(Mode));
+      Decoder D;
+      if (Mode == InstructionMode::MIPS16 && isMIPS64(A)) {
+        EXPECT_FALSE(D.init(A, Mode));
+        continue;
+      }
+      const bool Little = archLittleEndian(A);
+      const auto CsMode = static_cast<cs_mode>(
+          (isMIPS64(A) ? CS_MODE_MIPS64R2 : CS_MODE_MIPS32R2) |
+          (Little ? CS_MODE_LITTLE_ENDIAN : CS_MODE_BIG_ENDIAN) |
+          (Mode == InstructionMode::MIPS16      ? CS_MODE_MIPS16
+           : Mode == InstructionMode::MicroMIPS ? CS_MODE_MICRO
+                                                : 0));
+      struct Reference {
+        csh Handle{};
+        cs_insn *Insn = nullptr;
+        ~Reference() {
+          if (Insn)
+            cs_free(Insn, 1);
+          if (Handle)
+            cs_close(&Handle);
+        }
+      } Ref;
+      ASSERT_EQ(cs_open(CS_ARCH_MIPS, CsMode, &Ref.Handle), CS_ERR_OK);
+      ASSERT_EQ(cs_option(Ref.Handle, CS_OPT_DETAIL, CS_OPT_ON), CS_ERR_OK);
+      Ref.Insn = cs_malloc(Ref.Handle);
+      ASSERT_NE(Ref.Insn, nullptr);
+      ASSERT_TRUE(D.init(A, Mode));
+      const uint16_t Half = Mode == InstructionMode::MIPS16 ? 0x6a81 : 0x0c44;
+      auto Bytes = encode({0x8c820004u}, A); // LW v0,4(a0).
+      if (Mode != InstructionMode::MIPSClassic)
+        Bytes = {uint8_t(Half >> (Little ? 0 : 8)),
+                 uint8_t(Half >> (Little ? 8 : 0))};
+      for (bool Text : {false, true}) {
+        D.setText(Text);
+        ASSERT_EQ(
+            cs_option(Ref.Handle, CS_OPT_TEXT, Text ? CS_OPT_ON : CS_OPT_OFF),
+            CS_ERR_OK);
+        const uint8_t *Next = Bytes.data();
+        size_t Remaining = Bytes.size();
+        uint64_t PC = 0x2040;
+        ASSERT_TRUE(
+            cs_disasm_iter(Ref.Handle, &Next, &Remaining, &PC, Ref.Insn));
+        ASSERT_EQ(Remaining, 0u);
+        for (Method Decode : {&Decoder::decodeOne, &Decoder::decodeOneForLift,
+                              &Decoder::decodeOneLight}) {
+          DecodedInsn Out{};
+          Out.MIPSForbiddenFollower = true;
+          Out.AArch64Prefix = AArch64PrefixWords{};
+          EXPECT_EQ((D.*Decode)(Bytes.data(), Bytes.size(), 0x2041, Out), 0);
+          EXPECT_FALSE(Out.MIPSForbiddenFollower);
+          EXPECT_FALSE(Out.AArch64Prefix);
+          EXPECT_EQ((D.*Decode)(Bytes.data(), 1, 0x2040, Out), 0);
+          ASSERT_EQ((D.*Decode)(Bytes.data(), Bytes.size(), 0x2040, Out),
+                    Ref.Insn->size);
+          EXPECT_EQ(Out.Addr, Ref.Insn->address);
+          EXPECT_EQ(Out.Id, Ref.Insn->id);
+          EXPECT_EQ(Out.Size, Ref.Insn->size);
+          ASSERT_NE(Out.Raw, nullptr);
+          ASSERT_NE(Out.Raw->detail, nullptr);
+          EXPECT_EQ(Out.Raw->is_alias, Ref.Insn->is_alias);
+          EXPECT_STREQ(Out.Raw->mnemonic, Ref.Insn->mnemonic);
+          EXPECT_STREQ(Out.Raw->op_str, Ref.Insn->op_str);
+          const auto &Actual = Out.Raw->detail->mips;
+          const auto &Expected = Ref.Insn->detail->mips;
+          ASSERT_EQ(Actual.op_count, Expected.op_count);
+          if (Text)
+            ASSERT_GT(Expected.op_count, 0);
+          for (unsigned I = 0; I != Expected.op_count; ++I) {
+            const auto &Got = Actual.operands[I], &Want = Expected.operands[I];
+            ASSERT_EQ(Got.type, Want.type);
+            EXPECT_EQ(Got.access, Want.access);
+            EXPECT_EQ(Got.is_reglist, Want.is_reglist);
+            EXPECT_EQ(Got.is_unsigned, Want.is_unsigned);
+            if (Want.type == MIPS_OP_REG)
+              EXPECT_EQ(Got.reg, Want.reg);
+            else if (Want.type == MIPS_OP_IMM)
+              EXPECT_EQ(Got.imm, Want.imm);
+            else if (Want.type == MIPS_OP_MEM) {
+              EXPECT_EQ(Got.mem.base, Want.mem.base);
+              EXPECT_EQ(Got.mem.disp, Want.mem.disp);
+            }
+          }
+        }
+      }
+    }
+}
+
 class MIPSInteger : public ::testing::TestWithParam<Arch> {};
 
 TEST_P(MIPSInteger, RegisterAndStackContractsAreWidthSpecific) {
