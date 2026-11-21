@@ -18309,9 +18309,11 @@ takes 455 seconds on macOS, and the 72-variant entry-join case takes 428 seconds
 `NeverDWin64CallContractTests` allows 900 seconds for a matrix measured at
 575 seconds. Individual compiler and executable invocations retain their
 30-second limits.
-`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus,
-which takes 420 seconds on the same host. These are aggregate test budgets,
-not changes to the semantic assertions or production pipeline limits.
+`NeverDWorkerSourceSynthesis` also allows 600 seconds for its complete corpus.
+CTest reserves six slots for independent fixtures on hosts with at least six
+available processors and three slots on smaller hosts. Each fixture builds
+and executes all six generated C outputs at O0 and O2 when Clang and the CLI
+are available.
 `CSourcePresentation.IndexedRelocationsPreserveStringStorageProofs` compares
 indexed range queries with individual-byte provenance across ELF, PE and Mach-O,
 including unsorted and duplicate fixups, invalid import slots and a relocation
