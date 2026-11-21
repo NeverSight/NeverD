@@ -1370,6 +1370,145 @@ TEST(GoInternalABI, AResultIsAsWideAsItsCallersReadIt) {
   EXPECT_EQ(Body.find("__builtin_trap"), std::string::npos) << Body;
 }
 
+/// The C the pipeline \p R gives the function \p Name of \p Img: its body, from
+/// its signature on.
+std::string highCBody(const PipelineResult &R, const BinaryImage &Img,
+                      const std::string &Name) {
+  std::string Source;
+  llvm::raw_string_ostream OS(Source);
+  CEmitterOptions C;
+  C.TheArch = Img.Arch;
+  C.Format = Img.Format;
+  C.Image = &Img;
+  if (!HighCEmitter().emit(R.HighFuncs, OS, C))
+    return {};
+  OS.flush();
+  size_t At = 0;
+  while ((At = Source.find(" " + Name + "(", At)) != std::string::npos &&
+         Source.compare(Source.find('\n', At) - 2, 2, " {") != 0)
+    ++At;
+  if (At == std::string::npos)
+    return {};
+  return Source.substr(At, Source.find("\n}", At) - At);
+}
+
+/// How many reads of the current goroutine the function at \p Entry in \p R
+/// makes, and whether it reads a version of the goroutine register that no
+/// operation defines: the incoming value, or what a call left there.
+std::pair<unsigned, bool> goroutineReads(const PipelineResult &R, va_t Entry,
+                                         uint64_t Register) {
+  unsigned Reads = 0;
+  bool Undefined = false;
+  for (const MedFunc &M : R.MedFuncs) {
+    if (M.Entry != Entry)
+      continue;
+    std::set<std::pair<int, int>> Defined;
+    for (const MedBlock &Block : M.Blocks) {
+      for (const PhiNode &Phi : Block.Phis)
+        Defined.insert({Phi.Output.Id, Phi.Output.SSAVer});
+      for (const MedOp &Op : Block.Ops)
+        Defined.insert({Op.Output.Id, Op.Output.SSAVer});
+    }
+    for (const MedBlock &Block : M.Blocks)
+      for (const MedOp &Op : Block.Ops) {
+        if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs >= 1 &&
+            Op.Inputs[0].isConst() &&
+            Op.Inputs[0].ConstVal ==
+                static_cast<uint64_t>(Intrinsic::GoCurrentGoroutine))
+          ++Reads;
+        for (unsigned I = 0; I < Op.NumInputs; ++I)
+          Undefined |= Op.Inputs[I].Kind == MedVar::Reg &&
+                       Op.Inputs[I].RegOff == Register &&
+                       !Defined.count({Op.Inputs[I].Id, Op.Inputs[I].SSAVer});
+      }
+  }
+  return {Reads, Undefined};
+}
+
+TEST(GoInternalABI, TheGoroutineRegisterHoldsTheCurrentGoroutine) {
+  // Go's internal ABI keeps the current goroutine in R14, which compiled
+  // code never writes and reads as getg(): at the entry, and after a call,
+  // which may have changed it (`needm` installs another).  It had no
+  // definition, so `runtime.canpanic` read every `getg().m` as a trap.
+  //   main.f: mov rcx, [r14+0x30]; call main.g; mov rax, [r14+0x30];
+  //           add rax, rcx; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body = {0x49, 0x8B, 0x4E, 0x30};
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), G);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.insert(Body.end(), {0x49, 0x8B, 0x46, 0x30, 0x48, 0x01, 0xC8, 0xC3});
+  T.writeText(F, Body);
+  T.writeText(G, {0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  // main.g writes no register, so the call keeps R14 and the read at the
+  // entry serves both loads.
+  EXPECT_EQ(goroutineReads(R, F, x86reg::R14),
+            (std::pair<unsigned, bool>{1, false}));
+  EXPECT_TRUE(parameterRegisters(R, F).empty());
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("%%r14"), std::string::npos) << Text;
+}
+
+TEST(GoInternalABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
+  // arm64 keeps the goroutine in R28, which no summary tracks, so the call
+  // may change it: one read at the entry and one after the call.
+  //   main.f: ldr x1, [x28, #48]; str x30, [sp, #-32]!; str x1, [sp, #8]
+  //           bl main.g; ldr x0, [x28, #48]; ldr x1, [sp, #8]
+  //           add x0, x0, x1; ldr x30, [sp], #32; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call = 0x94000000u | (((G - (F + 12)) >> 2) & 0x3FFFFFFu);
+  T.writeText(F, words({0xF9401B81, 0xF81E0FFE, 0xF90007E1, Call, 0xF9401B80,
+                        0xF94007E1, 0x8B010000, 0xF84207FE, 0xD65F03C0}));
+  T.writeText(G, words({0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(goroutineReads(R, F, a64reg::X28),
+            (std::pair<unsigned, bool>{2, false}));
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("x28"), std::string::npos) << Text;
+}
+
 TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {
   // A Go result is the whole register a return leaves: the argument the
   // caller passed in it where the path leaves it unchanged, though another

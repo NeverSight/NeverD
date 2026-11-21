@@ -76,17 +76,29 @@ constexpr bool intrinsicWritesOnlyItsOutput(Intrinsic Id) {
   case Intrinsic::ArmThreadPointer:
   case Intrinsic::A64_GetFPSR:
   case Intrinsic::A64_GetFPCR:
+  case Intrinsic::GoCurrentGoroutine:
     return true;
   default:
     return false;
   }
 }
 
-/// An unused nontrapping EFLAGS image may disappear. Live reads retain their
+/// Intrinsics whose read changes nothing, so dead code elimination may drop
+/// an unused one: the read of the goroutine Go's internal ABI keeps in a
+/// register (GoCurrentGoroutine.h).  Reading a system register can have an
+/// effect of its own (a FIFO's), so no such read is one.
+constexpr bool intrinsicReadIsDiscardable(Intrinsic Id) {
+  return Id == Intrinsic::GoCurrentGoroutine;
+}
+
+/// An unused nontrapping EFLAGS image may disappear, and so may an unused read
+/// that changes nothing (intrinsicReadIsDiscardable). Live reads retain their
 /// occurrence: this grants no value-only, CSE or motion permission. The lifter
 /// represents PUSHF stack adjustment and memory writes as separate operations.
 constexpr bool intrinsicHasDiscardableStateRead(Intrinsic Id, uint8_t NumInputs,
                                                 uint16_t OutputSize) {
+  if (intrinsicReadIsDiscardable(Id))
+    return NumInputs == 1 && OutputSize == 8;
   return Id == Intrinsic::Pushf && NumInputs == 1 &&
          (OutputSize == 2 || OutputSize == 4 || OutputSize == 8);
 }

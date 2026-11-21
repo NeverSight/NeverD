@@ -20713,6 +20713,13 @@ assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
 which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
 and RBX, and the call passes 1, 4, 3 and 2.
+`GoInternalABI.TheGoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
+function that loads `[r14+0x30]` before and after a call to a function that
+writes no register: one read of the goroutine at its entry serves both, it
+reads no undefined R14 and takes no parameter, and its C reads R14 and traps
+nowhere. `GoInternalABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` does
+the same with arm64's `[x28, #48]`, where the call may change R28: it reads
+the goroutine at its entry and again after the call.
 `GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
 `main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
 caller that sets all seven of Go's first argument registers: `main.g` takes

@@ -126,6 +126,11 @@ bool goResultRegister(Arch A, uint64_t RegOff);
 /// arm64.  It is no positional argument.
 std::optional<uint64_t> goClosureContextRegister(Arch A);
 
+/// The register Go's internal ABI keeps the current goroutine in on \p A
+/// (abi-internal.md: "R14 | Current goroutine | Same | Same"), and R28 on
+/// arm64, where Go's assembly calls it `g` too.
+std::optional<uint64_t> goRoutineRegister(Arch A);
+
 /// One register argument a function's stack-growth path spills.
 struct GoArgumentSpill {
   uint64_t Register = 0;

@@ -5813,7 +5813,19 @@ platform contract. Calls from compiled code of a register-ABI amd64 image
 function's entry, so its frame zeroing stores zero. Ordinary calls do not
 assume the goroutine in R14 is unchanged: runtime paths such as `needm`
 can install a different g. Recognized write barriers continue to preserve R14
-under their narrower GPR contract. Calls from assembly, which may follow ABI0
+under their narrower GPR contract. Compiled code never writes that register,
+which holds the current goroutine wherever the code reads it ("R14 | Current
+goroutine | Same | Same" in abi-internal.md, R28 on arm64), so LowToMed gives
+each read the goroutine the register holds (`defineGoCurrentGoroutine`,
+`Intrinsic::GoCurrentGoroutine`): the incoming value, read after the entry's
+copies that name the parameters, and what each call leaves, read just after
+the call, wherever something reads them. The read keeps a call's argument
+setup (`preservesCallSetup`), and dead code elimination, at MedIR and at
+HighIR, drops one nothing comes to use (`intrinsicReadIsDiscardable`): the
+stack check the elided growth path leaves, or the return's transport of a
+register System V keeps. It merges or moves none, since a call may change the
+goroutine. C reads the register itself, as `getg()` does; `runtime.canpanic`
+read each `getg().m` as a trap. Calls from assembly, which may follow ABI0
 and use X15 as scratch, and calls from Go 1.17 and earlier code do not get
 the X15 guarantee. A restricted PE load skips the Go metadata and keeps the
 platform contract.

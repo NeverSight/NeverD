@@ -545,6 +545,10 @@ enum class Intrinsic : uint16_t {
   // Append-only: one ordinary native Win64 call publishes RAX and RCX.
   X64CallRCX,
 
+  // Append-only: the goroutine Go's internal ABI keeps in R14 (x86-64) or
+  // R28 (arm64), which Go's `getg()` reads (GoCurrentGoroutine.h).
+  GoCurrentGoroutine,
+
 #define NEVERD_MIPS_MERGE_LOAD(Id, Value, ...) Id = Value,
 #define NEVERD_MIPS_SCALAR_INTRINSIC(Id, Value, ...) Id = Value,
 #include "neverd/ir/intrinsics/MIPS/MIPSScalar.def"
@@ -1492,9 +1496,13 @@ constexpr bool keepsGeneralRegisters(Intrinsic Id) {
          Id == Intrinsic::Sevl || Id == Intrinsic::A64_Clrex;
 }
 
+/// Also true for the read of the goroutine Go's internal ABI keeps in a
+/// register (GoCurrentGoroutine), which defines that register and nothing
+/// else: a call that forwards its caller's arguments past it passes them.
 constexpr bool preservesCallSetup(Intrinsic Id) {
   return Id == Intrinsic::X87Wait || Id == Intrinsic::X87ContextExport ||
-         Id == Intrinsic::X87ContextRefresh || keepsGeneralRegisters(Id);
+         Id == Intrinsic::X87ContextRefresh ||
+         Id == Intrinsic::GoCurrentGoroutine || keepsGeneralRegisters(Id);
 }
 
 /// The control or debug register (`%cr8`, `%dr7`) that a ReadCr*/WriteCr*

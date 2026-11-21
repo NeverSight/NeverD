@@ -133,6 +133,17 @@ std::string renderIntrinsicCall(Intrinsic Id, Arch TheArch,
     throw std::invalid_argument(kWritebackMalformed);
   if (isAArch64PAuthLoadIntrinsic(Id) && TheArch != Arch::AArch64)
     throw std::invalid_argument(kPAuthLoadMalformed);
+  // The goroutine Go's internal ABI keeps in a register of its own, which C
+  // reads from that register, as the runtime's getg() does.
+  if (Id == Intrinsic::GoCurrentGoroutine) {
+    if (!Ops.empty() || (TheArch != Arch::X64 && TheArch != Arch::AArch64))
+      throw std::invalid_argument("Go goroutine read of a malformed shape");
+    return TheArch == Arch::X64
+               ? "({ uint64_t __g; __asm__ volatile(\"movq %%r14, %0\" : "
+                 "\"=r\"(__g)); __g; })"
+               : "({ uint64_t __g; __asm__ volatile(\"mov %0, x28\" : "
+                 "\"=r\"(__g)); __g; })";
+  }
   std::string Result;
   if (TheArch == Arch::ARM || TheArch == Arch::AArch64) {
     if (TheArch == Arch::AArch64 && GnuToolchain)

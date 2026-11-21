@@ -19,6 +19,7 @@
 #include "../X86/RegistrationRoots.h"
 #include "../X86/RegistrationSEH4PhysicalFrame.h"
 #include "ComputedBranchScalars.h"
+#include "GoCurrentGoroutine.h"
 #include "GoStackGrowth.h"
 #include "MIPS/PICGlobalPointer.h"
 
@@ -2468,6 +2469,14 @@ MedFunc LowToMedConverter::convertFunction(const LowFunc &SourceLow,
       runDce(Func);
       debugVerifyMedFunc(Func, "runDce");
     }
+
+    // Compiled Go code reads the goroutine its ABI keeps in a register.
+    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+      if (const std::optional<uint64_t> Goroutine =
+              goRoutineRegister(TheArch)) {
+        defineGoCurrentGoroutine(Func, *Goroutine);
+        debugVerifyMedFunc(Func, "defineGoCurrentGoroutine");
+      }
 
     // Bind public LowIR selector occurrences only after every MedIR rewrite and
     // SSA/propagation pass has finished.  A source op that disappeared, was

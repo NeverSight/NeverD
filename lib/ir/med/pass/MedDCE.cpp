@@ -13,6 +13,7 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -688,6 +689,11 @@ void LowToMedConverter::runDce(MedFunc &Func) {
       if (mips::isPureScalarValue(Id))
         return false;
     }
+    if (Op.Opcode == NdOp::INTRINSIC && Op.NumInputs == 1 &&
+        Op.Inputs[0].isConst() &&
+        intrinsicReadIsDiscardable(
+            static_cast<Intrinsic>(Op.Inputs[0].ConstVal)))
+      return false;
     return Op.Opcode == NdOp::STORE || Op.Opcode == NdOp::ATOMIC_XCHG ||
            Op.Opcode == NdOp::ATOMIC_ADD || Op.Opcode == NdOp::ATOMIC_CMPXCHG ||
            Op.Opcode == NdOp::CALL || Op.Opcode == NdOp::INDIR_CALL ||

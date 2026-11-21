@@ -299,6 +299,14 @@ std::optional<uint64_t> goClosureContextRegister(Arch A) {
   return std::nullopt;
 }
 
+std::optional<uint64_t> goRoutineRegister(Arch A) {
+  if (A == Arch::X64)
+    return x86reg::R14;
+  if (A == Arch::AArch64)
+    return a64reg::X28;
+  return std::nullopt;
+}
+
 bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
                                       const GPRReadWidths &Reads) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
