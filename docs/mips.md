@@ -12,6 +12,10 @@ slice, with version-specific instruction checks described below.
 The selected ELF profile determines register width, byte order, stack layout
 and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
 
+DWARF 2/3 bit-field layouts use the target byte order when converting offsets
+within a storage unit. A struct inside a union keeps its member declaration
+order in both MIPS byte orders, including fields that span bytes.
+
 ## Implementation boundaries
 
 - ELF identification and loading share class, ISA, ABI and encoding checks.
