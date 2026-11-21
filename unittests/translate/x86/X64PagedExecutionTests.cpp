@@ -1019,6 +1019,7 @@ TEST_F(X64PagedExecutionTest, GeneratedInstructionsMatchOriginalCPU) {
 #include "X86ModeSgxTests.inc"
 #include "X86ModeSmmTests.inc"
 #include "X86ModeStartupTests.inc"
+#include "X86ModeSysenterTests.inc"
 #include "X86ModeTransitionTests.inc"
 
 // Native comparisons extend the selector fixture above.

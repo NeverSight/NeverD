@@ -16,6 +16,7 @@
 #include "X86SmmExecution.h"
 
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <utility>
@@ -229,6 +230,17 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
       (S.Core.Core.Core.Core.Core.MXCSR & ~O.MXCSRMask))
     return invalid(
         "mixed-mode execution requires full CPU and undefined-value bindings");
+  if (O.Legacy.FastSystem == X86LegacyFastSystemProfile::IntelSEP) {
+    const auto ValidMSR = [&](uint64_t Address) {
+      return M.features().LongMode
+                 ? llvm::isIntN(M.features().LA57 ? 57 : 48, int64_t(Address))
+                 : Address <= UINT32_MAX;
+    };
+    if (!ValidMSR(S.Core.SysenterEIP) || !ValidMSR(S.Core.SysenterESP) ||
+        (M.controls().CR4 & (1u << 23)))
+      return invalid(
+          "Intel SEP requires valid SYSENTER MSRs and a CPU without CET");
+  }
   const bool VM86 = R.RFlags & 0x20000;
   if (S.RetainedRealCS &&
       (!(M.controls().CR0 & 1) || VM86 || (V.Core.CS.Attributes & 0x2000)))
@@ -466,7 +478,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       // A compatibility system fault or trap enters the wide IDT with the
       // same GPR witnesses as an ordinary instruction. A successful RSM
       // switches memory owners and has already installed the full save image.
-      if (&*Destination == &Memory &&
+      if (&*Destination == &Memory && !Result.CSWritten &&
           (*Mode == X86ExecutionMode::Compatibility16 ||
            *Mode == X86ExecutionMode::Compatibility32))
         detail::publishNon64(S, P->Low, {});
@@ -477,19 +489,34 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
     return Result;
   };
   static constexpr uint8_t RsmOpcode[]{0x0f, 0xaa}, HaltOpcode[]{0xf4},
-      ReadMSR[]{0x0f, 0x32}, WriteMSR[]{0x0f, 0x30};
+      ReadMSR[]{0x0f, 0x32}, WriteMSR[]{0x0f, 0x30}, EnterOpcode[]{0x0f, 0x34},
+      ExitOpcode[]{0x0f, 0x35};
   using SystemOp = detail::X86ModeSystemOp;
   SystemOp Op = SystemOp::Halt;
   const bool Long64 = *Mode == X86ExecutionMode::Long64;
   std::optional<bool> Locked;
   if (Long64)
     Locked = systemLockPrefix(Binding.Bytes, HaltOpcode, true);
-  if (!Locked && S.MCA &&
-      X86MachineCheckState::ownsMSR(uint32_t(modeRegisters(S).GPR[1]))) {
-    Op = SystemOp::ReadMCA;
+  const bool SEP = O.Legacy.FastSystem == X86LegacyFastSystemProfile::IntelSEP;
+  if (!Locked && SEP) {
+    Op = SystemOp::Sysenter;
+    Locked = systemLockPrefix(Binding.Bytes, EnterOpcode, Long64);
+    if (!Locked) {
+      Locked = systemLockPrefix(Binding.Bytes, ExitOpcode, Long64);
+      // A REX prefix is effective only immediately before the opcode.
+      const bool RexW =
+          Locked && Long64 && Binding.Bytes.size() > 2 &&
+          (Binding.Bytes[Binding.Bytes.size() - 3] & 0xf8) == 0x48;
+      Op = RexW ? SystemOp::SysexitQ : SystemOp::Sysexit;
+    }
+  }
+  const auto Index = uint32_t(modeRegisters(S).GPR[1]);
+  if (!Locked && ((S.MCA && X86MachineCheckState::ownsMSR(Index)) ||
+                  (SEP && detail::sysenterMSR(Index)))) {
+    Op = SystemOp::ReadMSR;
     Locked = systemLockPrefix(Binding.Bytes, ReadMSR, Long64);
     if (!Locked) {
-      Op = SystemOp::WriteMCA;
+      Op = SystemOp::WriteMSR;
       Locked = systemLockPrefix(Binding.Bytes, WriteMSR, Long64);
     }
   }

@@ -922,3 +922,52 @@ TEST_F(X86ModeExecutionTest, OneNativeCPUExecutesTheEntireRoundtrip) {
   RecordProperty("original_mode_rewrites", 0);
 }
 #endif
+
+TEST_F(X86ModeExecutionTest,
+       CompiledFastCallReturnsToTheOriginalCompatibilityStream) {
+  using Mode = X86ExecutionMode;
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.emplace_back(NeverC);
+  for (const auto &Compiler : Compilers)
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(Compiler);
+      SCOPED_TRACE(LLVM);
+      resetMode();
+      auto &V = Machine.Core.Core;
+      auto &R = V.Core.Core.Core.Core;
+      V.Core.CS = {0, UINT32_MAX, 11, 0xc0fb};
+      V.Core.SS = V.DS = V.ES = {0, UINT32_MAX, 19, 0xc0f3};
+      R.RFlags = 0x202;
+      Machine.Core.SysenterCS = 8;
+      Machine.Core.SysenterEIP = 0x1100;
+      Machine.Core.SysenterESP = 0xf500;
+      Options.Legacy.FastSystem = X86LegacyFastSystemProfile::IntelSEP;
+      Controls = {0x80010031, 0x10000, 0x20, 0x500, 2};
+      put(0x10000, 0x11007);
+      put(0x11000, 0x12007);
+      put(0x12000, 0x87);
+      add(0x1000, Mode::Compatibility32, {0x0f, 0x34});
+      auto PC =
+          add(0x1100, Mode::Long64,
+              {0x49, 0xb9, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11});
+      PC = add(PC, Mode::Long64, {0xb9, 0, 0x79, 0, 0});
+      PC = add(PC, Mode::Long64, {0xba, 0, 0x12, 0, 0});
+      ASSERT_NO_FATAL_FAILURE(compileLong(LLVM, "-O2", Compiler));
+      add(PC, Mode::Long64, {0x0f, 0x35});
+      add(0x1200, Mode::Compatibility32, {0x43});
+      Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+      X86ModeExecution Execution(*Memory, Options);
+      uint64_t Budget = 6;
+      auto Done = Execution.run(Machine, Program, Budget);
+      ASSERT_TRUE(bool(Done)) << llvm::toString(Done.takeError());
+      ASSERT_EQ(Done->Completions, 6u) << Done->OwnerError;
+      EXPECT_EQ(R.PC, 0x1201u);
+      EXPECT_EQ(R.GPR[3], 0x12345679u);
+      EXPECT_EQ(R.GPR[4], 0x7900u);
+      EXPECT_EQ(R.GPR[9], 0x1122334455667788ull);
+      EXPECT_EQ(V.Core.CS.Selector, 27u);
+      EXPECT_EQ(V.Core.SS.Selector, 35u);
+      EXPECT_EQ(llvm::cantFail(Execution.mode(Machine)), Mode::Compatibility32);
+    }
+}

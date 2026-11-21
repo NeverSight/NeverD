@@ -4,7 +4,8 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// Authenticated halt and machine-check MSR operations over the full CPU bank.
+/// Authenticated halt, fast system transfers and MSR access over the full CPU
+/// bank.
 //===----------------------------------------------------------------------===//
 
 #ifndef NEVERD_LIB_ANALYSIS_ARCH_X86_64_X86MODESYSTEMINSTRUCTION_H
@@ -13,7 +14,17 @@
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
 namespace neverd::analysis::detail {
-enum class X86ModeSystemOp { Halt, ReadMCA, WriteMCA };
+enum class X86ModeSystemOp {
+  Halt,
+  ReadMSR,
+  WriteMSR,
+  Sysenter,
+  Sysexit,
+  SysexitQ
+};
+constexpr bool sysenterMSR(uint32_t Index) {
+  return Index >= 0x174 && Index <= 0x176;
+}
 llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
     X86ModeState &State, translate::X86PagedMemory &Memory,
     const X86ModeInstruction &Instruction,

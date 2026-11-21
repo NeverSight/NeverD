@@ -69,6 +69,23 @@ LOCK and privilege checks follow authenticated fetch. Conventional MCA
 registers belong to the optional machine-check bank described below. These checks follow [Intel SDM Volume 3A, sections 2.2.1
 and 5.1.1](https://cdrdv2.intel.com/v1/dl/getContent/671190).
 
+## Intel fast system calls
+
+Binding `Legacy.FastSystem` to `IntelSEP` enables original SYSENTER and
+SYSEXIT instructions and guest reads and writes of the three SYSENTER MSRs.
+SYSENTER from compatibility code installs the full MSR instruction and stack
+pointers and selects CPL0 code64. Protected and virtual-8086 callers enter
+CPL0 protected32. Real-address SYSENTER raises #GP. SYSEXIT selects CPL3 and
+uses EDX and ECX for the compatibility or protected destination. An effective
+REX.W in code64 selects the complete RDX and RCX and a code64 destination.
+
+These instructions install fixed segment caches without reading the GDT or
+the destination stack. A single-step trap is delivered after the new RIP, RSP,
+CS, SS and flags commit. When EIP or ESP is written by WRMSR, the modeled
+Intel CPU checks its maximum linear-address width, including when its current
+page tables use four levels. The protected guest and compatibility guest use
+x64 NeverC or Clang for compiled host bodies. [Intel SYSENTER and SYSEXIT](https://cdrdv2-public.intel.com/789581/325383-sdm-vol-2abcd.pdf)
+
 ## Machine status and paid operand progress
 
 SMSW, LMSW and CLTS reuse the shared scalar owner. LMSW reads a word and
