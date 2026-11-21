@@ -198,6 +198,33 @@ TEST_P(LinuxPoll, QuietDurationStartsAtConnectAndIsSharedByAliases) {
   EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
                                "(TCP connection index 1, read readiness)");
 }
+TEST_P(LinuxPoll, StreamIOKeepsTheConnectRelativeQuietEnd) {
+  auto &C = Options.LinuxNetwork->Connections.front();
+  C.ReceiveEvents = {{C.Receive, 0, 0, 1000000}};
+  C.Receive.clear();
+  C.ReceiveEOF = false;
+  C.ReceiveQuietAfterConnectNS = 2000000;
+  ASSERT_EQ(socket(), 3u);
+  entry(0, 3, 1);
+  ASSERT_EQ(call(ServiceKind::Poll, Base + 256, 1, 2), 1u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 1000000u);
+  ASSERT_EQ(call(ServiceKind::Read, 3, Base + 128, 8), 2u);
+  require(cpu().write(Base + 128, C.ExpectedSend));
+  ASSERT_EQ(call(ServiceKind::SendTo, 3, Base + 128, C.ExpectedSend.size()),
+            C.ExpectedSend.size());
+
+  EXPECT_EQ(call(ServiceKind::Poll, Base + 256, 1, 1), 0u);
+  EXPECT_EQ(events(0), 0u);
+  EXPECT_EQ(Kernel->clock().elapsed(), 2000000u);
+  entry(0, 3, 1);
+  EXPECT_FALSE(call(ServiceKind::Poll, Base + 256, 1, 1));
+  EXPECT_EQ(Kernel->clock().elapsed(), 2000001u);
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 0, read readiness), "
+                               "sent bytes 3, receive events consumed 1/1");
+  EXPECT_EQ(events(0), 0xa5a5u);
+}
+
 TEST_P(LinuxPoll, UnrepresentableQuietEndDoesNotConsumeTheConnection) {
   auto &Connections = Options.LinuxNetwork->Connections;
   Connections[0].Receive.clear();
