@@ -703,7 +703,8 @@ private:
   llvm::SmallVector<uint32_t, limits::symbolic::kSymEvalPlanInlineSteps> Vars;
   // A native plan holds its slot values here. A wide affine product holds
   // [multiplicity, offset limbs, scale limbs] for each distinct factor;
-  // its argument slots name the bases and ScratchAP holds their values.
+  // zero multiplicity adds a third coefficient for a quadratic on one slot.
+  // Its argument slots name the bases and ScratchAP holds their values.
   llvm::SmallVector<uint64_t, limits::symbolic::kSymEvalPlanInlineSteps>
       PlanWords;
   std::vector<llvm::APInt> ScratchAP;

@@ -2426,6 +2426,48 @@ TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
   }
 }
 
+TEST(SymExpr, QuadraticEvaluationGroupsOnlyVanishingCubicTerms) {
+  constexpr unsigned W = 513;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+  std::mt19937_64 Random(0x63478);
+  for (unsigned Bits : {65u, 127u, 129u, 207u, 257u}) {
+    const unsigned Third = (Bits + 2) / 3;
+    const auto Scale = llvm::APInt(W, 3).shl(W - Bits);
+    for (unsigned Shift : {Third - 1, Third, (Bits + 1) / 2}) {
+      llvm::SmallVector<SymRef> Factors{C.mkConst(Scale)};
+      for (unsigned I = 0; I < 12; ++I) {
+        const auto B = (-llvm::APInt(W, 2 * I + 1)).shl(I == 8 ? 0 : Shift);
+        const auto F = C.mkAdd(C.mkConst(W, 2 * I + 1),
+                               C.mkMul(C.mkConst(B), I % 2 ? X : Y));
+        Factors.push_back(F);
+        if (I == 5)
+          Factors.push_back(F);
+      }
+      SymEvalPlan Plan(C, C.mkMul(Factors));
+      for (unsigned Trial = 0; Trial < 32; ++Trial) {
+        std::array<llvm::APInt, 2> Inputs;
+        for (auto &V : Inputs) {
+          std::array<uint64_t, 9> Words;
+          for (auto &Word : Words)
+            Word = Random();
+          V = llvm::APInt(W, Words);
+        }
+        auto Expected = Scale;
+        for (unsigned I = 0; I < 12; ++I) {
+          auto Term =
+              (Inputs[I % 2 ? 0 : 1] * (2 * I + 1)).shl(I == 8 ? 0 : Shift);
+          Term = llvm::APInt(W, 2 * I + 1) - Term;
+          Expected *= Term;
+          if (I == 5)
+            Expected *= Term;
+        }
+        EXPECT_EQ(Plan.eval(Inputs), Expected);
+      }
+    }
+  }
+}
+
 TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {
   std::mt19937_64 Random(0x6c6f777072656669);
   for (unsigned W : {65u, 128u, 257u})
