@@ -1449,6 +1449,11 @@ private:
   /// that register (CFGBuilderX86GetPc.cpp).
   void rewriteGetPcThunkCall(const BinaryImage &Img, InsnRecord &Rec,
                              va_t Next);
+  /// A direct call into one of Go's Duff's device routines is lifted as that
+  /// routine's body from the entry to its return (goDuffDeviceBody): Go's
+  /// compiler expects the call to change only the registers the body writes.
+  void rewriteGoDuffDeviceCall(const BinaryImage &Img, InsnRecord &Rec,
+                               va_t Next);
   /// The jump of an i386 PIC PLT entry the loader pairs with its import,
   /// `jmp *disp(%ebx)` by the GOT address its callers hold in EBX, is lifted
   /// as the jump through that import's slot (CFGBuilderX86PLT.cpp).
@@ -3013,6 +3018,10 @@ private:
   // reserved DenseMap sentinels (~0 / ~0-1).
   llvm::DenseSet<va_t> ExploredAddrs;
   llvm::DenseSet<va_t> CallTargets;
+  /// Each Duff's device entry's body in GoDuffDeviceBodiesImage, lifted once
+  /// (rewriteGoDuffDeviceCall).
+  std::map<va_t, std::optional<std::vector<LowOp>>> GoDuffDeviceBodies;
+  const BinaryImage *GoDuffDeviceBodiesImage = nullptr;
   /// Calls into this function's own body lifted as a push and a jump (see
   /// rewriteOwnInteriorCall), by target.
   std::map<va_t, std::set<va_t>> OwnInteriorCallSites;

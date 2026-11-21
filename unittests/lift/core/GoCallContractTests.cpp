@@ -1591,23 +1591,27 @@ TEST(GoFunctionTable, CodeInsideARecordedFunctionBeginsNone) {
   EXPECT_FALSE(Begins(F + 8));
 }
 
-TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
-  // Go's compiler calls `runtime.duffzero` and `runtime.duffcopy` at the point
-  // that zeroes or copies as many bytes as it needs, so each such point begins
-  // a routine of its own though the pclntab records only the first.
-  //   runtime.duffzero: nop x16; ret
-  //   main.g:           call runtime.duffzero+8; ret
-  constexpr va_t F = kTextVA + 0x100;
+TEST(GoFunctionTable, ACallIntoADuffsDeviceRunsItsBody) {
+  // Go's compiler calls `runtime.duffzero` at the point that zeroes as many
+  // bytes as it needs, and expects the call to change only the registers that
+  // straight-line body writes: the caller keeps RBX across it.  The body runs
+  // in the caller's place, and the entry begins no function of its own.
+  //   runtime.duffzero: movups [rdi], xmm15; movups [rdi+16], xmm15
+  //                     lea rdi, [rdi+32]; movups [rdi], xmm15; ret
+  //   main.g:           mov rdi, rax; call runtime.duffzero+4; mov rax, rbx
+  //                     ret
+  constexpr va_t Z = kTextVA + 0x100;
   constexpr va_t G = kTextVA + 0x200;
   GoTestImage T;
-  std::vector<uint8_t> Body(16, 0x90);
-  Body.push_back(0xC3);
-  T.writeText(F, Body);
-  std::vector<uint8_t> Caller = makeCall(G, F + 8);
-  Caller.push_back(0xC3);
+  T.writeText(Z, {0x44, 0x0F, 0x11, 0x3F, 0x44, 0x0F, 0x11, 0x7F, 0x10, 0x48,
+                  0x8D, 0x7F, 0x20, 0x44, 0x0F, 0x11, 0x3F, 0xC3});
+  std::vector<uint8_t> Caller = {0x48, 0x89, 0xC7};
+  const std::vector<uint8_t> Call = makeCall(G + Caller.size(), Z + 4);
+  Caller.insert(Caller.end(), Call.begin(), Call.end());
+  Caller.insert(Caller.end(), {0x48, 0x89, 0xD8, 0xC3});
   T.writeText(G, Caller);
   for (const auto &[Entry, Name] :
-       {std::pair{F, "runtime.duffzero"}, std::pair{G, "main.g"}}) {
+       {std::pair{Z, "runtime.duffzero"}, std::pair{G, "main.g"}}) {
     Symbol Function = Symbol::makeFunc(Entry);
     Function.Name = Name;
     T.Img.Symbols.push_back(std::move(Function));
@@ -1615,15 +1619,33 @@ TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
   GoModuleInfo Module;
   Module.PclnTabMagic = 0xFFFFFFF1u;
   Module.RegisterArguments = true;
-  Module.GoCode = {{F, kTextVA + 0x300}};
-  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
-  Module.DuffDevices = {{F, F + 17}};
+  Module.GoCode = {{Z, kTextVA + 0x300}};
+  Module.GoAssembly = {{Z, Z + 0x20}};
+  Module.FrameArguments = {{Z, 0, 0}, {G, 16, std::nullopt}};
+  Module.DuffDevices = {{Z, Z + 0x20}};
   T.Img.ExceptionMetadata.GoModule = std::move(Module);
   Decoder Dec;
   ASSERT_TRUE(Dec.init(T.Img));
   const auto Found = FuncDetector().detect(T.Img, Dec);
-  EXPECT_TRUE(llvm::any_of(
-      Found, [&](const auto &Item) { return Item.first == F + 8; }));
+  EXPECT_FALSE(llvm::any_of(
+      Found, [&](const auto &Item) { return Item.first == Z + 4; }));
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == G; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_FALSE(hasOp(*It, NdOp::CALL));
+  unsigned Stores = 0;
+  for (const MedBlock &Block : It->Blocks)
+    for (const MedOp &Op : Block.Ops)
+      Stores += Op.Opcode == NdOp::STORE;
+  EXPECT_GE(Stores, 2u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
 TEST(GoAssembly, ADuffsDeviceEntersWithZeroInX15) {

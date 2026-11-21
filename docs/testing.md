@@ -20757,8 +20757,10 @@ stores zero and traps nowhere.
 `GoFunctionTable.CodeInsideARecordedFunctionBeginsNone` runs function
 discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
 `main.g` begin functions, and `main.f+8` begins none.
-`GoFunctionTable.ADuffsDeviceEntryBeginsAFunction` runs it again with
-`main.f` as `runtime.duffzero`: `main.f+8` begins a function.
+`GoFunctionTable.ACallIntoADuffsDeviceRunsItsBody` lifts a `main.g` that calls
+`runtime.duffzero+4` with RBX live across the call: discovery begins no
+function there, `main.g` makes no call and stores twice, and its C holds no
+unknown value.
 `GoAssembly.ADuffsDeviceEntersWithZeroInX15` lifts a
 `runtime.duffzero` that stores X15 twice: its C stores zero and traps nowhere.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function

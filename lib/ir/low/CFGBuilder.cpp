@@ -2911,6 +2911,8 @@ void CFGBuilder::explore(const BinaryImage &Img, Decoder &Dec, va_t Addr) {
       if (Rec.IsCall && !Rec.IsIndirect && Rec.Immediate)
         rewriteGetPcThunkCall(Img, Rec, Next);
       if (Rec.IsCall && !Rec.IsIndirect && Rec.Immediate)
+        rewriteGoDuffDeviceCall(Img, Rec, Next);
+      if (Rec.IsCall && !Rec.IsIndirect && Rec.Immediate)
         rewriteOwnInteriorCall(Img, Rec, Next);
       rewriteOwnInteriorReturn(Img, Rec);
       rewriteOwnInteriorTailReturn(Img, Rec);

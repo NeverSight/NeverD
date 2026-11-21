@@ -5888,12 +5888,17 @@ as no tail call (`isTailCallTarget`). `runtime.suspendG`'s jump table holds
 case labels that read as code addresses, and each `jmp` to one became a call
 into a function that started in the middle of `suspendG`; where only the
 entry went, `runtime.runGCProg`'s jump to its loop called a function nothing
-defined, and the loop was decompiled nowhere. Duff's device routines are the
-exception (`GoModuleInfo::DuffDevices`): Go's compiler calls `runtime.duffzero`
-and `runtime.duffcopy` at the point that zeroes or copies as many bytes as it
-needs, so each such point begins a routine of its own. Under the internal ABI
-each enters with X15 zero, since compiled code alone calls it
-(`goDuffDeviceAt`): `runtime.duffzero` stores X15 sixty-four times.
+defined, and the loop was decompiled nowhere. Go's compiler calls
+`runtime.duffzero` and `runtime.duffcopy` (`GoModuleInfo::DuffDevices`) at the
+point that zeroes or copies as many bytes as it needs, and expects the call to
+change only the registers that straight-line body writes: the CFG builder
+lifts such a call as the body from that point to its return
+(`goDuffDeviceBody`, `CFGBuilder::rewriteGoDuffDeviceCall`), so the point begins
+no function, and the caller keeps every other register. As functions, the
+points chained into one another, and a caller's read of RAX after the call was
+unknown. Under the internal ABI a routine enters with X15 zero, since compiled
+code alone calls it (`goDuffDeviceAt`): `runtime.duffzero` stores X15
+sixty-four times.
 
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
