@@ -384,7 +384,7 @@ Decoder::decodePhysical(const uint8_t *Bytes, size_t Len, va_t Addr) {
   size_t Remaining = Len;
   uint64_t PC = Addr;
   if (Text && X86) {
-    if (X86_disasmIter(Handle, &Code, &Remaining, &PC, InsnBuf))
+    if (X86_disasmIterText(Handle, &Code, &Remaining, &PC, InsnBuf))
       return true;
   } else if (cs_disasm_iter(Handle, &Code, &Remaining, &PC, InsnBuf)) {
     return true;
