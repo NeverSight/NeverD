@@ -329,18 +329,23 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     Word = Wide;
   }
   if (CanRead()) {
+    const size_t ReadWords = llvm::APInt::getNumWords(Observed);
+    // The updated coefficient and offset are interned at the carrier width.
     const size_t ReadBytes =
         2 * (sizeof(llvm::APInt) + Words * sizeof(uint64_t));
-    if (ReadBytes > Storage || !Budget.consume(2 + 2 * Words))
+    if (ReadBytes > Storage || !Budget.consume(2 + 2 * ReadWords))
       return false;
     Storage -= ReadBytes;
-    const size_t ReadWords = llvm::APInt::getNumWords(Observed);
-    auto A = Ctx.constValue(Offset).trunc(Observed);
-    auto B = Ctx.constValue(Weight).trunc(Observed);
+    auto A =
+        llvm::APInt(Observed, Ctx.constWords(Offset).take_front(ReadWords));
+    auto B =
+        llvm::APInt(Observed, Ctx.constWords(Weight).take_front(ReadWords));
     do {
       const auto Op = Ctx.op(Word);
       if (HasScalar(Word) && (Op == SymOp::Add || Op == SymOp::Mul)) {
-        const auto K = Ctx.constValue(Ctx.operand(Word, 0)).trunc(Observed);
+        const auto K = llvm::APInt(
+            Observed,
+            Ctx.constWords(Ctx.operand(Word, 0)).take_front(ReadWords));
         // A signed one-limb multiplier needs one pass over B. In particular
         // a negative scalar must subtract its magnitude at the observed width.
         const bool Small = ReadWords > 1 && K.isSignedIntN(64);
@@ -425,7 +430,8 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
         if (Op == SymOp::Add && Ctx.isConst(Term)) {
           if (!Budget.consume(ReadWords * ReadWords))
             return false;
-          A += B * Ctx.constValue(Term).trunc(Observed);
+          A += B * llvm::APInt(Observed,
+                               Ctx.constWords(Term).take_front(ReadWords));
           continue;
         }
         // Algebraic sums and OR/XOR discard a zero prefix. For AND, an OR
@@ -452,8 +458,8 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
     } while (CanRead());
     Offset = Ctx.mkConst(A.sextOrTrunc(Width));
     Weight = Ctx.mkConst(B.sextOrTrunc(Width));
-    Row.Zeros = Ctx.constValue(Weight).countr_zero();
-    Row.Content = std::min(Row.Zeros, Ctx.constValue(Offset).countr_zero());
+    Row.Zeros = B.isZero() ? Width : B.countr_zero();
+    Row.Content = std::min(Row.Zeros, A.isZero() ? Width : A.countr_zero());
   }
   // An instruction combiner may leave the word shifted and replace its
   // narrow extension with a mask. Its observable prefix has the same
@@ -614,10 +620,8 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
                             bool *EmittedReading) {
   const unsigned Width = Ctx.width(Root);
   const size_t N = Ctx.numOperands(Root);
-  const size_t Words = llvm::APInt::getNumWords(Width);
   const size_t PerFactor = sizeof(Factor) + 3 * sizeof(SymRef);
-  const size_t ReadWork = 2 + Words;
-  if (N > Storage / PerFactor || N > Budget.available() / ReadWork)
+  if (N > Storage / PerFactor || N > Budget.available() / 2)
     return Root;
   Storage -= N * PerFactor;
   const size_t FirstGenerated = Ctx.numNodes();
@@ -627,7 +631,7 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
   const auto Outer =
       Ctx.isConst(Ctx.operand(Root, 0)) ? Ctx.operand(Root, 0) : SymRef{};
   for (size_t I = bool(Outer); I < N; ++I) {
-    if (!Budget.consume(ReadWork))
+    if (!Budget.consume(2))
       return Root;
     const auto F = Ctx.operand(Root, I);
     if (Ctx.op(F) != SymOp::Add || Ctx.numOperands(F) != 2 ||
@@ -642,9 +646,23 @@ SymRef foldTruncatedProduct(SymContext &Ctx, SymRef Root, unsigned Observed,
     }
     auto Weight = Ctx.operand(D, 0);
     auto Offset = Ctx.operand(F, 0);
-    const unsigned Zeros = Ctx.constValue(Weight).countr_zero();
-    const unsigned InitialContent =
-        std::min(Zeros, Ctx.constValue(Offset).countr_zero());
+    // ctz(weight | offset) is their common power of two. Read both
+    // literals together only as far as the first nonzero weight limb.
+    // Content may stop earlier; the final limb may be partial.
+    const auto Weights = Ctx.constWords(Weight),
+               Offsets = Ctx.constWords(Offset);
+    unsigned Zeros = 0, InitialContent = 0;
+    for (size_t J = 0; J < Weights.size(); ++J) {
+      if (!Budget.consume())
+        return Root;
+      const auto Remaining = Width - Zeros;
+      if (InitialContent == Zeros)
+        InitialContent += std::min(
+            Remaining, unsigned(std::countr_zero(Weights[J] | Offsets[J])));
+      Zeros += std::min(Remaining, unsigned(std::countr_zero(Weights[J])));
+      if (Weights[J])
+        break;
+    }
     TotalZeros += std::min(Observed - TotalZeros, InitialContent);
     if (TotalZeros == Observed)
       return Ctx.mkZero(Width);

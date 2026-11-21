@@ -316,7 +316,8 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
-                          rotated_bytes=False, shifted_bytes=False, funnel_bytes=False):
+                          rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
+                          staggered_bytes=False):
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -328,10 +329,12 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
         coefficient = ((2 * i + 1) << shift) & 0xffffffff
         offset = 2 * i + 1
         code += bytes.fromhex("89f9" + op)
-        if rotated_bytes or shifted_bytes or funnel_bytes:
+        if rotated_bytes or shifted_bytes or funnel_bytes or staggered_bytes:
             # Choose the source of CH, including a window wrapping past bit 31.
             source_bit = (0, 5, 29)[i % 3]
             distance = 1 + (i // 3) % 7 if shifted_bytes or funnel_bytes else 0
+            if staggered_bytes:
+                distance = 2 + (i // 3) % 5
             left_shift = i % 3 == 0
             start = 8 - distance if left_shift else 8 + distance
             left = (start - source_bit) % 32
@@ -341,15 +344,20 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 else:
                     code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
                 value = f"(({value}<<{left})|({value}>>{32-left}))"
-            if funnel_bytes:
+            if funnel_bytes or staggered_bytes:
                 # A different register supplies the other half of the funnel.
                 # CH lies entirely within ECX's shifted bits.
-                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
-                code += bytes.fromhex("41c1e8" if left_shift else "41c1e0") + bytes([32 - distance])
-                code += bytes.fromhex("c1e1" if left_shift else "c1e9") + bytes([distance])
                 join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
+                other_shift = 32 - distance
+                if staggered_bytes:
+                    # An overlapping ADD can carry into CH. Use a gap for
+                    # that upper-lane read and exercise overlap with OR/XOR.
+                    other_shift += 1 if symbol == "+" or (i // 3) % 2 else -1
+                code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
+                code += bytes.fromhex("41c1e8" if left_shift else "41c1e0") + bytes([other_shift])
+                code += bytes.fromhex("c1e1" if left_shift else "c1e9") + bytes([distance])
                 code += bytes.fromhex(join)
-                other = f"((z+{offset}U){'>>' if left_shift else '<<'}{32-distance})"
+                other = f"((z+{offset}U){'>>' if left_shift else '<<'}{other_shift})"
                 value = f"(({value}{'<<' if left_shift else '>>'}{distance}){symbol}{other})"
             elif shifted_bytes:
                 opcode = ("c1e1", "c1e9", "c1f9")[i % 3]  # shl, shr, sar ecx
@@ -715,6 +723,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-staggered-239", *high_perturbation_elf(
+                239, shift_base=6, affine_depth=1, observed=14, staggered_bytes=True)),
             ("funnel-perturbation-197", *high_perturbation_elf(
                 197, shift_base=6, affine_depth=1, observed=14, funnel_bytes=True)),
             ("shifted-perturbation-163", *high_perturbation_elf(

@@ -1494,6 +1494,57 @@ def funnel_window_corpus(width, count):
     return rows
 
 
+def staggered_window_corpus(width, count):
+    """Shifted fields with gaps, overlap and a live carry from the other lane."""
+    axes = ("(x^y)", "((x+z)^(w&u))")
+    positions = (0, width - 2)
+    rows = []
+    for case in range(count):
+        rng = random.Random(0xd9250 + 439 * width + 8861 * case)
+        degree = (337, 389, 433, 479)[case % 4]
+        observed = min(width - 6, max(10, width // 5 + case % 3))
+        stride = (observed + 2) // 3
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % 2
+            zeros = stride + i % 2
+            bits = observed - zeros
+            size = bits + (i % 5 == 0)
+            upper = (i // 2 + case) % 2 == 0
+            cut = rng.randrange(size + 4, width - size - 3)
+            overlap = (1 + i % 3) * (1 if (case + i) % 2 else -1)
+            end = cut + overlap
+            op = ("^", "|", "+")[(case + i) % 3]
+            if case % 4 == 3 and i == degree // 2:
+                upper, start, op, end = True, max(cut, end), "+", cut + 2
+            else:
+                if upper and op == "+" and end > cut:
+                    end = cut - 1
+                start = (rng.randrange(max(cut, end), width - size + 1) if upper else
+                         rng.randrange(min(cut, end) - size + 1))
+            origin = start - cut if upper else start + width - end
+            turn = (positions[axis] - origin) % width
+            selected = f"ror({axes[axis]},{turn})"
+            other = f"(({rng.randrange(7, 64000, 2)}+u*y)^(w+z*x))"
+            high, low = (selected, other) if upper else (other, selected)
+            joined = f"(({high}<<{cut}){op}({low}>>{width - end}))"
+            at = start
+            if i % 3 != 1:
+                at = rng.randrange(width - size + 1)
+                joined = f"ror({joined},{(start - at) % width})"
+            field = f"extract({joined},{at},{size})"
+            word = (f"concat(extract({other},{size},{width - size}),{field})" if i % 2 else
+                    f"sext({field},{width})")
+            offset = rng.randrange(-17, 18) | 1
+            weight = (rng.randrange(-11, 12) | 1) << zeros
+            inner_offset = rng.randrange(-15, 16) | 1
+            inner_weight = rng.randrange(-5, 6) | 1
+            factors.append(f"({offset}+({weight})*({inner_offset}+({inner_weight})*{word}))")
+        scale = 5 << (width - observed)
+        rows.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return rows
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1766,7 +1817,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window"),
+                 "funnel-window", "staggered-window"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1788,6 +1839,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "staggered-window": (32, 64, 97, 193, 257, 513, 769),
             "funnel-window": (19, 24, 32, 64, 97, 193, 257, 513),
             "shifted-window": (17, 24, 32, 64, 97, 193, 257, 513),
             "rotating-window": (17, 24, 32, 64, 97, 193, 257, 513),
@@ -1836,6 +1888,7 @@ def main():
                 "rotating-window": rotating_window_corpus,
                 "shifted-window": shifted_window_corpus,
                 "funnel-window": funnel_window_corpus,
+                "staggered-window": staggered_window_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

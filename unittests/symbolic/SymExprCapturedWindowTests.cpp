@@ -163,10 +163,10 @@ TEST(SymExpr, TwoWordFunnelSlicesMatchOriginalBitOperations) {
   const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
   const auto Count = llvm::APInt::getOneBitSet(73, 67) + 3;
   const auto TurnedX = C.mkRor(X, C.mkConst(Count));
-  for (unsigned Form = 0; Form != 3; ++Form) {
+  for (unsigned Form = 0; Form != 4; ++Form) {
     const auto High =
         C.mkShl(Form == 2 ? C.mkMul(TurnedX, Y) : TurnedX, C.mkConst(W, Cut));
-    const unsigned Right = W - Cut - (Form == 1);
+    const unsigned Right = W - Cut - (Form == 1) + (Form == 3);
     const auto Low = C.mkLShr(Y, C.mkConst(W, Right));
     for (const auto Op : {SymOp::Or, SymOp::Xor, SymOp::Add}) {
       const auto Join = Op == SymOp::Or    ? C.mkOr(High, Low)
@@ -177,6 +177,17 @@ TEST(SymExpr, TwoWordFunnelSlicesMatchOriginalBitOperations) {
         EXPECT_EQ(
             C.mkExtract(Join, Cut, Bits),
             C.mkExtract(C.mkRor(X, C.mkConst(W, Count.urem(W))), 0, Bits));
+      }
+      if (Form == 1 || Form == 3) {
+        // Reading the top two bits of an overlapping sum can observe a
+        // carry. Bitwise joins and a gapped sum keep this upper slice.
+        EXPECT_EQ(C.mkExtract(Join, 0, 2), C.mkExtract(Y, Right, 2));
+        const auto Source = C.mkExtract(X, (1 + Count.urem(W)) % W, 2);
+        const auto Top = C.mkExtract(Join, 4, 2);
+        if (Form == 3 || Op != SymOp::Add)
+          EXPECT_EQ(Top, Source);
+        else
+          EXPECT_NE(Top, Source);
       }
       for (unsigned Turn : {0u, 1u, W - 1}) {
         const auto Packed = C.mkRol(Join, C.mkConst(W, Turn));
