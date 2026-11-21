@@ -6079,6 +6079,17 @@ the block a second predecessor, so the growth loop stayed and the function
 read its stack parameters through the loop's join, as `runtime_makeslice(void)`
 did.
 
+Go's runtime resumes a frame that deferred at its `deferreturn` call
+(`runtime._func.deferreturn`, `GoFunctionEH::DeferReturnOffset`) on the frame's
+own stack pointer: recovery restores the frame's SP, from which the code there
+reloads the named results and returns. Where no branch or exceptional edge
+reaches that block, as with open-coded defers, which register no call site,
+SSA enters it as a root with the SP the function's pcsp table reaches
+(`GoFunctionEH::FrameSize`), as an SEH handler root takes its establisher
+frame. Entered with the function's own entry SP, the reloads read the caller's
+frame, and arm64's `main.namedResultRewrite` took a stack argument no caller
+passed.
+
 On Windows, `runtime.callbackasm` is a table of 2,000 entries, one per
 callback, each a `CALL runtime.callbackasm1`. The call only leaves the entry's
 address, from which `callbackasm1` computes the callback's index. The routine

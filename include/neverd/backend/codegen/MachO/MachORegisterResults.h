@@ -65,11 +65,16 @@ lowerMachORegisterResults(llvm::Module &Module, const BinaryImage &Image,
                           llvm::ArrayRef<va_t> RequiredNativeEntries,
                           llvm::ArrayRef<LowFunc> SourceFunctions = {});
 
-/// An ADR or immutable rebased literal load that produces a source address.
+enum class MachOAddressForm { Single, PagePair, Expanded };
+
+/// A numeric source address produced by a PC-relative instruction or pair.
 /// Instruction and target use the input image's preferred addresses.
 struct MachOLiftedSourceAddress {
   va_t Instruction;
   va_t Target;
+  MachOAddressForm Form = MachOAddressForm::Single;
+  /// Byte position of the instruction in the verified inline assembly.
+  uint64_t AssemblyOffset = 0;
 };
 
 /// Check each register body and its symbolic call operands against the image

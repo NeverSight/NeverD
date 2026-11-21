@@ -405,10 +405,9 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     const auto Mask = ZeroMask(Disturbance(F));
     if (!Mask)
       return false;
-    if (Width <= 64)
-      return !(Ctx.node(Mask).Aux & 1);
-    Budget.consume(Words);
-    return !Ctx.constValue(Mask)[0];
+    if (Width > 64)
+      Budget.consume();
+    return !(Ctx.constWords(Mask).front() & 1);
   };
   const bool FullPossible =
       HasLowZero(Factors.back()) || HasLowZero(Factors.front());
@@ -468,12 +467,23 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
     const size_t Count = Factors.size();
     if (Count > Budget.available() / (1 + Words))
       return Root;
-    const auto FirstHigh = llvm::find_if(Factors, IsHigh);
-    Budget.consume(
-        (FirstHigh - Factors.begin() + unsigned(FirstHigh != Factors.end())) *
-        (1 + Words));
+    bool TriedTruncated = false;
+    auto FirstHigh = Factors.begin();
+    for (; FirstHigh != Factors.end(); ++FirstHigh) {
+      if (!Budget.consume(1 + Words))
+        return Root;
+      if (IsHigh(*FirstHigh))
+        break;
+      // This is a lower bound over the factors already seen. Once it
+      // reaches Observed the full product reader can inspect the rest once.
+      if (!TriedTruncated && MiddleBits == Observed) {
+        TriedTruncated = true;
+        if (const auto Polynomial = Truncated(); Polynomial != Root)
+          return Polynomial;
+      }
+    }
     if (FirstHigh == Factors.end())
-      return Truncated();
+      return Root;
     const size_t Remaining = Factors.end() - FirstHigh;
     if (Count + 1 > Storage / (2 * sizeof(SymRef)) ||
         Remaining > Budget.available() / (Words + 2))
@@ -495,8 +505,10 @@ SymRef foldHighProductTerms(SymContext &Ctx, SymRef Root, WorkBudget &Budget,
       Edges += Ctx.numOperands(D);
       High.push_back(F);
     }
-    if (const auto Polynomial = Truncated(); Polynomial != Root)
-      return Polynomial;
+    if (!TriedTruncated) {
+      if (const auto Polynomial = Truncated(); Polynomial != Root)
+        return Polynomial;
+    }
     if (High.size() < 2)
       return Root;
     Factors = High;

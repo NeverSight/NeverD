@@ -214,3 +214,48 @@ TEST(SymExpr, TwoWordFunnelSlicesMatchOriginalBitOperations) {
     }
   }
 }
+
+TEST(SymExpr, SignedAndMaskedJoinedWindowsKeepEveryLiveBit) {
+  constexpr unsigned Width = 6, Cut = 3;
+  SymContext C;
+  const auto X = C.mkVar("x", Width), Y = C.mkVar("y", Width);
+  for (bool Arithmetic : {false, true}) {
+    for (unsigned Shift : {2u, 3u, 4u}) {
+      const auto Low = Arithmetic ? C.mkAShr(X, C.mkConst(Width, Shift))
+                                  : C.mkLShr(X, C.mkConst(Width, Shift));
+      for (bool Masked : {false, true}) {
+        // Both literals have three low zeros, with an additional set bit.
+        const auto K = C.mkConst(Width, 0x28);
+        const auto High = Masked ? C.mkAnd(K, Y) : C.mkMul(K, Y);
+        for (const auto Op : {SymOp::Add, SymOp::Xor, SymOp::Or}) {
+          const auto Joined = Op == SymOp::Add   ? C.mkAdd(High, Low)
+                              : Op == SymOp::Xor ? C.mkXor(High, Low)
+                                                 : C.mkOr(High, Low);
+          const auto ExpectedLow = Shift + Cut <= Width
+                                       ? C.mkExtract(X, Shift, Cut)
+                                       : C.mkExtract(Low, 0, Cut);
+          EXPECT_EQ(C.mkExtract(Joined, 0, Cut), ExpectedLow);
+          for (unsigned At = 0; At + 3 <= Width; ++At) {
+            SCOPED_TRACE(::testing::Message()
+                         << Arithmetic << ',' << Shift << ',' << Masked << ','
+                         << unsigned(Op) << ',' << At);
+            SymEvalPlan Field(C, C.mkExtract(Joined, At, 3));
+            for (unsigned A = 0; A < 64; ++A) {
+              for (unsigned B = 0; B < 64; ++B) {
+                const std::array<llvm::APInt, 2> Inputs{llvm::APInt(Width, A),
+                                                        llvm::APInt(Width, B)};
+                const auto H = Masked ? Inputs[1] & 0x28 : Inputs[1] * 0x28;
+                const auto L =
+                    Arithmetic ? Inputs[0].ashr(Shift) : Inputs[0].lshr(Shift);
+                const auto Value = Op == SymOp::Add   ? H + L
+                                   : Op == SymOp::Xor ? H ^ L
+                                                      : H | L;
+                ASSERT_EQ(Field.eval(Inputs), Value.extractBits(3, At));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

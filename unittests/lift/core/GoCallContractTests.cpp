@@ -1742,6 +1742,61 @@ TEST(GoSyscall, AnOrrMovedNumberBoundsTheArguments) {
   EXPECT_TRUE(It->Params.empty()) << It->Params.size();
 }
 
+TEST(GoDefer, DeferReturnResumesOnTheFrame) {
+  // Go's runtime resumes a frame that deferred at its `deferreturn` call on
+  // the frame's own stack pointer, from where the code reloads the named
+  // result and returns.  Entered at the stack pointer the function was called
+  // with, those loads read its caller's frame, and `main.namedResultRewrite`
+  // took a stack argument no caller passed.
+  //   main.f: str x30, [sp, #-0x20]!; str x0, [sp, #0x10]; bl main.g
+  //           ldr x0, [sp, #0x10]; ldr x30, [sp], #0x20; ret
+  //       r:  bl main.g; ldr x0, [sp, #0x10]; ldr x30, [sp], #0x20; ret
+  //   main.g: ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  const auto Call = [&](va_t At) {
+    return 0x94000000u | (((G - At) >> 2) & 0x3FFFFFFu);
+  };
+  T.writeText(
+      F, words({0xF81E0FFE, 0xF9000BE0, Call(F + 8), 0xF9400BE0, 0xF84207FE,
+                0xD65F03C0, Call(F + 24), 0xF9400BE0, 0xF84207FE, 0xD65F03C0}));
+  T.writeText(G, words({0xD65F03C0}));
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 8, 1}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  ExceptionFunction EH;
+  EH.CodeRange = {F, F + 40};
+  EH.Kind = RuntimeFunctionKind::Primary;
+  EH.Encoding = ExceptionEncoding::GoFuncTable;
+  GoFunctionEH Go;
+  Go.EntryVA = F;
+  Go.DeferReturnOffset = 24;
+  Go.FrameSize = 0x20;
+  Go.UsesOpenCodedDefers = true;
+  EH.Go = std::move(Go);
+  T.Img.ExceptionMetadata.Functions.push_back(std::move(EH));
+  T.Img.ExceptionMetadata.rebuildIndex();
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_EQ(It->Params.size(), 1u);
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

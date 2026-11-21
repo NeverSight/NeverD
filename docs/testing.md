@@ -4536,6 +4536,13 @@ suite exercises the same gap and overlap cases in a 239-factor x86-64 fixture.
 Wide product evaluation tests compare repeated affine factors against direct
 full-width arithmetic with the live prefix one bit below, at, and above an
 extension or concatenation boundary.
+Use `--family signed-window --count 12` for 96 products across 32 to 1025
+bits. Each has 361 to 503 factors. Arithmetic and logical right shifts share a
+field with an odd-scaled word or a literal mask. In 24 cases the final live
+bit crosses into sign padding or the neighboring word. A 277-factor x86-64
+fixture exercises consecutive exact shifts, more than 256 scalar definitions
+and a signed five-bit field. Both C renderers must shorten the product chain
+and preserve the sign fill when the output is executed at `-O0` and `-O2`.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent
@@ -20772,6 +20779,9 @@ unknown value.
 `GoSyscall.AnOrrMovedNumberBoundsTheArguments` lifts an arm64
 `runtime.osyield` that sets its number with `orr x8, xzr, #0x7c` before `svc
 #0`: sched_yield reads no argument, and the routine takes none.
+`GoDefer.DeferReturnResumesOnTheFrame` lifts an arm64 `main.f` whose
+`deferreturn` block, which no edge reaches, reloads its result from its frame:
+`main.f` takes the one argument its record gives, not the caller's frame.
 `GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
 that jumps to its own label, which another function calls: the jump is no
 call.

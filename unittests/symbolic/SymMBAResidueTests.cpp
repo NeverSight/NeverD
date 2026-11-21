@@ -1640,3 +1640,47 @@ TEST(SymMBAResidue, ProvesColumnCofactorsWithMultipleOrMissingPartners) {
 }
 
 } // namespace
+
+TEST(SymMBAResidue, ProjectedCoefficientsPreservePartialLimbsAndComplements) {
+  constexpr unsigned Width = 257;
+  const llvm::APInt One(Width, 1), Sign64 = One.shl(63);
+  for (unsigned Precision : {191u, 192u, 193u, 257u}) {
+    for (unsigned Shift : {63u, 64u, 65u}) {
+      SymContext C;
+      const auto X = C.mkVar("x", Width);
+      const auto Scale = One.shl(Width - Precision);
+      llvm::SmallVector<SymRef, 32> Factors{C.mkConst(Scale)};
+      const std::array<llvm::APInt, 6> Multipliers{
+          -One, Sign64 - 1, -Sign64, -Sign64 - 1, Sign64 + 1, One};
+      std::array<llvm::APInt, 6> Values{
+          One - 1, One, -One, Sign64 + 3, One.shl(129) - 7, -One.shl(223) + 13};
+      std::array<llvm::APInt, 6> Expected;
+      Expected.fill(Scale);
+      for (unsigned I = 0; I < 29; ++I) {
+        const auto Word = I % 3 ? X : C.mkNot(X);
+        auto K = Multipliers[I % Multipliers.size()];
+        if (Precision < Width && I % 2)
+          K += One.shl(Precision);
+        const auto Offset = I % 2 ? One.shl(127) - 2 * I - 1 : -One - 2 * I;
+        const auto Weight = (I % 2 ? -One : One) * (2 * I + 1);
+        const auto B = Weight.shl(Shift + I % 2);
+        const auto Inner =
+            C.mkAdd(C.mkConst(Width, 3), C.mkMul(C.mkConst(K), Word));
+        Factors.push_back(
+            C.mkAdd(C.mkConst(Offset), C.mkMul(C.mkConst(B), Inner)));
+        for (size_t J = 0; J < Values.size(); ++J) {
+          const auto V = I % 3 ? Values[J] : ~Values[J];
+          Expected[J] *= Offset + B * (K * V + 3);
+        }
+      }
+      MBAOptions Options;
+      Options.MaxWork = 65536;
+      const auto Result = simplifyMBADeep(C, C.mkMul(Factors), Options);
+      SCOPED_TRACE(::testing::Message() << Precision << ',' << Shift);
+      ASSERT_LT(Result.SizeAfter, Result.SizeBefore / 2);
+      EXPECT_LT(Result.Work, Options.MaxWork);
+      for (size_t J = 0; J < Values.size(); ++J)
+        EXPECT_EQ(C.eval(Result.Expr, {Values[J]}), Expected[J]);
+    }
+  }
+}

@@ -202,9 +202,8 @@ void parseChainedFixupsRebases(const uint8_t *BasePtr, size_t FileSize,
 /// Parse LC_UUID and store the hex-encoded UUID in Img.DynInfo.UUID.
 void parseUUID(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img);
 
-/// Parse LC_BUILD_VERSION and store the min OS version string in
-/// Img.DynInfo.MinOSVersion, and the platforms it and the older
-/// LC_VERSION_MIN_ commands name in Img.DynInfo.MachOPlatforms.
+/// Record the platforms named by the build-version and legacy minimum-version
+/// commands. Prefer the deployment target in LC_BUILD_VERSION when present.
 void parseBuildVersion(const llvm::object::MachOObjectFile &Obj,
                        BinaryImage &Img);
 

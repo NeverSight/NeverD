@@ -138,7 +138,10 @@ llvm::Expected<std::string> sourcePatchTargetTriple(const BinaryImage &Image) {
          !(Image.MachOCPUSubtype == kMacOSMainSubtype &&
            Image.DynInfo.MachOFileType == llvm::MachO::MH_EXECUTE)))
       return patchError(kUnsupported);
-    return std::string(kTriple);
+    // The Mach-O streamer emits the platform command for a versioned triple.
+    // The installer uses that command to identify macOS ABI0 objects in ABI1
+    // executables.
+    return kTriple + Image.DynInfo.MinOSVersion;
   }
   const char *Default = llvmCodegenTriple(Image.Arch, Image.Format);
   if (!Default)
