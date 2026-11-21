@@ -265,6 +265,31 @@ TEST_P(DWARFTypeImport, KeepsAnonymousRecordsInPlace) {
   EXPECT_EQ(recordOf("value").Size, 8u);
 }
 
+TEST(DWARFTypeImportMIPS, LegacyBitOffsetsInsideUnionMembersFollowTargetOrder) {
+  for (const char *Name :
+       {"dwarf_mips_bitfields.mips.o", "dwarf_mips_bitfields.mipsel.o"}) {
+    SCOPED_TRACE(Name);
+    auto Object = llvm::object::ObjectFile::createObjectFile(
+        std::string(NEVERD_TYPES_FIXTURES "/") + Name);
+    ASSERT_TRUE(static_cast<bool>(Object))
+        << llvm::toString(Object.takeError());
+    auto Context = llvm::DWARFContext::create(*Object->getBinary());
+    auto Read = importDWARFTypes(*Context, DataModel::ILP32);
+    ASSERT_TRUE(static_cast<bool>(Read)) << llvm::toString(Read.takeError());
+    const auto *Packet = (*Read)->find("Packet");
+    const auto *Header = (*Read)->find("Header");
+    const auto *Bits = (*Read)->find("HeaderBits");
+    ASSERT_TRUE(Packet && Packet->Record && Header && Header->Record && Bits &&
+                Bits->Record);
+    EXPECT_EQ(shapeOf(*Packet->Record), "struct{tag@0 header@4}");
+    EXPECT_EQ(shapeOf(*Header->Record), "union{fields@0 word@0}");
+    EXPECT_EQ(shapeOf(*Bits->Record),
+              "struct{version@0b:3 kind@3b:7 length@10b:22}");
+    EXPECT_EQ(Packet->Record->Size, 8u);
+    EXPECT_EQ(Header->Record->Size, 4u);
+  }
+}
+
 TEST_P(DWARFTypeImport, KeepsBitFieldsWhereTheCompilerPutThem) {
   // GNU C fills the int that holds the byte before a bit-field.
   const RecordDef &Flags = recordOf("flags");
