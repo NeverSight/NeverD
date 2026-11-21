@@ -21,8 +21,13 @@ remain open.
 
 Ordinary Win64 calls can again retain the previous call's physical RCX on
 large dependency graphs. The unread-register proof propagates only incoming
-families that can reach each call, within the same work limit. This
-restores call-result transport independently of the two registry stack inputs.
+families that can reach each call, within the same work limit. On the five
+original ordinary roots this reduced missing arguments from four to two per C
+route. Both remaining registry calls initialize only the low half of the fifth
+outgoing slot. The paged V6 function-call interface retains that slot in the
+original machine state and exports both call sites without a missing argument.
+An ordinary scalar value still needs the original four upper bytes or a proof
+covering all observers.
 
 The independent `X86LocalApicFixed` component now owns enabled fixed-message
 reception/coalescing, priority, nonconsuming selection, exact acknowledgment
@@ -508,7 +513,7 @@ LLVM C also keeps fixed and indexed frame accesses in one object, including
 analyst-named slots: separate scalar stores and indexed byte-array reads
 previously produced different results from the original instructions.
 Both routes pass independent native read/write comparisons across pipeline
-optimization, names and O0/O2. The five remaining ordinary roots still have
+optimization, names and O0/O2. At that stage the five ordinary roots had
 56 unproved argument occurrences per route; this does not establish their
 alias exclusions, residual call outputs or complete Windows execution.
 
@@ -762,7 +767,7 @@ selection now have complete audits. Both routes model all 9,900 selected
 instructions across 86 regions; the seven original sites also match CPL0 KVM
 execution at O0/O2. Zero native requests in this selection does not prove that
 external calls, incomplete CFGs or complete Windows entries execute correctly.
-The five ordinary callers still contain 56 unproved argument occurrences.
+The five ordinary callers contained 56 unproved argument occurrences at that stage.
 
 Opt-in direct-JMP discovery now extends that bounded selection to 10,317
 instructions in 88 regions, retaining all previous instruction bytes and zero
@@ -777,8 +782,8 @@ stack observers and segmented alignment. Two additional private selected-call
 experiments compare 31,840 original instruction executions over 115 distinct
 PCs and 640 paths with both C routes at O0/O2. External services use explicit
 controlled native test callbacks; these results do not implement the Windows
-services or prove complete live kernel execution. The ordinary 56 occurrences
-remain unproved, and automatic ordinary/state interface composition stays open.
+services or prove complete live kernel execution. That experiment retained the
+56 ordinary occurrences. Automatic ordinary/state interface composition stays open.
 
 Explicit x64 kernel continuation source carries GPRs, flags, vector bytes,
 segment bases, the physical stack and native-boundary requests. Its V4 layout
@@ -1195,7 +1200,7 @@ stack-passed pointers and hidden-register readers remain refusal boundaries.
 `SourceFrameBorrows.ScalarStackArgumentsKeepTheirPhysicalReadExtent` and
 `Win64CallContract.ScalarStackCallKeepsBorrowedReadExtent` cover this extension,
 including both C routes, selected/omitted bodies and original x64 execution.
-The five private ordinary roots retain four unknown argument occurrences per
+The five private ordinary roots retained four unknown argument occurrences per
 route after validated source-body specialization removed 49 unused formal
 operands and a complete fill-loop return proof recovered three RCX values.
 `X86/X64FillReturn.cpp` authenticates the entire scalar/SSE body and retains the
@@ -1203,10 +1208,11 @@ original call, memory writes and fault behavior. Its occurrence-bound result
 expression is shared by both source routes and SDK replay; it does not infer
 scratch results from an ABI or a function name. Public static controls mutate
 every instruction byte; isolated instruction stepping covers 12,624 synthetic
-cases without executing a sample or RET. The remaining two partial-stack
-initializers and two general post-call register values still require their own
-proofs. The source-only
-helpers do not erase physical aliases or establish complete Windows execution.
+cases without executing a sample or RET. Two partial-stack initializers and
+two general post-call register values were still unresolved at that stage.
+The unread-register repair recorded above recovered the post-call values.
+The source-only helpers do not erase physical aliases or establish complete
+Windows execution.
 Their admission now belongs to the existing optimized source-module cache:
 HighC and LLVM C share the proof, helper HighIR is lazy, and temporary helper
 preparation is released after projection. Native and unoptimized queries keep
