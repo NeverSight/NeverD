@@ -5835,7 +5835,9 @@ setup (`preservesCallSetup`), and dead code elimination, at MedIR and at
 HighIR, drops one nothing comes to use (`intrinsicReadIsDiscardable`): the
 stack check the elided growth path leaves, or the return's transport of a
 register System V keeps. It merges or moves none, since a call may change the
-goroutine. C reads the register itself, as `getg()` does; `runtime.canpanic`
+goroutine. Every arm64 Go function reads R28 so, before the internal ABI too:
+Go has kept the arm64 goroutine there since its port, where x86-64 kept it in
+thread-local storage until R14 took it. C reads the register itself, as `getg()` does; `runtime.canpanic`
 read each `getg().m` as a trap. A call through a func value passes the
 value's address in RDX (R26 on arm64, `goClosureContextRegister`), through
 which a closure reads what it captured, so the incoming value of that register

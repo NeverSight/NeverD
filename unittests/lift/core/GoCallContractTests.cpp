@@ -1939,6 +1939,35 @@ TEST(GoStackABI, AClosureReadsTheContextItsCallerPasses) {
   }
 }
 
+TEST(GoStackABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
+  // Go has kept the arm64 goroutine in R28 since its port, before the
+  // internal ABI too.  Only register-ABI code read the register as the
+  // goroutine, so a Go 1.15 function's loads through it read an unknown
+  // register.
+  //   main.f: ldr x0, [x28, #48]; str x0, [sp, #8]; ret
+  constexpr va_t F = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(F, words({0xF9401B80, 0xF90007E0, 0xD65F03C0}));
+  Symbol Function = Symbol::makeFunc(F);
+  Function.Name = "main.f";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{F, 8}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_f");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("mov %0, x28"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

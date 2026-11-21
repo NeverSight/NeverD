@@ -20799,6 +20799,9 @@ the register at the entry and traps nowhere.
 closure with a frame that adds two words it loads through RDX, and its arm64
 twin through R26: its C reads the register, names no frame word for those
 loads, and traps nowhere.
+`GoStackABI.AnARM64GoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
+1.15-style arm64 function that loads `[x28, #48]`: its C reads R28 and traps
+nowhere.
 `GoInternalABI.ARegisterReadAfterACallIsNoContext` lifts `main.g`, which reads
 RDX (arm64 R26) only after a call to a function that writes it: MedIR verifies
 and the C reads no context.

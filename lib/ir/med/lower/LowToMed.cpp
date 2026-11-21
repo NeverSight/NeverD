@@ -2491,8 +2491,12 @@ MedFunc LowToMedConverter::convertFunction(
       debugVerifyMedFunc(Func, "runDce");
     }
 
-    // Compiled Go code reads the goroutine its ABI keeps in a register.
-    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+    // Compiled Go code reads the goroutine its ABI keeps in a register.  On
+    // arm64 every Go function does, before the internal ABI too: Go has kept
+    // the goroutine in R28 since its arm64 port, where x86-64 kept it in
+    // thread-local storage until R14 took it.
+    if (Image && (usesGoRegisterArguments(*Image, Low.Entry) ||
+                  (TheArch == Arch::AArch64 && isGoCode(*Image, Low.Entry))))
       if (const std::optional<uint64_t> Goroutine =
               goRoutineRegister(TheArch)) {
         defineGoCurrentGoroutine(Func, *Goroutine);
