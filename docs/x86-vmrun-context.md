@@ -25,6 +25,32 @@ not 0x1234. The analysis and byte fixtures are recorded in
 concrete counterexample to the local scalar projection, not a claim about all
 IDA versions, all inputs or overall decompiler quality.
 
+## Hosted AMD SVM execution
+
+The `test_mac_intel` Ubuntu 22.04 runner exposed AMD SVM to a nested KVM vCPU.
+It executed twelve x64 guest images. With the upper half of RAX zero, the
+original `67 0F 01 D8` and the HighC and LLVM-to-C outputs at O0/O2 returned.
+The four generated guests completed 200 register and xstate contexts. With a
+nonzero upper half, all six images raised vector 13 with error code zero at
+`67 0F 01 D8`. Each exception frame identifies its faulting instruction
+bytes and records the full faulting RAX. The current 64-bit NeverC revision
+produced the same machine objects and guest images as the hosted fixtures.
+[AMD KVM execution and byte hashes](evidence/x86-vmrun-hosted-kvm-2026-11-21.json)
+
+These results establish the tested nested KVM profile. The compiler receives
+an initialized VMCB and explicit xstate in each case.
+
+## Current compiler and production LLVM
+
+The current source export runs the original x64 stream through HighC and
+LLVM-to-C. The portable x64 NeverC compiler generated 200 returning contexts
+across both routes at O0 and O2. Lowering the same IR with the published LLVM
+r7 SDK completed the same 200 contexts in QEMU TCG. The same original bytes
+decompiled to a constant `0x1234` in local IDA 9.4 with Hex-Rays
+9.4.0.260610. Each guest executed the independent original-byte RCX comparison
+and returned `0x5678`.
+[Current compiler, binary and guest receipts](evidence/x86-mode-smm-sgx-events-2026-11-21.json)
+
 ## Implemented contract
 
 The LLVM fork supplies `llvm.x86.vmrun.context(ptr, i32 immarg)` and NeverC

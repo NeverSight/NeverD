@@ -1,0 +1,258 @@
+{
+  "date": "2026-11-21",
+  "scope": "AMD EPYC 7763 hosted nested KVM, x64 original and HighC/LLVM-to-C O0/O2",
+  "run": "https://github.com/gmh5225/test_mac_intel/actions/runs/44886225790",
+  "hosted_commit": "1722bde276e4487ff2ccc2ff9c3ad007d1391c29",
+  "cpu": "AMD EPYC 7763 64-Core Processor",
+  "kvm_api": 12,
+  "guest_svm": true,
+  "nested": "1",
+  "report_sha256": "ba66ccc793d7bbb336a49797b3d87914bf1b286c79de2ed475fc59ad938fc48d",
+  "fixture_manifest_sha256": "9e905fa15c348266f1a14c57dd943b8a3ef4d0caf6b5c14d14d42dc76eeff448",
+  "compiler_commit": "f3eb95aa50cd6e7d99082d783d2a515ff71cf87c",
+  "neverd_export_commit": "0a5979c1e6e2f95207e3808f15f0ea9d8b8033ab",
+  "current_neverd_export_commit": "6f81b8559bac0dd326d9426269b5b7d48c03b343",
+  "current_neverd_export_sha256": {
+    "high": "58b48ae99f1e9a22deab07b08421f4b17b13e05a3cc9f4f548144ba396492dc3",
+    "llvm": "ace4911e30f0d32df3f95a1d023125f8cfdd66852d9c4a4dff869e90854f96d1"
+  },
+  "llvm_commit": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+  "llvm_release": "neverd-llvm-v23.0.0-r7",
+  "original_function_bytes": "4889f8b9341200000f01d84889c8c3",
+  "mapped_guest_runs_completed": 6,
+  "tagged_addr32_gp_observed": 6,
+  "generated_contexts_completed": 200,
+  "current_neverc_object_bytes_match_hosted": true,
+  "cases": [
+    {
+      "route": "original",
+      "optimization": "O0",
+      "rax_high32_zero": false,
+      "guest_sha256": "d7a49c3bb848463647781a61f8983d462f010189c642cae17d48e8ac02bf047e",
+      "hosted_ir_sha256": "2a4ce90ca172c37dd49b1b87fd08c715963cd14c25a23ca4d9860108751f94c0",
+      "current_compiler_ir_sha256": null,
+      "object_sha256": "e9b2f78e6d10231e2b082a64526666ff92d68a392f7239ab7feb1e5355f23286",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x100245",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba9800106000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "original",
+      "optimization": "O2",
+      "rax_high32_zero": false,
+      "guest_sha256": "a9fb8fc10553ac13a9a62d0afae84e0a13dd208f8fc63e66e03842a166a8fb5b",
+      "hosted_ir_sha256": "f8dd6c8d72202eee6f04c887fb7203cf7e3c2cd85c49fe1fa46c54da33f1e8aa",
+      "current_compiler_ir_sha256": null,
+      "object_sha256": "43c4763bd53ff77df27e2570dcda0b4260f9abb7ba530bda19e1897b1fb6ca77",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x100245",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba9800106000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "high",
+      "optimization": "O0",
+      "rax_high32_zero": false,
+      "guest_sha256": "0548cc98f89984a8d61c78857d3cc8c0eff2414888480cb9ff2ea64b4fc2074d",
+      "hosted_ir_sha256": "26636797c6c8668bad22707b5dcbf47b9d363eab3dc1ad84f2eaa95450e88b06",
+      "current_compiler_ir_sha256": "5d4bf28488c289a56915ac32b7ca500b2b3b72811b1aa9481eeee9e9c3aca10b",
+      "object_sha256": "6ee4caa44a72a783f69303bab8f3055e3d3eb4279d711f42852c91838e8ddc28",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x10af85",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba9800111000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "high",
+      "optimization": "O2",
+      "rax_high32_zero": false,
+      "guest_sha256": "a92242a37a5a551c2f16e984b1c25bbc29569040bc3d0c6ac8a66b09bb552641",
+      "hosted_ir_sha256": "ed4c3ac7257ef8cbc7d22ae2b234501f02588c96fbebf4d4b9811dc13a4fec2d",
+      "current_compiler_ir_sha256": "208cde03890a7a03b5210de6b8ad8480fa020b90f5631af9e3f03715dff17701",
+      "object_sha256": "3f06fa80643e70881ea2a73d1952c0521044533ec5a8bac7f01c6b8efce6b246",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x1053a5",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba980010b000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "llvm",
+      "optimization": "O0",
+      "rax_high32_zero": false,
+      "guest_sha256": "87de5aaaee8fc97c385acfbe7369d049c400550b8fb6dc7e654817639315618b",
+      "hosted_ir_sha256": "fa9d234f8b97e54f8e3110903955402476b00d80b531489b2ca641f74a1af27d",
+      "current_compiler_ir_sha256": "31880b258a37c7bfa655439a9e6ed67e3c8454ab26f1baeb2cf42e899a849dd0",
+      "object_sha256": "1a8393547acbe49c7f69d530d49fd98639e02de723a47b2c1edd09fc2b4c9819",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x10ab25",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba9800110000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "llvm",
+      "optimization": "O2",
+      "rax_high32_zero": false,
+      "guest_sha256": "1aea6548c931cc6132307d91d6fedc011b0275bbf8f45de2d0a5029c84fb164e",
+      "hosted_ir_sha256": "c5158aa516eb70bbb8a15a350041560ee4f87259ac47342ae0fe1e4521837bd0",
+      "current_compiler_ir_sha256": "b7463d0aa241381a6a33fe53f5bd1037cac7bda5762eb672e78a5b4ed6e1d24e",
+      "object_sha256": "360ffdfeaa0a83f17c0cb7e9112c9b396a66fa7814458a92b834fd1e4201aee6",
+      "observed": {
+        "returned": false,
+        "fault_vector": 13,
+        "fault_error": 0,
+        "fault_pc": "0x104fb5",
+        "fault_bytes": "670f01d8",
+        "fault_rax": "0xfedcba980010b000",
+        "host_return_code": 1
+      }
+    },
+    {
+      "route": "original",
+      "optimization": "O0",
+      "rax_high32_zero": true,
+      "guest_sha256": "99b8064bfcb4a1d63ef2c0ed027b832748f38b4c7a8b8e67f6e976124794c5bd",
+      "hosted_ir_sha256": "f8fc484f37ee2624d716d1dd77f3dc09dbdb87e128cf1c64374a3f5d70a680a8",
+      "current_compiler_ir_sha256": null,
+      "object_sha256": "e9ee1df4bdfc23985233bf3f81e15f2d95f2e9feb8eb9bd0b505adc5a94eecf9",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x106000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 0,
+        "console": [
+          "IDA:5678"
+        ]
+      }
+    },
+    {
+      "route": "original",
+      "optimization": "O2",
+      "rax_high32_zero": true,
+      "guest_sha256": "9adff5fc5a5c145c3324cee11f4628f5bb125b37f1753a44ed48f589426b1c9a",
+      "hosted_ir_sha256": "e49ffd53eb83137a86ed421e9ee1fc4fec164fe927f9141afb60ad31f732e944",
+      "current_compiler_ir_sha256": null,
+      "object_sha256": "059361774e8590ab2f8874f2c4c10baf1ccb7c95d90a2635c1cfea9d20140a37",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x106000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 0,
+        "console": [
+          "IDA:5678"
+        ]
+      }
+    },
+    {
+      "route": "high",
+      "optimization": "O0",
+      "rax_high32_zero": true,
+      "guest_sha256": "a82a631158e23de04142d003332d14357ffbdffe886df8097780736d520e8623",
+      "hosted_ir_sha256": "d9b99e06c4353c034f261ef3ea8a1b9d7d73c3be769146fb92e72224db775bd9",
+      "current_compiler_ir_sha256": "81ce2afbce42b7c6b67a23a39b75ebca4344284cae8cc4ca4479d61445f70447",
+      "object_sha256": "fbc7b1251a4975c7450cfd89800f232f84b652813029f075fcc938de40fdd5a4",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x111000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 50,
+        "console": [
+          "IDA:5678",
+          "PASS"
+        ]
+      }
+    },
+    {
+      "route": "high",
+      "optimization": "O2",
+      "rax_high32_zero": true,
+      "guest_sha256": "ad35fb8a887cfe411987054402f59fad68782b4f62c8cd86930e88135662ce45",
+      "hosted_ir_sha256": "9327c133cbabb137cb26306c379f2be4a7742f0dd089c0cccfdfb309c54e3522",
+      "current_compiler_ir_sha256": "e27890ec652e1500fc685f29e5ba07c2a3617aa429e0e11d42ae85c4c64b1ba2",
+      "object_sha256": "5ab76e867328663a314810995afb6bc09ad49c90c0f6e75727695d1870b24e48",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x10b000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 50,
+        "console": [
+          "IDA:5678",
+          "PASS"
+        ]
+      }
+    },
+    {
+      "route": "llvm",
+      "optimization": "O0",
+      "rax_high32_zero": true,
+      "guest_sha256": "96cf79cc90fbbc9f3e2934d8e42ca16813fafde5086e5ef80b15e9716ef7d0fa",
+      "hosted_ir_sha256": "56000218a466d6bdce4954c1157d50f8f63b35b8bc7ac112127803e0d6e5600b",
+      "current_compiler_ir_sha256": "a003067392b45da8c873c25cb61e778a211a7eb0e697b820deb4d244a6e670ce",
+      "object_sha256": "985d74bf317205fadcb1c6db23b919aaf3a8b7af7d55b7937b17a51ddbf9c7ae",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x110000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 50,
+        "console": [
+          "IDA:5678",
+          "PASS"
+        ]
+      }
+    },
+    {
+      "route": "llvm",
+      "optimization": "O2",
+      "rax_high32_zero": true,
+      "guest_sha256": "c718bc3ae671f080663b652527d7e23938b991153ae7554d4f34526652fe3ff0",
+      "hosted_ir_sha256": "2d4377ef0425c00fa59b405730eb99bd999180a71a5ca5e39025b59717f0ff92",
+      "current_compiler_ir_sha256": "2684b29eb9b9da0d2fc373afc99e04208b380844d2dcdba3365063a7b03edc29",
+      "object_sha256": "e836a4d9093e830c609bef4da98beb7d1dffa61a3a7e2bfe4d50355b826a7587",
+      "observed": {
+        "returned": true,
+        "addr32_rax": "0x10b000",
+        "vmexit_rcx": "0x5678",
+        "vmcb_exit": "0x81",
+        "contexts": 50,
+        "console": [
+          "IDA:5678",
+          "PASS"
+        ]
+      }
+    }
+  ],
+  "limits": [
+    "The tested processor is an AMD EPYC 7763 exposed through nested KVM on Ubuntu 22.04.",
+    "The returning and faulting VMRUN streams use an imported initialized SVM VMCB and explicit guest xstate."
+  ]
+}
