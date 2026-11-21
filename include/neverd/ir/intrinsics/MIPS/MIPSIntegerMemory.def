@@ -1,0 +1,13 @@
+// Major opcode, access bytes, store, signed load, requires a 64-bit GPR.
+NEVERD_MIPS_INTEGER_MEMORY(32, 1, false, true, false)  // LB
+NEVERD_MIPS_INTEGER_MEMORY(33, 2, false, true, false)  // LH
+NEVERD_MIPS_INTEGER_MEMORY(35, 4, false, true, false)  // LW
+NEVERD_MIPS_INTEGER_MEMORY(36, 1, false, false, false) // LBU
+NEVERD_MIPS_INTEGER_MEMORY(37, 2, false, false, false) // LHU
+NEVERD_MIPS_INTEGER_MEMORY(39, 4, false, false, true)  // LWU
+NEVERD_MIPS_INTEGER_MEMORY(40, 1, true, false, false)  // SB
+NEVERD_MIPS_INTEGER_MEMORY(41, 2, true, false, false)  // SH
+NEVERD_MIPS_INTEGER_MEMORY(43, 4, true, false, false)  // SW
+NEVERD_MIPS_INTEGER_MEMORY(55, 8, false, true, true)   // LD
+NEVERD_MIPS_INTEGER_MEMORY(63, 8, true, false, true)   // SD
+#undef NEVERD_MIPS_INTEGER_MEMORY
