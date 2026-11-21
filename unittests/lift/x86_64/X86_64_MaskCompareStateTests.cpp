@@ -820,53 +820,62 @@ TEST(MaskCompareContract, RawMasksAndMalformedLowMedHighShapesRemainExact) {
         x86FPStateShapeIsValid(Id, x86FPStateHighShape(*H, Arch::X64)));
   }
 }
-TEST(MaskCompareContract,
-     OwnedAssemblyAuthenticatesFullImmediateTypesAndEffects) {
-  for (const auto &F : maskCompareForms())
-    for (unsigned Immediate : {0u, 8u, 16u, 31u, 128u, 255u}) {
-      llvm::LLVMContext C;
-      llvm::Module Module("maskcmp", C);
-      llvm::IRBuilder<> B(C);
-      const unsigned Layout = x86FPMaskCompareStateLayout(
-          maskActiveBytes(F), maskControl(F), Immediate);
-      auto *T = x86FPMaskCompareLLVMType(C, Layout);
-      auto *Ty = llvm::FunctionType::get(
-          T, {T, F.Memory ? B.getPtrTy() : T, B.getPtrTy()}, false);
-      auto *Fn = llvm::Function::Create(Ty, llvm::Function::ExternalLinkage,
-                                        "probe", Module);
-      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
-      std::vector<llvm::Value *> Args;
-      for (auto &Arg : Fn->args())
-        Args.push_back(&Arg);
-      auto *Asm =
-          llvm::InlineAsm::get(Ty, x86FPMaskCompareAsm(Layout, F.Memory),
-                               x86FPMaskCompareConstraints(F.Memory), true);
-      auto *Call = B.CreateCall(Asm, Args);
-      Call->setMetadata(X86FPStateAsmMetadata, llvm::MDNode::get(C, {}));
-      Call->setMetadata(X86FPMaskCompareAsmMetadata,
-                        llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
-                                                 B.getInt32(Layout))));
-      EXPECT_EQ(classifyX86FPStateAsm(*Call),
-                std::make_pair(F.Memory ? Intrinsic::X86FPMaskCompareMemoryState
-                                        : Intrinsic::X86FPMaskCompareState,
-                               Layout));
-      // A forged predicate layout cannot authorize the original asm.
-      Call->setMetadata(
-          X86FPMaskCompareAsmMetadata,
-          llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
-                                   B.getInt32(Layout ^ (1u << 16)))));
-      EXPECT_DEATH_IF_SUPPORTED(classifyX86FPStateAsm(*Call),
-                                "invalid x86 FP state");
-      Call->setMetadata(X86FPMaskCompareAsmMetadata,
-                        llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
-                                                 B.getInt32(Layout))));
-      Call->setCalledOperand(
-          llvm::InlineAsm::get(Ty, x86FPMaskCompareAsm(Layout, F.Memory),
-                               x86FPMaskCompareConstraints(F.Memory), false));
-      EXPECT_DEATH_IF_SUPPORTED(classifyX86FPStateAsm(*Call),
-                                "invalid x86 FP state");
-    }
+class MaskCompareAssemblyContract
+    : public testing::TestWithParam<MaskCompareForm> {};
+
+TEST_P(MaskCompareAssemblyContract,
+       OwnedAssemblyAuthenticatesFullImmediateTypesAndEffects) {
+  const auto &F = GetParam();
+  for (unsigned Immediate : {0u, 8u, 16u, 31u, 128u, 255u}) {
+    llvm::LLVMContext C;
+    llvm::Module Module("maskcmp", C);
+    llvm::IRBuilder<> B(C);
+    const unsigned Layout = x86FPMaskCompareStateLayout(
+        maskActiveBytes(F), maskControl(F), Immediate);
+    auto *T = x86FPMaskCompareLLVMType(C, Layout);
+    auto *Ty = llvm::FunctionType::get(
+        T, {T, F.Memory ? B.getPtrTy() : T, B.getPtrTy()}, false);
+    auto *Fn = llvm::Function::Create(Ty, llvm::Function::ExternalLinkage,
+                                      "probe", Module);
+    B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+    std::vector<llvm::Value *> Args;
+    for (auto &Arg : Fn->args())
+      Args.push_back(&Arg);
+    auto *Asm =
+        llvm::InlineAsm::get(Ty, x86FPMaskCompareAsm(Layout, F.Memory),
+                             x86FPMaskCompareConstraints(F.Memory), true);
+    auto *Call = B.CreateCall(Asm, Args);
+    Call->setMetadata(X86FPStateAsmMetadata, llvm::MDNode::get(C, {}));
+    Call->setMetadata(X86FPMaskCompareAsmMetadata,
+                      llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
+                                               B.getInt32(Layout))));
+    EXPECT_EQ(classifyX86FPStateAsm(*Call),
+              std::make_pair(F.Memory ? Intrinsic::X86FPMaskCompareMemoryState
+                                      : Intrinsic::X86FPMaskCompareState,
+                             Layout));
+    // A forged predicate layout cannot authorize the original asm.
+    Call->setMetadata(
+        X86FPMaskCompareAsmMetadata,
+        llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
+                                 B.getInt32(Layout ^ (1u << 16)))));
+    EXPECT_DEATH_IF_SUPPORTED(classifyX86FPStateAsm(*Call),
+                              "invalid x86 FP state");
+    Call->setMetadata(X86FPMaskCompareAsmMetadata,
+                      llvm::MDNode::get(C, llvm::ConstantAsMetadata::get(
+                                               B.getInt32(Layout))));
+    Call->setCalledOperand(
+        llvm::InlineAsm::get(Ty, x86FPMaskCompareAsm(Layout, F.Memory),
+                             x86FPMaskCompareConstraints(F.Memory), false));
+    EXPECT_DEATH_IF_SUPPORTED(classifyX86FPStateAsm(*Call),
+                              "invalid x86 FP state");
+  }
 }
+
+INSTANTIATE_TEST_SUITE_P(AllForms, MaskCompareAssemblyContract,
+                         testing::ValuesIn(maskCompareForms()),
+                         [](const auto &Info) {
+                           return maskCompareName(Info.param);
+                         });
 
 std::vector<uint8_t> singleMaskBytes(const MaskCompareForm &F,
                                      unsigned Immediate, unsigned Dst = 0,
