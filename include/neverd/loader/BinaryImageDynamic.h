@@ -90,7 +90,7 @@ struct DynamicInfo {
   /// Mach-O: 16-byte UUID from LC_UUID, hex-encoded.
   std::string UUID;
 
-  /// Mach-O: LC_BUILD_VERSION min OS version string (e.g. "14.0.0").
+  /// Mach-O deployment target from a build or minimum-version command.
   std::string MinOSVersion;
 
   /// Mach-O: the platforms (llvm::MachO::PlatformType) its build version

@@ -2975,3 +2975,27 @@ Native arm64e object generation carries the input's macOS deployment
 version from `LC_BUILD_VERSION` or `LC_VERSION_MIN_MACOSX`. This puts the
 platform in the emitted object so the installer can verify an ABI0 object's
 use in an ABI1 macOS executable.
+
+The six wide inputs each contain eighteen 60 KiB embedded data regions.
+The Release CLI published each as a dylib and as a high-base PIE through
+three generations at O0 and O2. An independent decoder followed every old
+entry, verified both physical registers for each page pair and checked each
+numeric address against its original target. On both virtual M1 runner
+profiles, Darwin launched 49 original and published main executables and a
+separate arm64e caller exercised 49 signed dylibs. Each profile also passed
+271 source-fork tests, including direct walks from the signal handler.
+Frozen r6 reproduced six signed-CFI failures and four compact PAuth_LR skips.
+The two Xcode 27 inputs captured before the fix passed three consecutive
+publications per optimization level. The Apple Clang 17 modern-linker
+control with an empty terminal unwind interval still reports the malformed
+range. A separate address-only input from that linker omits every embedded
+data record. Its returning address does not establish the size of the
+unread trailing bytes, and publication reports the unverified function extent.
+
+[Source-fork native execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893316681).
+[Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44893359488).
+[Revisions, output hashes and native results](evidence/arm64e-wide-address-returns-2026-11-21.json).
+
+During this run GitHub listed M1 for the standard macOS arm64 profiles and M2 for XLarge. The three hosted qualification reports record the features that each guest exposed.
+[Standard macOS runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+[Larger macOS runners](https://docs.github.com/en/actions/reference/runners/larger-runners).
