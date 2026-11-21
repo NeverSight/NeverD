@@ -315,6 +315,43 @@ TEST(MIPSEntryGP, PICJoinsRequireTheSameEntryValueOnEveryIncomingPath) {
       }
 }
 
+TEST(MIPSEntryGP, CallResumesWithOnlyThePreservedEntryCarrier) {
+  enum class Slot { Empty, Save, ClobberCarrier, ClobberLink };
+  for (bool N32 : {false, true})
+    for (bool Little : {false, true})
+      for (bool Indirect : {false, true})
+        for (unsigned Carrier : {12u, 16u, 25u})
+          for (Slot Effect : {Slot::Empty, Slot::Save, Slot::ClobberCarrier,
+                              Slot::ClobberLink}) {
+            SCOPED_TRACE(testing::Message() << N32 << Little << Indirect
+                                            << Carrier << int(Effect));
+            const uint32_t Save = 0x03200025u | (Carrier << 11);
+            uint32_t Delay = 0;
+            if (Effect == Slot::Save)
+              Delay = Save;
+            else if (Effect == Slot::ClobberCarrier)
+              Delay = 0x00a00025u | (Carrier << 11);
+            else if (Effect == Slot::ClobberLink)
+              Delay = 0x00a0f825; // or ra,a1,zero
+            const uint32_t Words[] = {
+                0x03e08825,                           // or s1,ra,zero
+                Effect == Slot::Save ? 0u : Save,     // or carrier,t9,zero
+                Indirect ? 0x0080f809u : 0x0c004054u, // jalr a0 / jal 0x10150
+                Delay,
+                0x3c080001, // lui $8,1
+                0x25088000, // addiu $8,$8,-0x8000
+                0x01004000u | (Carrier << 16) | (N32 ? 0x21u : 0x2du),
+                0x65028070, // daddiu v0,$8,-0x7f90
+                0x0220f825, // or ra,s1,zero
+                0x03e00008,
+                0};
+            expectPICAddress(N32, Little, Words,
+                             Carrier == 16 && (Effect == Slot::Save ||
+                                               Effect == Slot::Empty),
+                             1);
+          }
+}
+
 TEST(MIPSEntryGP, LoopProjectionsHoldOnEveryVisit) {
   for (bool N32 : {false, true})
     for (bool Little : {false, true})

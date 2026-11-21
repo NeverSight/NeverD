@@ -2325,7 +2325,9 @@ std::string LLVMCWriter::boundImportCallee(const llvm::CallBase &Call) const {
       llvm::isa<llvm::InlineAsm>(Call.getCalledOperand()))
     return {};
   const llvm::Value *Slot = Call.getCalledOperand()->stripPointerCasts();
-  if (const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Slot))
+  if (const auto *Load = n32ExtendedCalleeLoad(Slot))
+    Slot = Load;
+  else if (const auto *Cast = llvm::dyn_cast<llvm::IntToPtrInst>(Slot))
     Slot = Cast->getOperand(0);
   const auto *Symbol = llvm::dyn_cast<llvm::GlobalVariable>(Slot);
   const bool CalledSymbol =
