@@ -290,6 +290,64 @@ TEST(DWARFTypeImportMIPS, LegacyBitOffsetsInsideUnionMembersFollowTargetOrder) {
   }
 }
 
+TEST(DWARFTypeImportMIPS, PackedLegacyBitFieldCrossesTheNominalWord) {
+  for (const char *Name :
+       {"dwarf_mips_bitfields.mips.o", "dwarf_mips_bitfields.mipsel.o"}) {
+    SCOPED_TRACE(Name);
+    auto Object = llvm::object::ObjectFile::createObjectFile(
+        std::string(NEVERD_TYPES_FIXTURES "/") + Name);
+    ASSERT_TRUE(static_cast<bool>(Object))
+        << llvm::toString(Object.takeError());
+    auto Context = llvm::DWARFContext::create(*Object->getBinary());
+    auto Read = importDWARFTypes(*Context, DataModel::ILP32);
+    ASSERT_TRUE(static_cast<bool>(Read)) << llvm::toString(Read.takeError());
+    const auto *Bits = (*Read)->find("PackedBits");
+    ASSERT_TRUE(Bits && Bits->Record);
+    EXPECT_EQ(shapeOf(*Bits->Record),
+              "struct{prefix@0b:27 value@27b:12 trailer@5}");
+    EXPECT_EQ(Bits->Record->Size, 6u);
+    EXPECT_EQ((*Read)->alignOf(*Bits->Record), 1u);
+    const auto *Header = (*Read)->find("PackedHeader");
+    ASSERT_TRUE(Header && Header->Record);
+    EXPECT_EQ(shapeOf(*Header->Record), "union{fields@0 bytes@0}");
+
+    // Change only this member's offset. A unit crossing within the record
+    // is valid, while the same field before or past that record is invalid.
+    llvm::StringRef Info;
+    for (const auto &Section : Object->getBinary()->sections())
+      if (llvm::cantFail(Section.getName()) == ".debug_info")
+        Info = llvm::cantFail(Section.getContents());
+    ASSERT_FALSE(Info.empty());
+    std::optional<uint64_t> At;
+    for (const auto &CU : Context->compile_units())
+      for (auto Die : CU->getUnitDIE(false).children())
+        if (Die.getTag() == llvm::dwarf::DW_TAG_structure_type &&
+            llvm::StringRef(Die.getShortName()) == "PackedBits")
+          for (auto Field : Die.children())
+            if (Field.getTag() == llvm::dwarf::DW_TAG_member &&
+                llvm::StringRef(Field.getShortName()) == "value")
+              for (auto Attribute : Field.attributes())
+                if (Attribute.Attr == llvm::dwarf::DW_AT_bit_offset) {
+                  ASSERT_EQ(Attribute.ByteSize, 1u);
+                  At = Attribute.Offset;
+                }
+    ASSERT_TRUE(At && *At < Info.size());
+    const auto File = Object->getBinary()->getData();
+    std::string Bad = File.str();
+    Bad[(Info.data() - File.data()) + *At] = 63;
+    auto Invalid = llvm::object::ObjectFile::createObjectFile(
+        llvm::MemoryBufferRef(Bad, Name));
+    ASSERT_TRUE(static_cast<bool>(Invalid))
+        << llvm::toString(Invalid.takeError());
+    auto BadContext = llvm::DWARFContext::create(**Invalid);
+    auto BadRead = importDWARFTypes(*BadContext, DataModel::ILP32);
+    ASSERT_TRUE(static_cast<bool>(BadRead))
+        << llvm::toString(BadRead.takeError());
+    EXPECT_FALSE((*BadRead)->find("PackedBits"));
+    EXPECT_TRUE((*BadRead)->find("HeaderBits"));
+  }
+}
+
 TEST_P(DWARFTypeImport, KeepsBitFieldsWhereTheCompilerPutThem) {
   // GNU C fills the int that holds the byte before a bit-field.
   const RecordDef &Flags = recordOf("flags");
