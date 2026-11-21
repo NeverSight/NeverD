@@ -146,7 +146,8 @@ protected:
         .str();
   }
   std::pair<std::string, std::string> source(llvm::StringRef Request, bool LLVM,
-                                             unsigned Version = 6) {
+                                             unsigned Version = 6,
+                                             bool Paged = false) {
     const char *Report = nullptr;
     auto Source = take(neverd_x64_continuation_source_v1(
         Session, Request.data(), Request.size(), LLVM, &Report));
@@ -161,7 +162,8 @@ protected:
       EXPECT_EQ(Object->getInteger("schema_version"), 2);
       EXPECT_EQ(Object->getInteger("state_version"), Version);
       EXPECT_EQ(Object->getString("environment_driver"),
-                "neverd_x64_run_v" + std::to_string(Version));
+                (Paged ? "neverd_x64_run_paged_v" : "neverd_x64_run_v") +
+                    std::to_string(Version));
       EXPECT_EQ(Object->getInteger("state_bytes"), Version == 13   ? 2464
                                                    : Version == 12 ? 2368
                                                    : Version == 11 ? 2416

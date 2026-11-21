@@ -15,7 +15,7 @@ const char PagedCr8Boundary[] = R"C(
 typedef struct {
     uint64_t progress, before_status, before_progress, after_status, fault_status;
     uint64_t saved_pc, vector, shadow;
-    unsigned bodies, faults, receipt_reads, bad;
+    unsigned bodies, faults, receipt_reads, observed_byte, bad;
 } paged_outcomes;
 
 static uint64_t fault_access(void *context, uint64_t address, uint64_t size,
@@ -65,10 +65,12 @@ uint64_t STEP(uint8_t *context, uint8_t *raw, uint64_t address,
     }
     neverd_x64_state_v6 staged;
     __builtin_memcpy(&staged, state, sizeof(staged));
+    const uint8_t *observation = (uint8_t *)&staged + m->observed_byte % sizeof(staged);
+    uint8_t prior = *observation;
     ++m->bodies;
     status = body(&staged, m);
     if (status == 17) {
-        m->bad |= !m->faults || __builtin_memcmp(&staged, state, sizeof(staged)) != 0;
+        m->bad |= !m->faults || *observation != prior;
         m->progress = 1;
         m->saved_pc = state->PC;
         return m->fault_status;
@@ -120,9 +122,10 @@ int proof_legal_write(uint64_t value) {
     return RUN() != 9 || budget || state.PC != 0x1004 || state.CR8 != (value & 15) ||
            BAD(1,1,0,(value & 15) << 4) || memory.receipt_reads != 1;
 }
-int proof_reserved_write(uint64_t value) {
+int proof_reserved_write(uint64_t value, unsigned byte) {
     if (value <= 15) return 0;
     PREPARE();
+    memory.observed_byte = byte;
     state.GPR[0] = value;
     return RUN() != 7 || budget || !GP_AT(0x1000) || BAD(1,0,0,0x3b);
 }
@@ -132,9 +135,10 @@ int proof_fault_entry_backing_stop(void) {
     memory.fault_status = 18;
     return RUN() != 18 || budget || !GP_AT(0x1000) || BAD(1,0,0,0x3b);
 }
-int proof_unprivileged(unsigned cpl, unsigned read) {
+int proof_unprivileged(unsigned cpl, unsigned read, unsigned byte) {
     if (cpl < 1 || cpl > 3) return 0;
     PREPARE();
+    memory.observed_byte = byte;
     state.CS.Selector |= cpl;
     state.CS.Attributes |= cpl << 5;
     state.SS.Selector |= cpl;
@@ -143,8 +147,9 @@ int proof_unprivileged(unsigned cpl, unsigned read) {
     uint64_t pc = state.PC;
     return RUN() != 7 || budget || !GP_AT(pc) || BAD(1,0,0,0x3b);
 }
-int proof_conforming_code_keeps_cpl(void) {
+int proof_conforming_code_keeps_cpl(unsigned byte) {
     PREPARE();
+    memory.observed_byte = byte;
     state.PC = 0x1004;
     state.CS.Selector |= 3;
     state.CS.Attributes |= 4;
@@ -152,26 +157,23 @@ int proof_conforming_code_keeps_cpl(void) {
     state.SS.Attributes |= 3u << 5;
     return RUN() != 7 || budget || !GP_AT(0x1004) || BAD(1,0,0,0x3b);
 }
-static uint64_t fresh_flags(neverd_x64_state_v6 *s, unsigned choices) {
+static uint64_t fresh_flags(neverd_x64_state_v6 *s, uint64_t choices) {
     const unsigned bits[] = {11, 7, 6, 4, 2, 0};
-    uint64_t flags = s->RFlags & ~0x8d5ULL;
-    for (unsigned i = 0; i < 6; ++i) {
-        s->Undefined[i] = choices >> i;
-        flags |= (s->Undefined[i] & 1) << bits[i];
-    }
-    return flags;
+    for (unsigned i = 0; i < 6; ++i)
+        s->Undefined[i] = choices >> bits[i];
+    return (s->RFlags & ~0x8d5ULL) | (choices & 0x8d5ULL);
 }
-int proof_write_flags(unsigned choices) {
+int proof_write_flags(uint64_t choices) {
     PREPARE();
-    uint64_t flags = fresh_flags(&state, choices);
-    return RUN() != 9 || state.RFlags != flags || BAD(1,1,0,0x30);
+    uint64_t expected = fresh_flags(&state, choices);
+    return RUN() != 9 || state.RFlags != expected || BAD(1,1,0,0x30);
 }
-int proof_read_preserves_tpr(unsigned choices) {
+int proof_read_preserves_tpr(uint64_t choices) {
     PREPARE();
     state.PC = 0x1004;
-    uint64_t flags = fresh_flags(&state, choices);
+    uint64_t expected = fresh_flags(&state, choices);
     return RUN() != 9 || budget || state.PC != 0x1008 || state.GPR[3] != 3 ||
-           state.RFlags != flags || BAD(1,0,0,0x3b) || memory.receipt_reads != 1;
+           state.RFlags != expected || BAD(1,0,0,0x3b) || memory.receipt_reads != 1;
 }
 int proof_ordinary_step(void) {
     PREPARE();
@@ -286,7 +288,7 @@ TEST_F(X64Cr8WriteNotificationTest, PagedCompletionSurvivesPostCommitStops) {
                  R"(,"paged_memory":true,"scheduled_events":true,"notify_cr8_writes":true,"paged_debug":)" +
                  (Debug ? "true" : "false"))
                     .str()),
-            LLVM);
+            LLVM, 6, /*Paged=*/true);
         auto Manifest = llvm::json::parse(Report);
         ASSERT_TRUE(bool(Manifest));
         const auto *Contract =
@@ -326,9 +328,10 @@ int proof_width_override_and_rex_b(uint64_t value) {
            state.GPR[9] != (value & 15) || state.GPR[10] != (value & 15) ||
            BAD(2,1,0,(value & 15) << 4) || memory.receipt_reads != 2;
 }
-int proof_ignored_width_preserves_reserved_bits(uint64_t value) {
+int proof_ignored_width_preserves_reserved_bits(uint64_t value, unsigned byte) {
     if (value <= 15) return 0;
     PREPARE();
+    memory.observed_byte = byte;
     state.GPR[9] = value;
     return RUN() != 7 || budget || !GP_AT(0x1000) || BAD(1,0,0,0x3b);
 }
@@ -336,7 +339,7 @@ int proof_ignored_width_preserves_reserved_bits(uint64_t value) {
   const auto Selection = request(
       R"("instructions":[4096,4101],"paged_memory":true,"scheduled_events":true,"notify_cr8_writes":true)");
   for (bool LLVM : {false, true}) {
-    const auto [Source, Report] = source(Selection, LLVM);
+    const auto [Source, Report] = source(Selection, LLVM, 6, /*Paged=*/true);
     provePredicates(
         true, LLVM ? "paged-cr8-width-llvm" : "paged-cr8-width-high", Source,
         std::string(Cr8NotificationProducer) + PagedCr8Boundary + Probes, 2, 0,
