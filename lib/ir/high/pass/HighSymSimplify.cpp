@@ -1661,7 +1661,12 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       const auto Source = Ctx.operand(Item.Ref, 0);
       ExprPtr Operand = get(Source);
       auto SourceBits = Ctx.width(Source);
-      if (!Operand && SourceBits > 1 && SourceBits < 64 && SourceBits % 8) {
+      // A packed arithmetic result can carry into the selected byte. Keep
+      // bitwise projections in their source form so repeated shifted views
+      // can still share the same word in the surrounding expression.
+      const auto SourceOp = Ctx.op(Source);
+      if (!Operand && SourceBits > 1 && SourceBits < 64 && SourceBits % 8 &&
+          (SourceOp == sym::SymOp::Add || SourceOp == sym::SymOp::Mul)) {
         Operand =
             packedExtractWord(Ctx, Source, Built, PackedWords, ScalarLiterals);
         SourceBits = 64;
