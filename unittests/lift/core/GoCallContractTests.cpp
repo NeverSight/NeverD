@@ -35,6 +35,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <array>
 #include <cstring>
 #include <map>
 #include <set>
@@ -2011,6 +2012,77 @@ TEST(GoInternalABI, AFuncValueCallReturnsItsFloatResults) {
     EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
     EXPECT_NE(Text.find("double"), std::string::npos) << Text;
   }
+}
+
+TEST(GoAssembly, AReflectCallHelperStoresWhatItsFuncValueReturns) {
+  // Reflection's call helpers (`runtime.callNNN`) load a call's argument
+  // registers from an internal/abi.RegArgs with `runtime.unspillArgs`, call
+  // a func value, and store every result register back with
+  // `runtime.spillArgs`.  Each transfer runs in its caller's place, and the
+  // func value enters Go code by the internal ABI, so the stores read the
+  // call's results: each of them read an unknown value.
+  //   runtime.unspillArgs: mov rax, [r12]; mov rbx, [r12+8]
+  //                        movsd xmm0, [r12+72]; ret
+  //   runtime.spillArgs:   mov [r12], rax; mov [r12+8], rbx
+  //                        movsd [r12+72], xmm0; ret
+  //   main.call16: push rbp; mov rbp, rsp; sub rsp, 16; mov [rsp], rsi
+  //                mov r12, rsi; call runtime.unspillArgs; mov rdx, rdi
+  //                mov r12, [rdx]; call r12; mov r12, [rsp]
+  //                call runtime.spillArgs; add rsp, 16; pop rbp; ret
+  constexpr va_t Helper = kTextVA + 0x100;
+  constexpr va_t Unspill = kTextVA + 0x200;
+  constexpr va_t Spill = kTextVA + 0x240;
+  GoTestImage T(Arch::X64);
+  T.writeText(Unspill, {0x49, 0x8B, 0x04, 0x24, 0x49, 0x8B, 0x5C, 0x24, 0x08,
+                        0xF2, 0x41, 0x0F, 0x10, 0x44, 0x24, 0x48, 0xC3});
+  T.writeText(Spill, {0x49, 0x89, 0x04, 0x24, 0x49, 0x89, 0x5C, 0x24, 0x08,
+                      0xF2, 0x41, 0x0F, 0x11, 0x44, 0x24, 0x48, 0xC3});
+  const auto Rel = [](va_t Target, va_t Next) {
+    const auto Value = static_cast<uint32_t>(Target - Next);
+    return std::array<uint8_t, 4>{
+        static_cast<uint8_t>(Value), static_cast<uint8_t>(Value >> 8),
+        static_cast<uint8_t>(Value >> 16), static_cast<uint8_t>(Value >> 24)};
+  };
+  const auto ToUnspill = Rel(Unspill, Helper + 20);
+  const auto ToSpill = Rel(Spill, Helper + 38);
+  T.writeText(
+      Helper,
+      {0x55,         0x48,         0x89, 0xE5, 0x48,         0x83,
+       0xEC,         0x10,         0x48, 0x89, 0x34,         0x24,
+       0x49,         0x89,         0xF4, 0xE8, ToUnspill[0], ToUnspill[1],
+       ToUnspill[2], ToUnspill[3], 0x48, 0x89, 0xFA,         0x4C,
+       0x8B,         0x22,         0x41, 0xFF, 0xD4,         0x4C,
+       0x8B,         0x24,         0x24, 0xE8, ToSpill[0],   ToSpill[1],
+       ToSpill[2],   ToSpill[3],   0x48, 0x83, 0xC4,         0x10,
+       0x5D,         0xC3});
+  for (const auto &[Entry, Name] : {std::pair{Helper, "main.call16"},
+                                    std::pair{Unspill, "runtime.unspillArgs"},
+                                    std::pair{Spill, "runtime.spillArgs"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.GoAssembly = {{Helper, Helper + 0x40},
+                       {Unspill, Unspill + 0x40},
+                       {Spill, Spill + 0x40}};
+  Module.RegisterArgumentTransfers = {{Unspill, Unspill + 0x40},
+                                      {Spill, Spill + 0x40}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_call16");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("spillArgs"), std::string::npos) << Text;
+  EXPECT_NE(Text.find("double"), std::string::npos) << Text;
 }
 
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {

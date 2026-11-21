@@ -20808,6 +20808,12 @@ the goroutine at its entry and again after the call.
 `GoInternalABI.AClosureReadsTheContextItsCallerPasses` lifts a closure that adds
 two words it loads through RDX, and its arm64 twin through R26: its C reads
 the register at the entry and traps nowhere.
+`GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
+loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
+RDX and stores them back with `runtime.spillArgs`: neither routine is called,
+and the C stores what the call returns, a double among it, trapping nowhere.
+`GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
+routines' code.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.

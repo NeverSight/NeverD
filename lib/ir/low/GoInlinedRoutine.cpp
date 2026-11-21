@@ -1,16 +1,16 @@
-//===- GoDuffDevice.cpp - Calls into Go's Duff's device -------------------===//
+//===- GoInlinedRoutine.cpp - Go routines a call runs in place ------------===//
 //
 // NeverD Decompiler
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// Lifts a Duff's device routine's straight-line body from an entry to its
-/// return, which a call to that entry runs in its caller's place.
+/// Lifts the straight-line body of a Go routine that runs in its caller's
+/// place, from an entry to its return.
 ///
 //===----------------------------------------------------------------------===//
 
-#include "neverd/ir/low/GoDuffDevice.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 
 #include "neverd/decode/Decoder.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -44,9 +44,9 @@ bool leavesStraightLineBody(const LowOp &Op) {
 
 } // namespace
 
-std::optional<std::vector<LowOp>> goDuffDeviceBody(const BinaryImage &Img,
-                                                   va_t Entry) {
-  if (!goDuffDeviceAt(Img, Entry))
+std::optional<std::vector<LowOp>> goInlinedRoutineBody(const BinaryImage &Img,
+                                                       va_t Entry) {
+  if (!goInlinedRoutineAt(Img, Entry))
     return std::nullopt;
   // A decoder of its own: the caller's still holds the call it decoded.
   Decoder Dec;
@@ -55,7 +55,7 @@ std::optional<std::vector<LowOp>> goDuffDeviceBody(const BinaryImage &Img,
   const uint64_t StackPointer = getTargetRegInfo(Img.Arch).StackPointer;
   std::vector<LowOp> Body;
   // The routine's extent bounds the walk: each instruction lies inside it.
-  for (va_t At = Entry; goDuffDeviceAt(Img, At);) {
+  for (va_t At = Entry; goInlinedRoutineAt(Img, At);) {
     const auto *Seg = Img.getSegmentFor(At);
     if (!Seg || At - Seg->VA >= Seg->Data.size() || !Dec.selectMode(Img, At))
       return std::nullopt;

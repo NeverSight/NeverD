@@ -23,7 +23,7 @@
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/DirectTailCall.h"
 #include "neverd/ir/low/GoCallContract.h"
-#include "neverd/ir/low/GoDuffDevice.h"
+#include "neverd/ir/low/GoInlinedRoutine.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/libc/NoReturnLoadedTarget.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -516,19 +516,20 @@ void CFGBuilder::rewriteAsTailCall(InsnRecord &Rec) {
   CallTargets.insert(Target);
 }
 
-void CFGBuilder::rewriteGoDuffDeviceCall(const BinaryImage &Img,
-                                         InsnRecord &Rec, va_t Next) {
+void CFGBuilder::rewriteGoInlinedRoutineCall(const BinaryImage &Img,
+                                             InsnRecord &Rec, va_t Next) {
   const va_t Target = *Rec.Immediate;
-  if (!goDuffDeviceAt(Img, Target))
+  if (!goInlinedRoutineAt(Img, Target))
     return;
-  if (GoDuffDeviceBodiesImage != &Img) {
-    GoDuffDeviceBodies.clear();
-    GoDuffDeviceBodiesImage = &Img;
+  if (GoInlinedRoutineBodiesImage != &Img) {
+    GoInlinedRoutineBodies.clear();
+    GoInlinedRoutineBodiesImage = &Img;
   }
-  auto Found = GoDuffDeviceBodies.find(Target);
-  if (Found == GoDuffDeviceBodies.end())
-    Found =
-        GoDuffDeviceBodies.emplace(Target, goDuffDeviceBody(Img, Target)).first;
+  auto Found = GoInlinedRoutineBodies.find(Target);
+  if (Found == GoInlinedRoutineBodies.end())
+    Found = GoInlinedRoutineBodies
+                .emplace(Target, goInlinedRoutineBody(Img, Target))
+                .first;
   if (!Found->second)
     return;
   std::vector<LowOp> Ops;

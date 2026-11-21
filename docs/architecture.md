@@ -5913,12 +5913,19 @@ defined, and the loop was decompiled nowhere. Go's compiler calls
 point that zeroes or copies as many bytes as it needs, and expects the call to
 change only the registers that straight-line body writes: the CFG builder
 lifts such a call as the body from that point to its return
-(`goDuffDeviceBody`, `CFGBuilder::rewriteGoDuffDeviceCall`), so the point begins
-no function, and the caller keeps every other register. As functions, the
-points chained into one another, and a caller's read of RAX after the call was
-unknown. Under the internal ABI a routine enters with X15 zero, since compiled
-code alone calls it (`goDuffDeviceAt`): `runtime.duffzero` stores X15
-sixty-four times.
+(`goInlinedRoutineBody`, `CFGBuilder::rewriteGoInlinedRoutineCall`), so the
+point begins no function, and the caller keeps every other register. As
+functions, the points chained into one another, and a caller's read of RAX
+after the call was unknown. Under the internal ABI a routine enters with X15
+zero, since compiled code alone calls it (`goDuffDeviceAt`):
+`runtime.duffzero` stores X15 sixty-four times. Reflection's call helpers
+(`runtime.callNNN`) call `runtime.unspillArgs` and `runtime.spillArgs`
+(`GoModuleInfo::RegisterArgumentTransfers`), which load every argument
+register from the internal/abi.RegArgs R12 (arm64 R20) points at and store
+them back, the same way (`goInlinedRoutineAt`): between the two a helper calls
+a func value, which enters Go code by the internal ABI, so its stores read
+what the call returns (`modelGoCallResults`). As calls, each of a Go image's
+27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
 
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
@@ -5936,9 +5943,12 @@ the same rules as amd64's nine, so a record holds up to sixteen; a call
 reading X2 returns three results, where AAPCS64 returns X0:X1 at most. That holds for a call that enters Go
 code by the internal ABI (`goCallEntersInternalABI`): a direct call to
 compiled Go code or to `<ABIInternal>` assembly, and an indirect call compiled
-code makes, through a function value. Go assembly also calls C through a
-pointer, which returns in the platform's registers: darwin's
-`runtime.syscall6` calls libc and reads RDX after. An indirect call returns
+code makes, through a function value. So does a call Go assembly makes through
+a func value, which loads its target from the address in the closure context
+register (`callsThroughContext`): a func value names compiled code or an ABI
+wrapper of assembly. Go assembly also calls C through a pointer, which returns
+in the platform's registers: darwin's `runtime.syscall6` calls libc and reads
+RDX after. An indirect call returns
 every result up to the last register its caller reads (`modelGoCallResults`):
 the call produces them packed, each result register the call left is defined
 from its field, in every block and through PHIs, and HighC prints the record

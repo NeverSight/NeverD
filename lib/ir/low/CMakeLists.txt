@@ -127,7 +127,7 @@ add_neverd_component_library(NeverDIRLow
   X86/CFGBuilderX86PLT.cpp
   CallRegisterEffects.cpp
   GoCallContract.cpp
-  GoDuffDevice.cpp
+  GoInlinedRoutine.cpp
   CallStackOffsets.cpp
   CallRegisterUnread.cpp
   CircleRange.cpp

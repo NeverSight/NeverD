@@ -499,6 +499,12 @@ bool goDuffDeviceAt(const BinaryImage &Img, va_t Address) {
   return Module && inRanges(Module->DuffDevices, Address);
 }
 
+bool goInlinedRoutineAt(const BinaryImage &Img, va_t Address) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return goDuffDeviceAt(Img, Address) ||
+         (Module && inRanges(Module->RegisterArgumentTransfers, Address));
+}
+
 std::optional<unsigned> goRegisterArgumentBound(const BinaryImage &Img,
                                                 va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
