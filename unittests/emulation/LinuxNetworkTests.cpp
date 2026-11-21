@@ -220,6 +220,30 @@ TEST_P(LinuxNetwork, MismatchConnectionIdentitySurvivesAliasesAndFDReuse) {
             "offset 3 (request size 3, size after max_send 2, bytes remaining "
             "0, connection index 1)");
 }
+TEST_P(LinuxNetwork, PeerOnlyConnectionOnReusedFDStartsWithoutStreamData) {
+  auto &Connections = Options.LinuxNetwork->Connections;
+  Connections.back() = {};
+  Connections.back().Peer = Connections.front().Peer;
+  const auto First = open();
+  ASSERT_EQ(call(ServiceKind::Connect, First, Base, 16), 0u);
+  llvm::cantFail(cpu().write(Base + 64, Connections.front().ExpectedSend));
+  ASSERT_EQ(call(ServiceKind::Write, First, Base + 64, 1), 1u);
+  ASSERT_EQ(call(ServiceKind::Read, First, Base + 128, 1), 1u);
+  ASSERT_EQ(call(ServiceKind::Close, First), 0u);
+
+  const auto Reused = open();
+  ASSERT_EQ(Reused, First);
+  ASSERT_EQ(call(ServiceKind::Connect, Reused, Base, 16), 0u);
+  EXPECT_FALSE(call(ServiceKind::SendTo, Reused, Base + 65, 1));
+  EXPECT_EQ(Report.Diagnostic,
+            "outgoing TCP stream exceeds its offline contract at stream "
+            "offset 0 (request size 1, size after max_send 1, bytes remaining "
+            "0, connection index 1)");
+  EXPECT_FALSE(call(ServiceKind::ReceiveFrom, Reused, Base + 128, 1));
+  EXPECT_EQ(Report.Diagnostic, "socket readiness has no offline observation "
+                               "(TCP connection index 1, read readiness)");
+}
+
 TEST_P(LinuxNetwork, SharedCursorsReplacementAndFDReuseKeepOneOwner) {
   const auto FD = open(), Other = open();
   ASSERT_EQ(FD, 3u);
