@@ -20845,12 +20845,24 @@ the register at the entry and traps nowhere.
 `GoAssembly.AReflectCallHelperStoresWhatItsFuncValueReturns` lifts a helper that
 loads RAX, RBX and X0 with `runtime.unspillArgs`, calls a func value through
 RDX and stores them back with `runtime.spillArgs`: neither routine is called,
-and the C stores what the call returns, a double among it, trapping nowhere.
+the call takes the two words and the double the transfer loads and nothing the
+helper was entered with, the helper keeps its two parameters, and the C stores
+what the call returns, a double among it, trapping nowhere.
 `GoRegisterArgumentTransfers.AreFoundByName` checks that the pclntab names both
 routines' code.
 `GoInternalABI.AFuncValueCallReturnsItsFloatResults` lifts `main.g`, which calls
 a func value through RDX (arm64 R26) and stores the float64 it returns in X0:
 the call returns a record with a double field, and the C traps nowhere.
+`GoInternalABI.AFuncValueCallTakesItsArgumentsInGoRegisters` lifts `main.g`,
+built as ELF and as PE, which sets RAX to 5 and RBX to 7 and calls a func value
+through RDX after storing a local above Win64's shadow space, RDI set before a
+branch: the call passes exactly 5 and 7.
+`GoInternalABI.TheRegisterThatHoldsTheTargetEndsTheArguments` lifts a Go 1.21
+map access's call of its hasher through RCX after loading the seed into ESI:
+the call passes the key's address and the seed, and nothing in RCX or above.
+`GoInternalABI.AJoinOfWhatACallLeftIsNoFuncValueArgument` lifts a func value
+call one way to which zeroes X0 while the other calls `main.f`: the call
+passes RAX alone.
 `GoStackABI.AClosureReadsTheContextItsCallerPasses` lifts a Go 1.15-style
 closure with a frame that adds two words it loads through RDX, and its arm64
 twin through R26: its C reads the register, names no frame word for those

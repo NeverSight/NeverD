@@ -19,6 +19,7 @@
 #include "neverd/Common.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
 #include "neverd/ir/med/MedABIPass.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
@@ -1831,6 +1832,79 @@ bool callsThroughContext(const MedBlock &Blk, int CallIdx, const MedVar &Target,
   const MedVar Address =
       Trace(Load->Inputs[0], static_cast<int>(Load - Blk.Ops.data())).first;
   return !Address.isConst() && Address == Trace(Context, CallIdx).first;
+}
+
+bool callsThroughFuncValue(const MedBlock &Block, size_t CallIdx,
+                           uint64_t Context) {
+  if (CallIdx >= Block.Ops.size() || Block.Ops[CallIdx].NumInputs < 1)
+    return false;
+  for (size_t J = CallIdx; J-- > 0;) {
+    const MedVar &Out = Block.Ops[J].Output;
+    if (Out.Kind != MedVar::Reg || Out.RegOff != Context)
+      continue;
+    return Out.Size >= 8 &&
+           callsThroughContext(Block, static_cast<int>(CallIdx),
+                               Block.Ops[CallIdx].Inputs[0], Out);
+  }
+  return false;
+}
+
+bool goIndirectCallTakesGoRegisters(const BinaryImage &Img, const MedFunc &Func,
+                                    const MedBlock &Block, size_t CallIdx) {
+  if (CallIdx >= Block.Ops.size() ||
+      Block.Ops[CallIdx].Opcode != NdOp::INDIR_CALL ||
+      !Img.ExceptionMetadata.GoModule ||
+      !Img.ExceptionMetadata.GoModule->RegisterArguments ||
+      !isGoCode(Img, Func.Entry))
+    return false;
+  if (usesGoRegisterArguments(Img, Func.Entry))
+    return Block.Ops[CallIdx].RegisterContract ==
+           CallRegisterContract::GoInternal;
+  const std::optional<uint64_t> Context = goClosureContextRegister(Img.Arch);
+  return Context && callsThroughFuncValue(Block, CallIdx, *Context);
+}
+
+bool setOnEveryWay(const MedFunc &Func, const MedVar &V,
+                   const ValuesLeftByCalls &LeftByCalls) {
+  using Key = std::tuple<int, int, int, uint64_t, uint16_t>;
+  auto keyOf = [](const MedVar &Value) {
+    return Key{static_cast<int>(Value.Kind), Value.Id, Value.SSAVer,
+               Value.Kind == MedVar::Reg ? Value.RegOff : 0, Value.Size};
+  };
+  auto unset = [&](const MedVar &Value) {
+    if (Value.Kind == MedVar::Unspecified || LeftByCalls.contains(Value))
+      return true;
+    return Value.Kind == MedVar::Reg && Value.SSAVer == 0 &&
+           llvm::none_of(Func.Params, [&](const MedVar &Param) {
+             return Param.RegOff == Value.RegOff;
+           });
+  };
+  // The PHIs, by the value each defines, once a value may be one.
+  std::map<Key, const PhiNode *> Joins;
+  bool Indexed = false;
+  std::set<Key> Seen;
+  llvm::SmallVector<MedVar, 8> Work{V};
+  while (!Work.empty()) {
+    const MedVar Value = Work.pop_back_val();
+    if (unset(Value))
+      return false;
+    if ((Value.Kind != MedVar::Reg && Value.Kind != MedVar::Temp) ||
+        !Seen.insert(keyOf(Value)).second)
+      continue;
+    if (!Indexed) {
+      for (const MedBlock &Block : Func.Blocks)
+        for (const PhiNode &Phi : Block.Phis)
+          Joins.emplace(keyOf(Phi.Output), &Phi);
+      Indexed = true;
+    }
+    if (const auto It = Joins.find(keyOf(Value)); It != Joins.end()) {
+      for (const auto &Arm : It->second->Args)
+        Work.push_back(Arm.second);
+      if (It->second->ExceptionalEntry)
+        Work.push_back(*It->second->ExceptionalEntry);
+    }
+  }
+  return true;
 }
 
 MedVar argRegSourceValueInBlock(const MedBlock &Blk, int J,

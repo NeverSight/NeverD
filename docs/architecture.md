@@ -5927,6 +5927,39 @@ a func value, which enters Go code by the internal ABI, so its stores read
 what the call returns (`modelGoCallResults`). As calls, each of a Go image's
 27 helpers passed `spillArgs` sixteen unknown values, twelve on Windows.
 
+Such a call takes its arguments in Go's registers too, integer and floating
+(`goIntegerArgumentRegisters`, `goFloatArgumentRegisters`), as does every
+indirect call compiled code makes (`goIndirectCallTakesGoRegisters`).
+MedABIPass reads them there, MedDCE keeps what reaches the call in each, and
+HighIR's argument scan, which numbers registers in the platform's order, takes
+MedABIPass's list for a call in its callee's order
+(`MedCallInfo::ArgumentsInCalleeRegisterOrder`). Read in System V's, a helper
+passed its func value RDI, RSI, RDX, which holds the closure, RCX, R8, R9 and
+eight floating registers, of the nine and fifteen it loads. A closure call
+`mov eax, 5; mov ebx, 7; call [rdx]` passed nothing: dead code elimination
+deleted both writes, and the scan then made RDX an argument. Assembly passes a
+func value only what it sets in those registers. The values it was entered
+with, which it takes in the platform's order, sit in Go's by chance: a copy of
+one into its own register sets nothing, and one left there is no argument it
+passes on. Taken as forwarded, a helper's RDI and RSI, Go's fourth and fifth,
+reordered its own parameters to Go's.
+
+Go assigns its integer arguments to those registers in order, so the register
+that holds such a call's target ends them, whatever was set above it. Go
+1.21's map access loads the hash seed into ESI before RBX takes it, and RSI,
+Go's fifth register, gave the hasher it calls through RCX five arguments. A
+compiler sets each argument on every way to its call, so a join that brings,
+on one way, the register as the function was entered, where no parameter of
+it arrives, or what an earlier call left there, is no argument either
+(`setOnEveryWay`): where one way to Go 1.26's hasher calls
+`internal/runtime/maps.fatal` first, X0 and X1 gave it two unknown floating
+arguments. The stack arguments of such a call sit where Go's stack ABI puts
+them (`goStackArgumentLayout`), with no shadow space, and Go numbers its
+integer and floating registers apart, so Win64's positions apply neither to
+it nor to any call in its callee's own order. Read with them on Windows, a
+local stored above the shadow space proved every register an argument, and
+each hasher took nine.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive

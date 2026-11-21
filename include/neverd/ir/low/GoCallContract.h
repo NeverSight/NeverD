@@ -87,6 +87,10 @@ bool goAssemblyTakesRegisterArguments(const BinaryImage &Img, va_t Entry,
 /// (abi-internal.md: RAX, RBX, RCX, RDI, RSI, R8, R9, R10, R11), or none.
 llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A);
 
+/// Go's floating argument and result registers on \p A, in order: X0-X14 on
+/// amd64 (X15 holds zero), F0-F15 (V0-V15) on arm64.  Empty elsewhere.
+llvm::ArrayRef<uint64_t> goFloatArgumentRegisters(Arch A);
+
 /// The registers x86-64 Go assembly at \p Entry takes its arguments in where
 /// neither of Go's ABIs nor the platform's convention passes them: assembly
 /// that declares no argument word (goFrameArgumentBytes) and takes no Go

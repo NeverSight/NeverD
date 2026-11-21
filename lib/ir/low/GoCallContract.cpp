@@ -221,6 +221,25 @@ llvm::ArrayRef<uint64_t> goIntegerArgumentRegisters(Arch A) {
   return {};
 }
 
+llvm::ArrayRef<uint64_t> goFloatArgumentRegisters(Arch A) {
+  static constexpr uint64_t X64[] = {
+      x86reg::vectorReg(0),  x86reg::vectorReg(1),  x86reg::vectorReg(2),
+      x86reg::vectorReg(3),  x86reg::vectorReg(4),  x86reg::vectorReg(5),
+      x86reg::vectorReg(6),  x86reg::vectorReg(7),  x86reg::vectorReg(8),
+      x86reg::vectorReg(9),  x86reg::vectorReg(10), x86reg::vectorReg(11),
+      x86reg::vectorReg(12), x86reg::vectorReg(13), x86reg::vectorReg(14)};
+  static constexpr uint64_t AArch64[] = {
+      a64reg::V(0),  a64reg::V(1),  a64reg::V(2),  a64reg::V(3),
+      a64reg::V(4),  a64reg::V(5),  a64reg::V(6),  a64reg::V(7),
+      a64reg::V(8),  a64reg::V(9),  a64reg::V(10), a64reg::V(11),
+      a64reg::V(12), a64reg::V(13), a64reg::V(14), a64reg::V(15)};
+  if (A == Arch::X64)
+    return X64;
+  if (A == Arch::AArch64)
+    return AArch64;
+  return {};
+}
+
 std::optional<FixedIntegerCallArguments>
 goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
                         const GPRReadWidths &Reads) {

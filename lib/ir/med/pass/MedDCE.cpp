@@ -11,6 +11,8 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "../abi/MedABIPassDetail.h"
+
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/intrinsics/IntrinsicValueEffects.h"
@@ -491,6 +493,14 @@ void LowToMedConverter::runDce(MedFunc &Func) {
         }
       }
       seedParamWrites(Blk, static_cast<int>(I) - 1, DirectCall);
+      // An indirect call into Go code by the internal ABI takes its arguments
+      // in Go's registers, which the platform's need not name: RAX and RBX
+      // are neither System V's nor Win64's (goIndirectCallTakesGoRegisters).
+      if (Image && Call.Opcode == NdOp::INDIR_CALL &&
+          goIndirectCallTakesGoRegisters(*Image, Func, Blk, I))
+        for (const uint64_t Register : goIntegerArgumentRegisters(TargetArch))
+          seedReachingDef(Blk, static_cast<int>(I) - 1, Register,
+                          /*Argument=*/true);
       // Setup can dominate several branches before the call. Keeping only
       // its immediate predecessor silently deletes these implicit inputs
       // before ABI recovery has bound them. Reuse the per-register walk,

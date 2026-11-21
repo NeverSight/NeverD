@@ -1691,7 +1691,14 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                                       Required == 0 && !ParamRegs.empty() &&
                                       FoundSource[0] &&
                                       LeftByCall(*FoundSource[0], ParamRegs[0]);
-      if (CompleteSetup || EmptyClobberPrefix ||
+      // The scan below numbers registers in the convention's order, which
+      // does not index arguments passed in the callee's own: recovery, which
+      // reads the callee's registers, gives such a call all of them, none
+      // included (MedCallInfo::ArgumentsInCalleeRegisterOrder).  A Go func
+      // value takes RAX, RBX and RCX, and RDX, System V's third, holds its
+      // closure.
+      const bool CalleeOrder = CI->ArgumentsInCalleeRegisterOrder;
+      if (CompleteSetup || EmptyClobberPrefix || CalleeOrder ||
           (SetupConvention
                ? Recovered || TargetLimit < static_cast<size_t>(MaxArgs)
                : !CI->Args.empty())) {
@@ -1743,9 +1750,9 @@ MedToHighConverter::collectCallArgs(const MedBlock &CurBlock, size_t CallIdx,
                  Source->SSAVer == Target.SSAVer;
         };
         size_t End = FromABI.size();
-        while (!CompleteSetup && !KnownImport && End < SetupLimit &&
-               Found[End] && Found[End]->Kind != ExprKind::Undef &&
-               !HoldsTarget(End))
+        while (!CompleteSetup && !KnownImport && !CalleeOrder &&
+               End < SetupLimit && Found[End] &&
+               Found[End]->Kind != ExprKind::Undef && !HoldsTarget(End))
           ++End;
         // COPY transport found by this scan is no fresh argument setup.
         if (HeuristicRegisterTail && End <= ParamRegs.size())

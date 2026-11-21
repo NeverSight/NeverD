@@ -38,6 +38,7 @@
 #include <array>
 #include <cstring>
 #include <map>
+#include <regex>
 #include <set>
 #include <string>
 #include <vector>
@@ -2083,6 +2084,156 @@ TEST(GoAssembly, AReflectCallHelperStoresWhatItsFuncValueReturns) {
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
   EXPECT_EQ(Text.find("spillArgs"), std::string::npos) << Text;
   EXPECT_NE(Text.find("double"), std::string::npos) << Text;
+  // The func value takes the two words and the double the transfer loads,
+  // in Go's registers, and nothing the helper was entered with: RDI and RSI,
+  // its own parameters, are Go's fourth and fifth by chance.
+  std::smatch Call;
+  ASSERT_TRUE(std::regex_search(
+      Text, Call,
+      std::regex(
+          R"(\(\*\(void \*\*\)\(arg0\)\)\)\((\w+), (\w+), )"
+          R"(\(__int128\)\(uint64_t\)\(\*\(uint64_t \*\)\(arg1 \+ 0x48\)\)\);)")))
+      << Text;
+  EXPECT_NE(Text.find(Call[1].str() + " = *(int64_t *)arg1;"),
+            std::string::npos)
+      << Text;
+  EXPECT_NE(Text.find(Call[2].str() + " = *(int64_t *)(arg1 + 8);"),
+            std::string::npos)
+      << Text;
+  EXPECT_NE(Text.find("main_call16(void* arg0, void* arg1)"), std::string::npos)
+      << Text;
+}
+
+TEST(GoInternalABI, AFuncValueCallTakesItsArgumentsInGoRegisters) {
+  // A call through a func value enters Go code by the internal ABI, which
+  // passes integer arguments in RAX, RBX, RCX, RDI, RSI and R8-R11.  The
+  // call took the platform's RDI and RSI instead, and dead code elimination
+  // dropped the writes of RAX and RBX, which System V passes nothing in.  Go
+  // has no shadow space and no positions.  Read as Win64's, the local main.g
+  // stores at [rsp+0x24] was a stack argument, and it made every register an
+  // argument that reaches the call: RDI, set before a branch, and RSI.
+  //   main.g: push rbp; mov rbp, rsp; sub rsp, 0x30; mov [rsp+0x28], rax
+  //           mov edi, 9; test rax, rax; jne 2f; xor esi, esi; jmp 1f
+  //        2: xor r12d, r12d
+  //        1: mov dword [rsp+0x24], 3; mov rdx, [rsp+0x28]; mov eax, 5
+  //           mov ebx, 7; call [rdx]; add rsp, 0x30; pop rbp; ret
+  constexpr va_t G = kTextVA + 0x100;
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF}) {
+    SCOPED_TRACE(static_cast<unsigned>(Format));
+    GoTestImage T(Arch::X64);
+    T.Img.Format = Format;
+    T.writeText(G, {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x30, 0x48,
+                    0x89, 0x44, 0x24, 0x28, 0xBF, 0x09, 0x00, 0x00, 0x00,
+                    0x48, 0x85, 0xC0, 0x75, 0x04, 0x31, 0xF6, 0xEB, 0x03,
+                    0x45, 0x31, 0xE4, 0xC7, 0x44, 0x24, 0x24, 0x03, 0x00,
+                    0x00, 0x00, 0x48, 0x8B, 0x54, 0x24, 0x28, 0xB8, 0x05,
+                    0x00, 0x00, 0x00, 0xBB, 0x07, 0x00, 0x00, 0x00, 0xFF,
+                    0x12, 0x48, 0x83, 0xC4, 0x30, 0x5D, 0xC3});
+    Symbol Function = Symbol::makeFunc(G);
+    Function.Name = "main.g";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    Module.RegisterArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_g");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find("((uint64_t)5, (uint64_t)7);"), std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
+TEST(GoInternalABI, TheRegisterThatHoldsTheTargetEndsTheArguments) {
+  // Go assigns its integer arguments to RAX, RBX, RCX and on in order, so a
+  // func value called through RCX takes two.  Go 1.21's map access loads the
+  // seed into ESI before RBX takes it; RSI, Go's fifth register, made the
+  // call take five, the target and an RDI nobody set among them.
+  //   main.g: push rbp; mov rbp, rsp; sub rsp, 0x20; mov rdx, [rax+0x48]
+  //           mov rcx, [rdx]; mov esi, [rbx+0xc]; lea rax, [rsp+0x18]
+  //           mov rbx, rsi; call rcx; add rsp, 0x20; pop rbp; ret
+  constexpr va_t G = kTextVA + 0x100;
+  GoTestImage T(Arch::X64);
+  T.writeText(G, {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20, 0x48,
+                  0x8B, 0x50, 0x48, 0x48, 0x8B, 0x0A, 0x8B, 0x73, 0x0C,
+                  0x48, 0x8D, 0x44, 0x24, 0x18, 0x48, 0x89, 0xF3, 0xFF,
+                  0xD1, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3});
+  Symbol Function = Symbol::makeFunc(G);
+  Function.Name = "main.g";
+  T.Img.Symbols.push_back(std::move(Function));
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("(uintptr_t)&stack_storage.var_m10, "
+                      "(int64_t)(*(uint32_t *)(arg1 + 0xC)));"),
+            std::string::npos)
+      << Text;
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+}
+
+TEST(GoInternalABI, AJoinOfWhatACallLeftIsNoFuncValueArgument) {
+  // A compiler sets each argument of a call on every way to it.  Where one
+  // way to a func value call sets X0 and the other calls main.f, X0 at the
+  // call joins zero with what main.f left: it is no argument
+  // (setOnEveryWay).  Taken as one, the call passed an unknown value after
+  // RAX.
+  //   main.f: ret
+  //   main.g: push rbp; mov rbp, rsp; sub rsp, 0x20; mov [rsp+0x10], rax
+  //           test rax, rax; jne 2f; xorps xmm0, xmm0; jmp 1f
+  //        2: call main.f
+  //        1: mov rdx, [rsp+0x10]; mov eax, 5; call [rdx]
+  //           add rsp, 0x20; pop rbp; ret
+  constexpr va_t F = kTextVA + 0x80;
+  constexpr va_t G = kTextVA + 0x100;
+  GoTestImage T(Arch::X64);
+  T.writeText(F, {0xC3});
+  std::vector<uint8_t> Body = {0x55, 0x48, 0x89, 0xE5, 0x48, 0x83, 0xEC, 0x20,
+                               0x48, 0x89, 0x44, 0x24, 0x10, 0x48, 0x85, 0xC0,
+                               0x75, 0x05, 0x0F, 0x57, 0xC0, 0xEB, 0x05};
+  const std::vector<uint8_t> Call = makeCall(G + Body.size(), F);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.insert(Body.end(),
+              {0x48, 0x8B, 0x54, 0x24, 0x10, 0xB8, 0x05, 0x00, 0x00, 0x00, 0xFF,
+               0x12, 0x48, 0x83, 0xC4, 0x20, 0x5D, 0xC3});
+  T.writeText(G, Body);
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+  const std::string Text = highCBody(R, T.Img, "main_g");
+  ASSERT_FALSE(Text.empty());
+  EXPECT_NE(Text.find("((uint64_t)5);"), std::string::npos) << Text;
+  EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
 }
 
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
