@@ -647,6 +647,11 @@ void Translator::collectRegion(llvm::Value *Root) {
     Pending.append(Ops.begin(), Ops.end());
   }
 
+  // A leaf contributes no removable instruction, including when this
+  // translator already holds the region of an earlier root.
+  if (!Region.contains(Root))
+    return;
+
   // The closed region is cheaper to measure and gives shared computations a
   // stable opaque identity.  If it cannot simplify, a second translation may
   // inspect pure shared definitions, which is needed when a split-word carry

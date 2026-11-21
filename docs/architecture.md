@@ -7439,7 +7439,9 @@ halves retain every observed bit. High IR emits packed fields smaller than
 a byte in a whole-byte carrier, including signed fields assembled from
 several extracts. The original field width determines the sign position.
 The LLVM translator carries same-word funnel shifts as rotates in both
-directions and emits them with their modulo-width count.
+directions and emits them with their modulo-width count. LLVM arguments,
+constants and opaque calls contribute zero removable instructions when
+queried as region roots.
 A mask or addend that changes only higher bits drops out; a mask
 that changes even one live bit stays. If every weight has at least `s` low
 zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
