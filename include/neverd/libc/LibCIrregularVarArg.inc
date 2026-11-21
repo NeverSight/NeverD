@@ -5,6 +5,8 @@
 // registers and every further argument on the stack.
 // Included with LIBC_IRREGULAR_VARARG(Name, Kinds...).
 
+LIBC_IRREGULAR_VARARG("sqlite3_mprintf", Pointer)
+LIBC_IRREGULAR_VARARG("sqlite3_snprintf", Integer, Pointer, Pointer)
 LIBC_IRREGULAR_VARARG("syslog", Integer, Pointer)
 LIBC_IRREGULAR_VARARG("err", Integer, Pointer)
 LIBC_IRREGULAR_VARARG("errx", Integer, Pointer)

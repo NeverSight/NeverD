@@ -3948,6 +3948,15 @@ std::optional<FunctionSym> HighCWriter::debugCallee(const HighExpr &E) const {
       if (auto It = DebugExternSigs.find(Name);
           It != DebugExternSigs.end() && !It->second.Params.empty())
         return It->second;
+      // A public PDB symbol can identify an omitted CRT function without
+      // describing its ABI. Let the exact platform prototype supply both
+      // its declaration and its operands, just as it does for an import.
+      if (!FS->ReturnType && !FS->IsVariadic && FS->Addr == E.CallAddr &&
+          !E.IsIndirectCall && !calledDefinition(E) &&
+          !isUserFunctionDeclaration(*FS))
+        if (const auto *Prototype = prototypeForSymbol(FS->Name);
+            Prototype && Prototype->Format == BinaryFormat::COFF)
+          return std::nullopt;
       return FS;
     }
   const std::string Name = callIdentifier(E);

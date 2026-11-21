@@ -147,6 +147,9 @@ struct RegisterStep {
   /// on.  No summarized function is called.
   std::optional<GPRReadWidths> FixedArguments;
   bool FixedTailCall = false;
+  /// CPUID leaf zero consumes no source subleaf argument. Reads still records
+  /// the physical ECX input for original machine-state observation proofs.
+  bool CpuidIgnoresSubleaf = false;
 };
 
 struct RegisterBlock {

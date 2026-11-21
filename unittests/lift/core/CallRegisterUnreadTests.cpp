@@ -13,6 +13,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <map>
@@ -34,6 +35,52 @@ LocalRegisterEffect body(std::vector<RegisterStep> Steps) {
 bool unread(const std::map<va_t, GPRFamilyMask> &Proof, va_t Entry) {
   const auto It = Proof.find(Entry);
   return It != Proof.end() && (It->second & ScratchBit);
+}
+
+TEST(CallRegisterUnread, CpuidVendorLeafKeepsThePhysicalSubleafObservation) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  constexpr unsigned Family = x86reg::RCX / 8;
+  constexpr GPRFamilyMask Bit = GPRFamilyMask{1} << Family;
+  for (const auto Leaf :
+       {std::optional<unsigned>(0), std::optional<unsigned>(7),
+        std::optional<unsigned>()}) {
+    LowFunc Function;
+    Function.Entry = 0x1000;
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    if (Leaf) {
+      LowOp Set;
+      Set.Addr = Function.Entry;
+      Set.Opcode = NdOp::COPY;
+      Set.Output = NdVar::reg(x86reg::RAX, 4);
+      Set.addInput(NdVar::scalar(*Leaf, 4));
+      Block.Ops.push_back(Set);
+    }
+    LowOp Query;
+    Query.Addr = Function.Entry + 2;
+    Query.Opcode = NdOp::INTRINSIC;
+    Query.Output = NdVar::reg(x86reg::RAX, 8);
+    Query.addInput(NdVar::cst(static_cast<unsigned>(Intrinsic::Cpuid), 2));
+    Query.addInput(NdVar::reg(x86reg::RAX, 4));
+    Query.addInput(NdVar::reg(x86reg::RCX, 4));
+    Block.Ops.push_back(Query);
+    LowOp Ret;
+    Ret.Opcode = NdOp::RETURN;
+    Ret.Addr = Function.Entry + 4;
+    Block.Ops.push_back(Ret);
+    Function.Blocks.push_back(std::move(Block));
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Summary =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, Bit, Bit);
+    ASSERT_TRUE(Summary.EntryReads.count(Function.Entry));
+    EXPECT_EQ(Summary.EntryReads.at(Function.Entry)[Family],
+              Leaf == 0u ? 0u : 4u);
+    EXPECT_EQ(Summary.Unread.at(Function.Entry) & Bit, 0u);
+  }
 }
 
 TEST(CallRegisterUnread, ReadsBeforeWritesAndIncompleteBodiesStayObserved) {
