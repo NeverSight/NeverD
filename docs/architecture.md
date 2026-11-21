@@ -5853,6 +5853,14 @@ callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
 (`runtime.sigtramp`): both keep the platform's positions.
 
+Go code has no System V variadic prologue, which reads AL, the count of
+vector registers its caller set, before it writes RAX, and stores the
+argument registers from the first variadic one through R9 into consecutive
+words that read no parameter: Go passes a variadic argument as a slice, and
+RAX is its first argument register. `findRegisterSaveAreaSpills` skips Go
+code, so `runtime.spillArgs`, which stores RAX and then R8 and R9 in a row,
+reads both.
+
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every

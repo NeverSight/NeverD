@@ -20713,6 +20713,10 @@ assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
 which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
 and RBX, and the call passes 1, 4, 3 and 2.
+`GoRegisterArguments.RegistersStoredInARowAreNoVariadicSaveArea` lifts
+`main.g`, which stores RAX, R8 and R9 into consecutive words off RDI, and a
+caller that sets all seven of Go's first argument registers: `main.g` takes
+RAX through R9, and the call passes all seven.
 `GoAssembly.AnARM64ForwarderIsNoABI0Assembly` lifts arm64 assembly that loads
 `[sp, #8]` and `[sp, #16]`, which takes them as its parameters, and a
 forwarder that only branches to another function, which takes no stack

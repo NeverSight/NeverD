@@ -169,7 +169,9 @@ struct Spill {
 /// caller passes exactly the variadic arguments it sets.  The vector argument
 /// registers spilled in the block a test of AL alone branches around are the
 /// save area's too, which \p SavesVectors reports: a caller passes the vector
-/// arguments AL counts.
+/// arguments AL counts.  Go code has no such prologue: Go passes a variadic
+/// argument as a slice, and RAX is its first argument register, which
+/// `runtime.spillArgs` stores with R8 and R9 into consecutive words.
 std::set<std::pair<size_t, size_t>>
 findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
                            const std::map<int, size_t> &IndexOfId,
@@ -177,7 +179,7 @@ findRegisterSaveAreaSpills(const BinaryImage &Img, CallRegisterBodyView F,
   std::set<std::pair<size_t, size_t>> Spills;
   SavesVectors = false;
   if (Img.Arch != Arch::X64 || Img.abiFormat() == BinaryFormat::COFF ||
-      F.Blocks.empty())
+      F.Blocks.empty() || isGoCode(Img, F.Blocks.front().StartAddr))
     return Spills;
   const TargetRegInfo &TRI = getTargetRegInfo(Img.Arch);
   const llvm::ArrayRef<uint64_t> Registers =

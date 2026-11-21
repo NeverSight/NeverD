@@ -947,6 +947,61 @@ TEST(GoAssembly, AHelperTakesTheRegistersItReads) {
   EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{1, 4, 3, 2}));
 }
 
+TEST(GoRegisterArguments, RegistersStoredInARowAreNoVariadicSaveArea) {
+  // System V reads RAX before a write as a variadic prologue's vector count,
+  // and the argument registers it then stores into consecutive words, from
+  // some position through R9, as the save area, which a caller fills only
+  // as far as it passes arguments.  In Go, RAX is the first argument:
+  // `runtime.spillArgs` stores R8 and R9 in a row, and took neither.
+  //   main.g: mov [rdi], rax; mov [rdi+8], r8; mov [rdi+16], r9; ret
+  //   main.f: mov eax, 1; ... mov r9d, 7; call main.g; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body;
+  const uint8_t Moves[][2] = {{0, 0xB8}, {0, 0xBB},    {0, 0xB9},   {0, 0xBF},
+                              {0, 0xBE}, {0x41, 0xB8}, {0x41, 0xB9}};
+  uint8_t Value = 1;
+  for (const auto &Move : Moves) {
+    if (Move[0])
+      Body.push_back(Move[0]);
+    Body.insert(Body.end(), {Move[1], Value++, 0, 0, 0});
+  }
+  const std::vector<uint8_t> Call = makeCall(F + Body.size(), G);
+  Body.insert(Body.end(), Call.begin(), Call.end());
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  T.writeText(G, {0x48, 0x89, 0x07, 0x4C, 0x89, 0x47, 0x08, 0x4C, 0x89, 0x4F,
+                  0x10, 0xC3});
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 56, 7}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  using namespace x86reg;
+  EXPECT_EQ(parameterRegisters(R, G),
+            (std::vector<uint64_t>{RAX, RBX, RCX, RDI, RSI, R8, R9}));
+  // The call passes all seven; the ones main.g never reads are zero.
+  const std::vector<uint64_t> Arguments = constantArguments(R, F);
+  ASSERT_EQ(Arguments.size(), 7u);
+  EXPECT_EQ(Arguments[0], 1u);
+  EXPECT_EQ(Arguments[3], 4u);
+  EXPECT_EQ(Arguments[5], 6u);
+  EXPECT_EQ(Arguments[6], 7u);
+}
+
 TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
   // An arm64 call takes its arguments from the setup its caller writes, so
   // no operation of a routine reads the registers it passes on in a call.
