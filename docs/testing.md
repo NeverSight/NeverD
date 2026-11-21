@@ -18259,9 +18259,20 @@ a memory barrier on the path that skips the import.
 instruction orders, conflicting linker values and an overwritten entry `$t9`.
 Its branch fixtures distinguish agreeing saved values from conflicting paths,
 a clobbering call, independent entries, coincident branch-likely successors,
-and a carrier overwritten on a later loop iteration. The private-frame tests
+and a carrier overwritten on a later loop iteration. Two-import fixtures
+rebuild GP from a callee-saved copy of the entry register after the first
+call. Each GOT cell has two independent bindings. The harness checks the load
+order and width, both argument lists, the final result and preserved registers.
+One fixture forwards the first result. Another replaces it in the second
+call's delay slot. A third spills GP, passes its full register value and
+reloads the next GOT binding after the first callback changes it. Its n32
+runtime address sets the pointer's sign bit. The n32 CPIC samples also link
+their code and GOT above 2 GiB before moving them. Both the default and
+unoptimized LLVM source routes exercise the explicit n32 word extension.
+The private-frame tests
 also vary whether a loop argument acquires a stack address at entry or on
-its backedge, and whether a later call can observe a post-call register write.
+its backedge, and whether a native call can observe an argument write on any
+path before a full-register overwrite.
 `HighCCallbackArguments.MembersKeepFixedAndVariadicArguments` in
 `NeverDSourceEntryBindingTests` also emits callbacks for those nine profiles.
 The generated C runs on the host at O0/O2 under UBSan: a variadic member must
