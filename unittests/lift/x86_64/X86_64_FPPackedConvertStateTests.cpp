@@ -257,61 +257,67 @@ TEST(PackedConvertContract, ShapeAndTypeRolesPreservePackedCarrierIdentity) {
   }
 }
 
-TEST(PackedConvertContract,
-     OwnedAssemblyRequiresPhysicalCarrierSourceAndStateSpaces) {
-  for (unsigned Control : {1U, 3U, 8U, 10U, 25U, 27U, 29U, 31U})
-    for (bool Memory : {false, true})
-      for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
-        SCOPED_TRACE(testing::Message()
-                     << Control << ':' << Memory << ':' << Mutation);
-        llvm::LLVMContext C;
-        llvm::Module Module("packed-owned", C);
-        llvm::IRBuilder<> B(C);
-        const auto Space = Memory ? NdMemoryAddressSpace::X86GS
-                                  : NdMemoryAddressSpace::Default;
-        const unsigned Layout = x86FPRoundStateLayout(
-            x86FPPackedConvertSourceBytes(Control), Control, 0, Space);
-        llvm::Type *Result = x86FPPackedConvertResultType(C, Control);
-        llvm::Type *Source = Memory ? static_cast<llvm::Type *>(B.getPtrTy(256))
-                                    : x86FPPackedConvertSourceType(C, Control);
-        llvm::Type *State = B.getPtrTy(Mutation == 2 ? 257 : 0);
-        if (Mutation == 1)
-          Source =
-              Memory ? static_cast<llvm::Type *>(B.getPtrTy()) : B.getInt64Ty();
-        if (Mutation == 3)
-          Result = B.getInt64Ty();
-        auto *Fn = llvm::Function::Create(
-            llvm::FunctionType::get(Result, {Source, State}, false),
-            llvm::Function::ExternalLinkage, "packed", Module);
-        B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
-        auto Text = x86FPPackedConvertAsm(Layout, Memory);
-        auto Constraints = std::string(x86FPPackedConvertConstraints(Memory));
-        if (Mutation == 4)
-          Text += "\n\tnop";
-        if (Mutation == 5)
-          Constraints.resize(Constraints.find(",~{memory}"));
-        auto *Asm =
-            llvm::InlineAsm::get(Fn->getFunctionType(), Text, Constraints,
-                                 Mutation != 6, Mutation == 7,
-                                 Mutation == 8 ? llvm::InlineAsm::AD_Intel
-                                               : llvm::InlineAsm::AD_ATT);
-        auto *Call = B.CreateCall(Asm, {Fn->getArg(0), Fn->getArg(1)});
-        if (Mutation != 9)
-          Call->setMetadata(X86FPStateAsmMetadata, llvm::MDNode::get(C, {}));
-        B.CreateRet(Call);
-        if (!Mutation)
-          EXPECT_EQ(classifyX86FPStateAsm(*Call),
-                    std::make_optional(std::pair{
-                        Memory ? Intrinsic::X86FPPackedConvertMemoryState
-                               : Intrinsic::X86FPPackedConvertState,
-                        Layout}));
-        else if (Mutation == 9)
-          EXPECT_FALSE(classifyX86FPStateAsm(*Call));
-        else
-          EXPECT_DEATH(classifyX86FPStateAsm(*Call),
-                       "invalid x86 FP state assembly");
-      }
+class PackedConvertAssemblyContract : public testing::TestWithParam<unsigned> {};
+
+TEST_P(PackedConvertAssemblyContract,
+       OwnedAssemblyRequiresPhysicalCarrierSourceAndStateSpaces) {
+  const unsigned Control = GetParam();
+  for (bool Memory : {false, true})
+    for (unsigned Mutation = 0; Mutation < 10; ++Mutation) {
+      SCOPED_TRACE(testing::Message()
+                   << Control << ':' << Memory << ':' << Mutation);
+      llvm::LLVMContext C;
+      llvm::Module Module("packed-owned", C);
+      llvm::IRBuilder<> B(C);
+      const auto Space = Memory ? NdMemoryAddressSpace::X86GS
+                                : NdMemoryAddressSpace::Default;
+      const unsigned Layout = x86FPRoundStateLayout(
+          x86FPPackedConvertSourceBytes(Control), Control, 0, Space);
+      llvm::Type *Result = x86FPPackedConvertResultType(C, Control);
+      llvm::Type *Source = Memory ? static_cast<llvm::Type *>(B.getPtrTy(256))
+                                  : x86FPPackedConvertSourceType(C, Control);
+      llvm::Type *State = B.getPtrTy(Mutation == 2 ? 257 : 0);
+      if (Mutation == 1)
+        Source =
+            Memory ? static_cast<llvm::Type *>(B.getPtrTy()) : B.getInt64Ty();
+      if (Mutation == 3)
+        Result = B.getInt64Ty();
+      auto *Fn = llvm::Function::Create(
+          llvm::FunctionType::get(Result, {Source, State}, false),
+          llvm::Function::ExternalLinkage, "packed", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Fn));
+      auto Text = x86FPPackedConvertAsm(Layout, Memory);
+      auto Constraints = std::string(x86FPPackedConvertConstraints(Memory));
+      if (Mutation == 4)
+        Text += "\n\tnop";
+      if (Mutation == 5)
+        Constraints.resize(Constraints.find(",~{memory}"));
+      auto *Asm =
+          llvm::InlineAsm::get(Fn->getFunctionType(), Text, Constraints,
+                               Mutation != 6, Mutation == 7,
+                               Mutation == 8 ? llvm::InlineAsm::AD_Intel
+                                             : llvm::InlineAsm::AD_ATT);
+      auto *Call = B.CreateCall(Asm, {Fn->getArg(0), Fn->getArg(1)});
+      if (Mutation != 9)
+        Call->setMetadata(X86FPStateAsmMetadata, llvm::MDNode::get(C, {}));
+      B.CreateRet(Call);
+      if (!Mutation)
+        EXPECT_EQ(classifyX86FPStateAsm(*Call),
+                  std::make_optional(std::pair{
+                      Memory ? Intrinsic::X86FPPackedConvertMemoryState
+                             : Intrinsic::X86FPPackedConvertState,
+                      Layout}));
+      else if (Mutation == 9)
+        EXPECT_FALSE(classifyX86FPStateAsm(*Call));
+      else
+        EXPECT_DEATH(classifyX86FPStateAsm(*Call),
+                     "invalid x86 FP state assembly");
+    }
 }
+
+INSTANTIATE_TEST_SUITE_P(Controls, PackedConvertAssemblyContract,
+                         testing::Values(1U, 3U, 8U, 10U, 25U, 27U, 29U, 31U),
+                         testing::PrintToStringParamName());
 
 TEST(PackedConvertContract,
      CheckedMemoryOwnsSourceExtentAlignmentAndFaultState) {
