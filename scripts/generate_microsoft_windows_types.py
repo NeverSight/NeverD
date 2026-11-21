@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 
 import build_wdk_driver_fixtures as wdk
 import microsoft_gdiplus_types as gdiplus
+import microsoft_flat_imports as flat
 import microsoft_rdbss_types as rdbss
 import microsoft_ucrt_types as ucrt
 
@@ -368,7 +369,8 @@ CPP_NOARG_PROVIDERS = {
 def prepare_provider(name: str, source: Path, arguments: list[str], directory: Path,
                      neverd: str, model: str, headers=(), defines=(), prototypes=(),
                      metadata: dict | None = None, convention: str = "",
-                     gdiplus_imports: dict | None = None) -> dict:
+                     gdiplus_imports: dict | None = None,
+                     flat_proof: dict | None = None) -> dict:
     """Validate and select a whole provider before it can enter the merge."""
     bridge_commands = []
     noargs = CPP_NOARG_PROVIDERS.get(name)
@@ -404,6 +406,8 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         cpp_bridge = rdbss.prepare(source, preprocessed, arguments, directory, run)
     parser_convention(preprocessed, convention)
     parsed = checked_types(neverd, preprocessed, directory / (name + ".parse.log"), model)
+    if flat_proof is not None:
+        prototypes = flat.select(flat_proof, parsed["prototypes"], directory, run)
     if cpp_bridge is not None:
         verifier = gdiplus if name == "GDIPlus" else rdbss
         verifier.verify_abis(cpp_bridge, preprocessed, arguments, directory,
@@ -440,8 +444,14 @@ def prepare_provider(name: str, source: Path, arguments: list[str], directory: P
         commands.append(selection)
     # GDI+ certifies its C record names against the original C++ namespace
     # before using those C names for the subsequent merge layout checks.
-    layout_arguments = cpp_bridge["arguments"] if name == "RDBSS" else arguments
-    layout_source = cpp_bridge["source"] if name == "RDBSS" else str(source)
+    if flat_proof is not None:
+        standalone = arguments[:arguments.index("-I")]
+        flat.verify_abis(flat_proof, preprocessed, standalone, directory, prototypes, run)
+        metadata = dict(metadata or {}, sdk_import_bridge=flat_proof)
+        commands += [flat_proof["import_library"]["command"], *flat_proof["commands"]]
+    original_profile = flat_proof or (cpp_bridge if name == "RDBSS" else None)
+    layout_arguments = original_profile["arguments"] if original_profile else arguments
+    layout_source = original_profile["source"] if original_profile else str(source)
     layouts = run(layout_arguments + dump + [layout_source],
                   directory / (name + ".official-clang.log"),
                   directory / (name + ".official-layouts.log"))
@@ -457,9 +467,10 @@ def merge_providers(base: str, primary: Path, output: Path,
                     model: str, primary_layouts: str,
                     runtime: dict | None = None,
                     compatibility: dict | None = None,
-                    convention: str = "", gdiplus_imports: dict | None = None) -> list[dict]:
+                    convention: str = "", gdiplus_imports: dict | None = None,
+                    flat_units: tuple | list = ()) -> list[dict]:
     providers = ISOLATED_PROVIDERS.get(base, ())
-    if not providers and runtime is None:
+    if not providers and runtime is None and not flat_units:
         return []
     directory = output / (base + "-providers")
     directory.mkdir(exist_ok=True)
@@ -472,6 +483,10 @@ def merge_providers(base: str, primary: Path, output: Path,
         units.append(prepare_provider(name, source, provider_arguments, directory,
                                       neverd, model, headers, defines, prototypes,
                                       convention=convention, gdiplus_imports=gdiplus_imports))
+    for profile in flat_units:
+        units.append(prepare_provider(profile["name"], profile["source"], profile["compiler"],
+                                      directory, neverd, model, profile["headers"],
+                                      flat_proof=profile["bridge"]))
     if runtime is not None:
         units.append(prepare_provider("UCRT", runtime["source"], runtime["arguments"],
                                       directory, neverd, model,
@@ -512,9 +527,11 @@ def merge_providers(base: str, primary: Path, output: Path,
         for index, (unit, report) in enumerate(zip(units, imported), 1):
             if report["declaration"] != index or report["prefix"] != unit["name"]:
                 raise ValueError("official provider provenance does not match its input")
-            bridge = unit["metadata"].get("cpp_header_bridge")
+            flat_bridge = unit["metadata"].get("sdk_import_bridge")
+            bridge = flat_bridge or unit["metadata"].get("cpp_header_bridge")
             if bridge and not set(report["prototypes"]) <= set(bridge["verified_functions"]):
-                raise ValueError(f"imported {unit['name']} routines lack an original C++ ABI proof")
+                language = bridge.get("language", "c++")
+                raise ValueError(f"imported {unit['name']} routines lack an original {language.upper()} ABI proof")
             if bridge:
                 # Recheck the actual published declarations after parsing,
                 # renaming and merging; a correct preprocessed bridge alone
@@ -532,7 +549,8 @@ def merge_providers(base: str, primary: Path, output: Path,
                 selection += ["--import-prototype=" + name for name in bridge["verified_functions"]]
                 run(selection, published / "selection.log")
                 proof = dict(bridge, commands=[])
-                verifier = gdiplus if unit["name"] == "GDIPlus" else rdbss
+                verifier = flat if flat_bridge else (
+                    gdiplus if unit["name"] == "GDIPlus" else rdbss)
                 verifier.verify_abis(proof, selected, common, published,
                                      bridge["verified_functions"], run)
                 bridge["published_abi"] = proof
@@ -650,9 +668,15 @@ def combine_targets(output: Path, directories: list[Path]) -> None:
 def generate(output: Path, cache: Path, neverd: str, clang: str,
              architecture: str = "arm64", *,
              include_ucrt: bool = False, readobj: str = "llvm-readobj",
-             ucrt_compatibility: bool = False) -> None:
+             ucrt_compatibility: bool = False, legacy_sdk: bool = False,
+             legacy_profile: dict | None = None) -> None:
     if ucrt_compatibility and not include_ucrt:
         raise ValueError("UCRT compatibility requires the official UCRT provider")
+    if legacy_sdk and legacy_profile is None:
+        output.mkdir(parents=True, exist_ok=True)
+        cache.mkdir(parents=True, exist_ok=True)
+        (output / "manifest.json").unlink(missing_ok=True)
+        legacy_profile = flat.legacy_headers(output, cache)
     if architecture == "all":
         output.mkdir(parents=True, exist_ok=True)
         (output / "manifest.json").unlink(missing_ok=True)
@@ -661,7 +685,8 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             directory = output / arch
             generate(directory, cache, neverd, clang, arch,
                      include_ucrt=include_ucrt, readobj=readobj,
-                     ucrt_compatibility=ucrt_compatibility)
+                     ucrt_compatibility=ucrt_compatibility, legacy_sdk=legacy_sdk,
+                     legacy_profile=legacy_profile)
             directories.append(directory)
         combine_targets(output, directories)
         return
@@ -761,14 +786,22 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
             target_packages = runtime["target_packages"]
             if ucrt_compatibility:
                 compatibility = ucrt.prepare_compatibility(runtime, output, cache)
-        gdiplus_imports = None
+        gdiplus_imports, flat_units = None, []
         if base == "WindowsUser":
             gdiplus_imports = gdiplus.import_library(output, cache, architecture, readobj)
             if gdiplus_imports["package"] not in target_packages:
                 target_packages.append(gdiplus_imports["package"])
+            flat_units, archives = flat.source_units(output, cache, architecture, readobj,
+                                                     arguments, legacy_profile)
+            target_packages.extend(item for item in archives if item not in target_packages)
+            if legacy_profile:
+                runtime_packages.extend(item for item in legacy_profile["packages"]
+                                        if item not in runtime_packages)
+                notice = legacy_profile["vc_notice"]
+                shutil.copy2(notice, licenses / notice.name)
         providers = merge_providers(base, generated, output, arguments, common,
                                      neverd, model, original_layouts, runtime, compatibility,
-                                     convention, gdiplus_imports)
+                                     convention, gdiplus_imports, flat_units)
         final = checked_types(neverd, generated, output / (name + ".final.log"), model)
         built.append({"name": name, "sha256": wdk.digest(generated),
                       "types": len(final["types"]),
@@ -788,7 +821,9 @@ def generate(output: Path, cache: Path, neverd: str, clang: str,
         "target_packages": target_packages,
         "profiles": dict({"ucrt": wdk.digest(ucrt.INPUTS)} if include_ucrt else {},
                          rdbss=wdk.digest(Path(rdbss.__file__)),
-                         gdiplus=wdk.digest(Path(gdiplus.__file__))),
+                         gdiplus=wdk.digest(Path(gdiplus.__file__)),
+                         flat_imports=wdk.digest(Path(flat.__file__)),
+                         **({"legacy_sdk": wdk.digest(flat.LEGACY_INPUTS)} if legacy_sdk else {})),
         "inputs": inputs,
         "licenses": [{"file": path.name, "sha256": wdk.digest(path)}
                      for path in sorted(licenses.iterdir())],
@@ -804,6 +839,8 @@ def main() -> None:
     parser.add_argument("--clang", default="clang")
     parser.add_argument("--ucrt", action="store_true",
                         help="include exact UCRT exports from pinned SDK/VC inputs")
+    parser.add_argument("--legacy-sdk", action="store_true",
+                        help="include retired AllJoyn and Peer APIs from Microsoft's archived SDK 22621")
     parser.add_argument("--ucrt-compatibility", action="store_true",
                         help="supplement missing UCRT declarations from pinned Wine sources (requires --ucrt)")
     parser.add_argument("--llvm-readobj", default="llvm-readobj",
@@ -813,7 +850,8 @@ def main() -> None:
     generate(arguments.output.resolve(), arguments.cache.resolve(),
              str(Path(arguments.neverd).resolve()), arguments.clang,
              arguments.architecture, include_ucrt=arguments.ucrt,
-             readobj=arguments.llvm_readobj, ucrt_compatibility=arguments.ucrt_compatibility)
+             readobj=arguments.llvm_readobj, ucrt_compatibility=arguments.ucrt_compatibility,
+             legacy_sdk=arguments.legacy_sdk)
 
 
 if __name__ == "__main__":

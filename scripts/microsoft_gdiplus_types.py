@@ -86,19 +86,8 @@ def imported_functions(functions, inputs, directory, run):
     """The DLL name and linker spelling both come from the target SDK import library."""
     if wdk.digest(Path(inputs["library"])) != inputs["sha256"]:
         raise ValueError("Microsoft GDI+ import library changed")
-    fmt = ucrt.IMPORT_FORMATS[inputs["architecture"]]
     text = run(inputs["command"], directory / "GDIPlus-imports.log")
-    imports = {}
-    for block in re.split(r"(?m)^File: ", text)[1:]:
-        if block.splitlines()[0].strip().lower() != "gdiplus.dll":
-            continue
-        fields = dict(re.findall(r"(?m)^([^:\n]+): (.*)$", block))
-        if fields.get("Format") != fmt or fields.get("Type") != "code":
-            continue
-        name = fields.get("Export name")
-        if not name:
-            raise ValueError("GDI+ import member has no export name")
-        imports.setdefault(name, set()).update(re.findall(r"(?m)^Symbol: (\S+)$", block))
+    imports = ucrt.module_import_symbols(text, inputs["architecture"], "gdiplus.dll")
     if not {"GdipCreatePath", "GdiplusStartup"} <= imports.keys():
         raise ValueError("GDI+ import inventory is incomplete")
     for name in functions.keys() & imports.keys():

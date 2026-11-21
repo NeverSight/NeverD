@@ -198,6 +198,24 @@ renderer cannot yet preserve and SDK declarations absent from the import library
 Run `--provider GDIPlus` to repeat the API check and use
 `check_windows_provider_calls.py --gdiplus` to recompile callers from both C backends.
 
+The SDK import profiles cover color management, catalog trust, monitor
+configuration, diagnostic data and Web Services for Devices on all three
+targets. The SDK supplies Host Compute, Host Network and Hypervisor Platform
+import libraries for x64 and ARM64. For each target the generator intersects
+public code import names with that SDK's declarations, checks the compiler's
+exact linker spelling, and compares the original and published compiler ABI
+before and after the merge. Ordinal-only imports carry no public name.
+
+Add `--legacy-sdk` to use the archived Microsoft 10.0.22621.3233 SDK for
+AllJoyn, Peer Networking and Peer Graph. The package identities and hashes
+are pinned in `scripts/MicrosoftLegacySDKInputs.json`. The current SDK
+profiles use Microsoft's C headers. The archived profiles use the original
+C++ headers to verify declarations with default arguments and empty parameter
+lists. Each target manifest retains the header profile, import library, and
+compiler commands. Use `check_windows_provider_calls.py --sdk-imports` and
+`check_windows_provider_calls.py --legacy-sdk` for linked HighC and LLVMC
+caller checks using the matching Microsoft libraries.
+
 Use `--provider NDIS` to compare every `Ndis` function declared by the retained
 target's primary WDK profile. Its inventory comes from fresh preprocessing of
 the original official headers; a missing published declaration therefore fails
