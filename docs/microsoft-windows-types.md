@@ -140,6 +140,15 @@ Direct3D 11/12, DXGI and D3DCompiler likewise select their exported C functions
 with the complete record and callback dependencies. These units cover device
 and swap-chain creation, root-signature serialization, factory creation and
 shader compilation; they do not infer a COM method call from a vtable slot.
+The kernel catalog also selects the WDK's callable storage-port access
+routines, tape class, WPP recorder, USB power, entropy and network power
+dependency interfaces. The storage-port profile defines
+`DISABLE_INLINE_REGISTER_ACCESS` so the compiler sees the external routines.
+NDIS poll uses the WDK's NDIS 6.85 profile. The NDIS chimney and legacy
+Network DMA units cover older driver imports. The Network DMA header
+requires `ENABLE_LEGACY_NETDMA`. The provider ABI checker compiles each
+selected prototype against the original headers and the published catalog.
+
 RDBSS is an independent kernel unit using the official mini-redirector
 profile. The pinned `rxcontx.h` gives two different anonymous enums the same
 `RX_CONTEXT_CREATE_FLAGS` typedef only in C. The generator compares both

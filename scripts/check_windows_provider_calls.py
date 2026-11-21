@@ -47,8 +47,14 @@ LIBRARIES = ("advapi32.lib", "pathcch.lib", "runtimeobject.lib", "gdi32.lib", "c
 DRIVER_FUNCTIONS = {"UseSDConfig": "SdPortGetPciConfigSpace",
                     "UseAudioAdapter": "PcAddAdapterDevice",
                     "UseStreamClock": "StreamClassQueryMasterClockSync",
-                    "UseCameraValue": "USBCAMD_GetRegistryKeyValue"}
-DRIVER_IMPORTS = {"sdport.sys": ("SdPortGetPciConfigSpace",),
+                    "UseCameraValue": "USBCAMD_GetRegistryKeyValue",
+                    "UseNetworkPoll": "NdisRequestPoll",
+                    "UseRecorderLog": "imp_WppRecorderLogDelete",
+                    "UseUSBPowerClient": "UsbPm_Deregister"}
+DRIVER_IMPORTS = {"ndis.sys": ("NdisRequestPoll",),
+                  "wpprecorder.sys": ("imp_WppRecorderLogDelete",),
+                  "usbpmapi.sys": ("UsbPm_Deregister",),
+                  "sdport.sys": ("SdPortGetPciConfigSpace",),
                   "portcls.sys": ("PcAddAdapterDevice",),
                   "stream.sys": ("StreamClassQueryMasterClockSync",),
                   "usbcamd2.sys": ("USBCAMD_GetRegistryKeyValue",)}

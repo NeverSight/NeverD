@@ -331,6 +331,8 @@ def check(args: argparse.Namespace) -> dict:
         expected = set(args.provider or CASES)
         profiles = manifest.get("profiles", {})
         if args.provider is None:
+            if "wdk_exports" not in profiles:
+                expected.difference_update(windows.WDK_EXPORT_PREFIXES)
             if "flat_imports" not in profiles:
                 expected.difference_update(flat.CURRENT.keys() - PROVIDER_PREFIXES.keys())
             if "legacy_sdk" not in profiles:

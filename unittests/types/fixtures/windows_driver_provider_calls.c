@@ -2,13 +2,30 @@
 #include <ntddk.h>
 
 // Each provider requires the WDK base declarations first.
+#define NDIS685
+#include <ndis.h>
+#include <ndis/poll.h>
 #include <portcls.h>
 #include <sdport.h>
 #include <strmini.h>
 #include <usb.h>
 #include <usbcamdi.h>
+#include <usbpmapi.h>
+#include <wpprecorder.h>
 
 // Stable public fixture names; imported APIs retain the WDK's conventions.
+__declspec(dllexport) void __cdecl UseNetworkPoll(NDIS_POLL_HANDLE Poll) {
+  NdisRequestPoll(Poll, NULL);
+}
+
+__declspec(dllexport) void __cdecl UseRecorderLog(PVOID Control, RECORDER_LOG Log) {
+  imp_WppRecorderLogDelete(Control, Log);
+}
+
+__declspec(dllexport) NTSTATUS __cdecl UseUSBPowerClient(USBPM_CLIENT Client) {
+  return UsbPm_Deregister(Client);
+}
+
 __declspec(dllexport) ULONG __cdecl
 UseSDConfig(PSD_MINIPORT Miniport, UCHAR Offset, PUCHAR Buffer, ULONG Length) {
   return SdPortGetPciConfigSpace(Miniport, Offset, Buffer, Length);
