@@ -14,6 +14,8 @@ from transport_test import Client
 
 
 ENTRY = 0x400078
+# Both entry points decompile the entire function before returning a page.
+DECOMPILE_TIMEOUT_SECONDS = 90
 WEIGHTED_MASKS = (0x7A6D35C1, 0xB53C678A, 0x4EF0A903, 0xD2195A6C)
 WEIGHTED_UNION = 0
 for _mask in WEIGHTED_MASKS:
@@ -475,17 +477,16 @@ def elf(code):
     return header + segment + code
 
 
-def ok(client, operation, payload):
-    reply = client.call(operation, payload)
+def ok(reply):
     assert reply["status"] == "ok", reply
     return reply["payload"]
 
 
 def source(client, representation, symbolic):
-    return ok(client, "decompile", {
+    return ok(client.call("decompile", {
         "address": hex(ENTRY), "representation": representation, "limit": 2048,
         "source_options": {"symbolic": True} if symbolic else {},
-    })["text"]
+    }, timeout=DECOMPILE_TIMEOUT_SECONDS))["text"]
 
 
 def function_name(text):
@@ -636,7 +637,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
         fixture.write_bytes(image)
         outputs = {}
         with Client(worker) as client:
-            ok(client, "open", {"path": str(fixture), "read_only": True})
+            ok(client.call("open", {"path": str(fixture), "read_only": True}))
             for representation in ("source", "llvmc"):
                 ordinary = source(client, representation, False)
                 enhanced = source(client, representation, True)
@@ -679,7 +680,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                     if single:
                         args.append("--func=" + hex(ENTRY))
                     subprocess.run(args + ["-o", str(output), str(fixture)],
-                                   check=True, capture_output=True, text=True, timeout=90)
+                                   check=True, capture_output=True, text=True,
+                                   timeout=DECOMPILE_TIMEOUT_SECONDS)
                     text = output.read_text(encoding="utf-8")
                     enhanced_shape(text)
                     outputs[name] = text
