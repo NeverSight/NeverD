@@ -21921,6 +21921,11 @@ new read bits through the recorded call sites until recursive components
 converge. This reuses each CFG's local observations across callee updates
 within `kCallRegisterUnreadWork`.
 
+The LLVM emitter resolves an isolated code address by checking which function
+symbols start or end at that address. Repeated requests for that address
+reuse the result. A second distinct address builds the module's full index.
+Both paths use the image's entry admission rules and symbol order for aliases.
+
 The two C routes and LLVM share the assembly owner in `X64CallRCXNative.h`.
 Its Windows x64 SSE2 profile prevents live AVX upper halves crossing an
 under-described call. Other target intrinsics and wider caller values are
