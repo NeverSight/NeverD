@@ -2819,6 +2819,14 @@ static llvm::Expected<PatchResult> installObject(
     return std::move(E);
   if (auto E = relocate(*Object, *LayoutImage, Bindings))
     return std::move(E);
+  // A repeated code-only installation can extend the old RX segment. Adding
+  // another in-image pool would also require a new RELRO segment. Return the
+  // affected sites to the layout planner before publishing either mapping.
+  if (AddressPlan->PoolSection &&
+      Object->Image.Sections[*AddressPlan->PoolSection].IsInImage &&
+      Original.findSegmentByName(kDefaultNdTextSegment))
+    return llvm::make_error<MachOLiteralPoolOutOfRange>(
+        AddressPlan->PoolInstructions);
   if (auto E = relocateLiftedAddresses(*Object, *AddressPlan))
     return E;
   if (!Object->Thunks.empty()) {

@@ -16,10 +16,13 @@
 
 #include "neverd/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
+#include "neverd/ir/low/AArch64AddressResult.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/RegistrationABI.h"
 #include "neverd/loader/COFF/COFFRegistrationEH.h"
 #include "neverd/loader/CodePointerSources.h"
+#include "neverd/loader/MachO/FunctionBody.h"
+#include "neverd/support/AArch64Literal.h"
 #include "neverd/support/BinaryEncoding.h"
 
 #include <algorithm>
@@ -218,6 +221,46 @@ void CFGBuilder::exploreAddressTakenRoots(const BinaryImage &Img,
   absoluteRelocationRootIndex(Img).collectOrdinarySources(
       Img, CurrentFuncRange->first, CurrentFuncRange->second,
       RelocationSources);
+  if (!RelocationSources.empty() && Img.isArm64e()) {
+    // The old entry is just a branch to a separately owned body. A rebased
+    // pointer into the bytes after it supplies an address, but no CFG edge
+    // from that branch. Explicit control and exceptional roots remain live.
+    const auto Body =
+        machOLiftedSource(Img, CurrentFuncEntry, CurrentFuncRange->second);
+    if (Body && Body->ForwardTarget &&
+        (*Body->ForwardTarget < CurrentFuncEntry ||
+         *Body->ForwardTarget >= CurrentFuncRange->second))
+      RelocationSources.clear();
+    else if (Body && !Body->ForwardTarget) {
+      // A literal pointer explicitly returned by this CFG names original
+      // storage. Remove only that slot's contribution to the candidate.
+      // Another slot or a control-flow use remains independent evidence.
+      constexpr auto Word = aarch64::kInsnSize;
+      for (const auto &[PC, Record] : Insns) {
+        if (Record.Size != Word || PC < CurrentFuncEntry ||
+            !rangeInBounds(PC - CurrentFuncEntry, Word, Body->Bytes.size()))
+          continue;
+        const auto *At = Body->Bytes.data() + (PC - CurrentFuncEntry);
+        const auto Encoding = readLE<uint32_t>(At);
+        const auto Target = machORebasedLiteralAddress(Img, Encoding, PC);
+        if (!Target)
+          continue;
+        const auto Candidate = RelocationSources.find(*Target);
+        if (Candidate == RelocationSources.end())
+          continue;
+        const va_t Slot = aarch64::decodeLiteralLoad(Encoding, PC)->Address;
+        if (!Candidate->second.contains(Slot))
+          continue;
+        DecodedInsn Load{};
+        if (Dec.decodeOne(At, Word, PC, Load) == int(Word) && Load.Raw &&
+            Load.Raw->detail &&
+            darwinAddressValueEscapes(
+                Dec, Body->Bytes, CurrentFuncEntry, PC + Word,
+                Load.Raw->detail->aarch64.operands[0].reg))
+          Candidate->second.erase(Slot);
+      }
+    }
+  }
   const ExceptionFunction *Exception =
       Img.ExceptionMetadata.findFunction(CurrentFuncEntry);
   for (auto &[Target, Sources] : RelocationSources) {

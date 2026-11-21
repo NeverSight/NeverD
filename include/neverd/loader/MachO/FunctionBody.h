@@ -36,6 +36,10 @@ std::optional<MachOLiftedSource> machOLiftedSource(const BinaryImage &Image,
 std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
                                               va_t VA);
 
+/// File-backed interior byte of a function used as an address value. The
+/// returned owner does not make an unaligned byte a callable entry.
+std::optional<va_t> machOInteriorByteOwner(const BinaryImage &Image, va_t VA);
+
 /// Target of an integer literal load from a dyld-rebased, immutable slot.
 std::optional<va_t> machORebasedLiteralAddress(const BinaryImage &Image,
                                                uint32_t Word, va_t PC);

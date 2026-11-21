@@ -18,6 +18,7 @@
 #include "neverd/loader/MachO/FunctionBody.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/Error.h"
 
@@ -87,6 +88,14 @@ llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
     llvm::Module &Module, const BinaryImage &Image,
     std::vector<MachODataInCodeRange> *RecoveredData = nullptr,
     std::vector<MachOLiftedSourceAddress> *SourceAddresses = nullptr);
+
+/// Also return the unclassified storage retained in the original image after
+/// each entry's reachable code.
+llvm::Expected<llvm::DenseSet<va_t>> validateMachORegisterResults(
+    llvm::Module &Module, const BinaryImage &Image,
+    std::vector<MachODataInCodeRange> *RecoveredData,
+    std::vector<MachOLiftedSourceAddress> *SourceAddresses,
+    llvm::DenseMap<va_t, ExceptionAddressRange> *RetainedTails);
 } // namespace neverd
 
 #endif // NEVERD_BACKEND_CODEGEN_MACHO_MACHOREGISTERRESULTS_H
