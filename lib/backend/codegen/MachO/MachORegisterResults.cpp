@@ -79,7 +79,7 @@ struct RegisterBody {
   std::optional<ExceptionAddressRange> RetainedTail;
   bool HasDataPage = false;
   bool HasEmbeddedData = false;
-  bool HasCompactFrame = false;
+  bool HasSavedFrame = false;
   bool HasLanguageFrame = false;
   bool HasBareReturn = false;
   bool IsForwarder = false;
@@ -123,6 +123,19 @@ std::optional<PCSigningInstruction> pcSigningInstruction(unsigned Id) {
 #include "MachORegisterResults.def"
   default:
     return std::nullopt;
+  }
+}
+
+bool isRegisterCall(unsigned Id) {
+  switch (Id) {
+  case AARCH64_INS_BLR:
+    return true;
+#define NEVERD_A64_PAUTH_BRANCH(Insn, Mask, Word, Key, Zero, Kind)             \
+  case AARCH64_INS_##Insn:                                                     \
+    return NdOp::Kind == NdOp::INDIR_CALL;
+#include "neverd/ir/intrinsics/AArch64/AArch64PAuth.def"
+  default:
+    return false;
   }
 }
 
@@ -727,8 +740,10 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
   Body.RecoveredData = std::move(Dispatch.Recovered);
   Body.HasEmbeddedData = !Source->Embedded.empty();
   Body.HasLanguageFrame = Frame->Itanium.has_value();
-  Body.HasCompactFrame =
-      Framed || (!Indexed && !Compact.SavedRegisterSlots.empty());
+  Body.HasSavedFrame = Framed || !Compact.SavedRegisterSlots.empty();
+  const bool SavesLR = llvm::any_of(Rows, [](const CFIInstruction &Row) {
+    return Row.Kind == CFIOpKind::Offset && Row.Register == kDwarfLR;
+  });
   llvm::raw_string_ostream OS(Body.Assembly);
   const bool FramelessSpills =
       !Indexed && !Framed && !Compact.SavedRegisterSlots.empty();
@@ -772,6 +787,10 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       break;
     }
   llvm::SmallVector<ScratchFlow> Flow(HasCall ? (End - Start) / Word : 0);
+  // Ordinary lowering can discard the complete frame of a leaf. Direct
+  // callers retain their existing call/result analysis.
+  Body.HasSavedFrame |= SavesLR && !HasCall;
+  bool UsesPCSigning = false;
   llvm::GlobalVariable *PageOffset = nullptr;
   auto Islands = Source->Embedded;
   auto Unreached = llvm::ArrayRef(Dispatch.UnreachedCode);
@@ -821,6 +840,7 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
     const auto PCSigning = pcSigningInstruction(I.Id);
     const bool PACM =
         I.Id == AARCH64_INS_HINT && I.Raw->alias_id == AARCH64_INS_ALIAS_PACM;
+    UsesPCSigning |= PCSigning.has_value() || PACM;
     while (!Unreached.empty() && Unreached.front().second <= PC)
       Unreached = Unreached.drop_front();
     const bool OutsideCFG = !Unreached.empty() && Unreached.front().first <= PC;
@@ -870,6 +890,20 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
           if (Predecessors.empty() || Predecessors.back() != Index)
             Predecessors.push_back(Index);
         }
+      OS << kInstructionWord << Encoding << '\n';
+      continue;
+    }
+    if (isRegisterCall(I.Id)) {
+      if (OutsideCFG)
+        return std::nullopt;
+      HasCall = true;
+      Body.HasSavedFrame |= SavesLR;
+      if (!Flow.empty()) {
+        // An unknown callee may consume or replace either physical result.
+        Flow[Index].Reads |= kScratchX8 | kScratchX9;
+        Flow[Index].Writes |= kScratchX8 | kScratchX9;
+      }
+      Fallthrough();
       OS << kInstructionWord << Encoding << '\n';
       continue;
     }
@@ -1043,13 +1077,6 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       Fallthrough();
     if (!SIMDData && !Literal && !KeepEncoding && !independent(I))
       return std::nullopt;
-    // Classic compact mode cannot describe a saved PC-signed return. A
-    // frameless body without calls or spills retains a live LR instead; the
-    // asynchronous bridge authenticates its recovered recipe and supplies
-    // the separate normalized LR used by the system cursor.
-    if (!Indexed && !PAuthLR && (PCSigning || PACM) &&
-        (Framed || HasCall || !Compact.SavedRegisterSlots.empty()))
-      return std::nullopt;
     // Frameless variadic entries can load directly at or above incoming SP
     // without materializing va_list. Count the pre-indexed address, not the
     // post-indexed writeback displacement.
@@ -1104,6 +1131,11 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       OS << kSignWithPC;
     }
   }
+  // A classic compact recipe can carry a live PC-signed LR across a
+  // frameless leaf. A call or spill needs an indexed or PAuth_LR recipe.
+  if (!Indexed && !PAuthLR && UsesPCSigning &&
+      (Framed || HasCall || !Compact.SavedRegisterSlots.empty()))
+    return std::nullopt;
   if (!llvm::all_of(Rows,
                     [](const auto &Row) { return Row.Kind == CFIOpKind::Nop; }))
     return std::nullopt;
@@ -1355,7 +1387,7 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     // Keep physical addressing, vector lanes and FP status effects within
     // their complete native body, including runtime checked-pointer behavior.
     if (Body.HasMemoryWriteback || Body.HasMemoryIndex || Body.HasSIMDData ||
-        Body.HasCompactFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
+        Body.HasSavedFrame || Body.HasLanguageFrame || Body.HasBareReturn ||
         Body.IsForwarder || Body.HasEmbeddedData || Body.HasDataPage ||
         !Body.SourceAddresses.empty())
       Select(F);

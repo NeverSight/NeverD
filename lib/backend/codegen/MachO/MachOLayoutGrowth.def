@@ -29,6 +29,7 @@ MACHO_LAYOUT_TEXT(
     "main executable needs unowned capacity in its existing read-only segment")
 
 MACHO_LAYOUT_TEXT(kLostFrameSection, "header growth lost the DWARF section")
+MACHO_LAYOUT_TEXT(kTerminalDwarfInput, "arm64e-terminal-unwind")
 MACHO_LAYOUT_TEXT(
     kInsufficientText,
     "Mach-O layout: metadata growth requires authenticated TEXT capacity")

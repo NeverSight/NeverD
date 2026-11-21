@@ -95,6 +95,16 @@ public:
     return true;
   }
 
+  bool pageEntries(uint64_t Page, uint16_t &Offset, uint16_t &Count) const {
+    return u16At(Page + kPageEntriesOffsetField, Offset) &&
+           u16At(Page + kPageEntryCountField, Count);
+  }
+
+  bool pageEncodings(uint64_t Page, uint16_t &Offset, uint16_t &Count) const {
+    return u16At(Page + kLocalEncodingsOffsetField, Offset) &&
+           u16At(Page + kLocalEncodingCountField, Count);
+  }
+
 private:
   const uint8_t *Data;
   size_t Size;
@@ -300,15 +310,15 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
       return rawParseError("second-level page header leaves the section");
     if (Page.Kind != kSecondLevelRegular && Page.Kind != kSecondLevelCompressed)
       return rawParseError("unknown second-level page kind");
-    if (!R.u16At(uint64_t(Page.SectionOffset) + 4, Page.EntryPageOffset) ||
-        !R.u16At(uint64_t(Page.SectionOffset) + 6, Page.EntryCount))
+    if (!R.pageEntries(Page.SectionOffset, Page.EntryPageOffset,
+                       Page.EntryCount))
       return rawParseError("second-level page header is truncated");
 
     const uint64_t HeaderSize =
         Page.Kind == kSecondLevelRegular ? uint64_t(8) : uint64_t(12);
     if (Page.Kind == kSecondLevelCompressed &&
-        (!R.u16At(uint64_t(Page.SectionOffset) + 8, Page.EncodingsPageOffset) ||
-         !R.u16At(uint64_t(Page.SectionOffset) + 10, Page.EncodingsCount)))
+        !R.pageEncodings(Page.SectionOffset, Page.EncodingsPageOffset,
+                         Page.EncodingsCount))
       return rawParseError("compressed page header is truncated");
     if (Page.EntryCount == 0)
       return rawParseError(kPageHasNoEntries);
@@ -458,7 +468,135 @@ parseCompactUnwindRaw(llvm::ArrayRef<uint8_t> SectionBytes,
   return Result;
 }
 
+std::optional<TerminalDwarfEntry>
+findTerminalDwarfEntry(llvm::ArrayRef<uint8_t> Section) {
+  const SectionReader R(Section.data(), Section.size(),
+                        llvm::endianness::little);
+  uint32_t Version, Index, Count;
+  if (!R.u32At(offsetof(CompactUnwindRawHeader, Version), Version) ||
+      Version != kUnwindSectionVersion ||
+      !R.u32At(offsetof(CompactUnwindRawHeader, IndexSectionOffset), Index) ||
+      !R.u32At(offsetof(CompactUnwindRawHeader, IndexCount), Count) ||
+      Count < 2)
+    return std::nullopt;
+  const uint64_t Sentinel =
+      Index + uint64_t(Count - 1) * sizeof(CompactUnwindRawIndexEntry);
+  const uint64_t Last = Sentinel - sizeof(CompactUnwindRawIndexEntry);
+  uint32_t End, SentinelPage, Page, Kind;
+  if (!R.u32At(Sentinel, End) ||
+      !R.u32At(Sentinel + offsetof(CompactUnwindRawIndexEntry,
+                                   SecondLevelPageSectionOffset),
+               SentinelPage) ||
+      SentinelPage ||
+      !R.u32At(Last + offsetof(CompactUnwindRawIndexEntry,
+                               SecondLevelPageSectionOffset),
+               Page) ||
+      !R.u32At(Page, Kind))
+    return std::nullopt;
+  const uint64_t P = Page;
+  uint16_t Entries, N;
+  if (!R.pageEntries(P, Entries, N) || !N)
+    return std::nullopt;
+  uint32_t Start, Encoding;
+  if (Kind == kSecondLevelRegular) {
+    const uint64_t At =
+        P + Entries + uint64_t(N - 1) * sizeof(CompactUnwindRawRegularEntry);
+    if (!R.u32At(At, Start) || Start != End ||
+        !R.u32At(At + offsetof(CompactUnwindRawRegularEntry, Encoding),
+                 Encoding))
+      return std::nullopt;
+  } else if (Kind == kSecondLevelCompressed) {
+    uint32_t Base, Packed;
+    if (!R.u32At(Last, Base) ||
+        !R.u32At(P + Entries + uint64_t(N - 1) * sizeof(Packed), Packed) ||
+        decodeCompressedFunctionOffset(Base, Packed, Start) || Start != End)
+      return std::nullopt;
+    const uint32_t Slot = Packed >> kCompressedEncodingIndexShift;
+    uint32_t CommonCount, Common;
+    if (!R.u32At(offsetof(CompactUnwindRawHeader, CommonEncodingsCount),
+                 CommonCount))
+      return std::nullopt;
+    if (Slot < CommonCount) {
+      if (!R.u32At(
+              offsetof(CompactUnwindRawHeader, CommonEncodingsSectionOffset),
+              Common) ||
+          !R.u32At(uint64_t(Common) + Slot * sizeof(Encoding), Encoding))
+        return std::nullopt;
+    } else {
+      uint16_t Local, NumLocal;
+      if (!R.pageEncodings(P, Local, NumLocal) ||
+          Slot - CommonCount >= NumLocal ||
+          !R.u32At(P + Local + (Slot - CommonCount) * sizeof(Encoding),
+                   Encoding))
+        return std::nullopt;
+    }
+  } else {
+    return std::nullopt;
+  }
+  const uint32_t FDE = Encoding & kDwarfSectionOffsetMask;
+  if (!FDE || (Encoding & ~(kHasLSDA | kPersonalityMask |
+                            kDwarfSectionOffsetMask)) != kARM64ModeDwarf)
+    return std::nullopt;
+  return TerminalDwarfEntry{Sentinel, Start, FDE};
+}
+
+std::optional<uint32_t>
+resolveTerminalDwarfEnd(const BinaryImage &Img, const TerminalDwarfEntry &Entry,
+                        llvm::ArrayRef<DwarfFDE> Frames) {
+  const va_t Base = macho_loader::getMachHeaderVA(Img);
+  if (!Img.isArm64e() || Base > UINT64_MAX - Entry.FunctionOffset)
+    return std::nullopt;
+  const va_t Start = Base + Entry.FunctionOffset;
+  const DwarfFDE *Match = nullptr;
+  if (Frames.empty()) {
+    const auto *F = Img.ExceptionMetadata.findFunction(Start);
+    if (F && F->CodeRange.Begin == Start &&
+        F->ParseStatus == ExceptionParseStatus::Complete && F->Compact &&
+        F->Compact->Kind == CompactUnwindKind::DwarfFDE &&
+        F->Compact->DwarfFDEOffset == Entry.FDEOffset &&
+        F->Compact->SemanticStatus == CompactUnwindSemanticStatus::Complete &&
+        F->Dwarf)
+      Match = &*F->Dwarf;
+  } else {
+    for (const auto &FDE : Frames)
+      if (FDE.InitialLocation == Start) {
+        if (Match)
+          return std::nullopt;
+        Match = &FDE;
+      }
+  }
+  if (!Match || Match->SectionOffset != Entry.FDEOffset ||
+      Match->InitialLocation != Start ||
+      Match->ParseStatus != ExceptionParseStatus::Complete ||
+      !Match->AddressRange || Match->AddressRange > UINT64_MAX - Start ||
+      Match->AddressRange > UINT32_MAX - Entry.FunctionOffset)
+    return std::nullopt;
+  const auto *Text = Img.getSectionFor(Start);
+  const auto *Segment = Img.getSegmentFor(Start);
+  if (!Text || !Segment || !Img.isCodeAddress(Start) ||
+      !rangeInBounds(Start - Text->VA, Match->AddressRange,
+                     std::min(Text->Size, Text->FileSz)) ||
+      !rangeInBounds(Start - Segment->VA, Match->AddressRange,
+                     std::min<uint64_t>(Segment->Data.size(), Segment->FileSz)))
+    return std::nullopt;
+  const va_t End = Start + Match->AddressRange;
+  const auto Next = llvm::upper_bound(Img.MachOFunctionStarts, Start);
+  if (Next != Img.MachOFunctionStarts.end() && *Next < End)
+    return std::nullopt;
+  for (const auto &FDE : Frames)
+    if (&FDE != Match && FDE.InitialLocation < End &&
+        (FDE.InitialLocation >= Start ||
+         Start - FDE.InitialLocation < FDE.AddressRange))
+      return std::nullopt;
+  return Entry.FunctionOffset + static_cast<uint32_t>(Match->AddressRange);
+}
+
 ParseResult parseCompactUnwind(const BinaryImage &Img) {
+  return parseCompactUnwind(Img, {});
+}
+
+ParseResult parseCompactUnwind(const BinaryImage &Img,
+                               llvm::ArrayRef<DwarfFDE> Frames) {
   ParseResult Result;
 
   const Section *Sec = Img.getSectionByName(section_names::macho::Unwind);
@@ -551,6 +689,10 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
   };
   std::vector<IndexEntry> Index;
   Index.reserve(IndexCount);
+  std::optional<uint32_t> TerminalEnd;
+  if (Img.isArm64e())
+    if (auto Entry = findTerminalDwarfEntry({Data, Size}))
+      TerminalEnd = resolveTerminalDwarfEnd(Img, *Entry, Frames);
   for (uint32_t I = 0; I < IndexCount; ++I) {
     const uint64_t Base = uint64_t(IndexOffset) + uint64_t(I) * 12;
     IndexEntry Entry;
@@ -558,6 +700,8 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
         !R.u32At(Base + 4, Entry.SecondLevelOffset) ||
         !R.u32At(Base + 8, Entry.LSDAArrayOffset))
       return malformed("__unwind_info index leaves its section");
+    if (TerminalEnd && I + 1 == IndexCount)
+      Entry.FunctionOffset = *TerminalEnd;
     if (const char *Error = validatePageIndex(
             Entry.FunctionOffset, Entry.SecondLevelOffset, !Index.empty(),
             Index.empty() ? 0 : Index.back().FunctionOffset,
@@ -605,8 +749,7 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       continue;
     }
     uint16_t EntryPageOffset = 0, EntryCount = 0;
-    if (!R.u16At(uint64_t(Page.SecondLevelOffset) + 4, EntryPageOffset) ||
-        !R.u16At(uint64_t(Page.SecondLevelOffset) + 6, EntryCount)) {
+    if (!R.pageEntries(Page.SecondLevelOffset, EntryPageOffset, EntryCount)) {
       partial("__unwind_info second-level page header is truncated");
       continue;
     }
@@ -655,8 +798,8 @@ ParseResult parseCompactUnwind(const BinaryImage &Img) {
       }
     } else if (Kind == kSecondLevelCompressed) {
       uint16_t EncodingsPageOffset = 0, EncodingsCount = 0;
-      if (!R.u16At(uint64_t(Page.SecondLevelOffset) + 8, EncodingsPageOffset) ||
-          !R.u16At(uint64_t(Page.SecondLevelOffset) + 10, EncodingsCount)) {
+      if (!R.pageEncodings(Page.SecondLevelOffset, EncodingsPageOffset,
+                           EncodingsCount)) {
         partial("__unwind_info compressed page header is truncated");
         continue;
       }

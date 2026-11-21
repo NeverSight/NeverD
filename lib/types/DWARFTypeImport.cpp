@@ -1128,11 +1128,14 @@ private:
             const uint64_t Unit =
                 unsignedOf(Child, dw::DW_AT_byte_size)
                     .value_or(Library.sizeOf(*Field.Type).value_or(0));
-            if (*Top + *BitSize > Unit * 8) {
+            if (Unit > std::numeric_limits<uint64_t>::max() / 8 ||
+                *Top > Unit * 8 || *BitSize > Unit * 8 - *Top) {
               Why = Refusal{"a bit-field outside its storage"};
               return nullptr;
             }
-            Field.BitOffset += Unit * 8 - *Top - *BitSize;
+            Field.BitOffset += Child.getDwarfUnit()->isLittleEndian()
+                                   ? Unit * 8 - *Top - *BitSize
+                                   : *Top;
           }
       } else {
         Why = Refusal{"a member at an offset DWARF computes"};
