@@ -9,9 +9,24 @@
 #if defined(RECHECK_FIRST) || defined(RECHECK_SECOND)
 .type finish,@function
 #endif
+#ifdef TRANSFER_SPILL
+#define FRAME_BYTES 80
+#else
+#define FRAME_BYTES 64
+#endif
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define LOW_AT(base) base
+#define HIGH_AT(base) base+4
+#else
+#define LOW_AT(base) base+4
+#define HIGH_AT(base) base
+#endif
+#ifndef COMBINE_WORDS
+#define COMBINE_WORDS or
+#endif
 .ent import_probe
 import_probe:
-  daddiu $sp,$sp,-64
+  daddiu $sp,$sp,-FRAME_BYTES
   sd $16,0($sp)
   sd $17,8($sp)
   sd $18,16($sp)
@@ -43,6 +58,72 @@ import_probe:
   addu $gp,$12,$16
 #endif
 .endm
+.macro spill_result
+#ifdef SEPARATE_HALVES
+  dsrl32 $14,$2,0
+  sw $14,64($sp)
+  sw $2,40($sp)
+#else
+  sd $2,40($sp)
+#endif
+#if defined(SWAPPED_SAMPLE)
+  lw $14,LOW_AT(40)($sp)
+#elif defined(LOAD_HALVES)
+  lw $14,HIGH_AT(40)($sp)
+#elif defined(STORE_HALVES)
+  ld $13,40($sp)
+  dsrl32 $14,$13,0
+  sw $14,HIGH_AT(64)($sp)
+  sw $13,LOW_AT(64)($sp)
+#elif defined(TRANSFER_SPILL) && !defined(SEPARATE_HALVES)
+  ld $13,40($sp)
+  sd $13,64($sp)
+#endif
+.endm
+.macro check_spill
+#ifdef GUARD_BEFORE_PACK
+  bne $2,$18,.Ldone
+  nop
+#endif
+#ifdef WRITE_SPILL_BYTE
+  sb $zero,44($sp)
+#endif
+#if defined(SEPARATE_HALVES)
+  lw $14,64($sp)
+  lwu $13,40($sp)
+  sd $zero,64($sp)
+#elif defined(SWAPPED_SAMPLE)
+  lwu $13,HIGH_AT(40)($sp)
+#elif defined(LOAD_HALVES)
+  lwu $13,LOW_AT(40)($sp)
+#endif
+#if defined(INSERT_FIELD)
+  dins $13,$14,32,32
+  or $19,$13,$zero
+#elif defined(LOAD_HALVES) || defined(SEPARATE_HALVES)
+  dsll32 $14,$14,0
+  COMBINE_WORDS $19,$13,$14
+#elif defined(TRANSFER_SPILL)
+  ld $19,64($sp)
+#else
+  ld $19,40($sp)
+#endif
+#ifdef TRANSFER_SPILL
+  sd $zero,40($sp)
+#endif
+#if defined(GUARD_BEFORE_PACK)
+  or $4,$19,$zero
+#elif defined(SWAPPED_SAMPLE)
+  bne $19,$18,.Ldone
+  or $4,$19,$zero
+#elif defined(TRANSFER_SPILL)
+  bne $19,$18,.Ldone
+  or $4,$2,$zero
+#else
+  bne $19,$18,.Ldone
+  ld $4,40($sp)
+#endif
+.endm
 #ifdef SELF_FORWARD
   or $4,$18,$zero
 .Lself:
@@ -64,7 +145,7 @@ import_probe:
   daddiu $5,$zero,37
   or $19,$2,$zero
 #ifdef RESULT_SPILL
-  sd $2,40($sp)
+  spill_result
 #endif
   beq $17,$zero,.Lcheck_result
   nop
@@ -84,7 +165,7 @@ import_probe:
   daddiu $5,$zero,37
   or $19,$2,$zero
 #ifdef RESULT_SPILL
-  sd $2,40($sp)
+  spill_result
 #endif
 #endif
   daddiu $17,$17,-1
@@ -92,12 +173,7 @@ import_probe:
   nop
 .Lcheck_result:
 #ifdef RESULT_SPILL
-#ifdef WRITE_SPILL_BYTE
-  sb $zero,44($sp)
-#endif
-  ld $19,40($sp)
-  bne $19,$18,.Ldone
-  ld $4,40($sp)
+  check_spill
 #else
   bne $19,$18,.Ldone
   or $4,$2,$zero
@@ -169,5 +245,5 @@ import_probe:
   ld $20,32($sp)
   ld $ra,56($sp)
   jr $ra
-  daddiu $sp,$sp,64
+  daddiu $sp,$sp,FRAME_BYTES
 .end import_probe

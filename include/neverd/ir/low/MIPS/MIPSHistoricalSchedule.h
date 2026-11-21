@@ -53,10 +53,41 @@ public:
     return HistoricalSchedule(HistoricalISA, State, System);
   }
 
+  /// Start at the boot ROM using a post-reset CP0 sample. Other status bits,
+  /// EPC and Cause cannot be obtained by zero-initializing the processor.
+  static std::optional<HistoricalSchedule> fromColdReset(HistoricalCP0 Sample) {
+    const bool R3000 = Sample.Processor == HistoricalProcessor::R30xx;
+    if (!R3000 && Sample.Processor != HistoricalProcessor::R4000)
+      return std::nullopt;
+    constexpr uint32_t BEV = 1u << 22, TS = 1u << 21, SR = 1u << 20;
+    const uint32_t Required = R3000 ? BEV : BEV | 4;
+    const uint32_t Mask = Required | (R3000 ? 3u : TS | SR);
+    if ((Sample.Status & Mask) != Required)
+      return std::nullopt;
+    HistoricalCP0 Boot{
+        Sample.Processor,
+        Sample.Status,
+        Sample.Cause,
+        Sample.EPC,
+        Sample.BadVAddr,
+        R3000 ? UINT64_C(0xbfc00000) : UINT64_C(0xffffffffbfc00000)};
+    Boot.ErrorEPC = Sample.ErrorEPC;
+    Boot.EntryHi = Sample.EntryHi;
+    Boot.Context = Sample.Context;
+    Boot.XContext = Sample.XContext;
+    auto Schedule = fromSnapshot(R3000 ? 1 : 3, {}, Boot);
+    if (Schedule)
+      Schedule->ObservedBoundary = Boundary{*Boot.ExceptionVector, true};
+    return Schedule;
+  }
+
   const std::optional<HistoricalCP0> &system() const { return System; }
 
   bool beginPhysical(uint64_t PC, uint32_t Word, bool Paired,
                      std::optional<bool> SlotTaken = {}) {
+    if (ObservedBoundary && (PC != ObservedBoundary->PC ||
+                             (ObservedBoundary->ColdReset && SlotTaken)))
+      return false;
     if (PC & 3) {
       if (!SlotTaken)
         enterFetchAddressError(PC);
@@ -76,9 +107,16 @@ public:
     return Active && Active->PC == PC ? Active->Word : std::nullopt;
   }
   /// A board supplies levels on IP[7:2] at an instruction boundary.
-  bool setHardwareInterrupts(uint8_t Lines) {
-    if (Active || !System || Lines >= 64)
+  /// A trace with an observed issue PC can bind the levels to that issue.
+  /// A failed attempt retains the binding and the prior lines survive
+  /// rejection.
+  bool setHardwareInterrupts(uint8_t Lines, std::optional<uint64_t> PC = {}) {
+    if (Active || !System || Lines >= 64 ||
+        (PC &&
+         ((*PC & 3) || (ObservedBoundary && ObservedBoundary->PC != *PC))))
       return false;
+    if (PC && !ObservedBoundary)
+      ObservedBoundary = Boundary{*PC, false};
     if (((System->Cause >> 10) & 63) != Lines)
       System->R30xxRecognized.reset();
     System->Cause = (System->Cause & ~0xfc00u) | uint32_t(Lines) << 10;
@@ -130,7 +168,7 @@ public:
   /// A misaligned target faults on fetch, after the preceding transfer and
   /// its executed slot have retired. The target instruction never issues.
   bool enterFetchAddressError(uint64_t PC) {
-    return !Active && System && (PC & 3) &&
+    return !Active && !ObservedBoundary && System && (PC & 3) &&
            System->enterException(4, PC, {}, PC);
   }
   bool raiseSoftwareException(uint64_t PC, uint8_t Code) {
@@ -151,8 +189,32 @@ public:
             Code == 11 ? HistoricalCP0::coprocessorOf(*Active->Word)
                        : std::nullopt))
       return false;
+    ObservedBoundary.reset();
     Active.reset();
     return true;
+  }
+
+  /// Resolve a guest reference before its memory or destination effects.
+  /// The instruction and its executed delay slot have distinct EPC evidence.
+  std::optional<uint64_t> translate(const HistoricalTLB &MMU, uint64_t PC,
+                                    uint64_t Address,
+                                    HistoricalMemoryAccess Access) {
+    if (!System || !Active || Active->PC != PC)
+      return std::nullopt;
+    const auto Result = MMU.translate(*System, Address, Access);
+    if (!Result) {
+      Active.reset();
+      return std::nullopt;
+    }
+    if (Result->Result == HistoricalAddressResult::Mapped)
+      return Result->Physical;
+    const auto Branch =
+        Active->SlotTaken ? std::optional(PC - 4) : std::nullopt;
+    if (System->enterTranslationFault(Result->Result, Access, MMU.ASID, PC,
+                                      Branch, Address))
+      ObservedBoundary.reset();
+    Active.reset();
+    return std::nullopt;
   }
 
   const HistoricalSchedulingState &snapshot() const { return Current; }
@@ -170,8 +232,9 @@ public:
     // operand. The base is an ordinary read, even when it aliases rt. Do not
     // infer that a coprocessor move has the same bypass.
     Reads |= MergeSource & ~Current.ForwardableLoad;
-    if (Active || PC % 4 || (Delayed & 1) || (Access & ~Known) ||
-        (ForwardableLoad & ~Delayed) || (Current.UnreadyRegisters & Reads) ||
+    if ((ObservedBoundary && PC != ObservedBoundary->PC) || Active || PC % 4 ||
+        (Delayed & 1) || (Access & ~Known) || (ForwardableLoad & ~Delayed) ||
+        (Current.UnreadyRegisters & Reads) ||
         (Current.UnknownHI && (Access & ReadHI)) ||
         (Current.UnknownLO && (Access & ReadLO)) ||
         (Current.FCSRDelay && (Access & (ReadFCSR | ReadFCC))) ||
@@ -221,6 +284,7 @@ public:
     if (Active->RestoresStatus)
       System->restoreExceptionState();
     Current = Active->Next;
+    ObservedBoundary.reset();
     Active.reset();
     return true;
   }
@@ -251,6 +315,11 @@ private:
   HistoricalSchedulingState Current;
   std::optional<HistoricalCP0> System;
   std::optional<Instruction> Active;
+  struct Boundary {
+    uint64_t PC;
+    bool ColdReset;
+  };
+  std::optional<Boundary> ObservedBoundary;
 };
 
 } // namespace neverd::mips

@@ -1205,6 +1205,118 @@ TEST(MIPSReturnTargets, GuardedReloadUsesTheCompleteLiveSpillOnEveryIteration) {
     }
 }
 
+TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
+  const auto Memory = [](unsigned Opcode, unsigned Reg, unsigned Offset) {
+    return (Opcode << 26) | (29u << 21) | (Reg << 16) | Offset;
+  };
+  const auto Move = [](unsigned Dst, unsigned Src) {
+    return (Src << 21) | (Dst << 11) | 0x25u;
+  };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    const unsigned Low = archLittleEndian(A) ? 24 : 28;
+    const unsigned High = archLittleEndian(A) ? 28 : 24;
+    const auto StoreLow = Memory(43, 2, Low), StoreHigh = Memory(43, 12, High);
+    const auto LoadLow = Memory(39, 13, Low), LoadHigh = Memory(35, 14, High);
+    const auto Full = Memory(63, 2, 24), Reload = Memory(55, 15, 24);
+    const auto Clear = Memory(63, 0, 24), OtherClear = Memory(63, 0, 40);
+    const auto Target = isMIPSN32(A) ? 0x8f390000u : 0xdf390000u;
+    constexpr uint32_t Split = 0x0002603e; // dsrl32 t0,v0,0
+    constexpr uint32_t Shift = 0x000e703c; // dsll32 t2,t2,0
+    constexpr uint32_t Join = 0x01ae7825;  // or t3,t1,t2
+    const auto Check = [&](const char *Name, bool Proven,
+                           llvm::ArrayRef<uint32_t> Before,
+                           unsigned Compared = 15, unsigned Forwarded = 2,
+                           llvm::ArrayRef<uint32_t> After = {}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << Name);
+      std::vector<uint32_t> Code{0x67bdffc0, 0xffbf0038,  0xffb00000,
+                                 0xffb10008, Move(16, 5), 0x0320f809,
+                                 0};
+      Code.insert(Code.end(), Before.begin(), Before.end());
+      const auto Exit = Code.size();
+      Code.insert(Code.end(),
+                  {0x14000000u | (Compared << 21) | (16u << 16), 0});
+      Code.insert(Code.end(), After.begin(), After.end());
+      Code.insert(Code.end(), {Move(4, Forwarded), 0x3c190002, Target,
+                               0x0320f809, 0x6405000b});
+      Code[Exit] |= Code.size() - Exit - 1;
+      Code.insert(Code.end(),
+                  {0xdfb00000, 0xdfb10008, 0xdfbf0038, 0x03e00008, 0x67bd0040});
+      const auto Lifted = build(image(Code, A));
+      ASSERT_TRUE(Lifted.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Lifted, A, BinaryFormat::ELF);
+        EXPECT_TRUE(Proven);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_FALSE(Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
+    };
+    Check("doubleword copied before source clear", true,
+          {Full, Reload, Memory(63, 15, 40), Clear, Memory(55, 15, 40)});
+    Check("word stores then doubleword load", true,
+          {Split, StoreLow, StoreHigh, Reload});
+    Check("doubleword store then word loads", true,
+          {Full, LoadLow, LoadHigh, Shift, Join});
+    Check("disjoint addition", true,
+          {Full, LoadLow, LoadHigh, Shift, 0x01ae782d});
+    Check("disjoint xor", true, {Full, LoadLow, LoadHigh, Shift, 0x01ae7826});
+    Check("carry into sampled high half", false,
+          {Full, LoadLow, LoadHigh, Shift, 0x35ce0001, 0x01ae782d, 0x000f703e,
+           Shift, Join});
+    Check("reassemble after guarding original", true, {Full, LoadHigh}, 2, 15,
+          {LoadLow, Shift, Join, Clear});
+    Check("same half rewritten after sampling", true, {Full, Reload, StoreLow});
+    Check("halves held in separate cells", true,
+          {Split, StoreLow, Memory(43, 12, 40), LoadLow, Memory(35, 14, 40),
+           Shift, Join, Clear, OtherClear});
+    Check("open call can read leftover half", false,
+          {Split, StoreLow, Memory(43, 12, 40), LoadLow, Memory(35, 14, 40),
+           Shift, Join, Clear});
+    Check("numeric write removes the only opaque half", true,
+          {StoreLow, 0x640d0049, Memory(43, 13, Low)}, 2);
+    Check("ordinary byte store after clearing", true,
+          {Full, Clear, Memory(40, 0, Low)}, 2);
+    Check("exchanged halves", false,
+          {Split, Memory(43, 2, High), Memory(43, 12, Low), Reload});
+    Check("duplicated low half", false,
+          {StoreLow, Memory(43, 2, High), Reload});
+    Check("sign extension contaminates high half", false,
+          {Full, Memory(35, 13, Low), LoadHigh, Shift, Join});
+    Check("sign extension after guarding original", false, {Full, LoadHigh}, 2,
+          15, {Memory(35, 13, Low), Shift, Join, Clear});
+    Check("only one predecessor supplies the high half", false,
+          {Split, StoreLow, 0x12000002, 0, StoreHigh, Reload});
+    Check("partial clear of a conditionally stored half", false,
+          {0x12000002, 0, StoreLow, Memory(40, 0, Low)}, 2);
+    Check("complete clear of a conditionally stored half", true,
+          {0x12000002, 0, StoreLow, Memory(43, 0, Low)}, 2);
+    Check("exchanged halves checked and forwarded together", true,
+          {Full, Memory(39, 13, High), Memory(35, 14, Low), Shift, Join, Clear},
+          15, 15);
+    Check("byte changed after sampling", false,
+          {Full, Reload, Memory(40, 0, High)});
+    Check("sample modified before both loads", true,
+          {Full, Memory(40, 0, High), LoadLow, LoadHigh, Shift, Join}, 15, 13,
+          {Memory(55, 13, 24)});
+    // One edge selects a checked result and the other an independent input.
+    // The joined word is safe until a later store changes part of it.
+    Check("joined safe word", true,
+          {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
+           Memory(63, 15, 24)},
+          2, 15);
+    Check("partial write to joined safe word", false,
+          {0x14500003, 0, 0x10000002, Move(15, 2), Move(15, 16),
+           Memory(63, 15, 24), Memory(40, 0, Low)},
+          2, 15);
+    Check("mixed calls", false,
+          {Move(17, 2), 0x3c190002, Target, 0x0320f809, 0x64040007, 0x0011603e,
+           StoreLow, StoreHigh, Reload});
+  }
+}
+
 TEST(MIPSReturnTargets, ReloadAfterACallRequiresPrivateSpillBytes) {
   for (Arch A :
        {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {

@@ -18320,6 +18320,12 @@ known lane before both reloads and checks the forwarded value on each byte
 order. Each binding exercises equality and a mismatch above bit 31. The
 controls include stale iterations, missing
 stores, partial overwrites and an unchecked spill in an open call's frame.
+The stack-transfer variants copy between two slots and carry 32-bit pieces
+across loop edges. They cover native-endian stores, signed high and unsigned
+low loads, disjoint OR, XOR and addition, and doubleword field insertion.
+One variant checks before packing. Another swaps the halves and forwards
+the newly checked word. The return-target tests reject forwarding a different
+word, a possible carry into the high half and an uncleared outgoing fragment.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.
