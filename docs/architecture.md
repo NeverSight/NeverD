@@ -5874,7 +5874,11 @@ RCX and R8, and left the byte and the length undefined in each of its SIMD
 compares. A routine that calls out reads the registers it saves for its
 callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
-(`runtime.sigtramp`): both keep the platform's positions.
+(`runtime.sigtramp`): both keep the platform's positions. Before Go 1.17 no
+amd64 Go code takes a register argument, so in such an image a routine that
+reads one is assembly, though no flag says so; there a read of RAX's low byte
+alone counts for none, since a compiled function's nil check makes one (`testb
+%al, (%rcx)`).
 
 A Go image's pclntab records every function of its Go code once its text base
 is proven (`GoModuleInfo::FrameArguments`), so an address inside one begins

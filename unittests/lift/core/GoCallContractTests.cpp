@@ -937,46 +937,56 @@ std::vector<uint64_t> constantArguments(const PipelineResult &R, va_t Entry) {
 }
 
 TEST(GoAssembly, AHelperTakesTheRegistersItReads) {
-  // Go assembly with no Go declaration of its own takes its operands where
-  // its callers set them, as internal/bytealg's indexbytebody<> takes SI,
-  // BX, AL and R8.  System V's positions made them RDI, RSI, RDX, RCX and
-  // R8, and left the RAX and RBX it reads undefined.
-  //   main.f: mov esi, 1; mov ebx, 2; mov eax, 3; mov r8d, 4; call h; ret
-  //   h:      lea rax, [rax+rbx]; add rax, rsi; mov [r8], rax; ret
-  constexpr va_t F = kTextVA + 0x100;
-  constexpr va_t H = kTextVA + 0x200;
-  GoTestImage T;
-  std::vector<uint8_t> Body = {0xBE, 1, 0, 0, 0,    0xBB, 2, 0, 0, 0, 0xB8,
-                               3,    0, 0, 0, 0x41, 0xB8, 4, 0, 0, 0};
-  const std::vector<uint8_t> Call = makeCall(F + Body.size(), H);
-  Body.insert(Body.end(), Call.begin(), Call.end());
-  Body.push_back(0xC3);
-  T.writeText(F, Body);
-  T.writeText(
-      H, {0x48, 0x8D, 0x04, 0x18, 0x48, 0x01, 0xF0, 0x49, 0x89, 0x00, 0xC3});
-  for (const auto &[Entry, Name] :
-       {std::pair{F, "main.f"}, std::pair{H, "main.h"}}) {
-    Symbol Function = Symbol::makeFunc(Entry);
-    Function.Name = Name;
-    T.Img.Symbols.push_back(std::move(Function));
+  for (const bool StackABI : {false, true}) {
+    SCOPED_TRACE(StackABI);
+    // Go assembly with no Go declaration of its own takes its operands where
+    // its callers set them, as internal/bytealg's indexbytebody<> takes SI,
+    // BX, AL and R8.  System V's positions made them RDI, RSI, RDX, RCX and
+    // R8, and left the RAX and RBX it reads undefined.
+    //   main.f: mov esi, 1; mov ebx, 2; mov eax, 3; mov r8d, 4; call h; ret
+    //   h:      lea rax, [rax+rbx]; add rax, rsi; mov [r8], rax; ret
+    constexpr va_t F = kTextVA + 0x100;
+    constexpr va_t H = kTextVA + 0x200;
+    GoTestImage T;
+    std::vector<uint8_t> Body = {0xBE, 1, 0, 0, 0,    0xBB, 2, 0, 0, 0, 0xB8,
+                                 3,    0, 0, 0, 0x41, 0xB8, 4, 0, 0, 0};
+    const std::vector<uint8_t> Call = makeCall(F + Body.size(), H);
+    Body.insert(Body.end(), Call.begin(), Call.end());
+    Body.push_back(0xC3);
+    T.writeText(F, Body);
+    T.writeText(
+        H, {0x48, 0x8D, 0x04, 0x18, 0x48, 0x01, 0xF0, 0x49, 0x89, 0x00, 0xC3});
+    for (const auto &[Entry, Name] :
+         {std::pair{F, "main.f"}, std::pair{H, "main.h"}}) {
+      Symbol Function = Symbol::makeFunc(Entry);
+      Function.Name = Name;
+      T.Img.Symbols.push_back(std::move(Function));
+    }
+    GoModuleInfo Module;
+    Module.PclnTabMagic = 0xFFFFFFF1u;
+    // Go 1.16 and earlier pass every argument of Go code on the stack and mark
+    // no function as assembly; the helper's record gives no size.
+    Module.RegisterArguments = !StackABI;
+    Module.GoCode = {{F, kTextVA + 0x300}};
+    if (!StackABI)
+      Module.GoAssembly = {{H, H + 0x10}};
+    // Go 1.16's `cmpbody<>` declares `$0-0`, a record of no argument word.
+    Module.FrameArguments = {
+        {F, 0, 0},
+        {H, StackABI ? std::optional<uint32_t>(0) : std::nullopt,
+         std::nullopt}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    // In the platform's order, then Go's.
+    using namespace x86reg;
+    EXPECT_EQ(parameterRegisters(R, H),
+              (std::vector<uint64_t>{RSI, R8, RAX, RBX}));
+    EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{1, 4, 3, 2}));
   }
-  GoModuleInfo Module;
-  Module.PclnTabMagic = 0xFFFFFFF1u;
-  Module.RegisterArguments = true;
-  Module.GoCode = {{F, kTextVA + 0x300}};
-  Module.GoAssembly = {{H, H + 0x10}};
-  Module.FrameArguments = {{F, 0, 0}, {H, std::nullopt, std::nullopt}};
-  T.Img.ExceptionMetadata.GoModule = std::move(Module);
-  PipelineOptions Options;
-  Options.EmitDumpOutput = false;
-  llvm::LLVMContext Context;
-  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
-  ASSERT_TRUE(R.Success) << R.Error;
-  // In the platform's order, then Go's.
-  using namespace x86reg;
-  EXPECT_EQ(parameterRegisters(R, H),
-            (std::vector<uint64_t>{RSI, R8, RAX, RBX}));
-  EXPECT_EQ(constantArguments(R, F), (std::vector<uint64_t>{1, 4, 3, 2}));
 }
 
 TEST(GoRegisterArguments, RegistersStoredInARowAreNoVariadicSaveArea) {

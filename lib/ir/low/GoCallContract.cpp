@@ -225,8 +225,11 @@ std::optional<FixedIntegerCallArguments>
 goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
                         const GPRReadWidths &Reads) {
   const auto &Module = Img.ExceptionMetadata.GoModule;
+  // Before the internal ABI no Go code takes a register argument, so code
+  // that does is assembly, though the pclntab marks none before Go 1.18.
   if (!Module || Img.Arch != Arch::X64 || !isGoCode(Img, Entry) ||
-      !inRanges(Module->GoAssembly, Entry) || goWriteBarrierAt(Img, Entry) ||
+      (Module->RegisterArguments && !inRanges(Module->GoAssembly, Entry)) ||
+      goWriteBarrierAt(Img, Entry) ||
       std::binary_search(Module->MorestackEntries.begin(),
                          Module->MorestackEntries.end(), Entry) ||
       goAssemblyTakesRegisterArguments(Img, Entry, Reads))
@@ -238,9 +241,13 @@ goEntryRegisterOperands(const BinaryImage &Img, va_t Entry,
       getTargetRegInfo(Img.Arch)
           .integerArgumentLayout(Img.abiFormat())
           .Registers;
+  // There a compiled function's nil check reads RAX's low byte (`testb %al,
+  // (%rcx)`), which takes no argument.
+  const bool StackABI = !Module->RegisterArguments;
   const auto Read = [&](uint64_t Register) {
     return Register != x86reg::RSP && Register != x86reg::RBP &&
-           Reads[Register / 8] != 0;
+           Reads[Register / 8] != 0 &&
+           !(StackABI && Register == x86reg::RAX && Reads[Register / 8] == 1);
   };
   constexpr unsigned GeneralFamilies = 16;
   bool Own = false;

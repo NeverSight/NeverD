@@ -20742,7 +20742,9 @@ assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 `GoAssembly.AHelperTakesTheRegistersItReads` runs a Go 1.18 image whose
 compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
 which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
-and RBX, and the call passes 1, 4, 3 and 2.
+and RBX, and the call passes 1, 4, 3 and 2. It runs again as a Go 1.16 image,
+which passes Go code's arguments on the stack and marks no assembly, where
+`main.h` declares `$0-0` as `cmpbody<>` does.
 `GoStackGrowth.AnARM64StackABIPathRestartsTheFunction` lifts a Go 1.16 arm64
 function whose growth path spills nothing: the path is recognised, restarts
 the function, and leaves no call or conditional branch.
