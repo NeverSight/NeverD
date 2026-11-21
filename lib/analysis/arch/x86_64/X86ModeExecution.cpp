@@ -414,8 +414,13 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       (Binding.Mode != *Mode || Binding.Address != Address))
     return invalid("original instruction binding disagrees with the full "
                    "address and execution mode");
-  const auto FinishSystem = [&](X86ModeExecutionResult Result,
-                                X86EventKind FaultKind = X86EventKind::Fault) {
+  const auto FinishSystem =
+      [&](X86ModeExecutionResult Result,
+          X86EventKind FaultKind =
+              X86EventKind::Fault) -> llvm::Expected<X86ModeExecutionResult> {
+    auto Destination = memoryFor(S);
+    if (!Destination)
+      return Destination.takeError();
     P->AttemptConsumed |= Result.InstructionAttempted;
     if (Result.Exception) {
       const auto &E = *Result.Exception;
@@ -428,10 +433,13 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
           uint8_t(S.STIBlocked),
           uint8_t(S.SSBlocked),
           uint8_t(O.Legacy.NMIBlockedBySTI.value_or(false))};
-      deliver(S, Memory, *P, Result);
+      // RSM may have restored a different address space and privilege context.
+      // A post-retirement trap uses that CPU image for its entire IDT entry.
+      P->Low = detail::projectNon64(S, !(Destination->controls().CR0 & 1));
+      deliver(S, *Destination, *P, Result);
     }
     reportReceipts(*P, Result);
-    retain(S, Memory, std::move(P));
+    retain(S, *Destination, std::move(P));
     return Result;
   };
   static constexpr uint8_t RsmOpcode[]{0x0f, 0xaa}, HaltOpcode[]{0xf4},
@@ -466,14 +474,15 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
   if (S.SMM && Rsm) {
     if (!P->PendingRSM)
       P->PendingRSM.emplace();
+    X86EventKind FaultKind = X86EventKind::Fault;
     auto Got =
         detail::executeX86Rsm(S, NormalMemory, Memory, Binding.Bytes, *Rsm,
-                              P->AttemptConsumed, O, *P->PendingRSM);
+                              P->AttemptConsumed, O, *P->PendingRSM, FaultKind);
     if (!Got)
       return Got.takeError();
     if (Got->Status != X86LegacyExecutionStatus::BackingFault)
       P->PendingRSM.reset();
-    return FinishSystem(std::move(*Got));
+    return FinishSystem(std::move(*Got), FaultKind);
   }
   static constexpr uint8_t Enclu[]{0x0f, 0x01, 0xd7};
   std::optional<uint8_t> EnclaveException;

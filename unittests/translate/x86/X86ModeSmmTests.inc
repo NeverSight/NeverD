@@ -219,3 +219,75 @@ TEST_F(X86ModeInterruptTest, SoftwareSmmSaveMapAndEditedRsmMatchKvm) {
   EXPECT_EQ(R.RFlags & ~uint64_t(0x10000), After.rflags & ~uint64_t(0x10000));
 }
 #endif
+
+TEST_F(X86ModeInterruptTest,
+       RsmDebugUsesFirmwareBeforeCommitAndRestoredTablesAfterCommit) {
+  for (auto OutsideMode : {Mode::Protected32, Mode::Long64})
+    for (bool FirmwareTF : {false, true})
+      for (bool OutsideTF : {false, true})
+        for (bool FirmwareBreakpoint : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << unsigned(OutsideMode) << " fwTF=" << FirmwareTF
+                       << " restoredTF=" << OutsideTF
+                       << " breakpoint=" << FirmwareBreakpoint);
+          start(OutsideMode);
+          auto &V = Machine.Core.Core;
+          auto &R = V.Core.Core.Core.Core;
+          Machine.SMM.emplace();
+          Machine.Debug.emplace();
+          Options.Legacy.Debug = Options.Long.DebugProfile =
+              X86InstructionDebugProfile::Watchpoints;
+          R.GPR[4] = 0xf000;
+          if (OutsideTF)
+            R.RFlags |= 0x100;
+          if (OutsideMode == Mode::Protected32)
+            put(0x9008, 0x4200 | (uint64_t(8) << 16) | (uint64_t(0x8e) << 40));
+          auto Firmware = RAM;
+          Firmware.Memory.front().Bytes[4] = 0;
+          Firmware.Memory.front().Bytes[5] = 0xa0;
+          Firmware.Memory.front().Bytes[6] = Firmware.Memory.front().Bytes[7] =
+              0;
+          Firmware.Memory.front().Bytes[0x38000] = 0x0f;
+          Firmware.Memory.front().Bytes[0x38001] = 0xaa;
+          Program = {{0x38000, Mode::Real16, {0x0f, 0xaa}}};
+          bindMemory();
+          auto Private = llvm::cantFail(
+              X86PagedMemory::create(Firmware, Features, Controls));
+          X86ModeExecution Execution(*Memory, Options, *Private);
+          ASSERT_TRUE(
+              llvm::cantFail(Execution.systemManagementInterrupt(Machine))
+                  .EventAccepted);
+          V.IDTR = {0, 0x3ff};
+          R.GPR[4] = 0xf000;
+          R.RFlags = FirmwareTF ? 0x102 : 2;
+          if (FirmwareBreakpoint) {
+            Machine.Debug->DR[0] = 0x38000;
+            Machine.Debug->DR7 = 0x401;
+          }
+          uint64_t Budget = 1;
+          auto Step = llvm::cantFail(Execution.run(Machine, Program, Budget));
+          ASSERT_TRUE(Step.OwnerError.empty()) << Step.OwnerError;
+          EXPECT_EQ(Step.Attempts, 1u);
+          EXPECT_EQ(Step.Completions, FirmwareBreakpoint ? 0u : 1u);
+          EXPECT_EQ(Machine.SMM->Active, FirmwareBreakpoint);
+          if (FirmwareBreakpoint) {
+            EXPECT_EQ(Step.DeliveredVector, 1u);
+            EXPECT_EQ(R.PC, 0xa000u);
+            EXPECT_EQ(word(bytes(*Private), uint16_t(R.GPR[4]), 2), 0x8000u);
+            EXPECT_EQ(Machine.Debug->DR6 & 0x4001, 1u);
+          } else if (FirmwareTF) {
+            EXPECT_EQ(Step.DeliveredVector, 1u);
+            EXPECT_EQ(Machine.Debug->DR6 & 0x4001, 0x4000u);
+            const auto Width = OutsideMode == Mode::Long64 ? 8u : 4u;
+            const auto Image = bytes(*Memory);
+            const auto SP = uint32_t(R.GPR[4]);
+            EXPECT_EQ(word(Image, SP, Width), 0x1000u);
+            EXPECT_EQ(bool(word(Image, SP + 2 * Width, Width) & 0x100),
+                      OutsideTF);
+          } else {
+            EXPECT_EQ(Step.DeliveredVector, 0u);
+            EXPECT_EQ(R.PC, 0x1000u);
+            EXPECT_EQ(bool(R.RFlags & 0x100), OutsideTF);
+          }
+        }
+}

@@ -30,7 +30,7 @@ llvm::Expected<X86ModeExecutionResult>
 executeX86Rsm(X86ModeState &State, translate::X86PagedMemory &Normal,
               translate::X86PagedMemory &SMRAM, llvm::ArrayRef<uint8_t> Bytes,
               bool Locked, bool Fetched, const X86ModeExecutionOptions &Options,
-              X86RsmProgress &Progress);
+              X86RsmProgress &Progress, X86EventKind &FaultKind);
 
 } // namespace neverd::analysis::detail
 

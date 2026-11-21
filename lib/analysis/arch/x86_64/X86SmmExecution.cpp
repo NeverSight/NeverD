@@ -222,14 +222,29 @@ enterX86Smm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
 llvm::Expected<X86ModeExecutionResult>
 executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
               llvm::ArrayRef<uint8_t> Bytes, bool Locked, bool Fetched,
-              const X86ModeExecutionOptions &Options,
-              X86RsmProgress &Progress) {
-  if ((S.SMM->Active && !S.Debug) || (modeRegisters(S).RFlags & 0x100) ||
-      (S.Debug && (S.Debug->DR7 & 0xff)))
-    return invalid(
-        "software RSM requires an inactive instruction-debug producer");
+              const X86ModeExecutionOptions &Options, X86RsmProgress &Progress,
+              X86EventKind &FaultKind) {
+  const auto &Regs = modeRegisters(S);
+  const bool TF = Regs.RFlags & 0x100;
+  if ((S.SMM->Active || TF) && !S.Debug)
+    return invalid("software RSM requires a bound debug register bank");
   X86ModeExecutionResult R;
   if (!Fetched) {
+    const auto &CS = S.Core.Core.Core.CS;
+    const uint64_t Address =
+        CS.Attributes & 0x2000 ? Regs.PC : uint32_t(CS.Base + Regs.PC);
+    if (S.Debug && (!SMRAM.sgxMemory() ||
+                    SMRAM.sgxMemory()->instructionBreakpointsAt(Address))) {
+      const auto Matches = x86ExecutionBreakpoints(
+          S.Debug->DR, S.Debug->DR7, Address, Regs.RFlags, S.SSBlocked);
+      if (Matches) {
+        x86PublishInstructionDebug(*S.Debug, false, Matches);
+        FaultKind = X86EventKind::InstructionBreakpoint;
+        R.InstructionAttempted = true;
+        R.Exception = X86MemoryException{1, 0, {}};
+        return R;
+      }
+    }
     auto OK = fetchX86SystemInstruction(
         S, SMRAM, Bytes, Options.Legacy.Segments.FullLimitChoice, R);
     if (!OK)
@@ -252,6 +267,9 @@ executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
     }
     Progress.SaveArea = std::move(B);
   }
+  if (TF && (S.Debug->DebugCTL & kX86BranchTraceFlag))
+    return invalid("software RSM branch single-stepping requires a bound "
+                   "processor behavior");
   auto Next = S;
   auto C = SMRAM.controls();
   restore(*Progress.SaveArea, Next, C);
@@ -300,6 +318,10 @@ executeX86Rsm(X86ModeState &S, X86PagedMemory &Normal, X86PagedMemory &SMRAM,
   llvm::cantFail(Normal.bindControls(C));
   S = std::move(Next);
   R.InstructionCompleted = true;
+  if (TF) {
+    x86PublishInstructionDebug(*S.Debug, true);
+    R.Exception = X86MemoryException{1, 0, {}};
+  }
   return R;
 }
 
