@@ -144,8 +144,9 @@ bool nativeArgumentsAreNonFrame(
                    })))
         return false;
       if (!Sites.empty() && I == Sites.back()) {
-        const auto It = Guarded.find(&Op);
-        const uint32_t Safe = It == Guarded.end() ? 0 : It->second.Registers;
+        const auto It = Guarded.Arguments.find(&Op);
+        const uint32_t Safe =
+            It == Guarded.Arguments.end() ? 0 : It->second.Registers;
         Live = Before | (All & ~Safe);
         Sites = Sites.drop_back();
       } else {
@@ -330,11 +331,26 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     }
   }
   const bool HasCalls = CallCount != 0;
-  const auto CallSP = HasCalls && QualifiedMemory
-                          ? sourceCallStackPointers(Function, Target, Remaining)
-                          : std::map<const MedOp *, MedVar>{};
+  const auto &TRI = getTargetRegInfo(Target);
+  std::map<int, MedVar> BlockSP;
+  const auto CallSP =
+      HasCalls && QualifiedMemory
+          ? sourceCallStackPointers(Function, Target, Remaining, BlockSP)
+          : std::map<const MedOp *, MedVar>{};
   for (const auto &[Call, SP] : CallSP)
     MemoryAddresses.push_back(SP);
+  // One static call can produce and consume different words on a loop edge.
+  const bool MayForward =
+      (isMIPSN32(Target) || isMIPSN64(Target)) && !NativeCalls.empty();
+  if (MayForward && QualifiedMemory && !HasMergeStores) {
+    for (const auto &Entry : BlockSP)
+      MemoryAddresses.push_back(Entry.second);
+    for (const auto &B : Function.Blocks)
+      for (const auto &Op : B.Ops)
+        if (Op.Output.Kind == MedVar::Reg &&
+            Op.Output.RegOff == TRI.StackPointer)
+          MemoryAddresses.push_back(Op.Output);
+  }
   std::map<Key, std::optional<int64_t>> Offsets;
   if (QualifiedMemory) {
     const auto Values =
@@ -399,7 +415,6 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   std::map<Key, bool> Results;
   std::set<Key> Active;
-  const auto &TRI = getTargetRegInfo(Target);
   using SliceKey = std::tuple<Key, unsigned, unsigned>;
   std::set<SliceKey> ProvenNonFrame;
   std::set<std::pair<SliceKey, bool>> NonFrameActive;
@@ -616,15 +631,20 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   // the saved-link proof, but require a complete argument extent before
   // admitting pointer spills. An unknown or open variadic call can read more
   // stack arguments than the ABI's minimum outgoing area.
+  const auto ClosedPrivateStart =
+      [&](const MedOp &Call) -> std::optional<int64_t> {
+    if (!Calls.contains(&Call) &&
+        (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
+         Call.CalleeVariadicRegisterFrom >= 0))
+      return std::nullopt;
+    return CallPrivateStart(Call);
+  };
   std::optional<int64_t> SharedPrivateStart;
   if (CallSP.size() == CallCount)
     for (const auto &Entry : CallSP) {
       const auto &Call = *Entry.first;
-      const auto Start = CallPrivateStart(Call);
-      if (!Start ||
-          (!Calls.contains(&Call) &&
-           (Call.CalleeStackArgs < 0 || Call.CalleeVariadicFrom >= 0 ||
-            Call.CalleeVariadicRegisterFrom >= 0))) {
+      const auto Start = ClosedPrivateStart(Call);
+      if (!Start) {
         SharedPrivateStart.reset();
         break;
       }
@@ -647,7 +667,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
     for (const auto &Block : Function.Blocks)
       for (const auto &Op : Block.Ops) {
         if (Op.Opcode == NdOp::STORE && Op.NumInputs == 2 &&
-            !PrivateFrameStore(Op) && !IsNonFrame(Op.Inputs[1]))
+            !PrivateFrameStore(Op) && !Guarded.Spills.contains(&Op) &&
+            !IsNonFrame(Op.Inputs[1]))
           return false;
         if (Op.Opcode != NdOp::CALL && Op.Opcode != NdOp::INDIR_CALL)
           continue;
@@ -660,8 +681,8 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
                                  ? Arg.Size
                                  : Signature->second.Inputs[I - 1].ValueBytes;
           if (!NonFrameBytes(Arg, 0, Bytes)) {
-            const auto It = Guarded.find(&Op);
-            if (It == Guarded.end() ||
+            const auto It = Guarded.Arguments.find(&Op);
+            if (It == Guarded.Arguments.end() ||
                 !llvm::is_contained(It->second.Inputs, I))
               return false;
           }
@@ -676,12 +697,15 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   const auto FrameIsPrivate = [&] {
     if (!UnexposedFrame) {
       UnexposedFrame = !HasCalls || FrameIsUnexposed(mips::GuardedCalls{});
-      if (!*UnexposedFrame && (isMIPSN32(Target) || isMIPSN64(Target)) &&
-          CallCount - Calls.size() >= 2) {
+      if (!*UnexposedFrame && MayForward && QualifiedMemory) {
+        const auto BlockEntrySP = [&](int Id) -> std::optional<int64_t> {
+          const auto It = BlockSP.find(Id);
+          return It == BlockSP.end() ? std::nullopt : Offset(It->second);
+        };
         const auto Guarded = mips::guardedResultArguments(
-            Function, NativeCalls, TRI, Format, Graph, Definitions, Remaining,
-            IsNonFrame);
-        if (!Guarded.empty())
+            Function, NativeCalls, TRI, Format, Graph, Definitions,
+            {Offset, BlockEntrySP, ClosedPrivateStart}, Remaining, IsNonFrame);
+        if (!Guarded.Arguments.empty() || !Guarded.Spills.empty())
           UnexposedFrame = FrameIsUnexposed(Guarded);
       }
     }

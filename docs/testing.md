@@ -18303,6 +18303,15 @@ that copy again before a third import. For every binding, both paths execute
 with matching and mismatching high halves. The harness checks the arguments
 and order of all observed calls, the restored registers and the final value against the original
 PIC and CPIC ELF on n32 and n64 in both byte orders.
+Loop variants take zero through three backedges and compare the final
+producer's word with an independent input. A single-site loop also passes
+its checked result back to that same import. The other loops forward from
+a register or through two full-width loads of a stack spill. Another variant rechecks
+the sampled word after the second call. A byte-store variant changes a
+known lane before both reloads and checks the forwarded value on each byte
+order. Each binding exercises equality and a mismatch above bit 31. The
+controls include stale iterations, missing
+stores, partial overwrites and an unchecked spill in an open call's frame.
 The private-frame tests also vary whether a loop argument acquires a stack
 address at entry or on its backedge, and whether a native call can observe an
 argument write on any path before a full-register overwrite.

@@ -1104,6 +1104,189 @@ TEST(MIPSReturnTargets, ACheckOfOnePhiOnlyQualifiesAnEqualPhi) {
     }
 }
 
+TEST(MIPSReturnTargets, GuardedReloadUsesTheCompleteLiveSpillOnEveryIteration) {
+  constexpr uint32_t Spill = 0xffa20028;   // sd v0,40(sp)
+  constexpr uint32_t Clear = 0xffa00028;   // sd zero,40(sp)
+  constexpr uint32_t Reload = 0xdfb20028;  // ld s2,40(sp)
+  constexpr uint32_t Forward = 0xdfa40028; // ld a0,40(sp)
+  struct Case {
+    const char *Name;
+    bool Proven;
+    uint32_t Initial = Spill, BeforeProducer = Clear, OnBackedge = Spill;
+    uint32_t Load = Reload, AfterLoad = 0, Argument = Forward, BeforeLoad = 0;
+  };
+  const Case Cases[] = {
+      {.Name = "fresh full word", .Proven = true},
+      {.Name = "clear after sampling",
+       .Proven = true,
+       .AfterLoad = Clear,
+       .Argument = 0x02402025}, // move a0,s2
+      {.Name = "check after a byte write",
+       .Proven = true,
+       .BeforeLoad = 0xa3a0002c}, // sb zero,44(sp)
+      {.Name = "missing entry store", .Proven = false, .Initial = 0},
+      {.Name = "open call can read unchecked stack word",
+       .Proven = false,
+       .BeforeProducer = 0},
+      {.Name = "different result on backedge",
+       .Proven = false,
+       .OnBackedge = 0,
+       .Argument = 0x00402025}, // move a0,v0
+      {.Name = "narrow comparison", .Proven = false, .Load = 0x8fb20028},
+      {.Name = "partial write after sampling",
+       .Proven = false,
+       .AfterLoad = 0xafa5002c}, // sw a1,44(sp)
+      {.Name = "unresolved alias after sampling",
+       .Proven = false,
+       .AfterLoad = 0xa0400000}, // sb zero,0(v0)
+      {.Name = "other stack argument exposes frame",
+       .Proven = false,
+       .AfterLoad = 0xffbd0020}, // sd sp,32(sp)
+      {.Name = "another pointer in delay slot",
+       .Proven = false,
+       .Argument = 0x03a02025}, // move a0,sp
+  };
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (const auto &C : Cases) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << C.Name);
+      const auto LoadTarget = isMIPSN32(A) ? 0x8f390000u : 0xdf390000u;
+      const uint32_t Code[] = {
+          0x67bdffc0,
+          0xffbf0038,
+          0xffb00000,
+          0xffb10008,
+          0xffb20010,
+          0x00a08025,
+          0x00c08825, // save comparison peer and loop count
+          0x0320f809,
+          0,
+          C.Initial,
+          0x1220000c,
+          0, // beq s1,zero,check
+          C.BeforeProducer,
+          0x64050025,
+          0x64060000, // fresh a1 and a2
+          0x3c190002,
+          LoadTarget,
+          0x0320f809,
+          0x64040013,
+          C.OnBackedge,
+          0x6631ffff,
+          0x1620fff6,
+          0, // bne s1,zero,repeat
+          C.BeforeLoad,
+          C.Load,
+          C.AfterLoad,
+          0x16500006,
+          C.Argument, // bne s2,s0,exit
+          0x64060000,
+          0x3c190002,
+          LoadTarget,
+          0x0320f809,
+          0x6405000b,
+          0xdfb00000,
+          0xdfb10008,
+          0xdfb20010,
+          0xdfbf0038,
+          0x03e00008,
+          0x67bd0040};
+      const auto Low = build(image(Code, A));
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      try {
+        Convert.convert(Low, A, BinaryFormat::ELF);
+        EXPECT_TRUE(C.Proven);
+      } catch (const LowToMedConversionError &Error) {
+        EXPECT_FALSE(C.Proven) << Error.what();
+        EXPECT_PRED_FORMAT2(testing::IsSubstring, "MIPS source return target",
+                            Error.what());
+      }
+    }
+}
+
+TEST(MIPSReturnTargets, ReloadAfterACallRequiresPrivateSpillBytes) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    auto Record = NdType::makeStruct({NdType::makeInt(8, false)});
+    Record->Passing = NdRecordPassing::ByValue;
+    SourceFunctionTypeHint Sig;
+    Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Sig.ReturnType = NdType::makeVoid();
+    Sig.Parameters = {{"value", Record}};
+    ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+    const std::map<va_t, SourceFunctionTypeHint> Targets{{0x2000, Sig}};
+    for (bool Bound : {false, true}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << Bound);
+      auto Image =
+          image({0x67bdffc0, 0xffbf0038, 0x0320f809, 0, 0xffa20028, // spill v0
+                 0x0c000800, 0x64040007, // call with a numeric argument
+                 0xdfac0028, 0x15800005, 0x01802025, // reload, compare, forward
+                 0x3c190002, isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+                 0x0320f809, 0x6405000b, 0xdfbf0038, 0x03e00008, 0x67bd0040},
+                A);
+      Image.MIPS.emplace();
+      Image.MIPS->ABI = isMIPSN32(A) ? MIPSABI::N32 : MIPSABI::N64;
+      Image.MIPS->FPABI = 1;
+      const auto Low = build(Image);
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      Convert.setBinaryImage(&Image);
+      Convert.setSourceCallHintsEnabled(true);
+      if (Bound) {
+        Convert.setSourceCalleeTypeHints(&Targets);
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      } else {
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+      }
+    }
+  }
+}
+
+TEST(MIPSReturnTargets, ARepeatedCallNeedsItsCurrentWordOnTheBackedge) {
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (bool SameWord : {false, true}) {
+      SCOPED_TRACE(testing::Message() << getArchName(A) << ' ' << SameWord);
+      const uint32_t Code[] = {
+          0x67bdffd0,
+          0xffbf0028,
+          0xffb00000,
+          0xffb10008,
+          0xffb20010,
+          0x00a08025,
+          0x00c08825,
+          0x02002025, // initially pass the saved peer
+          0x64060000,
+          0x3c190002,
+          isMIPSN32(A) ? 0x8f390000u : 0xdf390000u,
+          0x0320f809,
+          0x64050025, // set a1 in the call's delay slot
+          0x12200006,
+          0x6631ffff,                  // beq s1,zero,exit
+          SameWord ? 0x00409025u : 0u, // s2 holds this or a previous result
+          0x16500003,
+          0x00402025, // bne s2,s0,exit; move a0,v0
+          0x1000fff5,
+          0x00409025, // next iteration saves the old return word
+          0xdfb00000,
+          0xdfb10008,
+          0xdfb20010,
+          0xdfbf0028,
+          0x03e00008,
+          0x67bd0030};
+      const auto Low = build(image(Code, A));
+      ASSERT_TRUE(Low.hasCompleteLiftCoverage());
+      LowToMedConverter Convert;
+      if (SameWord)
+        EXPECT_NO_THROW(Convert.convert(Low, A, BinaryFormat::ELF));
+      else
+        EXPECT_THROW(Convert.convert(Low, A, BinaryFormat::ELF),
+                     LowToMedConversionError);
+    }
+}
+
 TEST_P(MIPSControl, ReusedExecutionUnitClearsAnOldSlotAndFailedHead) {
   const auto Code = encode({0x0c000408, 0x8ca2fff4, 0}, GetParam());
   Decoder Decode;

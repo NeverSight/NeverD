@@ -1,4 +1,4 @@
-/* Two equality edges feed a common call. A third call needs a fresh check. */
+/* Forward only the word checked on the path to the next import. */
 .abicalls
 .option pic2
 .set noreorder
@@ -21,7 +21,11 @@ import_probe:
   or $16,$25,$zero
   or $17,$6,$zero
   or $18,$5,$zero
+#ifdef REPEAT_PRODUCER
+  or $20,$4,$zero
+#else
   or $20,$7,$zero
+#endif
   .cpsetup $25,48,import_probe
 .macro load_target name
 #if __SIZEOF_POINTER__ == 8
@@ -39,7 +43,68 @@ import_probe:
   addu $gp,$12,$16
 #endif
 .endm
-#ifdef JOIN_BEFORE_CHECK
+#ifdef SELF_FORWARD
+  or $4,$18,$zero
+.Lself:
+  restore_gp
+  load_target dispatch
+  or $6,$zero,$zero
+  or $7,$zero,$zero
+  jalr $25
+  or $5,$20,$zero
+  beq $17,$zero,.Ldone
+  daddiu $17,$17,-1
+  bne $2,$18,.Ldone
+  or $4,$2,$zero
+  b .Lself
+  nop
+#elif defined(REPEAT_PRODUCER) || defined(RESULT_SPILL)
+  load_target dispatch
+  jalr $25
+  daddiu $5,$zero,37
+  or $19,$2,$zero
+#ifdef RESULT_SPILL
+  sd $2,40($sp)
+#endif
+  beq $17,$zero,.Lcheck_result
+  nop
+.Lrepeat:
+#ifdef REPEAT_PRODUCER
+#ifdef RESULT_SPILL
+  /* The previous unchecked word must not reach the next open call. */
+  sd $zero,40($sp)
+#endif
+  daddiu $20,$20,1
+  restore_gp
+  load_target dispatch
+  or $4,$20,$zero
+  or $6,$zero,$zero
+  or $7,$zero,$zero
+  jalr $25
+  daddiu $5,$zero,37
+  or $19,$2,$zero
+#ifdef RESULT_SPILL
+  sd $2,40($sp)
+#endif
+#endif
+  daddiu $17,$17,-1
+  bne $17,$zero,.Lrepeat
+  nop
+.Lcheck_result:
+#ifdef RESULT_SPILL
+#ifdef WRITE_SPILL_BYTE
+  sb $zero,44($sp)
+#endif
+  ld $19,40($sp)
+  bne $19,$18,.Ldone
+  ld $4,40($sp)
+#else
+  bne $19,$18,.Ldone
+  or $4,$2,$zero
+#endif
+  or $6,$zero,$zero
+  or $7,$zero,$zero
+#elif defined(JOIN_BEFORE_CHECK)
   beq $17,$zero,.Lother_call
   nop
   load_target dispatch
@@ -76,6 +141,7 @@ import_probe:
   nop
 .Ljoin:
 #endif
+#ifndef SELF_FORWARD
   restore_gp
   load_target transform
   jalr $25
@@ -91,6 +157,7 @@ import_probe:
   daddiu $5,$zero,7
   jalr $25
   or $4,$19,$zero
+#endif
 #endif
 .Ldone:
   daddiu $2,$2,1

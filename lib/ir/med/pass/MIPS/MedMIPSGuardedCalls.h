@@ -13,7 +13,10 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+
+#include <optional>
 
 namespace neverd {
 class MedDefSiteIndex;
@@ -31,16 +34,25 @@ struct GuardedCall {
   uint32_t Registers = 0;
   llvm::SmallVector<unsigned, 2> Inputs;
 };
-using GuardedCalls = llvm::SmallDenseMap<const MedOp *, GuardedCall, 4>;
+struct GuardedCalls {
+  llvm::SmallDenseMap<const MedOp *, GuardedCall, 4> Arguments{};
+  /// Allocated stores whose unchecked bytes cannot escape through a call.
+  llvm::SmallPtrSet<const MedOp *, 4> Spills;
+};
+
+struct GuardedStackLayout {
+  llvm::function_ref<std::optional<int64_t>(const MedVar &)> Offset;
+  llvm::function_ref<std::optional<int64_t>(int)> BlockEntrySP;
+  llvm::function_ref<std::optional<int64_t>(const MedOp &)> ClosedPrivateStart;
+};
 
 /// Arguments whose full machine word is equal to an independently non-frame
 /// value on every path to the native call.
-GuardedCalls
-guardedResultArguments(const MedFunc &F, const NativeCallSites &Native,
-                       const TargetRegInfo &TRI, BinaryFormat Format,
-                       const safety::detail::ExactPhiGraph &Graph,
-                       MedDefSiteIndex &Definitions, size_t &Remaining,
-                       llvm::function_ref<bool(const MedVar &)> IsNonFrame);
+GuardedCalls guardedResultArguments(
+    const MedFunc &F, const NativeCallSites &Native, const TargetRegInfo &TRI,
+    BinaryFormat Format, const safety::detail::ExactPhiGraph &Graph,
+    MedDefSiteIndex &Definitions, GuardedStackLayout Stack, size_t &Remaining,
+    llvm::function_ref<bool(const MedVar &)> IsNonFrame);
 } // namespace mips
 } // namespace neverd
 #endif

@@ -65,6 +65,16 @@ and the LLVM target triple. MIPS64 and AArch64 are different instruction sets.
   ABI-preserved register. A low-word comparison leaves the upper n32 bits
   unknown, and a call can invalidate a copy in a volatile register. Other
   arguments that reach the same call still need their own non-frame evidence.
+  Loop backedges carry equality only when it holds on entry and after every
+  iteration. Repeated executions of one call can return different words.
+  An aligned doubleword spill and reload can carry the same value through
+  the allocated frame. A partial or possibly aliasing write breaks that
+  identity. After a narrow write to an initialized spill, a new full-width
+  comparison can qualify the changed word. Before a call with unknown stack
+  argument extent, each live opaque spill must be checked or fully overwritten.
+  The call invalidates those slot identities. An earlier sample in a preserved
+  register can be checked again. A call with a known argument extent can
+  preserve a spill outside its outgoing area when the frame stays private.
 - Classic disassembly consumes four bytes. A delayed transfer and its slot
   form an eight-byte semantic execution unit. The branch reads its condition
   and indirect target before the slot, writes its link before the slot, and
