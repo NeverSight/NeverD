@@ -77,6 +77,9 @@ public:
   llvm::Error bindActive(std::optional<X86SgxEnclave> Enclave);
   bool hasRunningThread() const { return Running.has_value(); }
   uint64_t generation() const { return Generation; }
+  bool enabled() const { return Enabled; }
+  /// Disable enclave instructions until the platform installs a reset EPC bank.
+  void disableAfterMachineCheck();
 
 private:
   friend class X86PagedMemory;
@@ -104,6 +107,7 @@ private:
   };
   std::optional<Thread> Running;
   std::optional<std::array<uint8_t, 160>> X87;
+  bool Enabled = true;
   uint64_t OutsideXCR0 = 0;
   uint64_t Generation = 0;
 };

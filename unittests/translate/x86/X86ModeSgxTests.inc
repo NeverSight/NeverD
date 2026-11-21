@@ -15,6 +15,73 @@ protected:
       Page.Bytes[At + I] = Value >> (8 * I);
   }
 
+  void checkPlatformEvent(std::vector<X86SgxPage> Pages,
+                          const std::array<uint8_t, 160> &X87, bool INIT) {
+    auto Bank = llvm::cantFail(X86SgxMemory::create(std::move(Pages)));
+    llvm::cantFail(Bank->bindX87(X87, 7));
+    auto C = Controls;
+    C.CR4 |= 0x40;
+    auto O = Options;
+    O.Legacy.ControlRegisters->OtherCR4Features |= 0x40;
+    auto M = llvm::cantFail(
+        X86PagedMemory::createWithSgx(RAM, Features, C, std::move(Bank)));
+    X86ModeExecution Execution(*M, O);
+    auto S = Machine;
+    S.MCA.emplace();
+    S.MCA->Banks.resize(1);
+    auto &R = S.Core.Core.Core.Core.Core.Core;
+    R.RFlags &= ~uint64_t(0x100);
+    uint64_t Budget = 1;
+    ASSERT_EQ(llvm::cantFail(Execution.run(S, Program, Budget)).Completions,
+              1u);
+    ASSERT_TRUE(M->sgxMemory()->active());
+    X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
+    if (INIT) {
+      S.Startup = X86StartupState{0x906a0, false};
+      Inputs.INITPending = true;
+    } else {
+      Inputs.MachineCheck =
+          X86MachineCheckReport{0, 0xb000000000000105ull, 0x1234, 0x22, 7};
+    }
+    Budget = 0;
+    auto Event = llvm::cantFail(Execution.run(S, Program, Budget, Inputs));
+    ASSERT_TRUE(Event.EventAccepted) << Event.OwnerError;
+    if (INIT) {
+      ASSERT_TRUE(S.Startup->WaitingForSIPI);
+      EXPECT_FALSE(Inputs.INITPending);
+      EXPECT_FALSE(M->sgxMemory()->active());
+      EXPECT_TRUE(M->sgxMemory()->enabled());
+      // Booted outside software reestablishes paging and resumes the same
+      // imported thread. INIT left its EPCM pages and interrupted SSA intact.
+      S = Machine;
+      R.RFlags &= ~uint64_t(0x100);
+      R.GPR[0] = 3;
+      llvm::cantFail(M->bindControls(C));
+      Budget = 1;
+      auto Resumed = llvm::cantFail(Execution.run(S, Program, Budget));
+      ASSERT_EQ(Resumed.Completions, 1u) << Resumed.OwnerError;
+      EXPECT_TRUE(M->sgxMemory()->active());
+      EXPECT_EQ(R.PC, 0x41000u);
+      EXPECT_EQ(R.GPR[9], 0x1122334455667788ULL);
+      return;
+    }
+    ASSERT_EQ(Event.DeliveredVector, 18u) << Event.OwnerError;
+    EXPECT_FALSE(Inputs.MachineCheck);
+    EXPECT_FALSE(M->sgxMemory()->active());
+    EXPECT_FALSE(M->sgxMemory()->enabled());
+    EXPECT_EQ(word(bytes(*M), R.GPR[4], 8), 0x1800u);
+    S = Machine;
+    R.RFlags &= ~uint64_t(0x100);
+    R.GPR[0] = 3;
+    C.CR0 |= 8;
+    llvm::cantFail(M->bindControls(C));
+    Budget = 1;
+    auto Disabled = llvm::cantFail(Execution.run(S, Program, Budget));
+    EXPECT_EQ(Disabled.Completions, 0u);
+    EXPECT_EQ(Disabled.DeliveredVector, 6u);
+    EXPECT_FALSE(M->sgxMemory()->active());
+  }
+
   void checkInitialResume(const X86SgxPage &Secs, X86SgxPage Tcs,
                           const X86SgxPage &Code, X86SgxPage SSA,
                           X86SgxPage LastSSA,
@@ -38,7 +105,7 @@ protected:
       X86ModeExecution Execution(*Mem, Options);
       uint64_t Budget = 1;
       auto Step = Execution.run(State, Program, Budget);
-      ASSERT_TRUE(Step) << llvm::toString(Step.takeError());
+      ASSERT_TRUE(bool(Step)) << llvm::toString(Step.takeError());
       ASSERT_TRUE(Step->OwnerError.empty()) << Step->OwnerError;
       if (MXCSR & ~Options.MXCSRMask) {
         EXPECT_EQ(Step->Completions, 0u);
@@ -194,6 +261,10 @@ TEST_F(X86ModeSgxTest,
         X87[0] = 0x7f;
         X87[1] = 3;
         X87[32] = 0x13;
+        if (FaultBytes.empty())
+          for (bool INIT : {false, true})
+            ASSERT_NO_FATAL_FAILURE(
+                checkPlatformEvent({Secs, Tcs, Code, SSA, LastSSA}, X87, INIT));
         if (FaultBytes.empty())
           ASSERT_NO_FATAL_FAILURE(checkInitialResume(Secs, Tcs, Code, SSA,
                                                      LastSSA, X87, LLVM, AVX));

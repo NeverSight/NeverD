@@ -199,7 +199,8 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   }
   if (Illegal)
     return Fault(6);
-  if (!(C.CR0 & 1) || (R.RFlags & 0x20000) || (S.SMM && S.SMM->Active))
+  if (!EPC.enabled() || !(C.CR0 & 1) || (R.RFlags & 0x20000) ||
+      (S.SMM && S.SMM->Active))
     return Fault(6);
   if (C.CR0 & 8)
     return Fault(7);

@@ -13,6 +13,7 @@
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 #include "neverd/translate/X86/X86LegacyExecution.h"
 #include "neverd/translate/X86/X86LocalApic.h"
+#include "neverd/translate/X86/X86MachineCheck.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -51,10 +52,21 @@ struct X86SmmState {
   bool operator==(const X86SmmState &) const = default;
 };
 
+/// Explicit Intel logical processor outside VMX operation. INIT publishes
+/// CPUID.01H:EAX in EDX. An application processor waits for a routed SIPI.
+struct X86StartupState {
+  uint32_t ProcessorSignature;
+  bool BootstrapProcessor;
+  bool WaitingForSIPI = false;
+  bool operator==(const X86StartupState &) const = default;
+};
+
 struct X86ModeState {
   X64ContinuationStateV7 Core;
   std::optional<X64PagedDebugState> Debug;
   std::optional<X86SmmState> SMM;
+  std::optional<translate::X86MachineCheckState> MCA;
+  std::optional<X86StartupState> Startup;
   /// The first protected far transfer replaces the pre-PE code cache.
   bool RetainedRealCS = false;
   bool STIBlocked = false;
@@ -107,6 +119,9 @@ struct X86ModeInterrupts {
   translate::X86LocalApicFixed APIC;
   bool NMIPending = false;
   bool SMIPending = false;
+  std::optional<translate::X86MachineCheckReport> MachineCheck;
+  bool INITPending = false;
+  std::optional<uint8_t> StartupVector;
 };
 
 struct X86ModeExecutionResult : translate::X86LegacyExecutionResult {
@@ -149,8 +164,8 @@ public:
   run(X86ModeState &State, llvm::ArrayRef<X86ModeInstruction> Instructions,
       uint64_t &Budget);
 
-  /// Poll latched NMI and routed fixed interrupts at each fresh instruction
-  /// boundary, including a halted CPU or an exhausted instruction budget.
+  /// Poll asynchronous inputs at each fresh instruction boundary, including
+  /// a halted CPU, a waiting application processor and an exhausted budget.
   llvm::Expected<X86ModeExecutionResult>
   run(X86ModeState &State, llvm::ArrayRef<X86ModeInstruction> Instructions,
       uint64_t &Budget, X86ModeInterrupts &Interrupts);
@@ -159,12 +174,14 @@ public:
   /// boundary. Arrival/priority/APIC policy belongs to the producer. The CPU
   /// owns saved PC and inhibition. A deferred/refused input has no effects;
   /// acceptance is reported exactly once, including across entry suspension.
-  /// Resume pending work with run() before supplying another input. Shutdown
-  /// is terminal until the embedding supplies an explicitly reset machine.
+  /// Resume pending work with run() before supplying another input. A bound
+  /// INIT can start a stopped processor at the reset vector.
   llvm::Expected<X86ModeExecutionResult>
   interrupt(X86ModeState &State, X86EventKind Kind, uint8_t Vector);
 
 private:
+  llvm::Expected<X86ModeExecutionResult>
+  externalEvent(X86ModeState &State, X86EventKind Kind, uint8_t Vector);
   llvm::Expected<translate::X86PagedMemory &>
   memoryFor(const X86ModeState &State) const;
   llvm::Expected<X86ModeExecutionResult>

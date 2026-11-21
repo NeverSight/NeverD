@@ -26,6 +26,14 @@ inline const auto &modeRegisters(const X86ModeState &S) {
   return S.Core.Core.Core.Core.Core.Core;
 }
 
+inline uint8_t modeCPL(const X86ModeState &S,
+                       const translate::X86PagingState &C) {
+  if (!(C.CR0 & 1) || S.RetainedRealCS)
+    return 0;
+  return modeRegisters(S).RFlags & 0x20000 ? 3
+                                           : S.Core.Core.Core.CS.Selector & 3;
+}
+
 /// Authenticate a system instruction with the same segmented or wide fetch
 /// used by its current execution mode. A backing read is unpaid until fetch
 /// succeeds or generates a guest exception.
@@ -38,8 +46,7 @@ fetchX86SystemInstruction(const X86ModeState &S, translate::X86PagedMemory &M,
   const auto &V = S.Core.Core;
   const auto &R = modeRegisters(S);
   const auto &CS = V.Core.CS;
-  const bool Real = !(M.controls().CR0 & 1), VM86 = R.RFlags & 0x20000;
-  const uint8_t CPL = Real || S.RetainedRealCS ? 0 : VM86 ? 3 : CS.Selector & 3;
+  const uint8_t CPL = modeCPL(S, M.controls());
   auto C = M.controls();
   C.RFlags = R.RFlags;
   if (auto E = M.bindControls(C))
@@ -78,6 +85,7 @@ fetchX86SystemInstruction(const X86ModeState &S, translate::X86PagedMemory &M,
 
 inline bool sameModeState(const X86ModeState &A, const X86ModeState &B) {
   return A.Core.Core == B.Core.Core && A.Debug == B.Debug && A.SMM == B.SMM &&
+         A.MCA == B.MCA && A.Startup == B.Startup &&
          A.RetainedRealCS == B.RetainedRealCS &&
          std::tie(A.Core.SysenterCS, A.Core.SysenterESP, A.Core.SysenterEIP,
                   A.Core.Reserved, A.STIBlocked, A.SSBlocked, A.Halted,

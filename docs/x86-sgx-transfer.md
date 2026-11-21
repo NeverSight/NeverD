@@ -167,6 +167,13 @@ selected, AEX saves the upper YMM halves in the standard XSAVE layout and
 clears them in the outside image. ERESUME loads or initializes each selected
 vector component and loads MXCSR from the frame even when XSTATE_BV is zero.
 
+A routed INIT performs AEX before the CPU enters its reset or wait-for-SIPI
+state. Enclave pages, their ownership and the interrupted SSA survive INIT.
+A machine-check exception performs AEX before the vector-18 frame is built.
+It disables subsequent ENCLU instructions until a platform reset. This
+processor profile also disables SGX after a guest clears enabled MCi_CTL bits.
+[Intel SGX and MCA](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
 Enclave construction and cryptographic leaves require platform state beyond
 this imported-thread profile. Debug opt-in, AEX notification, CET, XSTATE components beyond AVX and
 physical SGX qualification remain open.

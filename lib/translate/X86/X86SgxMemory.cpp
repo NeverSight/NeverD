@@ -52,10 +52,19 @@ llvm::Error X86SgxMemory::bindX87(std::array<uint8_t, 160> Image,
   return llvm::Error::success();
 }
 
+void X86SgxMemory::disableAfterMachineCheck() {
+  if (Enabled) {
+    Enabled = false;
+    ++Generation;
+  }
+}
+
 llvm::Error X86SgxMemory::bindActive(std::optional<X86SgxEnclave> Enclave) {
   if (Running)
     return invalid("use EEXIT or AEX to leave a running enclave thread");
   if (Enclave) {
+    if (!Enabled)
+      return invalid("machine check disabled the enclave processor");
     const auto I = EPC.find(Enclave->SECS);
     if (!std::has_single_bit(Enclave->Size) || Enclave->Size <= PageMask ||
         (Enclave->Base & (Enclave->Size - 1)) || I == EPC.end() ||

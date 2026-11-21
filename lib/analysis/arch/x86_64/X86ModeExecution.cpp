@@ -9,7 +9,9 @@
 
 #include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
+#include "X86ModeStartup.h"
 #include "X86ModeState.h"
+#include "X86ModeSystemInstruction.h"
 #include "X86SgxExecution.h"
 #include "X86SmmExecution.h"
 
@@ -38,14 +40,14 @@ struct X86ModeContinuation {
   std::shared_ptr<const X86SgxMemory> EnclaveBank;
   uint64_t EnclaveGeneration = 0;
   bool AttemptConsumed = false;
-  bool PendingHaltFetch = false;
+  bool PendingSystemFetch = false;
   bool SoftwareINT = false;
   bool CompletionReported = false;
   bool AcceptanceReported = false;
 
   bool eventPending() const { return Event || WideEvent || Low.PendingEvent; }
   bool instructionPending() const {
-    return PendingHaltFetch || WideInstruction || PendingRSM || PendingSGX ||
+    return PendingSystemFetch || WideInstruction || PendingRSM || PendingSGX ||
            x86LegacyInstructionPending(Low);
   }
 };
@@ -232,59 +234,6 @@ llvm::Error admit(const X86ModeState &S, const X86ModeExecutionOptions &O,
   return llvm::Error::success();
 }
 
-llvm::Expected<X86ModeExecutionResult>
-executeWideHalt(X86ModeState &S, X86PagedMemory &Memory,
-                const X86ModeInstruction &I, const X86ModeExecutionOptions &O,
-                bool Locked, X86EventKind &FaultKind) {
-  X86ModeExecutionResult R;
-  auto &Regs = modeRegisters(S);
-  const uint8_t CPL = S.Core.Core.Core.CS.Selector & 3;
-  const bool TF = Regs.RFlags & 0x100;
-  if (TF && !S.Debug)
-    return invalid("single-step HLT requires the CPU debug bank");
-  R.InstructionAttempted = true;
-  if (x86PendingVirtualInterrupt(CPL, Memory.controls().CR4, Regs.RFlags)) {
-    R.Exception = X86MemoryException{13, 0, {}};
-    return R;
-  }
-  const bool Enclave = Memory.sgxMemory() && Memory.sgxMemory()->active();
-  if (S.Debug && !Enclave) {
-    const auto Matches = x86ExecutionBreakpoints(
-        S.Debug->DR, S.Debug->DR7, I.Address, Regs.RFlags, S.SSBlocked);
-    if (Matches) {
-      x86PublishInstructionDebug(*S.Debug, false, Matches);
-      R.Exception = X86MemoryException{1, 0, {}};
-      FaultKind = X86EventKind::InstructionBreakpoint;
-      return R;
-    }
-  }
-  R.InstructionAttempted = false;
-  auto Fetch = detail::fetchX86SystemInstruction(
-      S, Memory, I.Bytes, O.Legacy.Segments.FullLimitChoice, R);
-  if (!Fetch)
-    return Fetch.takeError();
-  if (!*Fetch)
-    return R;
-  if (Locked || CPL) {
-    R.Exception = X86MemoryException{uint8_t(Locked ? 6 : 13), 0, {}};
-    return R;
-  }
-  Regs.PC += I.Bytes.size();
-  Regs.RFlags &= ~uint64_t(0x10000);
-  auto Controls = Memory.controls();
-  Controls.RFlags = Regs.RFlags;
-  llvm::cantFail(Memory.bindControls(Controls));
-  S.SSBlocked = S.STIBlocked = false;
-  S.Halted = true;
-  R.InstructionCompleted = true;
-  R.Status = X86LegacyExecutionStatus::Halted;
-  if (TF && x86InstructionDebugStep(TF, S.Debug->DebugCTL, false)) {
-    x86PublishInstructionDebug(*S.Debug, true);
-    R.Exception = X86MemoryException{1, 0, {}};
-  }
-  return R;
-}
-
 // This is a terminal handoff: no low view is published after the wide owner
 // has installed a handler or retained a partly completed frame.
 void deliver(X86ModeState &S, X86PagedMemory &M, detail::X86ModeContinuation &P,
@@ -368,6 +317,11 @@ X86ModeExecution::memoryFor(const X86ModeState &S) const {
 
 llvm::Expected<X86ModeExecutionResult>
 X86ModeExecution::systemManagementInterrupt(X86ModeState &S) {
+  if (S.Startup && S.Startup->WaitingForSIPI) {
+    X86ModeExecutionResult R;
+    R.Status = X86LegacyExecutionStatus::EventDeferred;
+    return R;
+  }
   if (!S.SMM || !SMRAM || SMRAM == &NormalMemory ||
       NormalMemory.features() != SMRAM->features())
     return invalid(
@@ -480,17 +434,33 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
     retain(S, Memory, std::move(P));
     return Result;
   };
-  static constexpr uint8_t RsmOpcode[]{0x0f, 0xaa}, HaltOpcode[]{0xf4};
-  if (*Mode == X86ExecutionMode::Long64)
-    if (auto Halt = systemLockPrefix(Binding.Bytes, HaltOpcode, true)) {
-      X86EventKind Kind = X86EventKind::Fault;
-      auto Got = executeWideHalt(S, Memory, Binding, O, *Halt, Kind);
-      if (!Got)
-        return Got.takeError();
-      P->PendingHaltFetch =
-          Got->Status == X86LegacyExecutionStatus::BackingFault;
-      return FinishSystem(std::move(*Got), Kind);
+  static constexpr uint8_t RsmOpcode[]{0x0f, 0xaa}, HaltOpcode[]{0xf4},
+      ReadMSR[]{0x0f, 0x32}, WriteMSR[]{0x0f, 0x30};
+  using SystemOp = detail::X86ModeSystemOp;
+  SystemOp Op = SystemOp::Halt;
+  const bool Long64 = *Mode == X86ExecutionMode::Long64;
+  std::optional<bool> Locked;
+  if (Long64)
+    Locked = systemLockPrefix(Binding.Bytes, HaltOpcode, true);
+  if (!Locked && S.MCA &&
+      X86MachineCheckState::ownsMSR(uint32_t(modeRegisters(S).GPR[1]))) {
+    Op = SystemOp::ReadMCA;
+    Locked = systemLockPrefix(Binding.Bytes, ReadMSR, Long64);
+    if (!Locked) {
+      Op = SystemOp::WriteMCA;
+      Locked = systemLockPrefix(Binding.Bytes, WriteMSR, Long64);
     }
+  }
+  if (Locked) {
+    X86EventKind Kind = X86EventKind::Fault;
+    auto Got = detail::executeModeSystemInstruction(
+        S, Memory, Binding, O, Op, *Locked, Kind, NormalMemory.sgxMemory());
+    if (!Got)
+      return Got.takeError();
+    P->PendingSystemFetch =
+        Got->Status == X86LegacyExecutionStatus::BackingFault;
+    return FinishSystem(std::move(*Got), Kind);
+  }
   auto Rsm = systemLockPrefix(Binding.Bytes, RsmOpcode,
                               *Mode == X86ExecutionMode::Long64);
   if (S.SMM && Rsm) {
@@ -650,6 +620,20 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
 llvm::Expected<X86ModeExecutionResult>
 X86ModeExecution::interrupt(X86ModeState &S, X86EventKind Kind,
                             uint8_t Vector) {
+  if ((Kind != X86EventKind::Interrupt && Kind != X86EventKind::NMI) ||
+      (Kind == X86EventKind::NMI && Vector != 2))
+    return invalid("external input requires an IRQ or vector-2 NMI");
+  if (S.Startup && S.Startup->WaitingForSIPI) {
+    X86ModeExecutionResult R;
+    R.Status = X86LegacyExecutionStatus::EventDeferred;
+    return R;
+  }
+  return externalEvent(S, Kind, Vector);
+}
+
+llvm::Expected<X86ModeExecutionResult>
+X86ModeExecution::externalEvent(X86ModeState &S, X86EventKind Kind,
+                                uint8_t Vector) {
   auto Active = memoryFor(S);
   if (!Active)
     return Active.takeError();
@@ -659,9 +643,6 @@ X86ModeExecution::interrupt(X86ModeState &S, X86EventKind Kind,
         "resume pending mixed-mode work before supplying an interrupt");
   if (S.Shutdown)
     return invalid("a shutdown CPU requires explicit reset state");
-  if ((Kind != X86EventKind::Interrupt && Kind != X86EventKind::NMI) ||
-      (Kind == X86EventKind::NMI && Vector != 2))
-    return invalid("external input requires an IRQ or vector-2 NMI");
   if (auto Error = admit(S, Options, Memory))
     return std::move(Error);
   auto Current = mode(S);
@@ -699,6 +680,8 @@ X86ModeExecution::interrupt(X86ModeState &S, X86EventKind Kind,
     llvm::cantFail(Memory.bindControls(OriginalControls));
     return R;
   }
+  if (Kind == X86EventKind::Abort && Vector == 18 && NormalMemory.sgxMemory())
+    NormalMemory.sgxMemory()->disableAfterMachineCheck();
   reportReceipts(*P, R);
   retain(Next, Memory, std::move(P));
   S = std::move(Next);
@@ -744,13 +727,49 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
         return invalid("resume mixed-mode progress with the retained complete "
                        "state and controls");
     }
-    if (S.Shutdown) {
+    if (S.Shutdown || (S.Startup && S.Startup->WaitingForSIPI)) {
+      if (S.Pending)
+        return invalid(
+            "an inactive processor cannot retain an instruction or event");
+      auto Startup = detail::pollX86Startup(S, NormalMemory, Interrupts, Last);
+      if (!Startup)
+        return Startup.takeError();
+      if (*Startup)
+        return Finish();
       Last.Status = X86LegacyExecutionStatus::Shutdown;
       return Finish();
     }
     if (Interrupts && !S.Pending) {
       if (Interrupts->APIC.readCr8() != S.Core.Core.Core.Core.Core.CR8)
         return invalid("CPU CR8 and local APIC task priority disagree");
+      if (Interrupts->MachineCheck) {
+        if (!S.MCA)
+          return invalid("machine-check reports require a bound MCA bank");
+        auto Next = S;
+        auto Action = Next.MCA->report(*Interrupts->MachineCheck,
+                                       Memory.controls().CR4 & 0x40);
+        if (!Action)
+          return Action.takeError();
+        if (*Action == X86MachineCheckAction::Deliver) {
+          auto Got = externalEvent(Next, X86EventKind::Abort, 18);
+          if (!Got)
+            return Got.takeError();
+          Last = std::move(*Got);
+          if (Last.EventAccepted) {
+            Interrupts->MachineCheck.reset();
+            S = std::move(Next);
+          }
+          return Finish();
+        }
+        Interrupts->MachineCheck.reset();
+        S.MCA = std::move(Next.MCA);
+        if (*Action == X86MachineCheckAction::Shutdown) {
+          S.Shutdown = true;
+          Last.Status = X86LegacyExecutionStatus::Shutdown;
+          Last.EventAccepted = true;
+          return Finish();
+        }
+      }
       if (Interrupts->SMIPending) {
         auto Got = systemManagementInterrupt(S);
         if (!Got)
@@ -762,6 +781,11 @@ llvm::Expected<X86ModeExecutionResult> X86ModeExecution::runBoundaries(
           return Finish();
         }
       }
+      auto Startup = detail::pollX86Startup(S, NormalMemory, Interrupts, Last);
+      if (!Startup)
+        return Startup.takeError();
+      if (*Startup)
+        return Finish();
       const auto Fixed = Interrupts->APIC.nextFixedInterrupt();
       for (auto Kind : {X86EventKind::NMI, X86EventKind::Interrupt}) {
         const bool NMI = Kind == X86EventKind::NMI;

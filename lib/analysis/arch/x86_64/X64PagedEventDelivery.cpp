@@ -274,6 +274,9 @@ public:
       return SavedFlags;
     }
     Result.InputAccepted = true;
+    if (Event.Kind == X86EventKind::Abort && Event.Vector == 18 &&
+        Memory.sgxMemory())
+      Memory.sgxMemory()->disableAfterMachineCheck();
     if (value(NMI))
       State.NMIBlocked = 1;
     if (Event.Kind == X64ContinuationEventKind::Fault && Event.Vector == 14)

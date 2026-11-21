@@ -21,8 +21,9 @@ from its descriptor.
 
 An optional per-CPU SMM state and separate system RAM bind the KVM64 save-map
 profile. A software SGX bank binds imported SECS, TCS and EPCM pages for x64
-enclave threads. Latched SMI, NMI and fixed APIC arrivals enter at instruction
-boundaries, including HLT and a zero instruction budget. See the
+enclave threads. Machine checks, SMI, INIT, SIPI, NMI and fixed APIC arrivals
+are polled at instruction boundaries, including HLT and a zero instruction
+budget. See the
 [SMM execution profile](x86-smm-return.md), [SGX execution profile](x86-sgx-transfer.md)
 and [local APIC delivery](x86-local-apic.md).
 
@@ -264,15 +265,50 @@ its entire continuation, including secondary exceptions and owner refusals.
 Resume it with `run` and zero instruction budget after repairing physical
 backing. Pending paid or unpaid instructions and event work reject a new IRQ
 or NMI before effects. The continuation authenticates the complete bank and
-uses frozen options. Shutdown is persistent and cannot be woken by IRQ/NMI;
-the embedding supplies explicitly reset state. A protected-mode IDT task gate
+uses frozen options. A CPU in shutdown accepts INIT when startup state is
+bound. The embedding can also supply a reset machine. A protected-mode IDT task gate
 uses the bound task-switch policy and preserves the incoming task bank across
 a backing stop.
 
 Callers supply arrival timing. `run` with an `X86ModeInterrupts` bank arbitrates
-latched SMI, NMI and fixed local APIC vectors. `interrupt` accepts an already
-selected IRQ or NMI. The embedding owns other device inputs such as INIT and
-machine checks.
+latched machine checks, SMI, INIT, SIPI, NMI and fixed local APIC vectors.
+`interrupt` accepts an already selected IRQ or NMI. The embedding supplies
+error records, controller arrivals and startup signals.
+
+### Conventional machine checks
+
+Bind `X86ModeState::MCA` to the virtual CPU's banks and optional global control
+register. At an instruction boundary `X86ModeInterrupts::MachineCheck` carries
+one bank number, MCi_STATUS, MCi_ADDR, MCi_MISC and MCG_STATUS. A signaled
+uncorrected error enters vector 18 ahead of SMI, NMI and fixed interrupts,
+including with IF clear or the CPU halted. A second signaled error while MCIP
+is set, or a signaled error with CR4.MCE clear, enters shutdown. Corrected
+records and nonsignaling uncorrected records update the bound banks. An
+existing uncorrected record has priority over a corrected record. Disabled
+reporting consumes the input once. Malformed reports remain available for
+correction.
+
+Original RDMSR and WRMSR instructions read and acknowledge these banks across
+code widths. This model binds a single Intel KVM CPU with conventional MCi
+registers. CMCI threshold interrupts, broadcast recovery and error generation
+in external devices require their respective controller or device state.
+[Linux KVM machine-check API](https://www.kernel.org/doc/html/v6.18/virt/kvm/api.html#kvm-x86-set-mce)
+
+### Processor initialization and startup
+
+Bind `X86ModeState::Startup` with CPUID.01H:EAX and the logical processor's
+bootstrap role. A routed INIT clears the register and local interrupt state,
+preserves the CR0 cache-disable bits, and installs real-address CS with base
+0xffff0000 and IP 0xfff0. DR0–DR7 return to their initial values. The x87
+and vector banks, SYSENTER MSRs, STAR, KernelGSBase and machine-check records
+survive INIT. An application processor waits with its instruction budget
+intact until a SIPI selects CS.base = vector × 4096 and IP = 0. A running
+processor discards a SIPI. SMM latches INIT until RSM. When INIT interrupts
+an enclave, the CPU first saves the interrupted thread to its SSA. Startup
+keeps that enclave's EPC pages and ownership available for a later ERESUME.
+This profile accepts one logical processor outside VMX operation.
+[Linux KVM INIT and SIPI](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
+[Intel SGX section 40.9](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
 
 ## Earlier qualification records
 
