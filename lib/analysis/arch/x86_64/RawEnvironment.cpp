@@ -57,12 +57,8 @@ std::string optionsDigest(const SpecializationOptions &O) {
   if (!O.X64ReturningCalls.empty()) {
     H.text("x64-conditional-returning-calls-v1");
     H.number(O.X64ReturningCalls.size());
-    for (const auto &C : O.X64ReturningCalls) {
-      H.number(C.Version);
-      H.number(C.Address);
-      H.number(static_cast<unsigned>(C.Profile));
-      H.number(C.OutgoingBytes);
-    }
+    for (const auto &C : O.X64ReturningCalls)
+      x64::appendReturningCallDeclaration(H, C);
   }
   H.number(O.X64TerminalImports.size());
   for (const auto &B : O.X64TerminalImports) {
@@ -153,6 +149,9 @@ public:
         Declarations.begin(), Declarations.end(), Address,
         [](const auto &D, va_t Value) { return D.Address < Value; });
     if (At != Declarations.end() && At->Address == Address) {
+      if (At->PreservedFrameRanges.size() > Work)
+        return false;
+      Work -= At->PreservedFrameRanges.size();
       Call.emplace();
       Call->Declaration = *At;
     }
@@ -188,10 +187,18 @@ public:
       return llvm::createStringError(std::errc::value_too_large,
                                      "returning-call index budget exhausted");
     Work -= Count * Comparisons;
+    for (const auto &Call : Options.X64ReturningCalls) {
+      if (Call.PreservedFrameRanges.size() > Work)
+        return llvm::createStringError(
+            std::errc::value_too_large,
+            "returning-call frame-range index budget exhausted");
+      Work -= Call.PreservedFrameRanges.size();
+    }
     return std::make_unique<X64ReturningCallLookup>(Options.X64ReturningCalls);
   }
-  RecoveryCallTransition returningCallTransition() const override {
-    return x64::returningCallTransition();
+  RecoveryCallTransition returningCallTransition(
+      const SpecializationReturningCall &Call) const override {
+    return x64::returningCallTransition(Call.Declaration);
   }
   std::string
   returningCallDigest(const SpecializationReturningCall &Call) const override {
@@ -289,6 +296,17 @@ public:
           2 * OriginLookups + Expected.X64ReturningCalls.size();
       if (Calls > Budget.Records / Lookups ||
           !Budget.records(Calls * Lookups, 32))
+        return RecoveryValidationBudget::exhausted();
+      uint64_t FrameRanges = 0;
+      for (const auto &Declaration : Expected.X64ReturningCalls) {
+        if (Declaration.PreservedFrameRanges.size() >
+            Budget.Records - FrameRanges)
+          return RecoveryValidationBudget::exhausted();
+        FrameRanges += Declaration.PreservedFrameRanges.size();
+      }
+      if (Calls && FrameRanges > Budget.Records / Calls)
+        return RecoveryValidationBudget::exhausted();
+      if (!Budget.records(Calls * FrameRanges, 32))
         return RecoveryValidationBudget::exhausted();
       const uint64_t CallLookups = std::bit_width(Calls) + 1;
       for (const auto &B : R.Residual.Blocks)

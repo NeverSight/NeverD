@@ -84,6 +84,17 @@ enum class SpecializationX64CallProfile : uint8_t {
   /// RSP and guest PC return exactly; all runtime controls/segment roots
   /// survive.
   ConditionalNormalReturnV1,
+  /// V1 plus caller-declared entry-frame spans whose current materialized
+  /// bytes survive each call. The extra preservation is an explicit callee
+  /// effect precondition, never inferred from an observed address or ABI.
+  ConditionalNormalReturnFrameSpansV2,
+};
+
+struct SpecializationCallPreservedFrameRange {
+  int64_t Begin = 0;
+  int64_t End = 0;
+  bool
+  operator==(const SpecializationCallPreservedFrameRange &) const = default;
 };
 
 /// Opt-in relation at an exact native CALL. Every dynamic invocation has fresh
@@ -95,6 +106,9 @@ struct SpecializationX64ReturningCall {
   va_t Address = InvalidVA;
   SpecializationX64CallProfile Profile = SpecializationX64CallProfile::None;
   uint64_t OutgoingBytes = 0;
+  /// Version 2 only. Sorted, disjoint, nonempty entry-frame-relative spans.
+  /// Only bytes materialized immediately before the call are retained.
+  std::vector<SpecializationCallPreservedFrameRange> PreservedFrameRanges;
   bool operator==(const SpecializationX64ReturningCall &) const = default;
 };
 

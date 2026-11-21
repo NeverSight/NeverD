@@ -1151,7 +1151,7 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
   if (!Architecture)
     return fail(SpecializationStatus::InvalidInput,
                 llvm::toString(Architecture.takeError()));
-  const auto Policy = (*Architecture)->returningCallTransition();
+  const auto Policy = (*Architecture)->returningCallTransition(Call);
   const uint64_t Begin = static_cast<uint64_t>(PreservedBegin);
   const uint64_t Size =
       static_cast<uint64_t>(Options.EntryFrameBounds->End) - Begin;
@@ -1169,7 +1169,15 @@ bool Specializer::applyReturningCall(SymState &State, SymRef FrameRoot,
       if (!chargeCallWork(LookupCost))
         return false;
       const uint64_t Byte = Offset + I;
-      if (Byte - Begin >= Size)
+      bool Preserved = Byte - Begin < Size;
+      for (const auto &Range : Policy.PreservedFrameRanges) {
+        if (!chargeCallWork(1))
+          return false;
+        const uint64_t RangeBegin = static_cast<uint64_t>(Range.Begin);
+        Preserved |=
+            Byte - RangeBegin < static_cast<uint64_t>(Range.End) - RangeBegin;
+      }
+      if (!Preserved)
         return false;
       auto At = std::upper_bound(Current->begin(), Current->end(), Byte,
                                  [](uint64_t Value, const auto &Range) {
@@ -3152,6 +3160,12 @@ bool Specializer::evaluate(int Id) {
                     "returning-call push/outgoing extent leaves no contained "
                     "current-frame suffix");
       PreservedBegin = StackOffset + Outgoing;
+      const int64_t PushBegin = StackOffset - Base.Bytes;
+      for (const auto &Range : ReturningCall->Declaration.PreservedFrameRanges)
+        if (Range.End > PushBegin)
+          return fail(SpecializationStatus::InvalidInput,
+                      "returning-call preserved frame range overlaps the "
+                      "physical call push or outgoing stack area");
       const NdVar Scratch = NdVar::tmp(NativeCallTargetTemp, Base.Bytes);
       const NdVar Reserved[] = {
           NdVar::tmp(DispatchTemp, 8), NdVar::tmp(ReadAddressTemp, 8),
