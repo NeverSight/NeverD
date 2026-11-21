@@ -197,8 +197,7 @@ TEST(LocalTypesDebugContext, COMRegistrationUsesTheTargetUserABI) {
       auto Function = Context.resolveFunction(Entry);
       ASSERT_TRUE(Function && Function->ReturnType);
       EXPECT_EQ(Function->ReturnType->Size, 4u);
-      EXPECT_EQ(typeToC(Function->ReturnType, /*SourceNames=*/true), "HRESULT");
-      EXPECT_NE(typeToC(Function->ReturnType), "HRESULT");
+      EXPECT_EQ(Function->ReturnType->SourceName, "HRESULT");
       EXPECT_NE(Function->PrototypeDeclaration.find("HRESULT"),
                 std::string::npos);
       EXPECT_NE(Function->PrototypeDeclaration.find(Function->Name),
