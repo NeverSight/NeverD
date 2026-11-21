@@ -259,3 +259,41 @@ TEST(SymExpr, SignedAndMaskedJoinedWindowsKeepEveryLiveBit) {
     }
   }
 }
+
+TEST(SymExpr, JoinedPrefixRetainsCarriesAndSignPadding) {
+  constexpr unsigned W = 6;
+  SymContext C;
+  const auto X = C.mkVar("x", W), Y = C.mkVar("y", W), Z = C.mkVar("z", W);
+  for (auto Op : {SymOp::Add, SymOp::Or, SymOp::Xor}) {
+    for (bool Signed : {false, true}) {
+      const auto Count = C.mkConst(W, 2);
+      const auto Moved = Signed ? C.mkAShr(X, Count) : C.mkLShr(X, Count);
+      const auto Masked = C.mkAnd(C.mkConst(W, 0x38), Y);
+      for (unsigned Shift : {0u, 2u, 3u}) {
+        const auto Scaled = C.mkMul(C.mkConst(W, 1u << Shift), Z);
+        const auto Packed = Op == SymOp::Add ? C.mkAdd({Moved, Masked, Scaled})
+                            : Op == SymOp::Or
+                                ? C.mkOr({Moved, Masked, Scaled})
+                                : C.mkXor({Moved, Masked, Scaled});
+        const auto Rotated = C.mkRor(Packed, C.mkConst(W, 4));
+        const auto Field = C.mkExtract(Rotated, 3, 2);
+        if (Shift == 3)
+          EXPECT_EQ(Field, C.mkExtract(X, 3, 2));
+        SymEvalPlan Plan(C, Field);
+        SymEvalPlan Padded(C, C.mkExtract(Packed, 3, 2));
+        for (unsigned A = 0; A < 64; ++A)
+          for (unsigned B : {0u, 8u, 24u, 63u})
+            for (unsigned D = 0; D < 64; ++D) {
+              const unsigned Low = (A >> 2) | (Signed && (A & 32) ? 48 : 0);
+              const unsigned H = B & 0x38, T = D << Shift;
+              const unsigned Value = Op == SymOp::Add  ? Low + H + T
+                                     : Op == SymOp::Or ? Low | H | T
+                                                       : Low ^ H ^ T;
+              const std::array<uint64_t, 3> Inputs{A, B, D};
+              EXPECT_EQ(Plan.evalU64(Inputs), (Value >> 1) & 3);
+              EXPECT_EQ(Padded.evalU64(Inputs), (Value >> 3) & 3);
+            }
+      }
+    }
+  }
+}

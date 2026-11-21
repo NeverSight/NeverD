@@ -21,6 +21,16 @@ struct WordWindow {
   uint64_t Offset;
 };
 
+// Constant logical and arithmetic shift counts are normalized to [1, Width).
+// Keep the shifted word when any selected bit comes from its padding.
+inline WordWindow projectRightShift(const SymContext &Ctx, SymRef Right,
+                                    uint64_t At, unsigned Size) {
+  const unsigned Shift = Ctx.constWords(Ctx.operand(Right, 1)).front();
+  if (At + Size <= Ctx.width(Right) - Shift)
+    return {Ctx.operand(Right, 0), At + Shift};
+  return {Right, At};
+}
+
 // Check the operator shape before budgeted callers inspect the literal limbs.
 struct FunnelShifts {
   SymRef High, Right;
@@ -54,16 +64,12 @@ struct FunnelShifts {
     const unsigned Width = Ctx.width(High);
     const auto Digits = Ctx.constWords(Ctx.operand(High, 0));
     const unsigned Cut = llvm::APInt::tcLSB(Digits.data(), Digits.size());
-    // Right-shift builders normalize a constant count to [1, Width).
-    const unsigned Shift = Ctx.constWords(Ctx.operand(Right, 1)).front();
-    const unsigned LowEnd = Width - Shift;
-    if (At + Size <= Cut) {
-      if (At + Size <= LowEnd)
-        return WordWindow{Ctx.operand(Right, 0), At + Shift};
-      return WordWindow{Right, At};
-    }
+    if (At + Size <= Cut)
+      return projectRightShift(Ctx, Right, At, Size);
     if (Ctx.op(Right) == SymOp::AShr)
       return std::nullopt;
+    const unsigned Shift = Ctx.constWords(Ctx.operand(Right, 1)).front();
+    const unsigned LowEnd = Width - Shift;
     const bool ShiftedWord =
         Ctx.op(High) == SymOp::Mul && Ctx.numOperands(High) == 2 &&
         llvm::APInt::tcMSB(Digits.data(), Digits.size()) == Cut;
