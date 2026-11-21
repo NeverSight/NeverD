@@ -1,0 +1,794 @@
+{
+  "source_base": "1c38494404ae1b3fc39ad628cb28a2c743771896",
+  "code_and_tests_diff_sha256": "4b676336b4336afd7d02e741bb7025dbee5c1f291225adabad70994447f4b7b1",
+  "dependency_revisions": {
+    "llvm-project": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+    "capstone": "17f68720b746928d0628f4ed01664d43cb2ea350",
+    "unicorn": "9e7ca3522d54fbb365fc69d4c2dbf793fd4f063e"
+  },
+  "frozen_toolchain": "neverd-llvm-v23.0.0-r6",
+  "release_binaries": {
+    "build-arm64e-source/bin/neverd": "d152e2e65ed149d73186e8eaa5f31cdc0f1db0c62a7703e5c7d045671ac14cc3",
+    "build-arm64e-source/bin/libneverd.dylib": "fbaeae67a8d8da23c3c08ff1f96bb5f18b1e21f5f68ebd7a603075694613e382"
+  },
+  "archived_pie_sha256": "8a430c8c483999ab1fb50c6914f1033f0c0cf5a55926d82c9cd7fa789755a672",
+  "terminal_compact_rva": "0x37c",
+  "fde_section_offset": "0x14",
+  "terminal_fde_rva_end": "0x39c",
+  "actions": {
+    "system": "https://github.com/gmh5225/test_mac_intel/actions/runs/44924024676",
+    "release": "https://github.com/gmh5225/test_mac_intel/actions/runs/44927498865",
+    "toolchains": "https://github.com/gmh5225/test_mac_intel/actions/runs/44927794140",
+    "source": "https://github.com/gmh5225/test_mac_intel/actions/runs/44929436839",
+    "frozen": "https://github.com/gmh5225/test_mac_intel/actions/runs/44929546376"
+  },
+  "release_cli": {
+    "callback-O0-1": {
+      "input_sha256": "118f7b07e7b9adbb8451d6f75ead6849e91258474bd1cb7882df9217b555e667",
+      "sha256": "d32dc54036bcc85c18549a2a7a0ad4bd72eb518806eedbaa623865490e8e9c0a",
+      "verified_fdes": 2
+    },
+    "callback-O0-2": {
+      "input_sha256": "d32dc54036bcc85c18549a2a7a0ad4bd72eb518806eedbaa623865490e8e9c0a",
+      "sha256": "852ffba1e00a2b8e2bf8fcf200b283e87bd6a2ac249411aefd7f4e2b2d9c20d2",
+      "verified_fdes": 3
+    },
+    "callback-O0-3": {
+      "input_sha256": "852ffba1e00a2b8e2bf8fcf200b283e87bd6a2ac249411aefd7f4e2b2d9c20d2",
+      "sha256": "cfc6389b1e2345b7d7acab4ee095dc9319d9d35d099a38ee313a5cedd7b1cb4d",
+      "verified_fdes": 4
+    },
+    "callback-O2-1": {
+      "input_sha256": "118f7b07e7b9adbb8451d6f75ead6849e91258474bd1cb7882df9217b555e667",
+      "sha256": "eaae3e767a4042cb6b0ece408e4c710d6890073c4ef419cc3c4526f5a5ebe0e4",
+      "verified_fdes": 2
+    },
+    "callback-O2-2": {
+      "input_sha256": "eaae3e767a4042cb6b0ece408e4c710d6890073c4ef419cc3c4526f5a5ebe0e4",
+      "sha256": "e6afa32cea487b7cc96bf49cb6b0721e01233df611f6fc66da635bc2350847da",
+      "verified_fdes": 3
+    },
+    "callback-O2-3": {
+      "input_sha256": "e6afa32cea487b7cc96bf49cb6b0721e01233df611f6fc66da635bc2350847da",
+      "sha256": "ed13ef3c439c21720c9c488622d093cf965e197f0cb3f1566cf16fab1f6746de",
+      "verified_fdes": 4
+    },
+    "signed-O0-1": {
+      "input_sha256": "6226335d4e81c42241c96643e17ee699a2d1922ed49b0a47aa8c387acf78f373",
+      "sha256": "06e451195c4ed99222af53cde8e2dc271484e72fd74a4031f07ac4e72cb44d15",
+      "verified_fdes": 2
+    },
+    "signed-O0-2": {
+      "input_sha256": "06e451195c4ed99222af53cde8e2dc271484e72fd74a4031f07ac4e72cb44d15",
+      "sha256": "3bbcd6868cc316f8a4fee11119f974f6a9cbe492fe3eef32545f9ba8f67a8390",
+      "verified_fdes": 3
+    },
+    "signed-O0-3": {
+      "input_sha256": "3bbcd6868cc316f8a4fee11119f974f6a9cbe492fe3eef32545f9ba8f67a8390",
+      "sha256": "b6bc02c772c80fdd6d53e44a4e956862215ded7ae9e0441f54b6b04d34282ece",
+      "verified_fdes": 4
+    },
+    "signed-O2-1": {
+      "input_sha256": "6226335d4e81c42241c96643e17ee699a2d1922ed49b0a47aa8c387acf78f373",
+      "sha256": "5872cd99c0722132f1f04d0d353e2bccdb8f4ee798eed11dd43fab1aac5b6c1d",
+      "verified_fdes": 2
+    },
+    "signed-O2-2": {
+      "input_sha256": "5872cd99c0722132f1f04d0d353e2bccdb8f4ee798eed11dd43fab1aac5b6c1d",
+      "sha256": "b05873160f9be0f0206ce79b8f336a35310c160878b898e23792f6d63fa13a2a",
+      "verified_fdes": 3
+    },
+    "signed-O2-3": {
+      "input_sha256": "b05873160f9be0f0206ce79b8f336a35310c160878b898e23792f6d63fa13a2a",
+      "sha256": "93e03fb16b7e5efb04d07f6f3f3cdb6baecba452a3c9484196e4f1851583d8f5",
+      "verified_fdes": 4
+    },
+    "framed-O0-1": {
+      "input_sha256": "8a430c8c483999ab1fb50c6914f1033f0c0cf5a55926d82c9cd7fa789755a672",
+      "sha256": "dff2b28f2bb46dedb702816ef1fe6e138a95b13a838447cdb7276db7868d4f42",
+      "verified_fdes": 2
+    },
+    "framed-O0-2": {
+      "input_sha256": "dff2b28f2bb46dedb702816ef1fe6e138a95b13a838447cdb7276db7868d4f42",
+      "sha256": "ab59bca1295deec2662e0eafc132bb3705c0112f8ce36c07a8324900c37f090a",
+      "verified_fdes": 3
+    },
+    "framed-O0-3": {
+      "input_sha256": "ab59bca1295deec2662e0eafc132bb3705c0112f8ce36c07a8324900c37f090a",
+      "sha256": "e3ecc05d5c61609b9039fd27aeacf1b5e9acffb4aa7a20511b0c406860c84df7",
+      "verified_fdes": 4
+    },
+    "framed-O2-1": {
+      "input_sha256": "8a430c8c483999ab1fb50c6914f1033f0c0cf5a55926d82c9cd7fa789755a672",
+      "sha256": "1fccea2b262f20be62eb1b1ef8dd827836f58b6ba009a7fe3cdbb0bf2cf2fac1",
+      "verified_fdes": 2
+    },
+    "framed-O2-2": {
+      "input_sha256": "1fccea2b262f20be62eb1b1ef8dd827836f58b6ba009a7fe3cdbb0bf2cf2fac1",
+      "sha256": "aa490070ca2648b4dfc31dc5719f1a9d9e84b240374c87ad0cd084d9b6cb783b",
+      "verified_fdes": 3
+    },
+    "framed-O2-3": {
+      "input_sha256": "aa490070ca2648b4dfc31dc5719f1a9d9e84b240374c87ad0cd084d9b6cb783b",
+      "sha256": "527733e6650916374ddcd12378c391b6c6c62f6819fe9c8754bc46fd500f3262",
+      "verified_fdes": 4
+    },
+    "framedlib-O0-1": {
+      "input_sha256": "f38c25de4e1fa5aaf3d2b7e22ed40b177b96fd42f39677d8dacac338a4bd7f73",
+      "sha256": "810e36396e92515a71d2f85403b22b58c22401f97c41d9d86d8c326a34ace319",
+      "verified_fdes": 2
+    },
+    "framedlib-O0-2": {
+      "input_sha256": "810e36396e92515a71d2f85403b22b58c22401f97c41d9d86d8c326a34ace319",
+      "sha256": "86eb796d817900d7373b4173e105b0c9ce6079b1e3f259fe5aa1823b09c06e91",
+      "verified_fdes": 3
+    },
+    "framedlib-O0-3": {
+      "input_sha256": "86eb796d817900d7373b4173e105b0c9ce6079b1e3f259fe5aa1823b09c06e91",
+      "sha256": "8a5ae2df6f4621aaf0839ee0444eeb1e8f3dd5f6b61defaf15431b295c3ab46b",
+      "verified_fdes": 4
+    },
+    "framedlib-O2-1": {
+      "input_sha256": "f38c25de4e1fa5aaf3d2b7e22ed40b177b96fd42f39677d8dacac338a4bd7f73",
+      "sha256": "2397e8f4c433709d3e3035472c78d010edc3ab2a35abfadf29ae32246875064b",
+      "verified_fdes": 2
+    },
+    "framedlib-O2-2": {
+      "input_sha256": "2397e8f4c433709d3e3035472c78d010edc3ab2a35abfadf29ae32246875064b",
+      "sha256": "64b66ab13e781dd07d484111face007a9c5e0cec28cc9ce6bf4db2496afd6c0e",
+      "verified_fdes": 3
+    },
+    "framedlib-O2-3": {
+      "input_sha256": "64b66ab13e781dd07d484111face007a9c5e0cec28cc9ce6bf4db2496afd6c0e",
+      "sha256": "fd8af197dbbd5d23b8ba8f439a4dc053e21f7975f0fee0ba44a386386b249a4c",
+      "verified_fdes": 4
+    }
+  },
+  "hosted_linker_cli": {
+    "callback-macos-26-O0-1": {
+      "input_sha256": "1cb78d7bb4a19b4466b24190cd7ff718ce39b3ad78a3d1a0b5f77bc06a0cb863",
+      "sha256": "54b36fe46792475c6b8a01b3ff08fe55d547b27853868bd99549d61efb7377a1",
+      "verified_fdes": 2
+    },
+    "callback-macos-26-O0-2": {
+      "input_sha256": "54b36fe46792475c6b8a01b3ff08fe55d547b27853868bd99549d61efb7377a1",
+      "sha256": "35e0e3e830878baee4f72ffb46bd674771069190728888b5b7f960a0d1532687",
+      "verified_fdes": 3
+    },
+    "callback-macos-26-O0-3": {
+      "input_sha256": "35e0e3e830878baee4f72ffb46bd674771069190728888b5b7f960a0d1532687",
+      "sha256": "02ae879ba2fb2956c727125834264cb454c2bc744dce4afcde2b3f6bffa6f405",
+      "verified_fdes": 4
+    },
+    "callback-macos-26-O2-1": {
+      "input_sha256": "1cb78d7bb4a19b4466b24190cd7ff718ce39b3ad78a3d1a0b5f77bc06a0cb863",
+      "sha256": "919651c44b755b2f725221d56ad64917d35c07975a3363853e9819d3efe91278",
+      "verified_fdes": 2
+    },
+    "callback-macos-26-O2-2": {
+      "input_sha256": "919651c44b755b2f725221d56ad64917d35c07975a3363853e9819d3efe91278",
+      "sha256": "6c832783526e0df36b794be5c87471cf78780a4f22b9853ee3c8d1bc57a04ab7",
+      "verified_fdes": 3
+    },
+    "callback-macos-26-O2-3": {
+      "input_sha256": "6c832783526e0df36b794be5c87471cf78780a4f22b9853ee3c8d1bc57a04ab7",
+      "sha256": "95fd78bcc322c5d989ca61d3a82ca96f04ee73d221fdf160dcb0f52f22461b0e",
+      "verified_fdes": 4
+    },
+    "signed-macos-26-O0-1": {
+      "input_sha256": "9d707c29a37996fec4f7b9001bc2dea01749eb79b1596b36b2bdb73bcb104b5d",
+      "sha256": "3011b5a1425cf053738b4e662c85e7724d9a59eba70ca79fd6483b182f0ac1ae",
+      "verified_fdes": 2
+    },
+    "signed-macos-26-O0-2": {
+      "input_sha256": "3011b5a1425cf053738b4e662c85e7724d9a59eba70ca79fd6483b182f0ac1ae",
+      "sha256": "7787172efad313c6f1e35e06d5c3ce405ae8738db013cb4410ea034c409852fc",
+      "verified_fdes": 3
+    },
+    "signed-macos-26-O0-3": {
+      "input_sha256": "7787172efad313c6f1e35e06d5c3ce405ae8738db013cb4410ea034c409852fc",
+      "sha256": "dac21ea7c151e824757ce7cc9106ee90df109a5b49b17989e953543fdf7e7bdc",
+      "verified_fdes": 4
+    },
+    "signed-macos-26-O2-1": {
+      "input_sha256": "9d707c29a37996fec4f7b9001bc2dea01749eb79b1596b36b2bdb73bcb104b5d",
+      "sha256": "f77451460f080c3f4e056068a81ff01970396e0368469595136398588eddea01",
+      "verified_fdes": 2
+    },
+    "signed-macos-26-O2-2": {
+      "input_sha256": "f77451460f080c3f4e056068a81ff01970396e0368469595136398588eddea01",
+      "sha256": "bf56f0a7904742d0368f4c4036a8f63139511c2850d15db5d19752ce5b52a1ba",
+      "verified_fdes": 3
+    },
+    "signed-macos-26-O2-3": {
+      "input_sha256": "bf56f0a7904742d0368f4c4036a8f63139511c2850d15db5d19752ce5b52a1ba",
+      "sha256": "5c28e25e405a0fd4739ecc08fa669f5ac2e4c8a5046f3061fa0facb9c5bf64e4",
+      "verified_fdes": 4
+    },
+    "callback-xcode-27-O0-1": {
+      "input_sha256": "130d9e0734bf02cdadff28d01e8d49823f59ba1b9d17b8fe3eba1e931517fcc0",
+      "sha256": "6414546578012f5386a262629ef5226683092ee56763415665d27e90fb7a5da0",
+      "verified_fdes": 2
+    },
+    "callback-xcode-27-O0-2": {
+      "input_sha256": "6414546578012f5386a262629ef5226683092ee56763415665d27e90fb7a5da0",
+      "sha256": "c99e405f3eacbd5b38f8bb558d27e145831a1d823034260cb6672fa6d6d42271",
+      "verified_fdes": 3
+    },
+    "callback-xcode-27-O0-3": {
+      "input_sha256": "c99e405f3eacbd5b38f8bb558d27e145831a1d823034260cb6672fa6d6d42271",
+      "sha256": "cc8a2ba2cd1c48caa892297ce9c2a50cff15f993ba578525b02811042095669b",
+      "verified_fdes": 4
+    },
+    "callback-xcode-27-O2-1": {
+      "input_sha256": "130d9e0734bf02cdadff28d01e8d49823f59ba1b9d17b8fe3eba1e931517fcc0",
+      "sha256": "91a4c4c75d3fa4130b2cd939272f069bf65631a0a603589b25b72de048e615e6",
+      "verified_fdes": 2
+    },
+    "callback-xcode-27-O2-2": {
+      "input_sha256": "91a4c4c75d3fa4130b2cd939272f069bf65631a0a603589b25b72de048e615e6",
+      "sha256": "268f912b87b9f81945362c5476bb8acd1a2e34dd22b7d4107063da19c601f734",
+      "verified_fdes": 3
+    },
+    "callback-xcode-27-O2-3": {
+      "input_sha256": "268f912b87b9f81945362c5476bb8acd1a2e34dd22b7d4107063da19c601f734",
+      "sha256": "8159d8849d4b7ce6b599ea7107dd611054ebad32c97f01612fa494d0f38ea10f",
+      "verified_fdes": 4
+    },
+    "signed-xcode-27-O0-1": {
+      "input_sha256": "c977de535f2e9a8e145937acf5f1cc4c59a719c3b4c34b93ad11aa5aa6241b87",
+      "sha256": "d840cb278e968334b2aa8fe4af90bc9055af61d0dfa43876dc444c688bcb4c0e",
+      "verified_fdes": 2
+    },
+    "signed-xcode-27-O0-2": {
+      "input_sha256": "d840cb278e968334b2aa8fe4af90bc9055af61d0dfa43876dc444c688bcb4c0e",
+      "sha256": "0393c6f3ab47ab5d8a4354a9ddf5b396ad58868d0090ca613e0b30a85ac9a898",
+      "verified_fdes": 3
+    },
+    "signed-xcode-27-O0-3": {
+      "input_sha256": "0393c6f3ab47ab5d8a4354a9ddf5b396ad58868d0090ca613e0b30a85ac9a898",
+      "sha256": "eb701fc28d373c838be8cfc2e1d0679176aaa972da561035a20321f91eabad06",
+      "verified_fdes": 4
+    },
+    "signed-xcode-27-O2-1": {
+      "input_sha256": "c977de535f2e9a8e145937acf5f1cc4c59a719c3b4c34b93ad11aa5aa6241b87",
+      "sha256": "a7229f50d5a05db85c85c885c5da78beeb088a9ca2eb6afe507944d57dfe2cf1",
+      "verified_fdes": 2
+    },
+    "signed-xcode-27-O2-2": {
+      "input_sha256": "a7229f50d5a05db85c85c885c5da78beeb088a9ca2eb6afe507944d57dfe2cf1",
+      "sha256": "809f772cf0c246c0f8bb8041f028ba1dbe231a860fee052ace4b797cd394e762",
+      "verified_fdes": 3
+    },
+    "signed-xcode-27-O2-3": {
+      "input_sha256": "809f772cf0c246c0f8bb8041f028ba1dbe231a860fee052ace4b797cd394e762",
+      "sha256": "dee50b733d3fce6f4ed5824357d05c1ac00561d5331118180c968e320dc19b61",
+      "verified_fdes": 4
+    }
+  },
+  "invalid_controls": {
+    "wrong-fde/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "680f0c5f8140bcbf9e7af7007f98bf1c607a57db70ebc13edbb34df0da9e056e",
+      "unchanged": true
+    },
+    "wrong-fde/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "680f0c5f8140bcbf9e7af7007f98bf1c607a57db70ebc13edbb34df0da9e056e",
+      "unchanged": true
+    },
+    "missing-fde/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "ceb8012976afe4d8d523acce49a54625b3ee122063a86055ba269a7d47673b2b",
+      "unchanged": true
+    },
+    "missing-fde/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "ceb8012976afe4d8d523acce49a54625b3ee122063a86055ba269a7d47673b2b",
+      "unchanged": true
+    },
+    "non-dwarf/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "c099b8c55dc32126cb36bc25a516a2bf892d8c785238abc9ab0a9e9762b62f72",
+      "unchanged": true
+    },
+    "non-dwarf/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "c099b8c55dc32126cb36bc25a516a2bf892d8c785238abc9ab0a9e9762b62f72",
+      "unchanged": true
+    },
+    "past-section/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "38668a922222536dc0f8f8ccc2f91f08d363bd2413ac8ca6fc795fc6a1be6196",
+      "unchanged": true
+    },
+    "past-section/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "38668a922222536dc0f8f8ccc2f91f08d363bd2413ac8ca6fc795fc6a1be6196",
+      "unchanged": true
+    },
+    "zero-extent/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "9530a3d70fdd5306be09a7a34c34812d798c25649a47a5e76848bc3377d495ac",
+      "unchanged": true
+    },
+    "zero-extent/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "9530a3d70fdd5306be09a7a34c34812d798c25649a47a5e76848bc3377d495ac",
+      "unchanged": true
+    },
+    "overlapping-limit/O0": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "8c0a16488fd93dd9d604ab70d9eca546834fea4e17ea8b00f2d6e43f181f97a7",
+      "unchanged": true
+    },
+    "overlapping-limit/O2": {
+      "exit": 1,
+      "output": false,
+      "input_sha256": "8c0a16488fd93dd9d604ab70d9eca546834fea4e17ea8b00f2d6e43f181f97a7",
+      "unchanged": true
+    }
+  },
+  "native_release": {
+    "macos-26": {
+      "os": "26.7.2",
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "images_executed": 28,
+      "runner_built_callback_exit": 0
+    },
+    "xcode-27": {
+      "os": "27.0.1",
+      "hardware": "Apple M1 (Virtual)",
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "images_executed": 28,
+      "runner_built_callback_exit": 0
+    }
+  },
+  "source_suite": {
+    "macos-26": {
+      "total": 275,
+      "passed": 275,
+      "failed": [],
+      "skipped": [],
+      "host_sha256": "476228bffdfb08ae08713b48d1b43c4d684237689abd57c00af448e04cda813a",
+      "xml_sha256": "d396fa56eac7ccf58cc06518d914272fc2cdb735af5f9416a8f9776f5640f074",
+      "exit": 0,
+      "os": "26.7.2",
+      "cpu": "Apple M1 (Virtual)",
+      "native_terminal_frames": {
+        "RepublishesSignedTerminalIndexedDwarf": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "SystemUnwindsRepublishedSignedCallback": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "native_signal_walks": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_handler_to_registered_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6
+      },
+      "hosted_linker_images_executed": 28
+    },
+    "xcode-27": {
+      "total": 275,
+      "passed": 275,
+      "failed": [],
+      "skipped": [],
+      "host_sha256": "476228bffdfb08ae08713b48d1b43c4d684237689abd57c00af448e04cda813a",
+      "xml_sha256": "af3ace6e6fce0b5194c5219b23f71d2a7cb1904a7c42be7487190dba41bf05c9",
+      "exit": 0,
+      "os": "27.0.1",
+      "cpu": "Apple M1 (Virtual)",
+      "native_terminal_frames": {
+        "RepublishesSignedTerminalIndexedDwarf": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "SystemUnwindsRepublishedSignedCallback": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "native_signal_walks": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_handler_to_registered_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6
+      },
+      "hosted_linker_images_executed": 28
+    }
+  },
+  "frozen_suite": {
+    "macos-26": {
+      "total": 275,
+      "passed": 265,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "host_sha256": "2982660c3c1f869e77ed9f39a9cec8eb68b09ecd15be5d280b03423cc6b9dc90",
+      "xml_sha256": "84d4f28a546704d79fea57b60bc072b37b7f1b95d0d9fe3e4432390c2e1c26e1",
+      "exit": 1,
+      "os": "26.7.2",
+      "cpu": "Apple M1 (Virtual)",
+      "native_terminal_frames": {
+        "RepublishesSignedTerminalIndexedDwarf": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "SystemUnwindsRepublishedSignedCallback": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "native_signal_walks": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_handler_to_registered_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6
+      }
+    },
+    "xcode-27": {
+      "total": 275,
+      "passed": 265,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "host_sha256": "2982660c3c1f869e77ed9f39a9cec8eb68b09ecd15be5d280b03423cc6b9dc90",
+      "xml_sha256": "f7c9b05fa0475469e75e383111aecea4c28a5aa0734db19f7681f6a0710d2d92",
+      "exit": 1,
+      "os": "27.0.1",
+      "cpu": "Apple M1 (Virtual)",
+      "native_terminal_frames": {
+        "RepublishesSignedTerminalIndexedDwarf": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        },
+        "SystemUnwindsRepublishedSignedCallback": {
+          "resigned_publication_generations": 3,
+          "executed_native_images": 4
+        }
+      },
+      "native_signal_walks": {
+        "native_automatic_original_table_entry_walks": 12,
+        "native_handler_to_registered_entry_walks": 12,
+        "native_alternate_stack_table_walks": 6
+      }
+    }
+  },
+  "additional_tests": {
+    "NeverDLanguageEHTests": {
+      "total": 85,
+      "passed": 85,
+      "skipped": 0,
+      "failed": 0
+    },
+    "NeverDSourcePatchLayoutTests": {
+      "total": 15,
+      "passed": 15,
+      "skipped": 0,
+      "failed": 0
+    },
+    "NeverDNativeExceptionRewriteContractTests": {
+      "total": 207,
+      "passed": 207,
+      "skipped": 0,
+      "failed": 0
+    }
+  },
+  "native_linker_inputs": {
+    "macos-26/signed": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sha256": "9d707c29a37996fec4f7b9001bc2dea01749eb79b1596b36b2bdb73bcb104b5d",
+      "terminal_rva": "0x360",
+      "fde_rva": [
+        "0x360",
+        "0x378"
+      ]
+    },
+    "macos-26/callback": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.1.1.101)",
+      "sha256": "1cb78d7bb4a19b4466b24190cd7ff718ce39b3ad78a3d1a0b5f77bc06a0cb863",
+      "terminal_rva": "0x360",
+      "fde_rva": [
+        "0x360",
+        "0x378"
+      ]
+    },
+    "xcode-27/signed": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sha256": "c977de535f2e9a8e145937acf5f1cc4c59a719c3b4c34b93ad11aa5aa6241b87",
+      "terminal_rva": "0x379",
+      "fde_rva": [
+        "0x360",
+        "0x378"
+      ]
+    },
+    "xcode-27/callback": {
+      "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "sha256": "130d9e0734bf02cdadff28d01e8d49823f59ba1b9d17b8fe3eba1e931517fcc0",
+      "terminal_rva": "0x379",
+      "fde_rva": [
+        "0x360",
+        "0x378"
+      ]
+    }
+  },
+  "return_protection_relocations_and_checked_memory": {
+    "NeverDAArch64ReturnProtectionTests": {
+      "total": 19,
+      "failed": [],
+      "skipped": [],
+      "exit": 0
+    },
+    "NeverDMachOARM64RelocationTests": {
+      "total": 19,
+      "failed": [],
+      "skipped": [],
+      "exit": 0
+    },
+    "NeverDArm64eAnalysisTests": {
+      "total": 35,
+      "failed": [],
+      "skipped": [
+        "AArch64PACMSemantics.NativePrefixModesAgreeWithBothCProjections"
+      ],
+      "exit": 0
+    }
+  },
+  "dev_integration": {
+    "NeverDArm64eLiftedImageTests": {
+      "exit": 0,
+      "total": 275,
+      "failed": [],
+      "skipped": []
+    },
+    "NeverDLanguageEHTests": {
+      "exit": 0,
+      "total": 85,
+      "failed": [],
+      "skipped": []
+    },
+    "NeverDSourcePatchLayoutTests": {
+      "exit": 0,
+      "total": 15,
+      "failed": [],
+      "skipped": []
+    },
+    "release_cli": {
+      "images": 24,
+      "identical_to_native_executed": 24,
+      "controls": 12
+    },
+    "source": {
+      "base": "3ed69e2048a8904c71d6b26dbcc2d6bec65fe444",
+      "head": "7b925628c060851761e07be1b76c4e7f7af23a35",
+      "tree": "c10e87976752ae50eb3d9d5370f53fff7b26b47f",
+      "code_delta_sha256": "4b676336b4336afd7d02e741bb7025dbee5c1f291225adabad70994447f4b7b1",
+      "dependencies": {
+        "llvm-project": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+        "capstone": "2c3d603a35ee40bc82812c223a6fde14d4add1dc",
+        "unicorn": "9e7ca3522d54fbb365fc69d4c2dbf793fd4f063e"
+      }
+    },
+    "actions": "https://github.com/gmh5225/test_mac_intel/actions/runs/44932537141",
+    "native_suite": {
+      "macos-26": {
+        "total": 275,
+        "passed": 275,
+        "failed": [],
+        "skipped": [],
+        "host_sha256": "59bd5e10085cb0f50918304d822f7be0fbbc7ce39eb04d1f7446d53183574500",
+        "xml_sha256": "a4402af33ed95fbeb0f9cd2a4c7f79d93b327652010fcfd1171cf5c5a881244e",
+        "exit": 0,
+        "os": "26.7.2",
+        "cpu": "Apple M1 (Virtual)",
+        "native_terminal_frames": {
+          "RepublishesSignedTerminalIndexedDwarf": {
+            "resigned_publication_generations": 3,
+            "executed_native_images": 4
+          },
+          "SystemUnwindsRepublishedSignedCallback": {
+            "resigned_publication_generations": 3,
+            "executed_native_images": 4
+          }
+        },
+        "native_signal_walks": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_handler_to_registered_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "hosted_linker_images_executed": 28
+      },
+      "xcode-27": {
+        "total": 275,
+        "passed": 275,
+        "failed": [],
+        "skipped": [],
+        "host_sha256": "59bd5e10085cb0f50918304d822f7be0fbbc7ce39eb04d1f7446d53183574500",
+        "xml_sha256": "145b9b8243171ead53446384f6e66d471449538a6189adbd7380d1b1e0595518",
+        "exit": 0,
+        "os": "27.0.1",
+        "cpu": "Apple M1 (Virtual)",
+        "native_terminal_frames": {
+          "RepublishesSignedTerminalIndexedDwarf": {
+            "resigned_publication_generations": 3,
+            "executed_native_images": 4
+          },
+          "SystemUnwindsRepublishedSignedCallback": {
+            "resigned_publication_generations": 3,
+            "executed_native_images": 4
+          }
+        },
+        "native_signal_walks": {
+          "native_automatic_original_table_entry_walks": 12,
+          "native_handler_to_registered_entry_walks": 12,
+          "native_alternate_stack_table_walks": 6
+        },
+        "hosted_linker_images_executed": 28
+      }
+    },
+    "hosted_linker_cli": {
+      "callback-macos-26-O0-1": {
+        "input_sha256": "1cb78d7bb4a19b4466b24190cd7ff718ce39b3ad78a3d1a0b5f77bc06a0cb863",
+        "sha256": "54b36fe46792475c6b8a01b3ff08fe55d547b27853868bd99549d61efb7377a1",
+        "verified_fdes": 2
+      },
+      "callback-macos-26-O0-2": {
+        "input_sha256": "54b36fe46792475c6b8a01b3ff08fe55d547b27853868bd99549d61efb7377a1",
+        "sha256": "35e0e3e830878baee4f72ffb46bd674771069190728888b5b7f960a0d1532687",
+        "verified_fdes": 3
+      },
+      "callback-macos-26-O0-3": {
+        "input_sha256": "35e0e3e830878baee4f72ffb46bd674771069190728888b5b7f960a0d1532687",
+        "sha256": "02ae879ba2fb2956c727125834264cb454c2bc744dce4afcde2b3f6bffa6f405",
+        "verified_fdes": 4
+      },
+      "callback-macos-26-O2-1": {
+        "input_sha256": "1cb78d7bb4a19b4466b24190cd7ff718ce39b3ad78a3d1a0b5f77bc06a0cb863",
+        "sha256": "919651c44b755b2f725221d56ad64917d35c07975a3363853e9819d3efe91278",
+        "verified_fdes": 2
+      },
+      "callback-macos-26-O2-2": {
+        "input_sha256": "919651c44b755b2f725221d56ad64917d35c07975a3363853e9819d3efe91278",
+        "sha256": "6c832783526e0df36b794be5c87471cf78780a4f22b9853ee3c8d1bc57a04ab7",
+        "verified_fdes": 3
+      },
+      "callback-macos-26-O2-3": {
+        "input_sha256": "6c832783526e0df36b794be5c87471cf78780a4f22b9853ee3c8d1bc57a04ab7",
+        "sha256": "95fd78bcc322c5d989ca61d3a82ca96f04ee73d221fdf160dcb0f52f22461b0e",
+        "verified_fdes": 4
+      },
+      "signed-macos-26-O0-1": {
+        "input_sha256": "9d707c29a37996fec4f7b9001bc2dea01749eb79b1596b36b2bdb73bcb104b5d",
+        "sha256": "3011b5a1425cf053738b4e662c85e7724d9a59eba70ca79fd6483b182f0ac1ae",
+        "verified_fdes": 2
+      },
+      "signed-macos-26-O0-2": {
+        "input_sha256": "3011b5a1425cf053738b4e662c85e7724d9a59eba70ca79fd6483b182f0ac1ae",
+        "sha256": "7787172efad313c6f1e35e06d5c3ce405ae8738db013cb4410ea034c409852fc",
+        "verified_fdes": 3
+      },
+      "signed-macos-26-O0-3": {
+        "input_sha256": "7787172efad313c6f1e35e06d5c3ce405ae8738db013cb4410ea034c409852fc",
+        "sha256": "dac21ea7c151e824757ce7cc9106ee90df109a5b49b17989e953543fdf7e7bdc",
+        "verified_fdes": 4
+      },
+      "signed-macos-26-O2-1": {
+        "input_sha256": "9d707c29a37996fec4f7b9001bc2dea01749eb79b1596b36b2bdb73bcb104b5d",
+        "sha256": "f77451460f080c3f4e056068a81ff01970396e0368469595136398588eddea01",
+        "verified_fdes": 2
+      },
+      "signed-macos-26-O2-2": {
+        "input_sha256": "f77451460f080c3f4e056068a81ff01970396e0368469595136398588eddea01",
+        "sha256": "bf56f0a7904742d0368f4c4036a8f63139511c2850d15db5d19752ce5b52a1ba",
+        "verified_fdes": 3
+      },
+      "signed-macos-26-O2-3": {
+        "input_sha256": "bf56f0a7904742d0368f4c4036a8f63139511c2850d15db5d19752ce5b52a1ba",
+        "sha256": "5c28e25e405a0fd4739ecc08fa669f5ac2e4c8a5046f3061fa0facb9c5bf64e4",
+        "verified_fdes": 4
+      },
+      "callback-xcode-27-O0-1": {
+        "input_sha256": "130d9e0734bf02cdadff28d01e8d49823f59ba1b9d17b8fe3eba1e931517fcc0",
+        "sha256": "6414546578012f5386a262629ef5226683092ee56763415665d27e90fb7a5da0",
+        "verified_fdes": 2
+      },
+      "callback-xcode-27-O0-2": {
+        "input_sha256": "6414546578012f5386a262629ef5226683092ee56763415665d27e90fb7a5da0",
+        "sha256": "c99e405f3eacbd5b38f8bb558d27e145831a1d823034260cb6672fa6d6d42271",
+        "verified_fdes": 3
+      },
+      "callback-xcode-27-O0-3": {
+        "input_sha256": "c99e405f3eacbd5b38f8bb558d27e145831a1d823034260cb6672fa6d6d42271",
+        "sha256": "cc8a2ba2cd1c48caa892297ce9c2a50cff15f993ba578525b02811042095669b",
+        "verified_fdes": 4
+      },
+      "callback-xcode-27-O2-1": {
+        "input_sha256": "130d9e0734bf02cdadff28d01e8d49823f59ba1b9d17b8fe3eba1e931517fcc0",
+        "sha256": "91a4c4c75d3fa4130b2cd939272f069bf65631a0a603589b25b72de048e615e6",
+        "verified_fdes": 2
+      },
+      "callback-xcode-27-O2-2": {
+        "input_sha256": "91a4c4c75d3fa4130b2cd939272f069bf65631a0a603589b25b72de048e615e6",
+        "sha256": "268f912b87b9f81945362c5476bb8acd1a2e34dd22b7d4107063da19c601f734",
+        "verified_fdes": 3
+      },
+      "callback-xcode-27-O2-3": {
+        "input_sha256": "268f912b87b9f81945362c5476bb8acd1a2e34dd22b7d4107063da19c601f734",
+        "sha256": "8159d8849d4b7ce6b599ea7107dd611054ebad32c97f01612fa494d0f38ea10f",
+        "verified_fdes": 4
+      },
+      "signed-xcode-27-O0-1": {
+        "input_sha256": "c977de535f2e9a8e145937acf5f1cc4c59a719c3b4c34b93ad11aa5aa6241b87",
+        "sha256": "d840cb278e968334b2aa8fe4af90bc9055af61d0dfa43876dc444c688bcb4c0e",
+        "verified_fdes": 2
+      },
+      "signed-xcode-27-O0-2": {
+        "input_sha256": "d840cb278e968334b2aa8fe4af90bc9055af61d0dfa43876dc444c688bcb4c0e",
+        "sha256": "0393c6f3ab47ab5d8a4354a9ddf5b396ad58868d0090ca613e0b30a85ac9a898",
+        "verified_fdes": 3
+      },
+      "signed-xcode-27-O0-3": {
+        "input_sha256": "0393c6f3ab47ab5d8a4354a9ddf5b396ad58868d0090ca613e0b30a85ac9a898",
+        "sha256": "eb701fc28d373c838be8cfc2e1d0679176aaa972da561035a20321f91eabad06",
+        "verified_fdes": 4
+      },
+      "signed-xcode-27-O2-1": {
+        "input_sha256": "c977de535f2e9a8e145937acf5f1cc4c59a719c3b4c34b93ad11aa5aa6241b87",
+        "sha256": "a7229f50d5a05db85c85c885c5da78beeb088a9ca2eb6afe507944d57dfe2cf1",
+        "verified_fdes": 2
+      },
+      "signed-xcode-27-O2-2": {
+        "input_sha256": "a7229f50d5a05db85c85c885c5da78beeb088a9ca2eb6afe507944d57dfe2cf1",
+        "sha256": "809f772cf0c246c0f8bb8041f028ba1dbe231a860fee052ace4b797cd394e762",
+        "verified_fdes": 3
+      },
+      "signed-xcode-27-O2-3": {
+        "input_sha256": "809f772cf0c246c0f8bb8041f028ba1dbe231a860fee052ace4b797cd394e762",
+        "sha256": "dee50b733d3fce6f4ed5824357d05c1ac00561d5331118180c968e320dc19b61",
+        "verified_fdes": 4
+      }
+    },
+    "hosted_linker_outputs_identical_to_prior_native_run": 24,
+    "binaries": {
+      "neverd": "d152e2e65ed149d73186e8eaa5f31cdc0f1db0c62a7703e5c7d045671ac14cc3",
+      "libneverd.dylib": "f528e7c479b17a20c831400c803de80ccb367ceed88c51d7b3712cdee2486503",
+      "NeverDArm64eLiftedImageTests": "59bd5e10085cb0f50918304d822f7be0fbbc7ce39eb04d1f7446d53183574500"
+    }
+  }
+}
