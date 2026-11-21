@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -43,6 +44,10 @@ void emitScheduledDriver(
     const analysis::X64ContinuationSourceOptions &Options, llvm::StringRef Name,
     const X64FunctionCallSitePauses *CallSitePauses) {
   const bool Paged = Options.PagedMemory;
+  const bool HasPagedCr8Write =
+      Paged && Options.NotifyCr8Writes &&
+      std::any_of(Units.begin(), Units.end(),
+                  [](const auto &Unit) { return Unit.WritesCr8; });
   const auto Names = x64FunctionContextNames(Options.PagedDebug);
   if (FunctionContext)
     OS << "/* Retain the activation across event and instruction boundaries.\n"
@@ -80,12 +85,10 @@ void emitScheduledDriver(
         int sti, mov_ss;
         switch (state->PC) {
 )C";
-  bool HasPagedCr8Write = false;
   for (const auto &Unit : Units) {
     OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL: ";
     if (CallSitePauses && CallSitePauses->emit(OS, Unit.Address, ""))
       continue;
-    HasPagedCr8Write |= Paged && Options.NotifyCr8Writes && Unit.WritesCr8;
     OS << "status = ";
     if (Paged)
       OS << (Options.PagedDebug ? "neverd_x64_paged_debug_validate_v2"
