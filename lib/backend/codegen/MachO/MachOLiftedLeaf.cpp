@@ -24,6 +24,7 @@
 #include "neverd/loader/DWARF/EHFrame.h"
 #include "neverd/loader/DirectBranch.h"
 #include "neverd/loader/MachO/CompactUnwind.h"
+#include "neverd/loader/MachO/FunctionBody.h"
 #include "neverd/object/SectionNames.h"
 #include "neverd/support/DwarfEH.h"
 #include "neverd/support/ISAEncoding.h"
@@ -742,12 +743,17 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
                          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
                          const llvm::DenseSet<va_t> &RegisterEntries,
                          llvm::ArrayRef<MachODataInCodeRange> SourceData,
-                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses) {
+                         llvm::ArrayRef<MachOLiftedSourceAddress> Addresses,
+                         const CompiledSection *AddressPool) {
   using Kind = llvm::mc_rewrite::RewriteSectionKind;
   const CompiledSection *Code = nullptr;
   dwarf_eh::ParseResult LinkedFrames;
   for (const auto &Section : Generated.Sections) {
     if (Section.Kind != Kind::Code) {
+      if (&Section == AddressPool && Section.Kind == Kind::WritableData &&
+          Section.ReadOnlyAfterFixups &&
+          Layout.readOnlyAfterRelocations(Section.VA, Section.Size))
+        continue;
       if (Section.Name == section_names::macho::EhFrame &&
           !Section.ExternalBytes.empty())
         LinkedFrames =
@@ -968,15 +974,20 @@ llvm::Error verifyLeaves(const BinaryImage &Original, const BinaryImage &Layout,
             Addresses.front().Instruction == Start + Offset) {
           const auto Fixup = Addresses.front();
           Addresses = Addresses.drop_front();
-          DecodedInsn ADR{};
-          if (Decode.decodeOne(After.data(), aarch64::kInsnSize,
-                               Owner->second + Offset,
-                               ADR) != aarch64::kInsnSize ||
-              ADR.Id != AARCH64_INS_ADR || !ADR.Raw || !ADR.Raw->detail ||
-              (readLE<uint32_t>(Before.data()) & aarch64::kRdMask) !=
-                  (readLE<uint32_t>(After.data()) & aarch64::kRdMask) ||
-              va_t(ADR.Raw->detail->aarch64.operands[1].imm) !=
-                  Fixup.Target + Slide)
+          const auto Word = readLE<uint32_t>(After.data());
+          const auto PC = Owner->second + Offset;
+          auto Target = machORebasedLiteralAddress(Layout, Word, PC);
+          if (!Target) {
+            DecodedInsn ADR{};
+            if (Decode.decodeOne(After.data(), aarch64::kInsnSize, PC, ADR) !=
+                    aarch64::kInsnSize ||
+                ADR.Id != AARCH64_INS_ADR || !ADR.Raw || !ADR.Raw->detail)
+              return refuse(kSourceAddressTarget);
+            Target = ADR.Raw->detail->aarch64.operands[1].imm;
+          }
+          if ((readLE<uint32_t>(Before.data()) & aarch64::kRdMask) !=
+                  (Word & aarch64::kRdMask) ||
+              *Target != Fixup.Target + Slide)
             return refuse(kSourceAddressTarget);
           continue;
         }
@@ -1357,9 +1368,11 @@ MachOPatcher::installLiftedLeaves(llvm::Module &Module,
                       Object.ObjectData.size()),
       Image, Mappings, Bindings, Output, RecoveredData, Addresses,
       [&](const CompiledImage &Generated, const BinaryImage &Layout, va_t Slide,
-          llvm::ArrayRef<NativeMachOCompactRange> Ranges) {
+          llvm::ArrayRef<NativeMachOCompactRange> Ranges,
+          const CompiledSection *AddressPool) {
         return verifyLeaves(Image, Layout, Mappings, Generated, Slide, Ranges,
-                            *RegisterEntries, SourceData, Addresses);
+                            *RegisterEntries, SourceData, Addresses,
+                            AddressPool);
       });
 }
 } // namespace neverd

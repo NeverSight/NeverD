@@ -377,6 +377,9 @@ struct BinaryImage {
   /// contain relative 32-bit fields whose adjacent bytes can resemble a
   /// mapped 64-bit code address.
   bool MachOHasFunctionStarts = false;
+  /// Ordered executable entries from a complete arm64e LC_FUNCTION_STARTS,
+  /// including entries sharing a compact encoding with an adjacent function.
+  std::vector<va_t> MachOFunctionStarts;
   /// The Mach-O file header identifies an MH_DYLIB. A zero-based dylib must
   /// be loaded away from address zero, so unrelocated absolute instruction
   /// immediates cannot denote its own link-time image addresses.

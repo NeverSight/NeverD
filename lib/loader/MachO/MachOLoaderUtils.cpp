@@ -10,6 +10,7 @@
 #include "neverd/loader/MachO/MachOPlatform.h"
 #include "neverd/object/MachOLayout.h"
 #include "neverd/support/BinaryEncoding.h"
+#include "neverd/support/BranchEncoding.h"
 #include "neverd/support/FilePath.h"
 
 #include "llvm/ADT/StringExtras.h"
@@ -23,10 +24,13 @@
 #include "llvm/TargetParser/Host.h"
 #include "llvm/TargetParser/Triple.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <optional>
 #include <set>
+#include <utility>
+#include <vector>
 
 #define DEBUG_TYPE "neverd-macho-loader"
 
@@ -292,6 +296,8 @@ void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
   uint64_t Addr = TextVMAddr;
   [[maybe_unused]] size_t Added = 0;
   bool SawOwnedFunctionStart = false;
+  bool ValidArm64eStarts = Img.isArm64e();
+  std::vector<va_t> Starts;
 
   while (P < End) {
     unsigned BytesRead = 0;
@@ -300,8 +306,12 @@ void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
     if (Error || BytesRead == 0)
       break;
     P += BytesRead;
-    if (Delta == 0)
+    if (Delta == 0) {
+      if (ValidArm64eStarts &&
+          std::all_of(P, End, [](uint8_t Byte) { return Byte == 0; }))
+        Img.MachOFunctionStarts = std::move(Starts);
       break;
+    }
     if (Delta > InvalidVA - Addr)
       break;
     Addr += Delta;
@@ -310,7 +320,13 @@ void parseFunctionStarts(const uint8_t *BasePtr, size_t FileSize,
     if (Img.Arch == Arch::ARM)
       FuncAddr = clearThumbBit(FuncAddr);
 
-    SawOwnedFunctionStart |= Img.hasExecutableCodeOwnerAt(FuncAddr);
+    const bool Owned = Img.hasExecutableCodeOwnerAt(FuncAddr);
+    SawOwnedFunctionStart |= Owned;
+    if (ValidArm64eStarts) {
+      ValidArm64eStarts = Owned && FuncAddr % branch::A64InstructionBytes == 0;
+      if (ValidArm64eStarts)
+        Starts.push_back(FuncAddr);
+    }
 
     if (Existing.insert(FuncAddr).second) {
       Img.Symbols.push_back(Symbol::makeFunc(FuncAddr));

@@ -11,6 +11,7 @@
 
 #include "neverd/backend/codegen/MachO/MachORegisterResults.h"
 
+#include "../CodeGenSymbolize.h"
 #include "../rewrite/BlockAddressUse.h"
 #include "MachOEmbeddedDispatch.h"
 #include "MachOPageAddress.h"
@@ -51,6 +52,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace neverd {
 namespace {
@@ -71,6 +73,7 @@ struct RegisterBody {
   bool HasSIMDData = false;
   std::vector<MachODataInCodeRange> RecoveredData;
   llvm::SmallVector<MachOLiftedSourceAddress, 0> SourceAddresses;
+  llvm::SmallVector<va_t, 0> SourcePointerSlots;
   bool HasDataPage = false;
   bool HasEmbeddedData = false;
   bool HasCompactFrame = false;
@@ -929,32 +932,46 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       Fallthrough();
       continue;
     }
-    // A table or signing point moves with this body. A pointer into declared
-    // literal storage or a returned function entry denotes the source image,
-    // including when a later publication lifts this copy again.
-    if (I.Id == AARCH64_INS_ADR) {
+    // A table or signing point moves with this body. An exported numeric
+    // address denotes original storage even when lifting a published copy.
+    const auto Rebased = aarch64::isPointerLiteralLoad(Encoding)
+                             ? machORebasedLiteralAddress(Image, Encoding, PC)
+                             : std::nullopt;
+    if (I.Id == AARCH64_INS_ADR || Rebased) {
       if (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
-          Ops[1].type != AARCH64_OP_IMM)
+          (!Rebased && Ops[1].type != AARCH64_OP_IMM))
         return std::nullopt;
-      const va_t Target = Ops[1].imm;
+      const va_t Target = Rebased ? *Rebased : va_t(Ops[1].imm);
       const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
       const bool LiteralAddress =
           !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
       const auto Reg = Ops[0].reg;
       if (Reg == AARCH64_REG_XZR)
         return std::nullopt;
-      const bool Moves =
-          !OutsideCFG && (Dispatch.TableAddresses.contains(PC) ||
+      const bool Moves = !Rebased && !OutsideCFG &&
+                         (Dispatch.TableAddresses.contains(PC) ||
                           movesSigningPoint(*Source, Start, PC, Target, Reg));
       if (!Moves) {
         // The lookahead consumes the borrowed instruction. The source word
         // and destination register have already been copied.
-        if (!LiteralAddress &&
-            !(Image.hasAuthenticatedFunctionEntryAt(Target) &&
-              exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
-                             NextPC, Reg)))
-          return std::nullopt;
+        if (!LiteralAddress) {
+          if (!Image.hasAuthenticatedFunctionEntryAt(Target)) {
+            // An unvisited word can expose its own PC. Its unwind owner
+            // identifies the storage, but gives no evidence of a value use.
+            if (OutsideCFG)
+              return std::nullopt;
+            const auto Owner = machOInteriorAddressOwner(Image, Target);
+            if (!Owner || !Functions.contains(*Owner))
+              return std::nullopt;
+          }
+          if (!exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
+                              NextPC, Reg))
+            return std::nullopt;
+        }
         Body.SourceAddresses.push_back({PC, Target});
+        if (Rebased)
+          Body.SourcePointerSlots.push_back(
+              aarch64::decodeLiteralLoad(Encoding, PC)->Address);
       }
       Fallthrough();
       OS << kInstructionWord << Encoding << '\n';
@@ -1198,24 +1215,72 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     NewData.push_back(G);
     return G;
   };
-  bool HasVariadicCursor = false;
+  llvm::SmallVector<std::pair<llvm::Function *, bool>> AddressTaken;
+  llvm::DenseSet<const llvm::Function *> AddressUsers;
+  llvm::SmallVector<va_t> SourceSlots;
   for (auto It = Functions->begin(); It != Functions->end(); ++It) {
     auto &F = *It->second;
     if (!Admitted.contains(It->first))
       continue;
     const auto *Source = SourceByEntry.lookup(It->first);
-    if (llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }) &&
-        (!Source || Source->JumpTables.empty() ||
-         !blockAddressEscape(F, [&](const auto *Owner) {
-            return Owner == &F;
-          }).empty()))
-      continue;
     if (auto Body =
             registerBody(Decode, Image, *Functions, It, Source, DataSymbol)) {
-      HasVariadicCursor |= F.isVarArg() && Body->MaterializesCursor;
+      if (!Body->SourceAddresses.empty())
+        AddressUsers.insert(&F);
+      llvm::append_range(SourceSlots, Body->SourcePointerSlots);
+      if (llvm::any_of(F, [](const auto &BB) { return BB.hasAddressTaken(); }))
+        AddressTaken.emplace_back(&F, Source && !Source->JumpTables.empty());
       Bodies.try_emplace(&F, std::move(*Body));
     }
   }
+  // A pointer mirror may hold the old label in its initializer. dyld owns
+  // the actual cell. Bind its IR mirror before testing which labels escape.
+  llvm::SmallVector<llvm::GlobalVariable *> SourceMirrors;
+  if (!SourceSlots.empty()) {
+    llvm::sort(SourceSlots);
+    for (auto &G : M.globals()) {
+      const auto Base = parseNdCodePtrSymbol(G.getName());
+      if (!Base || !G.isConstant() || G.isThreadLocal() ||
+          G.getAddressSpace() || (G.hasInitializer() && !G.hasLocalLinkage()))
+        continue;
+      const auto Slot = llvm::lower_bound(SourceSlots, *Base);
+      if (Slot == SourceSlots.end())
+        continue;
+      const auto Size = M.getDataLayout().getTypeAllocSize(G.getValueType());
+      if (Size.isScalable() ||
+          !rangeInBounds(*Slot - *Base, sizeof(va_t), Size.getFixedValue()))
+        continue;
+      declareOriginalPointerMirror(G);
+      SourceMirrors.push_back(&G);
+    }
+  }
+  // A peer may store the address of an exact basic-block label. Its proved
+  // native body records the original address and will discard that IR use.
+  // A label referenced by surviving IR or metadata must keep its old body.
+  llvm::DenseMap<const llvm::Function *, llvm::SmallVector<llvm::Function *>>
+      DependsOn;
+  llvm::SmallVector<llvm::Function *> Retain;
+  for (auto [F, LocalDispatch] : AddressTaken) {
+    const auto Escape = blockAddressEscape(*F, [&](const auto *User) {
+      if (User == F && LocalDispatch)
+        return true;
+      if (!AddressUsers.contains(User))
+        return false;
+      if (User != F)
+        DependsOn[User].push_back(F);
+      return true;
+    });
+    if (!Escape.empty())
+      Retain.push_back(F);
+  }
+  while (!Retain.empty()) {
+    auto *F = Retain.pop_back_val();
+    if (Bodies.erase(F))
+      llvm::append_range(Retain, DependsOn.lookup(F));
+  }
+  const bool HasVariadicCursor = llvm::any_of(Bodies, [](const auto &Item) {
+    return Item.first->isVarArg() && Item.second.MaterializesCursor;
+  });
   llvm::DenseSet<llvm::Function *> Selected;
   llvm::SmallVector<llvm::Function *> Worklist;
   const auto Select = [&](llvm::Function *F) {
@@ -1265,11 +1330,13 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
     for (auto *Caller : Callers.lookup(F))
       Select(Caller);
   }
+  // Drop uses across the whole selection before destroying a peer's label.
+  for (auto *F : Selected)
+    for (auto &BB : *F)
+      BB.dropAllReferences();
   for (auto &[F, Body] : Bodies) {
     if (!Selected.contains(F))
       continue;
-    for (auto &BB : *F)
-      BB.dropAllReferences();
     while (!F->empty())
       F->begin()->eraseFromParent();
     F->addFnAttr(kRegisterBody);
@@ -1297,6 +1364,11 @@ lowerMachORegisterResults(llvm::Module &M, const BinaryImage &Image,
         llvm::BasicBlock::Create(M.getContext(), kEntryBlock, F));
     B.CreateCall(assembly(*F, Body), Body.Operands)->setDoesNotReturn();
     B.CreateUnreachable();
+  }
+  for (auto *G : SourceMirrors) {
+    G->removeDeadConstantUsers();
+    if (G->use_empty() && !G->isUsedByMetadata())
+      G->eraseFromParent();
   }
   return llvm::Error::success();
 }

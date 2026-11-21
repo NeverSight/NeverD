@@ -2757,9 +2757,9 @@ the register and absolute target. This covers pointers into a declared
 function, and original function entries returned in X0 or written through pointer
 parameters by STR and STUR. Full-width register moves preserve that identity.
 The switch recognizer identifies both the table address and the jump anchor.
-A local PACM signing point moves with a verified matching consumer. An
-unproved code address or a target beyond the signed byte displacement fails
-before publication.
+A local PACM signing point moves with a verified matching consumer.
+The source-address installer also handles interior code values and distant
+literal or code addresses as described below.
 
 For normal static data, Clang also emits an `ADRP` and an unshifted X-register
 `ADD`. When this pair identifies a byte in file-backed data, the register
@@ -2853,3 +2853,62 @@ the arm64 XLarge labels. The test repository reported zero self-hosted runners.
 [Standard runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 [Larger runner specifications](https://docs.github.com/en/actions/reference/runners/larger-runners).
 [Input hashes, IR checks and per-host results](evidence/arm64e-function-entry-offsets-2026-11-21.json).
+
+### Interior addresses, distant address loads and signal-handler entry walks
+
+For an aligned numeric code address, the loader intersects the registered
+unwind extent with the linked function starts and the file-backed instruction
+mapping. The function-start table distinguishes adjacent entries whose compact
+unwind encoding was coalesced. DWARF supplies an independent extent when
+present. The ownership check excludes declared data and preserves the original
+entry plus byte offset when a returned or stored value survives publication.
+An unvisited word next to an embedded table still needs independent evidence
+for its address operand. An unwind range alone cannot classify a use there.
+Lifting just the referring function can declare the proven owner and retain
+the same byte offset.
+For a target at an LLVM basic-block label, the publisher verifies every body
+that holds the label and drops their IR references together. A static table
+or a surviving body that still references a label retains its LLVM owner.
+
+The installer keeps a directly encodable `ADR`. For a distant address it can
+emit one `LDR Xt` from a pointer cell that dyld rebases and then makes read-only.
+Equal targets share a cell. A subsequent publication can reuse a reachable,
+immutable cell. When lifted IR models that cell with a private pointer table,
+the native publisher binds the table to its original storage before checking
+label references. It drops the IR table once its last use disappears.
+If the existing pool lies between the old executable segment and `__LINKEDIT`,
+the next generation places its code in a separate RX segment. Later
+generations can extend that segment while retaining the same read-only cells.
+Each form uses the original destination register and occupies
+one instruction, preserving the containing function's unwind and exception
+offsets. The final check decodes the installed instruction and compares the
+loaded target with the original address adjusted for layout growth. A literal
+load has a signed 19-bit displacement in four-byte units. Publication reports
+a placement error when the cell itself is outside that range.
+
+`ndDarwinArm64eWalkHandlerEntry` starts in an active `SA_SIGINFO` handler.
+It walks Darwin's registered frames until the signal-frame address agrees
+with the handler's `siginfo_t` argument. It checks the kernel-saved context
+within the supplied regular or alternate stack bounds and looks up the
+interrupted entry in the loaded image's original unwind tables.
+The XNU signal-frame layout places the context prefix after `siginfo_t` and
+records the machine-state address in that prefix.
+[XNU arm64 signal delivery](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/dev/arm/unix_signal.c).
+
+In the compiler-original control, Darwin's ordinary handler walk skipped the
+interrupted entry on all twelve samples across macos-26 and xcode-27. On the
+same profiles, the handler-start API recovered the entry, both callers, the
+caller SP and the preserved vector values in all twelve samples. These
+covered indexed DWARF, frameless compact unwind and compact unwind with LSDA,
+on both regular and alternate stacks. Both profiles reported virtual M1
+hardware. The explicit PAuth_LR, PACM-PC, CPTA-on and checked-writeback probes
+remain unqualified there.
+[Original control](https://github.com/gmh5225/test_mac_intel/actions/runs/44867024086).
+[Handler-start checks](https://github.com/gmh5225/test_mac_intel/actions/runs/44867399599).
+
+Hosted qualification can be rerun against current NeverD dev. The workflow
+resolves one commit for all three macOS runners, reports each missing feature
+and keeps the individual probe reports. Both the hosted and the self-hosted
+checkouts include the assembler fixture used by the signal cursor probe.
+[Hosted arm64e.x1 qualification](https://github.com/gmh5225/test_mac_intel/actions/workflows/neverd-hosted-arm64e-x1.yml).
+[Manual run on macos-15, macos-26 and xcode-27](https://github.com/gmh5225/test_mac_intel/actions/runs/44872479257).

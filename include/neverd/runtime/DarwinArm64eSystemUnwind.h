@@ -16,6 +16,8 @@
 #if defined(__APPLE__) && defined(__arm64e__)
 #include <libunwind.h>
 #include <mach-o/compact_unwind_encoding.h>
+#include <signal.h>
+#include <stddef.h>
 #include <unwind.h>
 
 #define NEVERD_SYSTEM_UNWIND_BRIDGE(Name, Symbol, Assembly)                    \
@@ -195,6 +197,55 @@ ndDarwinArm64eInitIndexedEntryCursor(unw_cursor_t *System,
                                      unsigned *LookupOffset) {
   return ndDarwinArm64eInitTableEntryCursor(
       System, Context, Entry, UNWIND_ARM64_MODE_DWARF, LookupOffset);
+}
+
+/// Walk out of a live SA_SIGINFO handler to the interrupted entry. Signal is
+/// the handler's second argument. Low and High bound the stack on which the
+/// handler runs (including a sigaltstack). No interrupted PC or row is needed.
+/// Discard the cursor on failure.
+static inline bool ndDarwinArm64eWalkHandlerEntry(unw_cursor_t *System,
+                                                  const siginfo_t *Signal,
+                                                  uintptr_t Low, uintptr_t High,
+                                                  unsigned *LookupOffset) {
+  const uintptr_t Frame = (uintptr_t)Signal;
+  // XNU's user_sigframe64 holds siginfo, the public ucontext prefix and the
+  // machine state in that order. The optional X/Open tail of ucontext_t is
+  // not part of the kernel prefix. Copy it to suitably aligned local storage.
+  ucontext_t Header;
+  const size_t Prefix =
+      offsetof(ucontext_t, uc_mcontext) + sizeof(Header.uc_mcontext);
+  const size_t Machine = sizeof(*Signal) + Prefix;
+  if (!System || !Signal || !LookupOffset || Frame % NDArm64eStackAlignment ||
+      Frame < Low || Frame > High ||
+      High - Frame < Machine + sizeof(*Header.uc_mcontext))
+    return false;
+  unw_context_t Here;
+  if (unw_getcontext(&Here) || unw_init_local(System, &Here))
+    return false;
+  for (;;) {
+    unw_word_t SP, FP;
+    if (unw_get_reg(System, UNW_REG_SP, &SP) || SP < Low || SP > Frame)
+      return false;
+    // The registered table can either present the signal frame's CFA after
+    // a step or describe _sigtramp's canonical FP record before that step.
+    if (SP == Frame)
+      break;
+    unw_proc_info_t Info;
+    if (!unw_get_proc_info(System, &Info) &&
+        (Info.format & UNWIND_ARM64_MODE_MASK) == UNWIND_ARM64_MODE_FRAME &&
+        !unw_get_reg(System, UNW_ARM64_FP, &FP) && FP >= SP && FP < Frame &&
+        Frame - FP == NDArm64eFrameRecordWords * sizeof(uintptr_t))
+      break;
+    if (unw_step(System) <= 0)
+      return false;
+  }
+  memcpy(&Header, (const unsigned char *)Signal + sizeof(*Signal), Prefix);
+  if ((uintptr_t)Header.uc_stack.ss_sp != Frame || Header.uc_link ||
+      (uintptr_t)Header.uc_mcontext != Frame + Machine ||
+      Header.uc_mcsize != sizeof(*Header.uc_mcontext))
+    return false;
+  return ndDarwinArm64eInitInterruptedEntryCursor(System, &Header,
+                                                  LookupOffset);
 }
 
 // Recover from the interrupted stack before changing either native consumer.
