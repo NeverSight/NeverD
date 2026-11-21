@@ -88,6 +88,9 @@ WindowsEntryPoints neverd::sdk::windowsEntryPoints(const BinaryImage &Image,
     if (Image.DynInfo.PECharacteristics & llvm::COFF::IMAGE_FILE_DLL) {
       Entries.DllRegisterServer = UniqueExport("DllRegisterServer");
       Entries.DllUnregisterServer = UniqueExport("DllUnregisterServer");
+      if ((Entries.DllRegisterServer || Entries.DllUnregisterServer) &&
+          identifyImageProfile(Image).Domain != ImageDomain::User)
+        return {};
     }
     return Entries;
   }

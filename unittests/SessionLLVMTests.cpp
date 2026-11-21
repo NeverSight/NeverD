@@ -143,6 +143,9 @@ TEST(WindowsEntryPoints, COMRegistrationRequiresAnExecutableUserDLLExport) {
   };
   EXPECT_EQ(entries().DllRegisterServer, Register);
   EXPECT_EQ(entries().DllUnregisterServer, Unregister);
+  Image.DynInfo.PECharacteristics |= llvm::COFF::IMAGE_FILE_SYSTEM;
+  EXPECT_FALSE(entries().DllRegisterServer);
+  Image.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_DLL;
   Image.Exports.push_back({.Name = "Alias", .Addr = Register});
   EXPECT_FALSE(entries().DllRegisterServer);
   EXPECT_EQ(entries().DllUnregisterServer, Unregister);
