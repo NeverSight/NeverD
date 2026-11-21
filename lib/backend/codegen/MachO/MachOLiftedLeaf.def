@@ -23,6 +23,7 @@
 
 MACHO_LEAF_TEXT(kLeafModule,
                 "arm64e lifted image has no complete native leaf contract")
+MACHO_LEAF_TEXT(kAddressPrefix, "nop\n")
 MACHO_LEAF_TEXT(
     kLeafCoverage,
     "arm64e lifted entries do not cover the original authenticated functions")

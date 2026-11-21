@@ -10,8 +10,22 @@
 #include "neverd/backend/codegen/PatchObject.h"
 #include "neverd/loader/MachO/DataInCode.h"
 
+#include <vector>
+
 namespace neverd {
 struct MachOLiftedSourceAddress;
+
+/// A one-word address site could not reach its dyld pointer cell.
+class MachOLiteralPoolOutOfRange
+    : public llvm::ErrorInfo<MachOLiteralPoolOutOfRange> {
+public:
+  static char ID;
+  explicit MachOLiteralPoolOutOfRange(llvm::ArrayRef<va_t> Instructions)
+      : Instructions(Instructions.begin(), Instructions.end()) {}
+  std::vector<va_t> Instructions;
+  void log(llvm::raw_ostream &OS) const override;
+  std::error_code convertToErrorCode() const override;
+};
 
 /// Verify lifted code and language metadata in the installed private candidate
 /// before atomic publication. AddressPool is the installer's own section, if

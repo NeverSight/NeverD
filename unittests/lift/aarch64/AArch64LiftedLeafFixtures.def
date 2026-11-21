@@ -12,6 +12,136 @@
 #endif
 
 A64_LEAF_TEXT(kTemporary, "neverd-arm64e-lifted-leaves")
+A64_LEAF_TEXT(kWideAddressLeaves, R"asm(
+.text
+.p2align 2
+.globl _wide_frame
+_wide_frame:
+.cfi_startproc
+  pacibsp
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  .cfi_def_cfa x29, 16
+  .cfi_offset x30, -8
+  .cfi_offset x29, -16
+  adr x0, LwideFrameValue
+  ldp x29, x30, [sp], #16
+  retab
+.data_region
+LwideFrameValue: .long 42
+.end_data_region
+.cfi_endproc
+.globl _wide_signed
+_wide_signed:
+.cfi_startproc
+  pacibsp
+  adr x0, LwideSignedReturn
+LwideSignedReturn:
+  retab
+.cfi_endproc
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  adrp x8, LwideReturn@PAGE
+  add x0, x8, LwideReturn@PAGEOFF
+LwideReturn:
+  ret
+.cfi_endproc
+.macro fill index
+.globl _fill\index
+_fill\index:
+.cfi_startproc
+  adr x0, 1f
+  ret
+.data_region
+1: .space (15 << 12), \index
+.end_data_region
+.cfi_endproc
+.endm
+.irp n,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17
+  fill \n
+.endr
+.subsections_via_symbols
+)asm")
+A64_LEAF_TEXT(kWideAddressCaller, R"c(
+#include <dlfcn.h>
+#include <ptrauth.h>
+#include <stdint.h>
+#include <stdio.h>
+
+typedef uintptr_t (*address)(void);
+int main(int argc, char **argv) {
+  if (argc != 2)
+    return 1;
+  void *image = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!image)
+    return 2;
+  const char *entries[] = {"leaf_sum", "wide_signed"};
+  for (unsigned i = 0; i != sizeof(entries) / sizeof(*entries); ++i) {
+    address entry = (address)dlsym(image, entries[i]);
+    if (!entry)
+      return 3;
+    uintptr_t expected =
+        (uintptr_t)ptrauth_strip(entry, ptrauth_key_function_pointer);
+    if (entry() != expected + 2 * sizeof(uint32_t))
+      return 3;
+  }
+  address framed = (address)dlsym(image, "wide_frame");
+  if (!framed)
+    return 4;
+  uintptr_t data = (uintptr_t)ptrauth_strip(framed, ptrauth_key_function_pointer)
+                   + 6 * sizeof(uint32_t);
+  if (framed() != data || *(const uint32_t *)data != 42)
+    return 4;
+  for (unsigned i = 0; i != 18; ++i) {
+    char name[32];
+    snprintf(name, sizeof(name), "fill%u", i);
+    address value = (address)dlsym(image, name);
+    if (!value)
+      return 4;
+    uintptr_t expected = (uintptr_t)ptrauth_strip(
+                             value, ptrauth_key_function_pointer) +
+                         2 * sizeof(uint32_t);
+    if (value() != expected || *(const uint8_t *)expected != i)
+      return 5;
+  }
+  return dlclose(image) != 0;
+}
+)c")
+A64_LEAF_VALUE(unsigned, kWideAddressFunctions, 21)
+A64_LEAF_VALUE(uint32_t, kMinADRImmediate, 0x00800000)
+A64_LEAF_VALUE(uint32_t, kMaxADRImmediate, 0x607fffe0)
+A64_LEAF_TEXT(kWidePageReturns, "verified_page_address_returns")
+A64_LEAF_TEXT(kForwardedSaveMain, R"asm(
+.text
+.p2align 2
+.globl _main
+_main:
+.cfi_startproc
+  b _leaf_sum
+.cfi_endproc
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  pacibsp
+  stp x29, x30, [sp, #-16]!
+  mov x29, sp
+  .cfi_def_cfa x29, 16
+  .cfi_offset x29, -16
+  .cfi_offset x30, -8
+  adr x0, Lvalue
+  ldr w0, [x0]
+  ldp x29, x30, [sp], #16
+  retab
+Lvalue: .long 42
+.cfi_endproc
+.subsections_via_symbols
+)asm")
+A64_LEAF_VALUE(int, kForwardedSaveResult, 42)
+A64_LEAF_VALUE(uint32_t, kLoadWordX0, 0xb9400000)
+A64_LEAF_VALUE(uint32_t, kLoadWordX1, 0xb9400020)
+A64_LEAF_VALUE(uint32_t, kLoadFollowingWord, 0xb9400400)
+A64_LEAF_VALUE(uint32_t, kStoreWordX0, 0xb9000000)
 A64_LEAF_TEXT(kSource, "leaves.c")
 A64_LEAF_TEXT(kOriginal, "leaves.dylib")
 A64_LEAF_TEXT(kOutput, "published.dylib")

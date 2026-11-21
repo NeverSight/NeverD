@@ -12,11 +12,14 @@
 #define MACHO_OBJECT_TEXT(Name, Text)
 #endif
 
+MACHO_OBJECT_TEXT(kObjectErrorPrefix, "Mach-O patch object: ")
 MACHO_OBJECT_TEXT(kAddressSourceWord,
                   "lifted source address differs from its emitted instruction or "
                   "function extent")
 MACHO_OBJECT_TEXT(kAddressReach,
                   "source address literal pool is out of instruction range")
+MACHO_OBJECT_TEXT(kAddressPageReach,
+                  "source address exceeds the signed ADRP page displacement")
 MACHO_OBJECT_TEXT(kNoPlacement, "original Mach-O has no safe placement")
 MACHO_OBJECT_TEXT(kClassicReturnCFI,
                   "classic arm64e requires implicit signed-return CFI; "
@@ -95,7 +98,8 @@ MACHO_OBJECT_TEXT(kTLVSymbolPrefix, "_")
 MACHO_OBJECT_VALUE(uint8_t, kDefaultFunctionPointerKey,
                    0) // IA, zero discriminator.
 MACHO_OBJECT_VALUE(unsigned, kTLVDescriptorBytes, 3 * sizeof(uint64_t))
-MACHO_OBJECT_VALUE(uint32_t, kTLVDescriptorAddress, 0x91000000)
+MACHO_OBJECT_VALUE(uint32_t, kAddImmediate64, 0x91000000)
+MACHO_OBJECT_VALUE(unsigned, kAddressBaseRegisterShift, 5)
 MACHO_OBJECT_TEXT(kTLVInstruction, "thread-local descriptor reference requires "
                                    "an unadjusted ADRP or pointer-sized LDR")
 MACHO_OBJECT_VALUE(uint32_t, kTLVLoadRegisters, 0x3ff)

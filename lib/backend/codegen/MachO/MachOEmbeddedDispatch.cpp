@@ -6,7 +6,10 @@
 
 #include "MachOEmbeddedDispatch.h"
 
+#include "MachOPageAddress.h"
+
 #include "neverd/decode/Decoder.h"
+#include "neverd/ir/intrinsics/AArch64/AArch64AddressMemory.h"
 #include "neverd/ir/low/LowIR.h"
 #include "neverd/lift/AArch64/AArch64Regs.h"
 #include "neverd/loader/BinaryImage.h"
@@ -41,6 +44,38 @@ struct Address {
   va_t Target;
   va_t PC;
 };
+
+// A linked image can omit DICE for a literal read through a local address.
+// Follow an adjacent address definition inside one CFG block. Only the bytes
+// read by the load acquire a data owner.
+std::optional<aarch64::LiteralLoad>
+addressedRead(Decoder &Decode, llvm::ArrayRef<uint8_t> Bytes, va_t PC) {
+  using namespace aarch64;
+  constexpr auto Word = kInsnSize;
+  if (Bytes.size() < 2 * Word)
+    return std::nullopt;
+  const auto Producer = readLE<uint32_t>(Bytes.data());
+  auto Target = decodePCRelativeAddress(Producer, PC);
+  if (!Target)
+    return std::nullopt;
+  size_t Consumer = Word;
+  if ((Producer & kADRP_Mask) == kADRP_Op) {
+    auto Pair = decodeMachOPageAddress(Decode, Bytes, PC);
+    if (!Pair)
+      return std::nullopt;
+    Target = Pair->Target;
+    Consumer += Word;
+  }
+  if (Bytes.size() - Consumer < Word)
+    return std::nullopt;
+  const auto Base = readLE<uint32_t>(Bytes.data() + Consumer - Word) & kRdMask;
+  const auto Load = aarch64AddressMemoryInstruction(
+      readLE<uint32_t>(Bytes.data() + Consumer));
+  if (!Load || !Load->isLoad() || Load->stackBase() || Load->base() != Base ||
+      Load->hasRegisterIndex() || Load->addressOffset(0))
+    return std::nullopt;
+  return aarch64::LiteralLoad{*Target, Load->accessBytes()};
+}
 
 /// The CFG resolver already proved which slots can reach this BR. A numeric
 /// target alone does not show that the table and its anchor move with the
@@ -310,7 +345,13 @@ machOEmbeddedDispatch(const BinaryImage &Image, Decoder &Decode,
         continue;
       const auto Encoding =
           readLE<uint32_t>(Source.Bytes.data() + (I.Address - Function.Entry));
-      const auto Load = aarch64::decodeLiteralLoad(Encoding, I.Address);
+      auto Load = aarch64::decodeLiteralLoad(Encoding, I.Address);
+      if (!Load && Block.EndAddr >= I.Address &&
+          Block.EndAddr - Function.Entry <= Source.Bytes.size())
+        Load = addressedRead(Decode,
+                             Source.Bytes.slice(I.Address - Function.Entry,
+                                                Block.EndAddr - I.Address),
+                             I.Address);
       if (Load && Load->Address >= Function.Entry &&
           rangeInBounds(Load->Address - Function.Entry, Load->Width,
                         Source.Bytes.size()) &&
