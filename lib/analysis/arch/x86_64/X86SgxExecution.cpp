@@ -79,11 +79,78 @@ uint32_t saveExitInfo(uint8_t *GPR, bool ExInfo,
   return 0;
 }
 
+llvm::Expected<bool> walkSgxWrite(X86PagedMemory &M, uint64_t Address,
+                                  X86ModeExecutionResult &Out,
+                                  uint64_t &Physical) {
+  auto Walk = walkX86PageTables(M.physicalMemory(), M.features(), M.controls(),
+                                {Address, MemoryAccessKind::Write, 3});
+  if (!Walk)
+    return Walk.takeError();
+  Out.SelfModifications.insert(Out.SelfModifications.end(),
+                               Walk->SelfModifications.begin(),
+                               Walk->SelfModifications.end());
+  Out.Exception = Walk->Exception;
+  Out.BackingFault = Walk->BackingFault;
+  if (Out.BackingFault)
+    Out.Status = Status::BackingFault;
+  Physical = Walk->PhysicalAddress;
+  return !Out.Exception && !Out.BackingFault;
+}
 } // namespace
 
 llvm::Expected<bool>
-X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
-                                    const X86SgxMemory &Memory) {
+X86SgxExecution::bindFrame(X86PagedMemory &M, const X86SgxEnclave &Enclave,
+                           const X86SgxPage &TCS, uint32_t FramePages,
+                           uint32_t Index, X86SgxFrameProgress &Progress,
+                           X86ModeExecutionResult &Out) {
+  const uint64_t OSSA = le::read64le(TCS.Bytes.data() + 16);
+  const uint64_t FrameSize = uint64_t(FramePages) * PageSize;
+  if (!FrameSize || FrameSize > Enclave.Size ||
+      OSSA > Enclave.Size - FrameSize ||
+      Index > (Enclave.Size - FrameSize - OSSA) / FrameSize) {
+    Out.Exception = X86MemoryException{13, 0, {}};
+    return false;
+  }
+  const uint64_t SSA = Enclave.Base + OSSA + Index * FrameSize;
+  const auto BindPage =
+      [&](uint64_t Address,
+          std::optional<uint64_t> &Saved) -> llvm::Expected<bool> {
+    if (Saved)
+      return true;
+    uint64_t Physical = 0;
+    auto Ready = walkSgxWrite(M, Address, Out, Physical);
+    if (!Ready)
+      return Ready.takeError();
+    if (!*Ready)
+      return false;
+    auto &Pages = M.sgxMemory()->EPC;
+    const auto I = Pages.find(Physical & ~(uint64_t(PageSize) - 1));
+    if (I != Pages.end()) {
+      const auto &P = I->second;
+      if (P.Valid && !P.Blocked && !P.Modified && !P.Pending &&
+          P.Type == X86SgxPageType::Regular && P.OwnerSECS == Enclave.SECS &&
+          P.Linear == (Address & ~(uint64_t(PageSize) - 1)) &&
+          hasPermission(P.Permissions, MemoryPermission::Write)) {
+        Saved = P.Physical;
+        return true;
+      }
+    }
+    Out.Exception = X86MemoryException{14, 0x8007, Address};
+    return false;
+  };
+  auto First = BindPage(SSA, Progress.XSavePage);
+  if (!First)
+    return First.takeError();
+  if (!*First)
+    return false;
+  if (FramePages == 1)
+    Progress.GprPage = Progress.XSavePage;
+  return BindPage(SSA + FrameSize - PageSize + GprOffset, Progress.GprPage);
+}
+
+llvm::Expected<std::optional<uint8_t>>
+X86SgxExecution::instructionException(llvm::ArrayRef<uint8_t> Bytes,
+                                      uint64_t PC, const X86SgxMemory &Memory) {
   if (!Memory.Running)
     return invalid("enclave instruction admission requires a running thread");
   const uint64_t XFRM = Memory.Running->XFRM;
@@ -100,10 +167,10 @@ X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
   const auto Groups = llvm::ArrayRef(Detail.groups, Detail.groups_count);
   for (const auto Group : Groups) {
     if (Group == X86_GRP_AVX512)
-      return true;
+      return uint8_t{6};
     if (!(XFRM & 4) && (Group == X86_GRP_AVX || Group == X86_GRP_AVX2 ||
                         Group == X86_GRP_F16C || Group == X86_GRP_FMA))
-      return true;
+      return uint8_t{6};
   }
   // Vector AES and polynomial multiply encodings can lack an AVX group.
   // Scalar BMI instructions also use VEX and do not require vector state.
@@ -113,10 +180,10 @@ X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
                        : Operand.type == X86_OP_MEM ? Operand.mem.index
                                                     : X86_REG_INVALID;
       if (Reg >= X86_REG_K0 && Reg <= X86_REG_K7)
-        return true;
+        return uint8_t{6};
       if (Reg >= X86_REG_XMM0 && Reg <= X86_REG_ZMM31 &&
           (X.opcode[0] == 0x62 || !(XFRM & 4)))
-        return true;
+        return uint8_t{6};
     }
   switch (I.Id) {
   case X86_INS_CPUID:
@@ -146,8 +213,6 @@ X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
   case X86_INS_IRETQ:
   case X86_INS_INT:
   case X86_INS_INTO:
-  case X86_INS_INT1:
-  case X86_INS_INT3:
   case X86_INS_LDS:
   case X86_INS_LES:
   case X86_INS_LFS:
@@ -155,26 +220,33 @@ X86SgxExecution::illegalInstruction(llvm::ArrayRef<uint8_t> Bytes, uint64_t PC,
   case X86_INS_LSS:
   case X86_INS_SYSCALL:
   case X86_INS_SYSENTER:
-    return true;
+    return uint8_t{6};
+  case X86_INS_INT1:
+  case X86_INS_INT3:
+    return uint8_t(Memory.Running->DebugOptIn ? (I.Id == X86_INS_INT1 ? 1 : 3)
+                                              : 6);
   case X86_INS_MOV:
   case X86_INS_POP: {
     const auto &X = I.Raw->detail->x86;
     if (!X.op_count || X.operands[0].type != X86_OP_REG)
-      return false;
+      return std::optional<uint8_t>{};
     const auto Reg = X.operands[0].reg;
-    return Reg == X86_REG_DS || Reg == X86_REG_ES || Reg == X86_REG_SS ||
-           Reg == X86_REG_FS || Reg == X86_REG_GS;
+    if (Reg == X86_REG_DS || Reg == X86_REG_ES || Reg == X86_REG_SS ||
+        Reg == X86_REG_FS || Reg == X86_REG_GS)
+      return uint8_t{6};
+    return std::optional<uint8_t>{};
   }
   default:
-    return false;
+    return std::optional<uint8_t>{};
   }
 }
 
 llvm::Expected<X86ModeExecutionResult>
 X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
                              llvm::ArrayRef<uint8_t> ExpectedBytes,
-                             bool Illegal, X86SgxInstructionProgress &Progress,
-                             uint32_t MXCSRMask) {
+                             std::optional<uint8_t> InstructionException,
+                             X86SgxInstructionProgress &Progress,
+                             uint32_t MXCSRMask, X86EventKind &FaultKind) {
   auto &EPC = *M.sgxMemory();
   auto &V = S.Core.Core;
   auto &R = modeRegisters(S);
@@ -187,18 +259,27 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     Out.Exception = X86MemoryException{Vector, Error, CR2};
     return Out;
   };
-  if (((R.RFlags & 0x100) && !S.Debug) || (S.Debug && (S.Debug->DR7 & 0xff)))
-    return invalid("software enclave transfer requires its TF producer and "
-                   "disabled address comparators");
+  if ((R.RFlags & 0x100) && !S.Debug)
+    return invalid("software enclave transfer with TF requires its debug bank");
   if (!Fetched) {
+    if (S.Debug && EPC.instructionBreakpointsAt(R.PC)) {
+      const auto Matches = x86ExecutionBreakpoints(S.Debug->DR, S.Debug->DR7,
+                                                   R.PC, R.RFlags, S.SSBlocked);
+      if (Matches) {
+        x86PublishInstructionDebug(*S.Debug, false, Matches);
+        FaultKind = X86EventKind::InstructionBreakpoint;
+        Out.InstructionAttempted = true;
+        return Fault(1);
+      }
+    }
     auto OK = fetchX86SystemInstruction(S, M, ExpectedBytes, {}, Out);
     if (!OK)
       return OK.takeError();
     if (!*OK)
       return Out;
   }
-  if (Illegal)
-    return Fault(6);
+  if (InstructionException)
+    return Fault(*InstructionException);
   if (!EPC.enabled() || !(C.CR0 & 1) || (R.RFlags & 0x20000) ||
       (S.SMM && S.SMM->Active))
     return Fault(6);
@@ -218,19 +299,50 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     if (!canonical(R.GPR[3], Bits))
       return Fault(13);
     const auto &T = *EPC.Running;
-    if (T.OutsideTF && !S.Debug)
-      return invalid("EEXIT requires the debug bank retained at opt-out entry");
+    const bool TF = T.DebugOptIn ? bool(R.RFlags & 0x100) : T.OutsideTF;
+    if (TF && !S.Debug)
+      return invalid("single-stepping EEXIT requires the CPU debug bank");
     restoreBases(V, T);
     R.PC = R.GPR[3];
     R.GPR[1] = T.AEP;
-    R.RFlags = (R.RFlags & ~uint64_t(0x10100)) | (uint64_t(T.OutsideTF) << 8);
-    if (T.OutsideTF) {
+    R.RFlags = (R.RFlags & ~uint64_t(0x10100)) | (uint64_t(TF) << 8);
+    if (TF) {
       x86PublishInstructionDebug(*S.Debug, true);
       Out.Exception = X86MemoryException{1, 0, {}};
     }
     le::write64le(EPC.EPC.at(T.TCS).Bytes.data(), 0);
     EPC.Running.reset();
     EPC.Active.reset();
+    ++EPC.Generation;
+    Out.InstructionCompleted = true;
+    return Out;
+  }
+  if (Leaf == 9 && EPC.Features.DecrementSSA) {
+    if (!EPC.Running || !EPC.Active)
+      return Fault(13);
+    auto &T = *EPC.Running;
+    auto &TCS = EPC.EPC.at(T.TCS);
+    const auto CSSA = le::read32le(TCS.Bytes.data() + 24);
+    if (!CSSA)
+      return Fault(13);
+    const auto &SECS = EPC.EPC.at(EPC.Active->SECS);
+    auto Ready =
+        bindFrame(M, *EPC.Active, TCS, le::read32le(SECS.Bytes.data() + 16),
+                  CSSA - 1, Progress.Frame, Out);
+    if (!Ready)
+      return Ready.takeError();
+    if (!*Ready)
+      return Out;
+    T.XSavePage = *Progress.Frame.XSavePage;
+    T.GprPage = *Progress.Frame.GprPage;
+    le::write32le(TCS.Bytes.data() + 24, CSSA - 1);
+    if (x86InstructionDebugStep(R.RFlags & 0x100,
+                                S.Debug ? S.Debug->DebugCTL : 0, false)) {
+      x86PublishInstructionDebug(*S.Debug, true);
+      Out.Exception = X86MemoryException{1, 0, {}};
+    }
+    R.PC += ExpectedBytes.size();
+    R.RFlags &= ~uint64_t(0x10000);
     ++EPC.Generation;
     Out.InstructionCompleted = true;
     return Out;
@@ -249,25 +361,14 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   if ((TCSLinear & (PageSize - 1)) || !canonical(TCSLinear, Bits))
     return Fault(13);
 
-  const auto Walk = [&](uint64_t Linear, uint64_t &Physical) -> llvm::Error {
-    auto P = walkX86PageTables(M.physicalMemory(), M.features(), C,
-                               {Linear, MemoryAccessKind::Write, CPL});
-    if (!P)
-      return P.takeError();
-    Out.Exception = P->Exception;
-    Out.BackingFault = P->BackingFault;
-    if (P->BackingFault)
-      Out.Status = Status::BackingFault;
-    Physical = P->PhysicalAddress;
-    return llvm::Error::success();
-  };
   uint64_t TCSPhysical = 0;
   if (Progress.TCSPhysical)
     TCSPhysical = *Progress.TCSPhysical;
   else {
-    if (auto E = Walk(TCSLinear, TCSPhysical))
-      return std::move(E);
-    if (Out.Exception || Out.BackingFault)
+    auto Ready = walkSgxWrite(M, TCSLinear, Out, TCSPhysical);
+    if (!Ready)
+      return Ready.takeError();
+    if (!*Ready)
       return Out;
     Progress.TCSPhysical = TCSPhysical;
   }
@@ -299,13 +400,16 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   const auto Attributes = le::read64le(SECS + 48);
   if (!(Attributes & 1) || !(Attributes & 4) || !(C.CR4 & 0x200))
     return Fault(13);
-  const uint64_t FramePages = le::read32le(SECS + 16);
+  const uint32_t FramePages = le::read32le(SECS + 16);
   const auto XFRM = le::read64le(SECS + 56);
   if ((XFRM & 3) != 3 || (XFRM & ~EPC.xcr0()) ||
       (XFRM != 3 && !(C.CR4 & (1u << 18))))
     return Fault(13);
   const auto MiscSelect = le::read32le(SECS + 20);
-  if (!FramePages || (MiscSelect & ~1u) || (Attributes & ~uint64_t(7)))
+  constexpr uint64_t AEXNotifyAttribute = uint64_t{1} << 10;
+  if (!FramePages || (MiscSelect & ~1u) ||
+      (Attributes &
+       ~(uint64_t(7) | (EPC.Features.AEXNotify ? AEXNotifyAttribute : 0))))
     return invalid("unsupported initialized SECS attributes or SSA geometry");
   if (!std::has_single_bit(Enclave.Size) || Enclave.Size < 2 * PageSize ||
       (Enclave.Base & (Enclave.Size - 1)) || !Enclave.contains(TCSLinear))
@@ -314,9 +418,13 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   const auto TcsFlags = le::read64le(Thread + 8);
   if (TcsFlags & ~uint64_t(3))
     return Fault(13);
-  if (TcsFlags)
-    return invalid(
-        "software SGX1 requires an opt-out TCS without AEX notification");
+  const bool DebugOptIn = TcsFlags & 1;
+  if (DebugOptIn && !(Attributes & 2))
+    return invalid("a debug opt-in TCS requires an imported debug enclave");
+  const bool NotifyThread = TcsFlags & 2;
+  if ((NotifyThread && !EPC.Features.AEXNotify) ||
+      (!DebugOptIn && NotifyThread != bool(Attributes & AEXNotifyAttribute)))
+    return Fault(13);
   const bool Resume = Leaf == 3;
   const auto CSSA = le::read32le(Thread + 24), NSSA = le::read32le(Thread + 28);
   if (le::read64le(Thread) || (Resume ? !CSSA || CSSA > NSSA : CSSA >= NSSA))
@@ -326,55 +434,37 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
                  GSOffsetInEnclave = le::read64le(Thread + 56);
   if ((OSSA | FSOffsetInEnclave | GSOffsetInEnclave) & (PageSize - 1))
     return Fault(13);
-  const auto Frame = uint64_t(Resume ? CSSA - 1 : CSSA);
-  const uint64_t FrameSize = FramePages * PageSize;
-  if (FrameSize > Enclave.Size || OSSA > Enclave.Size - FrameSize ||
-      Frame > (Enclave.Size - FrameSize - OSSA) / FrameSize)
-    return Fault(13);
-  const auto SSALinear = Enclave.Base + OSSA + Frame * FrameSize;
-  const auto SsaPage = [&](uint64_t Physical, uint64_t Linear) -> X86SgxPage * {
-    auto *P = Page(Physical & ~(PageSize - 1), Linear & ~(PageSize - 1),
-                   X86SgxPageType::Regular);
-    return P && P->OwnerSECS == Root->first &&
-                   hasPermission(P->Permissions, MemoryPermission::Write)
-               ? P
-               : nullptr;
-  };
-  uint64_t XSavePhysical = 0;
-  if (Progress.XSavePhysical)
-    XSavePhysical = *Progress.XSavePhysical;
-  else {
-    if (auto E = Walk(SSALinear, XSavePhysical))
-      return std::move(E);
-    if (Out.Exception || Out.BackingFault)
+  auto *Frame = &Progress.Frame;
+  auto Ready = bindFrame(M, Enclave, *TCS, FramePages, Resume ? CSSA - 1 : CSSA,
+                         *Frame, Out);
+  if (!Ready)
+    return Ready.takeError();
+  if (!*Ready)
+    return Out;
+  uint8_t *GPR = EPC.EPC.at(*Frame->GprPage).Bytes.data() + GprOffset;
+  const bool Notify = Resume && NotifyThread && (GPR[167] & 1);
+  if (Notify) {
+    if (CSSA >= NSSA)
+      return Fault(13);
+    Frame = &Progress.NotificationFrame;
+    auto Next = bindFrame(M, Enclave, *TCS, FramePages, CSSA, *Frame, Out);
+    if (!Next)
+      return Next.takeError();
+    if (!*Next)
       return Out;
+    GPR = EPC.EPC.at(*Frame->GprPage).Bytes.data() + GprOffset;
   }
-  auto *XSave = SsaPage(XSavePhysical, SSALinear);
-  if (!XSave)
-    return Fault(14, 0x8007, SSALinear);
-  Progress.XSavePhysical = XSavePhysical;
-  auto *GprPage = XSave;
-  if (FramePages > 1) {
-    const uint64_t GprLinear = SSALinear + FrameSize - PageSize + GprOffset;
-    uint64_t GprPhysical = 0;
-    if (auto E = Walk(GprLinear, GprPhysical))
-      return std::move(E);
-    if (Out.Exception || Out.BackingFault)
-      return Out;
-    GprPage = SsaPage(GprPhysical, GprLinear);
-    if (!GprPage)
-      return Fault(14, 0x8007, GprLinear);
-  }
-  uint8_t *FX = XSave->Bytes.data(), *GPR = GprPage->Bytes.data() + GprOffset;
-  const auto Target = Resume ? le::read64le(GPR + IpOffset)
-                             : Enclave.Base + le::read64le(Thread + 32);
+  uint8_t *FX = EPC.EPC.at(*Frame->XSavePage).Bytes.data();
+  const bool Restore = Resume && !Notify;
+  const auto Target = Restore ? le::read64le(GPR + IpOffset)
+                              : Enclave.Base + le::read64le(Thread + 32);
   const auto FS =
-      Resume ? le::read64le(GPR + FSOffset) : Enclave.Base + FSOffsetInEnclave;
+      Restore ? le::read64le(GPR + FSOffset) : Enclave.Base + FSOffsetInEnclave;
   const auto GS =
-      Resume ? le::read64le(GPR + GSOffset) : Enclave.Base + GSOffsetInEnclave;
+      Restore ? le::read64le(GPR + GSOffset) : Enclave.Base + GSOffsetInEnclave;
   if (!canonical(Target, Bits) || !canonical(FS, Bits) || !canonical(GS, Bits))
     return Fault(13);
-  if (Resume &&
+  if (Restore &&
       ((le::read64le(FX + 512) & ~XFRM) ||
        std::any_of(FX + 520, FX + 576, [](uint8_t B) { return B != 0; }) ||
        (le::read32le(FX + 24) & ~MXCSRMask)))
@@ -382,21 +472,22 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
   EPC.Running = X86SgxMemory::Thread{
       TCSPhysical,
       TCSLinear,
-      XSavePhysical,
-      GprPage->Physical,
+      *Frame->XSavePage,
+      *Frame->GprPage,
       AEP,
       XFRM,
       {R.FSBase, V.FS.Limit, V.FS.Selector, V.FS.Attributes},
       {R.GSBase, V.GS.Limit, V.GS.Selector, V.GS.Attributes},
       uint8_t(V.Unusable & 0x30),
       bool(R.RFlags & 0x100),
-      bool(C.CR4 & (1u << 18))};
-  if (Resume) {
+      bool(C.CR4 & (1u << 18)),
+      DebugOptIn};
+  if (Restore) {
     for (unsigned I = 0; I != 16; ++I)
       R.GPR[I] = le::read64le(GPR + I * 8);
     const uint32_t Mask =
         0x254cd5u | ((R.RFlags & 0x3000) == 0x3000 ? 0x200u : 0u);
-    R.RFlags = (R.RFlags & ~uint64_t(Mask | 0x100)) |
+    R.RFlags = (R.RFlags & ~uint64_t(Mask | (DebugOptIn ? 0 : 0x100))) |
                (le::read64le(GPR + FlagsOffset) & Mask);
     const auto XStateBV = le::read64le(FX + 512);
     if (XStateBV & 1)
@@ -423,7 +514,11 @@ X86SgxExecution::instruction(X86ModeState &S, X86PagedMemory &M, bool Fetched,
     le::write64le(GPR + UserBPOffset, R.GPR[5]);
     R.GPR[1] = R.PC + 3;
     R.GPR[0] = CSSA;
-    R.RFlags &= ~uint64_t(0x10100);
+    R.RFlags &= ~uint64_t(DebugOptIn ? 0x10000 : 0x10100);
+    if (DebugOptIn && (R.RFlags & 0x100)) {
+      x86PublishInstructionDebug(*S.Debug, true);
+      Out.Exception = X86MemoryException{1, 0, {}};
+    }
   }
   R.PC = Target;
   R.FSBase = FS;
@@ -484,7 +579,8 @@ llvm::Error X86SgxExecution::asynchronousExit(X64ContinuationStateV6 &V,
   R.GPR[3] = T.TCSLinear;
   R.GPR[4] = le::read64le(GPR + UserSPOffset);
   R.GPR[5] = le::read64le(GPR + UserBPOffset);
-  R.RFlags = (R.RFlags & ~uint64_t(0x109d5)) | (uint64_t(T.OutsideTF) << 8);
+  const bool TF = T.DebugOptIn ? bool(R.RFlags & 0x100) : T.OutsideTF;
+  R.RFlags = (R.RFlags & ~uint64_t(0x109d5)) | (uint64_t(TF) << 8);
   Event.SavedPC = R.PC = T.AEP;
   if (Exception && Event.Vector == 14)
     Event.FaultAddress &= ~uint64_t(PageSize - 1);

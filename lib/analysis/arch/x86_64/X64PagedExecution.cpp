@@ -257,7 +257,7 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   if (Kind == X64PagedAccess::PopFlags) {
     const auto Flags = T.StagedState.Core.Core.Core.Core.RFlags;
     const auto Mask = x86PopFlagsMask(T.CPL, Flags, 8);
-    if (T.Memory.sgxMemory() && T.Memory.sgxMemory()->active())
+    if (T.Memory.sgxMemory() && T.Memory.sgxMemory()->suppressesEnclaveDebug())
       Address &= ~uint64_t(0x100);
     Exchange.Value =
         ((Flags & ~(Mask | uint64_t{0x10000})) | (Address & Mask)) &
@@ -446,8 +446,10 @@ llvm::Error X64PagedExecution::deliverDebug(X64ContinuationStateV6 &State,
     // offset and the original linear address includes the loaded CS base.
     const uint64_t LinearPC =
         CS.Attributes & 0x2000 ? Core.PC : uint32_t(CS.Base + Core.PC);
-    Breakpoints |= x86ExecutionBreakpoints(
-        Options.Debug->DR, Options.Debug->DR7, LinearPC, Core.RFlags, false);
+    if (!Memory.sgxMemory() ||
+        Memory.sgxMemory()->instructionBreakpointsAt(LinearPC))
+      Breakpoints |= x86ExecutionBreakpoints(
+          Options.Debug->DR, Options.Debug->DR7, LinearPC, Core.RFlags, false);
   }
   x86PublishInstructionDebug(*Options.Debug, SingleStep, Breakpoints);
   X64ContinuationEventV1 Event;
@@ -546,7 +548,9 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   if (x86PendingVirtualInterrupt(CPL, Controls.CR4, Controls.RFlags)) {
     T.Access.Status = X86PageWalkStatus::Exception;
     T.Access.Exception = X86MemoryException{13, 0, std::nullopt};
-  } else if (DebugSSBlocked) {
+  } else if (DebugSSBlocked &&
+             (!Memory.sgxMemory() ||
+              Memory.sgxMemory()->instructionBreakpointsAt(Address))) {
     const auto Matches =
         x86ExecutionBreakpoints(Options.Debug->DR, Options.Debug->DR7, Address,
                                 Original.RFlags, *DebugSSBlocked);
@@ -574,13 +578,13 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
   }
   if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed &&
       Memory.sgxMemory() && Memory.sgxMemory()->active()) {
-    auto Denied = detail::X86SgxExecution::illegalInstruction(
+    auto Denied = detail::X86SgxExecution::instructionException(
         Bytes, Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
     if (*Denied) {
       T.Access.Status = X86PageWalkStatus::Exception;
-      T.Access.Exception = X86MemoryException{6, 0, {}};
+      T.Access.Exception = X86MemoryException{**Denied, 0, {}};
     }
   }
   uint64_t Exit = uint64_t(X64PagedExit::AccessFault);

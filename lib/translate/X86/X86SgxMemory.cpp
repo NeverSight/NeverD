@@ -24,7 +24,15 @@ llvm::Error invalid(const char *Message) {
 llvm::Expected<std::unique_ptr<X86SgxMemory>>
 X86SgxMemory::create(std::vector<X86SgxPage> Pages,
                      std::optional<X86SgxEnclave> Active) {
+  return create(std::move(Pages), Active, {});
+}
+
+llvm::Expected<std::unique_ptr<X86SgxMemory>>
+X86SgxMemory::create(std::vector<X86SgxPage> Pages,
+                     std::optional<X86SgxEnclave> Active,
+                     X86SgxFeatures Features) {
   auto Memory = std::make_unique<X86SgxMemory>();
+  Memory->Features = Features;
   for (auto &Page : Pages) {
     if ((Page.Physical | Page.Linear | Page.OwnerSECS) & PageMask ||
         Page.Type > X86SgxPageType::Trimmed || uint8_t(Page.Permissions) > 7 ||

@@ -36,8 +36,8 @@ llvm::Expected<X86ModeExecutionResult> executeModeSystemInstruction(
     R.Exception = X86MemoryException{13, 0, {}};
     return R;
   }
-  const bool Enclave = Memory.sgxMemory() && Memory.sgxMemory()->active();
-  if (S.Debug && !Enclave) {
+  if (S.Debug && (!Memory.sgxMemory() ||
+                  Memory.sgxMemory()->instructionBreakpointsAt(I.Address))) {
     const auto Matches = x86ExecutionBreakpoints(
         S.Debug->DR, S.Debug->DR7, I.Address, Regs.RFlags, S.SSBlocked);
     if (Matches) {

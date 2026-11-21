@@ -476,22 +476,24 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
     return FinishSystem(std::move(*Got));
   }
   static constexpr uint8_t Enclu[]{0x0f, 0x01, 0xd7};
-  bool Illegal = false;
+  std::optional<uint8_t> EnclaveException;
   if (Memory.sgxMemory() && Memory.sgxMemory()->active() &&
       (!Binding.Body || !Binding.Validate)) {
-    auto Denied = detail::X86SgxExecution::illegalInstruction(
+    auto Denied = detail::X86SgxExecution::instructionException(
         Binding.Bytes, Binding.Address, *Memory.sgxMemory());
     if (!Denied)
       return Denied.takeError();
-    Illegal = *Denied;
+    EnclaveException = *Denied;
   }
   if (*Mode == X86ExecutionMode::Long64 && Memory.sgxMemory() &&
-      (Illegal || llvm::ArrayRef(Binding.Bytes) == llvm::ArrayRef(Enclu))) {
+      (EnclaveException ||
+       llvm::ArrayRef(Binding.Bytes) == llvm::ArrayRef(Enclu))) {
     if (!P->PendingSGX)
       P->PendingSGX.emplace();
+    X86EventKind FaultKind = X86EventKind::Fault;
     auto Got = detail::X86SgxExecution::instruction(
-        S, Memory, P->AttemptConsumed, Binding.Bytes, Illegal, *P->PendingSGX,
-        O.MXCSRMask);
+        S, Memory, P->AttemptConsumed, Binding.Bytes, EnclaveException,
+        *P->PendingSGX, O.MXCSRMask, FaultKind);
     if (!Got)
       return Got.takeError();
     R = std::move(*Got);
@@ -503,7 +505,7 @@ X86ModeExecution::step(X86ModeState &S, const X86ModeInstruction *I) {
       Controls.RFlags = modeRegisters(S).RFlags;
       llvm::cantFail(Memory.bindControls(Controls));
     }
-    return FinishSystem(std::move(R));
+    return FinishSystem(std::move(R), FaultKind);
   }
   const uint64_t OldEFER = Memory.controls().EFER;
   const bool OldPE = Memory.controls().CR0 & 1;

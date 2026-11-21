@@ -85,6 +85,10 @@ public:
     Valid = either(Valid, both(Trap, member(Vector, kX86TrapVectors)));
     Valid = either(Valid, both(Abort, member(Vector, kX86AbortVectors)));
     Valid = either(Valid, both(Fault, member(Vector, kX86FaultVectors)));
+    if constexpr (Writer::FaultableMemory) {
+      if (W.permitsEnclaveBreakpointFault())
+        Valid = either(Valid, both(Fault, eq(Vector, k(3))));
+    }
     W.rejectIf(eq(Valid, NdVar::scalar(0, 1)));
     for (auto Offset :
          {offsetof(Event, STIBlocked), offsetof(Event, SSBlocked),

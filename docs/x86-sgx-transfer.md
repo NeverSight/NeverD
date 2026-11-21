@@ -149,14 +149,14 @@ A fetch crossing the enclave boundary raises #GP. An EPCM violation raises
 EPC reads all ones and discards writes.
 
 The x64 software transfer profile consumes original EENTER, ERESUME and EEXIT
-instructions against an initialized imported SECS and opt-out TCS. The bound
-processor binds XCR0=3 or 7. The enclave selects x87/SSE or x87/SSE/AVX
-with XFRM, and optionally requests exception information with MISCSELECT.EXINFO. For a
+instructions against an initialized imported SECS and TCS. The processor
+binds XCR0=3 or 7. The enclave selects x87/SSE or x87/SSE/AVX with XFRM
+and optionally requests exception information with MISCSELECT.EXINFO. For a
 user page fault the private SSA retains the exact faulting address and error
 code. For a general-protection fault it retains the error code and a zero
 address. The outside handler receives CR2 with its page offset cleared on
-page faults. The XSAVE
-area is at the beginning of the SSA frame and the GPR area is at its end.
+page faults. The XSAVE area is at the beginning of the SSA frame and the GPR
+area is at its end.
 Their EPC translations are cached independently when the frame spans multiple
 pages. AEX writes the interrupted registers, flags and PC to that frame,
 installs the outside register image, and dispatches the original event using
@@ -174,6 +174,22 @@ It disables subsequent ENCLU instructions until a platform reset. This
 processor profile also disables SGX after a guest clears enabled MCi_CTL bits.
 [Intel SGX and MCA](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
 
+A debug enclave can opt in through TCS.FLAGS.DBGOPTIN. Instruction and data
+breakpoints then observe enclave code and data. The opt-out path suppresses
+instruction matches inside the enclave and data matches against its address
+range. Opt-in EENTER with TF set takes a single-step trap at the enclave
+entry point. Opt-in INT1 and INT3 save the faulting instruction PC to the SSA.
+A plain ERESUME preserves an outside TF on opt-in and resumes the interrupted
+instruction. The saved SSA flags clear TF for both entry types.
+
+The CPU binding enumerates AEX notification and EDECCSSA independently. A
+thread that requests notification in the interrupted SSA byte at GPR offset
+167 enters its notification handler through ERESUME. The CPU validates the
+next SSA slot, keeps the interrupted slot and CSSA, and enters at TCS.OENTRY
+with the outside register image. EDECCSSA validates the preceding slot before
+committing its decrement and making that slot the destination for future AEX.
+[Intel SGX enclave operation, EDECCSSA, ERESUME and debugging](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
+
 Enclave construction and cryptographic leaves require platform state beyond
-this imported-thread profile. Debug opt-in, AEX notification, CET, XSTATE components beyond AVX and
-physical SGX qualification remain open.
+this imported-thread profile. CET, XSTATE components beyond AVX and physical
+SGX qualification remain open.

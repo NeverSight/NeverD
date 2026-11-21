@@ -45,6 +45,13 @@ struct X86SgxPage {
   std::array<uint8_t, 4096> Bytes{};
 };
 
+/// CPUID.(12H,1):EAX[10] selects the AEX notification attribute.
+/// CPUID.(12H,0):EAX[11] separately selects ENCLU[EDECCSSA].
+struct X86SgxFeatures {
+  bool AEXNotify = false;
+  bool DecrementSSA = false;
+};
+
 struct X86SgxEnclave {
   uint64_t SECS = 0;
   uint64_t Base = 0;
@@ -63,6 +70,9 @@ public:
   static llvm::Expected<std::unique_ptr<X86SgxMemory>>
   create(std::vector<X86SgxPage> Pages,
          std::optional<X86SgxEnclave> Active = {});
+  static llvm::Expected<std::unique_ptr<X86SgxMemory>>
+  create(std::vector<X86SgxPage> Pages, std::optional<X86SgxEnclave> Active,
+         X86SgxFeatures Features);
   llvm::Error validateBacking(const GuestState &RAM,
                               const X86PagingFeatures &Features) const;
   /// Bind the legacy x87 area of a standard 64-bit XSAVE image. The live CPU
@@ -78,6 +88,12 @@ public:
   bool hasRunningThread() const { return Running.has_value(); }
   uint64_t generation() const { return Generation; }
   bool enabled() const { return Enabled; }
+  bool suppressesEnclaveDebug() const {
+    return Running && !Running->DebugOptIn;
+  }
+  bool instructionBreakpointsAt(uint64_t Address) const {
+    return !Running || (Running->DebugOptIn && Active->contains(Address));
+  }
   /// Disable enclave instructions until the platform installs a reset EPC bank.
   void disableAfterMachineCheck();
 
@@ -103,10 +119,11 @@ private:
     uint64_t TCS, TCSLinear, XSavePage, GprPage, AEP, XFRM;
     SavedSegment FS, GS;
     uint8_t Unusable;
-    bool OutsideTF, SwitchXCR0;
+    bool OutsideTF, SwitchXCR0, DebugOptIn;
   };
   std::optional<Thread> Running;
   std::optional<std::array<uint8_t, 160>> X87;
+  X86SgxFeatures Features;
   bool Enabled = true;
   uint64_t OutsideXCR0 = 0;
   uint64_t Generation = 0;

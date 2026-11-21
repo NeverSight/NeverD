@@ -265,6 +265,14 @@ public:
       EmitExit();
   }
 
+  bool permitsEnclaveBreakpointFault() const {
+    // Opt-in INT3 faults at its own PC. The outside IDT frame can suspend
+    // after AEX has consumed the enclave and must retain this origin.
+    const auto *EPC = Memory.sgxMemory();
+    return EnclaveExitFrame ||
+           (EPC && EPC->hasRunningThread() && !EPC->suppressesEnclaveDebug());
+  }
+
   NdVar beginEvent(NdVar NMI, NdVar SavedFlags) {
     if (Stopped)
       return SavedFlags;
