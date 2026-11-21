@@ -86,17 +86,18 @@ TEST_F(PEFixedImageTest, EntryLoadedObjectBindsAChangingMemoryPointer) {
 }
 
 TEST_F(PEFixedImageTest, EntryLoadedObjectSurvivesAConditionalCall) {
-  // mov rax,[0x51000028]; mov rsi,rax; call rcx;
+  // mov rax,[0x51000028]; mov rsi,rax; call rcx; jmp next;
   // mov [rsi+0x68],rdx; ret
-  const std::vector<uint8_t> Code = {0x48, 0xa1, 0x28, 0,    0,    0x51, 0,
-                                     0,    0,    0,    0x48, 0x89, 0xc6, 0xff,
-                                     0xd1, 0x48, 0x89, 0x56, 0x68, 0xc3};
+  const std::vector<uint8_t> Code = {
+      0x48, 0xa1, 0x28, 0,    0,    0x51, 0,    0,    0,    0,    0x48,
+      0x89, 0xc6, 0xff, 0xd1, 0xeb, 0,    0x48, 0x89, 0x56, 0x68, 0xc3};
   auto Loaded = load(machineExitFixture(Code));
   ASSERT_TRUE(bool(Loaded)) << llvm::toString(Loaded.takeError());
-  auto O = returningCallOptions(Base + 0x100d, Base + 0x1013);
+  auto O = returningCallOptions(Base + 0x100d, Base + 0x1015);
   O.EntryFrameBounds->ExcludedAddressRanges = {{0x51000000, 0x51000100}};
   O.EntryFrameLoadedObjects = {{0x51000028, 0, 0x80}};
   O.ProveStoreFrameSeparation = true;
+  O.MaxChainedTransfers = 0;
   const auto R = specializeBinaryInterpreter(*Loaded, Base + 0x1000, O);
   ASSERT_TRUE(R.complete()) << R.Diagnostic;
   ASSERT_EQ(R.ReturningCalls.size(), 1U);
