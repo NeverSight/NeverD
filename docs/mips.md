@@ -182,8 +182,8 @@ Narrow reads can still consume a defined low word. This does not select a CPU's
 implementation-dependent behavior or give uninitialized registers a zero value.
 
 Before inferring parameters, source recovery checks merge-load pairs in a
-single block. Register arithmetic that constructs other call arguments may
-appear between the loads. The instructions must be complementary at the addresses
+single block. Register arithmetic and other merge loads may appear between
+the two reads. Each partial value must reach its own complementary load at the addresses
 required by the target byte order. Both reads retain their fault order, and
 the second consumes the first result. The first load can discard its incoming
 register bits only when every use of its result proves those bits unobservable.

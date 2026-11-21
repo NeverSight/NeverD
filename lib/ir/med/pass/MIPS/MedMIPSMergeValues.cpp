@@ -105,7 +105,13 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
   // Bound candidates to original occurrences before allocating SSA indexes.
   using Occurrence = std::pair<va_t, int>;
   llvm::SmallDenseMap<Occurrence, NdOp, 2> Calls;
-  llvm::SmallVector<std::pair<const LowOp *, const LowOp *>, 4> Candidates;
+  struct MergeSite {
+    unsigned Run;
+    MedOp *Op = nullptr;
+  };
+  llvm::SmallDenseMap<Occurrence, MergeSite, 4> Sites;
+  llvm::SmallVector<Occurrence, 4> Candidates;
+  unsigned Run = 0;
   const LowOp *Previous = nullptr;
   va_t PreviousEnd = InvalidVA;
   auto PreviousMode = InstructionMode::Default;
@@ -137,7 +143,12 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
         Previous && PreviousEnd == Boundary.Address && PreviousMode == Mode;
     if (Current) {
       if (Contiguous)
-        Candidates.push_back({Previous, Current});
+        Candidates.emplace_back(Previous->Addr, Previous->Seq);
+      else
+        ++Run;
+      if (!Sites.try_emplace({Current->Addr, Current->Seq}, MergeSite{Run})
+               .second)
+        return 0;
       Previous = Current;
     } else if (!Contiguous || Boundary.Control != LowInstructionControl::None ||
                Boundary.DelaySlot || !Boundary.Size || !Boundary.OpCount ||
@@ -152,7 +163,6 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
   if (Candidates.empty() || (Calls.empty() && !Function.CallClobbers.empty()))
     return 0;
 
-  llvm::DenseMap<Occurrence, MedOp *> Merges;
   llvm::DenseMap<ValueKey, llvm::SmallVector<Use, 2>> Uses;
   llvm::DenseMap<ValueKey, Address> Addresses;
   // A later ABI pass may read a physical register at a call or return even
@@ -195,7 +205,11 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
         return 0; // Other implicit machine-state effects are not proved here.
     }
     if (mergeLoad(Op))
-      Merges.try_emplace(Occurrence{Op.Addr, Op.OriginSeq}, &Op);
+      if (auto It = Sites.find({Op.Addr, Op.OriginSeq}); It != Sites.end()) {
+        if (It->second.Op)
+          return 0;
+        It->second.Op = &Op;
+      }
     for (unsigned I = 0; I < Op.NumInputs; ++I)
       if (!Op.Inputs[I].isConst())
         Uses[key(Op.Inputs[I])].push_back({&Op, I});
@@ -233,25 +247,13 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
       Observed.insert(key(Clobber.PreservedInput));
 
   unsigned Changed = 0;
-  for (const auto &[FirstLow, SecondLow] : Candidates) {
-    const auto FirstIt = Merges.find({FirstLow->Addr, FirstLow->Seq});
-    const auto SecondIt = Merges.find({SecondLow->Addr, SecondLow->Seq});
-    if (FirstIt == Merges.end() || SecondIt == Merges.end())
+  for (const auto &Candidate : Candidates) {
+    const auto &Site = Sites.find(Candidate)->second;
+    if (!Site.Op)
       continue;
-    MedOp &First = *FirstIt->second;
-    const MedOp &Second = *SecondIt->second;
+    MedOp &First = *Site.Op;
     const auto F = *mergeLoad(First);
-    const auto S = *mergeLoad(Second);
-    if (F.Bytes != S.Bytes || F.Left == S.Left ||
-        (First.Inputs[2].isConst() && First.Inputs[2].ConstVal == 0))
-      continue;
-    const auto Left = Resolve((F.Left ? First : Second).Inputs[1]);
-    const auto Right = Resolve((F.Left ? Second : First).Inputs[1]);
-    if (Left.Base != Right.Base)
-      continue;
-    const auto Delta = archLittleEndian(Target) ? Left.Offset - Right.Offset
-                                                : Right.Offset - Left.Offset;
-    if ((Delta & Mask) != F.Bytes - 1u)
+    if (First.Inputs[2].isConst() && !First.Inputs[2].ConstVal)
       continue;
 
     // Every use of the first result must either transport its low N bytes or
@@ -260,7 +262,7 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
     // the rewrite, even if another use completes a complementary pair.
     llvm::SmallVector<MedVar, 4> Pending{First.Output};
     llvm::DenseSet<ValueKey> Seen;
-    bool Complete = false;
+    const MedOp *Second = nullptr;
     bool Safe = true;
     while (!Pending.empty() && Safe) {
       const auto Value = Pending.pop_back_val();
@@ -275,9 +277,14 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
         continue;
       for (const auto &Use : It->second) {
         const MedOp &Op = *Use.Op;
-        if (&Op == &Second && Use.Input == 2 && Op.Inputs[2].Size == F.Bytes) {
-          Complete = true;
-          continue;
+        if (Use.Input == 2 && Op.Inputs[2].Size == F.Bytes) {
+          const auto Next = Sites.find({Op.Addr, Op.OriginSeq});
+          if (Next != Sites.end() && Next->second.Op == &Op &&
+              Next->second.Run == Site.Run && Op.Addr > First.Addr &&
+              (!Second || Second == &Op)) {
+            Second = &Op;
+            continue;
+          }
         }
         const bool Copy = Op.Opcode == NdOp::COPY && Op.NumInputs == 1 &&
                           Op.Output.Size == Op.Inputs[0].Size;
@@ -295,7 +302,16 @@ unsigned discardUnobservedMIPSMergeInputs(MedFunc &Function,
         Pending.push_back(Op.Output);
       }
     }
-    if (Safe && Complete) {
+    if (!Safe || !Second)
+      continue;
+    const auto S = *mergeLoad(*Second);
+    if (F.Bytes != S.Bytes || F.Left == S.Left)
+      continue;
+    const auto Left = Resolve((F.Left ? First : *Second).Inputs[1]);
+    const auto Right = Resolve((F.Left ? *Second : First).Inputs[1]);
+    const auto Delta = archLittleEndian(Target) ? Left.Offset - Right.Offset
+                                                : Right.Offset - Left.Offset;
+    if (Left.Base == Right.Base && (Delta & Mask) == F.Bytes - 1u) {
       First.Inputs[2] =
           MedVar::makeConst(0, F.Bytes, ConstantAddressProvenance::Scalar);
       ++Changed;
