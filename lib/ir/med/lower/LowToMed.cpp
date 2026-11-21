@@ -2498,8 +2498,12 @@ MedFunc LowToMedConverter::convertFunction(
         defineGoCurrentGoroutine(Func, *Goroutine);
         debugVerifyMedFunc(Func, "defineGoCurrentGoroutine");
       }
-    // A closure it compiled reads the context its caller passes in a register.
-    if (Image && usesGoRegisterArguments(*Image, Low.Entry))
+    // A closure it compiled reads the context its caller passes in a
+    // register, as does Go code before its internal ABI that takes no
+    // register argument (MedFunc::StackArgumentsOnly): a stub that takes some,
+    // as Go 1.16's panicSliceAlen takes CX and DX, reads those instead.
+    if (Image &&
+        (Func.StackArgumentsOnly || usesGoRegisterArguments(*Image, Low.Entry)))
       if (const std::optional<uint64_t> Context =
               goClosureContextRegister(TheArch)) {
         defineGoClosureContext(Func, *Context);

@@ -1889,6 +1889,56 @@ TEST(GoInternalABI, ARegisterReadAfterACallIsNoContext) {
   }
 }
 
+TEST(GoStackABI, AClosureReadsTheContextItsCallerPasses) {
+  // Before Go's internal ABI a call through a func value passes the closure
+  // in RDX (arm64 R26) too, and a closure, which takes no register argument,
+  // reads what it captured through it.  HighC printed its loads as reads of
+  // its own frame (`var_30`), LLVM C as reads through an unknown register.
+  //   main.f.func1: sub rsp, 0x18; mov [rsp+0x10], rbp; lea rbp, [rsp+0x10]
+  //                 mov rax, [rdx+0x30]; add rax, [rdx+0x38]
+  //                 mov [rsp+0x20], rax; mov rbp, [rsp+0x10]; add rsp, 0x18
+  //                 ret
+  //   (arm64)       sub sp, sp, #32; ldr x0, [x26, #0x30]
+  //                 ldr x1, [x26, #0x38]; add x0, x0, x1; str x0, [sp, #40]
+  //                 add sp, sp, #32; ret
+  for (const Arch A : {Arch::X64, Arch::AArch64}) {
+    SCOPED_TRACE(static_cast<int>(A));
+    constexpr va_t F = kTextVA + 0x100;
+    GoTestImage T(A);
+    if (A == Arch::X64)
+      T.writeText(F,
+                  {0x48, 0x83, 0xEC, 0x18, 0x48, 0x89, 0x6C, 0x24, 0x10, 0x48,
+                   0x8D, 0x6C, 0x24, 0x10, 0x48, 0x8B, 0x42, 0x30, 0x48, 0x03,
+                   0x42, 0x38, 0x48, 0x89, 0x44, 0x24, 0x20, 0x48, 0x8B, 0x6C,
+                   0x24, 0x10, 0x48, 0x83, 0xC4, 0x18, 0xC3});
+    else
+      T.writeText(F, words({0xD10083FF, 0xF9401B40, 0xF9401F41, 0x8B010000,
+                            0xF90017E0, 0x910083FF, 0xD65F03C0}));
+    Symbol Function = Symbol::makeFunc(F);
+    Function.Name = "main.f.func1";
+    T.Img.Symbols.push_back(std::move(Function));
+    GoModuleInfo Module;
+    Module.StackArguments = true;
+    Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+    Module.FrameArguments = {{F, 8}};
+    T.Img.ExceptionMetadata.GoModule = std::move(Module);
+    PipelineOptions Options;
+    Options.EmitDumpOutput = false;
+    llvm::LLVMContext Context;
+    const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+    ASSERT_TRUE(R.Success) << R.Error;
+    EXPECT_EQ(R.MedIRVerifierFailures, 0u);
+    const std::string Text = highCBody(R, T.Img, "main_f_func1");
+    ASSERT_FALSE(Text.empty());
+    EXPECT_NE(Text.find(A == Arch::X64 ? "movq %%rdx" : "mov %0, x26"),
+              std::string::npos)
+        << Text;
+    EXPECT_EQ(Text.find("var_30"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("var_38"), std::string::npos) << Text;
+    EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
+  }
+}
+
 TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
   // A branch into a recorded function's interior is no tail call, whatever
   // names the label: `runtime.runGCProg`'s jump to its loop became a call to

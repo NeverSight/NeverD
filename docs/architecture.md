@@ -5841,7 +5841,10 @@ value's address in RDX (R26 on arm64, `goClosureContextRegister`), through
 which a closure reads what it captured, so the incoming value of that register
 is the closure context (`defineGoClosureContext`,
 `Intrinsic::GoClosureContext`), read the same way at the entry; a call
-clobbers the register, so no read follows one. For either register the
+clobbers the register, so no read follows one. Go code before the internal
+ABI that takes no register argument (`MedFunc::StackArgumentsOnly`) reads its
+context the same way; a stub that takes registers, as Go 1.16's
+`panicSliceAlen` takes CX and DX, reads those instead. For either register the
 incoming value is the version nothing in the function defines: where a
 function reads the register only after a call that writes it, its first SSA
 version is that call's clobber, and stays the call's. Calls from assembly, which may
