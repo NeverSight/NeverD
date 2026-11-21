@@ -1802,7 +1802,8 @@ types.
 
 When HighC reconstructs a record from individual arguments or result words,
 it initializes nested structures and arrays in the enclosing member's type.
-This preserves the declared C type of anonymous members that share a layout.
+Field reads through a declared record retain its member names through nested
+anonymous structures and array elements.
 
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing

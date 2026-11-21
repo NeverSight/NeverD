@@ -8930,7 +8930,16 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
       llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
-    if (!Record->SourceName.empty()) {
+    // A field of a declared object still uses that declaration's spelling
+    // through anonymous members and array elements. A standalone anonymous
+    // value uses the generated field names of its structural C tag.
+    const HighExpr *Base = E.Operands.front().get();
+    while (Base->Type && Base->Type->SourceName.empty() &&
+           Base->Kind == ExprKind::Field && Base->Operands.size() == 1 &&
+           Base->Operands.front())
+      Base = Base->Operands.front().get();
+    if (Base->Type && Base->Type->Kind == NdTypeKind::Struct &&
+        !Base->Type->SourceName.empty()) {
       const auto Field = Record->displayFieldPathAt(
           Record->FieldOffsets[E.ConstVal], E.Type->Size,
           /*EnterNestedAtZero=*/false);
