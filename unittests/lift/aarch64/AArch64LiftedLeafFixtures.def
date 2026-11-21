@@ -133,12 +133,15 @@ _leaf_sum:
   ldr w0, [x0]
   ldp x29, x30, [sp], #16
   retab
-.data_region
 Lvalue: .long 42
-.end_data_region
 .cfi_endproc
+.subsections_via_symbols
 )asm")
 A64_LEAF_VALUE(int, kForwardedSaveResult, 42)
+A64_LEAF_VALUE(uint32_t, kLoadWordX0, 0xb9400000)
+A64_LEAF_VALUE(uint32_t, kLoadWordX1, 0xb9400020)
+A64_LEAF_VALUE(uint32_t, kLoadFollowingWord, 0xb9400400)
+A64_LEAF_VALUE(uint32_t, kStoreWordX0, 0xb9000000)
 A64_LEAF_TEXT(kSource, "leaves.c")
 A64_LEAF_TEXT(kOriginal, "leaves.dylib")
 A64_LEAF_TEXT(kOutput, "published.dylib")

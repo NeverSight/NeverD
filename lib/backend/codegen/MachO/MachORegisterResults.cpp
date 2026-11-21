@@ -950,7 +950,9 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
                                       : va_t(Ops[1].imm);
       const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
       const bool LiteralAddress =
-          !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
+          (!Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA) ||
+          coverMachOEmbeddedRead(*Source, Start, Target, 1,
+                                 llvm::MachO::DICE_KIND_DATA);
       const auto Reg = NumericPage ? NumericPage->ResultRegister : Ops[0].reg;
       if (Reg == AARCH64_REG_XZR)
         return std::nullopt;

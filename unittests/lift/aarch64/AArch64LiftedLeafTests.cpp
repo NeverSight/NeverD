@@ -2220,6 +2220,10 @@ TEST(AArch64LiftedImage, EncodesSignedByteAndPageAddressesAtBothLimits) {
       EXPECT_EQ(encodePCRelativeAddress(Kind, Rd, PC, Base), Op | Rd);
       EXPECT_EQ(encodePCRelativeAddress(Kind, Rd, PC, High),
                 Op | Rd | kMaxADRImmediate);
+      EXPECT_EQ(decodePCRelativeAddress(Op | Rd | kMinADRImmediate, PC), Low);
+      EXPECT_EQ(decodePCRelativeAddress(Op | Rd, PC), Page ? Base : PC);
+      EXPECT_EQ(decodePCRelativeAddress(Op | Rd | kMaxADRImmediate, PC),
+                Page ? High & kPageMask : High);
     }
     EXPECT_FALSE(encodePCRelativeAddress(Kind, 0, PC, Low - 1));
     EXPECT_FALSE(encodePCRelativeAddress(Kind, 0, PC, High + 1));
@@ -2348,6 +2352,35 @@ TEST(AArch64LiftedImage, KeepsOldFrameSaveInsideItsForwardingEntry) {
     symbolizeImageAbsolutePointers(*Lifted.LlvmModule, *Image);
     MachOPatcher Patcher;
     Patcher.setImageContext(&*Image);
+    if (I == 0) {
+      EXPECT_TRUE(Image->MachODataInCode.empty());
+      std::vector<MachODataInCodeRange> Recovered;
+      std::vector<MachOLiftedSourceAddress> Sites;
+      auto Entries = validateMachORegisterResults(*Lifted.LlvmModule, *Image,
+                                                  &Recovered, &Sites);
+      ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
+      ASSERT_EQ(Recovered.size(), 1u);
+      EXPECT_EQ(Recovered.front().End - Recovered.front().Begin,
+                sizeof(uint32_t));
+      EXPECT_EQ(Recovered.front().Kind, llvm::MachO::DICE_KIND_DATA);
+      ASSERT_EQ(Sites.size(), 1u);
+      EXPECT_EQ(Sites.front().Target, Recovered.front().Begin);
+      const auto File =
+          Image->vaToFileOffset(Sites.front().Instruction + aarch64::kInsnSize);
+      ASSERT_TRUE(rangeInBounds(File, sizeof(uint32_t), Image->Raw.size()));
+      ASSERT_EQ(readLE<uint32_t>(Image->Raw.data() + File), kLoadWordX0);
+      for (auto Unproven : {kLoadWordX1, kLoadFollowingWord, kStoreWordX0}) {
+        auto Bytes = Image->Raw;
+        writeLE<uint32_t>(Bytes.data() + File, Unproven);
+        auto Changed = Reader->loadBuffer(llvm::MemoryBufferRef(
+            llvm::toStringRef(llvm::ArrayRef(Bytes)), Input));
+        ASSERT_TRUE(bool(Changed)) << llvm::toString(Changed.takeError());
+        auto Rejected =
+            validateMachORegisterResults(*Lifted.LlvmModule, *Changed);
+        EXPECT_FALSE(bool(Rejected));
+        llvm::consumeError(Rejected.takeError());
+      }
+    }
     const auto Output = (Root / (kRepeatedPrefix + std::to_string(I))).string();
     ASSERT_TRUE(
         Patcher.patch(Input, Output, *Lifted.LlvmModule, Image->Arch).Success);

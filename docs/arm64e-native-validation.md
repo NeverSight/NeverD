@@ -2954,3 +2954,24 @@ When a published entry begins with a forwarding branch, its old FP/LR save
 can still appear in the next word. Function discovery uses the linker's
 function starts and unwind extent to keep that instruction with its owner.
 A direct `BL` to the same address supplies independent call evidence.
+
+
+A linked executable can omit a data-in-code record for a constant read
+through an adjacent `ADR` or `ADRP`/`ADD` in the same basic block. The
+publisher recovers the exact bytes of a fixed-width load at offset zero
+and checks them against every CFG block and existing data range in the
+function. It installs the recovered record for the original and copied
+storage. A different base register, a store or a load past the constant
+provides no such evidence.
+
+On layouts where code and the Mach header share a 4 KiB page, header
+growth resolves the address computed by the consuming `ADD`. When the
+page register differs from the result, the publisher follows the Darwin
+scratch register through ordinary instructions. A fresh definition or
+return through LR ends its lifetime. Reading the page itself or reaching
+an unresolved transfer prevents header movement.
+
+Native arm64e object generation carries the input's macOS deployment
+version from `LC_BUILD_VERSION` or `LC_VERSION_MIN_MACOSX`. This puts the
+platform in the emitted object so the installer can verify an ABI0 object's
+use in an ABI1 macOS executable.

@@ -576,16 +576,22 @@ void parseUUID(const llvm::object::MachOObjectFile &Obj, BinaryImage &Img) {
 
 void parseBuildVersion(const llvm::object::MachOObjectFile &Obj,
                        BinaryImage &Img) {
+  std::optional<uint32_t> BuildMin, LegacyMin;
   for (const auto &LC : Obj.load_commands()) {
-    if (const std::optional<uint32_t> Platform =
-            machOCommandPlatform(Obj, LC, Img.Arch))
-      Img.DynInfo.MachOPlatforms.push_back(*Platform);
-    if (LC.C.cmd != LC_BUILD_VERSION ||
-        LC.C.cmdsize < sizeof(build_version_command) ||
-        !Img.DynInfo.MinOSVersion.empty())
+    const auto Platform = machOCommandPlatform(Obj, LC, Img.Arch);
+    if (!Platform)
       continue;
-    auto BV = *reinterpret_cast<const build_version_command *>(LC.Ptr);
-    Img.DynInfo.MinOSVersion = packed_version::toString(BV.minos);
+    Img.DynInfo.MachOPlatforms.push_back(*Platform);
+    if (LC.C.cmd == LC_BUILD_VERSION) {
+      if (!BuildMin)
+        BuildMin = Obj.getBuildVersionLoadCommand(LC).minos;
+    } else if (!LegacyMin && LC.C.cmdsize >= sizeof(version_min_command)) {
+      LegacyMin = Obj.getVersionMinLoadCommand(LC).version;
+    }
+  }
+  const auto Minimum = BuildMin ? BuildMin : LegacyMin;
+  if (Minimum && Img.DynInfo.MinOSVersion.empty()) {
+    Img.DynInfo.MinOSVersion = packed_version::toString(*Minimum);
     LLVM_DEBUG(llvm::dbgs()
                << "macho: min OS = " << Img.DynInfo.MinOSVersion << "\n");
   }
