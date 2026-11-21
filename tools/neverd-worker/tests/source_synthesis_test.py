@@ -319,8 +319,9 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
-                          staggered_bytes=False, signed_bytes=False, joined_prefix=False):
-    signed_bytes = signed_bytes or joined_prefix
+                          staggered_bytes=False, signed_bytes=False, joined_prefix=False,
+                          masked_window=False):
+    signed_bytes = signed_bytes or joined_prefix or masked_window
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -341,7 +342,9 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
             if signed_bytes:
                 distance = 19 if i == degree // 2 else 1 + i % 11
             left_shift = i % 3 == 0 and not signed_bytes
-            start = 8 - distance if left_shift else 8 + distance
+            # The moving field reaches CH after a second rotation.
+            field_at = 2 + (5 * i) % 12 if masked_window else 8
+            start = field_at - distance if left_shift else field_at + distance
             left = (start - source_bit) % 32
             if left:
                 if i % 2:
@@ -350,22 +353,41 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                     code += bytes.fromhex("c1c9") + bytes([32 - left])  # ror ecx, imm8
                 value = f"(({value}<<{left})|({value}>>{32-left}))"
             if signed_bytes:
-                # CH is below the low zero bits of the masked or scaled R8D.
-                # One SAR places part of its sign fill in the observed byte.
-                cut = 16 + (i // 3) % 9
+                # The neighbor leaves the observed window clear. The masked
+                # case also preserves unrelated low bits that may carry in an ADD.
+                cut = (field_at + 8 + (i // 3) % (24 - field_at) if masked_window
+                       else 16 + (i // 3) % 9)
                 mask = (((0x9e3779b9 * (i + 1)) | 1) << cut) & 0xffffffff
-                literal = mask if i % 2 else (3 + 2 * (i % 5)) << cut
+                masked = masked_window or i % 2 == 1
+                if masked_window:
+                    mask |= ((offset * 0x9e3779b9) & ((1 << field_at) - 1)) | 1
+                literal = mask if masked else (3 + 2 * (i % 5)) << cut
                 code += bytes.fromhex("4189d0 4181c0") + struct.pack("<I", offset)
-                code += bytes.fromhex("4181e0" if i % 2 else "4569c0") + struct.pack("<I", literal)
-                other = f"((z+{offset}U){'&' if i % 2 else '*'}{literal}U)"
+                code += bytes.fromhex("4181e0" if masked else "4569c0") + struct.pack("<I", literal)
+                other = f"((z+{offset}U){'&' if masked else '*'}{literal}U)"
                 arithmetic = i % 4 != 1
                 code += bytes.fromhex("c1f9" if arithmetic else "c1e9") + bytes([distance])
                 moved = f"({value}>>{distance})"
                 if arithmetic:
                     moved = f"({moved}|((0U-({value}>>31))<<{32-distance}))"
                 join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
+                if masked_window:
+                    # Only the addition at the boundary can carry into CH.
+                    join, symbol = (("4409c1", "|"), ("4431c1", "^"))[i % 2]
+                    if i == degree // 3:
+                        join, symbol = "4401c1", "+"
                 code += bytes.fromhex(join)
                 value = f"({moved}{symbol}{other})"
+                if masked_window:
+                    if i % 3 == 1:
+                        low_mask = (1 << field_at) - 1
+                        code += bytes.fromhex("4189f0 4181e0") + struct.pack("<I", low_mask)
+                        code += bytes.fromhex(join)
+                        value = f"({value}{symbol}(y&{low_mask}U))"
+                    by = (field_at - 8) % 32  # rotate the observed byte into CH
+                    if by:
+                        code += bytes.fromhex("c1c9") + bytes([by])
+                        value = f"(({value}>>{by})|({value}<<{32-by}))"
                 if joined_prefix:
                     # A second independent word starts above CH. At one
                     # boundary its low bit contributes to the selected byte.
@@ -579,6 +601,10 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind.startswith("funnel-perturbation-masked-"):
+            # The few surviving factors may include a live carry and shifts
+            # printed as literal products. Bound the actual emitted expression.
+            assert code.count("*") <= 14, text
         elif kind == "funnel-perturbation-joined-137":
             # Five distinct affine factors need five coefficient products and
             # four joins. High C can spell the bit-window shifts as 2^k * x.
@@ -758,6 +784,9 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            *((f"funnel-perturbation-masked-{degree}", *high_perturbation_elf(
+                degree, shift_base=shift, affine_depth=1, observed=bits, masked_window=True))
+              for degree, shift, bits in ((139, 5, 13), (141, 6, 14), (157, 7, 15), (173, 6, 14))),
             ("funnel-perturbation-joined-137", *high_perturbation_elf(
                 137, shift_base=6, affine_depth=1, observed=14, joined_prefix=True)),
             ("funnel-perturbation-signed-277", *high_perturbation_elf(

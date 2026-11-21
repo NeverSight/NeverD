@@ -36,9 +36,11 @@
 #include "neverd/symbolic/SymWideArithmetic.h"
 
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MathExtras.h"
 
 #include <algorithm>
 #include <limits>
@@ -1180,6 +1182,106 @@ std::optional<SourceBitField> sourceBitField(sym::SymContext &Ctx,
   return SourceBitField{Ctx.rebuild(Field, Words), First->Low, Bits};
 }
 
+// A source integer has a whole-byte width. For the source of an extract,
+// keep a native unsigned word congruent to each packed value modulo its bit
+// width. Addition and bitwise operations preserve that congruence. Zero
+// extension and the low operand of a concatenation make padding observable.
+ExprPtr packedExtractWord(sym::SymContext &Ctx, sym::SymRef Root,
+                          const std::unordered_map<uint32_t, ExprPtr> &Built,
+                          llvm::DenseMap<uint32_t, ExprPtr> &Words,
+                          bool ScalarLiterals) {
+  using sym::SymOp;
+  auto Literal = [](uint64_t N) {
+    return HighExpr::makeConst(N, 8, ConstantAddressProvenance::Scalar);
+  };
+  auto Binary = [](NdOp O, ExprPtr L, ExprPtr V) {
+    auto E = HighExpr::makeBinop(O, std::move(L), std::move(V));
+    E->Type = NdType::makeInt(8, false);
+    return E;
+  };
+  auto Clip = [&](ExprPtr V, unsigned Bits) {
+    return Binary(NdOp::INT_AND, std::move(V),
+                  Literal(llvm::maskTrailingOnes<uint64_t>(Bits)));
+  };
+  auto Assemble = [&](sym::SymRef R) -> ExprPtr {
+    const auto Op = Ctx.op(R);
+    if (Op == SymOp::Const)
+      return literalExpr(Ctx.constValue(R), 8, ScalarLiterals);
+    const auto Args = Ctx.operands(R);
+    if (Args.empty())
+      return nullptr;
+    auto Word = Words.lookup(Args.front().index());
+    if (!Word)
+      return nullptr;
+    if (Op == SymOp::Extract) {
+      const auto Low = Ctx.node(R).Aux;
+      return Low ? Binary(NdOp::INT_RIGHT, Word, Literal(Low)) : Word;
+    }
+    if (Op == SymOp::ZExt)
+      return Clip(Word, Ctx.width(Args.front()));
+    NdOp Operation;
+    switch (Op) {
+    case SymOp::Add:
+      Operation = NdOp::INT_ADD;
+      break;
+    case SymOp::Mul:
+      Operation = NdOp::INT_MULT;
+      break;
+    case SymOp::And:
+      Operation = NdOp::INT_AND;
+      break;
+    case SymOp::Or:
+      Operation = NdOp::INT_OR;
+      break;
+    case SymOp::Xor:
+      Operation = NdOp::INT_XOR;
+      break;
+    case SymOp::Concat:
+      Operation = NdOp::INT_OR;
+      break;
+    default:
+      return nullptr;
+    }
+    for (auto Part : llvm::drop_begin(Args)) {
+      auto Right = Words.lookup(Part.index());
+      if (!Right)
+        return nullptr;
+      if (Op == SymOp::Concat) {
+        Word = Binary(NdOp::INT_LEFT, Word, Literal(Ctx.width(Part)));
+        Right = Clip(Right, Ctx.width(Part));
+      }
+      Word = Binary(Operation, std::move(Word), std::move(Right));
+    }
+    return Word;
+  };
+  llvm::SmallVector<std::pair<sym::SymRef, bool>, 16> Work{{Root, false}};
+  while (!Work.empty()) {
+    const auto [R, Ready] = Work.pop_back_val();
+    if (Words.contains(R.index()))
+      continue;
+    const unsigned Bits = Ctx.width(R);
+    ExprPtr Word;
+    if (Bits == 1 || Bits % 8 == 0 || Bits >= 64) {
+      const auto It = Built.find(R.index());
+      if (Bits <= 64 && It != Built.end() && It->second) {
+        Word = std::make_shared<HighExpr>();
+        Word->Kind = ExprKind::Cast;
+        Word->Type = Word->CastTo = NdType::makeInt(8, false);
+        Word->Operands = {It->second};
+      }
+    } else if (!Ready) {
+      Work.emplace_back(R, true);
+      for (auto Child : Ctx.operands(R))
+        Work.emplace_back(Child, false);
+      continue;
+    } else {
+      Word = Assemble(R);
+    }
+    Words.try_emplace(R.index(), std::move(Word));
+  }
+  return Words.lookup(Root.index());
+}
+
 ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
                         bool ScalarLiterals) {
   struct WorkItem {
@@ -1188,6 +1290,7 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
   };
   llvm::SmallVector<WorkItem, 64> Work{{R, false}};
   std::unordered_map<uint32_t, ExprPtr> Built;
+  llvm::DenseMap<uint32_t, ExprPtr> PackedWords;
   std::unordered_set<uint32_t> Active;
   std::unordered_map<uint32_t, std::pair<sym::SymRef, bool>> ParityInputs;
 
@@ -1207,8 +1310,8 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     }
 
     std::optional<SourceBitField> Field;
-    if (Ctx.op(Item.Ref) == sym::SymOp::ZExt ||
-        Ctx.op(Item.Ref) == sym::SymOp::SExt)
+    if (Ctx.width(Item.Ref) % 8 == 0 && (Ctx.op(Item.Ref) == sym::SymOp::ZExt ||
+                                         Ctx.op(Item.Ref) == sym::SymOp::SExt))
       Field = sourceBitField(Ctx, Ctx.operand(Item.Ref, 0));
     // The source language stores integer fields in whole bytes. Lift a packed
     // high field above a literal into that whole-byte carrier before shifting.
@@ -1557,6 +1660,17 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
     case sym::SymOp::Extract: {
       const auto Source = Ctx.operand(Item.Ref, 0);
       ExprPtr Operand = get(Source);
+      auto SourceBits = Ctx.width(Source);
+      // A packed arithmetic result can carry into the selected byte. Keep
+      // bitwise projections in their source form so repeated shifted views
+      // can still share the same word in the surrounding expression.
+      const auto SourceOp = Ctx.op(Source);
+      if (!Operand && SourceBits > 1 && SourceBits < 64 && SourceBits % 8 &&
+          (SourceOp == sym::SymOp::Add || SourceOp == sym::SymOp::Mul)) {
+        Operand =
+            packedExtractWord(Ctx, Source, Built, PackedWords, ScalarLiterals);
+        SourceBits = 64;
+      }
       const uint64_t Low = Ctx.node(Item.Ref).Aux;
       if (!Operand)
         break;
@@ -1564,11 +1678,11 @@ ExprPtr Translator::out(sym::SymRef R, uint32_t /*Width*/,
       // (uint32_t)(x >> 14) arrives as a window at bit 14. Read it as that
       // shift and truncation again; the source width is a whole byte count.
       if (Low % 8 != 0) {
-        if (Ctx.width(Source) % 8 != 0)
+        if (SourceBits % 8 != 0)
           break;
         Operand = HighExpr::makeBinop(
             NdOp::INT_RIGHT, Operand,
-            HighExpr::makeConst(Low, Ctx.width(Source) / 8,
+            HighExpr::makeConst(Low, SourceBits / 8,
                                 ConstantAddressProvenance::Scalar));
       }
       Result = std::make_shared<HighExpr>();

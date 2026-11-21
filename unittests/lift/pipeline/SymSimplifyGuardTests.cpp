@@ -709,6 +709,49 @@ TEST(SymSimplifyGuard, MaskedNoWrapAdmissionMatchesExhaustiveByteDomains) {
   EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
 }
 
+TEST(SymSimplifyGuard, LogicalShiftBoundsMatchDefinedByteAdditions) {
+  llvm::LLVMContext C;
+  llvm::Module M("shifted_add_domains", C);
+  auto *I8 = llvm::Type::getInt8Ty(C);
+  for (unsigned Shift : {0u, 1u, 4u, 7u, 8u})
+    for (unsigned Mask : {1u, 0x7fu, 0x80u, 0xffu})
+      for (unsigned Flags : {1u, 2u, 3u})
+        for (bool Exact : {false, true}) {
+          SCOPED_TRACE(::testing::Message()
+                       << Shift << "," << Mask << "," << Flags << "," << Exact);
+          auto *F = llvm::Function::Create(
+              llvm::FunctionType::get(I8, {I8, I8}, false),
+              llvm::Function::ExternalLinkage, "f", &M);
+          llvm::IRBuilder<> IR(llvm::BasicBlock::Create(C, "entry", F));
+          auto make = [&] {
+            auto *L = IR.CreateLShr(F->getArg(0), IR.getInt8(Shift), "", Exact);
+            auto *R = IR.CreateAnd(F->getArg(1), IR.getInt8(Mask));
+            return IR.CreateAdd(L, R, "", Flags & 1, Flags & 2);
+          };
+          auto *Root = IR.CreateXor(make(), make());
+          IR.CreateRet(Root);
+          bool Defined = Shift < 8;
+          auto Signed = [](unsigned V) { return int(V) - (V < 128 ? 0 : 256); };
+          for (unsigned X = 0; X < 256 && Defined; ++X) {
+            if (Exact && (X & ((1u << Shift) - 1))) {
+              Defined = false;
+              break;
+            }
+            for (unsigned Y = 0; Y < 256 && Defined; ++Y) {
+              unsigned L = X >> Shift, R = Y & Mask;
+              int Sum = Signed(L) + Signed(R);
+              Defined = (!(Flags & 1) || L + R < 256) &&
+                        (!(Flags & 2) || (Sum >= -128 && Sum <= 127));
+            }
+          }
+          auto Result = SymSimplifyPass::constantValueOf(Root);
+          EXPECT_EQ(Result.has_value(), Defined);
+          if (Result)
+            EXPECT_TRUE(Result->isZero());
+        }
+  EXPECT_FALSE(llvm::verifyModule(M, &llvm::errs()));
+}
+
 TEST(SymSimplifyGuard, NestedMaskedBoundsPreserveHiddenPoisonAndWideDomains) {
   for (unsigned Width : {8u, 16u, 32u, 64u, 128u, 257u}) {
     for (bool Poisoned : {false, true}) {
