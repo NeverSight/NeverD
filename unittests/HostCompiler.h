@@ -18,10 +18,13 @@
 #include "TestProcess.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 
 #include <initializer_list>
 #include <optional>
@@ -29,6 +32,16 @@
 #include <vector>
 
 namespace neverd::test {
+
+/// Clang needs its builtins for wide integers on Windows. The Windows CRT
+/// provides math functions that require libm on other hosts.
+inline void appendHostCLinkFlags(llvm::SmallVectorImpl<llvm::StringRef> &Args,
+                                 bool LinkMath = false) {
+  if (llvm::Triple(llvm::sys::getDefaultTargetTriple()).isOSWindows())
+    Args.push_back("--rtlib=compiler-rt");
+  else if (LinkMath)
+    Args.push_back("-lm");
+}
 
 /// Whether this host builds and runs x86 code.
 inline constexpr bool hostRunsX86() {

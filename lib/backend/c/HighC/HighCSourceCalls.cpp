@@ -351,14 +351,18 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       throw std::invalid_argument(kResultCallError);
     return Result + llvm::formatv(kResultCallValueEndC, *Value).str();
   };
-  if (Hint.CallKind == SourceCallTypeHint::Kind::Analyst) {
+  const bool Analyst = Hint.CallKind == SourceCallTypeHint::Kind::Analyst;
+  const bool MIPSStorage = Signature.MIPSRecords && RetainResultStorage;
+  if (Analyst || MIPSStorage) {
     if (sourceCallUsesMachineABI(Hint, Opts.Format, AuthenticatedTarget))
       return MachineCall();
     std::string Diagnostic;
-    if (!Hint.AnalystSite || Hint.AnalystSite->Instruction != E.CallSiteAddr ||
+    if ((Analyst && (!Hint.AnalystSite ||
+                     Hint.AnalystSite->Instruction != E.CallSiteAddr)) ||
         Hint.Signature.Architecture != Opts.TheArch ||
         !validateSourceABI(Hint.Signature, Diagnostic) ||
-        E.Operands.size() != Hint.Signature.Parameters.size())
+        E.Operands.size() !=
+            Signature.Parameters.size() + unsigned(MIPSStorage))
       throw std::invalid_argument("The call-site contract lost its original "
                                   "occurrence or complete operands");
     const unsigned Fixed = Hint.AnalystFixedCount < 0
@@ -368,7 +372,7 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       throw std::invalid_argument("Invalid call-site variadic prefix");
     std::string Callee = OriginalCallee(Fixed, Hint.AnalystFixedCount >= 0);
     std::string Call = Callee + "(";
-    for (unsigned I = 0; I < E.Operands.size(); ++I) {
+    for (unsigned I = 0; I < Signature.Parameters.size(); ++I) {
       const auto &Argument = E.Operands[I];
       const auto Value =
           Argument
@@ -383,6 +387,11 @@ std::string HighCWriter::renderSourceCallExpr(const HighExpr &E) {
       Call += *Value;
     }
     Call += ")";
+    if (MIPSStorage)
+      return llvm::formatv(c_detail::kSourceRecordStore.data(),
+                           declarationToC(Signature.ReturnType, ""),
+                           exprStr(*E.Operands.back()), Call)
+          .str();
     if (Signature.ReturnType->Kind == NdTypeKind::Void ||
         Signature.ReturnType->Kind == NdTypeKind::Ptr)
       return Call;

@@ -122,8 +122,9 @@ def sources(case, prefix):
 
 
 def observe(image, little, abi, case, function, prefix):
-    _, _, size, defined = case
+    name, _, size, defined = case
     o32 = abi == '32'
+    narrow_word = not o32 and name == 'u32'
     mask = (1 << (32 if o32 else 64)) - 1
     cpu, entry = roundtrip.emulator(
         image, 32 if o32 else 64, little, function,
@@ -148,6 +149,16 @@ def observe(image, little, abi, case, function, prefix):
     result_pointer = None
     poison_v0 = False
 
+    def check_word(uc, register, expected_bytes):
+        # n32/n64 put a four-byte record in the low GPR half on LE and the
+        # high half on BE. Its caller and callee must ignore the other half.
+        shift = 0 if little else 32
+        bits = uc.reg_read(register)
+        expected = int.from_bytes(expected_bytes, 'little' if little else 'big')
+        assert (bits >> shift) & 0xffffffff == expected, (image, register, bits, expected)
+        if poison_v0:
+            uc.reg_write(register, bits ^ (0xffffffff << (32 - shift)))
+
     def visit(uc, pc, instruction_size, user):
         nonlocal return_pc, result_pointer
         if pc == callee:
@@ -155,6 +166,8 @@ def observe(image, little, abi, case, function, prefix):
             return_pc = uc.reg_read(mips.UC_MIPS_REG_RA)
             if o32:
                 result_pointer = uc.reg_read(mips.UC_MIPS_REG_4)
+            elif narrow_word:
+                check_word(uc, getattr(mips, f'UC_MIPS_REG_{4 + prefix}'), value)
         elif pc == return_pc:
             # n32/n64 hidden-result functions need not return their buffer
             # pointer in v0. Change it after the callee's delay slot and before
@@ -164,14 +177,25 @@ def observe(image, little, abi, case, function, prefix):
             return_pc = None
             if o32:
                 assert uc.reg_read(mips.UC_MIPS_REG_V0) == result_pointer, (image, function)
-            if poison_v0:
+            if narrow_word:
+                check_word(uc, mips.UC_MIPS_REG_V0, expected_bytes)
+            elif poison_v0:
                 uc.reg_write(mips.UC_MIPS_REG_V0, 0x5a71395362481a53)
 
     hook = cpu.hook_add(UC_HOOK_CODE, visit)
     try:
-        attempts = [(value, poison) for value in values
-                    for poison in ((False, True) if not o32 and size > 16 else (False,))]
-        for value, poison_v0 in attempts:
+        word_bytes = 4 if o32 else 8
+        attempts = [(i, value, poison) for i, value in enumerate(values)
+                    for poison in ((False, True) if narrow_word or (not o32 and size > 16) else (False,))]
+        for i, value, poison_v0 in attempts:
+            # Both wrapper pointers address bytes. Exercise every word residue
+            # and vary their alignments independently of the callee's ABI slots.
+            input_offset = i % word_bytes
+            output_offset = -i % word_bytes
+            input_address = DATA + 32 + input_offset
+            output_address = DATA + 256 + output_offset
+            input_guard = bytes([0x3c]) * 16
+            input_region = input_guard + value + input_guard
             for r in range(1, 32):
                 cpu.reg_write(getattr(mips, f'UC_MIPS_REG_{r}'),
                               gprs.get(r, (0x5a0000005a000000 + r) & mask))
@@ -179,28 +203,28 @@ def observe(image, little, abi, case, function, prefix):
                 cpu.reg_write(getattr(mips, f'UC_MIPS_REG_F{r}'),
                               fprs.get(r, (0xa5000000a5000000 + r) & mask))
             cpu.mem_write(roundtrip.STACK - 8192, bytes([0xcc]) * 16384)
-            cpu.mem_write(DATA, value + bytes(128 - size))
-            cpu.mem_write(DATA + 240, bytes([0xa5]) * 144)
+            cpu.mem_write(input_address - 16, input_region)
+            cpu.mem_write(output_address - 16, bytes([0xa5]) * 144)
             cpu.reg_write(mips.UC_MIPS_REG_SP, roundtrip.STACK)
             cpu.reg_write(mips.UC_MIPS_REG_RA, roundtrip.STOP)
-            cpu.reg_write(mips.UC_MIPS_REG_4, DATA)
-            cpu.reg_write(mips.UC_MIPS_REG_5, DATA + 256)
+            cpu.reg_write(mips.UC_MIPS_REG_4, input_address)
+            cpu.reg_write(mips.UC_MIPS_REG_5, output_address)
             cpu.reg_write(mips.UC_MIPS_REG_6, callee)
             cpu.reg_write(mips.UC_MIPS_REG_FCSR, 0)
             calls.clear()
             returned.clear()
             return_pc = None
+            expected_bytes = bytes(byte ^ ((mix >> ((j & 7) * 8)) & 0xff)
+                                   for j, byte in enumerate(value))
             cpu.emu_start(entry, roundtrip.STOP, count=20000)
-            output = bytes(cpu.mem_read(DATA + 256, 128))
-            context = (str(image), function, value.hex(), poison_v0)
+            output = bytes(cpu.mem_read(output_address, 128))
+            context = (str(image), function, value.hex(), input_offset, output_offset, poison_v0)
             assert calls == [callee], (context, calls)
             assert len(returned) == 1, (context, returned)
-            expected = bytes(byte ^ ((mix >> ((i & 7) * 8)) & 0xff)
-                             for i, byte in enumerate(value))
-            assert all(output[i] == expected[i] for i in defined), (context, output.hex())
-            assert bytes(cpu.mem_read(DATA + 240, 16)) == bytes([0xa5]) * 16, context
+            assert all(output[i] == expected_bytes[i] for i in defined), (context, output.hex())
+            assert bytes(cpu.mem_read(output_address - 16, 16)) == bytes([0xa5]) * 16, context
             assert output[size:] == bytes([0xa5]) * (128 - size), context
-            assert bytes(cpu.mem_read(DATA, size)) == value, context
+            assert bytes(cpu.mem_read(input_address - 16, len(input_region))) == input_region, context
             assert cpu.reg_read(mips.UC_MIPS_REG_PC) == roundtrip.STOP, context
             assert cpu.reg_read(mips.UC_MIPS_REG_RA) == roundtrip.STOP, context
             assert cpu.reg_read(mips.UC_MIPS_REG_SP) == roundtrip.STACK, context
@@ -209,7 +233,8 @@ def observe(image, little, abi, case, function, prefix):
                 assert cpu.reg_read(getattr(mips, f'UC_MIPS_REG_{r}')) == expected, (context, r)
             for r, expected in fprs.items():
                 assert cpu.reg_read(getattr(mips, f'UC_MIPS_REG_F{r}')) == expected, (context, r)
-            rows.append(dict(input=value.hex(), poisoned_v0=poison_v0,
+            rows.append(dict(input=value.hex(), input_offset=input_offset, output_offset=output_offset,
+                             poisoned_v0=poison_v0,
                              defined_output=bytes(output[i] for i in defined).hex()))
     finally:
         cpu.hook_del(hook)
@@ -249,12 +274,17 @@ def run(args, artifacts):
                             folder.mkdir()
                             header, declaration, texts = sources(case, prefix)
 
-                            def compile_source(compiler, text, stem, opt):
+                            def compile_source(compiler, text, stem, opt, *, emitted=False):
                                 source, asm, obj = (folder / (stem + ext) for ext in ('.c', '.s', '.o'))
                                 source.write_text(text)
                                 artifacts.keep_source(source)
                                 target = ['--target=' + triple, '-fno-addrsig'] if compiler == 'clang' else [byte_order]
-                                command([compilers[compiler], *target, *common, opt, '-S', source, '-o', asm])
+                                # Plain-pointer emitted C may access the same frame bytes
+                                # through different scalar types. Keep the original
+                                # compiler's aliasing defaults for the reference image.
+                                alias_flags = ['-fno-strict-aliasing'] if emitted else []
+                                command([compilers[compiler], *target, *common, opt, *alias_flags,
+                                         '-S', source, '-o', asm])
                                 artifacts.keep_source(asm)
                                 command([args.assembler, *machine, byte_order, asm, '-o', obj])
                                 artifacts.discard(source, asm)
@@ -315,7 +345,7 @@ def run(args, artifacts):
                                                 f'  return record_callee({", ".join(arguments)});\n}}\n')
                                         for compiler in args.rebuild_compiler or compilers:
                                             for opt in args.rebuild_opt or ('-O0', '-O2'):
-                                                obj = compile_source(compiler, source_text, 'rebuilt', opt)
+                                                obj = compile_source(compiler, source_text, 'rebuilt', opt, emitted=True)
                                                 image = folder / 'rebuilt.elf'
                                                 link([obj if name == function else original_obj
                                                       for name, original_obj in objects.items()] + [runtime], image)

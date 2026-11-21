@@ -38,6 +38,7 @@
 #include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/backend/llvm/LLVMCallContract.h"
 #include "neverd/backend/llvm/LLVMFloatingCall.h"
+#include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/LLVMSourceSEHFilter.h"
 #include "neverd/backend/llvm/LLVMSourceTypeHints.h"
 #include "neverd/backend/llvm/SourceFrameBytes.h"
@@ -3755,9 +3756,10 @@ bool LLVMCWriter::isResultParamValue(const llvm::Value *V) const {
 unsigned LLVMCWriter::printedCallArgLimit(const llvm::CallBase &Call,
                                           llvm::StringRef CalleeName) const {
   const unsigned Have = Call.arg_size();
-  // Both render every operand. Even a trailing load used only by a variadic
-  // occurrence must stay live when its target's declaration has fewer inputs.
-  if (Call.isInlineAsm() || Call.getMetadata("neverd.source.analyst-call"))
+  // These calls consume their physical LLVM operands. A by-value record may
+  // occupy several operands for a single declared C parameter.
+  if (Call.isInlineAsm() || Call.hasFnAttr(LLVMMIPSRecordCall) ||
+      Call.getMetadata("neverd.source.analyst-call"))
     return Have;
   const MsvcCallee *Msvc = msvcCallee(CalleeName, Opts.Format);
   auto Clamp = [&](size_t Limit) {
@@ -3988,6 +3990,10 @@ LLVMCWriter::recordCallArguments(const llvm::CallBase &Call,
 
 TypeRef LLVMCWriter::expectedCallArgType(const llvm::CallBase &Call,
                                          unsigned Index) const {
+  if (Call.hasFnAttr(LLVMMIPSRecordCall)) {
+    const auto Type = mipsRecordScalarOperand(Call, Index);
+    return isNamedPointerDisplay(Type) ? Type : TypeRef{};
+  }
   // The source-import table already proved this exact call's complete scalar
   // signature. Use the same binding for frame objects and call conversions.
   if (const auto *Source = sourceImportCallee(Call))

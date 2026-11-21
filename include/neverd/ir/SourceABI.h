@@ -107,6 +107,11 @@ sourceABIErrorResult(const SourceFunctionTypeHint &Hint);
 std::vector<SourceABIParameter>
 sourceABIParameters(const SourceFunctionTypeHint &Hint);
 
+/// Fill the same bindings and distinguish a valid zero-argument declaration
+/// from an invalid one. Failure clears Parameters.
+bool sourceABIParameters(const SourceFunctionTypeHint &Hint,
+                         std::vector<SourceABIParameter> &Parameters);
+
 /// HighIR representation of a validated call result before source binding.
 /// Scalars carry unsigned machine bits; void and complete records retain their
 /// logical type. This does not define any bytes outside the declared result.

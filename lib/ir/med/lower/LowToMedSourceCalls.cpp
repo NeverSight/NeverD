@@ -4,7 +4,9 @@
 #include "../../../loader/Swift/SwiftErrorSourceProjection.h"
 #include "../../../loader/Swift/SwiftMangledValueConstructorABI.h"
 
+#include "neverd/ArchSupport.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/MIPS/SourceRecordABI.h"
 #include "neverd/ir/SourceABI.h"
 #include "neverd/ir/SourceCallABI.h"
 #include "neverd/ir/TargetRegInfo.h"
@@ -28,9 +30,74 @@
 
 namespace neverd {
 
+namespace {
+/// A partial result defines one end of a physical register. The other bytes
+/// come from the call's unknown clobber. Keep that dependency visible to SSA.
+void appendPartialReturnRegister(std::vector<MedOp> &Ops, va_t Address,
+                                 MedVar Register, MedVar Value,
+                                 unsigned ByteOffset,
+                                 llvm::function_ref<MedVar(uint16_t)> Temp) {
+  MedOp Unused;
+  Unused.Opcode = NdOp::SUBBYTES;
+  Unused.Addr = Address;
+  Unused.Output = Temp(Register.Size - Value.Size);
+  Unused.addInput(Register);
+  Unused.addInput(MedVar::makeConst(ByteOffset ? 0 : Value.Size, 4));
+  MedOp Merge;
+  Merge.Opcode = NdOp::CONCAT;
+  Merge.Addr = Address;
+  Merge.Output = Register;
+  Merge.addInput(ByteOffset ? Value : Unused.Output);
+  Merge.addInput(ByteOffset ? Unused.Output : Value);
+  Ops.push_back(std::move(Unused));
+  Ops.push_back(std::move(Merge));
+}
+
+/// The logical result uses object-byte offsets. Gather each integer register
+/// in target byte order and preserve the call clobber in unoccupied lanes.
+void appendMIPSByteResult(
+    std::vector<MedOp> &Ops, const MedOp &Call,
+    llvm::ArrayRef<SourceABIValueLocation> Pieces, Arch Target,
+    llvm::function_ref<MedVar(uint16_t)> Temp,
+    llvm::function_ref<MedVar(uint64_t, uint16_t)> Register) {
+  const auto Emit = [&](NdOp Opcode, MedVar Out, MedVar A, MedVar B) {
+    MedOp Op;
+    Op.Opcode = Opcode;
+    Op.Addr = Call.Addr;
+    Op.Output = Out;
+    Op.addInput(A);
+    if (B.Size)
+      Op.addInput(B);
+    Ops.push_back(std::move(Op));
+    return Out;
+  };
+  unsigned ObjectOffset = 0;
+  for (const auto &P : Pieces) {
+    const unsigned Width = P.ValueBytes;
+    const auto Result =
+        Register(P.RegisterOffset, P.CarrierBytes ? P.CarrierBytes : Width);
+    MedVar Word;
+    for (unsigned I = 0; I < Width; ++I) {
+      const unsigned At =
+          ObjectOffset + (archLittleEndian(Target) ? Width - 1 - I : I);
+      auto Byte =
+          Emit(NdOp::SUBBYTES, Temp(1), Call.Output, MedVar::makeConst(At, 4));
+      Word = I ? Emit(NdOp::CONCAT, Temp(I + 1), Word, Byte) : Byte;
+    }
+    if (P.CarrierBytes)
+      appendPartialReturnRegister(Ops, Call.Addr, Result, Word,
+                                  P.RegisterByteOffset, Temp);
+    else
+      Emit(NdOp::COPY, Result, Word, {});
+    ObjectOffset += Width;
+  }
+}
+} // namespace
+
 const SourceFunctionTypeHint *
 LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
-                                   BinaryFormat Fmt) {
+                                   BinaryFormat Fmt,
+                                   bool &BoundMIPSRecordCall) {
   // Image-independent IR clients supply explicit source contracts. Their
   // physical carriers do not depend on a container format. Runtime discovery
   // from a loaded image remains restricted to its supported Mach-O path.
@@ -365,7 +432,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
             equalSourceABIs(Hint->Signature, Found->second.Signature))
           Hint->SwiftOpaqueValue = Found->second.SwiftOpaqueValue;
       }
-      std::string Diagnostic;
+      std::vector<SourceABIParameter> Parameters;
       const bool NativeError =
           Hint && isNativeSwiftErrorSourceCall(*Hint, TargetArch) &&
           Op.Opcode == NdOp::CALL && Op.Inputs[0].isConst() &&
@@ -377,7 +444,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
               Hint->TargetAddress;
       if (!Hint || (MIPSRecords && !Hint->Signature.MIPSRecords) ||
           Hint->Signature.Architecture != TargetArch ||
-          !validateSourceABI(Hint->Signature, Diagnostic) ||
+          !sourceABIParameters(Hint->Signature, Parameters) ||
           (Hint->Signature.ReturnLocation.Kind ==
                SourceABICarrierKind::IndirectResultPointer &&
            !sourceCallRetainsResultStorage(*Hint) &&
@@ -418,7 +485,6 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         continue;
       }
       const auto &Signature = Hint->Signature;
-      const auto Parameters = sourceABIParameters(Signature);
       const bool HasStack =
           std::any_of(Parameters.begin(), Parameters.end(),
                       [](const SourceABIParameter &P) {
@@ -505,6 +571,16 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           Argument = Load.Output;
           Ops.push_back(std::move(Address));
           Ops.push_back(std::move(Load));
+        } else if (Signature.MIPSRecords && Location.CarrierBytes) {
+          MedOp Extract;
+          Extract.Opcode = NdOp::SUBBYTES;
+          Extract.Addr = Op.Addr;
+          Extract.Output = Temporary(Location.ValueBytes);
+          Extract.addInput(ndVarToMedVar(
+              NdVar::reg(Location.RegisterOffset, Location.CarrierBytes)));
+          Extract.addInput(MedVar::makeConst(Location.RegisterByteOffset, 4));
+          Argument = Extract.Output;
+          Ops.push_back(std::move(Extract));
         } else if (TargetArch == Arch::AArch64 &&
                    Location.Kind == SourceABICarrierKind::IntegerRegister &&
                    Location.ValueBytes < 4) {
@@ -537,8 +613,10 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
                       : ndVarToMedVar(NdVar::reg(Return.RegisterOffset,
                                                  Return.ValueBytes));
       std::vector<MedOp> ReturnOps;
-      const auto FloatingCarrier = [&](const SourceABIValueLocation &Location)
+      const auto ReturnCarrier = [&](const SourceABIValueLocation &Location)
           -> std::optional<std::pair<uint64_t, uint16_t>> {
+        if (Signature.MIPSRecords && Location.CarrierBytes)
+          return {{Location.RegisterOffset, Location.CarrierBytes}};
         if (Location.Kind != SourceABICarrierKind::FloatingRegister ||
             !TRI.isVectorReg(Location.RegisterOffset))
           return std::nullopt;
@@ -552,27 +630,14 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           return std::nullopt;
         return std::make_pair(Offset, Bytes);
       };
-      const auto AppendFloatingCarrier =
-          [&](MedVar Value, std::pair<uint64_t, uint16_t> Wide) {
-            // A source result, scalar or record member, defines only its low
-            // lane. Its suffix comes from this call's unknown clobber. Do not
-            // publish a narrow architectural register write: SSA would zero
-            // its upper lanes before this merge could retain their identity.
-            MedOp Upper;
-            Upper.Opcode = NdOp::SUBBYTES;
-            Upper.Addr = Op.Addr;
-            Upper.Output = Temporary(Wide.second - Value.Size);
-            Upper.addInput(ndVarToMedVar(NdVar::reg(Wide.first, Wide.second)));
-            Upper.addInput(MedVar::makeConst(Value.Size, 4));
-            MedOp Merge;
-            Merge.Opcode = NdOp::CONCAT;
-            Merge.Addr = Op.Addr;
-            Merge.Output = ndVarToMedVar(NdVar::reg(Wide.first, Wide.second));
-            Merge.addInput(Upper.Output);
-            Merge.addInput(Value);
-            ReturnOps.push_back(std::move(Upper));
-            ReturnOps.push_back(std::move(Merge));
-          };
+      const auto AppendCarrier = [&](MedVar Value,
+                                     std::pair<uint64_t, uint16_t> Wide,
+                                     unsigned ByteOffset) {
+        appendPartialReturnRegister(
+            ReturnOps, Op.Addr,
+            ndVarToMedVar(NdVar::reg(Wide.first, Wide.second)), Value,
+            ByteOffset, Temporary);
+      };
       if (NativeError) {
         // A single source operation owns both observable call results. Define
         // x21/R12 explicitly before SSA can treat its incoming value as an
@@ -591,8 +656,26 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           ReturnOps.push_back(std::move(Extract));
         }
       } else if (IndirectResult && sourceCallRetainsResultStorage(*Hint)) {
-        Op.addInput(ndVarToMedVar(
-            NdVar::reg(Return.RegisterOffset, Return.ValueBytes)));
+        const auto Storage =
+            ndVarToMedVar(NdVar::reg(Return.RegisterOffset, Return.ValueBytes));
+        Op.addInput(Storage);
+        if (Signature.MIPSRecords && isMIPSO32(TargetArch)) {
+          // o32 returns its incoming hidden pointer in v0. Capture it before
+          // the call clobbers argument registers. n32 and n64 leave v0 free.
+          MedOp Save;
+          Save.Opcode = NdOp::COPY;
+          Save.Addr = Op.Addr;
+          Save.Output = Temporary(Return.ValueBytes);
+          Save.addInput(Storage);
+          MedOp Result;
+          Result.Opcode = NdOp::COPY;
+          Result.Addr = Op.Addr;
+          Result.Output =
+              ndVarToMedVar(NdVar::reg(TRI.IntReturnReg, Return.ValueBytes));
+          Result.addInput(Save.Output);
+          Ops.push_back(std::move(Save));
+          ReturnOps.push_back(std::move(Result));
+        }
       } else if (IndirectResult) {
         // Preserve the pre-call hidden pointer before SSA introduces the
         // caller-saved x8 clobber. A declared result initializes every record
@@ -628,6 +711,14 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
           ReturnOps.push_back(std::move(Field));
           ReturnOps.push_back(std::move(Store));
         }
+      } else if (Signature.MIPSRecords &&
+                 mips::isByteRecord(Signature.ReturnType)) {
+        Op.Output = Temporary(Signature.ReturnType->Size);
+        appendMIPSByteResult(ReturnOps, Op, Signature.ReturnComponents,
+                             TargetArch, Temporary,
+                             [&](uint64_t Offset, uint16_t Width) {
+                               return ndVarToMedVar(NdVar::reg(Offset, Width));
+                             });
       } else if (!Signature.ReturnComponents.empty()) {
         Op.Output = Temporary(Signature.ReturnType->Size);
         const auto Members = Signature.MIPSRecords
@@ -635,7 +726,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
                                  : sourceAggregateMembers(Signature.ReturnType);
         for (size_t I = 0; I < Signature.ReturnComponents.size(); ++I) {
           const auto &Piece = Signature.ReturnComponents[I];
-          const auto Wide = FloatingCarrier(Piece);
+          const auto Wide = ReturnCarrier(Piece);
           const bool Boolean =
               Piece.Kind == SourceABICarrierKind::BooleanRegister;
           MedOp Extract;
@@ -677,7 +768,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
             ReturnOps.push_back(std::move(Extend));
             ReturnOps.push_back(std::move(Merge));
           } else if (Wide)
-            AppendFloatingCarrier(Value, *Wide);
+            AppendCarrier(Value, *Wide, Piece.RegisterByteOffset);
         }
       } else if (Hint->CallKind ==
                  SourceCallTypeHint::Kind::SwiftBooleanProjection) {
@@ -722,8 +813,8 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
         Merge.addInput(Value);
         ReturnOps.push_back(std::move(Upper));
         ReturnOps.push_back(std::move(Merge));
-      } else if (const auto Wide = FloatingCarrier(Return)) {
-        AppendFloatingCarrier(Op.Output, *Wide);
+      } else if (const auto Wide = ReturnCarrier(Return)) {
+        AppendCarrier(Op.Output, *Wide, 0);
       }
       // These hints were matched to an exact imported runtime declaration by
       // the loader and passed ABI validation above. Carry its termination
@@ -735,6 +826,7 @@ LowToMedConverter::bindSourceCalls(MedFunc &Func, const LowFunc &Low,
            Hint->CallKind == SourceCallTypeHint::Kind::DarwinRuntimeCall ||
            Hint->CallKind == SourceCallTypeHint::Kind::SwiftRuntimeCall))
         Op.DoesNotReturn = true;
+      BoundMIPSRecordCall |= Signature.MIPSRecords;
       Op.SourceCallHint =
           std::make_shared<const SourceCallTypeHint>(std::move(*Hint));
       Ops.push_back(std::move(Op));

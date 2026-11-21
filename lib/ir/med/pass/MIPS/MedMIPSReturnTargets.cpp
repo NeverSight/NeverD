@@ -404,11 +404,12 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   std::vector<MedVar> MemoryAddresses;
   std::map<const MedBlock *, int> BlockIndices;
   bool QualifiedMemory = true;
+  bool HasMergeStores = false;
   size_t CallCount = 0;
   NativeCallSites NativeCalls;
   struct CallFrame {
     llvm::SmallVector<SourceABIValueLocation, 8> Inputs;
-    unsigned FloatingResultBytes = 0;
+    unsigned NumericResultBytes = 0;
   };
   std::map<const MedOp *, CallFrame> Calls;
   size_t Remaining = limits::ir::kSourceFrameAnalysisRemaining;
@@ -422,6 +423,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           Op.Opcode == NdOp::INTRINSIC && Op.NumInputs &&
           Op.Inputs[0].isConst() &&
           (Op.Inputs[0].ConstVal == uint64_t(Intrinsic::MIPSRequireWord) ||
+           mips::mergeLoad(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isBarrier(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
            mips::isDSPControlIntrinsic(
                static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) ||
@@ -439,17 +441,30 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         if (Op.SourceCallHint && Op.SourceCallHint->Signature.MIPSRecords) {
           const auto &Signature = Op.SourceCallHint->Signature;
           const auto Pieces = sourceABIParameters(Signature);
-          if (Op.NumInputs != Pieces.size() + 1)
+          const bool Hidden = Signature.ReturnLocation.Kind ==
+                              SourceABICarrierKind::IndirectResultPointer;
+          if (Op.NumInputs != Pieces.size() + 1 + unsigned(Hidden))
             return false;
           auto &Frame = Calls[&Op];
           for (const auto &P : Pieces)
             Frame.Inputs.push_back(P.Location);
+          if (Hidden)
+            Frame.Inputs.push_back(Signature.ReturnLocation);
+          // A complete scalar-only object returned by a qualified call can
+          // be spilled as data after its non-frame operands are proven. A
+          // pointer field or padding cannot provide that byte provenance.
+          const auto Members = sourceValueMembers(Signature.ReturnType);
+          unsigned Covered = 0;
+          for (const auto &M : Members) {
+            if (M.ByteOffset != Covered || (M.Type->Kind != NdTypeKind::Int &&
+                                            M.Type->Kind != NdTypeKind::Float))
+              break;
+            Covered += M.Type->Size;
+          }
           if (Signature.ReturnType->Kind == NdTypeKind::Float ||
-              (!Signature.ReturnComponents.empty() &&
-               llvm::all_of(Signature.ReturnComponents, [](const auto &P) {
-                 return P.Kind == SourceABICarrierKind::FloatingRegister;
-               })))
-            Frame.FloatingResultBytes = Signature.ReturnType->Size;
+              ((Hidden || !Signature.ReturnComponents.empty()) &&
+               Covered == Signature.ReturnType->Size))
+            Frame.NumericResultBytes = Signature.ReturnType->Size;
         } else if (const auto Signature =
                        boundFloatingCallArguments(Op, Target, Format)) {
           auto &Frame = Calls[&Op];
@@ -457,17 +472,24 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
             Frame.Inputs.push_back(
                 {P.Kind, P.Register, P.StackOffset, P.Bytes});
           if (Signature->ReturnKind == NdTypeKind::Float)
-            Frame.FloatingResultBytes = Signature->ReturnBytes;
+            Frame.NumericResultBytes = Signature->ReturnBytes;
         } else {
           NativeCalls[&Block].push_back(&Op - Block.Ops.data());
         }
         if (Op.IsTailCall && Calls.contains(&Op))
           QualifiedTails.emplace(Op.Addr, Op.OriginSeq);
       }
-      if ((Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
-           (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
-            Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) ||
-          Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
+      if (Op.Opcode == NdOp::INTRINSIC && !NoDataWrite &&
+          (Op.NumInputs != 3 || !Op.Inputs[0].isConst() ||
+           Op.Inputs[0].ConstVal != uint64_t(Intrinsic::RequireAligned))) {
+        if (Op.NumInputs && Op.Inputs[0].isConst() &&
+            mips::mergeStore(static_cast<Intrinsic>(Op.Inputs[0].ConstVal)) &&
+            mipsScalarMedShapeIsValid(Op, Target))
+          HasMergeStores = true;
+        else
+          QualifiedMemory = false;
+      }
+      if (Op.MemoryAddressSpace != NdMemoryAddressSpace::Default ||
           Op.MemoryOrdering != NdMemoryOrdering::None)
         QualifiedMemory = false;
     }
@@ -491,6 +513,10 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
   };
   MedDefSiteIndex Definitions(Function);
   safety::detail::ExactPhiGraph Graph(Function);
+  // Only the byte-by-byte record walk tracks the addresses and register
+  // lanes of a merge store. The whole-slot reaching-store proof cannot.
+  const bool RecordFrameMemory = QualifiedMemory;
+  QualifiedMemory &= !HasMergeStores;
   const auto BeforeFrameEscape = [&](const MedBlock &LoadBlock,
                                      size_t LoadIndex) {
     // An external read cannot recover this function's frame address before
@@ -679,7 +705,7 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         // pointer-returning calls still provide no such proof.
         if (const auto Call = Calls.find(&Op);
             Call != Calls.end() &&
-            First + Bytes <= Call->second.FloatingResultBytes) {
+            First + Bytes <= Call->second.NumericResultBytes) {
           Safe = IsNonFrame(Op.Inputs[0]);
           for (size_t I = 0; Safe && I < Call->second.Inputs.size(); ++I)
             Safe = NonFrameBytes(Op.Inputs[I + 1], 0,
@@ -899,11 +925,11 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
         !Call.SourceCallHint->Signature.MIPSRecords)
       return std::nullopt;
     if (const auto Start = CallPrivateStart(Call))
-      return mips::RecordFrameCall{*Start, It->second.FloatingResultBytes};
+      return mips::RecordFrameCall{*Start, It->second.NumericResultBytes};
     return std::nullopt;
   };
   const bool SingleRecordExit =
-      QualifiedMemory && Required.size() == 1 && TailReturns.empty() &&
+      RecordFrameMemory && Required.size() == 1 && TailReturns.empty() &&
       llvm::any_of(Calls, [](const auto &C) {
         return C.first->SourceCallHint &&
                C.first->SourceCallHint->Signature.MIPSRecords;
@@ -919,12 +945,23 @@ bool hasMIPSSourceReturnTargets(const LowFunc &Low, const MedFunc &Function,
           TailReturns.erase(Tail);
           continue;
         }
-        if (!Required.erase(Origin) ||
-            Op.NumInputs != SourceResultOperands + 1 ||
-            (!Prove(Op.Inputs[SourceResultOperands]) &&
-             (!SingleRecordExit ||
-              !mips::preservesRecordFrameLink(Function, Op, Target, RecordCall,
-                                              Remaining))))
+        if (!Required.erase(Origin) || Op.NumInputs != SourceResultOperands + 1)
+          return false;
+        const auto &Link = Op.Inputs[SourceResultOperands];
+        const auto RecordFrame = [&] {
+          return SingleRecordExit &&
+                 mips::preservesRecordFrameLink(Function, Op, Target,
+                                                RecordCall, Remaining);
+        };
+        // A hidden result pointer can expose selected frame bytes to the
+        // callee. Follow those bytes before spending the shared budget on a
+        // general reaching-store proof that cannot preserve this call.
+        const bool CheckRecordFirst =
+            SingleRecordExit && (!QualifiedMemory || !FrameIsPrivate());
+        const bool LinkPreserved = CheckRecordFirst
+                                       ? RecordFrame() || Prove(Link)
+                                       : Prove(Link) || RecordFrame();
+        if (!LinkPreserved)
           return false;
       }
   return Required.empty() && TailReturns.empty() && QualifiedTails.empty();

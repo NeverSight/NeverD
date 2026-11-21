@@ -498,6 +498,8 @@ private:
   const PhiNode *uniqueMedPhi(const MedVar &V);
   ExprPtr sourceBitSlice(const ExprPtr &Value, uint64_t ByteOffset,
                          uint16_t Bytes, unsigned Depth = 0);
+  ExprPtr sourceRecordFromWords(const SourceParameterTypeHint &Parameter,
+                                llvm::ArrayRef<MedVar> Words);
   void collectSourcePhiSlices(const MedFunc &Med);
   VarKeyMap<std::map<std::pair<uint64_t, uint16_t>, MedVar>> SourcePhiSlices;
   ExprPtr sourceFloatValue(const MedVar &Value, uint16_t Bytes);

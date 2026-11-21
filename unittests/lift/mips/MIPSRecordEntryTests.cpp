@@ -5,9 +5,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/c/MIPS/CRecordEntry.h"
+#include "../../../lib/backend/llvm/MIPS/LLVMRecordABI.h"
 #include "gtest/gtest.h"
 
+#include "neverd/backend/RewriteSourceIdentity.h"
 #include "neverd/backend/c/CEmitterOptions.h"
+#include "neverd/backend/c/LLVMC/LLVMCEmitter.h"
 #include "neverd/backend/llvm/LLVMSourceCallValue.h"
 #include "neverd/backend/llvm/MedLLVMEmitter.h"
 #include "neverd/ir/MIPS/SourceRecordABI.h"
@@ -20,8 +23,10 @@
 #include "neverd/loader/BinaryImage.h"
 #include "neverd/pipeline/Pipeline.h"
 
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/Regex.h"
 
 using namespace neverd;
 
@@ -230,6 +235,345 @@ TEST(MIPSRecordABI, LLVMRecordArgumentsUseEachPhysicalScalar) {
     }
   }
 }
+TEST(MIPSRecordABI, TwoFloatsShareOneArgumentWordAndReturnInTwoFPRs) {
+  llvm::LLVMContext Context;
+  auto Float = NdType::makeFloat(4);
+  auto Pair = NdType::makeStruct({Float, Float});
+  Pair->Passing = NdRecordPassing::ByValue;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    for (unsigned Prefix : {0u, 7u, 8u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Prefix);
+      SourceFunctionTypeHint Sig;
+      Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+      Sig.ReturnType = Pair;
+      for (unsigned I = 0; I < Prefix; ++I)
+        Sig.Parameters.push_back({"word", NdType::makeInt(8, false)});
+      Sig.Parameters.push_back({"pair", Pair});
+      ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+      std::string Diagnostic;
+      ASSERT_TRUE(validateSourceABI(Sig, Diagnostic)) << Diagnostic;
+      const auto Args = sourceABIParameters(Sig);
+      ASSERT_EQ(Args.size(), Prefix + 1);
+      const auto &Last = Args.back();
+      EXPECT_EQ(Last.ParameterIndex, Prefix);
+      EXPECT_EQ(Last.ByteOffset, 0);
+      EXPECT_TRUE(llvmMIPSRecordPieceType(Context, Last, Sig)->isIntegerTy(64));
+      EXPECT_EQ(Last.Location.Kind,
+                Prefix == 8 ? SourceABICarrierKind::Stack
+                            : SourceABICarrierKind::IntegerRegister);
+      ASSERT_EQ(Sig.ReturnComponents.size(), 2u);
+      for (unsigned I = 0; I < 2; ++I) {
+        EXPECT_EQ(Sig.ReturnComponents[I].RegisterOffset, mipsreg::w(I * 2));
+        EXPECT_EQ(Sig.ReturnComponents[I].ValueBytes, 4);
+      }
+      auto Bad = Sig;
+      Bad.Parameters.back().Components.front().ValueBytes = 4;
+      EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+    }
+  }
+}
+
+TEST(MIPSRecordABI, MixedFloatingAndIntegerFieldsKeepIndependentCallClasses) {
+  llvm::LLVMContext Context;
+  auto D = NdType::makeFloat(8);
+  auto U64 = NdType::makeInt(8, false);
+  auto Mixed = NdType::makeStruct({D, U64});
+  Mixed->Passing = NdRecordPassing::ByValue;
+  EXPECT_TRUE(sourceAggregateMembers(Mixed).empty());
+  const auto Members = sourceValueMembers(Mixed);
+  ASSERT_EQ(Members.size(), 2u);
+  EXPECT_EQ(Members[0].ByteOffset, 0);
+  EXPECT_EQ(Members[1].ByteOffset, 8);
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SourceFunctionTypeHint Sig;
+    Sig.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    Sig.ReturnType = Mixed;
+    Sig.Parameters.push_back({"value", Mixed});
+    ASSERT_TRUE(mips::assignRecordSourceABI(Sig, A, BinaryFormat::ELF));
+    const auto Pieces = sourceABIParameters(Sig);
+    ASSERT_EQ(Pieces.size(), 2u);
+    EXPECT_TRUE(llvmMIPSRecordPieceType(Context, Pieces[0], Sig)->isDoubleTy());
+    EXPECT_TRUE(
+        llvmMIPSRecordPieceType(Context, Pieces[1], Sig)->isIntegerTy(64));
+    EXPECT_EQ(Pieces[0].Location.RegisterOffset, mipsreg::w(12));
+    EXPECT_EQ(Pieces[1].Location.RegisterOffset, mipsreg::r(5));
+    const auto *Result =
+        llvm::cast<llvm::StructType>(llvmSourceCallResultType(Context, Sig));
+    ASSERT_EQ(Result->getNumElements(), 2u);
+    EXPECT_TRUE(Result->getElementType(0)->isIntegerTy(64));
+    EXPECT_TRUE(Result->getElementType(1)->isIntegerTy(64));
+    auto Bad = Sig;
+    Bad.ReturnComponents[0] = Pieces[0].Location;
+    std::string Diagnostic;
+    EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+  }
+}
+
+TEST(MIPSRecordABI, ByteRecordsBindEachPartialRegisterOrExactStackPiece) {
+  llvm::LLVMContext Context;
+  for (Arch A :
+       {Arch::MIPS64N32, Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL})
+    for (unsigned Count : {3u, 9u, 15u})
+      for (unsigned Prefix : {0u, 7u, 8u}) {
+        auto ByteArray =
+            NdType::makeArray(NdType::makeInt(1, false), Count, Count);
+        auto Record = NdType::makeStruct({ByteArray});
+        Record->Passing = NdRecordPassing::ByValue;
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Record;
+        for (unsigned I = 0; I < Prefix; ++I)
+          S.Parameters.push_back({"word", NdType::makeInt(8, false)});
+        S.Parameters.push_back({"bytes", Record});
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        auto Parameters = sourceABIParameters(S);
+        const unsigned Chunks = (Count + 7) / 8;
+        ASSERT_EQ(Parameters.size(), Prefix + Chunks);
+        ASSERT_EQ(S.ReturnComponents.size(), Chunks);
+        auto *RT =
+            llvm::cast<llvm::StructType>(llvmSourceCallResultType(Context, S));
+        ASSERT_EQ(RT->getNumElements(), Chunks);
+        for (unsigned J = 0; J < Chunks; ++J) {
+          const auto &P = Parameters[Prefix + J];
+          const unsigned Bytes = std::min(8u, Count - 8 * J);
+          EXPECT_EQ(P.ByteOffset, 8 * J);
+          EXPECT_EQ(P.Location.ValueBytes, Bytes);
+          EXPECT_EQ(P.Location.CarrierBytes,
+                    Prefix + J < 8 && Bytes < 8 ? 8 : 0);
+          EXPECT_EQ(P.Location.RegisterByteOffset,
+                    Prefix + J < 8 && !archLittleEndian(A) ? 8 - Bytes : 0);
+          EXPECT_TRUE(
+              llvmMIPSRecordPieceType(Context, P, S)->isIntegerTy(Bytes * 8));
+          EXPECT_TRUE(RT->getElementType(J)->isIntegerTy(Bytes * 8));
+        }
+        auto Bad = S;
+        Bad.ReturnComponents.back().RegisterByteOffset ^= 1;
+        std::string Diagnostic;
+        EXPECT_FALSE(validateSourceABI(Bad, Diagnostic));
+      }
+}
+
+TEST(MIPSRecordABI, HiddenResultPreservesStorageWidthAndLLVMArgumentPositions) {
+  llvm::LLVMContext Context;
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 17, 17);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (const auto A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                       Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    const auto &TRI = getTargetRegInfo(A);
+    SourceFunctionTypeHint S;
+    S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+    S.ReturnType = Record;
+    S.Parameters.push_back({"object", Record});
+    ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+    EXPECT_EQ(S.ReturnLocation.Kind,
+              SourceABICarrierKind::IndirectResultPointer);
+    EXPECT_EQ(S.ReturnLocation.RegisterOffset, TRI.IntParamRegs.front());
+    EXPECT_EQ(S.ReturnLocation.ValueBytes, TRI.PointerSize);
+    EXPECT_TRUE(S.ReturnComponents.empty());
+    EXPECT_TRUE(llvmSourceCallResultType(Context, S)->isVoidTy());
+    const auto Pieces = sourceABIParameters(S);
+    ASSERT_FALSE(Pieces.empty());
+    EXPECT_EQ(Pieces.front().Location.RegisterOffset, TRI.IntParamRegs[1]);
+    auto Attrs = mips::recordCallAttributes(Context, {}, S, Pieces);
+    auto *Storage =
+        llvm::dyn_cast_or_null<llvm::ArrayType>(Attrs.getParamStructRetType(0));
+    ASSERT_TRUE(Storage);
+    EXPECT_EQ(Storage->getNumElements(), 17u);
+    EXPECT_FALSE(Attrs.hasParamAttr(0, llvm::Attribute::InReg));
+    EXPECT_FALSE(Attrs.hasRetAttr(llvm::Attribute::InReg));
+    for (unsigned I = 0; I < Pieces.size(); ++I)
+      EXPECT_TRUE(Attrs.hasParamAttr(I + 1, llvm::Attribute::InReg));
+    std::string Error;
+    S.ReturnLocation.RegisterOffset = TRI.IntReturnReg;
+    EXPECT_FALSE(validateSourceABI(S, Error));
+  }
+}
+
+TEST(MIPSRecordABI, O32ScalarWordPairsAreOneCAndLLVMArgument) {
+  llvm::LLVMContext Context;
+  auto Bytes = NdType::makeArray(NdType::makeInt(1, false), 5, 5);
+  auto Record = NdType::makeStruct({Bytes});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL})
+    for (bool Stack : {false, true})
+      for (bool Floating : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << ' ' << Stack << ' ' << Floating);
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Record;
+        const auto Scalar =
+            Floating ? NdType::makeFloat(8) : NdType::makeInt(8, false);
+        S.Parameters =
+            Stack ? std::vector<SourceParameterTypeHint>{{"bytes", Record},
+                                                         {"number", Scalar}}
+                  : std::vector<SourceParameterTypeHint>{{"number", Scalar},
+                                                         {"bytes", Record}};
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        const auto Parts = sourceABIParameters(S);
+        const auto Args = llvmMIPSRecordArguments(Context, S, Parts);
+        ASSERT_EQ(Args.size(), 3u);
+        const unsigned I = Stack ? 2 : 0;
+        const auto &Number = Args[I];
+        ASSERT_EQ(Number.PieceCount, 2u);
+        EXPECT_EQ(Number.Type, Floating ? llvm::Type::getDoubleTy(Context)
+                                        : llvm::Type::getInt64Ty(Context));
+        EXPECT_FALSE(Number.InReg);
+        for (unsigned J = 0; J < 2; ++J) {
+          const auto &P = Parts[Number.FirstPiece + J];
+          EXPECT_EQ(P.ByteOffset, (archLittleEndian(A) ? J : 1 - J) * 4);
+          EXPECT_EQ(P.Location.ValueBytes, 4u);
+          if (Stack) {
+            EXPECT_EQ(P.Location.Kind, SourceABICarrierKind::Stack);
+            EXPECT_EQ(P.Location.EntryStackOffset, 16u + J * 4u);
+          } else {
+            EXPECT_EQ(P.Location.RegisterOffset,
+                      getTargetRegInfo(A).IntParamRegs[2 + J]);
+          }
+        }
+        const auto Attrs = mips::recordCallAttributes(Context, {}, S, Parts);
+        EXPECT_FALSE(Attrs.hasParamAttr(I + 1, llvm::Attribute::InReg));
+        EXPECT_EQ(Attrs.hasParamAttr(I + 1, llvm::Attribute::ZExt), !Floating);
+        auto Changed = S;
+        std::swap(Changed.Parameters[Stack ? 1 : 0].Components[0],
+                  Changed.Parameters[Stack ? 1 : 0].Components[1]);
+        std::string Diagnostic;
+        EXPECT_FALSE(validateSourceABI(Changed, Diagnostic));
+      }
+}
+
+TEST(MIPSRecordABI, LLVMCReconstructsN32IntegerWordsWithoutPointerNarrowing) {
+  struct Context final : NullDebugContext {
+    FunctionSym Callee;
+    std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
+      return Entry == Callee.Addr ? std::optional(Callee) : std::nullopt;
+    }
+    bool hasAuthenticatedFunctionSignatures() const override { return true; }
+    bool hasInfo() const override { return true; }
+  };
+  for (const Arch A : {Arch::MIPS64N32, Arch::MIPS64N32EL})
+    for (unsigned Bytes : {3u, 8u, 17u}) {
+      SCOPED_TRACE(::testing::Message() << unsigned(A) << '/' << Bytes);
+      RecordFixture F(A, Bytes);
+      Context Debug;
+      Debug.Callee = F.Function;
+      Debug.Callee.Name = "consume_payload";
+      Debug.Callee.ReturnType = NdType::makeVoid();
+      F.Image.MIPS->ABI = MIPSABI::N32;
+      const auto S = mips::recordSourceABI(F.Image, Debug, Debug.Callee.Addr);
+      ASSERT_TRUE(S);
+      const auto Parts = sourceABIParameters(*S);
+      ASSERT_EQ(Parts.size(), (Bytes + 7) / 8);
+
+      llvm::LLVMContext C;
+      llvm::Module Module("record-words", C);
+      Module.setDataLayout(archLittleEndian(A) ? "e-p:32:32" : "E-p:32:32");
+      llvm::IRBuilder<> B(C);
+      llvm::SmallVector<llvm::Type *, 4> Words;
+      for (const auto &P : Parts)
+        Words.push_back(llvmMIPSRecordPieceType(C, P, *S));
+      auto *Type = llvm::FunctionType::get(B.getVoidTy(), Words, false);
+      auto *Callee = llvm::Function::Create(
+          Type, llvm::GlobalValue::ExternalLinkage, Debug.Callee.Name, Module);
+      const auto Attrs = mips::recordCallAttributes(C, {}, *S, Parts);
+      Callee->setAttributes(Attrs);
+      rewrite_source::setOriginalVA(*Callee, Debug.Callee.Addr);
+      auto *Forward = llvm::Function::Create(
+          llvm::FunctionType::get(B.getVoidTy(), {B.getPtrTy()}, false),
+          llvm::GlobalValue::ExternalLinkage, "forward_payload", Module);
+      B.SetInsertPoint(llvm::BasicBlock::Create(C, "entry", Forward));
+      llvm::SmallVector<llvm::Value *, 4> Values;
+      for (unsigned I = 0; I < Words.size(); ++I) {
+        auto *Address = B.CreateConstGEP1_32(B.getInt8Ty(), Forward->getArg(0),
+                                             Parts[I].ByteOffset);
+        Values.push_back(B.CreateLoad(Words[I], Address,
+                                      "payload_word" + std::to_string(I)));
+      }
+      // The caller reads each word before the store. Its typed C declaration
+      // exposes a single argument, including when three loads feed that value.
+      if (Words.size() > 1)
+        B.CreateStore(B.getInt8(0), Forward->getArg(0));
+      B.CreateCall(Callee, Values)->setAttributes(Attrs);
+      B.CreateRetVoid();
+      std::string Text;
+      llvm::raw_string_ostream Output(Text);
+      ASSERT_TRUE(
+          LLVMCEmitter().emit(Module, Output, F.Options, &Debug, &F.Image));
+      Output.flush();
+      EXPECT_NE(Text.find("__neverd_piece0 = (uint"), std::string::npos)
+          << Text;
+      if (Words.size() > 1)
+        EXPECT_TRUE(llvm::Regex("payload_word1[0-9]+ = ").match(Text)) << Text;
+      EXPECT_EQ(Text.find("__neverd_piece0 = (uint64_t)(uintptr_t)"),
+                std::string::npos)
+          << Text;
+    }
+}
+
+TEST(MIPSRecordABI, O32AlignedRecordMaySpanArgumentRegistersAndStack) {
+  const auto U32 = NdType::makeInt(4, false);
+  const auto U64 = NdType::makeInt(8, false);
+  auto Record = NdType::makeStruct({NdType::makeFloat(8), U64}, 4);
+  Record->Passing = NdRecordPassing::ByValue;
+  llvm::LLVMContext Context;
+  for (const Arch A :
+       {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64O32, Arch::MIPS64O32EL})
+    for (bool Hidden : {false, true})
+      for (unsigned Prefix : {0u, 1u, 2u}) {
+        SCOPED_TRACE(::testing::Message()
+                     << unsigned(A) << '/' << Hidden << '/' << Prefix);
+        SourceFunctionTypeHint S;
+        S.Origin = SourceFunctionTypeHint::OriginKind::ExplicitSource;
+        S.ReturnType = Hidden ? Record : NdType::makeVoid();
+        for (unsigned I = 0; I < Prefix; ++I)
+          S.Parameters.push_back({"tag", U32});
+        S.Parameters.push_back({"value", Record});
+        S.Parameters.push_back({"tail", U64});
+        ASSERT_TRUE(mips::assignRecordSourceABI(S, A, BinaryFormat::ELF));
+        const auto Pieces = sourceABIParameters(S);
+        ASSERT_EQ(Pieces.size(), Prefix + 4 + 2);
+        const auto Args = llvmMIPSRecordArguments(Context, S, Pieces);
+        const unsigned Incoming = unsigned(Hidden) + Prefix;
+        const unsigned Pad = Incoming % 2;
+        ASSERT_EQ(Args.size(), Prefix + Pad + 4 + 1);
+        const auto Attrs = mips::recordCallAttributes(Context, {}, S, Pieces);
+        if (Pad) {
+          const auto &Unused = Args[Prefix];
+          EXPECT_EQ(Unused.PieceCount, 0u);
+          EXPECT_TRUE(Unused.Type->isIntegerTy(32));
+          EXPECT_FALSE(Attrs.hasParamAttr(Incoming, llvm::Attribute::InReg));
+        }
+        for (unsigned Word = 0; Word < 4; ++Word) {
+          const auto &Piece = Pieces[Prefix + Word];
+          EXPECT_EQ(Piece.ByteOffset, Word * 4);
+          EXPECT_EQ(Piece.Type->Kind, NdTypeKind::Int);
+          EXPECT_EQ(Piece.Type->Size, 4);
+          const unsigned Slot = Incoming + Pad + Word;
+          if (Slot < 4) {
+            EXPECT_EQ(Piece.Location.Kind,
+                      SourceABICarrierKind::IntegerRegister);
+            EXPECT_EQ(Piece.Location.RegisterOffset,
+                      getTargetRegInfo(A).IntParamRegs[Slot]);
+          } else {
+            EXPECT_EQ(Piece.Location.Kind, SourceABICarrierKind::Stack);
+            EXPECT_EQ(Piece.Location.EntryStackOffset, Slot * 4);
+          }
+          const auto &Arg = Args[Prefix + Pad + Word];
+          EXPECT_TRUE(Arg.Type->isIntegerTy(32));
+          EXPECT_EQ(Arg.PieceCount, 1u);
+          EXPECT_TRUE(Attrs.hasParamAttr(Slot, llvm::Attribute::InReg));
+        }
+        EXPECT_TRUE(Args.back().Type->isIntegerTy(64));
+        EXPECT_EQ(Args.back().PieceCount, 2u);
+        EXPECT_TRUE(Attrs.hasParamAttr(unsigned(Hidden) + Args.size() - 1,
+                                       llvm::Attribute::ZExt));
+      }
+}
+
 TEST(MIPSRecordSourceEntry, AlignmentGapRequiresAnUnreadIntegerSlot) {
   for (const auto A : {Arch::MIPS32, Arch::MIPS32EL}) {
     RecordFixture F(A, 8);

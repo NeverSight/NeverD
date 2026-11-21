@@ -873,6 +873,56 @@ TEST(SourceCallABI, RefusesClobberedAndUnseededPhiCarriers) {
   F.Blocks[0].Phis = {Phi};
   EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
 }
+TEST(SourceCallABI, HiddenRecordStorageReadsTheAuthenticatedEntryStackPointer) {
+  auto Record = NdType::makeStruct(
+      {NdType::makeArray(NdType::makeInt(1, false), 17, 17)});
+  Record->Passing = NdRecordPassing::ByValue;
+  for (Arch A : {Arch::MIPS32, Arch::MIPS32EL, Arch::MIPS64N32,
+                 Arch::MIPS64N32EL, Arch::MIPS64, Arch::MIPS64EL}) {
+    SCOPED_TRACE(static_cast<unsigned>(A));
+    auto H = contract({});
+    H.Signature.ReturnType = Record;
+    std::string Error;
+    ASSERT_TRUE(assignAnalystCallABI(H, A, BinaryFormat::ELF, Error)) << Error;
+    const auto &TRI = getTargetRegInfo(A);
+    MedVar SP = value(1);
+    SP.Kind = MedVar::Reg;
+    SP.TheArch = A;
+    SP.RegOff = TRI.StackPointer;
+    SP.Size = TRI.addressRegisterBytes();
+    MedOp Entry;
+    Entry.Opcode = NdOp::COPY;
+    Entry.Output = SP;
+    Entry.addInput(SP);
+    MedOp Allocate;
+    Allocate.Opcode = NdOp::INT_SUB;
+    Allocate.Output = value(2);
+    Allocate.Output.Size = SP.Size;
+    Allocate.addInput(SP);
+    Allocate.addInput(MedVar::makeConst(64, SP.Size));
+    MedOp Call;
+    Call.Opcode = NdOp::CALL;
+    Call.SourceCallHint = std::make_shared<SourceCallTypeHint>(H);
+    Call.addInput(MedVar::makeConst(0x2000, SP.Size));
+    Call.addInput(Allocate.Output);
+    MedFunc F;
+    F.Entry = 0x1000;
+    F.Blocks.emplace_back();
+    auto &B = F.Blocks.front();
+    B.StartAddr = F.Entry;
+    B.Ops = {Entry, Allocate, Call};
+    EXPECT_TRUE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error)) << Error;
+    F.CallClobbers.push_back({SP, 0});
+    EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+    F.CallClobbers.clear();
+    B.Ops.front().Inputs[0].SSAVer = 1;
+    EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+    B.Ops.front() = Entry;
+    B.StartAddr += 4;
+    EXPECT_FALSE(sourceCallArgumentsDefined(F, *H.AnalystSite, Error));
+  }
+}
+
 TEST(SourceCallABI, AcceptsOnlyTheExactPromotedEntryRegisterMarker) {
   auto H = contract({NdType::makeInt(8)});
   MedFunc F;

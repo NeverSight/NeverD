@@ -2158,7 +2158,9 @@ MedFunc LowToMedConverter::convertFunction(
 
     x86_registration::RegistrationRoots(Low, TheArch, Fmt)
         .disconnectNoReturnFallthroughs(Func);
-    const auto *EntrySignature = bindSourceCalls(Func, Low, Fmt);
+    bool BoundMIPSRecordCall = false;
+    const auto *EntrySignature =
+        bindSourceCalls(Func, Low, Fmt, BoundMIPSRecordCall);
     const bool RecordEntry = EntrySignature && EntrySignature->MIPSRecords;
     if (!MIPSRecordResult.empty()) {
       Func.MultiReturn.assign(MIPSRecordResult.begin(), MIPSRecordResult.end());
@@ -2188,8 +2190,12 @@ MedFunc LowToMedConverter::convertFunction(
              P.Kind == SourceABICarrierKind::FloatingRegister});
       Func.ExplicitMIPSRecordResult = true;
     }
-    if (RecordEntry || Func.ExplicitMIPSRecordResult)
-      MIPSReturnsQualified = false;
+    // A typed record can expose a private result buffer even in an image
+    // whose ELF header carries no floating-point ABI metadata.
+    const bool RequireMIPSReturnProof = QualifyMIPSReturns || RecordEntry ||
+                                        Func.ExplicitMIPSRecordResult ||
+                                        BoundMIPSRecordCall;
+    MIPSReturnsQualified = !RequireMIPSReturnProof;
     modelKnownWideCallReturns(Func);
     debugVerifyMedFunc(Func, "modelKnownWideCallReturns");
 
@@ -2273,7 +2279,7 @@ MedFunc LowToMedConverter::convertFunction(
     debugVerifyMedFunc(Func, "buildSsa");
     if (isMIPS(TheArch))
       requireMIPSSourceAccumulators(Func);
-    if (QualifyMIPSReturns || RecordEntry || Func.ExplicitMIPSRecordResult) {
+    if (RequireMIPSReturnProof) {
       unsigned ResultInputs = MIPSRecordResult.size();
       if (RecordEntry && EntrySignature->ReturnType->Kind != NdTypeKind::Void)
         ResultInputs = EntrySignature->ReturnType->Kind == NdTypeKind::Struct
