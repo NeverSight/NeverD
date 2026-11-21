@@ -99,25 +99,15 @@ SymRef widenWindow(SymContext &Ctx, SymRef Source, uint64_t Offset,
         return Ctx.op(V) == SymOp::LShr || Ctx.op(V) == SymOp::AShr;
       };
       auto Terms = Ctx.operands(Source);
-      SymRef Shifted;
-      if (Terms.size() == 2) {
-        if (RightShift(Terms[0]))
-          Shifted = Terms[0];
-        else if (RightShift(Terms[1]))
-          Shifted = Terms[1];
-      } else if (Op == SymOp::Add && Ctx.isConst(Terms.front())) {
-        if (!Budget.consume(Terms.size()))
-          return {};
-        for (auto T : Terms)
-          if (RightShift(T)) {
-            Shifted = T;
-            break;
-          }
-      }
-      if (Shifted && llvm::all_of(Terms, [&](SymRef V) {
-            return V == Shifted || hasZeroPrefix(Ctx, V, End, Words, Budget);
-          })) {
-        Source = Shifted;
+      if (Terms.size() > 2 && !Budget.consume(Terms.size()))
+        return {};
+      auto Shifted = llvm::find_if(Terms, RightShift);
+      auto Zero = [&](SymRef V) {
+        return hasZeroPrefix(Ctx, V, End, Words, Budget);
+      };
+      if (Shifted != Terms.end() && std::all_of(Terms.begin(), Shifted, Zero) &&
+          std::all_of(Shifted + 1, Terms.end(), Zero)) {
+        Source = *Shifted;
         continue;
       }
       if (Budget.exhausted())
@@ -249,6 +239,50 @@ SymRef widenCoordinate(SymContext &Ctx, SymRef Low, unsigned Width,
     Widened.try_emplace(V.index(), Wide);
   }
   return Widened.lookup(Low.index());
+}
+
+// Lowering can mask both sides of a rotation to the bits used by a factor.
+// The logical right shift fills exactly the bottom Cut bits. The two halves
+// are disjoint, so a sum, OR and XOR yield the same observed prefix.
+SymRef maskedRotatePrefix(SymContext &Ctx, SymRef Word, unsigned Bits,
+                          WorkBudget &Budget, size_t &Storage) {
+  const auto Op = Ctx.op(Word);
+  if ((Op != SymOp::Or && Op != SymOp::Xor && Op != SymOp::Add) ||
+      Ctx.numOperands(Word) != 2)
+    return Word;
+  auto High = Ctx.operand(Word, 0), Low = Ctx.operand(Word, 1);
+  if (Ctx.op(High) != SymOp::Mul)
+    std::swap(High, Low);
+  if (Ctx.op(High) != SymOp::Mul || Ctx.numOperands(High) != 2 ||
+      !Ctx.isConst(Ctx.operand(High, 0)) || Ctx.op(Low) != SymOp::And ||
+      Ctx.numOperands(Low) != 2 || !Ctx.isConst(Ctx.operand(Low, 0)))
+    return Word;
+  const auto Left = Ctx.operand(High, 1), Right = Ctx.operand(Low, 1);
+  if (Ctx.op(Left) != SymOp::And || !Ctx.isConst(Ctx.operand(Left, 0)) ||
+      Ctx.op(Right) != SymOp::LShr || !Ctx.isConst(Ctx.operand(Right, 1)))
+    return Word;
+  const auto Base = Ctx.operand(Right, 0);
+  const auto Tail = Ctx.operands(Left).drop_front();
+  const unsigned Width = Ctx.width(Word);
+  if (!Budget.consume(4 * llvm::APInt::getNumWords(Width) + Tail.size()))
+    return {};
+  if (Tail.size() == 1
+          ? Tail.front() != Base
+          : Ctx.op(Base) != SymOp::And || Tail != Ctx.operands(Base))
+    return Word;
+  const int32_t Cut = Ctx.constValue(Ctx.operand(High, 0)).exactLogBase2();
+  const auto Shift = Ctx.operand(Right, 1);
+  if (Cut <= 0 || unsigned(Cut) >= Bits ||
+      Ctx.constWords(Shift).front() != Width - unsigned(Cut) ||
+      Ctx.constValue(Ctx.operand(Left, 0)).countr_one() <
+          Bits - unsigned(Cut) ||
+      Ctx.constValue(Ctx.operand(Low, 0)).countr_one() < unsigned(Cut))
+    return Word;
+  const size_t Bytes = sizeof(SymNode) + 2 * sizeof(SymRef);
+  if (Bytes > Storage)
+    return {};
+  Storage -= Bytes;
+  return Ctx.mkRor(Base, Shift);
 }
 
 bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
@@ -486,11 +520,18 @@ bool readTruncatedCoordinate(SymContext &Ctx, Factor &Row, unsigned Observed,
   // An instruction combiner may leave the word shifted and replace its
   // narrow extension with a mask. Its observable prefix has the same
   // coordinate as an explicit extract, including any copied rotate bits.
+  // Constant left rotations use the same right-rotated representative.
   const unsigned Bits = Observed - std::min(Observed, Row.Zeros);
   if (Bits && Bits < Width &&
-      (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr) &&
+      (Ctx.op(Word) == SymOp::LShr || Ctx.op(Word) == SymOp::AShr ||
+       Ctx.op(Word) == SymOp::Rol) &&
       Ctx.isConst(Ctx.operand(Word, 1))) {
     Word = widenWindow(Ctx, Word, 0, Bits, Width, Budget, Storage);
+    if (!Word)
+      return false;
+  }
+  if (Bits && Bits < Width) {
+    Word = maskedRotatePrefix(Ctx, Word, Bits, Budget, Storage);
     if (!Word)
       return false;
   }

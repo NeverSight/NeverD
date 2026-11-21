@@ -91,6 +91,40 @@ std::optional<int> compareConstantWithZExtMaximum(const SymContext &Ctx,
   return Value.isMask(Narrow) ? 0 : -1;
 }
 
+// One right shift can supply the low prefix of an n-ary join. Even for an
+// addition, no carry enters the window if all other terms vanish below End.
+std::optional<detail::WordWindow> projectShiftedPrefix(const SymContext &Ctx,
+                                                       SymRef Join, uint64_t At,
+                                                       unsigned Size) {
+  const auto Width = Ctx.width(Join);
+  const uint64_t End = At + Size;
+  if (End > Width)
+    return std::nullopt;
+  const auto Words = llvm::APInt::getNumWords(End);
+  constexpr auto InspectionWork = ::neverd::limits::symbolic::
+      kSymExprStructSymContextConstantWindowRemaining;
+  if (Ctx.numOperands(Join) > InspectionWork / (1 + Words))
+    return std::nullopt;
+  SymRef Right;
+  for (SymRef Term : Ctx.operands(Join)) {
+    const auto Op = Ctx.op(Term);
+    if (Op == SymOp::LShr || Op == SymOp::AShr) {
+      if (Right || !Ctx.isConst(Ctx.operand(Term, 1)))
+        return std::nullopt;
+      Right = Term;
+      continue;
+    }
+    if (Op == SymOp::And || Op == SymOp::Mul)
+      Term = Ctx.operand(Term, 0);
+    if (!Ctx.isConst(Term) ||
+        llvm::APInt::tcLSB(Ctx.constWords(Term).data(), Words) < End)
+      return std::nullopt;
+  }
+  if (!Right)
+    return std::nullopt;
+  return detail::projectRightShift(Ctx, Right, At, Size);
+}
+
 // A product of unsigned narrow values can be computed before their carrier
 // extension. Powers of two inside an extension may move out only when the
 // inner multiplication cannot wrap. Keep the complete narrow product: a high
@@ -336,7 +370,21 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
     const bool Turn = Outer == SymOp::Rol || Outer == SymOp::Ror;
     const auto Packed = Turn ? operand(A, 0) : A;
     const auto Shifts = detail::FunnelShifts::match(*this, Packed);
-    if (!Shifts || Shifts->sharesSource(*this))
+    const auto Op = op(Packed);
+    if (!Turn && Low && (Op == SymOp::Or || Op == SymOp::Xor) &&
+        numOperands(Packed) == 2) {
+      auto L = operand(Packed, 0), H = operand(Packed, 1);
+      if (op(L) != SymOp::ZExt)
+        std::swap(L, H);
+      if (op(L) == SymOp::ZExt && width(operand(L, 0)) <= Low) {
+        A = H;
+        continue;
+      }
+    }
+    const bool Multi =
+        numOperands(Packed) > 2 &&
+        (Op == SymOp::Add || Op == SymOp::Or || Op == SymOp::Xor);
+    if ((!Shifts && !Multi) || (Shifts && Shifts->sharesSource(*this)))
       break;
     const unsigned Have = width(Packed);
     uint64_t At = Low;
@@ -347,7 +395,9 @@ SymRef SymContext::mkExtract(SymRef A, uint32_t Low, uint32_t Width) {
       const auto By = constValue(Count).urem(Have);
       At = (At + (Outer == SymOp::Ror ? By : Have - By)) % Have;
     }
-    const auto Selected = Shifts->project(*this, At, Width);
+    const auto Selected = Shifts
+                              ? Shifts->project(*this, At, Width)
+                              : projectShiftedPrefix(*this, Packed, At, Width);
     if (!Selected)
       break;
     A = Selected->Word;

@@ -382,6 +382,31 @@ TEST(SymSimplifyGuard, GeneratedVariableShiftsRequireCompleteValueBounds) {
   }
 }
 
+TEST(SymSimplifyGuard, LeafRootsDoNotCountAsRemovableInstructions) {
+  llvm::LLVMContext C;
+  llvm::Module M("leaf-roots", C);
+  auto *Ty = llvm::Type::getInt32Ty(C);
+  auto *F = llvm::Function::Create(llvm::FunctionType::get(Ty, {Ty}, false),
+                                   llvm::Function::ExternalLinkage, "f", M);
+  llvm::IRBuilder<> B(llvm::BasicBlock::Create(C, "entry", F));
+  auto Callee =
+      M.getOrInsertFunction("read_word", llvm::FunctionType::get(Ty, false));
+  auto *Arg = F->getArg(0);
+  auto *Literal = B.getInt32(3);
+  auto *Call = B.CreateCall(Callee);
+  auto *Sum = B.CreateAdd(Arg, Literal);
+  B.CreateRet(Sum);
+  sym::SymContext Ctx;
+  Translator Xlat(Ctx);
+  ASSERT_TRUE(Xlat.in(Sum));
+  ASSERT_EQ(Xlat.descendedInsts(), 1u);
+  llvm::Value *Leaves[] = {Arg, Literal, Call};
+  for (auto *Leaf : Leaves) {
+    EXPECT_TRUE(Xlat.in(Leaf));
+    EXPECT_EQ(Xlat.descendedInsts(), 1u);
+  }
+}
+
 TEST(SymSimplifyGuard, TranslatesRotationsAndPreservesBothFunnelInputs) {
   namespace sym = neverd::symbolic;
   llvm::LLVMContext C;

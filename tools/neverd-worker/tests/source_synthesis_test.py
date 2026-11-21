@@ -14,6 +14,8 @@ from transport_test import Client
 
 
 ENTRY = 0x400078
+# Both entry points decompile the entire function before returning a page.
+DECOMPILE_TIMEOUT_SECONDS = 90
 WEIGHTED_MASKS = (0x7A6D35C1, 0xB53C678A, 0x4EF0A903, 0xD2195A6C)
 WEIGHTED_UNION = 0
 for _mask in WEIGHTED_MASKS:
@@ -317,7 +319,8 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
-                          staggered_bytes=False, signed_bytes=False):
+                          staggered_bytes=False, signed_bytes=False, joined_prefix=False):
+    signed_bytes = signed_bytes or joined_prefix
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -363,6 +366,13 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
                 code += bytes.fromhex(join)
                 value = f"({moved}{symbol}{other})"
+                if joined_prefix:
+                    # A second independent word starts above CH. At one
+                    # boundary its low bit contributes to the selected byte.
+                    extra_cut = 14 if i == degree // 3 else 16 + i % 13
+                    code += bytes.fromhex("4189f0 41c1e0") + bytes([extra_cut])
+                    code += bytes.fromhex(join)
+                    value = f"({value}{symbol}(y<<{extra_cut}))"
             elif funnel_bytes or staggered_bytes:
                 # A different register supplies the other half of the funnel.
                 # CH lies entirely within ECX's shifted bits.
@@ -467,17 +477,16 @@ def elf(code):
     return header + segment + code
 
 
-def ok(client, operation, payload):
-    reply = client.call(operation, payload)
+def ok(reply):
     assert reply["status"] == "ok", reply
     return reply["payload"]
 
 
 def source(client, representation, symbolic):
-    return ok(client, "decompile", {
+    return ok(client.call("decompile", {
         "address": hex(ENTRY), "representation": representation, "limit": 2048,
         "source_options": {"symbolic": True} if symbolic else {},
-    })["text"]
+    }, timeout=DECOMPILE_TIMEOUT_SECONDS))["text"]
 
 
 def function_name(text):
@@ -570,6 +579,12 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
             # The original-product execution oracle checks the retained
             # nonzero residual without prescribing a particular spelling.
             pass
+        elif kind == "funnel-perturbation-joined-137":
+            # Five distinct affine factors need five coefficient products and
+            # four joins. High C can spell the bit-window shifts as 2^k * x.
+            literals = re.findall(r"\b(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*\s*\*", code)
+            shifts = sum(int(lit, 0).bit_count() == 1 for lit in literals)
+            assert code.count("*") - shifts <= 9 and code.count("*") <= 14, text
         elif kind.startswith(("truncated-perturbation-", "affine-perturbation-", "view-perturbation-", "dynamic-perturbation-", "spliced-perturbation-", "rotated-perturbation-", "shifted-perturbation-", "funnel-perturbation-")):
             assert code.count("*") <= 12, text
         elif kind.startswith(("power-group-", "high-perturbation-", "mixed-perturbation-")):
@@ -622,7 +637,7 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
         fixture.write_bytes(image)
         outputs = {}
         with Client(worker) as client:
-            ok(client, "open", {"path": str(fixture), "read_only": True})
+            ok(client.call("open", {"path": str(fixture), "read_only": True}))
             for representation in ("source", "llvmc"):
                 ordinary = source(client, representation, False)
                 enhanced = source(client, representation, True)
@@ -665,7 +680,8 @@ def run_fixture(worker, cli, compiler, kind, image, expected):
                     if single:
                         args.append("--func=" + hex(ENTRY))
                     subprocess.run(args + ["-o", str(output), str(fixture)],
-                                   check=True, capture_output=True, text=True, timeout=90)
+                                   check=True, capture_output=True, text=True,
+                                   timeout=DECOMPILE_TIMEOUT_SECONDS)
                     text = output.read_text(encoding="utf-8")
                     enhanced_shape(text)
                     outputs[name] = text
@@ -742,6 +758,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-joined-137", *high_perturbation_elf(
+                137, shift_base=6, affine_depth=1, observed=14, joined_prefix=True)),
             ("funnel-perturbation-signed-277", *high_perturbation_elf(
                 277, shift_base=6, affine_depth=1, observed=14, signed_bytes=True)),
             ("funnel-perturbation-staggered-239", *high_perturbation_elf(

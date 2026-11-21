@@ -41,12 +41,39 @@ SymRef Parser::makeLiteral(const Token &N) {
   if (Failed)
     return {};
 
-  // Most MBA coefficients fit in a native word. Parse those once; the
-  // literal builder owns truncation and zero extension to the declared width.
+  if (N.Radix == 10) {
+    // The lexer already established every digit. A group of up to 19
+    // decimal digits fits a limb. Longer literals denote a residue at W,
+    // including when a #width suffix narrows a much larger number.
+    constexpr size_t ChunkDigits = 19;
+    constexpr uint64_t ChunkRadix = 10000000000000000000ULL;
+    auto Digits = N.Digits;
+    auto Take = [&](size_t Count) {
+      uint64_t Chunk = 0;
+      for (char Digit : Digits.take_front(Count))
+        Chunk = Chunk * 10 + (Digit - '0');
+      Digits = Digits.drop_front(Count);
+      return Chunk;
+    };
+    if (Digits.size() <= ChunkDigits)
+      return Ctx.mkConst(W, Take(Digits.size()));
+    uint64_t First = Take(1 + (Digits.size() - 1) % ChunkDigits);
+    if (W <= 64) {
+      while (!Digits.empty())
+        First = First * ChunkRadix + Take(ChunkDigits);
+      return Ctx.mkConst(W, First);
+    }
+    llvm::APInt V(W, First);
+    while (!Digits.empty()) {
+      V *= ChunkRadix;
+      V += Take(ChunkDigits);
+    }
+    return Ctx.mkConst(V);
+  }
+
   uint64_t Native;
   if (!N.Digits.getAsInteger(N.Radix, Native))
     return Ctx.mkConst(W, Native);
-
   unsigned Needed = llvm::APInt::getBitsNeeded(N.Digits, N.Radix);
   llvm::APInt V(std::max(Needed, W), N.Digits, N.Radix);
   return Ctx.mkConst(V.zextOrTrunc(W));

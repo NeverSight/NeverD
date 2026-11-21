@@ -1602,6 +1602,56 @@ def signed_window_corpus(width, count):
     return rows
 
 
+def joined_prefix_corpus(width, count):
+    """Long products of signed and logical fields with two or three noisy neighbors."""
+    axes = ("(x^y)", "((u|w)^(x+z))", "((x&z)^(y+w))")
+    positions = (0, width - 2, 1 + width // 3)
+    full = (1 << width) - 1
+    expressions = []
+    for case in range(count):
+        rng = random.Random(0x9D16F + width * 3749 + case * 17713)
+        degree = (383, 439, 509, 563)[case % 4]
+        observed = min(width - 6, max(10, width // 7 + case % 3))
+        factors = []
+        for i in range(degree):
+            axis = (case + i) % (2 + case % 2)
+            zeros = (observed + 2) // 3 + i % 2
+            bits = observed - zeros
+            size = bits + (i % 4 == 2)
+            start = rng.randrange(1, width - size - 4)
+            shift = width - (start + size + rng.randrange(4))
+            turn = (positions[axis] - start - shift) % width
+            selected = f"ror({axes[axis]},{turn})"
+            low = (f"ashr({selected},{shift})" if (i + case) % 3 != 1
+                   else f"({selected}>>{shift})")
+            neighbors = (f"(({17*i+3}+u*y)^(x+z*w))",
+                         f"((v+{11*i+1})^(y+w*x))", f"(z^(u+w+{i+7}))")
+            terms = []
+            for j in range(2 + (i % 3 == 0)):
+                cut = start + size + rng.randrange(4)
+                if case % 3 and i == degree // 2 and j == 1:
+                    cut = start + bits - 1
+                if (i + j + case) % 2:
+                    mask = ((rng.getrandbits(width) | 1) << cut) & full
+                    terms.append(f"({neighbors[j]}&{mask})")
+                else:
+                    scale = (rng.randrange(1, 16, 2) << cut) & full
+                    terms.append(f"({scale}*{neighbors[j]})")
+            terms.insert((i + case) % len(terms), low)
+            op = ("^", "|", "+")[(i + case) % 3]
+            joined = "(" + op.join(terms) + ")"
+            at = rng.randrange(width - size + 1)
+            field = f"extract(ror({joined},{(start-at)%width}),{at},{size})"
+            word = (f"sext({field},{width})" if i % 2
+                    else f"concat(extract(v,{size},{width-size}),{field})")
+            offset = rng.randrange(-21, 22) | 1
+            weight = (rng.randrange(-13, 14) | 1) << zeros
+            factors.append(f"({offset}+({weight})*{word})")
+        scale = 3 << (width - observed)
+        expressions.append(f"({scale}*" + "*".join(factors) + ")+(x^y)+2*(x&y)+(u|v)")
+    return expressions
+
+
 def affine_product_corpus(width, count):
     """Repeated words hidden under up to three affine coordinate changes."""
     axes = ("(x^y)", "((x&z)^(y|w))", "((x+y)^(z&w))")
@@ -1874,7 +1924,7 @@ def main():
                  "sparse-linear-mixed-degree", "upper-perturbation", "masked-perturbation",
                  "mixed-perturbation", "truncated-product", "integer-product", "affine-product",
                  "residue-view", "dynamic-lane", "spliced-word", "rotating-window", "shifted-window",
-                 "funnel-window", "staggered-window", "signed-window"),
+                 "funnel-window", "staggered-window", "signed-window", "joined-prefix"),
         default="complement",
     )
     args = parser.parse_args()
@@ -1896,6 +1946,7 @@ def main():
             "integer-product": (8, 16, 31, 64, 97, 193, 257),
             "mixed-perturbation": (8, 16, 32, 64, 65, 129, 257),
             "residue-view": (9, 16, 32, 65, 97, 257, 513),
+            "joined-prefix": (32, 64, 129, 257, 513, 769, 1025, 1281),
             "signed-window": (32, 64, 97, 193, 257, 513, 769, 1025),
             "staggered-window": (32, 64, 97, 193, 257, 513, 769),
             "funnel-window": (19, 24, 32, 64, 97, 193, 257, 513),
@@ -1948,6 +1999,7 @@ def main():
                 "funnel-window": funnel_window_corpus,
                 "staggered-window": staggered_window_corpus,
                 "signed-window": signed_window_corpus,
+                "joined-prefix": joined_prefix_corpus,
                 "truncated-product": truncated_product_corpus,
                 "integer-product": integer_product_corpus,
             }[args.family]

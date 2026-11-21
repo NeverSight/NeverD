@@ -7430,7 +7430,9 @@ precision. Each group is evaluated in Horner form and the groups are
 multiplied together, including when their input words overlap. A degree
 can drop again when its falling factorial vanishes because the product of `j`
 consecutive integers is always divisible by `j!`. The solver compares the
-two exact polynomial readings at the observed width.
+two exact polynomial readings at the observed width. Long scaled products can
+reuse this truncated reading after the low-word residue proof declines,
+within the same work allowance.
 Nested affine spellings of a word are composed at the observed precision
 before grouping its factors. Polynomial arithmetic is charged at its actual
 coefficient precision. A signed one-limb affine scalar can multiply a wide
@@ -7446,8 +7448,17 @@ even when the window wraps. Constant shifts translate the window only when
 every bit comes from the source. A mask can be peeled when it preserves
 every bit of the window, including both sides of a wrapped interval.
 Variable counts and observable zero or sign padding stay in the source word.
+A sum, OR or XOR can also supply a field from one right shift when every
+other term is zero below the end of that field. This condition accounts for
+carries into the field from lower bits of a sum.
+Masked complementary shifts of the same word can share a rotation when both
+halves retain every observed bit. High IR emits packed fields smaller than
+a byte in a whole-byte carrier, including signed fields assembled from
+several extracts. The original field width determines the sign position.
 The LLVM translator carries same-word funnel shifts as rotates in both
-directions and emits them with their modulo-width count.
+directions and emits them with their modulo-width count. LLVM arguments,
+constants and opaque calls contribute zero removable instructions when
+queried as region roots.
 A mask or addend that changes only higher bits drops out; a mask
 that changes even one live bit stays. If every weight has at least `s` low
 zeros, the degree-`k` coefficient is a multiple of `2^(k*s)`. Its quotient
@@ -17529,6 +17540,10 @@ versions that counted n-ary nodes once and omitted all all-ones literals.
 Verification samples reuse the compiled evaluator's word-sized path when both
 plans and all context variables fit in 64 bits. Corner assignments and the
 random stream stay unchanged; wider inputs retain arbitrary-width evaluation.
+A wide product can combine three or more distinct affine factors that each
+occur once and read the same input slot. When each weight has at least
+`ceil(P/3)` low zero bits, cubic and higher terms vanish at precision `P`.
+The plan evaluates the resulting quadratic at every original assignment.
 The evaluator lowers constant and variable leaves on their first worklist
 visit. Native inputs are loaded before the operator loop, in the original
 lookup order; shared inputs are still read once and unused inputs are omitted.
@@ -17541,9 +17556,10 @@ Affine prefix inference stores completed value/known-mask facts by exact node
 and queried precision in a dense cache. Facts are copied before recursion;
 bucket growth is fully charged before allocation, and incomplete queries are
 never cached. Partial known bits still cannot stand in for constant prefixes.
-Textual coefficients that fit in 64 bits use one native integer parse; the
-constant builder still owns width truncation and zero extension, and larger
-literals retain arbitrary-precision parsing.
+Decimal literals are read in groups of up to 19 digits. Longer literals
+accumulate modulo the declared width, using a native limb for widths up to
+64 bits. Binary and hexadecimal literals use a native parse when they fit
+in one limb and an arbitrary-width parse for larger values.
 Region candidates are independently proved over the completed abstraction,
 then instantiated with that abstraction's hidden-input mapping. The identity
 holds for arbitrary independent inputs, so restoring related sources cannot
