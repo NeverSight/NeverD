@@ -1751,6 +1751,101 @@ int main(int argc, char **argv) {
 )c")
 
 A64_LEAF_TEXT(kAssemblyName, "leaves.S")
+A64_LEAF_TEXT(kTerminalCallback, "#define NEVERD_TEST_TERMINAL_CALLBACK 1\n")
+A64_LEAF_TEXT(kTerminalDriver, "terminal-caller.cpp")
+A64_LEAF_TEXT(kTerminalCaller, R"cpp(
+#include <dlfcn.h>
+#include <libunwind.h>
+#include <mach-o/compact_unwind_encoding.h>
+#include <ptrauth.h>
+#include <cstdint>
+
+using Callback = int (*)();
+using SignedFrame = int (*)(Callback);
+using Sum = int (*)(int, int);
+static unsigned Cleanups;
+
+static int walk() {
+  unw_context_t Context;
+  unw_cursor_t Cursor;
+  unw_proc_info_t Frame;
+  unw_word_t IP;
+  if (unw_getcontext(&Context) || unw_init_local(&Cursor, &Context) ||
+      unw_step(&Cursor) <= 0 || unw_get_proc_info(&Cursor, &Frame) ||
+      unw_get_reg(&Cursor, UNW_REG_IP, &IP))
+    return 1;
+  auto PC = reinterpret_cast<uintptr_t>(ptrauth_strip(
+      reinterpret_cast<void *>(IP), ptrauth_key_return_address));
+  // Six instructions, with the authenticated callback at word three.
+  if ((Frame.format & UNWIND_ARM64_MODE_MASK) != UNWIND_ARM64_MODE_DWARF ||
+      Frame.end_ip - Frame.start_ip != 24 || PC != Frame.start_ip + 16 ||
+      unw_step(&Cursor) <= 0 || unw_get_reg(&Cursor, UNW_REG_IP, &IP))
+    return 2;
+  Dl_info Caller{}, Self{};
+  if (!dladdr(ptrauth_strip(reinterpret_cast<void *>(IP),
+                            ptrauth_key_return_address), &Caller) ||
+      !dladdr(ptrauth_strip(reinterpret_cast<void *>(&walk),
+                            ptrauth_key_function_pointer), &Self) ||
+      Caller.dli_fbase != Self.dli_fbase)
+    return 3;
+  return 42;
+}
+
+static int raiseException() { throw 42; }
+
+__attribute__((noinline)) static int invoke(SignedFrame Frame, Callback CB) {
+  struct Guard {
+    ~Guard() { ++Cleanups; }
+  } Cleanup;
+  return Frame(CB);
+}
+
+int main(int Argc, char **Argv) {
+  if (Argc != 2)
+    return 4;
+  auto *Image = dlopen(Argv[1], RTLD_NOW | RTLD_LOCAL);
+  if (!Image)
+    return 5;
+  auto Frame = reinterpret_cast<SignedFrame>(dlsym(Image, "leaf_difference"));
+  auto Add = reinterpret_cast<Sum>(dlsym(Image, "leaf_sum"));
+  if (!Add || Add(19, 23) != 42 || !Frame || invoke(Frame, walk) != 42 ||
+      Cleanups != 1)
+    return 6;
+  try {
+    invoke(Frame, raiseException);
+  } catch (int Value) {
+    return Value == 42 && Cleanups == 2 ? dlclose(Image) : 7;
+  }
+  return 8;
+}
+)cpp")
+A64_LEAF_TEXT(kTerminalDwarfLeaves, R"asm(
+.text
+.p2align 2
+.globl _leaf_sum
+_leaf_sum:
+.cfi_startproc
+  add x0,x1,x0
+  ret
+.cfi_endproc
+.globl _leaf_difference
+_leaf_difference:
+.cfi_startproc
+  pacibsp
+  stp x29,x30,[sp,#-16]!
+  mov x29,sp
+  .cfi_def_cfa x29,16
+  .cfi_offset x29,-16
+  .cfi_offset x30,-8
+#ifdef NEVERD_TEST_TERMINAL_CALLBACK
+  blraaz x0
+#else
+  sub x0,x0,x1
+#endif
+  ldp x29,x30,[sp],#16
+  retab
+.cfi_endproc
+)asm")
 A64_LEAF_TEXT(kSignedLeaves, R"asm(
 .text
 .p2align 2

@@ -7,6 +7,7 @@
 /// Exercise file-pointer preservation and transactional layout rejection.
 //===----------------------------------------------------------------------===//
 
+#include "../lib/backend/codegen/MachO/MachODependencyState.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/COFF/COFFLayoutGrowth.h"
@@ -501,6 +502,28 @@ TEST(SourcePatchLayout,
   llvm::consumeError(Unwind.takeError());
   EXPECT_EQ(Blocked, Before);
 }
+
+TEST(SourcePatchLayout, FailedLoadCommandReservationRollsBackUnwindGrowth) {
+  const auto Original = headerMachO(true);
+  const MachOUnwindFunctionCounts Added{1, 0};
+  auto Bytes = Original;
+  auto Space =
+      reserveMachOSourceUnwind(Bytes, Arch::X64, sizeof(uint32_t), Added);
+  ASSERT_TRUE(bool(Space)) << llvm::toString(Space.takeError());
+  ASSERT_TRUE(*Space);
+  ASSERT_NE(Bytes, Original);
+
+  Bytes = Original;
+  std::optional<MachODependencyState> Slid;
+  auto Published = reserveMachOPublishedUnwind(
+      Bytes, Arch::X64, sizeof(uint32_t), Added, false, Slid,
+      limits::backend::kMaxMachOHeaderGrowthBytes + 1);
+  ASSERT_FALSE(bool(Published));
+  llvm::consumeError(Published.takeError());
+  EXPECT_EQ(Bytes, Original);
+  EXPECT_FALSE(Slid);
+}
+
 TEST(SourcePatchLayout, MachOZeroNotePayloadIsNotUnusedHeaderSpace) {
   using namespace llvm::MachO;
   auto B = headerMachO();
