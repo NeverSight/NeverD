@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace llvm {
 class raw_ostream;
@@ -41,6 +42,16 @@ struct X64RtmAbortRegion {
 std::optional<X64RtmAbortRegion> readX64RtmAbortRegion(const BinaryImage &Image,
                                                        va_t Address,
                                                        unsigned AddressBits);
+
+/// The public instruction entry calls its original V6 guard, then executes
+/// the authenticated pair under the invocation's declared RTM support.
+struct X64RtmAbortStep {
+  std::string Name;
+  X64RtmAbortRegion Region;
+};
+
+llvm::json::Array emitX64RtmAbortSteps(llvm::raw_ostream &OS,
+                                       llvm::ArrayRef<X64RtmAbortStep> Steps);
 
 /// Emit an explicit V6 environment callback and receipts for its accepted
 /// pairs. One environment invocation owns the complete pair. Instruction steps
