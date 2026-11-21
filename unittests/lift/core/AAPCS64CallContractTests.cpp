@@ -325,6 +325,63 @@ int main(void) {
   }
 }
 
+TEST(AAPCS64CallContract, BoundWindowsResultsKeepFullWidthObservations) {
+  class Bound final : public NullDebugContext {
+  public:
+    bool hasInfo() const override { return true; }
+    llvm::ArrayRef<va_t> boundFunctionEntries() const override {
+      static constexpr va_t Entries[] = {Text, Plt};
+      return Entries;
+    }
+    std::optional<FunctionSym> resolveFunction(va_t Entry) const override {
+      if (Entry != Text && Entry != Plt)
+        return std::nullopt;
+      FunctionSym F;
+      F.Addr = Entry;
+      F.Name = Entry == Text ? "entry_shim" : "entry_body";
+      F.ExplicitEntryDeclaration = F.PlatformConvention = true;
+      F.ReturnType = NdType::makeInt(4, true);
+      F.Params = {{"driver", NdType::makePtr(NdType::makeVoid())},
+                  {"path", NdType::makePtr(NdType::makeVoid())}};
+      return F;
+    }
+  } Debug;
+  for (bool WideUse : {false, true}) {
+    llvm::LLVMContext Context;
+    llvm::SMDiagnostic Error;
+    std::string IR = R"(
+      target datalayout = "e-p:64:64-i64:64"
+      declare i64 @entry_body(i64, i64)
+      define i64 @entry_shim(i64 %driver, i64 %path) {
+        %status = call i64 @entry_body(i64 %driver, i64 %path)
+        ret i64 %status
+      }
+    )";
+    if (WideUse)
+      IR += R"(
+        define void @observer(ptr %out) {
+          %r = call i64 @entry_shim(i64 1, i64 2)
+          store i64 %r, ptr %out
+          ret void
+        }
+      )";
+    auto Mod = llvm::parseAssemblyString(IR, Error, Context);
+    ASSERT_TRUE(Mod);
+    auto *Root = Mod->getFunction("entry_shim");
+    rewrite_source::setOriginalVA(*Root, Text);
+    rewrite_source::setOriginalVA(*Mod->getFunction("entry_body"), Plt);
+    CEmitterOptions Options;
+    Options.TheArch = Arch::AArch64;
+    Options.Format = BinaryFormat::COFF;
+    std::string Source;
+    llvm::raw_string_ostream OS(Source);
+    ASSERT_TRUE(LLVMCEmitter().emit(*Mod, OS, Options, &Debug, nullptr, Root));
+    const std::string Type = WideUse ? "uint64_t " : "int32_t ";
+    EXPECT_NE(Source.find(Type + "entry_shim("), std::string::npos) << Source;
+    EXPECT_NE(Source.find(Type + "entry_body("), std::string::npos) << Source;
+  }
+}
+
 TEST(AAPCS64CallContract, ReadingOnlyTheSecondReturnWordStillRequiresTheBody) {
   constexpr va_t Callee = Text + 0x40;
   const uint32_t Call = 0x94000000u | ((Callee - (Text + 8)) / 4);

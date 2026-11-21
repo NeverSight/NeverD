@@ -24,6 +24,7 @@
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/LowToMedError.h"
 #include "neverd/ir/med/MedCallLeftovers.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/ir/med/MedStackAlignment.h"
 #include "neverd/ir/med/X86/X86RegistrationDisplayJoins.h"
 #include "neverd/lift/MIPS/MIPSRegs.h"
@@ -327,8 +328,7 @@ void LowToMedConverter::buildSsa(MedFunc &Func, const LowFunc &Low) {
   // at every exceptional target before liveness/SSA construction so they kill
   // the protected call's ordinary register values, while all preserved frame
   // registers continue to flow over the exceptional edge.
-  const uint64_t EHSelectorReg =
-      TRI.IntReturnRegs.size() > 1 ? TRI.IntReturnRegs[1] : TRI.IntReturnReg2;
+  const uint64_t EHSelectorReg = secondIntegerResultRegister(TRI);
   auto InsertEHDefs = [&](MedBlock &Block, uint64_t RegOff,
                           MedVar::VarKind Kind) {
     auto IdsIt = RegOffToIds.find(RegOff);

@@ -44,9 +44,8 @@
 using namespace neverd::gui;
 
 namespace {
-QString bundledAgentManifest() {
+QString bundledAgentManifest([[maybe_unused]] const QDir &ProgramDirectory) {
 #ifdef NEVERD_GUI_BUNDLES_AGENT
-  const QDir ProgramDirectory(QCoreApplication::applicationDirPath());
   if (ProgramDirectory == QDir(QStringLiteral(NEVERD_GUI_BUILD_DIR)))
     return QStringLiteral(NEVERD_BUNDLED_AGENT_BUILD_DIR "/plugin.json");
   return QDir::cleanPath(ProgramDirectory.absoluteFilePath(
@@ -234,16 +233,21 @@ int main(int argc, char **argv) {
   parser.process(app);
   const auto optionsParsedMs = startupClock.nsecsElapsed() / 1.0e6;
 
+  // A launcher may be a symlink in a different directory from this build.
+  const auto executable =
+      QFileInfo(QCoreApplication::applicationFilePath()).canonicalFilePath();
+  const QDir programDirectory =
+      executable.isEmpty() ? QDir(QCoreApplication::applicationDirPath())
+                           : QFileInfo(executable).absoluteDir();
   QString worker = parser.value(QStringLiteral("worker"));
   if (worker.isEmpty())
-    worker = QDir(QCoreApplication::applicationDirPath())
-                 .filePath(
+    worker = programDirectory.filePath(
 #ifdef Q_OS_WIN
-                     QStringLiteral("neverd-worker.exe")
+        QStringLiteral("neverd-worker.exe")
 #else
-                     QStringLiteral("neverd-worker")
+        QStringLiteral("neverd-worker")
 #endif
-                 );
+    );
   const bool interaction =
       parser.isSet(QStringLiteral("interaction-benchmark"));
   bool automated = parser.isSet(QStringLiteral("startup-benchmark")) ||
@@ -358,7 +362,7 @@ int main(int argc, char **argv) {
   if (startupMetrics)
     startupMetrics->record("services_created_ms");
 
-  const auto agentManifest = bundledAgentManifest();
+  const auto agentManifest = bundledAgentManifest(programDirectory);
   MainWindow window(session, mcp, broker, agentManifest);
   for (const auto &path : parser.values(QStringLiteral("process-plugin"))) {
     QString error;

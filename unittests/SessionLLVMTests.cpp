@@ -85,6 +85,43 @@ protected:
   Session State;
 };
 
+TEST(WindowsDriverEntry, ExportedArm64ShimRequiresNamedExecutableTransfer) {
+  constexpr va_t Shim = 0x1000, Body = Shim + 8;
+  BinaryImage Image;
+  Image.Arch = Arch::AArch64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  Image.Entry = Shim;
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_NATIVE;
+  Image.DynInfo.PECharacteristics = llvm::COFF::IMAGE_FILE_SYSTEM;
+  Segment Text;
+  Text.VA = Shim;
+  Text.Flags = SegmentFlags::Readable | SegmentFlags::Executable;
+  // bl DriverEntry; ret; DriverEntry: ret
+  Text.Data = {0x02, 0x00, 0x00, 0x94, 0xc0, 0x03,
+               0x5f, 0xd6, 0xc0, 0x03, 0x5f, 0xd6};
+  Text.FileSz = Text.Size = Text.Data.size();
+  Image.Segments.push_back(std::move(Text));
+  Image.Exports = {{.Name = "GsDriverEntry", .Addr = Shim},
+                   {.Name = "DriverEntry", .Addr = Body}};
+  const auto entries = [&] {
+    return windowsDriverEntries(Image, nullptr, DebugInfoKind::None);
+  };
+  EXPECT_EQ(entries(), (std::vector<va_t>{Shim, Body}));
+  Image.Exports.push_back({.Name = "AnotherEntry", .Addr = Body});
+  EXPECT_EQ(entries(), (std::vector<va_t>{Shim}));
+  Image.Exports.pop_back();
+  Image.BytePatchRanges.emplace_back(Shim + 1, 1);
+  EXPECT_TRUE(entries().empty());
+  Image.BytePatchRanges.clear();
+  // cbz x0, DriverEntry. A conditional edge alone cannot bind this callback.
+  Image.Segments.front().Data[0] = 0x40;
+  Image.Segments.front().Data[3] = 0xb4;
+  EXPECT_EQ(entries(), (std::vector<va_t>{Shim}));
+  Image.DynInfo.PESubsystem = llvm::COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+  EXPECT_TRUE(entries().empty());
+}
+
 TEST_F(SessionLLVMTest, OmittedDebugNamedRuntimeUsesItsDeclaredArity) {
   constexpr va_t Runtime = 0x2000;
   class PublicNames : public NullDebugContext {

@@ -421,6 +421,10 @@ llvm::Error X64PagedExecution::deliverEvent(
     Last.Exit = uint64_t(X64ContinuationExitV1::EventDeferred);
     break;
   case X64PagedEventStatus::InvalidState:
+    // A post-instruction trap can refuse entry after the original instruction
+    // set Exit to Continue, Call or Return. Keep its completion/transfer
+    // receipt, and expose the event owner's stop to the driver.
+    Last.Exit = uint64_t(X64ContinuationExitV1::InvalidState);
     break;
   case X64PagedEventStatus::BackingFault:
     Last.Exit = uint64_t(X64PagedExit::BackingFault);

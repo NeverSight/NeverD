@@ -267,8 +267,9 @@ const FunctionDef *TypeLibrary::findPrototype(llvm::StringRef Name) const {
 }
 
 uint32_t TypeLibrary::define(LocalType Type) {
-  auto Found = ByName.find(Type.Name);
-  if (Found != ByName.end()) {
+  const auto Next = static_cast<uint32_t>(ByOrdinal.size() + 1);
+  auto [Found, Inserted] = ByName.try_emplace(Type.Name, Next);
+  if (!Inserted) {
     Type.Ordinal = Found->second;
     auto &Held = ByOrdinal[Found->second - 1];
     if (Tried)
@@ -276,11 +277,10 @@ uint32_t TypeLibrary::define(LocalType Type) {
     Held = std::make_shared<const LocalType>(std::move(Type));
     return Found->second;
   }
-  const auto Ordinal = static_cast<uint32_t>(ByOrdinal.size() + 1);
+  const uint32_t Ordinal = Found->second;
   Type.Ordinal = Ordinal;
   if (Tried)
     Tried->Changed.emplace_back(Ordinal, nullptr);
-  ByName[Type.Name] = Ordinal;
   indexCxxSpelling(Type.Name, Ordinal, true);
   ByOrdinal.push_back(std::make_shared<const LocalType>(std::move(Type)));
   return Ordinal;

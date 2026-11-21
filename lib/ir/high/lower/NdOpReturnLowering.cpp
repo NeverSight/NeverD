@@ -657,15 +657,13 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
   // this boundary; an unrelated earlier write to the high register is not a
   // substitute for the value reaching this RETURN.
   const uint16_t WordBytes = TRI.integerReturnWordBytes();
+  const bool ProvenPair = isWholeIntegerReturnPair(Med.MultiReturn, TRI);
+  const uint64_t HighRegister =
+      ProvenPair ? secondIntegerResultRegister(TRI) : TRI.IntReturnReg2;
   if (Func.ReturnType && Func.ReturnType->Kind == NdTypeKind::Int &&
       Func.ReturnType->Size == 2 * WordBytes &&
-      (WordBytes == 4 || isMIPS(TargetArch) ||
-       (Med.MultiReturn.size() == 2 && !Med.MultiReturn[0].IsFP &&
-        !Med.MultiReturn[1].IsFP &&
-        Med.MultiReturn[0].RegOff == TRI.IntReturnReg &&
-        Med.MultiReturn[1].RegOff == TRI.IntReturnReg2)) &&
-      TRI.IntReturnReg2 != 0 && RetVal && RetVal->Type &&
-      RetVal->Type->Size == WordBytes) {
+      (WordBytes == 4 || isMIPS(TargetArch) || ProvenPair) && HighRegister &&
+      RetVal && RetVal->Type && RetVal->Type->Size == WordBytes) {
     // A call after the high register's last write leaves what its callee
     // put there, which this function computed none of.
     ExprPtr High;
@@ -674,27 +672,26 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
       if (RIt->Opcode == NdOp::RETURN)
         continue;
       if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-          RIt->Output.RegOff == TRI.IntReturnReg2) {
+          RIt->Output.RegOff == HighRegister) {
         High = ValueFromDefinition(*RIt);
         break;
       }
-      if ((Clobbered = !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
+      if ((Clobbered = !callKeepsRegister(*RIt, HighRegister, WordBytes)))
         break;
     }
     if (!High && !Clobbered)
       if (const PhiNode *Phi =
-              detail::registerPhi(Med, CurBlock, TRI.IntReturnReg2, TRI))
+              detail::registerPhi(Med, CurBlock, HighRegister, TRI))
         High = HighExpr::makeVar(Phi->Output);
     if (!High && !Clobbered) {
       if (const MedBlock *Pred = onlyPredecessor(Med, CurBlock)) {
         for (auto RIt = Pred->Ops.rbegin(); RIt != Pred->Ops.rend(); ++RIt) {
           if (RIt->Output.Kind == MedVar::Reg && RIt->Output.Size > 0 &&
-              RIt->Output.RegOff == TRI.IntReturnReg2) {
+              RIt->Output.RegOff == HighRegister) {
             High = ValueFromDefinition(*RIt);
             break;
           }
-          if ((Clobbered =
-                   !callKeepsRegister(*RIt, TRI.IntReturnReg2, WordBytes)))
+          if ((Clobbered = !callKeepsRegister(*RIt, HighRegister, WordBytes)))
             break;
         }
       }
@@ -705,7 +702,7 @@ void MedToHighConverter::lowerReturn(HighFunc &Func, const MedBlock &CurBlock,
     // function computed.
     if (!High && !Clobbered) {
       MedVar Reaching;
-      if (reachingRegAtBlockEntry(CurBlock, TRI.IntReturnReg2, Reaching) &&
+      if (reachingRegAtBlockEntry(CurBlock, HighRegister, Reaching) &&
           Reaching.Size > 0) {
         widenRegisterLowView(Med, Reaching);
         if (Reaching.Size > 0 && !isEntryIdentity(Med, Reaching))

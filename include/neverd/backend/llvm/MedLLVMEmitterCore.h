@@ -2613,8 +2613,8 @@ private:
   std::map<uint64_t, llvm::Constant *> CodePtrTableGlobals;
   std::shared_ptr<RelocatedFunctionEntryVerifier> RelocatedEntryProofs;
   bool ImageFunctionSymbolsIndexed = false;
-  std::map<va_t, const Symbol *> ImageFunctionEntrySymbols;
-  std::map<va_t, const Symbol *> ImageFunctionEndSymbols;
+  std::unordered_map<va_t, const Symbol *> ImageFunctionEntrySymbols;
+  std::unordered_map<va_t, const Symbol *> ImageFunctionEndSymbols;
   // Relocation-free intervals used only by finite direct loads/stores. They
   // never enter GlobalDataCache, whose address-valued uses need a whole run.
   struct DirectDataBytes {

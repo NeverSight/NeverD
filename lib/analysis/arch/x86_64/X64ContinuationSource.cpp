@@ -24,6 +24,7 @@
 #include "X64ContinuationSmm.h"
 #include "X64ContinuationSvm.h"
 #include "X64ContinuationSystemTransfers.h"
+#include "X64ContinuationTaskPriority.h"
 #include "X64ContinuationUserInterrupts.h"
 #include "X64ControlTransitions.h"
 #include "X64FredReturnEncoding.h"
@@ -1128,15 +1129,7 @@ struct Writer {
       else
         store(offsetof(StateV4, CR2), Op.Inputs[1]);
     } else if (detail::taskPriorityOperation(Op)) {
-      const NdVar Priority = load(offsetof(StateV2, CR8));
-      const auto Transition = detail::lowerX64TaskPriority(
-          Op, Priority, [&](uint16_t Bytes) { return temporary(Bytes); });
-      append(Transition->Ops);
-      if (Transition->Rejected) {
-        rejectIf(*Transition->Rejected);
-        store(offsetof(StateV2, CR8), Priority);
-        WritesCr8 = true;
-      }
+      detail::emitX64ContinuationTaskPriority(*this, Op);
     } else if (x64::mxcsr::supportsScalarOperation(Op,
                                                    controlOptions(Options))) {
       const NdVar Slot = load(offsetof(StateV2, MXCSR), 4);
@@ -1579,9 +1572,15 @@ buildInstruction(SpecializationInstruction Instruction,
         RequireNative("instruction requires a different flags domain");
     }
   }
+  const bool PagedTaskPriority =
+      Options.PagedMemory && Options.NotifyCr8Writes &&
+      !Result.RequiresNativeExecution && Instruction.Ops.size() == 1 &&
+      detail::taskPriorityOperation(Instruction.Ops.front()).has_value();
   detail::X64PagedMemoryRoles PagedRoles;
   if (Options.PagedMemory) {
-    PagedRoles = (Repeated || PortIO || DebugRegister)
+    // Audited MOV CR8 has one register operand and no data memory. Its
+    // undefined-effects certificate already checked the original encoding.
+    PagedRoles = (Repeated || PortIO || DebugRegister || PagedTaskPriority)
                      ? detail::X64PagedMemoryRoles{.Supported = true}
                      : detail::x64PagedMemoryRoles(Instruction);
     if ((!PagedRoles.Supported && !Iret && !FarReturn && !FarPointer &&
@@ -1593,7 +1592,7 @@ buildInstruction(SpecializationInstruction Instruction,
       if (Op.Opcode == NdOp::INTRINSIC && !divisionPreconditionIntrinsic(Op) &&
           !alignmentIntrinsic(Op) && !UndefinedInstruction && !Interrupt &&
           !Iret && !FarReturn && !FarPointer && !SegmentMove && !PortIO &&
-          !DebugTrap &&
+          !DebugTrap && !PagedTaskPriority &&
           !(Options.PagedDebug &&
             (PoppedFlags ||
              Instruction.NativeBytes == std::vector<uint8_t>{0x9c})) &&
@@ -1652,6 +1651,8 @@ buildInstruction(SpecializationInstruction Instruction,
     }
   const size_t MaxBlocks =
       Instruction.Ops.size() + 3 + ExtraMSRBlocks +
+      // A paged CR8 guard and its fault callback each split two blocks.
+      (PagedTaskPriority ? 3 : 0) +
       unsigned(PagedRoles.Sse && !PagedRoles.SseMemory) +
       (UserInterrupt == detail::X64UserInterrupt::Return ? 2 : 0);
   if (MaxBlocks > Options.MaxOperations ||
@@ -2064,10 +2065,9 @@ buildX64ContinuationSource(const BinaryImage &Image,
        Options.NativeSevGuestExit || Options.SegmentBaseMSRAddressBits))
     return invalid("paged V6 requires its owned memory and fault environment");
   if (Options.NotifyCr8Writes &&
-      (!Options.ScheduledEvents || !Options.EventDelivery ||
-       Options.PagedMemory))
-    return invalid("CR8 write notification requires the successful-RAM "
-                   "event scheduler");
+      (!Options.ScheduledEvents ||
+       (!Options.EventDelivery && !Options.PagedMemory)))
+    return invalid("CR8 write notification requires a V6 event scheduler");
   if (Options.ScheduledEvents && !Options.EventDelivery && !Options.PagedMemory)
     return invalid("scheduled events require event delivery or paged memory");
   if (Options.EventDelivery &&

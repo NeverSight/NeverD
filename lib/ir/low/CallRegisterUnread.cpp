@@ -13,12 +13,12 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include <deque>
 #include <map>
-#include <optional>
-#include <set>
+#include <utility>
 #include <vector>
 
 namespace neverd {
@@ -35,15 +35,32 @@ GPRFamilyMask readFamilies(const GPRReadWidths &Widths) {
   return Result;
 }
 
+struct CallerInputs {
+  size_t Caller;
+  GPRFamilyMask Live;
+};
+
 struct Observation {
   GPRFamilyMask Reads = 0;
   GPRFamilyMask EntryKills = 0;
+  std::vector<CallerInputs> Callers;
 };
 
+bool opaqueEntry(const LocalRegisterEffect &Effect) {
+  return Effect.Incomplete || Effect.Unknown || Effect.UnknownEntryReads ||
+         Effect.UnknownObservers || Effect.Blocks.empty() ||
+         Effect.VariadicFrom >= 0;
+}
+
+bool charge(size_t &Budget, size_t Work = 1) {
+  if (Work > Budget)
+    return false;
+  Budget -= Work;
+  return true;
+}
+
 GPRFamilyMask entryKills(const LocalRegisterEffect &Effect, size_t &Budget) {
-  if (Effect.Incomplete || Effect.Unknown || Effect.UnknownEntryReads ||
-      Effect.UnknownObservers || Effect.Blocks.empty() ||
-      Effect.VariadicFrom >= 0)
+  if (opaqueEntry(Effect))
     return 0;
   GPRFamilyMask Result = 0;
   for (const auto &Step : Effect.Blocks.front().Steps) {
@@ -61,72 +78,88 @@ GPRFamilyMask entryKills(const LocalRegisterEffect &Effect, size_t &Budget) {
   return Result & AllGPRs;
 }
 
-std::optional<GPRFamilyMask>
-entryReads(const LocalRegisterEffect &Effect,
-           const std::map<va_t, Observation> &CalleeReads, size_t &Budget) {
-  if (Effect.Incomplete || Effect.Unknown || Effect.UnknownEntryReads ||
-      Effect.UnknownObservers || Effect.Blocks.empty() ||
-      Effect.VariadicFrom >= 0)
-    return AllGPRs;
-  if (Effect.Blocks.size() > Budget)
-    return std::nullopt;
-  Budget -= Effect.Blocks.size();
-  std::vector<GPRFamilyMask> Live(Effect.Blocks.size());
-  bool Changed = true;
-  while (Changed) {
-    Changed = false;
-    for (size_t B = Effect.Blocks.size(); B-- > 0;) {
-      if (!Budget)
-        return std::nullopt;
-      --Budget;
-      GPRFamilyMask Next = 0;
-      const RegisterBlock &Block = Effect.Blocks[B];
-      for (size_t Successor : Block.Succs) {
-        if (!Budget)
-          return std::nullopt;
-        --Budget;
-        if (Successor >= Live.size())
-          return AllGPRs;
-        Next |= Live[Successor];
+// Track the original entry bits that can still reach each observation.
+// Kills, including callee entry kills, are fixed before this walk. A direct
+// call therefore needs only the intersection of its callee's eventual reads
+// with the families reaching this call site.
+bool collectObservations(const LocalRegisterEffect &Effect, size_t Caller,
+                         const llvm::DenseMap<va_t, size_t> &Indices,
+                         std::vector<Observation> &Nodes, size_t &Budget) {
+  auto &Local = Nodes[Caller];
+  if (opaqueEntry(Effect)) {
+    Local.Reads = AllGPRs;
+    return true;
+  }
+  if (!charge(Budget, Effect.Blocks.size()))
+    return false;
+  for (const auto &Block : Effect.Blocks) {
+    if (!charge(Budget, Block.Succs.size()))
+      return false;
+    for (size_t S : Block.Succs)
+      if (S >= Effect.Blocks.size()) {
+        Local.Reads = AllGPRs;
+        return true;
       }
-      for (auto I = Block.Steps.rbegin(); I != Block.Steps.rend(); ++I) {
-        if (!Budget)
-          return std::nullopt;
-        --Budget;
-        const RegisterStep &Step = *I;
-        if (Step.Exits || Step.TailCallee || Step.UnknownTailCall ||
-            Step.FixedTailCall)
-          Next = 0;
-        const bool Call = Step.Callee != InvalidVA || Step.UnknownCall ||
-                          Step.UnknownTailCall || Step.FixedArguments ||
-                          Step.FixedTailCall;
-        if (Call) {
-          const auto Callee = CalleeReads.find(Step.Callee);
-          // A prototype fixes source arguments, not implicit machine-state
-          // observations. Initial pointer contents also cannot bind a call.
-          if (Step.UnknownCall || Step.UnknownTailCall || Step.FixedArguments ||
-              Step.FixedTailCall || Callee == CalleeReads.end())
-            Next |= AllGPRs;
-          else {
-            // A complete entry prefix executes before every normal return.
-            // Reads within the callee still observe its incoming values;
-            // only the caller's later observation is satisfied by that write.
-            Next &= ~Callee->second.EntryKills;
-            Next |= Callee->second.Reads;
-          }
+  }
+
+  struct BlockInputs {
+    GPRFamilyMask Reached = 0, Pending = 0;
+  };
+  std::vector<BlockInputs> Inputs(Effect.Blocks.size());
+  Inputs.front() = {AllGPRs, AllGPRs};
+  std::deque<size_t> Work{0};
+  llvm::SmallDenseMap<size_t, GPRFamilyMask, 8> Calls;
+  while (!Work.empty()) {
+    if (!charge(Budget))
+      return false;
+    const size_t B = Work.front();
+    Work.pop_front();
+    GPRFamilyMask Live = std::exchange(Inputs[B].Pending, 0);
+    const auto &Block = Effect.Blocks[B];
+    for (const auto &Step : Block.Steps) {
+      if (!Live)
+        break;
+      if (!charge(Budget))
+        return false;
+      Local.Reads |= readFamilies(Step.Reads) & Live;
+      if (Step.UnknownCall || Step.UnknownTailCall || Step.FixedArguments ||
+          Step.FixedTailCall) {
+        Local.Reads |= Live;
+        Live = 0;
+      } else if (Step.Callee != InvalidVA) {
+        const auto Target = Indices.find(Step.Callee);
+        if (Target == Indices.end()) {
+          Local.Reads |= Live;
+          Live = 0;
         } else {
-          Next &= ~Step.Kills;
-          // Partial writes cannot kill a whole family in this bit proof.
+          Calls[Target->second] |= Live;
+          Live &= ~Nodes[Target->second].EntryKills;
         }
-        Next |= readFamilies(Step.Reads);
+      } else {
+        Live &= ~Step.Kills;
       }
-      if (Next != Live[B]) {
-        Live[B] = Next;
-        Changed = true;
-      }
+      if (Step.Exits || Step.TailCallee)
+        Live = 0;
+    }
+    if (!Live)
+      continue;
+    if (!charge(Budget, Block.Succs.size()))
+      return false;
+    for (size_t S : Block.Succs) {
+      auto &Next = Inputs[S];
+      const auto Added = Live & ~Next.Reached;
+      if (!Added)
+        continue;
+      if (!Next.Pending)
+        Work.push_back(S);
+      Next.Pending |= Added;
+      Next.Reached |= Added;
     }
   }
-  return Live.front();
+  for (const auto &[Callee, Live] : Calls)
+    if (const auto Needed = Live & ~Local.Reads)
+      Nodes[Callee].Callers.push_back({Caller, Needed});
+  return true;
 }
 
 } // namespace
@@ -134,50 +167,49 @@ entryReads(const LocalRegisterEffect &Effect,
 std::map<va_t, GPRFamilyMask>
 proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs) {
   size_t Budget = limits::ir::kCallRegisterUnreadWork;
-  if (Funcs.size() > Budget)
+  if (!charge(Budget, Funcs.size()))
     return {};
-  Budget -= Funcs.size();
-  std::map<va_t, Observation> Reads;
-  std::map<va_t, std::set<va_t>> Readers;
-  std::deque<va_t> Pending;
-  std::set<va_t> Queued;
+  llvm::DenseMap<va_t, size_t> Indices;
+  Indices.reserve(Funcs.size());
+  std::vector<Observation> Nodes(Funcs.size());
+  size_t I = 0;
   for (const auto &[Entry, Effect] : Funcs) {
     if (!Effect)
       return {};
-    Reads.emplace(Entry, Observation{0, entryKills(*Effect, Budget)});
-    Pending.push_back(Entry);
-    Queued.insert(Entry);
-    if (Effect->Blocks.size() > Budget)
-      return {};
-    Budget -= Effect->Blocks.size();
-    for (const RegisterBlock &Block : Effect->Blocks)
-      for (const RegisterStep &Step : Block.Steps) {
-        if (!Budget)
-          return {};
-        --Budget;
-        if (Step.Callee != InvalidVA && Funcs.count(Step.Callee))
-          Readers[Step.Callee].insert(Entry);
-      }
+    Indices.try_emplace(Entry, I);
+    Nodes[I++].EntryKills = entryKills(*Effect, Budget);
   }
-  while (!Pending.empty()) {
-    const va_t Entry = Pending.front();
-    Pending.pop_front();
-    Queued.erase(Entry);
-    const auto Next = entryReads(*Funcs.at(Entry), Reads, Budget);
-    if (!Next)
+  I = 0;
+  for (const auto &[Entry, Effect] : Funcs)
+    if (!collectObservations(*Effect, I++, Indices, Nodes, Budget))
       return {};
-    GPRFamilyMask &Read = Reads.at(Entry).Reads;
-    if ((*Next | Read) == Read)
-      continue;
-    Read |= *Next;
-    if (const auto It = Readers.find(Entry); It != Readers.end())
-      for (va_t Reader : It->second) {
-        if (!Budget)
-          return {};
-        --Budget;
-        if (Queued.insert(Reader).second)
-          Pending.push_back(Reader);
-      }
+
+  // Grow the least fixed point, including recursive call components. Only
+  // newly observed bits propagate. Callee changes never rescan a caller CFG.
+  std::deque<size_t> Work;
+  std::vector<GPRFamilyMask> Pending(Nodes.size());
+  for (I = 0; I < Nodes.size(); ++I)
+    if (Nodes[I].Reads && !Nodes[I].Callers.empty()) {
+      Pending[I] = Nodes[I].Reads;
+      Work.push_back(I);
+    }
+  while (!Work.empty()) {
+    const size_t Callee = Work.front();
+    Work.pop_front();
+    const auto Reads = std::exchange(Pending[Callee], 0);
+    if (!charge(Budget, Nodes[Callee].Callers.size()))
+      return {};
+    for (const auto &[Caller, Live] : Nodes[Callee].Callers) {
+      const auto Added = Live & Reads & ~Nodes[Caller].Reads;
+      if (!Added)
+        continue;
+      Nodes[Caller].Reads |= Added;
+      if (Nodes[Caller].Callers.empty())
+        continue;
+      if (!Pending[Caller])
+        Work.push_back(Caller);
+      Pending[Caller] |= Added;
+    }
   }
   std::map<va_t, GPRFamilyMask> Unread;
   // The register-flow body deliberately omits implicit return transport and
@@ -193,12 +225,15 @@ proveUnreadCallRegisters(const LocalRegisterEffectRefs &Funcs) {
              llvm::is_contained(TRI.IntReturnRegs, Register))
       ReturnRegisters |= GPRFamilyMask{1} << Family;
   }
-  for (const auto &[Entry, Proof] : Reads)
+  I = 0;
+  for (const auto &[Entry, Effect] : Funcs) {
+    const auto &Proof = Nodes[I++];
     // Return transport is not represented as an observation. Admit those
     // families only when the complete entry prefix destroys their entry bits.
     if (const auto Mask =
             Candidates & ~(ReturnRegisters & ~Proof.EntryKills) & ~Proof.Reads)
-      Unread.emplace(Entry, Mask);
+      Unread.emplace_hint(Unread.end(), Entry, Mask);
+  }
   return Unread;
 }
 

@@ -11,8 +11,10 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/lift/X86/X86Regs.h"
 #include "neverd/loader/BinaryImage.h"
 
 #include <map>
@@ -34,6 +36,52 @@ LocalRegisterEffect body(std::vector<RegisterStep> Steps) {
 bool unread(const std::map<va_t, GPRFamilyMask> &Proof, va_t Entry) {
   const auto It = Proof.find(Entry);
   return It != Proof.end() && (It->second & ScratchBit);
+}
+
+TEST(CallRegisterUnread, CpuidVendorLeafKeepsThePhysicalSubleafObservation) {
+  BinaryImage Image;
+  Image.Arch = Arch::X64;
+  Image.Bits = Bitness::Bits64;
+  Image.Format = BinaryFormat::COFF;
+  constexpr unsigned Family = x86reg::RCX / 8;
+  constexpr GPRFamilyMask Bit = GPRFamilyMask{1} << Family;
+  for (const auto Leaf :
+       {std::optional<unsigned>(0), std::optional<unsigned>(7),
+        std::optional<unsigned>()}) {
+    LowFunc Function;
+    Function.Entry = 0x1000;
+    LowBlock Block;
+    Block.Id = 0;
+    Block.StartAddr = Function.Entry;
+    if (Leaf) {
+      LowOp Set;
+      Set.Addr = Function.Entry;
+      Set.Opcode = NdOp::COPY;
+      Set.Output = NdVar::reg(x86reg::RAX, 4);
+      Set.addInput(NdVar::scalar(*Leaf, 4));
+      Block.Ops.push_back(Set);
+    }
+    LowOp Query;
+    Query.Addr = Function.Entry + 2;
+    Query.Opcode = NdOp::INTRINSIC;
+    Query.Output = NdVar::reg(x86reg::RAX, 8);
+    Query.addInput(NdVar::cst(static_cast<unsigned>(Intrinsic::Cpuid), 2));
+    Query.addInput(NdVar::reg(x86reg::RAX, 4));
+    Query.addInput(NdVar::reg(x86reg::RCX, 4));
+    Block.Ops.push_back(Query);
+    LowOp Ret;
+    Ret.Opcode = NdOp::RETURN;
+    Ret.Addr = Function.Entry + 4;
+    Block.Ops.push_back(Ret);
+    Function.Blocks.push_back(std::move(Block));
+    const auto Effect = localRegisterEffect(Image, Function);
+    const auto Summary =
+        solveCallRegisterEffects({{Function.Entry, Effect}}, Bit, Bit);
+    ASSERT_TRUE(Summary.EntryReads.count(Function.Entry));
+    EXPECT_EQ(Summary.EntryReads.at(Function.Entry)[Family],
+              Leaf == 0u ? 0u : 4u);
+    EXPECT_EQ(Summary.Unread.at(Function.Entry) & Bit, 0u);
+  }
 }
 
 TEST(CallRegisterUnread, ReadsBeforeWritesAndIncompleteBodiesStayObserved) {
@@ -262,7 +310,7 @@ TEST(CallRegisterUnread, RecursiveSummariesConvergeInBothAddressOrders) {
   }
 }
 
-TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
+TEST(CallRegisterUnread, ReversedBlockOrderRetainsAReachableRead) {
   auto Effect = body({});
   Effect.Blocks.resize(2048);
   Effect.Blocks[0].Succs = {Effect.Blocks.size() - 1};
@@ -271,8 +319,39 @@ TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
   Effect.Blocks[1].Steps = {Read};
   for (size_t B = 2; B < Effect.Blocks.size(); ++B)
     Effect.Blocks[B].Succs = {B - 1};
+  const auto Proof = proveUnreadCallRegisters({{0x1000, &Effect}});
+  ASSERT_EQ(Proof.size(), 1u);
+  EXPECT_FALSE(unread(Proof, 0x1000));
+}
+
+TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
+  auto Effect = body({});
+  Effect.Blocks[0].Succs.resize(limits::ir::kCallRegisterUnreadWork, 0);
   EXPECT_TRUE(proveUnreadCallRegisters({{0x1000, &Effect}}).empty());
   Effect = body({});
   EXPECT_TRUE(unread(proveUnreadCallRegisters({{0x1000, &Effect}}), 0x1000));
+}
+
+TEST(CallRegisterUnread, EachCallSiteObservesOnlySurvivingEntryFamilies) {
+  constexpr unsigned Other = 9;
+  constexpr auto OtherBit = GPRFamilyMask{1} << Other;
+  RegisterStep KillScratch, KillOther, Call, Observe;
+  KillScratch.Kills = ScratchBit;
+  KillOther.Kills = OtherBit;
+  Call.Callee = 0x2000;
+  Observe.Reads[Scratch] = Observe.Reads[Other] = 8;
+  auto Callee = body({Observe});
+  auto Caller = body({});
+  Caller.Blocks[0].Succs = {1, 2};
+  Caller.Blocks.push_back({{KillScratch, Call}, {}});
+  Caller.Blocks.push_back({{KillOther, Call}, {}});
+  const LocalRegisterEffectRefs Bodies{{0x1000, &Caller}, {0x2000, &Callee}};
+  EXPECT_EQ(proveUnreadCallRegisters(Bodies).at(0x1000) &
+                (ScratchBit | OtherBit),
+            0u);
+  Caller.Blocks[0].Steps.push_back(KillScratch);
+  EXPECT_EQ(proveUnreadCallRegisters(Bodies).at(0x1000) &
+                (ScratchBit | OtherBit),
+            ScratchBit);
 }
 } // namespace

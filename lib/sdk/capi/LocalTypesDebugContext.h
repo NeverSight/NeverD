@@ -103,7 +103,8 @@ public:
       std::unordered_map<uint64_t, std::string> Recognized = {},
       std::string EntryType = {},
       std::optional<va_t> ProgramMain = std::nullopt,
-      std::string EntryDeclaration = {});
+      std::string EntryDeclaration = {},
+      std::vector<va_t> WindowsDriverEntries = {});
   /// Takes back the members and enumerators it gave the debug information's
   /// types, and gives back those they held, so that the context made after
   /// a change to the library gives them anew.
@@ -130,6 +131,9 @@ public:
   bool hasUserFunctionDeclarations() const override {
     return !Declarations.empty() || !Types->prototypes().empty() ||
            Inner.hasUserFunctionDeclarations();
+  }
+  llvm::ArrayRef<va_t> boundFunctionEntries() const override {
+    return BoundFunctionEntries;
   }
   bool hasAuthenticatedFunctionSignatures() const override {
     return Inner.hasAuthenticatedFunctionSignatures();
@@ -328,6 +332,10 @@ private:
   UserFactReads *DeclarationReads = nullptr;
   std::shared_ptr<types::TypeLibrary> Types;
   std::map<va_t, std::string> Declarations;
+  std::vector<va_t> WindowsDriverEntries;
+  std::optional<FunctionSym> WindowsDriverSignature;
+  std::vector<va_t> BoundFunctionEntries;
+  void refreshBoundFunctionEntries();
   const BinaryImage *Image;
   std::vector<types::HeaderLibrary> Headers;
   std::unordered_map<uint64_t, std::string> Recognized;
@@ -336,6 +344,9 @@ private:
   std::string EntryDeclaration;
   /// The function type EntryType points to, as a signature.
   std::optional<FunctionSym> entrySignature() const;
+  std::optional<FunctionSym>
+  entryTypeSignature(llvm::StringRef TypeName,
+                     bool RequireHeader = false) const;
   std::optional<va_t> ProgramMain;
   /// Main as the C runtime calls it (libc::kProgramMainDeclaration).
   std::optional<FunctionSym> mainSignature() const;

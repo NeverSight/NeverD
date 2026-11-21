@@ -15,6 +15,7 @@ from pathlib import Path
 import subprocess
 
 import build_wdk_driver_fixtures as wdk
+from generate_microsoft_windows_types import PROVIDER_INLINE_ROUTINES, PROVIDER_PREFIXES
 import microsoft_ucrt_types as ucrt
 
 
@@ -22,6 +23,7 @@ CASES = {
     # NDIS belongs to the primary kernel unit. Enumerate its original profile
     # instead of allowing an incomplete published header to choose the tests.
     "NDIS": (),
+    **{provider: () for provider in PROVIDER_PREFIXES},
     "NetworkInterfaces": ("NmrRegisterClient", "WskRegister", "WskCaptureProviderNPI"),
     "KernelStreaming": ("KsCreatePin", "KsAddEvent", "KsAcquireControl"),
     "StorageClass": ("ClassReadDriveCapacity", "ClassClaimDevice"),
@@ -33,6 +35,9 @@ CASES = {
     "SmartCard": ("SmartcardDeviceControl", "SmartcardT0Request"),
     "SDPort": ("SdPortInitialize", "SdPortGetPciConfigSpace"),
     "StreamClass": ("StreamClassRegisterAdapter", "StreamClassGetPhysicalAddress"),
+    "USBCamera": ("USBCAMD_DriverEntry", "USBCAMD_AdapterReceivePacket",
+                  "USBCAMD_ControlVendorCommand", "USBCAMD_SelectAlternateInterface",
+                  "USBCAMD_GetRegistryKeyValue", "USBCAMD_InitializeNewInterface"),
     "AudioPort": ("PcAddAdapterDevice", "PcNewPort"),
     "GraphicsKernel": ("DxgkInitialize", "DlGetDeviceBase"),
     "RDBSS": ("RxRegisterMinirdr", "RxStartMinirdr", "RxpUnregisterMinirdr",
@@ -48,6 +53,15 @@ CASES = {
     "PropertyVariants": ("InitPropVariantFromBuffer", "PropVariantToStringAlloc"),
     "PerformanceData": ("PdhOpenQueryW", "PdhAddCounterW"),
     "Biometrics": ("WinBioOpenSession", "WinBioCloseSession"),
+    "BluetoothGATT": ("BluetoothGATTGetServices", "BluetoothGATTGetIncludedServices",
+                      "BluetoothGATTGetCharacteristics", "BluetoothGATTGetDescriptors",
+                      "BluetoothGATTGetCharacteristicValue", "BluetoothGATTGetDescriptorValue",
+                      "BluetoothGATTBeginReliableWrite", "BluetoothGATTSetCharacteristicValue",
+                      "BluetoothGATTEndReliableWrite", "BluetoothGATTAbortReliableWrite",
+                      "BluetoothGATTSetDescriptorValue", "BluetoothGATTRegisterEvent",
+                      "BluetoothGATTUnregisterEvent"),
+    "ConnectionManager": ("WcmQueryProperty", "WcmSetProperty", "WcmGetProfileList",
+                          "WcmSetProfileList", "WcmFreeMemory"),
     "GraphicsThunk": ("D3DKMTCreateDevice", "D3DKMTDestroyDevice"),
     "Direct3D11": ("D3D11CreateDevice", "D3D11CreateDeviceAndSwapChain"),
     "Direct3D12": ("D3D12CreateDevice", "D3D12SerializeVersionedRootSignature", "D3D12GetInterface"),
@@ -89,10 +103,11 @@ def generated_compiler(command: list[str], *, keep_sdk_headers: bool = False) ->
     return result
 
 
-def ndis_names(args: argparse.Namespace, compiler: list[str], original: Path,
-               directory: Path, row: dict, arch: str) -> tuple[str, ...]:
+def official_names(args: argparse.Namespace, compiler: list[str], original: Path,
+                   directory: Path, row: dict, arch: str, provider: str,
+                   prefixes: tuple[str, ...]) -> tuple[str, ...]:
     """Inventory declarations from the original target's official headers."""
-    preprocessed = directory / "NDIS-official.h"
+    preprocessed = directory / (provider + "-official.h")
     command = compiler + ["-E", str(original)]
     row["commands"].append(command)
     result = subprocess.run(command, capture_output=True, text=True, timeout=args.timeout)
@@ -110,10 +125,12 @@ def ndis_names(args: argparse.Namespace, compiler: list[str], original: Path,
     (directory / "inventory.json").write_text(result.stdout, encoding="utf-8")
     parsed = json.loads(result.stdout)
     if parsed["problems"]:
-        raise ValueError("official NDIS declarations were refused")
-    names = tuple(sorted(name for name in parsed["prototypes"] if name.startswith("Ndis")))
+        raise ValueError(f"official {provider} declarations were refused")
+    names = tuple(sorted(name for name in parsed["prototypes"]
+                         if name.startswith(prefixes) and
+                         name not in PROVIDER_INLINE_ROUTINES.get(provider, ())))
     if not names:
-        raise ValueError("official NDIS profile declares no functions")
+        raise ValueError(f"official {provider} profile declares no functions")
     return names
 
 
@@ -154,10 +171,11 @@ def check(args: argparse.Namespace) -> dict:
                     if bridge and row["original_source_sha256"] != bridge["source_sha256"]:
                         raise ValueError("original C++ provider source changed")
                     row["generated_header_sha256"] = digest(header)
-                    if name == "NDIS":
-                        names = ndis_names(args, compiler, original, directory, row, arch)
-                        row.update(functions=names, inventory="original official target profile",
-                                   contract_kind="function types, including inline declarations")
+                    if name == "NDIS" or name in PROVIDER_PREFIXES:
+                        prefixes = ("Ndis",) if name == "NDIS" else PROVIDER_PREFIXES[name]
+                        names = official_names(args, compiler, original, directory,
+                                               row, arch, name, prefixes)
+                        row.update(functions=names, inventory="original official target profile")
                     # Select the published prototypes and their full type closure.
                     # Unrelated compiler intrinsic declarations in the complete
                     # catalog are not interchangeable with Clang's builtins.
@@ -179,6 +197,7 @@ def check(args: argparse.Namespace) -> dict:
                     row["selected_header_sha256"] = digest(selected)
                     bindings = names
                     if name == "NDIS":
+                        row["contract_kind"] = "function types, including inline declarations"
                         # Type-only aliases cover SDK inline functions without
                         # comparing their definitions to external declarations.
                         bindings = tuple(f"neverd_ndis_contract_{i}" for i in range(len(names)))

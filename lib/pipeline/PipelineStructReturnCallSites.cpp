@@ -15,6 +15,7 @@
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/ImportCallee.h"
+#include "neverd/ir/med/MedReturnValue.h"
 #include "neverd/libc/LibCNames.h"
 #include "neverd/pipeline/Pipeline.h"
 
@@ -386,9 +387,10 @@ bool isIntegerRegisterPair(const std::vector<MedReturnReg> &Fields,
     return !Field.IsFP && Field.RegOff == RegOff &&
            (Field.Size == 0 || Field.Size == TRI.PointerSize);
   };
-  return TRI.IntReturnReg2 != 0 && Fields.size() == 2 &&
+  const uint64_t Second = secondIntegerResultRegister(TRI);
+  return Second && Fields.size() == 2 &&
          wholeRegister(Fields[0], TRI.IntReturnReg) &&
-         wholeRegister(Fields[1], TRI.IntReturnReg2);
+         wholeRegister(Fields[1], Second);
 }
 
 } // namespace
