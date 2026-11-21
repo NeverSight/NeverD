@@ -1793,6 +1793,9 @@ a typed entry around a recovered body
 when the machine inputs match the declared layout. The return can occupy
 one register, a pair of GPRs or FPRs, or the caller's storage. A short final
 word uses only the object's remaining bytes, including on big-endian targets.
+When the body takes the address of a stack-passed record, the stack slots
+that hold that object share one backing store. A byte loop can update its
+partial final word before a later load, including in a hidden-result callee.
 Direct calls and explicitly typed indirect calls retain the register bank and
 byte offset of each independently placed field. A result written in the
 return delay slot is captured before SSA loses its physical register name. Reconstructing a source type requires an

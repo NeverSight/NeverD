@@ -22,6 +22,7 @@
 #include "neverd/ArchSupport.h"
 #include "neverd/Limits.h"
 #include "neverd/ir/Limits.h"
+#include "neverd/ir/SourceABI.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/IntrinsicShapes.h"
@@ -987,7 +988,8 @@ bool loadsIncomingStackWord(const MedFunc &Func, Arch A, BinaryFormat F,
 
 namespace med_calling_conv_detail {
 void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
-                       int64_t MaxStackOff, const BinaryImage *Image) {
+                       int64_t MaxStackOff, const BinaryImage *Image,
+                       const SourceFunctionTypeHint *RecordABI) {
   // Stack parameters that follow the used registers (i386) are recovered by
   // detectCdeclStackParams instead.
   const CallArgumentConvention *Convention =
@@ -1243,6 +1245,69 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
             MaxStackOff <= 0 || Off < MaxStackOff)
           Offsets.insert(Off);
     }
+  if (Offsets.empty() && !RecordABI)
+    return;
+
+  // A stack-argument slot whose home is a mutable local — the function WRITES
+  // it directly, or its ADDRESS ESCAPES (passed to a call / stored, so a callee
+  // may write it through the escaped pointer) — keeps its loads as memory reads
+  // rather than folding them to the incoming value (which would drop the
+  // write). The home slot already holds the argument (the caller places it at
+  // exactly [entry_sp + Base + k*Slot], which is what a memory load reads) and
+  // the emitter re-seeds it at entry, so memory access is correct.
+  std::set<int64_t> MutableSlots;
+  for (const auto &Blk : Func.Blocks)
+    for (const auto &Op : Blk.Ops) {
+      // SP and any stack-slot address thread through copies, extends and
+      // address arithmetic to reach their real use; those propagation ops are
+      // not escapes. On AArch64/ARM the first stack argument sits at [sp+0], so
+      // the bare SP base flowing through the block-entry `COPY SP SP` (or an
+      // address copy) would otherwise be mis-read as slot 0 escaping and
+      // corrupt every read-only stack argument there.  A genuine escape (the
+      // address used as a call argument, a stored value, or returned) is a
+      // non-propagation op and is still caught here, where rawStackOff threads
+      // back through the chain to the slot.  Kept in sync with the ops traceOff
+      // walks through.
+      switch (Op.Opcode) {
+      case NdOp::COPY:
+      case NdOp::INT_ADD:
+      case NdOp::INT_SUB:
+      case NdOp::SUBBYTES:
+      case NdOp::INT_ZEXT:
+      case NdOp::INT_SEXT:
+        continue;
+      default:
+        break;
+      }
+      for (uint8_t K = 0; K < Op.NumInputs; ++K) {
+        if (((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0) ||
+            (med_calling_conv_detail::stackMemoryRead(Op) &&
+             K == med_calling_conv_detail::stackMemoryRead(Op)->AddressInput))
+          continue;
+        if (auto Off = rawStackOff(Op.Inputs[K]))
+          MutableSlots.insert(slotOf(*Off).first); // escaped address
+      }
+    }
+
+  // An address into a stack-passed record can also reach the other words of
+  // that same object. A byte walk need not form a separate entry-SP address
+  // for its last word. Keep each declared stack piece in the shared frame,
+  // including pieces read only through the escaped pointer.
+  if (RecordABI && !MutableSlots.empty()) {
+    for (const auto &Param : RecordABI->Parameters) {
+      if (Param.Type->Kind != NdTypeKind::Struct ||
+          !llvm::any_of(Param.Components, [&](const auto &Piece) {
+            return Piece.Kind == SourceABICarrierKind::Stack &&
+                   MutableSlots.contains(Piece.EntryStackOffset);
+          }))
+        continue;
+      for (const auto &Piece : Param.Components)
+        if (Piece.Kind == SourceABICarrierKind::Stack) {
+          Offsets.insert(Piece.EntryStackOffset);
+          MutableSlots.insert(Piece.EntryStackOffset);
+        }
+    }
+  }
   if (Offsets.empty())
     return;
 
@@ -1308,47 +1373,6 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     Param.TheArch = TargetArch;
     Func.Params.push_back(Param);
   }
-
-  // A stack-argument slot whose home is a mutable local — the function WRITES
-  // it directly, or its ADDRESS ESCAPES (passed to a call / stored, so a callee
-  // may write it through the escaped pointer) — keeps its loads as memory reads
-  // rather than folding them to the incoming value (which would drop the
-  // write). The home slot already holds the argument (the caller places it at
-  // exactly [entry_sp + Base + k*Slot], which is what a memory load reads) and
-  // the emitter re-seeds it at entry, so memory access is correct.
-  std::set<int64_t> MutableSlots;
-  for (const auto &Blk : Func.Blocks)
-    for (const auto &Op : Blk.Ops) {
-      // SP and any stack-slot address thread through copies, extends and
-      // address arithmetic to reach their real use; those propagation ops are
-      // not escapes. On AArch64/ARM the first stack argument sits at [sp+0], so
-      // the bare SP base flowing through the block-entry `COPY SP SP` (or an
-      // address copy) would otherwise be mis-read as slot 0 escaping and
-      // corrupt every read-only stack argument there.  A genuine escape (the
-      // address used as a call argument, a stored value, or returned) is a
-      // non-propagation op and is still caught here, where rawStackOff threads
-      // back through the chain to the slot.  Kept in sync with the ops traceOff
-      // walks through.
-      switch (Op.Opcode) {
-      case NdOp::COPY:
-      case NdOp::INT_ADD:
-      case NdOp::INT_SUB:
-      case NdOp::SUBBYTES:
-      case NdOp::INT_ZEXT:
-      case NdOp::INT_SEXT:
-        continue;
-      default:
-        break;
-      }
-      for (uint8_t K = 0; K < Op.NumInputs; ++K) {
-        if (((Op.Opcode == NdOp::LOAD || Op.Opcode == NdOp::STORE) && K == 0) ||
-            (med_calling_conv_detail::stackMemoryRead(Op) &&
-             K == med_calling_conv_detail::stackMemoryRead(Op)->AddressInput))
-          continue;
-        if (auto Off = rawStackOff(Op.Inputs[K]))
-          MutableSlots.insert(slotOf(*Off).first); // escaped address
-      }
-    }
 
   med_calling_conv_detail::preserveCallStackHomes(
       Func, TargetArch, Fmt, Image, Base, Slot, rawStackOff, MutableSlots);
@@ -1946,7 +1970,18 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
           : std::nullopt;
   // A routine with fixed operands takes no stack word: a register stub writes
   // the slots it passes on itself, and a write barrier's frame is its own.
-  if (!Func.IsVariadic && !GoFixedOperands && !BoundRegisters)
+  if (!Func.IsVariadic && !GoFixedOperands && !BoundRegisters) {
+    // A hidden-result wrapper still sees a physical entry body. Its callee
+    // declaration gives the object boundaries even without typed parameters.
+    const SourceFunctionTypeHint *RecordABI = nullptr;
+    if (SourceCallHintsEnabled && isMIPS(TargetArch) && SourceCalleeTypeHints) {
+      const auto It = SourceCalleeTypeHints->find(Func.Entry);
+      std::string Error;
+      if (It != SourceCalleeTypeHints->end() && It->second.MIPSRecords &&
+          It->second.Architecture == TargetArch && Fmt == BinaryFormat::ELF &&
+          validateSourceABI(It->second, Error))
+        RecordABI = &It->second;
+    }
     med_calling_conv_detail::detectStackParams(
         Func, TargetArch, Fmt,
         GoFrameBytes
@@ -1955,8 +1990,8 @@ void LowToMedConverter::detectCc(MedFunc &Func, Arch TheArch, BinaryFormat Fmt,
                   GoRegisterArgumentsOnly
                       ? goStackArgumentLayout(TargetArch).EntryStackBase
                       : 0),
-        Image);
-  else if (Convention && Convention->VariadicArgumentsOnStack &&
+        Image, RecordABI);
+  } else if (Convention && Convention->VariadicArgumentsOnStack &&
            Func.VariadicOverflowBase > 0) {
     // A variadic function (Darwin AArch64) with more than the register count
     // of named integer args: args 9.. are stack-passed FIXED args sitting
