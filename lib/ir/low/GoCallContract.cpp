@@ -341,14 +341,13 @@ goMorestackSpills(const BinaryImage &Img, llvm::ArrayRef<LowBlock> Blocks) {
   return std::nullopt;
 }
 
-/// Whether \p Img's stack-growth paths are modelled: every x86-64 image, and
-/// an AArch64 one whose register ABI is (GoModuleInfo::RegisterArguments).
-/// Under arm64's stack ABI the path's absence would expose stack arguments
-/// AAPCS64 places after eight register positions.
+/// Whether \p Img's stack-growth paths are modelled: every x86-64 and
+/// AArch64 image, whether its Go code passes arguments in registers or on
+/// the stack (goStackArgumentLayout), as amd64 Go 1.16 and arm64 Go 1.17 and
+/// earlier do.
 bool goGrowthPathsModeled(const BinaryImage &Img) {
-  const auto &Module = Img.ExceptionMetadata.GoModule;
-  return Module && (Img.Arch == Arch::X64 ||
-                    (Img.Arch == Arch::AArch64 && Module->RegisterArguments));
+  return Img.ExceptionMetadata.GoModule &&
+         (Img.Arch == Arch::X64 || Img.Arch == Arch::AArch64);
 }
 
 std::optional<GoBoundsFailure> goBoundsFailureAt(const BinaryImage &Img,

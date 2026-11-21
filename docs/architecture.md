@@ -6027,9 +6027,11 @@ hands them its own return address in R3, as any call does in LR, and their
 bodies' other reads save the registers of the function they restart. Read as
 AAPCS64 positions, every kept arm64 growth call passed four or more unknowns.
 arm64 paths, `ldr x16, [x28, #16]` and
-the spills a `stp` makes, qualify where the image's register ABI is modelled
-(`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
-expose stack arguments AAPCS64 places after eight register positions. A call
+the spills a `stp` makes, qualify under either ABI (`goGrowthPathsModeled`):
+Go 1.17 and earlier pass arm64 arguments on the stack, which their own layout
+places (`goStackArgumentLayout`). Kept there, the path rejoined the entry
+with the link register and the goroutine a `bl morestack` left, and every
+frame's `str x30` and stack check printed a trap. A call
 to a growth routine resumes at its return address (`goCallResumesAfter`),
 though arm64's routine ends in a trap after `newstack`, so the CFG builder
 asks this before a no-return proof.

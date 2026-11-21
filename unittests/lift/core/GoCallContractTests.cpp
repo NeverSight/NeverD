@@ -491,6 +491,37 @@ TEST(GoStackGrowth, AnARM64PathRestartsTheFunctionToo) {
   EXPECT_TRUE(F.ExactRegisterParameters);
 }
 
+TEST(GoStackGrowth, AnARM64StackABIPathRestartsTheFunction) {
+  // Go 1.17 and earlier pass arm64 arguments on the stack, so the path spills
+  // nothing.  Kept, it rejoined the entry with the link register and the
+  // goroutine `bl morestack_noctxt` left there.
+  //   main.f: ldr x1, [x28, #16]; mov x2, sp; cmp x2, x1; b.ls grow
+  //           ldr x0, [sp, #8]; ret
+  //     grow: mov x3, x30; bl morestack_noctxt; b main.f
+  constexpr va_t Function = kTextVA + 0x100;
+  GoTestImage T(Arch::AArch64);
+  const uint32_t Call =
+      0x94000000u | (((Morestack - (Function + 0x1C)) >> 2) & 0x3FFFFFFu);
+  T.writeText(Function,
+              words({0xF9400B81, 0x910003E2, 0xEB01005F, 0x54000069, 0xF94007E0,
+                     0xD65F03C0, 0xAA1E03E3, Call, 0x17FFFFF8}));
+  T.writeText(Morestack, words({0x00000000}));
+  GoModuleInfo Module;
+  Module.StackArguments = true;
+  Module.GoCode = {{Function, kTextVA + 0x500}};
+  Module.MorestackEntries = {Morestack};
+  Module.FrameArguments = {{Function, 8}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  EXPECT_TRUE(goCallResumesAfter(T.Img, Morestack));
+  const auto Growth = goStackGrowth(T.Img, build(T.Img, Function).Blocks);
+  ASSERT_TRUE(Growth.has_value());
+  EXPECT_TRUE(Growth->Spills.empty());
+  EXPECT_TRUE(Growth->Restarts);
+  const MedFunc F = lift(T.Img, Function);
+  EXPECT_FALSE(hasOp(F, NdOp::CALL));
+  EXPECT_FALSE(hasOp(F, NdOp::COND_BR));
+}
+
 TEST(GoStackGrowth, AGrowthRoutineTakesNoArgument) {
   // A growth path hands runtime.morestack_noctxt its own return address in
   // R3, as a call does in LR, and the routines' other reads save registers.
