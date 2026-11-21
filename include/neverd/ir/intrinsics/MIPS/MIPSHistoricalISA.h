@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace neverd::mips {
 namespace historical {
@@ -47,6 +48,28 @@ constexpr unsigned historicalTrappingArithmeticBytes(uint32_t Word) {
   return Fn == 32 || Fn == 34 ? 4 : Fn == 44 || Fn == 46 ? 8 : 0;
 }
 
+/// SPECIAL and REGIMM encode the same six comparisons in their low selector
+/// bits. The ten-bit software code in the register form is opaque to the CPU.
+enum class HistoricalTrap : uint8_t {
+  SignedGE,
+  UnsignedGE,
+  SignedLT,
+  UnsignedLT,
+  Equal,
+  NotEqual = 6
+};
+
+constexpr std::optional<HistoricalTrap> historicalTrap(uint32_t Word) {
+  const unsigned Major = Word >> 26;
+  const unsigned Selector = Major ? (Word >> 16) & 31 : Word & 63;
+  if ((Major != 0 && Major != 1) || (Selector & ~7u) != (Major ? 8u : 48u))
+    return std::nullopt;
+  const unsigned Kind = Selector & 7;
+  if (Kind == 5 || Kind == 7)
+    return std::nullopt;
+  return static_cast<HistoricalTrap>(Kind);
+}
+
 constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
   using namespace historical;
   const unsigned Op = Word >> 26, RS = Word >> 21 & 31, RT = Word >> 16 & 31,
@@ -76,9 +99,10 @@ constexpr bool historicalInstructionAvailable(uint32_t Word, unsigned Level) {
       return Level >= 2; // CW4011 R4000-compatible mode and R4000.
     const bool WordTransfer = RS == 0 || RS == 4;
     const bool DoubleTransfer = Level == 3 && (RS == 1 || RS == 5);
+    const bool Address = FS == 8 || FS == 14 || (Level >= 2 && FS == 30);
     return !(Word & 0x7ff) && (WordTransfer || DoubleTransfer) &&
-           (FS == 8 || FS == 12 || FS == 13 || FS == 14) &&
-           (!(RS & 4) || FS != 8) && (!DoubleTransfer || FS == 8 || FS == 14);
+           (Address || (WordTransfer && (FS == 12 || FS == 13))) &&
+           (!(RS & 4) || FS != 8);
   }
   if (Op == 19)
     return Has(Cop1X, Fn);

@@ -48,9 +48,17 @@ bool sameValue(const MedVar &A, const MedVar &B) {
 bool lowtomed_detail::keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops,
                                              size_t At) {
   const MedOp &Keep = Ops[At];
-  if (Keep.Opcode != NdOp::INT_AND || Keep.NumInputs != 2 ||
-      Keep.Inputs[0].Kind != MedVar::Reg || !Keep.Inputs[1].isConst() ||
-      (Keep.Inputs[1].ConstVal & 0xFF) != 0 || Keep.Inputs[1].ConstVal == 0)
+  // The merge keeps the register's bytes above the ones written: masked
+  // (`t = R & ~0xff; u = t | v`), or sliced off and joined above them
+  // (`t = R[1:]; u = concat(t, v)`), as an 8-bit write lowers to.
+  const bool Masked =
+      Keep.Opcode == NdOp::INT_AND && Keep.NumInputs == 2 &&
+      Keep.Inputs[0].Kind == MedVar::Reg && Keep.Inputs[1].isConst() &&
+      (Keep.Inputs[1].ConstVal & 0xFF) == 0 && Keep.Inputs[1].ConstVal != 0;
+  const bool Sliced = Keep.Opcode == NdOp::SUBBYTES && Keep.NumInputs == 2 &&
+                      Keep.Inputs[0].Kind == MedVar::Reg &&
+                      Keep.Inputs[1].isConst() && Keep.Inputs[1].ConstVal > 0;
+  if (!Masked && !Sliced)
     return false;
   const uint64_t Register = Keep.Inputs[0].RegOff;
   for (size_t K = At + 1;
@@ -58,12 +66,49 @@ bool lowtomed_detail::keepsUpperBytesOfWrite(const std::vector<MedOp> &Ops,
        K <= At + ::neverd::limits::ir::kLowToMedCallReturnStructWindow;
        ++K) {
     const MedOp &Merge = Ops[K];
-    if (Merge.Opcode != NdOp::INT_OR || Merge.NumInputs != 2 ||
-        (!sameValue(Merge.Inputs[0], Keep.Output) &&
-         !sameValue(Merge.Inputs[1], Keep.Output)))
+    if (Merge.NumInputs != 2 ||
+        (Masked ? Merge.Opcode != NdOp::INT_OR ||
+                      (!sameValue(Merge.Inputs[0], Keep.Output) &&
+                       !sameValue(Merge.Inputs[1], Keep.Output))
+                : Merge.Opcode != NdOp::CONCAT ||
+                      !sameValue(Merge.Inputs[0], Keep.Output)))
       continue;
     if (Merge.Output.Kind == MedVar::Reg && Merge.Output.RegOff == Register)
       return true;
+    // Joined back to the register's whole width, the slice is the register
+    // with its low bytes replaced, wherever copy propagation took the value.
+    if (Sliced && Merge.Output.Size == Keep.Inputs[0].Size)
+      return true;
+    // So is the mask's merge with a value no wider than the bytes the mask
+    // clears: `setg r9b; movzx r9d, r9b` reads only the merge's low byte, and
+    // the copy back into R9 is gone.
+    if (Masked && Merge.Output.Size == Keep.Inputs[0].Size) {
+      const uint64_t Mask = Keep.Inputs[1].ConstVal;
+      unsigned Cleared = 0;
+      while (Cleared < 8 && ((Mask >> (8 * Cleared)) & 0xFF) == 0)
+        ++Cleared;
+      const bool Contiguous =
+          Cleared < 8 &&
+          (Mask | ((uint64_t(1) << (8 * Cleared)) - 1)) ==
+              (Keep.Inputs[0].Size >= 8
+                   ? ~uint64_t(0)
+                   : (uint64_t(1) << (8 * Keep.Inputs[0].Size)) - 1);
+      const MedVar &Value = sameValue(Merge.Inputs[0], Keep.Output)
+                                ? Merge.Inputs[1]
+                                : Merge.Inputs[0];
+      bool Narrow = Value.isConst() && Cleared < 8 &&
+                    (Value.ConstVal >> (8 * Cleared)) == 0;
+      for (size_t D = K;
+           !Narrow && D-- > 0 &&
+           K - D <= ::neverd::limits::ir::kLowToMedCallReturnStructWindow;)
+        if (sameValue(Ops[D].Output, Value)) {
+          Narrow = Ops[D].Opcode == NdOp::INT_ZEXT && Ops[D].NumInputs >= 1 &&
+                   Ops[D].Inputs[0].Size <= Cleared;
+          break;
+        }
+      if (Contiguous && Narrow)
+        return true;
+    }
     for (size_t M = K + 1;
          M < Ops.size() &&
          M <= K + ::neverd::limits::ir::kLowToMedCallReturnStructWindow;

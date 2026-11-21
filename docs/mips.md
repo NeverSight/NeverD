@@ -1455,8 +1455,11 @@ uses 64-bit GPRs with four-byte pointers and argument words, four argument
 registers, and a 16-byte caller home area. GNU and Clang producers can declare
 a 32-bit or 64-bit GPR size in the ABI record. Both use the historical ISA
 from the ELF flags. Hard-double o32 uses paired FPRs when CPR1 is 32-bit.
-Concrete o32 doubleword GPR operations require the caller to bind
-`HistoricalO32DoublewordEnabled` for the selected processor mode.
+A bound R4000 Status register enables doubleword operations in kernel mode
+and selects SX or UX in supervisor or user mode. A prohibited doubleword
+instruction takes the reserved-instruction exception before writing its GPR.
+Without CP0, an o32 caller can bind `HistoricalO32DoublewordEnabled` for an
+independently observed execution mode.
 
 Each admitted I–III instruction carries ordered begin/retire operations in
 LowIR and MedIR. A branch and its executed delay slot retire separately; a
@@ -1484,8 +1487,21 @@ A historical scheduling snapshot can additionally bind a processor's CP0 state.
 The R30xx and R4000 have distinct exception rules. A MIPS II CW4011 snapshot
 selects its R3000- or R4000-compatible exception mode. Historical CP0 moves use
 selector zero. The bound state supplies Status, Cause, EPC and an observed bad
-address. Cause writes change only the software interrupt bits. Accepted Status
-writes track interrupt visibility and coprocessor usability separately.
+address. Both CW4011 compatibility modes expose the aligned 32-bit ErrorEPC
+through word transfers. A dependent read or exception return requires an
+intervening retired instruction. In R4000-compatible mode an active ERL
+selects ErrorEPC for ERET. On the R4000, ErrorEPC accepts word and doubleword
+transfers, and word writes to either exception PC sign-extend to 64 bits.
+A R4000 handler can update its exception level in kernel mode and prepare KSU/UX/SX
+under an active exception level. Cause writes change only the software
+interrupt bits. Accepted Status writes track interrupt visibility and
+coprocessor usability separately. On R30xx an ordinary enable becomes
+eligible after the next two instructions retire. During a disable, an old
+source can still interrupt either instruction. Simultaneous changes to IEc
+and IM can also expose a line masked at both endpoints. For such a pending
+source, execution stops before writeback until the board supplies the
+recognition result with `HistoricalSchedule::observeInterruptRecognition`.
+An unchanged enabled source remains eligible throughout the window.
 Register updates and hazard aging occur on successful physical retirement.
 
 SYSCALL and BREAK enter the common exception handler, including inside delay
@@ -1493,9 +1509,14 @@ slots. The branch occurrence and its outcome accompany an executed slot.
 R30xx shifts KU/IE into the mode stack. R4000 retains the original EPC and BD
 when EXL is already set. The CW4011 also records the branch outcome in BT.
 RFE restores the KU/IE stack. ERET selects EPC or the observed ErrorEPC and
-clears the load-linked reservation. Signed ADD/SUB and immediate forms
+clears the load-linked reservation. A misaligned R4000 return destination
+raises an instruction-fetch address error after ERET restores Status. Signed
+ADD/SUB and immediate forms
 deliver overflow before writeback. Aligned scalar integer loads and stores
-report address errors before accessing memory. A disabled coprocessor
+report address errors before accessing memory. MIPS II and III conditional register and
+immediate traps compare at the GPR width. A true predicate records Cause
+code 13 and the appropriate EPC and BD before the instruction retires. A
+false predicate completes normally. A disabled coprocessor
 sets the CE field. Interrupts sample the observed IP and IM bits at issue
 after the corresponding write hazard. The platform can update its six
 hardware interrupt lines between physical instructions. Reset, TLB state

@@ -299,6 +299,12 @@ struct GoPanicBoundsRange {
 struct GoFrameArguments {
   va_t Entry = InvalidVA;
   std::optional<uint32_t> Bytes;
+  /// The scalar components of the function's arguments its traceback lists
+  /// (`FUNCDATA_ArgInfo`, Go 1.17 and later), each of which takes one
+  /// register at most under Go's internal ABI, and the first parameter the
+  /// table leaves out of a function whose symbol names type arguments: none
+  /// where the table is absent or elides some.
+  std::optional<uint8_t> ArgumentComponents;
 };
 
 /// Whether the Go runtime routine \p Name (`runtime.gopanic`) never returns

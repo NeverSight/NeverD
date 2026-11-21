@@ -4444,10 +4444,14 @@ void recoverCallAbi(
       if (P.RegOff != kNoParamReg)
         if (int ArgIdx = regToIntArgIdx(P.RegOff); ArgIdx >= 0)
           ExistingIntArgs.insert(ArgIdx);
-    // A register outside the order carries no argument of this function.
+    // A register outside the order carries no argument of this function,
+    // nor one past the registers its metadata bounds it to
+    // (MedFunc::MaxRegisterArguments).
     int MaxPromoted = -1;
     for (const auto &Promoted : PromoteParams)
       MaxPromoted = std::max(MaxPromoted, regToIntArgIdx(Promoted.first));
+    if (Func.MaxRegisterArguments >= 0)
+      MaxPromoted = std::min(MaxPromoted, Func.MaxRegisterArguments - 1);
     for (int I = 0;
          I <= MaxPromoted && I < static_cast<int>(IntParamRegs.size()); ++I) {
       if (ExistingIntArgs.count(I))

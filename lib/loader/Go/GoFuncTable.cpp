@@ -194,6 +194,32 @@ bool usesPreGo112Record(const ImageReader &R, const FuncLayout &L,
 /// declares fewer tables and when it declares the table but has no data for
 /// it.  \p GoFuncBase is ignored on the pointer layout, where each entry is
 /// already a relocated address.
+std::optional<uint8_t> readArgumentComponents(const ImageReader &R, va_t VA) {
+  unsigned Components = 0;
+  for (unsigned Read = 0; Read < TraceArgsMaxLen; ++Read) {
+    const std::optional<uint8_t> Byte = R.u8(VA++);
+    if (!Byte)
+      return std::nullopt;
+    switch (*Byte) {
+    case TraceArgsEndSeq:
+      return static_cast<uint8_t>(Components);
+    case TraceArgsStartAgg:
+    case TraceArgsEndAgg:
+      continue;
+    case TraceArgsDotdotdot:
+      return std::nullopt;
+    case TraceArgsOffsetTooLarge:
+      ++Components;
+      continue;
+    default:
+      if (*Byte >= TraceArgsSpecial || !R.u8(VA++))
+        return std::nullopt;
+      ++Components;
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<va_t> getFuncDataAddress(const ImageReader &R,
                                        const FuncLayout &L, const RawFunc &F,
                                        unsigned Index, va_t GoFuncBase) {

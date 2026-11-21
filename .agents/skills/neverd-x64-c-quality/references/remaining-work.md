@@ -581,15 +581,15 @@ Still open, in order of yield:
        `reflectcall`'s dispatch passes them a placeholder.
      - A WRAPPER frame's panic check (`reflectcall`'s `callNNN`) stores
        through a register with no definition in Go 1.15-1.26 alike.
-     - A register-ABI direct call's results past the first. Indirect calls
-       return every result their caller reads (`modelGoCallResults`); a
-       direct call still takes RAX alone, and its callee must return the
-       same record to every caller: 323 of the 2,272 placeholder sites of
-       Go 1.26 linux-amd64 read RBX-R11 right after one. A callee's field
-       that its body takes from an inner call needs that call's results too
-       (`CALL g; RET`), and HighC refuses a callee whose field reaches no
-       value ("cannot recover a field of a multi-register struct return").
-       Floating results (X0-X14) are not modelled.
+     - Floating register-ABI results (amd64 X0-X14, arm64 F0-F15) are not
+       modelled; integer results are on both targets (`modelGoCallResults`,
+       `materializeGoCallResults`).
+     - A narrow result a function hands back from a call it makes. Direct
+       calls return each result as wide as their callers read it
+       (`GoCallShape`), but the call a forwarding function returns from
+       takes words, so its callee still returns the upper bytes a `setcc`
+       leaves undefined. The width would follow the forwarder's own
+       callers.
      - arm64 growth paths, which still wait on the register-ABI gate.
        The no-return list is open to the stack ABI.
      Bounds stubs are done. LowIR recognizes a stub once

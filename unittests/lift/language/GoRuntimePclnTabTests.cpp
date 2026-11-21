@@ -307,6 +307,64 @@ TEST(GoWriteBarriers, NameEachContractTheRuntimeDocuments) {
   EXPECT_EQ(Buffer.Kind, GoWriteBarrierKind::Buffer);
 }
 
+TEST(GoArgumentComponents, CountEachScalarTheTracebackLists) {
+  // A traceback lists each argument's scalar components (FUNCDATA_ArgInfo):
+  // an offset and a size each, or an offset too large alone, with structs
+  // and arrays bracketed, and the rest elided past its limit.  Under Go's
+  // internal ABI each takes one register at most.
+  GoTestImage T;
+  // gopark(unlockf, lock, reason uint8, traceReason uint8, traceskip int):
+  // five components, though the two bytes share a word of `_func.args`.
+  const va_t Five = T.addPayload(
+      {0x00, 0x08, 0x08, 0x08, 0x10, 0x01, 0x11, 0x01, 0x18, 0x08, 0xFF});
+  // f(s string, p struct{ a, b int }): a string's words and a struct's.
+  const va_t Aggregates =
+      T.addPayload({0xFE, 0x00, 0x08, 0x08, 0x08, 0xFD, 0xFE, 0x10, 0x08, 0x18,
+                    0x08, 0xFD, 0xFF});
+  // g(huge [32]int, x int): an offset past what a byte holds.
+  const va_t Large = T.addPayload({0x00, 0x08, 0xFB, 0xFF});
+  // A function named after a generic type: the table leaves its first
+  // parameter out, as a shape function's dictionary.
+  const va_t Generic = T.addPayload({0x08, 0x08, 0xFF});
+  // ten components and more, elided.
+  std::vector<uint8_t> Many;
+  for (uint8_t I = 0; I < 10; ++I) {
+    Many.push_back(static_cast<uint8_t>(8 * I));
+    Many.push_back(8);
+  }
+  Many.push_back(0xFC);
+  Many.push_back(0xFF);
+  const va_t Elided = T.addPayload(Many);
+  std::vector<GoFuncSpec> Funcs;
+  const std::pair<const char *, std::optional<va_t>> Tables[] = {
+      {"runtime.gopark", Five},
+      {"main.f", Aggregates},
+      {"main.g", Large},
+      {"main.h", Elided},
+      {"main.none", std::nullopt},
+      {"type:.eq.sync/atomic.Pointer[main.T]", Generic}};
+  va_t Entry = kTextVA + 0x100;
+  for (const auto &[Name, Table] : Tables) {
+    GoFuncSpec F = makeGoCode(Name, Entry);
+    if (Table)
+      F.FuncData = {std::nullopt, std::nullopt, std::nullopt,
+                    std::nullopt, std::nullopt, *Table};
+    Funcs.push_back(std::move(F));
+    Entry += 0x100;
+  }
+  T.installPclnTab(buildPclnTab(kGo116Magic, Funcs, Entry).Bytes);
+  parseGoExceptions(T.Img);
+  const auto &Module = T.Img.ExceptionMetadata.GoModule;
+  ASSERT_TRUE(Module.has_value());
+  ASSERT_EQ(Module->FrameArguments.size(), 6u);
+  EXPECT_EQ(Module->FrameArguments[0].ArgumentComponents, 5);
+  EXPECT_EQ(Module->FrameArguments[1].ArgumentComponents, 4);
+  EXPECT_EQ(Module->FrameArguments[2].ArgumentComponents, 2);
+  EXPECT_FALSE(Module->FrameArguments[3].ArgumentComponents);
+  EXPECT_FALSE(Module->FrameArguments[4].ArgumentComponents);
+  EXPECT_EQ(Module->FrameArguments[5].ArgumentComponents, 2);
+}
+
 TEST(GoNoReturn, NameTheRoutinesTheCompilerEndsABlockWith) {
   for (const char *Name :
        {"runtime.gopanic", "runtime.throw", "runtime.panicBounds",

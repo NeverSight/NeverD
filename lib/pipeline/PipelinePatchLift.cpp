@@ -270,6 +270,7 @@ bool Pipeline::runPatchLiftMode(const BinaryImage &Img, llvm::LLVMContext &Ctx,
 
   modelWideIntReturns(Img, Result, medStackProjection(Opts));
 
+  materializeGoCallResults(Img, Result);
   recoverStructReturnFromCallers(Img, Result);
 
   propagateStructReturnForwarderShapes(Img, Result);

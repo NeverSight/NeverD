@@ -380,14 +380,33 @@ void parseGoExceptions(BinaryImage &Img) {
           goRuntimeNeverReturns(G.Name))
         Module.NoReturnEntries.push_back(G.CodeRange.Begin);
   llvm::sort(Module.NoReturnEntries);
+  // ArgInfo sits at index 5 of the Go 1.16 numbering from Go 1.17; before
+  // Go 1.16 that index held the open-coded defer record.
+  const bool ArgInfoIndexed =
+      Layout.OpenCodedDeferInfoIndex == FuncDataOpenCodedDeferInfo &&
+      (MD.GoFuncBase != 0 || Layout.FuncDataIsPointer);
   if (TextBaseProven)
     for (const GoFunction &G : Funcs)
-      if (G.CodeRange.isValid())
-        Module.FrameArguments.push_back(
-            {G.CodeRange.Begin,
-             G.Raw.Args >= 0
-                 ? std::optional<uint32_t>(static_cast<uint32_t>(G.Raw.Args))
-                 : std::nullopt});
+      if (G.CodeRange.isValid()) {
+        GoFrameArguments Frame;
+        Frame.Entry = G.CodeRange.Begin;
+        if (G.Raw.Args >= 0)
+          Frame.Bytes = static_cast<uint32_t>(G.Raw.Args);
+        if (ArgInfoIndexed)
+          if (const std::optional<va_t> Table = getFuncDataAddress(
+                  R, Layout, G.Raw, FuncDataArgInfo, MD.GoFuncBase)) {
+            Frame.ArgumentComponents = readArgumentComponents(R, *Table);
+            // The compiler leaves the first parameter out of a function
+            // whose symbol names type arguments, taking it for a generic
+            // dictionary (`EmitArgInfo`): it is one for a shape function,
+            // and `p` for `type:.eq.sync/atomic.Pointer[T]`.
+            if (Frame.ArgumentComponents &&
+                G.Name.find('[') != std::string::npos &&
+                *Frame.ArgumentComponents < UINT8_MAX)
+              ++*Frame.ArgumentComponents;
+          }
+        Module.FrameArguments.push_back(Frame);
+      }
   llvm::sort(Module.FrameArguments,
              [](const GoFrameArguments &A, const GoFrameArguments &B) {
                return A.Entry < B.Entry;

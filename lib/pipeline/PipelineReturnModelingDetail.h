@@ -45,6 +45,13 @@ MedFunc *forwardingCallee(const BinaryImage &Img, const PipelineResult &Result,
 void modelWideIntReturns(const BinaryImage &Img, PipelineResult &Result,
                          MedStackProjection StackProjection);
 
+/// Under Go's internal ABI (x86-64), return from every direct call of a Go
+/// function the results past RAX any of its callers reads, and from an
+/// indirect call those its own caller reads, and give the function that
+/// record (MedFunc::MultiReturn).  A function whose return hands back what a
+/// call it makes returns reads those results of that call.
+void materializeGoCallResults(const BinaryImage &Img, PipelineResult &Result);
+
 /// Learn each callee's multi-register return shape from its direct callers'
 /// field-extract remodeling and re-type the callee to match.  64-bit targets.
 void recoverStructReturnFromCallers(const BinaryImage &Img,

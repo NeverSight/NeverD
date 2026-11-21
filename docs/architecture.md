@@ -5840,7 +5840,9 @@ a `bool`.
 Results come back in the same registers, in the same order, and a call keeps
 none of them but its results ("There are no callee-save registers"), so a
 read of one after a call, before any write, is a result, and so is every
-register before it (`goResultRegister`). That holds for a call that enters Go
+register before it (`goResultRegister`). arm64 returns them in R0-R15 under
+the same rules as amd64's nine, so a record holds up to sixteen; a call
+reading X2 returns three results, where AAPCS64 returns X0:X1 at most. That holds for a call that enters Go
 code by the internal ABI (`goCallEntersInternalABI`): a direct call to
 compiled Go code or to `<ABIInternal>` assembly, and an indirect call compiled
 code makes, through a function value. Go assembly also calls C through a
@@ -5857,6 +5859,55 @@ platform's integer pair is a record at a call as in the function it calls
 (`integerReturnPair`): arm64 printed `__int128` at each call of a function
 returning X0:X1 and joined it from the callee's record. An indirect call
 declares no function, so HighC holds its record to no other call's.
+A function returns one record to every call of it, so each direct call of a
+Go function returns as many results as any of its callers reads, from
+compiled code or assembly alike, and the function returns that record
+(`materializeGoCallResults`, `MedFunc::MultiReturn`): `t =
+runtime_mapaccess2(...); if (!(uint8_t)t.field_1)`, beside a definition that
+returns `{zeroVal, 0}` and `{elem, 1}`. A function whose return hands back
+what a call it makes returns (`CALL g; RET`) reads those results of that call,
+until no count grows. A run of some functions alone shapes the callees it
+calls from its own calls. A read that only keeps the bytes a byte write leaves
+(`t = R[1:]; concat(t, v)` as well as `R & ~0xff | v`) reads no result, also
+where copy propagation dropped the merge's copy back into the register: `setg
+r9b; movzx r9d, r9b` in `runtime.traceStack` gave `callers` seven results, and
+through the functions returning their calls' results `tracebackPCs`,
+`(*unwinder).next` and `pcvalue` too.
+
+Each return of the function must hand back every result it has
+(`goReturnedValue`): the newest write of the whole register, its PHI, a call
+that returns that many results itself, or the argument the caller passed there
+where the path leaves it unchanged. A narrower value is no result: an 8- or
+32-bit view is an SSA value of its own, which a later write of the whole
+register leaves stale, and `lea` copy-propagated into a temporary leaves only
+a view of that temporary. For the same reason a read reaches a call through a
+view's PHI only along an edge where the whole register still holds what the
+call left: arm64's `mov x11, #45` writes X11 whole and leaves W11's version
+from before a call, which `internal/bisect.New` read through such a PHI as
+`new`'s twelfth result, and every function returning an allocation's result
+returned twelve. Results are a prefix from RAX, so the function keeps
+the results up to the first one some return leaves undefined, and the counts
+settle from above: `runtime.lock2` returns nothing, though a caller reads five
+registers past its call through a PHI no path uses. A read past that count
+stays the caller's unknown value, where an unknown field would fail every call
+of the function. HighC finds each field the same way, the unchanged argument
+past a join included (`if n.Bytes == nil { return "" }` returns the nil
+receiver as the string's pointer). Only the callers tell which registers a
+return hands back, after the function's dead code is gone, so register DCE
+keeps, in Go code, the definition of each result register that reaches a
+return: a function's callers read RCX after it, and its `lea rcx, ...` stays.
+
+Each result is as wide as its callers read it, a view a caller takes of it
+included, in the widths C declares; RAX stays whole, and a result no caller
+reads, before the last, is a word (`GoCallShape`). Go returns a bool in its
+register's low byte, which `setg bl` merges into upper bytes the function
+never set: a word-wide field returned those, a trap on every call, where
+`runtime.stackScanState.getPtr` now returns `{p, v10 == v9}` as a
+`uint64_t, uint8_t` record. The packed value a call returns is laid out as
+that record (each field naturally aligned), and a register width wider than
+its field holds the field in its low bytes, which is all any reader takes. A
+result a function hands back from a call it makes stays a word at that call,
+and an indirect call's results stay words.
 
 A function's stack-growth path decides which arguments it takes
 (`goMorestackSpills`). The compiler spills exactly the register arguments a
@@ -5877,6 +5928,30 @@ callee's parameters, so exact callees give exact calls on both targets. The spil
 call, so it bounds the function's stack parameters (`detectStackParams`) and
 holds none of them.
 
+Compiled Go code without such a path still takes no more integer registers
+than its traceback lists argument components (`FUNCDATA_ArgInfo`, Go 1.17 and
+later: `GoFrameArguments::ArgumentComponents`, `goRegisterArgumentBound`). The
+compiler lists each scalar an argument is made of, a struct's or array's fields
+each, with an offset and a size, up to ten before it elides the rest, and it
+leaves out the first parameter of a function whose symbol names type
+arguments, taking it for a generic dictionary (`EmitArgInfo`), which it is for
+a shape function and which is `p` for `type:.eq.sync/atomic.Pointer[T]`: the
+loader counts it back. Each component takes one register at most, the integer
+ones in Go's order, so no register past that count is a parameter
+(`MedFunc::MaxRegisterArguments`), whatever the body reads there or passes on:
+call recovery promotes none and forwarder propagation raises no arity past it.
+`_func.args` bounds nothing, since it packs `gopark`'s two byte arguments into
+one word. Where the components fit the integer registers, Go assigns no
+argument to the stack (it does so only past the registers or for an array of
+more than one element), so the area `_func.args` gives above the return
+address is all spill slots, which the function fills before reading them
+across calls, and none of it is a stack parameter. `sync/atomic.StorePointer`
+lists two components; its spills read as stack arguments put AAPCS64's eight
+register positions before them, eleven parameters, and every call passed nine
+unknowns. Assembly's table follows its Go declaration, which a routine entered
+another way does not keep: `runtime.rt0_go()` takes argc and argv, so
+assembly keeps the registers it reads.
+
 The stack-growth path is not part of what a function computes, and MedIR leaves
 it out (`elideGoStackGrowth`, `lib/ir/med/lower/GoStackGrowth.cpp`). `morestack`
 grows the goroutine's stack and resumes at its call's return address
@@ -5890,7 +5965,11 @@ that grows the stack rather than `runtime.morestackc`, which throws, and the
 entry alone must reach it. A frame larger than 4 KiB checks for underflow with
 a second branch to the path and keeps it. `g` is R14 from Go 1.17 and a
 thread-local load before it, and both forms qualify. The runtime's growth
-routines take no register argument. arm64 paths, `ldr x16, [x28, #16]` and
+routines take no register argument, exactly (`MorestackEntries`): arm64's path
+hands them its own return address in R3, as any call does in LR, and their
+bodies' other reads save the registers of the function they restart. Read as
+AAPCS64 positions, every kept arm64 growth call passed four or more unknowns.
+arm64 paths, `ldr x16, [x28, #16]` and
 the spills a `stp` makes, qualify where the image's register ABI is modelled
 (`goGrowthPathsModeled`); under arm64's stack ABI, leaving the path out would
 expose stack arguments AAPCS64 places after eight register positions. A call

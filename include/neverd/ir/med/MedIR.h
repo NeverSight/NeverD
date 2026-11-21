@@ -656,6 +656,10 @@ struct MedFunc {
   /// call recovery promotes no register the function passes on beyond them,
   /// and forwarder propagation raises no arity of it.
   bool ExactRegisterParameters = false;
+  /// The most integer argument registers the function takes, in its order,
+  /// where its metadata bounds them (goRegisterArgumentBound), or -1: no
+  /// register past them is a parameter, read, passed on or raised.
+  int MaxRegisterArguments = -1;
   /// Every argument arrives on the stack, from the word after the return
   /// address, and no register carries one: Go code before Go's internal ABI
   /// (goTakesStackArguments).  integerArgumentLayoutOf gives its layout.

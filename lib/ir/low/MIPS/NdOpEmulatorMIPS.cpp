@@ -62,18 +62,26 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         Context.FloatingPointException)
       return false;
     if (Id == Intrinsic::MIPSHistoricalRetire) {
-      const bool ERET = Context.Historical->retiringERET(Op.Addr);
+      const auto Target = Context.Historical->retiringERETTarget(Op.Addr);
       if (!Context.Historical->retire(Op.Addr))
         return false;
-      if (ERET)
+      if (Target) {
         clearMIPSReservation();
+        if (*Target & 3) {
+          Context.Historical->enterFetchAddressError(*Target);
+          return false;
+        }
+      }
       return true;
     }
     if (!knownOperandBytes(Op.Inputs[2], 0, 1) ||
         readOperand(Op.Inputs[2]) != Img.MIPS->hasScalarFP32ABI(Img.Arch))
       return false;
-    if (isMIPS64O32(Img.Arch) && !Context.HistoricalO32DoublewordEnabled &&
-        mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset))
+    const auto &System = Context.Historical->system();
+    const bool Doubleword =
+        Wide && mips::historicalDoublewordGPRInstruction(Op.Inputs[1].Offset);
+    if (Doubleword && !System && isMIPS64O32(Img.Arch) &&
+        !Context.HistoricalO32DoublewordEnabled)
       return false;
     std::optional<bool> Taken;
     if (Op.NumInputs == 4) {
@@ -92,7 +100,6 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
                                            Img.MIPS->hasScalarFP32ABI(Img.Arch),
                                            Taken))
       return false;
-    const auto &System = Context.Historical->system();
     if (System && System->canTakeInterrupt()) {
       Context.Historical->enterException(Op.Addr, 0);
       return false;
@@ -103,10 +110,15 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
         Context.Historical->enterException(Op.Addr, 11);
         return false;
       }
+      if (Doubleword && !System->permitsDoublewordGPRs()) {
+        Context.Historical->enterException(Op.Addr, 10);
+        return false;
+      }
     }
     return true;
   }
   if (Id == Intrinsic::MIPSHistoricalOverflow ||
+      Id == Intrinsic::MIPSHistoricalTrap ||
       Id == Intrinsic::MIPSHistoricalAddressCheck) {
     auto &Schedule = Context.Historical;
     if (!Img.MIPS || !Schedule || !Img.MIPS->HistoricalISA ||
@@ -117,12 +129,14 @@ bool NdOpEmulator::stepMIPSSystem(const LowOp &Op, MIPSSystemContext &Context) {
     if (!Word)
       return false;
     const auto Value = readOperand(Op.Inputs[1]);
-    if (Id == Intrinsic::MIPSHistoricalOverflow) {
-      if (!mips::historicalTrappingArithmeticBytes(*Word) || Value > 1)
+    if (Id != Intrinsic::MIPSHistoricalAddressCheck) {
+      const bool Trap = Id == Intrinsic::MIPSHistoricalTrap;
+      if (Value > 1 || (Trap ? !mips::historicalTrap(*Word)
+                             : !mips::historicalTrappingArithmeticBytes(*Word)))
         return false;
       if (!Value)
         return true;
-      Schedule->enterException(Op.Addr, 12);
+      Schedule->enterException(Op.Addr, Trap ? 13 : 12);
     } else {
       const unsigned Major = *Word >> 26;
       const unsigned Bytes = Major == 33 || Major == 37 || Major == 41   ? 2
@@ -551,6 +565,7 @@ bool NdOpEmulator::executeMIPSScalar(const LowOp &Op) {
       Id == Intrinsic::MIPSHistoricalRFE ||
       Id == Intrinsic::MIPSHistoricalERET ||
       Id == Intrinsic::MIPSHistoricalOverflow ||
+      Id == Intrinsic::MIPSHistoricalTrap ||
       Id == Intrinsic::MIPSHistoricalAddressCheck)
     return false; // Explicit, single-step context required in either mode.
   if (mips::isMSADivision(Id)) {
