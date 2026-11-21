@@ -4546,6 +4546,14 @@ bit crosses into sign padding or the neighboring word. A 277-factor x86-64
 fixture exercises consecutive exact shifts, more than 256 scalar definitions
 and a signed five-bit field. Both C renderers must shorten the product chain
 and preserve the sign fill when the output is executed at `-O0` and `-O2`.
+Use `--family joined-prefix --count 12` for 96 products across 32 to 1281
+bits. Each of the 383 to 563 factors selects a field beside two or three
+separately scaled or masked words. In 64 products one neighbor contributes
+the last observed bit. The x86-64 source fixture combines a live neighboring
+bit with a sign-filled byte. The evaluator tests compare shared-coordinate
+quadratics and the adjacent surviving cubic against direct full-width
+multiplication, including duplicate factors and independent inputs. The
+parser tests narrow long decimal constants at explicit widths.
 For latency comparisons, retain per-run and pooled per-input P95, separate
 thread CPU from wall time, and include same-binary A/A controls. Pooling input
 medians can change the sample at the 95th percentile and reverse the apparent

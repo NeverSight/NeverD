@@ -317,7 +317,8 @@ def carry_product_elf(degree, product=True, needed=7, high_bits=None, additive=F
 def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                           observed=32, dynamic_masks=False, spliced_words=False,
                           rotated_bytes=False, shifted_bytes=False, funnel_bytes=False,
-                          staggered_bytes=False, signed_bytes=False):
+                          staggered_bytes=False, signed_bytes=False, joined_prefix=False):
+    signed_bytes = signed_bytes or joined_prefix
     scale = 1 << (32 - observed)
     code = bytearray.fromhex("b8") + struct.pack("<I", scale)
     factors = []
@@ -363,6 +364,13 @@ def high_perturbation_elf(degree, low_factors=(), shift_base=16, affine_depth=0,
                 join, symbol = (("4409c1", "|"), ("4431c1", "^"), ("4401c1", "+"))[(i // 3) % 3]
                 code += bytes.fromhex(join)
                 value = f"({moved}{symbol}{other})"
+                if joined_prefix:
+                    # A second independent word starts above CH. At one
+                    # boundary its low bit contributes to the selected byte.
+                    extra_cut = 14 if i == degree // 3 else 16 + i % 13
+                    code += bytes.fromhex("4189f0 41c1e0") + bytes([extra_cut])
+                    code += bytes.fromhex(join)
+                    value = f"({value}{symbol}(y<<{extra_cut}))"
             elif funnel_bytes or staggered_bytes:
                 # A different register supplies the other half of the funnel.
                 # CH lies entirely within ECX's shifted bits.
@@ -742,6 +750,8 @@ if __name__ == "__main__":
             ("mixed-perturbation-49", *high_perturbation_elf(49, (0, 19, 48))),
             ("truncated-perturbation-63", *high_perturbation_elf(63, shift_base=7)),
             ("affine-perturbation-63", *high_perturbation_elf(63, shift_base=7, affine_depth=2)),
+            ("funnel-perturbation-joined-137", *high_perturbation_elf(
+                137, shift_base=6, affine_depth=1, observed=14, joined_prefix=True)),
             ("funnel-perturbation-signed-277", *high_perturbation_elf(
                 277, shift_base=6, affine_depth=1, observed=14, signed_bytes=True)),
             ("funnel-perturbation-staggered-239", *high_perturbation_elf(
