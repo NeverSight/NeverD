@@ -107,6 +107,11 @@ set(CAPSTONE_X86_SUPPORT       ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_ARM_SUPPORT        ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_AARCH64_SUPPORT    ON  CACHE BOOL "" FORCE)
 set(CAPSTONE_MIPS_SUPPORT       ON  CACHE BOOL "" FORCE)
+# In the static Linux Clang decoder, most MIPS mnemonics skip alias lookup.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_C_COMPILER_ID STREQUAL "Clang"
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    set(CAPSTONE_MIPS_PRECHECK_PRINTED_ALIAS ON)
+endif()
 add_subdirectory(third_party/capstone)
 
 # Capstone's decode DFA is the single hottest dependency in the front end, so

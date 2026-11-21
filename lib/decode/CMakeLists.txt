@@ -27,7 +27,9 @@ target_include_directories(NeverDDecode PRIVATE
 
 # Resolve the ordinary x86 text fallback in the first static archive pass.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_link_options(NeverDDecode INTERFACE "LINKER:--undefined=X86_disasmIter")
+  # Resolve both fallback and i386 before the amd64 member brings in its helpers.
+  target_link_options(NeverDDecode INTERFACE
+    "LINKER:--undefined=X86_disasmIter" "LINKER:--undefined=X86_disasmIter32")
 endif()
 
 # AArch64/AArch64Decoder.cpp contains the native operand decode hot path. Keep
