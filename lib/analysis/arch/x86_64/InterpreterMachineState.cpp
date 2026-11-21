@@ -1228,10 +1228,10 @@ buildMachineSource(const LowFunc &Residual, BinaryFormat SourceFormat,
             consumeSourceOperations(RemainingOperations, Block.Ops.size()))
       return std::move(Error);
   RemainingOperations = OperationLimit;
-  const bool HasReturningCall = std::any_of(Residual.Blocks.begin(),
-                                            Residual.Blocks.end(), [](const auto &B) {
-    return std::any_of(B.Ops.begin(), B.Ops.end(), isLowRawReturningCall);
-  });
+  const bool HasReturningCall = std::any_of(
+      Residual.Blocks.begin(), Residual.Blocks.end(), [](const auto &B) {
+        return std::any_of(B.Ops.begin(), B.Ops.end(), isLowRawReturningCall);
+      });
   if (HasReturningCall ||
       (hasLowRawEnvironmentRequirement(Residual) && !Region))
     return invalid(
