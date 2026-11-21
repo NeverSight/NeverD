@@ -5873,6 +5873,19 @@ callee (`gcWriteBarrier<>` before `wbBufFlush`, `asyncPreempt`), and assembly
 the platform's code enters reads its arguments where the platform passes them
 (`runtime.sigtramp`): both keep the platform's positions.
 
+A Go image's pclntab records every function of its Go code once its text base
+is proven (`GoModuleInfo::FrameArguments`), so an address inside one begins
+none (`goInsideRecordedFunction`): function discovery takes no entry there,
+whatever evidence names the address, and the CFG builder reads a branch there
+as no tail call (`isTailCallTarget`). `runtime.suspendG`'s jump table holds
+case labels that read as code addresses, and each `jmp` to one became a call
+into a function that started in the middle of `suspendG`; where only the
+entry went, `runtime.runGCProg`'s jump to its loop called a function nothing
+defined, and the loop was decompiled nowhere. Duff's device routines are the
+exception (`GoModuleInfo::DuffDevices`): Go's compiler calls `runtime.duffzero`
+and `runtime.duffcopy` at the point that zeroes or copies as many bytes as it
+needs, so each such point begins a routine of its own.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive

@@ -20743,6 +20743,14 @@ assembly in a Go 1.18 image: alone and in the whole image, its caller passes
 compiled `main.f` sets SI, BX, AL and R8 and calls the assembly `main.h`,
 which declares no arguments and reads those four: `main.h` takes RSI, R8, RAX
 and RBX, and the call passes 1, 4, 3 and 2.
+`GoFunctionTable.CodeInsideARecordedFunctionBeginsNone` runs function
+discovery over a Go image in which `main.g` calls `main.f+8`: `main.f` and
+`main.g` begin functions, and `main.f+8` begins none.
+`GoFunctionTable.ADuffsDeviceEntryBeginsAFunction` runs it again with
+`main.f` as `runtime.duffzero`: `main.f+8` begins a function.
+`GoFunctionTable.ABranchInsideARecordedFunctionStaysInIt` lifts a Go function
+that jumps to its own label, which another function calls: the jump is no
+call.
 `GoInternalABI.TheGoroutineRegisterHoldsTheCurrentGoroutine` lifts a Go
 function that loads `[r14+0x30]` before and after a call to a function that
 writes no register: one read of the goroutine at its entry serves both, it
@@ -20789,6 +20797,8 @@ the barrier's parameters are its two registers.
 `GoNoReturn.AreListedWhereTheImagesArgumentPassingIsKnown` loads Go
 1.16 pclntabs: a thread-local g prologue lists `runtime.gopanic`, while a Go
 1.17 `cmp rsp, [r14+0x10]` beside it, or no prologue, lists nothing.
+`GoDuffDevices.AreFoundByName` loads a pclntab with `runtime.duffzero`,
+`runtime.duffcopy` and `main.a`: the first two are listed with their code.
 
 `GoCallbacks.TheLoaderNamesTheRoutineThatReturnsPastItsCaller` lists
 `runtime.callbackasm1` from a pclntab. `GoCallbacks.

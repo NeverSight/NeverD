@@ -19,6 +19,7 @@
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CFGBuilder.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
+#include "neverd/ir/low/FuncDetector.h"
 #include "neverd/ir/low/GoCallContract.h"
 #include "neverd/ir/med/LowToMed.h"
 #include "neverd/ir/med/MedABIPass.h"
@@ -1023,7 +1024,7 @@ TEST(GoAssembly, AnARM64ForwarderIsNoABI0Assembly) {
   Module.RegisterArguments = true;
   Module.GoCode = {{Add, kTextVA + 0x200}};
   Module.GoAssembly = {{Add, Other}};
-  Module.FrameArguments = {{Add, 24}, {Forwarder, 24}};
+  Module.FrameArguments = {{Add, 24}, {Forwarder, 24}, {Other, 24}};
   T.Img.ExceptionMetadata.GoModule = std::move(Module);
   for (const auto &[Entry, Name] :
        {std::pair{Add, "main.add"}, std::pair{Forwarder, "main.fwd"},
@@ -1507,6 +1508,118 @@ TEST(GoInternalABI, AnARM64GoroutineRegisterHoldsTheCurrentGoroutine) {
   ASSERT_FALSE(Text.empty());
   EXPECT_EQ(Text.find("__builtin_trap"), std::string::npos) << Text;
   EXPECT_NE(Text.find("x28"), std::string::npos) << Text;
+}
+
+TEST(GoFunctionTable, CodeInsideARecordedFunctionBeginsNone) {
+  // A Go image's pclntab records every function of its Go code, so code
+  // inside one begins none.  `runtime.suspendG`'s jump table holds case
+  // labels that discovery took for entries, and each `jmp` to one became a
+  // call into a function that starts in the middle of suspendG.
+  //   main.f: nop x16; ret
+  //   main.g: call main.f+8; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body(16, 0x90);
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  std::vector<uint8_t> Caller = makeCall(G, F + 8);
+  Caller.push_back(0xC3);
+  T.writeText(G, Caller);
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(T.Img));
+  const auto Found = FuncDetector().detect(T.Img, Dec);
+  const auto Begins = [&](va_t Entry) {
+    return llvm::any_of(Found,
+                        [&](const auto &Item) { return Item.first == Entry; });
+  };
+  EXPECT_TRUE(Begins(F));
+  EXPECT_TRUE(Begins(G));
+  EXPECT_FALSE(Begins(F + 8));
+}
+
+TEST(GoFunctionTable, ADuffsDeviceEntryBeginsAFunction) {
+  // Go's compiler calls `runtime.duffzero` and `runtime.duffcopy` at the point
+  // that zeroes or copies as many bytes as it needs, so each such point begins
+  // a routine of its own though the pclntab records only the first.
+  //   runtime.duffzero: nop x16; ret
+  //   main.g:           call runtime.duffzero+8; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  std::vector<uint8_t> Body(16, 0x90);
+  Body.push_back(0xC3);
+  T.writeText(F, Body);
+  std::vector<uint8_t> Caller = makeCall(G, F + 8);
+  Caller.push_back(0xC3);
+  T.writeText(G, Caller);
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "runtime.duffzero"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  Module.DuffDevices = {{F, F + 17}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  Decoder Dec;
+  ASSERT_TRUE(Dec.init(T.Img));
+  const auto Found = FuncDetector().detect(T.Img, Dec);
+  EXPECT_TRUE(llvm::any_of(
+      Found, [&](const auto &Item) { return Item.first == F + 8; }));
+}
+
+TEST(GoFunctionTable, ABranchInsideARecordedFunctionStaysInIt) {
+  // A branch into a recorded function's interior is no tail call, whatever
+  // names the label: `runtime.runGCProg`'s jump to its loop became a call to
+  // a function nothing defined, and the loop was decompiled nowhere.
+  //   main.f: jmp main.f+8; nop x6; mov eax, 1; ret
+  //   main.g: call main.f+8; ret
+  constexpr va_t F = kTextVA + 0x100;
+  constexpr va_t G = kTextVA + 0x200;
+  GoTestImage T;
+  T.writeText(F, {0xEB, 0x06, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0xB8, 0x01,
+                  0x00, 0x00, 0x00, 0xC3});
+  std::vector<uint8_t> Caller = makeCall(G, F + 8);
+  Caller.push_back(0xC3);
+  T.writeText(G, Caller);
+  for (const auto &[Entry, Name] :
+       {std::pair{F, "main.f"}, std::pair{G, "main.g"}}) {
+    Symbol Function = Symbol::makeFunc(Entry);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{F, kTextVA + 0x300}};
+  Module.FrameArguments = {{F, 0, 0}, {G, 0, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  const auto It =
+      llvm::find_if(R.MedFuncs, [&](const MedFunc &M) { return M.Entry == F; });
+  ASSERT_NE(It, R.MedFuncs.end());
+  EXPECT_FALSE(hasOp(*It, NdOp::CALL));
 }
 
 TEST(GoInternalABI, AResultIsTheArgumentWhereAReturnLeavesItUnchanged) {

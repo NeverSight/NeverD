@@ -482,6 +482,13 @@ bool goRecordsFunction(const BinaryImage &Img, va_t Entry) {
   return goFunctionRecord(Img, Entry) != nullptr;
 }
 
+bool goInsideRecordedFunction(const BinaryImage &Img, va_t Address) {
+  const auto &Module = Img.ExceptionMetadata.GoModule;
+  return Module && !Module->FrameArguments.empty() && isGoCode(Img, Address) &&
+         !goRecordsFunction(Img, Address) &&
+         !inRanges(Module->DuffDevices, Address);
+}
+
 std::optional<unsigned> goRegisterArgumentBound(const BinaryImage &Img,
                                                 va_t Entry) {
   const auto &Module = Img.ExceptionMetadata.GoModule;

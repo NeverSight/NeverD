@@ -222,6 +222,16 @@ std::optional<uint32_t> goFrameArgumentBytes(const BinaryImage &Img,
 /// NeverD splits off a function's interior is no such function.
 bool goRecordsFunction(const BinaryImage &Img, va_t Entry);
 
+/// Whether \p Address lies inside a function the `pclntab` records rather
+/// than at its start.  The table records every function of the image's Go
+/// code once its text base is proven (GoModuleInfo::FrameArguments), so such
+/// an address begins none, and a branch to it is no tail call: a jump-table
+/// case label (`runtime.suspendG`'s), which reads as a code address.  Duff's
+/// device routines are the exception (GoModuleInfo::DuffDevices), entered at
+/// the point that zeroes or copies as many bytes as their caller needs.
+/// False where the image records no function.
+bool goInsideRecordedFunction(const BinaryImage &Img, va_t Address);
+
 /// The most integer registers the Go function at \p Entry takes its
 /// arguments in, in Go's order, where the image passes them in registers:
 /// one for each scalar component its traceback lists
