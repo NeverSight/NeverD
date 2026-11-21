@@ -65,7 +65,7 @@ uint32_t X86LegacySourceExecution::select(uint64_t &Key) {
 }
 
 bool X86LegacySourceExecution::pendingAttemptConsumed() const {
-  return detail::legacyInstructionPending(State) &&
+  return x86LegacyInstructionPending(State) &&
          State.PendingInstructionAttempted;
 }
 

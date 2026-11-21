@@ -181,3 +181,14 @@ with the corresponding ordinary-bank transitions visible in
 [Linux KVM LAPIC](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/lapic.c)
 and [QEMU APIC](https://github.com/qemu/qemu/blob/v10.2.0/hw/intc/apic.c).
 Their external virtualization/device routing is not incorporated into this model.
+
+## Mixed-mode instruction boundaries
+
+Passing `X86ModeInterrupts` to `X86ModeExecution::run` polls latched SMI,
+NMI and fixed-interrupt inputs before the next fresh instruction. A masked
+higher-priority input remains pending while an eligible lower-priority input
+can run. An accepted vector moves from IRR to ISR once, including a partially
+completed event frame suspended on backing. EOI belongs to the controller's
+caller. Original successful x64 MOV-to-CR8 writes update TPR before the next
+arbitration point, including a same-class write that clears its subpriority.
+A faulting write retains the CPU and controller priority.

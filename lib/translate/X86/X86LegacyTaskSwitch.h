@@ -37,6 +37,7 @@ struct X86LegacyTaskRequest {
 };
 
 struct X86LegacyTaskResult : X86MemoryAccessResult {
+  std::optional<X86WideFarTransfer> WideFarTransfer;
   bool Committed = false;
   bool DebugTrap = false;
   bool ModeUnavailable = false;

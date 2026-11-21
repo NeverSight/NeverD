@@ -110,12 +110,10 @@ and 110,592 actual exported-C observations. The adjacent SMM regression adds
 55,296 complete native state pairs. LLVM code64/x32 and the NeverC frontend
 also retain an original site above 4 GiB without truncation.
 
-The local host has no SGX capability or device. These tests stop before
-ENCLU and execute zero enclave instructions. Successful EENTER/ERESUME/EEXIT,
-SSA/AEX behavior and native enclave/runtime integration are therefore not
-qualified here. A software enclave model, complete legacy i386 dispatcher and
-general fault/asynchronous-event execution remain separate work; this profile
-does not make them disappear.
+The local host exposes no SGX device. The native compiler tests stop before
+ENCLU and execute zero enclave instructions. Their results cover state
+transport up to the transfer site. The software enclave tests below exercise
+EENTER, ERESUME, EEXIT and AEX against imported EPC state.
 
 ## Actions runner discovery (2026-11-09)
 
@@ -130,10 +128,37 @@ The [retained evidence](evidence/x86-sgx-runner-discovery-2026-11-09.json)
 records exact image versions, source commit and raw CPUID/report hashes.
 The workflow's successful status means capability discovery completed. Exactly
 zero enclave instructions executed, so EENTER/ERESUME/EEXIT/AEX remain
-unqualified. The Linux enclave test route still needs an SGX/EPC-enabled host
-with an accessible driver and an actual enclave execution oracle. The software
-EPCM/SSA/AEX model remains separate implementation work.
+unqualified. On November 20 the Linux runner also built the upstream v6.18
+SGX harness and its enclave image. With SGX1, an EPC section and access to
+`/dev/sgx_enclave`, the workflow executes `enclave.unclobbered_vdso` and
+`enclave.pte_permissions`, retaining the results of entry/exit and fault/resume.
+All three hosted runners reported zero EPC sections and the Linux runner
+executed zero native test cases. [Run and artifact digests](evidence/x86-sgx-runner-discovery-2026-11-20.json)
 
 Architectural ownership follows Intel SDM revision 090, ENCLU/EENTER/ERESUME/
 EEXIT and enclave entry/exit chapters, available from the
 [Intel SDM index](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html).
+
+## Software SGX1 enclave execution
+
+`X86SgxMemory` imports EPC pages, EPCM permissions and ownership, and the
+logical processor's x87 state. Binding this bank to `X86PagedMemory` keeps
+private bytes out of ordinary RAM. Normal paging checks precede EPCM checks.
+A fetch crossing the enclave boundary raises #GP. An EPCM violation raises
+#PF with the SGX error bit. For this processor profile, non-enclave access to
+EPC reads all ones and discards writes.
+
+The x64 software transfer profile consumes original EENTER, ERESUME and EEXIT
+instructions against an initialized imported SECS and opt-out TCS. The bound
+processor uses XCR0=3, the enclave uses XFRM=3 and MISCSELECT=0. The XSAVE
+area is at the beginning of the SSA frame and the GPR area is at its end.
+Their EPC translations are cached independently when the frame spans multiple
+pages. AEX writes the interrupted registers, flags and PC to that frame,
+installs the outside register image, and dispatches the original event using
+the AEP as the saved return address. An inhibited arrival leaves the enclave
+running. IRETQ to the AEP and ERESUME restore the SSA contents. The outside interrupt frame clears RF.
+The saved SSA uses the RF value belonging to the original event.
+
+Enclave construction and cryptographic leaves require platform state beyond
+this imported-thread profile. Debug opt-in, AEX notification, CET, additional
+XSTATE components and physical SGX qualification remain open.

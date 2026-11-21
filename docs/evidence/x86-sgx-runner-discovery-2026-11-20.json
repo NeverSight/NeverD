@@ -185,5 +185,50 @@
         "compiler": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
       }
     }
-  ]
+  ],
+  "native_selftest_run": {
+    "workflow": "https://github.com/gmh5225/test_mac_intel/actions/runs/44869926227",
+    "source_commit": "ad8d7e08303b3aa1024f0c5ff5fdf48f18a46e3f",
+    "workflow_conclusion": "success",
+    "runners": {
+      "macos-15-intel": {
+        "id": 14693641914,
+        "sha256": "15eb20405b6e3c7da9cf55ee7fcc0902cc05d85a5efb5d26f3cada183ad493de",
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "sgx1": false,
+        "epc_section_type": 0,
+        "device_access": false
+      },
+      "ubuntu-24.04": {
+        "id": 14693422085,
+        "sha256": "4a9069dec0b8d3a65d4895f552e24aab1d37e719d4120bb24f51f0f9bbf9a11a",
+        "cpu": "AMD EPYC 9V74 80-Core Processor",
+        "sgx1": false,
+        "epc_section_type": 0,
+        "device_access": false,
+        "native_selftests": {
+          "linux_source": "7d0a66e4bb9081d75c82ec4957c50034cb0ea449",
+          "source": "tools/testing/selftests/sgx",
+          "status": "unavailable",
+          "cases": {},
+          "test_sgx_sha256": "c5cd1494e9c03a3da0f790855d6ecedc6b075e86ca6552b460ca9aed5998c8d9",
+          "test_encl.elf_sha256": "6ab885b7c7990aee797300c85f6cf0e195ae55f156dc17b67e425c518202e1f7",
+          "reasons": [
+            "SGX1 is not exposed by CPUID",
+            "CPUID does not enumerate an EPC section",
+            "No accessible SGX enclave device",
+            "The Linux selftest needs read/write access to /dev/sgx_enclave"
+          ]
+        }
+      },
+      "macos-26-intel": {
+        "id": 14693083608,
+        "sha256": "178bcd0979e5068331ad5241577c49608163881fcfd9db3aef4c5c16e9fdc4db",
+        "cpu": "Intel(R) Core(TM) i7-8700B CPU @ 3.20GHz",
+        "sgx1": false,
+        "epc_section_type": 0,
+        "device_access": false
+      }
+    }
+  }
 }

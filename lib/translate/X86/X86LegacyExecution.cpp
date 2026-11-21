@@ -170,7 +170,7 @@ llvm::Error detail::admitLegacyExecution(const X86LegacyExecutionState &S,
                    "and no CET/FRED");
   const auto &CS = S.Core.Segments[1];
   const unsigned DPL = (CS.Attributes >> 5) & 3;
-  if (!S.PendingTask &&
+  if ((Controls.CR0 & 1) && !CS.RetainedRealCS && !S.PendingTask &&
       (DPL > S.Core.CPL || (!(CS.Attributes & 4) && DPL != S.Core.CPL)))
     return invalid("legacy execution requires an authenticated code privilege");
   if (O.Events != X86LegacyEventProfile::OrderedFrame ||
@@ -186,7 +186,7 @@ static bool retainsLegacyInstruction(const X86LegacyExecutionState &State) {
          State.PendingControl || detail::legacyTaskInstructionPending(State);
 }
 
-bool detail::legacyInstructionPending(const X86LegacyExecutionState &State) {
+bool x86LegacyInstructionPending(const X86LegacyExecutionState &State) {
   return !State.PendingEvent && retainsLegacyInstruction(State);
 }
 
@@ -214,6 +214,8 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   if (detail::legacyTaskFaultContext(State))
     return invalid(
         "deliver the incoming task fault before another instruction");
+  if (!(Memory.controls().CR0 & 1) && !Non64Mode)
+    return invalid("real-address instructions require the mixed-mode bank");
   if (State.Halted) {
     if (auto Error =
             detail::admitLegacyExecution(State, Memory, Options, Non64Mode))
@@ -232,7 +234,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
     return std::move(Error);
   const bool ResumingStack = State.PendingStack.has_value();
   const bool ResumingTask = detail::legacyTaskInstructionPending(State);
-  const bool Resuming = detail::legacyInstructionPending(State);
+  const bool Resuming = x86LegacyInstructionPending(State);
   const bool Attempted = !(Resuming && State.PendingInstructionAttempted);
   const bool Code32 = ResumingTask
                           ? bool(detail::legacyTaskInstructionKey(State) >> 32)
@@ -245,9 +247,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
          MSR] = *Decoded;
   if (Non64Mode) {
     using Op = detail::X86LegacyScalarOperation;
-    if ((State.EFlags & 0x20000) || State.PendingTask || State.PendingEvent ||
-        State.Mpx || Options.Tasks || FastSystem || Port || String || Mpx ||
-        IRET || RETF || (Far && (Far->Call || Far->Memory)) ||
+    if (State.Mpx || FastSystem || Port || String || Mpx ||
         (Scalar && (Scalar->DescriptorQuery || Scalar->SystemSelector ||
                     Scalar->Operation == Op::Bound)))
       return invalid("instruction requires a separate mixed-mode state owner");
@@ -418,8 +418,9 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                                           : 0;
   if (SingleStep && (!State.Debug || !Options.Debug))
     return invalid("legacy TF stepping requires a debug-event producer");
-  const bool TaskReturn =
-      IRET && !(EntryFlags & 0x20000) && (EntryFlags & 0x4000);
+  const bool TaskReturn = IRET && !(Memory.controls().EFER & 0x400) &&
+                          (Memory.controls().CR0 & 1) &&
+                          !(EntryFlags & 0x20000) && (EntryFlags & 0x4000);
   if (TaskReturn && !Options.Tasks)
     return invalid("legacy nested-task IRET requires task-switch state");
   if (((IRET && !TaskReturn) || RETF) &&
@@ -487,6 +488,10 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return Delivered.takeError();
     Delivered->DeviceTransferCompleted = R.DeviceTransferCompleted;
     Delivered->PortInputBytesWritten = R.PortInputBytesWritten;
+    Delivered->CSWritten |= R.CSWritten;
+    Delivered->SSWritten |= R.SSWritten;
+    Delivered->DataSegmentsWritten |= R.DataSegmentsWritten;
+    Delivered->TaskStateWritten |= R.TaskStateWritten;
     Delivered->SegmentWritten = R.SegmentWritten;
     Delivered->DebugAddressWritten = R.DebugAddressWritten;
     Delivered->InstructionAttempted = Attempted;
@@ -530,6 +535,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   const auto FinishTask = [&](const detail::X86LegacyTaskResult &Got)
       -> llvm::Expected<X86LegacyExecutionResult> {
     Accept(Got);
+    R.TaskStateWritten = Got.Committed;
     R.InstructionAttempted = Attempted;
     if (Got.ModeUnavailable) {
       detail::retainLegacyTaskWatchpoints(State, Observation.Matches);
@@ -623,6 +629,15 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return Got.takeError();
     R.InstructionAttempted = Attempted;
     if (Accept(*Got)) {
+      const bool EnteredVM86 =
+          !(EntryFlags & 0x20000) && (Returned.EFlags & 0x20000);
+      const bool Outer = Returned.Core.CPL > State.Core.CPL;
+      R.CSWritten = true;
+      R.SSWritten = Outer || EnteredVM86;
+      if (Outer || EnteredVM86)
+        for (unsigned Index : {0u, 3u, 4u, 5u})
+          if (EnteredVM86 || Returned.Core.Segments[Index].Unusable)
+            R.DataSegmentsWritten |= 1u << Index;
       State = Returned;
       State.SSBlocked = State.STIBlocked = false;
       auto Controls = Memory.controls();
@@ -733,6 +748,7 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                                                   State.Sysenter, *FastSystem);
     TakenBranch = !R.Exception;
   } else if (!R.Exception && Far) {
+    const auto OldCPL = State.Core.CPL;
     auto Got = detail::executeLegacyFarTransfer(State, Memory, *Far, NextIP,
                                                 Instruction, Options);
     detail::retainLegacyTransferWatchpoints(State, Observation.Matches);
@@ -744,7 +760,9 @@ executeLegacyInstruction(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       Next = State.Core;
       NextIP = State.EIP;
       TakenBranch = true;
+      R.WideFarTransfer = Got->WideFarTransfer;
       R.CSWritten = true;
+      R.SSWritten = Next.CPL < OldCPL;
     }
   } else if (!R.Exception && Segment) {
     auto Got = detail::executeLegacySegmentTransfer(

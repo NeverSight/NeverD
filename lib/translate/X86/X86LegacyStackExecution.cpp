@@ -26,8 +26,7 @@ llvm::Error invalid(const char *Message) {
 }
 
 bool sameCache(const X86LegacySegmentCache &A, const X86LegacySegmentCache &B) {
-  return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
-         std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
+  return A == B;
 }
 
 class StackExecution {
@@ -156,8 +155,8 @@ private:
         P.Entry.Segments[2],
         {X86SegmentRegister::SS,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         Offset, F.Bytes, O.Segments.FullLimitChoice,
-         bool(S.EFlags & 0x20000)});
+         Offset, F.Bytes, O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000),
+         !(M.controls().CR0 & 1)});
     if (!Checked) {
       Failure = Checked.takeError();
       return false;

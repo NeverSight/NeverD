@@ -13,6 +13,8 @@
 #include "X64MachineFlags.h"
 #include "X64PagedSse.h"
 #include "X64SegmentMoveEncoding.h"
+#include "X64TaskPriority.h"
+#include "X86SgxExecution.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedSource.h"
 #include "neverd/ir/X86/X86DebugRules.h"
@@ -255,6 +257,8 @@ extern "C" uint64_t neverd_x64_paged_access_v1(void *Opaque, uint64_t Address,
   if (Kind == X64PagedAccess::PopFlags) {
     const auto Flags = T.StagedState.Core.Core.Core.Core.RFlags;
     const auto Mask = x86PopFlagsMask(T.CPL, Flags, 8);
+    if (T.Memory.sgxMemory() && T.Memory.sgxMemory()->active())
+      Address &= ~uint64_t(0x100);
     Exchange.Value =
         ((Flags & ~(Mask | uint64_t{0x10000})) | (Address & Mask)) &
         ~detail::X64MachineFlags::SplitMask;
@@ -568,6 +572,16 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
       return Last;
     }
   }
+  if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed &&
+      Memory.sgxMemory() && Memory.sgxMemory()->active()) {
+    auto Denied = detail::X86SgxExecution::illegalInstruction(Bytes, Address);
+    if (!Denied)
+      return Denied.takeError();
+    if (*Denied) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception = X86MemoryException{6, 0, {}};
+    }
+  }
   uint64_t Exit = uint64_t(X64PagedExit::AccessFault);
   translate::X86WatchpointObservation Observation(Memory, Options.Debug,
                                                   Options.DebugProfile);
@@ -585,8 +599,20 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
                           Icebp);
     return llvm::Error::success();
   };
-  if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed)
-    Exit = Body(NextBytes, ExchangeBytes);
+  const auto CR8 = detail::decodeX64TaskPriority(Bytes);
+  const bool WritesCR8 =
+      CR8 && CR8->Operation == detail::X64TaskPriorityOperation::Write;
+  if (!T.Error && T.Access.Status == X86PageWalkStatus::Completed) {
+    if (CR8 &&
+        (CR8->Locked || CPL || (WritesCR8 && Original.GPR[CR8->GPR] > 15))) {
+      T.Access.Status = X86PageWalkStatus::Exception;
+      T.Access.Exception =
+          X86MemoryException{uint8_t(CR8->Locked ? 6 : 13), 0, {}};
+    } else {
+      // A valid transfer uses the original instruction's generated source.
+      Exit = Body(NextBytes, ExchangeBytes);
+    }
+  }
   if (T.Error)
     return std::move(*T.Error);
   if (T.DebugPC) {
@@ -771,6 +797,7 @@ llvm::Expected<X64PagedExecutionResult> X64PagedExecution::execute(
     return std::move(Failure);
   Last.InstructionAttempted = true;
   Last.InstructionCompleted = !Partial;
+  Last.CR8Written = Last.InstructionCompleted && WritesCR8;
   Last.StartsSTIShadow = !Partial && T.SetsInterruptFlag &&
                          !(EntryFlags & 0x200) &&
                          (State.Core.Core.Core.Core.RFlags & 0x200);

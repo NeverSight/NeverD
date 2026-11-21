@@ -21,8 +21,7 @@ namespace neverd::translate::detail {
 namespace {
 
 bool sameCache(const X86LegacySegmentCache &A, const X86LegacySegmentCache &B) {
-  return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
-         std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
+  return A == B;
 }
 
 auto controls(const X86PagingState &C) {

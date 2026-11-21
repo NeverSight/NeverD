@@ -9,6 +9,7 @@
 
 #include "X86LegacyFarTransfer.h"
 
+#include "X86LegacyDescriptorAddress.h"
 #include "X86LegacyTransferJournal.h"
 
 #include "neverd/ir/X86/X86SegmentDescriptorRules.h"
@@ -91,7 +92,8 @@ private:
   }
 
   bool access(uint64_t Address, unsigned Bytes, Value &V, bool Write = false,
-              bool Implicit = true, uint8_t CPL = 0, bool Stack = false) {
+              bool Implicit = true, uint8_t CPL = 0, bool Stack = false,
+              bool WideStack = false) {
     auto Replayed = Journal->replay(Address, Bytes, Write, V);
     if (!Replayed) {
       Failure = Replayed.takeError();
@@ -110,7 +112,7 @@ private:
     const X86LinearAccess A{
         Address, Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
         CPL,     Implicit,
-        Stack,   !Implicit || !(M.controls().EFER & 0x400)};
+        Stack,   (!Implicit && !WideStack) || !(M.controls().EFER & 0x400)};
     if (Write) {
       auto Store = M.prepareStore(A, Bytes);
       if (!Store) {
@@ -139,7 +141,8 @@ private:
     auto Range = checkX86LegacySegmentAccess(
         S.Core.Segments[unsigned(Segment)],
         {Segment, X86SegmentAccessKind::Read, Offset, Bytes,
-         O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000)});
+         O.Segments.FullLimitChoice, bool(S.EFlags & 0x20000),
+         !(M.controls().CR0 & 1)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -168,6 +171,17 @@ private:
     Address = Base + (Selector & 0xfff8);
     if (!(M.controls().EFER & 0x400))
       Address = uint32_t(Address);
+    else {
+      auto Check = detail::checkLegacyDescriptorAddress(
+          M.controls(), {Address, MemoryAccessKind::Read, C.CPL, true}, 8,
+          Selector, O.Segments.DescriptorCanonicality);
+      if (!Check) {
+        Failure = Check.takeError();
+        return false;
+      }
+      if (*Check)
+        return !faultIf(true, 13, (*Check)->ErrorCode);
+    }
     return access(Address, 8, D);
   }
 
@@ -183,34 +197,133 @@ private:
             Selector, uint16_t(Rules::attributes(*this, D)), false};
   }
 
-  void virtualTransfer(bool Call, unsigned Width, Value IP, uint16_t Selector,
-                       uint32_t NextIP) {
+  bool canonicalRange(uint64_t Start, unsigned Size, bool Stack, uint8_t CPL) {
+    auto Check = checkX86LinearAccess(
+        M.controls(),
+        {Start, Stack ? MemoryAccessKind::Write : MemoryAccessKind::Execute,
+         CPL, false, Stack},
+        Size);
+    if (!Check) {
+      Failure = Check.takeError();
+      return false;
+    }
+    return !*Check || !faultIf(true, (*Check)->Vector, (*Check)->ErrorCode);
+  }
+
+  void wideGate(bool Call, uint16_t Selector, uint64_t GateAddress, Value Gate,
+                uint32_t NextIP) {
+    const auto CodeSelector = uint16_t(Gate >> 16);
+    const auto GateError = Selector & 0xfffcu,
+               CodeError = CodeSelector & 0xfffcu;
+    const unsigned GateDPL = (Gate >> 45) & 3;
+    const unsigned Limit = Selector & 4 ? S.Core.LDTR.Limit : S.Core.GDTRLimit;
+    if (faultIf((Selector & 0xfff8u) + 15 > Limit, 13, GateError))
+      return;
+    auto Range = detail::checkLegacyDescriptorAddress(
+        M.controls(), {GateAddress, MemoryAccessKind::Read, S.Core.CPL, true},
+        16, Selector, O.Segments.DescriptorCanonicality);
+    if (!Range) {
+      Failure = Range.takeError();
+      return;
+    }
+    if (*Range && faultIf(true, 13, (*Range)->ErrorCode))
+      return;
+    Value Tail = 0;
+    if (!access(GateAddress + 8, 8, Tail) ||
+        faultIf((Tail >> 40) & 31, 13, GateError) ||
+        faultIf(GateDPL < S.Core.CPL || GateDPL < (Selector & 3), 13,
+                GateError) ||
+        faultIf(!(Gate & (Value{1} << 47)), 11, GateError))
+      return;
+    Value Code = 0;
+    uint64_t CodeAddress = 0;
+    if (!descriptor(CodeSelector, 13, Code, CodeAddress))
+      return;
+    const uint16_t Attr = Code >> 40;
+    const uint8_t DPL = (Attr >> 5) & 3;
+    const bool Conforming = Attr & 4;
+    if (faultIf((Attr & 0x6018) != 0x2018 || DPL > S.Core.CPL ||
+                    (!Call && !Conforming && DPL != S.Core.CPL),
+                13, CodeError) ||
+        faultIf(!(Attr & 0x80), 11, CodeError))
+      return;
+    const Value Target =
+        (Tail << 32) | uint32_t((Gate >> 32) & 0xffff0000) | uint16_t(Gate);
+    transferToLongCode(Call, 8, Target, NextIP, CodeSelector, Code, CodeAddress,
+                       Conforming ? S.Core.CPL : DPL);
+  }
+
+  // A transfer to CS.L uses a flat stack. A direct CALL pushes its operand
+  // width, while an IA-32e call gate pushes eight-byte slots.
+  void transferToLongCode(bool Call, unsigned Width, Value Target,
+                          uint32_t NextIP, uint16_t Selector, Value Code,
+                          Value CodeAddress, uint8_t CPL) {
+    const bool Inner = CPL < S.Core.CPL;
+    Value SP = S.Core.GPR[4];
+    if (Inner) {
+      const unsigned At = 4 + 8 * CPL;
+      if (faultIf(S.TR.Unusable || (S.TR.Attributes & 0x9f) != 0x8b ||
+                      At + 7 > S.TR.Limit,
+                  10, S.TR.Selector & 0xfffc) ||
+          !access(O.Non64Mode->TRBase + At, 8, SP))
+        return;
+    }
+    const unsigned Frame = Width * (Inner ? 4 : 2);
+    if ((Call && !canonicalRange(SP - Frame, Frame, true, CPL)) ||
+        !canonicalRange(Target, 1, false, CPL) || !accessed(CodeAddress, Code))
+      return;
+    if (Call) {
+      const auto Push = [&](Value V) {
+        SP -= Width;
+        return access(SP, Width, V, true, false, CPL, true, true);
+      };
+      if ((Inner &&
+           (!Push(S.Core.Segments[2].Selector) || !Push(S.Core.GPR[4]))) ||
+          !Push(S.Core.Segments[1].Selector) || !Push(NextIP))
+        return;
+      S.Core.GPR[4] = uint32_t(SP);
+    }
+    if (Inner) {
+      auto &SS = S.Core.Segments[2];
+      SS.Selector = CPL;
+      SS.Unusable = true;
+    }
+    S.Core.CPL = CPL;
+    S.Core.Segments[1] =
+        cache((Selector & 0xfffc) | CPL, Code | (Value{1} << 40));
+    S.EIP = uint32_t(Target);
+    R.WideFarTransfer = X86WideFarTransfer{
+        Target, Call ? std::optional<Value>(SP) : std::nullopt};
+  }
+
+  void paragraphTransfer(bool Call, unsigned Width, Value IP, uint16_t Selector,
+                         uint32_t NextIP) {
+    const bool Real = !(M.controls().CR0 & 1);
     const auto &SS = S.Core.Segments[2];
+    const auto Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
     uint32_t SP = S.Core.GPR[4];
     if (Call)
       for (Value V : {Value(S.Core.Segments[1].Selector), Value(NextIP)}) {
-        SP = (SP & 0xffff0000) | uint16_t(SP - Width);
-        auto Range =
-            checkX86LegacySegmentAccess(SS, {X86SegmentRegister::SS,
-                                             X86SegmentAccessKind::Write,
-                                             uint16_t(SP),
-                                             Width,
-                                             {},
-                                             true});
+        SP = (SP & ~Mask) | ((SP - Width) & Mask);
+        auto Range = checkX86LegacySegmentAccess(
+            SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write, SP & Mask,
+                 Width, O.Segments.FullLimitChoice, !Real, Real});
         if (!Range) {
           Failure = Range.takeError();
           return;
         }
-        if (faultIf(bool(Range->FaultVector), 12, 0))
-          return;
-        if (!access(SS.Base + uint16_t(SP), Width, V, true, false, 3, true))
+        if (faultIf(bool(Range->FaultVector), 12, 0) ||
+            !access(Range->Linear, Width, V, true, false, S.Core.CPL, true))
           return;
       }
-    // The Intel VM86 profile checks the target after both CALL stores.
-    if (faultIf(IP > UINT16_MAX, 13, 0))
+    auto &CS = S.Core.Segments[1];
+    if (faultIf(IP > CS.Limit, 13, 0))
       return;
     S.Core.GPR[4] = SP;
-    S.Core.Segments[1] = x86VM86SegmentCache(Selector);
+    if (Real)
+      x86ReloadRealSegment(CS, Selector);
+    else
+      CS = x86VM86SegmentCache(Selector);
     S.EIP = IP;
   }
 
@@ -227,8 +340,8 @@ private:
                    Selector))
         return;
     }
-    if (S.EFlags & 0x20000) {
-      virtualTransfer(F.Call, F.Bytes, IP, Selector, NextIP);
+    if ((S.EFlags & 0x20000) || !(M.controls().CR0 & 1)) {
+      paragraphTransfer(F.Call, F.Bytes, IP, Selector, NextIP);
       return;
     }
     Value Code = 0;
@@ -236,23 +349,11 @@ private:
     if (!descriptor(Selector, 13, Code, CodeAddress))
       return;
     const unsigned Type = (Code >> 40) & 31;
-    if (O.Non64Mode && !(Type & 0x10)) {
-      if (M.controls().EFER & 0x400) {
-        // Task transfers are invalid in IA-32e; valid call gates still require
-        // their own 16-byte gate and privilege-transition owner.
-        if (Type != 12)
-          faultIf(true, 13, Selector & 0xfffc);
-        else
-          Failure = llvm::createStringError(
-              llvm::errc::not_supported,
-              "mixed-mode far gates require their own state owner");
-      } else if (Type == 1 || Type == 3 || Type == 5 || Type == 9 ||
-                 Type == 11 || Type == 4 || Type == 12)
-        Failure = llvm::createStringError(
-            llvm::errc::not_supported,
-            "mixed-mode task and gate transfers require their own state owner");
-      else
+    if (O.Non64Mode && (M.controls().EFER & 0x400) && !(Type & 0x10)) {
+      if (Type != 12)
         faultIf(true, 13, Selector & 0xfffc);
+      else
+        wideGate(F.Call, Selector, CodeAddress, Code, NextIP);
       return;
     }
     if (Type == 1 || Type == 3 || Type == 5 || Type == 9 || Type == 11) {
@@ -320,6 +421,11 @@ private:
       return;
     }
     const uint8_t CPL = Conforming ? S.Core.CPL : DPL;
+    if (LongTarget) {
+      transferToLongCode(F.Call, Width, IP, NextIP, Selector, Code, CodeAddress,
+                         CPL);
+      return;
+    }
     const bool Inner = CPL < S.Core.CPL;
     const auto CS = cache((Selector & 0xfffc) | CPL, Code);
     if (!accessed(CodeAddress, Code))
@@ -397,7 +503,7 @@ private:
       if (!Push(S.Core.Segments[1].Selector) || !Push(NextIP))
         return;
     }
-    if (faultIf(!LongTarget && IP > CS.Limit, 13, 0))
+    if (faultIf(IP > CS.Limit, 13, 0))
       return;
     S.Core.Segments[1] = CS;
     S.Core.Segments[2] = SS;

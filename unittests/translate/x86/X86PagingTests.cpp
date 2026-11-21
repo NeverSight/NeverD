@@ -634,4 +634,92 @@ TEST_F(X86PagingTest, PhysicalExecutePermissionsCannotMasqueradeAsPaging) {
   llvm::consumeError(P.takeError());
 }
 
+TEST_F(X86PagingTest,
+       EnclavePrivatePagesEnforcePagingIdentityAndEpcmPermissions) {
+  constexpr uint64_t SECS = 0x12000, Code = 0x10000, Data = 0x11000;
+  X86SgxPage Root{.Physical = SECS, .Type = X86SgxPageType::SECS};
+  X86SgxPage CodePage{.Physical = Code,
+                      .Linear = 0,
+                      .OwnerSECS = SECS,
+                      .Permissions =
+                          MemoryPermission::Read | MemoryPermission::Execute};
+  X86SgxPage DataPage{.Physical = Data,
+                      .Linear = 0x1000,
+                      .OwnerSECS = SECS,
+                      .Permissions =
+                          MemoryPermission::Read | MemoryPermission::Write};
+  CodePage.Bytes.back() = 0x90;
+  DataPage.Bytes.front() = 0x5a;
+  const X86SgxEnclave Enclave{SECS, 0, 8192};
+  fourLevels(Code | 7);
+  put(0x4008, Data | 7);
+  put(0x4010, Code | 7);
+  auto RAM = llvm::cantFail(createZeroedGuestState(GuestArchitecture::X86_64));
+  RAM.Memory = Memory->snapshotMemoryRegions();
+  auto EPC =
+      llvm::cantFail(X86SgxMemory::create({Root, CodePage, DataPage}, Enclave));
+  auto M =
+      llvm::cantFail(X86PagedMemory::createWithSgx(RAM, F, S, std::move(EPC)));
+  std::array<uint8_t, 2> Out{0xff, 0xff};
+  const X86LinearAccess Read{4095, MemoryAccessKind::Read, 3};
+  EXPECT_EQ(llvm::cantFail(M->load(Read, Out)).Status,
+            X86PageWalkStatus::Completed);
+  EXPECT_EQ(Out, (std::array<uint8_t, 2>{0x90, 0x5a}));
+  auto Fetch =
+      llvm::cantFail(M->load({4095, MemoryAccessKind::Execute, 3}, Out));
+  ASSERT_TRUE(Fetch.Exception);
+  EXPECT_EQ(Fetch.Exception->ErrorCode, 0x8015u);
+  EXPECT_EQ(Fetch.Exception->CR2, 4096u);
+  auto NoFetchBit = M->controls();
+  NoFetchBit.EFER &= ~uint64_t(0x800);
+  NoFetchBit.CR4 &= ~(uint64_t(1) << 20);
+  llvm::cantFail(M->bindControls(NoFetchBit));
+  auto FetchWithoutNX =
+      llvm::cantFail(M->load({4095, MemoryAccessKind::Execute, 3}, Out));
+  ASSERT_TRUE(FetchWithoutNX.Exception);
+  EXPECT_EQ(FetchWithoutNX.Exception->ErrorCode, 0x8005u);
+  llvm::cantFail(M->bindControls(S));
+  auto Outside =
+      llvm::cantFail(M->load({8191, MemoryAccessKind::Execute, 3}, Out));
+  ASSERT_TRUE(Outside.Exception);
+  EXPECT_EQ(Outside.Exception->Vector, 13);
+  auto Store =
+      llvm::cantFail(M->store({4095, MemoryAccessKind::Write, 3}, Out));
+  ASSERT_TRUE(Store.Exception);
+  EXPECT_EQ(Store.Exception->ErrorCode, 0x8007u);
+  ASSERT_EQ(M->physicalMemory()
+                .storeScalar(0x4008, GuestScalarWidth::I64, Code | 7)
+                .Status,
+            GuestMemoryAccessStatus::Completed);
+  Out.fill(0xab);
+  auto Aliased = llvm::cantFail(M->load(Read, Out));
+  ASSERT_TRUE(Aliased.Exception);
+  EXPECT_EQ(Aliased.Exception->ErrorCode, 0x8005u);
+  EXPECT_EQ(Out, (std::array<uint8_t, 2>{0xab, 0xab}));
+  ASSERT_EQ(
+      M->physicalMemory().storeScalar(0x4008, GuestScalarWidth::I64, 0).Status,
+      GuestMemoryAccessStatus::Completed);
+  auto NotPresent = llvm::cantFail(M->load(Read, Out));
+  ASSERT_TRUE(NotPresent.Exception);
+  EXPECT_EQ(NotPresent.Exception->ErrorCode, 4u);
+  llvm::cantFail(M->sgxMemory()->bindActive({}));
+  EXPECT_EQ(llvm::cantFail(M->store({4095, MemoryAccessKind::Write, 3},
+                                    llvm::ArrayRef(Out).take_front()))
+                .Status,
+            X86PageWalkStatus::Completed);
+  EXPECT_EQ(llvm::cantFail(M->load({4095, MemoryAccessKind::Read, 3},
+                                   llvm::MutableArrayRef(Out).take_front()))
+                .Status,
+            X86PageWalkStatus::Completed);
+  EXPECT_EQ(Out[0], 0xff);
+  llvm::cantFail(M->sgxMemory()->bindActive(Enclave));
+  EXPECT_EQ(llvm::cantFail(M->load({4095, MemoryAccessKind::Read, 3},
+                                   llvm::MutableArrayRef(Out).take_front()))
+                .Status,
+            X86PageWalkStatus::Completed);
+  EXPECT_EQ(Out[0], 0x90u);
+  EXPECT_EQ(M->physicalMemory().loadScalar(Code, GuestScalarWidth::I8).Status,
+            GuestMemoryAccessStatus::Fault);
+}
+
 } // namespace

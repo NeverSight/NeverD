@@ -265,7 +265,42 @@ private:
     return true;
   }
 
+  void enterRealAddress() {
+    const unsigned Offset = unsigned(E.Vector) * 4;
+    if (faultIf(Offset + 3 > S.IDTRLimit, 13, 0))
+      return;
+    auto &CS = S.Core.Segments[1];
+    const auto &SS = S.Core.Segments[2];
+    const auto Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
+    uint32_t SP = S.Core.GPR[4];
+    for (Value ValueToPush : {Value(uint16_t(Flags)), Value(CS.Selector),
+                              Value(uint16_t(E.SavedEIP))}) {
+      SP = (SP & ~Mask) | ((SP - 2) & Mask);
+      auto Range = checkX86LegacySegmentAccess(
+          SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Write, SP & Mask,
+               2, O.Segments.FullLimitChoice, false, true});
+      if (!Range) {
+        Failure = Range.takeError();
+        return;
+      }
+      if (faultIf(bool(Range->FaultVector), 12, 0) ||
+          !access(Range->Linear, 2, ValueToPush, true, false, 0))
+        return;
+    }
+    Value Target = 0;
+    if (!access(S.IDTRBase + Offset, 4, Target))
+      return;
+    x86ReloadRealSegment(CS, Target >> 16);
+    S.EIP = uint16_t(Target);
+    S.Core.GPR[4] = SP;
+    S.EFlags &= ~uint32_t(0x50300);
+  }
+
   void execute() {
+    if (!(M.controls().CR0 & 1)) {
+      enterRealAddress();
+      return;
+    }
     const bool VM86 = S.EFlags & 0x20000;
     if (VM86 && E.SoftwareINT) {
       if ((M.controls().CR4 & 1) && redirectVM86())
@@ -444,7 +479,10 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
   R.Exception = Pending.LastException;
   R.SoftwareCompleted = Pending.SoftwareCompleted;
   R.CR2Written = Pending.CR2Written;
-  R.CSWritten = R.SSWritten = Pending.SegmentsWritten;
+  R.CSWritten = Pending.CSWritten;
+  R.SSWritten = Pending.SSWritten;
+  R.DataSegmentsWritten = Pending.DataSegmentsWritten;
+  R.TaskStateWritten = Pending.TaskStateWritten;
   X86WatchpointObservation Observation(
       Memory, State.Debug ? &*State.Debug : nullptr,
       Options.Debug.value_or(X86InstructionDebugProfile::InstructionStep),
@@ -465,6 +503,8 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
              Event.Kind == Kind::DebugRegisterFault)
       SavedFlags &= ~0x10000u;
     ++R.DeliveryAttempts;
+    const bool VM86 = State.EFlags & 0x20000;
+    const auto OldCPL = State.Core.CPL;
     auto Got = Entry(State, Memory, Event, Options, SavedFlags).run();
     R.CR2Written = Pending.CR2Written;
     if (!Got)
@@ -473,6 +513,7 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
                                Got->SelfModifications.begin(),
                                Got->SelfModifications.end());
     if (Got->Committed) {
+      R.TaskStateWritten = Pending.TaskStateWritten = true;
       Pending.FaultEIP = State.EIP;
       SavedFlags = State.EFlags;
     }
@@ -488,7 +529,12 @@ continueEvent(X86LegacyExecutionState &State, X86PagedMemory &Memory,
       return R;
     }
     if (Got->Status == X86PageWalkStatus::Completed) {
-      R.CSWritten = R.SSWritten = Pending.SegmentsWritten = true;
+      R.CSWritten = Pending.CSWritten = true;
+      if (State.Core.CPL < OldCPL || Got->Committed)
+        R.SSWritten = Pending.SSWritten = true;
+      if (VM86 && !(State.EFlags & 0x20000))
+        for (unsigned Index : {0u, 3u, 4u, 5u})
+          R.DataSegmentsWritten = Pending.DataSegmentsWritten |= 1u << Index;
       const bool Software = Event.Kind == Kind::Software;
       R.SoftwareCompleted |= Software;
       Pending.SoftwareCompleted = R.SoftwareCompleted;

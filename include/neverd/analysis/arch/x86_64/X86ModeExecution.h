@@ -12,6 +12,7 @@
 
 #include "neverd/analysis/arch/x86_64/X64PagedExecution.h"
 #include "neverd/translate/X86/X86LegacyExecution.h"
+#include "neverd/translate/X86/X86LocalApic.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -31,15 +32,31 @@ enum class X86ExecutionMode : uint8_t {
   Compatibility16,
   Compatibility32,
   Long64,
+  Virtual8086,
+  Real16,
+  Real32,
 };
 
 namespace detail {
 struct X86ModeContinuation;
 }
 
+/// Linux KVM long-mode-capable SMM save-map profile (revision 0x20064).
+/// SMBASE selects the entry and mutable save area in the separate SMRAM bank.
+struct X86SmmState {
+  uint32_t SMBase = 0x30000;
+  bool Active = false;
+  bool EnteredInsideNMI = false;
+  std::optional<X64ContinuationSegment> InterruptedRealCS;
+  bool operator==(const X86SmmState &) const = default;
+};
+
 struct X86ModeState {
   X64ContinuationStateV7 Core;
   std::optional<X64PagedDebugState> Debug;
+  std::optional<X86SmmState> SMM;
+  /// The first protected far transfer replaces the pre-PE code cache.
+  bool RetainedRealCS = false;
   bool STIBlocked = false;
   bool SSBlocked = false;
   bool Halted = false;
@@ -83,7 +100,17 @@ struct X86ModeInstruction {
   bool BranchDebug = false;
 };
 
+/// Keep this controller with CPU and RAM across entry suspension. The owner
+/// serializes arrivals, TPR writes and EOI with calls to run(). Multiple NMI
+/// arrivals coalesce while latched. The CPU owns instruction-shadow admission.
+struct X86ModeInterrupts {
+  translate::X86LocalApicFixed APIC;
+  bool NMIPending = false;
+  bool SMIPending = false;
+};
+
 struct X86ModeExecutionResult : translate::X86LegacyExecutionResult {
+  bool CR8Written = false;
   bool BudgetExhausted = false;
   bool MissingInstruction = false;
   /// A post-instruction owner refusal retains its pending event and reports
@@ -99,18 +126,34 @@ struct X86ModeExecutionResult : translate::X86LegacyExecutionResult {
 /// bindings; constructing an executor with different options affects only the
 /// next instruction, never an already accepted instruction or event.
 class X86ModeExecution final {
-  translate::X86PagedMemory &Memory;
+  translate::X86PagedMemory &NormalMemory;
+  translate::X86PagedMemory *SMRAM = nullptr;
   X86ModeExecutionOptions Options;
 
 public:
   X86ModeExecution(translate::X86PagedMemory &Memory,
                    const X86ModeExecutionOptions &Options)
-      : Memory(Memory), Options(Options) {}
+      : NormalMemory(Memory), Options(Options) {}
+  X86ModeExecution(translate::X86PagedMemory &Memory,
+                   const X86ModeExecutionOptions &Options,
+                   translate::X86PagedMemory &SystemManagementRAM)
+      : NormalMemory(Memory), SMRAM(&SystemManagementRAM), Options(Options) {}
+
+  /// Enter the bound software SMM profile at a retired instruction boundary.
+  /// A refused or backing-stopped save leaves the SMI available for retry.
+  llvm::Expected<X86ModeExecutionResult>
+  systemManagementInterrupt(X86ModeState &State);
 
   llvm::Expected<X86ExecutionMode> mode(const X86ModeState &State) const;
   llvm::Expected<X86ModeExecutionResult>
   run(X86ModeState &State, llvm::ArrayRef<X86ModeInstruction> Instructions,
       uint64_t &Budget);
+
+  /// Poll latched NMI and routed fixed interrupts at each fresh instruction
+  /// boundary, including a halted CPU or an exhausted instruction budget.
+  llvm::Expected<X86ModeExecutionResult>
+  run(X86ModeState &State, llvm::ArrayRef<X86ModeInstruction> Instructions,
+      uint64_t &Budget, X86ModeInterrupts &Interrupts);
 
   /// Supply an externally selected IRQ or NMI at the current instruction
   /// boundary. Arrival/priority/APIC policy belongs to the producer. The CPU
@@ -122,6 +165,12 @@ public:
   interrupt(X86ModeState &State, X86EventKind Kind, uint8_t Vector);
 
 private:
+  llvm::Expected<translate::X86PagedMemory &>
+  memoryFor(const X86ModeState &State) const;
+  llvm::Expected<X86ModeExecutionResult>
+  runBoundaries(X86ModeState &State,
+                llvm::ArrayRef<X86ModeInstruction> Instructions,
+                uint64_t &Budget, X86ModeInterrupts *Interrupts);
   llvm::Expected<X86ModeExecutionResult>
   step(X86ModeState &State, const X86ModeInstruction *Instruction);
 };

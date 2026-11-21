@@ -163,10 +163,10 @@ public:
         choose(either(Software, DebugAccess), masked(Flags, ~uint64_t{0x10000}),
                choose(either(Fault, Repeated),
                       op(NdOp::INT_OR, {Flags, k(0x10000)}), Flags));
-    W.beginEvent(NMI);
+    const auto FrameFlags = W.beginEvent(NMI, SavedFlags);
     X64ContinuationEvents<Writer>(W, Base::AddressBits,
                                   Base::DescriptorCanonicality)
-        .interrupt(Vector, SavedPC, SavedFlags, op(NdOp::INT_ZEXT, {HasError}),
+        .interrupt(Vector, SavedPC, FrameFlags, op(NdOp::INT_ZEXT, {HasError}),
                    Error, op(NdOp::INT_ZEXT, {Software}),
                    op(NdOp::INT_ZEXT, {NMI}), op(NdOp::INT_ZEXT, {PageFault}),
                    FaultAddress);

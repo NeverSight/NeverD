@@ -14,6 +14,7 @@
 #include "X64ContinuationEvents.h"
 #include "X64ContinuationSegmentMoves.h"
 #include "X64FarPointerEncoding.h"
+#include "X86SgxExecution.h"
 
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/X86/X86ExceptionDelivery.h"
@@ -115,6 +116,8 @@ public:
   bool Stopped = false;
   bool InstructionEffects = false;
   bool Resuming = false;
+  std::optional<uint64_t> AEXFlags;
+  bool EnclaveExitFrame = false;
   bool CaptureAccesses = false;
   llvm::SmallVector<X64PagedEventContinuation::Access> CompletedAccesses;
   size_t AccessCursor = 0;
@@ -262,14 +265,22 @@ public:
       EmitExit();
   }
 
-  void beginEvent(NdVar NMI) {
+  NdVar beginEvent(NdVar NMI, NdVar SavedFlags) {
     if (Stopped)
-      return;
+      return SavedFlags;
+    if (Memory.sgxMemory() && Memory.sgxMemory()->active()) {
+      AEXFlags = value(SavedFlags);
+      Stopped = true;
+      return SavedFlags;
+    }
     Result.InputAccepted = true;
     if (value(NMI))
       State.NMIBlocked = 1;
     if (Event.Kind == X64ContinuationEventKind::Fault && Event.Vector == 14)
       State.Core.Core.CR2 = Event.FaultAddress;
+    return EnclaveExitFrame
+               ? NdVar::scalar(value(SavedFlags) & ~uint64_t(0x10000), 8)
+               : SavedFlags;
   }
 
   void eventStack(NdVar CPL) {
@@ -448,7 +459,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     X86InstructionDebugProfile DebugProfile =
         X86InstructionDebugProfile::InstructionStep,
     uint8_t DataBreakpoints = 0, bool SoftwareCompleted = false,
-    bool InputAccepted = false) {
+    bool InputAccepted = false, bool EnclaveExitFrame = false) {
   if (!x86DescriptorCanonicalityValid(DescriptorCanonicality))
     return llvm::createStringError(
         llvm::errc::invalid_argument,
@@ -505,16 +516,29 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                                       Observation.Matches,
                                                       Result.SoftwareCompleted,
                                                       false,
-                                                      DescriptorCanonicality};
+                                                      DescriptorCanonicality,
+                                                      EnclaveExitFrame};
       return Result;
     }
     TransitionWriter W(State, Memory, Event, MXCSRMask);
     W.Resuming = Accepted && Result.DeliveryAttempts == 0;
+    W.EnclaveExitFrame = EnclaveExitFrame;
     W.CaptureAccesses = true;
     W.CompletedAccesses = std::move(CompletedAccesses);
     detail::X64ContinuationDelivery<TransitionWriter>(
         W, Controls.CR4 & 0x1000 ? 57 : 48, DescriptorCanonicality)
         .execute(NdVar::scalar(0, 8));
+    if (W.AEXFlags) {
+      if (auto E = detail::X86SgxExecution::asynchronousExit(
+              State, *Memory.sgxMemory(), Event, *W.AEXFlags))
+        return std::move(E);
+      Result.InputAccepted = true;
+      EnclaveExitFrame = true;
+      FaultPC = Event.SavedPC;
+      Controls.RFlags = State.Core.Core.Core.Core.RFlags;
+      llvm::cantFail(Memory.bindControls(Controls));
+      continue;
+    }
     if (Result.DeliveryAttempts == 0)
       Result.InputAccepted |= W.Result.InputAccepted;
     ++Result.DeliveryAttempts;
@@ -539,7 +563,8 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
                                       Observation.Matches,
                                       Result.SoftwareCompleted,
                                       true,
-                                      DescriptorCanonicality};
+                                      DescriptorCanonicality,
+                                      EnclaveExitFrame};
       if (Result.Status == X64PagedEventStatus::Delivered) {
         Result.DeliveredVector = Event.Vector;
         const bool Software = Event.Kind == X64ContinuationEventKind::Software;
@@ -582,6 +607,7 @@ llvm::Expected<X64PagedEventResult> deliverEventSequence(
     }
     const bool Double =
         FirstFault && x86DoubleFaultPair(Event.Vector, W.Fault->Vector);
+    EnclaveExitFrame = false;
     Event = {};
     Event.SavedPC = FaultPC;
     Event.Vector = Double ? 8 : W.Fault->Vector;
@@ -622,7 +648,7 @@ resumeX64PagedEvent(X64ContinuationStateV6 &State, X86PagedMemory &Memory,
       Options, Continuation.DescriptorCanonicality, Continuation.LastException,
       Continuation.EventAccepted, Continuation.CompletedAccesses, Debug,
       DebugProfile, Continuation.DataBreakpoints,
-      Continuation.SoftwareCompleted, true);
+      Continuation.SoftwareCompleted, true, Continuation.EnclaveExitFrame);
 }
 
 namespace {

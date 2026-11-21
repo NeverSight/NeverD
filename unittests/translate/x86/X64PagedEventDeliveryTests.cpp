@@ -10,6 +10,7 @@
 #include "gtest/gtest.h"
 
 #include "neverd/analysis/arch/x86_64/X64PagedEventDelivery.h"
+#include "neverd/analysis/arch/x86_64/X86ModeExecution.h"
 
 #include "llvm/Support/Error.h"
 
@@ -109,6 +110,186 @@ TEST_F(X64PagedEventTest, PageFaultPublishesCR2AndRestartFrame) {
   EXPECT_EQ(get(SP), 7u);
   EXPECT_EQ(get(SP + 8), 0x9000u);
   EXPECT_EQ(get(SP + 24), 0x10202u);
+}
+
+TEST_F(X64PagedEventTest,
+       RsmRetainsEditedSaveImageAndPaidPaeReloadAcrossBackingRepair) {
+  constexpr uint64_t Root = 0x20000, Save = 0x1fe00;
+  auto SystemImage = RAM;
+  SystemImage.Memory.front().Bytes[0x18000] = 0x0f;
+  SystemImage.Memory.front().Bytes[0x18001] = 0xaa;
+  RAM.Memory.push_back({Root, MemoryPermission::Read | MemoryPermission::Write,
+                        0, std::vector<uint8_t>(8)});
+  Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+  auto System =
+      llvm::cantFail(X86PagedMemory::create(SystemImage, Features, Controls));
+  X86ModeState CPU;
+  CPU.Core.Core = State;
+  auto &V = CPU.Core.Core;
+  V.DS = V.ES = V.Core.SS;
+  V.FS = V.GS = {UINT32_MAX, 16, 0xc093};
+  V.Unusable = 64;
+  CPU.Debug.emplace();
+  CPU.SMM.emplace();
+  CPU.SMM->SMBase = 0x10000;
+  X86ModeExecutionOptions O;
+  O.Legacy.Segments.FullLimitChoice = neverd::X86FullSegmentLimitChoice::Fault;
+  O.Legacy.Debug = O.Long.DebugProfile =
+      neverd::X86InstructionDebugProfile::Watchpoints;
+  O.MXCSRMask = 0xffff;
+  O.PagingAddressBits = 48;
+  O.Undefined.emplace();
+  X86ModeExecution Execution(*Memory, O, *System);
+  ASSERT_TRUE(
+      llvm::cantFail(Execution.systemManagementInterrupt(CPU)).EventAccepted);
+  const auto Edit = [&](unsigned Offset, GuestScalarWidth Width,
+                        uint64_t Value) {
+    ASSERT_EQ(System->physicalMemory()
+                  .storeScalar(Save + Offset, Width, Value)
+                  .Status,
+              GuestMemoryAccessStatus::Completed);
+  };
+  ASSERT_NO_FATAL_FAILURE(Edit(0x12, GuestScalarWidth::I16, 0xc09b));
+  ASSERT_NO_FATAL_FAILURE(Edit(0xd0, GuestScalarWidth::I64, 0));
+  ASSERT_NO_FATAL_FAILURE(Edit(0x148, GuestScalarWidth::I64, 0x20));
+  ASSERT_NO_FATAL_FAILURE(Edit(0x150, GuestScalarWidth::I64, Root));
+  ASSERT_NO_FATAL_FAILURE(Edit(0x158, GuestScalarWidth::I64, 0x80010011));
+  ASSERT_NO_FATAL_FAILURE(Edit(0x1f8, GuestScalarWidth::I64, 0x1234));
+  X86ModeInstruction Rsm{0x18000, X86ExecutionMode::Real16, {0x0f, 0xaa}};
+  uint64_t Budget = 1;
+  auto Stop = llvm::cantFail(Execution.run(CPU, Rsm, Budget));
+  ASSERT_EQ(Stop.Status, X86LegacyExecutionStatus::BackingFault);
+  EXPECT_TRUE(CPU.SMM->Active);
+  ASSERT_TRUE(CPU.Pending);
+  EXPECT_EQ(Stop.Attempts, 1u);
+  EXPECT_EQ(Budget, 0u);
+
+  ASSERT_NO_FATAL_FAILURE(Edit(0x1f8, GuestScalarWidth::I64, 0xbad));
+  RAM.Memory = Memory->physicalMemory().snapshotMemoryRegions();
+  RAM.Memory.back().Bytes.assign(32, 0);
+  std::fill_n(RAM.Memory.back().Bytes.begin(), 8, 0xff);
+  Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+  X86ModeExecution Repaired(*Memory, O, *System);
+  auto Done = llvm::cantFail(Repaired.run(CPU, {}, Budget));
+  EXPECT_EQ(Done.Attempts, 0u);
+  EXPECT_EQ(Done.Completions, 1u);
+  EXPECT_FALSE(CPU.Pending);
+  EXPECT_FALSE(CPU.SMM->Active);
+  EXPECT_EQ(V.Core.Core.Core.Core.GPR[0], 0x1234u);
+  EXPECT_EQ(Memory->controls().PDPTE, (std::array<uint64_t, 4>{}));
+  EXPECT_EQ(llvm::cantFail(Repaired.mode(CPU)), X86ExecutionMode::Protected32);
+}
+
+TEST_F(X64PagedEventTest,
+       RealModeInterruptsPushParagraphSelectorsAndIretRestoresTheOriginalPC) {
+  for (const auto Kind :
+       {neverd::X86EventKind::NMI, neverd::X86EventKind::Interrupt}) {
+    SetUp();
+    X86ModeState CPU;
+    CPU.Core.Core = State;
+    auto &V = CPU.Core.Core;
+    auto &R = V.Core.Core.Core.Core;
+    V.Core.CS = {0x1000, UINT16_MAX, 0x100, 0x93};
+    V.Core.SS = {0x7000, UINT16_MAX, 0x700, 0x93};
+    V.DS = V.ES = {0, UINT16_MAX, 0, 0x93};
+    V.FS = V.GS = {UINT16_MAX, 0, 0x93};
+    V.Unusable = 64;
+    V.IDTR = {0x2000, 1023};
+    R.PC = 0x200;
+    R.GPR[4] = 0x8800;
+    R.RFlags = 0x202;
+    X86ModeExecutionOptions O;
+    O.Legacy.Segments.FullLimitChoice =
+        neverd::X86FullSegmentLimitChoice::Fault;
+    O.Legacy.Returns = X86LegacyReturnProfile::OrderedFrame;
+    O.Legacy.Events = X86LegacyEventProfile::OrderedFrame;
+    O.MXCSRMask = 0xffff;
+    O.PagingAddressBits = 48;
+    O.Undefined.emplace();
+    const uint8_t Vector = Kind == neverd::X86EventKind::NMI ? 2 : 64;
+    put(0x2000 + 4 * Vector, uint32_t(0x300) << 16 | 0x101);
+    RAM.Memory.front().Bytes[0x3101] = 0xcf;
+    Controls = {0x10, 0, 0, 0, 0x202};
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    X86ModeExecution Execution(*Memory, O);
+    auto Event = llvm::cantFail(Execution.interrupt(CPU, Kind, Vector));
+    ASSERT_EQ(Event.Status, X86LegacyExecutionStatus::EventDelivered)
+        << Event.OwnerError;
+    EXPECT_TRUE(Event.EventAccepted);
+    EXPECT_EQ(R.PC, 0x101u);
+    EXPECT_EQ(V.Core.CS.Selector, 0x300u);
+    EXPECT_EQ(V.Core.CS.Base, 0x3000u);
+    EXPECT_EQ(R.GPR[4], 0x87fau);
+    EXPECT_EQ(R.RFlags, 2u);
+    EXPECT_EQ(get(0xf7fa) & 0xffffffffffffULL, 0x020201000200ULL);
+    X86ModeInstruction Return{0x3101, X86ExecutionMode::Real16, {0xcf}};
+    uint64_t Budget = 1;
+    auto Done = llvm::cantFail(Execution.run(CPU, Return, Budget));
+    EXPECT_EQ(Done.Completions, 1u) << Done.OwnerError;
+    EXPECT_EQ(V.Core.CS.Base, 0x1000u);
+    EXPECT_EQ(R.PC, 0x200u);
+    EXPECT_EQ(R.GPR[4], 0x8800u);
+    EXPECT_EQ(R.RFlags, 0x202u);
+    EXPECT_FALSE(V.NMIBlocked);
+  }
+}
+
+TEST_F(X64PagedEventTest, LongModeHaltRetiresBeforeIrqWakeAndZeroBudgetNmi) {
+  enum class Wake { NMI, IRQ, SingleStep };
+  for (const auto Source : {Wake::NMI, Wake::IRQ, Wake::SingleStep}) {
+    SCOPED_TRACE(static_cast<unsigned>(Source));
+    const bool UnderSTI = Source == Wake::IRQ;
+    SetUp();
+    X86ModeState CPU;
+    CPU.Core.Core = State;
+    auto &R = CPU.Core.Core.Core.Core.Core.Core;
+    R.RFlags = UnderSTI ? 0x202 : Source == Wake::SingleStep ? 0x102 : 2;
+    CPU.STIBlocked = UnderSTI;
+    X86ModeExecutionOptions O;
+    O.Legacy.Segments.FullLimitChoice =
+        neverd::X86FullSegmentLimitChoice::Fault;
+    O.MXCSRMask = 0xffff;
+    O.PagingAddressBits = 48;
+    O.Undefined.emplace();
+    if (Source == Wake::SingleStep) {
+      CPU.Debug.emplace();
+      O.Legacy.Debug = O.Long.DebugProfile =
+          neverd::X86InstructionDebugProfile::Watchpoints;
+    }
+    X86ModeInterrupts Inputs{*X86LocalApicFixed::fromState({}, 0)};
+    ASSERT_EQ(Inputs.APIC.receiveFixedInterrupt(64, true, true),
+              X86LocalApicArrival::Queued);
+    RAM.Memory.front().Bytes[0x9000] = 0xf4;
+    Memory = llvm::cantFail(X86PagedMemory::create(RAM, Features, Controls));
+    X86ModeExecution Execution(*Memory, O);
+    X86ModeInstruction Halt{0x9000, X86ExecutionMode::Long64, {0xf4}};
+    uint64_t Budget = 1;
+    auto Result = llvm::cantFail(Execution.run(CPU, Halt, Budget, Inputs));
+    ASSERT_EQ(Result.Completions, 1u) << Result.OwnerError;
+    ASSERT_EQ(Result.Attempts, 1u);
+    EXPECT_EQ(Budget, 0u);
+    if (Source == Wake::NMI) {
+      ASSERT_EQ(Result.Status, X86LegacyExecutionStatus::Halted);
+      EXPECT_EQ(R.PC, 0x9001u);
+      Inputs.NMIPending = true;
+      Result = llvm::cantFail(Execution.run(CPU, {}, Budget, Inputs));
+      EXPECT_EQ(Result.Attempts, 0u);
+      EXPECT_EQ(Result.Completions, 0u);
+    }
+    ASSERT_EQ(Result.Status, X86LegacyExecutionStatus::EventDelivered)
+        << Result.OwnerError;
+    EXPECT_EQ(Result.DeliveredVector, UnderSTI                     ? 64u
+                                      : Source == Wake::SingleStep ? 1u
+                                                                   : 2u);
+    if (Source == Wake::SingleStep) {
+      EXPECT_TRUE(CPU.Debug->DR6 & (1u << 14));
+      EXPECT_EQ(get(R.GPR[4] + 16) & 0x10100, 0x100u);
+    }
+    EXPECT_FALSE(CPU.Halted);
+    EXPECT_FALSE(CPU.STIBlocked);
+    EXPECT_EQ(get(R.GPR[4]), 0x9001u);
+    EXPECT_EQ(Inputs.APIC.state().ISR[2], unsigned(UnderSTI));
+  }
 }
 
 TEST_F(X64PagedEventTest, StackFrameWrapsAcrossTheLinearAddressBoundary) {

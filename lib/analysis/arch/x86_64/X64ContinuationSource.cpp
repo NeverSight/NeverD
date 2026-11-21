@@ -726,7 +726,7 @@ struct Writer {
   }
 
   void architecturalFaultIf(NdVar Bad, uint8_t, NdVar) { rejectIf(Bad); }
-  void beginEvent(NdVar) {}
+  NdVar beginEvent(NdVar, NdVar SavedFlags) { return SavedFlags; }
   void eventStack(NdVar) {}
 
   void store(uint64_t Offset, NdVar V) {

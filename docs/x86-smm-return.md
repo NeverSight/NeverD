@@ -1,4 +1,26 @@
-# Native SMM return
+# System-management execution
+
+## Software SMI and RSM
+
+Bind `X86SmmState`, a debug register bank and a separate `X86PagedMemory`
+with matching processor features. This selects the 512-byte KVM64 save map,
+revision `0x20064`. SMI saves selectors, hidden segment caches, descriptor
+tables, integer registers, flags, control registers, DR6/DR7 and the
+interrupt shadow at SMBASE + 0xfe00. Firmware starts at SMBASE + 0x8000
+with paging disabled and uses the system RAM bank. A further SMI stays
+latched while firmware is active.
+
+Original RSM fetches in the current execution mode and consumes the mutable
+save image. Firmware edits therefore affect the resumed CPU. A legacy PAE
+restore reloads the four PDPTEs from the resumed physical address space.
+Invalid control combinations enter shutdown. A backing stop retains the
+authenticated instruction and restore progress. CR2, CR8, vector registers
+and debug address registers follow their live CPU bank across the SMI and
+RSM pair. The software profile accepts inactive instruction debugging and
+non-CET state. The save-map layout follows the Linux implementation.
+[Linux KVM SMM](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/smm.c)
+
+## Native SMM return
 
 `native-smm-v12` admits canonical `RSM` (`0F AA`) while executing in active
 native SMM in code64. It uses a terminal native LLVM intrinsic to restore the

@@ -37,7 +37,7 @@ X86MemoryAccessResult backingFault(const GuestMemoryAccessResult &Access) {
 llvm::Expected<X86LegacySegmentResult>
 segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
               uint64_t Bytes) {
-  if (!(State.CR0 & 1) ||
+  if ((!(State.CR0 & 1) && (A.CPL || (State.RFlags & 0x20000))) ||
       ((State.RFlags & 0x20000) && ((State.EFER & 0x400) || A.CPL != 3)) ||
       A.CPL > 3 || !Bytes || Bytes > kMemoryFaultMaxAccessBytes)
     return invalid(
@@ -58,7 +58,7 @@ segmentAccess(const X86PagingState &State, const X86SegmentedAccess &A,
   }
   return checkX86LegacySegmentAccess(
       A.Cache, {A.Segment, Kind, A.Offset, uint32_t(Bytes), A.FullLimitChoice,
-                bool(State.RFlags & 0x20000)});
+                bool(State.RFlags & 0x20000), !(State.CR0 & 1)});
 }
 
 } // namespace
@@ -89,6 +89,22 @@ X86PagedMemory::X86PagedMemory(std::unique_ptr<GuestMemoryRuntime> Physical,
                                const X86PagingState &Controls)
     : Physical(std::move(Physical)), Features(Features), Controls(Controls) {}
 
+llvm::Expected<std::unique_ptr<X86PagedMemory>>
+X86PagedMemory::createWithSgx(const GuestState &RAM, const X86PagingFeatures &F,
+                              const X86PagingState &C,
+                              std::shared_ptr<X86SgxMemory> Enclaves,
+                              const GuestMemoryRuntimeLimits &Limits) {
+  if (!Enclaves)
+    return invalid("software SGX requires its private EPC bank");
+  auto Memory = create(RAM, F, C, Limits);
+  if (!Memory)
+    return Memory.takeError();
+  if (auto E = Enclaves->validateBacking(RAM, F))
+    return std::move(E);
+  (*Memory)->SGX = std::move(Enclaves);
+  return Memory;
+}
+
 llvm::Error X86PagedMemory::bindControls(const X86PagingState &State) {
   if (auto Error = validateX86PagingState(Features, State))
     return Error;
@@ -118,6 +134,17 @@ X86PagedMemory::plan(const X86LinearAccess &Access, uint64_t Bytes) {
     P.Result.Exception = *Check;
     return P;
   }
+  if (SGX && SGX->active() && Access.Kind == MemoryAccessKind::Execute) {
+    const auto &Enclave = *SGX->active();
+    if (Access.CPL != 3 || !(Controls.EFER & 0x400))
+      return invalid("active software enclave requires user-mode IA-32e fetch");
+    if (!Enclave.contains(Access.Address) ||
+        !Enclave.contains(Access.Address + Bytes - 1)) {
+      P.Result.Status = X86PageWalkStatus::Exception;
+      P.Result.Exception = X86MemoryException{13, 0, {}};
+      return P;
+    }
+  }
   auto Current = Access;
   uint64_t Remaining = Bytes;
   while (Remaining) {
@@ -133,7 +160,19 @@ X86PagedMemory::plan(const X86LinearAccess &Access, uint64_t Bytes) {
     // Limit fragments to 4 KiB even for large pages. Subsequent operand bytes
     // can alias the physical page tables; all translations precede the store.
     const uint64_t Size = std::min(Remaining, 4096 - (Current.Address & 4095));
-    P.Fragments.push_back({Translation->PhysicalAddress, Size});
+    Fragment F{Translation->PhysicalAddress, Size};
+    if (SGX) {
+      auto X = SGX->resolve(Current, Controls, F.PhysicalAddress);
+      if (X.Exception) {
+        P.Result.Status = X86PageWalkStatus::Exception;
+        P.Result.Exception = X.Exception;
+        P.Fragments.clear();
+        return P;
+      }
+      F.Target = X.Destination;
+      F.PrivateBytes = X.Bytes;
+    }
+    P.Fragments.push_back(F);
     Remaining -= Size;
     if (Remaining) {
       Current.Address += Size;
@@ -155,17 +194,11 @@ X86PagedMemory::load(const X86LinearAccess &Access,
     return P.takeError();
   if (P->Result.Status != X86PageWalkStatus::Completed)
     return P->Result;
-  std::vector<uint8_t> Bytes(Output.size());
-  size_t Offset = 0;
-  for (const auto &Fragment : P->Fragments) {
-    const auto R = Physical->loadBytes(
-        Fragment.PhysicalAddress,
-        llvm::MutableArrayRef(Bytes).slice(Offset, Fragment.Size));
-    if (R.Status == GuestMemoryAccessStatus::Fault)
-      return backingFault(R);
-    Offset += Fragment.Size;
+  if (auto Fault = readFragments(P->Fragments, Output)) {
+    P->Result.Status = X86PageWalkStatus::BackingFault;
+    P->Result.BackingFault = *Fault;
+    return P->Result;
   }
-  std::copy(Bytes.begin(), Bytes.end(), Output.begin());
   observe(Access, Output.size());
   return P->Result;
 }
@@ -182,6 +215,8 @@ X86PagedMemory::prepareStore(const X86LinearAccess &Access, uint64_t Bytes) {
   if (Store.Status != X86PageWalkStatus::Completed)
     return Store;
   for (const auto &Fragment : P->Fragments) {
+    if (Fragment.Target != X86SgxMemory::Target::RAM)
+      continue;
     const auto R =
         Physical->validateStoreBytes(Fragment.PhysicalAddress, Fragment.Size);
     if (R.Status == GuestMemoryAccessStatus::Fault) {
@@ -201,21 +236,43 @@ X86PagedMemory::loadPreparedStore(const PreparedStore &Store,
                                   llvm::MutableArrayRef<uint8_t> Output) {
   assert(Store.Status == X86PageWalkStatus::Completed && Store.Owner == this &&
          Store.Bytes == Output.size() && "read the successful original plan");
-  std::vector<uint8_t> Bytes(Output.size());
-  size_t Offset = 0;
-  for (const auto &Fragment : Store.Fragments) {
-    const auto R = Physical->loadBytes(
-        Fragment.PhysicalAddress,
-        llvm::MutableArrayRef(Bytes).slice(Offset, Fragment.Size));
-    if (R.Status == GuestMemoryAccessStatus::Fault)
-      return backingFault(R);
-    Offset += Fragment.Size;
+  if (auto Fault = readFragments(Store.Fragments, Output)) {
+    X86MemoryAccessResult Result;
+    Result.Status = X86PageWalkStatus::BackingFault;
+    Result.BackingFault = *Fault;
+    return Result;
   }
-  std::copy(Bytes.begin(), Bytes.end(), Output.begin());
   auto Access = Store.Access;
   Access.Kind = MemoryAccessKind::Read;
   observe(Access, Output.size());
   return static_cast<const X86MemoryAccessResult &>(Store);
+}
+
+std::optional<GuestMemoryFault>
+X86PagedMemory::readFragments(llvm::ArrayRef<Fragment> Fragments,
+                              llvm::MutableArrayRef<uint8_t> Output) {
+  std::vector<uint8_t> Bytes(Output.size());
+  size_t Offset = 0;
+  for (const auto &F : Fragments) {
+    auto Out = llvm::MutableArrayRef(Bytes).slice(Offset, F.Size);
+    switch (F.Target) {
+    case X86SgxMemory::Target::RAM: {
+      auto Read = Physical->loadBytes(F.PhysicalAddress, Out);
+      if (Read.Status == GuestMemoryAccessStatus::Fault)
+        return Read.Fault;
+      break;
+    }
+    case X86SgxMemory::Target::Private:
+      std::copy_n(F.PrivateBytes, F.Size, Out.begin());
+      break;
+    case X86SgxMemory::Target::AbortPage:
+      std::fill(Out.begin(), Out.end(), 0xff);
+      break;
+    }
+    Offset += F.Size;
+  }
+  std::copy(Bytes.begin(), Bytes.end(), Output.begin());
+  return std::nullopt;
 }
 
 void X86PagedMemory::commitStore(const PreparedStore &Store,
@@ -226,6 +283,13 @@ void X86PagedMemory::commitStore(const PreparedStore &Store,
   for (const auto &Fragment : Store.Fragments) {
     // No callbacks, concurrent writers, permission changes or executable
     // generation increments can intervene between validation and commit.
+    if (Fragment.Target != X86SgxMemory::Target::RAM) {
+      if (Fragment.Target == X86SgxMemory::Target::Private)
+        std::copy_n(Input.begin() + Offset, Fragment.Size,
+                    Fragment.PrivateBytes);
+      Offset += Fragment.Size;
+      continue;
+    }
     const auto R = Physical->storeBytes(Fragment.PhysicalAddress,
                                         Input.slice(Offset, Fragment.Size));
     assert(R.Status == GuestMemoryAccessStatus::Completed &&
