@@ -13,6 +13,7 @@
 #include "neverd/ir/X86/X86LegacySegments.h"
 #include "neverd/translate/GuestMemoryRuntime.h"
 #include "neverd/translate/X86/X86Paging.h"
+#include "neverd/translate/X86/X86SgxMemory.h"
 
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Error.h"
@@ -49,6 +50,14 @@ public:
   create(const GuestState &PhysicalRAM, const X86PagingFeatures &Features,
          const X86PagingState &Controls,
          const GuestMemoryRuntimeLimits &Limits = {});
+
+  static llvm::Expected<std::unique_ptr<X86PagedMemory>> createWithSgx(
+      const GuestState &OrdinaryRAM, const X86PagingFeatures &Features,
+      const X86PagingState &Controls, std::shared_ptr<X86SgxMemory> Enclaves,
+      const GuestMemoryRuntimeLimits &Limits = {});
+  X86SgxMemory *sgxMemory() const { return SGX.get(); }
+  /// Retain this exact bank when rebuilding ordinary RAM after a backing stop.
+  const std::shared_ptr<X86SgxMemory> &sgxBank() const { return SGX; }
 
   const X86PagingState &controls() const { return Controls; }
   const X86PagingFeatures &features() const { return Features; }
@@ -111,6 +120,8 @@ private:
   struct Fragment {
     uint64_t PhysicalAddress;
     uint64_t Size;
+    X86SgxMemory::Target Target = X86SgxMemory::Target::RAM;
+    uint8_t *PrivateBytes = nullptr;
   };
   struct Plan {
     X86MemoryAccessResult Result;
@@ -132,9 +143,13 @@ private:
                  const X86PagingFeatures &Features,
                  const X86PagingState &Controls);
   llvm::Expected<Plan> plan(const X86LinearAccess &Access, uint64_t Bytes);
+  std::optional<GuestMemoryFault>
+  readFragments(llvm::ArrayRef<Fragment> Fragments,
+                llvm::MutableArrayRef<uint8_t> Output);
   void observe(const X86LinearAccess &Access, uint64_t Bytes) const;
 
   std::unique_ptr<GuestMemoryRuntime> Physical;
+  std::shared_ptr<X86SgxMemory> SGX;
   X86PagingFeatures Features;
   X86PagingState Controls;
   AccessObserver Observer;

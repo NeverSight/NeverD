@@ -129,7 +129,7 @@ public:
       ReturnCoreType = A >> 24;
   }
 
-  void initialize() {
+  void initialize(std::optional<unsigned> LocalApicCPU = {}) {
     KVM = open("/dev/kvm", O_RDWR | O_CLOEXEC);
     if (KVM < 0)
       GTEST_SKIP() << "KVM unavailable: " << errno;
@@ -142,7 +142,9 @@ public:
     Region.memory_size = Size;
     Region.userspace_addr = reinterpret_cast<uintptr_t>(RAM);
     ASSERT_EQ(ioctl(VM, KVM_SET_USER_MEMORY_REGION, &Region), 0);
-    CPU = ioctl(VM, KVM_CREATE_VCPU, 0);
+    if (LocalApicCPU)
+      ASSERT_EQ(ioctl(VM, KVM_CREATE_IRQCHIP, 0), 0);
+    CPU = ioctl(VM, KVM_CREATE_VCPU, LocalApicCPU.value_or(0));
     ASSERT_GE(CPU, 0);
     constexpr unsigned Capacity = 256;
     CPUIDStorage.resize(

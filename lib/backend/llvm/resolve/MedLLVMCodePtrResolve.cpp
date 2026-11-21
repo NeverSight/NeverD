@@ -295,16 +295,29 @@ MedLLVMEmitter::materializeImageFunctionDeclaration(va_t Entry,
 /// there (its exclusive end).
 std::pair<const Symbol *, const Symbol *>
 MedLLVMEmitter::imageFunctionSymbolsAt(va_t Address) {
-  if (!ImageFunctionSymbolsIndexed) {
+  if (!ImageFunctionSymbolsIndexed &&
+      !ImageFunctionEntrySymbols.contains(Address)) {
+    // A selected caller may use just one code address. Cache its start and
+    // exclusive end (including a miss). A second distinct query builds the
+    // full index for tables and whole-module emission.
+    const bool IndexAll = !ImageFunctionEntrySymbols.empty();
     for (const Symbol &Sym : Img->Symbols) {
-      if (!Sym.IsFunc || !Img->isFunctionEntryCandidateAt(Sym.Addr))
+      if (!Sym.IsFunc)
         continue;
       const va_t Entry = normalizeCodeAddress(Sym.Addr, Img->Arch, Img->Mode);
-      ImageFunctionEntrySymbols[Entry] = &Sym;
-      if (Sym.Size && Sym.Size <= InvalidVA - Entry)
+      const bool Starts = IndexAll || Entry == Address;
+      const bool Ends = Sym.Size && Sym.Size <= InvalidVA - Entry &&
+                        (IndexAll || Entry + Sym.Size == Address);
+      if ((!Starts && !Ends) || !Img->isFunctionEntryCandidateAt(Sym.Addr))
+        continue;
+      if (Starts)
+        ImageFunctionEntrySymbols[Entry] = &Sym;
+      if (Ends)
         ImageFunctionEndSymbols[Entry + Sym.Size] = &Sym;
     }
-    ImageFunctionSymbolsIndexed = true;
+    if (!IndexAll)
+      ImageFunctionEntrySymbols.try_emplace(Address, nullptr);
+    ImageFunctionSymbolsIndexed = IndexAll;
   }
   const auto Exact = ImageFunctionEntrySymbols.find(Address);
   const auto Ending = ImageFunctionEndSymbols.find(Address);

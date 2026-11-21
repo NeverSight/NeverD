@@ -9,6 +9,7 @@
 
 #include "neverd/translate/X86/X86LegacySegmentExecution.h"
 
+#include "X86LegacyDescriptorAddress.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacySegmentEncoding.h"
 #include "X86LegacyTransferJournal.h"
@@ -211,8 +212,8 @@ private:
         cache(Segment),
         {Segment,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
-         Offset, Bytes, O.FullLimitChoice,
-         bool(M.controls().RFlags & 0x20000)});
+         Offset, Bytes, O.FullLimitChoice, bool(M.controls().RFlags & 0x20000),
+         !(M.controls().CR0 & 1)});
     if (!Address) {
       Failure = Address.takeError();
       return false;
@@ -231,6 +232,11 @@ private:
 
   bool loadSegment(X86SegmentRegister Segment, uint16_t Selector,
                    X86LegacySegmentCache &Next) {
+    if (!(M.controls().CR0 & 1)) {
+      Next = S.Segments[unsigned(Segment)];
+      x86ReloadRealSegment(Next, Selector);
+      return true;
+    }
     if (M.controls().RFlags & 0x20000) {
       Next = x86VM86SegmentCache(Selector);
       return true;
@@ -263,24 +269,16 @@ private:
     const X86LinearAccess Access{
         Address, MemoryAccessKind::Read, S.CPL, true, false, !Wide};
     if (Wide) {
-      // The starting address always carries the selector error. Processors
-      // differ only when a canonical start has noncanonical trailing bytes.
-      const unsigned Bytes =
-          O.DescriptorCanonicality ==
-                  X86DescriptorCanonicalityProfile::SelectorForRange
-              ? 8
-              : 1;
-      auto Check = checkX86LinearAccess(M.controls(), Access, Bytes);
+      auto Check = detail::checkLegacyDescriptorAddress(
+          M.controls(), Access, 8, Selector, O.DescriptorCanonicality);
       if (!Check) {
         Failure = Check.takeError();
         return false;
       }
       if (*Check) {
-        faultIf(true, 13, Selector & 0xfffc);
+        faultIf(true, 13, (*Check)->ErrorCode);
         return false;
       }
-      // memory() still checks all eight bytes before a walk. Under the start
-      // profile, a noncanonical tail therefore keeps the ordinary #GP(0).
     }
     Value Descriptor = 0;
     if (!memory(Access, 8, Descriptor))
@@ -310,15 +308,17 @@ private:
 llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
                                           const X86PagingState &Controls,
                                           bool Compatibility) {
-  if (!(Controls.CR0 & 1) || ((Controls.EFER & 0x400) && !Compatibility) ||
-      (Compatibility && (Controls.RFlags & 0x20000)) || State.CPL > 3 ||
-      ((Controls.RFlags & 0x20000) && State.CPL != 3))
+  const bool Real = !(Controls.CR0 & 1);
+  if ((Real && (State.CPL || (Controls.RFlags & 0x20000))) ||
+      ((Controls.EFER & 0x400) && !Compatibility) ||
+      ((Controls.EFER & 0x400) && (Controls.RFlags & 0x20000)) ||
+      State.CPL > 3 || ((Controls.RFlags & 0x20000) && State.CPL != 3))
     return invalid(
         "legacy segment execution requires bound protected-mode state");
   for (unsigned I = 0; I != State.Segments.size(); ++I)
     if (auto Error = validateX86LegacySegmentCache(
             static_cast<X86SegmentRegister>(I), State.Segments[I],
-            bool(Controls.RFlags & 0x20000)))
+            bool(Controls.RFlags & 0x20000), Real))
       return std::move(Error);
   // Protected LLDT retains the descriptor's flag nibble, including the
   // otherwise unused L bit. It does not make the LDT a long code segment.
@@ -326,7 +326,10 @@ llvm::Error validateX86LegacySegmentState(const X86LegacySegmentState &State,
                                (State.LDTR.Attributes & 0x0f00)))
     return invalid("legacy segment execution requires a loaded LDT cache");
   const auto &CS = State.Segments[unsigned(X86SegmentRegister::CS)];
-  if (!(Controls.RFlags & 0x20000) && (CS.Selector & 3) != State.CPL)
+  if (CS.RetainedRealCS && (Real || (Controls.RFlags & 0x20000) || State.CPL))
+    return invalid("retained pre-PE code cache requires CPL0");
+  if (!Real && !CS.RetainedRealCS && !(Controls.RFlags & 0x20000) &&
+      (CS.Selector & 3) != State.CPL)
     return invalid("legacy segment execution CPL disagrees with CS");
   return llvm::Error::success();
 }

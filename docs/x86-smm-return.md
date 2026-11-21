@@ -1,4 +1,36 @@
-# Native SMM return
+# System-management execution
+
+## Software SMI and RSM
+
+Bind `X86SmmState`, a debug register bank and a separate `X86PagedMemory`
+with matching processor features. A long-mode-capable CPU uses the 512-byte
+KVM64 save map (revision `0x20064`) even in real or protected mode. A CPU
+with CPUID long-mode support clear selects the KVM32 map (revision
+`0x20000`). The legacy map stores eight dword GPRs and separate visible
+selectors and descriptor caches. EFER and extended GPR slots follow the live
+CPU bank across firmware execution. RSM selects its layout from the processor
+capability even if firmware edits the revision word. SMI saves selectors, hidden segment caches, descriptor
+tables, integer registers, flags, control registers, DR6/DR7 and the
+interrupt shadow at SMBASE + 0xfe00. Firmware starts at SMBASE + 0x8000
+with paging disabled and uses the system RAM bank. A further SMI stays
+latched while firmware is active. The interrupted CR4 and EFER must fit the
+processor feature binding. A missing feature leaves the SMI pending, the
+SMRAM image intact and any interrupted enclave on its current thread.
+
+Original RSM fetches in the current execution mode and consumes the mutable
+save image. Firmware edits therefore affect the resumed CPU. A legacy PAE
+restore reloads the four PDPTEs from the resumed physical address space.
+Invalid control combinations enter shutdown. A backing stop retains the
+authenticated instruction and restore progress. CR2, CR8, vector registers
+and debug address registers follow their live CPU bank across the SMI and
+RSM pair. A firmware instruction breakpoint on RSM enters the SMM debug
+handler before the save image is consumed. Firmware TF produces a single-step
+trap after a successful RSM using the restored register bank and IDT. TF set
+only in the save image steps the next resumed instruction. The software
+profile uses non-CET state. The save-map layout follows Linux KVM.
+[Linux KVM SMM](https://github.com/torvalds/linux/blob/v6.18/arch/x86/kvm/smm.c)
+
+## Native SMM return
 
 `native-smm-v12` admits canonical `RSM` (`0F AA`) while executing in active
 native SMM in code64. It uses a terminal native LLVM intrinsic to restore the

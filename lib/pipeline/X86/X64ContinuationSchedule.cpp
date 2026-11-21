@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 
@@ -43,6 +44,10 @@ void emitScheduledDriver(
     const analysis::X64ContinuationSourceOptions &Options, llvm::StringRef Name,
     const X64FunctionCallSitePauses *CallSitePauses) {
   const bool Paged = Options.PagedMemory;
+  const bool HasPagedCr8Write =
+      Paged && Options.NotifyCr8Writes &&
+      std::any_of(Units.begin(), Units.end(),
+                  [](const auto &Unit) { return Unit.WritesCr8; });
   const auto Names = x64FunctionContextNames(Options.PagedDebug);
   if (FunctionContext)
     OS << "/* Retain the activation across event and instruction boundaries.\n"
@@ -140,9 +145,10 @@ void emitScheduledDriver(
 )C";
   if (Paged)
     OS << "        }\n";
-  OS << R"C(        const uint64_t old_flags = state->RFlags;
-        switch (state->PC) {
-)C";
+  OS << "        const uint64_t old_flags = state->RFlags;\n";
+  if (HasPagedCr8Write)
+    OS << "        uint64_t progress;\n";
+  OS << "        switch (state->PC) {\n";
   for (const auto &Unit : Units) {
     OS << "        case 0x" << llvm::utohexstr(Unit.Address) << "ULL:";
     if (FunctionContext && Unit.IsNearReturn) {
@@ -154,28 +160,39 @@ void emitScheduledDriver(
           },
           Options.PagedDebug ? "shadows->SSBlocked" : "");
       OS << "            break;\n";
-    } else if (Options.NotifyCr8Writes && Unit.WritesCr8) {
-      // The lowering owner marks modeled writes, not reads or native requests.
-      // Rejections preserve the producer; same-value completions still notify.
-      OS << " status = " << Unit.Function.Name
-         << "((uint8_t *)state);\n"
-            "            if (status == 0) "
-            "neverd_x64_cr8_written_v1(state->CR8, context);\n"
-            "            break;\n";
-    } else
-      OS << " status = " << Unit.Function.Name
-         << (Options.PagedDebug ? "_paged_debug_step(state, memory_context, "
-                                  "shadows->SSBlocked); break;\n"
-             : Paged            ? "_paged_step(state, memory_context); break;\n"
-                                : "((uint8_t *)state); break;\n");
+      continue;
+    }
+    OS << " status = " << Unit.Function.Name
+       << (Options.PagedDebug ? "_paged_debug_step(state, memory_context, "
+                                "shadows->SSBlocked);"
+           : Paged            ? "_paged_step(state, memory_context);"
+                              : "((uint8_t *)state);");
+    if (!Options.NotifyCr8Writes || !Unit.WritesCr8) {
+      OS << " break;\n";
+      continue;
+    }
+    // A paged debug trap can precede or follow the write. Read the receipt
+    // once, before notifying, and reuse it for budget and shadow accounting.
+    if (Paged)
+      OS << "\n            progress = "
+            "neverd_x64_paged_progress_v1(memory_context);"
+            "\n            if (progress & "
+         << analysis::kX64PagedInstructionCompleted << ")";
+    else
+      OS << "\n            if (status == 0)";
+    OS << " neverd_x64_cr8_written_v1(state->CR8, context);\n"
+       << (Paged ? "            goto account_progress;\n"
+                 : "            break;\n");
   }
   OS << R"C(        default: return 5;
         }
 )C";
   if (Paged) {
-    OS << "        const uint64_t progress = "
-          "neverd_x64_paged_progress_v1(memory_context);\n"
-       << "        if (progress & " << analysis::kX64PagedInstructionAttempted
+    OS << "        " << (HasPagedCr8Write ? "" : "const uint64_t ")
+       << "progress = neverd_x64_paged_progress_v1(memory_context);\n";
+    if (HasPagedCr8Write)
+      OS << "account_progress:\n";
+    OS << "        if (progress & " << analysis::kX64PagedInstructionAttempted
        << ") --*budget;\n"
        << "        else if (!(progress & "
        << analysis::kX64PagedInstructionResumed << ")) return status;\n"

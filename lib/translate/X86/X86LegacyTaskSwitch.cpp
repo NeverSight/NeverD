@@ -29,8 +29,7 @@ llvm::Error invalid(const char *Message) {
 }
 
 bool sameCache(const X86LegacySegmentCache &A, const X86LegacySegmentCache &B) {
-  return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
-         std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
+  return A == B;
 }
 
 bool sameControls(const X86PagingState &A, const X86PagingState &B) {

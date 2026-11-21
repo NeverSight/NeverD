@@ -11,6 +11,7 @@
 
 #include "gtest/gtest.h"
 
+#include "neverd/ir/Limits.h"
 #include "neverd/ir/TargetRegInfo.h"
 #include "neverd/ir/low/CallRegisterEffects.h"
 #include "neverd/lift/X86/X86Regs.h"
@@ -309,7 +310,7 @@ TEST(CallRegisterUnread, RecursiveSummariesConvergeInBothAddressOrders) {
   }
 }
 
-TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
+TEST(CallRegisterUnread, ReversedBlockOrderRetainsAReachableRead) {
   auto Effect = body({});
   Effect.Blocks.resize(2048);
   Effect.Blocks[0].Succs = {Effect.Blocks.size() - 1};
@@ -318,8 +319,39 @@ TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
   Effect.Blocks[1].Steps = {Read};
   for (size_t B = 2; B < Effect.Blocks.size(); ++B)
     Effect.Blocks[B].Succs = {B - 1};
+  const auto Proof = proveUnreadCallRegisters({{0x1000, &Effect}});
+  ASSERT_EQ(Proof.size(), 1u);
+  EXPECT_FALSE(unread(Proof, 0x1000));
+}
+
+TEST(CallRegisterUnread, ExhaustionPublishesNoPartialProofAndDoesNotPersist) {
+  auto Effect = body({});
+  Effect.Blocks[0].Succs.resize(limits::ir::kCallRegisterUnreadWork, 0);
   EXPECT_TRUE(proveUnreadCallRegisters({{0x1000, &Effect}}).empty());
   Effect = body({});
   EXPECT_TRUE(unread(proveUnreadCallRegisters({{0x1000, &Effect}}), 0x1000));
+}
+
+TEST(CallRegisterUnread, EachCallSiteObservesOnlySurvivingEntryFamilies) {
+  constexpr unsigned Other = 9;
+  constexpr auto OtherBit = GPRFamilyMask{1} << Other;
+  RegisterStep KillScratch, KillOther, Call, Observe;
+  KillScratch.Kills = ScratchBit;
+  KillOther.Kills = OtherBit;
+  Call.Callee = 0x2000;
+  Observe.Reads[Scratch] = Observe.Reads[Other] = 8;
+  auto Callee = body({Observe});
+  auto Caller = body({});
+  Caller.Blocks[0].Succs = {1, 2};
+  Caller.Blocks.push_back({{KillScratch, Call}, {}});
+  Caller.Blocks.push_back({{KillOther, Call}, {}});
+  const LocalRegisterEffectRefs Bodies{{0x1000, &Caller}, {0x2000, &Callee}};
+  EXPECT_EQ(proveUnreadCallRegisters(Bodies).at(0x1000) &
+                (ScratchBit | OtherBit),
+            0u);
+  Caller.Blocks[0].Steps.push_back(KillScratch);
+  EXPECT_EQ(proveUnreadCallRegisters(Bodies).at(0x1000) &
+                (ScratchBit | OtherBit),
+            ScratchBit);
 }
 } // namespace

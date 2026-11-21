@@ -41,8 +41,7 @@ X86MemoryAccessResult fault(uint8_t Vector) {
 namespace {
 
 bool sameCache(const X86LegacySegmentCache &A, const X86LegacySegmentCache &B) {
-  return std::tie(A.Base, A.Limit, A.Selector, A.Attributes, A.Unusable) ==
-         std::tie(B.Base, B.Limit, B.Selector, B.Attributes, B.Unusable);
+  return A == B;
 }
 
 bool sameDebug(const std::optional<X86LegacyDebugState> &A,
@@ -165,7 +164,7 @@ llvm::Expected<X86MemoryAccessResult> executeLegacyControlRegister(
         (Next.TR.Attributes & 15) == 3);
     if (Plan.Exception)
       return Fault(Plan.Exception->Vector);
-    if (!(Plan.Controls.CR0 & PE))
+    if (!(Plan.Controls.CR0 & PE) && !Options.Non64Mode)
       return invalid("MOV-CR real-mode entry requires a mode-transfer owner");
     if ((Plan.Controls.EFER & 0x400) && !Options.Non64Mode)
       return invalid(

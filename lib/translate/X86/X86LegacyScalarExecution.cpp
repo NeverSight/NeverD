@@ -64,11 +64,11 @@ public:
       else if (F.Operation == Op::ClearTaskSwitch)
         Result.CR0 = Controls.CR0 & ~uint64_t{8};
       else if (read(F.Source, 2, B))
-        // Admission guarantees PE=1. LMSW cannot clear it or change CR0[63:4].
-        Result.CR0 = (Controls.CR0 & ~uint64_t{14}) | (B & 14);
+        // LMSW may set PE and cannot clear it once set.
+        Result.CR0 = (Controls.CR0 & ~uint64_t{14}) | (B & 15);
       return;
     }
-    if ((S.EFlags & 0x20000) &&
+    if (((S.EFlags & 0x20000) || !(M.controls().CR0 & 1)) &&
         (F.SystemSelector || F.DescriptorQuery ||
          F.Operation == X86LegacyScalarOperation::AdjustPrivilege)) {
       fault(6);
@@ -776,7 +776,7 @@ private:
         {Segment,
          Write ? X86SegmentAccessKind::Write : X86SegmentAccessKind::Read,
          A.offset(S.Core.GPR), Bytes, O.Segments.FullLimitChoice,
-         bool(S.EFlags & 0x20000)});
+         bool(S.EFlags & 0x20000), !(M.controls().CR0 & 1)});
     if (!Checked) {
       Failure = Checked.takeError();
       return false;

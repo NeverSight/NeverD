@@ -15,6 +15,13 @@
 
 namespace neverd {
 
+constexpr uint64_t x86NormalizedDR6(uint64_t V) {
+  return (V & 0xe00f) | 0xffff0ff0;
+}
+constexpr uint64_t x86NormalizedDR7(uint64_t V) {
+  return (V & 0xffff2bff) | 0x400;
+}
+
 struct X86DebugRegisterAccess {
   uint8_t Debug, General;
   bool Write, InvalidOpcode;
@@ -54,9 +61,9 @@ x86AccessDebugRegister(Bank &State, Word &Value, X86DebugRegisterAccess Access,
     if (Index < 4) {
       State.DR[Index] = Value;
     } else if (Index == 6) {
-      State.DR6 = (Value & 0xe00f) | 0xffff0ff0;
+      State.DR6 = x86NormalizedDR6(Value);
     } else {
-      const uint64_t Next = (Value & 0xffff2bff) | 0x400;
+      const uint64_t Next = x86NormalizedDR7(Value);
       if (!x86InstructionDebugValid(State.DR6, Next, State.DebugCTL, Profile,
                                     CR4))
         return Result::UnsupportedControl;

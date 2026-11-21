@@ -7,6 +7,7 @@
 /// Protected 16/32-bit IRET and RETF over segmented, paged guest RAM.
 //===----------------------------------------------------------------------===//
 
+#include "X86LegacyDescriptorAddress.h"
 #include "X86LegacyExecutionInternal.h"
 #include "X86LegacyTransferJournal.h"
 
@@ -81,7 +82,7 @@ private:
     Failure = llvm::createStringError(llvm::errc::not_supported, Message);
   }
 
-  bool access(uint32_t Address, unsigned Bytes, Value &V, bool Implicit,
+  bool access(uint64_t Address, unsigned Bytes, Value &V, bool Implicit,
               bool Write = false) {
     auto Replayed = Journal->replay(Address, Bytes, Write, V);
     if (!Replayed) {
@@ -105,7 +106,7 @@ private:
     const X86LinearAccess A{
         Address,    Write ? MemoryAccessKind::Write : MemoryAccessKind::Read,
         S.Core.CPL, Implicit,
-        !Implicit,  true};
+        !Implicit,  !Implicit || !(M.controls().EFER & 0x400)};
     auto Got = Write ? M.store(A, Span) : M.load(A, Span);
     if (!Got) {
       Failure = Got.takeError();
@@ -139,7 +140,7 @@ private:
     auto Range = checkX86LegacySegmentAccess(
         SS, {X86SegmentRegister::SS, X86SegmentAccessKind::Read,
              (S.Core.GPR[4] + Offset) & Mask, Bytes, O.Segments.FullLimitChoice,
-             bool(S.EFlags & 0x20000)});
+             bool(S.EFlags & 0x20000), !(M.controls().CR0 & 1)});
     if (!Range) {
       Failure = Range.takeError();
       return false;
@@ -149,7 +150,7 @@ private:
     return access(Range->Linear, Bytes, V, false);
   }
 
-  bool descriptor(uint16_t Selector, Value &D, uint32_t &Address) {
+  bool descriptor(uint16_t Selector, Value &D, uint64_t &Address) {
     if (faultIf(!(Selector & 0xfffc), 13, 0))
       return false;
     const bool Local = Selector & 4;
@@ -159,11 +160,25 @@ private:
                         (Local ? C.LDTR.Limit : C.GDTRLimit),
                 13, Selector & 0xfffc))
       return false;
-    Address = (Local ? C.LDTR.Base : C.GDTRBase) + (Selector & 0xfff8);
+    if (O.Non64Mode && (M.controls().EFER & 0x400)) {
+      Address = (Local ? O.Non64Mode->LDTRBase : O.Non64Mode->GDTRBase) +
+                (Selector & 0xfff8u);
+      auto Check = detail::checkLegacyDescriptorAddress(
+          M.controls(), {Address, MemoryAccessKind::Read, C.CPL, true}, 8,
+          Selector, O.Segments.DescriptorCanonicality);
+      if (!Check) {
+        Failure = Check.takeError();
+        return false;
+      }
+      if (*Check)
+        return !faultIf(true, 13, (*Check)->ErrorCode);
+    } else
+      Address =
+          uint32_t((Local ? C.LDTR.Base : C.GDTRBase) + (Selector & 0xfff8));
     return access(Address, 8, D, true);
   }
 
-  bool accessed(uint32_t Address, Value D) {
+  bool accessed(uint64_t Address, Value D) {
     if (D & (Value{1} << 40))
       return true;
     D |= Value{1} << 40;
@@ -228,6 +243,9 @@ private:
   }
 
   void execute(unsigned Bytes, uint16_t Discard, bool Interrupt) {
+    const bool IA32e = M.controls().EFER & 0x400;
+    if (faultIf(IA32e && Interrupt && (S.EFlags & 0x4000), 13, 0))
+      return;
     const bool VM86 = S.EFlags & 0x20000;
     if (faultIf(Interrupt && VM86 && (S.EFlags & 0x3000) != 0x3000 &&
                     (Bytes != 2 || !(M.controls().CR4 & 1)),
@@ -240,23 +258,42 @@ private:
     // does not participate in segment, page or alignment checks.
     if (!frame(Bytes, 2, Selector) || !frame(0, Bytes, IP))
       return;
+    if (!(M.controls().CR0 & 1)) {
+      auto &CS = S.Core.Segments[1];
+      if (faultIf(IP > CS.Limit, 13, 0))
+        return;
+      auto &SP = S.Core.GPR[4];
+      const auto Mask =
+          S.Core.Segments[2].Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
+      SP = (SP & ~Mask) | ((SP + (Interrupt ? 3 : 2) * Bytes + Discard) & Mask);
+      x86ReloadRealSegment(CS, Selector);
+      S.EIP = IP;
+      if (Interrupt) {
+        const uint32_t Write = Bytes == 4 ? 0x257fd5u : 0x7fd5u;
+        S.EFlags = (S.EFlags & ~Write) | (Flags & Write) | 2;
+      }
+      if (!Interrupt || Bytes == 2)
+        S.EFlags &= ~0x10000u;
+      return;
+    }
     if (VM86) {
       returnVM86(Bytes, Discard, Interrupt, IP, Selector, Flags);
       return;
     }
-    if (Interrupt && S.Core.CPL == 0 && (Flags & 0x20000)) {
+    if (!IA32e && Interrupt && S.Core.CPL == 0 && (Flags & 0x20000)) {
       enterVM86(IP, Selector, Flags);
       return;
     }
     Value Code = 0;
-    uint32_t CodeAddress = 0;
+    uint64_t CodeAddress = 0;
     if (!descriptor(Selector, Code, CodeAddress))
       return;
-    Returns::checkCode(*this, Selector, Code, S.Core.CPL, false);
+    Returns::checkCode(*this, Selector, Code, S.Core.CPL, IA32e);
     if (R.Status != X86PageWalkStatus::Completed)
       return;
     const auto CS = cache(Selector, Code);
-    if (CS.Attributes & 0x2000) {
+    const bool LongTarget = IA32e && (CS.Attributes & 0x2000);
+    if (!IA32e && (CS.Attributes & 0x2000)) {
       unsupported("legacy return code has unsupported reserved L bit");
       return;
     }
@@ -269,26 +306,34 @@ private:
     if (Outer) {
       const unsigned Offset = (Interrupt ? 3 : 2) * Bytes + Discard;
       Value StackSelector = 0, Stack = 0;
-      uint32_t StackAddress = 0;
+      uint64_t StackAddress = 0;
       if (!frame(Offset + Bytes, 2, StackSelector) || !frame(Offset, Bytes, SP))
         return;
-      if (!descriptor(StackSelector, Stack, StackAddress))
-        return;
-      Descriptors::checkData(*this, true, StackSelector, Stack, CPL);
-      if (R.Status != X86PageWalkStatus::Completed)
-        return;
-      SS = cache(StackSelector, Stack);
-      if (auto Error =
-              validateX86LegacySegmentCache(X86SegmentRegister::SS, SS)) {
-        Failure = std::move(Error);
-        return;
+      if (LongTarget && !(StackSelector & 0xfffc)) {
+        if (faultIf(CPL == 3 || (StackSelector & 3) != CPL, 13, 0))
+          return;
+        SS = {0, 0, uint16_t(StackSelector), 0, true};
+      } else {
+        if (!descriptor(StackSelector, Stack, StackAddress))
+          return;
+        Descriptors::checkData(*this, true, StackSelector, Stack, CPL);
+        if (R.Status != X86PageWalkStatus::Completed)
+          return;
+        SS = cache(StackSelector, Stack);
+        if (auto Error =
+                validateX86LegacySegmentCache(X86SegmentRegister::SS, SS)) {
+          Failure = std::move(Error);
+          return;
+        }
+        if (!accessed(StackAddress, Stack))
+          return;
       }
-      if (!accessed(StackAddress, Stack))
-        return;
     }
-    if (faultIf(IP > CS.Limit, 13, 0))
+    if (faultIf(!LongTarget && IP > CS.Limit, 13, 0))
       return;
-    const uint32_t Mask = SS.Attributes & 0x4000 ? UINT32_MAX : UINT16_MAX;
+    const uint32_t Mask = (LongTarget && Outer) || (SS.Attributes & 0x4000)
+                              ? UINT32_MAX
+                              : UINT16_MAX;
     const uint32_t NewSP = (S.Core.GPR[4] & ~Mask) | ((SP + Discard) & Mask);
     const uint32_t NewFlags =
         Interrupt

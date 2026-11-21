@@ -111,7 +111,8 @@ protected:
   }
 
   void compileLong(bool LLVM, const std::string &Optimization,
-                   const std::string &Compiler, bool Debug = false) {
+                   const std::string &Compiler, bool Debug = false,
+                   uint64_t ImageBase = 0x1100) {
     llvm::json::Array PCs;
     std::vector<uint8_t> Code;
     for (const auto &I : Program)
@@ -127,7 +128,7 @@ protected:
     std::string Request;
     llvm::raw_string_ostream OS(Request);
     OS << llvm::formatv("{0}", llvm::json::Value(std::move(Settings)));
-    auto Export = exportX64Continuation(image(Code, 0x1100), Request, LLVM);
+    auto Export = exportX64Continuation(image(Code, ImageBase), Request, LLVM);
     ASSERT_TRUE(bool(Export)) << llvm::toString(Export.takeError());
     const auto Manifest = llvm::cantFail(llvm::json::parse(Export->Manifest));
     ASSERT_EQ(Manifest.getAsObject()->getInteger("native_requests"), 0)

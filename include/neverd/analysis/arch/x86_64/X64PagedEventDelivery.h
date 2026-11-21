@@ -135,6 +135,9 @@ struct X64PagedEventContinuation {
   /// Retained for every secondary event, including an unaccepted budget stop.
   X86DescriptorCanonicalityProfile DescriptorCanonicality =
       kX64PagedEventDescriptorCanonicality;
+  /// The primary event entered with synthetic SGX state. Its outside frame
+  /// must retain RF=0 across backing suspension.
+  bool EnclaveExitFrame = false;
 };
 
 struct X64PagedEventResult {

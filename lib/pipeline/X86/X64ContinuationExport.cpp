@@ -1210,9 +1210,15 @@ typedef struct neverd_x64_event_v1 {
     Report["cr8_write_notification"] = llvm::json::Object{
         {"symbol", "neverd_x64_cr8_written_v1"},
         {"instructions", std::move(Writes)},
-        {"domain", "successful-RAM scheduled drivers and their call views; "
-                   "once after each completed MOV to CR8, including "
-                   "same-value writes, before the next poll or return"},
+        {"domain",
+         Request->Options.PagedMemory
+             ? "paged scheduled drivers and their call views notify once "
+               "on InstructionCompleted before the next poll or return, "
+               "including same-value writes and post-commit debug stops. "
+               "Privilege or reserved-bit faults precede completion."
+             : "successful-RAM scheduled drivers and their call views; "
+               "once after each completed MOV to CR8, including "
+               "same-value writes, before the next poll or return"},
         {"effects", "cannot fail; update only the existing producer context; "
                     "no state, shadows, budgets, code or RAM access; "
                     "initial CPU/controller coherence is caller-owned; "
