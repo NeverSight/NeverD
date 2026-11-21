@@ -910,45 +910,51 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
       Fallthrough();
       continue;
     }
+    // A page pair can materialize an original instruction or embedded byte.
+    // Keep the ADD as a distinct instruction, including its result register.
+    std::optional<MachOPageAddress> NumericPage;
     if (I.Id == AARCH64_INS_ADRP) {
       auto Pair = decodeMachOPageAddress(
           Decode, Source->Bytes.drop_front(PC - Start), PC);
       if (!Pair)
         return std::nullopt;
       const auto *Storage = Image.getSectionFor(Pair->Target);
-      if (!Storage || !Storage->isReadable() ||
-          (Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
-                            llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) ||
-          Pair->Target - Storage->VA >= Storage->FileSz)
-        return std::nullopt;
-      PageOffset = DataSymbol(Pair->Target);
-      if (!PageOffset)
-        return std::nullopt;
-      Body.HasDataPage = true;
-      OS << kAddressPage << cs_reg_name(Decode.getHandle(), Pair->PageRegister)
-         << kSeparator;
-      emitOperand(Body, OS, PageOffset, kSymbolConstraint);
-      OS << kPage;
-      Fallthrough();
-      continue;
+      if (Storage && Storage->isReadable() &&
+          !(Storage->Type & (llvm::MachO::S_ATTR_PURE_INSTRUCTIONS |
+                             llvm::MachO::S_ATTR_SOME_INSTRUCTIONS)) &&
+          Pair->Target - Storage->VA < Storage->FileSz) {
+        PageOffset = DataSymbol(Pair->Target);
+        if (!PageOffset)
+          return std::nullopt;
+        Body.HasDataPage = true;
+        OS << kAddressPage
+           << cs_reg_name(Decode.getHandle(), Pair->PageRegister) << kSeparator;
+        emitOperand(Body, OS, PageOffset, kSymbolConstraint);
+        OS << kPage;
+        Fallthrough();
+        continue;
+      }
+      NumericPage = Pair;
     }
     // A table or signing point moves with this body. An exported numeric
     // address denotes original storage even when lifting a published copy.
     const auto Rebased = aarch64::isPointerLiteralLoad(Encoding)
                              ? machORebasedLiteralAddress(Image, Encoding, PC)
                              : std::nullopt;
-    if (I.Id == AARCH64_INS_ADR || Rebased) {
-      if (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
-          (!Rebased && Ops[1].type != AARCH64_OP_IMM))
+    if (NumericPage || I.Id == AARCH64_INS_ADR || Rebased) {
+      if (!NumericPage && (Ops.size() != 2 || Ops[0].type != AARCH64_OP_REG ||
+                           (!Rebased && Ops[1].type != AARCH64_OP_IMM)))
         return std::nullopt;
-      const va_t Target = Rebased ? *Rebased : va_t(Ops[1].imm);
+      const va_t Target = NumericPage ? NumericPage->Target
+                          : Rebased   ? *Rebased
+                                      : va_t(Ops[1].imm);
       const auto Data = machODataInCodeRanges(Image.MachODataInCode, Target, 1);
       const bool LiteralAddress =
           !Data.empty() && Data.front().Kind == llvm::MachO::DICE_KIND_DATA;
-      const auto Reg = Ops[0].reg;
+      const auto Reg = NumericPage ? NumericPage->ResultRegister : Ops[0].reg;
       if (Reg == AARCH64_REG_XZR)
         return std::nullopt;
-      const bool Moves = !Rebased && !OutsideCFG &&
+      const bool Moves = !NumericPage && !Rebased && !OutsideCFG &&
                          (Dispatch.TableAddresses.contains(PC) ||
                           movesSigningPoint(*Source, Start, PC, Target, Reg));
       if (!Moves) {
@@ -964,11 +970,15 @@ registerBody(Decoder &Decode, const BinaryImage &Image,
             if (!Owner || !Functions.contains(*Owner))
               return std::nullopt;
           }
-          if (!exportsAddress(Decode, Source->Bytes.drop_front(NextPC - Start),
-                              NextPC, Reg))
+          const va_t Use = NumericPage ? NextPC + Word : NextPC;
+          if (!exportsAddress(Decode, Source->Bytes.drop_front(Use - Start),
+                              Use, Reg))
             return std::nullopt;
         }
-        Body.SourceAddresses.push_back({PC, Target});
+        Body.SourceAddresses.push_back({PC, Target,
+                                        NumericPage ? MachOAddressForm::PagePair
+                                                    : MachOAddressForm::Single,
+                                        OS.tell()});
         if (Rebased)
           Body.SourcePointerSlots.push_back(
               aarch64::decodeLiteralLoad(Encoding, PC)->Address);

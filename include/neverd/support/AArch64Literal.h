@@ -1,4 +1,4 @@
-//===- AArch64Literal.h - A64 PC-relative literal loads --------*- C++ -*-===//
+//===- AArch64Literal.h - A64 PC-relative operands --------------*- C++ -*-===//
 //
 // NeverD Decompiler
 //
@@ -28,6 +28,28 @@ inline std::optional<int64_t> addressDisplacement(va_t PC, va_t Target) {
   if ((Target < PC) != (Delta < 0) || !llvm::isInt<Bits>(Delta))
     return std::nullopt;
   return Delta;
+}
+
+enum class AddressInstruction { ADR, ADRP };
+
+/// Encode the signed 21-bit displacement in bytes (ADR) or pages (ADRP).
+inline std::optional<uint32_t> encodePCRelativeAddress(AddressInstruction Kind,
+                                                       uint32_t Rd, va_t PC,
+                                                       va_t Target) {
+  const bool Page = Kind == AddressInstruction::ADRP;
+  if (Page) {
+    PC >>= kPageShift;
+    Target >>= kPageShift;
+  }
+  constexpr unsigned Width =
+      branch::A64PageImmLo.Width + branch::A64PageImmHi.Width;
+  const auto Delta = addressDisplacement<Width>(PC, Target);
+  if (Rd > kRdMask || !Delta)
+    return std::nullopt;
+  const uint32_t Bits = static_cast<uint32_t>(*Delta);
+  return (Page ? kADRP_Op : kADR_Op) | Rd |
+         ((Bits & kImmLoMask) << kImmLoShift) |
+         (((Bits >> kImmLoWidth) & kImmHiMask) << kImmHiShift);
 }
 
 /// Encode an LDR Xt literal without truncating its signed, scaled displacement.

@@ -2883,8 +2883,8 @@ Each form uses the original destination register and occupies
 one instruction, preserving the containing function's unwind and exception
 offsets. The final check decodes the installed instruction and compares the
 loaded target with the original address adjusted for layout growth. A literal
-load has a signed 19-bit displacement in four-byte units. Publication reports
-a placement error when the cell itself is outside that range.
+load has a signed 19-bit displacement in four-byte units. The wide-image
+paths below handle sites that cannot reach a trailing cell.
 
 `ndDarwinArm64eWalkHandlerEntry` starts in an active `SA_SIGINFO` handler.
 It walks Darwin's registered frames until the signal-frame address agrees
@@ -2920,10 +2920,37 @@ dylibs and checked their values. Darwin launched all 14 original and
 published executables. Each host passed 268 source-fork tests, including
 twelve handler-start walks on the compiler and published images.
 An additional 1.1 MiB instruction section with eighteen embedded data regions
-put the trailing pool outside the first load's range. Both optimization modes
-reported the placement failure before creating an output.
+put the trailing pool outside the first load's range. At the recorded revision
+both optimization modes reported the placement failure before creating an output.
 The frozen r6 build passed 258 tests on each host, with six previously
 recorded signed-CFI failures and four compact-emitter skips.
 [Source-fork execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877832586).
 [Frozen r6 execution](https://github.com/gmh5225/test_mac_intel/actions/runs/44877884491).
 [Revision, test executables and results](evidence/arm64e-interior-address-publication-2026-11-21.json).
+
+### Source addresses beyond literal-load reach
+
+A numeric `ADRP` followed by an unshifted 64-bit `ADD` can return a
+mapped instruction address or the address of declared embedded data. The
+publisher relocates the page displacement and low twelve bits. The final
+decoder checks both register operands, including pairs that retain the
+page in X8 and return the full address in X0. Each publication recovers the
+original numeric address from the linked input.
+
+When a one-word site cannot reach either its original address or its dyld
+pointer cell, the publisher can emit a two-word page pair inside a function
+with compact unwind. It recognizes a zero-stack leaf or an FP/LR save and
+restore, checks the position-independent body and its final return,
+and excludes DWARF and language metadata from this expansion. The leading
+B-key SP signature and authenticated return keep their signing modifier.
+It then verifies the new instruction, all shifted words and every embedded
+data range against the source. A whole function that needs to preserve its
+instruction offsets can move closer to the pool. The final verifier checks
+the relocated calls, original register operands and unwind records in either
+layout. Publication still reports a range error if the available placements
+cannot encode the address.
+
+When a published entry begins with a forwarding branch, its old FP/LR save
+can still appear in the next word. Function discovery uses the linker's
+function starts and unwind extent to keep that instruction with its owner.
+A direct `BL` to the same address supplies independent call evidence.
