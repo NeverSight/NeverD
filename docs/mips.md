@@ -1803,6 +1803,11 @@ explicit local declaration or matching debug information and a complete
 by-value field layout. Unions and incomplete field graphs retain their display
 types.
 
+When HighC reconstructs a record from individual arguments or result words,
+it initializes nested structures and arrays in the enclosing member's type.
+Field reads through a declared record retain its member names through nested
+anonymous structures and array elements.
+
 A nonleaf's saved link is accepted only when exact reaching stores preserve
 the original RA and mode, its slot lies outside the callee's complete outgoing
 argument area, and no argument or other store exposes the private frame.

@@ -8106,11 +8106,12 @@ bool HighCWriter::isNamedFrameMemory(const HighExpr &E) const {
 }
 
 std::string HighCWriter::exprStr(const HighExpr &E, int ParentPrec,
-                                 MemoryLoadDestination *Destination) {
+                                 MemoryLoadDestination *Destination,
+                                 bool InInitializer) {
   PrintedIntegerTypes.erase(&E);
   UntypedArithmeticTexts.erase(&E);
   UnsignedCarrierTexts.erase(&E);
-  std::string Text = exprStrImpl(E, ParentPrec, Destination);
+  std::string Text = exprStrImpl(E, ParentPrec, Destination, InInitializer);
   // C has no bitwise, shift, multiplicative or remainder operator on a
   // pointer: a local the text declares one, or a pointer member, is the
   // address it holds as an integer there.
@@ -8214,7 +8215,8 @@ HighCWriter::reinterpretedBits(const TypeRef &To, const TypeRef &From,
 }
 
 std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
-                                     MemoryLoadDestination *Destination) {
+                                     MemoryLoadDestination *Destination,
+                                     bool InInitializer) {
   // On a 64-bit target the source is built on a 64-bit host, where a
   // pointer converted to uintptr_t is the unsigned 64-bit integer already.
   auto PointerInteger = [&](std::string Text) {
@@ -8865,9 +8867,9 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
     std::string Result =
         Complex ? std::string(c_detail::kSourceComplexInitializerOpen.data(),
                               c_detail::kSourceComplexInitializerOpen.size())
-        : Array ? std::string(c_detail::kSourceArrayInitializerOpen.data(),
-                              c_detail::kSourceArrayInitializerOpen.size())
-                : "(" + typeToC(E.Type) + "){";
+        : Array || InInitializer
+            ? c_detail::kSourceAggregateInitializerOpen.str()
+            : "(" + typeToC(E.Type) + "){";
     for (size_t I = 0; I < E.Operands.size(); ++I) {
       const TypeRef &Field = Array ? E.Type->ElemType : E.Type->Fields[I];
       const HighExpr *Operand = E.Operands[I].get();
@@ -8887,7 +8889,9 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         Result += integerView(*Operand, Field, /*ParentPrec=*/0);
         continue;
       }
-      const auto Text = exprStr(*E.Operands[I]);
+      // Braces initialize the destination member's own C type, including an
+      // anonymous struct whose identical layout has a different type identity.
+      const auto Text = exprStr(*Operand, 0, nullptr, /*InInitializer=*/true);
       if (Field->Kind == NdTypeKind::Ptr) {
         // Pointer expressions retain their integer machine carrier in HighC.
         // A record initializer needs the same source conversion as a call.
@@ -8926,7 +8930,16 @@ std::string HighCWriter::exprStrImpl(const HighExpr &E, int ParentPrec,
         E.ConstVal >= E.Operands[0]->Type->Fields.size() ||
         !equalSourceTypes(E.Type, E.Operands[0]->Type->Fields[E.ConstVal]))
       llvm::report_fatal_error(c_detail::kInvalidSourceRecordField);
-    if (!Record->SourceName.empty()) {
+    // A field of a declared object still uses that declaration's spelling
+    // through anonymous members and array elements. A standalone anonymous
+    // value uses the generated field names of its structural C tag.
+    const HighExpr *Base = E.Operands.front().get();
+    while (Base->Type && Base->Type->SourceName.empty() &&
+           Base->Kind == ExprKind::Field && Base->Operands.size() == 1 &&
+           Base->Operands.front())
+      Base = Base->Operands.front().get();
+    if (Base->Type && Base->Type->Kind == NdTypeKind::Struct &&
+        !Base->Type->SourceName.empty()) {
       const auto Field = Record->displayFieldPathAt(
           Record->FieldOffsets[E.ConstVal], E.Type->Size,
           /*EnterNestedAtZero=*/false);
