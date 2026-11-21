@@ -777,14 +777,23 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     if (auto Signature = entryTypeSignature("PDRIVER_INITIALIZE", true))
       for (va_t Addr : WindowsEntries.DriverEntries)
         WindowsEntrySignatures.emplace(Addr, *Signature);
-  const auto BindSignature = [&](va_t Entry, types::HeaderLibrary Provider,
-                                 std::optional<FunctionSym> Signature) {
-    if (Signature) {
-      Signature->PrototypeLibrary = types::headerLibraryName(Provider).str();
-      Signature->PrototypeFromHeader = true;
-      WindowsEntrySignatures.emplace(Entry, std::move(*Signature));
-    }
-  };
+  const auto BindSignature =
+      [&](va_t Entry, types::HeaderLibrary Provider,
+          const types::TypeLibrary &Header,
+          std::shared_ptr<const types::FunctionDef> Function,
+          llvm::StringRef Name) {
+        if (auto Signature = signatureOf(Header, *Function, Name)) {
+          types::RenderOptions Options;
+          Options.Spelling = types::headerLibrarySpelling(Provider);
+          Signature->PrototypeDeclaration = types::spellType(
+              Header, *types::makeFunction(std::move(Function)), Name.str(),
+              Options);
+          Signature->PrototypeLibrary =
+              types::headerLibraryName(Provider).str();
+          Signature->PrototypeFromHeader = true;
+          WindowsEntrySignatures.emplace(Entry, std::move(*Signature));
+        }
+      };
   if (WindowsEntries.DllInitialize && WindowsEntries.DllUnload && Image) {
     // The export-driver lifecycle declarations are specified by the Windows
     // loader. Resolve their NTSTATUS and PUNICODE_STRING in the matching WDK.
@@ -802,8 +811,7 @@ LocalTypesDebugContext::LocalTypesDebugContext(
         auto Read =
             types::parseFunctionDeclaration(Prefix + Callable.str(), *Header);
         if (Read.ok())
-          BindSignature(Addr, Provider,
-                        signatureOf(*Header, *Read.Function, Read.Name));
+          BindSignature(Addr, Provider, *Header, Read.Function, Read.Name);
       };
       Bind(*WindowsEntries.DllInitialize,
            "DllInitialize(PUNICODE_STRING RegistryPath)");
@@ -823,8 +831,8 @@ LocalTypesDebugContext::LocalTypesDebugContext(
                              : nullptr;
     if (!Header)
       return;
-    if (const auto *Function = Header->findPrototype(Name)) {
-      BindSignature(*Entry, Provider, signatureOf(*Header, *Function, Name));
+    if (auto Function = Header->prototypes().lookup(Name)) {
+      BindSignature(*Entry, Provider, *Header, std::move(Function), Name);
       return;
     }
     // olectl.h specifies STDAPI and no parameters for both self-registration
@@ -835,8 +843,7 @@ LocalTypesDebugContext::LocalTypesDebugContext(
     auto Read = types::parseFunctionDeclaration(Prefix + Name.str() + "(void)",
                                                 *Header);
     if (Read.ok())
-      BindSignature(*Entry, Provider,
-                    signatureOf(*Header, *Read.Function, Read.Name));
+      BindSignature(*Entry, Provider, *Header, Read.Function, Read.Name);
   };
   BindCOMExport(WindowsEntries.DllRegisterServer, "DllRegisterServer");
   BindCOMExport(WindowsEntries.DllUnregisterServer, "DllUnregisterServer");
