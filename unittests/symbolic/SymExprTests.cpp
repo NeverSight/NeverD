@@ -1293,7 +1293,7 @@ TEST(SymExpr, SharedRootSubstitutionKeepsSimultaneousReplacements) {
         for (auto &V : Values) {
           V = llvm::APInt(Width, 0);
           for (unsigned Bit = 0; Bit < Width; Bit += 64)
-            V |= llvm::APInt(Width, Random()).shl(Bit);
+            V |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
         }
         const auto S = ReplaceShared ? Values[0] : Values[1] + Values[2];
         const auto L = S ^ Values[2];
@@ -1328,7 +1328,7 @@ TEST(SymExpr, BatchedSubstitutionPreservesDifferentOperandArities) {
       for (auto &V : Values) {
         V = llvm::APInt(Width, 0);
         for (unsigned Bit = 0; Bit < Width; Bit += 64)
-          V |= llvm::APInt(Width, Random()).shl(Bit);
+          V |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
       }
       const auto ReplacedShared = Values[1] ^ Values[2];
       for (size_t R = 0; R < Results.size(); ++R) {
@@ -1525,8 +1525,8 @@ TEST(SymExpr, NativeArithmeticKeepsMixedWidthConsumersExact) {
                                         Trial == 1 ? 0 : Random()};
       const std::array Values{llvm::APInt(Width, Raw[0], false, true),
                               llvm::APInt(Width, Raw[1], false, true)};
-      const auto Expected =
-          ~(Values[0] * Values[1] + Values[0] + llvm::APInt(Width, 3));
+      const auto Expected = ~(Values[0] * Values[1] + Values[0] +
+                              llvm::APInt(Width, 3, false, true));
       EXPECT_EQ(Native.evalU64(Raw), Expected.getZExtValue());
       EXPECT_EQ(Native.eval(Values), Expected);
       EXPECT_EQ(Wide.eval(Values), Expected.zext(WideWidth) * Scale);
@@ -1890,9 +1890,9 @@ TEST(SymExpr, ZeroExtendedUnsignedRemaindersUseTheirNarrowOperands) {
     for (unsigned Sample = 0; Sample != 128; ++Sample) {
       llvm::APInt A(Left, 0), B(Right, 0);
       for (unsigned Bit = 0; Bit < Left; Bit += 64)
-        A |= llvm::APInt(Left, Random()).shl(Bit);
+        A |= llvm::APInt(64, Random()).zextOrTrunc(Left).shl(Bit);
       for (unsigned Bit = 0; Bit < Right; Bit += 64)
-        B |= llvm::APInt(Right, Random()).shl(Bit);
+        B |= llvm::APInt(64, Random()).zextOrTrunc(Right).shl(Bit);
       if (Sample == 0)
         B.clearAllBits();
       auto N = A.zextOrTrunc(Inner), D = B.zextOrTrunc(Inner);
@@ -1983,8 +1983,8 @@ TEST(SymExpr, ScaledProductWindowsCoverEveryBytePairAndWideCarriers) {
     for (unsigned Sample = 0; Sample < 32; ++Sample) {
       llvm::APInt Left(Width, 0), Right(Width, 0);
       for (unsigned Bit = 0; Bit < Width; Bit += 64) {
-        Left |= llvm::APInt(Width, Random()).shl(Bit);
-        Right |= llvm::APInt(Width, Random()).shl(Bit);
+        Left |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
+        Right |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
       }
       const llvm::APInt Inputs[] = {Left, Right};
       auto Oracle = (Left.zext(Carrier) * Right.zext(Carrier))
@@ -2017,7 +2017,8 @@ TEST(SymExpr, ProductWindowsKeepCoefficientsCarriesAndMultipleFactors) {
               // byte wrap, then forms the complete outer product.
               const uint32_t Oracle =
                   Coefficient * ((A << Shift) & 255u) * B * D;
-              ASSERT_EQ(Plan.eval(Inputs), llvm::APInt(8, Oracle >> Low));
+              ASSERT_EQ(Plan.eval(Inputs),
+                        llvm::APInt(8, uint8_t(Oracle >> Low)));
             }
       }
       if (Coefficient == 8 && Shift == 2) {
@@ -2105,7 +2106,7 @@ TEST(SymExpr, ZeroConcatProductWindowsKeepAllLowerCarries) {
       for (unsigned A = 0; A < 256; ++A)
         for (unsigned B = 0; B < 256; ++B) {
           const llvm::APInt Inputs[] = {llvm::APInt(8, A), llvm::APInt(8, B)};
-          ASSERT_EQ(Plan.eval(Inputs), llvm::APInt(8, (A * B) >> 4));
+          ASSERT_EQ(Plan.eval(Inputs), llvm::APInt(8, uint8_t((A * B) >> 4)));
         }
     }
   std::mt19937_64 Random(0x7a65726f6c616e65);
@@ -2125,8 +2126,8 @@ TEST(SymExpr, ZeroConcatProductWindowsKeepAllLowerCarries) {
     for (unsigned I = 0; I < 64; ++I) {
       llvm::APInt A(Width, 0), B(Width, 0);
       for (unsigned Bit = 0; Bit < Width; Bit += 64) {
-        A |= llvm::APInt(Width, Random()).shl(Bit);
-        B |= llvm::APInt(Width, Random()).shl(Bit);
+        A |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
+        B |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
       }
       auto Oracle = (A.zext(Carrier).shl(64) * B.zext(Carrier).shl(8))
                         .extractBits(Width, Low);
@@ -2150,7 +2151,7 @@ TEST(SymExpr, ZeroConcatFactoringPreservesNonzeroLanesAndInnerWrap) {
         for (unsigned B : {0u, 1u, 0x7Fu, 0x80u, 0xFFu}) {
           auto Oracle = (uint64_t((A << 8) | Tail) * (B << 8)) >> Low;
           const llvm::APInt Inputs[] = {llvm::APInt(8, A), llvm::APInt(8, B)};
-          EXPECT_EQ(Plan.eval(Inputs), llvm::APInt(16, Oracle));
+          EXPECT_EQ(Plan.eval(Inputs), llvm::APInt(16, uint16_t(Oracle)));
         }
     }
   SymContext C;
@@ -2225,7 +2226,7 @@ TEST(SymExpr, PreparedWideArithmeticKeepsEveryInputAcrossEvaluations) {
         auto &Input = Inputs[I];
         Input = llvm::APInt(Width, 0);
         for (unsigned Bit = 0; Bit < Width; Bit += 64)
-          Input |= llvm::APInt(Width, Random()).shl(Bit);
+          Input |= llvm::APInt(64, Random()).zextOrTrunc(Width).shl(Bit);
         if (Trial % 8 == 0)
           Input.clearAllBits();
         else if (Trial % 8 == 1)
@@ -2237,8 +2238,8 @@ TEST(SymExpr, PreparedWideArithmeticKeepsEveryInputAcrossEvaluations) {
         Values[I] = I == 2 && Trial % 7 == 0 ? llvm::APInt(Width, 0)
                                              : Input.zextOrTrunc(Width);
       }
-      auto Expected =
-          llvm::APInt(Width, 3) * Values[0] * Values[1] * Values[2] * Values[0];
+      auto Expected = llvm::APInt(Width, 3, false, true) * Values[0] *
+                      Values[1] * Values[2] * Values[0];
       Expected += Values[0] & Values[1] & Values[2] & Mask;
       Expected += Values[0] | Values[1] | Values[2] | Mask;
       Expected += Values[0] ^ Values[1] ^ Values[2] ^ Mask;
@@ -2369,6 +2370,60 @@ TEST(SymExpr, WideScaledProductsObserveEveryDemandedPrefixAndSharedUse) {
         EXPECT_EQ(ShiftPlan.eval(Inputs), Expected + Shared.lshr(Width - 1));
       }
     }
+}
+
+TEST(SymExpr, AffineProductPlansKeepLiveLaneBitsAndRepeatedFactors) {
+  std::mt19937_64 Random(0xaff1ae);
+  for (unsigned Bits : {65u, 127u, 128u, 129u, 171u, 257u}) {
+    constexpr unsigned W = 513;
+    const unsigned FieldWidth = Bits - 33;
+    SymContext C;
+    const auto X = C.mkVar("x", W), Y = C.mkVar("y", W);
+    const auto Field = C.mkExtract(X, 9, FieldWidth);
+    const auto Upper = C.mkExtract(Y, FieldWidth, W - FieldWidth);
+    const auto Packed = C.mkConcat(Upper, Field);
+    const auto Scale = llvm::APInt(W, 5).shl(W - Bits);
+    for (unsigned Shift : {32u, 33u, 34u}) {
+      SCOPED_TRACE(::testing::Message() << Bits << ',' << Shift);
+      const auto B = (-llvm::APInt(W, 7)).shl(Shift);
+      auto Factor = [&](SymRef Word) {
+        return C.mkAdd(C.mkConst(W, 3),
+                       C.mkMul(C.mkConst(B), C.mkAdd(C.mkConst(W, 11), Word)));
+      };
+      const auto A = Factor(Packed), D = Factor(C.mkSExt(Field, W));
+      const auto E = Factor(C.mkZExt(Field, W));
+      const auto Root = C.mkMul({C.mkConst(Scale), A, A, D, E});
+      SymEvalPlan Plan(C, Root);
+      const auto Steps = C.dagSize(Root);
+      EXPECT_EQ(Plan.numSteps(), Steps);
+      EXPECT_THROW((void)Plan.evalWith([&](uint32_t) -> const llvm::APInt * {
+        throw std::runtime_error("missing input");
+      }),
+                   std::runtime_error);
+      for (unsigned Trial = 0; Trial < 64; ++Trial) {
+        std::array<llvm::APInt, 2> Inputs;
+        for (auto &V : Inputs) {
+          std::array<uint64_t, 9> Words;
+          for (auto &Word : Words)
+            Word = Random();
+          V = llvm::APInt(W, Words);
+        }
+        const auto Low = Inputs[0].extractBits(FieldWidth, 9);
+        const auto Both =
+            Inputs[1].extractBits(W - FieldWidth, FieldWidth).concat(Low);
+        auto Eval = [&](const llvm::APInt &V) { return 3 + B * (11 + V); };
+        unsigned Lookups = 0;
+        const auto Actual = Plan.evalWith([&](uint32_t Id) {
+          ++Lookups;
+          return &Inputs[Id];
+        });
+        EXPECT_EQ(Actual, Scale * Eval(Both) * Eval(Both) * Eval(Low.sext(W)) *
+                              Eval(Low.zext(W)));
+        EXPECT_EQ(Lookups, 2u);
+        EXPECT_EQ(Plan.numSteps(), Steps);
+      }
+    }
+  }
 }
 
 TEST(SymExpr, WideProductsKeepDynamicCoefficientsAndSharedFactorPrecision) {

@@ -357,6 +357,9 @@ public:
   bool isVar(SymRef R) const { return op(R) == SymOp::Var; }
   /// The value of a \c Const node.  Only valid when \c isConst.
   llvm::APInt constValue(SymRef R) const;
+  /// Little-endian words of a constant. As with operands(), a builder that
+  /// interns another node can invalidate this view.
+  llvm::ArrayRef<uint64_t> constWords(SymRef R) const;
   /// The value of \p R when it is a constant, otherwise nothing.
   std::optional<llvm::APInt> asConst(SymRef R) const;
   /// Prove an at-most-64-bit window constant without changing the DAG. Work
@@ -662,7 +665,9 @@ public:
   /// Lowered DAG nodes, including constants: the solver's conservative cost
   /// model remains unchanged when constant or neutral slots need no work.
   size_t numSteps() const {
-    return FitsU64 ? ScratchU64.size() : Steps.size() + ConstantSlots.size();
+    // Wide lowering assigns the root the final slot, including when
+    // affine factors no longer need their intermediate evaluation steps.
+    return FitsU64 ? PlanWords.size() : size_t(RootSlot) + 1;
   }
 
   SymRef root() const { return Root; }
@@ -696,8 +701,11 @@ private:
   llvm::SmallVector<uint32_t, limits::symbolic::kSymEvalPlanInlineOperands>
       ArgSlots;
   llvm::SmallVector<uint32_t, limits::symbolic::kSymEvalPlanInlineSteps> Vars;
+  // A native plan holds its slot values here. A wide affine product holds
+  // [multiplicity, offset limbs, scale limbs] for each distinct factor;
+  // its argument slots name the bases and ScratchAP holds their values.
   llvm::SmallVector<uint64_t, limits::symbolic::kSymEvalPlanInlineSteps>
-      ScratchU64;
+      PlanWords;
   std::vector<llvm::APInt> ScratchAP;
   uint32_t RootSlot = 0;
   bool FitsU64 = true;
