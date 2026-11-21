@@ -25,6 +25,8 @@ NEVERD_WDK_LICENSE(
 NEVERD_WDK_LIMIT("read_chunk", "1048576")
 NEVERD_WDK_LIMIT("download_timeout", "60")
 NEVERD_WDK_LIMIT("command_timeout", "120")
+// CreateProcessW counts UTF-16 code units, including the terminating null.
+NEVERD_WDK_LIMIT("windows_command_line_units", "32767")
 
 NEVERD_WDK_EXTRACT("c/Include/10.0.26100.0/km/")
 NEVERD_WDK_EXTRACT("c/Include/10.0.26100.0/shared/")

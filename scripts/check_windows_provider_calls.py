@@ -27,6 +27,7 @@ RDBSS_FIXTURE = FIXTURE.with_name("windows_rdbss_provider_calls.cpp")
 GDIPLUS_FIXTURE = FIXTURE.with_name("windows_gdiplus_provider_calls.cpp")
 LEGACY_FIXTURE = FIXTURE.with_name("windows_legacy_sdk_calls.cpp")
 FLAT_FIXTURE = FIXTURE.with_name("windows_sdk_import_calls.c")
+SYSTEM_FIXTURE = FIXTURE.with_name("windows_sdk_system_calls.c")
 FUNCTIONS = {"UseEventRegistration": "EventRegister", "UsePath": "PathCchCombineEx",
              "UseRuntimeString": "WindowsCreateString", "UseGraphicsDevice": "D3DKMTCreateDevice",
              "UseLogFile": "CreateLogFile", "UseTpmContext": "Tbsi_Context_Create",
@@ -78,6 +79,13 @@ FLAT_FUNCTIONS = {"UseColorProfile": "GetColorProfileHeader", "UseCatalog": "Cry
 FLAT_CALL_PROVIDERS = ("ColorManagement", "CatalogTrust", "MonitorConfiguration", "DiagnosticData",
                        "WSDevices", "Direct3D10", "KeyProtection", "Accessibility", "ProcessStatus",
                        "ProcessSnapshots")
+SYSTEM_FUNCTIONS = {"UseIcmpHandle": "IcmpCloseHandle", "UseTransactionClock": "GetCurrentClockTransactionManager",
+                    "UseTransactionManagerId": "GetTransactionManagerId",
+                    "UseSensorSerialization": "CollectionsListAllocateBufferAndSerialize",
+                    "UseSnmpRelease": "SnmpUtilMemFree",
+                    "UsePlatformAuthenticator": "WebAuthNIsUserVerifyingPlatformAuthenticatorAvailable"}
+SYSTEM_PROVIDERS = ("InternetControlMessage", "TransactionManager", "SensorUtilities",
+                    "SNMPUtilities", "WebAuthentication")
 
 
 def check(args: argparse.Namespace) -> dict:
@@ -86,6 +94,8 @@ def check(args: argparse.Namespace) -> dict:
         fixture, functions, provider_name = GDIPLUS_FIXTURE, GDIPLUS_FUNCTIONS, "GDIPlus"
     elif getattr(args, "legacy_sdk", False):
         fixture, functions, provider_name = LEGACY_FIXTURE, LEGACY_FUNCTIONS, "AllJoyn"
+    elif getattr(args, "sdk_system", False):
+        fixture, functions, provider_name = SYSTEM_FIXTURE, SYSTEM_FUNCTIONS, "TransactionManager"
     elif getattr(args, "sdk_imports", False):
         fixture, functions, provider_name = FLAT_FIXTURE, FLAT_FUNCTIONS, "ColorManagement"
     elif args.rdbss:
@@ -173,7 +183,8 @@ def check(args: argparse.Namespace) -> dict:
             with zipfile.ZipFile(archive) as source:
                 members = {name.lower(): name for name in source.namelist()}
                 fixture_libraries = {"GDIPlus": ("gdiplus.lib",), "AllJoyn": flat.LEGACY.values(),
-                                     "ColorManagement": [flat.CURRENT[name][0] for name in FLAT_CALL_PROVIDERS]}
+                                     "ColorManagement": [flat.CURRENT[name][0] for name in FLAT_CALL_PROVIDERS],
+                                     "TransactionManager": [flat.CURRENT[name][0] for name in SYSTEM_PROVIDERS]}
                 for name in fixture_libraries.get(provider_name, LIBRARIES):
                     member = members[f"c/um/{arch}/{name.lower()}"]
                     destination = directory / name
@@ -256,6 +267,8 @@ def main() -> None:
                          help="check callers against the archived Microsoft SDK headers and import libraries")
     profile.add_argument("--sdk-imports", action="store_true",
                          help="check color, trust, monitor, diagnostic and device service callers")
+    profile.add_argument("--sdk-system", action="store_true",
+                         help="check ICMP, transaction, sensor, SNMP and WebAuthn import callers")
     parser.add_argument("--architecture", choices=("x86", "x64", "arm64"), action="append")
     parser.add_argument("--timeout", type=int, default=wdk.LIMITS["command_timeout"])
     args = parser.parse_args()

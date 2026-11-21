@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,22 @@ SPEC.loader.exec_module(windows)
 
 
 class MicrosoftWindowsTypes(unittest.TestCase):
+    def test_large_selection_preserves_every_prototype_in_a_response_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            response = Path(directory) / "SDK prototypes.rsp"
+            base = ["neverd", "types", "--declare", "SDK \U0001f4c1/declarations.h"]
+            names = ["NdisCloseConfiguration", "IcmpCloseHandle"]
+            expected = ["--import-prototype=" + name for name in names]
+            units = len(subprocess.list2cmdline(base + expected).encode("utf-16-le")) // 2 + 1
+            with patch.dict(windows.wdk.LIMITS, windows_command_line_units=units):
+                self.assertEqual(windows.prototype_selection_command(base, names, response),
+                                 base + expected)
+                self.assertFalse(response.exists())
+            with patch.dict(windows.wdk.LIMITS, windows_command_line_units=units - 1):
+                self.assertEqual(windows.prototype_selection_command(base, names, response),
+                                 base + ["@" + str(response.resolve())])
+                self.assertEqual(response.read_text(encoding="utf-8").splitlines(), expected)
+
     def test_rdbss_published_abi_must_pass_before_replacing_primary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
