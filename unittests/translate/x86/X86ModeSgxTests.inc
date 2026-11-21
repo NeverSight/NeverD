@@ -418,3 +418,137 @@ TEST_F(X86ModeSgxTest,
         EXPECT_EQ(Memory->sgxMemory()->xcr0(), 7u);
       }
 }
+
+// Signed Intel SDK simulation exercises the same DIV ECX instruction and
+// repairs RCX=0 to 7 before retry. Re-enter the original TCS using its next
+// SSA slot so that only enclave code can edit the interrupted register bank.
+TEST_F(X86ModeSgxThreadTest, NestedHandlerRepairsDivideAtOriginalInstruction) {
+  if (!hasCrossTargetClang())
+    GTEST_SKIP() << "No test Clang";
+  std::vector<std::string> Compilers{NEVERD_TEST_CLANG};
+  if (const char *NeverC = std::getenv("NEVERD_TEST_NEVERC"))
+    Compilers.emplace_back(NeverC);
+
+  constexpr uint64_t AEP = 0x1800, ResumeSite = 0x1820, ExitTarget = 0x2000;
+  constexpr uint64_t Marker = UINT64_C(0x1122334455667788);
+  for (const auto &Compiler : Compilers)
+    for (bool LLVM : {false, true}) {
+      SCOPED_TRACE(testing::Message() << Compiler << " llvm=" << LLVM);
+      startThread();
+      auto Bindings = std::move(Program);
+      // Each original code range has its own linear base and exported bodies.
+      const auto Compile =
+          [&](uint64_t PC, bool Private,
+              std::initializer_list<std::vector<uint8_t>> Ops) {
+            Program.clear();
+            const uint64_t First = PC;
+            for (const auto &Bytes : Ops) {
+              if (Private)
+                privateInstruction(unsigned(PC - Code.Linear), Bytes);
+              else
+                add(PC, Mode::Long64, Bytes);
+              PC += Bytes.size();
+            }
+            ASSERT_NO_FATAL_FAILURE(
+                compileLong(LLVM, "-O2", Compiler, false, First));
+            Bindings.insert(Bindings.end(), Program.begin(), Program.end());
+          };
+      const auto Mov = [](uint8_t Opcode, uint32_t Value) {
+        std::vector<uint8_t> Bytes(5);
+        Bytes[0] = Opcode;
+        llvm::support::endian::write32le(Bytes.data() + 1, Value);
+        return Bytes;
+      };
+      const auto Entry = Code.Linear;
+      const auto SavedGPR = Previous.Linear + GPR;
+      // EENTER returns CSSA in EAX. A nested entry takes the handler branch.
+      ASSERT_NO_FATAL_FAILURE(Compile(Entry, true,
+                                      {{0x85, 0xc0},
+                                       {0x75, 0x1a},
+                                       Mov(0xb8, 84),
+                                       {0x89, 0xf9},
+                                       {0x31, 0xd2},
+                                       {0xf7, 0xf1},
+                                       {0x89, 0xc6},
+                                       Mov(0xb8, 4),
+                                       Mov(0xbb, ExitTarget)}));
+      ASSERT_NO_FATAL_FAILURE(Compile(
+          Entry + 30, true,
+          {{0xc7, 0x46, 8, 7, 0, 0, 0}, Mov(0xbb, ResumeSite), Mov(0xb8, 4)}));
+      put(0x9000, 0x1100 | (uint64_t(24) << 16) | (uint64_t(0x8e) << 40));
+      Options.Long.IretAccessOrder = X64PagedIretAccessOrder::FlagsFirst;
+      ASSERT_NO_FATAL_FAILURE(Compile(0x1100, false, {{0x48, 0xcf}}));
+      ASSERT_NO_FATAL_FAILURE(
+          Compile(AEP, false, {Mov(0xb8, 2), Mov(0xbe, SavedGPR)}));
+      ASSERT_NO_FATAL_FAILURE(Compile(
+          ResumeSite, false, {Mov(0xb8, 3), Mov(0xbb, Base), Mov(0xb9, AEP)}));
+
+      Program = std::move(Bindings);
+      privateInstruction(27, Enclu);
+      privateInstruction(47, Enclu);
+      add(AEP + 10, Mode::Long64, Enclu);
+      add(ResumeSite + 15, Mode::Long64, Enclu);
+      bindThread();
+      X86ModeExecution Execution(*Memory, Options);
+      auto &R = Machine.Core.Core.Core.Core.Core.Core;
+      const auto Run = [&](uint64_t Budget) {
+        return llvm::cantFail(Execution.run(Machine, Program, Budget));
+      };
+      const auto Complete = [&](uint64_t Count) {
+        auto Result = Run(Count);
+        ASSERT_TRUE(Result.OwnerError.empty()) << Result.OwnerError;
+        ASSERT_EQ(Result.Completions, Count);
+      };
+      for (uint32_t Divisor : {7u, 0u, 0u}) {
+        SCOPED_TRACE(Divisor);
+        R.PC = 0x1000;
+        R.GPR[0] = 2;
+        R.GPR[1] = AEP;
+        R.GPR[3] = Base;
+        R.GPR[7] = Divisor;
+        R.GPR[9] = Marker;
+        ASSERT_NO_FATAL_FAILURE(Complete(6));
+        ASSERT_TRUE(Memory->sgxMemory()->active());
+        ASSERT_EQ(R.PC, Entry + 13);
+        if (!Divisor) {
+          const auto Fault = Run(1);
+          ASSERT_TRUE(Fault.OwnerError.empty()) << Fault.OwnerError;
+          ASSERT_EQ(Fault.Status, X86LegacyExecutionStatus::EventDelivered);
+          ASSERT_EQ(Fault.DeliveredVector, 0u);
+          ASSERT_EQ(Fault.Completions, 0u);
+          ASSERT_FALSE(Memory->sgxMemory()->active());
+          ASSERT_EQ(R.PC, 0x1100u);
+          EXPECT_EQ(word(bytes(*Memory), R.GPR[4], 8), AEP);
+          ASSERT_NO_FATAL_FAILURE(Complete(4));
+          ASSERT_TRUE(Memory->sgxMemory()->active());
+          ASSERT_EQ(R.PC, Entry);
+          ASSERT_EQ(R.GPR[0], 1u);
+          std::vector<uint8_t> SSA(184);
+          ASSERT_EQ(
+              llvm::cantFail(
+                  Memory->load({SavedGPR, MemoryAccessKind::Read, 3}, SSA))
+                  .Status,
+              X86PageWalkStatus::Completed);
+          EXPECT_EQ(word(SSA, 0, 8), 84u);
+          EXPECT_EQ(word(SSA, 8, 8), 0u);
+          EXPECT_EQ(word(SSA, 16, 8), 0u);
+          EXPECT_EQ(word(SSA, 9 * 8, 8), Marker);
+          EXPECT_EQ(word(SSA, 136, 8), Entry + 13);
+          EXPECT_EQ(word(SSA, 160, 4), 0x80000300u);
+          ASSERT_NO_FATAL_FAILURE(Complete(10));
+          ASSERT_TRUE(Memory->sgxMemory()->active());
+          ASSERT_EQ(R.PC, Entry + 13);
+          EXPECT_EQ(R.GPR[0], 84u);
+          EXPECT_EQ(R.GPR[1], 7u);
+          EXPECT_EQ(R.GPR[2], 0u);
+          EXPECT_EQ(R.GPR[9], Marker);
+        }
+        ASSERT_NO_FATAL_FAILURE(Complete(1));
+        ASSERT_EQ(R.GPR[0], 12u);
+        ASSERT_NO_FATAL_FAILURE(Complete(4));
+        ASSERT_FALSE(Memory->sgxMemory()->active());
+        EXPECT_EQ(R.PC, ExitTarget);
+        EXPECT_EQ(R.GPR[6], 12u);
+      }
+    }
+}

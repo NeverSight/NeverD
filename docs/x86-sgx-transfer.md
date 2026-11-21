@@ -190,6 +190,15 @@ with the outside register image. EDECCSSA validates the preceding slot before
 committing its decrement and making that slot the destination for future AEX.
 [Intel SGX enclave operation, EDECCSSA, ERESUME and debugging](https://cdrdv2-public.intel.com/843859/332831-sdm-vol-3d-dec-24.pdf)
 
+The exception-handler regression executes the original `DIV ECX` through
+both C emitters and x64 Clang/NeverC. A divide fault writes vector 0 and its
+original PC, dividend and marker register to the first SSA slot. EENTER on
+the same TCS reaches the nested handler at CSSA=1. It writes 7 to the saved
+RCX, exits, and ERESUME retries the original instruction with 84/7 = 12.
+Two successive faults exercise slot reuse. Intel's signed x64 simulation
+enclave produces the same register, retry and quotient observations on the
+designated runner. [Independent Intel SDK simulation](https://github.com/gmh5225/test_mac_intel/actions/runs/44873573672)
+
 Enclave construction and cryptographic leaves require platform state beyond
 this imported-thread profile. CET, XSTATE components beyond AVX and physical
 SGX qualification remain open.
