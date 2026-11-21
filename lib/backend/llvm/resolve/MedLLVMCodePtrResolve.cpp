@@ -213,7 +213,7 @@ llvm::Constant *MedLLVMEmitter::resolveLiftedFunctionInterior(va_t Address) {
     return nullptr;
   std::optional<va_t> BestEntry;
   if (Img && Img->isArm64e()) {
-    BestEntry = machOInteriorAddressOwner(*Img, Address);
+    BestEntry = machOInteriorByteOwner(*Img, Address);
   } else if (TargetFormat == BinaryFormat::COFF &&
              !EmittedFuncCodeRanges.empty()) {
     va_t BestSpan = ~va_t{0};
@@ -3099,14 +3099,14 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
 
   struct CodeProof {
     std::optional<va_t> CommonTarget;
-    llvm::Function *CommonBlockOwner = nullptr;
+    llvm::Function *CommonInteriorOwner = nullptr;
     bool SawCode = false;
     bool SawNonCode = false;
     bool SawNull = false;
     bool SawUnresolved = false;
     bool SawConflict = false;
-    bool SawBlockIdentity = false;
-    bool SawNonBlockIdentity = false;
+    bool SawInteriorIdentity = false;
+    bool SawNonInteriorIdentity = false;
     bool SawOwnerConflict = false;
     bool SawUnmaterializableCodeIdentity = false;
     bool SawExplicit = false;
@@ -3127,8 +3127,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     A.SawNull |= B.SawNull;
     A.SawUnresolved |= B.SawUnresolved;
     A.SawConflict |= B.SawConflict;
-    A.SawBlockIdentity |= B.SawBlockIdentity;
-    A.SawNonBlockIdentity |= B.SawNonBlockIdentity;
+    A.SawInteriorIdentity |= B.SawInteriorIdentity;
+    A.SawNonInteriorIdentity |= B.SawNonInteriorIdentity;
     A.SawOwnerConflict |= B.SawOwnerConflict;
     A.SawUnmaterializableCodeIdentity |= B.SawUnmaterializableCodeIdentity;
     A.SawExplicit |= B.SawExplicit;
@@ -3144,11 +3144,11 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
       A.SawConflict = true;
     else if (!A.CommonTarget)
       A.CommonTarget = B.CommonTarget;
-    if (A.CommonBlockOwner && B.CommonBlockOwner &&
-        A.CommonBlockOwner != B.CommonBlockOwner)
+    if (A.CommonInteriorOwner && B.CommonInteriorOwner &&
+        A.CommonInteriorOwner != B.CommonInteriorOwner)
       A.SawOwnerConflict = true;
-    else if (!A.CommonBlockOwner)
-      A.CommonBlockOwner = B.CommonBlockOwner;
+    else if (!A.CommonInteriorOwner)
+      A.CommonInteriorOwner = B.CommonInteriorOwner;
     return A;
   };
 
@@ -3185,16 +3185,16 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     // single identity that may be replaced with its initializer.
     // Function-entry alternatives retain their runtime selection. Interior
     // labels may merge only within one LLVM function, and are never callable.
-    const bool SameOwnerBlockAlternatives =
-        Result.SawConflict && Result.SawBlockIdentity &&
-        !Result.SawNonBlockIdentity && Result.CommonBlockOwner &&
+    const bool SameOwnerInteriorAlternatives =
+        Result.SawConflict && Result.SawInteriorIdentity &&
+        !Result.SawNonInteriorIdentity && Result.CommonInteriorOwner &&
         !Result.SawOwnerConflict;
     const bool ConflictIsMaterializable = !Result.SawConflict ||
-                                          SameOwnerBlockAlternatives ||
+                                          SameOwnerInteriorAlternatives ||
                                           Result.AllFunctionEntries;
     if (Result.SawCode &&
         (Result.SawCodeDependency || Result.SawNull ||
-         SameOwnerBlockAlternatives ||
+         SameOwnerInteriorAlternatives ||
          (Result.SawConflict && Result.AllFunctionEntries) ||
          (Result.SawRuntimeValue && !Result.SawUnresolved)) &&
         !Result.SawNonCode && ConflictIsMaterializable &&
@@ -3280,10 +3280,18 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (AllowExactLiftedBlock && !LiftedCodeIdentity)
       LiftedCodeIdentity = resolveLiftedCodeAddress(Normalized);
     const bool HasLiftedCodeIdentity = LiftedCodeIdentity != nullptr;
-    llvm::Function *BlockOwner = nullptr;
+    llvm::Function *InteriorOwner = nullptr;
     if (auto *BlockAddress =
             llvm::dyn_cast_or_null<llvm::BlockAddress>(LiftedCodeIdentity))
-      BlockOwner = BlockAddress->getFunction();
+      InteriorOwner = BlockAddress->getFunction();
+    // A returned Darwin text address can be a byte offset from its owning
+    // function. PHI/SELECT emission materializes each arm separately. Keep
+    // that selection for storage uses under the same ownership rule as labels.
+    if (!RequireCodeRole && !InteriorOwner && Img->isArm64e())
+      if (const auto *Offset =
+              llvm::dyn_cast_or_null<llvm::ConstantExpr>(LiftedCodeIdentity);
+          Offset && Offset->getOpcode() == llvm::Instruction::GetElementPtr)
+        InteriorOwner = llvm::dyn_cast<llvm::Function>(Offset->getOperand(0));
     // Data the debug information places among the code is no code, though
     // its section is.
     const bool HasLayoutCodeOwner =
@@ -3302,10 +3310,10 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
     if (Current.Size != 0 && PointerSize != 0 && Current.Size < PointerSize)
       return {.SawCode = true, .SawUnresolved = true, .SawExplicit = true};
     return {.CommonTarget = Normalized,
-            .CommonBlockOwner = BlockOwner,
+            .CommonInteriorOwner = InteriorOwner,
             .SawCode = true,
-            .SawBlockIdentity = BlockOwner != nullptr,
-            .SawNonBlockIdentity = BlockOwner == nullptr,
+            .SawInteriorIdentity = InteriorOwner != nullptr,
+            .SawNonInteriorIdentity = InteriorOwner == nullptr,
             .SawUnmaterializableCodeIdentity = !HasLiftedCodeIdentity,
             .SawExplicit = true,
             .SawFunctionIdentity = HasFunctionIdentity,
@@ -3745,8 +3753,8 @@ llvm::Value *MedLLVMEmitter::tryResolveCodeAddressValue(
          {"saw_null", Proof.SawNull},
          {"saw_unresolved", Proof.SawUnresolved},
          {"saw_conflict", Proof.SawConflict},
-         {"saw_block_identity", Proof.SawBlockIdentity},
-         {"saw_non_block_identity", Proof.SawNonBlockIdentity},
+         {"saw_block_identity", Proof.SawInteriorIdentity},
+         {"saw_non_block_identity", Proof.SawNonInteriorIdentity},
          {"saw_owner_conflict", Proof.SawOwnerConflict},
          {"saw_unmaterializable_code", Proof.SawUnmaterializableCodeIdentity},
          {"saw_explicit", Proof.SawExplicit},

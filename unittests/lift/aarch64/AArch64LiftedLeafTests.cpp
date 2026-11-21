@@ -478,6 +478,7 @@ void verifyPublishedLeaves(const char *Leaves, const char *CallerSource,
           machOInteriorAddressOwner(*Image, Sum->Addr + aarch64::kInsnSize),
           Sum->Addr);
       EXPECT_FALSE(machOInteriorAddressOwner(*Image, Sum->Addr + 1));
+      EXPECT_EQ(machOInteriorByteOwner(*Image, Sum->Addr + 1), Sum->Addr);
       EXPECT_FALSE(
           machOInteriorAddressOwner(*Image, ExpectedData.front().Begin));
       EXPECT_EQ(
@@ -2239,7 +2240,7 @@ TEST(AArch64LiftedImage, PreservesSourceAddressesBeyondADRReach) {
                         kAddressFunctions);
 }
 
-TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
+static void verifyWideAddressReturns(bool OmitDataRecords) {
 #if defined(__APPLE__) && defined(__aarch64__)
   llvm::SmallString<128> Directory;
   ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
@@ -2249,10 +2250,14 @@ TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
   const auto Caller = (Root / kDriverSource).string();
   const auto Driver = (Root / kDriver).string();
   auto Input = (Root / kOriginal).string();
-  std::ofstream(Source) << kWideAddressLeaves;
-  ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
-                                      {kCompiler, kTargetFlag, kTarget, kDylib,
-                                       kDataLinker, Source, kOut, Input}),
+  const std::string Cases = OmitDataRecords ? kReturnTailCases : std::string();
+  const unsigned ExpectedSites =
+      kWideAddressFunctions + (OmitDataRecords ? kAdditionalTailSites : 0u);
+  std::ofstream(Source) << Cases << kWideAddressLeaves;
+  ASSERT_EQ(llvm::sys::ExecuteAndWait(
+                kCompiler, {kCompiler, kTargetFlag, kTarget, kDylib,
+                            OmitDataRecords ? kOmitDataRecords : kDataLinker,
+                            Source, kOut, Input}),
             0);
   ASSERT_EQ(llvm::sys::ExecuteAndWait(
                 kCodesign, {kCodesign, kForceSign, kSign, kAdHocIdentity,
@@ -2260,7 +2265,7 @@ TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
             0);
   const bool Native = std::getenv(kExecute) != nullptr;
   if (Native) {
-    std::ofstream(Caller) << kWideAddressCaller;
+    std::ofstream(Caller) << Cases << kWideAddressCaller;
     ASSERT_EQ(
         llvm::sys::ExecuteAndWait(kCompiler, {kCompiler, kTargetFlag, kTarget,
                                               kOptimize, Caller, kOut, Driver}),
@@ -2281,14 +2286,22 @@ TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
     ASSERT_TRUE(Lifted.Success && Lifted.LlvmModule) << Lifted.Error;
     symbolizeImageAbsolutePointers(*Lifted.LlvmModule, *Image);
     std::vector<MachOLiftedSourceAddress> Sites;
+    llvm::DenseMap<va_t, ExceptionAddressRange> Tails;
     auto Entries = validateMachORegisterResults(*Lifted.LlvmModule, *Image,
-                                                nullptr, &Sites);
+                                                nullptr, &Sites, &Tails);
     ASSERT_TRUE(bool(Entries)) << llvm::toString(Entries.takeError());
-    ASSERT_EQ(Sites.size(), kWideAddressFunctions);
+    ASSERT_EQ(Sites.size(), ExpectedSites);
     const auto PagePairs = llvm::count_if(Sites, [](const auto &Site) {
       return Site.Form == MachOAddressForm::PagePair;
     });
-    EXPECT_EQ(PagePairs, I ? kWideAddressFunctions : 1u);
+    if (!I)
+      EXPECT_EQ(PagePairs,
+                OmitDataRecords ? kUnmarkedPagePairs : kDeclaredPagePairs);
+    else if (!OmitDataRecords)
+      EXPECT_EQ(PagePairs, kWideAddressFunctions);
+    const unsigned ExpectedTails =
+        OmitDataRecords && !I ? kUnmarkedWideTails : 0;
+    EXPECT_EQ(Tails.size(), ExpectedTails);
     const auto Output = (Root / (kRepeatedPrefix + std::to_string(I))).string();
     MachOPatcher Patcher;
     Patcher.setImageContext(&*Image);
@@ -2298,16 +2311,43 @@ TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
     ASSERT_EQ(llvm::sys::ExecuteAndWait(kCodesign,
                                         {kCodesign, kVerify, kStrict, Output}),
               0);
+    if (OmitDataRecords) {
+      ASSERT_TRUE(Image->MachODataInCode.empty());
+      auto Installed = Reader->load(Output);
+      ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+      EXPECT_TRUE(Installed->MachODataInCode.empty());
+      for (unsigned J = 0; J < kWideFillFunctions; ++J) {
+        const auto Name = kWideFillSymbol + std::to_string(J);
+        const auto *Entry = Installed->findSymbol(Name);
+        ASSERT_NE(Entry, nullptr) << Name;
+        const auto *Bytes = Installed->readVA(
+            Entry->Addr + kAddressReturnWords * aarch64::kInsnSize,
+            kWideFillBytes);
+        ASSERT_NE(Bytes, nullptr);
+        EXPECT_TRUE(llvm::all_of(llvm::ArrayRef(Bytes, kWideFillBytes),
+                                 [J](uint8_t Byte) { return Byte == J; }))
+            << Name;
+      }
+    }
     if (Native)
       ASSERT_EQ(llvm::sys::ExecuteAndWait(Driver, {Driver, Output}), 0);
     Input = Output;
   }
   testing::Test::RecordProperty(kNativeImages, Native ? Generations + 1 : 0);
   testing::Test::RecordProperty(kPublicationGenerations, Generations);
-  testing::Test::RecordProperty(kWidePageReturns, kWideAddressFunctions);
+  testing::Test::RecordProperty(
+      OmitDataRecords ? kAddressFixups : kWidePageReturns, ExpectedSites);
 #else
   GTEST_SKIP() << kUnavailable;
 #endif
+}
+
+TEST(AArch64LiftedImage, RepublishesAddressReturnsBeyondLiteralPoolReach) {
+  verifyWideAddressReturns(false);
+}
+
+TEST(AArch64LiftedImage, KeepsAddressOnlyTailsWithoutDataInCode) {
+  verifyWideAddressReturns(true);
 }
 
 TEST(AArch64LiftedImage, KeepsOldFrameSaveInsideItsForwardingEntry) {
@@ -2434,6 +2474,60 @@ TEST(AArch64LiftedImage, RecognizesOnlyImmutableLocalLiteralRebases) {
   Check(Mutable->Addr, std::nullopt);
 #else
   GTEST_SKIP();
+#endif
+}
+
+TEST(AArch64LiftedImage, DistinguishesReturnedLiteralSlotsFromOtherRoots) {
+#if defined(__APPLE__) && defined(__aarch64__)
+  llvm::SmallString<128> Directory;
+  ASSERT_FALSE(llvm::sys::fs::createUniqueDirectory(kTemporary, Directory));
+  const std::filesystem::path Root(Directory.str().str());
+  auto Cleanup = llvm::scope_exit([&] { std::filesystem::remove_all(Root); });
+  const auto Source = (Root / kAssemblyName).string();
+  const auto Input = (Root / kOriginal).string();
+  const auto Reader = Loader::create(BinaryFormat::MachO);
+  constexpr auto Word = aarch64::kInsnSize;
+  for (bool SecondAlias : {false, true}) {
+    SCOPED_TRACE(SecondAlias);
+    {
+      std::ofstream OS(Source);
+      if (SecondAlias)
+        OS << kSecondTailAlias;
+      OS << kReturnedLiteralTail;
+    }
+    ASSERT_EQ(llvm::sys::ExecuteAndWait(kCompiler,
+                                        {kCompiler, kTargetFlag, kTarget,
+                                         kDylib, kOmitDataRecords, kFixupChains,
+                                         Source, kOut, Input}),
+              0);
+    auto Linked = Reader->load(Input);
+    ASSERT_TRUE(bool(Linked)) << llvm::toString(Linked.takeError());
+    const auto *Entry = Linked->findSymbol(kSumSymbol);
+    const auto *Cells = Linked->findSymbol(kAddressCellsSymbol);
+    ASSERT_TRUE(Entry && Cells);
+    const va_t PC = Entry->Addr;
+    const va_t Tail = PC + kAddressReturnWords * Word;
+    const auto Load = aarch64::encodePointerLiteralLoad(0, PC, Cells->Addr);
+    ASSERT_TRUE(Load);
+    EXPECT_EQ(machORebasedLiteralAddress(*Linked, *Load, PC), Tail);
+    // Set the cross-section literal displacement after the linker has placed
+    // the cell. Both aliases and their dyld records come from the real linker.
+    auto Bytes = Linked->Raw;
+    const auto Offset = Linked->vaToFileOffset(PC);
+    ASSERT_TRUE(rangeInBounds(Offset, Word, Bytes.size()));
+    writeLE<uint32_t>(Bytes.data() + Offset, *Load);
+    auto Image = Reader->loadBuffer(
+        llvm::MemoryBufferRef(llvm::toStringRef(llvm::ArrayRef(Bytes)), Input));
+    ASSERT_TRUE(bool(Image)) << llvm::toString(Image.takeError());
+    Decoder Decode;
+    ASSERT_TRUE(Decode.init(*Image));
+    const auto Code = CFGBuilder().build(*Image, Decode, PC);
+    EXPECT_EQ(llvm::is_contained(Code.DecodeFailureAddresses, Tail),
+              SecondAlias);
+    EXPECT_EQ(Code.hasCompleteInstructionLift(), !SecondAlias);
+  }
+#else
+  GTEST_SKIP() << kUnavailable;
 #endif
 }
 

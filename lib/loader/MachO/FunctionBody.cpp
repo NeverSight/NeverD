@@ -18,25 +18,23 @@
 #include <algorithm>
 
 namespace neverd {
-std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
-                                              va_t VA) {
-  constexpr auto Word = aarch64::kInsnSize;
-  if (!Image.isArm64e() || VA % Word ||
-      !Image.hasExecutableCodeOwnerRange(VA, Word))
+static std::optional<va_t> interiorOwner(const BinaryImage &Image, va_t VA,
+                                         unsigned Width) {
+  if (!Image.isArm64e() || !Image.hasExecutableCodeOwnerRange(VA, Width))
     return std::nullopt;
   const auto *Frame = Image.ExceptionMetadata.findFunction(VA);
   const auto *Segment = Image.getSegmentFor(VA);
   if (!Frame || (!Frame->Compact && !Frame->Dwarf) || !Segment ||
       !Segment->isExecutable() || Segment->isWritable() ||
-      !rangeInBounds(VA - Frame->CodeRange.Begin, Word,
+      !rangeInBounds(VA - Frame->CodeRange.Begin, Width,
                      Frame->CodeRange.size()) ||
-      !rangeInBounds(VA - Segment->VA, Word, Segment->FileSz))
+      !rangeInBounds(VA - Segment->VA, Width, Segment->FileSz))
     return std::nullopt;
   const auto Data = Image.DataInCode.lower_bound(VA);
-  if (Data != Image.DataInCode.end() && *Data - VA < Word)
+  if (Data != Image.DataInCode.end() && *Data - VA < Width)
     return std::nullopt;
   if (Frame->Dwarf && (VA < Frame->Dwarf->InitialLocation ||
-                       !rangeInBounds(VA - Frame->Dwarf->InitialLocation, Word,
+                       !rangeInBounds(VA - Frame->Dwarf->InitialLocation, Width,
                                       Frame->Dwarf->AddressRange)))
     return std::nullopt;
   // Darwin may coalesce several adjacent functions' compact unwind rows.
@@ -57,6 +55,16 @@ std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
       Image.getSegmentFor(Owner) != Segment)
     return std::nullopt;
   return Owner;
+}
+
+std::optional<va_t> machOInteriorAddressOwner(const BinaryImage &Image,
+                                              va_t VA) {
+  constexpr auto Word = aarch64::kInsnSize;
+  return VA % Word ? std::nullopt : interiorOwner(Image, VA, Word);
+}
+
+std::optional<va_t> machOInteriorByteOwner(const BinaryImage &Image, va_t VA) {
+  return interiorOwner(Image, VA, sizeof(uint8_t));
 }
 
 std::optional<va_t> machORebasedLiteralAddress(const BinaryImage &Image,

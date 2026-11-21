@@ -1,0 +1,433 @@
+{
+  "tested_commit": "9c45a40aecd9d6a1733344cb5364bdc1c74dc474",
+  "tested_base": "1de4e60626967be8fc60694411df714d31ac39d7",
+  "dependencies": {
+    "capstone": "88f64f91be1b3c9de7c5819e93806fa8d79127db",
+    "llvm_source": "0fc04bcc24c22f759f3dbddaa3bbd202563c01fb",
+    "unicorn": "9e7ca3522d54fbb365fc69d4c2dbf793fd4f063e",
+    "prebuilt": "neverd-llvm-v23.0.0-r6"
+  },
+  "historical_reproducer": {
+    "sha256": "6b42fe4067403df90569723d6b8bbf30b3b6307645adaddd8b894e8e903b8cd7",
+    "byte_identical": true,
+    "original_failure": "error: arm64e entry wide_frame has 28 source bytes and 20 emitted bytes"
+  },
+  "publication_inputs": {
+    "archived": {
+      "original_sha256": "6b42fe4067403df90569723d6b8bbf30b3b6307645adaddd8b894e8e903b8cd7",
+      "data_in_code_command_bytes": 0,
+      "retained_ranges_checked": 19,
+      "retained_bytes_checked": 1105924,
+      "retained_sha256": "cf9d110a55c85f339c04bc8e169e13d865f87db9261ef5185076a0f11c455269",
+      "signed_output_sha256": {
+        "O0": [
+          "9c3d7f68fc552c225ab5516823fd91d1ae6cb06337e916569bc9dd6cc99542f8",
+          "cc3ec9d21035a25d6dd6fa2d0090dddb4f7265f2638a8f20a29b9f8c1bc6bd70",
+          "297517575bd51f0efc009c95b58679ff90e1bc956d5f63fc3442f3d7ea2f3ca6"
+        ],
+        "O2": [
+          "38e09d38e77ec293ab2a748c18d7e29f1ba151a43ccfc7ecf6d94d40dffba365",
+          "956773fda495b7647f4da154af7f79a4b892b4ff3683dc341afaa5930d5e8f1c",
+          "ab6656513144a6f329175ffc037add43eed1fcf550e4b32ddc6de81b87b0fc02"
+        ]
+      }
+    },
+    "modern": {
+      "original_sha256": "163f43e5563808aaa6e5af4906cf780bea1bee92f4b69e9ed5d0f1a1711128f5",
+      "data_in_code_command_bytes": 0,
+      "retained_ranges_checked": 19,
+      "retained_bytes_checked": 1105924,
+      "retained_sha256": "cf9d110a55c85f339c04bc8e169e13d865f87db9261ef5185076a0f11c455269",
+      "signed_output_sha256": {
+        "O0": [
+          "c2e61ffe6279d21f6866841cf6caaec40eba556510cadbd89993260724d3563f",
+          "d8800ef728d1a4046242a18ef7242164cf961100c77a9233d535a3bcdfe4786b",
+          "5eef1bde4ac130de9b4da54736d01b9a24cf7313821552c84557378dc0374b10"
+        ],
+        "O2": [
+          "9ca333ca7acbc8a84f87f3e002a66e6a9796af1ffbf36754f79ec9cd4ff4faac",
+          "d08c044871b6f35bacc271d5e0f41d7943c0c88deee991ed719f41c42e918b3d",
+          "1295d8c05c97b3c15174be6f5000b500633b43bae33a9f7c5981466d795b8f99"
+        ]
+      }
+    },
+    "classic": {
+      "original_sha256": "86d1e12d25a07740fbd1bd9bc68f2eaf7146757aa265e74e9acff168095420d7",
+      "data_in_code_command_bytes": null,
+      "retained_ranges_checked": 19,
+      "retained_bytes_checked": 1105924,
+      "retained_sha256": "cf9d110a55c85f339c04bc8e169e13d865f87db9261ef5185076a0f11c455269",
+      "signed_output_sha256": {
+        "O0": [
+          "32ee34e366e4fff0061ea7281c1db5d54928f860031ce2e334b64b65ffe748a0",
+          "300a6fd0b830aaa08cf7a5c1a5c828d616314535afb51c570c7f767f14dfa2d7",
+          "25776bed30c37e820d1b69ddf22b2499960a70859145d511053aa28c775f8d90"
+        ],
+        "O2": [
+          "65dfafd016cb28f185cbd5a4e97f23cbed5ad17e587e9f533b04363ae2430640",
+          "7cd323315f1ed5425c87053e82d8a05cb5c65993ccc11a201b09564817a57f0f",
+          "221b094f8550f037eb6d79f07e576c2747f77ef2c12d23b18d8aa03c9fc44456"
+        ]
+      }
+    },
+    "extended": {
+      "original_sha256": "1a4bad589c910f9cdafcce07b00cc434cba04cd8f4fe3e98c3f4cf2cee42c6a0",
+      "data_in_code_command_bytes": null,
+      "retained_ranges_checked": 24,
+      "retained_bytes_checked": 1105988,
+      "retained_sha256": "7ee136874d06efafe77da04d6d8245c614e3562ba7bd15aecfbeed262220a962",
+      "signed_output_sha256": {
+        "O0": [
+          "222de90e08b16a550af57fc001fd5706ffd46292e07be7d399803e377dc34c2f",
+          "6a7a33cdb48da3c6576e98ee620e92f508a7d62fbe235d44ada76fd6c08f3945",
+          "40eb0e17eb56ef5bd720e96154d3c5ce6e110f6f30f37fd0f00a4ef232afe432"
+        ],
+        "O2": [
+          "f61ac5bbebf986dee12243e1899801bc6a63cde3c6ab642fb346d85a5f6ca473",
+          "b7449bbd2a98ff253642d8804f8135c8aeb44cf64dc25be5c5376ebbd28dcbf2",
+          "7de87d706ed5d3e09f2a3a6156288d83adb6c697ae65e480c28478b5bfd7ed83"
+        ]
+      }
+    },
+    "pie": {
+      "original_sha256": "707f73e559e3d0d010001280d5bbae6807a3924b5f24d023733606d0b2ae5c9c",
+      "data_in_code_command_bytes": null,
+      "retained_ranges_checked": 24,
+      "retained_bytes_checked": 1105988,
+      "retained_sha256": "7ee136874d06efafe77da04d6d8245c614e3562ba7bd15aecfbeed262220a962",
+      "signed_output_sha256": {
+        "O0": [
+          "e218c63c42a749e9d6e9158919251bfc9ac188a15fe3f32051e607c1a98ab457",
+          "8b9a35e568f422556e506a9fe3b2d92c4c63f8f3f195e36046d9072763256eb8",
+          "555c9229ee2be63c16d27a2b6fafbc39cd1f83fc7e1e95be3a532ee0631634a7"
+        ],
+        "O2": [
+          "d26a1fd58c74f328bb6feb78698e695d28044a79a6d01b3b9e3efb5c1132d270",
+          "c658e0d5b9593bfb7921b5b84bd0f867e97ffc287818e10b81f116cc206384f8",
+          "c88574e52581f575d0b71eb7d923711228ad2bfeb6e8acb937f640d4e258562f"
+        ]
+      }
+    },
+    "literal": {
+      "original_sha256": "0e9ee97c01ff4493c7b5b335e25613fbdb49d457d7d1c7d725fa63127f276a74",
+      "data_in_code_command_bytes": null,
+      "retained_ranges_checked": 1,
+      "retained_bytes_checked": 8,
+      "retained_sha256": "a46552d001f21754c0024c0fcd2244bedb0d5cbcfdd87d8beac238644ce52ac5",
+      "signed_output_sha256": {
+        "O0": [
+          "d43cb22730e234ec0d805c647af9e1334eb466df467a704e418d36ed8b276b69",
+          "851dca6632ab3a4bea082434c12cb12f35d18fca26d59a910cfe8ec24757c685",
+          "39edc7d154bcf5c494b54d5e867baf655daa91fa38d86c2b1a1303713c4f2b53"
+        ],
+        "O2": [
+          "27347d4cb8c0da484232f8cedf4dab38ed24e5ec1b4cb2fa7d855bc398db9f14",
+          "08e4ecc3d466111fd6b097156e21d4edece9fc005355b9c4339039dce796dd72",
+          "f728e3dd0de1596ef0dbc1effee0c13e4f66a90d2f31f9f079bb8ef59c56f19f"
+        ]
+      }
+    }
+  },
+  "local_tests": {
+    "source_llvm": {
+      "exit": 0,
+      "total": 273,
+      "passed": 273,
+      "failed": [],
+      "skipped": [],
+      "host_sha256": "b962ac3658f06bc3113efb57127be8d49f63c69cab5f4ca6b769843274d7202f"
+    },
+    "prebuilt_r6": {
+      "exit": 1,
+      "total": 273,
+      "passed": 263,
+      "failed": [
+        "AArch64DarwinEntry.AsyncDwarfRestoresTheLinkRegisterBeforeSwiftReturn",
+        "AArch64DarwinEntry.IndexedDwarfCallReturnsTheUpdatedSwiftErrorRegister",
+        "AArch64DarwinEntry.SignedLeafUsesTheIncomingSPAtItsNewAddress",
+        "AArch64LiftedImage.AppendedFunctionsSurviveRepeatedAutomaticLifting",
+        "AArch64LiftedImage.CodesignSignedLiftedOutputAllowsRepeatedNativePublication",
+        "AArch64LiftedImage.SignedFrameCallsImportBeforeReadingOriginalGlobal"
+      ],
+      "skipped": [
+        "AArch64CompactRegisters.PublishesPAuthLRAllPairs",
+        "AArch64CompactRegisters.PublishesPAuthLROffsetAndSparsePairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLRAllPairs",
+        "AArch64CompactRegisters.SystemUnwindsPAuthLROffsetAndSparsePairs"
+      ],
+      "host_sha256": "7677895edc5431a48f1640b47d5e615a0e40856a412b0c4321f46af3fd18d516"
+    },
+    "jump_table": {
+      "total": 798,
+      "failed": [],
+      "exit": 0,
+      "skipped": [
+        {
+          "name": "JTE_X86_32.SelectArmBiasedBeforeItsTableKeepsTheAnchoredOwner",
+          "reason": "this compiler reads both table entries directly"
+        },
+        {
+          "name": "JTE_X86_32.AbsoluteSelectArmBiasedBeforeItsTableKeepsTheOwner",
+          "reason": "this compiler reads both table entries directly"
+        },
+        {
+          "name": "JTE_X86_64.ReloadedGuardExecutesTheOriginalSelection",
+          "reason": "requires an x86-64 Linux execution host"
+        },
+        {
+          "name": "JumpTableSharedAbsolute.BothSourceRoutesExecuteEverySelection",
+          "reason": "Execution of AArch64 source requires qemu-aarch64"
+        },
+        {
+          "name": "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/0",
+          "reason": "Execution of aarch64 source requires qemu-aarch64"
+        },
+        {
+          "name": "NativeTargets/JumpTableFiniteSelectorSource.BothSourceRoutesExecuteTheOriginalSelection/1",
+          "reason": "Execution of x86_64 source requires qemu-x86_64"
+        }
+      ],
+      "passed": 792
+    },
+    "related": {
+      "NeverDArm64eAnalysisTests": {
+        "total": 40,
+        "failures": [],
+        "exit": 0
+      },
+      "NeverDImageAnalysisBoundaryTests": {
+        "total": 162,
+        "failures": [],
+        "exit": 0
+      },
+      "NeverDAArch64ReturnProtectionTests": {
+        "total": 19,
+        "failures": [],
+        "exit": 0
+      }
+    }
+  },
+  "native_execution": {
+    "suite": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44917069820",
+      "profiles": {
+        "macos-26": {
+          "total": 273,
+          "exit": 0,
+          "neverd": "9c45a40aecd9d6a1733344cb5364bdc1c74dc474",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "26.7.2",
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "xml_sha256": "662f23ad690d77693b98799dc1a7b93d4020ef00b173fd22ef6e42c050bd4a01",
+          "pie_binaries_executed": 7,
+          "dylibs_called": 35,
+          "new_test": {
+            "executed_native_images": 4,
+            "resigned_publication_generations": 3,
+            "verified_source_address_sites": 27
+          }
+        },
+        "xcode-27": {
+          "total": 273,
+          "exit": 0,
+          "neverd": "9c45a40aecd9d6a1733344cb5364bdc1c74dc474",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "27.0.1",
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "xml_sha256": "987aa42729a5076dd2d99b3b0c2dbfce46a68ff6b4db9f26c76d13193a482271",
+          "pie_binaries_executed": 7,
+          "dylibs_called": 35,
+          "new_test": {
+            "executed_native_images": 4,
+            "resigned_publication_generations": 3,
+            "verified_source_address_sites": 27
+          }
+        }
+      }
+    },
+    "suite-r6": {
+      "url": "https://github.com/gmh5225/test_mac_intel/actions/runs/44921174291",
+      "profiles": {
+        "macos-26": {
+          "total": 273,
+          "exit": 1,
+          "neverd": "9c45a40aecd9d6a1733344cb5364bdc1c74dc474",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "26.7.2",
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "xml_sha256": "c03d1936c6a91015c0bf57bb8bc7d2611afeed1a9a133d85833cd121ce8bcbe3",
+          "new_test": {
+            "executed_native_images": 4,
+            "resigned_publication_generations": 3,
+            "verified_source_address_sites": 27
+          }
+        },
+        "xcode-27": {
+          "total": 273,
+          "exit": 1,
+          "neverd": "9c45a40aecd9d6a1733344cb5364bdc1c74dc474",
+          "hardware": "Apple M1 (Virtual)",
+          "os": "27.0.1",
+          "x1": {
+            "status": "unavailable",
+            "native_arm64e_x1_environment_qualified": false,
+            "missing": [
+              {
+                "probe": "probe-cursor",
+                "feature": "explicit_pauth_lr_qualified"
+              },
+              {
+                "probe": "probe-cursor",
+                "feature": "pacm_pc_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_cpta_qualified"
+              },
+              {
+                "probe": "probe-cpta",
+                "feature": "x1_el0_checked_writeback_qualified"
+              }
+            ]
+          },
+          "native_handler_walks": 12,
+          "xml_sha256": "5e580da0ac95e5e4d4223120314e6e9111ade1fcee34bc1ad90de07db5a88778",
+          "new_test": {
+            "executed_native_images": 4,
+            "resigned_publication_generations": 3,
+            "verified_source_address_sites": 27
+          }
+        }
+      }
+    }
+  },
+  "smaller_cli_cases": {
+    "bytes": {
+      "O0": 3,
+      "O2": 3
+    },
+    "page": {
+      "O0": 3,
+      "O2": 3
+    },
+    "epilogue": {
+      "O0": 3,
+      "O2": 3
+    },
+    "branch": {
+      "O0": 3,
+      "O2": 3
+    },
+    "callback": {
+      "O0": 3,
+      "O2": 3
+    },
+    "dwarf": {
+      "O0": 3,
+      "O2": 3
+    },
+    "local-stack": {
+      "O0": "refused without output",
+      "O2": "refused without output"
+    },
+    "clobbered": {
+      "O0": "refused without output",
+      "O2": "refused without output"
+    },
+    "unused": {
+      "O0": "refused without output",
+      "O2": "refused without output"
+    },
+    "past-end": {
+      "O0": "refused without output",
+      "O2": "refused without output"
+    }
+  },
+  "independent_controls": {
+    "unused_second_fixup_to_trailer": "preserves relocation root and refuses incomplete input",
+    "malformed_terminal_unwind": "rejected before output"
+  },
+  "target_at_integration_check": {
+    "dev": "44902d1101f1ea551b4b1e09b0af4d1ae9045e39",
+    "source_capstone": "88f64f91be1b3c9de7c5819e93806fa8d79127db",
+    "dev_capstone": "17f68720b746928d0628f4ed01664d43cb2ea350",
+    "capstone_changed": [
+      "CMakeLists.txt",
+      "arch/RISCV/RISCVMapping.c",
+      "tests/unit/riscv_mapping_index.c"
+    ],
+    "merged_low_ir_target": "c6266d18a60b9769695bf5bc795adcb90e5e5ff3",
+    "matching_capstone_objects": {
+      "arch/AArch64": "6a928ae1c2c9836501dafe7c2d73b93e1859d141",
+      "include/capstone/aarch64.h": "aeb392390421a4ffbcfc2a31208559cf7529bdd4",
+      "include/capstone/capstone.h": "80f8ce9e9bfa8f81c09d2f4b2885124753ddf016",
+      "cs.c": "7b069255e17ae1d5fc4c77106c4abb17f5d21dca"
+    }
+  }
+}

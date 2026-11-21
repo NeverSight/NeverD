@@ -31,6 +31,7 @@ MACHO_REGISTER_EXTEND(SXTW, ", sxtw")
 MACHO_REGISTER_EXTEND(SXTX, ", sxtx")
 MACHO_REGISTER_TEXT(kShiftAmount, " #")
 MACHO_REGISTER_TEXT(kRecoveredData, "neverd.arm64e.recovered-data-in-code")
+MACHO_REGISTER_TEXT(kRetainedTail, "neverd.arm64e.retained-address-tail")
 MACHO_REGISTER_TEXT(kRegisterBody, "neverd.arm64e.register-results")
 MACHO_REGISTER_TEXT(kInvalidBody,
                     "arm64e native register body disagrees with its source "
