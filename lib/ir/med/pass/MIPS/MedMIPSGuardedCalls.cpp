@@ -124,6 +124,12 @@ Word transferredHalves(const MedOp &Op,
   if (Op.NumInputs != 2)
     return {};
   const auto &A = Op.Inputs[0], &B = Op.Inputs[1];
+  const bool Shift = Op.Opcode == NdOp::INT_LEFT ||
+                     Op.Opcode == NdOp::INT_RIGHT ||
+                     Op.Opcode == NdOp::INT_ASHR;
+  if (Shift && B.isConst() && B.ConstVal == 0 && A.Size == B.Size &&
+      A.Size == Op.Output.Size)
+    return Read(A);
   if (Op.Opcode == NdOp::SUBBYTES && A.Size == WordBytes && B.isConst() &&
       Op.Output.Size == HalfBytes &&
       (B.ConstVal == 0 || B.ConstVal == HalfBytes)) {
@@ -136,17 +142,10 @@ Word transferredHalves(const MedOp &Op,
     return {Read(B).Low, Read(A).Low};
   if (A.Size != WordBytes || B.Size != WordBytes)
     return {};
-  if (Op.Opcode == NdOp::INT_LEFT || Op.Opcode == NdOp::INT_RIGHT ||
-      Op.Opcode == NdOp::INT_ASHR) {
-    if (!B.isConst())
-      return {};
-    if (B.ConstVal == 0)
-      return Read(A);
-    if (B.ConstVal == 32) {
-      if (Op.Opcode == NdOp::INT_LEFT)
-        return {{ZeroId}, Read(A).Low};
-      return {Read(A).High, {Op.Opcode == NdOp::INT_RIGHT ? ZeroId : 0}};
-    }
+  if (Shift && B.isConst() && B.ConstVal == 32) {
+    if (Op.Opcode == NdOp::INT_LEFT)
+      return {{ZeroId}, Read(A).Low};
+    return {Read(A).High, {Op.Opcode == NdOp::INT_RIGHT ? ZeroId : 0}};
   }
   if (Op.Opcode == NdOp::INT_AND && (A.isConst() || B.isConst())) {
     const auto Mask = A.isConst() ? A.ConstVal : B.ConstVal;
@@ -345,6 +344,86 @@ void assumeEqual(State &Out, Word L, Word R) {
       S.Unchecked = false;
   }
 }
+
+// Capture operands when the arithmetic executes. The zero test can follow a
+// register overwrite, and its branch delay slot can change the forwarded word.
+class ZeroTests {
+  struct Test {
+    Word Left, Right;
+    bool BothZero, Needed = false;
+  };
+  llvm::SmallVector<Test, 0> Tests;
+  // (lo, hi) identifies a whole sample. (bits, 0) identifies a single
+  // 32-bit pattern wherever a copy, shift or stack reload places it.
+  llvm::DenseMap<BitPair, size_t> ByBits;
+
+  void add(BitPair Bits, Word L, Word R, bool BothZero) {
+    ByBits.try_emplace(Bits, Tests.size());
+    Tests.push_back({L, R, BothZero});
+  }
+  bool mark(BitPair Bits) {
+    const auto It = ByBits.find(Bits);
+    if (It == ByBits.end())
+      return false;
+    Tests[It->second].Needed = true;
+    return true;
+  }
+  bool mark(Word W) {
+    if (W.complete() && mark(BitPair{W.Low.Id, W.High.Id}))
+      return true;
+    const bool Low = mark(BitPair{W.Low.Id, 0});
+    return mark(BitPair{W.High.Id, 0}) || Low;
+  }
+
+public:
+  void clear() {
+    Tests.clear();
+    ByBits.clear();
+  }
+  void capture(NdOp Op, Word &Result, Word L, Word R, unsigned &NextId) {
+    if (Result.complete() || L == Word{} || R == Word{})
+      return;
+    const bool BothZero = Op == NdOp::INT_OR;
+    for (auto Part : {&Word::Low, &Word::High}) {
+      auto &H = Result.*Part;
+      if (H.Id)
+        continue;
+      // A sampled result still has opaque bits until the guard executes.
+      H.Id = NextId++;
+      // A borrow from the low half can affect the high half of a difference.
+      if (Op != NdOp::INT_SUB || Part == &Word::Low)
+        add({H.Id, 0}, {L.*Part, {}}, {R.*Part, {}}, BothZero);
+    }
+    add({Result.Low.Id, Result.High.Id}, L, R, BothZero);
+  }
+  bool assume(State &Out, Word Tested, size_t Locations, size_t &Remaining) {
+    if (Tests.empty() || !mark(Tested))
+      return true;
+    if (Tests.size() > Remaining)
+      return false;
+    Remaining -= Tests.size();
+    const Word Zero{{ZeroId}, {ZeroId}, Evidence::Independent};
+    // A new test has at least one fresh identity. Its operands can only name
+    // earlier tests, including when several ORs share the same difference.
+    for (auto &T : llvm::reverse(Tests)) {
+      if (!T.Needed)
+        continue;
+      const unsigned Equalities = T.BothZero ? 2 : 1;
+      if (Locations > Remaining / Equalities)
+        return false;
+      Remaining -= Equalities * Locations;
+      if (T.BothZero) {
+        for (const Word &Part : {T.Left, T.Right}) {
+          assumeEqual(Out, Part, Zero);
+          mark(Part);
+        }
+      } else {
+        assumeEqual(Out, T.Left, T.Right);
+      }
+    }
+    return true;
+  }
+};
 
 /// An identity names equal bits within one execution state. At a join two
 /// locations remain equal exactly when their incoming identities agree on
@@ -570,6 +649,13 @@ GuardedCalls guardedResultArguments(
       return true;
     };
     const auto Edge = equalityEdge(*B, Graph, Definitions);
+    const bool ChecksZero =
+        Edge.Compare && Edge.Compare->Inputs[0].Size == WordBytes &&
+        Edge.Compare->Inputs[1].Size == WordBytes &&
+        llvm::any_of(
+            llvm::ArrayRef(Edge.Compare->Inputs).take_front(2),
+            [](const MedVar &V) { return V.isConst() && V.ConstVal == 0; });
+    ZeroTests Tests;
     Word Left, Right;
     llvm::ArrayRef<size_t> Sites;
     if (const auto It = Native.find(B); It != Native.end())
@@ -628,6 +714,7 @@ GuardedCalls guardedResultArguments(
         else
           Exposed.erase(&Op);
         Left = Right = {};
+        Tests.clear();
         Temps.clear();
         AtEntry = false;
         if (Untyped && fullGPR(Op.Output) &&
@@ -683,8 +770,17 @@ GuardedCalls guardedResultArguments(
             for (auto &S : Current.Slots)
               S.forget();
           }
-        } else if (Op.Output.Size)
+        } else if (Op.Output.Size) {
           Value = transferredHalves(Op, read);
+          if (ChecksZero && Op.NumInputs == 2 && Op.Output.Size == WordBytes &&
+              Op.Inputs[0].Size == WordBytes &&
+              Op.Inputs[1].Size == WordBytes &&
+              (Op.Opcode == NdOp::INT_XOR || Op.Opcode == NdOp::INT_SUB ||
+               Op.Opcode == NdOp::INT_OR)) {
+            Tests.capture(Op.Opcode, Value, read(Op.Inputs[0]),
+                          read(Op.Inputs[1]), NextIdentity);
+          }
+        }
         if (AtEntry && fullGPR(Op.Output) &&
             (Value.Proof == Evidence::Independent || IsNonFrame(Op.Output))) {
           Value.Proof = Evidence::Independent;
@@ -712,8 +808,13 @@ GuardedCalls guardedResultArguments(
         return {};
       Remaining -= Locations;
       auto Out = Current;
-      if (Succ == Edge.Successor)
+      if (Succ == Edge.Successor) {
         assumeEqual(Out, Left, Right);
+        if (ChecksZero &&
+            !Tests.assume(Out, Edge.Compare->Inputs[0].isConst() ? Right : Left,
+                          Locations, Remaining))
+          return {};
+      }
       for (const auto &Phi : Succ->Phis) {
         if (Phi.Args.size() + 1 > Remaining)
           return GuardedCalls{};

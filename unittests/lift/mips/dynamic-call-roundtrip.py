@@ -65,6 +65,11 @@ SPILL_GUARDS = {
     "chain-spill-clear-halfwords": ["-DCLEAR_BYTES=2"],
     "chain-spill-guard-halves": ["-DGUARD_HALVES"],
     "chain-spill-guard-high-first": ["-DGUARD_HALVES", "-DHIGH_FIRST"],
+    "chain-spill-guard-folded": ["-DGUARD_HALVES", "-DOR_DIFFERENCES"],
+    "chain-spill-guard-folded-reload": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                        "-DSPILL_DIFFERENCE=8"],
+    "chain-spill-guard-folded-word": ["-DGUARD_HALVES", "-DOR_DIFFERENCES",
+                                      "-DSPILL_DIFFERENCE=4"],
     "chain-spill-recheck-pack": ["-DRECHECK_LOW"],
 }
 
@@ -82,7 +87,7 @@ def check_import(args, artifacts, command, profile, original_flags, fixed_flags,
                          "chain-spill-recheck")
     self_forward = form == "loop-self-forward"
     repeated = form in ("chain-loop-result", "chain-loop-spill")
-    split_guard = form in ("chain-spill-guard-halves", "chain-spill-guard-high-first")
+    split_guard = "-DGUARD_HALVES" in SPILL_GUARDS.get(form, ())
     recheck_low = form == "chain-spill-recheck-pack"
     loop_guard = (form in SPILL_TRANSFERS or form in SPILL_GUARDS or repeated or
                   form in ("chain-spill-check", "chain-spill-recheck", "chain-spill-byte"))

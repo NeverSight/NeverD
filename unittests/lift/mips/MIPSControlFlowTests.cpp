@@ -1478,6 +1478,65 @@ TEST(MIPSReturnTargets, StackWordHalvesMustMatchTheGuardedArgument) {
     CheckParts("only high half checked", false, {HighEqual, 0});
     CheckParts("same low half checked twice", false,
                {LowEqual, 0, LowEqual, 0});
+    const auto Binary = [](unsigned Fn, unsigned Dst, unsigned L, unsigned R) {
+      return (L << 21) | (R << 16) | (Dst << 11) | Fn;
+    };
+    const auto LowDiff = Binary(0x26, 12, 12, 13);
+    const auto HighDiff = Binary(0x26, 15, 14, 15);
+    const auto EitherDiff = Binary(0x25, 24, 15, 12);
+    const auto ZeroDiff = Guard(24, 0);
+    CheckParts("whole XOR difference", true,
+               {Binary(0x26, 24, 2, 16), ZeroDiff, 0});
+    CheckParts("whole modular subtraction", true,
+               {Binary(0x2f, 24, 16, 2), ZeroDiff, 0});
+    CheckParts("folded differences after operand reuse", true,
+               {LowDiff, HighDiff, EitherDiff, Move(13, 0), ZeroDiff, 0});
+    CheckParts("folded differences and repack", true,
+               {LowDiff, HighDiff, EitherDiff, ZeroDiff, 0, Shift, Join}, 15);
+    CheckParts("matching differences can cancel", false,
+               {LowDiff, HighDiff, Binary(0x26, 24, 15, 12), ZeroDiff, 0});
+    CheckParts("disjoint differences can mask each other", false,
+               {LowDiff, HighDiff, Binary(0x24, 24, 15, 12), ZeroDiff, 0});
+    CheckParts("repeated low difference misses high half", false,
+               {LowDiff, Binary(0x25, 24, 12, 12), ZeroDiff, 0});
+    CheckParts("word subtraction misses high half", false,
+               {Binary(0, 12, 0, 2), Binary(0, 15, 0, 16),
+                Binary(0x23, 24, 12, 15), ZeroDiff, 0});
+    CheckParts("zero high difference can include a borrow", false,
+               {Binary(0x2f, 24, 2, 16), 0x0018c03e, ZeroDiff, 0});
+    CheckParts(
+        "folded guard followed by changed high half", false,
+        {LowDiff, HighDiff, EitherDiff, ZeroDiff, Move(14, 13), Shift, Join},
+        15);
+    CheckParts("intact spilled difference", true,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
+    for (unsigned Load : {35u, 39u})
+      CheckParts("word spill of folded half differences", true,
+                 {LowDiff, HighDiff, EitherDiff, OtherClear, Memory(43, 24, 40),
+                  Memory(Load, 24, 40), ZeroDiff, 0});
+    CheckParts("word spill loses the high bits of a whole XOR", false,
+               {Binary(0x26, 24, 2, 16), Memory(43, 24, 40), Memory(39, 24, 40),
+                OtherClear, ZeroDiff, 0});
+    CheckParts(
+        "checked zero difference in outgoing slot", true,
+        {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), ZeroDiff, 0});
+    CheckParts(
+        "untested difference in outgoing slot", false,
+        {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40), Guard(17, 0), 0},
+        0);
+    CheckParts("word spill of folded signed word comparisons", true,
+               {Binary(0, 12, 0, 12), Binary(0, 13, 0, 13),
+                Binary(0, 14, 0, 14), Binary(0, 15, 0, 15), LowDiff, HighDiff,
+                EitherDiff, OtherClear, Memory(43, 24, 40), Memory(35, 24, 40),
+                ZeroDiff, 0});
+    CheckParts("saved difference belongs to a previous call result", false,
+               {LowDiff, HighDiff, EitherDiff, Move(16, 24), 0x3c190002, Target,
+                0x0320f809, Move(4, 0), Guard(16, 0), 0});
+    CheckParts("partial overwrite of spilled difference", false,
+               {LowDiff, HighDiff, EitherDiff, Memory(63, 24, 40),
+                Memory(40, 0, archLittleEndian(A) ? 40 : 47),
+                Memory(55, 24, 40), OtherClear, ZeroDiff, 0});
     CheckParts("halves compared to different inputs", false,
                {LowEqual, 0, 0x0011783e, HighEqual, 0});
     CheckParts("halves compared in the wrong positions", false,
