@@ -20920,6 +20920,17 @@ nine: the call passes R11's value too.
 `GoInternalABI.ACallKeepsTheSetupOfEveryGoRegister` runs register DCE over
 an arm64 block that moves X10 into X9 and calls: the move stays where the
 callee is code Go compiled and goes where it is not.
+`GoInternalABI.ACallPassesTheArgumentsGoAssignsTheStack` runs the pipeline,
+as ELF and as PE and for C and for LLVM, over a function that takes nine
+registers and two stack words, one that takes RAX and two stack words, a
+caller of each and a wrapper that jumps to the first: both functions declare
+exactly those parameters and read no local, the calls pass 1 to 11 and 1, 10,
+11, the wrapper takes and passes eleven, and the lifted callers return 66 and
+22, the sums, where arguments bound to the wrong parameters gave 45 and 0.
+`GoInternalABI.AnArm64StackArgumentFollowsNoPlatformPosition` does so on arm64
+over a function that reads the word above the stack pointer's and its caller:
+the function takes X0 and that word, the call passes 1 and 7, and the caller
+takes no parameter.
 `GoScheduleCalls.AreFoundByName` loads a pclntab that names `runtime.mcall`:
 the module records its entry and a call of it resumes, where one of
 `runtime.mcallx` or of any other function does not.

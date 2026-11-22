@@ -32,15 +32,20 @@
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <array>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <regex>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -2691,6 +2696,197 @@ TEST(GoInternalABI, ACallKeepsTheSetupOfEveryGoRegister) {
                      [](const MedOp &Op) { return Op.Opcode == NdOp::COPY; }),
         GoCallee);
   }
+}
+
+TEST(GoInternalABI, ACallPassesTheArgumentsGoAssignsTheStack) {
+  // Go's internal ABI assigns an argument the stack once its registers are
+  // taken, or where those left cannot hold it whole, in words above the
+  // return address, where the stack ABI puts every argument: Windows' home
+  // space and a platform's register count have no part in it.  Read by the
+  // platform's layout, such a function took a placeholder for each of System
+  // V's six registers ahead of its own, which a lifted call, passing Go's
+  // registers and the stack words in order, bound to the wrong parameters; on
+  // Windows the words were locals nothing wrote, and no call passed them.
+  //   main.eleven: nine register arguments, then add rax, [rsp+8]
+  //                add rax, [rsp+0x10]; ret
+  //   main.three: add rax, [rsp+8]; add rax, [rsp+0x10]; ret
+  //   main.more: sub rsp, 0x18; mov qword [rsp], 10; mov qword [rsp+8], 11
+  //              mov eax, 1; ...; mov r11d, 9; call main.eleven
+  //              add rsp, 0x18; ret
+  //   main.few: the same with RAX alone set, calling main.three
+  //   main.wrap: jmp main.eleven
+  constexpr va_t Eleven = kTextVA + 0x100;
+  constexpr va_t Three = kTextVA + 0x140;
+  constexpr va_t More = kTextVA + 0x200;
+  constexpr va_t Few = kTextVA + 0x280;
+  constexpr va_t Wrap = kTextVA + 0x300;
+  const std::vector<uint8_t> Sum = {
+      0x48, 0x01, 0xD8, 0x48, 0x01, 0xC8, 0x48, 0x01, 0xF8, 0x48, 0x01, 0xF0,
+      0x4C, 0x01, 0xC0, 0x4C, 0x01, 0xC8, 0x4C, 0x01, 0xD0, 0x4C, 0x01, 0xD8};
+  const std::vector<uint8_t> Stack = {0x48, 0x03, 0x44, 0x24, 0x08, 0x48,
+                                      0x03, 0x44, 0x24, 0x10, 0xC3};
+  const std::vector<uint8_t> Set = {
+      0xB8, 0x01, 0x00, 0x00, 0x00, 0xBB, 0x02, 0x00, 0x00, 0x00,
+      0xB9, 0x03, 0x00, 0x00, 0x00, 0xBF, 0x04, 0x00, 0x00, 0x00,
+      0xBE, 0x05, 0x00, 0x00, 0x00, 0x41, 0xB8, 0x06, 0x00, 0x00,
+      0x00, 0x41, 0xB9, 0x07, 0x00, 0x00, 0x00, 0x41, 0xBA, 0x08,
+      0x00, 0x00, 0x00, 0x41, 0xBB, 0x09, 0x00, 0x00, 0x00};
+  const std::vector<uint8_t> Push = {0x48, 0x83, 0xEC, 0x18, 0x48, 0xC7, 0x04,
+                                     0x24, 0x0A, 0x00, 0x00, 0x00, 0x48, 0xC7,
+                                     0x44, 0x24, 0x08, 0x0B, 0x00, 0x00, 0x00};
+  for (const BinaryFormat Format : {BinaryFormat::ELF, BinaryFormat::COFF})
+    for (const bool Lift : {false, true}) {
+      SCOPED_TRACE(testing::Message() << "pe=" << (Format == BinaryFormat::COFF)
+                                      << " lift=" << Lift);
+      GoTestImage T(Arch::X64);
+      T.Img.Format = Format;
+      std::vector<uint8_t> Body = Sum;
+      Body.insert(Body.end(), Stack.begin(), Stack.end());
+      T.writeText(Eleven, Body);
+      T.writeText(Three, Stack);
+      Body = Push;
+      Body.insert(Body.end(), Set.begin(), Set.end());
+      std::vector<uint8_t> Call = makeCall(More + Body.size(), Eleven);
+      Body.insert(Body.end(), Call.begin(), Call.end());
+      Body.insert(Body.end(), {0x48, 0x83, 0xC4, 0x18, 0xC3});
+      T.writeText(More, Body);
+      Body = Push;
+      Body.insert(Body.end(), {0xB8, 0x01, 0x00, 0x00, 0x00});
+      Call = makeCall(Few + Body.size(), Three);
+      Body.insert(Body.end(), Call.begin(), Call.end());
+      Body.insert(Body.end(), {0x48, 0x83, 0xC4, 0x18, 0xC3});
+      T.writeText(Few, Body);
+      Body = {0xE9};
+      const auto Jump = static_cast<uint32_t>(Eleven - (Wrap + 5));
+      for (unsigned Shift = 0; Shift < 32; Shift += 8)
+        Body.push_back(static_cast<uint8_t>(Jump >> Shift));
+      T.writeText(Wrap, Body);
+      for (const auto &[Address, Name] :
+           {std::pair{Eleven, "main.eleven"}, std::pair{Three, "main.three"},
+            std::pair{More, "main.more"}, std::pair{Few, "main.few"},
+            std::pair{Wrap, "main.wrap"}}) {
+        Symbol Function = Symbol::makeFunc(Address);
+        Function.Name = Name;
+        T.Img.Symbols.push_back(std::move(Function));
+      }
+      GoModuleInfo Module;
+      Module.PclnTabMagic = 0xFFFFFFF1u;
+      Module.RegisterArguments = true;
+      Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+      Module.FrameArguments = {
+          {Eleven, 88}, {Three, 24}, {More, 0}, {Few, 0}, {Wrap, 88}};
+      T.Img.ExceptionMetadata.GoModule = std::move(Module);
+      PipelineOptions Options;
+      Options.EmitDumpOutput = false;
+      Options.LiftMode = Lift;
+      llvm::LLVMContext Context;
+      const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+      ASSERT_TRUE(R.Success) << R.Error;
+      if (Lift) {
+        // Each call passes what its callee declares, in the callee's order:
+        // the lifted callers return the sums, 1 to 11 and 1 + 10 + 11, where
+        // the misbound ones returned 45 and 0.
+        ASSERT_TRUE(R.LlvmModule);
+        for (const auto &[Caller, Sum] :
+             {std::pair{"main.more", 66u}, std::pair{"main.few", 22u}}) {
+          SCOPED_TRACE(Caller);
+          const llvm::Function *Calling = R.LlvmModule->getFunction(Caller);
+          ASSERT_TRUE(Calling);
+          std::optional<uint64_t> Returned;
+          for (const llvm::BasicBlock &Block : *Calling)
+            if (const auto *Return =
+                    llvm::dyn_cast<llvm::ReturnInst>(Block.getTerminator()))
+              if (const auto *Value = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                      Return->getReturnValue()))
+                Returned = Value->getZExtValue();
+          std::string Text;
+          llvm::raw_string_ostream OS(Text);
+          Calling->print(OS);
+          EXPECT_EQ(Returned, std::optional<uint64_t>(Sum)) << Text;
+        }
+        for (const auto &[Name, Arguments] :
+             {std::pair{"main.eleven", 11u}, std::pair{"main.three", 3u},
+              std::pair{"main.wrap", 11u}}) {
+          SCOPED_TRACE(Name);
+          const llvm::Function *Taking = R.LlvmModule->getFunction(Name);
+          ASSERT_TRUE(Taking);
+          EXPECT_EQ(Taking->arg_size(), Arguments);
+        }
+        continue;
+      }
+      const std::string Taking = highCBody(R, T.Img, "main_eleven");
+      EXPECT_NE(Taking.find("int64_t arg10) {"), std::string::npos) << Taking;
+      EXPECT_EQ(Taking.find("var_"), std::string::npos) << Taking;
+      const std::string Few3 = highCBody(R, T.Img, "main_three");
+      EXPECT_NE(Few3.find("main_three(int64_t arg0, int64_t arg1, int64_t "
+                          "arg2) {"),
+                std::string::npos)
+          << Few3;
+      EXPECT_EQ(Few3.find("var_"), std::string::npos) << Few3;
+      const std::string Passing = highCBody(R, T.Img, "main_more");
+      EXPECT_NE(
+          Passing.find("main_eleven(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0xB);"),
+          std::string::npos)
+          << Passing;
+      const std::string PassingFew = highCBody(R, T.Img, "main_few");
+      EXPECT_NE(PassingFew.find("main_three(1, 10, 0xB);"), std::string::npos)
+          << PassingFew;
+      const std::string Wrapping = highCBody(R, T.Img, "main_wrap");
+      EXPECT_NE(Wrapping.find("int64_t arg10) {"), std::string::npos)
+          << Wrapping;
+      EXPECT_NE(Wrapping.find(", arg1, arg2, arg3, arg4, arg5, arg6, arg7, "
+                              "arg8, arg9, arg10);"),
+                std::string::npos)
+          << Wrapping;
+    }
+}
+
+TEST(GoInternalABI, AnArm64StackArgumentFollowsNoPlatformPosition) {
+  // On arm64 the word at the stack pointer holds the caller's link register
+  // and Go's stack arguments start above it; AAPCS64's start at the stack
+  // pointer, past eight registers.  Read so, main.far's word was its tenth
+  // argument: the call passed X1 to X7 to reach it, which main.near, setting
+  // none of them, took as seven parameters of its own.
+  //   main.far: ldr x16, [sp, #8]; add x0, x0, x16; ret
+  //   main.near: str x30, [sp, #-0x20]!; mov x0, #1; mov x1, #7
+  //              str x1, [sp, #8]; bl main.far; ldr x30, [sp], #0x20; ret
+  constexpr va_t Far = kTextVA + 0x100;
+  constexpr va_t Near = kTextVA + 0x180;
+  GoTestImage T(Arch::AArch64);
+  T.writeText(Far, words({0xF94007F0, 0x8B100000, 0xD65F03C0}));
+  const va_t At = Near + 4 * 4;
+  T.writeText(Near, words({0xF81E0FFE, 0xD2800020, 0xD28000E1, 0xF90007E1,
+                           0x94000000u | static_cast<uint32_t>(
+                                             ((Far - At) / 4) & 0x03FFFFFFu),
+                           0xF84207FE, 0xD65F03C0}));
+  for (const auto &[Address, Name] :
+       {std::pair{Far, "main.far"}, std::pair{Near, "main.near"}}) {
+    Symbol Function = Symbol::makeFunc(Address);
+    Function.Name = Name;
+    T.Img.Symbols.push_back(std::move(Function));
+  }
+  GoModuleInfo Module;
+  Module.PclnTabMagic = 0xFFFFFFF1u;
+  Module.RegisterArguments = true;
+  Module.GoCode = {{kTextVA, kTextVA + 0x400}};
+  Module.FrameArguments = {{Far, 16}, {Near, 0}};
+  T.Img.ExceptionMetadata.GoModule = std::move(Module);
+  PipelineOptions Options;
+  Options.EmitDumpOutput = false;
+  llvm::LLVMContext Context;
+  const PipelineResult R = Pipeline().run(T.Img, Context, Options);
+  ASSERT_TRUE(R.Success) << R.Error;
+  for (const MedFunc &F : R.MedFuncs) {
+    SCOPED_TRACE(F.Entry - kTextVA);
+    EXPECT_EQ(F.Params.size(), F.Entry == Far ? 2u : 0u);
+  }
+  const std::string Taking = highCBody(R, T.Img, "main_far");
+  EXPECT_NE(Taking.find("main_far(int64_t arg0, int64_t arg1) {"),
+            std::string::npos)
+      << Taking;
+  const std::string Passing = highCBody(R, T.Img, "main_near");
+  EXPECT_NE(Passing.find("main_near(void) {"), std::string::npos) << Passing;
+  EXPECT_NE(Passing.find("main_far(1, 7);"), std::string::npos) << Passing;
 }
 
 TEST(GoInternalABI, AFuncValueSetBeforeTheCallsBlockIsStillOne) {

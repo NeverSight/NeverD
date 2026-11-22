@@ -518,6 +518,20 @@ IntegerArgumentLayout goStackArgumentLayout(Arch A) {
   return Layout;
 }
 
+IntegerArgumentLayout goRegisterArgumentLayout(Arch A) {
+  IntegerArgumentLayout Layout = goStackArgumentLayout(A);
+  Layout.Registers = goIntegerArgumentRegisters(A);
+  return Layout;
+}
+
+std::optional<IntegerArgumentLayout>
+goRegisterArgumentLayout(Arch A, llvm::ArrayRef<uint64_t> Registers) {
+  const llvm::ArrayRef<uint64_t> Go = goIntegerArgumentRegisters(A);
+  if (Go.empty() || Registers != Go)
+    return std::nullopt;
+  return goRegisterArgumentLayout(A);
+}
+
 namespace {
 /// The record of the function the `pclntab` starts at \p Entry, if any.
 const GoFrameArguments *goFunctionRecord(const BinaryImage &Img, va_t Entry) {

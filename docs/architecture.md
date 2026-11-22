@@ -6116,6 +6116,26 @@ place for `fmtE` (`MOVD R10, R9; MOVD R11, R10`), both moves were deleted as
 dead, and the call passed what R9 and R10 held on entry, two other parameters
 of the caller, in place of the precision and the format.
 
+Go assigns an argument the stack once its registers are taken, or where those
+left cannot hold it whole, in words above the return address, where the stack
+ABI puts every argument. `goRegisterArgumentLayout` is that layout: Go's
+registers and the stack ABI's bases, with no home space on Windows and no
+platform's register count. A function that takes Go's registers has it
+(`integerArgumentLayoutOf`), its stack parameters are found and numbered by it
+(`detectStackParams`), and a call of one reads its stack arguments by it. A
+stack argument there implies no register one, so the function takes no
+placeholder for a register it does not read, and a call passes no value for
+one. Read by the platform's layout, `strconv.fmtE`, whose precision and
+format follow nine registers, took a placeholder for each of System V's six
+registers ahead of its own: a lifted call, which passes Go's registers and
+the stack words in order, bound every argument to the wrong parameter. On
+Windows the two words lay in what Win64 calls home space, so the function
+read them as locals nothing wrote and no call passed them. On arm64, where
+AAPCS64's stack arguments start at the stack pointer and Go's a word above,
+past its saved link register, a function's first stack word was a tenth
+argument, and a caller passed X1 to X7 to reach it, taking them as parameters
+of its own.
+
 Go code has no System V variadic prologue, which reads AL, the count of
 vector registers its caller set, before it writes RAX, and stores the
 argument registers from the first variadic one through R9 into consecutive

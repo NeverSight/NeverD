@@ -1034,6 +1034,9 @@ IntegerArgumentLayout integerArgumentLayoutOf(const MedFunc &Func,
                                               const TargetRegInfo &TRI) {
   if (Func.StackArgumentsOnly)
     return goStackArgumentLayout(TRI.TheArch);
+  if (const std::optional<IntegerArgumentLayout> Go =
+          goRegisterArgumentLayout(TRI.TheArch, Func.IntegerArgumentRegisters))
+    return *Go;
   IntegerArgumentLayout Layout =
       TRI.integerArgumentLayout(Func.CC == CallingConv::Win64);
   if (!Func.IntegerArgumentRegisters.empty())
@@ -1661,11 +1664,18 @@ void recoverCallAbi(
             AIt != CalleeRegArity->end())
           CalleeRegArgs = AIt->second;
       // A direct callee with its own register order takes its register
-      // arguments in that order.
+      // arguments in that order.  One that takes Go's takes the rest as Go
+      // passes them (goRegisterArgumentLayout).
+      bool GoArgumentLayout = false;
       if (!CI.IsIndirect && !IsRelocExtern && !IsDirectImport && CalleeIntRegs)
         if (auto RIt = CalleeIntRegs->find(CI.TargetAddr);
             RIt != CalleeIntRegs->end() && !RIt->second.empty()) {
           IntegerLayout.Registers = RIt->second;
+          if (const std::optional<IntegerArgumentLayout> Go =
+                  goRegisterArgumentLayout(TheArch, RIt->second)) {
+            IntegerLayout = *Go;
+            GoArgumentLayout = true;
+          }
           IntParamRegs = IntegerLayout.Registers;
           CI.ArgumentsInCalleeRegisterOrder = true;
         }
@@ -1680,8 +1690,7 @@ void recoverCallAbi(
       if (CI.IsIndirect && Img &&
           goIndirectCallTakesGoRegisters(*Img, Func, Blk, OI)) {
         GoRegisterCall = true;
-        IntegerLayout = goStackArgumentLayout(TheArch);
-        IntegerLayout.Registers = goIntegerArgumentRegisters(TheArch);
+        IntegerLayout = goRegisterArgumentLayout(TheArch);
         IntParamRegs = IntegerLayout.Registers;
         CI.ArgumentsInCalleeRegisterOrder = true;
       }
@@ -4101,9 +4110,11 @@ void recoverCallAbi(
         }
       }
       // A callee's stack parameters follow all of its register positions, read
-      // or not, so a call that reaches them passes those positions too.
+      // or not, so a call that reaches them passes those positions too.  Go's
+      // follow the registers the callee takes.
       if (!CI.IsIndirect && !PositionalSlots && !HeaderVariadic &&
-          !OpenVariadicArity && !StackPart.empty() && CalleeArgs > StackArgBase)
+          !OpenVariadicArity && !StackPart.empty() &&
+          CalleeArgs > StackArgBase && !GoArgumentLayout)
         ZeroedRegArgs = std::max(ZeroedRegArgs, StackArgBase);
       // A variadic routine of the image reads, past its named parameters, as
       // many arguments as its format names where the last of them is a

@@ -1004,10 +1004,15 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
     return;
   const auto &TRI = getTargetRegInfo(TargetArch);
   const uint64_t SpOff = TRI.StackPointer;
-  // A Go stack-ABI function's arguments are all on the stack.
+  // A Go stack-ABI function's arguments are all on the stack, and one that
+  // takes Go's registers takes the rest where that ABI puts them
+  // (goRegisterArgumentLayout).
+  const std::optional<IntegerArgumentLayout> GoRegisters =
+      goRegisterArgumentLayout(TargetArch, Func.IntegerArgumentRegisters);
   const auto Layout = Func.StackArgumentsOnly
                           ? goStackArgumentLayout(TargetArch)
-                          : TRI.integerArgumentLayout(Fmt);
+                      : GoRegisters ? *GoRegisters
+                                    : TRI.integerArgumentLayout(Fmt);
   const auto ParamRegs = Layout.Registers;
   const int MaxRegArgs = static_cast<int>(ParamRegs.size());
   const int Slot = Layout.SlotBytes;
@@ -1319,8 +1324,10 @@ void detectStackParams(MedFunc &Func, Arch TargetArch, BinaryFormat Fmt,
   // A stack argument was found, so the function takes more than the register
   // arguments.  The stack-argument indices must align with a full parameter-
   // register prefix on the caller, so ensure all MaxRegArgs leading register
-  // slots are present.
-  if (Leading != MaxRegArgs) {
+  // slots are present.  Go assigns an argument the stack past its registers
+  // or where those left cannot take it whole, whatever the arguments around
+  // it take: there a stack argument implies no register one.
+  if (Leading != MaxRegArgs && !GoRegisters) {
     bool HasRegParam = false;
     for (const auto &P : Func.Params)
       if (P.RegOff != kNoParamReg && Layout.registerIndex(P.RegOff) >= 0) {

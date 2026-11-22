@@ -240,6 +240,21 @@ bool goStackABIEntryRegister(const TargetRegInfo &TRI, uint64_t Register);
 /// past its return address.
 IntegerArgumentLayout goStackArgumentLayout(Arch A);
 
+/// The layout of a Go call by Go's internal ABI, on \p A: the integer
+/// arguments in Go's registers (goIntegerArgumentRegisters), and the ones Go
+/// assigns no register, past the last or too large for those left, in words
+/// where the stack ABI puts every argument (goStackArgumentLayout).  Go
+/// reserves no home space, on Windows either, and a stack argument follows
+/// Go's registers whichever of them the routine takes: none implies a
+/// register argument.
+IntegerArgumentLayout goRegisterArgumentLayout(Arch A);
+
+/// goRegisterArgumentLayout where \p Registers are the registers Go passes
+/// integer arguments in on \p A: a routine that takes its arguments in them
+/// (MedFunc::IntegerArgumentRegisters) takes the rest so.
+std::optional<IntegerArgumentLayout>
+goRegisterArgumentLayout(Arch A, llvm::ArrayRef<uint64_t> Registers);
+
 /// The bytes of arguments and results the Go function at \p Entry takes on
 /// its caller's frame, as its `pclntab` record says (GoFrameArguments), if
 /// it says.
