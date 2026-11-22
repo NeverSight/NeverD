@@ -195,6 +195,27 @@ TEST(SymParse, LiteralWordBoundariesPreserveTruncationAndZeroExtension) {
   }
 }
 
+TEST(SymParse, PowerOfTwoRadicesKeepOnlyDeclaredLimbsAndRoundTripEveryNibble) {
+  SymContext C;
+  // Bits 64..127 are zero and must retain all sixteen hex places.
+  const std::string Hex = "1aBcDeF01234567890000000000000000fEdCbA9876543210";
+  const llvm::APInt Expected(193, Hex, 16);
+  std::string Binary;
+  for (unsigned I = Expected.getBitWidth(); I; --I)
+    Binary.push_back(Expected[I - 1] ? '1' : '0');
+  for (unsigned W : {1u, 63u, 64u, 65u, 126u, 128u, 129u, 191u, 193u, 513u}) {
+    SCOPED_TRACE(W);
+    const auto Word = Expected.zextOrTrunc(W);
+    const auto Suffix = "#" + std::to_string(W);
+    const auto Value = C.mkConst(Word);
+    EXPECT_EQ(parse(C, "0X000" + Hex + Suffix), Value);
+    EXPECT_EQ(parse(C, "0B000" + Binary + Suffix), Value);
+    EXPECT_EQ(parse(C, C.toString(Value), W), Value);
+  }
+  EXPECT_EQ(C.toString(C.mkConst(Expected.zext(257))),
+            "0x1ABCDEF01234567890000000000000000FEDCBA9876543210");
+}
+
 TEST(SymParse, AWidthSuffixOverridesTheParseWidth) {
   SymContext Ctx;
   EXPECT_EQ(Ctx.width(parse(Ctx, "255#8")), 8u);

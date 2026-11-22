@@ -21,6 +21,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -74,6 +75,24 @@ void appendDigits(std::string &Out, const llvm::APInt &V) {
     V.toString(S, 10, /*Signed=*/false);
   } else {
     Out += "0x";
+    const unsigned Bits = V.getActiveBits();
+    if (Bits > 64) {
+      // Write each limb in place. Repeatedly shifting the complete APInt for
+      // one hex digit copies all remaining limbs for every output character.
+      const size_t Count = 1 + (Bits - 1) / 4;
+      const size_t Start = Out.size();
+      Out.resize(Start + Count);
+      size_t End = Count;
+      for (unsigned I = 0; End; ++I) {
+        uint64_t Word = V.getRawData()[I];
+        const size_t Begin = End - std::min<size_t>(End, 16);
+        while (End > Begin) {
+          Out[Start + --End] = llvm::hexdigit(Word & 15);
+          Word >>= 4;
+        }
+      }
+      return;
+    }
     V.toString(S, 16, /*Signed=*/false);
   }
   Out.append(S.begin(), S.end());
