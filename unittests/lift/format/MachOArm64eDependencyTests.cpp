@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../../../lib/backend/codegen/MachO/MachODependencyState.h"
+#include "../../../lib/backend/codegen/MachO/MachOSourceDependencies.h"
 #include "gtest/gtest.h"
 
 #include "neverd/backend/codegen/MachO/MachOAuthenticatedFixups.h"
@@ -662,6 +663,33 @@ TEST(MachOArm64eDependencies,
   EXPECT_FALSE(
       macho_loader::arm64e::decodeObjectPointerWord(kObjectReservedWord));
   EXPECT_FALSE(macho_loader::arm64e::decodeObjectPointerWord(0));
+}
+
+TEST(MachOArm64eInstallation, ReservesEachNewLibraryCommandOnce) {
+  auto Bytes = linkedImage(Chains[0]);
+  const auto Input = llvm::toStringRef(llvm::ArrayRef(Bytes));
+  auto Original = Loader::create(BinaryFormat::MachO)
+                      ->loadBuffer(llvm::MemoryBufferRef(Input, kLibrary));
+  ASSERT_TRUE(bool(Original)) << llvm::toString(Original.takeError());
+
+  const SourcePatchDependency Requests[] = {
+      {kLibrary, kSymbol},
+      {kAdditionalLibrary, kAdditionalSymbol},
+      {kAdditionalLibrary, kNewSymbol}};
+  EXPECT_EQ(machOSourceLibraryCommandBytes(
+                *Original, llvm::ArrayRef(Requests).take_front()),
+            0u);
+  const auto Required = machOSourceLibraryCommandBytes(*Original, Requests);
+  const auto CommandBytes = [&] {
+    return readLE<uint32_t>(Bytes.data() +
+                            offsetof(mach_header_64, sizeofcmds));
+  };
+  const auto Before = CommandBytes();
+  auto Libraries = admitMachOSourceLibraries(Bytes, Requests);
+  ASSERT_TRUE(bool(Libraries)) << llvm::toString(Libraries.takeError());
+  EXPECT_GT(Required, 0u);
+  EXPECT_EQ(CommandBytes() - Before, Required);
+  EXPECT_EQ(Libraries->at(kAdditionalLibrary), Libraries->at(kLibrary) + 1);
 }
 
 TEST(MachOArm64eInstallation, DeclaredProvidersAndRelroInstallTogether) {

@@ -90,6 +90,10 @@ MACHO_OBJECT_VALUE(unsigned, kThreadFieldWords, 2)
 MACHO_OBJECT_VALUE(unsigned, kThreadKeyShift, 16)
 MACHO_OBJECT_TEXT(kTLVTemplatePrefix, "__nd_tls_prefix")
 MACHO_OBJECT_TEXT(kTLVAtExit, "_tlv_atexit")
+MACHO_OBJECT_TEXT(kImportStubPrefix, "__nd_import_")
+MACHO_OBJECT_TEXT(
+    kImportStubAddend,
+    "a branch to an authenticated import stub must target its entry")
 MACHO_OBJECT_TEXT(kTLVAtExitThunk, "__nd_tlv_atexit")
 MACHO_OBJECT_VALUE(uint32_t, kBranchAuthZeroX16, 0xd61f0a1f)
 MACHO_OBJECT_TEXT(kDSOHandle, "__dso_handle")

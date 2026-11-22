@@ -58,7 +58,8 @@ static int plus(int x) {
   return value == &retained && checked == value ? x + *value : x;
 }
 static Fn __ptrauth(1, 1, 0x5371) volatile slot = plus;
-int entry(int x) { return slot(x); }
+extern int neverd_provider(void);
+int entry(int x) { return slot(x) + neverd_provider(); }
 )c")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntry, "entry")
 MACHO_AUTH_NATIVE_TEXT(kBindingEntrySymbol, "_entry")

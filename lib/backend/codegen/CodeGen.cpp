@@ -14,6 +14,7 @@
 #include "neverd/backend/codegen/CodeGen.h"
 
 #include "CodeGenDetail.h"
+#include "MachO/MachOArm64eABI.h"
 
 #define DEBUG_TYPE "neverd-codegen"
 #include "neverd/ArchSupport.h"
@@ -189,9 +190,9 @@ detectTargetFeatures(llvm::Module &Mod, Arch TheArch) {
 static llvm::Error validateStackProbes(const llvm::Module &Module,
                                        Arch TargetArch,
                                        bool CheckOtherTargets = false) {
-  const bool InlineProbeOnly =
+  const bool CheckAArch64Method =
       TargetArch == Arch::AArch64 && !Module.getTargetTriple().isOSWindows();
-  if (!InlineProbeOnly && !CheckOtherTargets)
+  if (!CheckAArch64Method && !CheckOtherTargets)
     return llvm::Error::success();
   const auto Fail = [](const llvm::Twine &Detail) {
     return llvm::createStringError(llvm::errc::invalid_argument, Detail);
@@ -202,7 +203,7 @@ static llvm::Error validateStackProbes(const llvm::Module &Module,
       return Fail(kInvalidModuleProbeSize);
   }
   llvm::StringRef ModuleProbe;
-  if (InlineProbeOnly) {
+  if (CheckAArch64Method) {
     if (const auto *Flag = Module.getModuleFlag(kStackProbe)) {
       const auto *Value = llvm::dyn_cast<llvm::MDString>(Flag);
       if (!Value)
@@ -225,9 +226,15 @@ static llvm::Error validateStackProbes(const llvm::Module &Module,
         Function.hasFnAttribute(kStackProbe)
             ? Function.getFnAttribute(kStackProbe).getValueAsString()
             : ModuleProbe;
-    if (InlineProbeOnly && !Probe.empty() && Probe != kInlineStackProbe)
-      return Fail(kUnsupportedProbe + Probe + kProbeOnFunction +
-                  Function.getName() + kProbeProfile);
+    if (!CheckAArch64Method || Probe.empty() || Probe == kInlineStackProbe)
+      continue;
+#if __has_include("llvm/BinaryFormat/AArch64DarwinStackProbe.def")
+    if (Module.getTargetTriple().isOSDarwin() &&
+        Probe == macho_arm64e_abi::kStackProbe)
+      continue;
+#endif
+    return Fail(kUnsupportedProbe + Probe + kProbeOnFunction +
+                Function.getName() + kProbeProfile);
   }
   return llvm::Error::success();
 }
@@ -462,7 +469,7 @@ CodegenResult Codegen::compile(llvm::Module &Mod, Arch TargetArch,
   }
 
   Mod.setDataLayout(TM->createDataLayout());
-  if (!preparePointerAuthenticationGlobals(Mod, TT))
+  if (!preparePointerAuthentication(Mod, TT))
     return Result;
 
   reserveX86StackTemporaries(Mod, TargetArch);
@@ -732,8 +739,7 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
   }
 
   Mod.setDataLayout(TM->createDataLayout());
-  if (!preparePointerAuthenticationGlobals(Mod, TT,
-                                           TargetArch == Arch::AArch64)) {
+  if (!preparePointerAuthentication(Mod, TT, TargetArch == Arch::AArch64)) {
     Result.ImageValid = false;
     return Result;
   }
@@ -782,39 +788,26 @@ llvm::mc_rewrite::RewriteResult Codegen::compileForRewrite(
       if (!Global.isDeclaration())
         Global.setDSOLocal(true);
 
-  // Pre-pass: suppress every form of compiler-inserted stack probe. The probe
-  // routine (Darwin __chkstk_darwin, Windows __chkstk) is NOT part of the
-  // rewrite address model — the resolve callback cannot map it — so any probe
-  // call/branch the backend emits resolves to nothing and faults at run time
-  // (COFF i386 jumps to a wild VA; COFF ARM32/Thumb even errors out of the MC
-  // layer with "cannot perform a PC-relative fixup with a non-zero symbol
-  // offset" because the unresolved __chkstk branch can't be a COFF relocation).
-  // Two independent triggers, both neutralized here:
-  //   (1) The host-clang "probe-stack" attribute (Apple clang puts
-  //       "probe-stack"="__chkstk_darwin" on Darwin arm64; the AArch64 backend
-  //       only implements the "inline-asm" kind and report_fatal_error()s on
-  //       any other value). Strip it.
-  //   (2) The Windows/COFF *frame* probe: X86 (getStackProbeSize) and ARM
-  //       (WindowsRequiresStackProbe) call __chkstk whenever the frame is
-  //       >= "stack-probe-size" (default 4096). A large injected/obfuscated
-  //       frame (e.g. control-flow flattening's reg2mem spills) crosses 4 KiB
-  //       and pulls in __chkstk. Pin "stack-probe-size" beyond any real frame
-  //       to disable it (the rewritten code runs at a fixed VA with a flat
-  //       stack — there is no guard page to probe). "no-stack-arg-probe" does
-  //       the same for the dynamic-alloca (WIN_ALLOCA) probe.
-  // Lifted IR never carries probe-stack; external --from-ir / --from-c IR and
-  // any COFF target with a >4 KiB frame do. Harmless no-op on ELF/Mach-O, which
-  // have no Windows-style frame probe.
+  // Generated lifted bodies use the fixed-address stack model. Keep explicit
+  // Darwin probing on inputs that request it, including module-wide methods.
+  llvm::StringRef ModuleMethod;
+  if (const auto *Method = llvm::dyn_cast_or_null<llvm::MDString>(
+          Mod.getModuleFlag(kStackProbe)))
+    ModuleMethod = Method->getString();
   for (auto &F : Mod) {
     if (InputKind == RewriteInputKind::ReplacementIR)
       continue;
-    if (F.hasFnAttribute("probe-stack"))
-      F.removeFnAttr("probe-stack");
-    if (F.hasFnAttribute("stack-probe-size"))
-      F.removeFnAttr("stack-probe-size");
-    F.addFnAttr("stack-probe-size", "4294967295");
-    if (!F.hasFnAttribute("no-stack-arg-probe"))
-      F.addFnAttr("no-stack-arg-probe");
+    const auto Method = F.hasFnAttribute(kStackProbe)
+                            ? F.getFnAttribute(kStackProbe).getValueAsString()
+                            : ModuleMethod;
+    if (TT.isOSDarwin() && TargetArch == Arch::AArch64 &&
+        Method == macho_arm64e_abi::kStackProbe)
+      continue;
+    F.removeFnAttr(kStackProbe);
+    F.removeFnAttr(kStackProbeSize);
+    F.addFnAttr(kStackProbeSize, kLiftedProbeLimit);
+    if (!F.hasFnAttribute(kNoStackArgProbe))
+      F.addFnAttr(kNoStackArgProbe);
   }
 
   // Robustness: the lifter can emit malformed bodies for auto-detected

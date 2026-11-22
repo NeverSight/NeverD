@@ -12,6 +12,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/JSON.h"
@@ -221,6 +222,10 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
   Options.mapping_count = 1;
   Options.bindings = &Binding;
   Options.binding_count = 1;
+  const neverd_source_patch_dependency_v1 Provider{
+      kProviderLibrary, kProviderFunction, NEVERD_SOURCE_DEPENDENCY_FUNCTION};
+  Options.dependencies = &Provider;
+  Options.dependency_count = 1;
   for (auto Artifact :
        {NEVERD_SOURCE_PATCH_ARTIFACT_IR, NEVERD_SOURCE_PATCH_ARTIFACT_OBJECT}) {
     SCOPED_TRACE(Artifact);
@@ -235,6 +240,20 @@ TEST(SourcePatchArm64eSDK, InstallsLegacyIRWithDeferredDataBinding) {
         << neverd_last_error(Session);
     auto Installed = llvm::object::ObjectFile::createObjectFile(Output);
     ASSERT_TRUE(bool(Installed)) << llvm::toString(Installed.takeError());
+    const auto *MachO =
+        llvm::dyn_cast<llvm::object::MachOObjectFile>(Installed->getBinary());
+    ASSERT_NE(MachO, nullptr);
+    unsigned Providers = 0;
+    for (const auto &LC : MachO->load_commands()) {
+      if (LC.C.cmd != llvm::MachO::LC_LOAD_DYLIB)
+        continue;
+      const auto D = MachO->getDylibIDLoadCommand(LC);
+      ASSERT_LT(D.dylib.name, LC.C.cmdsize);
+      const auto Payload =
+          llvm::StringRef(LC.Ptr, LC.C.cmdsize).drop_front(D.dylib.name);
+      Providers += Payload.split('\0').first == kProviderLibrary;
+    }
+    EXPECT_EQ(Providers, 1u);
     std::optional<uint64_t> FinalVA;
     for (const auto &Symbol : Installed->getBinary()->symbols()) {
       auto Name = Symbol.getName();

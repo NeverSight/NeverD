@@ -212,9 +212,9 @@ int patchSource(Session &S, const void *Input, size_t InputSize,
     // The final object installer knows the actual frame and entry counts.
     // A zero-base dylib may need to move its sections together. Preparing
     // addresses here would pin imports to their input locations.
-    if (!Callbacks && Dependencies.empty() &&
-        (!S.Img.isMachO() ||
-         (S.Img.isArm64e() && S.Img.MachOIsDylib && !S.Img.Base)))
+    if (!Callbacks && !S.Img.isMachO() && Dependencies.empty())
+      return llvm::Error::success();
+    if (!Callbacks && S.Img.isArm64e() && S.Img.MachOIsDylib && !S.Img.Base)
       return llvm::Error::success();
     std::optional<BinaryImage> Reserved;
     if (S.Img.isMachO()) {

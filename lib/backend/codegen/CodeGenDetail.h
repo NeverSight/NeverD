@@ -29,10 +29,9 @@ class Module;
 
 namespace neverd {
 
-/// Normalize Apple descriptor globals before target-specific object emission.
-bool preparePointerAuthenticationGlobals(llvm::Module &M,
-                                         const llvm::Triple &Triple,
-                                         bool RequireRecipes = false);
+/// Prepare authenticated globals and calls for the configured target backend.
+bool preparePointerAuthentication(llvm::Module &M, const llvm::Triple &Triple,
+                                  bool RequireRecipes = false);
 
 /// Synthetic marker inserted into the scanned-name set when the module uses
 /// native half-precision (`half`) arithmetic (emitted as ops, not intrinsics),

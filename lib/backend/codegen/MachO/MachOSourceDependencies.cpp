@@ -9,6 +9,7 @@
 
 #include "MachOSourceDependencies.h"
 
+#include "MachOArm64eABI.h"
 #include "MachODependencyState.h"
 #include "MachOStrictLayout.h"
 
@@ -20,6 +21,7 @@
 #include "llvm/Support/LEB128.h"
 
 #include <map>
+#include <set>
 
 namespace neverd {
 namespace {
@@ -442,7 +444,35 @@ chained(std::vector<uint8_t> &B, const Layout &L, const BinaryImage &Original,
   std::memcpy(Out.data(), &H, sizeof(H));
   return Out;
 }
+
+size_t dylibCommandSize(llvm::StringRef Library, unsigned PointerSize) {
+  return llvm::alignTo(sizeof(dylib_command) + Library.size() + 1, PointerSize);
+}
 } // namespace
+
+llvm::ArrayRef<SourcePatchDependency> machODarwinStackImports() {
+  using namespace macho_arm64e_abi;
+  static const SourcePatchDependency Imports[] = {
+      {kLibSystem, kStackProbe, SourcePatchDependencyKind::Function},
+      {kLibSystem, kStackGuard, SourcePatchDependencyKind::Data},
+      {kLibSystem, kStackFailure, SourcePatchDependencyKind::Function}};
+  return Imports;
+}
+
+uint64_t
+machOSourceLibraryCommandBytes(const BinaryImage &Original,
+                               llvm::ArrayRef<SourcePatchDependency> Requests) {
+  if (Requests.empty())
+    return 0;
+  std::set<llvm::StringRef> Providers;
+  for (const auto &Ref : Original.MachODylibReferences)
+    Providers.insert(Ref.Name);
+  uint64_t Size = 0;
+  for (const auto &D : Requests)
+    if (Providers.insert(D.Library).second)
+      Size += dylibCommandSize(D.Library, Original.getPointerSize());
+  return Size;
+}
 
 llvm::Expected<std::map<std::string, uint32_t>>
 admitMachOSourceLibraries(std::vector<uint8_t> &B,
@@ -467,6 +497,8 @@ admitMachOSourceLibraries(std::vector<uint8_t> &B,
       return fail(kDuplicateLibraries);
   }
   std::vector<std::vector<uint8_t>> Commands;
+  const unsigned PointerSize =
+      Header.Is64 ? sizeof(uint64_t) : sizeof(uint32_t);
   for (const auto &I : Requests) {
     if (Libraries.contains(I.Library)) {
       const auto Ordinal = Libraries.at(I.Library);
@@ -478,10 +510,7 @@ admitMachOSourceLibraries(std::vector<uint8_t> &B,
       continue;
     }
     Libraries.emplace(I.Library, Libraries.size() + 1);
-    std::vector<uint8_t> C(
-        llvm::alignTo(sizeof(dylib_command) + I.Library.size() + 1,
-                      Header.Is64 ? 8 : 4),
-        0);
+    std::vector<uint8_t> C(dylibCommandSize(I.Library, PointerSize), 0);
     auto *D = reinterpret_cast<dylib_command *>(C.data());
     D->cmd = LC_LOAD_DYLIB;
     D->cmdsize = C.size();

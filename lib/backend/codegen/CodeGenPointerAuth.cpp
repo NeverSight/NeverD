@@ -6,12 +6,16 @@
 
 #include "CodeGenDetail.h"
 
+#include "neverd/backend/llvm/AArch64/LLVMAArch64ReturnProtection.h"
 #include "neverd/ir/intrinsics/AArch64/AArch64PAuth.h"
 
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Support/WithColor.h"
@@ -131,6 +135,67 @@ llvm::Constant *importAppleDescriptor(llvm::GlobalVariable &G,
     return nullptr;
   return Recipe;
 }
+
+bool prepareAuthenticatedCalls(llvm::Module &Module) {
+#if !__has_include("llvm/BinaryFormat/AArch64AuthenticatedCalls.def")
+  llvm::SmallVector<llvm::CallBase *> Calls;
+#endif
+  for (auto &F : Module)
+    for (auto &I : llvm::instructions(F)) {
+      auto *Call = llvm::dyn_cast<llvm::CallBase>(&I);
+      if (!Call || !Call->hasOperandBundles())
+        continue;
+      auto Bundle = Call->getOperandBundle(llvm::LLVMContext::OB_ptrauth);
+      if (!Bundle)
+        continue;
+      // LLVM IR leaves the allowed key range to the target.
+      const auto *Key =
+          llvm::dyn_cast<llvm::ConstantInt>(Bundle->Inputs[kCallKey].get());
+      if (!Key || Key->getValue().ugt(kAArch64PAuthKeyDB)) {
+        llvm::WithColor::error() << kInvalidCallKey << F.getName() << '\n';
+        return false;
+      }
+#if !__has_include("llvm/BinaryFormat/AArch64AuthenticatedCalls.def")
+      const bool PAuthLR = F.hasFnAttribute(kReturnSigningPCAttribute);
+      if (PAuthLR && Call->isMustTailCall()) {
+        llvm::WithColor::error()
+            << kUnsupportedPAuthLRMustTail << F.getName() << '\n';
+        return false;
+      }
+      if (PAuthLR || Key->getZExtValue() >= kAArch64PAuthKeyDA)
+        Calls.push_back(Call);
+#endif
+    }
+#if !__has_include("llvm/BinaryFormat/AArch64AuthenticatedCalls.def")
+  for (auto *Call : Calls) {
+    // Older backends cannot keep x16 available for return authentication
+    // across an authenticated tail call.
+    if (auto *CI = llvm::dyn_cast<llvm::CallInst>(Call);
+        CI && CI->getFunction()->hasFnAttribute(kReturnSigningPCAttribute))
+      CI->setTailCallKind(llvm::CallInst::TCK_NoTail);
+    auto Bundle = *Call->getOperandBundle(llvm::LLVMContext::OB_ptrauth);
+    const auto &Key = Bundle.Inputs[kCallKey];
+    const auto &Disc = Bundle.Inputs[kCallDiscriminator];
+    if (llvm::cast<llvm::ConstantInt>(Key.get())->getZExtValue() <
+        kAArch64PAuthKeyDA)
+      continue;
+    // Verify the original field schema before producing an IA-signed target
+    // that this backend can consume. Keep all call arguments and unwind edges.
+    llvm::IRBuilder<> B(Call);
+    auto *Target = Call->getCalledOperand();
+    auto *IA = B.getInt32(kAArch64PAuthKeyIA);
+    auto *Zero = B.getInt64(0);
+    auto *Signed = B.CreateIntrinsic(llvm::Intrinsic::ptrauth_resign, {},
+                                     {B.CreatePtrToInt(Target, B.getInt64Ty()),
+                                      Key.get(), Disc.get(), IA, Zero});
+    Call->setCalledOperand(B.CreateIntToPtr(Signed, Target->getType()));
+    Call->setOperand(Key.getOperandNo(), IA);
+    Call->setOperand(Disc.getOperandNo(), Zero);
+  }
+#endif
+  return true;
+}
+
 #if !__has_include("llvm/MC/MCPointerAuthInfo.h")
 // The prebuilt compiler can emit native object authentication relocations,
 // but its final-address callback cannot retain their signing schema. Detect
@@ -163,9 +228,9 @@ bool hasRecipeCallbacksFor(const llvm::Module &Module) {
 #endif
 } // namespace
 
-bool preparePointerAuthenticationGlobals(llvm::Module &Module,
-                                         const llvm::Triple &Triple,
-                                         bool RequireRecipes) {
+bool preparePointerAuthentication(llvm::Module &Module,
+                                  const llvm::Triple &Triple,
+                                  bool RequireRecipes) {
   llvm::SmallVector<std::pair<llvm::GlobalVariable *, llvm::Constant *>>
       Imports;
   for (auto &Global : Module.globals()) {
@@ -185,6 +250,8 @@ bool preparePointerAuthenticationGlobals(llvm::Module &Module,
   if (RequireRecipes && !hasRecipeCallbacksFor(Module))
     return false;
 #endif
+  if (Triple.isAArch64() && !prepareAuthenticatedCalls(Module))
+    return false;
   // Validate the entire module before replacing references, including those
   // nested in aggregate initializers. The descriptor itself has no storage.
   for (auto [Global, Value] : Imports) {
