@@ -92,6 +92,21 @@ std::optional<int> compareConstantWithZExtMaximum(const SymContext &Ctx,
   return Value.isMask(Narrow) ? 0 : -1;
 }
 
+// Read only the limbs covered by a field, including an unaligned last limb.
+llvm::APInt literalField(llvm::ArrayRef<uint64_t> Digits, unsigned From,
+                         unsigned Bits) {
+  const unsigned First = From / 64, Skip = From % 64;
+  if (Bits <= 64) {
+    auto Word = Digits[First] >> Skip;
+    if (Bits > 64 - Skip)
+      Word |= Digits[First + 1] << (64 - Skip);
+    return llvm::APInt(Bits, Word);
+  }
+  return llvm::APInt(Bits + Skip,
+                     Digits.slice(First, llvm::APInt::getNumWords(Bits + Skip)))
+      .extractBits(Bits, Skip);
+}
+
 // For a masked addition, a pair of zero mask bits kills a carry and a
 // pair of set bits can generate one. A differing pair can only propagate.
 // The highest equal mask bits below the field decide whether a carry can
@@ -128,14 +143,8 @@ projectMaskedPair(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size,
     OtherZero &= !(Other[I] & Field);
   }
   auto SliceMasks = [&](unsigned From, unsigned Bits) {
-    const unsigned Skip = From % 64;
-    auto Read = [&](llvm::ArrayRef<uint64_t> Digits) {
-      return llvm::APInt(
-                 Bits + Skip,
-                 Digits.slice(From / 64, llvm::APInt::getNumWords(Bits + Skip)))
-          .extractBits(Bits, Skip);
-    };
-    return std::pair{Read(Live), Read(Other)};
+    return std::pair{literalField(Live, From, Bits),
+                     literalField(Other, From, Bits)};
   };
   const auto Op = Ctx.op(Join);
   unsigned From = At;
@@ -189,6 +198,65 @@ projectMaskedPair(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size,
   }
   return detail::WordWindow{Op == SymOp::Or ? Ctx.mkOr(X, Y) : Ctx.mkXor(X, Y),
                             0};
+}
+
+// OR and XOR have no carries between bit positions. Slice each masked
+// operand separately so masks differing outside the field share the same
+// narrow expression. Count the whole fan-out against the current request.
+template <typename Extract>
+std::optional<detail::WordWindow>
+projectMaskedBitwise(SymContext &Ctx, SymRef Join, uint64_t At, unsigned Size,
+                     unsigned &RemainingSplits, Extract Read) {
+  const unsigned Width = Ctx.width(Join);
+  const unsigned N = Ctx.numOperands(Join);
+  if (At + Size > Width || Size == Width || N - 1 > RemainingSplits)
+    return std::nullopt;
+  const auto Words = (At + Size - 1) / 64 - At / 64 + 1;
+  constexpr auto Limit = ::neverd::limits::symbolic::
+      kSymExprStructSymContextConstantWindowRemaining;
+  if (N > Limit / Words)
+    return std::nullopt;
+  // If the masks already contain just the requested field, distributing
+  // the extract can duplicate a single physical shift across all its arms.
+  bool AlreadyNarrow = N <= Limit / llvm::APInt::getNumWords(Width);
+  for (const auto Term : Ctx.operands(Join)) {
+    if (!Ctx.isConst(Term) &&
+        (Ctx.op(Term) != SymOp::And || Ctx.numOperands(Term) != 2 ||
+         !Ctx.isConst(Ctx.operand(Term, 0))))
+      return std::nullopt;
+    if (AlreadyNarrow) {
+      const auto Digits =
+          Ctx.constWords(Ctx.isConst(Term) ? Term : Ctx.operand(Term, 0));
+      AlreadyNarrow = (!At || detail::zeroBitWindow(Digits, 0, At)) &&
+                      (At + Size == Width ||
+                       detail::zeroBitWindow(Digits, At + Size, Width));
+    }
+  }
+  if (AlreadyNarrow)
+    return std::nullopt;
+
+  RemainingSplits -= N - 1;
+  llvm::SmallVector<SymRef, 8> Parts;
+  for (unsigned I = 0; I < N; ++I) {
+    // Interning a slice can move both operands and literals in the arena.
+    const auto Term = Ctx.operand(Join, I);
+    const bool Constant = Ctx.isConst(Term);
+    const auto Literal = Constant ? Term : Ctx.operand(Term, 0);
+    const auto Mask = literalField(Ctx.constWords(Literal), At, Size);
+    if (Mask.isZero())
+      continue;
+    if (Constant) {
+      Parts.push_back(Ctx.mkConst(Mask));
+      continue;
+    }
+    const auto Field = Read(Ctx.operand(Term, 1), At, Size);
+    Parts.push_back(Mask.isAllOnes() ? Field
+                                     : Ctx.mkAnd(Field, Ctx.mkConst(Mask)));
+  }
+  if (Parts.empty())
+    return detail::WordWindow{Ctx.mkZero(Size), 0};
+  return detail::WordWindow{
+      Ctx.op(Join) == SymOp::Or ? Ctx.mkOr(Parts) : Ctx.mkXor(Parts), 0};
 }
 
 // One right shift can supply the low prefix of an n-ary join. Even for an
@@ -483,6 +551,8 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
   // repeated fields share a source even when their packing offsets differ.
   for (;;) {
     const auto Outer = op(A);
+    if (Outer == SymOp::Var)
+      return Width == width(A) ? A : intern(SymOp::Extract, Width, {A}, Low);
     // Every bit of a field inside the original word survives either extension.
     if ((Outer == SymOp::ZExt || Outer == SymOp::SExt) &&
         uint64_t(Low) + Width <= width(operand(A, 0))) {
@@ -527,8 +597,12 @@ SymRef SymContext::extractWindow(SymRef A, uint32_t Low, uint32_t Width,
     else if (Masked)
       Selected =
           projectMaskedPair(*this, Packed, At, Width, RemainingSplits, Read);
-    else
+    else {
       Selected = projectShiftedPrefix(*this, Packed, At, Width);
+      if (!Selected && (Op == SymOp::Or || Op == SymOp::Xor))
+        Selected = projectMaskedBitwise(*this, Packed, At, Width,
+                                        RemainingSplits, Read);
+    }
     if (!Selected)
       break;
     A = Selected->Word;
